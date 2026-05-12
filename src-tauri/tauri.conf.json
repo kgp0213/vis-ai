@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/open-tauri/v2/main/packages/tauri-conf/schema.json",
+  "productName": "Reasonix",
+  "version": "0.1.0",
+  "identifier": "com.reasonix.desktop",
+  "build": {
+    "beforeDevCommand": "",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; connect-src http://127.0.0.1:*; style-src 'unsafe-inline' 'self' http://127.0.0.1:*; font-src 'self' http://127.0.0.1:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/test.txt",
+      "resources/server/node.exe",
+      "resources/server/launcher.mjs",
+      "resources/server/reasonix-pkg/**"
+    ],
+    "windows": {
+      "wix": null,
+      "nsis": null
+    }
+  }
+}

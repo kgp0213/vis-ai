@@ -1,0 +1,24 @@
+# Rust build artifacts
+src-tauri/target/
+
+# Node.js
+node_modules/
+src-tauri/resources/server/node.exe
+src-tauri/resources/server/reasonix-pkg/node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+
+# Portable distribution output (not source)
+portable/
+
+# Env/secrets
+.env
+.env.local
