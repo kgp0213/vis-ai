@@ -23802,7 +23802,9 @@ function ChatPanel() {
   }, []);
   const newConversation = q2(async () => {
     if (busy) {
-      if (!confirm(t4("chat.newConfirmBusy"))) return;
+      if (!await window._showConfirm(t4("chat.newConfirmBusy"))) return;
+    } else if (messages.length > 0 && !await window._showConfirm(t4("chat.newConfirm"))) {
+      return;
     }
     try {
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
@@ -29556,7 +29558,9 @@ ${commentRefs}` : commentRefs;
   }, []);
   const newConversation = q2(async () => {
     if (busy) {
-      if (!confirm(t4("changes.newConfirmBusy"))) return;
+      if (!await window._showConfirm(t4("changes.newConfirmBusy"))) return;
+    } else if (messages.length > 0 && !await window._showConfirm(t4("changes.newConfirm"))) {
+      return;
     }
     try {
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
