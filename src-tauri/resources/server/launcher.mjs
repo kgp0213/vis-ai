@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Reasonix Desktop — Server Launcher (v4)
+ * Visionox Desktop — Server Launcher (v4)
  *
  * Full session context with all agent tools: filesystem, shell, web search,
  * memory, plan, choice, and todo.  The dashboard can chat, run tools, and
- * stream events — same capability set as `reasonix code`.
+ * stream events — same capability set as the upstream agent.
  *
  * Usage: node launcher.mjs [--port <n>] [--token <hex>]
  */
@@ -12,11 +12,29 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REASONIX_DIR = resolve(__dirname, "reasonix-pkg");
+const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
+
+// ── Log buffer for developer mode ─────────────────────────────────
+const LOG_MAX = 500;
+const logBuffer = [];
+const _origError = console.error;
+const _origLog = console.log;
+console.error = (...args) => {
+  const msg = args.join(" ");
+  logBuffer.push({ ts: Date.now(), msg });
+  if (logBuffer.length > LOG_MAX) logBuffer.shift();
+  _origError.apply(console, args);
+};
+console.log = (...args) => {
+  const msg = args.join(" ");
+  logBuffer.push({ ts: Date.now(), msg });
+  if (logBuffer.length > LOG_MAX) logBuffer.shift();
+  _origLog.apply(console, args);
+};
 
 // ── Parse args ─────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -31,33 +49,27 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-// ── Resolve reasonix dist paths ─────────────────────────────────
+// ── Resolve visionox dist paths ──────────────────────────────────
 function distPath(name) {
-  return pathToFileURL(resolve(REASONIX_DIR, "dist", "cli", name)).href;
+  return pathToFileURL(resolve(VISIONOX_DIR, "dist", "cli", name)).href;
 }
 
 // ── Data dirs ───────────────────────────────────────────────────
 const home = homedir();
-const reasonixDataDir = resolve(home, ".reasonix");
-if (!existsSync(reasonixDataDir)) {
-  mkdirSync(reasonixDataDir, { recursive: true });
+const visionoxDataDir = resolve(home, ".visionox");
+if (!existsSync(visionoxDataDir)) {
+  mkdirSync(visionoxDataDir, { recursive: true });
 }
-const sessionsDir = resolve(reasonixDataDir, "sessions");
+const sessionsDir = resolve(visionoxDataDir, "sessions");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
 }
 
-// Dedicated workspace so filesystem tools have a sandbox.
-const workspaceDir = resolve(home, "reasonix-workspace");
-if (!existsSync(workspaceDir)) {
-  mkdirSync(workspaceDir, { recursive: true });
-}
-
-const configPath = resolve(reasonixDataDir, "config.json");
-const usageLogPath = resolve(reasonixDataDir, "usage.jsonl");
+const configPath = resolve(visionoxDataDir, "config.json");
+const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
 
 // ── Import server module ────────────────────────────────────────
-const serverModUrl = distPath("server-2FXGNQ4F.js");
+const serverModUrl = distPath("server-DRFPXXSH.js");
 console.error(`[launcher] importing ${serverModUrl}`);
 const { startDashboardServer } = await import(serverModUrl);
 
@@ -71,20 +83,29 @@ const [
     registerFilesystemTools, registerMemoryTools,
     registerChoiceTool, registerPlanTool, registerTodoTool,
     registerWebTools,
+    bridgeMcpTools,
   },
   {
-    readConfig, loadApiKey, loadBaseUrl, loadEditMode,
+    readConfig, writeConfig, loadApiKey, loadBaseUrl, loadEditMode,
     searchEnabled, webSearchEngine, webSearchEndpoint,
     loadProjectShellAllowed,
+    mcpEnvFor,
+    loadSemanticEmbeddingUserConfig,
   },
   { loadDotenv },
   { registerShellTools, JobRegistry },
+  { McpClient, parseMcpSpec, inspectMcpServer },
+  { buildTransportFromSpec },
+  { registerSemanticSearchTool },
 ] = await Promise.all([
-  import(distPath("chunk-KMWKGPFZ.js")),
-  import(distPath("chunk-BTSIAOUG.js")),
-  import(distPath("chunk-SWLIVNTP.js")),
+  import(distPath("chunk-AT6GGIBV.js")),
+  import(distPath("chunk-AT6GGIBV.js")),
+  import(distPath("chunk-65Q5HQ26.js")),
   import(distPath("chunk-3Q3C4W66.js")),
-  import(distPath("chunk-NTVW2TWO.js")),
+  import(distPath("chunk-BYZGO3BX.js")),
+  import(distPath("chunk-CFY2XLY6.js")),
+  import(distPath("chunk-7G3SESEU.js")),
+  import(distPath("chunk-RAUPWSYA.js")),
 ]);
 
 // ── Load config ─────────────────────────────────────────────────
@@ -93,6 +114,12 @@ const apiKey = loadApiKey();
 const config = readConfig(configPath);
 const model = config.model ?? "deepseek-v4-flash";
 const baseUrl = loadBaseUrl();
+
+// Workspace directory — configurable via config.workspaceDir
+const workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
+if (!existsSync(workspaceDir)) {
+  mkdirSync(workspaceDir, { recursive: true });
+}
 
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, model=${model}`);
 console.error(`[launcher] workspace: ${workspaceDir}`);
@@ -107,7 +134,12 @@ registerFilesystemTools(tools, {
   allowWriting: true,
 });
 
-// Shell tools — allowlist-based, confirmation gated by edit mode
+// Shell tools — gated by edit mode (yolo=auto-approve, auto=semi-auto, review=confirm)
+// Default to yolo on first run
+if (!config.editMode) {
+  config.editMode = "yolo";
+  writeConfig(config, configPath);
+}
 registerShellTools(tools, {
   rootDir: workspaceDir,
   extraAllowed: () => loadProjectShellAllowed(workspaceDir, configPath),
@@ -134,15 +166,130 @@ registerTodoTool(tools);
 
 console.error(`[launcher] ${tools.size} tools registered`);
 
-// ── Build session ───────────────────────────────────────────────
-let loop = null;
+// ── Semantic search ──────────────────────────────────────────────
+let hasSemanticSearch = false;
+try {
+  const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
+  const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
+  const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
+  const providerCfg = semanticCfg[cfgKey];
+  const registered = await registerSemanticSearchTool(tools, {
+    root: workspaceDir,
+    provider,
+    model: providerCfg?.model,
+    baseUrl: providerCfg?.baseUrl,
+    apiKey: providerCfg?.apiKey,
+    extraBody: providerCfg?.extraBody,
+  });
+  if (registered) {
+    hasSemanticSearch = true;
+    console.error(`[launcher] semantic_search tool registered`);
+  }
+} catch (err) {
+  console.error(`[launcher] semantic_search skipped: ${err.message}`);
+}
 
-if (apiKey) {
+// ── MCP servers ──────────────────────────────────────────────────
+const mcpSpecs = config.mcp ?? [];
+const mcpServers = [];
+
+for (const rawSpec of mcpSpecs) {
   try {
-    const client = new DeepSeekClient({ apiKey, baseUrl });
+    const spec = parseMcpSpec(rawSpec.trim());
+    if (!spec) continue;
+    const transport = buildTransportFromSpec(spec, { env: mcpEnvFor(spec.name, config) });
+    const client = new McpClient({ transport });
+    await client.initialize();
+    const report = await inspectMcpServer(client);
+    const { registeredNames } = bridgeMcpTools(client, { registry: tools });
+    mcpServers.push({
+      label: spec.name,
+      spec: rawSpec.trim(),
+      toolCount: registeredNames.length,
+      toolNames: registeredNames,
+      report,
+      host: { client },
+      readResource: (uri) => client.readResource(uri),
+      getPrompt: (name, args) => client.getPrompt(name, args),
+    });
+    console.error(`[launcher] MCP "${spec.name}": ${registeredNames.length} tools bridged`);
+  } catch (err) {
+    console.error(`[launcher] MCP "${rawSpec}" failed: ${err.message}`);
+  }
+}
 
-    const prefix = new ImmutablePrefix({
-      system: `You are Reasonix, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
+if (mcpServers.length > 0) {
+  console.error(`[launcher] ${mcpServers.length} MCP server(s) connected, ${tools.size} total tools`);
+}
+
+async function reloadMcp() {
+  const cfg = readConfig(configPath);
+  const specs = cfg.mcp ?? [];
+  // Remove servers no longer in config
+  for (let i = mcpServers.length - 1; i >= 0; i--) {
+    if (!specs.includes(mcpServers[i].spec)) {
+      const srv = mcpServers[i];
+      for (const name of srv.toolNames) {
+        tools.unregister(name);
+        loop?.prefix?.removeTool(name);
+      }
+      srv.host?.client?.close?.();
+      mcpServers.splice(i, 1);
+      console.error(`[launcher] MCP removed: "${srv.spec}"`);
+    }
+  }
+  // Add new servers from config
+  for (const rawSpec of specs) {
+    if (mcpServers.some((s) => s.spec === rawSpec)) continue;
+    try {
+      const spec = parseMcpSpec(rawSpec.trim());
+      if (!spec) continue;
+      const transport = buildTransportFromSpec(spec, { env: mcpEnvFor(spec.name, cfg) });
+      const client = new McpClient({ transport });
+      await client.initialize();
+      const report = await inspectMcpServer(client);
+      const { registeredNames } = bridgeMcpTools(client, { registry: tools });
+      // Add new tool specs to loop prefix
+      for (const ts of tools.specs().filter((s) => registeredNames.includes(s.function?.name))) {
+        loop?.prefix?.addTool(ts);
+      }
+      mcpServers.push({
+        label: spec.name,
+        spec: rawSpec.trim(),
+        toolCount: registeredNames.length,
+        toolNames: registeredNames,
+        report,
+        host: { client },
+        readResource: (uri) => client.readResource(uri),
+        getPrompt: (name, args) => client.getPrompt(name, args),
+      });
+      console.error(`[launcher] MCP "${spec.name}": ${registeredNames.length} tools bridged`);
+    } catch (err) {
+      console.error(`[launcher] MCP "${rawSpec}" failed: ${err.message}`);
+    }
+  }
+  return mcpServers.length;
+}
+
+function invokeMcpTool(serverName, toolName, args) {
+  const srv = mcpServers.find((s) => s.label === serverName);
+  if (!srv) throw new Error(`MCP server "${serverName}" not found`);
+  return srv.host.client.callTool(toolName, args);
+}
+
+// ── Build session ───────────────────────────────────────────────
+const SEMANTIC_ROUTING = hasSemanticSearch ? `
+
+# Search routing
+
+You have BOTH \`semantic_search\` (vector index) and \`search_content\` (literal grep).
+
+- **Descriptive queries** ("where do we handle X", "which file owns Y", "how does Z work") → call \`semantic_search\` FIRST.
+- **Exact-token queries** (specific identifier, regex, "find every call to foo") → call \`search_content\`.
+
+If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.` : "";
+
+const SYSTEM_PROMPT = `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
 
 You have access to the following tools:
 - Filesystem tools: read_file, write_file, list_directory, search_files — sandboxed to ${workspaceDir}
@@ -154,7 +301,16 @@ You have access to the following tools:
 - Todo tools: track tasks
 
 Always use the appropriate tool when you need to access files, run commands, or search the web.
-Respond in the same language as the user's message.`,
+Respond in the same language as the user's message.${SEMANTIC_ROUTING}`;
+
+let loop = null;
+
+if (apiKey) {
+  try {
+    const client = new DeepSeekClient({ apiKey, baseUrl });
+
+    const prefix = new ImmutablePrefix({
+      system: SYSTEM_PROMPT,
       toolSpecs: tools.specs(),
     });
 
@@ -232,7 +388,7 @@ const ctx = {
   sessionsDir,
   loop,
   tools,
-  mcpServers: [],
+  mcpServers,
 
   // ── Getters ────────────────────────────────────────────────
   getCurrentCwd: () => workspaceDir,
@@ -244,15 +400,32 @@ const ctx = {
   getModels: () => null,
   getLoopRunStatus: () => null,
   getActiveModal: () => null,
+  hasApiKey: !!apiKey,
+  getLogs: () => logBuffer.slice(),
 
   // ── Setters / actions ──────────────────────────────────────
-  setEditMode: (m) => { console.error(`[launcher] edit mode: ${m}`); },
+  setEditMode: (m) => {
+    const cfg = readConfig(configPath);
+    cfg.editMode = m;
+    writeConfig(cfg, configPath);
+    console.error(`[launcher] edit mode: ${m}`);
+  },
   setPlanMode: () => {},
   applyPresetLive: (name) => { console.error(`[launcher] preset: ${name}`); },
   applyEffortLive: (effort) => { loop?.configure({ reasoningEffort: effort }); },
   applyModelLive: (m) => { loop?.configure({ model: m }); },
   setProNextLive: () => {},
   setBudgetUsdLive: (usd) => { loop?.setBudget(usd); },
+
+  reloadMcp,
+  invokeMcpTool,
+
+  setWorkspaceDir: (dir) => {
+    const cfg = readConfig(configPath);
+    cfg.workspaceDir = dir;
+    writeConfig(cfg, configPath);
+    console.error(`[launcher] workspaceDir saved: ${dir} (restart required)`);
+  },
 
   startAutoLoop: () => {},
   stopAutoLoop: () => {},
@@ -268,6 +441,35 @@ const ctx = {
   },
 
   submitPrompt: (text) => {
+    // Handle /new and /clear: save session and reset
+    if (text === "/new" || text === "/clear") {
+      if (messages.length > 0) {
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        const sessionFile = resolve(sessionsDir, `${ts}.jsonl`);
+        try {
+          // Convert messages to transcript format (role + content)
+          const jsonl = messages.map((m) => JSON.stringify({ role: m.role, content: m.text })).join("\n") + "\n";
+          writeFileSync(sessionFile, jsonl, "utf8");
+          console.error(`[launcher] session saved: ${sessionFile}`);
+        } catch (err) {
+          console.error(`[launcher] failed to save session: ${err.message}`);
+        }
+      }
+      messages.length = 0;
+      nextMsgId = 1;
+      // Add welcome message
+      const welcomeId = `assistant-${Date.now()}`;
+      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
+      messages.push(welcomeMsg);
+      // Notify client: busy-change to trigger refetch, then welcome message
+      busy = true;
+      broadcastDashboardEvent({ kind: "busy-change", busy: true });
+      broadcastDashboardEvent({ kind: "assistant_final", id: welcomeId, text: welcomeMsg.text });
+      busy = false;
+      broadcastDashboardEvent({ kind: "busy-change", busy: false });
+      return { accepted: true };
+    }
+
     if (!loop) {
       return {
         accepted: false,
@@ -283,6 +485,7 @@ const ctx = {
 
     const userMsgId = String(nextMsgId++);
     messages.push({ id: userMsgId, role: "user", text });
+    broadcastDashboardEvent({ kind: "user", id: userMsgId, text });
 
     const assistantId = `assistant-${Date.now()}`;
 
@@ -344,6 +547,13 @@ const ctx = {
     };
   },
 };
+
+// ── Initial welcome message ──────────────────────────────────────
+messages.push({
+  id: "welcome",
+  role: "assistant",
+  text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。",
+});
 
 // ── Start the server ────────────────────────────────────────────
 const token = tokenOverride ?? randomBytes(32).toString("hex");

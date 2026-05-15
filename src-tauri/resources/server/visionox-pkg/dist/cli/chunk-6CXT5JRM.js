@@ -30,7 +30,7 @@ function detectGitBranch(cwd) {
   }
 }
 function sessionsDir() {
-  return join(homedir(), ".reasonix", "sessions");
+  return join(homedir(), ".visionox", "sessions");
 }
 function sessionPath(name) {
   return join(sessionsDir(), `${sanitizeName(name)}.jsonl`);

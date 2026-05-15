@@ -362,7 +362,7 @@ async function checkOllama(projectRoot) {
 }
 function readSemanticMeta(projectRoot) {
   try {
-    const raw = readFileSync(join(projectRoot, ".reasonix", "semantic", "index.meta.json"), "utf8");
+    const raw = readFileSync(join(projectRoot, ".visionox", "semantic", "index.meta.json"), "utf8");
     const parsed = JSON.parse(raw);
     return {
       provider: parsed.provider === "openai-compat" ? "openai-compat" : "ollama",
@@ -373,7 +373,7 @@ function readSemanticMeta(projectRoot) {
   }
 }
 async function checkProject(projectRoot) {
-  const markers = [".git", "REASONIX.md", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"];
+  const markers = [".git", "VISIONOX.md", "package.json", "pyproject.toml", "Cargo.toml", "go.mod"];
   const found = markers.filter((m) => existsSync(join(projectRoot, m)));
   if (found.length === 0) {
     return {

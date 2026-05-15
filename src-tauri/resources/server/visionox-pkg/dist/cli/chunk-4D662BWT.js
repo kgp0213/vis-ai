@@ -623,7 +623,7 @@ function normalizeMeta(meta) {
 }
 
 // src/index/semantic/builder.ts
-var INDEX_DIR_NAME = path3.join(".reasonix", "semantic");
+var INDEX_DIR_NAME = path3.join(".visionox", "semantic");
 function emptyBuckets() {
   return {
     defaultDir: 0,

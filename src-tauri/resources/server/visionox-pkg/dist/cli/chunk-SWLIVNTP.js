@@ -328,7 +328,7 @@ var DEFAULT_INDEX_EXCLUDES = {
     "coverage",
     ".turbo",
     ".vercel",
-    ".reasonix"
+    ".visionox"
   ],
   files: [
     "package-lock.json",
@@ -429,7 +429,7 @@ var DEFAULT_OLLAMA_URL = "http://localhost:11434";
 var DEFAULT_EMBED_MODEL = "nomic-embed-text";
 var DEFAULT_TIMEOUT_MS = 3e4;
 function defaultConfigPath() {
-  return join(homedir(), ".reasonix", "config.json");
+  return join(homedir(), ".visionox", "config.json");
 }
 function readConfig(path = defaultConfigPath()) {
   try {

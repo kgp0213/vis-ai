@@ -18933,7 +18933,7 @@ function showToast(text, kind = "info", ttl = 3e3) {
   toastBus.dispatchEvent(new CustomEvent("toast", { detail: { text, kind, ttl } }));
 }
 function reportAppError(error, source, info) {
-  console.error(`[reasonix dashboard] ${source}:`, error, info);
+  console.error(`[visionox dashboard] ${source}:`, error, info);
   appBus.dispatchEvent(
     new CustomEvent("error", { detail: { error, source, info, ts: Date.now() } })
   );
@@ -19149,7 +19149,7 @@ function setLang(lang) {
     headers: { "Content-Type": "application/json", "X-Reasonix-Token": TOKEN },
     body: JSON.stringify({ lang: toBackendLang(lang) }),
     keepalive: true
-  }).catch((err) => console.error("[reasonix dashboard] lang persist:", err));
+  }).catch((err) => console.error("[visionox dashboard] lang persist:", err));
 }
 function onLangChange(cb) {
   listeners.push(cb);
@@ -19277,6 +19277,9 @@ var en = {
     loopIter: "iter {iter}",
     loopFiresIn: "fires in {remaining}",
     sectionRuntime: "Runtime",
+    sectionDev: "Developer",
+    devMode: "Developer Mode",
+    noLogs: "No logs yet — start a conversation to see output.",
     activeModel: "active model",
     modelPricingLine: "${hit} hit \xB7 ${miss} miss \xB7 ${out} out  per 1M tok",
     editMode: "edit mode",
@@ -19355,7 +19358,7 @@ var en = {
     loading: "loading overview\u2026",
     failed: "overview failed: {error}",
     standaloneTitle: "Standalone mode",
-    standaloneDesc: "Read-only disk view. Start /dashboard from inside reasonix code for live session state, MCP, and tools.",
+    standaloneDesc: "Read-only disk view. Start /dashboard from inside visionox code for live session state, MCP, and tools.",
     cockpit: "Cockpit",
     balance: "balance",
     tokens7d: "tokens \xB7 7d",
@@ -19363,7 +19366,7 @@ var en = {
     toolCalls24h: "tool calls \xB7 24h",
     budget: "budget",
     currentSession: "current session",
-    noSession: "No live session \u2014 /dashboard from inside reasonix code to attach.",
+    noSession: "No live session \u2014 /dashboard from inside visionox code to attach.",
     promptTok: "prompt tok",
     completionTok: "completion tok",
     cost: "cost",
@@ -19377,7 +19380,7 @@ var en = {
     toolsLoaded: "tools loaded",
     mcpServers: "mcp servers",
     editMode: "edit mode",
-    version: "Reasonix",
+    version: "Visionox",
     workingDir: "Working directory",
     projectRoot: "project root",
     noPriorData: "no prior data",
@@ -19395,7 +19398,7 @@ var en = {
     records: "{count} records",
     dailyUsage: "Daily usage",
     dailyMeta: "cost \xB7 cache saved \xB7 turns",
-    noData: "No usage data yet \u2014 run a turn in reasonix chat / code / run and refresh.",
+    noData: "No usage data yet \u2014 run a turn in visionox chat / code / run and refresh.",
     windows: "Rolling windows",
     colWindow: "window",
     colTurns: "turns",
@@ -19459,7 +19462,7 @@ var en = {
     colNum: "#",
     colPrefix: "prefix",
     builtinTitle: "Builtin \xB7 {count} \xB7 read-only",
-    standaloneWarning: "Mutations require /dashboard from inside an active reasonix code session \u2014 standalone reasonix dashboard can't tell which project's allowlist to edit."
+    standaloneWarning: "Mutations require /dashboard from inside an active visionox code session \u2014 standalone visionox dashboard can't tell which project's allowlist to edit."
   },
   mcp: {
     loading: "loading MCP\u2026",
@@ -19469,7 +19472,7 @@ var en = {
     unbridged: "unbridged",
     specPlaceholder: "spec \u2014 e.g. fs=npx -y @modelcontextprotocol/...",
     saved: "saved",
-    savedRestart: "saved \u2014 restart reasonix code to bridge this server",
+    savedRestart: "saved \u2014 restart visionox code to bridge this server",
     removed: "removed \u2014 restart to drop the live bridge",
     removeConfirm: "Remove MCP spec from config?\n\n{spec}",
     noServers: "No MCP servers in this session.",
@@ -19479,8 +19482,8 @@ var en = {
     removeBtn: "Remove",
     spec: "spec",
     whyUnbridged: "Why unbridged?",
-    whyUnbridgedDesc: "This spec lives in your config.json but isn't bridged into the live session. MCP servers attach when reasonix code starts; the dashboard alone can't spawn the child process.",
-    whyUnbridgedHint: "To activate: restart reasonix code, then refresh this dashboard.",
+    whyUnbridgedDesc: "This spec lives in your config.json but isn't bridged into the live session. MCP servers attach when visionox code starts; the dashboard alone can't spawn the child process.",
+    whyUnbridgedHint: "To activate: restart visionox code, then refresh this dashboard.",
     pickHint: "Pick an MCP server on the left to inspect tools / resources / prompts.",
     toolsTitle: "Tools \xB7 {count}",
     resourcesTitle: "Resources \xB7 {count}",
@@ -19512,8 +19515,8 @@ var en = {
     marketplaceInstalledBadge: "installed",
     marketplaceUninstall: "Uninstall",
     marketplaceEnvTitle: "Required environment variables",
-    marketplaceEnvHint: "Set these in your shell before next `reasonix code` so the bridged server can authenticate.",
-    marketplaceRestartHint: "Spec written to ~/.reasonix/config.json. Restart `reasonix code` to bridge the server (live hot-reload is on the roadmap)."
+    marketplaceEnvHint: "Set these in your shell before next `visionox code` so the bridged server can authenticate.",
+    marketplaceRestartHint: "Spec written to ~/.visionox/config.json. Restart `visionox code` to bridge the server (live hot-reload is on the roadmap)."
   },
   memory: {
     loading: "loading memory\u2026",
@@ -19522,7 +19525,7 @@ var en = {
     create: "create",
     noFiles: "No memory files yet.",
     pickHint: "Pick a memory file on the left.",
-    pickDesc: "Project REASONIX.md is committable; global notes live in ~/.reasonix/memory/.",
+    pickDesc: "Project VISIONOX.md is committable; global notes live in ~/.visionox/memory/.",
     chars: "{count} chars",
     saved: "saved {scope}",
     reloadHint: "re-applied on next /new or session restart"
@@ -19534,7 +19537,7 @@ var en = {
     matrixSub: "{scripts} script{s} \xD7 {events} event{s}",
     noHooks: "No hooks configured. Edit the JSON below to add some.",
     colScript: "script",
-    noProject: "No active project \u2014 open /dashboard from reasonix code to edit project hooks.",
+    noProject: "No active project \u2014 open /dashboard from visionox code to edit project hooks.",
     saveReload: "Save + Reload",
     discard: "Discard changes",
     savedReloaded: "saved + reloaded {scope}",
@@ -19556,7 +19559,7 @@ var en = {
     runs7d: "runs \xB7 7d",
     pickHint: "Pick a skill on the left, or create a new one above.",
     readOnlyBuiltin: "read-only \xB7 builtin",
-    builtinDesc: "Built-in skills ship with Reasonix; the model picks them up automatically. To customize, create a project- or global-scoped skill with the same name.",
+    builtinDesc: "Built-in skills ship with Visionox; the model picks them up automatically. To customize, create a project- or global-scoped skill with the same name.",
     saved: "saved {scope}/{name}",
     deleteConfirm: "Delete skill {scope}/{name}?",
     reloadHint: "re-loaded on next /new or session restart"
@@ -19578,7 +19581,7 @@ var en = {
     semanticIndex: "semantic index",
     built: "\u25CF built",
     none: "\u2014 none",
-    runIndex: "run reasonix index to build",
+    runIndex: "run visionox index to build",
     usageLog: "usage log",
     backgroundJobs: "background jobs",
     noSession: "\u2014 no session",
@@ -19613,7 +19616,7 @@ var en = {
     ready: "ready",
     setupNeeded: "setup needed",
     installOllama: "Install Ollama",
-    installOllamaDesc: "Reasonix doesn't run package managers for you. Install Ollama first, then come back:",
+    installOllamaDesc: "Visionox doesn't run package managers for you. Install Ollama first, then come back:",
     macWindows: "macOS / Windows:",
     download: "download from ollama.com/download",
     linux: "Linux:",
@@ -19648,7 +19651,7 @@ var en = {
     openaiCompat: "openai-compatible",
     apiUrl: "API URL",
     apiKey: "API key",
-    apiKeyStoredNote: "API key is stored in ~/.reasonix/config.json \u2014 do not share that file.",
+    apiKeyStoredNote: "API key is stored in ~/.visionox/config.json \u2014 do not share that file.",
     customRequestBody: "custom request body",
     invalidCustomRequestBody: "Custom request body must be valid JSON: {error}",
     customRequestBodyMustBeObject: "Custom request body must be a JSON object.",
@@ -19656,7 +19659,7 @@ var en = {
     extraBody: "extra body",
     keepExistingKey: "leave blank to keep existing key",
     remoteProvider: "Remote embedding provider",
-    remoteProviderDesc: "Configure the full OpenAI-compatible embeddings URL here. Reasonix will send requests exactly to the URL you provide.",
+    remoteProviderDesc: "Configure the full OpenAI-compatible embeddings URL here. Visionox will send requests exactly to the URL you provide.",
     ollama: "ollama",
     binary: "binary",
     found: "found",
@@ -19711,7 +19714,11 @@ var en = {
     pullingModel: "pulling {model} \u2014 this may take a few minutes on first install",
     savedConfig: "saved \xB7 {count} fields updated \xB7 re-run index to apply",
     runningPreview: "running dry walk against project root\u2026",
-    exclude: "exclude"
+    exclude: "exclude",
+    validateModel: "Validate Model",
+    validating: "Validating\u2026",
+    validateOk: "Connected \xB7 {model} \xB7 {dim}d \xB7 {latencyMs}ms",
+    validateFailed: "Validation failed"
   },
   modal: {
     shellTitle: "shell command",
@@ -19858,6 +19865,9 @@ var zhCN = {
     loopIter: "\u7B2C {iter} \u6B21",
     loopFiresIn: "{remaining} \u540E\u89E6\u53D1",
     sectionRuntime: "\u8FD0\u884C\u65F6",
+    sectionDev: "\u5F00\u53D1\u8005",
+    devMode: "\u5F00\u53D1\u8005\u6A21\u5F0F",
+    noLogs: "\u6682\u65E0\u65E5\u5FD7 \u2014 \u5F00\u59CB\u5BF9\u8BDD\u540E\u5373\u53EF\u770B\u5230\u8F93\u51FA\u3002",
     activeModel: "\u5F53\u524D\u6A21\u578B",
     modelPricingLine: "${hit} \u547D\u4E2D \xB7 ${miss} \u672A\u547D\u4E2D \xB7 ${out} \u8F93\u51FA  / 100 \u4E07 tok",
     editMode: "\u7F16\u8F91\u6A21\u5F0F",
@@ -19936,7 +19946,7 @@ var zhCN = {
     loading: "\u52A0\u8F7D\u6982\u89C8\u2026",
     failed: "\u6982\u89C8\u5931\u8D25\uFF1A{error}",
     standaloneTitle: "\u72EC\u7ACB\u6A21\u5F0F",
-    standaloneDesc: "\u53EA\u8BFB\u78C1\u76D8\u89C6\u56FE\u3002\u5728 reasonix code \u5185\u542F\u52A8 /dashboard \u4EE5\u83B7\u53D6\u5B9E\u65F6\u4F1A\u8BDD\u72B6\u6001\u3001MCP \u548C\u5DE5\u5177\u3002",
+    standaloneDesc: "\u53EA\u8BFB\u78C1\u76D8\u89C6\u56FE\u3002\u5728 visionox code \u5185\u542F\u52A8 /dashboard \u4EE5\u83B7\u53D6\u5B9E\u65F6\u4F1A\u8BDD\u72B6\u6001\u3001MCP \u548C\u5DE5\u5177\u3002",
     cockpit: "\u9A7E\u9A76\u8231",
     balance: "\u4F59\u989D",
     tokens7d: "tokens \xB7 7 \u5929",
@@ -19944,7 +19954,7 @@ var zhCN = {
     toolCalls24h: "\u5DE5\u5177\u8C03\u7528 \xB7 24 \u5C0F\u65F6",
     budget: "\u9884\u7B97",
     currentSession: "\u5F53\u524D\u4F1A\u8BDD",
-    noSession: "\u65E0\u6D3B\u8DC3\u4F1A\u8BDD \u2014 \u5728 reasonix code \u5185\u6267\u884C /dashboard \u8FDB\u884C\u8FDE\u63A5\u3002",
+    noSession: "\u65E0\u6D3B\u8DC3\u4F1A\u8BDD \u2014 \u5728 visionox code \u5185\u6267\u884C /dashboard \u8FDB\u884C\u8FDE\u63A5\u3002",
     promptTok: "\u63D0\u793A tokens",
     completionTok: "\u8865\u5168 tokens",
     cost: "\u8D39\u7528",
@@ -19958,7 +19968,7 @@ var zhCN = {
     toolsLoaded: "\u5DF2\u52A0\u8F7D\u5DE5\u5177",
     mcpServers: "MCP \u670D\u52A1\u5668",
     editMode: "\u7F16\u8F91\u6A21\u5F0F",
-    version: "Reasonix",
+    version: "Visionox",
     workingDir: "\u5DE5\u4F5C\u76EE\u5F55",
     projectRoot: "\u9879\u76EE\u6839\u76EE\u5F55",
     noPriorData: "\u65E0\u5386\u53F2\u6570\u636E",
@@ -19976,7 +19986,7 @@ var zhCN = {
     records: "{count} \u6761\u8BB0\u5F55",
     dailyUsage: "\u6BCF\u65E5\u7528\u91CF",
     dailyMeta: "\u8D39\u7528 \xB7 \u7F13\u5B58\u8282\u7701 \xB7 \u8F6E\u6B21",
-    noData: "\u6682\u65E0\u7528\u91CF\u6570\u636E \u2014 \u5728 reasonix chat / code / run \u4E2D\u6267\u884C\u4E00\u8F6E\uFF0C\u7136\u540E\u5237\u65B0\u3002",
+    noData: "\u6682\u65E0\u7528\u91CF\u6570\u636E \u2014 \u5728 visionox chat / code / run \u4E2D\u6267\u884C\u4E00\u8F6E\uFF0C\u7136\u540E\u5237\u65B0\u3002",
     windows: "\u6EDA\u52A8\u7A97\u53E3",
     colWindow: "\u65F6\u95F4\u8303\u56F4",
     colTurns: "\u8F6E\u6B21",
@@ -20040,7 +20050,7 @@ var zhCN = {
     colNum: "#",
     colPrefix: "\u524D\u7F00",
     builtinTitle: "\u5185\u7F6E \xB7 {count} \xB7 \u53EA\u8BFB",
-    standaloneWarning: "\u4FEE\u6539\u64CD\u4F5C\u9700\u8981\u5728\u6D3B\u8DC3\u7684 reasonix code \u4F1A\u8BDD\u5185\u6267\u884C /dashboard \u2014 \u72EC\u7ACB\u6A21\u5F0F\u7684 reasonix dashboard \u65E0\u6CD5\u786E\u5B9A\u8981\u7F16\u8F91\u54EA\u4E2A\u9879\u76EE\u7684\u5141\u8BB8\u5217\u8868\u3002"
+    standaloneWarning: "\u4FEE\u6539\u64CD\u4F5C\u9700\u8981\u5728\u6D3B\u8DC3\u7684 visionox code \u4F1A\u8BDD\u5185\u6267\u884C /dashboard \u2014 \u72EC\u7ACB\u6A21\u5F0F\u7684 visionox dashboard \u65E0\u6CD5\u786E\u5B9A\u8981\u7F16\u8F91\u54EA\u4E2A\u9879\u76EE\u7684\u5141\u8BB8\u5217\u8868\u3002"
   },
   mcp: {
     loading: "\u52A0\u8F7D MCP\u2026",
@@ -20050,7 +20060,7 @@ var zhCN = {
     unbridged: "\u672A\u6865\u63A5",
     specPlaceholder: "\u89C4\u683C \u2014 \u4F8B\u5982 fs=npx -y @modelcontextprotocol/...",
     saved: "\u5DF2\u4FDD\u5B58",
-    savedRestart: "\u5DF2\u4FDD\u5B58 \u2014 \u91CD\u542F reasonix code \u4EE5\u6865\u63A5\u6B64\u670D\u52A1\u5668",
+    savedRestart: "\u5DF2\u4FDD\u5B58 \u2014 \u91CD\u542F visionox code \u4EE5\u6865\u63A5\u6B64\u670D\u52A1\u5668",
     removed: "\u5DF2\u79FB\u9664 \u2014 \u91CD\u542F\u4EE5\u65AD\u5F00\u5B9E\u65F6\u6865\u63A5",
     removeConfirm: "\u4ECE\u914D\u7F6E\u4E2D\u79FB\u9664 MCP \u89C4\u683C\uFF1F\n\n{spec}",
     noServers: "\u6B64\u4F1A\u8BDD\u4E2D\u65E0 MCP \u670D\u52A1\u5668\u3002",
@@ -20060,8 +20070,8 @@ var zhCN = {
     removeBtn: "\u79FB\u9664",
     spec: "\u89C4\u683C",
     whyUnbridged: "\u4E3A\u4EC0\u4E48\u672A\u6865\u63A5\uFF1F",
-    whyUnbridgedDesc: "\u6B64\u89C4\u683C\u5B58\u5728\u4E8E\u60A8\u7684 config.json \u4E2D\uFF0C\u4F46\u672A\u6865\u63A5\u5230\u5B9E\u65F6\u4F1A\u8BDD\u3002MCP \u670D\u52A1\u5668\u5728 reasonix code \u542F\u52A8\u65F6\u8FDE\u63A5\uFF1B\u4EEA\u8868\u76D8\u672C\u8EAB\u65E0\u6CD5\u751F\u6210\u5B50\u8FDB\u7A0B\u3002",
-    whyUnbridgedHint: "\u6FC0\u6D3B\u65B9\u6CD5\uFF1A\u91CD\u542F reasonix code\uFF0C\u7136\u540E\u5237\u65B0\u6B64\u4EEA\u8868\u76D8\u3002",
+    whyUnbridgedDesc: "\u6B64\u89C4\u683C\u5B58\u5728\u4E8E\u60A8\u7684 config.json \u4E2D\uFF0C\u4F46\u672A\u6865\u63A5\u5230\u5B9E\u65F6\u4F1A\u8BDD\u3002MCP \u670D\u52A1\u5668\u5728 visionox code \u542F\u52A8\u65F6\u8FDE\u63A5\uFF1B\u4EEA\u8868\u76D8\u672C\u8EAB\u65E0\u6CD5\u751F\u6210\u5B50\u8FDB\u7A0B\u3002",
+    whyUnbridgedHint: "\u6FC0\u6D3B\u65B9\u6CD5\uFF1A\u91CD\u542F visionox code\uFF0C\u7136\u540E\u5237\u65B0\u6B64\u4EEA\u8868\u76D8\u3002",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684 MCP \u670D\u52A1\u5668\u4EE5\u68C0\u67E5\u5DE5\u5177 / \u8D44\u6E90 / \u63D0\u793A\u3002",
     toolsTitle: "\u5DE5\u5177 \xB7 {count}",
     resourcesTitle: "\u8D44\u6E90 \xB7 {count}",
@@ -20093,8 +20103,8 @@ var zhCN = {
     marketplaceInstalledBadge: "\u5DF2\u5B89\u88C5",
     marketplaceUninstall: "\u5378\u8F7D",
     marketplaceEnvTitle: "\u5FC5\u9700\u7684\u73AF\u5883\u53D8\u91CF",
-    marketplaceEnvHint: "\u4E0B\u6B21\u542F\u52A8 `reasonix code` \u4E4B\u524D\u5728 shell \u91CC\u8BBE\u597D\uFF0C\u6865\u63A5\u7684\u670D\u52A1\u5668\u624D\u80FD\u6B63\u5E38\u9274\u6743\u3002",
-    marketplaceRestartHint: "\u5DF2\u5199\u5165 ~/.reasonix/config.json\u3002\u91CD\u542F `reasonix code` \u540E\u670D\u52A1\u5668\u624D\u4F1A\u771F\u6B63\u6865\u63A5\uFF08\u70ED\u91CD\u8F7D\u5728\u8DEF\u7EBF\u56FE\u4E0A\uFF09\u3002"
+    marketplaceEnvHint: "\u4E0B\u6B21\u542F\u52A8 `visionox code` \u4E4B\u524D\u5728 shell \u91CC\u8BBE\u597D\uFF0C\u6865\u63A5\u7684\u670D\u52A1\u5668\u624D\u80FD\u6B63\u5E38\u9274\u6743\u3002",
+    marketplaceRestartHint: "\u5DF2\u5199\u5165 ~/.visionox/config.json\u3002\u91CD\u542F `visionox code` \u540E\u670D\u52A1\u5668\u624D\u4F1A\u771F\u6B63\u6865\u63A5\uFF08\u70ED\u91CD\u8F7D\u5728\u8DEF\u7EBF\u56FE\u4E0A\uFF09\u3002"
   },
   memory: {
     loading: "\u52A0\u8F7D\u8BB0\u5FC6\u2026",
@@ -20103,7 +20113,7 @@ var zhCN = {
     create: "\u521B\u5EFA",
     noFiles: "\u6682\u65E0\u8BB0\u5FC6\u6587\u4EF6\u3002",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684\u8BB0\u5FC6\u6587\u4EF6\u3002",
-    pickDesc: "\u9879\u76EE REASONIX.md \u53EF\u63D0\u4EA4\uFF1B\u5168\u5C40\u7B14\u8BB0\u5B58\u50A8\u5728 ~/.reasonix/memory/\u3002",
+    pickDesc: "\u9879\u76EE VISIONOX.md \u53EF\u63D0\u4EA4\uFF1B\u5168\u5C40\u7B14\u8BB0\u5B58\u50A8\u5728 ~/.visionox/memory/\u3002",
     chars: "{count} \u4E2A\u5B57\u7B26",
     saved: "\u5DF2\u4FDD\u5B58 {scope}",
     reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D"
@@ -20115,7 +20125,7 @@ var zhCN = {
     matrixSub: "{scripts} \u4E2A\u811A\u672C \xD7 {events} \u4E2A\u4E8B\u4EF6",
     noHooks: "\u672A\u914D\u7F6E\u94A9\u5B50\u3002\u7F16\u8F91\u4E0B\u65B9\u7684 JSON \u4EE5\u6DFB\u52A0\u3002",
     colScript: "\u811A\u672C",
-    noProject: "\u65E0\u6D3B\u8DC3\u9879\u76EE \u2014 \u5728 reasonix code \u4E2D\u6253\u5F00 /dashboard \u4EE5\u7F16\u8F91\u9879\u76EE\u94A9\u5B50\u3002",
+    noProject: "\u65E0\u6D3B\u8DC3\u9879\u76EE \u2014 \u5728 visionox code \u4E2D\u6253\u5F00 /dashboard \u4EE5\u7F16\u8F91\u9879\u76EE\u94A9\u5B50\u3002",
     saveReload: "\u4FDD\u5B58\u5E76\u91CD\u8F7D",
     discard: "\u653E\u5F03\u66F4\u6539",
     savedReloaded: "\u5DF2\u4FDD\u5B58\u5E76\u91CD\u8F7D {scope}",
@@ -20159,7 +20169,7 @@ var zhCN = {
     semanticIndex: "\u8BED\u4E49\u7D22\u5F15",
     built: "\u25CF \u5DF2\u6784\u5EFA",
     none: "\u2014 \u65E0",
-    runIndex: "\u8FD0\u884C reasonix index \u4EE5\u6784\u5EFA",
+    runIndex: "\u8FD0\u884C visionox index \u4EE5\u6784\u5EFA",
     usageLog: "\u7528\u91CF\u65E5\u5FD7",
     backgroundJobs: "\u540E\u53F0\u4EFB\u52A1",
     noSession: "\u2014 \u65E0\u4F1A\u8BDD",
@@ -20291,7 +20301,11 @@ var zhCN = {
     pullingModel: "\u6B63\u5728\u62C9\u53D6 {model} \u2014 \u9996\u6B21\u5B89\u88C5\u53EF\u80FD\u9700\u8981\u51E0\u5206\u949F",
     savedConfig: "\u5DF2\u4FDD\u5B58 \xB7 {count} \u4E2A\u5B57\u6BB5\u5DF2\u66F4\u65B0 \xB7 \u91CD\u65B0\u8FD0\u884C\u7D22\u5F15\u4EE5\u5E94\u7528",
     runningPreview: "\u6B63\u5728\u5BF9\u9879\u76EE\u6839\u76EE\u5F55\u6267\u884C\u5E72\u8FD0\u884C\u2026",
-    exclude: "\u6392\u9664"
+    exclude: "\u6392\u9664",
+    validateModel: "\u6A21\u578B\u9A8C\u8BC1",
+    validating: "\u9A8C\u8BC1\u4E2D\u2026",
+    validateOk: "\u8054\u901A\u6210\u529F \xB7 {model} \xB7 {dim}\u7EF4 \xB7 {latencyMs}ms",
+    validateFailed: "\u9A8C\u8BC1\u5931\u8D25"
   },
   modal: {
     shellTitle: "Shell \u547D\u4EE4",
@@ -25012,7 +25026,7 @@ function MemoryPanel() {
                   onClick=${() => openFile("project")}
                 >
                   <span class="name">
-                    REASONIX.md
+                    VISIONOX.md
                     ${tree.project.exists ? html4`<span class="pill ok">${t4("memory.exists")}</span>` : html4`<span class="pill">${t4("memory.create")}</span>`}
                   </span>
                   <span class="preview">${tree.project.path}</span>
@@ -25676,6 +25690,8 @@ function SemanticPanel() {
   const [error, setError] = d2(null);
   const [busy, setBusy] = d2(false);
   const [info, setInfo] = d2(null);
+  const [validating, setValidating] = d2(false);
+  const [validateResult, setValidateResult] = d2(null);
   const load = q2(async () => {
     try {
       const [semantic, config] = await Promise.all([
@@ -25684,6 +25700,7 @@ function SemanticPanel() {
       ]);
       setData(semantic);
       setDraft((current) => current && draftDirtyRef.current ? current : toConfigDraft(config));
+      setValidateResult(null);
     } catch (err) {
       setError(err.message);
     }
@@ -25801,6 +25818,37 @@ function SemanticPanel() {
       setBusy(false);
     }
   }, [draft, load]);
+  const validateProvider = q2(async () => {
+    if (!draft) return;
+    setValidating(true);
+    setValidateResult(null);
+    setError(null);
+    try {
+      const v = validateSemanticDraft(draft);
+      const extraBody = v.extraBody;
+      const r3 = await api("/semantic/validate-provider", {
+        method: "POST",
+        body: {
+          provider: draft.provider,
+          ollama: {
+            baseUrl: draft.ollama.baseUrl,
+            model: draft.ollama.model
+          },
+          openaiCompat: {
+            baseUrl: draft.openaiCompat.baseUrl,
+            apiKey: draft.openaiCompat.apiKey,
+            model: draft.openaiCompat.model,
+            extraBody
+          }
+        }
+      });
+      setValidateResult(r3);
+    } catch (err) {
+      setValidateResult({ ok: false, error: err.message });
+    } finally {
+      setValidating(false);
+    }
+  }, [draft]);
   if (!data && !error) {
     return html4`<div class="card" style="color:var(--fg-3)">${t4("common.loading")}</div>`;
   }
@@ -25970,8 +26018,10 @@ function SemanticPanel() {
                 ${semanticValidation.error ? html4`<div style="color:var(--c-err);font-size:12px;margin-top:-2px">${semanticValidation.error}</div>` : null}
               `}
           <div style="display:flex;gap:6px;margin-top:10px">
-            <button class="btn primary" disabled=${busy || semanticValidation.error !== null} onClick=${saveProviderConfig}>${t4("common.save")}</button>
+            <button class="btn primary" disabled=${busy || validating || semanticValidation.error !== null} onClick=${validateProvider}>${validating ? t4("semantic.validating") : t4("semantic.validateModel")}</button>
+            <button class="btn primary" disabled=${busy || validating || semanticValidation.error !== null} onClick=${saveProviderConfig}>${t4("common.save")}</button>
           </div>
+          ${validateResult ? html4`<div style="margin-top:6px"><span class="pill ${validateResult.ok ? 'ok' : 'err'}">${validateResult.ok ? t4("semantic.validateOk", { model: validateResult.model, dim: String(validateResult.dim ?? '?'), latencyMs: String(validateResult.latencyMs ?? 0) }) : t4("semantic.validateFailed") + ': ' + (validateResult.error || '')}</span></div>` : null}
         </div>
         ${info ? html4`<div><span class="pill info">${info}</span></div>` : null}
 
@@ -26586,7 +26636,7 @@ function SessionsPanel() {
                   <div class="card-h"><span class="title">${t4("sessions.resumeTitle")}</span></div>
                   <div class="card-b" style="font-size:12.5px;color:var(--fg-2)">
                     ${t4("sessions.resumeDesc")}
-                    <code class="mono" style="display:block;margin-top:8px;padding:8px 10px;background:var(--bg-input);border-radius:var(--r);color:var(--fg-0);font-size:12px;user-select:all">reasonix chat --session ${open.name}</code>
+                    <code class="mono" style="display:block;margin-top:8px;padding:8px 10px;background:var(--bg-input);border-radius:var(--r);color:var(--fg-0);font-size:12px;user-select:all">visionox chat --session ${open.name}</code>
                   </div>
                 </div>
                 ${openLoading ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : open.messages && open.messages.length > 0 ? html4`<div class="chat-feed" style="max-height:calc(100vh - 220px);overflow-y:auto">
@@ -26930,6 +26980,14 @@ function SettingsPanel() {
   const [loopStatus, setLoopStatus] = d2(null);
   const [loopAvgCost, setLoopAvgCost] = d2(null);
   const [loopBusy, setLoopBusy] = d2(false);
+  const [showDevLog, setShowDevLog] = d2(false);
+  const [logLines, setLogLines] = d2([]);
+  const refreshLogs = q2(async () => {
+    try {
+      const r3 = await api("/logs");
+      setLogLines(r3.logs ?? []);
+    } catch { setLogLines([]); }
+  }, []);
   const lastStatusSyncRef = A2(0);
   const [now, setNow] = d2(() => Date.now());
   const load = q2(async () => {
@@ -27195,6 +27253,16 @@ function SettingsPanel() {
     html4`<code class="mono">${v3.editMode}</code>`,
     t4("settings.editModeNote")
   )}
+      </div>
+
+      ${sectionH3(t4("settings.sectionDev"))}
+      <div class="card">
+        <button class="btn ghost" onClick=${() => { setShowDevLog(!showDevLog); if (!showDevLog) refreshLogs(); }}>${t4("settings.devMode")}</button>
+        ${showDevLog ? html4`
+          <div style="margin-top:10px;max-height:400px;overflow-y:auto;background:var(--bg-code);border:1px solid var(--bd);border-radius:var(--r);padding:10px;font-family:var(--font-mono);font-size:11px;line-height:1.5;white-space:pre-wrap;color:var(--fg-1)">
+            ${logLines.length === 0 ? t4("settings.noLogs") : logLines.map((l) => html4`<div style="padding:1px 0;border-bottom:1px solid var(--bd)"><span style="color:var(--fg-4)">${new Date(l.ts).toLocaleTimeString()}</span>  ${l.msg}</div>`)}
+          </div>
+        ` : null}
       </div>
     </div>
   `;
@@ -27478,7 +27546,7 @@ function SystemPanel() {
         <div class="health-item">
           <div class="lbl">${t4("system.usageLog")} <span class="pill ok">${t4("system.ok")}</span></div>
           <div class="v">${fmtBytes(h3.usageLog.bytes)}</div>
-          <div class="meta">~/.reasonix/usage.jsonl</div>
+          <div class="meta">~/.visionox/usage.jsonl</div>
         </div>
 
         <div class="health-item">
@@ -27497,7 +27565,7 @@ function SystemPanel() {
         </div>
         <table class="tbl">
           <tbody style="font-size:11.5px">
-            <tr><td class="dim" style="padding:5px 14px">${t4("system.home")}</td><td class="path">${h3.reasonixHome}</td></tr>
+            <tr><td class="dim" style="padding:5px 14px">${t4("system.home")}</td><td class="path">${h3.visionoxHome}</td></tr>
             <tr><td class="dim" style="padding:5px 14px">${t4("system.sessionsPath")}</td><td class="path">${h3.sessions.path}</td></tr>
             <tr><td class="dim" style="padding:5px 14px">${t4("system.memoryPath")}</td><td class="path">${h3.memory.path}</td></tr>
             <tr><td class="dim" style="padding:5px 14px">${t4("system.semanticPath")}</td><td class="path">${h3.semantic.path}</td></tr>
@@ -27775,8 +27843,8 @@ function tabSections() {
       label: t4("app.sectionWorkspace"),
       tabs: [
         { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html5`<${ChatPanel} />` },
-        { id: "plans", name: t4("app.tabPlans"), glyph: "\u229E", panel: () => html5`<${PlansPanel} />` },
-        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html5`<${SessionsPanel} />` }
+        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html5`<${SessionsPanel} />` },
+        { id: "plans", name: t4("app.tabPlans"), glyph: "\u229E", panel: () => html5`<${PlansPanel} />` }
       ]
     },
     {
@@ -27852,8 +27920,7 @@ function App() {
     <div class=${`app ${sidebarCollapsed ? "collapsed" : ""}`}>
       <aside class="app-side">
         <div class="brand">
-          <span class="glyph">◈</span>
-          <span class="label">REASONIX</span>
+          <img src="/assets/v3.png" alt="" height="26" style="flex-shrink:0" />
           <span class="ver">${MODE}</span>
         </div>
         <div class="side-tabs">
@@ -27884,13 +27951,8 @@ function App() {
           >${sidebarCollapsed ? "\xBB" : "\xAB"}</span>
         </div>
       </aside>
-      <header class="app-top">
-        <span class="ws">
-          <span class="path">dashboard</span>
-          <span class="sep">·</span>
-          <span class="branch">${MODE}</span>
-        </span>
-        <span class="grow"></span>
+      <header class="app-top" style="justify-content:center">
+        <span style="font-family:'Microsoft YaHei','微软雅黑',sans-serif;font-size:15px;color:var(--fg-0);font-weight:600;letter-spacing:.02em">维信诺协同办公平台 - 产品工程中心 @2026</span>
       </header>
       <div class="app-body">
         <${ErrorBoundary}>${active.panel()}<//>

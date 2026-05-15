@@ -224,6 +224,12 @@ function serveAsset(name) {
   if (VENDOR_CSS_NAMES.has(name)) {
     return { body: loadVendorCss(name), contentType: "text/css; charset=utf-8" };
   }
+  if (name.endsWith(".png")) {
+    try {
+      const body = readFileSync(join(ASSET_DIR, "dist", name));
+      return { body, contentType: "image/png" };
+    } catch { return null; }
+  }
   return null;
 }
 
@@ -265,7 +271,7 @@ async function handleEditMode(method, _rest, body, ctx) {
     if (!ctx.setEditMode) {
       return {
         status: 503,
-        body: { error: "edit-mode mutation requires an attached `reasonix code` session." }
+        body: { error: "edit-mode mutation requires an attached `visionox code` session." }
       };
     }
     const { mode } = parseBody(body);
@@ -287,7 +293,7 @@ var MAX_DEPTH = 4;
 var SKIP_DIRS = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
-  ".reasonix",
+  ".visionox",
   "dist",
   "build",
   "out",
@@ -413,10 +419,12 @@ async function handleHealth(method, _rest, _body, ctx) {
     return { status: 405, body: { error: "GET only" } };
   }
   const home = homedir();
-  const reasonixHome = join3(home, ".reasonix");
-  const sessionsStat = dirSize(join3(reasonixHome, "sessions"));
-  const memoryStat = dirSize(join3(reasonixHome, "memory"));
-  const semanticStat = dirSize(join3(reasonixHome, "semantic"));
+  const visionoxHome = join3(home, ".visionox");
+  const sessionsStat = dirSize(join3(visionoxHome, "sessions"));
+  const memoryStat = dirSize(join3(visionoxHome, "memory"));
+  const cwd = ctx.getCurrentCwd?.();
+  const semanticPath = cwd ? join3(cwd, INDEX_DIR_NAME) : join3(visionoxHome, "semantic");
+  const semanticStat = dirSize(semanticPath);
   let usageBytes = 0;
   if (existsSync2(ctx.usageLogPath)) {
     try {
@@ -430,7 +438,7 @@ async function handleHealth(method, _rest, _body, ctx) {
     body: {
       version: VERSION,
       latestVersion: ctx.getLatestVersion?.() ?? null,
-      reasonixHome,
+      visionoxHome,
       sessions: {
         path: sessionsStat.path,
         count: sessions.length,
@@ -552,7 +560,7 @@ async function handleHooks(method, rest, body, ctx) {
       if (!cwd) {
         return {
           status: 503,
-          body: { error: "no active project \u2014 open `/dashboard` from inside `reasonix code`" }
+          body: { error: "no active project \u2014 open `/dashboard` from inside `visionox code`" }
         };
       }
       path = projectSettingsPath(cwd);
@@ -898,7 +906,7 @@ async function handleMcp(method, rest, body, ctx, query = new URLSearchParams())
       return {
         status: 503,
         body: {
-          error: "live MCP reload not wired in this session \u2014 restart `reasonix code` to apply spec edits."
+          error: "live MCP reload not wired in this session \u2014 restart `visionox code` to apply spec edits."
         }
       };
     }
@@ -1070,10 +1078,10 @@ function projectHash(rootDir) {
   return createHash("sha1").update(resolvePath(rootDir)).digest("hex").slice(0, 16);
 }
 function globalMemoryDir() {
-  return join4(homedir2(), ".reasonix", "memory", "global");
+  return join4(homedir2(), ".visionox", "memory", "global");
 }
 function projectMemoryDir(rootDir) {
-  return join4(homedir2(), ".reasonix", "memory", projectHash(rootDir));
+  return join4(homedir2(), ".visionox", "memory", projectHash(rootDir));
 }
 function parseBody6(raw) {
   if (!raw) return {};
@@ -1618,7 +1626,8 @@ async function handleOverview(method, _rest, _body, ctx) {
   }
   const cfg = readConfig(ctx.configPath);
   const cwd = ctx.getCurrentCwd?.() ?? null;
-  const semanticIndexExists = cwd ? await indexExists(cwd).catch(() => false) : null;
+  const isDesktop = ctx.mode === "desktop";
+  const semanticIndexExists = isDesktop ? null : (cwd ? await indexExists(cwd).catch(() => false) : null);
   const overview = {
     version: VERSION,
     mode: ctx.mode,
@@ -1630,6 +1639,7 @@ async function handleOverview(method, _rest, _body, ctx) {
     planMode: ctx.getPlanMode?.() ?? null,
     pendingEdits: ctx.getPendingEditCount?.() ?? null,
     mcpServerCount: ctx.mcpServers?.length ?? null,
+    hasApiKey: ctx.hasApiKey ?? null,
     toolCount: ctx.tools ? ctx.tools.size : null,
     preset: cfg.preset ?? "auto",
     reasoningEffort: cfg.reasoningEffort ?? "max",
@@ -1669,7 +1679,7 @@ async function handlePermissions(method, rest, body, ctx) {
     return {
       status: 503,
       body: {
-        error: "no active project \u2014 mutations require an attached dashboard session (run `/dashboard` from inside `reasonix code`)."
+        error: "no active project \u2014 mutations require an attached dashboard session (run `/dashboard` from inside `visionox code`)."
       }
     };
   }
@@ -1796,8 +1806,86 @@ async function handleSemantic(method, rest, body, ctx) {
     if (action === "start") return await startDaemon(ctx);
     if (action === "pull") return await startPull(body, ctx);
   }
+  if (sub === "validate-provider" && method === "POST") return await validateProviderApi(body, ctx);
   if (sub === "search" && method === "POST") return await runSearch(body, ctx);
   return { status: 404, body: { error: "no such semantic endpoint" } };
+}
+async function validateProviderApi(rawBody, ctx) {
+  let parsed;
+  try { parsed = JSON.parse(rawBody || "{}"); } catch {
+    return { status: 400, body: { error: "body must be JSON" } };
+  }
+  // Save previous config for rollback
+  const prev = loadSemanticEmbeddingUserConfig(ctx.configPath);
+  try {
+    // Tentatively save the provided config so resolveSemanticEmbeddingConfig works
+    const next = {
+      provider: parsed.provider === "openai-compat" ? "openai-compat" : "ollama",
+      ollama: {
+        baseUrl: typeof parsed.ollama?.baseUrl === "string" ? parsed.ollama.baseUrl : prev.ollama?.baseUrl,
+        model: typeof parsed.ollama?.model === "string" ? parsed.ollama.model : prev.ollama?.model
+      },
+      openaiCompat: {
+        baseUrl: typeof parsed.openaiCompat?.baseUrl === "string" ? normalizeEmbeddingUrl(parsed.openaiCompat.baseUrl) : prev.openaiCompat?.baseUrl,
+        apiKey: typeof parsed.openaiCompat?.apiKey === "string" ? parsed.openaiCompat.apiKey.trim() || prev.openaiCompat?.apiKey : prev.openaiCompat?.apiKey,
+        model: typeof parsed.openaiCompat?.model === "string" ? parsed.openaiCompat.model : prev.openaiCompat?.model,
+        extraBody: parsed.openaiCompat?.extraBody === void 0 ? prev.openaiCompat?.extraBody : parsed.openaiCompat.extraBody
+      }
+    };
+    saveSemanticEmbeddingConfig(next, ctx.configPath);
+    const config = resolveSemanticEmbeddingConfig(ctx.configPath);
+    const startedAt = Date.now();
+
+    if (config.provider === "ollama") {
+      const status = await checkOllamaStatus(config.model, config.baseUrl);
+      const latencyMs = Date.now() - startedAt;
+      if (!status.binaryFound) {
+        return { status: 200, body: { ok: false, error: "Ollama binary not found. Install from https://ollama.com", provider: "ollama", model: config.model } };
+      }
+      if (!status.daemonRunning) {
+        return { status: 200, body: { ok: false, error: "Ollama daemon not running. Run `ollama serve` to start.", provider: "ollama", model: config.model } };
+      }
+      if (!status.modelPulled) {
+        return { status: 200, body: { ok: false, error: `Model "${config.model}" not pulled. Run \`ollama pull ${config.model}\` first. Installed models: ${(status.installedModels || []).join(", ") || "none"}`, provider: "ollama", model: config.model } };
+      }
+      return { status: 200, body: { ok: true, provider: "ollama", model: config.model, dim: null, latencyMs } };
+    }
+
+    // OpenAI-compatible: send a real embedding request
+    const body2 = JSON.stringify({
+      model: config.model,
+      input: "test",
+      ...(config.extraBody || {})
+    });
+    const url = config.baseUrl.replace(/\/+$/, "");
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {})
+      },
+      body: body2,
+      signal: AbortSignal.timeout(config.timeoutMs || 30000)
+    });
+    const latencyMs = Date.now() - startedAt;
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try { const t = await res.text(); detail += ` — ${t.slice(0, 200)}`; } catch {}
+      return { status: 200, body: { ok: false, error: `API returned ${detail}`, provider: "openai-compat", model: config.model } };
+    }
+    const json = await res.json();
+    // Check embedding response shape
+    if (!json || !Array.isArray(json.data) || !json.data[0] || !Array.isArray(json.data[0].embedding)) {
+      return { status: 200, body: { ok: false, error: "Model returned text, not embeddings — check model type (use an embedding model, not a chat model)", provider: "openai-compat", model: config.model } };
+    }
+    const dim = json.data[0].embedding.length;
+    return { status: 200, body: { ok: true, provider: "openai-compat", model: config.model, dim, latencyMs } };
+  } catch (err) {
+    return { status: 200, body: { ok: false, error: err.message, provider: parsed.provider === "openai-compat" ? "openai-compat" : "ollama", model: null } };
+  } finally {
+    // Restore previous config
+    saveSemanticEmbeddingConfig(prev, ctx.configPath);
+  }
 }
 async function runSearch(rawBody, ctx) {
   const root = getRoot(ctx);
@@ -1851,7 +1939,7 @@ async function getStatus(ctx) {
       status: 200,
       body: {
         attached: false,
-        reason: "Semantic indexing requires a code-mode session \u2014 run `/dashboard` from inside `reasonix code` instead of standalone `reasonix dashboard`."
+        reason: "Semantic indexing requires a code-mode session \u2014 run `/dashboard` from inside `visionox code` instead of standalone `visionox dashboard`."
       }
     };
   }
@@ -2127,6 +2215,12 @@ function getSemanticConfig(ctx) {
     body: redactSemanticEmbeddingConfig(loadSemanticEmbeddingUserConfig(ctx.configPath))
   };
 }
+function normalizeEmbeddingUrl(url) {
+  if (!url || typeof url !== "string") return url;
+  const trimmed = url.trim().replace(/\/+$/, "");
+  if (trimmed.endsWith("/embeddings")) return trimmed;
+  return trimmed + "/embeddings";
+}
 function saveSemanticConfigApi(rawBody, ctx) {
   let parsed;
   try {
@@ -2142,7 +2236,7 @@ function saveSemanticConfigApi(rawBody, ctx) {
       model: typeof parsed.ollama?.model === "string" ? parsed.ollama.model : existing.ollama?.model
     },
     openaiCompat: {
-      baseUrl: typeof parsed.openaiCompat?.baseUrl === "string" ? parsed.openaiCompat.baseUrl : existing.openaiCompat?.baseUrl,
+      baseUrl: typeof parsed.openaiCompat?.baseUrl === "string" ? normalizeEmbeddingUrl(parsed.openaiCompat.baseUrl) : existing.openaiCompat?.baseUrl,
       apiKey: typeof parsed.openaiCompat?.apiKey === "string" ? parsed.openaiCompat.apiKey.trim() || existing.openaiCompat?.apiKey : existing.openaiCompat?.apiKey,
       model: typeof parsed.openaiCompat?.model === "string" ? parsed.openaiCompat.model : existing.openaiCompat?.model,
       extraBody: parsed.openaiCompat?.extraBody === void 0 ? existing.openaiCompat?.extraBody : parsed.openaiCompat.extraBody
@@ -2305,8 +2399,10 @@ async function handleSettings(method, _rest, body, ctx) {
         proNext: live?.proArmed ?? false,
         budgetUsd: live?.budgetUsd ?? null,
         sessionSpendUsd: ctx.getStats?.()?.totalCostUsd ?? null,
+        workspaceDir: cfg.workspaceDir ?? null,
         // Hint to the SPA which fields require restart.
         appliesAt: {
+          workspaceDir: "next-session",
           apiKey: "next-session",
           baseUrl: "next-session",
           preset: "next-session",
@@ -2404,6 +2500,14 @@ async function handleSettings(method, _rest, body, ctx) {
       }
       changed.push("budgetUsd");
     }
+    if (fields.workspaceDir !== void 0) {
+      if (typeof fields.workspaceDir !== "string" || !fields.workspaceDir.trim()) {
+        return { status: 400, body: { error: "workspaceDir must be a non-empty string" } };
+      }
+      cfg.workspaceDir = fields.workspaceDir.trim();
+      ctx.setWorkspaceDir?.(fields.workspaceDir.trim());
+      changed.push("workspaceDir");
+    }
     if (changed.length > 0) {
       writeConfig(cfg, ctx.configPath);
       if (langPending) setLanguage(langPending);
@@ -2446,10 +2550,10 @@ function parseBody10(raw) {
 }
 var SAFE_NAME2 = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 function globalSkillsDir() {
-  return join6(homedir3(), ".reasonix", SKILLS_DIRNAME);
+  return join6(homedir3(), ".visionox", SKILLS_DIRNAME);
 }
 function projectSkillsDir(rootDir) {
-  return join6(rootDir, ".reasonix", SKILLS_DIRNAME);
+  return join6(rootDir, ".visionox", SKILLS_DIRNAME);
 }
 function parseFrontmatterDescription(raw) {
   const lines = raw.split(/\r?\n/);
@@ -2593,7 +2697,7 @@ async function handleSkills(method, rest, body, ctx) {
     if (!cwd) {
       return {
         status: 503,
-        body: { error: "no active project \u2014 open `/dashboard` from `reasonix code`" }
+        body: { error: "no active project \u2014 open `/dashboard` from `visionox code`" }
       };
     }
     dir = projectSkillsDir(cwd);
@@ -2671,7 +2775,7 @@ async function handleSubmit(method, _rest, body, ctx) {
     return {
       status: 503,
       body: {
-        error: "submit requires an attached dashboard session \u2014 open `/dashboard` from inside `reasonix code` or `reasonix chat`."
+        error: "submit requires an attached dashboard session \u2014 open `/dashboard` from inside `visionox code` or `visionox chat`."
       }
     };
   }
@@ -2703,7 +2807,7 @@ async function handleTools(method, _rest, _body, ctx) {
     return {
       status: 503,
       body: {
-        error: "live tools view requires an attached session \u2014 run `/dashboard` from inside `reasonix code` instead of standalone `reasonix dashboard`.",
+        error: "live tools view requires an attached session \u2014 run `/dashboard` from inside `visionox code` instead of standalone `visionox dashboard`.",
         available: false
       }
     };
@@ -2842,6 +2946,9 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleFiles(method, rest, body, ctx);
       case "loop":
         return await handleLoop(method, rest, body, ctx);
+      case "logs":
+        if (method !== "GET") return { status: 405, body: { error: "GET only" } };
+        return { status: 200, body: { logs: ctx.getLogs?.() ?? [] } };
       case "models":
         return await handleModels(method, rest, body, ctx);
       default:
@@ -2926,13 +3033,16 @@ async function dispatch(req, res, ctx, expectedToken) {
     return;
   }
   if (path.startsWith("/assets/")) {
-    const fail = checkAuth(req, expectedToken, false);
-    if (fail) {
-      res.writeHead(fail.status);
-      res.end();
-      return;
+    const assetName = path.slice("/assets/".length);
+    if (!assetName.endsWith(".png")) {
+      const fail = checkAuth(req, expectedToken, false);
+      if (fail) {
+        res.writeHead(fail.status);
+        res.end();
+        return;
+      }
     }
-    const asset = serveAsset(path.slice("/assets/".length));
+    const asset = serveAsset(assetName);
     if (!asset) {
       res.writeHead(404);
       res.end("not found");

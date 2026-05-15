@@ -23,7 +23,7 @@ import {
 import { homedir } from "os";
 import { dirname, join } from "path";
 function defaultUsageLogPath(homeDirOverride) {
-  return join(homeDirOverride ?? homedir(), ".reasonix", "usage.jsonl");
+  return join(homeDirOverride ?? homedir(), ".visionox", "usage.jsonl");
 }
 var USAGE_COMPACTION_THRESHOLD_BYTES = 5 * 1024 * 1024;
 var USAGE_RETENTION_DAYS = 365;

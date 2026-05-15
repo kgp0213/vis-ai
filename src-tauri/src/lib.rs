@@ -1,6 +1,10 @@
 use std::io::BufRead;
+use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+const DETACHED_PROCESS: u32 = 0x00000008;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -35,7 +39,8 @@ fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>
         .arg("--port")
         .arg("0")
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
@@ -79,7 +84,7 @@ pub fn run() {
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .title("Reasonix")
+            .title("")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
             .center()
@@ -120,7 +125,7 @@ pub fn run() {
             });
 
             // ── System tray ───────────────────────────────────────
-            let quit_i = MenuItemBuilder::new("Quit Reasonix")
+            let quit_i = MenuItemBuilder::new("Quit Visionox")
                 .id("quit")
                 .build(app)?;
             let show_i = MenuItemBuilder::new("Show Window")
@@ -134,7 +139,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .menu(&tray_menu)
-                .tooltip("Reasonix")
+                .tooltip("Visionox")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
                     "show" => {

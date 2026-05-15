@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/open-tauri/v2/main/packages/tauri-conf/schema.json",
-  "productName": "Reasonix",
+  "productName": "Visionox",
   "version": "0.1.0",
-  "identifier": "com.reasonix.desktop",
+  "identifier": "com.visionox.desktop",
   "build": {
     "beforeDevCommand": "",
     "devUrl": "http://localhost:1420",
@@ -16,22 +16,22 @@
   },
   "bundle": {
     "active": true,
+    "resources": [
+      "resources/test.txt",
+      "resources/server/node.exe",
+      "resources/server/launcher.mjs",
+      "resources/server/visionox-pkg/**/*"
+    ],
+    "windows": {
+      "wix": null,
+      "nsis": null
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": [
-      "resources/test.txt",
-      "resources/server/node.exe",
-      "resources/server/launcher.mjs",
-      "resources/server/reasonix-pkg/**"
-    ],
-    "windows": {
-      "wix": null,
-      "nsis": null
-    }
+    ]
   }
 }

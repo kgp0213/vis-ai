@@ -13,7 +13,7 @@ var CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
 var FETCH_TIMEOUT_MS = 1e4;
 var CACHE_SCHEMA_VERSION = 2;
 function defaultCachePath() {
-  return join(homedir(), ".reasonix", "mcp-registry-cache.json");
+  return join(homedir(), ".visionox", "mcp-registry-cache.json");
 }
 function readCache(path) {
   try {

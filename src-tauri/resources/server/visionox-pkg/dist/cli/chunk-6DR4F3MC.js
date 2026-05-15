@@ -3,8 +3,8 @@
 // src/memory/project.ts
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename, join } from "path";
-var PROJECT_MEMORY_FILE = "REASONIX.md";
-var PROJECT_MEMORY_FILES = ["REASONIX.md", "AGENTS.md", "AGENT.md"];
+var PROJECT_MEMORY_FILE = "VISIONOX.md";
+var PROJECT_MEMORY_FILES = ["VISIONOX.md", "AGENTS.md", "AGENT.md"];
 var PROJECT_MEMORY_MAX_CHARS = 8e3;
 var FOREIGN_PLATFORM_FILE_MARKERS = ["SOUL.md", "PERSONA.md"];
 function detectForeignAgentPlatform(rootDir) {
@@ -164,11 +164,11 @@ var SkillStore = class {
     const out = [];
     if (this.projectRoot) {
       out.push({
-        dir: join2(this.projectRoot, ".reasonix", SKILLS_DIRNAME),
+        dir: join2(this.projectRoot, ".visionox", SKILLS_DIRNAME),
         scope: "project"
       });
     }
-    out.push({ dir: join2(this.homeDir, ".reasonix", SKILLS_DIRNAME), scope: "global" });
+    out.push({ dir: join2(this.homeDir, ".visionox", SKILLS_DIRNAME), scope: "global" });
     return out;
   }
   /** Higher-priority root wins on collision (project > global > builtin); sorted for stable prefix hash. */
@@ -207,7 +207,7 @@ var SkillStore = class {
     if (scope === "project" && !this.projectRoot) {
       return { error: "project scope requires a workspace \u2014 run from `reasonix code`" };
     }
-    const root = scope === "project" ? join2(this.projectRoot ?? "", ".reasonix", SKILLS_DIRNAME) : join2(this.homeDir, ".reasonix", SKILLS_DIRNAME);
+    const root = scope === "project" ? join2(this.projectRoot ?? "", ".visionox", SKILLS_DIRNAME) : join2(this.homeDir, ".visionox", SKILLS_DIRNAME);
     const flat = join2(root, `${name}.md`);
     const folder = join2(root, name, SKILL_FILE);
     if (existsSync2(folder)) {

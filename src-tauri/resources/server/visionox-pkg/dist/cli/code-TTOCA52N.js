@@ -83,7 +83,7 @@ function registerScaffoldTools(registry, opts = {}) {
   const configPath = opts.configPath ?? defaultConfigPath();
   registry.register({
     name: "create_skill",
-    description: 'Scaffold a new skill (`SKILL.md` in `.reasonix/skills/<name>.md`) the user can invoke later via `/skill <name>`. Use this when the user asks the agent to add a playbook, automate a recurring workflow, or capture a multi-step recipe as a named skill. The frontmatter is filled from the structured args here (description / allowed_tools / run_as / model) so the model never has to write raw YAML. Use `run_as: "subagent"` for read-and-synthesize playbooks where only the final answer should come back; default `"inline"` appends the body to the parent log so the user sees the steps. Refuses to overwrite an existing skill \u2014 pick a different name or ask the user to delete the old one.',
+    description: 'Scaffold a new skill (`SKILL.md` in `.visionox/skills/<name>.md`) the user can invoke later via `/skill <name>`. Use this when the user asks the agent to add a playbook, automate a recurring workflow, or capture a multi-step recipe as a named skill. The frontmatter is filled from the structured args here (description / allowed_tools / run_as / model) so the model never has to write raw YAML. Use `run_as: "subagent"` for read-and-synthesize playbooks where only the final answer should come back; default `"inline"` appends the body to the parent log so the user sees the steps. Refuses to overwrite an existing skill \u2014 pick a different name or ask the user to delete the old one.',
     parameters: {
       type: "object",
       properties: {
@@ -102,7 +102,7 @@ function registerScaffoldTools(registry, opts = {}) {
         scope: {
           type: "string",
           enum: ["project", "global"],
-          description: "`project` = `.reasonix/skills/` under the workspace (default, requires `reasonix code`); `global` = `~/.reasonix/skills/` shared across all repos."
+          description: "`project` = `.visionox/skills/` under the workspace (default, requires `reasonix code`); `global` = `~/.visionox/skills/` shared across all repos."
         },
         allowed_tools: {
           type: "array",

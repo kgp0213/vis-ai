@@ -4,7 +4,13 @@ src-tauri/target/
 # Node.js
 node_modules/
 src-tauri/resources/server/node.exe
-src-tauri/resources/server/reasonix-pkg/node_modules/
+src-tauri/resources/server/visionox-pkg/node_modules/
+server/visionox-pkg/
+
+# Temp files
+tmp_*
+launcher_*.log
+launcher_url*.txt
 
 # OS files
 .DS_Store
@@ -18,6 +24,9 @@ Thumbs.db
 
 # Portable distribution output (not source)
 portable/
+
+# Temp icon work
+icons/
 
 # Env/secrets
 .env

@@ -248,7 +248,7 @@ function sanitizeRoot(rootDir) {
   return resolve(rootDir).replace(/[\\/:]+/g, "_").replace(/^_+/, "");
 }
 function storeRoot(rootDir) {
-  return join(homedir(), ".reasonix", "sessions", sanitizeRoot(rootDir), "checkpoints");
+  return join(homedir(), ".visionox", "sessions", sanitizeRoot(rootDir), "checkpoints");
 }
 function indexPath(rootDir) {
   return join(storeRoot(rootDir), "index.json");
@@ -752,7 +752,7 @@ import { dirname as dirname3, join as join3 } from "path";
 function slashUsagePath() {
   const override = process.env.REASONIX_SLASH_USAGE_PATH;
   if (override) return override;
-  return join3(homedir2(), ".reasonix", "slash-usage.json");
+  return join3(homedir2(), ".visionox", "slash-usage.json");
 }
 function loadSlashUsage() {
   const path = slashUsagePath();
@@ -7193,8 +7193,8 @@ function detectHashMemory(text) {
 function appendProjectMemory(rootDir, note) {
   return appendBulletToFile(resolveProjectMemoryWritePath(rootDir), note, PROJECT_HEADER);
 }
-var GLOBAL_MEMORY_DIR = ".reasonix";
-var GLOBAL_MEMORY_FILE = "REASONIX.md";
+var GLOBAL_MEMORY_DIR = ".visionox";
+var GLOBAL_MEMORY_FILE = "VISIONOX.md";
 function globalMemoryPath(homeDir = homedir3()) {
   return join6(homeDir, GLOBAL_MEMORY_DIR, GLOBAL_MEMORY_FILE);
 }
@@ -11287,9 +11287,9 @@ var handlers4 = {
 import { existsSync as existsSync4 } from "fs";
 import * as pathMod from "path";
 var INIT_PROMPT = [
-  "# Task: Initialize REASONIX.md",
+  "# Task: Initialize VISIONOX.md",
   "",
-  "I want you to generate a REASONIX.md at the project root that captures",
+  "I want you to generate a VISIONOX.md at the project root that captures",
   "the working knowledge a future Reasonix session needs to be productive",
   "here. This file is auto-pinned into your system prompt every launch,",
   "so its size and accuracy matter.",
@@ -11316,7 +11316,7 @@ var INIT_PROMPT = [
   "   runner, lint/format setup, build/run/test scripts, any non-obvious",
   "   convention with visible evidence (commit message format, import",
   "   order, naming pattern).",
-  "5. Write REASONIX.md with the sections below, skipping any you can't",
+  "5. Write VISIONOX.md with the sections below, skipping any you can't",
   "   fill from evidence.",
   "",
   "## Sections to use (skip ones with no evidence)",
@@ -11336,7 +11336,7 @@ var INIT_PROMPT = [
   "",
   "## Output",
   "",
-  "Write the result to `REASONIX.md` in the project root using the",
+  "Write the result to `VISIONOX.md` in the project root using the",
   "filesystem tools (edit_file with empty SEARCH if creating new,",
   "write_file if overwriting). After writing, STOP \u2014 do not summarize",
   "what you did, do not propose follow-up tasks. The user will review",
@@ -11349,7 +11349,7 @@ var init = (args, _loop, ctx) => {
     return { info: t("handlers.init.codeOnly") };
   }
   const force = (args[0] ?? "").toLowerCase() === "force";
-  const target = pathMod.join(ctx.codeRoot, "REASONIX.md");
+  const target = pathMod.join(ctx.codeRoot, "VISIONOX.md");
   if (existsSync4(target) && !force) {
     return {
       info: [

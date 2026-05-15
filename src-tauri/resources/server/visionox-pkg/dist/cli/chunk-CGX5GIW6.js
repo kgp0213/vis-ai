@@ -22,7 +22,7 @@ var DEFAULT_TIMEOUTS_MS = {
   Stop: 3e4
 };
 var HOOK_SETTINGS_FILENAME = "settings.json";
-var HOOK_SETTINGS_DIRNAME = ".reasonix";
+var HOOK_SETTINGS_DIRNAME = ".visionox";
 function globalSettingsPath(homeDirOverride) {
   return join(homeDirOverride ?? homedir(), HOOK_SETTINGS_DIRNAME, HOOK_SETTINGS_FILENAME);
 }

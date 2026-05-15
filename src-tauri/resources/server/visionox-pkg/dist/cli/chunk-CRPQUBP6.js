@@ -29,7 +29,7 @@ function readPackageVersion() {
 }
 var VERSION = readPackageVersion();
 function cachePath(homeDirOverride) {
-  return join(homeDirOverride ?? homedir(), ".reasonix", "version-cache.json");
+  return join(homeDirOverride ?? homedir(), ".visionox", "version-cache.json");
 }
 function readCache(homeDirOverride) {
   try {

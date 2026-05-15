@@ -38,7 +38,7 @@ function listAll() {
     );
     return;
   }
-  console.log("Saved sessions (~/.reasonix/sessions/):");
+  console.log("Saved sessions (~/.visionox/sessions/):");
   console.log("");
   console.log(`  ${"name".padEnd(22)} ${"msgs".padStart(6)}  ${"size".padStart(8)}  modified`);
   console.log(`  ${"\u2500".repeat(60)}`);

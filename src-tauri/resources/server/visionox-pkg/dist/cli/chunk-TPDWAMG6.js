@@ -299,19 +299,19 @@ var SLASH_COMMANDS = [
     cmd: "memory",
     group: "extend",
     argsHint: "[list|show <name>|forget <name>|clear <scope> confirm]",
-    summary: "show / manage pinned memory (REASONIX.md + ~/.reasonix/memory)"
+    summary: "show / manage pinned memory (VISIONOX.md + ~/.visionox/memory)"
   },
   {
     cmd: "skill",
     group: "extend",
     argsHint: "[list|show <name>|new <name>|<name> [args]]",
-    summary: "list / run / scaffold user skills (<project>/.reasonix/skills + ~/.reasonix/skills)"
+    summary: "list / run / scaffold user skills (<project>/.visionox/skills + ~/.visionox/skills)"
   },
   {
     cmd: "init",
     group: "code",
     argsHint: "[force]",
-    summary: "scan the project and synthesize a baseline REASONIX.md (model writes; review with /apply). `force` overwrites an existing file.",
+    summary: "scan the project and synthesize a baseline VISIONOX.md (model writes; review with /apply). `force` overwrites an existing file.",
     contextual: "code",
     argCompleter: ["force"]
   },
@@ -446,13 +446,13 @@ var SLASH_COMMANDS = [
     cmd: "hooks",
     group: "advanced",
     argsHint: "[reload]",
-    summary: "list active hooks (settings.json under .reasonix/) \xB7 reload re-reads from disk"
+    summary: "list active hooks (settings.json under .visionox/) \xB7 reload re-reads from disk"
   },
   {
     cmd: "permissions",
     group: "advanced",
     argsHint: "[list|add <prefix>|remove <prefix|N>|clear confirm]",
-    summary: "show / edit shell allowlist (builtin read-only \xB7 per-project: ~/.reasonix/config.json)",
+    summary: "show / edit shell allowlist (builtin read-only \xB7 per-project: ~/.visionox/config.json)",
     argCompleter: ["list", "add", "remove", "clear"]
   },
   {
