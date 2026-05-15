@@ -17,7 +17,6 @@
   "bundle": {
     "active": true,
     "resources": [
-      "resources/test.txt",
       "resources/server/node.exe",
       "resources/server/launcher.mjs",
       "resources/server/visionox-pkg/**/*"

@@ -4,8 +4,10 @@ src-tauri/target/
 # Node.js
 node_modules/
 src-tauri/resources/server/node.exe
+src-tauri/resources/server/visionox-pkg/dist/
 src-tauri/resources/server/visionox-pkg/node_modules/
 server/visionox-pkg/
+server/launcher.mjs
 
 # Temp files
 tmp_*

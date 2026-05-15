@@ -29759,7 +29759,7 @@ function tabSections() {
     }
   ];
 }
-function ConfirmDialog(_ref2) { var msg=_ref2.msg, onResolve=_ref2.onResolve; if(!msg) return null; return html6`<div style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5)"><div style="background:var(--bg-elev);border:1px solid var(--bd);border-radius:8px;padding:24px;min-width:320px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,.4)"><div style="font-size:14px;color:var(--fg-1);margin-bottom:20px;line-height:1.6">${msg}</div><div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onClick=${function(){onResolve(false)}}>${t4("modal.cancel")}</button><button class="btn primary" onClick=${function(){onResolve(true)}}>${t4("modal.confirm")}</button></div></div></div>`; }
+function ConfirmDialog(_ref2) { var msg=_ref2.msg, onResolve=_ref2.onResolve; if(!msg) return null; return html6`<div style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5)"><div style="background:var(--bg-elev);border:1px solid var(--bd);border-radius:8px;padding:24px;min-width:320px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,.4)"><div style="font-size:14px;color:var(--fg-1);margin-bottom:20px;line-height:1.6">${msg}</div><div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onClick=${function(){onResolve(false)}}>${t4("common.cancel")}</button><button class="btn primary" onClick=${function(){onResolve(true)}}>${t4("common.confirm")}</button></div></div></div>`; }
 
 function App() {
   useLang();
@@ -29772,12 +29772,12 @@ function App() {
     window._showConfirm = function(msg) {
       return new Promise(function(resolve) {
         setConfirmMsg(msg);
-        setConfirmResolve(function() { return resolve; });
+        setConfirmResolve({ fn: resolve });
       });
     };
   }, []);
   const handleConfirmResolve = function(result) {
-    if (confirmResolve) { var r = confirmResolve; setConfirmResolve(null); setConfirmMsg(null); r()(result); }
+    if (confirmResolve) { var r = confirmResolve; setConfirmResolve(null); setConfirmMsg(null); r.fn(result); }
   };
   const [activeId, setActiveId] = d2(() => {
     try {

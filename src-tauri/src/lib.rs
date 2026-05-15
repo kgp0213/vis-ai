@@ -1,19 +1,85 @@
 use std::io::BufRead;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
-const DETACHED_PROCESS: u32 = 0x00000008;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
+use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+struct JobObject {
+    handle: HANDLE,
+}
+
+impl JobObject {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err("CreateJobObjectW failed".into());
+        }
+
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION =
+            unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        let ret = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if ret == 0 {
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+            return Err("SetInformationJobObject failed".into());
+        }
+
+        Ok(Self { handle })
+    }
+
+    fn assign(&self, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+        let proc_handle =
+            unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        if proc_handle.is_null() {
+            return Err("OpenProcess failed".into());
+        }
+
+        let ret = unsafe { AssignProcessToJobObject(self.handle, proc_handle) };
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(proc_handle) };
+        if ret == 0 {
+            return Err("AssignProcessToJobObject failed".into());
+        }
+
+        Ok(())
+    }
+}
+
+// SAFETY: Windows HANDLE values are process-wide and thread-safe by design.
+unsafe impl Send for JobObject {}
+unsafe impl Sync for JobObject {}
+
+impl Drop for JobObject {
+    fn drop(&mut self) {
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.handle) };
+    }
+}
 
 struct ServerState {
     child: Option<Child>,
     url: Option<String>,
+    job: Option<Arc<JobObject>>,
 }
 
 /// Spawn the Node.js launcher and block until we parse the dashboard URL.
@@ -40,7 +106,7 @@ fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>
         .arg("0")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
@@ -73,9 +139,11 @@ fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .manage(Mutex::new(ServerState {
             child: None,
             url: None,
+            job: None,
         }))
         .setup(|app| {
             // ── Create main window FIRST (shows loading page) ─────
@@ -91,6 +159,11 @@ pub fn run() {
             .visible(true)
             .build()?;
 
+            // Create Job Object for guaranteed child cleanup on exit
+            let job = JobObject::new().expect("failed to create job object");
+            let job = Arc::new(job);
+            let job_for_thread = job.clone();
+
             // Spawn server in background thread so UI isn't blocked
             let win_for_url = main_window.clone();
             let app_handle = app.handle().clone();
@@ -100,12 +173,17 @@ pub fn run() {
                     Ok((child, url)) => {
                         println!("[tauri] dashboard ready at {}", url);
 
-                        // Store child handle for cleanup
+                        // Assign child to job object — kernel kills it when
+                        // this process exits regardless of the reason.
+                        let _ = job_for_thread.assign(child.id());
+
+                        // Store child handle and job for cleanup
                         let state = app_handle.state::<Mutex<ServerState>>();
                         {
                             let mut s = state.lock().unwrap();
                             s.child = Some(child);
                             s.url = Some(url.clone());
+                            s.job = Some(job_for_thread);
                         }
 
                         // Navigate the loading page to the dashboard
