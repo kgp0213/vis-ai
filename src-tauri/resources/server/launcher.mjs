@@ -12,8 +12,9 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { execSync } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
@@ -125,6 +126,16 @@ if (!existsSync(workspaceDir)) {
   mkdirSync(workspaceDir, { recursive: true });
 }
 
+// Deploy skill-creation-guide.md to workspace for agent reference
+const guideSrc = resolve(__dirname, "..", "skill-creation-guide.md");
+const guideDir = resolve(workspaceDir, ".visionox");
+const guideDst = resolve(guideDir, "skill-creation-guide.md");
+if (existsSync(guideSrc) && !existsSync(guideDst)) {
+  if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
+  copyFileSync(guideSrc, guideDst);
+  console.error(`[launcher] skill-creation-guide.md deployed to workspace`);
+}
+
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, model=${model}`);
 console.error(`[launcher] workspace: ${workspaceDir}`);
 
@@ -136,6 +147,7 @@ const jobs = new JobRegistry();
 registerFilesystemTools(tools, {
   rootDir: workspaceDir,
   allowWriting: true,
+  allowAllPaths: () => loadEditMode(configPath) === "admin",
 });
 
 // Shell tools — gated by edit mode (yolo=auto-approve, auto=semi-auto, review=confirm)
@@ -147,7 +159,7 @@ if (!config.editMode) {
 registerShellTools(tools, {
   rootDir: workspaceDir,
   extraAllowed: () => loadProjectShellAllowed(workspaceDir, configPath),
-  allowAll: () => loadEditMode(configPath) === "yolo",
+  allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
   jobs,
 });
 
@@ -169,6 +181,104 @@ registerChoiceTool(tools);
 registerTodoTool(tools);
 
 console.error(`[launcher] ${tools.size} tools registered`);
+
+// ── install_skill tool ────────────────────────────────────────────
+const skillsRoot = resolve(homedir(), ".visionox", "skills");
+
+tools.register({
+  name: "install_skill",
+  description: `安装或导入一个 Skill。支持两种方式:
+1. 提供 name + body — 直接写入 SKILL.md 到 ~/.visionox/skills/<name>/
+2. 提供 name + source — 从 .skill 文件（ZIP 格式）解压安装
+Skill 安装后在新对话中自动加载。`,
+  parameters: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Skill 名称，仅限英文小写+连字符，如 'my-skill'。禁止空格、中文、大写字母。",
+      },
+      body: {
+        type: "string",
+        description: "SKILL.md 的完整内容（含 YAML frontmatter）。与 source 二选一。",
+      },
+      source: {
+        type: "string",
+        description: ".skill 文件的本地路径（ZIP 格式）。与 body 二选一。",
+      },
+    },
+    required: ["name"],
+  },
+  fn: async (args) => {
+    const name = String(args.name ?? "").trim();
+    if (!name || !/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(name)) {
+      return JSON.stringify({
+        error: `invalid name: "${name}". Use lowercase + hyphens only, e.g. "my-skill". No spaces, no Chinese, no uppercase.`,
+      });
+    }
+    const skillDir = resolve(skillsRoot, name);
+    if (!existsSync(skillDir)) {
+      mkdirSync(skillDir, { recursive: true });
+    }
+
+    if (args.body) {
+      const body = String(args.body);
+      if (!body.includes("---") || body.indexOf("---") === body.lastIndexOf("---")) {
+        return JSON.stringify({
+          error: "SKILL.md must have YAML frontmatter (start and end with ---). See skill-creation-guide.md for the format.",
+        });
+      }
+      writeFileSync(resolve(skillDir, "SKILL.md"), body, "utf8");
+      return JSON.stringify({
+        installed: true,
+        name,
+        path: skillDir,
+        hint: "新对话中即可使用此 skill。",
+      });
+    }
+
+    if (args.source) {
+      const src = String(args.source);
+      if (!existsSync(src)) {
+        return JSON.stringify({ error: `source file not found: ${src}` });
+      }
+      if (!src.endsWith(".skill") && !src.endsWith(".zip")) {
+        return JSON.stringify({ error: `source must be a .skill or .zip file, got: ${src}` });
+      }
+      try {
+        const zipPath = src.endsWith(".skill") ? src.replace(/\.skill$/, ".zip") : src;
+        if (src.endsWith(".skill")) {
+          copyFileSync(src, zipPath);
+        }
+        if (process.platform === "win32") {
+          execSync(
+            `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${skillDir}' -Force"`,
+            { stdio: "pipe" }
+          );
+        } else {
+          execSync(`unzip -o "${zipPath}" -d "${skillDir}"`, { stdio: "pipe" });
+        }
+        if (src.endsWith(".skill")) {
+          try { require("fs").unlinkSync(zipPath); } catch {}
+        }
+        return JSON.stringify({
+          installed: true,
+          name,
+          path: skillDir,
+          hint: "新对话中即可使用此 skill。",
+        });
+      } catch (err) {
+        return JSON.stringify({ error: `extract failed: ${err.message}` });
+      }
+    }
+
+    return JSON.stringify({
+      error: "provide either body (SKILL.md content) or source (.skill file path).",
+    });
+  },
+});
+
+console.error(`[launcher] install_skill tool registered — skills root: ${skillsRoot}`);
 
 // ── Semantic search ──────────────────────────────────────────────
 let hasSemanticSearch = false;
@@ -472,7 +582,7 @@ const ctx = {
       nextMsgId = 1;
       // Add welcome message
       const welcomeId = `assistant-${Date.now()}`;
-      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
+      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
       messages.push(welcomeMsg);
       // Notify client
       busy = true;
@@ -565,7 +675,7 @@ const ctx = {
 messages.push({
   id: "welcome",
   role: "assistant",
-  text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。",
+  text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md",
 });
 
 // ── Start the server ────────────────────────────────────────────

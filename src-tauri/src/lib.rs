@@ -216,6 +216,7 @@ pub fn run() {
                 .build()?;
 
             TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
                 .menu(&tray_menu)
                 .tooltip("Visionox")
                 .on_menu_event(|app, event| match event.id().as_ref() {

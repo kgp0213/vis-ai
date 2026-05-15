@@ -19375,6 +19375,7 @@ var en = {
     editReviewTitle: "review \u2014 both edits and non-allowlisted shell ask first",
     editAutoTitle: "auto \u2014 edits auto-apply, shell still asks",
     editYoloTitle: "yolo \u2014 edits AND shell auto-run, allowlist bypassed",
+    editAdminTitle: "admin \u2014 yolo + unrestricted filesystem access (no sandbox)",
     railSession: "Session",
     railTurns: "turns",
     railPromptTok: "prompt tok",
@@ -20002,6 +20003,7 @@ var zhCN = {
     editReviewTitle: "review \u2014 \u7F16\u8F91\u548C\u975E\u5141\u8BB8\u5217\u8868\u7684 shell \u547D\u4EE4\u90FD\u4F1A\u5148\u8BE2\u95EE",
     editAutoTitle: "auto \u2014 \u7F16\u8F91\u81EA\u52A8\u5E94\u7528\uFF0Cshell \u4ECD\u4F1A\u8BE2\u95EE",
     editYoloTitle: "yolo \u2014 \u7F16\u8F91\u548C shell \u90FD\u81EA\u52A8\u8FD0\u884C\uFF0C\u7ED5\u8FC7\u5141\u8BB8\u5217\u8868",
+    editAdminTitle: "admin \u2014 yolo + \u65E0\u9650\u5236\u6587\u4EF6\u7CFB\u7EDF\u8BBF\u95EE\uFF08\u65E0\u6C99\u7BB1\uFF09",
     railSession: "\u4F1A\u8BDD",
     railTurns: "\u8F6E\u6B21",
     railPromptTok: "\u63D0\u793A tokens",
@@ -24078,13 +24080,13 @@ function ChatPanel() {
             ` : null}
           ${editMode ? html4`
               <div class="mode-picker" title=${t4("chat.editGateTitle")}>
-                ${["review", "auto", "yolo"].map(
+                ${["review", "auto", "yolo", "admin"].map(
     (m3) => html4`
                   <button
                     key=${m3}
-                    class="mode-btn ${editMode === m3 ? "active" : ""} ${m3 === "yolo" ? "yolo" : ""}"
+                    class="mode-btn ${editMode === m3 ? "active" : ""} ${m3 === "yolo" ? "yolo" : ""} ${m3 === "admin" ? "admin" : ""}"
                     onClick=${() => setEditMode(m3)}
-                    title=${m3 === "review" ? t4("chat.editReviewTitle") : m3 === "auto" ? t4("chat.editAutoTitle") : t4("chat.editYoloTitle")}
+                    title=${m3 === "review" ? t4("chat.editReviewTitle") : m3 === "auto" ? t4("chat.editAutoTitle") : m3 === "yolo" ? t4("chat.editYoloTitle") : t4("chat.editAdminTitle")}
                   >${m3}</button>
                 `
   )}

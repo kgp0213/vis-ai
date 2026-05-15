@@ -19,7 +19,8 @@
     "resources": [
       "resources/server/node.exe",
       "resources/server/launcher.mjs",
-      "resources/server/visionox-pkg/**/*"
+      "resources/server/visionox-pkg/**/*",
+      "resources/skill-creation-guide.md"
     ],
     "windows": {
       "wix": null,

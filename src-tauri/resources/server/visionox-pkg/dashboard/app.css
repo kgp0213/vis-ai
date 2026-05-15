@@ -1815,6 +1815,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   color: var(--bg);
 }
 .mode-btn.active.yolo {
+  background: var(--c-warn);
+  color: var(--bg);
+}
+.mode-btn.active.admin {
   background: var(--c-err);
   color: var(--bg);
 }
