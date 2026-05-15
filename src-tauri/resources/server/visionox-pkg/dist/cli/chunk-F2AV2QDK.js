@@ -1,12 +1,22 @@
 #!/usr/bin/env node
 import {
+  loadOverlay
+} from "./chunk-Y5XNV3NX.js";
+import {
+  createMcpRuntime
+} from "./chunk-SXLJBFIV.js";
+import {
+  Eventizer,
+  registerSkillTools,
+  shouldAutoResolveCheckpoint
+} from "./chunk-A7VHMMDE.js";
+import {
   formatMcpLifecycleEvent,
   formatMcpSlowToast
-} from "./chunk-BQNUJJN7.js";
+} from "./chunk-LTXADNCO.js";
 import {
-  buildTransportFromSpec,
-  preflightStdioSpec
-} from "./chunk-7G3SESEU.js";
+  buildTransportFromSpec
+} from "./chunk-BOFL3T45.js";
 import {
   dumpStartupProfile,
   markPhase
@@ -16,7 +26,6 @@ import {
   ImmutablePrefix,
   ToolRegistry,
   applyEditBlocks,
-  bridgeMcpTools,
   detectAtPicker,
   expandAtMentions,
   expandAtUrls,
@@ -35,25 +44,25 @@ import {
   toWholeFileEditBlock,
   walkFilesStream,
   webFetch
-} from "./chunk-BTSIAOUG.js";
-import {
-  McpClient,
-  inspectMcpServer,
-  parseMcpSpec
-} from "./chunk-SJNIIH5W.js";
+} from "./chunk-IEA6JOIP.js";
 import {
   openTranscriptFile,
   recordFromLoopEvent,
   writeRecord
-} from "./chunk-XHQIK7B6.js";
+} from "./chunk-7SPOFTMT.js";
 import {
-  MemoryStore
-} from "./chunk-DDA76P44.js";
+  McpClient,
+  parseMcpSpec
+} from "./chunk-CFY2XLY6.js";
+import {
+  MemoryStore,
+  effectivePriority
+} from "./chunk-ARF3N2SY.js";
 import {
   KeystrokeProvider,
   SingleSelect,
   useKeystroke
-} from "./chunk-NLV2YORE.js";
+} from "./chunk-4W2CICFQ.js";
 import {
   COLOR,
   GLYPH,
@@ -61,21 +70,22 @@ import {
   ThemeProvider,
   useColor,
   useThemeTokens
-} from "./chunk-SUZRC4NC.js";
+} from "./chunk-UV7XJUJH.js";
 import {
   PRESETS,
   PRESET_DESCRIPTIONS,
   resolvePreset
-} from "./chunk-MHDNZXJJ.js";
+} from "./chunk-E46ECXJD.js";
 import {
   runDoctorChecks
-} from "./chunk-JBBMMYOI.js";
+} from "./chunk-KZYLMMU5.js";
 import {
   countTokens
 } from "./chunk-DAEAAVDF.js";
 import {
-  DeepSeekClient
-} from "./chunk-KMWKGPFZ.js";
+  DeepSeekClient,
+  pickPrimaryBalance
+} from "./chunk-H4OLWRSX.js";
 import {
   loadDotenv
 } from "./chunk-3Q3C4W66.js";
@@ -92,16 +102,22 @@ import {
   archivePlanState,
   clearPlanState,
   countAdvancedCommands,
+  createCheckpoint,
+  deleteCheckpoint,
   detectSlashArgContext,
+  findCheckpoint,
+  fmtAgo,
+  listCheckpoints,
   listPlanArchives,
   loadPlanState,
   orderSlashCommandsByGroup,
   parseSlash,
   relativeTime,
   resolveSlashAlias,
+  restoreCheckpoint,
   savePlanState,
   suggestSlashCommands
-} from "./chunk-TPDWAMG6.js";
+} from "./chunk-A3LL4XDV.js";
 import {
   fetchSmitheryDetail,
   loadMorePages,
@@ -111,20 +127,20 @@ import {
 import {
   eventLogPath,
   openEventSink
-} from "./chunk-6NMWJSES.js";
+} from "./chunk-7VFNPMKG.js";
 import {
   BUILTIN_ALLOWLIST,
   formatCommandResult,
   pauseGate,
   runCommand
-} from "./chunk-NTVW2TWO.js";
+} from "./chunk-BYZGO3BX.js";
 import {
   PROJECT_MEMORY_FILE,
   SkillStore,
   memoryEnabled,
   readProjectMemory,
   resolveProjectMemoryWritePath
-} from "./chunk-6DR4F3MC.js";
+} from "./chunk-CD4SCQL4.js";
 import {
   HOOK_EVENTS,
   formatHookOutcomeMessage,
@@ -132,10 +148,11 @@ import {
   loadHooks,
   projectSettingsPath,
   runHooks
-} from "./chunk-CGX5GIW6.js";
+} from "./chunk-WE3YZULK.js";
 import {
   deleteSession,
   detectGitBranch,
+  freshSessionName,
   listSessionsForWorkspace,
   loadSessionMessages,
   loadSessionMeta,
@@ -144,7 +161,7 @@ import {
   resolveSession,
   sanitizeName,
   sessionsDir
-} from "./chunk-6CXT5JRM.js";
+} from "./chunk-YJFKFTAL.js";
 import {
   getLanguage,
   getSupportedLanguages,
@@ -153,7 +170,7 @@ import {
   setLanguage,
   t,
   tObj
-} from "./chunk-TWJAH4XD.js";
+} from "./chunk-MHGPBJ2T.js";
 import {
   CARD,
   FG,
@@ -186,13 +203,13 @@ import {
   resolveThemePreference,
   saveApiKey,
   saveEditMode,
-  saveReasoningEffort,
+  savePreset,
   saveTheme,
   searchEnabled,
   webSearchEndpoint,
   webSearchEngine,
   writeConfig
-} from "./chunk-SWLIVNTP.js";
+} from "./chunk-65Q5HQ26.js";
 import {
   aggregateUsage,
   appendUsage,
@@ -214,226 +231,40 @@ import {
 
 // src/cli/commands/chat.tsx
 import { render } from "ink";
-import React68, { useState as useState29 } from "react";
-
-// src/mcp/summary.ts
-function buildMcpServerSummary(opts) {
-  return {
-    label: opts.label,
-    spec: opts.spec,
-    toolCount: opts.toolCount,
-    report: opts.report,
-    host: opts.host,
-    bridgeEnv: opts.bridgeEnv,
-    readResource(uri) {
-      return opts.host.client.readResource(uri);
-    },
-    getPrompt(name, args) {
-      return args !== void 0 ? opts.host.client.getPrompt(name, args) : opts.host.client.getPrompt(name);
-    }
-  };
-}
+import React69, { useState as useState31 } from "react";
 
 // src/cli/ui/App.tsx
 import { statSync } from "fs";
-import { resolve as resolve2 } from "path";
-import { Box as Box52, Text as Text56, useStdin, useStdout as useStdout17 } from "ink";
-import React65, { useCallback as useCallback13, useEffect as useEffect17, useMemo as useMemo11, useRef as useRef10, useState as useState27 } from "react";
-
-// src/code/checkpoints.ts
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join, relative, resolve, sep } from "path";
-function sanitizeRoot(rootDir) {
-  return resolve(rootDir).replace(/[\\/:]+/g, "_").replace(/^_+/, "");
-}
-function storeRoot(rootDir) {
-  return join(homedir(), ".visionox", "sessions", sanitizeRoot(rootDir), "checkpoints");
-}
-function indexPath(rootDir) {
-  return join(storeRoot(rootDir), "index.json");
-}
-function snapshotPath(rootDir, id) {
-  return join(storeRoot(rootDir), `${id}.json`);
-}
-function listCheckpoints(rootDir) {
-  const path = indexPath(rootDir);
-  if (!existsSync(path)) return [];
-  try {
-    const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (m) => typeof m === "object" && m !== null && typeof m.id === "string" && typeof m.name === "string" && typeof m.createdAt === "number" && typeof m.source === "string" && typeof m.fileCount === "number" && typeof m.bytes === "number"
-    );
-  } catch {
-    return [];
-  }
-}
-function writeIndex(rootDir, items) {
-  const path = indexPath(rootDir);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(items, null, 2), "utf8");
-}
-function loadCheckpoint(rootDir, id) {
-  const path = snapshotPath(rootDir, id);
-  if (!existsSync(path)) return null;
-  try {
-    const raw = readFileSync(path, "utf8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && Array.isArray(parsed.files)) {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-function createCheckpoint(opts) {
-  const absRoot = resolve(opts.rootDir);
-  const id = `cp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-  const files = [];
-  let bytes = 0;
-  const seen = /* @__PURE__ */ new Set();
-  for (const p of opts.paths) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    const abs = resolve(absRoot, p);
-    if (abs !== absRoot && !abs.startsWith(`${absRoot}${sep}`)) continue;
-    const rel = relative(absRoot, abs).split(sep).join("/");
-    if (existsSync(abs)) {
-      try {
-        const content = readFileSync(abs, "utf8");
-        files.push({ path: rel, content });
-        bytes += content.length;
-      } catch {
-        files.push({ path: rel, content: null });
-      }
-    } else {
-      files.push({ path: rel, content: null });
-    }
-  }
-  const checkpoint2 = {
-    id,
-    name: opts.name,
-    rootDir: absRoot,
-    createdAt: Date.now(),
-    source: opts.source ?? "manual",
-    files,
-    bytes
-  };
-  const cpPath = snapshotPath(absRoot, id);
-  mkdirSync(dirname(cpPath), { recursive: true });
-  writeFileSync(cpPath, JSON.stringify(checkpoint2), "utf8");
-  const meta = {
-    id,
-    name: opts.name,
-    createdAt: checkpoint2.createdAt,
-    source: checkpoint2.source,
-    fileCount: files.length,
-    bytes
-  };
-  const items = listCheckpoints(absRoot);
-  items.push(meta);
-  writeIndex(absRoot, items);
-  return meta;
-}
-function findCheckpoint(rootDir, idOrName) {
-  const items = listCheckpoints(rootDir);
-  const byId = items.find((m) => m.id === idOrName);
-  if (byId) return byId;
-  const byName = [...items].reverse().find((m) => m.name === idOrName);
-  return byName ?? null;
-}
-function restoreCheckpoint(rootDir, id) {
-  const cp = loadCheckpoint(rootDir, id);
-  const absRoot = resolve(rootDir);
-  const result = { restored: [], removed: [], skipped: [] };
-  if (!cp) {
-    result.skipped.push({ path: "(checkpoint)", reason: `not found: ${id}` });
-    return result;
-  }
-  for (const f of cp.files) {
-    const abs = resolve(absRoot, f.path);
-    if (abs !== absRoot && !abs.startsWith(`${absRoot}${sep}`)) {
-      result.skipped.push({ path: f.path, reason: "path escapes rootDir" });
-      continue;
-    }
-    try {
-      if (f.content === null) {
-        if (existsSync(abs)) {
-          rmSync(abs);
-          result.removed.push(f.path);
-        }
-      } else {
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs, f.content, "utf8");
-        result.restored.push(f.path);
-      }
-    } catch (err) {
-      result.skipped.push({ path: f.path, reason: err.message });
-    }
-  }
-  return result;
-}
-function deleteCheckpoint(rootDir, id) {
-  const cpPath = snapshotPath(rootDir, id);
-  let removed = false;
-  if (existsSync(cpPath)) {
-    try {
-      rmSync(cpPath);
-      removed = true;
-    } catch {
-      return false;
-    }
-  }
-  const items = listCheckpoints(rootDir);
-  const next = items.filter((m) => m.id !== id);
-  if (next.length !== items.length) {
-    writeIndex(rootDir, next);
-    removed = true;
-  }
-  return removed;
-}
-function fmtAgo(ms) {
-  const now = Date.now();
-  const diff = Math.max(0, now - ms);
-  const s = Math.floor(diff / 1e3);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
-}
+import { resolve } from "path";
+import { Box as Box54, Text as Text57, useStdin, useStdout as useStdout18 } from "ink";
+import React66, { useCallback as useCallback13, useEffect as useEffect17, useMemo as useMemo12, useRef as useRef10, useState as useState29 } from "react";
 
 // src/code/pending-edits.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
-import { dirname as dirname2, join as join2 } from "path";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 function pendingEditsPath(sessionName) {
-  return join2(sessionsDir(), `${sanitizeName(sessionName)}.pending.json`);
+  return join(sessionsDir(), `${sanitizeName(sessionName)}.pending.json`);
 }
 function savePendingEdits(sessionName, blocks) {
   if (!sessionName) return;
   const path = pendingEditsPath(sessionName);
   try {
     if (blocks.length === 0) {
-      if (existsSync2(path)) unlinkSync(path);
+      if (existsSync(path)) unlinkSync(path);
       return;
     }
-    mkdirSync2(dirname2(path), { recursive: true });
-    writeFileSync2(path, JSON.stringify(blocks, null, 2), "utf8");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(blocks, null, 2), "utf8");
   } catch {
   }
 }
 function loadPendingEdits(sessionName) {
   if (!sessionName) return null;
   const path = pendingEditsPath(sessionName);
-  if (!existsSync2(path)) return null;
+  if (!existsSync(path)) return null;
   let raw;
   try {
-    raw = readFileSync2(path, "utf8");
+    raw = readFileSync(path, "utf8");
   } catch {
     return null;
   }
@@ -455,310 +286,25 @@ function clearPendingEdits(sessionName) {
   if (!sessionName) return;
   const path = pendingEditsPath(sessionName);
   try {
-    if (existsSync2(path)) unlinkSync(path);
+    if (existsSync(path)) unlinkSync(path);
   } catch {
   }
 }
 
-// src/core/event-redaction.ts
-var SECRET_KEY_RE = /(secret|token|password|passphrase|api[-_]?key|authorization|cookie|credential|passwd|pwd)/i;
-function redactEventValue(value) {
-  return redactUnknown(value, null);
-}
-function redactUnknown(value, key) {
-  if (Array.isArray(value)) return value.map((item) => redactUnknown(item, null));
-  if (value && typeof value === "object") {
-    const out = {};
-    for (const [childKey, childValue] of Object.entries(value)) {
-      out[childKey] = redactUnknown(childValue, childKey);
-    }
-    return out;
-  }
-  if (typeof value === "string") {
-    if (key && SECRET_KEY_RE.test(key) || /^Bearer\s+/i.test(value)) return "[redacted]";
-  }
-  return value;
-}
-
-// src/core/eventize.ts
-var Eventizer = class {
-  nextId = 0;
-  lastTurn = -1;
-  nextToolSeq = 0;
-  pendingCallIds = [];
-  consume(ev, ctx) {
-    const out = [];
-    if (ev.turn !== this.lastTurn) {
-      this.lastTurn = ev.turn;
-      out.push(this.turnStartedEvent(ev.turn, ctx));
-    }
-    switch (ev.role) {
-      case "assistant_delta":
-        if (ev.content) out.push(this.deltaEvent(ev.turn, "content", ev.content));
-        if (ev.reasoningDelta) out.push(this.deltaEvent(ev.turn, "reasoning", ev.reasoningDelta));
-        break;
-      case "tool_call_delta":
-        break;
-      case "assistant_final":
-        out.push(this.finalEvent(ev));
-        break;
-      case "tool_start": {
-        const callId = `tc-${++this.nextToolSeq}`;
-        this.pendingCallIds.push(callId);
-        out.push(this.toolIntentEvent(ev.turn, callId, ev.toolName ?? "", ev.toolArgs ?? ""));
-        out.push(this.toolDispatchedEvent(ev.turn, callId));
-        break;
-      }
-      case "tool": {
-        const callId = this.pendingCallIds.shift() ?? `tc-orphan-${++this.nextToolSeq}`;
-        const ok = !looksLikeToolError(ev.content, ev.toolName);
-        out.push(this.toolResultEvent(ev.turn, callId, ok, ev.content, 0));
-        break;
-      }
-      case "warning":
-        out.push(this.classifyWarning(ev));
-        break;
-      case "error":
-        out.push(this.errorEvent(ev.turn, ev.error ?? ev.content, false));
-        break;
-      case "status":
-        out.push(this.statusEvent(ev.turn, ev.content));
-        break;
-      // `done` / `branch_*` intentionally drop — no kernel-level event.
-      default:
-        break;
-    }
-    return out;
-  }
-  emitUserMessage(turn, text) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "user.message",
-      text
-    };
-  }
-  emitSlashInvoked(turn, name, args) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "slash.invoked",
-      name,
-      args
-    };
-  }
-  emitSessionOpened(turn, name, resumedFromTurn) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "session.opened",
-      name,
-      resumedFromTurn
-    };
-  }
-  emitSessionCompacted(turn, before, after, reason, replacementMessages) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "session.compacted",
-      beforeMessages: before,
-      afterMessages: after,
-      reason,
-      replacementMessages
-    };
-  }
-  emitToolCall(turn, name, args) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.call",
-      name,
-      args: redactEventValue(args)
-    };
-  }
-  emitToolConfirmAllow(turn, kind, payload) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.confirm.allow",
-      kind,
-      payload: redactEventValue(payload)
-    };
-  }
-  emitToolConfirmDeny(turn, kind, payload, denyContext) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.confirm.deny",
-      kind,
-      payload: redactEventValue(payload),
-      denyContext
-    };
-  }
-  emitToolConfirmAlwaysAllow(turn, kind, payload, prefix) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.confirm.always_allow",
-      kind,
-      payload: redactEventValue(payload),
-      prefix
-    };
-  }
-  turnStartedEvent(turn, ctx) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "model.turn.started",
-      model: ctx.model,
-      reasoningEffort: ctx.reasoningEffort,
-      prefixHash: ctx.prefixHash
-    };
-  }
-  deltaEvent(turn, channel, text) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "model.delta",
-      channel,
-      text
-    };
-  }
-  finalEvent(ev) {
-    const usage = ev.stats ? {
-      prompt_tokens: ev.stats.usage.promptTokens,
-      completion_tokens: ev.stats.usage.completionTokens,
-      total_tokens: ev.stats.usage.totalTokens,
-      prompt_cache_hit_tokens: ev.stats.usage.promptCacheHitTokens,
-      prompt_cache_miss_tokens: ev.stats.usage.promptCacheMissTokens
-    } : {};
-    const costUsd = ev.stats?.cost ?? 0;
-    const out = {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn: ev.turn,
-      type: "model.final",
-      content: ev.content,
-      // toolCalls land later via tool_start → tool.intent — not in this event.
-      toolCalls: [],
-      usage,
-      costUsd
-    };
-    if (ev.forcedSummary) out.forcedSummary = true;
-    return out;
-  }
-  toolIntentEvent(turn, callId, name, args) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.intent",
-      callId,
-      name,
-      args
-    };
-  }
-  toolDispatchedEvent(turn, callId) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.dispatched",
-      callId
-    };
-  }
-  toolResultEvent(turn, callId, ok, output, durationMs) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "tool.result",
-      callId,
-      ok,
-      output,
-      durationMs
-    };
-  }
-  statusEvent(turn, text) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "status",
-      text
-    };
-  }
-  errorEvent(turn, message, recoverable) {
-    return {
-      id: ++this.nextId,
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      turn,
-      type: "error",
-      message,
-      recoverable
-    };
-  }
-  /** Pattern-match warning text since LoopEvent doesn't carry a typed kind. */
-  classifyWarning(ev) {
-    const c = ev.content;
-    if (/\bauto-escalating to\b|\barmed\b.*pro|NEEDS_PRO/.test(c)) {
-      return {
-        id: ++this.nextId,
-        ts: (/* @__PURE__ */ new Date()).toISOString(),
-        turn: ev.turn,
-        type: "policy.escalated",
-        fromModel: "",
-        toModel: "",
-        reason: c.includes("armed") ? "user-request" : "self-report"
-      };
-    }
-    if (/budget\b.*\$|\$\d.*\/\s*\$\d/.test(c)) {
-      const blocked = /blocked|exceeded|refus/i.test(c);
-      return {
-        id: ++this.nextId,
-        ts: (/* @__PURE__ */ new Date()).toISOString(),
-        turn: ev.turn,
-        type: blocked ? "policy.budget.blocked" : "policy.budget.warning",
-        spentUsd: 0,
-        capUsd: 0
-      };
-    }
-    return this.errorEvent(ev.turn, c, true);
-  }
-};
-function looksLikeToolError(content, _toolName) {
-  if (!content) return false;
-  if (content.startsWith("ERROR:")) return true;
-  if (content.startsWith("[hook block]")) return true;
-  if (/^\{"error"\s*:/.test(content)) return true;
-  if (/\bConfirmationError:|\bNeedsConfirmationError\b/.test(content)) return true;
-  return false;
-}
-
 // src/slash-usage.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync, writeFileSync as writeFileSync3 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname3, join as join3 } from "path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, writeFileSync as writeFileSync2 } from "fs";
+import { homedir } from "os";
+import { dirname as dirname2, join as join2 } from "path";
 function slashUsagePath() {
   const override = process.env.REASONIX_SLASH_USAGE_PATH;
   if (override) return override;
-  return join3(homedir2(), ".visionox", "slash-usage.json");
+  return join2(homedir(), ".visionox", "slash-usage.json");
 }
 function loadSlashUsage() {
   const path = slashUsagePath();
-  if (!existsSync3(path)) return {};
+  if (!existsSync2(path)) return {};
   try {
-    const raw = readFileSync3(path, "utf8");
+    const raw = readFileSync2(path, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return {};
     const out = {};
@@ -775,8 +321,8 @@ function persist(counts) {
   const tmp = `${path}.tmp`;
   const payload = { version: 1, counts };
   try {
-    mkdirSync3(dirname3(path), { recursive: true });
-    writeFileSync3(tmp, JSON.stringify(payload), "utf8");
+    mkdirSync2(dirname2(path), { recursive: true });
+    writeFileSync2(tmp, JSON.stringify(payload), "utf8");
     renameSync(tmp, path);
   } catch {
   }
@@ -788,90 +334,11 @@ function recordSlashUse(name) {
   return counts;
 }
 
-// src/tools/skills.ts
-function registerSkillTools(registry, opts = {}) {
-  const store = new SkillStore({
-    homeDir: opts.homeDir,
-    projectRoot: opts.projectRoot,
-    disableBuiltins: opts.disableBuiltins
-  });
-  const subagentRunner = opts.subagentRunner;
-  registry.register({
-    name: "run_skill",
-    description: "Invoke a playbook from the Skills index pinned in the system prompt. Each entry is a self-contained instruction block. Pass `name` as the BARE skill identifier (e.g. 'explore'), NOT the `[\u{1F9EC} subagent]` tag that appears after it in the index. Entries tagged `[\u{1F9EC} subagent]` spawn an isolated subagent \u2014 only the final distilled answer comes back, the model's tool calls + reasoning during the run never enter your context. Plain skills are inlined: the body becomes a tool result you read and follow. For subagent skills, supply 'arguments' describing the concrete task \u2014 they'll be the only context the subagent has.",
-    readOnly: true,
-    parallelSafe: true,
-    parameters: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "Skill identifier as it appears in the pinned Skills index (e.g. 'explore', 'review', 'security-review'). Case-sensitive."
-        },
-        arguments: {
-          type: "string",
-          description: "Free-form arguments the skill should act on. For inline skills: appended to the body as an 'Arguments:' line; the skill's own instructions decide how to consume them. For `[\u{1F9EC} subagent]` skills: REQUIRED \u2014 becomes the entire task description the subagent receives, since it has no other context."
-        }
-      },
-      required: ["name"]
-    },
-    fn: async (args, ctx) => {
-      const raw = typeof args.name === "string" ? args.name.trim() : "";
-      if (!raw) {
-        return JSON.stringify({ error: "run_skill requires a 'name' argument" });
-      }
-      const stripped = raw.replace(/\[[^\]]*\]/g, " ").trim();
-      const tokens = stripped.split(/\s+/).filter(Boolean);
-      const name = tokens.find((t2) => /^[a-zA-Z0-9]/.test(t2)) ?? "";
-      if (!name) {
-        return JSON.stringify({
-          error: "run_skill requires a 'name' argument",
-          hint: `'${raw}' is just a marker/tag, not a skill name`
-        });
-      }
-      const skill2 = store.read(name);
-      if (!skill2) {
-        const available = store.list().map((s) => s.name).join(", ");
-        return JSON.stringify({
-          error: `unknown skill: ${JSON.stringify(name)}`,
-          available: available || "(none \u2014 user has not defined any skills)"
-        });
-      }
-      const rawArgs = typeof args.arguments === "string" ? args.arguments.trim() : "";
-      if (skill2.runAs === "subagent") {
-        if (!subagentRunner) {
-          return JSON.stringify({
-            error: `run_skill: skill ${JSON.stringify(name)} is marked runAs=subagent but no subagent runner is configured for this session. Skill authors who need isolation should run inside reasonix code (or a library setup that passes subagentRunner to registerSkillTools).`
-          });
-        }
-        if (!rawArgs) {
-          return JSON.stringify({
-            error: `run_skill: skill ${JSON.stringify(name)} is a subagent and requires 'arguments' \u2014 the subagent has no other context, so describe the concrete task in the arguments field.`
-          });
-        }
-        return subagentRunner(skill2, rawArgs, ctx?.signal);
-      }
-      const header = [
-        `# Skill: ${skill2.name}`,
-        skill2.description ? `> ${skill2.description}` : "",
-        `(scope: ${skill2.scope} \xB7 ${skill2.path})`
-      ].filter(Boolean).join("\n");
-      const argsBlock = rawArgs ? `
-
-Arguments: ${rawArgs}` : "";
-      return `${header}
-
-${skill2.body}${argsBlock}`;
-    }
-  });
-  return registry;
-}
-
 // src/cli/edit/external-editor.ts
 import { spawn } from "child_process";
-import { mkdtempSync, readFileSync as readFileSync4, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "fs";
+import { mkdtempSync, readFileSync as readFileSync3, rmSync, writeFileSync as writeFileSync3 } from "fs";
 import { tmpdir } from "os";
-import { join as join4 } from "path";
+import { join as join3 } from "path";
 function detectEditor(env = process.env) {
   for (const key of ["GIT_EDITOR", "VISUAL", "EDITOR"]) {
     const raw = env[key];
@@ -885,39 +352,39 @@ async function openInExternalEditor(initial2) {
     return {
       kind: "missing",
       content: initial2,
-      detail: "no $EDITOR / $VISUAL / $GIT_EDITOR set \u2014 export one (e.g. `export EDITOR=nano`) and retry"
+      detail: t("composer.editorMissing")
     };
   }
-  const dir = mkdtempSync(join4(tmpdir(), "reasonix-compose-"));
-  const path = join4(dir, "REASONIX_INPUT.md");
+  const dir = mkdtempSync(join3(tmpdir(), "reasonix-compose-"));
+  const path = join3(dir, "REASONIX_INPUT.md");
   try {
-    writeFileSync4(path, initial2, "utf8");
+    writeFileSync3(path, initial2, "utf8");
     await spawnEditor(editor, path);
-    const raw = readFileSync4(path, "utf8");
+    const raw = readFileSync3(path, "utf8");
     return { kind: "ok", content: stripTrailingNewline(raw) };
   } catch (err) {
     return {
       kind: "failed",
       content: initial2,
-      detail: err.message
+      detail: t("composer.editorExited", { code: err.message })
     };
   } finally {
     try {
-      rmSync2(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     } catch {
     }
   }
 }
 function spawnEditor(editor, path) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve2, reject) => {
     const child = spawn(`${editor} "${path}"`, {
       shell: true,
       stdio: "inherit"
     });
     child.on("error", reject);
     child.on("exit", (code) => {
-      if (code === 0 || code === null) resolve3();
-      else reject(new Error(`editor exited with code ${code}`));
+      if (code === 0 || code === null) resolve2();
+      else reject(new Error(String(code)));
     });
   });
 }
@@ -1040,7 +507,7 @@ function BootSplash() {
   return /* @__PURE__ */ React2.createElement(Box2, { flexDirection: "column", alignItems: "center", marginY: 1 }, /* @__PURE__ */ React2.createElement(Box2, { flexDirection: "column", alignItems: "flex-start", marginBottom: 1 }, REASONIX_LOGO.map((line) => /* @__PURE__ */ React2.createElement(Text2, { key: line, color: TONE.brand, bold: true }, line))), /* @__PURE__ */ React2.createElement(Box2, { flexDirection: "column", alignItems: "flex-start" }, spout.map((line, i) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length spout column, position is the identity
     /* @__PURE__ */ React2.createElement(Text2, { key: i, color: TONE.accent }, line.length > 0 ? line : " ")
-  )), WHALE_LINES.map((line) => /* @__PURE__ */ React2.createElement(Text2, { key: line, color: TONE.brand, bold: true }, line)), /* @__PURE__ */ React2.createElement(Text2, { color: FG.faint }, wave)), /* @__PURE__ */ React2.createElement(Box2, { marginTop: 1 }, /* @__PURE__ */ React2.createElement(Text2, { color: FG.meta }, `loading${dots}`)));
+  )), WHALE_LINES.map((line) => /* @__PURE__ */ React2.createElement(Text2, { key: line, color: TONE.brand, bold: true }, line)), /* @__PURE__ */ React2.createElement(Text2, { color: FG.faint }, wave)), /* @__PURE__ */ React2.createElement(Box2, { marginTop: 1 }, /* @__PURE__ */ React2.createElement(Text2, { color: FG.meta }, `${t("common.loading")}${dots}`)));
 }
 
 // src/cli/ui/CheckpointPicker.tsx
@@ -1206,7 +673,7 @@ function ApprovalCard({
   const { stdout } = useStdout2();
   const cols = stdout?.columns ?? 80;
   const ruleWidth = Math.max(MIN_SEPARATOR, cols - SEPARATOR_PAD);
-  return /* @__PURE__ */ React4.createElement(Box4, { flexDirection: "column", marginY: 1 }, /* @__PURE__ */ React4.createElement(Box4, { flexDirection: "row" }, /* @__PURE__ */ React4.createElement(Text4, { color: palette.color, backgroundColor: SURFACE.bgElev }, " \u258E "), /* @__PURE__ */ React4.createElement(Text4, { bold: true, color: palette.color, backgroundColor: SURFACE.bgElev }, `${headerGlyph}  `), /* @__PURE__ */ React4.createElement(Text4, { bold: true, color: FG.strong, backgroundColor: SURFACE.bgElev }, ` ${title} `), metaRight !== void 0 && /* @__PURE__ */ React4.createElement(Text4, { color: metaRightColor ?? FG.faint, backgroundColor: SURFACE.bgElev }, `  ${metaRight} `)), /* @__PURE__ */ React4.createElement(Box4, { flexDirection: "column", paddingX: 2, marginTop: 1 }, children), /* @__PURE__ */ React4.createElement(Box4, { paddingX: 2, marginTop: 1 }, /* @__PURE__ */ React4.createElement(Text4, { color: FG.faint }, "\u2500".repeat(ruleWidth))), /* @__PURE__ */ React4.createElement(Box4, { paddingX: 2 }, /* @__PURE__ */ React4.createElement(Text4, { color: FG.faint }, effectiveFooter)));
+  return /* @__PURE__ */ React4.createElement(Box4, { flexDirection: "column", marginY: 1, flexShrink: 0 }, /* @__PURE__ */ React4.createElement(Box4, { flexDirection: "row" }, /* @__PURE__ */ React4.createElement(Text4, { color: palette.color, backgroundColor: SURFACE.bgElev }, " \u258E "), /* @__PURE__ */ React4.createElement(Text4, { bold: true, color: palette.color, backgroundColor: SURFACE.bgElev }, `${headerGlyph}  `), /* @__PURE__ */ React4.createElement(Text4, { bold: true, color: FG.strong, backgroundColor: SURFACE.bgElev }, ` ${title} `), metaRight !== void 0 && /* @__PURE__ */ React4.createElement(Text4, { color: metaRightColor ?? FG.faint, backgroundColor: SURFACE.bgElev }, `  ${metaRight} `)), /* @__PURE__ */ React4.createElement(Box4, { flexDirection: "column", paddingX: 2, marginTop: 1, flexShrink: 0 }, children), /* @__PURE__ */ React4.createElement(Box4, { paddingX: 2, marginTop: 1, flexShrink: 0 }, /* @__PURE__ */ React4.createElement(Text4, { color: FG.faint }, "\u2500".repeat(ruleWidth))), /* @__PURE__ */ React4.createElement(Box4, { paddingX: 2, flexShrink: 0 }, /* @__PURE__ */ React4.createElement(Text4, { color: FG.faint }, effectiveFooter)));
 }
 
 // src/cli/ui/layout/viewport-budget.tsx
@@ -2252,6 +1719,7 @@ function McpMarketplace({ onClose, postInfo, reloadMcp, pickerPorts }) {
       setState((s) => ({ ...s, query: s.query + ev.input, selected: 0 }));
     }
   });
+  const overlay = useMemo4(() => loadOverlay("zh-CN"), []);
   const start = Math.max(
     0,
     Math.min(state.selected - Math.floor(VISIBLE_ROWS / 2), filtered.length - VISIBLE_ROWS)
@@ -2271,7 +1739,7 @@ function McpMarketplace({ onClose, postInfo, reloadMcp, pickerPorts }) {
     const installedBadge = installedSpec ? " \u2713" : "";
     const pop = e.popularity !== void 0 ? ` \xB7 ${e.popularity.toLocaleString()}` : "";
     return /* @__PURE__ */ React11.createElement(Box9, { key: e.name }, /* @__PURE__ */ React11.createElement(Text9, { color: active ? COLOR.brand : void 0 }, active ? "\u25B8 " : "  "), /* @__PURE__ */ React11.createElement(Text9, { bold: active }, e.name.padEnd(38).slice(0, 38)), /* @__PURE__ */ React11.createElement(Text9, { dimColor: true }, ` ${tag2}${pop}${installedBadge}`));
-  })), selected ? /* @__PURE__ */ React11.createElement(Box9, { marginTop: 1, flexDirection: "column" }, /* @__PURE__ */ React11.createElement(Text9, { bold: true }, selected.title), selected.description ? /* @__PURE__ */ React11.createElement(Text9, { dimColor: true }, selected.description.slice(0, 200)) : null, selected.install ? /* @__PURE__ */ React11.createElement(Text9, { dimColor: true }, t("mcpMarketplace.specLine", {
+  })), selected ? /* @__PURE__ */ React11.createElement(Box9, { marginTop: 1, flexDirection: "column" }, /* @__PURE__ */ React11.createElement(Text9, { bold: true }, overlay?.[selected.name]?.title ?? selected.title, overlay?.[selected.name] ? /* @__PURE__ */ React11.createElement(Text9, { dimColor: true }, `  \xB7  ${selected.title}`) : null), /* @__PURE__ */ React11.createElement(Text9, { dimColor: true }, overlay?.[selected.name]?.description ?? selected.description?.slice(0, 200) ?? null), selected.install ? /* @__PURE__ */ React11.createElement(Text9, { dimColor: true }, t("mcpMarketplace.specLine", {
     runtime: selected.install.runtime,
     id: selected.install.packageId ?? selected.install.url ?? "\u2014",
     transport: selected.install.transport
@@ -2347,8 +1815,10 @@ var PILL_SECTION = {
   taskDone: { bg: "#102815", fg: "#7ee787" },
   taskFailed: { bg: "#2c1416", fg: "#ff8b81" },
   plan: { bg: "#2a1f3d", fg: "#d2a8ff" },
-  user: { bg: "#11141a", fg: "#8b949e" }
+  user: { bg: "#11141a", fg: "#8b949e" },
+  empty: { bg: "#11141a", fg: "#6e7681" }
 };
+var PILL_PATH = { bg: "#11141a", fg: "#8b949e" };
 var PILL_MODEL = {
   flash: { bg: "#11141a", fg: "#79c0ff" },
   pro: { bg: "#11141a", fg: "#d2a8ff" },
@@ -2469,17 +1939,128 @@ var FALLBACK_MODELS = [
   "deepseek-reasoner"
 ];
 
+// src/cli/ui/PathConfirm.tsx
+import { homedir as homedir2 } from "os";
+import { Box as Box12, Text as Text13 } from "ink";
+import React15, { useState as useState9 } from "react";
+function tildeify(p) {
+  const home = homedir2();
+  if (!home) return p;
+  const normalized = home.replace(/[\\/]+$/, "");
+  if (p === normalized) return "~";
+  if (p.startsWith(`${normalized}/`)) return `~/${p.slice(normalized.length + 1)}`;
+  if (p.startsWith(`${normalized}\\`)) return `~\\${p.slice(normalized.length + 1)}`;
+  return p;
+}
+function PathConfirm({
+  path,
+  intent,
+  toolName,
+  sandboxRoot,
+  allowPrefix,
+  onChoose
+}) {
+  useReserveRows("modal", { min: 8, max: 14 });
+  const [phase, setPhase] = useState9("pick");
+  if (phase === "deny") {
+    return /* @__PURE__ */ React15.createElement(
+      ApprovalCard,
+      {
+        tone: "error",
+        glyph: "\u2717",
+        title: t("pathConfirm.denyTitle"),
+        metaRight: t("pathConfirm.optional"),
+        footerHint: t("pathConfirm.denyFooter")
+      },
+      /* @__PURE__ */ React15.createElement(
+        DenyContextInput,
+        {
+          onSubmit: (context2) => onChoose("deny", context2 || void 0),
+          onCancel: () => onChoose("deny")
+        }
+      )
+    );
+  }
+  return /* @__PURE__ */ React15.createElement(
+    ApprovalCard,
+    {
+      tone: "warn",
+      glyph: "!",
+      title: t("pathConfirm.title"),
+      metaRight: t("pathConfirm.awaiting"),
+      footerHint: t("pathConfirm.pickFooter")
+    },
+    /* @__PURE__ */ React15.createElement(Box12, { marginBottom: 1 }, /* @__PURE__ */ React15.createElement(Text13, { color: FG.faint }, t(intent === "write" ? "pathConfirm.subtitleWrite" : "pathConfirm.subtitleRead", {
+      tool: toolName
+    }))),
+    /* @__PURE__ */ React15.createElement(
+      InfoRows,
+      {
+        path: tildeify(path),
+        sandboxRoot: tildeify(sandboxRoot),
+        allowPrefix: tildeify(allowPrefix)
+      }
+    ),
+    /* @__PURE__ */ React15.createElement(
+      SingleSelect,
+      {
+        initialValue: "run_once",
+        items: [
+          {
+            value: "run_once",
+            label: t("pathConfirm.allowOnce"),
+            hint: t("pathConfirm.allowOnceDesc")
+          },
+          {
+            value: "always_allow",
+            label: t("pathConfirm.allowAlways"),
+            hint: t("pathConfirm.allowAlwaysDesc", { prefix: tildeify(allowPrefix) })
+          },
+          {
+            value: "deny",
+            label: t("pathConfirm.deny"),
+            hint: t("pathConfirm.denyDesc")
+          }
+        ],
+        onSubmit: (v) => {
+          if (v === "deny") setPhase("deny");
+          else onChoose(v);
+        },
+        onTab: (v) => {
+          if (v === "deny") setPhase("deny");
+        },
+        onCancel: () => onChoose("deny")
+      }
+    )
+  );
+}
+function InfoRows({
+  path,
+  sandboxRoot,
+  allowPrefix
+}) {
+  const rows = [
+    { label: t("pathConfirm.pathLabel"), value: path },
+    { label: t("pathConfirm.sandboxLabel"), value: sandboxRoot }
+  ];
+  if (allowPrefix !== path) {
+    rows.push({ label: t("pathConfirm.allowPrefixLabel"), value: allowPrefix });
+  }
+  const labelWidth = Math.max(...rows.map((r) => r.label.length));
+  return /* @__PURE__ */ React15.createElement(Box12, { flexDirection: "column", marginBottom: 1 }, rows.map((r) => /* @__PURE__ */ React15.createElement(Box12, { key: r.label, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React15.createElement(Text13, { color: FG.faint }, r.label.padEnd(labelWidth)), /* @__PURE__ */ React15.createElement(Text13, { color: FG.body }, r.value))));
+}
+
 // src/cli/ui/PlanCheckpointConfirm.tsx
-import { Box as Box14 } from "ink";
-import React17 from "react";
+import { Box as Box15 } from "ink";
+import React18 from "react";
 
 // src/cli/ui/PlanStepList.tsx
-import { Box as Box13, Text as Text14 } from "ink";
-import React16 from "react";
+import { Box as Box14, Text as Text15 } from "ink";
+import React17 from "react";
 
 // src/cli/ui/char-bar.tsx
-import { Box as Box12, Text as Text13 } from "ink";
-import React15 from "react";
+import { Box as Box13, Text as Text14 } from "ink";
+import React16 from "react";
 function CharBar({
   pct,
   width = 24,
@@ -2491,7 +2072,7 @@ function CharBar({
   const total = Math.max(4, width);
   const clamped = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0));
   const filled = Math.round(total * clamped / 100);
-  return /* @__PURE__ */ React15.createElement(Box12, null, /* @__PURE__ */ React15.createElement(Text13, { color }, GLYPH.block.repeat(filled)), /* @__PURE__ */ React15.createElement(Text13, { color: emptyColor ?? COLOR.info, dimColor: true }, GLYPH.shade1.repeat(total - filled)), showLabel ? /* @__PURE__ */ React15.createElement(Text13, { dimColor: true }, `  ${label ?? `${Math.round(clamped)}%`}`) : null);
+  return /* @__PURE__ */ React16.createElement(Box13, null, /* @__PURE__ */ React16.createElement(Text14, { color }, GLYPH.block.repeat(filled)), /* @__PURE__ */ React16.createElement(Text14, { color: emptyColor ?? COLOR.info, dimColor: true }, GLYPH.shade1.repeat(total - filled)), showLabel ? /* @__PURE__ */ React16.createElement(Text14, { dimColor: true }, `  ${label ?? `${Math.round(clamped)}%`}`) : null);
 }
 
 // src/cli/ui/PlanStepList.tsx
@@ -2510,8 +2091,8 @@ function statusGlyph(status2, isCur) {
   return { glyph: GLYPH.pending, color: COLOR.info };
 }
 function riskLabel(risk) {
-  if (risk === "med") return { text: `${GLYPH.warn} med`, color: COLOR.warn };
-  if (risk === "high") return { text: `${GLYPH.warn} high`, color: COLOR.err };
+  if (risk === "med") return { text: `${GLYPH.warn}${t("planFlow.riskMed")}`, color: COLOR.warn };
+  if (risk === "high") return { text: `${GLYPH.warn}${t("planFlow.riskHigh")}`, color: COLOR.err };
   return null;
 }
 function PlanStepListInner({ steps, statuses, focusStepId }) {
@@ -2521,30 +2102,30 @@ function PlanStepListInner({ steps, statuses, focusStepId }) {
   const doneCount = statusList.filter((s) => s === "done").length;
   const pct = Math.round(doneCount / total * 100);
   const showProgress = doneCount > 0;
-  return /* @__PURE__ */ React16.createElement(Box13, { flexDirection: "column" }, /* @__PURE__ */ React16.createElement(Box13, null, /* @__PURE__ */ React16.createElement(Text14, { dimColor: true }, showProgress ? t(
+  return /* @__PURE__ */ React17.createElement(Box14, { flexDirection: "column" }, /* @__PURE__ */ React17.createElement(Box14, null, /* @__PURE__ */ React17.createElement(Text15, { dimColor: true }, showProgress ? t(
     total === 1 ? "planFlow.stepList.counterDoneSingular" : "planFlow.stepList.counterDone",
     { done: doneCount, total, pct }
   ) : t(total === 1 ? "planFlow.stepList.counterSingular" : "planFlow.stepList.counter", {
     total
-  }))), /* @__PURE__ */ React16.createElement(Box13, { flexDirection: "column" }, steps.map((step, i) => {
+  }))), /* @__PURE__ */ React17.createElement(Box14, { flexDirection: "column" }, steps.map((step, i) => {
     const status2 = statusList[i];
     const isLast = i === total - 1;
     const isCur = focusStepId === step.id;
     const sg = statusGlyph(status2, isCur);
     const risk = riskLabel(step.risk);
     const titleDim = status2 === "done" || status2 === "skipped";
-    return /* @__PURE__ */ React16.createElement(Box13, { key: step.id }, /* @__PURE__ */ React16.createElement(Text14, { color: COLOR.info, dimColor: true }, isLast ? GLYPH.branchEnd : GLYPH.branch), /* @__PURE__ */ React16.createElement(Text14, null, "  "), /* @__PURE__ */ React16.createElement(Text14, { color: sg.color, bold: status2 === "running" || isCur }, sg.glyph), /* @__PURE__ */ React16.createElement(Text14, null, "  "), /* @__PURE__ */ React16.createElement(
-      Text14,
+    return /* @__PURE__ */ React17.createElement(Box14, { key: step.id }, /* @__PURE__ */ React17.createElement(Text15, { color: COLOR.info, dimColor: true }, isLast ? GLYPH.branchEnd : GLYPH.branch), /* @__PURE__ */ React17.createElement(Text15, null, "  "), /* @__PURE__ */ React17.createElement(Text15, { color: sg.color, bold: status2 === "running" || isCur }, sg.glyph), /* @__PURE__ */ React17.createElement(Text15, null, "  "), /* @__PURE__ */ React17.createElement(
+      Text15,
       {
         dimColor: titleDim,
         bold: isCur || status2 === "running",
         strikethrough: status2 === "done" || status2 === "skipped"
       },
       `${step.id} \xB7 ${step.title}`
-    ), risk ? /* @__PURE__ */ React16.createElement(React16.Fragment, null, /* @__PURE__ */ React16.createElement(Text14, null, "   "), /* @__PURE__ */ React16.createElement(Text14, { color: risk.color }, risk.text)) : null);
-  })), showProgress ? /* @__PURE__ */ React16.createElement(Box13, null, /* @__PURE__ */ React16.createElement(Text14, null, "      "), /* @__PURE__ */ React16.createElement(CharBar, { pct, width: 24 })) : null);
+    ), risk ? /* @__PURE__ */ React17.createElement(React17.Fragment, null, /* @__PURE__ */ React17.createElement(Text15, null, "   "), /* @__PURE__ */ React17.createElement(Text15, { color: risk.color }, risk.text)) : null);
+  })), showProgress ? /* @__PURE__ */ React17.createElement(Box14, null, /* @__PURE__ */ React17.createElement(Text15, null, "      "), /* @__PURE__ */ React17.createElement(CharBar, { pct, width: 24 })) : null);
 }
-var PlanStepList = React16.memo(PlanStepListInner);
+var PlanStepList = React17.memo(PlanStepListInner);
 
 // src/cli/ui/PlanCheckpointConfirm.tsx
 function PlanCheckpointConfirmInner({
@@ -2563,7 +2144,7 @@ function PlanCheckpointConfirmInner({
   const isLast = total > 0 && completed >= total;
   const statuses = buildStatusMap(steps, completedStepIds, stepId, isLast);
   const subtitle = counter ? `${counter}  \xB7  ${label}` : label;
-  return /* @__PURE__ */ React17.createElement(ApprovalCard, { tone: "ok", glyph: "\u26C1", title: t("planFlow.checkpoint.title"), metaRight: subtitle }, steps && steps.length > 0 ? /* @__PURE__ */ React17.createElement(Box14, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React17.createElement(PlanStepList, { steps, statuses, focusStepId: stepId })) : null, /* @__PURE__ */ React17.createElement(
+  return /* @__PURE__ */ React18.createElement(ApprovalCard, { tone: "ok", glyph: "\u26C1", title: t("planFlow.checkpoint.title"), metaRight: subtitle }, steps && steps.length > 0 ? /* @__PURE__ */ React18.createElement(Box15, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React18.createElement(PlanStepList, { steps, statuses, focusStepId: stepId })) : null, /* @__PURE__ */ React18.createElement(
     SingleSelect,
     {
       initialValue: isLast ? "stop" : "continue",
@@ -2589,7 +2170,7 @@ function PlanCheckpointConfirmInner({
     }
   ));
 }
-var PlanCheckpointConfirm = React17.memo(PlanCheckpointConfirmInner);
+var PlanCheckpointConfirm = React18.memo(PlanCheckpointConfirmInner);
 function buildStatusMap(steps, completedStepIds, currentStepId, isLast) {
   const map = /* @__PURE__ */ new Map();
   if (!steps) return map;
@@ -2605,12 +2186,12 @@ function buildStatusMap(steps, completedStepIds, currentStepId, isLast) {
 }
 
 // src/cli/ui/PlanConfirm.tsx
-import { Box as Box16, Text as Text16 } from "ink";
-import React19 from "react";
+import { Box as Box17, Text as Text17, useStdout as useStdout6 } from "ink";
+import React20, { useMemo as useMemo5, useState as useState10 } from "react";
 
 // src/cli/ui/markdown-view.tsx
-import { Box as Box15, Text as Text15 } from "ink";
-import React18 from "react";
+import { Box as Box16, Text as Text16, Transform } from "ink";
+import React19 from "react";
 
 // node_modules/marked/lib/marked.esm.js
 function _getDefaults() {
@@ -4999,33 +4580,33 @@ var TONE_BRAND = "#79c0ff";
 var TONE_OK = "#7ee787";
 var SURFACE_ELEV = "#161b22";
 function MarkdownView({ text }) {
-  return /* @__PURE__ */ React18.createElement(MarkdownLines, { lines: markdownToLines(text) });
+  return /* @__PURE__ */ React19.createElement(MarkdownLines, { lines: markdownToLines(text) });
 }
 function MarkdownLines({
   lines
 }) {
-  return /* @__PURE__ */ React18.createElement(Box15, { flexDirection: "column" }, lines.map((line, i) => /* @__PURE__ */ React18.createElement(LineRow, { key: `md-${i}-${line.kind}`, line })));
+  return /* @__PURE__ */ React19.createElement(Box16, { flexDirection: "column" }, lines.map((line, i) => /* @__PURE__ */ React19.createElement(LineRow, { key: `md-${i}-${line.kind}`, line })));
 }
 function LineRow({ line }) {
   switch (line.kind) {
     case "blank":
-      return /* @__PURE__ */ React18.createElement(Text15, null, " ");
+      return /* @__PURE__ */ React19.createElement(Text16, null, " ");
     case "hr":
-      return /* @__PURE__ */ React18.createElement(Text15, { color: FG_FAINT }, "\u2500\u2500\u2500\u2500\u2500\u2500");
+      return /* @__PURE__ */ React19.createElement(Text16, { color: FG_FAINT }, "\u2500\u2500\u2500\u2500\u2500\u2500");
     case "heading":
-      return /* @__PURE__ */ React18.createElement(Box15, null, /* @__PURE__ */ React18.createElement(Text15, { bold: true, color: FG_STRONG }, `${"#".repeat(line.level)} `), /* @__PURE__ */ React18.createElement(Spans, { spans: line.spans, bold: true, strongColor: true }));
+      return /* @__PURE__ */ React19.createElement(Box16, null, /* @__PURE__ */ React19.createElement(Text16, { bold: true, color: FG_STRONG }, `${"#".repeat(line.level)} `), /* @__PURE__ */ React19.createElement(Spans, { spans: line.spans, bold: true, strongColor: true }));
     case "paragraph":
-      return /* @__PURE__ */ React18.createElement(Box15, null, /* @__PURE__ */ React18.createElement(Spans, { spans: line.spans }));
+      return /* @__PURE__ */ React19.createElement(Box16, null, /* @__PURE__ */ React19.createElement(Spans, { spans: line.spans }));
     case "list": {
       const indent = " ".repeat(line.depth * 2);
       const marker = line.task === "done" ? "\u2713" : line.task === "todo" ? "\u25CB" : line.ordered ? `${line.index}.` : "\xB7";
       const markerColor = line.task === "done" ? TONE_OK : line.task === "todo" ? FG_FAINT : FG_META;
-      return /* @__PURE__ */ React18.createElement(Box15, null, /* @__PURE__ */ React18.createElement(Text15, { color: markerColor }, `${indent}${marker} `), /* @__PURE__ */ React18.createElement(Spans, { spans: line.spans, dim: line.task === "done", strike: line.task === "done" }));
+      return /* @__PURE__ */ React19.createElement(Box16, null, /* @__PURE__ */ React19.createElement(Text16, { color: markerColor }, `${indent}${marker} `), /* @__PURE__ */ React19.createElement(Spans, { spans: line.spans, dim: line.task === "done", strike: line.task === "done" }));
     }
     case "code":
-      return /* @__PURE__ */ React18.createElement(CodeBlock, { lang: line.lang, text: line.text });
+      return /* @__PURE__ */ React19.createElement(CodeBlock, { lang: line.lang, text: line.text });
     case "blockquote":
-      return /* @__PURE__ */ React18.createElement(Box15, null, /* @__PURE__ */ React18.createElement(Text15, { color: TONE_BRAND }, "\u258E "), /* @__PURE__ */ React18.createElement(Spans, { spans: line.spans, italic: true }));
+      return /* @__PURE__ */ React19.createElement(Box16, null, /* @__PURE__ */ React19.createElement(Text16, { color: TONE_BRAND }, "\u258E "), /* @__PURE__ */ React19.createElement(Spans, { spans: line.spans, italic: true }));
   }
 }
 function spanKey(span, i) {
@@ -5033,14 +4614,14 @@ function spanKey(span, i) {
 }
 function CodeBlock({ lang, text }) {
   const lines = text.split("\n");
-  return /* @__PURE__ */ React18.createElement(Box15, { flexDirection: "column" }, lang.length > 0 ? /* @__PURE__ */ React18.createElement(Text15, { color: FG_META }, ` ${lang}`) : null, lines.map((ln, i) => (
+  return /* @__PURE__ */ React19.createElement(Box16, { flexDirection: "column" }, lang.length > 0 ? /* @__PURE__ */ React19.createElement(Text16, { color: FG_META }, ` ${lang}`) : null, lines.map((ln, i) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: code lines are positional + stable per render
-    /* @__PURE__ */ React18.createElement(Text15, { key: `code-${i}`, backgroundColor: SURFACE_ELEV }, ` ${ln} `)
+    /* @__PURE__ */ React19.createElement(Text16, { key: `code-${i}`, backgroundColor: SURFACE_ELEV }, ` ${ln} `)
   )));
 }
 function Spans({ spans, bold, italic, dim, strike, strongColor }) {
-  if (spans.length === 0) return /* @__PURE__ */ React18.createElement(Text15, null, " ");
-  return /* @__PURE__ */ React18.createElement(React18.Fragment, null, spans.map((span, i) => /* @__PURE__ */ React18.createElement(
+  if (spans.length === 0) return /* @__PURE__ */ React19.createElement(Text16, null, " ");
+  return /* @__PURE__ */ React19.createElement(React19.Fragment, null, spans.map((span, i) => /* @__PURE__ */ React19.createElement(
     SpanText,
     {
       key: spanKey(span, i),
@@ -5062,11 +4643,11 @@ function SpanText({
   strongColor
 }) {
   if (span.code) {
-    return /* @__PURE__ */ React18.createElement(Text15, { color: FG_STRONG, backgroundColor: SURFACE_ELEV }, ` ${span.text} `);
+    return /* @__PURE__ */ React19.createElement(Text16, { color: FG_STRONG, backgroundColor: SURFACE_ELEV }, ` ${span.text} `);
   }
   const color = span.fileRef ? TONE_BRAND : span.link ? TONE_BRAND : strongColor ? FG_STRONG : FG_BODY;
-  return /* @__PURE__ */ React18.createElement(
-    Text15,
+  const inner = /* @__PURE__ */ React19.createElement(
+    Text16,
     {
       color,
       bold: !!(span.bold || ambientBold),
@@ -5077,6 +4658,17 @@ function SpanText({
     },
     span.text
   );
+  const target = linkTarget(span);
+  if (!target) return inner;
+  return /* @__PURE__ */ React19.createElement(Transform, { transform: (text) => `\x1B]8;;${target}\x1B\\${text}\x1B]8;;\x1B\\` }, inner);
+}
+function linkTarget(span) {
+  if (span.link) return span.link;
+  if (span.fileRef) {
+    const { path, line } = span.fileRef;
+    return line ? `file://${path}:${line}` : `file://${path}`;
+  }
+  return null;
 }
 
 // src/cli/ui/plan-open-questions.ts
@@ -5109,22 +4701,75 @@ function extractOpenQuestionsSection(plan2) {
 }
 
 // src/cli/ui/PlanConfirm.tsx
-var PLAN_BODY_PREVIEW_LINES = 24;
-function PlanConfirmInner({ plan: plan2, steps, onChoose }) {
+var DEFAULT_DETAIL_LINES = 12;
+var MIN_DETAIL_LINES = 6;
+var EXPANDED_MODAL_OVERHEAD_ROWS = 12;
+var EXPANDED_DETAIL_CHROME_ROWS = 4;
+function PlanConfirmInner({ plan: plan2, steps, summary, onChoose }) {
+  const { stdout } = useStdout6();
+  const totalRows = useTotalRows();
+  const [expanded, setExpanded] = useState10(false);
+  const [detailOffset, setDetailOffset] = useState10(0);
   const stepRows = steps?.length ?? 0;
   const hasSteps = stepRows > 0;
   const openQuestions = extractOpenQuestionsSection(plan2);
-  const planLines = plan2.split("\n");
-  const truncatedBody = planLines.length > PLAN_BODY_PREVIEW_LINES;
-  const previewBody = truncatedBody ? planLines.slice(0, PLAN_BODY_PREVIEW_LINES).join("\n") : plan2;
-  const previewRows = truncatedBody ? PLAN_BODY_PREVIEW_LINES : Math.min(planLines.length, PLAN_BODY_PREVIEW_LINES);
-  const reservedFor = hasSteps ? stepRows : previewRows;
-  const oqRows = openQuestions ? openQuestions.split("\n").length : 0;
-  useReserveRows("modal", { min: 10, max: Math.max(16, reservedFor + oqRows + 14) });
+  const planLines = useMemo5(() => plan2.split("\n"), [plan2]);
+  const effectiveSummary = useMemo5(
+    () => summarizePlan(plan2, summary, steps),
+    [plan2, summary, steps]
+  );
+  const oqRows = openQuestions ? Math.min(openQuestions.split("\n").length, 8) : 0;
+  const modalRows = useReserveRows("modal", {
+    min: 10,
+    max: expanded ? Math.max(10, totalRows - EXPANDED_DETAIL_CHROME_ROWS) : Math.max(16, Math.min(32, (hasSteps ? stepRows + 2 : 2) + oqRows + 14))
+  });
+  const detailViewRows = expanded ? Math.max(10, modalRows - EXPANDED_MODAL_OVERHEAD_ROWS) : Math.max(
+    MIN_DETAIL_LINES,
+    Math.min(18, Math.floor(((stdout?.rows ?? 32) - 14) / 2) || DEFAULT_DETAIL_LINES)
+  );
+  const maxDetailOffset = Math.max(0, planLines.length - detailViewRows);
+  const clampedDetailOffset = Math.min(detailOffset, maxDetailOffset);
+  const rawSliceStart = clampedDetailOffset;
+  const rawSliceEnd = Math.min(planLines.length, rawSliceStart + detailViewRows);
+  const { displayStart, displayEnd } = (() => {
+    let start = rawSliceStart;
+    let end = rawSliceEnd;
+    while (start < end && planLines[start]?.trim() === "" && end < planLines.length) {
+      start += 1;
+      end += 1;
+    }
+    return { displayStart: start, displayEnd: end };
+  })();
+  const visiblePlanLines = planLines.slice(displayStart, displayEnd);
+  const detailOverflow = planLines.length > detailViewRows;
+  const showDetailScrollHint = expanded && plan2.trim().length > 0 && detailOverflow;
+  const detailOwnsScrollKey = expanded && detailOverflow;
+  const isDetailScrollKey = (ev) => detailOwnsScrollKey && !!(ev.pageUp || ev.pageDown || ev.home || ev.end || ev.mouseScrollUp || ev.mouseScrollDown || ev.upArrow || ev.downArrow);
+  useKeystroke((ev) => {
+    if (ev.paste) return;
+    if (ev.ctrl && ev.input === "p") {
+      setExpanded((v) => !v);
+      return;
+    }
+    if (!isDetailScrollKey(ev)) return;
+    if (ev.pageUp || ev.mouseScrollUp) {
+      setDetailOffset((n) => Math.max(0, n - detailViewRows));
+    } else if (ev.pageDown || ev.mouseScrollDown) {
+      setDetailOffset((n) => Math.min(maxDetailOffset, n + detailViewRows));
+    } else if (ev.home) {
+      setDetailOffset(0);
+    } else if (ev.end) {
+      setDetailOffset(maxDetailOffset);
+    } else if (ev.upArrow) {
+      setDetailOffset((n) => Math.max(0, n - 1));
+    } else if (ev.downArrow) {
+      setDetailOffset((n) => Math.min(maxDetailOffset, n + 1));
+    }
+  });
   const refineLabel = t("planFlow.picker.refine");
   const bannerTemplate = t("planFlow.openQuestionsBanner");
   const [bannerBefore, bannerAfter] = bannerTemplate.split("{refine}");
-  return /* @__PURE__ */ React19.createElement(
+  return /* @__PURE__ */ React20.createElement(
     ApprovalCard,
     {
       tone: "accent",
@@ -5133,12 +4778,20 @@ function PlanConfirmInner({ plan: plan2, steps, onChoose }) {
       metaRight: t("planFlow.approveCardMetaRight"),
       metaRightColor: CARD.plan.color
     },
-    openQuestions ? /* @__PURE__ */ React19.createElement(Box16, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React19.createElement(Text16, { color: TONE.warn }, bannerBefore ?? "", /* @__PURE__ */ React19.createElement(Text16, { bold: true }, refineLabel), bannerAfter ?? ""), /* @__PURE__ */ React19.createElement(Box16, { marginTop: 1, flexDirection: "column" }, /* @__PURE__ */ React19.createElement(Text16, { color: TONE.warn, bold: true }, t("planFlow.openQuestionsHeader")), /* @__PURE__ */ React19.createElement(MarkdownView, { text: openQuestions }))) : null,
-    hasSteps ? /* @__PURE__ */ React19.createElement(Box16, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React19.createElement(PlanStepList, { steps })) : plan2.trim().length > 0 ? /* @__PURE__ */ React19.createElement(Box16, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React19.createElement(MarkdownView, { text: previewBody }), truncatedBody ? /* @__PURE__ */ React19.createElement(Text16, { color: FG.faint }, t(
-      planLines.length - PLAN_BODY_PREVIEW_LINES === 1 ? "planFlow.truncatedBodyMore" : "planFlow.truncatedBodyMorePlural",
-      { n: planLines.length - PLAN_BODY_PREVIEW_LINES }
-    )) : null) : null,
-    /* @__PURE__ */ React19.createElement(
+    openQuestions ? /* @__PURE__ */ React20.createElement(Box17, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React20.createElement(Text17, { color: TONE.warn }, bannerBefore ?? "", /* @__PURE__ */ React20.createElement(Text17, { bold: true }, refineLabel), bannerAfter ?? ""), /* @__PURE__ */ React20.createElement(Box17, { marginTop: 1, flexDirection: "column" }, /* @__PURE__ */ React20.createElement(Text17, { color: TONE.warn, bold: true }, t("planFlow.openQuestionsHeader")), /* @__PURE__ */ React20.createElement(MarkdownView, { text: openQuestions }))) : null,
+    !expanded || plan2.trim().length === 0 ? /* @__PURE__ */ React20.createElement(Box17, { marginBottom: 1, flexDirection: "column" }, effectiveSummary ? /* @__PURE__ */ React20.createElement(Text17, { color: FG.body }, effectiveSummary) : /* @__PURE__ */ React20.createElement(Text17, { color: FG.faint }, t("planFlow.noPlanSummary")), !expanded && hasSteps ? /* @__PURE__ */ React20.createElement(Box17, { marginTop: 1, flexDirection: "column" }, /* @__PURE__ */ React20.createElement(PlanStepList, { steps })) : null, /* @__PURE__ */ React20.createElement(Text17, { color: FG.faint }, expanded ? t("planFlow.detailExpandedHint") : t("planFlow.detailCollapsedHint"))) : null,
+    expanded && plan2.trim().length > 0 ? /* @__PURE__ */ React20.createElement(
+      PlanDetailWindow,
+      {
+        lines: visiblePlanLines,
+        overflow: detailOverflow,
+        start: displayStart + 1,
+        end: displayEnd,
+        total: planLines.length
+      }
+    ) : null,
+    showDetailScrollHint ? /* @__PURE__ */ React20.createElement(Box17, { marginBottom: 1 }, /* @__PURE__ */ React20.createElement(Text17, { color: FG.faint }, t("planFlow.detailScrollHint"))) : null,
+    /* @__PURE__ */ React20.createElement(
       SingleSelect,
       {
         initialValue: openQuestions ? "refine" : "approve",
@@ -5165,25 +4818,44 @@ function PlanConfirmInner({ plan: plan2, steps, onChoose }) {
           }
         ],
         onSubmit: (v) => onChoose(v),
-        onCancel: () => onChoose("cancel")
+        onCancel: () => onChoose("cancel"),
+        inlineHints: true,
+        ignoreKey: isDetailScrollKey
       }
     )
   );
 }
-var PlanConfirm = React19.memo(PlanConfirmInner);
+function PlanDetailWindow({
+  lines,
+  overflow,
+  start,
+  end,
+  total
+}) {
+  return /* @__PURE__ */ React20.createElement(Box17, { flexDirection: "column" }, overflow ? /* @__PURE__ */ React20.createElement(Text17, { color: FG.faint }, t("planFlow.detailWindow", { start, end, total })) : null, lines.map((line, i) => /* @__PURE__ */ React20.createElement(Text17, { key: `plan-detail-${start + i}`, wrap: "truncate" }, line.length > 0 ? line : " ")));
+}
+function summarizePlan(plan2, summary, steps) {
+  const trimmedSummary = summary?.trim();
+  if (trimmedSummary) return trimmedSummary;
+  const firstTextLine = plan2.split("\n").map((line) => line.trim()).find((line) => line.length > 0 && !/^#{1,6}\s*$/.test(line));
+  if (firstTextLine) return firstTextLine.replace(/^#{1,6}\s+/, "").slice(0, 160);
+  if (steps && steps.length > 0) return steps[0]?.title ?? "";
+  return "";
+}
+var PlanConfirm = React20.memo(PlanConfirmInner);
 
 // src/cli/ui/PlanRefineInput.tsx
-import { Box as Box17, Text as Text17 } from "ink";
-import React21, { useState as useState10 } from "react";
+import { Box as Box18, Text as Text18 } from "ink";
+import React22, { useState as useState12 } from "react";
 
 // src/cli/ui/ticker.tsx
 import { useAnimation } from "ink";
-import React20, { createContext as createContext2, useContext as useContext2, useState as useState9 } from "react";
+import React21, { createContext as createContext2, useContext as useContext2, useState as useState11 } from "react";
 var FAST_TICK_MS = 120;
 var SLOW_TICK_MS = 1e3;
 var TickerActiveContext = createContext2(true);
 function TickerProvider({ children, disabled }) {
-  return /* @__PURE__ */ React20.createElement(TickerActiveContext.Provider, { value: !disabled }, children);
+  return /* @__PURE__ */ React21.createElement(TickerActiveContext.Provider, { value: !disabled }, children);
 }
 function useTickerActive() {
   return useContext2(TickerActiveContext);
@@ -5196,8 +4868,13 @@ function useSlowTick() {
   const isActive = useTickerActive();
   return useAnimation({ interval: SLOW_TICK_MS, isActive }).frame;
 }
+function useCursorBlink() {
+  const isActive = useTickerActive();
+  const tick = useSlowTick();
+  return !isActive || tick % 2 === 0;
+}
 function useElapsedSeconds() {
-  const [start] = useState9(() => Date.now());
+  const [start] = useState11(() => Date.now());
   useSlowTick();
   return Math.floor((Date.now() - start) / 1e3);
 }
@@ -5222,7 +4899,7 @@ function modeMeta(mode2) {
   };
 }
 function PlanRefineInput({ mode: mode2, questions, onSubmit, onCancel }) {
-  const [value, setValue] = useState10("");
+  const [value, setValue] = useState12("");
   useKeystroke((ev) => {
     if (ev.paste) {
       setValue((v) => v + ev.input.replace(/\r?\n/g, " "));
@@ -5248,7 +4925,7 @@ function PlanRefineInput({ mode: mode2, questions, onSubmit, onCancel }) {
   const cursorOn = Math.floor(tick / 4) % 2 === 0;
   const meta = modeMeta(mode2);
   const showQuestions = mode2 === "refine" && !!questions && questions.trim().length > 0;
-  return /* @__PURE__ */ React21.createElement(
+  return /* @__PURE__ */ React22.createElement(
     ApprovalCard,
     {
       tone: meta.tone,
@@ -5256,15 +4933,15 @@ function PlanRefineInput({ mode: mode2, questions, onSubmit, onCancel }) {
       title: meta.title,
       footerHint: t("planFlow.refineFooter")
     },
-    showQuestions ? /* @__PURE__ */ React21.createElement(Box17, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React21.createElement(Text17, { color: TONE.warn, bold: true }, t("planFlow.refineQuestionsHeading")), /* @__PURE__ */ React21.createElement(MarkdownView, { text: questions })) : null,
-    /* @__PURE__ */ React21.createElement(Box17, { marginBottom: 1 }, /* @__PURE__ */ React21.createElement(Text17, { color: FG.sub }, meta.hint, value === "" ? meta.blankHint : "")),
-    /* @__PURE__ */ React21.createElement(Box17, null, /* @__PURE__ */ React21.createElement(Text17, { color: meta.cursorColor, bold: true }, "\u203A "), /* @__PURE__ */ React21.createElement(Text17, null, value), /* @__PURE__ */ React21.createElement(Text17, { color: meta.cursorColor, bold: true }, cursorOn ? "\u258D" : " "))
+    showQuestions ? /* @__PURE__ */ React22.createElement(Box18, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React22.createElement(Text18, { color: TONE.warn, bold: true }, t("planFlow.refineQuestionsHeading")), /* @__PURE__ */ React22.createElement(MarkdownView, { text: questions })) : null,
+    /* @__PURE__ */ React22.createElement(Box18, { marginBottom: 1 }, /* @__PURE__ */ React22.createElement(Text18, { color: FG.sub }, meta.hint, value === "" ? meta.blankHint : "")),
+    /* @__PURE__ */ React22.createElement(Box18, null, /* @__PURE__ */ React22.createElement(Text18, { color: meta.cursorColor, bold: true }, "\u203A "), /* @__PURE__ */ React22.createElement(Text18, null, value), /* @__PURE__ */ React22.createElement(Text18, { color: meta.cursorColor, bold: true }, cursorOn ? "\u258D" : " "))
   );
 }
 
 // src/cli/ui/PlanReviseConfirm.tsx
-import { Box as Box18, Text as Text18 } from "ink";
-import React22 from "react";
+import { Box as Box19, Text as Text19 } from "ink";
+import React23 from "react";
 function computeDiff(oldSteps, newSteps) {
   const oldIds = new Set(oldSteps.map((s) => s.id));
   const newIds = new Set(newSteps.map((s) => s.id));
@@ -5300,7 +4977,7 @@ function PlanReviseConfirmInner({
   const removedCount = rows.filter((r) => r.kind === "removed").length;
   const addedCount = rows.filter((r) => r.kind === "added").length;
   const keptCount = rows.filter((r) => r.kind === "kept").length;
-  return /* @__PURE__ */ React22.createElement(
+  return /* @__PURE__ */ React23.createElement(
     ApprovalCard,
     {
       tone: "warn",
@@ -5312,17 +4989,17 @@ function PlanReviseConfirmInner({
         kept: keptCount
       })
     },
-    /* @__PURE__ */ React22.createElement(Box18, { marginBottom: 1 }, /* @__PURE__ */ React22.createElement(Text18, null, reason)),
-    summary ? /* @__PURE__ */ React22.createElement(Box18, { marginBottom: 1 }, /* @__PURE__ */ React22.createElement(Text18, { dimColor: true }, t("planReviseConfirm.updatedSummary", { summary }))) : null,
-    /* @__PURE__ */ React22.createElement(Box18, { marginBottom: 1, flexDirection: "column" }, rows.map((row2) => {
+    /* @__PURE__ */ React23.createElement(Box19, { marginBottom: 1 }, /* @__PURE__ */ React23.createElement(Text19, null, reason)),
+    summary ? /* @__PURE__ */ React23.createElement(Box19, { marginBottom: 1 }, /* @__PURE__ */ React23.createElement(Text19, { dimColor: true }, t("planReviseConfirm.updatedSummary", { summary }))) : null,
+    /* @__PURE__ */ React23.createElement(Box19, { marginBottom: 1, flexDirection: "column" }, rows.map((row2) => {
       const risk = riskDots(row2.step.risk);
       const prefix = row2.kind === "removed" ? "\u2212" : row2.kind === "added" ? "+" : " ";
       const prefixColor = row2.kind === "removed" ? "#f87171" : row2.kind === "added" ? "#4ade80" : "#94a3b8";
       const dim = row2.kind === "kept";
       const strike = row2.kind === "removed";
-      return /* @__PURE__ */ React22.createElement(Box18, { key: `${row2.kind}-${row2.step.id}` }, /* @__PURE__ */ React22.createElement(Text18, { color: prefixColor, bold: true }, `${prefix} `), /* @__PURE__ */ React22.createElement(Text18, { color: risk.color, bold: true, dimColor: dim }, risk.dots), /* @__PURE__ */ React22.createElement(Text18, { dimColor: dim, strikethrough: strike }, ` ${row2.step.id} \xB7 ${row2.step.title}`));
+      return /* @__PURE__ */ React23.createElement(Box19, { key: `${row2.kind}-${row2.step.id}` }, /* @__PURE__ */ React23.createElement(Text19, { color: prefixColor, bold: true }, `${prefix} `), /* @__PURE__ */ React23.createElement(Text19, { color: risk.color, bold: true, dimColor: dim }, risk.dots), /* @__PURE__ */ React23.createElement(Text19, { dimColor: dim, strikethrough: strike }, ` ${row2.step.id} \xB7 ${row2.step.title}`));
     })),
-    /* @__PURE__ */ React22.createElement(
+    /* @__PURE__ */ React23.createElement(
       SingleSelect,
       {
         initialValue: "accept",
@@ -5344,22 +5021,22 @@ function PlanReviseConfirmInner({
     )
   );
 }
-var PlanReviseConfirm = React22.memo(PlanReviseConfirmInner);
+var PlanReviseConfirm = React23.memo(PlanReviseConfirmInner);
 
 // src/cli/ui/PlanReviseEditor.tsx
-import { Box as Box19, Text as Text19 } from "ink";
-import React23, { useState as useState11 } from "react";
+import { Box as Box20, Text as Text20 } from "ink";
+import React24, { useState as useState13 } from "react";
 function PlanReviseEditor({
   steps,
   completedStepIds,
   onAccept,
   onCancel
 }) {
-  const [rows, setRows] = useState11(
+  const [rows, setRows] = useState13(
     () => steps.map((s) => ({ step: s, done: completedStepIds?.has(s.id) ?? false, skipped: false }))
   );
   const firstEditableIndex = rows.findIndex((r) => !r.done);
-  const [focus, setFocus] = useState11(firstEditableIndex < 0 ? 0 : firstEditableIndex);
+  const [focus, setFocus] = useState13(firstEditableIndex < 0 ? 0 : firstEditableIndex);
   useKeystroke((ev) => {
     if (ev.paste) return;
     if (ev.escape) {
@@ -5420,7 +5097,7 @@ function PlanReviseEditor({
       return;
     }
   });
-  return /* @__PURE__ */ React23.createElement(
+  return /* @__PURE__ */ React24.createElement(
     ApprovalCard,
     {
       tone: "accent",
@@ -5429,7 +5106,7 @@ function PlanReviseEditor({
       metaRight: t("planFlow.reviseSteps", { count: rows.length }),
       footerHint: t("planFlow.reviseFooter")
     },
-    rows.map((r, i) => /* @__PURE__ */ React23.createElement(ReviseRow, { key: r.step.id, row: r, index: i, focused: i === focus }))
+    rows.map((r, i) => /* @__PURE__ */ React24.createElement(ReviseRow, { key: r.step.id, row: r, index: i, focused: i === focus }))
   );
 }
 function ReviseRow({
@@ -5440,13 +5117,13 @@ function ReviseRow({
   const marker = row2.done ? "[\u2713]" : row2.skipped ? "[s]" : focused ? "[ ]" : "[ ]";
   const markerColor = row2.done ? TONE.ok : row2.skipped ? FG.faint : focused ? TONE.brand : FG.faint;
   const titleColor = row2.done ? FG.sub : row2.skipped ? FG.faint : focused ? FG.strong : FG.sub;
-  const focusGlyph = focused ? /* @__PURE__ */ React23.createElement(Text19, { color: TONE.brand }, "\u25B8 ") : /* @__PURE__ */ React23.createElement(Text19, null, "  ");
-  return /* @__PURE__ */ React23.createElement(Box19, null, focusGlyph, /* @__PURE__ */ React23.createElement(Text19, { color: markerColor }, marker), /* @__PURE__ */ React23.createElement(Text19, { color: titleColor, bold: focused, italic: row2.skipped, strikethrough: row2.skipped }, ` ${index + 1}. ${row2.step.title}`), row2.skipped ? /* @__PURE__ */ React23.createElement(Text19, { color: TONE.warn }, "     \u2190 skipped") : null);
+  const focusGlyph = focused ? /* @__PURE__ */ React24.createElement(Text20, { color: TONE.brand }, "\u25B8 ") : /* @__PURE__ */ React24.createElement(Text20, null, "  ");
+  return /* @__PURE__ */ React24.createElement(Box20, null, focusGlyph, /* @__PURE__ */ React24.createElement(Text20, { color: markerColor }, marker), /* @__PURE__ */ React24.createElement(Text20, { color: titleColor, bold: focused, italic: row2.skipped, strikethrough: row2.skipped }, ` ${index + 1}. ${row2.step.title}`), row2.skipped ? /* @__PURE__ */ React24.createElement(Text20, { color: TONE.warn }, "     \u2190 skipped") : null);
 }
 
 // src/cli/ui/PromptInput.tsx
-import { Box as Box20, Text as Text20, useStdout as useStdout6 } from "ink";
-import React24, { useRef, useState as useState12 } from "react";
+import { Box as Box21, Text as Text21, useStdout as useStdout7 } from "ink";
+import React25, { useRef, useState as useState14 } from "react";
 
 // src/cli/ui/key-normalize.ts
 var CSI_TAIL_TO_FLAGS = [
@@ -5894,7 +5571,7 @@ function PromptInput({
   const inputLineCount = value.length > 0 ? value.split("\n").length : 1;
   const reserveMax = Math.min(Math.ceil(inputLineCount / 4) * 4 + 3, 24);
   useReserveRows("input", { min: 1, max: reserveMax });
-  const [cursor, setCursor] = useState12(value.length);
+  const [cursor, setCursor] = useState14(value.length);
   const pastesRef = useRef(/* @__PURE__ */ new Map());
   const nextPasteIdRef = useRef(0);
   const lastLocalValueRef = useRef(value);
@@ -5973,7 +5650,7 @@ function PromptInput({
     if (action.historyHandoff === "next") onHistoryNext?.();
     if (action.openExternalEditor) onOpenExternalEditor?.();
   }, !disabled);
-  const { stdout } = useStdout6();
+  const { stdout } = useStdout7();
   const cols = stdout?.columns ?? 80;
   const promptPrefix = "\u203A ";
   const continuationIndent = "  ";
@@ -5982,18 +5659,18 @@ function PromptInput({
   const effectivePlaceholder = disabled ? placeholder ?? t("composer.waitingForResponse") : placeholder ?? t("composer.placeholder");
   const lines = value.length > 0 ? value.split("\n") : [""];
   const accentColor = disabled ? FG.faint : TONE.brand;
-  const cursorVisible = true;
+  const cursorVisible = useCursorBlink();
   const { line: cursorLine, col: cursorCol } = lineAndColumn(value, cursor);
   const renderItems = collapseLinesForDisplay(lines, cursorLine);
   const showHugeBufferHints = lines.length > 20;
-  return /* @__PURE__ */ React24.createElement(Box20, { flexDirection: "column", paddingX: 1 }, (() => {
+  return /* @__PURE__ */ React25.createElement(Box21, { flexDirection: "column", paddingX: 1 }, (() => {
     const rows = [];
     let firstRowEmitted = false;
     for (let renderIdx = 0; renderIdx < renderItems.length; renderIdx++) {
       const item = renderItems[renderIdx];
       if (item.kind === "skip") {
         rows.push(
-          /* @__PURE__ */ React24.createElement(Box20, { key: `skip-${renderIdx}` }, /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, continuationIndent), /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, `[\u2026 ${item.linesHidden} line${item.linesHidden === 1 ? "" : "s"} hidden \u2014 full content kept, submitted on Enter \u2026]`))
+          /* @__PURE__ */ React25.createElement(Box21, { key: `skip-${renderIdx}` }, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, continuationIndent), /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, `[\u2026 ${item.linesHidden} line${item.linesHidden === 1 ? "" : "s"} hidden \u2014 full content kept, submitted on Enter \u2026]`))
         );
         continue;
       }
@@ -6003,7 +5680,7 @@ function PromptInput({
       const showPlaceholder = i === 0 && value.length === 0;
       if (showPlaceholder) {
         rows.push(
-          /* @__PURE__ */ React24.createElement(
+          /* @__PURE__ */ React25.createElement(
             PromptLine,
             {
               key: `ln-${i}-text-0`,
@@ -6034,7 +5711,7 @@ function PromptInput({
         if (seg.kind === "paste") {
           const cursorOnIt = isCursorLine && cursorCol >= seg.startOffset && cursorCol <= seg.startOffset + 1;
           rows.push(
-            /* @__PURE__ */ React24.createElement(
+            /* @__PURE__ */ React25.createElement(
               PasteChipRow,
               {
                 key: `ln-${i}-paste-${segIdx}`,
@@ -6051,7 +5728,7 @@ function PromptInput({
         }
         const segHasCursor = isCursorLine && cursorCol >= seg.startOffset && cursorCol <= seg.startOffset + seg.text.length;
         rows.push(
-          /* @__PURE__ */ React24.createElement(
+          /* @__PURE__ */ React25.createElement(
             PromptLine,
             {
               key: `ln-${i}-text-${segIdx}`,
@@ -6076,7 +5753,7 @@ function PromptInput({
         const isFirst = !firstRowEmitted;
         firstRowEmitted = true;
         rows.push(
-          /* @__PURE__ */ React24.createElement(
+          /* @__PURE__ */ React25.createElement(
             PromptLine,
             {
               key: `ln-${i}-empty`,
@@ -6099,7 +5776,7 @@ function PromptInput({
       }
     }
     return rows;
-  })(), showHugeBufferHints && !disabled ? /* @__PURE__ */ React24.createElement(Box20, null, /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, `  [${lines.length} lines \xB7 PgUp/PgDn jump \xB7 Ctrl+U clear \xB7 Ctrl+W del word]`)) : null, !disabled ? /* @__PURE__ */ React24.createElement(Box20, { marginTop: 1 }, /* @__PURE__ */ React24.createElement(HintRow, null)) : /* @__PURE__ */ React24.createElement(Box20, { marginTop: 1 }, /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, "  esc to stop")));
+  })(), showHugeBufferHints && !disabled ? /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, `  [${lines.length} lines \xB7 PgUp/PgDn jump \xB7 Ctrl+U clear \xB7 Ctrl+W del word]`)) : null, !disabled ? /* @__PURE__ */ React25.createElement(Box21, { marginTop: 1 }, /* @__PURE__ */ React25.createElement(HintRow, null)) : /* @__PURE__ */ React25.createElement(Box21, { marginTop: 1 }, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, "  esc to stop")));
 }
 function HintRow() {
   const items = [
@@ -6110,7 +5787,7 @@ function HintRow() {
     { key: "esc", tKey: "composer.hintAbort" },
     { key: "^C", tKey: "composer.hintQuit" }
   ];
-  return /* @__PURE__ */ React24.createElement(Box20, { flexDirection: "row" }, /* @__PURE__ */ React24.createElement(Text20, null, "  "), items.map((item, i) => /* @__PURE__ */ React24.createElement(React24.Fragment, { key: item.key }, i > 0 && /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, "  \xB7  "), /* @__PURE__ */ React24.createElement(Text20, { color: FG.meta }, item.key), /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, ` ${t(item.tKey)}`))));
+  return /* @__PURE__ */ React25.createElement(Box21, { flexDirection: "row" }, /* @__PURE__ */ React25.createElement(Text21, null, "  "), items.map((item, i) => /* @__PURE__ */ React25.createElement(React25.Fragment, { key: item.key }, i > 0 && /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, "  \xB7  "), /* @__PURE__ */ React25.createElement(Text21, { color: FG.meta }, item.key), /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, ` ${t(item.tKey)}`))));
 }
 function splitLineByPastes(line) {
   const out = [];
@@ -6147,9 +5824,9 @@ function PasteChipRow({
   const leadColor = isFirst ? accentColor : FG.faint;
   const labelText = formatChipLabel(entry, pasteId, visibleCells - 6);
   if (active) {
-    return /* @__PURE__ */ React24.createElement(Box20, null, /* @__PURE__ */ React24.createElement(Text20, { bold: true, color: leadColor }, lead), /* @__PURE__ */ React24.createElement(Text20, { bold: true, color: accentColor }, "\u25B8 "), /* @__PURE__ */ React24.createElement(Text20, { bold: true, color: "black", backgroundColor: accentColor }, `  ${labelText}  `));
+    return /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: leadColor }, lead), /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: accentColor }, "\u25B8 "), /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: "black", backgroundColor: accentColor }, `  ${labelText}  `));
   }
-  return /* @__PURE__ */ React24.createElement(Box20, null, /* @__PURE__ */ React24.createElement(Text20, { bold: true, color: leadColor }, lead), /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, "  "), /* @__PURE__ */ React24.createElement(Text20, { color: FG.meta }, "\u250C "), /* @__PURE__ */ React24.createElement(Text20, { color: FG.body, backgroundColor: SURFACE.bgElev }, `${labelText} `), /* @__PURE__ */ React24.createElement(Text20, { color: FG.meta }, " \u2510"));
+  return /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: leadColor }, lead), /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, "  "), /* @__PURE__ */ React25.createElement(Text21, { color: FG.meta }, "\u250C "), /* @__PURE__ */ React25.createElement(Text21, { color: FG.body, backgroundColor: SURFACE.bgElev }, `${labelText} `), /* @__PURE__ */ React25.createElement(Text21, { color: FG.meta }, " \u2510"));
 }
 function formatChipLabel(entry, pasteId, budget2) {
   if (!entry) return `\u{1F4CB} paste #${pasteId + 1} \xB7 (missing)`;
@@ -6193,10 +5870,10 @@ function PromptLine({
   disabled
 }) {
   if (showPlaceholder) {
-    return /* @__PURE__ */ React24.createElement(Box20, null, /* @__PURE__ */ React24.createElement(Text20, { bold: true, color: accentColor }, promptPrefix), !disabled ? /* @__PURE__ */ React24.createElement(Text20, { color: accentColor }, cursorVisible ? "\u258C" : " ") : null, /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, placeholderText));
+    return /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: accentColor }, promptPrefix), !disabled ? /* @__PURE__ */ React25.createElement(Text21, { color: accentColor }, cursorVisible ? "\u258C" : " ") : null, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, placeholderText));
   }
   const viewport = buildViewport(line, isCursorLine ? cursorCol : null, visibleCells, pastes);
-  return /* @__PURE__ */ React24.createElement(Box20, null, isFirst ? /* @__PURE__ */ React24.createElement(Text20, { bold: true, color: accentColor }, promptPrefix) : /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, continuationIndent), viewport.hiddenLeft ? /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, "\u2039") : null, /* @__PURE__ */ React24.createElement(
+  return /* @__PURE__ */ React25.createElement(Box21, null, isFirst ? /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: accentColor }, promptPrefix) : /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, continuationIndent), viewport.hiddenLeft ? /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, "\u2039") : null, /* @__PURE__ */ React25.createElement(
     ViewportContent,
     {
       segments: viewport.segments,
@@ -6204,7 +5881,7 @@ function PromptLine({
       accentColor,
       cursorVisible
     }
-  ), viewport.hiddenRight ? /* @__PURE__ */ React24.createElement(Text20, { color: FG.faint }, "\u203A") : null);
+  ), viewport.hiddenRight ? /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, "\u203A") : null);
 }
 function ViewportContent({
   segments,
@@ -6213,7 +5890,7 @@ function ViewportContent({
   cursorVisible
 }) {
   if (cursorCell === null) {
-    return /* @__PURE__ */ React24.createElement(React24.Fragment, null, segments.map((seg, i) => renderSegment(seg, i, false)));
+    return /* @__PURE__ */ React25.createElement(React25.Fragment, null, segments.map((seg, i) => renderSegment(seg, i, false)));
   }
   const out = [];
   let cells = 0;
@@ -6232,8 +5909,8 @@ function ViewportContent({
     }
     if (seg.kind === "paste") {
       out.push(
-        /* @__PURE__ */ React24.createElement(
-          Text20,
+        /* @__PURE__ */ React25.createElement(
+          Text21,
           {
             key: `p-${i}-cursor`,
             color: FG.body,
@@ -6250,29 +5927,29 @@ function ViewportContent({
     const offsetIntoSeg = cursorCell - cells;
     const split = splitTextByCells(seg.text, offsetIntoSeg);
     if (split.before.length > 0) {
-      out.push(/* @__PURE__ */ React24.createElement(Text20, { key: `t-${i}-b` }, split.before));
+      out.push(/* @__PURE__ */ React25.createElement(Text21, { key: `t-${i}-b` }, split.before));
     }
     if (split.atCursor.length > 0) {
       out.push(
-        /* @__PURE__ */ React24.createElement(Text20, { key: `t-${i}-c`, inverse: cursorVisible, color: accentColor }, split.atCursor)
+        /* @__PURE__ */ React25.createElement(Text21, { key: `t-${i}-c`, inverse: cursorVisible, color: accentColor }, split.atCursor)
       );
     } else {
       out.push(
-        /* @__PURE__ */ React24.createElement(Text20, { key: `t-${i}-c-eol`, color: accentColor }, cursorVisible ? "\u258C" : " ")
+        /* @__PURE__ */ React25.createElement(Text21, { key: `t-${i}-c-eol`, color: accentColor }, cursorVisible ? "\u258C" : " ")
       );
     }
     if (split.after.length > 0) {
-      out.push(/* @__PURE__ */ React24.createElement(Text20, { key: `t-${i}-a` }, split.after));
+      out.push(/* @__PURE__ */ React25.createElement(Text21, { key: `t-${i}-a` }, split.after));
     }
     placed = true;
     cells += segCells;
   }
   if (!placed) {
     out.push(
-      /* @__PURE__ */ React24.createElement(Text20, { key: "cursor-eol", color: accentColor }, cursorVisible ? "\u258C" : " ")
+      /* @__PURE__ */ React25.createElement(Text21, { key: "cursor-eol", color: accentColor }, cursorVisible ? "\u258C" : " ")
     );
   }
-  return /* @__PURE__ */ React24.createElement(React24.Fragment, null, out);
+  return /* @__PURE__ */ React25.createElement(React25.Fragment, null, out);
 }
 function segmentCells(seg) {
   if (seg.kind === "paste") return seg.label.length;
@@ -6312,9 +5989,9 @@ function charCellsForText(ch) {
 }
 function renderSegment(seg, key, _inverse) {
   if (seg.kind === "text") {
-    return /* @__PURE__ */ React24.createElement(Text20, { key: `s-${key}` }, seg.text);
+    return /* @__PURE__ */ React25.createElement(Text21, { key: `s-${key}` }, seg.text);
   }
-  return /* @__PURE__ */ React24.createElement(Text20, { key: `s-${key}`, backgroundColor: SURFACE.bgElev, color: FG.body }, seg.label);
+  return /* @__PURE__ */ React25.createElement(Text21, { key: `s-${key}`, backgroundColor: SURFACE.bgElev, color: FG.body }, seg.label);
 }
 var COLLAPSE_THRESHOLD = 20;
 var COLLAPSE_HEAD_LINES = 3;
@@ -6341,8 +6018,8 @@ function collapseLinesForDisplay(lines, cursorLine) {
 }
 
 // src/cli/ui/SessionPicker.tsx
-import { Box as Box21, Text as Text21, useStdout as useStdout7 } from "ink";
-import React25, { useMemo as useMemo5, useState as useState13 } from "react";
+import { Box as Box22, Text as Text22, useStdout as useStdout8 } from "ink";
+import React26, { useMemo as useMemo6, useState as useState15 } from "react";
 var PAGE_MARGIN3 = 6;
 function SessionPicker({
   sessions: sessions2,
@@ -6351,12 +6028,12 @@ function SessionPicker({
   walletCurrency,
   pickerPorts
 }) {
-  const [focus, setFocus] = useState13(0);
-  const [renaming, setRenaming] = useState13(null);
-  const { stdout } = useStdout7();
+  const [focus, setFocus] = useState15(0);
+  const [renaming, setRenaming] = useState15(null);
+  const { stdout } = useStdout8();
   const rows = stdout?.rows ?? 40;
   const visibleCount = Math.max(3, rows - PAGE_MARGIN3);
-  const snapshot = useMemo5(
+  const snapshot = useMemo6(
     () => ({
       pickerKind: "sessions",
       title: t("sessionPicker.title", { workspace }),
@@ -6450,7 +6127,7 @@ function SessionPicker({
   const end = Math.min(sessions2.length, start + visibleCount);
   const shown = sessions2.slice(start, end);
   const hiddenBelow = sessions2.length - end;
-  return /* @__PURE__ */ React25.createElement(Box21, { flexDirection: "column", marginY: 1 }, /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: TONE.brand }, t("sessionPicker.header")), /* @__PURE__ */ React25.createElement(Text21, { color: FG.meta }, `  \xB7  ${workspace}`)), /* @__PURE__ */ React25.createElement(Box21, { height: 1 }), sessions2.length === 0 ? /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, t("sessionPicker.empty")), /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: TONE.brand }, "\u23CE"), /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, t("sessionPicker.emptyNew"))) : shown.map((s, i) => /* @__PURE__ */ React25.createElement(
+  return /* @__PURE__ */ React26.createElement(Box22, { flexDirection: "column", marginY: 1 }, /* @__PURE__ */ React26.createElement(Box22, null, /* @__PURE__ */ React26.createElement(Text22, { bold: true, color: TONE.brand }, t("sessionPicker.header")), /* @__PURE__ */ React26.createElement(Text22, { color: FG.meta }, `  \xB7  ${workspace}`)), /* @__PURE__ */ React26.createElement(Box22, { height: 1 }), sessions2.length === 0 ? /* @__PURE__ */ React26.createElement(Box22, null, /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, t("sessionPicker.empty")), /* @__PURE__ */ React26.createElement(Text22, { bold: true, color: TONE.brand }, "\u23CE"), /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, t("sessionPicker.emptyNew"))) : shown.map((s, i) => /* @__PURE__ */ React26.createElement(
     SessionRow,
     {
       key: s.name,
@@ -6458,7 +6135,7 @@ function SessionPicker({
       focused: start + i === focus,
       walletCurrency
     }
-  )), hiddenBelow > 0 ? /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, t("cardLabels.more", { count: hiddenBelow }))) : null, renaming ? /* @__PURE__ */ React25.createElement(Box21, { marginTop: 1 }, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, t("sessionPicker.renamePrompt", { from: renaming.from })), /* @__PURE__ */ React25.createElement(Text21, { bold: true, color: TONE.brand }, renaming.buf), /* @__PURE__ */ React25.createElement(Text21, { backgroundColor: TONE.brand, color: "black" }, " ")) : null, /* @__PURE__ */ React25.createElement(Box21, { marginTop: 1 }, /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, renaming ? t("sessionPicker.renameHint") : sessions2.length === 0 ? t("sessionPicker.emptyHint") : t("sessionPicker.pickerHint"))));
+  )), hiddenBelow > 0 ? /* @__PURE__ */ React26.createElement(Box22, null, /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, t("cardLabels.more", { count: hiddenBelow }))) : null, renaming ? /* @__PURE__ */ React26.createElement(Box22, { marginTop: 1 }, /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, t("sessionPicker.renamePrompt", { from: renaming.from })), /* @__PURE__ */ React26.createElement(Text22, { bold: true, color: TONE.brand }, renaming.buf), /* @__PURE__ */ React26.createElement(Text22, { backgroundColor: TONE.brand, color: "black" }, " ")) : null, /* @__PURE__ */ React26.createElement(Box22, { marginTop: 1 }, /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, renaming ? t("sessionPicker.renameHint") : sessions2.length === 0 ? t("sessionPicker.emptyHint") : t("sessionPicker.pickerHint"))));
 }
 function SessionRow({
   info,
@@ -6472,7 +6149,7 @@ function SessionRow({
   const currency = walletCurrency ?? info.meta.balanceCurrency;
   const costLabel = info.meta.totalCostUsd !== void 0 ? formatCost(info.meta.totalCostUsd, currency, 2) : "";
   const time = relativeTime2(info.mtime);
-  return /* @__PURE__ */ React25.createElement(Box21, null, /* @__PURE__ */ React25.createElement(Text21, { color: focused ? TONE.brand : FG.faint }, focused ? "  \u25B8 " : "    "), /* @__PURE__ */ React25.createElement(Text21, { bold: focused, color: focused ? FG.strong : FG.sub }, info.name.padEnd(12)), /* @__PURE__ */ React25.createElement(Text21, { color: FG.meta }, ` \xB7 ${branch.padEnd(8)} \xB7 `), /* @__PURE__ */ React25.createElement(Text21, { color: focused ? FG.body : FG.sub }, truncate(summary, 40)), /* @__PURE__ */ React25.createElement(Box21, { flexGrow: 1 }), /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, `${time.padStart(11)}   `), /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, t("sessionPicker.turns", { count: turns })), costLabel ? /* @__PURE__ */ React25.createElement(Text21, { color: FG.faint }, ` \xB7 ${costLabel}`) : null);
+  return /* @__PURE__ */ React26.createElement(Box22, null, /* @__PURE__ */ React26.createElement(Text22, { color: focused ? TONE.brand : FG.faint }, focused ? "  \u25B8 " : "    "), /* @__PURE__ */ React26.createElement(Text22, { bold: focused, color: focused ? FG.strong : FG.sub }, info.name.padEnd(12)), /* @__PURE__ */ React26.createElement(Text22, { color: FG.meta }, ` \xB7 ${branch.padEnd(8)} \xB7 `), /* @__PURE__ */ React26.createElement(Text22, { color: focused ? FG.body : FG.sub }, truncate(summary, 40)), /* @__PURE__ */ React26.createElement(Box22, { flexGrow: 1 }), /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, `${time.padStart(11)}   `), /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, t("sessionPicker.turns", { count: turns })), costLabel ? /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, ` \xB7 ${costLabel}`) : null);
 }
 function truncate(s, max) {
   if (s.length <= max) return s;
@@ -6492,15 +6169,43 @@ function relativeTime2(date) {
 }
 
 // src/cli/ui/ShellConfirm.tsx
-import { Box as Box22, Text as Text22 } from "ink";
-import React26, { useState as useState14 } from "react";
-function ShellConfirm({ command, allowPrefix, kind, onChoose }) {
+import { homedir as homedir3 } from "os";
+import { Box as Box23, Text as Text23 } from "ink";
+import React27, { useState as useState16 } from "react";
+var CHROME_ROWS = 18;
+var MIN_COMMAND_LINES = 3;
+function clampCommand(command, max) {
+  const lines = command.split("\n");
+  if (lines.length <= max) return { preview: command, hidden: 0 };
+  return { preview: lines.slice(0, max).join("\n"), hidden: lines.length - max };
+}
+function tildeify2(path) {
+  const home = homedir3();
+  if (!home) return path;
+  const normalized = home.replace(/[\\/]+$/, "");
+  if (path === normalized) return "~";
+  if (path.startsWith(`${normalized}/`)) return `~/${path.slice(normalized.length + 1)}`;
+  if (path.startsWith(`${normalized}\\`)) return `~\\${path.slice(normalized.length + 1)}`;
+  return path;
+}
+function ShellConfirm({
+  command,
+  allowPrefix,
+  kind,
+  cwd: cwd2,
+  timeoutSec,
+  waitSec,
+  onChoose
+}) {
   useReserveRows("modal", { min: 8, max: 14 });
+  const totalRows = useTotalRows();
+  const maxCommandLines = Math.max(MIN_COMMAND_LINES, totalRows - CHROME_ROWS);
+  const { preview, hidden } = clampCommand(command, maxCommandLines);
   const isBackground = kind === "run_background";
   const subtitle = isBackground ? t("shellConfirm.bgSubtitle") : t("shellConfirm.subtitle");
-  const [phase, setPhase] = useState14("pick");
+  const [phase, setPhase] = useState16("pick");
   if (phase === "deny") {
-    return /* @__PURE__ */ React26.createElement(
+    return /* @__PURE__ */ React27.createElement(
       ApprovalCard,
       {
         tone: "error",
@@ -6509,7 +6214,7 @@ function ShellConfirm({ command, allowPrefix, kind, onChoose }) {
         metaRight: t("shellConfirm.optional"),
         footerHint: t("shellConfirm.denyFooter")
       },
-      /* @__PURE__ */ React26.createElement(
+      /* @__PURE__ */ React27.createElement(
         DenyContextInput,
         {
           onSubmit: (context2) => onChoose("deny", context2 || void 0),
@@ -6518,7 +6223,7 @@ function ShellConfirm({ command, allowPrefix, kind, onChoose }) {
       )
     );
   }
-  return /* @__PURE__ */ React26.createElement(
+  return /* @__PURE__ */ React27.createElement(
     ApprovalCard,
     {
       tone: "warn",
@@ -6527,9 +6232,12 @@ function ShellConfirm({ command, allowPrefix, kind, onChoose }) {
       metaRight: t("shellConfirm.awaiting"),
       footerHint: t("shellConfirm.pickFooter")
     },
-    /* @__PURE__ */ React26.createElement(Box22, { marginBottom: 1 }, /* @__PURE__ */ React26.createElement(Text22, { color: FG.faint }, subtitle)),
-    /* @__PURE__ */ React26.createElement(Box22, { marginBottom: 1 }, /* @__PURE__ */ React26.createElement(Text22, { bold: true, color: TONE.err }, "$ "), /* @__PURE__ */ React26.createElement(Text22, { bold: true, color: FG.strong }, command)),
-    /* @__PURE__ */ React26.createElement(
+    /* @__PURE__ */ React27.createElement(Box23, { marginBottom: 1 }, /* @__PURE__ */ React27.createElement(Text23, { color: FG.faint }, subtitle)),
+    /* @__PURE__ */ React27.createElement(Box23, { marginBottom: 1, flexDirection: "column" }, /* @__PURE__ */ React27.createElement(Box23, null, /* @__PURE__ */ React27.createElement(Text23, { bold: true, color: TONE.err }, "$ "), /* @__PURE__ */ React27.createElement(Text23, { bold: true, color: FG.strong }, preview)), hidden > 0 ? /* @__PURE__ */ React27.createElement(Text23, { color: FG.faint }, t(hidden === 1 ? "shellConfirm.previewMore" : "shellConfirm.previewMorePlural", {
+      n: hidden
+    })) : null),
+    /* @__PURE__ */ React27.createElement(InfoRows2, { cwd: cwd2, timeoutSec, waitSec, kind }),
+    /* @__PURE__ */ React27.createElement(
       SingleSelect,
       {
         initialValue: "run_once",
@@ -6562,6 +6270,23 @@ function ShellConfirm({ command, allowPrefix, kind, onChoose }) {
     )
   );
 }
+function InfoRows2({
+  cwd: cwd2,
+  timeoutSec,
+  waitSec,
+  kind
+}) {
+  const rows = [];
+  if (cwd2) rows.push({ label: t("shellConfirm.cwdLabel"), value: tildeify2(cwd2) });
+  if (kind === "run_background" && waitSec !== void 0 && waitSec > 0) {
+    rows.push({ label: t("shellConfirm.waitLabel"), value: `${waitSec}s` });
+  } else if (kind !== "run_background" && timeoutSec !== void 0) {
+    rows.push({ label: t("shellConfirm.timeoutLabel"), value: `${timeoutSec}s` });
+  }
+  if (rows.length === 0) return null;
+  const labelWidth = Math.max(...rows.map((r) => r.label.length));
+  return /* @__PURE__ */ React27.createElement(Box23, { flexDirection: "column", marginBottom: 1 }, rows.map((r) => /* @__PURE__ */ React27.createElement(Box23, { key: r.label, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React27.createElement(Text23, { color: FG.faint }, r.label.padEnd(labelWidth)), /* @__PURE__ */ React27.createElement(Text23, { color: FG.body }, r.value))));
+}
 function derivePrefix(command) {
   const tokens = command.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return "";
@@ -6592,8 +6317,8 @@ function derivePrefix(command) {
 }
 
 // src/cli/ui/SlashArgPicker.tsx
-import { Box as Box23, Text as Text23 } from "ink";
-import React27 from "react";
+import { Box as Box24, Text as Text24 } from "ink";
+import React28 from "react";
 function SlashArgPicker({
   matches,
   selectedIndex,
@@ -6602,13 +6327,13 @@ function SlashArgPicker({
   partial
 }) {
   const color = useColor();
-  const headerRow = /* @__PURE__ */ React27.createElement(Box23, null, /* @__PURE__ */ React27.createElement(Text23, { color: color.accent, bold: true }, "/ "), /* @__PURE__ */ React27.createElement(Text23, { color: color.accent, bold: true }, `/${spec.cmd}`), spec.argsHint ? /* @__PURE__ */ React27.createElement(Text23, { dimColor: true }, ` ${spec.argsHint}`) : null, /* @__PURE__ */ React27.createElement(Text23, { dimColor: true }, `  ${spec.summary}`));
+  const headerRow = /* @__PURE__ */ React28.createElement(Box24, null, /* @__PURE__ */ React28.createElement(Text24, { color: color.accent, bold: true }, "/ "), /* @__PURE__ */ React28.createElement(Text24, { color: color.accent, bold: true }, `/${spec.cmd}`), spec.argsHint ? /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, ` ${spec.argsHint}`) : null, /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, `  ${spec.summary}`));
   if (kind === "hint") {
-    return /* @__PURE__ */ React27.createElement(Box23, { paddingX: 1, marginTop: 1 }, headerRow);
+    return /* @__PURE__ */ React28.createElement(Box24, { paddingX: 1, marginTop: 1 }, headerRow);
   }
   if (matches === null) return null;
   if (matches.length === 0) {
-    return /* @__PURE__ */ React27.createElement(Box23, { flexDirection: "column", paddingX: 1, marginTop: 1 }, headerRow, /* @__PURE__ */ React27.createElement(Box23, null, /* @__PURE__ */ React27.createElement(Text23, { color: color.warn, bold: true }, GLYPH.warn), /* @__PURE__ */ React27.createElement(Text23, { color: color.warn }, t("slashArgPicker.noMatch", { partial })), /* @__PURE__ */ React27.createElement(Text23, { dimColor: true }, t("slashArgPicker.keepTyping"))));
+    return /* @__PURE__ */ React28.createElement(Box24, { flexDirection: "column", paddingX: 1, marginTop: 1 }, headerRow, /* @__PURE__ */ React28.createElement(Box24, null, /* @__PURE__ */ React28.createElement(Text24, { color: color.warn, bold: true }, GLYPH.warn), /* @__PURE__ */ React28.createElement(Text24, { color: color.warn }, t("slashArgPicker.noMatch", { partial })), /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashArgPicker.keepTyping"))));
   }
   const MAX = 8;
   const total = matches.length;
@@ -6616,16 +6341,16 @@ function SlashArgPicker({
   const shown = matches.slice(windowStart, windowStart + MAX);
   const hiddenAbove = windowStart;
   const hiddenBelow = total - windowStart - shown.length;
-  return /* @__PURE__ */ React27.createElement(Box23, { flexDirection: "column", paddingX: 1, marginTop: 1 }, headerRow, hiddenAbove > 0 ? /* @__PURE__ */ React27.createElement(Text23, { dimColor: true }, t("slashArgPicker.above", { hidden: hiddenAbove })) : null, shown.map((value, i) => /* @__PURE__ */ React27.createElement(ArgRow, { key: value, value, isSelected: windowStart + i === selectedIndex })), hiddenBelow > 0 ? /* @__PURE__ */ React27.createElement(Text23, { dimColor: true }, t("slashArgPicker.below", { hidden: hiddenBelow })) : null, /* @__PURE__ */ React27.createElement(Box23, { marginTop: 0 }, /* @__PURE__ */ React27.createElement(Text23, { dimColor: true }, t("slashArgPicker.footer"))));
+  return /* @__PURE__ */ React28.createElement(Box24, { flexDirection: "column", paddingX: 1, marginTop: 1 }, headerRow, hiddenAbove > 0 ? /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashArgPicker.above", { hidden: hiddenAbove })) : null, shown.map((value, i) => /* @__PURE__ */ React28.createElement(ArgRow, { key: value, value, isSelected: windowStart + i === selectedIndex })), hiddenBelow > 0 ? /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashArgPicker.below", { hidden: hiddenBelow })) : null, /* @__PURE__ */ React28.createElement(Box24, { marginTop: 0 }, /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashArgPicker.footer"))));
 }
 function ArgRow({ value, isSelected }) {
   const color = useColor();
-  return /* @__PURE__ */ React27.createElement(Box23, null, /* @__PURE__ */ React27.createElement(Text23, { color: isSelected ? color.primary : color.info, bold: isSelected }, isSelected ? `${GLYPH.cur} ` : "  "), /* @__PURE__ */ React27.createElement(Text23, { color: isSelected ? color.user : color.info, bold: isSelected, dimColor: !isSelected }, value));
+  return /* @__PURE__ */ React28.createElement(Box24, null, /* @__PURE__ */ React28.createElement(Text24, { color: isSelected ? color.primary : color.info, bold: isSelected }, isSelected ? `${GLYPH.cur} ` : "  "), /* @__PURE__ */ React28.createElement(Text24, { color: isSelected ? color.user : color.info, bold: isSelected, dimColor: !isSelected }, value));
 }
 
 // src/cli/ui/SlashSuggestions.tsx
-import { Box as Box24, Text as Text24, useStdout as useStdout8 } from "ink";
-import React28 from "react";
+import { Box as Box25, Text as Text25, useStdout as useStdout9 } from "ink";
+import React29 from "react";
 var GROUP_MODE_MAX_ROWS = 24;
 var SEARCH_MODE_MAX_ROWS = 8;
 var COMMAND_NAME_CELLS = 14;
@@ -6641,9 +6366,9 @@ function SlashSuggestions({
   advancedHidden
 }) {
   const color = useColor();
-  const { stdout } = useStdout8();
+  const { stdout } = useStdout9();
   const cols = stdout?.columns ?? 80;
-  const [rememberedWindowStart, setRememberedWindowStart] = React28.useState(0);
+  const [rememberedWindowStart, setRememberedWindowStart] = React29.useState(0);
   const maxRows = groupMode ? GROUP_MODE_MAX_ROWS : SEARCH_MODE_MAX_ROWS;
   const safeMatches = matches ?? [];
   const windowStart = computeWindowStart(
@@ -6653,26 +6378,26 @@ function SlashSuggestions({
     rememberedWindowStart,
     groupMode
   );
-  React28.useEffect(() => {
+  React29.useEffect(() => {
     setRememberedWindowStart(windowStart);
   }, [windowStart]);
   if (matches === null) return null;
   if (matches.length === 0) {
-    return /* @__PURE__ */ React28.createElement(Box24, { paddingX: 1, marginTop: 1 }, /* @__PURE__ */ React28.createElement(Text24, { color: color.warn, bold: true }, GLYPH.warn), /* @__PURE__ */ React28.createElement(Text24, null, " "), /* @__PURE__ */ React28.createElement(Text24, { color: color.warn }, t("slashSuggestions.noMatch")), /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashSuggestions.backspaceHint")));
+    return /* @__PURE__ */ React29.createElement(Box25, { paddingX: 1, marginTop: 1 }, /* @__PURE__ */ React29.createElement(Text25, { color: color.warn, bold: true }, GLYPH.warn), /* @__PURE__ */ React29.createElement(Text25, null, " "), /* @__PURE__ */ React29.createElement(Text25, { color: color.warn }, t("slashSuggestions.noMatch")), /* @__PURE__ */ React29.createElement(Text25, { dimColor: true }, t("slashSuggestions.backspaceHint")));
   }
   const total = matches.length;
   const items = buildVisibleItems(matches, windowStart, maxRows, groupMode);
   const shownCommands = items.filter((item) => item.kind === "command");
   const hiddenAbove = windowStart;
   const hiddenBelow = total - windowStart - shownCommands.length;
-  return /* @__PURE__ */ React28.createElement(Box24, { flexDirection: "column", paddingX: 1, marginTop: 1, flexShrink: 0, flexWrap: "nowrap" }, /* @__PURE__ */ React28.createElement(Box24, null, /* @__PURE__ */ React28.createElement(Text24, { color: color.accent, bold: true }, "/ "), /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t(
+  return /* @__PURE__ */ React29.createElement(Box25, { flexDirection: "column", paddingX: 1, marginTop: 1, flexShrink: 0, flexWrap: "nowrap" }, /* @__PURE__ */ React29.createElement(Box25, null, /* @__PURE__ */ React29.createElement(Text25, { color: color.accent, bold: true }, "/ "), /* @__PURE__ */ React29.createElement(Text25, { dimColor: true }, t(
     total === 1 ? "slashSuggestions.commandCount" : "slashSuggestions.commandCountPlural",
     { count: total }
-  )), hiddenAbove > 0 ? /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashSuggestions.aboveLabel", { count: hiddenAbove })) : null), items.map((item) => {
+  )), hiddenAbove > 0 ? /* @__PURE__ */ React29.createElement(Text25, { dimColor: true }, t("slashSuggestions.aboveLabel", { count: hiddenAbove })) : null), items.map((item) => {
     if (item.kind === "group") {
-      return /* @__PURE__ */ React28.createElement(GroupHeader, { key: `group:${item.group}:${item.beforeIndex}`, group: item.group });
+      return /* @__PURE__ */ React29.createElement(GroupHeader, { key: `group:${item.group}:${item.beforeIndex}`, group: item.group });
     }
-    return /* @__PURE__ */ React28.createElement(
+    return /* @__PURE__ */ React29.createElement(
       SuggestionRow,
       {
         key: `cmd:${item.spec.group}:${item.spec.cmd}`,
@@ -6681,7 +6406,7 @@ function SlashSuggestions({
         columns: cols
       }
     );
-  }), hiddenBelow > 0 ? /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashSuggestions.belowLabel", { count: hiddenBelow })) : null, groupMode && advancedHidden && advancedHidden > 0 ? /* @__PURE__ */ React28.createElement(Box24, { marginTop: 1 }, /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashSuggestions.advancedHint", { count: advancedHidden }))) : null, /* @__PURE__ */ React28.createElement(Box24, { marginTop: 0 }, /* @__PURE__ */ React28.createElement(Text24, { dimColor: true }, t("slashSuggestions.footerHint"))));
+  }), hiddenBelow > 0 ? /* @__PURE__ */ React29.createElement(Text25, { dimColor: true }, t("slashSuggestions.belowLabel", { count: hiddenBelow })) : null, groupMode && advancedHidden && advancedHidden > 0 ? /* @__PURE__ */ React29.createElement(Box25, { marginTop: 1 }, /* @__PURE__ */ React29.createElement(Text25, { dimColor: true }, t("slashSuggestions.advancedHint", { count: advancedHidden }))) : null, /* @__PURE__ */ React29.createElement(Box25, { marginTop: 0 }, /* @__PURE__ */ React29.createElement(Text25, { dimColor: true }, t("slashSuggestions.footerHint"))));
 }
 function computeWindowStart(matches, maxRows, selectedIndex, currentWindowStart, groupMode = false) {
   if (matches.length <= 0) return 0;
@@ -6713,7 +6438,7 @@ function shouldShowGroupHeader(matches, idx) {
   return idx === 0 || matches[idx]?.group !== matches[idx - 1]?.group;
 }
 function GroupHeader({ group }) {
-  return /* @__PURE__ */ React28.createElement(Box24, { flexShrink: 0, height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React28.createElement(Text24, { dimColor: true, wrap: "truncate" }, `  ${groupLabel(group)}`));
+  return /* @__PURE__ */ React29.createElement(Box25, { flexShrink: 0, height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React29.createElement(Text25, { dimColor: true, wrap: "truncate" }, `  ${groupLabel(group)}`));
 }
 function SuggestionRow({
   spec,
@@ -6730,7 +6455,7 @@ function SuggestionRow({
   const reservedCells = 2 + COMMAND_NAME_CELLS + ARGS_CELLS + 2 + 2;
   const summaryBudget = Math.max(8, columns - reservedCells);
   const summaryText = truncateCells(`${summary}${aliasHint}`, summaryBudget);
-  return /* @__PURE__ */ React28.createElement(Box24, { flexDirection: "row", flexWrap: "nowrap", flexShrink: 0, height: 1, minHeight: 1 }, /* @__PURE__ */ React28.createElement(Text24, { color: isSelected ? color.primary : color.info, bold: isSelected, wrap: "truncate" }, isSelected ? `${GLYPH.cur} ` : "  "), /* @__PURE__ */ React28.createElement(Text24, { color: color.accent, bold: isSelected, wrap: "truncate" }, padOrTrim(name, COMMAND_NAME_CELLS)), /* @__PURE__ */ React28.createElement(Text24, { dimColor: true, wrap: "truncate" }, padOrTrim(argsSuffix, ARGS_CELLS)), /* @__PURE__ */ React28.createElement(Text24, { wrap: "truncate" }, "  "), /* @__PURE__ */ React28.createElement(Text24, { color: isSelected ? color.user : color.info, dimColor: !isSelected, wrap: "truncate" }, summaryText));
+  return /* @__PURE__ */ React29.createElement(Box25, { flexDirection: "row", flexWrap: "nowrap", flexShrink: 0, height: 1, minHeight: 1 }, /* @__PURE__ */ React29.createElement(Text25, { color: isSelected ? color.primary : color.info, bold: isSelected, wrap: "truncate" }, isSelected ? `${GLYPH.cur} ` : "  "), /* @__PURE__ */ React29.createElement(Text25, { color: color.accent, bold: isSelected, wrap: "truncate" }, padOrTrim(name, COMMAND_NAME_CELLS)), /* @__PURE__ */ React29.createElement(Text25, { dimColor: true, wrap: "truncate" }, padOrTrim(argsSuffix, ARGS_CELLS)), /* @__PURE__ */ React29.createElement(Text25, { wrap: "truncate" }, "  "), /* @__PURE__ */ React29.createElement(Text25, { color: isSelected ? color.user : color.info, dimColor: !isSelected, wrap: "truncate" }, summaryText));
 }
 function padOrTrim(value, cells) {
   const trimmed = truncateCells(value, cells);
@@ -6743,8 +6468,8 @@ function truncateCells(value, maxCells) {
 }
 
 // src/cli/ui/ThemePicker.tsx
-import { Box as Box25, Text as Text25 } from "ink";
-import React29 from "react";
+import { Box as Box26, Text as Text26 } from "ink";
+import React30 from "react";
 function ThemePicker({
   currentPreference,
   activeTheme,
@@ -6756,7 +6481,7 @@ function ThemePicker({
     label: value,
     hint: describeTheme(value, currentPreference, activeTheme)
   }));
-  return /* @__PURE__ */ React29.createElement(Box25, { flexDirection: "column", marginY: 1 }, /* @__PURE__ */ React29.createElement(Text25, { bold: true }, t("themePicker.header")), /* @__PURE__ */ React29.createElement(
+  return /* @__PURE__ */ React30.createElement(Box26, { flexDirection: "column", marginY: 1 }, /* @__PURE__ */ React30.createElement(Text26, { bold: true }, t("themePicker.header")), /* @__PURE__ */ React30.createElement(
     SingleSelect,
     {
       items,
@@ -6776,8 +6501,8 @@ function describeTheme(value, currentPreference, activeTheme) {
 }
 
 // src/cli/ui/WelcomeBanner.tsx
-import { Box as Box26, Text as Text26 } from "ink";
-import React30 from "react";
+import { Box as Box27, Text as Text27 } from "ink";
+import React31 from "react";
 var HINTS = ["/help", "/init", "/memory", "/cost"];
 function WelcomeBanner({
   inCodeMode,
@@ -6787,8 +6512,8 @@ function WelcomeBanner({
   const tagline = inCodeMode ? t("ui.taglineCode") : t("ui.taglineChat");
   const taglineSub = t("ui.taglineSub");
   const startTextRaw = t("ui.startSessionHint");
-  return /* @__PURE__ */ React30.createElement(Box26, { flexDirection: "column", alignItems: "center", marginY: 1 }, /* @__PURE__ */ React30.createElement(
-    Box26,
+  return /* @__PURE__ */ React31.createElement(Box27, { flexDirection: "column", alignItems: "center", marginY: 1 }, /* @__PURE__ */ React31.createElement(
+    Box27,
     {
       flexDirection: "column",
       alignItems: "center",
@@ -6797,9 +6522,9 @@ function WelcomeBanner({
       paddingX: 4,
       paddingY: 1
     },
-    /* @__PURE__ */ React30.createElement(Box26, { flexDirection: "row", gap: 2 }, /* @__PURE__ */ React30.createElement(Text26, { color: TONE.brand, bold: true }, "REASONIX"), /* @__PURE__ */ React30.createElement(Text26, { color: FG.faint }, "\xD7"), /* @__PURE__ */ React30.createElement(Box26, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React30.createElement(Text26, null, "\u{1F40B}"), /* @__PURE__ */ React30.createElement(Text26, { color: TONE.accent, bold: true }, "DeepSeek"))),
-    /* @__PURE__ */ React30.createElement(Box26, { marginTop: 1, flexDirection: "column", alignItems: "center" }, /* @__PURE__ */ React30.createElement(Text26, { color: FG.body }, tagline), /* @__PURE__ */ React30.createElement(Text26, { color: FG.meta }, taglineSub))
-  ), /* @__PURE__ */ React30.createElement(Box26, { marginTop: 1 }, /* @__PURE__ */ React30.createElement(Text26, { color: FG.sub }, startTextRaw)), /* @__PURE__ */ React30.createElement(Box26, { marginTop: 1, flexDirection: "row", gap: 3 }, HINTS.map((cmd) => /* @__PURE__ */ React30.createElement(Text26, { key: cmd, color: FG.meta }, cmd))), inCodeMode && workspaceRoot ? /* @__PURE__ */ React30.createElement(Box26, { marginTop: 1, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React30.createElement(Text26, { color: TONE.brand }, t("welcomeBanner.workspace")), /* @__PURE__ */ React30.createElement(Text26, { color: FG.faint }, "\xB7"), /* @__PURE__ */ React30.createElement(Text26, { color: FG.body }, workspaceRoot), /* @__PURE__ */ React30.createElement(Text26, { color: FG.faint }, t("welcomeBanner.relaunchHint"))) : null, dashboardUrl ? /* @__PURE__ */ React30.createElement(Box26, { marginTop: 1, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React30.createElement(Text26, { color: TONE.brand, bold: true }, t("welcomeBanner.dashboard")), /* @__PURE__ */ React30.createElement(Text26, { color: FG.faint }, "\xB7"), /* @__PURE__ */ React30.createElement(Text26, { color: TONE.accent }, dashboardUrl)) : null);
+    /* @__PURE__ */ React31.createElement(Box27, { flexDirection: "row", gap: 2 }, /* @__PURE__ */ React31.createElement(Text27, { color: TONE.brand, bold: true }, "REASONIX"), /* @__PURE__ */ React31.createElement(Text27, { color: FG.faint }, "\xD7"), /* @__PURE__ */ React31.createElement(Box27, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React31.createElement(Text27, null, "\u{1F40B}"), /* @__PURE__ */ React31.createElement(Text27, { color: TONE.accent, bold: true }, "DeepSeek"))),
+    /* @__PURE__ */ React31.createElement(Box27, { marginTop: 1, flexDirection: "column", alignItems: "center" }, /* @__PURE__ */ React31.createElement(Text27, { color: FG.body }, tagline), /* @__PURE__ */ React31.createElement(Text27, { color: FG.meta }, taglineSub))
+  ), /* @__PURE__ */ React31.createElement(Box27, { marginTop: 1 }, /* @__PURE__ */ React31.createElement(Text27, { color: FG.sub }, startTextRaw)), /* @__PURE__ */ React31.createElement(Box27, { marginTop: 1, flexDirection: "row", gap: 3 }, HINTS.map((cmd) => /* @__PURE__ */ React31.createElement(Text27, { key: cmd, color: FG.meta }, cmd))), inCodeMode && workspaceRoot ? /* @__PURE__ */ React31.createElement(Box27, { marginTop: 1, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React31.createElement(Text27, { color: TONE.brand }, t("welcomeBanner.workspace")), /* @__PURE__ */ React31.createElement(Text27, { color: FG.faint }, "\xB7"), /* @__PURE__ */ React31.createElement(Text27, { color: FG.body }, workspaceRoot), /* @__PURE__ */ React31.createElement(Text27, { color: FG.faint }, t("welcomeBanner.relaunchHint"))) : null, dashboardUrl ? /* @__PURE__ */ React31.createElement(Box27, { marginTop: 1, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React31.createElement(Text27, { color: TONE.brand, bold: true }, t("welcomeBanner.dashboard")), /* @__PURE__ */ React31.createElement(Text27, { color: FG.faint }, "\xB7"), /* @__PURE__ */ React31.createElement(Text27, { color: TONE.accent }, dashboardUrl)) : null);
 }
 
 // src/cli/ui/bang.ts
@@ -6815,8 +6540,8 @@ ${output}`;
 }
 
 // src/cli/ui/copy-mode/CopyMode.tsx
-import { Box as Box27, Text as Text27, useStdout as useStdout9 } from "ink";
-import React31, { useMemo as useMemo6, useState as useState15 } from "react";
+import { Box as Box28, Text as Text28, useStdout as useStdout10 } from "ink";
+import React32, { useMemo as useMemo7, useState as useState17 } from "react";
 
 // src/frame/width.ts
 import stringWidthLib from "string-width";
@@ -6867,13 +6592,13 @@ function wrapToCells(s, maxCells) {
 }
 
 // src/cli/ui/clipboard.ts
-import { mkdtempSync as mkdtempSync2, writeFileSync as writeFileSync5 } from "fs";
+import { mkdtempSync as mkdtempSync2, writeFileSync as writeFileSync4 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
-import { join as join5 } from "path";
+import { join as join4 } from "path";
 var OSC_52_LIMIT = 75e3;
 function writeClipboard(text) {
-  const dir = mkdtempSync2(join5(tmpdir2(), "reasonix-clip-"));
-  const filePath = join5(dir, "clip.txt");
+  const dir = mkdtempSync2(join4(tmpdir2(), "reasonix-clip-"));
+  const filePath = join4(dir, "clip.txt");
   let osc52 = false;
   if (text.length <= OSC_52_LIMIT) {
     const b64 = Buffer.from(text, "utf8").toString("base64");
@@ -6882,7 +6607,7 @@ function writeClipboard(text) {
   }
   let writtenPath = null;
   try {
-    writeFileSync5(filePath, text, "utf8");
+    writeFileSync4(filePath, text, "utf8");
     writtenPath = filePath;
   } catch {
   }
@@ -6928,18 +6653,18 @@ function isYankable(line) {
 }
 
 // src/cli/ui/copy-mode/CopyMode.tsx
-var CHROME_ROWS = 3;
+var CHROME_ROWS2 = 3;
 function CopyMode({ cards, onClose }) {
-  const snapshot = useMemo6(() => buildSnapshot(cards), [cards]);
-  const { stdout } = useStdout9();
+  const snapshot = useMemo7(() => buildSnapshot(cards), [cards]);
+  const { stdout } = useStdout10();
   const termRows = stdout?.rows ?? 30;
   const termCols = stdout?.columns ?? 80;
-  const bodyRows = Math.max(4, termRows - CHROME_ROWS);
+  const bodyRows = Math.max(4, termRows - CHROME_ROWS2);
   const lastYankableIdx = findLastYankable(snapshot);
   const initialCursor = findFirstYankable(snapshot);
-  const [cursor, setCursor] = useState15(initialCursor);
-  const [anchor, setAnchor] = useState15(null);
-  const [status2, setStatus] = useState15(null);
+  const [cursor, setCursor] = useState17(initialCursor);
+  const [anchor, setAnchor] = useState17(null);
+  const [status2, setStatus] = useState17(null);
   const stepDown = (i) => stepBy(snapshot, i, 1);
   const stepUp = (i) => stepBy(snapshot, i, -1);
   useKeystroke((ev) => {
@@ -6971,9 +6696,9 @@ function CopyMode({ cards, onClose }) {
   const selRange = anchor === null ? null : [Math.min(anchor, cursor), Math.max(anchor, cursor)];
   const totalY = countYankable(snapshot);
   const cursorY = countYankableUntil(snapshot, cursor);
-  return /* @__PURE__ */ React31.createElement(Box27, { flexDirection: "column" }, /* @__PURE__ */ React31.createElement(Box27, null, /* @__PURE__ */ React31.createElement(Text27, { color: TONE.brand, bold: true }, t("copyMode.title")), /* @__PURE__ */ React31.createElement(Text27, { color: FG.faint }, `  ${t("copyMode.help")}`)), /* @__PURE__ */ React31.createElement(Box27, { flexDirection: "column" }, snapshot.length === 0 ? /* @__PURE__ */ React31.createElement(Text27, { color: FG.faint }, t("copyMode.empty")) : window.lines.map((line, i) => {
+  return /* @__PURE__ */ React32.createElement(Box28, { flexDirection: "column" }, /* @__PURE__ */ React32.createElement(Box28, null, /* @__PURE__ */ React32.createElement(Text28, { color: TONE.brand, bold: true }, t("copyMode.title")), /* @__PURE__ */ React32.createElement(Text28, { color: FG.faint }, `  ${t("copyMode.help")}`)), /* @__PURE__ */ React32.createElement(Box28, { flexDirection: "column" }, snapshot.length === 0 ? /* @__PURE__ */ React32.createElement(Text28, { color: FG.faint }, t("copyMode.empty")) : window.lines.map((line, i) => {
     const idx = window.start + i;
-    return /* @__PURE__ */ React31.createElement(
+    return /* @__PURE__ */ React32.createElement(
       CopyLine,
       {
         key: `${line.cardId}-${idx}`,
@@ -6983,11 +6708,11 @@ function CopyMode({ cards, onClose }) {
         inSelection: selRange !== null && idx >= selRange[0] && idx <= selRange[1]
       }
     );
-  })), /* @__PURE__ */ React31.createElement(Box27, null, /* @__PURE__ */ React31.createElement(Text27, { color: FG.meta }, t("copyMode.statusBar", {
+  })), /* @__PURE__ */ React32.createElement(Box28, null, /* @__PURE__ */ React32.createElement(Text28, { color: FG.meta }, t("copyMode.statusBar", {
     cur: cursorY > 0 ? cursorY : 1,
     total: Math.max(1, totalY),
     sel: anchor === null ? "\u2014" : String(rangeYankable(snapshot, anchor, cursor))
-  })), status2 ? /* @__PURE__ */ React31.createElement(Text27, { color: TONE.ok }, `  ${status2}`) : null));
+  })), status2 ? /* @__PURE__ */ React32.createElement(Text28, { color: TONE.ok }, `  ${status2}`) : null));
 }
 function CopyLine({
   line,
@@ -6999,10 +6724,10 @@ function CopyLine({
   const room = Math.max(1, cols - 2);
   const display = line.kind === "blank" ? "" : clipToCells(line.text, room);
   if (line.kind === "header") {
-    return /* @__PURE__ */ React31.createElement(Box27, null, /* @__PURE__ */ React31.createElement(Text27, { color: isCursor ? TONE.brand : FG.faint }, marker), /* @__PURE__ */ React31.createElement(Text27, { color: FG.meta }, display));
+    return /* @__PURE__ */ React32.createElement(Box28, null, /* @__PURE__ */ React32.createElement(Text28, { color: isCursor ? TONE.brand : FG.faint }, marker), /* @__PURE__ */ React32.createElement(Text28, { color: FG.meta }, display));
   }
   const color = isCursor ? TONE.brand : FG.body;
-  return /* @__PURE__ */ React31.createElement(Box27, null, /* @__PURE__ */ React31.createElement(Text27, { color: isCursor ? TONE.brand : FG.faint }, marker), /* @__PURE__ */ React31.createElement(Text27, { color, inverse: inSelection }, display.length === 0 ? " " : display));
+  return /* @__PURE__ */ React32.createElement(Box28, null, /* @__PURE__ */ React32.createElement(Text28, { color: isCursor ? TONE.brand : FG.faint }, marker), /* @__PURE__ */ React32.createElement(Text28, { color, inverse: inSelection }, display.length === 0 ? " " : display));
 }
 function findFirstYankable(snapshot) {
   for (let i = 0; i < snapshot.length; i++) if (isYankable(snapshot[i])) return i;
@@ -7157,9 +6882,9 @@ function loopEventToDashboard(ev, ctx) {
 }
 
 // src/cli/ui/hash-memory.ts
-import { closeSync, fstatSync, mkdirSync as mkdirSync4, openSync, readSync, writeSync } from "fs";
-import { homedir as homedir3 } from "os";
-import { dirname as dirname4, join as join6 } from "path";
+import { closeSync, fstatSync, mkdirSync as mkdirSync3, openSync, readSync, writeSync } from "fs";
+import { homedir as homedir4 } from "os";
+import { dirname as dirname3, join as join5 } from "path";
 var PROJECT_HEADER = `# Reasonix project memory
 
 Notes the user pinned via the \`#\` prompt prefix. The whole file is
@@ -7195,8 +6920,8 @@ function appendProjectMemory(rootDir, note) {
 }
 var GLOBAL_MEMORY_DIR = ".visionox";
 var GLOBAL_MEMORY_FILE = "visionox.md";
-function globalMemoryPath(homeDir = homedir3()) {
-  return join6(homeDir, GLOBAL_MEMORY_DIR, GLOBAL_MEMORY_FILE);
+function globalMemoryPath(homeDir = homedir4()) {
+  return join5(homeDir, GLOBAL_MEMORY_DIR, GLOBAL_MEMORY_FILE);
 }
 function appendGlobalMemory(note, homeDir) {
   return appendBulletToFile(globalMemoryPath(homeDir), note, GLOBAL_HEADER);
@@ -7206,7 +6931,7 @@ function appendBulletToFile(path, note, newFileHeader) {
   if (!trimmed) throw new Error("note body cannot be empty");
   const bullet2 = `- ${trimmed}
 `;
-  mkdirSync4(dirname4(path), { recursive: true });
+  mkdirSync3(dirname3(path), { recursive: true });
   const fd = openSync(path, "a+");
   try {
     const stat = fstatSync(fd);
@@ -7357,10 +7082,10 @@ function handleErrorEvent(ev, ctx) {
   ctx.setToolProgress(null);
   ctx.toolStartedAtRef.current = null;
   ctx.translator.toolAbort(ev.error ?? ev.content);
-  ctx.log.pushError("tool error", ev.error ?? ev.content);
+  ctx.log.pushError(t("common.error"), ev.error ?? ev.content);
 }
 function handleWarningEvent(ev, ctx) {
-  ctx.log.pushWarning("warning", ev.content);
+  ctx.log.pushWarning(t("common.warning"), ev.content);
   if (ev.content?.startsWith("\u21E7 ")) ctx.setTurnOnPro(true);
 }
 
@@ -7387,9 +7112,7 @@ function handleToolEvent(ev, ctx) {
         if (ctx.session && total > 0 && completed >= total) {
           const archive = archivePlanState(ctx.session);
           if (archive) {
-            ctx.log.pushInfo(
-              `\u25B8 plan complete \u2014 all ${total} step${total === 1 ? "" : "s"} done \xB7 archived`
-            );
+            ctx.log.pushInfo(t("planFlow.completeMsg", { total, s: total === 1 ? "" : "s" }));
           }
         }
       }
@@ -7399,7 +7122,7 @@ function handleToolEvent(ev, ctx) {
 }
 
 // src/cli/ui/state/provider.tsx
-import React32 from "react";
+import React33 from "react";
 
 // src/cli/ui/state/reducer.ts
 function reduce(state, event) {
@@ -7491,6 +7214,21 @@ function reduce(state, event) {
       return { ...state, status: { ...state.status, ...event.patch } };
     case "session.model.change":
       return state.session.model === event.model ? state : { ...state, session: { ...state.session, model: event.model } };
+    case "session.preset.change":
+      return state.status.preset === event.preset ? state : { ...state, status: { ...state.status, preset: event.preset } };
+    case "mcp.loading": {
+      const current = state.status.mcpLoading;
+      if (event.total <= 0) {
+        if (!current) return state;
+        const { mcpLoading: _drop, ...rest } = state.status;
+        return { ...state, status: rest };
+      }
+      if (current && current.ready === event.ready && current.total === event.total) return state;
+      return {
+        ...state,
+        status: { ...state.status, mcpLoading: { ready: event.ready, total: event.total } }
+      };
+    }
     case "focus.move":
       return {
         ...state,
@@ -7763,26 +7501,26 @@ function createStore(session, initialCards) {
 }
 
 // src/cli/ui/state/provider.tsx
-var StoreCtx = React32.createContext(null);
+var StoreCtx = React33.createContext(null);
 function AgentStoreProvider({
   session,
   initialCards,
   children
 }) {
-  const initialCardsRef = React32.useRef(initialCards);
-  const store = React32.useMemo(() => createStore(session, initialCardsRef.current), [session]);
-  return /* @__PURE__ */ React32.createElement(StoreCtx.Provider, { value: store }, children);
+  const initialCardsRef = React33.useRef(initialCards);
+  const store = React33.useMemo(() => createStore(session, initialCardsRef.current), [session]);
+  return /* @__PURE__ */ React33.createElement(StoreCtx.Provider, { value: store }, children);
 }
 function useAgentStore() {
-  const store = React32.useContext(StoreCtx);
+  const store = React33.useContext(StoreCtx);
   if (!store) throw new Error("useAgentStore must be used inside AgentStoreProvider");
   return store;
 }
 function useAgentState(selector) {
   const store = useAgentStore();
-  const subscribe = React32.useCallback((cb) => store.subscribe(cb), [store]);
-  const getSnapshot = React32.useCallback(() => selector(store.getState()), [store, selector]);
-  return React32.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const subscribe = React33.useCallback((cb) => store.subscribe(cb), [store]);
+  const getSnapshot = React33.useCallback(() => selector(store.getState()), [store, selector]);
+  return React33.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 function useDispatch() {
   return useAgentStore().dispatch;
@@ -7800,14 +7538,14 @@ function useActivityLabel() {
 }
 
 // src/cli/ui/hooks/useAgentSession.ts
-import { useMemo as useMemo7 } from "react";
+import { useMemo as useMemo8 } from "react";
 function useAgentSession({
   sessionId,
   model: model2,
   workspace,
   branch
 }) {
-  return useMemo7(
+  return useMemo8(
     () => ({
       id: sessionId ?? "default",
       branch: branch ?? "main",
@@ -7874,24 +7612,24 @@ import {
   useCallback as useCallback3,
   useEffect as useEffect5,
   useRef as useRef2,
-  useState as useState16
+  useState as useState18
 } from "react";
 var FLASH_MS = 1200;
 function useEditGate(codeMode) {
   const pendingEdits = useRef2([]);
-  const [pendingCount, setPendingCount] = useState16(0);
-  const [pendingTick, setPendingTick] = useState16(0);
+  const [pendingCount, setPendingCount] = useState18(0);
+  const [pendingTick, setPendingTick] = useState18(0);
   const syncPendingCount = useCallback3(() => {
     setPendingCount(pendingEdits.current.length);
     setPendingTick((t2) => t2 + 1);
   }, []);
-  const [editMode, setEditMode] = useState16(() => codeMode ? loadEditMode() : "review");
+  const [editMode, setEditMode] = useState18(() => codeMode ? loadEditMode() : "review");
   const editModeRef = useRef2(editMode);
   useEffect5(() => {
     editModeRef.current = editMode;
     if (codeMode) saveEditMode(editMode);
   }, [editMode, codeMode]);
-  const [modeFlash, setModeFlash] = useState16(false);
+  const [modeFlash, setModeFlash] = useState18(false);
   const flashTimerRef = useRef2(null);
   const prevEditModeRef = useRef2(editMode);
   useEffect5(() => {
@@ -7917,9 +7655,9 @@ function useEditGate(codeMode) {
 }
 
 // src/cli/ui/hooks/useHookList.ts
-import { useCallback as useCallback4, useState as useState17 } from "react";
+import { useCallback as useCallback4, useState as useState19 } from "react";
 function useHookList(initialProjectRoot) {
-  const [hookList, setHookList] = useState17(
+  const [hookList, setHookList] = useState19(
     () => loadHooks({ projectRoot: initialProjectRoot })
   );
   const reloadHooks = useCallback4((projectRoot) => {
@@ -7959,18 +7697,18 @@ function useInputRecall(setInput) {
 }
 
 // src/cli/ui/hooks/useLanguageReload.ts
-import { useEffect as useEffect6, useState as useState18 } from "react";
+import { useEffect as useEffect6, useState as useState20 } from "react";
 function useLanguageReload() {
-  const [version, setVersion] = useState18(0);
+  const [version, setVersion] = useState20(0);
   useEffect6(() => onLanguageChange(() => setVersion((v) => v + 1)), []);
   return version;
 }
 
 // src/cli/ui/hooks/useLoopMode.ts
-import { useCallback as useCallback6, useEffect as useEffect7, useRef as useRef4, useState as useState19 } from "react";
+import { useCallback as useCallback6, useEffect as useEffect7, useRef as useRef4, useState as useState21 } from "react";
 function useLoopMode(opts) {
   const { log, busyRef, handleSubmitRef } = opts;
-  const [activeLoop, setActiveLoop] = useState19(null);
+  const [activeLoop, setActiveLoop] = useState21(null);
   const activeLoopRef = useRef4(null);
   const loopTimerRef = useRef4(null);
   const loopFiringRef = useRef4(false);
@@ -8054,13 +7792,13 @@ function useLoopMode(opts) {
 }
 
 // src/cli/ui/hooks/usePresetMode.ts
-import { useState as useState20 } from "react";
+import { useState as useState22 } from "react";
 function usePresetMode(model2) {
-  const [preset2, setPreset] = useState20(
+  const [preset2, setPreset] = useState22(
     () => model2 === "deepseek-v4-pro" ? "pro" : "auto"
   );
-  const [proArmed, setProArmed] = useState20(false);
-  const [turnOnPro, setTurnOnPro] = useState20(false);
+  const [proArmed, setProArmed] = useState22(false);
+  const [turnOnPro, setTurnOnPro] = useState22(false);
   return { preset: preset2, setPreset, proArmed, setProArmed, turnOnPro, setTurnOnPro };
 }
 
@@ -8081,7 +7819,7 @@ function useQuit(transcriptRef) {
 }
 
 // src/cli/ui/hooks/useScrollback.ts
-import { useMemo as useMemo8 } from "react";
+import { useMemo as useMemo9 } from "react";
 var seq = 0;
 function nextId2(prefix) {
   seq += 1;
@@ -8094,7 +7832,7 @@ function formatTok(n) {
 }
 function useScrollback() {
   const dispatch = useDispatch();
-  return useMemo8(
+  return useMemo9(
     () => ({
       pushUser(text) {
         const id = nextId2("u");
@@ -8307,10 +8045,10 @@ ${stack}` : message
 }
 
 // src/cli/ui/hooks/useTerminalSetup.ts
-import { useStdout as useStdout10 } from "ink";
+import { useStdout as useStdout11 } from "ink";
 import { useEffect as useEffect9 } from "react";
 function useTerminalSetup(mouse) {
-  const { stdout } = useStdout10();
+  const { stdout } = useStdout11();
   useEffect9(() => {
     if (!stdout || !stdout.isTTY) return;
     stdout.write("\x1B[?2004h");
@@ -8325,11 +8063,11 @@ function useTerminalSetup(mouse) {
 }
 
 // src/cli/ui/hooks/useToolProgressDisplay.ts
-import { useCallback as useCallback8, useEffect as useEffect10, useState as useState21 } from "react";
+import { useCallback as useCallback8, useEffect as useEffect10, useState as useState23 } from "react";
 function useToolProgressDisplay(progressSink) {
-  const [ongoingTool, setOngoingTool] = useState21(null);
-  const [toolProgress, setToolProgress] = useState21(null);
-  const [statusLine, setStatusLine] = useState21(null);
+  const [ongoingTool, setOngoingTool] = useState23(null);
+  const [toolProgress, setToolProgress] = useState23(null);
+  const [statusLine, setStatusLine] = useState23(null);
   useEffect10(() => {
     if (!progressSink) return;
     progressSink.current = (info) => {
@@ -8376,10 +8114,10 @@ function useTranscriptWriter(transcriptRef, model2, prefixHash) {
 import {
   useEffect as useEffect11,
   useRef as useRef5,
-  useState as useState22
+  useState as useState24
 } from "react";
 function useWorkspaceRoot(launchRoot) {
-  const [currentRootDir, setCurrentRootDir] = useState22(() => launchRoot ?? process.cwd());
+  const [currentRootDir, setCurrentRootDir] = useState24(() => launchRoot ?? process.cwd());
   const currentRootDirRef = useRef5(currentRootDir);
   useEffect11(() => {
     currentRootDirRef.current = currentRootDir;
@@ -8388,21 +8126,21 @@ function useWorkspaceRoot(launchRoot) {
 }
 
 // src/cli/ui/layout/CardStream.tsx
-import { Box as Box47, Text as Text50, useBoxMetrics } from "ink";
-import React58, { useEffect as useEffect12, useMemo as useMemo9, useRef as useRef6 } from "react";
+import { Box as Box49, Text as Text51, useBoxMetrics } from "ink";
+import React59, { useEffect as useEffect12, useMemo as useMemo10, useRef as useRef6 } from "react";
 
 // src/cli/ui/cards/CardRenderer.tsx
-import { Box as Box46, Text as Text49 } from "ink";
-import React56 from "react";
+import { Box as Box48, Text as Text50 } from "ink";
+import React57 from "react";
 
 // src/cli/ui/cards/CtxCard.tsx
-import { Box as Box30, Text as Text29 } from "ink";
-import React35 from "react";
+import { Box as Box31, Text as Text30 } from "ink";
+import React36 from "react";
 
 // src/cli/ui/primitives/Card.tsx
-import { Box as Box28 } from "ink";
-import React33, { useContext as useContext3 } from "react";
-var ActiveCardContext = React33.createContext(true);
+import { Box as Box29 } from "ink";
+import React34, { useContext as useContext3 } from "react";
+var ActiveCardContext = React34.createContext(true);
 var STRIPE_BORDER = {
   topLeft: " ",
   top: " ",
@@ -8416,10 +8154,10 @@ var STRIPE_BORDER = {
 function Card({ tone, children }) {
   const active = useContext3(ActiveCardContext);
   if (!active) {
-    return /* @__PURE__ */ React33.createElement(Box28, { flexDirection: "column" }, children);
+    return /* @__PURE__ */ React34.createElement(Box29, { flexDirection: "column" }, children);
   }
-  return /* @__PURE__ */ React33.createElement(
-    Box28,
+  return /* @__PURE__ */ React34.createElement(
+    Box29,
     {
       flexDirection: "column",
       borderStyle: STRIPE_BORDER,
@@ -8436,8 +8174,8 @@ function Card({ tone, children }) {
 }
 
 // src/cli/ui/primitives/CardHeader.tsx
-import { Box as Box29, Text as Text28 } from "ink";
-import React34, { useContext as useContext4 } from "react";
+import { Box as Box30, Text as Text29 } from "ink";
+import React35, { useContext as useContext4 } from "react";
 function CardHeader({
   glyph,
   tone,
@@ -8450,13 +8188,13 @@ function CardHeader({
 }) {
   const active = useContext4(ActiveCardContext);
   const visibleMeta = active ? meta : meta?.filter((item) => typeof item !== "string");
-  return /* @__PURE__ */ React34.createElement(Box29, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React34.createElement(Text28, { color: tone }, glyph), titleBg ? /* @__PURE__ */ React34.createElement(Text28, { backgroundColor: titleBg, color: titleColor ?? tone, bold: true }, ` ${title} `) : /* @__PURE__ */ React34.createElement(Text28, { bold: true, color: titleColor ?? tone }, title), subtitle ? /* @__PURE__ */ React34.createElement(Text28, { color: FG.body }, subtitle) : null, visibleMeta?.map((item, i) => {
+  return /* @__PURE__ */ React35.createElement(Box30, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React35.createElement(Text29, { color: tone }, glyph), titleBg ? /* @__PURE__ */ React35.createElement(Text29, { backgroundColor: titleBg, color: titleColor ?? tone, bold: true }, ` ${title} `) : /* @__PURE__ */ React35.createElement(Text29, { bold: true, color: titleColor ?? tone }, title), subtitle ? /* @__PURE__ */ React35.createElement(Text29, { color: FG.body }, subtitle) : null, visibleMeta?.map((item, i) => {
     const isStr = typeof item === "string";
     const text = isStr ? item : item.text;
     const color = isStr ? FG.faint : item.color;
     return (
       // biome-ignore lint/suspicious/noArrayIndexKey: meta items are positional
-      /* @__PURE__ */ React34.createElement(React34.Fragment, { key: `m-${i}` }, /* @__PURE__ */ React34.createElement(Text28, { color: FG.faint }, "\xB7"), /* @__PURE__ */ React34.createElement(Text28, { color }, text))
+      /* @__PURE__ */ React35.createElement(React35.Fragment, { key: `m-${i}` }, /* @__PURE__ */ React35.createElement(Text29, { color: FG.faint }, "\xB7"), /* @__PURE__ */ React35.createElement(Text29, { color }, text))
     );
   }), active ? right : null);
 }
@@ -8465,13 +8203,13 @@ function CardHeader({
 var BAR_CELLS = 32;
 function row(label, tokens, ratio, color) {
   const filled = Math.max(0, Math.min(BAR_CELLS, Math.round(ratio * BAR_CELLS)));
-  return /* @__PURE__ */ React35.createElement(Box30, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React35.createElement(Text29, { color: FG.sub }, label.padEnd(7)), /* @__PURE__ */ React35.createElement(Text29, { color }, "\u2588".repeat(filled)), /* @__PURE__ */ React35.createElement(Text29, { color: FG.faint }, "\u2591".repeat(BAR_CELLS - filled)), /* @__PURE__ */ React35.createElement(Text29, { bold: true, color: FG.body }, tokens.toLocaleString()), /* @__PURE__ */ React35.createElement(Text29, { color: FG.faint }, `\xB7 ${(ratio * 100).toFixed(1)}%`));
+  return /* @__PURE__ */ React36.createElement(Box31, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React36.createElement(Text30, { color: FG.sub }, label.padEnd(7)), /* @__PURE__ */ React36.createElement(Text30, { color }, "\u2588".repeat(filled)), /* @__PURE__ */ React36.createElement(Text30, { color: FG.faint }, "\u2591".repeat(BAR_CELLS - filled)), /* @__PURE__ */ React36.createElement(Text30, { bold: true, color: FG.body }, tokens.toLocaleString()), /* @__PURE__ */ React36.createElement(Text30, { color: FG.faint }, `\xB7 ${(ratio * 100).toFixed(1)}%`));
 }
 function CtxCard({ card }) {
   const cap = Math.max(1, card.ctxMax);
   const used = card.systemTokens + card.toolsTokens + card.logTokens + card.inputTokens;
   const usedPct = used / cap * 100;
-  return /* @__PURE__ */ React35.createElement(Card, { tone: TONE.brand }, /* @__PURE__ */ React35.createElement(
+  return /* @__PURE__ */ React36.createElement(Card, { tone: TONE.brand }, /* @__PURE__ */ React36.createElement(
     CardHeader,
     {
       glyph: "\u2318",
@@ -8479,8 +8217,8 @@ function CtxCard({ card }) {
       title: t("cardTitles.context"),
       meta: [`${used.toLocaleString()} / ${cap.toLocaleString()} (${usedPct.toFixed(1)}%)`]
     }
-  ), row(t("cardLabels.system"), card.systemTokens, card.systemTokens / cap, TONE.brand), row(t("cardLabels.tools"), card.toolsTokens, card.toolsTokens / cap, TONE.warn), row(t("cardLabels.log"), card.logTokens, card.logTokens / cap, TONE.ok), row(t("cardLabels.input"), card.inputTokens, card.inputTokens / cap, TONE.accent), card.topTools.length > 0 ? /* @__PURE__ */ React35.createElement(React35.Fragment, null, /* @__PURE__ */ React35.createElement(Text29, { color: FG.faint }, `${t("cardLabels.topTools")} \xB7 ${card.toolsCount} ${t("cardLabels.tools")} \xB7 ${card.logMessages} ${t("cardLabels.logMsgs")}`), card.topTools.slice(0, 5).map((tool) => /* @__PURE__ */ React35.createElement(Box30, { key: `${tool.turn}-${tool.name}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React35.createElement(Text29, { color: FG.sub }, tool.name), /* @__PURE__ */ React35.createElement(
-    Text29,
+  ), row(t("cardLabels.system"), card.systemTokens, card.systemTokens / cap, TONE.brand), row(t("cardLabels.tools"), card.toolsTokens, card.toolsTokens / cap, TONE.warn), row(t("cardLabels.log"), card.logTokens, card.logTokens / cap, TONE.ok), row(t("cardLabels.input"), card.inputTokens, card.inputTokens / cap, TONE.accent), card.topTools.length > 0 ? /* @__PURE__ */ React36.createElement(React36.Fragment, null, /* @__PURE__ */ React36.createElement(Text30, { color: FG.faint }, `${t("cardLabels.topTools")} \xB7 ${card.toolsCount} ${t("cardLabels.tools")} \xB7 ${card.logMessages} ${t("cardLabels.logMsgs")}`), card.topTools.slice(0, 5).map((tool) => /* @__PURE__ */ React36.createElement(Box31, { key: `${tool.turn}-${tool.name}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React36.createElement(Text30, { color: FG.sub }, tool.name), /* @__PURE__ */ React36.createElement(
+    Text30,
     {
       color: FG.faint
     },
@@ -8489,8 +8227,8 @@ function CtxCard({ card }) {
 }
 
 // src/cli/ui/cards/DiffCard.tsx
-import { Box as Box31, Text as Text30 } from "ink";
-import React36 from "react";
+import { Box as Box32, Text as Text31 } from "ink";
+import React37 from "react";
 var LINE_COLOR = {
   ctx: FG.sub,
   add: TONE.ok,
@@ -8505,7 +8243,7 @@ var LINE_GLYPH = {
 };
 function DiffCard({ card }) {
   const showFooter = card.hunks.length > 0;
-  return /* @__PURE__ */ React36.createElement(Card, { tone: TONE.ok }, /* @__PURE__ */ React36.createElement(
+  return /* @__PURE__ */ React37.createElement(Card, { tone: TONE.ok }, /* @__PURE__ */ React37.createElement(
     CardHeader,
     {
       glyph: "\xB1",
@@ -8517,12 +8255,12 @@ function DiffCard({ card }) {
         { text: `-${card.stats.del}`, color: TONE.err }
       ]
     }
-  ), card.hunks.map((hunk) => /* @__PURE__ */ React36.createElement(Box31, { key: `${card.id}:${hunk.header}`, flexDirection: "column" }, /* @__PURE__ */ React36.createElement(Text30, { italic: true, color: FG.faint }, hunk.header), hunk.lines.map((line, li) => /* @__PURE__ */ React36.createElement(Box31, { key: `${card.id}:${hunk.header}:${li}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React36.createElement(Text30, { color: LINE_COLOR[line.kind] }, LINE_GLYPH[line.kind]), /* @__PURE__ */ React36.createElement(Text30, { color: LINE_COLOR[line.kind], dimColor: line.kind === "ctx" }, line.text))))), showFooter && /* @__PURE__ */ React36.createElement(Box31, { flexDirection: "row", gap: 2 }, /* @__PURE__ */ React36.createElement(Text30, { bold: true, color: TONE.ok }, t("cardLabels.applyAction")), /* @__PURE__ */ React36.createElement(Text30, { color: FG.sub }, t("cardLabels.skipAction")), /* @__PURE__ */ React36.createElement(Text30, { bold: true, color: TONE.err }, t("cardLabels.rejectAction"))));
+  ), card.hunks.map((hunk) => /* @__PURE__ */ React37.createElement(Box32, { key: `${card.id}:${hunk.header}`, flexDirection: "column" }, /* @__PURE__ */ React37.createElement(Text31, { italic: true, color: FG.faint }, hunk.header), hunk.lines.map((line, li) => /* @__PURE__ */ React37.createElement(Box32, { key: `${card.id}:${hunk.header}:${li}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React37.createElement(Text31, { color: LINE_COLOR[line.kind] }, LINE_GLYPH[line.kind]), /* @__PURE__ */ React37.createElement(Text31, { color: LINE_COLOR[line.kind], dimColor: line.kind === "ctx" }, line.text))))), showFooter && /* @__PURE__ */ React37.createElement(Box32, { flexDirection: "row", gap: 2 }, /* @__PURE__ */ React37.createElement(Text31, { bold: true, color: TONE.ok }, t("cardLabels.applyAction")), /* @__PURE__ */ React37.createElement(Text31, { color: FG.sub }, t("cardLabels.skipAction")), /* @__PURE__ */ React37.createElement(Text31, { bold: true, color: TONE.err }, t("cardLabels.rejectAction"))));
 }
 
 // src/cli/ui/cards/DoctorCard.tsx
-import { Box as Box32, Text as Text31 } from "ink";
-import React37 from "react";
+import { Box as Box33, Text as Text32 } from "ink";
+import React38 from "react";
 var LEVEL_GLYPH = {
   ok: "\u2713",
   warn: "\u26A0",
@@ -8550,7 +8288,7 @@ function DoctorCard({ card }) {
   const fail = card.checks.filter((c) => c.level === "fail").length;
   const labelWidth = card.checks.reduce((m, c) => Math.max(m, c.label.length), 0);
   const summary = `${card.checks.length} ${t("cardLabels.checksLabel")} \xB7 ${ok} ${t("cardLabels.passed")}${warn > 0 ? ` \xB7 ${warn} ${t("cardLabels.warnTag")}` : ""}${fail > 0 ? ` \xB7 ${fail} ${t("cardLabels.failTag")}` : ""}`;
-  return /* @__PURE__ */ React37.createElement(Card, { tone: CARD.tool.color }, /* @__PURE__ */ React37.createElement(
+  return /* @__PURE__ */ React38.createElement(Card, { tone: CARD.tool.color }, /* @__PURE__ */ React38.createElement(
     CardHeader,
     {
       glyph: "\u2695",
@@ -8558,12 +8296,12 @@ function DoctorCard({ card }) {
       title: t("cardTitles.doctor"),
       meta: [summary]
     }
-  ), card.checks.map((c) => /* @__PURE__ */ React37.createElement(Box32, { key: c.label, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React37.createElement(Text31, { color: levelColor[c.level] }, LEVEL_GLYPH[c.level]), /* @__PURE__ */ React37.createElement(Text31, { bold: true, color: fg.body }, c.label.padEnd(labelWidth + 1)), /* @__PURE__ */ React37.createElement(Text31, { color: fg.sub }, c.detail), /* @__PURE__ */ React37.createElement(Text31, { color: levelColor[c.level] }, levelTag(c.level)))));
+  ), card.checks.map((c) => /* @__PURE__ */ React38.createElement(Box33, { key: c.label, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React38.createElement(Text32, { color: levelColor[c.level] }, LEVEL_GLYPH[c.level]), /* @__PURE__ */ React38.createElement(Text32, { bold: true, color: fg.body }, c.label.padEnd(labelWidth + 1)), /* @__PURE__ */ React38.createElement(Text32, { color: fg.sub }, c.detail), /* @__PURE__ */ React38.createElement(Text32, { color: levelColor[c.level] }, levelTag(c.level)))));
 }
 
 // src/cli/ui/cards/ErrorCard.tsx
-import { Box as Box33, Text as Text32 } from "ink";
-import React38 from "react";
+import { Box as Box34, Text as Text33 } from "ink";
+import React39 from "react";
 var STACK_TAIL = 5;
 function ErrorCard({ card }) {
   const retryNote = card.retries !== void 0 && card.retries > 0 ? `${card.retries} ${t("cardLabels.retries")}` : null;
@@ -8573,7 +8311,7 @@ function ErrorCard({ card }) {
   const stackHidden = stackTrunc ? stackLines.length - stackVisible.length : 0;
   const hasStack = stackVisible.length > 0;
   const messageLines = card.message.split("\n");
-  return /* @__PURE__ */ React38.createElement(Card, { tone: TONE.err }, /* @__PURE__ */ React38.createElement(
+  return /* @__PURE__ */ React39.createElement(Card, { tone: TONE.err }, /* @__PURE__ */ React39.createElement(
     CardHeader,
     {
       glyph: "\u2716",
@@ -8581,19 +8319,19 @@ function ErrorCard({ card }) {
       title: card.title || t("cardTitles.error"),
       meta: retryNote ? [retryNote] : void 0
     }
-  ), messageLines.map((line, i) => /* @__PURE__ */ React38.createElement(Text32, { key: `${card.id}:msg:${i}`, color: TONE.err }, line || " ")), hasStack ? /* @__PURE__ */ React38.createElement(Box33, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ React38.createElement(Text32, { color: FG.meta }, t("cardLabels.stackTrace")), stackHidden > 0 ? /* @__PURE__ */ React38.createElement(Text32, { color: FG.faint }, t(
+  ), messageLines.map((line, i) => /* @__PURE__ */ React39.createElement(Text33, { key: `${card.id}:msg:${i}`, color: TONE.err }, line || " ")), hasStack ? /* @__PURE__ */ React39.createElement(Box34, { flexDirection: "column", marginTop: 1 }, /* @__PURE__ */ React39.createElement(Text33, { color: FG.meta }, t("cardLabels.stackTrace")), stackHidden > 0 ? /* @__PURE__ */ React39.createElement(Text33, { color: FG.faint }, t(
     stackHidden === 1 ? "cardLabels.earlierStackLine" : "cardLabels.earlierStackLines",
     { count: stackHidden }
-  )) : null, stackVisible.map((line, i) => /* @__PURE__ */ React38.createElement(Text32, { key: `${card.id}:stk:${stackHidden + i}`, color: FG.meta }, line || " "))) : null);
+  )) : null, stackVisible.map((line, i) => /* @__PURE__ */ React39.createElement(Text33, { key: `${card.id}:stk:${stackHidden + i}`, color: FG.meta }, line || " "))) : null);
 }
 
 // src/cli/ui/cards/LiveCard.tsx
-import { Box as Box34, Text as Text34 } from "ink";
-import React40 from "react";
+import { Box as Box35, Text as Text35 } from "ink";
+import React41 from "react";
 
 // src/cli/ui/primitives/Spinner.tsx
-import { Text as Text33 } from "ink";
-import React39 from "react";
+import { Text as Text34 } from "ink";
+import React40 from "react";
 var FRAMES = {
   circle: ["\u25D0", "\u25D3", "\u25D1", "\u25D2"],
   braille: ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827"]
@@ -8602,7 +8340,7 @@ function Spinner({ kind = "circle", color, bold }) {
   const frames = FRAMES[kind];
   const tick = useTick();
   const frame = tick % frames.length;
-  return /* @__PURE__ */ React39.createElement(Text33, { bold, color }, frames[frame]);
+  return /* @__PURE__ */ React40.createElement(Text34, { bold, color }, frames[frame]);
 }
 
 // src/cli/ui/cards/LiveCard.tsx
@@ -8629,12 +8367,12 @@ var VARIANT_GLYPH = {
 function LiveCard({ card }) {
   const color = TONE_TO_COLOR[card.tone];
   const glyph = VARIANT_GLYPH[card.variant];
-  return /* @__PURE__ */ React40.createElement(Box34, { paddingLeft: 2, flexDirection: "row", gap: 1 }, card.variant === "thinking" ? /* @__PURE__ */ React40.createElement(Spinner, { kind: "circle", color, bold: true }) : /* @__PURE__ */ React40.createElement(Text34, { bold: true, color }, glyph), /* @__PURE__ */ React40.createElement(Text34, { color: FG.body }, card.text), card.meta !== void 0 ? /* @__PURE__ */ React40.createElement(Text34, { color: FG.faint }, `\xB7 ${card.meta}`) : null);
+  return /* @__PURE__ */ React41.createElement(Box35, { paddingLeft: 2, flexDirection: "row", gap: 1 }, card.variant === "thinking" ? /* @__PURE__ */ React41.createElement(Spinner, { kind: "circle", color, bold: true }) : /* @__PURE__ */ React41.createElement(Text35, { bold: true, color }, glyph), /* @__PURE__ */ React41.createElement(Text35, { color: FG.body }, card.text), card.meta !== void 0 ? /* @__PURE__ */ React41.createElement(Text35, { color: FG.faint }, `\xB7 ${card.meta}`) : null);
 }
 
 // src/cli/ui/cards/MemoryCard.tsx
-import { Box as Box35, Text as Text35 } from "ink";
-import React41 from "react";
+import { Box as Box36, Text as Text36 } from "ink";
+import React42 from "react";
 var CATEGORY_ORDER = [
   "user",
   "feedback",
@@ -8669,7 +8407,7 @@ function MemoryCard({ card }) {
   const counts = countByCategory(card.entries);
   const summary = CATEGORY_ORDER.filter((c) => counts[c] > 0).map((c) => `${counts[c]} ${categoryLabel(c)}`).join(" \xB7 ");
   const tokens = card.tokens > 1024 ? `~${(card.tokens / 1024).toFixed(1)}K ${t("cardLabels.tok")}` : `~${card.tokens} ${t("cardLabels.tok")}`;
-  return /* @__PURE__ */ React41.createElement(Card, { tone: FG.meta }, /* @__PURE__ */ React41.createElement(
+  return /* @__PURE__ */ React42.createElement(Card, { tone: FG.meta }, /* @__PURE__ */ React42.createElement(
     CardHeader,
     {
       glyph: "\u2311",
@@ -8682,7 +8420,7 @@ function MemoryCard({ card }) {
     const all = card.entries.filter((e) => e.category === category);
     const shown = all.slice(0, 5);
     const remaining = all.length - shown.length;
-    return /* @__PURE__ */ React41.createElement(Box35, { key: category, flexDirection: "column" }, /* @__PURE__ */ React41.createElement(Text35, { color: FG.faint }, `${categoryLabel(category)} (${counts[category]})`), shown.map((entry) => /* @__PURE__ */ React41.createElement(Box35, { key: `${category}:${entry.summary}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React41.createElement(Text35, { color: CATEGORY_GLYPH_COLOR[category] }, CATEGORY_GLYPH[category]), /* @__PURE__ */ React41.createElement(Text35, { color: FG.sub }, entry.summary))), remaining > 0 ? /* @__PURE__ */ React41.createElement(Text35, { color: FG.faint }, t("cardLabels.more", { count: remaining })) : null);
+    return /* @__PURE__ */ React42.createElement(Box36, { key: category, flexDirection: "column" }, /* @__PURE__ */ React42.createElement(Text36, { color: FG.faint }, `${categoryLabel(category)} (${counts[category]})`), shown.map((entry) => /* @__PURE__ */ React42.createElement(Box36, { key: `${category}:${entry.summary}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React42.createElement(Text36, { color: CATEGORY_GLYPH_COLOR[category] }, CATEGORY_GLYPH[category]), /* @__PURE__ */ React42.createElement(Text36, { color: FG.sub }, entry.summary))), remaining > 0 ? /* @__PURE__ */ React42.createElement(Text36, { color: FG.faint }, t("cardLabels.more", { count: remaining })) : null);
   }));
 }
 function countByCategory(entries) {
@@ -8697,8 +8435,8 @@ function countByCategory(entries) {
 }
 
 // src/cli/ui/cards/PlanCard.tsx
-import { Box as Box36, Text as Text36 } from "ink";
-import React42 from "react";
+import { Box as Box37, Text as Text37 } from "ink";
+import React43 from "react";
 var STATUS_GLYPH = {
   queued: "\u25CB",
   running: "\u25B6",
@@ -8724,11 +8462,11 @@ function PlanCard({ card }) {
   const hasRunning = card.steps.some((s) => s.status === "running");
   const cardTone = hasRunning ? toneActive.accent : tone.accent;
   const window = pickWindow(card.steps);
-  return /* @__PURE__ */ React42.createElement(Card, { tone: cardTone }, /* @__PURE__ */ React42.createElement(CardHeader, { glyph: "\u229E", tone: cardTone, title: card.title, meta: [progress] }), window.hiddenBefore > 0 ? /* @__PURE__ */ React42.createElement(Box36, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React42.createElement(Text36, { color: tone.ok }, "\u2713"), /* @__PURE__ */ React42.createElement(Text36, { color: fg.faint }, `\u22EF ${window.hiddenBefore} ${t("cardLabels.done")}`)) : null, window.steps.map((step) => {
+  return /* @__PURE__ */ React43.createElement(Card, { tone: cardTone }, /* @__PURE__ */ React43.createElement(CardHeader, { glyph: "\u229E", tone: cardTone, title: card.title, meta: [progress] }), window.hiddenBefore > 0 ? /* @__PURE__ */ React43.createElement(Box37, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React43.createElement(Text37, { color: tone.ok }, "\u2713"), /* @__PURE__ */ React43.createElement(Text37, { color: fg.faint }, `\u22EF ${window.hiddenBefore} ${t("cardLabels.done")}`)) : null, window.steps.map((step) => {
     const isActive = step.status === "running";
     const titleColor = isActive ? fg.strong : fg.sub;
-    return /* @__PURE__ */ React42.createElement(Box36, { key: step.id, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React42.createElement(Text36, { color: statusColor[step.status] }, STATUS_GLYPH[step.status]), /* @__PURE__ */ React42.createElement(Text36, { bold: isActive, color: titleColor }, `${step.indexLabel}. ${step.title}`), isActive ? /* @__PURE__ */ React42.createElement(Text36, { color: toneActive.brand }, t("cardLabels.inProgress")) : null);
-  }), window.hiddenAfter > 0 ? /* @__PURE__ */ React42.createElement(Box36, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React42.createElement(Text36, { color: fg.faint }, "\u25CB"), /* @__PURE__ */ React42.createElement(Text36, { color: fg.faint }, `\u22EF ${window.hiddenAfter} ${t("cardLabels.upcoming")}`)) : null);
+    return /* @__PURE__ */ React43.createElement(Box37, { key: step.id, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React43.createElement(Text37, { color: statusColor[step.status] }, STATUS_GLYPH[step.status]), /* @__PURE__ */ React43.createElement(Text37, { bold: isActive, color: titleColor }, `${step.indexLabel}. ${step.title}`), isActive ? /* @__PURE__ */ React43.createElement(Text37, { color: toneActive.brand }, t("cardLabels.inProgress")) : null);
+  }), window.hiddenAfter > 0 ? /* @__PURE__ */ React43.createElement(Box37, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React43.createElement(Text37, { color: fg.faint }, "\u25CB"), /* @__PURE__ */ React43.createElement(Text37, { color: fg.faint }, `\u22EF ${window.hiddenAfter} ${t("cardLabels.upcoming")}`)) : null);
 }
 function pickWindow(steps) {
   if (steps.length <= VISIBLE_WINDOW) {
@@ -8756,54 +8494,61 @@ function anchorIndex(steps) {
 }
 
 // src/cli/ui/cards/ReasoningCard.tsx
-import { Box as Box37, Text as Text38, useStdout as useStdout11 } from "ink";
-import React44 from "react";
+import { Box as Box38, Text as Text39, useStdout as useStdout12 } from "ink";
+import React45 from "react";
 
 // src/cli/ui/primitives/CursorBlock.tsx
-import { Text as Text37 } from "ink";
-import React43 from "react";
+import { Text as Text38 } from "ink";
+import React44 from "react";
 function CursorBlock() {
   const tick = useTick();
   const on = Math.floor(tick / 4) % 2 === 0;
-  return /* @__PURE__ */ React43.createElement(Text37, { inverse: on, color: CARD.streaming.color }, " ");
+  return /* @__PURE__ */ React44.createElement(Text38, { inverse: on, color: CARD.streaming.color }, " ");
 }
 
 // src/cli/ui/cards/ReasoningCard.tsx
-var STREAMING_PREVIEW_LINES = 4;
+var STREAMING_PREVIEW_LINES = 3;
+var SETTLED_HEAD_LINES = 2;
 var SETTLED_TAIL_LINES = 2;
+var XL_TOKEN_THRESHOLD = 800;
 function ReasoningCard({
   card,
   expanded
 }) {
-  const { stdout } = useStdout11();
+  const { stdout } = useStdout12();
   const cols = stdout?.columns ?? 80;
   const lineCells = Math.max(20, cols - 4);
   const allLines = card.text.length > 0 ? card.text.split("\n") : [];
-  const showBody = expanded && (allLines.length > 0 || card.streaming);
+  const isEmpty = !card.streaming && !card.aborted && allLines.length === 0;
+  const showBody = expanded && (allLines.length > 0 || card.streaming || isEmpty);
   const tone = card.aborted ? TONE.err : card.streaming ? TONE_ACTIVE.accent : TONE.accent;
-  return /* @__PURE__ */ React44.createElement(Card, { tone }, /* @__PURE__ */ React44.createElement(ReasoningHeader, { card }), showBody && (card.streaming ? /* @__PURE__ */ React44.createElement(StreamingPreview, { card, allLines, lineCells }) : /* @__PURE__ */ React44.createElement(SettledPreview, { card, allLines, lineCells })));
+  return /* @__PURE__ */ React45.createElement(Card, { tone }, /* @__PURE__ */ React45.createElement(ReasoningHeader, { card, isEmpty }), showBody && (isEmpty ? /* @__PURE__ */ React45.createElement(EmptyHint, null) : card.streaming ? /* @__PURE__ */ React45.createElement(StreamingPreview, { card, allLines, lineCells }) : /* @__PURE__ */ React45.createElement(SettledPreview, { card, allLines, lineCells })));
 }
-function ReasoningHeader({ card }) {
+function ReasoningHeader({
+  card,
+  isEmpty
+}) {
   const streamingActive = card.streaming && !card.aborted;
-  const headColor = card.aborted ? TONE.err : streamingActive ? TONE_ACTIVE.accent : TONE.accent;
+  const headColor = card.aborted ? TONE.err : streamingActive ? TONE_ACTIVE.accent : isEmpty ? FG.faint : TONE.accent;
   const glyph = streamingActive ? "\u25C7" : "\u25C6";
   const title = streamingActive ? t("cardTitles.reasoningEllipsis") : card.aborted ? t("cardTitles.reasoningAborted") : t("cardTitles.reasoning");
+  const pill = isEmpty ? PILL_SECTION.empty : PILL_SECTION.reason;
   const meta = [];
   const m = headerMeta(card);
   if (m) meta.push(m);
   const duration = headerDuration(card);
   if (duration) meta.push(duration);
   const modelBadge = card.model ? modelBadgeFor(card.model) : null;
-  return /* @__PURE__ */ React44.createElement(
+  return /* @__PURE__ */ React45.createElement(
     CardHeader,
     {
       glyph,
       tone: headColor,
       title,
-      titleColor: PILL_SECTION.reason.fg,
-      titleBg: PILL_SECTION.reason.bg,
+      titleColor: pill.fg,
+      titleBg: pill.bg,
       meta: meta.length > 0 ? meta : void 0,
-      right: /* @__PURE__ */ React44.createElement(React44.Fragment, null, streamingActive ? /* @__PURE__ */ React44.createElement(Spinner, { kind: "braille", color: TONE_ACTIVE.accent }) : null, modelBadge ? /* @__PURE__ */ React44.createElement(Pill, { label: modelBadge.label, ...PILL_MODEL[modelBadge.kind], bold: false }) : null)
+      right: /* @__PURE__ */ React45.createElement(React45.Fragment, null, streamingActive ? /* @__PURE__ */ React45.createElement(Spinner, { kind: "braille", color: TONE_ACTIVE.accent }) : null, modelBadge ? /* @__PURE__ */ React45.createElement(Pill, { label: modelBadge.label, ...PILL_MODEL[modelBadge.kind], bold: false }) : null)
     }
   );
 }
@@ -8824,43 +8569,74 @@ function headerDuration(card) {
 function StreamingPreview({ card, allLines, lineCells }) {
   const visualLines = allLines.flatMap((l) => wrapToCells(l, lineCells));
   const visible = visualLines.slice(-STREAMING_PREVIEW_LINES);
-  return /* @__PURE__ */ React44.createElement(BodyLines, { card, lines: visible, lineCells, cursorOnLast: true });
+  const hasOverflow = visualLines.length > visible.length;
+  return /* @__PURE__ */ React45.createElement(React45.Fragment, null, hasOverflow ? /* @__PURE__ */ React45.createElement(Text39, { color: FG.faint }, "\u22EE") : null, /* @__PURE__ */ React45.createElement(
+    BodyLines,
+    {
+      card,
+      lines: visible,
+      lineCells,
+      anchor: !hasOverflow,
+      cursorOnLast: true
+    }
+  ));
 }
 function SettledPreview({ card, allLines, lineCells }) {
   const visualLines = allLines.flatMap((l) => wrapToCells(l, lineCells));
-  const visible = visualLines.slice(-SETTLED_TAIL_LINES);
-  const droppedLines = Math.max(0, visualLines.length - visible.length);
-  return /* @__PURE__ */ React44.createElement(React44.Fragment, null, droppedLines > 0 ? /* @__PURE__ */ React44.createElement(ElisionHint, { droppedLines, card }) : null, /* @__PURE__ */ React44.createElement(BodyLines, { card, lines: visible, lineCells, indexOffset: droppedLines }));
+  if (card.tokens >= XL_TOKEN_THRESHOLD) {
+    const visible = visualLines.slice(-SETTLED_TAIL_LINES);
+    const droppedLines = Math.max(0, visualLines.length - visible.length);
+    return /* @__PURE__ */ React45.createElement(React45.Fragment, null, droppedLines > 0 ? /* @__PURE__ */ React45.createElement(ScrollPastHint, { card }) : null, /* @__PURE__ */ React45.createElement(BodyLines, { card, lines: visible, lineCells, indexOffset: droppedLines }));
+  }
+  const totalShown = SETTLED_HEAD_LINES + SETTLED_TAIL_LINES;
+  if (visualLines.length <= totalShown) {
+    return /* @__PURE__ */ React45.createElement(BodyLines, { card, lines: visualLines, lineCells, anchor: true });
+  }
+  const headLines = visualLines.slice(0, SETTLED_HEAD_LINES);
+  const tailLines = visualLines.slice(-SETTLED_TAIL_LINES);
+  const droppedMid = visualLines.length - headLines.length - tailLines.length;
+  return /* @__PURE__ */ React45.createElement(React45.Fragment, null, /* @__PURE__ */ React45.createElement(BodyLines, { card, lines: headLines, lineCells, anchor: true }), /* @__PURE__ */ React45.createElement(MidElisionHint, { droppedLines: droppedMid }), /* @__PURE__ */ React45.createElement(
+    BodyLines,
+    {
+      card,
+      lines: tailLines,
+      lineCells,
+      indexOffset: headLines.length + droppedMid
+    }
+  ));
+}
+function EmptyHint() {
+  return /* @__PURE__ */ React45.createElement(Text39, { italic: true, color: FG.faint }, "no thinking \u2014 direct answer");
 }
 function BodyLines({
   card,
   lines,
   lineCells,
   cursorOnLast = false,
-  indexOffset = 0
+  indexOffset = 0,
+  anchor = false
 }) {
-  return /* @__PURE__ */ React44.createElement(React44.Fragment, null, lines.map((line, i) => {
+  const tone = card.aborted ? TONE.err : card.streaming ? TONE_ACTIVE.accent : TONE.accent;
+  const innerCells = lineCells - (anchor ? 2 : 0);
+  return /* @__PURE__ */ React45.createElement(React45.Fragment, null, lines.map((line, i) => {
     const isLast = i === lines.length - 1;
-    return /* @__PURE__ */ React44.createElement(Box37, { key: `${card.id}:b:${indexOffset + i}`, flexDirection: "row" }, /* @__PURE__ */ React44.createElement(Text38, { italic: true, color: FG.meta }, clipToCells(line, lineCells)), isLast && cursorOnLast && /* @__PURE__ */ React44.createElement(CursorBlock, null));
+    const isFirst = i === 0;
+    return /* @__PURE__ */ React45.createElement(Box38, { key: `${card.id}:b:${indexOffset + i}`, flexDirection: "row", gap: 1 }, anchor ? /* @__PURE__ */ React45.createElement(Text39, { color: tone }, isFirst ? "\u21B3" : " ") : null, /* @__PURE__ */ React45.createElement(Text39, { italic: true, color: FG.meta }, clipToCells(line, innerCells)), isLast && cursorOnLast && /* @__PURE__ */ React45.createElement(CursorBlock, null));
   }));
 }
-function ElisionHint({
-  droppedLines,
-  card
-}) {
+function MidElisionHint({ droppedLines }) {
+  return /* @__PURE__ */ React45.createElement(Text39, { color: FG.faint }, `\u22EF ${droppedLines} line${droppedLines === 1 ? "" : "s"} elided`);
+}
+function ScrollPastHint({ card }) {
   const parts = [];
-  if (card.paragraphs > 1) {
-    parts.push(`${card.paragraphs} \xB6`);
-  } else {
-    parts.push(`${droppedLines} line${droppedLines === 1 ? "" : "s"}`);
-  }
-  if (card.tokens > 0) parts.push(`${card.tokens.toLocaleString()} tok`);
-  return /* @__PURE__ */ React44.createElement(Text38, { color: FG.faint }, `\u22EF ${parts.join(" \xB7 ")} above \xB7 /reasoning last`);
+  if (card.paragraphs > 0) parts.push(`${card.paragraphs} \xB6`);
+  if (card.tokens > 0) parts.push(`~${card.tokens.toLocaleString()} tok`);
+  return /* @__PURE__ */ React45.createElement(Text39, { color: FG.faint }, `\u22EF ${parts.join(" + ")} scrolled past \xB7 /reasoning last`);
 }
 
 // src/cli/ui/cards/SearchCard.tsx
-import { Box as Box38, Text as Text39 } from "ink";
-import React45 from "react";
+import { Box as Box39, Text as Text40 } from "ink";
+import React46 from "react";
 function SearchCard({ card }) {
   const fileCount = new Set(card.hits.map((h) => h.file)).size;
   const elapsed = `${(card.elapsedMs / 1e3).toFixed(2)}s`;
@@ -8869,7 +8645,7 @@ function SearchCard({ card }) {
     files: fileCount
   });
   const grouped = groupByFile(card.hits.slice(0, 10));
-  return /* @__PURE__ */ React45.createElement(Card, { tone: TONE.info }, /* @__PURE__ */ React45.createElement(
+  return /* @__PURE__ */ React46.createElement(Card, { tone: TONE.info }, /* @__PURE__ */ React46.createElement(
     CardHeader,
     {
       glyph: "\u2299",
@@ -8878,7 +8654,7 @@ function SearchCard({ card }) {
       subtitle: `"${card.query}"`,
       meta: [stats2, elapsed]
     }
-  ), grouped.map(([file, hits]) => /* @__PURE__ */ React45.createElement(Box38, { key: file, flexDirection: "column" }, /* @__PURE__ */ React45.createElement(Text39, { bold: true, color: FG.strong }, file), hits.map((h, i) => /* @__PURE__ */ React45.createElement(Box38, { key: `${file}:${h.line}:${i}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React45.createElement(Text39, { color: FG.faint }, `${h.line.toString().padStart(4)} \u2502`), /* @__PURE__ */ React45.createElement(HighlightedLine, { text: h.preview, start: h.matchStart, end: h.matchEnd }))))), card.hits.length > 10 ? /* @__PURE__ */ React45.createElement(Text39, { color: FG.faint }, t(
+  ), grouped.map(([file, hits]) => /* @__PURE__ */ React46.createElement(Box39, { key: file, flexDirection: "column" }, /* @__PURE__ */ React46.createElement(Text40, { bold: true, color: FG.strong }, file), hits.map((h, i) => /* @__PURE__ */ React46.createElement(Box39, { key: `${file}:${h.line}:${i}`, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React46.createElement(Text40, { color: FG.faint }, `${h.line.toString().padStart(4)} \u2502`), /* @__PURE__ */ React46.createElement(HighlightedLine, { text: h.preview, start: h.matchStart, end: h.matchEnd }))))), card.hits.length > 10 ? /* @__PURE__ */ React46.createElement(Text40, { color: FG.faint }, t(
     card.hits.length - 10 === 1 ? "cardLabels.moreHitSingular" : "cardLabels.moreHitsPlural",
     { count: card.hits.length - 10 }
   )) : null);
@@ -8889,9 +8665,9 @@ function HighlightedLine({
   end
 }) {
   if (start < 0 || end <= start || end > text.length) {
-    return /* @__PURE__ */ React45.createElement(Text39, { color: FG.sub }, text);
+    return /* @__PURE__ */ React46.createElement(Text40, { color: FG.sub }, text);
   }
-  return /* @__PURE__ */ React45.createElement(React45.Fragment, null, /* @__PURE__ */ React45.createElement(Text39, { color: FG.sub }, text.slice(0, start)), /* @__PURE__ */ React45.createElement(Text39, { bold: true, inverse: true }, text.slice(start, end)), /* @__PURE__ */ React45.createElement(Text39, { color: FG.sub }, text.slice(end)));
+  return /* @__PURE__ */ React46.createElement(React46.Fragment, null, /* @__PURE__ */ React46.createElement(Text40, { color: FG.sub }, text.slice(0, start)), /* @__PURE__ */ React46.createElement(Text40, { bold: true, inverse: true }, text.slice(start, end)), /* @__PURE__ */ React46.createElement(Text40, { color: FG.sub }, text.slice(end)));
 }
 function groupByFile(hits) {
   const map = /* @__PURE__ */ new Map();
@@ -8904,8 +8680,8 @@ function groupByFile(hits) {
 }
 
 // src/cli/ui/cards/StreamingCard.tsx
-import { Box as Box40, Text as Text41, useStdout as useStdout13 } from "ink";
-import React47, { useContext as useContext5 } from "react";
+import { Box as Box41, Text as Text42, useStdout as useStdout14 } from "ink";
+import React48, { useContext as useContext5 } from "react";
 
 // src/cli/ui/layout/LiveExpandContext.ts
 import { createContext as createContext3 } from "react";
@@ -8913,54 +8689,54 @@ var LiveExpandContext = createContext3(false);
 
 // src/cli/ui/markdown.tsx
 import { highlight, supportsLanguage } from "cli-highlight";
-import { Box as Box39, Text as Text40, useStdout as useStdout12 } from "ink";
-import React46 from "react";
+import { Box as Box40, Text as Text41, Transform as Transform2, useStdout as useStdout13 } from "ink";
+import React47 from "react";
 import stringWidth from "string-width";
 var BODY_LEFT_CELLS = 7;
-var MarkdownWidthCtx = React46.createContext(void 0);
+var MarkdownWidthCtx = React47.createContext(void 0);
 function useWidth() {
-  const ctx = React46.useContext(MarkdownWidthCtx);
+  const ctx = React47.useContext(MarkdownWidthCtx);
   if (ctx !== void 0) return ctx;
-  return (useStdout12()?.stdout?.columns ?? process.stdout.columns ?? 80) - BODY_LEFT_CELLS;
+  return (useStdout13()?.stdout?.columns ?? process.stdout.columns ?? 80) - BODY_LEFT_CELLS;
 }
 marked.setOptions({ gfm: true, breaks: false });
 function Markdown({ text, width }) {
-  const tokens = React46.useMemo(() => marked.lexer(text), [text]);
+  const tokens = React47.useMemo(() => marked.lexer(text), [text]);
   const ctxWidth = width !== void 0 ? Math.max(1, width) : void 0;
-  return /* @__PURE__ */ React46.createElement(MarkdownWidthCtx.Provider, { value: ctxWidth }, /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column", gap: 1 }, tokens.map((token, i) => /* @__PURE__ */ React46.createElement(BlockToken, { key: `${i}-${token.type}`, token }))));
+  return /* @__PURE__ */ React47.createElement(MarkdownWidthCtx.Provider, { value: ctxWidth }, /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column", gap: 1 }, tokens.map((token, i) => /* @__PURE__ */ React47.createElement(BlockToken, { key: `${i}-${token.type}`, token }))));
 }
 function BlockToken({ token }) {
   switch (token.type) {
     case "heading":
-      return /* @__PURE__ */ React46.createElement(Heading, { token });
+      return /* @__PURE__ */ React47.createElement(Heading, { token });
     case "paragraph":
-      return /* @__PURE__ */ React46.createElement(Paragraph, { token });
+      return /* @__PURE__ */ React47.createElement(Paragraph, { token });
     case "list":
-      return /* @__PURE__ */ React46.createElement(List, { token, depth: 0 });
+      return /* @__PURE__ */ React47.createElement(List, { token, depth: 0 });
     case "code":
-      return /* @__PURE__ */ React46.createElement(CodeBlock2, { token });
+      return /* @__PURE__ */ React47.createElement(CodeBlock2, { token });
     case "blockquote":
-      return /* @__PURE__ */ React46.createElement(Blockquote, { token });
+      return /* @__PURE__ */ React47.createElement(Blockquote, { token });
     case "hr":
-      return /* @__PURE__ */ React46.createElement(HorizontalRule, null);
+      return /* @__PURE__ */ React47.createElement(HorizontalRule, null);
     case "table":
-      return /* @__PURE__ */ React46.createElement(Table, { token });
+      return /* @__PURE__ */ React47.createElement(Table, { token });
     case "html":
-      return /* @__PURE__ */ React46.createElement(Text40, { color: FG.body }, token.text);
+      return /* @__PURE__ */ React47.createElement(Text41, { color: FG.body }, token.text);
     case "space":
       return null;
     default:
-      return /* @__PURE__ */ React46.createElement(Text40, { color: FG.body }, token.raw ?? "");
+      return /* @__PURE__ */ React47.createElement(Text41, { color: FG.body }, token.raw ?? "");
   }
 }
 function Heading({ token }) {
-  return /* @__PURE__ */ React46.createElement(Box39, null, /* @__PURE__ */ React46.createElement(Text40, { bold: true, color: FG.strong, backgroundColor: SURFACE.bgElev }, ` ${plainText(token.tokens)} `));
+  return /* @__PURE__ */ React47.createElement(Box40, null, /* @__PURE__ */ React47.createElement(Text41, { bold: true, color: FG.strong, backgroundColor: SURFACE.bgElev }, ` ${plainText(token.tokens)} `));
 }
 function Paragraph({ token }) {
-  return /* @__PURE__ */ React46.createElement(Text40, { color: FG.body }, /* @__PURE__ */ React46.createElement(Inline, { tokens: token.tokens ?? [] }));
+  return /* @__PURE__ */ React47.createElement(Text41, { color: FG.body }, /* @__PURE__ */ React47.createElement(Inline, { tokens: token.tokens ?? [] }));
 }
 function List({ token, depth }) {
-  return /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, token.items.map((item, i) => /* @__PURE__ */ React46.createElement(
+  return /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, token.items.map((item, i) => /* @__PURE__ */ React47.createElement(
     ListItem,
     {
       key: `${i}-${item.text.slice(0, 24)}`,
@@ -8981,27 +8757,27 @@ function ListItem({
   const markerColor = item.task ? item.checked ? TONE.ok : FG.faint : FG.meta;
   const dim = item.task && item.checked === true;
   const indent = " ".repeat(depth + 1);
-  return /* @__PURE__ */ React46.createElement(Box39, null, /* @__PURE__ */ React46.createElement(Text40, { color: markerColor }, `${indent}${marker} `), /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, item.tokens.map((tok, i) => {
+  return /* @__PURE__ */ React47.createElement(Box40, null, /* @__PURE__ */ React47.createElement(Text41, { color: markerColor }, `${indent}${marker} `), /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, item.tokens.map((tok, i) => {
     if (tok.type === "text") {
       const inner = tok.tokens;
       return (
         // biome-ignore lint/suspicious/noArrayIndexKey: list-item children are positional and stable per render
-        /* @__PURE__ */ React46.createElement(Text40, { key: `t-${i}`, color: dim ? FG.faint : FG.body, strikethrough: dim }, inner ? /* @__PURE__ */ React46.createElement(Inline, { tokens: inner }) : tok.text)
+        /* @__PURE__ */ React47.createElement(Text41, { key: `t-${i}`, color: dim ? FG.faint : FG.body, strikethrough: dim }, inner ? /* @__PURE__ */ React47.createElement(Inline, { tokens: inner }) : tok.text)
       );
     }
     if (tok.type === "list") {
-      return /* @__PURE__ */ React46.createElement(List, { key: `l-${i}`, token: tok, depth: depth + 1 });
+      return /* @__PURE__ */ React47.createElement(List, { key: `l-${i}`, token: tok, depth: depth + 1 });
     }
-    return /* @__PURE__ */ React46.createElement(BlockToken, { key: `b-${i}-${tok.type}`, token: tok });
+    return /* @__PURE__ */ React47.createElement(BlockToken, { key: `b-${i}-${tok.type}`, token: tok });
   })));
 }
 function CodeBlock2({ token }) {
   const lang = token.lang?.split(/\s+/)[0] ?? "";
   const colored = highlightCode(decodeHtmlEntities(token.text), lang);
   const lines = colored.split("\n");
-  return /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, lang ? /* @__PURE__ */ React46.createElement(Box39, null, /* @__PURE__ */ React46.createElement(Text40, { color: FG.meta }, ` ${lang}`)) : null, /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, lines.map((line, i) => (
+  return /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, lang ? /* @__PURE__ */ React47.createElement(Box40, null, /* @__PURE__ */ React47.createElement(Text41, { color: FG.meta }, ` ${lang}`)) : null, /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, lines.map((line, i) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: code lines are positional and stable per render
-    /* @__PURE__ */ React46.createElement(Text40, { key: `code-${i}`, backgroundColor: SURFACE.bgElev }, ` ${line} `)
+    /* @__PURE__ */ React47.createElement(Text41, { key: `code-${i}`, backgroundColor: SURFACE.bgElev }, ` ${line} `)
   ))));
 }
 function highlightCode(source, lang) {
@@ -9014,7 +8790,7 @@ function highlightCode(source, lang) {
   }
 }
 function Blockquote({ token }) {
-  return /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, (token.tokens ?? []).map((child, i) => /* @__PURE__ */ React46.createElement(Box39, { key: `${i}-${child.type}`, flexDirection: "row" }, /* @__PURE__ */ React46.createElement(Text40, { color: TONE.brand }, " \u258E "), /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column", flexGrow: 1 }, child.type === "paragraph" ? /* @__PURE__ */ React46.createElement(Text40, { italic: true, color: FG.sub }, /* @__PURE__ */ React46.createElement(Inline, { tokens: child.tokens ?? [] })) : /* @__PURE__ */ React46.createElement(BlockToken, { token: child })))));
+  return /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, (token.tokens ?? []).map((child, i) => /* @__PURE__ */ React47.createElement(Box40, { key: `${i}-${child.type}`, flexDirection: "row" }, /* @__PURE__ */ React47.createElement(Text41, { color: TONE.brand }, " \u258E "), /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column", flexGrow: 1 }, child.type === "paragraph" ? /* @__PURE__ */ React47.createElement(Text41, { italic: true, color: FG.sub }, /* @__PURE__ */ React47.createElement(Inline, { tokens: child.tokens ?? [] })) : /* @__PURE__ */ React47.createElement(BlockToken, { token: child })))));
 }
 function padToCells(text, cells) {
   const w = stringWidth(text);
@@ -9024,7 +8800,7 @@ function padToCells(text, cells) {
 function HorizontalRule() {
   const width = useWidth();
   const rule = "\u2500".repeat(Math.max(width, 1));
-  return /* @__PURE__ */ React46.createElement(Text40, { color: FG.faint }, ` ${rule}`);
+  return /* @__PURE__ */ React47.createElement(Text41, { color: FG.faint }, ` ${rule}`);
 }
 function tableLayout(headerCells, bodyCells, availableWidth) {
   const colCount = headerCells.length;
@@ -9052,7 +8828,7 @@ function Table({ token }) {
   const bodyCells = token.rows.map((row2) => row2.map((c) => plainText(c.tokens)));
   const layout = tableLayout(headerCells, bodyCells, width);
   if (!layout.fallback)
-    return /* @__PURE__ */ React46.createElement(
+    return /* @__PURE__ */ React47.createElement(
       ColumnarTable,
       {
         headerCells,
@@ -9062,7 +8838,7 @@ function Table({ token }) {
         gap: layout.gap
       }
     );
-  return /* @__PURE__ */ React46.createElement(
+  return /* @__PURE__ */ React47.createElement(
     FallbackTable,
     {
       headerCells,
@@ -9080,14 +8856,14 @@ function ColumnarTable({
   gap
 }) {
   const ruleRow = widths.map((w) => "\u2500".repeat(w)).join(gap);
-  return /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, /* @__PURE__ */ React46.createElement(Box39, null, /* @__PURE__ */ React46.createElement(Text40, null, " "), headerCells.map((cell, i) => (
+  return /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, /* @__PURE__ */ React47.createElement(Box40, null, /* @__PURE__ */ React47.createElement(Text41, null, " "), headerCells.map((cell, i) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: header cells positional
-    /* @__PURE__ */ React46.createElement(React46.Fragment, { key: `h-${i}` }, /* @__PURE__ */ React46.createElement(Text40, { bold: true, color: FG.sub }, padToCells(cell, widths[i])), i < colCount - 1 ? /* @__PURE__ */ React46.createElement(Text40, null, gap) : null)
-  ))), /* @__PURE__ */ React46.createElement(Box39, null, /* @__PURE__ */ React46.createElement(Text40, null, " "), /* @__PURE__ */ React46.createElement(Text40, { color: FG.faint }, ruleRow)), bodyCells.map((row2, ri) => (
+    /* @__PURE__ */ React47.createElement(React47.Fragment, { key: `h-${i}` }, /* @__PURE__ */ React47.createElement(Text41, { bold: true, color: FG.sub }, padToCells(cell, widths[i])), i < colCount - 1 ? /* @__PURE__ */ React47.createElement(Text41, null, gap) : null)
+  ))), /* @__PURE__ */ React47.createElement(Box40, null, /* @__PURE__ */ React47.createElement(Text41, null, " "), /* @__PURE__ */ React47.createElement(Text41, { color: FG.faint }, ruleRow)), bodyCells.map((row2, ri) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: body rows positional
-    /* @__PURE__ */ React46.createElement(Box39, { key: `tr-${ri}` }, /* @__PURE__ */ React46.createElement(Text40, null, " "), row2.map((cell, i) => (
+    /* @__PURE__ */ React47.createElement(Box40, { key: `tr-${ri}` }, /* @__PURE__ */ React47.createElement(Text41, null, " "), row2.map((cell, i) => (
       // biome-ignore lint/suspicious/noArrayIndexKey: cells positional
-      /* @__PURE__ */ React46.createElement(React46.Fragment, { key: `c-${ri}-${i}` }, /* @__PURE__ */ React46.createElement(Text40, { color: FG.body }, padToCells(cell ?? "", widths[i])), i < colCount - 1 ? /* @__PURE__ */ React46.createElement(Text40, null, gap) : null)
+      /* @__PURE__ */ React47.createElement(React47.Fragment, { key: `c-${ri}-${i}` }, /* @__PURE__ */ React47.createElement(Text41, { color: FG.body }, padToCells(cell ?? "", widths[i])), i < colCount - 1 ? /* @__PURE__ */ React47.createElement(Text41, null, gap) : null)
     )))
   )));
 }
@@ -9097,20 +8873,20 @@ function FallbackTable({
   labelPad,
   valueCells
 }) {
-  return /* @__PURE__ */ React46.createElement(Box39, { flexDirection: "column" }, bodyCells.map((row2, ri) => (
+  return /* @__PURE__ */ React47.createElement(Box40, { flexDirection: "column" }, bodyCells.map((row2, ri) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: body rows positional
-    /* @__PURE__ */ React46.createElement(Box39, { key: `fr-${ri}`, flexDirection: "column" }, ri > 0 ? /* @__PURE__ */ React46.createElement(Text40, null, " ") : null, headerCells.map((h, ci) => {
+    /* @__PURE__ */ React47.createElement(Box40, { key: `fr-${ri}`, flexDirection: "column" }, ri > 0 ? /* @__PURE__ */ React47.createElement(Text41, null, " ") : null, headerCells.map((h, ci) => {
       const label = `${padToCells(h, labelPad - 2)}: `;
       const lines = wrapToCells(row2[ci] ?? "", valueCells);
       return lines.map((line, li) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: fallback table lines are positional
-        /* @__PURE__ */ React46.createElement(Box39, { key: `fc-${ri}-${ci}-${li}` }, li === 0 ? /* @__PURE__ */ React46.createElement(Text40, { bold: true, color: FG.sub }, label) : /* @__PURE__ */ React46.createElement(Text40, null, padToCells("", labelPad)), /* @__PURE__ */ React46.createElement(Text40, { color: FG.body }, line))
+        /* @__PURE__ */ React47.createElement(Box40, { key: `fc-${ri}-${ci}-${li}` }, li === 0 ? /* @__PURE__ */ React47.createElement(Text41, { bold: true, color: FG.sub }, label) : /* @__PURE__ */ React47.createElement(Text41, null, padToCells("", labelPad)), /* @__PURE__ */ React47.createElement(Text41, { color: FG.body }, line))
       ));
     }))
   )));
 }
 function Inline({ tokens }) {
-  return /* @__PURE__ */ React46.createElement(React46.Fragment, null, tokens.map((tok, i) => /* @__PURE__ */ React46.createElement(InlineToken, { key: `${i}-${tok.type}`, token: tok })));
+  return /* @__PURE__ */ React47.createElement(React47.Fragment, null, tokens.map((tok, i) => /* @__PURE__ */ React47.createElement(InlineToken, { key: `${i}-${tok.type}`, token: tok })));
 }
 var FILE_REF_RE2 = /\b([A-Za-z0-9_./@\-]+\.[A-Za-z0-9]{1,6})(?::(\d+)(?:-(\d+))?)?\b/g;
 var MENTION_RE = /(?<![A-Za-z0-9_])@([A-Za-z0-9_./\-]+\.[A-Za-z0-9]{1,6})/g;
@@ -9120,11 +8896,11 @@ function looksLikeFileRef(path, hasLine) {
   const ext = path.split(".").pop() ?? "";
   return ext.length >= 2;
 }
-function osc8(label, _target, color) {
-  return /* @__PURE__ */ React46.createElement(Text40, { color, underline: true }, label);
+function osc8(children, target, color) {
+  return /* @__PURE__ */ React47.createElement(Transform2, { transform: (text) => `\x1B]8;;${target}\x1B\\${text}\x1B]8;;\x1B\\` }, /* @__PURE__ */ React47.createElement(Text41, { color, underline: true }, children));
 }
 function renderInlineText(raw) {
-  if (!raw) return /* @__PURE__ */ React46.createElement(Text40, null, raw);
+  if (!raw) return /* @__PURE__ */ React47.createElement(Text41, null, raw);
   const out = [];
   let cursor = 0;
   const hits = [];
@@ -9135,7 +8911,7 @@ function renderInlineText(raw) {
     hits.push({
       start,
       end,
-      node: /* @__PURE__ */ React46.createElement(Text40, { color: TONE.warn, underline: true }, `@${path}`)
+      node: /* @__PURE__ */ React47.createElement(Text41, { color: TONE.warn, underline: true }, `@${path}`)
     });
   }
   for (const m of raw.matchAll(FILE_REF_RE2)) {
@@ -9152,44 +8928,44 @@ function renderInlineText(raw) {
   let key = 0;
   for (const h of hits) {
     if (h.start > cursor) {
-      out.push(/* @__PURE__ */ React46.createElement(Text40, { key: `t-${key++}` }, raw.slice(cursor, h.start)));
+      out.push(/* @__PURE__ */ React47.createElement(Text41, { key: `t-${key++}` }, raw.slice(cursor, h.start)));
     }
-    out.push(/* @__PURE__ */ React46.createElement(React46.Fragment, { key: `r-${key++}` }, h.node));
+    out.push(/* @__PURE__ */ React47.createElement(React47.Fragment, { key: `r-${key++}` }, h.node));
     cursor = h.end;
   }
-  if (cursor < raw.length) out.push(/* @__PURE__ */ React46.createElement(Text40, { key: `t-${key++}` }, raw.slice(cursor)));
-  return /* @__PURE__ */ React46.createElement(React46.Fragment, null, out);
+  if (cursor < raw.length) out.push(/* @__PURE__ */ React47.createElement(Text41, { key: `t-${key++}` }, raw.slice(cursor)));
+  return /* @__PURE__ */ React47.createElement(React47.Fragment, null, out);
 }
 function InlineToken({ token }) {
   switch (token.type) {
     case "text": {
       const t2 = token;
-      return t2.tokens ? /* @__PURE__ */ React46.createElement(Inline, { tokens: t2.tokens }) : renderInlineText(t2.text);
+      return t2.tokens ? /* @__PURE__ */ React47.createElement(Inline, { tokens: t2.tokens }) : renderInlineText(t2.text);
     }
     case "strong":
-      return /* @__PURE__ */ React46.createElement(Text40, { bold: true, color: FG.strong }, /* @__PURE__ */ React46.createElement(Inline, { tokens: token.tokens }));
+      return /* @__PURE__ */ React47.createElement(Text41, { bold: true, color: FG.strong }, /* @__PURE__ */ React47.createElement(Inline, { tokens: token.tokens }));
     case "em":
-      return /* @__PURE__ */ React46.createElement(Text40, { italic: true }, /* @__PURE__ */ React46.createElement(Inline, { tokens: token.tokens }));
+      return /* @__PURE__ */ React47.createElement(Text41, { italic: true }, /* @__PURE__ */ React47.createElement(Inline, { tokens: token.tokens }));
     case "codespan":
-      return /* @__PURE__ */ React46.createElement(Text40, { color: FG.strong, backgroundColor: SURFACE.bgElev }, ` ${decodeHtmlEntities(token.text)} `);
+      return /* @__PURE__ */ React47.createElement(Text41, { color: FG.strong, backgroundColor: SURFACE.bgElev }, ` ${decodeHtmlEntities(token.text)} `);
     case "del":
-      return /* @__PURE__ */ React46.createElement(Text40, { color: TONE.err, strikethrough: true }, /* @__PURE__ */ React46.createElement(Inline, { tokens: token.tokens }));
+      return /* @__PURE__ */ React47.createElement(Text41, { color: TONE.err, strikethrough: true }, /* @__PURE__ */ React47.createElement(Inline, { tokens: token.tokens }));
     case "link": {
       const l = token;
-      return /* @__PURE__ */ React46.createElement(Text40, { color: TONE.brand, underline: true }, /* @__PURE__ */ React46.createElement(Inline, { tokens: l.tokens }));
+      return osc8(/* @__PURE__ */ React47.createElement(Inline, { tokens: l.tokens }), l.href, TONE.brand);
     }
     case "image": {
       const im = token;
-      return /* @__PURE__ */ React46.createElement(Text40, { color: TONE.brand }, `[image: ${im.text || im.href}]`);
+      return /* @__PURE__ */ React47.createElement(Text41, { color: TONE.brand }, `[image: ${im.text || im.href}]`);
     }
     case "br":
-      return /* @__PURE__ */ React46.createElement(Text40, null, "\n");
+      return /* @__PURE__ */ React47.createElement(Text41, null, "\n");
     case "escape":
-      return /* @__PURE__ */ React46.createElement(Text40, null, token.text);
+      return /* @__PURE__ */ React47.createElement(Text41, null, token.text);
     case "html":
-      return /* @__PURE__ */ React46.createElement(Text40, null, token.text);
+      return /* @__PURE__ */ React47.createElement(Text41, null, token.text);
     default:
-      return /* @__PURE__ */ React46.createElement(Text40, null, token.raw ?? "");
+      return /* @__PURE__ */ React47.createElement(Text41, null, token.raw ?? "");
   }
 }
 function plainText(tokens) {
@@ -9262,7 +9038,7 @@ function estimateLiveTokenCount(text, cardId, calibration, countFn = countTokens
   };
 }
 function useLiveTokenRate(card, enabled) {
-  const calibrationRef = React47.useRef(null);
+  const calibrationRef = React48.useRef(null);
   if (!enabled) return { tokens: 0, tps: null };
   const estimate = estimateLiveTokenCount(card.text, card.id, calibrationRef.current);
   calibrationRef.current = estimate.calibration;
@@ -9270,7 +9046,7 @@ function useLiveTokenRate(card, enabled) {
 }
 var PILL_RATE = { bg: "#11141a", fg: "#8b949e" };
 function StreamingCard({ card }) {
-  const { stdout } = useStdout13();
+  const { stdout } = useStdout14();
   const cols = stdout?.columns ?? 80;
   const expanded = useContext5(LiveExpandContext);
   const reserveCap = expanded ? EXPANDED_MAX_LINES + 2 : STREAMING_PREVIEW_LINES2 + 2;
@@ -9281,19 +9057,19 @@ function StreamingCard({ card }) {
   useSlowTick();
   const liveRate = useLiveTokenRate(card, !card.done && !card.aborted);
   const modelBadge = card.model ? modelBadgeFor(card.model) : null;
-  const modelPill = modelBadge ? /* @__PURE__ */ React47.createElement(Pill, { label: modelBadge.label, ...PILL_MODEL[modelBadge.kind], bold: false }) : null;
+  const modelPill = modelBadge ? /* @__PURE__ */ React48.createElement(Pill, { label: modelBadge.label, ...PILL_MODEL[modelBadge.kind], bold: false }) : null;
   if (card.done && !card.aborted) {
     const { tokens, tps } = tokenRate(card.text, card.ts, card.endedAt ?? Date.now());
-    const ratePill = tokens >= MIN_TOKENS_FOR_RATE && tps !== null ? /* @__PURE__ */ React47.createElement(Pill, { label: `${formatTokenCount(tokens)} tok \xB7 ${tps} t/s`, ...PILL_RATE, bold: false }) : null;
-    return /* @__PURE__ */ React47.createElement(Card, { tone: TONE.ok }, /* @__PURE__ */ React47.createElement(
+    const ratePill = tokens >= MIN_TOKENS_FOR_RATE && tps !== null ? /* @__PURE__ */ React48.createElement(Pill, { label: `${formatTokenCount(tokens)} tok \xB7 ${tps} t/s`, ...PILL_RATE, bold: false }) : null;
+    return /* @__PURE__ */ React48.createElement(Card, { tone: TONE.ok }, /* @__PURE__ */ React48.createElement(
       CardHeader,
       {
         glyph: "\u2039",
         tone: TONE.ok,
         title: t("cardTitles.reply"),
-        right: /* @__PURE__ */ React47.createElement(React47.Fragment, null, ratePill, modelPill)
+        right: /* @__PURE__ */ React48.createElement(React48.Fragment, null, ratePill, modelPill)
       }
-    ), /* @__PURE__ */ React47.createElement(Markdown, { text: card.text }));
+    ), /* @__PURE__ */ React48.createElement(Markdown, { text: card.text }));
   }
   const lineCells = Math.max(20, cols - 4);
   const allLines = card.text.length > 0 ? card.text.split("\n") : [""];
@@ -9305,24 +9081,24 @@ function StreamingCard({ card }) {
   const headColor = aborted ? TONE.err : TONE_ACTIVE.brand;
   const glyph = aborted ? "\u2039" : "\u25C8";
   const headLabel = aborted ? t("cardLabels.aborted") : t("cardLabels.writing");
-  const liveRatePill = !aborted && liveRate.tokens >= MIN_TOKENS_FOR_RATE && liveRate.tps !== null ? /* @__PURE__ */ React47.createElement(Pill, { label: `${liveRate.tps} t/s`, ...PILL_RATE, bold: false }) : null;
-  const expandPill = !aborted ? /* @__PURE__ */ React47.createElement(Pill, { label: expanded ? "expanded \u2303o" : "preview \u2303o", ...PILL_RATE, bold: false }) : null;
-  return /* @__PURE__ */ React47.createElement(Card, { tone: headColor }, /* @__PURE__ */ React47.createElement(
+  const liveRatePill = !aborted && liveRate.tokens >= MIN_TOKENS_FOR_RATE && liveRate.tps !== null ? /* @__PURE__ */ React48.createElement(Pill, { label: `${liveRate.tps} t/s`, ...PILL_RATE, bold: false }) : null;
+  const expandPill = !aborted ? /* @__PURE__ */ React48.createElement(Pill, { label: expanded ? "expanded \u2303o" : "preview \u2303o", ...PILL_RATE, bold: false }) : null;
+  return /* @__PURE__ */ React48.createElement(Card, { tone: headColor }, /* @__PURE__ */ React48.createElement(
     CardHeader,
     {
       glyph,
       tone: headColor,
       title: headLabel,
-      right: /* @__PURE__ */ React47.createElement(React47.Fragment, null, liveRatePill, expandPill, aborted ? null : /* @__PURE__ */ React47.createElement(Spinner, { kind: "braille", color: TONE_ACTIVE.brand }), modelPill)
+      right: /* @__PURE__ */ React48.createElement(React48.Fragment, null, liveRatePill, expandPill, aborted ? null : /* @__PURE__ */ React48.createElement(Spinner, { kind: "braille", color: TONE_ACTIVE.brand }), modelPill)
     }
-  ), expanded && droppedAbove > 0 ? /* @__PURE__ */ React47.createElement(Text41, { color: FG.faint }, t(droppedAbove === 1 ? "cardLabels.earlierLine" : "cardLabels.earlierLines", {
+  ), expanded && droppedAbove > 0 ? /* @__PURE__ */ React48.createElement(Text42, { color: FG.faint }, t(droppedAbove === 1 ? "cardLabels.earlierLine" : "cardLabels.earlierLines", {
     count: droppedAbove
-  })) : null, visible.map((line, i) => /* @__PURE__ */ React47.createElement(Box40, { key: `${card.id}:${visualLines.length - visible.length + i}`, flexDirection: "row" }, /* @__PURE__ */ React47.createElement(Text41, { color: aborted ? FG.meta : FG.body }, clipToCells(line, lineCells)))), aborted ? /* @__PURE__ */ React47.createElement(Text41, { color: FG.faint }, t("cardLabels.truncatedByEsc")) : null);
+  })) : null, visible.map((line, i) => /* @__PURE__ */ React48.createElement(Box41, { key: `${card.id}:${visualLines.length - visible.length + i}`, flexDirection: "row" }, /* @__PURE__ */ React48.createElement(Text42, { color: aborted ? FG.meta : FG.body }, clipToCells(line, lineCells)))), aborted ? /* @__PURE__ */ React48.createElement(Text42, { color: FG.faint }, t("cardLabels.truncatedByEsc")) : null);
 }
 
 // src/cli/ui/cards/SubAgentCard.tsx
-import { Box as Box41, Text as Text42 } from "ink";
-import React48, { useContext as useContext6 } from "react";
+import { Box as Box42, Text as Text43 } from "ink";
+import React49, { useContext as useContext6 } from "react";
 function SubAgentCard({ card }) {
   const { fg, tone, toneActive } = useThemeTokens();
   const statusColor = {
@@ -9336,7 +9112,7 @@ function SubAgentCard({ card }) {
   const isRunning = card.status === "running";
   const inLive = useContext6(ActiveCardContext);
   const headerMeta2 = isRunning ? runningChildren > 0 ? [`${runningChildren} ${t("cardLabels.runningLabel")}`] : [t("cardLabels.workingLabel")] : [{ text: card.status, color: headColor }];
-  return /* @__PURE__ */ React48.createElement(Card, { tone: headColor }, /* @__PURE__ */ React48.createElement(
+  return /* @__PURE__ */ React49.createElement(Card, { tone: headColor }, /* @__PURE__ */ React49.createElement(
     CardHeader,
     {
       glyph: headGlyph,
@@ -9346,7 +9122,7 @@ function SubAgentCard({ card }) {
       subtitle: card.task,
       meta: headerMeta2
     }
-  ), card.name ? /* @__PURE__ */ React48.createElement(Text42, { color: fg.faint }, `${t("cardLabels.agent")} \xB7 ${card.name}`) : null, card.tools && card.tools.length > 0 && /* @__PURE__ */ React48.createElement(Text42, { color: fg.faint }, `${t("cardLabels.tools")} \xB7 ${card.tools.join(", ")}`), card.children.map((child) => /* @__PURE__ */ React48.createElement(Box41, { key: child.id, flexDirection: "row", gap: 1 }, inLive ? null : /* @__PURE__ */ React48.createElement(Text42, { color: tone.violet }, "\u258E"), /* @__PURE__ */ React48.createElement(ChildRow, { card: child }))));
+  ), card.name ? /* @__PURE__ */ React49.createElement(Text43, { color: fg.faint }, `${t("cardLabels.agent")} \xB7 ${card.name}`) : null, card.tools && card.tools.length > 0 && /* @__PURE__ */ React49.createElement(Text43, { color: fg.faint }, `${t("cardLabels.tools")} \xB7 ${card.tools.join(", ")}`), card.children.map((child) => /* @__PURE__ */ React49.createElement(Box42, { key: child.id, flexDirection: "row", gap: 1 }, inLive ? null : /* @__PURE__ */ React49.createElement(Text43, { color: tone.violet }, "\u258E"), /* @__PURE__ */ React49.createElement(ChildRow, { card: child }))));
 }
 function isChildDone(card) {
   switch (card.kind) {
@@ -9363,16 +9139,16 @@ function ChildRow({ card }) {
   const { fg, tone } = useThemeTokens();
   const v = childVisual(card, tone.ok, tone.err, fg.faint);
   const isDone = isChildDone(card);
-  return /* @__PURE__ */ React48.createElement(React48.Fragment, null, v.statusGlyph, /* @__PURE__ */ React48.createElement(Text42, { color: v.kindColor }, v.kindGlyph), /* @__PURE__ */ React48.createElement(Text42, { dimColor: isDone, color: fg.body }, v.text));
+  return /* @__PURE__ */ React49.createElement(React49.Fragment, null, v.statusGlyph, /* @__PURE__ */ React49.createElement(Text43, { color: v.kindColor }, v.kindGlyph), /* @__PURE__ */ React49.createElement(Text43, { dimColor: isDone, color: fg.body }, v.text));
 }
 function runningGlyph(color) {
-  return /* @__PURE__ */ React48.createElement(Spinner, { kind: "circle", color });
+  return /* @__PURE__ */ React49.createElement(Spinner, { kind: "circle", color });
 }
 function doneGlyph(color) {
-  return /* @__PURE__ */ React48.createElement(Text42, { color }, "\u2713");
+  return /* @__PURE__ */ React49.createElement(Text43, { color }, "\u2713");
 }
 function failedGlyph(color) {
-  return /* @__PURE__ */ React48.createElement(Text42, { color }, "\u2716");
+  return /* @__PURE__ */ React49.createElement(Text43, { color }, "\u2716");
 }
 function childVisual(card, doneColor, failedColor, fallbackColor) {
   switch (card.kind) {
@@ -9417,7 +9193,7 @@ function childVisual(card, doneColor, failedColor, fallbackColor) {
       };
     default:
       return {
-        statusGlyph: /* @__PURE__ */ React48.createElement(Text42, { color: fallbackColor }, "\xB7"),
+        statusGlyph: /* @__PURE__ */ React49.createElement(Text43, { color: fallbackColor }, "\xB7"),
         kindGlyph: "\xB7",
         kindColor: fallbackColor,
         text: card.kind
@@ -9426,8 +9202,8 @@ function childVisual(card, doneColor, failedColor, fallbackColor) {
 }
 
 // src/cli/ui/cards/TaskCard.tsx
-import { Box as Box42, Text as Text43 } from "ink";
-import React49 from "react";
+import { Box as Box43, Text as Text44 } from "ink";
+import React50 from "react";
 var STEP_GLYPH = {
   queued: "\u25CB",
   running: "\u25B6",
@@ -9438,6 +9214,11 @@ var TASK_GLYPH = {
   running: "\u25B6",
   done: "\u2713",
   failed: "\u2717"
+};
+var TASK_PILL = {
+  running: PILL_SECTION.task,
+  done: PILL_SECTION.taskDone,
+  failed: PILL_SECTION.taskFailed
 };
 function TaskCard({ card }) {
   const { fg, tone } = useThemeTokens();
@@ -9452,22 +9233,25 @@ function TaskCard({ card }) {
     done: tone.ok,
     failed: tone.err
   };
+  const pill = TASK_PILL[card.status];
   const elapsed = `${(card.elapsedMs / 1e3).toFixed(1)}s`;
-  return /* @__PURE__ */ React49.createElement(Card, { tone: taskColor[card.status] }, /* @__PURE__ */ React49.createElement(
+  return /* @__PURE__ */ React50.createElement(Card, { tone: taskColor[card.status] }, /* @__PURE__ */ React50.createElement(
     CardHeader,
     {
       glyph: TASK_GLYPH[card.status],
       tone: taskColor[card.status],
-      title: `${t("cardLabels.stepLabel")} ${card.index}/${card.total}`,
-      subtitle: card.title,
+      title: t("cardTitles.task"),
+      titleColor: pill.fg,
+      titleBg: pill.bg,
+      subtitle: `${card.index} / ${card.total}  ${card.title}`,
       meta: [elapsed, card.status]
     }
-  ), card.steps.map((step) => /* @__PURE__ */ React49.createElement(Box42, { key: step.id, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React49.createElement(Text43, { color: stepColor[step.status] }, STEP_GLYPH[step.status]), /* @__PURE__ */ React49.createElement(Text43, { bold: true, color: fg.body }, (step.toolName ?? t("cardLabels.stepLabel")).padEnd(7)), /* @__PURE__ */ React49.createElement(Text43, { color: fg.sub }, step.title), step.detail ? /* @__PURE__ */ React49.createElement(Text43, { color: fg.faint }, step.detail) : null, step.elapsedMs !== void 0 ? /* @__PURE__ */ React49.createElement(Text43, { color: fg.faint }, `${(step.elapsedMs / 1e3).toFixed(2)}s`) : null)));
+  ), card.steps.map((step) => /* @__PURE__ */ React50.createElement(Box43, { key: step.id, flexDirection: "row", gap: 1 }, /* @__PURE__ */ React50.createElement(Text44, { color: stepColor[step.status] }, STEP_GLYPH[step.status]), /* @__PURE__ */ React50.createElement(Text44, { bold: true, color: fg.body }, (step.toolName ?? t("cardLabels.stepLabel")).padEnd(7)), /* @__PURE__ */ React50.createElement(Pill, { label: step.title, ...PILL_PATH, bold: false }), step.detail ? /* @__PURE__ */ React50.createElement(Text44, { color: fg.faint }, step.detail) : null, step.elapsedMs !== void 0 ? /* @__PURE__ */ React50.createElement(Text44, { color: fg.faint }, `${(step.elapsedMs / 1e3).toFixed(2)}s`) : null)));
 }
 
 // src/cli/ui/cards/TipCard.tsx
-import { Box as Box43, Text as Text44 } from "ink";
-import React50 from "react";
+import { Box as Box44, Text as Text45 } from "ink";
+import React51 from "react";
 import stringWidth2 from "string-width";
 var KEY_GUTTER = 4;
 function TipCard({ card }) {
@@ -9475,7 +9259,7 @@ function TipCard({ card }) {
     (max, sec) => sec.rows.reduce((m, r) => Math.max(m, stringWidth2(r.key)), max),
     0
   );
-  return /* @__PURE__ */ React50.createElement(Box43, { flexDirection: "column", paddingLeft: 2, marginY: 1 }, /* @__PURE__ */ React50.createElement(Box43, { flexDirection: "row", justifyContent: "space-between" }, /* @__PURE__ */ React50.createElement(Box43, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React50.createElement(Text44, { color: TONE.accent, bold: true }, "\u24D8"), /* @__PURE__ */ React50.createElement(Text44, { color: FG.body, bold: true }, card.topic)), card.oneTime ? /* @__PURE__ */ React50.createElement(Text44, { color: FG.faint }, t("ui.tipShownOnce")) : null), card.sections.map((section, i) => /* @__PURE__ */ React50.createElement(Box43, { key: section.title ?? `section-${i}`, flexDirection: "column", marginTop: 1 }, section.title ? /* @__PURE__ */ React50.createElement(Box43, { marginBottom: 0 }, /* @__PURE__ */ React50.createElement(Text44, { color: FG.sub }, section.title)) : null, section.rows.map((row2) => /* @__PURE__ */ React50.createElement(
+  return /* @__PURE__ */ React51.createElement(Box44, { flexDirection: "column", paddingLeft: 2, marginY: 1 }, /* @__PURE__ */ React51.createElement(Box44, { flexDirection: "row", justifyContent: "space-between" }, /* @__PURE__ */ React51.createElement(Box44, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React51.createElement(Text45, { color: TONE.accent, bold: true }, "\u24D8"), /* @__PURE__ */ React51.createElement(Text45, { color: FG.body, bold: true }, card.topic)), card.oneTime ? /* @__PURE__ */ React51.createElement(Text45, { color: FG.faint }, t("ui.tipShownOnce")) : null), card.sections.map((section, i) => /* @__PURE__ */ React51.createElement(Box44, { key: section.title ?? `section-${i}`, flexDirection: "column", marginTop: 1 }, section.title ? /* @__PURE__ */ React51.createElement(Box44, { marginBottom: 0 }, /* @__PURE__ */ React51.createElement(Text45, { color: FG.sub }, section.title)) : null, section.rows.map((row2) => /* @__PURE__ */ React51.createElement(
     TipRowRender,
     {
       key: row2.key,
@@ -9483,7 +9267,7 @@ function TipCard({ card }) {
       keyWidth,
       indent: section.title ? 2 : 0
     }
-  )))), card.footer ? /* @__PURE__ */ React50.createElement(Box43, { marginTop: 1 }, /* @__PURE__ */ React50.createElement(Text44, { color: FG.faint }, card.footer)) : null);
+  )))), card.footer ? /* @__PURE__ */ React51.createElement(Box44, { marginTop: 1 }, /* @__PURE__ */ React51.createElement(Text45, { color: FG.faint }, card.footer)) : null);
 }
 function TipRowRender({
   row: row2,
@@ -9492,21 +9276,21 @@ function TipRowRender({
 }) {
   const pad = " ".repeat(Math.max(0, keyWidth - stringWidth2(row2.key) + KEY_GUTTER));
   const lead = indent > 0 ? " ".repeat(indent) : "";
-  return /* @__PURE__ */ React50.createElement(Box43, { flexDirection: "row" }, lead ? /* @__PURE__ */ React50.createElement(Text44, null, lead) : null, /* @__PURE__ */ React50.createElement(Text44, { color: TONE.accent }, row2.key), /* @__PURE__ */ React50.createElement(Text44, null, pad), /* @__PURE__ */ React50.createElement(Text44, { color: FG.body }, row2.text));
+  return /* @__PURE__ */ React51.createElement(Box44, { flexDirection: "row" }, lead ? /* @__PURE__ */ React51.createElement(Text45, null, lead) : null, /* @__PURE__ */ React51.createElement(Text45, { color: TONE.accent }, row2.key), /* @__PURE__ */ React51.createElement(Text45, null, pad), /* @__PURE__ */ React51.createElement(Text45, { color: FG.body }, row2.text));
 }
 
 // src/cli/ui/cards/ToolCard.tsx
-import { Text as Text45, useStdout as useStdout14 } from "ink";
-import React52 from "react";
+import { Text as Text46, useStdout as useStdout15 } from "ink";
+import React53 from "react";
 
 // src/cli/ui/state/inflight-context.tsx
-import React51, { createContext as createContext4, useContext as useContext7, useSyncExternalStore } from "react";
+import React52, { createContext as createContext4, useContext as useContext7, useSyncExternalStore } from "react";
 var Ctx = createContext4(null);
 function InflightProvider({
   inflight,
   children
 }) {
-  return /* @__PURE__ */ React51.createElement(Ctx.Provider, { value: inflight }, children);
+  return /* @__PURE__ */ React52.createElement(Ctx.Provider, { value: inflight }, children);
 }
 function useIsInflight(id) {
   const inflight = useContext7(Ctx);
@@ -9527,11 +9311,11 @@ function tailLinesFor(name) {
   return /(?:^|_)(read|search|list|tree|get|status|diff|fetch|grep)(_|$)/.test(lower) || lower === "job_output" ? READ_TAIL : OTHER_TAIL;
 }
 function ToolCard({ card }) {
-  const { stdout } = useStdout14();
+  const { stdout } = useStdout15();
   const cols = stdout?.columns ?? 80;
   const lineCells = Math.max(20, cols - 4);
   const argsLabel = formatArgsSummary(card.args);
-  const subagentMarkdown = React52.useMemo(
+  const subagentMarkdown = React53.useMemo(
     () => unwrapSubagentMarkdown(card.name, card.output),
     [card.name, card.output]
   );
@@ -9553,7 +9337,7 @@ function ToolCard({ card }) {
     meta.push({ text: t("cardLabels.rejected"), color: TONE.err });
   }
   for (const part of metaTrail(card)) meta.push(part);
-  return /* @__PURE__ */ React52.createElement(Card, { tone: headColor }, /* @__PURE__ */ React52.createElement(
+  return /* @__PURE__ */ React53.createElement(Card, { tone: headColor }, /* @__PURE__ */ React53.createElement(
     CardHeader,
     {
       glyph: statusGlyph2(status2),
@@ -9561,12 +9345,12 @@ function ToolCard({ card }) {
       title: card.name,
       subtitle: argsLabel || void 0,
       meta: meta.length > 0 ? meta : void 0,
-      right: status2 === "running" ? /* @__PURE__ */ React52.createElement(Spinner, { kind: "braille", color: TONE_ACTIVE.brand, bold: true }) : void 0
+      right: status2 === "running" ? /* @__PURE__ */ React53.createElement(Spinner, { kind: "braille", color: TONE_ACTIVE.brand, bold: true }) : void 0
     }
-  ), showBody && (subagentMarkdown !== null ? /* @__PURE__ */ React52.createElement(Markdown, { text: subagentMarkdown, width: lineCells }) : /* @__PURE__ */ React52.createElement(React52.Fragment, null, hidden > 0 ? /* @__PURE__ */ React52.createElement(Text45, { color: FG.faint }, t(hidden === 1 ? "cardLabels.earlierLine" : "cardLabels.earlierLines", {
+  ), showBody && (subagentMarkdown !== null ? /* @__PURE__ */ React53.createElement(Markdown, { text: subagentMarkdown, width: lineCells }) : /* @__PURE__ */ React53.createElement(React53.Fragment, null, hidden > 0 ? /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, t(hidden === 1 ? "cardLabels.earlierLine" : "cardLabels.earlierLines", {
     count: hidden
-  })) : null, visible.map((line, i) => /* @__PURE__ */ React52.createElement(
-    Text45,
+  })) : null, visible.map((line, i) => /* @__PURE__ */ React53.createElement(
+    Text46,
     {
       key: `${card.id}:${hidden + i}`,
       color: errColor,
@@ -9667,8 +9451,8 @@ function formatBytes(n) {
 }
 
 // src/cli/ui/cards/UsageCard.tsx
-import { Box as Box45, Text as Text46 } from "ink";
-import React53 from "react";
+import { Box as Box46, Text as Text47 } from "ink";
+import React54 from "react";
 var BAR_CELLS2 = 30;
 function compactNum(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -9678,10 +9462,10 @@ function compactNum(n) {
 function bar(ratio, color) {
   const filled = Math.max(0, Math.min(BAR_CELLS2, Math.round(ratio * BAR_CELLS2)));
   const empty = BAR_CELLS2 - filled;
-  return /* @__PURE__ */ React53.createElement(React53.Fragment, null, /* @__PURE__ */ React53.createElement(Text46, { color }, "\u2588".repeat(filled)), /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, "\u2591".repeat(empty)));
+  return /* @__PURE__ */ React54.createElement(React54.Fragment, null, /* @__PURE__ */ React54.createElement(Text47, { color }, "\u2588".repeat(filled)), /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, "\u2591".repeat(empty)));
 }
 function UsageCard({ card }) {
-  if (card.compact) return /* @__PURE__ */ React53.createElement(CompactUsageRow, { card });
+  if (card.compact) return /* @__PURE__ */ React54.createElement(CompactUsageRow, { card });
   const cap = Math.max(1, card.tokens.promptCap);
   const promptRatio = card.tokens.prompt / cap;
   const reasonRatio = card.tokens.reason / cap;
@@ -9691,16 +9475,16 @@ function UsageCard({ card }) {
     formatCost(card.cost, card.balanceCurrency)
   ];
   if (card.elapsedMs !== void 0) headerMeta2.push(`${(card.elapsedMs / 1e3).toFixed(1)}s`);
-  return /* @__PURE__ */ React53.createElement(Card, { tone: FG.meta }, /* @__PURE__ */ React53.createElement(CardHeader, { glyph: "\u03A3", tone: FG.meta, title: t("cardTitles.usage"), meta: headerMeta2 }), /* @__PURE__ */ React53.createElement(Box45, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React53.createElement(Text46, { color: FG.sub }, t("cardLabels.prompt")), bar(promptRatio, TONE.brand), /* @__PURE__ */ React53.createElement(Text46, { bold: true, color: FG.body }, card.tokens.prompt.toLocaleString()), /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, `/ 1M \xB7 ${(promptRatio * 100).toFixed(1)}%`)), /* @__PURE__ */ React53.createElement(Box45, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React53.createElement(Text46, { color: FG.sub }, t("cardLabels.reason")), bar(reasonRatio, TONE.accent), /* @__PURE__ */ React53.createElement(Text46, { bold: true, color: FG.body }, card.tokens.reason.toLocaleString())), /* @__PURE__ */ React53.createElement(Box45, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React53.createElement(Text46, { color: FG.sub }, t("cardLabels.output")), bar(outputRatio, TONE.brand), /* @__PURE__ */ React53.createElement(Text46, { bold: true, color: FG.body }, card.tokens.output.toLocaleString())), /* @__PURE__ */ React53.createElement(Box45, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React53.createElement(Text46, { color: FG.sub }, t("cardLabels.cache"), " "), bar(card.cacheHit, TONE.ok), /* @__PURE__ */ React53.createElement(Text46, { bold: true, color: TONE.ok }, `${(card.cacheHit * 100).toFixed(1)}%`)), /* @__PURE__ */ React53.createElement(Box45, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, t("cardLabels.session")), /* @__PURE__ */ React53.createElement(Text46, { bold: true, color: FG.body }, `\u26C1 ${formatCost(card.sessionCost, card.balanceCurrency, 3)}`), card.balance !== void 0 ? /* @__PURE__ */ React53.createElement(React53.Fragment, null, /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, `\xB7 ${t("cardLabels.balance")}`), /* @__PURE__ */ React53.createElement(Text46, { bold: true, color: TONE.brand }, formatBalance(card.balance, card.balanceCurrency))) : null));
+  return /* @__PURE__ */ React54.createElement(Card, { tone: FG.meta }, /* @__PURE__ */ React54.createElement(CardHeader, { glyph: "\u03A3", tone: FG.meta, title: t("cardTitles.usage"), meta: headerMeta2 }), /* @__PURE__ */ React54.createElement(Box46, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React54.createElement(Text47, { color: FG.sub }, t("cardLabels.prompt")), bar(promptRatio, TONE.brand), /* @__PURE__ */ React54.createElement(Text47, { bold: true, color: FG.body }, card.tokens.prompt.toLocaleString()), /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, `/ 1M \xB7 ${(promptRatio * 100).toFixed(1)}%`)), /* @__PURE__ */ React54.createElement(Box46, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React54.createElement(Text47, { color: FG.sub }, t("cardLabels.reason")), bar(reasonRatio, TONE.accent), /* @__PURE__ */ React54.createElement(Text47, { bold: true, color: FG.body }, card.tokens.reason.toLocaleString())), /* @__PURE__ */ React54.createElement(Box46, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React54.createElement(Text47, { color: FG.sub }, t("cardLabels.output")), bar(outputRatio, TONE.brand), /* @__PURE__ */ React54.createElement(Text47, { bold: true, color: FG.body }, card.tokens.output.toLocaleString())), /* @__PURE__ */ React54.createElement(Box46, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React54.createElement(Text47, { color: FG.sub }, t("cardLabels.cache"), " "), bar(card.cacheHit, TONE.ok), /* @__PURE__ */ React54.createElement(Text47, { bold: true, color: TONE.ok }, `${(card.cacheHit * 100).toFixed(1)}%`)), /* @__PURE__ */ React54.createElement(Box46, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, t("cardLabels.session")), /* @__PURE__ */ React54.createElement(Text47, { bold: true, color: FG.body }, `\u26C1 ${formatCost(card.sessionCost, card.balanceCurrency, 3)}`), card.balance !== void 0 ? /* @__PURE__ */ React54.createElement(React54.Fragment, null, /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, `\xB7 ${t("cardLabels.balance")}`), /* @__PURE__ */ React54.createElement(Text47, { bold: true, color: TONE.brand }, formatBalance(card.balance, card.balanceCurrency))) : null));
 }
 function CompactUsageRow({ card }) {
   const elapsed = card.elapsedMs !== void 0 ? ` \xB7 ${(card.elapsedMs / 1e3).toFixed(1)}s` : "";
-  return /* @__PURE__ */ React53.createElement(Box45, { flexDirection: "row", gap: 1, marginTop: 1 }, /* @__PURE__ */ React53.createElement(Text46, { color: FG.meta }, "\u03A3"), /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, `${t("cardLabels.turn")} ${card.turn}`), /* @__PURE__ */ React53.createElement(Text46, { color: FG.meta }, `\xB7 ${compactNum(card.tokens.prompt)} ${t("cardLabels.prompt")} \xB7 ${compactNum(card.tokens.output)} ${t("cardLabels.output")}`), /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, `\xB7 ${t("cardLabels.cache")}`), /* @__PURE__ */ React53.createElement(Text46, { color: TONE.ok }, `${(card.cacheHit * 100).toFixed(0)}%`), /* @__PURE__ */ React53.createElement(Text46, { color: FG.faint }, `\xB7 ${formatCost(card.cost, card.balanceCurrency)}${elapsed}`), card.balance !== void 0 ? /* @__PURE__ */ React53.createElement(Text46, { color: TONE.brand }, `\xB7 ${formatBalance(card.balance, card.balanceCurrency)}`) : null);
+  return /* @__PURE__ */ React54.createElement(Box46, { flexDirection: "row", gap: 1, marginTop: 1 }, /* @__PURE__ */ React54.createElement(Text47, { color: FG.meta }, "\u03A3"), /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, `${t("cardLabels.turn")} ${card.turn}`), /* @__PURE__ */ React54.createElement(Text47, { color: FG.meta }, `\xB7 ${compactNum(card.tokens.prompt)} ${t("cardLabels.prompt")} \xB7 ${compactNum(card.tokens.output)} ${t("cardLabels.output")}`), /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, `\xB7 ${t("cardLabels.cache")}`), /* @__PURE__ */ React54.createElement(Text47, { color: TONE.ok }, `${(card.cacheHit * 100).toFixed(0)}%`), /* @__PURE__ */ React54.createElement(Text47, { color: FG.faint }, `\xB7 ${formatCost(card.cost, card.balanceCurrency)}${elapsed}`), card.balance !== void 0 ? /* @__PURE__ */ React54.createElement(Text47, { color: TONE.brand }, `\xB7 ${formatBalance(card.balance, card.balanceCurrency)}`) : null);
 }
 
 // src/cli/ui/cards/UserCard.tsx
-import { Text as Text47 } from "ink";
-import React54 from "react";
+import { Box as Box47, Text as Text48 } from "ink";
+import React55 from "react";
 
 // src/cli/ui/cards/time.ts
 function formatRelativeTime(ts, now = Date.now()) {
@@ -9717,24 +9501,25 @@ function formatRelativeTime(ts, now = Date.now()) {
 
 // src/cli/ui/cards/UserCard.tsx
 function UserCard({ card }) {
-  return /* @__PURE__ */ React54.createElement(Card, { tone: TONE.accent }, /* @__PURE__ */ React54.createElement(
+  return /* @__PURE__ */ React55.createElement(Card, { tone: CARD.user.color }, /* @__PURE__ */ React55.createElement(
     CardHeader,
     {
-      glyph: "\u203A",
-      tone: TONE.accent,
+      glyph: CARD.user.glyph,
+      tone: CARD.user.color,
       title: t("cardTitles.you"),
-      titleColor: FG.sub,
+      titleColor: PILL_SECTION.user.fg,
+      titleBg: PILL_SECTION.user.bg,
       meta: [formatRelativeTime(card.ts)]
     }
-  ), /* @__PURE__ */ React54.createElement(Text47, null, card.text));
+  ), /* @__PURE__ */ React55.createElement(Box47, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ React55.createElement(Text48, { color: FG.sub }, "\u21B3"), /* @__PURE__ */ React55.createElement(Text48, null, card.text)));
 }
 
 // src/cli/ui/cards/WarnCard.tsx
-import { Text as Text48 } from "ink";
-import React55 from "react";
+import { Text as Text49 } from "ink";
+import React56 from "react";
 function WarnCard({ card }) {
   const messageLines = card.message.length > 0 ? card.message.split("\n") : [];
-  return /* @__PURE__ */ React55.createElement(Card, { tone: TONE.warn }, /* @__PURE__ */ React55.createElement(
+  return /* @__PURE__ */ React56.createElement(Card, { tone: TONE.warn }, /* @__PURE__ */ React56.createElement(
     CardHeader,
     {
       glyph: "\u26A0",
@@ -9742,61 +9527,61 @@ function WarnCard({ card }) {
       title: card.title,
       meta: card.detail ? [card.detail] : void 0
     }
-  ), messageLines.map((line, i) => /* @__PURE__ */ React55.createElement(Text48, { key: `${card.id}:${i}`, color: FG.body }, line || " ")));
+  ), messageLines.map((line, i) => /* @__PURE__ */ React56.createElement(Text49, { key: `${card.id}:${i}`, color: FG.body }, line || " ")));
 }
 
 // src/cli/ui/cards/CardRenderer.tsx
-var CardRenderer = React56.memo(function CardRenderer2({
+var CardRenderer = React57.memo(function CardRenderer2({
   card
 }) {
-  return /* @__PURE__ */ React56.createElement(Box46, { flexDirection: "column" }, renderCard(card));
+  return /* @__PURE__ */ React57.createElement(Box48, { flexDirection: "column" }, renderCard(card));
 });
 function renderCard(card) {
   switch (card.kind) {
     case "user":
-      return /* @__PURE__ */ React56.createElement(UserCard, { card });
+      return /* @__PURE__ */ React57.createElement(UserCard, { card });
     case "reasoning":
-      return /* @__PURE__ */ React56.createElement(ReasoningCard, { card, expanded: true });
+      return /* @__PURE__ */ React57.createElement(ReasoningCard, { card, expanded: true });
     case "streaming":
-      return /* @__PURE__ */ React56.createElement(StreamingCard, { card });
+      return /* @__PURE__ */ React57.createElement(StreamingCard, { card });
     case "tool":
-      return /* @__PURE__ */ React56.createElement(ToolCard, { card });
+      return /* @__PURE__ */ React57.createElement(ToolCard, { card });
     case "task":
-      return /* @__PURE__ */ React56.createElement(TaskCard, { card });
+      return /* @__PURE__ */ React57.createElement(TaskCard, { card });
     case "plan":
-      return /* @__PURE__ */ React56.createElement(PlanCard, { card });
+      return /* @__PURE__ */ React57.createElement(PlanCard, { card });
     case "diff":
-      return /* @__PURE__ */ React56.createElement(DiffCard, { card });
+      return /* @__PURE__ */ React57.createElement(DiffCard, { card });
     case "error":
-      return /* @__PURE__ */ React56.createElement(ErrorCard, { card });
+      return /* @__PURE__ */ React57.createElement(ErrorCard, { card });
     case "warn":
-      return /* @__PURE__ */ React56.createElement(WarnCard, { card });
+      return /* @__PURE__ */ React57.createElement(WarnCard, { card });
     case "usage":
-      return /* @__PURE__ */ React56.createElement(UsageCard, { card });
+      return /* @__PURE__ */ React57.createElement(UsageCard, { card });
     case "memory":
-      return /* @__PURE__ */ React56.createElement(MemoryCard, { card });
+      return /* @__PURE__ */ React57.createElement(MemoryCard, { card });
     case "subagent":
-      return /* @__PURE__ */ React56.createElement(SubAgentCard, { card });
+      return /* @__PURE__ */ React57.createElement(SubAgentCard, { card });
     case "search":
-      return /* @__PURE__ */ React56.createElement(SearchCard, { card });
+      return /* @__PURE__ */ React57.createElement(SearchCard, { card });
     case "live":
-      return /* @__PURE__ */ React56.createElement(LiveCard, { card });
+      return /* @__PURE__ */ React57.createElement(LiveCard, { card });
     case "tip":
-      return /* @__PURE__ */ React56.createElement(TipCard, { card });
+      return /* @__PURE__ */ React57.createElement(TipCard, { card });
     case "ctx":
-      return /* @__PURE__ */ React56.createElement(CtxCard, { card });
+      return /* @__PURE__ */ React57.createElement(CtxCard, { card });
     case "doctor":
-      return /* @__PURE__ */ React56.createElement(DoctorCard, { card });
+      return /* @__PURE__ */ React57.createElement(DoctorCard, { card });
     default:
-      return /* @__PURE__ */ React56.createElement(FallbackCard, { card });
+      return /* @__PURE__ */ React57.createElement(FallbackCard, { card });
   }
 }
 function FallbackCard({ card }) {
-  return /* @__PURE__ */ React56.createElement(Box46, { flexDirection: "row" }, /* @__PURE__ */ React56.createElement(Text49, { color: FG.faint }, `  \xB7 ${card.kind} card \xB7 not yet migrated`));
+  return /* @__PURE__ */ React57.createElement(Box48, { flexDirection: "row" }, /* @__PURE__ */ React57.createElement(Text50, { color: FG.faint }, `  \xB7 ${card.kind} card \xB7 not yet migrated`));
 }
 
 // src/cli/ui/state/chat-scroll-provider.tsx
-import React57 from "react";
+import React58 from "react";
 
 // src/cli/ui/state/chat-scroll-store.ts
 var SCROLL_ARROW_ROWS = 3;
@@ -9815,6 +9600,8 @@ function createChatScrollStore() {
   const listeners = /* @__PURE__ */ new Set();
   let pendingDelta = 0;
   let flushTimer = null;
+  let pendingMaxShrink = null;
+  let shrinkTimer = null;
   function set(next) {
     const merged = { ...state, ...next };
     if (merged.scrollRows === state.scrollRows && merged.pinned === state.pinned && merged.maxScroll === state.maxScroll && merged.scrollVersion === state.scrollVersion && merged.cardHeights === state.cardHeights) {
@@ -9846,6 +9633,17 @@ function createChatScrollStore() {
       pendingDelta += delta;
     }
   }
+  function flushShrink() {
+    if (shrinkTimer !== null) {
+      clearTimeout(shrinkTimer);
+      shrinkTimer = null;
+    }
+    const target = pendingMaxShrink;
+    pendingMaxShrink = null;
+    if (target === null) return;
+    const nextScrollRows = state.pinned ? target : Math.min(state.scrollRows, target);
+    set({ maxScroll: target, scrollRows: nextScrollRows });
+  }
   return {
     getState() {
       return state;
@@ -9866,10 +9664,27 @@ function createChatScrollStore() {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
+      pendingMaxShrink = null;
+      if (shrinkTimer !== null) {
+        clearTimeout(shrinkTimer);
+        shrinkTimer = null;
+      }
       set({ pinned: true });
     },
     setMaxScroll(rows) {
       const m = rows < 0 ? 0 : rows;
+      const currentMax = pendingMaxShrink ?? state.maxScroll;
+      if (state.pinned && m < currentMax) {
+        pendingMaxShrink = m;
+        if (shrinkTimer === null) {
+          shrinkTimer = setTimeout(() => {
+            shrinkTimer = null;
+            flushShrink();
+          }, COALESCE_MS);
+        }
+        return;
+      }
+      if (pendingMaxShrink !== null) flushShrink();
       const nextScrollRows = state.pinned ? m : Math.min(state.scrollRows, m);
       set({ maxScroll: m, scrollRows: nextScrollRows });
     },
@@ -9895,23 +9710,23 @@ function createChatScrollStore() {
 }
 
 // src/cli/ui/state/chat-scroll-provider.tsx
-var Ctx2 = React57.createContext(null);
+var Ctx2 = React58.createContext(null);
 function ChatScrollProvider({
   children
 }) {
-  const store = React57.useMemo(() => createChatScrollStore(), []);
-  return /* @__PURE__ */ React57.createElement(Ctx2.Provider, { value: store }, children);
+  const store = React58.useMemo(() => createChatScrollStore(), []);
+  return /* @__PURE__ */ React58.createElement(Ctx2.Provider, { value: store }, children);
 }
 function useStore() {
-  const s = React57.useContext(Ctx2);
+  const s = React58.useContext(Ctx2);
   if (!s) throw new Error("useChatScroll* must be used inside ChatScrollProvider");
   return s;
 }
 function useChatScrollState(selector) {
   const store = useStore();
-  const subscribe = React57.useCallback((cb) => store.subscribe(cb), [store]);
-  const getSnapshot = React57.useCallback(() => selector(store.getState()), [store, selector]);
-  return React57.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const subscribe = React58.useCallback((cb) => store.subscribe(cb), [store]);
+  const getSnapshot = React58.useCallback(() => selector(store.getState()), [store, selector]);
+  return React58.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 function useChatScrollActions() {
   return useStore();
@@ -9919,6 +9734,34 @@ function useChatScrollActions() {
 
 // src/cli/ui/layout/CardStream.tsx
 var VISIBLE_BUFFER_ROWS = 30;
+function computeCardStreamItems(cards, cardHeights, scrollRows, outerHeight) {
+  const bucket = Math.floor(scrollRows / VISIBLE_BUFFER_ROWS) * VISIBLE_BUFFER_ROWS;
+  const winStart = Math.max(0, bucket - VISIBLE_BUFFER_ROWS);
+  const winEnd = bucket + outerHeight + VISIBLE_BUFFER_ROWS * 2;
+  const out = [];
+  let cursor = 0;
+  let pendingSpacer = 0;
+  let spacerKey = 0;
+  for (const card of cards) {
+    const h = cardHeights.get(card.id);
+    const cardEnd = cursor + (h ?? 0);
+    const live = h === void 0 || cardEnd >= winStart && cursor <= winEnd;
+    if (live) {
+      if (pendingSpacer > 0) {
+        out.push({ kind: "spacer", rows: pendingSpacer, key: `sp-${spacerKey++}` });
+        pendingSpacer = 0;
+      }
+      out.push({ kind: "card", card });
+    } else {
+      pendingSpacer += h ?? 0;
+    }
+    cursor = cardEnd;
+  }
+  if (pendingSpacer > 0) {
+    out.push({ kind: "spacer", rows: pendingSpacer, key: `sp-${spacerKey}` });
+  }
+  return out;
+}
 function CardStream({
   suppressLive = false
 }) {
@@ -9943,35 +9786,12 @@ function CardStream({
   if (suppressLive && cards.length > 0 && !isFullySettled(cards[cards.length - 1])) {
     visible = cards.slice(0, -1);
   }
-  const items = useMemo9(() => {
-    const winStart = Math.max(0, scrollRows - VISIBLE_BUFFER_ROWS);
-    const winEnd = scrollRows + outer.height + VISIBLE_BUFFER_ROWS;
-    const out = [];
-    let cursor = 0;
-    let pendingSpacer = 0;
-    let spacerKey = 0;
-    for (const card of visible) {
-      const h = cardHeights.get(card.id);
-      const cardEnd = cursor + (h ?? 0);
-      const live = h === void 0 || cardEnd >= winStart && cursor <= winEnd;
-      if (live) {
-        if (pendingSpacer > 0) {
-          out.push({ kind: "spacer", rows: pendingSpacer, key: `sp-${spacerKey++}` });
-          pendingSpacer = 0;
-        }
-        out.push({ kind: "card", card });
-      } else {
-        pendingSpacer += h ?? 0;
-      }
-      cursor = cardEnd;
-    }
-    if (pendingSpacer > 0) {
-      out.push({ kind: "spacer", rows: pendingSpacer, key: `sp-${spacerKey}` });
-    }
-    return out;
-  }, [visible, cardHeights, scrollRows, outer.height]);
-  return /* @__PURE__ */ React58.createElement(React58.Fragment, null, /* @__PURE__ */ React58.createElement(Box47, { height: 1, flexShrink: 0 }, scrollRows > 0 ? /* @__PURE__ */ React58.createElement(ScrollIndicator, { scrollRows, maxScroll }) : null), /* @__PURE__ */ React58.createElement(Box47, { ref: outerRef, flexDirection: "column", flexGrow: 1, overflow: "hidden" }, /* @__PURE__ */ React58.createElement(Box47, { ref: innerRef, flexDirection: "column", marginTop: -scrollRows, flexShrink: 0 }, items.map(
-    (item) => item.kind === "spacer" ? /* @__PURE__ */ React58.createElement(Box47, { key: item.key, height: item.rows, flexShrink: 0 }) : /* @__PURE__ */ React58.createElement(MeasuredCard, { key: item.card.id, card: item.card, report: setCardHeight })
+  const items = useMemo10(
+    () => computeCardStreamItems(visible, cardHeights, scrollRows, outer.height),
+    [visible, cardHeights, scrollRows, outer.height]
+  );
+  return /* @__PURE__ */ React59.createElement(React59.Fragment, null, /* @__PURE__ */ React59.createElement(Box49, { height: 1, flexShrink: 0 }, scrollRows > 0 ? /* @__PURE__ */ React59.createElement(ScrollIndicator, { scrollRows, maxScroll }) : null), /* @__PURE__ */ React59.createElement(Box49, { ref: outerRef, flexDirection: "column", flexGrow: 1, overflow: "hidden" }, /* @__PURE__ */ React59.createElement(Box49, { ref: innerRef, flexDirection: "column", marginTop: -scrollRows, flexShrink: 0 }, items.map(
+    (item) => item.kind === "spacer" ? /* @__PURE__ */ React59.createElement(Box49, { key: item.key, height: item.rows, flexShrink: 0 }) : /* @__PURE__ */ React59.createElement(MeasuredCard, { key: item.card.id, card: item.card, report: setCardHeight })
   ))));
 }
 function MeasuredCard({
@@ -9983,15 +9803,15 @@ function MeasuredCard({
   useEffect12(() => {
     if (m.height > 0) report(card.id, m.height);
   }, [card.id, m.height, report]);
-  return /* @__PURE__ */ React58.createElement(Box47, { ref, flexDirection: "column", flexShrink: 0 }, /* @__PURE__ */ React58.createElement(CardRenderer, { card }));
+  return /* @__PURE__ */ React59.createElement(Box49, { ref, flexDirection: "column", flexShrink: 0 }, /* @__PURE__ */ React59.createElement(CardRenderer, { card }));
 }
 function ScrollIndicator({
   scrollRows,
   maxScroll
 }) {
   const version = useChatScrollState((s) => s.scrollVersion);
-  const [hot, setHot] = React58.useState(false);
-  React58.useEffect(() => {
+  const [hot, setHot] = React59.useState(false);
+  React59.useEffect(() => {
     if (version === 0) return;
     setHot(true);
     const id = setTimeout(() => setHot(false), 220);
@@ -10001,7 +9821,7 @@ function ScrollIndicator({
   const above = scrollRows === 1 ? t("cardStream.scrollAbove", { scroll: scrollRows, max: maxScroll }) : t("cardStream.scrollAbovePlural", { scroll: scrollRows, max: maxScroll });
   const more = remaining > 0 ? t("cardStream.scrollMore", { remaining }) : "";
   const text = `${above}${more}${t("cardStream.scrollPgUp")}`;
-  return /* @__PURE__ */ React58.createElement(Text50, { color: hot ? TONE.accent : FG.faint }, text);
+  return /* @__PURE__ */ React59.createElement(Text51, { color: hot ? TONE.accent : FG.faint }, text);
 }
 function isFullySettled(card) {
   switch (card.kind) {
@@ -10021,13 +9841,13 @@ function isFullySettled(card) {
 }
 
 // src/cli/ui/layout/LiveRows.tsx
-import { Box as Box48, Text as Text51 } from "ink";
-import React59 from "react";
+import { Box as Box50, Text as Text52 } from "ink";
+import React60 from "react";
 var SPINNER_FRAMES = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
 function ThinkingRow({ text }) {
   const elapsed = useElapsedSeconds();
   const { fg, tone } = useThemeTokens();
-  return /* @__PURE__ */ React59.createElement(Box48, { marginY: 1, paddingX: 1, gap: 1 }, /* @__PURE__ */ React59.createElement(Spinner, { kind: "circle", color: TONE.accent }), /* @__PURE__ */ React59.createElement(Text51, { italic: true, color: FG.sub }, text), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, `${elapsed}s`));
+  return /* @__PURE__ */ React60.createElement(Box50, { marginY: 1, paddingX: 1, gap: 1 }, /* @__PURE__ */ React60.createElement(Spinner, { kind: "circle", color: TONE.accent }), /* @__PURE__ */ React60.createElement(Text52, { italic: true, color: FG.sub }, text), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, `${elapsed}s`));
 }
 function ModeStatusBar({
   editMode,
@@ -10039,24 +9859,24 @@ function ModeStatusBar({
 }) {
   useSlowTick();
   const running = jobs2?.runningCount() ?? 0;
-  const jobsTag = running > 0 ? /* @__PURE__ */ React59.createElement(Text51, { color: TONE.warn, bold: true }, `  \xB7  \u23F5 ${running} job${running === 1 ? "" : "s"}`) : null;
+  const jobsTag = running > 0 ? /* @__PURE__ */ React60.createElement(Text52, { color: TONE.warn, bold: true }, `  \xB7  \u23F5 ${running} job${running === 1 ? "" : "s"}`) : null;
   if (planMode) {
-    return /* @__PURE__ */ React59.createElement(ModeBarFrame, null, /* @__PURE__ */ React59.createElement(ModePill, { label: t("editMode.plan"), color: TONE.err, flash }), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, t("editMode.writesGated")), jobsTag);
+    return /* @__PURE__ */ React60.createElement(ModeBarFrame, null, /* @__PURE__ */ React60.createElement(ModePill, { label: t("editMode.plan"), color: TONE.err, flash }), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, t("editMode.writesGated")), jobsTag);
   }
   const label = editMode === "yolo" ? t("editMode.yolo") : editMode === "auto" ? t("editMode.auto") : t("editMode.review");
   const pillColor = editMode === "yolo" ? TONE.err : editMode === "auto" ? TONE.accent : TONE.brand;
   const mid = editMode === "yolo" ? t("editMode.editsShellAuto") : editMode === "auto" ? t("editMode.editsLandNow") : pendingCount > 0 ? t("editMode.queuedApplyDiscard", { count: pendingCount }) : t("editMode.editsQueued");
-  return /* @__PURE__ */ React59.createElement(ModeBarFrame, null, /* @__PURE__ */ React59.createElement(ModePill, { label, color: pillColor, flash }), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, t("editMode.shiftTabFlip", { mid })), jobsTag);
+  return /* @__PURE__ */ React60.createElement(ModeBarFrame, null, /* @__PURE__ */ React60.createElement(ModePill, { label, color: pillColor, flash }), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, t("editMode.shiftTabFlip", { mid })), jobsTag);
 }
 function ModeBarFrame({ children }) {
-  return /* @__PURE__ */ React59.createElement(Box48, { paddingX: 1 }, children);
+  return /* @__PURE__ */ React60.createElement(Box50, { paddingX: 1 }, children);
 }
 function ModePill({
   label,
   color,
   flash
 }) {
-  return /* @__PURE__ */ React59.createElement(Text51, { color, bold: true, inverse: flash }, `[${label}]`);
+  return /* @__PURE__ */ React60.createElement(Text52, { color, bold: true, inverse: flash }, `[${label}]`);
 }
 function UndoBanner({
   banner
@@ -10071,7 +9891,7 @@ function UndoBanner({
   const urgent = !paused && remainingSec <= 1;
   const pct = remainingMs / totalMs * 100;
   const tone = paused ? TONE.warn : urgent ? TONE.err : TONE.accent;
-  return /* @__PURE__ */ React59.createElement(Box48, { marginY: 1, paddingX: 1 }, /* @__PURE__ */ React59.createElement(Text51, { backgroundColor: TONE.accent, color: "black", bold: true }, ` \u2713 AUTO-APPLIED ${ok}/${total} `), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, "   press "), /* @__PURE__ */ React59.createElement(Text51, { backgroundColor: TONE.brand, color: "black", bold: true }, " u "), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, paused ? " to undo \xB7 " : " to undo \xB7 "), /* @__PURE__ */ React59.createElement(Text51, { backgroundColor: paused ? TONE.warn : FG.faint, color: "black", bold: true }, " space "), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, paused ? " to resume  " : " to pause  "), /* @__PURE__ */ React59.createElement(CharBar, { pct, width: 20, color: tone, showLabel: false }), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, "  "), /* @__PURE__ */ React59.createElement(Text51, { color: tone, bold: urgent || paused }, paused ? `${remainingSec}s \xB7 paused` : `${remainingSec}s`));
+  return /* @__PURE__ */ React60.createElement(Box50, { marginY: 1, paddingX: 1 }, /* @__PURE__ */ React60.createElement(Text52, { backgroundColor: TONE.accent, color: "black", bold: true }, ` \u2713 AUTO-APPLIED ${ok}/${total} `), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, "   press "), /* @__PURE__ */ React60.createElement(Text52, { backgroundColor: TONE.brand, color: "black", bold: true }, " u "), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, paused ? " to undo \xB7 " : " to undo \xB7 "), /* @__PURE__ */ React60.createElement(Text52, { backgroundColor: paused ? TONE.warn : FG.faint, color: "black", bold: true }, " space "), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, paused ? " to resume  " : " to pause  "), /* @__PURE__ */ React60.createElement(CharBar, { pct, width: 20, color: tone, showLabel: false }), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, "  "), /* @__PURE__ */ React60.createElement(Text52, { color: tone, bold: urgent || paused }, paused ? `${remainingSec}s \xB7 paused` : `${remainingSec}s`));
 }
 function subagentPhaseLabel(phase, iter, elapsedMs) {
   if (phase === "summarising") return "summarising findings\u2026";
@@ -10086,7 +9906,7 @@ function SubagentRow({ activity }) {
   const last = activity.lastInner;
   const subtitle = activity.skillName ?? truncate2(activity.task, 48);
   const modelBadge = activity.model ? modelBadgeFor(activity.model) : null;
-  return /* @__PURE__ */ React59.createElement(Card, { tone: CARD.subagent.color }, /* @__PURE__ */ React59.createElement(
+  return /* @__PURE__ */ React60.createElement(Card, { tone: CARD.subagent.color }, /* @__PURE__ */ React60.createElement(
     CardHeader,
     {
       glyph: "\u232C",
@@ -10096,9 +9916,9 @@ function SubagentRow({ activity }) {
       titleBg: PILL_SECTION.plan.bg,
       subtitle,
       meta: [`iter ${activity.iter}`, `${seconds}s`],
-      right: /* @__PURE__ */ React59.createElement(React59.Fragment, null, modelBadge ? /* @__PURE__ */ React59.createElement(Pill, { label: modelBadge.label, ...PILL_MODEL[modelBadge.kind], bold: false }) : null, /* @__PURE__ */ React59.createElement(Spinner, { kind: "braille", color: CARD.subagent.color }))
+      right: /* @__PURE__ */ React60.createElement(React60.Fragment, null, modelBadge ? /* @__PURE__ */ React60.createElement(Pill, { label: modelBadge.label, ...PILL_MODEL[modelBadge.kind], bold: false }) : null, /* @__PURE__ */ React60.createElement(Spinner, { kind: "braille", color: CARD.subagent.color }))
     }
-  ), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, "task  ", /* @__PURE__ */ React59.createElement(Text51, { color: FG.sub }, activity.task)), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, "last  ", last ? /* @__PURE__ */ React59.createElement(React59.Fragment, null, /* @__PURE__ */ React59.createElement(Text51, { color: last.color }, `${last.glyph} `), /* @__PURE__ */ React59.createElement(Text51, { color: FG.body }, last.label), last.meta ? /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, `   ${last.meta}`) : null) : /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, t("editMode.queuedDots"))), /* @__PURE__ */ React59.createElement(Text51, { color: TONE.brand }, "\u25B6  ", phase));
+  ), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, "task  ", /* @__PURE__ */ React60.createElement(Text52, { color: FG.sub }, activity.task)), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, "last  ", last ? /* @__PURE__ */ React60.createElement(React60.Fragment, null, /* @__PURE__ */ React60.createElement(Text52, { color: last.color }, `${last.glyph} `), /* @__PURE__ */ React60.createElement(Text52, { color: FG.body }, last.label), last.meta ? /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, `   ${last.meta}`) : null) : /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, t("editMode.queuedDots"))), /* @__PURE__ */ React60.createElement(Text52, { color: TONE.brand }, "\u25B6  ", phase));
 }
 function SubagentLiveStack({
   activities,
@@ -10106,13 +9926,13 @@ function SubagentLiveStack({
 }) {
   const tick = useTick();
   if (activities.length === 0) return null;
-  if (activities.length === 1) return /* @__PURE__ */ React59.createElement(SubagentRow, { activity: activities[0] });
+  if (activities.length === 1) return /* @__PURE__ */ React60.createElement(SubagentRow, { activity: activities[0] });
   const visible = activities.slice(0, max);
   const overflow = activities.length - visible.length;
   const summarising = activities.filter((a) => a.phase === "summarising").length;
   const metaParts = [`${activities.length} running`];
   if (summarising > 0) metaParts.push(`${summarising} summarising`);
-  return /* @__PURE__ */ React59.createElement(Card, { tone: CARD.subagent.color }, /* @__PURE__ */ React59.createElement(
+  return /* @__PURE__ */ React60.createElement(Card, { tone: CARD.subagent.color }, /* @__PURE__ */ React60.createElement(
     CardHeader,
     {
       glyph: "\u232C",
@@ -10121,9 +9941,9 @@ function SubagentLiveStack({
       titleColor: PILL_SECTION.plan.fg,
       titleBg: PILL_SECTION.plan.bg,
       subtitle: metaParts.join(" \xB7 "),
-      right: /* @__PURE__ */ React59.createElement(Spinner, { kind: "braille", color: CARD.subagent.color })
+      right: /* @__PURE__ */ React60.createElement(Spinner, { kind: "braille", color: CARD.subagent.color })
     }
-  ), visible.map((a, i) => /* @__PURE__ */ React59.createElement(CompactSubagentLine, { key: a.runId, activity: a, tick, index: i })), overflow > 0 ? /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, `  +${overflow} more running\u2026`) : null);
+  ), visible.map((a, i) => /* @__PURE__ */ React60.createElement(CompactSubagentLine, { key: a.runId, activity: a, tick, index: i })), overflow > 0 ? /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, `  +${overflow} more running\u2026`) : null);
 }
 function CompactSubagentLine({
   activity,
@@ -10138,7 +9958,7 @@ function CompactSubagentLine({
   const title = activity.skillName ?? truncate2(activity.task, 28);
   const titlePadded = title.padEnd(28);
   const last = activity.lastInner;
-  return /* @__PURE__ */ React59.createElement(Box48, { flexDirection: "row" }, /* @__PURE__ */ React59.createElement(Text51, { color: glyphColor, bold: true }, `  ${glyph} `), /* @__PURE__ */ React59.createElement(Text51, { color: FG.body }, titlePadded), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, `  iter ${String(activity.iter).padStart(2)} \xB7 ${seconds}s \xB7 `), last ? /* @__PURE__ */ React59.createElement(React59.Fragment, null, /* @__PURE__ */ React59.createElement(Text51, { color: last.color }, `${last.glyph} `), /* @__PURE__ */ React59.createElement(Text51, { color: FG.body }, truncate2(last.label, 18)), last.meta ? /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, `  ${last.meta}`) : null) : /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, t("editMode.queuedDots")));
+  return /* @__PURE__ */ React60.createElement(Box50, { flexDirection: "row" }, /* @__PURE__ */ React60.createElement(Text52, { color: glyphColor, bold: true }, `  ${glyph} `), /* @__PURE__ */ React60.createElement(Text52, { color: FG.body }, titlePadded), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, `  iter ${String(activity.iter).padStart(2)} \xB7 ${seconds}s \xB7 `), last ? /* @__PURE__ */ React60.createElement(React60.Fragment, null, /* @__PURE__ */ React60.createElement(Text52, { color: last.color }, `${last.glyph} `), /* @__PURE__ */ React60.createElement(Text52, { color: FG.body }, truncate2(last.label, 18)), last.meta ? /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, `  ${last.meta}`) : null) : /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, t("editMode.queuedDots")));
 }
 function truncate2(text, max) {
   return text.length > max ? `${text.slice(0, max)}\u2026` : text;
@@ -10150,7 +9970,7 @@ function OngoingToolRow({
   const tick = useTick();
   const elapsed = useElapsedSeconds();
   const summary = summarizeToolArgs(tool.name, tool.args);
-  return /* @__PURE__ */ React59.createElement(Box48, { marginY: 1, flexDirection: "column", paddingX: 1 }, /* @__PURE__ */ React59.createElement(Box48, null, /* @__PURE__ */ React59.createElement(Text51, { color: CARD.tool.color, bold: true }, SPINNER_FRAMES[tick % SPINNER_FRAMES.length]), /* @__PURE__ */ React59.createElement(Text51, null, "  "), /* @__PURE__ */ React59.createElement(Text51, { color: CARD.tool.color, bold: true }, `\u25A3 ${tool.name}`), /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, `  running \xB7 ${elapsed}s`)), progress ? /* @__PURE__ */ React59.createElement(Box48, { paddingLeft: 3 }, /* @__PURE__ */ React59.createElement(Text51, { color: TONE.brand }, renderProgressLine(progress))) : null, summary ? /* @__PURE__ */ React59.createElement(Box48, { paddingLeft: 3 }, /* @__PURE__ */ React59.createElement(Text51, { color: FG.faint }, summary)) : null);
+  return /* @__PURE__ */ React60.createElement(Box50, { marginY: 1, flexDirection: "column", paddingX: 1 }, /* @__PURE__ */ React60.createElement(Box50, null, /* @__PURE__ */ React60.createElement(Text52, { color: CARD.tool.color, bold: true }, SPINNER_FRAMES[tick % SPINNER_FRAMES.length]), /* @__PURE__ */ React60.createElement(Text52, null, "  "), /* @__PURE__ */ React60.createElement(Text52, { color: CARD.tool.color, bold: true }, `\u25A3 ${tool.name}`), /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, `  running \xB7 ${elapsed}s`)), progress ? /* @__PURE__ */ React60.createElement(Box50, { paddingLeft: 3 }, /* @__PURE__ */ React60.createElement(Text52, { color: TONE.brand }, renderProgressLine(progress))) : null, summary ? /* @__PURE__ */ React60.createElement(Box50, { paddingLeft: 3 }, /* @__PURE__ */ React60.createElement(Text52, { color: FG.faint }, summary)) : null);
 }
 function renderProgressLine(p) {
   const msg = p.message ? `  ${p.message}` : "";
@@ -10206,16 +10026,16 @@ function summarizeToolArgs(name, args) {
 }
 
 // src/cli/ui/layout/StatusRow.tsx
-import { Box as Box49, Text as Text53, useStdout as useStdout15 } from "ink";
-import React61 from "react";
+import { Box as Box51, Text as Text54, useStdout as useStdout16 } from "ink";
+import React62 from "react";
 
 // src/cli/ui/primitives/Countdown.tsx
-import { Text as Text52 } from "ink";
-import React60 from "react";
+import { Text as Text53 } from "ink";
+import React61 from "react";
 function Countdown({ endsAt, color = TONE.brand }) {
   useSlowTick();
   const remainingSec = Math.max(0, Math.ceil((endsAt - Date.now()) / 1e3));
-  return /* @__PURE__ */ React60.createElement(Text52, { bold: true, color }, String(remainingSec));
+  return /* @__PURE__ */ React61.createElement(Text53, { bold: true, color }, String(remainingSec));
 }
 
 // src/cli/ui/layout/StatusRow.tsx
@@ -10224,67 +10044,116 @@ var RULE_MIN = 20;
 var WALLET_MIN_COLS = 90;
 var VERSION_MIN_COLS = 70;
 var FEEDBACK_HINT_MIN_COLS = 100;
-function StatusRow() {
+var PRESET_MIN_COLS = 60;
+var DEFAULT_STATUS_BAR_CONFIG = {
+  showBalance: true,
+  showSessionCost: true,
+  showTurnCost: true,
+  showCacheHit: true,
+  showVersion: true,
+  showFeedbackHint: true
+};
+function StatusRow({
+  statusBar = DEFAULT_STATUS_BAR_CONFIG
+}) {
   const status2 = useAgentState((s) => s.status);
   const session = useAgentState((s) => s.session);
-  const { stdout } = useStdout15();
+  const { stdout } = useStdout16();
   const cols = stdout?.columns ?? 80;
   const ruleWidth = Math.max(RULE_MIN, cols - RULE_PAD);
   const hasTurn = status2.cost > 0;
   const hasSession = status2.sessionCost > 0;
   const hasBalance = typeof status2.balance === "number";
-  const showWallet = cols >= WALLET_MIN_COLS && (hasSession || hasBalance);
-  return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Box49, { height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, null, "  "), /* @__PURE__ */ React61.createElement(Text53, { color: FG.faint, wrap: "truncate" }, "\u2500".repeat(ruleWidth))), /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, minHeight: 1, flexWrap: "nowrap", flexShrink: 0 }, /* @__PURE__ */ React61.createElement(Text53, { wrap: "truncate" }, "  "), status2.recording ? /* @__PURE__ */ React61.createElement(RecordingPill, { rec: status2.recording }) : status2.countdownSeconds !== void 0 ? /* @__PURE__ */ React61.createElement(CountdownRow, { mode: status2.mode, secondsLeft: status2.countdownSeconds }) : /* @__PURE__ */ React61.createElement(ModePill2, { mode: status2.mode, network: status2.network, detail: status2.networkDetail }), /* @__PURE__ */ React61.createElement(Sep, null), /* @__PURE__ */ React61.createElement(Text53, { color: FG.sub, wrap: "truncate" }, `${session.id} \xB7 ${session.branch}`), hasTurn && /* @__PURE__ */ React61.createElement(React61.Fragment, null, /* @__PURE__ */ React61.createElement(Sep, null), /* @__PURE__ */ React61.createElement(Text53, { bold: true, color: TONE.brand, wrap: "truncate" }, "\u25B8 "), /* @__PURE__ */ React61.createElement(Text53, { bold: true, color: FG.body, wrap: "truncate" }, `${formatCost(status2.cost, status2.balanceCurrency)} ${t("statusBar.turn")}`)), /* @__PURE__ */ React61.createElement(Sep, null), /* @__PURE__ */ React61.createElement(
-    Text53,
+  const showWallet = cols >= WALLET_MIN_COLS && (hasSession && statusBar.showSessionCost || hasBalance && statusBar.showBalance);
+  return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Box51, { height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, null, "  "), /* @__PURE__ */ React62.createElement(Text54, { color: FG.faint, wrap: "truncate" }, "\u2500".repeat(ruleWidth))), /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, minHeight: 1, flexWrap: "nowrap", flexShrink: 0 }, /* @__PURE__ */ React62.createElement(Text54, { wrap: "truncate" }, "  "), status2.recording ? /* @__PURE__ */ React62.createElement(RecordingPill, { rec: status2.recording }) : status2.countdownSeconds !== void 0 ? /* @__PURE__ */ React62.createElement(CountdownRow, { mode: status2.mode, secondsLeft: status2.countdownSeconds }) : /* @__PURE__ */ React62.createElement(ModePill2, { mode: status2.mode, network: status2.network, detail: status2.networkDetail }), cols >= PRESET_MIN_COLS && status2.preset !== void 0 && /* @__PURE__ */ React62.createElement(PresetPill, { preset: status2.preset, model: session.model }), /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { color: FG.sub, wrap: "truncate" }, `${session.id} \xB7 ${session.branch}`), hasTurn && statusBar.showTurnCost && /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { bold: true, color: TONE.brand, wrap: "truncate" }, "\u25B8 "), /* @__PURE__ */ React62.createElement(Text54, { bold: true, color: FG.body, wrap: "truncate" }, `${formatCost(status2.cost, status2.balanceCurrency)} ${t("statusBar.turn")}`)), statusBar.showCacheHit && /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(
+    Text54,
     {
       color: TONE.accent,
       wrap: "truncate"
     },
     `${t("statusBar.cache")} ${Math.round(status2.cacheHit * 100)}%`
-  ), showWallet && /* @__PURE__ */ React61.createElement(
+  )), status2.mcpLoading && status2.mcpLoading.ready < status2.mcpLoading.total && /* @__PURE__ */ React62.createElement(McpLoadingPill, { ready: status2.mcpLoading.ready, total: status2.mcpLoading.total }), showWallet && /* @__PURE__ */ React62.createElement(
     WalletPill,
     {
       sessionCostUsd: status2.sessionCost,
       balance: status2.balance,
-      currency: status2.balanceCurrency
+      currency: status2.balanceCurrency,
+      showSessionCost: statusBar.showSessionCost,
+      showBalance: statusBar.showBalance
     }
-  ), cols >= VERSION_MIN_COLS && /* @__PURE__ */ React61.createElement(React61.Fragment, null, /* @__PURE__ */ React61.createElement(Sep, null), /* @__PURE__ */ React61.createElement(Text53, { color: FG.faint, wrap: "truncate" }, `v${VERSION}`), cols >= FEEDBACK_HINT_MIN_COLS && /* @__PURE__ */ React61.createElement(React61.Fragment, null, /* @__PURE__ */ React61.createElement(Text53, { color: FG.faint, wrap: "truncate" }, "  \xB7  "), /* @__PURE__ */ React61.createElement(Text53, { color: FG.meta, wrap: "truncate" }, "\u2691 "), /* @__PURE__ */ React61.createElement(Text53, { color: FG.sub, wrap: "truncate" }, "/feedback")))));
+  ), statusBar.showVersion && cols >= VERSION_MIN_COLS && /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { color: FG.faint, wrap: "truncate" }, `v${VERSION}`)), statusBar.showFeedbackHint && cols >= FEEDBACK_HINT_MIN_COLS && /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { color: FG.meta, wrap: "truncate" }, "\u2691 "), /* @__PURE__ */ React62.createElement(Text54, { color: FG.sub, wrap: "truncate" }, "/feedback"))));
+}
+function PresetPill({
+  preset: preset2,
+  model: model2
+}) {
+  const label = preset2 ?? shortModelLabel(model2);
+  const color = preset2 === "pro" ? TONE.accent : preset2 === "flash" ? TONE.brand : FG.sub;
+  return /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { color: FG.meta, wrap: "truncate" }, "\u25B4 "), /* @__PURE__ */ React62.createElement(Text54, { color, wrap: "truncate" }, label));
+}
+function shortModelLabel(model2) {
+  if (model2 === "deepseek-v4-flash") return "flash";
+  if (model2 === "deepseek-v4-pro") return "pro";
+  return model2.replace(/^deepseek-/, "");
+}
+function McpLoadingPill({
+  ready,
+  total
+}) {
+  return /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { color: TONE.brand, wrap: "truncate" }, "\u2301 "), /* @__PURE__ */ React62.createElement(
+    Text54,
+    {
+      color: FG.body,
+      wrap: "truncate"
+    },
+    `${t("statusBar.mcpLoading")} ${ready}/${total}`
+  ));
 }
 function WalletPill({
   sessionCostUsd,
   balance,
-  currency
+  currency,
+  showSessionCost,
+  showBalance: showBalanceCfg
 }) {
-  const showSpent = sessionCostUsd > 0;
-  const showBalance = typeof balance === "number";
-  return /* @__PURE__ */ React61.createElement(React61.Fragment, null, /* @__PURE__ */ React61.createElement(Sep, null), /* @__PURE__ */ React61.createElement(Text53, { color: FG.meta, wrap: "truncate" }, "\u26C1 "), showSpent && /* @__PURE__ */ React61.createElement(
-    Text53,
+  const showSpent = showSessionCost && sessionCostUsd > 0;
+  const showBalanceLine = showBalanceCfg && typeof balance === "number";
+  return /* @__PURE__ */ React62.createElement(React62.Fragment, null, /* @__PURE__ */ React62.createElement(Sep, null), /* @__PURE__ */ React62.createElement(Text54, { color: FG.meta, wrap: "truncate" }, "\u26C1 "), showSpent && /* @__PURE__ */ React62.createElement(
+    Text54,
     {
       color: FG.body,
       wrap: "truncate"
     },
     `${formatCost(sessionCostUsd, currency, 2)} ${t("statusBar.spent")}`
-  ), showSpent && showBalance && /* @__PURE__ */ React61.createElement(Text53, { color: FG.meta, wrap: "truncate" }, "  /  "), showBalance && /* @__PURE__ */ React61.createElement(Text53, { bold: true, color: balanceColor(balance, currency), wrap: "truncate" }, formatBalance(balance, currency, { fractionDigits: 2 })), showBalance && /* @__PURE__ */ React61.createElement(Text53, { color: FG.faint, wrap: "truncate" }, t("statusBar.left")));
+  ), showSpent && showBalanceLine && /* @__PURE__ */ React62.createElement(Text54, { color: FG.meta, wrap: "truncate" }, "  /  "), showBalanceLine && /* @__PURE__ */ React62.createElement(Text54, { bold: true, color: balanceColor(balance, currency), wrap: "truncate" }, formatBalance(balance, currency, { fractionDigits: 2 })), showBalanceLine && /* @__PURE__ */ React62.createElement(Text54, { color: FG.faint, wrap: "truncate" }, t("statusBar.left")));
 }
 function ModePill2({
   mode: mode2,
   network,
   detail
 }) {
+  const modeLabel = `${t("statusBar.editsLabel")}${mode2}`;
   if (network === "online") {
     const pill = modeGlyph(mode2);
-    return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, { color: pill.color, wrap: "truncate" }, pill.glyph), /* @__PURE__ */ React61.createElement(Text53, { color: FG.sub, wrap: "truncate" }, ` ${mode2}`));
+    return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, { color: pill.color, wrap: "truncate" }, pill.glyph), /* @__PURE__ */ React62.createElement(Text54, { color: FG.sub, wrap: "truncate" }, ` ${modeLabel}`));
   }
   const dot = networkDot(network);
   if (network === "slow") {
     const tail = detail ? ` \xB7 ${detail}` : "";
-    return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, { color: dot.color, wrap: "truncate" }, dot.glyph), /* @__PURE__ */ React61.createElement(Text53, { color: dot.color, wrap: "truncate" }, ` ${mode2} \xB7 ${t("statusBar.slow")}${tail}`));
+    return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, { color: dot.color, wrap: "truncate" }, dot.glyph), /* @__PURE__ */ React62.createElement(
+      Text54,
+      {
+        color: dot.color,
+        wrap: "truncate"
+      },
+      ` ${modeLabel} \xB7 ${t("statusBar.slow")}${tail}`
+    ));
   }
   if (network === "disconnected") {
     const tail = detail ? ` \xB7 ${detail}` : "";
-    return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, { color: dot.color, wrap: "truncate" }, dot.glyph), /* @__PURE__ */ React61.createElement(Text53, { color: dot.color, wrap: "truncate" }, ` ${t("statusBar.disconnect")}${tail}`));
+    return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, { color: dot.color, wrap: "truncate" }, dot.glyph), /* @__PURE__ */ React62.createElement(Text54, { color: dot.color, wrap: "truncate" }, ` ${t("statusBar.disconnect")}${tail}`));
   }
-  return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, { color: dot.color, wrap: "truncate" }, dot.glyph), /* @__PURE__ */ React61.createElement(Text53, { color: dot.color, wrap: "truncate" }, ` ${t("statusBar.reconnecting")}`));
+  return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, { color: dot.color, wrap: "truncate" }, dot.glyph), /* @__PURE__ */ React62.createElement(Text54, { color: dot.color, wrap: "truncate" }, ` ${t("statusBar.reconnecting")}`));
 }
 function CountdownRow({
   mode: mode2,
@@ -10292,12 +10161,12 @@ function CountdownRow({
 }) {
   const pill = modeGlyph(mode2);
   const endsAt = Date.now() + secondsLeft * 1e3;
-  return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, { color: pill.color, wrap: "truncate" }, pill.glyph), /* @__PURE__ */ React61.createElement(Text53, { color: FG.sub, wrap: "truncate" }, ` ${mode2}   \xB7   `), /* @__PURE__ */ React61.createElement(Text53, { color: TONE.warn, wrap: "truncate" }, t("statusBar.approvingIn")), /* @__PURE__ */ React61.createElement(Countdown, { endsAt }), /* @__PURE__ */ React61.createElement(Text53, { color: TONE.warn, wrap: "truncate" }, t("statusBar.escToInterrupt")));
+  return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, { color: pill.color, wrap: "truncate" }, pill.glyph), /* @__PURE__ */ React62.createElement(Text54, { color: FG.sub, wrap: "truncate" }, ` ${t("statusBar.editsLabel")}${mode2}   \xB7   `), /* @__PURE__ */ React62.createElement(Text54, { color: TONE.warn, wrap: "truncate" }, t("statusBar.approvingIn")), /* @__PURE__ */ React62.createElement(Countdown, { endsAt }), /* @__PURE__ */ React62.createElement(Text54, { color: TONE.warn, wrap: "truncate" }, t("statusBar.escToInterrupt")));
 }
 function RecordingPill({ rec }) {
   const sizeMb = (rec.sizeBytes / (1024 * 1024)).toFixed(1);
-  return /* @__PURE__ */ React61.createElement(Box49, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React61.createElement(Text53, { bold: true, color: TONE.err, wrap: "truncate" }, t("statusBar.recordingGlyph")), /* @__PURE__ */ React61.createElement(
-    Text53,
+  return /* @__PURE__ */ React62.createElement(Box51, { flexDirection: "row", height: 1, flexWrap: "nowrap" }, /* @__PURE__ */ React62.createElement(Text54, { bold: true, color: TONE.err, wrap: "truncate" }, t("statusBar.recordingGlyph")), /* @__PURE__ */ React62.createElement(
+    Text54,
     {
       color: TONE.err,
       wrap: "truncate"
@@ -10306,7 +10175,7 @@ function RecordingPill({ rec }) {
   ));
 }
 function Sep() {
-  return /* @__PURE__ */ React61.createElement(Text53, { color: FG.meta, wrap: "truncate" }, "   \xB7   ");
+  return /* @__PURE__ */ React62.createElement(Text54, { color: FG.meta, wrap: "truncate" }, "   \xB7   ");
 }
 function modeGlyph(mode2) {
   switch (mode2) {
@@ -10334,8 +10203,8 @@ function networkDot(state) {
 }
 
 // src/cli/ui/layout/ToastRail.tsx
-import { Box as Box50, Text as Text54, useStdout as useStdout16 } from "ink";
-import React62, { useEffect as useEffect13 } from "react";
+import { Box as Box52, Text as Text55, useStdout as useStdout17 } from "ink";
+import React63, { useEffect as useEffect13 } from "react";
 var TONE_COLOR = {
   ok: TONE.ok,
   info: TONE.brand,
@@ -10357,7 +10226,7 @@ function ToastRail() {
   const toasts = useAgentState((s) => s.toasts);
   const dispatch = useDispatch();
   useSlowTick();
-  const { stdout } = useStdout16();
+  const { stdout } = useStdout17();
   const cols = stdout?.columns ?? 80;
   const rule = "\u2501".repeat(Math.max(20, cols - 4));
   const now = Date.now();
@@ -10373,17 +10242,17 @@ function ToastRail() {
   }, [toasts, dispatch]);
   const visible = toasts.filter((t2) => now - t2.bornAt < t2.ttlMs);
   if (visible.length === 0) return null;
-  return /* @__PURE__ */ React62.createElement(Box50, { flexDirection: "column" }, visible.map((t2) => {
+  return /* @__PURE__ */ React63.createElement(Box52, { flexDirection: "column" }, visible.map((t2) => {
     const color = TONE_COLOR[t2.tone];
     const glyph = TONE_GLYPH[t2.tone];
     const body = bodyColor(t2, now);
     const remainingSec = Math.max(0, Math.ceil((t2.ttlMs - (now - t2.bornAt)) / 1e3));
-    return /* @__PURE__ */ React62.createElement(Box50, { key: t2.id, flexDirection: "column", paddingX: 1 }, /* @__PURE__ */ React62.createElement(Text54, { color }, rule), /* @__PURE__ */ React62.createElement(Box50, { flexDirection: "row" }, /* @__PURE__ */ React62.createElement(Text54, { color }, glyph), /* @__PURE__ */ React62.createElement(Text54, { bold: true, color: body }, ` ${t2.title}`), t2.detail !== void 0 && /* @__PURE__ */ React62.createElement(Text54, { color: FG.sub }, `  \xB7  ${t2.detail}`), /* @__PURE__ */ React62.createElement(Box50, { flexGrow: 1 }), /* @__PURE__ */ React62.createElement(Text54, { color: FG.faint }, `${remainingSec}s`)));
+    return /* @__PURE__ */ React63.createElement(Box52, { key: t2.id, flexDirection: "column", paddingX: 1 }, /* @__PURE__ */ React63.createElement(Text55, { color }, rule), /* @__PURE__ */ React63.createElement(Box52, { flexDirection: "row" }, /* @__PURE__ */ React63.createElement(Text55, { color }, glyph), /* @__PURE__ */ React63.createElement(Text55, { bold: true, color: body }, ` ${t2.title}`), t2.detail !== void 0 && /* @__PURE__ */ React63.createElement(Text55, { color: FG.sub }, `  \xB7  ${t2.detail}`), /* @__PURE__ */ React63.createElement(Box52, { flexGrow: 1 }), /* @__PURE__ */ React63.createElement(Text55, { color: FG.faint }, `${remainingSec}s`)));
   }));
 }
 
 // src/cli/ui/layout/plan-live-row.tsx
-import React63 from "react";
+import React64 from "react";
 function isActivePlanInFlight(card) {
   if (card.kind !== "plan") return false;
   if (card.variant !== "active") return false;
@@ -10398,7 +10267,7 @@ function PlanLiveRow() {
     return null;
   });
   if (!planCard) return null;
-  return /* @__PURE__ */ React63.createElement(PlanCard, { card: planCard });
+  return /* @__PURE__ */ React64.createElement(PlanCard, { card: planCard });
 }
 
 // src/cli/ui/loop.ts
@@ -10815,8 +10684,9 @@ var handlers = {
 // src/cli/ui/slash/handlers/basic.ts
 var exit = () => ({ exit: true });
 var resetLog = (_args, loop2) => {
-  const { dropped, archived } = loop2.clearLog();
-  const info = archived ? t("handlers.basic.newInfoArchived", { count: dropped, archived }) : t("handlers.basic.newInfo", { count: dropped });
+  const { dropped, archived, systemRebuilt } = loop2.clearLog();
+  const head = archived ? t("handlers.basic.newInfoArchived", { count: dropped, archived }) : t("handlers.basic.newInfo", { count: dropped });
+  const info = systemRebuilt ? head + t("handlers.basic.newInfoSystemReloaded") : head;
   return { clear: true, info };
 };
 function groupHeader(group) {
@@ -11284,7 +11154,7 @@ var handlers4 = {
 };
 
 // src/cli/ui/slash/handlers/init.ts
-import { existsSync as existsSync4 } from "fs";
+import { existsSync as existsSync3 } from "fs";
 import * as pathMod from "path";
 var INIT_PROMPT = [
   "# Task: Initialize visionox.md",
@@ -11350,7 +11220,7 @@ var init = (args, _loop, ctx) => {
   }
   const force = (args[0] ?? "").toLowerCase() === "force";
   const target = pathMod.join(ctx.codeRoot, "visionox.md");
-  if (existsSync4(target) && !force) {
+  if (existsSync3(target) && !force) {
     return {
       info: [
         t("handlers.init.exists", { path: target }),
@@ -11608,6 +11478,28 @@ var handlers8 = { mcp };
 
 // src/cli/ui/slash/handlers/memory.ts
 import { basename } from "path";
+function pickTypeFlag(args) {
+  const rest = [];
+  let type = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? "";
+    if (a === "--type" || a === "-t") {
+      const next = args[i + 1];
+      if (next) {
+        type = next;
+        i++;
+      }
+      continue;
+    }
+    const eq = a.match(/^--type=(.+)$/);
+    if (eq) {
+      type = eq[1] ?? null;
+      continue;
+    }
+    rest.push(a);
+  }
+  return { type, rest };
+}
 var memory = (args, _loop, ctx) => {
   if (!memoryEnabled()) {
     return { info: t("handlers.memory.disabled") };
@@ -11616,18 +11508,25 @@ var memory = (args, _loop, ctx) => {
     return { info: t("handlers.memory.noRoot") };
   }
   const store = new MemoryStore({ projectRoot: ctx.codeRoot });
-  const sub = (args[0] ?? "").toLowerCase();
+  const { type: typeFilter, rest: filteredArgs } = pickTypeFlag(args);
+  const sub = (filteredArgs[0] ?? args[0] ?? "").toLowerCase();
   if (sub === "list" || sub === "ls") {
-    const entries = store.list();
+    const all = store.list();
+    const entries = typeFilter ? all.filter((e) => e.type === typeFilter) : all;
     if (entries.length === 0) {
-      return { info: t("handlers.memory.listEmpty") };
+      return {
+        info: typeFilter ? `no memories with type='${typeFilter}'. (${all.length} total across all types)` : t("handlers.memory.listEmpty")
+      };
     }
-    const lines = [t("handlers.memory.listHeader", { count: entries.length })];
+    const header = typeFilter ? `\u25B8 memory entries \u2014 type=${typeFilter} (${entries.length}/${all.length})` : t("handlers.memory.listHeader", { count: entries.length });
+    const lines = [header];
     for (const e of entries) {
+      const prio = effectivePriority(e);
+      const marker = prio === "high" ? "\u26A0 " : prio === "low" ? "\xB7 " : "  ";
       const tag2 = `${e.scope}/${e.type}`.padEnd(18);
       const name = e.name.padEnd(28);
       const desc = e.description.length > 70 ? `${e.description.slice(0, 69)}\u2026` : e.description;
-      lines.push(`  ${tag2}  ${name}  ${desc}`);
+      lines.push(`${marker}${tag2}  ${name}  ${desc}`);
     }
     lines.push("");
     lines.push(t("handlers.memory.listFooter"));
@@ -11677,15 +11576,24 @@ var memory = (args, _loop, ctx) => {
       };
     }
     const scope = rawScope;
-    const entries = store.list().filter((e) => e.scope === scope);
+    const all = store.list();
+    const inScope = all.filter((e) => e.scope === scope);
+    const expiring = scope === "project" ? all.filter((e) => e.scope === "global" && e.expires === "project_end") : [];
     let deleted = 0;
-    for (const e of entries) {
+    for (const e of inScope) {
       try {
         if (store.delete(scope, e.name)) deleted++;
       } catch {
       }
     }
-    return { info: t("handlers.memory.cleared", { scope, count: deleted }) };
+    for (const e of expiring) {
+      try {
+        if (store.delete("global", e.name)) deleted++;
+      } catch {
+      }
+    }
+    const extra = expiring.length > 0 ? ` (+${expiring.length} global expires=project_end)` : "";
+    return { info: `${t("handlers.memory.cleared", { scope, count: deleted })}${extra}` };
   }
   const parts = [];
   const projMem = readProjectMemory(ctx.memoryRoot);
@@ -11735,14 +11643,27 @@ var memory = (args, _loop, ctx) => {
 var handlers9 = { memory };
 
 // src/cli/ui/slash/handlers/model.ts
+function inferPresetFromModel(id) {
+  if (id === "deepseek-v4-pro") return "pro";
+  if (id === "deepseek-v4-flash") return "flash";
+  return null;
+}
 var model = (args, loop2, ctx) => {
   const id = args[0];
   const known = ctx.models ?? null;
   if (!id) {
     return { openModelPicker: true };
   }
-  loop2.configure({ model: id });
+  loop2.configure({ model: id, autoEscalate: false });
   ctx.dispatch?.({ type: "session.model.change", model: id });
+  const inferred = inferPresetFromModel(id);
+  ctx.dispatch?.({ type: "session.preset.change", preset: inferred });
+  if (inferred) {
+    try {
+      savePreset(inferred);
+    } catch {
+    }
+  }
   if (known && known.length > 0 && !known.includes(id)) {
     return {
       info: t("handlers.model.modelNotInCatalog", { id, list: known.join(", ") })
@@ -11752,31 +11673,29 @@ var model = (args, loop2, ctx) => {
 };
 var preset = (args, loop2, ctx) => {
   const name = (args[0] ?? "").toLowerCase();
-  const applyAndPersist = (effort) => {
-    try {
-      saveReasoningEffort(effort);
-    } catch {
-    }
-  };
-  const apply2 = (p) => {
+  const apply2 = (presetName, p) => {
     loop2.configure({
       model: p.model,
       autoEscalate: p.autoEscalate,
       reasoningEffort: p.reasoningEffort
     });
     ctx.dispatch?.({ type: "session.model.change", model: p.model });
-    applyAndPersist(p.reasoningEffort);
+    ctx.dispatch?.({ type: "session.preset.change", preset: presetName });
+    try {
+      savePreset(presetName);
+    } catch {
+    }
   };
   if (name === "auto") {
-    apply2(PRESETS.auto);
+    apply2("auto", PRESETS.auto);
     return { info: t("handlers.model.presetAuto") };
   }
   if (name === "flash") {
-    apply2(PRESETS.flash);
+    apply2("flash", PRESETS.flash);
     return { info: t("handlers.model.presetFlash") };
   }
   if (name === "pro") {
-    apply2(PRESETS.pro);
+    apply2("pro", PRESETS.pro);
     return { info: t("handlers.model.presetPro") };
   }
   if (name === "") {
@@ -11857,8 +11776,8 @@ var handlers10 = {
 import { release } from "os";
 
 // src/cli/ui/ctx-breakdown.tsx
-import { Box as Box51, Text as Text55 } from "ink";
-import React64 from "react";
+import { Box as Box53, Text as Text56 } from "ink";
+import React65 from "react";
 function computeCtxBreakdown(loop2) {
   const systemTokens = countTokens(loop2.prefix.system);
   const toolsTokens = countTokens(JSON.stringify(loop2.prefix.toolSpecs));
@@ -12890,7 +12809,7 @@ function hydrateCardsFromMessages(messages) {
 }
 
 // src/cli/ui/useCompletionPickers.ts
-import { useCallback as useCallback10, useEffect as useEffect14, useMemo as useMemo10, useReducer as useReducer2, useRef as useRef7, useState as useState23 } from "react";
+import { useCallback as useCallback10, useEffect as useEffect14, useMemo as useMemo11, useReducer as useReducer2, useRef as useRef7, useState as useState25 } from "react";
 var SEARCH_DEBOUNCE_MS = 80;
 var SEARCH_FLUSH_MS = 50;
 var SEARCH_RESULT_CAP = 200;
@@ -12903,13 +12822,13 @@ function useCompletionPickers({
   mcpServers,
   slashUsage
 }) {
-  const [slashSelected, setSlashSelected] = useState23(0);
-  const slashMatches = useMemo10(() => {
+  const [slashSelected, setSlashSelected] = useState25(0);
+  const slashMatches = useMemo11(() => {
     if (!input.startsWith("/") || input.includes(" ")) return null;
     return suggestSlashCommands(input.slice(1), !!codeMode, slashUsage);
   }, [input, codeMode, slashUsage]);
   const slashGroupMode = input === "/";
-  const slashAdvancedHidden = useMemo10(
+  const slashAdvancedHidden = useMemo11(
     () => slashGroupMode ? countAdvancedCommands(!!codeMode) : 0,
     [slashGroupMode, codeMode]
   );
@@ -12920,7 +12839,7 @@ function useCompletionPickers({
       return prev;
     });
   }, [slashMatches]);
-  const [atSelected, setAtSelected] = useState23(0);
+  const [atSelected, setAtSelected] = useState25(0);
   const recentFilesRef = useRef7([]);
   const recordRecentFile = useCallback10((p) => {
     const list2 = recentFilesRef.current;
@@ -12929,12 +12848,12 @@ function useCompletionPickers({
     list2.unshift(p);
     if (list2.length > 20) list2.length = 20;
   }, []);
-  const atPicker = useMemo10(() => {
+  const atPicker = useMemo11(() => {
     if (!codeMode) return null;
     if (slashMatches !== null) return null;
     return detectAtPicker(input);
   }, [codeMode, input, slashMatches]);
-  const parsed = useMemo10(
+  const parsed = useMemo11(
     () => atPicker ? parseAtQuery(atPicker.query) : null,
     [atPicker]
   );
@@ -12946,7 +12865,7 @@ function useCompletionPickers({
     atMode === "search" && parsed ? parsed.filter : null,
     recentFilesRef
   );
-  const atState = useMemo10(() => {
+  const atState = useMemo11(() => {
     if (!parsed) return null;
     if (atMode === "browse") {
       return {
@@ -12981,13 +12900,13 @@ function useCompletionPickers({
     },
     [atPicker, input, setInput]
   );
-  const [slashArgSelected, setSlashArgSelected] = useState23(0);
-  const slashArgContext = useMemo10(() => {
+  const [slashArgSelected, setSlashArgSelected] = useState25(0);
+  const slashArgContext = useMemo11(() => {
     if (!input.startsWith("/")) return null;
     if (slashMatches !== null) return null;
     return detectSlashArgContext(input, !!codeMode);
   }, [input, slashMatches, codeMode]);
-  const slashArgMatches = useMemo10(() => {
+  const slashArgMatches = useMemo11(() => {
     if (!slashArgContext || slashArgContext.kind !== "picker") return null;
     const completer = slashArgContext.spec.argCompleter;
     const partial = slashArgContext.partial;
@@ -13061,8 +12980,8 @@ function useCompletionPickers({
   };
 }
 function useBrowseListing(rootDir, dir) {
-  const [entries, setEntries] = useState23([]);
-  const [loading, setLoading] = useState23(false);
+  const [entries, setEntries] = useState25([]);
+  const [loading, setLoading] = useState25(false);
   useEffect14(() => {
     if (dir === null) {
       setEntries([]);
@@ -13169,12 +13088,12 @@ function rankSearchHits(hits, filter, recent) {
 }
 
 // src/cli/ui/useEditHistory.ts
-import { useCallback as useCallback11, useRef as useRef8, useState as useState24 } from "react";
+import { useCallback as useCallback11, useRef as useRef8, useState as useState26 } from "react";
 function useEditHistory(codeMode) {
   const editHistory = useRef8([]);
   const nextHistoryId = useRef8(1);
   const currentTurnEntry = useRef8(null);
-  const [undoBanner, setUndoBanner] = useState24(null);
+  const [undoBanner, setUndoBanner] = useState26(null);
   const undoTimeoutRef = useRef8(null);
   const recordEdit = useCallback11(
     (source, blocks, results, snaps) => {
@@ -13399,17 +13318,18 @@ function useEditHistory(codeMode) {
 }
 
 // src/cli/ui/useSessionInfo.ts
-import { useCallback as useCallback12, useEffect as useEffect15, useState as useState25 } from "react";
+import { useCallback as useCallback12, useEffect as useEffect15, useState as useState27 } from "react";
 function useSessionInfo(loop2) {
-  const [balance, setBalance] = useState25(null);
-  const [models, setModels] = useState25(null);
-  const [latestVersion, setLatestVersion] = useState25(null);
+  const [balance, setBalance] = useState27(null);
+  const [models, setModels] = useState27(null);
+  const [latestVersion, setLatestVersion] = useState27(null);
   useEffect15(() => {
     let cancelled = false;
     void (async () => {
       const bal = await loop2.client.getBalance().catch(() => null);
-      if (cancelled || !bal || !bal.balance_infos.length) return;
-      const primary = bal.balance_infos[0];
+      if (cancelled || !bal) return;
+      const primary = pickPrimaryBalance(bal.balance_infos);
+      if (!primary) return;
       setBalance({ currency: primary.currency, total: Number(primary.total_balance) });
     })();
     return () => {
@@ -13442,9 +13362,9 @@ function useSessionInfo(loop2) {
   const refreshBalance = useCallback12(() => {
     void (async () => {
       const bal = await loop2.client.getBalance().catch(() => null);
-      if (bal?.balance_infos.length) {
-        const p = bal.balance_infos[0];
-        setBalance({ currency: p.currency, total: Number(p.total_balance) });
+      const primary = bal ? pickPrimaryBalance(bal.balance_infos) : null;
+      if (primary) {
+        setBalance({ currency: primary.currency, total: Number(primary.total_balance) });
       }
     })();
   }, [loop2]);
@@ -13472,7 +13392,7 @@ function useSessionInfo(loop2) {
 }
 
 // src/cli/ui/useSubagent.ts
-import { useEffect as useEffect16, useRef as useRef9, useState as useState26 } from "react";
+import { useEffect as useEffect16, useRef as useRef9, useState as useState28 } from "react";
 function reduceSubagentInnerEvent(prev, ev) {
   if (ev.kind === "inner") {
     if (!ev.inner) return prev;
@@ -13517,23 +13437,28 @@ function summariseInner(ev) {
     return {
       glyph: "\u25A3",
       color: CARD.tool.color,
-      label: ev.toolName ?? "tool",
-      meta: "running"
+      label: ev.toolName ?? t("common.tool"),
+      meta: t("common.running")
     };
   }
   if (ev.role === "tool") {
     return {
       glyph: "\u25A3",
       color: CARD.tool.color,
-      label: ev.toolName ?? "tool",
-      meta: "done"
+      label: ev.toolName ?? t("common.tool"),
+      meta: t("common.done")
     };
   }
   if (ev.role === "warning") {
-    return { glyph: "\u26A0", color: TONE.warn, label: "warning", meta: ev.content?.slice(0, 40) };
+    return {
+      glyph: "\u26A0",
+      color: TONE.warn,
+      label: t("common.warning"),
+      meta: ev.content?.slice(0, 40)
+    };
   }
   if (ev.role === "error") {
-    return { glyph: "\u2716", color: TONE.err, label: ev.error ?? "error" };
+    return { glyph: "\u2716", color: TONE.err, label: ev.error ?? t("common.error") };
   }
   return null;
 }
@@ -13542,7 +13467,7 @@ function useSubagent({
   log,
   getWalletCurrency
 }) {
-  const [activities, setActivities] = useState26([]);
+  const [activities, setActivities] = useState28([]);
   const sinkRef = useRef9({ current: null });
   const getWalletCurrencyRef = useRef9(getWalletCurrency);
   useEffect16(() => {
@@ -13612,20 +13537,43 @@ function InputAreaWithHistoryHint({
 }) {
   const pinned = useChatScrollState((s) => s.pinned);
   if (!pinned) {
-    return /* @__PURE__ */ React65.createElement(Text56, { color: FG.faint }, " \u{1F4D6} reading history \u2014 End / PgDn to return \xB7 \u2193 to advance one line");
+    return /* @__PURE__ */ React66.createElement(Text57, { color: FG.faint }, " \u{1F4D6} reading history \u2014 End / PgDn to return \xB7 \u2193 to advance one line");
   }
-  return /* @__PURE__ */ React65.createElement(React65.Fragment, null, inputArea);
+  return /* @__PURE__ */ React66.createElement(React66.Fragment, null, inputArea);
+}
+function HistoryTypingCapture({
+  input,
+  setInput,
+  enabled,
+  onReturnToBottom
+}) {
+  const pinned = useChatScrollState((s) => s.pinned);
+  useKeystroke((ev) => {
+    if (ev.paste) return;
+    if (ev.return) {
+      onReturnToBottom();
+      return;
+    }
+    if (ev.backspace) {
+      setInput(input.slice(0, -1));
+      return;
+    }
+    if (ev.input.length > 0 && ev.input >= " ") {
+      setInput(input + ev.input);
+    }
+  }, enabled && !pinned);
+  return null;
 }
 function LoopStatusRow({
   loop: loop2
 }) {
-  const [, setTick] = React65.useState(0);
-  React65.useEffect(() => {
+  const [, setTick] = React66.useState(0);
+  React66.useEffect(() => {
     const id = setInterval(() => setTick((t2) => t2 + 1), 1e3);
     return () => clearInterval(id);
   }, []);
   const nextFireMs = Math.max(0, loop2.nextFireAt - Date.now());
-  return /* @__PURE__ */ React65.createElement(Box52, null, /* @__PURE__ */ React65.createElement(Text56, { color: "cyan" }, `\u25B8 ${formatLoopStatus(loop2.prompt, nextFireMs, loop2.iter)} \xB7 /loop stop or type to cancel`));
+  return /* @__PURE__ */ React66.createElement(Box54, null, /* @__PURE__ */ React66.createElement(Text57, { color: "cyan" }, `\u25B8 ${formatLoopStatus(loop2.prompt, nextFireMs, loop2.iter)} \xB7 /loop stop or type to cancel`));
 }
 function App(props) {
   markPhase("app_render_start");
@@ -13634,20 +13582,41 @@ function App(props) {
     model: props.model,
     workspace: props.codeMode?.rootDir ?? process.cwd()
   });
-  const initialCards = React65.useMemo(
+  const initialCards = React66.useMemo(
     () => props.session ? hydrateCardsFromMessages(loadSessionMessages(props.session)) : [],
     [props.session]
   );
-  const [themeName, setThemeName] = React65.useState(
+  const [themeName, setThemeName] = React66.useState(
     () => resolveThemePreference(loadTheme(), process.env.REASONIX_THEME)
   );
-  return /* @__PURE__ */ React65.createElement(ThemeProvider, { name: themeName }, /* @__PURE__ */ React65.createElement(AgentStoreProvider, { session, initialCards }, /* @__PURE__ */ React65.createElement(ChatScrollProvider, null, /* @__PURE__ */ React65.createElement(AppInner, { ...props, themeName, setThemeName }))));
+  const statusBar = React66.useMemo(() => {
+    const cfg = readConfig().statusBar ?? {};
+    return {
+      showBalance: cfg.showBalance !== false,
+      showSessionCost: cfg.showSessionCost !== false,
+      showTurnCost: cfg.showTurnCost !== false,
+      showCacheHit: cfg.showCacheHit !== false,
+      showVersion: cfg.showVersion !== false,
+      showFeedbackHint: cfg.showFeedbackHint !== false
+    };
+  }, []);
+  return /* @__PURE__ */ React66.createElement(ThemeProvider, { name: themeName }, /* @__PURE__ */ React66.createElement(AgentStoreProvider, { session, initialCards }, /* @__PURE__ */ React66.createElement(ChatScrollProvider, null, /* @__PURE__ */ React66.createElement(
+    AppInner,
+    {
+      ...props,
+      themeName,
+      setThemeName,
+      statusBar
+    }
+  ))));
 }
 function AppInner({
   model: model2,
   system,
+  rebuildSystem,
   transcript,
   budgetUsd,
+  failureThreshold,
   session,
   tools,
   mcpSpecs,
@@ -13659,8 +13628,10 @@ function AppInner({
   dashboardPort,
   onSwitchSession,
   mouse = true,
+  startupInfoHints,
   themeName,
-  setThemeName
+  setThemeName,
+  statusBar
 }) {
   markPhase("app_inner_start");
   const log = useScrollback();
@@ -13671,17 +13642,17 @@ function AppInner({
   const isStreaming = useAgentState((s) => s.cards.some((c) => c.kind === "streaming" && !c.done));
   const activityLabel = useActivityLabel();
   const chatScroll = useChatScrollActions();
-  const [input, setInput] = useState27("");
-  const [busy, setBusy] = useState27(false);
-  const [slashUsage, setSlashUsage] = useState27(
+  const [input, setInput] = useState29("");
+  const [busy, setBusy] = useState29(false);
+  const [slashUsage, setSlashUsage] = useState29(
     () => loadSlashUsage()
   );
-  const [liveExpand, setLiveExpand] = useState27(false);
+  const [liveExpand, setLiveExpand] = useState29(false);
   useEffect17(() => {
     if (!isStreaming && liveExpand) setLiveExpand(false);
   }, [isStreaming, liveExpand]);
   const languageVersion = useLanguageReload();
-  const [bootReady, setBootReady] = useState27(false);
+  const [bootReady, setBootReady] = useState29(false);
   useEffect17(() => {
     const t2 = setTimeout(() => setBootReady(true), 1400);
     return () => clearTimeout(t2);
@@ -13690,7 +13661,7 @@ function AppInner({
     markPhase("first_paint");
     dumpStartupProfile();
   }, []);
-  const [liveMcpServers, setLiveMcpServers] = useState27(() => mcpServers ?? []);
+  const [liveMcpServers, setLiveMcpServers] = useState29(() => mcpServers ?? []);
   const abortedThisTurn = useRef10(false);
   useEffect17(() => {
     busyRef.current = busy;
@@ -13704,7 +13675,7 @@ function AppInner({
     setStatusLine,
     clear: clearToolProgressDisplay
   } = useToolProgressDisplay(progressSink);
-  const { stdout } = useStdout17();
+  const { stdout } = useStdout18();
   useTerminalSetup(mouse);
   const walletCurrencyRef = useRef10(void 0);
   const { activities: subagentActivities, sinkRef: subagentSinkRef } = useSubagent({
@@ -13741,30 +13712,31 @@ function AppInner({
   const { preset: preset2, setPreset, proArmed, setProArmed, turnOnPro, setTurnOnPro } = usePresetMode(model2);
   const planModeRef = useRef10(false);
   const latestVersionRef = useRef10(null);
-  const [pendingEditReview, setPendingEditReview] = useState27(null);
-  const [walkthroughActive, setWalkthroughActive] = useState27(false);
+  const [pendingEditReview, setPendingEditReview] = useState29(null);
+  const [walkthroughActive, setWalkthroughActive] = useState29(false);
   const editReviewResolveRef = useRef10(null);
   const turnEditPolicyRef = useRef10("ask");
-  const [pendingShell, setPendingShell] = useState27(null);
-  const [pendingPlan, setPendingPlan] = useState27(null);
-  const [pendingReviseEditor, setPendingReviseEditor] = useState27(null);
-  const [pendingSessionsPicker, setPendingSessionsPicker] = useState27(false);
-  const [sessionsPickerList, setSessionsPickerList] = useState27([]);
-  const [pendingCheckpointPicker, setPendingCheckpointPicker] = useState27(false);
-  const [checkpointPickerList, setCheckpointPickerList] = useState27([]);
-  const [pendingMcpHub, setPendingMcpHub] = useState27(null);
-  const [pendingModelPicker, setPendingModelPicker] = useState27(false);
-  const [pendingThemePicker, setPendingThemePicker] = useState27(false);
-  const [pendingCopyMode, setPendingCopyMode] = useState27(false);
-  const [stagedInput, setStagedInput] = useState27(null);
-  const [pendingCheckpoint, setPendingCheckpoint] = useState27(null);
-  const [stagedCheckpointRevise, setStagedCheckpointRevise] = useState27(null);
-  const [pendingRevision, setPendingRevision] = useState27(null);
-  const [pendingChoice, setPendingChoice] = useState27(null);
-  const [stagedChoiceCustom, setStagedChoiceCustom] = useState27(null);
+  const [pendingShell, setPendingShell] = useState29(null);
+  const [pendingPath, setPendingPath] = useState29(null);
+  const [pendingPlan, setPendingPlan] = useState29(null);
+  const [pendingReviseEditor, setPendingReviseEditor] = useState29(null);
+  const [pendingSessionsPicker, setPendingSessionsPicker] = useState29(false);
+  const [sessionsPickerList, setSessionsPickerList] = useState29([]);
+  const [pendingCheckpointPicker, setPendingCheckpointPicker] = useState29(false);
+  const [checkpointPickerList, setCheckpointPickerList] = useState29([]);
+  const [pendingMcpHub, setPendingMcpHub] = useState29(null);
+  const [pendingModelPicker, setPendingModelPicker] = useState29(false);
+  const [pendingThemePicker, setPendingThemePicker] = useState29(false);
+  const [pendingCopyMode, setPendingCopyMode] = useState29(false);
+  const [stagedInput, setStagedInput] = useState29(null);
+  const [pendingCheckpoint, setPendingCheckpoint] = useState29(null);
+  const [stagedCheckpointRevise, setStagedCheckpointRevise] = useState29(null);
+  const [pendingRevision, setPendingRevision] = useState29(null);
+  const [pendingChoice, setPendingChoice] = useState29(null);
+  const [stagedChoiceCustom, setStagedChoiceCustom] = useState29(null);
   const modalOpen = !!pendingShell || !!pendingPlan || !!pendingReviseEditor || !!pendingSessionsPicker || !!pendingCheckpointPicker || !!pendingMcpHub || pendingModelPicker || pendingThemePicker || pendingCopyMode || !!stagedInput || !!pendingEditReview || walkthroughActive || !!pendingChoice || !!stagedChoiceCustom || !!pendingRevision || !!stagedCheckpointRevise || !!pendingCheckpoint;
-  const [planMode, setPlanMode] = useState27(false);
-  const [queuedSubmit, setQueuedSubmit] = useState27(null);
+  const [planMode, setPlanMode] = useState29(false);
+  const [queuedSubmit, setQueuedSubmit] = useState29(null);
   const { recallPrev, recallNext, pushHistory, resetCursor } = useInputRecall(setInput);
   const { setRawMode, isRawModeSupported } = useStdin();
   const handleOpenExternalEditor = useCallback13(async () => {
@@ -13792,7 +13764,7 @@ function AppInner({
   const activePickerSnapshotRef = useRef10(null);
   const activeViewerResolverRef = useRef10(null);
   const activeViewerSnapshotRef = useRef10(null);
-  const [pendingReplayViewer, setPendingReplayViewer] = useState27(null);
+  const [pendingReplayViewer, setPendingReplayViewer] = useState29(null);
   const planStepsRef = useRef10(null);
   const completedStepIdsRef = useRef10(/* @__PURE__ */ new Set());
   const planBodyRef = useRef10(null);
@@ -13810,7 +13782,7 @@ function AppInner({
     if (planSummaryRef.current) extras.summary = planSummaryRef.current;
     savePlanState(session, steps, completedStepIdsRef.current, extras);
   }, [session]);
-  const [summary, setSummary] = useState27({
+  const [summary, setSummary] = useState29({
     turns: 0,
     totalCostUsd: 0,
     totalInputCostUsd: 0,
@@ -13844,7 +13816,7 @@ function AppInner({
     };
   }, []);
   const loopRef = useRef10(null);
-  const loop2 = useMemo11(() => {
+  const loop2 = useMemo12(() => {
     if (loopRef.current) return loopRef.current;
     const client = new DeepSeekClient({ baseUrl: loadBaseUrl() });
     if (tools && !tools.has("run_skill")) {
@@ -13882,17 +13854,19 @@ function AppInner({
       tools,
       model: model2,
       budgetUsd,
+      failureThreshold,
       session,
       hooks: hookList,
       hookCwd: currentRootDir,
       // Restore the user's last-chosen effort cap. Without this a
       // `/effort high` silently reverted to `max` on relaunch — the
       // loop's constructor default wins over persisted state.
-      reasoningEffort: loadReasoningEffort()
+      reasoningEffort: loadReasoningEffort(),
+      rebuildSystem
     });
     loopRef.current = l;
     return l;
-  }, [model2, system, budgetUsd, session, tools, codeMode]);
+  }, [model2, system, rebuildSystem, budgetUsd, failureThreshold, session, tools, codeMode]);
   useEffect17(() => {
     if (!session || !tools) return;
     tools.setAuditListener((event) => {
@@ -13939,11 +13913,22 @@ function AppInner({
   useEffect17(() => {
     loop2.hooks = hookList;
   }, [loop2, hookList]);
+  useEffect17(() => {
+    const canonical = loop2.model === "deepseek-v4-pro" ? "pro" : loop2.model === "deepseek-v4-flash" ? loop2.autoEscalate ? "auto" : "flash" : null;
+    agentStore.dispatch({ type: "session.preset.change", preset: canonical });
+  }, []);
   const mcpBridgeStartedRef = useRef10(false);
   useEffect17(() => {
     if (mcpBridgeStartedRef.current) return;
     if (!mcpRuntime || !mcpSpecs || mcpSpecs.length === 0) return;
     mcpBridgeStartedRef.current = true;
+    const total = mcpSpecs.length;
+    let ready = 0;
+    agentStore.dispatch({ type: "mcp.loading", ready, total });
+    const bumpReady = () => {
+      ready = Math.min(ready + 1, total);
+      agentStore.dispatch({ type: "mcp.loading", ready, total });
+    };
     mcpRuntime.setLifecycleSink((notice) => {
       if (notice.kind === "handshake") {
         log.pushInfo(formatMcpLifecycleEvent({ state: "handshake", name: notice.name }));
@@ -13958,14 +13943,17 @@ function AppInner({
             ms: notice.ms
           })
         );
+        bumpReady();
       } else if (notice.kind === "disabled") {
         log.pushInfo(formatMcpLifecycleEvent({ state: "disabled", name: notice.name }));
+        bumpReady();
       } else if (notice.kind === "failed") {
         log.pushWarning(
           `MCP \xB7 ${notice.name} failed`,
           `${notice.reason}
 \u2192 run \`reasonix setup\` to remove this entry, or fix the underlying issue (missing npm package, network, etc.).`
         );
+        bumpReady();
       } else if (notice.kind === "slow") {
         log.pushInfo(
           formatMcpSlowToast({
@@ -13981,7 +13969,7 @@ function AppInner({
         setLiveMcpServers(mcpRuntime.summaries());
       });
     }
-  }, [mcpRuntime, mcpSpecs, loop2, log]);
+  }, [mcpRuntime, mcpSpecs, loop2, log, agentStore]);
   const { balance, models, latestVersion, refreshBalance, refreshModels, refreshLatestVersion } = useSessionInfo(loop2);
   useEffect17(() => {
     planModeRef.current = planMode;
@@ -14014,7 +14002,7 @@ function AppInner({
       }
     }
   }, []);
-  const pickerPorts = useMemo11(
+  const pickerPorts = useMemo12(
     () => ({
       broadcast: broadcastDashboardEvent,
       resolverRef: activePickerResolverRef,
@@ -14022,7 +14010,7 @@ function AppInner({
     }),
     [broadcastDashboardEvent]
   );
-  const viewerPorts = useMemo11(
+  const viewerPorts = useMemo12(
     () => ({
       broadcast: broadcastDashboardEvent,
       resolverRef: activeViewerResolverRef,
@@ -14197,6 +14185,7 @@ function AppInner({
     } else {
       log.pushInfo(t("ui.newSession", { name: session }));
     }
+    for (const hint of startupInfoHints ?? []) log.pushInfo(hint);
     if (session && codeMode) {
       const restored = loadPendingEdits(session);
       if (restored && restored.length > 0) {
@@ -14236,10 +14225,10 @@ function AppInner({
       log.pushTip({ topic: tip.topic, sections: tip.sections, footer: tip.footer });
       markMouseClipboardHintShown();
     }
-  }, [session, loop2, codeMode, syncPendingCount, log, pendingEdits]);
+  }, [session, loop2, codeMode, syncPendingCount, log, pendingEdits, startupInfoHints]);
   const quitProcess = useQuit(transcriptRef);
   useKeystroke((ev) => {
-    const pickerOwnsArrows = (atState?.entries.length ?? 0) > 0 || (slashMatches?.length ?? 0) > 0 || (slashArgMatches?.length ?? 0) > 0 || pendingShell != null;
+    const pickerOwnsArrows = (atState?.entries.length ?? 0) > 0 || (slashMatches?.length ?? 0) > 0 || (slashArgMatches?.length ?? 0) > 0 || pendingShell != null || pendingPath != null;
     if (ev.pageUp || ev.mouseScrollUp) chatScroll.scrollPageUp();
     else if (ev.pageDown || ev.mouseScrollDown) chatScroll.scrollPageDown();
     else if (ev.end) chatScroll.jumpToBottom();
@@ -14280,7 +14269,7 @@ function AppInner({
       );
       return;
     }
-    if (codeMode && key.shift && key.tab && !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision) {
+    if (codeMode && key.shift && key.tab && !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision) {
       const cur = editModeRef.current;
       const next = cur === "review" ? "auto" : cur === "auto" ? "yolo" : "review";
       setEditMode(next);
@@ -14288,7 +14277,7 @@ function AppInner({
       log.pushInfo(message);
       return;
     }
-    if (codeMode && input.length === 0 && (chKey === "u" || chKey === "U") && !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision && // Fire when EITHER the banner is up OR there's any non-undone
+    if (codeMode && input.length === 0 && (chKey === "u" || chKey === "U") && !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision && // Fire when EITHER the banner is up OR there's any non-undone
     // history entry — the keybind is useful long after the 5-second
     // banner expires, which users rightly want.
     (undoBanner || hasUndoable())) {
@@ -14296,16 +14285,16 @@ function AppInner({
       log.pushInfo(out);
       return;
     }
-    if (codeMode && input.length === 0 && chKey === " " && undoBanner && !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision) {
+    if (codeMode && input.length === 0 && chKey === " " && undoBanner && !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision) {
       toggleUndoPause();
       return;
     }
-    if (key.ctrl && key.input === "o" && isStreaming && !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision) {
+    if (key.ctrl && key.input === "o" && isStreaming && !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !walkthroughActive && !pendingChoice && !stagedChoiceCustom && !pendingRevision) {
       setLiveExpand((v) => !v);
       return;
     }
     if (busy) return;
-    if (pendingShell) return;
+    if (pendingShell || pendingPath) return;
     if (atState && atState.entries.length > 0) {
       const entries = atState.entries;
       if (key.upArrow) {
@@ -14454,7 +14443,7 @@ function AppInner({
     if (dashboardRef.current) return dashboardRef.current.url;
     if (dashboardStartingRef.current) return dashboardStartingRef.current;
     const startup = (async () => {
-      const { startDashboardServer } = await import("./server-2FXGNQ4F.js");
+      const { startDashboardServer } = await import("./server-DRFPXXSH.js");
       const handle = await startDashboardServer(
         {
           mode: "attached",
@@ -14488,6 +14477,11 @@ function AppInner({
             agentStore.dispatch({ type: "session.model.change", model: settings.model });
             const canonical = settings.model === "deepseek-v4-pro" ? "pro" : settings.autoEscalate ? "auto" : "flash";
             setPreset(canonical);
+            agentStore.dispatch({ type: "session.preset.change", preset: canonical });
+            try {
+              savePreset(canonical);
+            } catch {
+            }
           },
           applyEffortLive: (effort) => {
             loop2.configure({ reasoningEffort: effort });
@@ -14627,11 +14621,11 @@ function AppInner({
             handleStagedInputSubmitRef.current(text ?? "", { plan: plan2, mode: choice }).catch(() => void 0);
           },
           resolveEditReview: (choice) => {
-            const resolve3 = editReviewResolveRef.current;
-            if (resolve3) {
+            const resolve2 = editReviewResolveRef.current;
+            if (resolve2) {
               editReviewResolveRef.current = null;
               setPendingEditReview(null);
-              resolve3({ choice, denyContext: void 0 });
+              resolve2({ choice, denyContext: void 0 });
             }
           },
           resolveCheckpointConfirm: (choice, text) => {
@@ -14717,7 +14711,7 @@ function AppInner({
   const getDashboardUrl = useCallback13(() => {
     return dashboardRef.current?.url ?? null;
   }, []);
-  const [dashboardUrl, setDashboardUrlState] = useState27(null);
+  const [dashboardUrl, setDashboardUrlState] = useState29(null);
   useEffect17(() => {
     if (noDashboard) return;
     if (dashboardRef.current) return;
@@ -14839,6 +14833,37 @@ function AppInner({
         }
         return;
       }
+      const btwMatch = /^\/btw(?:\s+([\s\S]+))?$/.exec(text);
+      if (btwMatch) {
+        const question = btwMatch[1]?.trim() ?? "";
+        pushHistory(text);
+        log.pushUser(text);
+        if (!question) {
+          log.pushInfo(t("app.btwUsage"));
+          return;
+        }
+        setBusy(true);
+        try {
+          const reply = await loop2.client.chat({
+            model: loop2.model,
+            messages: [
+              {
+                role: "system",
+                content: "You are answering a side question that is unrelated to the current coding conversation. Answer concisely (1-3 sentences) in plain prose. Do not call tools, do not ask clarifying questions, and do not reference any prior turns."
+              },
+              { role: "user", content: question }
+            ]
+          });
+          const answer = reply.content.trim() || "(no answer)";
+          log.pushInfo(`${t("app.btwHeader")}
+${answer}`, "brand");
+        } catch (err) {
+          log.pushWarning(t("app.btwFailed"), err.message);
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
       const mcpBrowseMatch = /^\/(resource|prompt)(?:\s+([\s\S]*))?$/.exec(text);
       if (mcpBrowseMatch) {
         const kind = mcpBrowseMatch[1];
@@ -14930,7 +14955,7 @@ function AppInner({
           },
           reloadHooks: () => reloadHooks(codeMode ? currentRootDir : void 0),
           switchCwd: codeMode?.reregisterTools ? (newPath) => {
-            const resolved = resolve2(newPath);
+            const resolved = resolve(newPath);
             let stat;
             try {
               stat = statSync(resolved);
@@ -15389,6 +15414,22 @@ function AppInner({
     },
     [pendingShell, codeMode, currentRootDir, log]
   );
+  const handlePathConfirm = useCallback13(
+    (choice, denyContext) => {
+      const pending = pendingPath;
+      if (!pending) return;
+      const { id, allowPrefix } = pending;
+      setPendingPath(null);
+      if (choice === "deny") {
+        pauseGate.resolve(id, { type: "deny", denyContext });
+      } else if (choice === "always_allow") {
+        pauseGate.resolve(id, { type: "always_allow", prefix: allowPrefix });
+      } else {
+        pauseGate.resolve(id, { type: "run_once" });
+      }
+    },
+    [pendingPath]
+  );
   const pendingGateIdRef = useRef10(null);
   const resetPendingModals = useCallback13(() => {
     const editResolve = editReviewResolveRef.current;
@@ -15398,6 +15439,7 @@ function AppInner({
       editResolve({ choice: "reject" });
     }
     setPendingShell(null);
+    setPendingPath(null);
     setPendingPlan(null);
     setPendingCheckpoint(null);
     setPendingRevision(null);
@@ -15550,13 +15592,30 @@ function AppInner({
       chatScroll.jumpToBottom();
       switch (request.kind) {
         case "run_command":
-        case "run_background":
+        case "run_background": {
+          const p = payload;
           setPendingShell({
             id: request.id,
-            command: payload.command,
-            kind: request.kind
+            command: p.command,
+            kind: request.kind,
+            cwd: p.cwd,
+            timeoutSec: p.timeoutSec,
+            waitSec: p.waitSec
           });
           break;
+        }
+        case "path_access": {
+          const p = payload;
+          setPendingPath({
+            id: request.id,
+            path: p.path,
+            intent: p.intent,
+            toolName: p.toolName,
+            sandboxRoot: p.sandboxRoot,
+            allowPrefix: p.allowPrefix
+          });
+          break;
+        }
         case "plan_proposed": {
           const p = payload;
           setPendingPlan(p.plan);
@@ -15569,7 +15628,7 @@ function AppInner({
           const p = payload;
           const completed = completedStepIdsRef.current.size;
           const total = planStepsRef.current?.length ?? 0;
-          if (editModeRef.current === "auto" || editModeRef.current === "yolo") {
+          if (shouldAutoResolveCheckpoint(editModeRef.current)) {
             handleAutoCheckpointContinueRef.current(p.stepId, p.title);
             pauseGate.resolve(request.id, { type: "continue" });
             break;
@@ -15784,8 +15843,16 @@ function AppInner({
     []
   );
   const tickerSuspended = modalOpen || !busy && !isStreaming;
-  if (!bootReady) return /* @__PURE__ */ React65.createElement(BootSplash, null);
-  return /* @__PURE__ */ React65.createElement(React65.Fragment, null, /* @__PURE__ */ React65.createElement(TickerProvider, { disabled: tickerSuspended }, /* @__PURE__ */ React65.createElement(ViewportBudgetProvider, null, /* @__PURE__ */ React65.createElement(InflightProvider, { inflight: loop2.inflight }, /* @__PURE__ */ React65.createElement(Box52, { flexDirection: "row", height: stdout?.rows ?? 24 }, /* @__PURE__ */ React65.createElement(Box52, { flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ React65.createElement(Box52, { flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ React65.createElement(LiveExpandContext.Provider, { value: liveExpand }, /* @__PURE__ */ React65.createElement(CardStream, { suppressLive: modalOpen })), !hasConversation && !busy && !isStreaming && slashMatches === null ? /* @__PURE__ */ React65.createElement(
+  if (!bootReady) return /* @__PURE__ */ React66.createElement(BootSplash, null);
+  return /* @__PURE__ */ React66.createElement(React66.Fragment, null, /* @__PURE__ */ React66.createElement(
+    HistoryTypingCapture,
+    {
+      input,
+      setInput,
+      enabled: !modalOpen && !busy,
+      onReturnToBottom: chatScroll.jumpToBottom
+    }
+  ), /* @__PURE__ */ React66.createElement(TickerProvider, { disabled: tickerSuspended }, /* @__PURE__ */ React66.createElement(ViewportBudgetProvider, null, /* @__PURE__ */ React66.createElement(InflightProvider, { inflight: loop2.inflight }, /* @__PURE__ */ React66.createElement(Box54, { flexDirection: "row", height: stdout?.rows ?? 24 }, /* @__PURE__ */ React66.createElement(Box54, { flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ React66.createElement(Box54, { flexDirection: "column", flexGrow: 1 }, /* @__PURE__ */ React66.createElement(LiveExpandContext.Provider, { value: liveExpand }, /* @__PURE__ */ React66.createElement(CardStream, { suppressLive: modalOpen })), !hasConversation && !busy && !isStreaming && slashMatches === null ? /* @__PURE__ */ React66.createElement(
     WelcomeBanner,
     {
       inCodeMode: !!codeMode,
@@ -15793,7 +15860,7 @@ function AppInner({
       dashboardUrl,
       languageVersion
     }
-  ) : null, !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && ongoingTool ? /* @__PURE__ */ React65.createElement(OngoingToolRow, { tool: ongoingTool, progress: toolProgress }) : null, !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && subagentActivities.length > 0 ? /* @__PURE__ */ React65.createElement(SubagentLiveStack, { activities: subagentActivities, max: 3 }) : null, !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !ongoingTool && statusLine ? /* @__PURE__ */ React65.createElement(ThinkingRow, { text: statusLine }) : null, undoBanner && !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !pendingChoice && !stagedChoiceCustom && !pendingRevision && !stagedCheckpointRevise && !pendingCheckpoint ? /* @__PURE__ */ React65.createElement(UndoBanner, { banner: undoBanner }) : null, !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && busy && !isStreaming && !ongoingTool && !statusLine ? /* @__PURE__ */ React65.createElement(ThinkingRow, { text: activityLabel }) : null, !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview ? /* @__PURE__ */ React65.createElement(PlanLiveRow, null) : null, /* @__PURE__ */ React65.createElement(ToastRail, null)), stagedInput ? /* @__PURE__ */ React65.createElement(
+  ) : null, !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && ongoingTool ? /* @__PURE__ */ React66.createElement(OngoingToolRow, { tool: ongoingTool, progress: toolProgress }) : null, !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && subagentActivities.length > 0 ? /* @__PURE__ */ React66.createElement(SubagentLiveStack, { activities: subagentActivities, max: 3 }) : null, !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !ongoingTool && statusLine ? /* @__PURE__ */ React66.createElement(ThinkingRow, { text: statusLine }) : null, undoBanner && !pendingShell && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && !pendingChoice && !stagedChoiceCustom && !pendingRevision && !stagedCheckpointRevise && !pendingCheckpoint ? /* @__PURE__ */ React66.createElement(UndoBanner, { banner: undoBanner }) : null, !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview && busy && !isStreaming && !ongoingTool && !statusLine ? /* @__PURE__ */ React66.createElement(ThinkingRow, { text: activityLabel }) : null, !pendingShell && !pendingPath && !pendingPlan && !pendingReviseEditor && !pendingSessionsPicker && !pendingCheckpointPicker && !pendingMcpHub && !stagedInput && !pendingEditReview ? /* @__PURE__ */ React66.createElement(PlanLiveRow, null) : null, /* @__PURE__ */ React66.createElement(ToastRail, null)), stagedInput ? /* @__PURE__ */ React66.createElement(
     PlanRefineInput,
     {
       mode: stagedInput.mode,
@@ -15801,21 +15868,21 @@ function AppInner({
       onSubmit: handleStagedInputSubmit,
       onCancel: handleStagedInputCancel
     }
-  ) : stagedChoiceCustom ? /* @__PURE__ */ React65.createElement(
+  ) : stagedChoiceCustom ? /* @__PURE__ */ React66.createElement(
     PlanRefineInput,
     {
       mode: "choice-custom",
       onSubmit: handleChoiceCustomSubmit,
       onCancel: handleChoiceCustomCancel
     }
-  ) : stagedCheckpointRevise ? /* @__PURE__ */ React65.createElement(
+  ) : stagedCheckpointRevise ? /* @__PURE__ */ React66.createElement(
     PlanRefineInput,
     {
       mode: "checkpoint-revise",
       onSubmit: (text) => handleCheckpointReviseSubmit(text, stagedCheckpointRevise),
       onCancel: handleCheckpointReviseCancel
     }
-  ) : pendingChoice ? /* @__PURE__ */ React65.createElement(
+  ) : pendingChoice ? /* @__PURE__ */ React66.createElement(
     ChoiceConfirm,
     {
       question: pendingChoice.question,
@@ -15823,7 +15890,7 @@ function AppInner({
       allowCustom: pendingChoice.allowCustom,
       onChoose: stableHandleChoiceConfirm
     }
-  ) : pendingRevision ? /* @__PURE__ */ React65.createElement(
+  ) : pendingRevision ? /* @__PURE__ */ React66.createElement(
     PlanReviseConfirm,
     {
       reason: pendingRevision.reason,
@@ -15834,7 +15901,7 @@ function AppInner({
       summary: pendingRevision.summary,
       onChoose: stableHandleReviseConfirm
     }
-  ) : pendingCheckpoint ? /* @__PURE__ */ React65.createElement(
+  ) : pendingCheckpoint ? /* @__PURE__ */ React66.createElement(
     PlanCheckpointConfirm,
     {
       stepId: pendingCheckpoint.stepId,
@@ -15845,7 +15912,7 @@ function AppInner({
       completedStepIds: completedStepIdsRef.current,
       onChoose: stableHandleCheckpointConfirm
     }
-  ) : pendingCheckpointPicker ? /* @__PURE__ */ React65.createElement(
+  ) : pendingCheckpointPicker ? /* @__PURE__ */ React66.createElement(
     CheckpointPicker,
     {
       checkpoints: checkpointPickerList,
@@ -15890,7 +15957,7 @@ function AppInner({
         }
       }
     }
-  ) : pendingSessionsPicker ? /* @__PURE__ */ React65.createElement(
+  ) : pendingSessionsPicker ? /* @__PURE__ */ React66.createElement(
     SessionPicker,
     {
       sessions: sessionsPickerList,
@@ -15912,7 +15979,7 @@ function AppInner({
         if (outcome.kind === "new") {
           setPendingSessionsPicker(false);
           if (onSwitchSession) {
-            onSwitchSession(void 0);
+            onSwitchSession(freshSessionName(session));
           } else {
             log.pushInfo(
               "\u25B8 to start a fresh session, quit and run: reasonix chat (no --session flag)"
@@ -15935,7 +16002,7 @@ function AppInner({
         }
       }
     }
-  ) : pendingThemePicker ? /* @__PURE__ */ React65.createElement(
+  ) : pendingThemePicker ? /* @__PURE__ */ React66.createElement(
     ThemePicker,
     {
       currentPreference: loadTheme() ?? "auto",
@@ -15953,7 +16020,7 @@ function AppInner({
   active now: ${active}`);
       }
     }
-  ) : pendingCopyMode ? /* @__PURE__ */ React65.createElement(
+  ) : pendingCopyMode ? /* @__PURE__ */ React66.createElement(
     CopyMode,
     {
       cards: agentStore.getState().cards,
@@ -15969,7 +16036,7 @@ function AppInner({
         }
       }
     }
-  ) : pendingModelPicker ? /* @__PURE__ */ React65.createElement(
+  ) : pendingModelPicker ? /* @__PURE__ */ React66.createElement(
     ModelPicker,
     {
       models,
@@ -15980,8 +16047,20 @@ function AppInner({
       onChoose: (outcome) => {
         setPendingModelPicker(false);
         if (outcome.kind === "select") {
-          loop2.configure({ model: outcome.id });
+          loop2.configure({ model: outcome.id, autoEscalate: false });
           agentStore.dispatch({ type: "session.model.change", model: outcome.id });
+          const inferred = outcome.id === "deepseek-v4-pro" ? "pro" : outcome.id === "deepseek-v4-flash" ? "flash" : null;
+          setPreset(inferred ?? "flash");
+          agentStore.dispatch({
+            type: "session.preset.change",
+            preset: inferred
+          });
+          if (inferred) {
+            try {
+              savePreset(inferred);
+            } catch {
+            }
+          }
           log.pushInfo(`\u25B8 model: ${outcome.id}`);
           return;
         }
@@ -15993,15 +16072,20 @@ function AppInner({
             reasoningEffort: p.reasoningEffort
           });
           agentStore.dispatch({ type: "session.model.change", model: p.model });
+          setPreset(outcome.name);
+          agentStore.dispatch({
+            type: "session.preset.change",
+            preset: outcome.name
+          });
           try {
-            saveReasoningEffort(p.reasoningEffort);
+            savePreset(outcome.name);
           } catch {
           }
           log.pushInfo(`\u25B8 preset: ${outcome.name} \xB7 ${p.model}`);
         }
       }
     }
-  ) : pendingMcpHub ? /* @__PURE__ */ React65.createElement(
+  ) : pendingMcpHub ? /* @__PURE__ */ React66.createElement(
     McpHub,
     {
       initialTab: pendingMcpHub.tab,
@@ -16021,7 +16105,7 @@ function AppInner({
         return r;
       } : void 0
     }
-  ) : pendingPlan ? /* @__PURE__ */ React65.createElement(
+  ) : pendingPlan ? /* @__PURE__ */ React66.createElement(
     PlanConfirm,
     {
       plan: pendingPlan,
@@ -16030,7 +16114,7 @@ function AppInner({
       onChoose: stableHandlePlanConfirm,
       projectRoot: currentRootDir
     }
-  ) : pendingReviseEditor ? /* @__PURE__ */ React65.createElement(
+  ) : pendingReviseEditor ? /* @__PURE__ */ React66.createElement(
     PlanReviseEditor,
     {
       steps: planStepsRef.current ?? [],
@@ -16049,37 +16133,50 @@ function AppInner({
         setPendingPlan(planText);
       }
     }
-  ) : pendingShell ? /* @__PURE__ */ React65.createElement(
+  ) : pendingShell ? /* @__PURE__ */ React66.createElement(
     ShellConfirm,
     {
       command: pendingShell.command,
       allowPrefix: derivePrefix(pendingShell.command),
       kind: pendingShell.kind,
+      cwd: pendingShell.cwd,
+      timeoutSec: pendingShell.timeoutSec,
+      waitSec: pendingShell.waitSec,
       onChoose: handleShellConfirm
     }
-  ) : pendingEditReview ? /* @__PURE__ */ React65.createElement(
+  ) : pendingPath ? /* @__PURE__ */ React66.createElement(
+    PathConfirm,
+    {
+      path: pendingPath.path,
+      intent: pendingPath.intent,
+      toolName: pendingPath.toolName,
+      sandboxRoot: pendingPath.sandboxRoot,
+      allowPrefix: pendingPath.allowPrefix,
+      onChoose: handlePathConfirm
+    }
+  ) : pendingEditReview ? /* @__PURE__ */ React66.createElement(
     EditConfirm,
     {
       block: pendingEditReview,
       onChoose: (choice, denyContext) => {
-        const resolve3 = editReviewResolveRef.current;
-        if (resolve3) {
+        const resolve2 = editReviewResolveRef.current;
+        if (resolve2) {
           editReviewResolveRef.current = null;
-          resolve3({ choice, denyContext });
+          resolve2({ choice, denyContext });
         }
       }
     }
-  ) : walkthroughActive && pendingEdits.current.length > 0 ? /* @__PURE__ */ React65.createElement(
+  ) : walkthroughActive && pendingEdits.current.length > 0 ? /* @__PURE__ */ React66.createElement(
     EditConfirm,
     {
       key: `walk-${pendingTick}`,
       block: pendingEdits.current[0],
       onChoose: handleWalkChoice
     }
-  ) : /* @__PURE__ */ React65.createElement(
+  ) : /* @__PURE__ */ React66.createElement(
     InputAreaWithHistoryHint,
     {
-      inputArea: /* @__PURE__ */ React65.createElement(Box52, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, /* @__PURE__ */ React65.createElement(Box52, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, codeMode ? /* @__PURE__ */ React65.createElement(
+      inputArea: /* @__PURE__ */ React66.createElement(Box54, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, /* @__PURE__ */ React66.createElement(Box54, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, codeMode ? /* @__PURE__ */ React66.createElement(
         ModeStatusBar,
         {
           editMode,
@@ -16089,7 +16186,7 @@ function AppInner({
           undoArmed: !!undoBanner || hasUndoable(),
           jobs: codeMode.jobs
         }
-      ) : null, activeLoop ? /* @__PURE__ */ React65.createElement(LoopStatusRow, { loop: activeLoop }) : null, /* @__PURE__ */ React65.createElement(StatusRow, null), /* @__PURE__ */ React65.createElement(
+      ) : null, activeLoop ? /* @__PURE__ */ React66.createElement(LoopStatusRow, { loop: activeLoop }) : null, /* @__PURE__ */ React66.createElement(StatusRow, { statusBar }), /* @__PURE__ */ React66.createElement(
         PromptInput,
         {
           value: input,
@@ -16100,7 +16197,7 @@ function AppInner({
           onHistoryNext: handleHistoryNext,
           onOpenExternalEditor: handleOpenExternalEditor
         }
-      )), /* @__PURE__ */ React65.createElement(Box52, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, slashMatches !== null ? /* @__PURE__ */ React65.createElement(
+      )), /* @__PURE__ */ React66.createElement(Box54, { flexDirection: "column", flexShrink: 0, flexWrap: "nowrap" }, slashMatches !== null ? /* @__PURE__ */ React66.createElement(
         SlashSuggestions,
         {
           key: `slash-suggestions:${slashGroupMode ? "group" : "search"}`,
@@ -16109,7 +16206,7 @@ function AppInner({
           groupMode: slashGroupMode,
           advancedHidden: slashAdvancedHidden
         }
-      ) : null, atState !== null ? /* @__PURE__ */ React65.createElement(AtMentionSuggestions, { state: atState, selectedIndex: atSelected }) : null), slashArgContext ? /* @__PURE__ */ React65.createElement(
+      ) : null, atState !== null ? /* @__PURE__ */ React66.createElement(AtMentionSuggestions, { state: atState, selectedIndex: atSelected }) : null), slashArgContext ? /* @__PURE__ */ React66.createElement(
         SlashArgPicker,
         {
           matches: slashArgMatches,
@@ -16124,12 +16221,12 @@ function AppInner({
 }
 
 // src/cli/ui/Setup.tsx
-import { Box as Box53, Text as Text58, useApp } from "ink";
-import React67, { useState as useState28 } from "react";
+import { Box as Box55, Text as Text59, useApp } from "ink";
+import React68, { useState as useState30 } from "react";
 
 // src/cli/ui/MaskedInput.tsx
-import { Text as Text57, useInput } from "ink";
-import React66, { useRef as useRef11 } from "react";
+import { Text as Text58, useInput } from "ink";
+import React67, { useRef as useRef11 } from "react";
 function stripPasteMarkers(s) {
   return s.replace(/\u001b?\[20[01]~/g, "").replace(/\u001b/g, "");
 }
@@ -16164,17 +16261,17 @@ function MaskedInput({
   });
   if (value.length === 0) {
     if (placeholder.length === 0) {
-      return /* @__PURE__ */ React66.createElement(Text57, { inverse: true }, " ");
+      return /* @__PURE__ */ React67.createElement(Text58, { inverse: true }, " ");
     }
-    return /* @__PURE__ */ React66.createElement(React66.Fragment, null, /* @__PURE__ */ React66.createElement(Text57, { inverse: true }, placeholder[0]), /* @__PURE__ */ React66.createElement(Text57, { color: FG.faint }, placeholder.slice(1)));
+    return /* @__PURE__ */ React67.createElement(React67.Fragment, null, /* @__PURE__ */ React67.createElement(Text58, { inverse: true }, placeholder[0]), /* @__PURE__ */ React67.createElement(Text58, { color: FG.faint }, placeholder.slice(1)));
   }
-  return /* @__PURE__ */ React66.createElement(React66.Fragment, null, /* @__PURE__ */ React66.createElement(Text57, null, mask.repeat(value.length)), /* @__PURE__ */ React66.createElement(Text57, { inverse: true }, " "));
+  return /* @__PURE__ */ React67.createElement(React67.Fragment, null, /* @__PURE__ */ React67.createElement(Text58, null, mask.repeat(value.length)), /* @__PURE__ */ React67.createElement(Text58, { inverse: true }, " "));
 }
 
 // src/cli/ui/Setup.tsx
 function Setup({ onReady }) {
-  const [value, setValue] = useState28("");
-  const [error, setError] = useState28(null);
+  const [value, setValue] = useState30("");
+  const [error, setError] = useState30(null);
   const { exit: exit2 } = useApp();
   const handleSubmit = (raw) => {
     const trimmed = raw.trim();
@@ -16195,7 +16292,7 @@ function Setup({ onReady }) {
     }
     onReady(trimmed);
   };
-  return /* @__PURE__ */ React67.createElement(Box53, { flexDirection: "column", paddingX: 1, marginY: 1 }, /* @__PURE__ */ React67.createElement(Box53, null, /* @__PURE__ */ React67.createElement(Text58, { bold: true, color: GRADIENT[0] }, GLYPH.brand), /* @__PURE__ */ React67.createElement(Text58, null, "  "), /* @__PURE__ */ React67.createElement(Text58, { bold: true }, t("wizard.welcomeTitle"))), /* @__PURE__ */ React67.createElement(Box53, { marginTop: 1 }, /* @__PURE__ */ React67.createElement(Text58, { color: COLOR.info }, t("wizard.apiKeyPrompt"))), /* @__PURE__ */ React67.createElement(Box53, null, /* @__PURE__ */ React67.createElement(Text58, { dimColor: true }, `  ${t("wizard.apiKeyGetOne")}`)), /* @__PURE__ */ React67.createElement(Box53, null, /* @__PURE__ */ React67.createElement(Text58, { dimColor: true }, t("wizard.apiKeySavedLocally", { path: defaultConfigPath() }))), /* @__PURE__ */ React67.createElement(Box53, { marginTop: 1 }, /* @__PURE__ */ React67.createElement(Text58, { bold: true, color: COLOR.brand }, GLYPH.bar), /* @__PURE__ */ React67.createElement(Text58, { bold: true, color: COLOR.primary }, " \u203A "), /* @__PURE__ */ React67.createElement(
+  return /* @__PURE__ */ React68.createElement(Box55, { flexDirection: "column", paddingX: 1, marginY: 1 }, /* @__PURE__ */ React68.createElement(Box55, null, /* @__PURE__ */ React68.createElement(Text59, { bold: true, color: GRADIENT[0] }, GLYPH.brand), /* @__PURE__ */ React68.createElement(Text59, null, "  "), /* @__PURE__ */ React68.createElement(Text59, { bold: true }, t("wizard.welcomeTitle"))), /* @__PURE__ */ React68.createElement(Box55, { marginTop: 1 }, /* @__PURE__ */ React68.createElement(Text59, { color: COLOR.info }, t("wizard.apiKeyPrompt"))), /* @__PURE__ */ React68.createElement(Box55, null, /* @__PURE__ */ React68.createElement(Text59, { dimColor: true }, `  ${t("wizard.apiKeyGetOne")}`)), /* @__PURE__ */ React68.createElement(Box55, null, /* @__PURE__ */ React68.createElement(Text59, { dimColor: true }, t("wizard.apiKeySavedLocally", { path: defaultConfigPath() }))), /* @__PURE__ */ React68.createElement(Box55, { marginTop: 1 }, /* @__PURE__ */ React68.createElement(Text59, { bold: true, color: COLOR.brand }, GLYPH.bar), /* @__PURE__ */ React68.createElement(Text59, { bold: true, color: COLOR.primary }, " \u203A "), /* @__PURE__ */ React68.createElement(
     MaskedInput,
     {
       value,
@@ -16204,7 +16301,7 @@ function Setup({ onReady }) {
       mask: "\u2022",
       placeholder: t("wizard.apiKeyPlaceholder")
     }
-  )), error ? /* @__PURE__ */ React67.createElement(Box53, { marginTop: 1 }, /* @__PURE__ */ React67.createElement(Text58, { color: COLOR.err, bold: true }, GLYPH.err), /* @__PURE__ */ React67.createElement(Text58, { color: COLOR.err }, `  ${error}`)) : value ? /* @__PURE__ */ React67.createElement(Box53, { marginTop: 1 }, /* @__PURE__ */ React67.createElement(Text58, { dimColor: true }, t("wizard.apiKeyPreview", { redacted: redactKey(value) }))) : null, /* @__PURE__ */ React67.createElement(Box53, { marginTop: 1 }, /* @__PURE__ */ React67.createElement(Text58, { dimColor: true }, t("wizard.exitHint"))));
+  )), error ? /* @__PURE__ */ React68.createElement(Box55, { marginTop: 1 }, /* @__PURE__ */ React68.createElement(Text59, { color: COLOR.err, bold: true }, GLYPH.err), /* @__PURE__ */ React68.createElement(Text59, { color: COLOR.err }, `  ${error}`)) : value ? /* @__PURE__ */ React68.createElement(Box55, { marginTop: 1 }, /* @__PURE__ */ React68.createElement(Text59, { dimColor: true }, t("wizard.apiKeyPreview", { redacted: redactKey(value) }))) : null, /* @__PURE__ */ React68.createElement(Box55, { marginTop: 1 }, /* @__PURE__ */ React68.createElement(Text59, { dimColor: true }, t("wizard.exitHint"))));
 }
 
 // src/cli/ui/drain-tty.ts
@@ -16222,7 +16319,7 @@ async function drainTtyResponses(timeoutMs = 50) {
     return;
   }
   stdin.resume();
-  await new Promise((resolve3) => {
+  await new Promise((resolve2) => {
     const onData = (_chunk) => {
     };
     stdin.on("data", onData);
@@ -16235,201 +16332,13 @@ async function drainTtyResponses(timeoutMs = 50) {
         } catch {
         }
       }
-      resolve3();
+      resolve2();
     }, timeoutMs);
     timer.unref();
   });
 }
 
 // src/cli/commands/chat.tsx
-var stderrLifecycleSink = (n) => {
-  if (n.kind === "slow") {
-    process.stderr.write(
-      `${formatMcpSlowToast({ name: n.serverName, p95Ms: n.p95Ms, sampleSize: n.sampleSize })}
-`
-    );
-    return;
-  }
-  if (n.kind === "failed") {
-    process.stderr.write(
-      `${formatMcpLifecycleEvent({ state: "failed", name: n.name, reason: n.reason })}
-  \u2192 run \`reasonix setup\` to remove this entry, or fix the underlying issue (missing npm package, network, etc.).
-`
-    );
-    return;
-  }
-  if (n.kind === "connected") {
-    process.stderr.write(
-      `${formatMcpLifecycleEvent({
-        state: "connected",
-        name: n.name,
-        tools: n.tools,
-        resources: n.resources,
-        prompts: n.prompts,
-        ms: n.ms
-      })}
-`
-    );
-    return;
-  }
-  process.stderr.write(`${formatMcpLifecycleEvent({ state: n.kind, name: n.name })}
-`);
-};
-function createMcpRuntime(ctx) {
-  const records = /* @__PURE__ */ new Map();
-  const insertionOrder = [];
-  let sink = stderrLifecycleSink;
-  async function addSpec(raw, loop2) {
-    if (records.has(raw)) {
-      return { ok: true, summary: records.get(raw).summary };
-    }
-    const tools = ctx.getTools();
-    if (!tools) return { ok: false, reason: "no tool registry available" };
-    const disabledNames = new Set(readConfig().mcpDisabled ?? []);
-    let label = "anon";
-    let mcp2;
-    try {
-      const spec = parseMcpSpec(raw);
-      label = spec.name ?? "anon";
-      if (spec.name && disabledNames.has(spec.name)) {
-        sink({ kind: "disabled", name: label });
-        return { ok: false, reason: "disabled by user" };
-      }
-      sink({ kind: "handshake", name: label });
-      const t0 = Date.now();
-      const namePrefix = spec.name ? `${spec.name}_` : ctx.getRequestedCount() === 1 && ctx.getMcpPrefix() ? ctx.getMcpPrefix() : "";
-      if (spec.transport === "stdio") preflightStdioSpec(spec);
-      const transport = buildTransportFromSpec(spec, { env: mcpEnvFor(spec.name, readConfig()) });
-      mcp2 = new McpClient({ transport });
-      await mcp2.initialize();
-      const host = { client: mcp2 };
-      const bridge = await bridgeMcpTools(mcp2, {
-        registry: tools,
-        namePrefix,
-        serverName: label,
-        host,
-        onProgress: (info) => ctx.progressSink.current?.(info),
-        onSlow: (info) => sink({
-          kind: "slow",
-          serverName: info.serverName,
-          p95Ms: info.p95Ms,
-          sampleSize: info.sampleSize
-        })
-      });
-      let report;
-      try {
-        report = await inspectMcpServer(mcp2);
-      } catch {
-        report = {
-          protocolVersion: mcp2.protocolVersion,
-          serverInfo: mcp2.serverInfo,
-          capabilities: mcp2.serverCapabilities ?? {},
-          tools: { supported: true, items: [] },
-          resources: { supported: false, reason: "inspect failed" },
-          prompts: { supported: false, reason: "inspect failed" },
-          elapsedMs: 0
-        };
-      }
-      const ms = Date.now() - t0;
-      const resourceCount = report.resources.supported ? report.resources.items.length : 0;
-      const promptCount = report.prompts.supported ? report.prompts.items.length : 0;
-      sink({
-        kind: "connected",
-        name: label,
-        tools: bridge.registeredNames.length,
-        resources: resourceCount,
-        prompts: promptCount,
-        ms
-      });
-      const summary = buildMcpServerSummary({
-        label,
-        spec: raw,
-        toolCount: bridge.registeredNames.length,
-        report,
-        host,
-        bridgeEnv: bridge.env
-      });
-      const allSpecs = tools.specs();
-      const registeredSpecs = allSpecs.filter(
-        (s) => bridge.registeredNames.includes(s.function.name)
-      );
-      records.set(raw, {
-        spec: raw,
-        client: mcp2,
-        summary,
-        registeredNames: bridge.registeredNames,
-        registeredSpecs
-      });
-      insertionOrder.push(raw);
-      if (loop2) for (const s of registeredSpecs) loop2.prefix.addTool(s);
-      return { ok: true, summary };
-    } catch (err) {
-      await mcp2?.close().catch(() => void 0);
-      const reason = err.message;
-      sink({ kind: "failed", name: label, reason });
-      return { ok: false, reason };
-    }
-  }
-  async function removeSpec(raw, loop2) {
-    const record = records.get(raw);
-    if (!record) return false;
-    await record.client.close().catch(() => void 0);
-    const tools = ctx.getTools();
-    for (const name of record.registeredNames) {
-      tools?.unregister(name);
-      loop2?.prefix.removeTool(name);
-    }
-    records.delete(raw);
-    const idx = insertionOrder.indexOf(raw);
-    if (idx >= 0) insertionOrder.splice(idx, 1);
-    return true;
-  }
-  async function reloadFromConfig(loop2) {
-    const desired = readConfig().mcp ?? [];
-    const desiredSet = new Set(desired);
-    const currentSet = new Set(records.keys());
-    const added = [];
-    const removed = [];
-    const failed = [];
-    for (const spec of [...currentSet]) {
-      if (!desiredSet.has(spec)) {
-        await removeSpec(spec, loop2);
-        removed.push(spec);
-      }
-    }
-    for (const spec of desired) {
-      if (currentSet.has(spec)) continue;
-      const result = await addSpec(spec, loop2);
-      if (result.ok) added.push(spec);
-      else failed.push({ spec, reason: result.reason });
-    }
-    return { added, removed, failed, summaries: summaries() };
-  }
-  function specs() {
-    return [...insertionOrder];
-  }
-  function summaries() {
-    return insertionOrder.map((s) => records.get(s)?.summary).filter((s) => Boolean(s));
-  }
-  async function closeAll() {
-    for (const r of records.values()) await r.client.close().catch(() => void 0);
-    records.clear();
-    insertionOrder.length = 0;
-  }
-  function setLifecycleSink(s) {
-    sink = s;
-  }
-  return {
-    size: () => records.size,
-    specs,
-    summaries,
-    addSpec,
-    removeSpec,
-    reloadFromConfig,
-    closeAll,
-    setLifecycleSink
-  };
-}
 function Root({
   initialKey,
   tools,
@@ -16438,15 +16347,16 @@ function Root({
   progressSink,
   showPicker,
   mcpRuntime,
+  startupInfoHints,
   ...appProps
 }) {
-  const [key, setKey] = useState29(initialKey);
-  const [pickerOpen, setPickerOpen] = useState29(showPicker);
-  const [activeSession, setActiveSession] = useState29(appProps.session);
+  const [key, setKey] = useState31(initialKey);
+  const [pickerOpen, setPickerOpen] = useState31(showPicker);
+  const [activeSession, setActiveSession] = useState31(appProps.session);
   const workspaceRoot = appProps.codeMode?.rootDir ?? process.cwd();
-  const [sessions2, setSessions] = useState29(() => listSessionsForWorkspace(workspaceRoot));
+  const [sessions2, setSessions] = useState31(() => listSessionsForWorkspace(workspaceRoot));
   if (!key) {
-    return /* @__PURE__ */ React68.createElement(
+    return /* @__PURE__ */ React69.createElement(
       Setup,
       {
         onReady: (k) => {
@@ -16458,7 +16368,7 @@ function Root({
   }
   process.env.DEEPSEEK_API_KEY = key;
   if (pickerOpen) {
-    return /* @__PURE__ */ React68.createElement(KeystrokeProvider, null, /* @__PURE__ */ React68.createElement(
+    return /* @__PURE__ */ React69.createElement(KeystrokeProvider, null, /* @__PURE__ */ React69.createElement(
       SessionPicker,
       {
         sessions: sessions2,
@@ -16470,7 +16380,7 @@ function Root({
             return;
           }
           if (outcome.kind === "new") {
-            setActiveSession(void 0);
+            setActiveSession(freshSessionName(activeSession));
             setPickerOpen(false);
             return;
           }
@@ -16491,20 +16401,23 @@ function Root({
       }
     ));
   }
-  return /* @__PURE__ */ React68.createElement(KeystrokeProvider, null, /* @__PURE__ */ React68.createElement(
+  return /* @__PURE__ */ React69.createElement(KeystrokeProvider, null, /* @__PURE__ */ React69.createElement(
     App,
     {
       key: activeSession ?? "__new__",
       model: appProps.model,
       system: appProps.system,
+      rebuildSystem: appProps.rebuildSystem,
       transcript: appProps.transcript,
       budgetUsd: appProps.budgetUsd,
+      failureThreshold: appProps.failureThreshold,
       session: activeSession,
       tools,
       mcpSpecs,
       mcpServers,
       mcpRuntime,
       progressSink,
+      startupInfoHints,
       codeMode: appProps.codeMode,
       noDashboard: appProps.noDashboard,
       dashboardPort: appProps.dashboardPort,
@@ -16530,6 +16443,11 @@ async function chatCommand(opts) {
   });
   const mcpSpecs = [...requestedSpecs];
   const mcpServers = [];
+  const cfg = readConfig();
+  const startupInfoHints = [];
+  if (cfg.setupCompleted === true && (cfg.mcp?.length ?? 0) === 0 && mcpSpecs.length === 0) {
+    startupInfoHints.push(t("mcpHealth.emptyHint"));
+  }
   if (searchEnabled()) {
     if (!tools) tools = new ToolRegistry();
     registerWebTools(tools, {
@@ -16551,7 +16469,7 @@ async function chatCommand(opts) {
   const showPicker = !opts.session && !opts.forceResume && listSessionsForWorkspace(launchWorkspace).length > 0;
   markPhase("ink_render_call");
   const { waitUntilExit } = render(
-    /* @__PURE__ */ React68.createElement(
+    /* @__PURE__ */ React69.createElement(
       Root,
       {
         initialKey,
@@ -16560,6 +16478,7 @@ async function chatCommand(opts) {
         mcpServers,
         mcpRuntime: runtime,
         progressSink,
+        startupInfoHints,
         showPicker,
         ...opts,
         session: resolvedSession
@@ -16592,4 +16511,4 @@ async function chatCommand(opts) {
 export {
   chatCommand
 };
-//# sourceMappingURL=chunk-VM6A6QLY.js.map
+//# sourceMappingURL=chunk-F2AV2QDK.js.map

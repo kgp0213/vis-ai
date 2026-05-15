@@ -107,10 +107,59 @@ If you have no search tool, qualify hard: "I haven't verified \u2014 this is a g
 import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, readdirSync, statSync as statSync2, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join as join2, resolve } from "path";
+
+// src/frontmatter.ts
+var KEY_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/;
+var FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+function stripQuotes(s) {
+  if (s.length < 2) return s;
+  const first = s[0];
+  const last = s[s.length - 1];
+  if (first === '"' && last === '"' || first === "'" && last === "'") {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+function parseFrontmatter(raw) {
+  const stripped = raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw;
+  const lines = stripped.split(/\r?\n/);
+  if (lines[0] !== "---") return { data: {}, body: stripped };
+  const end = lines.indexOf("---", 1);
+  if (end < 0) return { data: {}, body: stripped };
+  const entries = /* @__PURE__ */ new Map();
+  let currentKey = null;
+  for (let i = 1; i < end; i++) {
+    const line = lines[i] ?? "";
+    if (line.trim() === "") {
+      currentKey = null;
+      continue;
+    }
+    const m = line.match(KEY_RE);
+    if (m?.[1] && !FORBIDDEN_KEYS.has(m[1])) {
+      currentKey = m[1];
+      entries.set(currentKey, (m[2] ?? "").trim());
+    } else if (currentKey) {
+      const cont = line.trim();
+      const prev = entries.get(currentKey) ?? "";
+      entries.set(currentKey, prev ? `${prev} ${cont}` : cont);
+    }
+  }
+  const data = /* @__PURE__ */ Object.create(null);
+  for (const [k, v] of entries) {
+    if (FORBIDDEN_KEYS.has(k)) continue;
+    data[k] = stripQuotes(v);
+  }
+  return {
+    data,
+    body: lines.slice(end + 1).join("\n").replace(/^\n+/, "")
+  };
+}
+
+// src/skills.ts
 var SKILLS_DIRNAME = "skills";
 var SKILL_FILE = "SKILL.md";
 var SKILLS_INDEX_MAX_CHARS = 4e3;
-var VALID_SKILL_NAME = /^[a-zA-Z0-9一-鿿][a-zA-Z0-9一-鿿 ._()（）-]{0,63}$/;
+var VALID_SKILL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 function validateSkillFrontmatter(raw) {
   const { data } = parseFrontmatter(raw);
   const desc = (data.description ?? "").trim();
@@ -120,23 +169,6 @@ function validateSkillFrontmatter(raw) {
     };
   }
   return { ok: true };
-}
-function parseFrontmatter(raw) {
-  const lines = raw.split(/\r?\n/);
-  if (lines[0] !== "---") return { data: {}, body: raw };
-  const end = lines.indexOf("---", 1);
-  if (end < 0) return { data: {}, body: raw };
-  const data = {};
-  for (let i = 1; i < end; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/);
-    if (m?.[1]) data[m[1]] = (m[2] ?? "").trim();
-  }
-  return {
-    data,
-    body: lines.slice(end + 1).join("\n").replace(/^\n+/, "")
-  };
 }
 function isValidSkillName(name) {
   return VALID_SKILL_NAME.test(name);
@@ -202,7 +234,7 @@ var SkillStore = class {
   /** Like `create` but writes caller-supplied file contents instead of the stub — used by the scaffold tool. */
   createWithContent(name, scope, content) {
     if (!isValidSkillName(name)) {
-      return { error: `invalid skill name: "${name}"` };
+      return { error: `invalid skill name: "${name}" \u2014 use letters, digits, _, -, .` };
     }
     if (scope === "project" && !this.projectRoot) {
       return { error: "project scope requires a workspace \u2014 run from `reasonix code`" };
@@ -524,6 +556,7 @@ export {
   readProjectMemory,
   memoryEnabled,
   applyProjectMemory,
+  parseFrontmatter,
   TUI_FORMATTING_RULES,
   escalationContract,
   NEGATIVE_CLAIM_RULE,
@@ -533,4 +566,4 @@ export {
   SkillStore,
   applySkillsIndex
 };
-//# sourceMappingURL=chunk-6DR4F3MC.js.map
+//# sourceMappingURL=chunk-CD4SCQL4.js.map

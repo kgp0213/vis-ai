@@ -922,10 +922,10 @@ var require_core = __commonJS({
     }
     var version = "11.11.1";
     var HTMLInjectionError = class extends Error {
-      constructor(reason, html6) {
+      constructor(reason, html8) {
         super(reason);
         this.name = "HTMLInjectionError";
-        this.html = html6;
+        this.html = html8;
       }
     };
     var escape3 = escapeHTML;
@@ -959,14 +959,14 @@ var require_core = __commonJS({
         classes += block2.parentNode ? block2.parentNode.className : "";
         const match = options2.languageDetectRe.exec(classes);
         if (match) {
-          const language = getLanguage(match[1]);
+          const language = getLanguage2(match[1]);
           if (!language) {
             warn(LANGUAGE_NOT_FOUND.replace("{}", match[1]));
             warn("Falling back to no-highlight mode for this block.", block2);
           }
           return language ? match[1] : "no-highlight";
         }
-        return classes.split(/\s+/).find((_class) => shouldNotHighlight(_class) || getLanguage(_class));
+        return classes.split(/\s+/).find((_class) => shouldNotHighlight(_class) || getLanguage2(_class));
       }
       function highlight2(codeOrLanguageName, optionsOrCode, ignoreIllegals) {
         let code = "";
@@ -1244,7 +1244,7 @@ var require_core = __commonJS({
           modeBuffer += lexeme;
           return lexeme.length;
         }
-        const language = getLanguage(languageName);
+        const language = getLanguage2(languageName);
         if (!language) {
           error(LANGUAGE_NOT_FOUND.replace("{}", languageName));
           throw new Error('Unknown language: "' + languageName + '"');
@@ -1336,16 +1336,16 @@ var require_core = __commonJS({
       function highlightAuto(code, languageSubset) {
         languageSubset = languageSubset || options2.languages || Object.keys(languages);
         const plaintext = justTextHighlightResult(code);
-        const results = languageSubset.filter(getLanguage).filter(autoDetection).map(
+        const results = languageSubset.filter(getLanguage2).filter(autoDetection).map(
           (name) => _highlight(name, code, false)
         );
         results.unshift(plaintext);
         const sorted = results.sort((a3, b2) => {
           if (a3.relevance !== b2.relevance) return b2.relevance - a3.relevance;
           if (a3.language && b2.language) {
-            if (getLanguage(a3.language).supersetOf === b2.language) {
+            if (getLanguage2(a3.language).supersetOf === b2.language) {
               return 1;
-            } else if (getLanguage(b2.language).supersetOf === a3.language) {
+            } else if (getLanguage2(b2.language).supersetOf === a3.language) {
               return -1;
             }
           }
@@ -1465,7 +1465,7 @@ var require_core = __commonJS({
       function listLanguages() {
         return Object.keys(languages);
       }
-      function getLanguage(name) {
+      function getLanguage2(name) {
         name = (name || "").toLowerCase();
         return languages[name] || languages[aliases[name]];
       }
@@ -1478,7 +1478,7 @@ var require_core = __commonJS({
         });
       }
       function autoDetection(name) {
-        const lang = getLanguage(name);
+        const lang = getLanguage2(name);
         return lang && !lang.disableAutodetect;
       }
       function upgradePluginAPI(plugin) {
@@ -1533,7 +1533,7 @@ var require_core = __commonJS({
         registerLanguage,
         unregisterLanguage,
         listLanguages,
-        getLanguage,
+        getLanguage: getLanguage2,
         registerAliases,
         autoDetection,
         inherit,
@@ -18986,7 +18986,7 @@ function buildIssueBody({ error, source, info }) {
     "```",
     "",
     "**Environment**",
-    `- Reasonix: ${MODE}`,
+    `- Visionox: ${MODE}`,
     `- Browser: ${ua}`,
     `- URL: ${location.pathname} (token redacted)`,
     "",
@@ -19205,7 +19205,57 @@ var en = {
     tabMemory: "Memory",
     tabHooks: "Hooks",
     tabSettings: "Settings",
+    sectionChanges: "Changes",
+    tabChanges: "Changes",
     footer: "127.0.0.1 only \xB7 token-gated"
+  },
+  changes: {
+    chatPlaceholder: "Ask about your code...",
+    chatWelcome: "Changes \u2014 ask questions about your project files.",
+    chatSend: "Send",
+    viewerPlaceholder: "Select a file to view",
+    treeEmpty: "(empty)",
+    tabClose: "Close tab",
+    newConversation: "New",
+    clearConversation: "Clear",
+    newTitle: "/new \u2014 wipe conversation context",
+    clearTitle: "/clear \u2014 wipe visible scrollback",
+    newConfirmBusy: "A turn is in flight. Abort and start a new conversation?",
+    newConfirm: "Clear current conversation and start fresh?",
+    newToast: "new conversation",
+    clearToast: "scrollback cleared",
+    newFailed: "/new failed: {error}",
+    clearFailed: "/clear failed: {error}",
+    chatSendBtn: "Send",
+    fileTreeTitle: "Files",
+    codeViewerTitle: "Code Viewer",
+    chatPanelTitle: "Chat",
+    loadingFiles: "Loading project files\u2026",
+    review: "Review",
+    allFiles: "All Files",
+    changes: "changes",
+    commentLabel: "Commenting on line",
+    commentPlaceholder: "Add a comment\u2026",
+    commentCancel: "Cancel",
+    commentSubmit: "Comment",
+    commentLine: "Line",
+    commentEdit: "Edit",
+    commentDelete: "Delete",
+    diffSourceGit: "Git changes",
+    diffSourceSession: "Previous session",
+    diffSourceCheckpoint: "Checkpoint",
+    checkpointEmpty: "No checkpoints in this workspace yet.",
+    restoreBtn: "Restore",
+    restoreConfirm: 'Restore "{name}"? This will overwrite current files.',
+    deleteBtn: "Delete",
+    deleteConfirm: 'Delete checkpoint "{name}"? Snapshot will be removed, files stay unchanged.',
+    createBtn: "Snapshot",
+    createPlaceholder: "name for snapshot\u2026",
+    backToList: "back to list",
+    diffStyleUnified: "Unified",
+    diffStyleSplit: "Split",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all"
   },
   common: {
     loading: "loading\u2026",
@@ -19214,6 +19264,7 @@ var en = {
     save: "Save",
     remove: "remove",
     cancel: "Cancel",
+    confirm: "Confirm",
     delete: "Delete",
     add: "Add",
     confirm: "Confirm",
@@ -19279,7 +19330,7 @@ var en = {
     sectionRuntime: "Runtime",
     sectionDev: "Developer",
     devMode: "Developer Mode",
-    noLogs: "No logs yet — start a conversation to see output.",
+    noLogs: "No logs yet.",
     activeModel: "active model",
     modelPricingLine: "${hit} hit \xB7 ${miss} miss \xB7 ${out} out  per 1M tok",
     editMode: "edit mode",
@@ -19380,7 +19431,7 @@ var en = {
     toolsLoaded: "tools loaded",
     mcpServers: "mcp servers",
     editMode: "edit mode",
-    version: "Visionox",
+    version: "Visionix",
     workingDir: "Working directory",
     projectRoot: "project root",
     noPriorData: "no prior data",
@@ -19525,7 +19576,7 @@ var en = {
     create: "create",
     noFiles: "No memory files yet.",
     pickHint: "Pick a memory file on the left.",
-    pickDesc: "Project VISIONOX.md is committable; global notes live in ~/.visionox/memory/.",
+    pickDesc: "Project visionox.md is committable; global notes live in ~/.visionox/memory/.",
     chars: "{count} chars",
     saved: "saved {scope}",
     reloadHint: "re-applied on next /new or session restart"
@@ -19712,13 +19763,13 @@ var en = {
     daemonUp: "daemon is up",
     daemonTimeout: "daemon didn't come up in time \u2014 check ollama serve manually",
     pullingModel: "pulling {model} \u2014 this may take a few minutes on first install",
+    validateModel: "Validate Model",
+    validating: "Validating…",
+    validateOk: "Connected · {model} · {dim}d · {latencyMs}ms",
+    validateFailed: "Validation failed",
     savedConfig: "saved \xB7 {count} fields updated \xB7 re-run index to apply",
     runningPreview: "running dry walk against project root\u2026",
-    exclude: "exclude",
-    validateModel: "Validate Model",
-    validating: "Validating\u2026",
-    validateOk: "Connected \xB7 {model} \xB7 {dim}d \xB7 {latencyMs}ms",
-    validateFailed: "Validation failed"
+    exclude: "exclude"
   },
   modal: {
     shellTitle: "shell command",
@@ -19793,7 +19844,49 @@ var zhCN = {
     tabMemory: "\u8BB0\u5FC6",
     tabHooks: "\u94A9\u5B50",
     tabSettings: "\u8BBE\u7F6E",
+    sectionChanges: "\u53D8\u66F4",
+    tabChanges: "\u53D8\u66F4",
     footer: "\u4EC5 127.0.0.1 \xB7 Token \u4FDD\u62A4"
+  },
+  changes: {
+    chatPlaceholder: "\u8BE2\u95EE\u4EE3\u7801\u95EE\u9898\u2026",
+    chatWelcome: "\u53D8\u66F4 \u2014 \u8BE2\u95EE\u9879\u76EE\u6587\u4EF6\u76F8\u5173\u95EE\u9898\u3002",
+    chatSend: "\u53D1\u9001",
+    viewerPlaceholder: "\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6\u67E5\u770B",
+    treeEmpty: "\uFF08\u7A7A\uFF09",
+    tabClose: "\u5173\u95ED\u6807\u7B7E",
+    newConversation: "\u65B0\u5EFA",
+    clearConversation: "\u6E05\u9664",
+    newTitle: "/new \u2014 \u6E05\u9664\u5BF9\u8BDD\u4E0A\u4E0B\u6587",
+    clearTitle: "/clear \u2014 \u4EC5\u6E05\u9664\u53EF\u89C1\u7684\u6EDA\u52A8\u56DE\u653E",
+    newConfirmBusy: "\u6709\u8F6E\u6B21\u6B63\u5728\u6267\u884C\u3002\u4E2D\u6B62\u5E76\u5F00\u59CB\u65B0\u5BF9\u8BDD\uFF1F",
+    newConfirm: "\u6E05\u9664\u5F53\u524D\u5BF9\u8BDD\u5E76\u91CD\u65B0\u5F00\u59CB\uFF1F",
+    newToast: "\u65B0\u5BF9\u8BDD",
+    clearToast: "\u6EDA\u52A8\u56DE\u653E\u5DF2\u6E05\u9664",
+    newFailed: "/new \u5931\u8D25\uFF1A{error}",
+    clearFailed: "/clear \u5931\u8D25\uFF1A{error}",
+    chatSendBtn: "\u53D1\u9001",
+    fileTreeTitle: "\u6587\u4EF6",
+    codeViewerTitle: "\u4EE3\u7801\u67E5\u770B\u5668",
+    chatPanelTitle: "\u5BF9\u8BDD",
+    loadingFiles: "\u6B63\u5728\u52A0\u8F7D\u9879\u76EE\u6587\u4EF6\u2026",
+    review: "\u5BA1\u67E5",
+    allFiles: "\u6240\u6709\u6587\u4EF6",
+    changes: "\u66F4\u6539",
+    commentLabel: "\u6B63\u5728\u8BC4\u8BBA \u7B2C",
+    commentPlaceholder: "\u6DFB\u52A0\u8BC4\u8BBA\u2026",
+    commentCancel: "\u53D6\u6D88",
+    commentSubmit: "\u8BC4\u8BBA",
+    commentLine: "\u7B2C",
+    commentEdit: "\u7F16\u8F91",
+    commentDelete: "\u5220\u9664",
+    reviewEmpty: "\u6682\u65E0\u53EF\u5BA1\u67E5\u7684\u66F4\u6539",
+    diffSourceGit: "Git \u53D8\u66F4",
+    diffSourceSession: "\u4E0A\u4E00\u8F6E\u53D8\u66F4",
+    diffStyleUnified: "\u7EDF\u4E00\u89C6\u56FE",
+    diffStyleSplit: "\u5206\u680F\u89C6\u56FE",
+    expandAll: "\u5168\u90E8\u5C55\u5F00",
+    collapseAll: "\u5168\u90E8\u6298\u53E0"
   },
   common: {
     loading: "\u52A0\u8F7D\u4E2D\u2026",
@@ -19865,9 +19958,6 @@ var zhCN = {
     loopIter: "\u7B2C {iter} \u6B21",
     loopFiresIn: "{remaining} \u540E\u89E6\u53D1",
     sectionRuntime: "\u8FD0\u884C\u65F6",
-    sectionDev: "\u5F00\u53D1\u8005",
-    devMode: "\u5F00\u53D1\u8005\u6A21\u5F0F",
-    noLogs: "\u6682\u65E0\u65E5\u5FD7 \u2014 \u5F00\u59CB\u5BF9\u8BDD\u540E\u5373\u53EF\u770B\u5230\u8F93\u51FA\u3002",
     activeModel: "\u5F53\u524D\u6A21\u578B",
     modelPricingLine: "${hit} \u547D\u4E2D \xB7 ${miss} \u672A\u547D\u4E2D \xB7 ${out} \u8F93\u51FA  / 100 \u4E07 tok",
     editMode: "\u7F16\u8F91\u6A21\u5F0F",
@@ -19968,7 +20058,7 @@ var zhCN = {
     toolsLoaded: "\u5DF2\u52A0\u8F7D\u5DE5\u5177",
     mcpServers: "MCP \u670D\u52A1\u5668",
     editMode: "\u7F16\u8F91\u6A21\u5F0F",
-    version: "Visionox",
+    version: "Visionix",
     workingDir: "\u5DE5\u4F5C\u76EE\u5F55",
     projectRoot: "\u9879\u76EE\u6839\u76EE\u5F55",
     noPriorData: "\u65E0\u5386\u53F2\u6570\u636E",
@@ -20113,7 +20203,7 @@ var zhCN = {
     create: "\u521B\u5EFA",
     noFiles: "\u6682\u65E0\u8BB0\u5FC6\u6587\u4EF6\u3002",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684\u8BB0\u5FC6\u6587\u4EF6\u3002",
-    pickDesc: "\u9879\u76EE VISIONOX.md \u53EF\u63D0\u4EA4\uFF1B\u5168\u5C40\u7B14\u8BB0\u5B58\u50A8\u5728 ~/.visionox/memory/\u3002",
+    pickDesc: "\u9879\u76EE visionox.md \u53EF\u63D0\u4EA4\uFF1B\u5168\u5C40\u7B14\u8BB0\u5B58\u50A8\u5728 ~/.visionox/memory/\u3002",
     chars: "{count} \u4E2A\u5B57\u7B26",
     saved: "\u5DF2\u4FDD\u5B58 {scope}",
     reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D"
@@ -20147,7 +20237,7 @@ var zhCN = {
     runs7d: "\u6B21\u8FD0\u884C \xB7 7 \u5929",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684\u6280\u80FD\uFF0C\u6216\u5728\u4E0A\u65B9\u521B\u5EFA\u65B0\u6280\u80FD\u3002",
     readOnlyBuiltin: "\u53EA\u8BFB \xB7 \u5185\u7F6E",
-    builtinDesc: "\u5185\u7F6E\u6280\u80FD\u968F Reasonix \u4E00\u8D77\u53D1\u5E03\uFF1B\u6A21\u578B\u4F1A\u81EA\u52A8\u8BC6\u522B\u3002\u5982\u9700\u81EA\u5B9A\u4E49\uFF0C\u8BF7\u521B\u5EFA\u540C\u540D\u7684\u9879\u76EE\u6216\u5168\u5C40\u6280\u80FD\u3002",
+    builtinDesc: "\u5185\u7F6E\u6280\u80FD\u968F Visionox \u4E00\u8D77\u53D1\u5E03\uFF1B\u6A21\u578B\u4F1A\u81EA\u52A8\u8BC6\u522B\u3002\u5982\u9700\u81EA\u5B9A\u4E49\uFF0C\u8BF7\u521B\u5EFA\u540C\u540D\u7684\u9879\u76EE\u6216\u5168\u5C40\u6280\u80FD\u3002",
     saved: "\u5DF2\u4FDD\u5B58 {scope}/{name}",
     deleteConfirm: "\u5220\u9664\u6280\u80FD {scope}/{name}\uFF1F",
     reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D"
@@ -20204,7 +20294,7 @@ var zhCN = {
     ready: "\u5C31\u7EEA",
     setupNeeded: "\u9700\u8981\u8BBE\u7F6E",
     installOllama: "\u5B89\u88C5 Ollama",
-    installOllamaDesc: "Reasonix \u4E0D\u4F1A\u4E3A\u60A8\u8FD0\u884C\u5305\u7BA1\u7406\u5668\u3002\u8BF7\u5148\u5B89\u88C5 Ollama\uFF0C\u7136\u540E\u8FD4\u56DE\uFF1A",
+    installOllamaDesc: "Visionox \u4E0D\u4F1A\u4E3A\u60A8\u8FD0\u884C\u5305\u7BA1\u7406\u5668\u3002\u8BF7\u5148\u5B89\u88C5 Ollama\uFF0C\u7136\u540E\u8FD4\u56DE\uFF1A",
     macWindows: "macOS / Windows\uFF1A",
     download: "\u4ECE ollama.com/download \u4E0B\u8F7D",
     linux: "Linux\uFF1A",
@@ -20246,7 +20336,7 @@ var zhCN = {
     extraBody: "\u6269\u5C55\u8BF7\u6C42\u4F53",
     keepExistingKey: "\u7559\u7A7A\u5219\u4FDD\u7559\u73B0\u6709 Key",
     remoteProvider: "\u8FDC\u7A0B\u5411\u91CF\u670D\u52A1",
-    remoteProviderDesc: "\u5728\u8FD9\u91CC\u914D\u7F6E OpenAI-Compatible embeddings \u7684\u5B8C\u6574 URL\u3002Reasonix \u4F1A\u4E25\u683C\u4F7F\u7528\u4F60\u63D0\u4F9B\u7684 URL \u53D1\u8D77\u8BF7\u6C42\u3002",
+    remoteProviderDesc: "\u5728\u8FD9\u91CC\u914D\u7F6E OpenAI-Compatible embeddings \u7684\u5B8C\u6574 URL\u3002Visionox \u4F1A\u4E25\u683C\u4F7F\u7528\u4F60\u63D0\u4F9B\u7684 URL \u53D1\u8D77\u8BF7\u6C42\u3002",
     ollama: "Ollama",
     binary: "\u4E8C\u8FDB\u5236",
     found: "\u5DF2\u627E\u5230",
@@ -20301,11 +20391,7 @@ var zhCN = {
     pullingModel: "\u6B63\u5728\u62C9\u53D6 {model} \u2014 \u9996\u6B21\u5B89\u88C5\u53EF\u80FD\u9700\u8981\u51E0\u5206\u949F",
     savedConfig: "\u5DF2\u4FDD\u5B58 \xB7 {count} \u4E2A\u5B57\u6BB5\u5DF2\u66F4\u65B0 \xB7 \u91CD\u65B0\u8FD0\u884C\u7D22\u5F15\u4EE5\u5E94\u7528",
     runningPreview: "\u6B63\u5728\u5BF9\u9879\u76EE\u6839\u76EE\u5F55\u6267\u884C\u5E72\u8FD0\u884C\u2026",
-    exclude: "\u6392\u9664",
-    validateModel: "\u6A21\u578B\u9A8C\u8BC1",
-    validating: "\u9A8C\u8BC1\u4E2D\u2026",
-    validateOk: "\u8054\u901A\u6210\u529F \xB7 {model} \xB7 {dim}\u7EF4 \xB7 {latencyMs}ms",
-    validateFailed: "\u9A8C\u8BC1\u5931\u8D25"
+    exclude: "\u6392\u9664"
   },
   modal: {
     shellTitle: "Shell \u547D\u4EE4",
@@ -20362,6 +20448,187 @@ var zhCN = {
 
 // dashboard/src/i18n/index.ts
 var t4 = createT({ en, "zh-CN": zhCN });
+
+// node_modules/preact/compat/dist/compat.module.js
+function g3(n3, t5) {
+  for (var e3 in t5) n3[e3] = t5[e3];
+  return n3;
+}
+function E2(n3, t5) {
+  for (var e3 in n3) if ("__source" !== e3 && !(e3 in t5)) return true;
+  for (var r3 in t5) if ("__source" !== r3 && n3[r3] !== t5[r3]) return true;
+  return false;
+}
+function M2(n3, t5) {
+  this.props = n3, this.context = t5;
+}
+function N2(n3, e3) {
+  function r3(n4) {
+    var t5 = this.props.ref;
+    return t5 != n4.ref && t5 && ("function" == typeof t5 ? t5(null) : t5.current = null), e3 ? !e3(this.props, n4) || t5 != n4.ref : E2(this.props, n4);
+  }
+  function u3(e4) {
+    return this.shouldComponentUpdate = r3, k(n3, e4);
+  }
+  return u3.displayName = "Memo(" + (n3.displayName || n3.name) + ")", u3.__f = u3.prototype.isReactComponent = true, u3.type = n3, u3;
+}
+(M2.prototype = new C()).isPureReactComponent = true, M2.prototype.shouldComponentUpdate = function(n3, t5) {
+  return E2(this.props, n3) || E2(this.state, t5);
+};
+var T3 = l.__b;
+l.__b = function(n3) {
+  n3.type && n3.type.__f && n3.ref && (n3.props.ref = n3.ref, n3.ref = null), T3 && T3(n3);
+};
+var A3 = "undefined" != typeof Symbol && Symbol.for && /* @__PURE__ */ Symbol.for("react.forward_ref") || 3911;
+var O2 = l.__e;
+l.__e = function(n3, t5, e3, r3) {
+  if (n3.then) {
+    for (var u3, o3 = t5; o3 = o3.__; ) if ((u3 = o3.__c) && u3.__c) return null == t5.__e && (t5.__e = e3.__e, t5.__k = e3.__k), u3.__c(n3, t5);
+  }
+  O2(n3, t5, e3, r3);
+};
+var U2 = l.unmount;
+function V2(n3, t5, e3) {
+  return n3 && (n3.__c && n3.__c.__H && (n3.__c.__H.__.forEach(function(n4) {
+    "function" == typeof n4.__c && n4.__c();
+  }), n3.__c.__H = null), null != (n3 = g3({}, n3)).__c && (n3.__c.__P === e3 && (n3.__c.__P = t5), n3.__c.__e = true, n3.__c = null), n3.__k = n3.__k && n3.__k.map(function(n4) {
+    return V2(n4, t5, e3);
+  })), n3;
+}
+function W2(n3, t5, e3) {
+  return n3 && e3 && (n3.__v = null, n3.__k = n3.__k && n3.__k.map(function(n4) {
+    return W2(n4, t5, e3);
+  }), n3.__c && n3.__c.__P === t5 && (n3.__e && e3.appendChild(n3.__e), n3.__c.__e = true, n3.__c.__P = e3)), n3;
+}
+function P3() {
+  this.__u = 0, this.o = null, this.__b = null;
+}
+function j3(n3) {
+  var t5 = n3.__ && n3.__.__c;
+  return t5 && t5.__a && t5.__a(n3);
+}
+function B3() {
+  this.i = null, this.l = null;
+}
+l.unmount = function(n3) {
+  var t5 = n3.__c;
+  t5 && (t5.__z = true), t5 && t5.__R && t5.__R(), t5 && 32 & n3.__u && (n3.type = null), U2 && U2(n3);
+}, (P3.prototype = new C()).__c = function(n3, t5) {
+  var e3 = t5.__c, r3 = this;
+  null == r3.o && (r3.o = []), r3.o.push(e3);
+  var u3 = j3(r3.__v), o3 = false, i3 = function() {
+    o3 || r3.__z || (o3 = true, e3.__R = null, u3 ? u3(c3) : c3());
+  };
+  e3.__R = i3;
+  var l3 = e3.__P;
+  e3.__P = null;
+  var c3 = function() {
+    if (!--r3.__u) {
+      if (r3.state.__a) {
+        var n4 = r3.state.__a;
+        r3.__v.__k[0] = W2(n4, n4.__c.__P, n4.__c.__O);
+      }
+      var t6;
+      for (r3.setState({ __a: r3.__b = null }); t6 = r3.o.pop(); ) t6.__P = l3, t6.forceUpdate();
+    }
+  };
+  r3.__u++ || 32 & t5.__u || r3.setState({ __a: r3.__b = r3.__v.__k[0] }), n3.then(i3, i3);
+}, P3.prototype.componentWillUnmount = function() {
+  this.o = [];
+}, P3.prototype.render = function(n3, e3) {
+  if (this.__b) {
+    if (this.__v.__k) {
+      var r3 = document.createElement("div"), o3 = this.__v.__k[0].__c;
+      this.__v.__k[0] = V2(this.__b, r3, o3.__O = o3.__P);
+    }
+    this.__b = null;
+  }
+  var i3 = e3.__a && k(S, null, n3.fallback);
+  return i3 && (i3.__u &= -33), [k(S, null, e3.__a ? null : n3.children), i3];
+};
+var H2 = function(n3, t5, e3) {
+  if (++e3[1] === e3[0] && n3.l.delete(t5), n3.props.revealOrder && ("t" !== n3.props.revealOrder[0] || !n3.l.size)) for (e3 = n3.i; e3; ) {
+    for (; e3.length > 3; ) e3.pop()();
+    if (e3[1] < e3[0]) break;
+    n3.i = e3 = e3[2];
+  }
+};
+(B3.prototype = new C()).__a = function(n3) {
+  var t5 = this, e3 = j3(t5.__v), r3 = t5.l.get(n3);
+  return r3[0]++, function(u3) {
+    var o3 = function() {
+      t5.props.revealOrder ? (r3.push(u3), H2(t5, n3, r3)) : u3();
+    };
+    e3 ? e3(o3) : o3();
+  };
+}, B3.prototype.render = function(n3) {
+  this.i = null, this.l = /* @__PURE__ */ new Map();
+  var t5 = F(n3.children);
+  n3.revealOrder && "b" === n3.revealOrder[0] && t5.reverse();
+  for (var e3 = t5.length; e3--; ) this.l.set(t5[e3], this.i = [1, 0, this.i]);
+  return n3.children;
+}, B3.prototype.componentDidUpdate = B3.prototype.componentDidMount = function() {
+  var n3 = this;
+  this.l.forEach(function(t5, e3) {
+    H2(n3, e3, t5);
+  });
+};
+var q3 = "undefined" != typeof Symbol && Symbol.for && /* @__PURE__ */ Symbol.for("react.element") || 60103;
+var G2 = /^(?:accent|alignment|arabic|baseline|cap|clip(?!PathU)|color|dominant|fill|flood|font|glyph(?!R)|horiz|image(!S)|letter|lighting|marker(?!H|W|U)|overline|paint|pointer|shape|stop|strikethrough|stroke|text(?!L)|transform|underline|unicode|units|v|vector|vert|word|writing|x(?!C))[A-Z]/;
+var J2 = /^on(Ani|Tra|Tou|BeforeInp|Compo)/;
+var K2 = /[A-Z0-9]/g;
+var Q2 = "undefined" != typeof document;
+var X2 = function(n3) {
+  return ("undefined" != typeof Symbol && "symbol" == typeof /* @__PURE__ */ Symbol() ? /fil|che|rad/ : /fil|che|ra/).test(n3);
+};
+C.prototype.isReactComponent = true, ["componentWillMount", "componentWillReceiveProps", "componentWillUpdate"].forEach(function(t5) {
+  Object.defineProperty(C.prototype, t5, { configurable: true, get: function() {
+    return this["UNSAFE_" + t5];
+  }, set: function(n3) {
+    Object.defineProperty(this, t5, { configurable: true, writable: true, value: n3 });
+  } });
+});
+var en2 = l.event;
+l.event = function(n3) {
+  return en2 && (n3 = en2(n3)), n3.persist = function() {
+  }, n3.isPropagationStopped = function() {
+    return this.cancelBubble;
+  }, n3.isDefaultPrevented = function() {
+    return this.defaultPrevented;
+  }, n3.nativeEvent = n3;
+};
+var rn;
+var un = { configurable: true, get: function() {
+  return this.class;
+} };
+var on = l.vnode;
+l.vnode = function(n3) {
+  "string" == typeof n3.type && (function(n4) {
+    var t5 = n4.props, e3 = n4.type, u3 = {}, o3 = -1 == e3.indexOf("-");
+    for (var i3 in t5) {
+      var l3 = t5[i3];
+      if (!("value" === i3 && "defaultValue" in t5 && null == l3 || Q2 && "children" === i3 && "noscript" === e3 || "class" === i3 || "className" === i3)) {
+        var c3 = i3.toLowerCase();
+        "defaultValue" === i3 && "value" in t5 && null == t5.value ? i3 = "value" : "download" === i3 && true === l3 ? l3 = "" : "translate" === c3 && "no" === l3 ? l3 = false : "o" === c3[0] && "n" === c3[1] ? "ondoubleclick" === c3 ? i3 = "ondblclick" : "onchange" !== c3 || "input" !== e3 && "textarea" !== e3 || X2(t5.type) ? "onfocus" === c3 ? i3 = "onfocusin" : "onblur" === c3 ? i3 = "onfocusout" : J2.test(i3) && (i3 = c3) : c3 = i3 = "oninput" : o3 && G2.test(i3) ? i3 = i3.replace(K2, "-$&").toLowerCase() : null === l3 && (l3 = void 0), "oninput" === c3 && u3[i3 = c3] && (i3 = "oninputCapture"), u3[i3] = l3;
+      }
+    }
+    "select" == e3 && (u3.multiple && Array.isArray(u3.value) && (u3.value = F(t5.children).forEach(function(n5) {
+      n5.props.selected = -1 != u3.value.indexOf(n5.props.value);
+    })), null != u3.defaultValue && (u3.value = F(t5.children).forEach(function(n5) {
+      n5.props.selected = u3.multiple ? -1 != u3.defaultValue.indexOf(n5.props.value) : u3.defaultValue == n5.props.value;
+    }))), t5.class && !t5.className ? (u3.class = t5.class, Object.defineProperty(u3, "className", un)) : t5.className && (u3.class = u3.className = t5.className), n4.props = u3;
+  })(n3), n3.$$typeof = q3, on && on(n3);
+};
+var ln = l.__r;
+l.__r = function(n3) {
+  ln && ln(n3), rn = n3.__c;
+};
+var cn = l.diffed;
+l.diffed = function(n3) {
+  cn && cn(n3);
+  var t5 = n3.props, e3 = n3.__e;
+  null != e3 && "textarea" === n3.type && "value" in t5 && t5.value !== e3.value && (e3.value = null == t5.value ? "" : t5.value), rn = null;
+};
 
 // node_modules/marked/lib/marked.esm.js
 function _getDefaults() {
@@ -22499,187 +22766,6 @@ var parseInline = marked.parseInline;
 var parser = _Parser.parse;
 var lexer = _Lexer.lex;
 
-// node_modules/preact/compat/dist/compat.module.js
-function g3(n3, t5) {
-  for (var e3 in t5) n3[e3] = t5[e3];
-  return n3;
-}
-function E2(n3, t5) {
-  for (var e3 in n3) if ("__source" !== e3 && !(e3 in t5)) return true;
-  for (var r3 in t5) if ("__source" !== r3 && n3[r3] !== t5[r3]) return true;
-  return false;
-}
-function M2(n3, t5) {
-  this.props = n3, this.context = t5;
-}
-function N2(n3, e3) {
-  function r3(n4) {
-    var t5 = this.props.ref;
-    return t5 != n4.ref && t5 && ("function" == typeof t5 ? t5(null) : t5.current = null), e3 ? !e3(this.props, n4) || t5 != n4.ref : E2(this.props, n4);
-  }
-  function u3(e4) {
-    return this.shouldComponentUpdate = r3, k(n3, e4);
-  }
-  return u3.displayName = "Memo(" + (n3.displayName || n3.name) + ")", u3.__f = u3.prototype.isReactComponent = true, u3.type = n3, u3;
-}
-(M2.prototype = new C()).isPureReactComponent = true, M2.prototype.shouldComponentUpdate = function(n3, t5) {
-  return E2(this.props, n3) || E2(this.state, t5);
-};
-var T3 = l.__b;
-l.__b = function(n3) {
-  n3.type && n3.type.__f && n3.ref && (n3.props.ref = n3.ref, n3.ref = null), T3 && T3(n3);
-};
-var A3 = "undefined" != typeof Symbol && Symbol.for && /* @__PURE__ */ Symbol.for("react.forward_ref") || 3911;
-var O2 = l.__e;
-l.__e = function(n3, t5, e3, r3) {
-  if (n3.then) {
-    for (var u3, o3 = t5; o3 = o3.__; ) if ((u3 = o3.__c) && u3.__c) return null == t5.__e && (t5.__e = e3.__e, t5.__k = e3.__k), u3.__c(n3, t5);
-  }
-  O2(n3, t5, e3, r3);
-};
-var U2 = l.unmount;
-function V2(n3, t5, e3) {
-  return n3 && (n3.__c && n3.__c.__H && (n3.__c.__H.__.forEach(function(n4) {
-    "function" == typeof n4.__c && n4.__c();
-  }), n3.__c.__H = null), null != (n3 = g3({}, n3)).__c && (n3.__c.__P === e3 && (n3.__c.__P = t5), n3.__c.__e = true, n3.__c = null), n3.__k = n3.__k && n3.__k.map(function(n4) {
-    return V2(n4, t5, e3);
-  })), n3;
-}
-function W2(n3, t5, e3) {
-  return n3 && e3 && (n3.__v = null, n3.__k = n3.__k && n3.__k.map(function(n4) {
-    return W2(n4, t5, e3);
-  }), n3.__c && n3.__c.__P === t5 && (n3.__e && e3.appendChild(n3.__e), n3.__c.__e = true, n3.__c.__P = e3)), n3;
-}
-function P3() {
-  this.__u = 0, this.o = null, this.__b = null;
-}
-function j3(n3) {
-  var t5 = n3.__ && n3.__.__c;
-  return t5 && t5.__a && t5.__a(n3);
-}
-function B3() {
-  this.i = null, this.l = null;
-}
-l.unmount = function(n3) {
-  var t5 = n3.__c;
-  t5 && (t5.__z = true), t5 && t5.__R && t5.__R(), t5 && 32 & n3.__u && (n3.type = null), U2 && U2(n3);
-}, (P3.prototype = new C()).__c = function(n3, t5) {
-  var e3 = t5.__c, r3 = this;
-  null == r3.o && (r3.o = []), r3.o.push(e3);
-  var u3 = j3(r3.__v), o3 = false, i3 = function() {
-    o3 || r3.__z || (o3 = true, e3.__R = null, u3 ? u3(c3) : c3());
-  };
-  e3.__R = i3;
-  var l3 = e3.__P;
-  e3.__P = null;
-  var c3 = function() {
-    if (!--r3.__u) {
-      if (r3.state.__a) {
-        var n4 = r3.state.__a;
-        r3.__v.__k[0] = W2(n4, n4.__c.__P, n4.__c.__O);
-      }
-      var t6;
-      for (r3.setState({ __a: r3.__b = null }); t6 = r3.o.pop(); ) t6.__P = l3, t6.forceUpdate();
-    }
-  };
-  r3.__u++ || 32 & t5.__u || r3.setState({ __a: r3.__b = r3.__v.__k[0] }), n3.then(i3, i3);
-}, P3.prototype.componentWillUnmount = function() {
-  this.o = [];
-}, P3.prototype.render = function(n3, e3) {
-  if (this.__b) {
-    if (this.__v.__k) {
-      var r3 = document.createElement("div"), o3 = this.__v.__k[0].__c;
-      this.__v.__k[0] = V2(this.__b, r3, o3.__O = o3.__P);
-    }
-    this.__b = null;
-  }
-  var i3 = e3.__a && k(S, null, n3.fallback);
-  return i3 && (i3.__u &= -33), [k(S, null, e3.__a ? null : n3.children), i3];
-};
-var H2 = function(n3, t5, e3) {
-  if (++e3[1] === e3[0] && n3.l.delete(t5), n3.props.revealOrder && ("t" !== n3.props.revealOrder[0] || !n3.l.size)) for (e3 = n3.i; e3; ) {
-    for (; e3.length > 3; ) e3.pop()();
-    if (e3[1] < e3[0]) break;
-    n3.i = e3 = e3[2];
-  }
-};
-(B3.prototype = new C()).__a = function(n3) {
-  var t5 = this, e3 = j3(t5.__v), r3 = t5.l.get(n3);
-  return r3[0]++, function(u3) {
-    var o3 = function() {
-      t5.props.revealOrder ? (r3.push(u3), H2(t5, n3, r3)) : u3();
-    };
-    e3 ? e3(o3) : o3();
-  };
-}, B3.prototype.render = function(n3) {
-  this.i = null, this.l = /* @__PURE__ */ new Map();
-  var t5 = F(n3.children);
-  n3.revealOrder && "b" === n3.revealOrder[0] && t5.reverse();
-  for (var e3 = t5.length; e3--; ) this.l.set(t5[e3], this.i = [1, 0, this.i]);
-  return n3.children;
-}, B3.prototype.componentDidUpdate = B3.prototype.componentDidMount = function() {
-  var n3 = this;
-  this.l.forEach(function(t5, e3) {
-    H2(n3, e3, t5);
-  });
-};
-var q3 = "undefined" != typeof Symbol && Symbol.for && /* @__PURE__ */ Symbol.for("react.element") || 60103;
-var G2 = /^(?:accent|alignment|arabic|baseline|cap|clip(?!PathU)|color|dominant|fill|flood|font|glyph(?!R)|horiz|image(!S)|letter|lighting|marker(?!H|W|U)|overline|paint|pointer|shape|stop|strikethrough|stroke|text(?!L)|transform|underline|unicode|units|v|vector|vert|word|writing|x(?!C))[A-Z]/;
-var J2 = /^on(Ani|Tra|Tou|BeforeInp|Compo)/;
-var K2 = /[A-Z0-9]/g;
-var Q2 = "undefined" != typeof document;
-var X2 = function(n3) {
-  return ("undefined" != typeof Symbol && "symbol" == typeof /* @__PURE__ */ Symbol() ? /fil|che|rad/ : /fil|che|ra/).test(n3);
-};
-C.prototype.isReactComponent = true, ["componentWillMount", "componentWillReceiveProps", "componentWillUpdate"].forEach(function(t5) {
-  Object.defineProperty(C.prototype, t5, { configurable: true, get: function() {
-    return this["UNSAFE_" + t5];
-  }, set: function(n3) {
-    Object.defineProperty(this, t5, { configurable: true, writable: true, value: n3 });
-  } });
-});
-var en2 = l.event;
-l.event = function(n3) {
-  return en2 && (n3 = en2(n3)), n3.persist = function() {
-  }, n3.isPropagationStopped = function() {
-    return this.cancelBubble;
-  }, n3.isDefaultPrevented = function() {
-    return this.defaultPrevented;
-  }, n3.nativeEvent = n3;
-};
-var rn;
-var un = { configurable: true, get: function() {
-  return this.class;
-} };
-var on = l.vnode;
-l.vnode = function(n3) {
-  "string" == typeof n3.type && (function(n4) {
-    var t5 = n4.props, e3 = n4.type, u3 = {}, o3 = -1 == e3.indexOf("-");
-    for (var i3 in t5) {
-      var l3 = t5[i3];
-      if (!("value" === i3 && "defaultValue" in t5 && null == l3 || Q2 && "children" === i3 && "noscript" === e3 || "class" === i3 || "className" === i3)) {
-        var c3 = i3.toLowerCase();
-        "defaultValue" === i3 && "value" in t5 && null == t5.value ? i3 = "value" : "download" === i3 && true === l3 ? l3 = "" : "translate" === c3 && "no" === l3 ? l3 = false : "o" === c3[0] && "n" === c3[1] ? "ondoubleclick" === c3 ? i3 = "ondblclick" : "onchange" !== c3 || "input" !== e3 && "textarea" !== e3 || X2(t5.type) ? "onfocus" === c3 ? i3 = "onfocusin" : "onblur" === c3 ? i3 = "onfocusout" : J2.test(i3) && (i3 = c3) : c3 = i3 = "oninput" : o3 && G2.test(i3) ? i3 = i3.replace(K2, "-$&").toLowerCase() : null === l3 && (l3 = void 0), "oninput" === c3 && u3[i3 = c3] && (i3 = "oninputCapture"), u3[i3] = l3;
-      }
-    }
-    "select" == e3 && (u3.multiple && Array.isArray(u3.value) && (u3.value = F(t5.children).forEach(function(n5) {
-      n5.props.selected = -1 != u3.value.indexOf(n5.props.value);
-    })), null != u3.defaultValue && (u3.value = F(t5.children).forEach(function(n5) {
-      n5.props.selected = u3.multiple ? -1 != u3.defaultValue.indexOf(n5.props.value) : u3.defaultValue == n5.props.value;
-    }))), t5.class && !t5.className ? (u3.class = t5.class, Object.defineProperty(u3, "className", un)) : t5.className && (u3.class = u3.className = t5.className), n4.props = u3;
-  })(n3), n3.$$typeof = q3, on && on(n3);
-};
-var ln = l.__r;
-l.__r = function(n3) {
-  ln && ln(n3), rn = n3.__c;
-};
-var cn = l.diffed;
-l.diffed = function(n3) {
-  cn && cn(n3);
-  var t5 = n3.props, e3 = n3.__e;
-  null != e3 && "textarea" === n3.type && "value" in t5 && t5.value !== e3.value && (e3.value = null == t5.value ? "" : t5.value), rn = null;
-};
-
 // dashboard/src/lib/html.ts
 var html4 = htm_module_default.bind(k);
 
@@ -22831,14 +22917,7 @@ function hlLine(text, lang) {
 }
 
 // dashboard/src/components/chat-internals.ts
-var ROLE_GLYPH = {
-  user: "\u25C7",
-  assistant: "\u25C6",
-  tool: "\u25A3",
-  info: "\xB7",
-  warning: "\u25B2",
-  error: "\u2726"
-};
+var ROLE_AVATAR = {user: "/assets/128x128.png", assistant: "/assets/ai-avatar.png"};
 function renderMessageBody(text) {
   if (!text) return null;
   return html4`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdownToString(text) }}></div>`;
@@ -22941,18 +23020,18 @@ function ToolCard({ msg }) {
 }
 var ChatMessage = N2(function ChatMessage2({ msg, streaming }) {
   const role = msg.role;
-  const glyph = ROLE_GLYPH[role] ?? "\xB7";
+  const avatar = ROLE_AVATAR[role];
   if (role === "tool") {
     return html4`
       <div class="chat-msg tool">
-        <div class="glyph">${glyph}</div>
+        <div class="glyph">▣</div>
         <${ToolCard} msg=${msg} />
       </div>
     `;
   }
   return html4`
     <div class="chat-msg ${role}">
-      <div class="glyph">${glyph}</div>
+      ${avatar ? html4`<img class="avatar" src=${avatar} width="28" height="28" alt="" />` : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
         ${renderMessageBody(msg.text)}
@@ -23499,6 +23578,7 @@ function ChatPanel() {
   const [effort, setEffortLocal] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
+  const [workspaceDir, setWorkspaceDirLocal] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
   const [semanticIndex, setSemanticIndex] = d2(null);
@@ -23506,6 +23586,10 @@ function ChatPanel() {
   const [popoverKind, setPopoverKind] = d2(null);
   const [popoverItems, setPopoverItems] = d2([]);
   const [popoverSel, setPopoverSel] = d2(0);
+  const [showSkillPicker, setShowSkillPicker] = d2(false);
+  const [skillList, setSkillList] = d2([]);
+  const [showWsPicker, setShowWsPicker] = d2(false);
+  const [recentWss, setRecentWss] = d2(() => { try { return JSON.parse(localStorage.getItem("visionox-workspaces") || "[]"); } catch { return []; } });
   const [semanticBannerDismissed, setSemanticBannerDismissed] = d2(() => {
     try {
       return localStorage.getItem("rx.semanticBannerDismissed") === "1";
@@ -23719,8 +23803,6 @@ function ChatPanel() {
   const newConversation = q2(async () => {
     if (busy) {
       if (!confirm(t4("chat.newConfirmBusy"))) return;
-    } else if (messages.length > 0 && !confirm(t4("chat.newConfirm"))) {
-      return;
     }
     try {
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
@@ -23757,6 +23839,19 @@ function ChatPanel() {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
   }, []);
+  const pickWorkspace = q2(async (dir) => {
+    setShowWsPicker(false);
+    try {
+      await api("/settings", { method: "POST", body: { workspaceDir: dir } });
+      setWorkspaceDirLocal(dir);
+      const updated = [dir, ...recentWss.filter(w => w !== dir)].slice(0, 5);
+      setRecentWss(updated);
+      try { localStorage.setItem("visionox-workspaces", JSON.stringify(updated)); } catch {}
+      showToast("工作空间已设为 " + dir + "（重启后生效）", "info");
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [recentWss]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -23876,15 +23971,6 @@ function ChatPanel() {
       autoScrollInFlight.current = false;
     }, 0);
   }, [messages, streaming]);
-  const allMessages = streaming ? [
-    ...messages,
-    {
-      id: streaming.id,
-      role: "assistant",
-      text: streaming.text,
-      reasoning: streaming.reasoning
-    }
-  ] : messages;
   const resolveModal = q2(async (kind, choice, text) => {
     try {
       await api("/modal/resolve", {
@@ -23907,6 +23993,7 @@ function ChatPanel() {
         setStats(o3.stats ?? null);
         setOverviewModel(o3.model ?? null);
         setBudgetUsd(o3.budgetUsd ?? null);
+        setWorkspaceDirLocal(o3.cwd ?? null);
         const recent = o3.cockpit?.recentPlans ?? [];
         setActivePlan(recent.find((p3) => p3.status === "active") ?? null);
         setSemanticIndex(o3.semanticIndexExists ?? null);
@@ -24029,21 +24116,9 @@ function ChatPanel() {
 
       <div class="chat-body">
         <div class="chat-main">
-          <div class="chat-feed" ref=${feedRef}>
-            ${allMessages.length === 0 ? html4`<div class="chat-empty">
-                    ${t4("chat.noConversation")}
-                  </div>` : allMessages.map(
-    (m3) => html4`
-                      <${ChatMessage}
-                        key=${m3.id}
-                        msg=${m3}
-                        streaming=${Boolean(streaming && streaming.id === m3.id)}
-                      />
-                    `
-  )}
-          </div>
+          <${ChatFeed} messages=${messages} streaming=${streaming} innerRef=${feedRef} />
 
-          <div class="chat-input-area" style="position:relative">
+          <div class="chat-input-area" style="position:relative;flex-direction:column;gap:2px;padding-top:6px">
             ${popoverKind && popoverItems.length > 0 ? html4`
                   <div class="popover" style="position:absolute;bottom:calc(100% + 6px);left:0;width:380px;max-height:280px;overflow-y:auto;z-index:10">
                     <div class="popover-h">${popoverKind === "slash" ? t4("chat.slashCommands") : t4("chat.projectFiles")}</div>
@@ -24065,24 +24140,55 @@ function ChatPanel() {
   )}
                   </div>
                 ` : null}
-            <textarea
-              placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
-              value=${input}
-              onInput=${onInput}
-              onKeyDown=${onKeyDown}
-              onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
-              disabled=${busy}
-              rows="2"
-            ></textarea>
-            <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
-              <button
-                class="primary"
-                onClick=${send}
-                disabled=${busy || !input.trim()}
-              >${t4("chat.send")}</button>
-              <div style="display: flex; gap: 6px;">
-                <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
-                <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
+            <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
+              <div style="display:flex;gap:6px;align-items:flex-end">
+                <textarea
+                  placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
+                  value=${input}
+                  onInput=${onInput}
+                  onKeyDown=${onKeyDown}
+                  onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
+                  disabled=${busy}
+                  style="flex:1"
+                  rows="4"
+                ></textarea>
+                <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
+                  <button
+                    class="primary"
+                    onClick=${send}
+                    disabled=${busy || !input.trim()}
+                  >${t4("chat.send")}</button>
+                  <div style="display: flex; gap: 6px;">
+                    <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
+                    <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;position:relative;flex-shrink:0;margin:0;gap:12px">
+                <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { api("/skills").then(r => setSkillList([...r.global, ...r.builtin])).catch(() => {}); } }}>🔧 技能</span>
+                ${showSkillPicker && skillList.length > 0 ? html4`
+                  <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
+                    <div class="popover-h">选择技能</div>
+                    ${skillList.map(s => html4`
+                      <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); setInput((prev) => prev + '/' + s.name + ' '); setShowSkillPicker(false); }}>
+                        <span class="name">${s.name}</span>
+                        <span class="meta">${(s.description || '').slice(0,40)}</span>
+                      </div>
+                    `)}
+                  </div>
+                ` : null}
+                <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</span>
+                ${showWsPicker ? html4`
+                  <div class="popover" style="position:absolute;bottom:100%;left:0;width:280px;max-height:220px;overflow-y:auto;z-index:10">
+                    <div class="popover-h">选择工作空间</div>
+                    <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); pickWorkspace(workspaceDir); setShowWsPicker(false); }}><span class="name">🏠 默认沙箱</span></div>
+                    ${recentWss.map(w => html4`
+                      <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); pickWorkspace(w); setShowWsPicker(false); }}><span class="name">📁 ${w}</span></div>
+                    `)}
+                    <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); const p = prompt('输入工作空间路径:'); if (p && p.trim()) pickWorkspace(p.trim()); setShowWsPicker(false); }}><span class="name">📂 浏览其他目录...</span></div>
+                  </div>
+                ` : null}
+              ${(showSkillPicker || showWsPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); }}></div>` : null}
               </div>
             </div>
           </div>
@@ -24103,7 +24209,32 @@ function ChatPanel() {
     </div>
   `;
 }
-function SideRail({ stats, budgetUsd, activePlan }) {
+var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef }) {
+  useLang();
+  const allMessages = streaming ? [
+    ...messages,
+    {
+      id: streaming.id,
+      role: "assistant",
+      text: streaming.text,
+      reasoning: streaming.reasoning
+    }
+  ] : messages;
+  return html4`
+    <div class="chat-feed" ref=${innerRef}>
+      ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : allMessages.map(
+    (m3) => html4`
+                <${ChatMessage}
+                  key=${m3.id}
+                  msg=${m3}
+                  streaming=${Boolean(streaming && streaming.id === m3.id)}
+                />
+              `
+  )}
+    </div>
+  `;
+});
+var SideRail = N2(function SideRail2({ stats, budgetUsd, activePlan }) {
   useLang();
   if (!stats && !activePlan) return html4`<aside class="chat-rail"></aside>`;
   const cachePct = stats ? stats.cacheHitRatio * 100 : 0;
@@ -24140,7 +24271,7 @@ function SideRail({ stats, budgetUsd, activePlan }) {
           ` : null}
     </aside>
   `;
-}
+});
 function ActivePlanCard({ plan }) {
   useLang();
   const dots = [];
@@ -24226,7 +24357,7 @@ function InFlightRow({
     </div>
   `;
 }
-function ChatStatusBar({ stats, model }) {
+var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
   useLang();
   if (!stats) {
     return html4`
@@ -24275,7 +24406,7 @@ function ChatStatusBar({ stats, model }) {
         ` : null}
     </div>
   `;
-}
+});
 
 // dashboard/src/panels/hooks.ts
 function buildMatrix(data) {
@@ -24304,6 +24435,8 @@ function HooksPanel() {
   const [drafts, setDrafts] = d2({});
   const [busy, setBusy] = d2(false);
   const [info, setInfo] = d2(null);
+  const [validating, setValidating] = d2(false);
+  const [validateResult, setValidateResult] = d2(null);
   const [eventFilter, setEventFilter] = d2("all");
   const load = q2(async () => {
     try {
@@ -25026,7 +25159,7 @@ function MemoryPanel() {
                   onClick=${() => openFile("project")}
                 >
                   <span class="name">
-                    VISIONOX.md
+                    visionox.md
                     ${tree.project.exists ? html4`<span class="pill ok">${t4("memory.exists")}</span>` : html4`<span class="pill">${t4("memory.create")}</span>`}
                   </span>
                   <span class="preview">${tree.project.path}</span>
@@ -25698,9 +25831,9 @@ function SemanticPanel() {
         api("/semantic"),
         api("/semantic/config")
       ]);
+      setValidateResult(null);
       setData(semantic);
       setDraft((current) => current && draftDirtyRef.current ? current : toConfigDraft(config));
-      setValidateResult(null);
     } catch (err) {
       setError(err.message);
     }
@@ -25825,21 +25958,12 @@ function SemanticPanel() {
     setError(null);
     try {
       const v = validateSemanticDraft(draft);
-      const extraBody = v.extraBody;
       const r3 = await api("/semantic/validate-provider", {
         method: "POST",
         body: {
           provider: draft.provider,
-          ollama: {
-            baseUrl: draft.ollama.baseUrl,
-            model: draft.ollama.model
-          },
-          openaiCompat: {
-            baseUrl: draft.openaiCompat.baseUrl,
-            apiKey: draft.openaiCompat.apiKey,
-            model: draft.openaiCompat.model,
-            extraBody
-          }
+          ollama: { baseUrl: draft.ollama.baseUrl, model: draft.ollama.model },
+          openaiCompat: { baseUrl: draft.openaiCompat.baseUrl, apiKey: draft.openaiCompat.apiKey, model: draft.openaiCompat.model, extraBody: v.extraBody }
         }
       });
       setValidateResult(r3);
@@ -26566,6 +26690,7 @@ function SessionsPanel() {
   const [open, setOpen] = d2(null);
   const [openLoading, setOpenLoading] = d2(false);
   const [filter, setFilter] = d2("");
+  const [deleting, setDeleting] = d2(false);
   const view = q2(async (name) => {
     setOpen({ name, messages: null });
     setOpenLoading(true);
@@ -26578,6 +26703,18 @@ function SessionsPanel() {
       setOpenLoading(false);
     }
   }, []);
+  const remove = q2(async (name) => {
+    if (!confirm("删除此会话记录？")) return;
+    setDeleting(true);
+    try {
+      await api(`/sessions/${encodeURIComponent(name)}`, { method: "DELETE" });
+      setOpen(null);
+    } catch (err) {
+      if (open) setOpen({ ...open, error: err.message });
+    } finally {
+      setDeleting(false);
+    }
+  }, [open]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("sessions.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "sessions", error: error.message })}</div>`;
@@ -26629,6 +26766,7 @@ function SessionsPanel() {
                     ${open.messages ? t4("sessions.messages", { count: open.messages.length, s: open.messages.length === 1 ? "" : "s" }) : t4("common.loading")}
                   </span>
                   <span class="actions">
+                    <button class="btn ghost" disabled=${deleting} onClick=${() => remove(open.name)}>${t4("common.delete")}</button>
                     <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
                   </span>
                 </div>
@@ -26982,12 +27120,7 @@ function SettingsPanel() {
   const [loopBusy, setLoopBusy] = d2(false);
   const [showDevLog, setShowDevLog] = d2(false);
   const [logLines, setLogLines] = d2([]);
-  const refreshLogs = q2(async () => {
-    try {
-      const r3 = await api("/logs");
-      setLogLines(r3.logs ?? []);
-    } catch { setLogLines([]); }
-  }, []);
+  const refreshLogs = q2(async () => { try { const r3 = await api("/logs"); setLogLines(r3.logs ?? []); } catch { setLogLines([]); } }, []);
   const lastStatusSyncRef = A2(0);
   const [now, setNow] = d2(() => Date.now());
   const load = q2(async () => {
@@ -27255,9 +27388,9 @@ function SettingsPanel() {
   )}
       </div>
 
-      ${sectionH3(t4("settings.sectionDev"))}
+      <h3 style="margin:18px 0 8px;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${t4("settings.sectionDev")}</h3>
       <div class="card">
-        <button class="btn ghost" onClick=${() => { setShowDevLog(!showDevLog); if (!showDevLog) refreshLogs(); }}>${t4("settings.devMode")}</button>
+        <button class="btn primary" onClick=${() => { setShowDevLog(!showDevLog); if (!showDevLog) refreshLogs(); }}>${t4("settings.devMode")}</button>
         ${showDevLog ? html4`
           <div style="margin-top:10px;max-height:400px;overflow-y:auto;background:var(--bg-code);border:1px solid var(--bd);border-radius:var(--r);padding:10px;font-family:var(--font-mono);font-size:11px;line-height:1.5;white-space:pre-wrap;color:var(--fg-1)">
             ${logLines.length === 0 ? t4("settings.noLogs") : logLines.map((l) => html4`<div style="padding:1px 0;border-bottom:1px solid var(--bd)"><span style="color:var(--fg-4)">${new Date(l.ts).toLocaleTimeString()}</span>  ${l.msg}</div>`)}
@@ -27835,46 +27968,1813 @@ function UsagePanel() {
   `;
 }
 
-// dashboard/app.js
+// dashboard/src/lib/file-tree.ts
 var html5 = htm_module_default.bind(k);
+var EXT_ICONS = {
+  ts: "TS",
+  tsx: "TS",
+  js: "JS",
+  jsx: "JS",
+  json: "{}",
+  css: "#",
+  scss: "#",
+  html: "<>",
+  md: "MD",
+  py: "PY",
+  rs: "RS",
+  go: "GO",
+  yaml: "Y",
+  yml: "Y",
+  toml: "T",
+  xml: "<>",
+  svg: "<>",
+  png: "[]",
+  jpg: "[]",
+  ico: "[]",
+  sh: "$",
+  bash: "$",
+  ps1: "$",
+  bat: "$",
+  sql: "DB",
+  graphql: "GQ",
+  proto: "PB",
+  dockerfile: "D",
+  makefile: "MK"
+};
+var EXT_LANG = {
+  ts: "typescript",
+  tsx: "typescript",
+  js: "javascript",
+  jsx: "javascript",
+  json: "json",
+  css: "css",
+  scss: "scss",
+  html: "html",
+  md: "markdown",
+  py: "python",
+  rs: "rust",
+  go: "go",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  xml: "xml",
+  sh: "bash",
+  bash: "bash",
+  ps1: "powershell",
+  bat: "batch",
+  sql: "sql",
+  graphql: "graphql",
+  proto: "protobuf",
+  dockerfile: "dockerfile",
+  makefile: "makefile"
+};
+function getFileIcon(name) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  const icon = EXT_ICONS[ext] ?? "\xB7";
+  const cls = ext || "file";
+  return { icon, cls };
+}
+function getLanguage(name) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return EXT_LANG[ext] ?? ext;
+}
+function isBinaryExt(name) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  const binary = /* @__PURE__ */ new Set(["png", "jpg", "jpeg", "gif", "ico", "svg", "woff", "woff2", "ttf", "eot", "mp4", "webm", "mp3", "wav", "zip", "tar", "gz", "7z", "pdf"]);
+  return binary.has(ext);
+}
+function useProjectTree() {
+  const [tree, setTree] = d2([]);
+  const [loading, setLoading] = d2(true);
+  const [error, setError] = d2(null);
+  y2(() => {
+    if (MODE === "standalone") {
+      setLoading(false);
+      setTree(createDemoTree());
+      return;
+    }
+    let cancelled = false;
+    api("/project-tree").then((r3) => {
+      if (!cancelled) {
+        setTree(r3.tree);
+        setLoading(false);
+      }
+    }).catch((err) => {
+      if (!cancelled) {
+        setError(err.message);
+        setLoading(false);
+        setTree(createDemoTree());
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return { tree, loading, error };
+}
+function useFileTreeState(initialTree) {
+  const [expanded, setExpanded] = d2(/* @__PURE__ */ new Set());
+  const [openFiles, setOpenFiles] = d2([]);
+  const [activeFilePath, setActiveFilePath] = d2(null);
+  const [loadingFiles, setLoadingFiles] = d2({});
+  const toggleExpand = q2((path) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+  const openFile = q2(async (node) => {
+    if (node.isDir) {
+      toggleExpand(node.path);
+      return;
+    }
+    if (isBinaryExt(node.name)) return;
+    const existing = openFiles.find((f3) => f3.path === node.path);
+    if (existing) {
+      setActiveFilePath(node.path);
+      return;
+    }
+    if (loadingFiles[node.path]) return;
+    setLoadingFiles((prev) => ({ ...prev, [node.path]: true }));
+    const lang = getLanguage(node.name);
+    if (MODE === "standalone") {
+      const mockContent = generateMockContent(node.name, lang);
+      setOpenFiles((prev) => [...prev, { path: node.path, name: node.name, content: mockContent, language: lang }]);
+      setActiveFilePath(node.path);
+      setLoadingFiles((prev) => {
+        const next = { ...prev };
+        delete next[node.path];
+        return next;
+      });
+      return;
+    }
+    try {
+      const encodedPath = node.path.split("/").map(encodeURIComponent).join("/");
+      const data = await api(`/file/${encodedPath}`);
+      setOpenFiles((prev) => [...prev, { path: node.path, name: node.name, content: data.content, language: lang }]);
+      setActiveFilePath(node.path);
+    } catch (err) {
+      console.error(`[file-tree] failed to load ${node.path}:`, err);
+      setOpenFiles((prev) => [...prev, { path: node.path, name: node.name, content: `// Failed to load file: ${err.message}
+`, language: lang }]);
+      setActiveFilePath(node.path);
+    } finally {
+      setLoadingFiles((prev) => {
+        const next = { ...prev };
+        delete next[node.path];
+        return next;
+      });
+    }
+  }, [openFiles, toggleExpand, loadingFiles]);
+  const closeFile = q2((path) => {
+    setOpenFiles((prev) => {
+      const next = prev.filter((f3) => f3.path !== path);
+      if (activeFilePath === path) {
+        const lastFile = next[next.length - 1];
+        setActiveFilePath(lastFile ? lastFile.path : null);
+      }
+      return next;
+    });
+  }, [activeFilePath]);
+  const activeFile = openFiles.find((f3) => f3.path === activeFilePath) ?? null;
+  return { expanded, openFiles, activeFilePath, activeFile, toggleExpand, openFile, closeFile, setActiveFilePath, loadingFiles };
+}
+function generateMockContent(name, lang) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "json") return JSON.stringify({ name: "example", version: "1.0.0", dependencies: { react: "^18.0.0" } }, null, 2);
+  if (ext === "md") return '# Example Document\n\nThis is a sample markdown file.\n\n## Section\n\n- Item 1\n- Item 2\n\n```js\nconsole.log("hello");\n```';
+  if (ext === "css") return "/* styles */\n.container {\n  display: flex;\n  padding: 16px;\n  color: var(--fg-1);\n}";
+  if (ext === "html") return "<!doctype html>\n<html>\n<head><title>Example</title></head>\n<body>\n  <h1>Hello</h1>\n</body>\n</html>";
+  if (ext === "py") return "def hello():\n    print('Hello, World!')\n\nif __name__ == '__main__':\n    hello()";
+  if (ext === "yaml" || ext === "yml") return "name: example\nversion: '1.0'\nservices:\n  app:\n    image: node:18\n    ports:\n      - '3000:3000'";
+  return `// ${name}
+// Language: ${lang}
+
+export function example() {
+  return "Hello from ${name}";
+}
+`;
+}
+function createDemoTree() {
+  return [
+    {
+      name: "src",
+      path: "src",
+      isDir: true,
+      children: [
+        { name: "index.ts", path: "src/index.ts", isDir: false },
+        { name: "app.tsx", path: "src/app.tsx", isDir: false },
+        { name: "config.ts", path: "src/config.ts", isDir: false },
+        {
+          name: "components",
+          path: "src/components",
+          isDir: true,
+          children: [
+            { name: "Header.tsx", path: "src/components/Header.tsx", isDir: false },
+            { name: "Sidebar.tsx", path: "src/components/Sidebar.tsx", isDir: false },
+            { name: "Button.tsx", path: "src/components/Button.tsx", isDir: false }
+          ]
+        },
+        {
+          name: "lib",
+          path: "src/lib",
+          isDir: true,
+          children: [
+            { name: "api.ts", path: "src/lib/api.ts", isDir: false },
+            { name: "format.ts", path: "src/lib/format.ts", isDir: false }
+          ]
+        }
+      ]
+    },
+    {
+      name: "tests",
+      path: "tests",
+      isDir: true,
+      children: [
+        { name: "app.test.ts", path: "tests/app.test.ts", isDir: false },
+        { name: "utils.test.ts", path: "tests/utils.test.ts", isDir: false }
+      ]
+    },
+    { name: "package.json", path: "package.json", isDir: false },
+    { name: "tsconfig.json", path: "tsconfig.json", isDir: false },
+    { name: "README.md", path: "README.md", isDir: false },
+    { name: "styles.css", path: "styles.css", isDir: false },
+    { name: "index.html", path: "index.html", isDir: false }
+  ];
+}
+
+// dashboard/src/lib/line-comments.ts
+function useLineComments() {
+  const [comments, setComments] = d2([]);
+  const [draft, setDraft] = d2(null);
+  const addComment = q2((file, lineNumber, content) => {
+    const id = `comment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setComments((prev) => [...prev, { id, file, lineNumber, content, timestamp: Date.now() }]);
+    setDraft(null);
+  }, []);
+  const updateComment = q2((id, content) => {
+    setComments((prev) => prev.map((c3) => c3.id === id ? { ...c3, content } : c3));
+  }, []);
+  const deleteComment = q2((id) => {
+    setComments((prev) => prev.filter((c3) => c3.id !== id));
+  }, []);
+  const startDraft = q2((file, lineNumber) => {
+    setDraft({ file, lineNumber, content: "" });
+  }, []);
+  const editComment = q2((id, content) => {
+    const comment = comments.find((c3) => c3.id === id);
+    if (comment) {
+      setDraft({ file: comment.file, lineNumber: comment.lineNumber, content, editingId: id });
+    }
+  }, [comments]);
+  const cancelDraft = q2(() => {
+    setDraft(null);
+  }, []);
+  const setDraftContent = q2((content) => {
+    setDraft((prev) => prev ? { ...prev, content } : null);
+  }, []);
+  const submitDraft = q2(() => {
+    if (draft && draft.content.trim()) {
+      if (draft.editingId) {
+        updateComment(draft.editingId, draft.content.trim());
+      } else {
+        addComment(draft.file, draft.lineNumber, draft.content.trim());
+      }
+      setDraft(null);
+    }
+  }, [draft, addComment, updateComment]);
+  const commentsForFile = q2(
+    (file) => comments.filter((c3) => c3.file === file),
+    [comments]
+  );
+  const commentsForLine = q2(
+    (file, lineNumber) => comments.filter((c3) => c3.file === file && c3.lineNumber === lineNumber),
+    [comments]
+  );
+  return {
+    comments,
+    draft,
+    addComment,
+    updateComment,
+    deleteComment,
+    startDraft,
+    editComment,
+    cancelDraft,
+    setDraftContent,
+    submitDraft,
+    commentsForFile,
+    commentsForLine
+  };
+}
+
+// dashboard/src/lib/review-diffs.ts
+function useReviewDiffs() {
+  const [diffs, setDiffs] = d2([]);
+  const [loading, setLoading] = d2(false);
+  const loadDiffs = q2(async (ep = "/review-diffs") => {
+    setLoading(true);
+    try {
+      const data = await api(ep);
+      setDiffs(Array.isArray(data) ? data : []);
+    } catch {
+      setDiffs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  const modifiedFiles = q2(() => new Set(diffs.map((d3) => d3.file)), [diffs]);
+  const modifiedCount = q2(() => diffs.length, [diffs]);
+  return { diffs, loading, modifiedFiles, modifiedCount, reload: loadDiffs };
+}
+
+// dashboard/src/lib/diff-parser.ts
+function parseHunks(patch) {
+  if (!patch) return [];
+  const hunks = [];
+  const rawLines = patch.split("\n");
+  let cursor = 0;
+  while (cursor < rawLines.length) {
+    const line = rawLines[cursor];
+    const m3 = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (m3) {
+      const oldStart = parseInt(m3[1], 10);
+      const oldLen = m3[2] !== void 0 ? parseInt(m3[2], 10) : 1;
+      const newStart = parseInt(m3[3], 10);
+      const newLen = m3[4] !== void 0 ? parseInt(m3[4], 10) : 1;
+      const lines = [];
+      let oldNum = oldStart;
+      let newNum = newStart;
+      cursor++;
+      while (cursor < rawLines.length && !rawLines[cursor].startsWith("@@ ") && !rawLines[cursor].startsWith("diff ") && !rawLines[cursor].startsWith("--- ") && !rawLines[cursor].startsWith("index ")) {
+        const l3 = rawLines[cursor];
+        if (l3.startsWith("\\")) {
+          cursor++;
+          continue;
+        }
+        const ch = l3[0];
+        const content = l3.slice(1);
+        if (ch === "-") {
+          lines.push({ type: "del", content, oldLineNum: oldNum });
+          oldNum++;
+        } else if (ch === "+") {
+          lines.push({ type: "add", content, newLineNum: newNum });
+          newNum++;
+        } else {
+          lines.push({ type: "ctx", content, oldLineNum: oldNum, newLineNum: newNum });
+          oldNum++;
+          newNum++;
+        }
+        cursor++;
+      }
+      hunks.push({ oldStart, oldLines: oldLen, newStart, newLines: newLen, lines });
+    } else {
+      cursor++;
+    }
+  }
+  return hunks;
+}
+
+// dashboard/src/panels/changes.ts
+var html6 = htm_module_default.bind(k);
+function escapeAttr(s3) {
+  return s3.replace(/["&<>]/g, (c3) => ({ '"': "&quot;", "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c3]);
+}
+function lineDiff2(a3, b2) {
+  const m3 = a3.length, n3 = b2.length;
+  const dp = Array.from({ length: m3 + 1 }, () => new Array(n3 + 1).fill(0));
+  for (let i4 = 1; i4 <= m3; i4++) for (let j5 = 1; j5 <= n3; j5++)
+    dp[i4][j5] = a3[i4 - 1] === b2[j5 - 1] ? dp[i4 - 1][j5 - 1] + 1 : Math.max(dp[i4 - 1][j5], dp[i4][j5 - 1]);
+  const out = [];
+  let i3 = m3, j4 = n3;
+  while (i3 > 0 || j4 > 0) {
+    if (i3 > 0 && j4 > 0 && a3[i3 - 1] === b2[j4 - 1]) {
+      out.push({ kind: "context", text: a3[i3 - 1] });
+      i3--;
+      j4--;
+    } else if (j4 > 0 && (i3 === 0 || dp[i3][j4 - 1] >= dp[i3 - 1][j4])) {
+      out.push({ kind: "ins", text: b2[j4 - 1] });
+      j4--;
+    } else {
+      out.push({ kind: "del", text: a3[i3 - 1] });
+      i3--;
+    }
+  }
+  return out.reverse();
+}
+function pairDiffRows2(diff) {
+  const rows = [];
+  let k3 = 0;
+  while (k3 < diff.length) {
+    const e3 = diff[k3];
+    if (e3.kind === "context") {
+      rows.push({ left: e3.text, right: e3.text, kind: "context" });
+      k3++;
+      continue;
+    }
+    const d3 = [], ins = [];
+    while (k3 < diff.length && diff[k3].kind === "del") d3.push(diff[k3].text), k3++;
+    while (k3 < diff.length && diff[k3].kind === "ins") ins.push(diff[k3].text), k3++;
+    const p3 = Math.max(d3.length, ins.length);
+    for (let i3 = 0; i3 < p3; i3++) rows.push({ left: d3[i3] ?? null, right: ins[i3] ?? null, kind: d3[i3] != null && ins[i3] != null ? "change" : d3[i3] != null ? "del" : "ins" });
+  }
+  return rows;
+}
+function hE(s3) {
+  return s3.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function renderDiffHtml(patch, style) {
+  const hunks = parseHunks(patch);
+  if (hunks.length === 0) return "";
+  if (style === "unified") {
+    let html9 = "";
+    for (const hunk of hunks) {
+      html9 += `<div class="diff-hunk-header">@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@</div>`;
+      for (const line of hunk.lines) {
+        const cls = line.type === "add" ? "diff-add" : line.type === "del" ? "diff-del" : "";
+        const prefix = line.type === "add" ? "+" : line.type === "del" ? "-" : " ";
+        html9 += `<div class="diff-line ${cls}"><span class="diff-ln-old">${line.oldLineNum ?? ""}</span><span class="diff-ln-new">${line.newLineNum ?? ""}</span><span class="diff-prefix">${prefix}</span><span class="diff-content">${hE(line.content)}</span></div>`;
+      }
+    }
+    return html9;
+  }
+  const oldLines = [], newLines = [];
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.type === "ctx") {
+        oldLines.push(line.content);
+        newLines.push(line.content);
+      } else if (line.type === "del") oldLines.push(line.content);
+      else newLines.push(line.content);
+    }
+  }
+  const diff = lineDiff2(oldLines, newLines);
+  const rows = pairDiffRows2(diff);
+  let oldNum = 1, newNum = 1;
+  let html8 = `<div class="edit-diff-head"><div class="edit-diff-side edit-diff-side-old"><span class="edit-diff-marker">\u2212</span> Before</div><div class="edit-diff-side edit-diff-side-new"><span class="edit-diff-marker">+</span> After</div></div><div class="edit-diff-body">`;
+  for (const row of rows) {
+    html8 += `<div class="edit-diff-row edit-diff-row-${row.kind}">`;
+    html8 += `<div class="edit-diff-cell edit-diff-cell-old">`;
+    if (row.left != null) {
+      html8 += `<span class="edit-diff-ln">${oldNum}</span><span class="edit-diff-marker">${row.kind === "del" || row.kind === "change" ? "\u2212" : " "}</span>${hE(row.left)}`;
+      oldNum++;
+    }
+    html8 += `</div>`;
+    html8 += `<div class="edit-diff-cell edit-diff-cell-new">`;
+    if (row.right != null) {
+      html8 += `<span class="edit-diff-ln">${newNum}</span><span class="edit-diff-marker">${row.kind === "ins" || row.kind === "change" ? "+" : " "}</span>${hE(row.right)}`;
+      newNum++;
+    }
+    html8 += `</div></div>`;
+  }
+  html8 += `</div>`;
+  return html8;
+}
+function ChangesPanel() {
+  useLang();
+  const { tree, loading } = useProjectTree();
+  const { expanded, openFiles, activeFilePath, activeFile, toggleExpand, openFile, closeFile, setActiveFilePath } = useFileTreeState(tree);
+  const { comments, draft, startDraft, cancelDraft, setDraftContent, submitDraft, commentsForFile, deleteComment, editComment } = useLineComments();
+  const { diffs, modifiedFiles, modifiedCount, reload } = useReviewDiffs();
+  const [diffSource, setDiffSource] = d2("git");
+  const [checkpointList, setCheckpointList] = d2([]);
+  const [selectedCheckpointId, setSelectedCheckpointId] = d2(null);
+  const [createName, setCreateName] = d2("");
+  const [leftPct, setLeftPct] = d2(30);
+  const [rightPct, setRightPct] = d2(30);
+  const [showOnlyModified, setShowOnlyModified] = d2(false);
+  const [reviewMode, setReviewMode] = d2(true);
+  const [diffStyle, setDiffStyle] = d2("unified");
+  const [reviewHtml, setReviewHtml] = d2("");
+  const openingFile = A2(false);
+  y2(() => {
+    if (openFiles.length === 0 && !openingFile.current) setReviewMode(true);
+  }, [openFiles]);
+  const diffEndpoint = diffSource === "checkpoint" ? selectedCheckpointId ? `/checkpoint-diffs?id=${selectedCheckpointId}` : null : diffSource === "git" ? "/git-diffs" : "/review-diffs";
+  y2(() => {
+    if (diffSource === "checkpoint") {
+      api("/checkpoints").then((list2) => setCheckpointList(list2)).catch(() => setCheckpointList([]));
+    }
+  }, [diffSource]);
+  y2(() => {
+    if (diffEndpoint) {
+      reload(diffEndpoint);
+    } else {
+      setReviewHtml(`<div class="review-empty">${t4("changes.reviewEmpty") || "Select a checkpoint to compare"}</div>`);
+    }
+    void diffEndpoint;
+  }, [diffEndpoint, reload]);
+  y2(() => {
+    if (diffs.length === 0) {
+      const emptyMsg = t4("changes.reviewEmpty") || "No changes to review";
+      setReviewHtml(`<div class="review-empty">${emptyMsg}</div>`);
+      return;
+    }
+    setReviewHtml(
+      diffs.map((diff) => {
+        const file = hE(diff.file);
+        const chev = '<span class="chev">\u25B8</span>';
+        const stat = `<span class="stat"><span class="add">+${diff.additions}</span><span class="rem"> -${diff.deletions}</span></span>`;
+        const body = diff.patch ? `<div class="review-file-body" style="display:none">${renderDiffHtml(diff.patch, diffStyle)}</div>` : "";
+        return `<div class="review-file-item" data-file="${escapeAttr(file)}"><div class="review-file-header">${chev}<span class="filename">${escapeAttr(file)}</span>${stat}</div>${body}</div>`;
+      }).join("")
+    );
+  }, [diffs, diffStyle, t4]);
+  const expandAll = q2(() => {
+    document.querySelectorAll(".review-file-body").forEach((el) => {
+      el.style.display = "";
+    });
+    document.querySelectorAll(".review-file-header .chev").forEach((el) => {
+      el.textContent = "\u25BE";
+    });
+  }, []);
+  const collapseAll = q2(() => {
+    document.querySelectorAll(".review-file-body").forEach((el) => {
+      el.style.display = "none";
+    });
+    document.querySelectorAll(".review-file-header .chev").forEach((el) => {
+      el.textContent = "\u25B8";
+    });
+  }, []);
+  const handleLeftResize = q2((delta) => {
+    setLeftPct((prev) => {
+      const containerWidth = window.innerWidth;
+      const deltaPct = delta / containerWidth * 100;
+      return Math.max(15, Math.min(50, prev + deltaPct));
+    });
+  }, []);
+  const handleRightResize = q2((delta) => {
+    setRightPct((prev) => {
+      const containerWidth = window.innerWidth;
+      const deltaPct = delta / containerWidth * 100;
+      return Math.max(15, Math.min(50, prev - deltaPct));
+    });
+  }, []);
+  const toggleModifiedFilter = q2(() => {
+    setShowOnlyModified((prev) => !prev);
+  }, []);
+  const toggleReviewMode = q2(() => {
+    setReviewMode((prev) => !prev);
+  }, []);
+  const openReviewWithFilePicker = q2(() => {
+    setReviewMode(true);
+  }, []);
+  const handleOpenFile = q2(
+    async (filePath) => {
+      const findInTree = (nodes, path) => {
+        for (const n3 of nodes) {
+          if (n3.path === path) return n3;
+          if (n3.children) {
+            const found = findInTree(n3.children, path);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      let node = findInTree(tree, filePath);
+      if (!node) {
+        const parts = filePath.split("/");
+        const name = parts[parts.length - 1] || filePath;
+        node = { path: filePath, name, isDir: false };
+      }
+      await openFile(node);
+    },
+    [tree, openFile]
+  );
+  y2(() => {
+    const handler = (e3) => {
+      const header = e3.target.closest(".review-file-header");
+      if (!header) return;
+      const item = header.closest(".review-file-item");
+      if (!item) return;
+      const filePath = item.getAttribute("data-file");
+      if (!filePath) return;
+      const body = item.querySelector(".review-file-body");
+      if (body) {
+        const isOpen = body.style.display !== "none";
+        body.style.display = isOpen ? "none" : "";
+        const chev = header.querySelector(".chev");
+        if (chev) chev.textContent = isOpen ? "\u25B8" : "\u25BE";
+      }
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, []);
+  const activeFileComments = activeFile ? commentsForFile(activeFile.path) : [];
+  return html6`
+    <div class="changes-layout">
+      <div class="changes-panel changes-panel-left" style=${{ width: `${leftPct}%` }}>
+        <div class="changes-panel-header">
+          <span class="glyph">◆</span>
+          <span>${t4("changes.chatPanelTitle")}</span>
+        </div>
+        <div class="changes-panel-body">
+          <${ChatPane}
+            comments=${comments}
+            deleteComment=${deleteComment}
+          />
+        </div>
+      </div>
+
+      <${ResizeHandle} onResize=${handleLeftResize} direction="horizontal" />
+
+      <div class="changes-panel changes-panel-center">
+        ${reviewMode ? html6`
+              <${TabBar}
+                reviewTab=${html6`<${ReviewTab} count=${modifiedCount()} active=${true} onClick=${toggleReviewMode} />`}
+                fileList=${diffs.map((d3) => d3.file)}
+                onOpenFile=${(f3) => {
+    handleOpenFile(f3);
+    setReviewMode(false);
+  }}
+                onToggleReview=${toggleReviewMode}
+                files=${openFiles}
+                activePath=${activeFilePath}
+                onSelect=${(path) => {
+    setActiveFilePath(path);
+    setReviewMode(false);
+  }}
+                onClose=${closeFile}
+              />
+              <div class="review-controls" style=${{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", borderBottom: "1px solid var(--bd)", fontSize: "12px" }}>
+                <select value=${diffSource} onChange=${(e3) => {
+    const v3 = e3.target.value;
+    setDiffSource(v3);
+    if (v3 !== "checkpoint") setSelectedCheckpointId(null);
+  }} style=${{ fontSize: "12px", fontWeight: 500, padding: "1px 4px", borderRadius: "3px", background: "var(--bg-elev)", color: "var(--fg-0)", border: "1px solid var(--bd)", cursor: "pointer", outline: "none" }}>
+                  <option value="git">${t4("changes.diffSourceGit")}</option>
+                  <option value="session">${t4("changes.diffSourceSession")}</option>
+                  <option value="checkpoint">${t4("changes.diffSourceCheckpoint")}</option>
+                </select>
+                ${diffSource !== "checkpoint" || selectedCheckpointId ? html6`
+                <span style=${{ color: "var(--fg-3)" }}>${modifiedCount()}</span>
+                <div style=${{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "4px" }}>
+                  <button class=${`toggle-btn ${diffStyle === "unified" ? "active" : ""}`} onClick=${() => setDiffStyle("unified")} style=${{ fontSize: "11px", padding: "2px 6px" }}>${t4("changes.diffStyleUnified")}</button>
+                  <button class=${`toggle-btn ${diffStyle === "split" ? "active" : ""}`} onClick=${() => setDiffStyle("split")} style=${{ fontSize: "11px", padding: "2px 6px" }}>${t4("changes.diffStyleSplit")}</button>
+                  <button class="toggle-btn" onClick=${expandAll} style=${{ fontSize: "11px", padding: "2px 6px" }}>${t4("changes.expandAll")}</button>
+                  <button class="toggle-btn" onClick=${collapseAll} style=${{ fontSize: "11px", padding: "2px 6px" }}>${t4("changes.collapseAll")}</button>
+                </div>
+                ` : null}
+              </div>
+              ${diffSource === "checkpoint" && selectedCheckpointId ? html6`
+                <div style=${{ padding: "4px 12px", fontSize: "11px", color: "var(--fg-3)", borderBottom: "1px solid var(--bd)", cursor: "pointer" }}>
+                  <span onClick=${() => setSelectedCheckpointId(null)} style=${{ color: "var(--c-brand)", cursor: "pointer" }}>← ${t4("changes.backToList")}</span>
+                </div>
+              ` : null}
+              ${diffSource === "checkpoint" && !selectedCheckpointId ? html6`
+                <div class="checkpoint-picker" style=${{ flex: "1", overflowY: "auto", padding: "8px 12px" }}>
+                  <div style=${{ display: "flex", gap: "6px", marginBottom: "8px" }}>
+                    <input
+                      value=${createName}
+                      onInput=${(e3) => setCreateName(e3.target.value)}
+                      placeholder=${t4("changes.createPlaceholder")}
+                      style=${{ flex: 1, fontSize: "12px", padding: "4px 8px", background: "var(--bg-input)", border: "1px solid var(--bd)", borderRadius: "3px", color: "var(--fg-0)" }}
+                    />
+                    <button
+                      class="primary"
+                      onClick=${async () => {
+    const name = createName.trim();
+    if (!name) return;
+    try {
+      await api("/checkpoint-create", { method: "POST", body: { name } });
+      setCreateName("");
+      const list2 = await api("/checkpoints");
+      setCheckpointList(list2);
+    } catch {
+      alert("create failed");
+    }
+  }}
+                      disabled=${!createName.trim()}
+                      style=${{ padding: "5px 12px" }}
+                    >${t4("changes.createBtn")}</button>
+                  </div>
+                  ${checkpointList.length === 0 ? html6`
+                    <div class="empty" style=${{ textAlign: "center", margin: "12px" }}>${t4("changes.checkpointEmpty")}</div>
+                  ` : checkpointList.map((c3) => html6`
+                    <div
+                      key=${c3.id}
+                      class="checkpoint-item"
+                      style=${{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", cursor: "pointer", borderRadius: "4px", borderBottom: "1px solid var(--bd)" }}
+                      onMouseEnter=${(e3) => {
+    e3.currentTarget.style.background = "var(--bg-hover)";
+  }}
+                      onMouseLeave=${(e3) => {
+    e3.currentTarget.style.background = "transparent";
+  }}
+                    >
+                      <div
+                        onClick=${() => {
+    setSelectedCheckpointId(c3.id);
+  }}
+                        style=${{ display: "flex", flexDirection: "column", gap: "2px", flex: 1 }}
+                      >
+                        <span style=${{ fontSize: "13px", fontWeight: 500 }}>${c3.name}</span>
+                        <span style=${{ fontSize: "11px", color: "var(--fg-3)" }}>${c3.id.slice(0, 7)} · ${c3.fileCount} file${c3.fileCount === 1 ? "" : "s"}</span>
+                      </div>
+                      <div style=${{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style=${{ fontSize: "11px", color: "var(--fg-4)" }}>${c3.ago}</span>
+                        <button
+                          onClick=${async (e3) => {
+    e3.stopPropagation();
+    if (confirm(t4("changes.restoreConfirm").replace("{name}", c3.name))) {
+      try {
+        await api("/checkpoint-restore", { method: "POST", body: { id: c3.id } });
+        setSelectedCheckpointId(null);
+        setDiffSource("git");
+      } catch {
+        alert("restore failed");
+      }
+    }
+  }}
+                          style=${{ fontSize: "11px", padding: "2px 6px", background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: "3px", cursor: "pointer" }}
+                        >${t4("changes.restoreBtn")}</button>
+                        <button
+                          onClick=${async (e3) => {
+    e3.stopPropagation();
+    if (confirm(t4("changes.deleteConfirm").replace("{name}", c3.name))) {
+      try {
+        await api("/checkpoint-delete", { method: "POST", body: { id: c3.id } });
+        setCheckpointList((prev) => prev.filter((x3) => x3.id !== c3.id));
+      } catch {
+        alert("delete failed");
+      }
+    }
+  }}
+                          style=${{ fontSize: "11px", padding: "2px 6px", color: "var(--fg-3)", border: "1px solid var(--bd)", borderRadius: "3px", cursor: "pointer", background: "transparent" }}
+                        >${t4("changes.deleteBtn")}</button>
+                      </div>
+                    </div>
+                  `)}
+                </div>
+              ` : null}
+              <div class="review-diff-view" style=${{ flex: "1", overflowY: "auto" }}>
+                <div class="review-diff-list" style=${{ padding: "0 12px" }} key=${diffStyle} dangerouslySetInnerHTML=${{ __html: reviewHtml }}></div>
+              </div>
+            ` : html6`
+              <${TabBar}
+                reviewTab=${html6`<${ReviewTab} count=${modifiedCount()} active=${false} onClick=${toggleReviewMode} />`}
+                fileList=${diffs.map((d3) => d3.file)}
+                onOpenFile=${handleOpenFile}
+                files=${openFiles}
+                activePath=${activeFilePath}
+                onSelect=${setActiveFilePath}
+                onClose=${closeFile}
+              />
+              <${CodeViewer}
+                key=${activeFile?.path ?? "empty"}
+                file=${activeFile}
+                comments=${activeFileComments}
+                draft=${draft && draft.file === activeFilePath ? draft : null}
+                onStartComment=${startDraft}
+                onEditComment=${editComment}
+                onCancelComment=${cancelDraft}
+                onCommentChange=${setDraftContent}
+                onSubmitComment=${submitDraft}
+                onDeleteComment=${deleteComment}
+              />
+            `}
+      </div>
+
+      <${ResizeHandle} onResize=${handleRightResize} direction="horizontal" />
+
+      <div class="changes-panel changes-panel-right" style=${{ width: `${rightPct}%` }}>
+        <div class="changes-panel-header">
+          <span class="glyph">▼</span>
+          <span>${t4("changes.fileTreeTitle")}</span>
+        </div>
+        <${FileTreeToggle}
+          showOnlyModified=${showOnlyModified}
+          modifiedCount=${modifiedCount()}
+          onToggle=${toggleModifiedFilter}
+        />
+        <div class="changes-panel-body">
+          ${loading ? html6`<div class="empty" style=${{ margin: "12px", textAlign: "center" }}>${t4("changes.loadingFiles")}</div>` : html6`<${FileTree}
+                nodes=${tree}
+                expanded=${expanded}
+                onToggle=${toggleExpand}
+                onSelect=${(node) => {
+    setReviewMode(false);
+    openFile(node);
+  }}
+                modifiedFiles=${modifiedFiles()}
+                showOnlyModified=${showOnlyModified}
+              />`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+function fmtCost2(usd, currency) {
+  if (currency === "CNY" || currency === "\xA5") {
+    return `\xA5${(usd * 7.2).toFixed(4)}`;
+  }
+  return `$${usd.toFixed(4)}`;
+}
+function ChatStatusBar3({ stats, model }) {
+  useLang();
+  if (!stats) {
+    return html6`
+      <div class="chat-statusbar">
+        <span class="muted">—</span>
+      </div>
+    `;
+  }
+  const ctxPct = stats.contextCapTokens > 0 ? stats.lastPromptTokens / stats.contextCapTokens * 100 : 0;
+  const balance = stats.balance && stats.balance.length > 0 ? stats.balance[0] : null;
+  return html6`
+    <div class="chat-statusbar">
+      <span class="status-item">
+        <span class="status-label">${t4("chat.statusModel")}</span>
+        <code>${model ?? "\u2014"}</code>
+      </span>
+      <span class="status-item">
+        <span class="status-label">${t4("chat.statusCtx")}</span>
+        <span class="status-bar-mini">
+          <span class="status-bar-mini-fill" style=${`width: ${Math.min(100, ctxPct).toFixed(1)}%;`}></span>
+        </span>
+        <span class="muted">${stats.lastPromptTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
+      </span>
+      <span class="status-item">
+        <span class="status-label">${t4("chat.statusCache")}</span>
+        <span class=${stats.cacheHitRatio >= 0.9 ? "status-ok" : stats.cacheHitRatio >= 0.6 ? "status-warn" : "status-err"}>
+          ${(stats.cacheHitRatio * 100).toFixed(1)}%
+        </span>
+      </span>
+      <span class="status-item">
+        <span class="status-label">${t4("chat.statusTurn")}</span>
+        <code>${fmtCost2(stats.lastTurnCostUsd, balance?.currency)}</code>
+      </span>
+      <span class="status-item">
+        <span class="status-label">${t4("chat.statusSession")}</span>
+        <code>${fmtCost2(stats.totalCostUsd, balance?.currency)}</code>
+        <span class="muted" style="font-size: 10px;">
+          ${t4("chat.statusTurns", { count: stats.turns, s: stats.turns === 1 ? "" : "s" })}
+        </span>
+      </span>
+      ${balance ? html6`
+          <span class="status-item">
+            <span class="status-label">${t4("chat.statusBalance")}</span>
+            <code>${balance.total_balance} ${balance.currency}</code>
+          </span>
+        ` : null}
+    </div>
+  `;
+}
+function CommentCard(props) {
+  return html6`
+    <div class="comment-card">
+      <span class="comment-card-icon">⬥</span>
+      <span class="comment-card-file">${props.fileName}:${props.lineNumber}</span>
+      <span class="comment-card-content">${props.content}</span>
+      <span class="comment-card-remove" onClick=${props.onRemove}>×</span>
+    </div>
+  `;
+}
+function filterModifiedNodes(nodes, modifiedFiles) {
+  return nodes.map((node) => {
+    if (node.isDir && node.children) {
+      const filteredChildren = filterModifiedNodes(node.children, modifiedFiles);
+      if (filteredChildren.length === 0) return null;
+      return { ...node, children: filteredChildren };
+    }
+    if (modifiedFiles.has(node.path)) return node;
+    return null;
+  }).filter((n3) => n3 !== null);
+}
+function renderTree(props) {
+  const { nodes, expanded, onToggle, onSelect, indent = 0, modifiedFiles = /* @__PURE__ */ new Set(), showOnlyModified = false } = props;
+  const displayNodes = showOnlyModified ? filterModifiedNodes(nodes, modifiedFiles) : nodes;
+  return displayNodes.map((node) => {
+    const isExpanded = expanded.has(node.path);
+    const indentEls = [];
+    for (let i3 = 0; i3 < indent; i3++) {
+      indentEls.push(html6`<span class="indent" key=${`indent-${i3}`} />`);
+    }
+    if (node.isDir) {
+      const cls2 = isExpanded ? "tree-node open" : "tree-node";
+      return html6`
+        <div key=${node.path}>
+          <div class=${cls2} onClick=${() => onToggle(node.path)}>
+            ${indentEls}
+            <span class="arrow">${isExpanded ? "\u25BE" : "\u25B8"}</span>
+            <span class="icon dir">▼</span>
+            <span class="name">${node.name}</span>
+          </div>
+          ${isExpanded && node.children && node.children.length > 0 ? renderTree({ nodes: node.children, expanded, onToggle, onSelect, indent: indent + 1, modifiedFiles, showOnlyModified }) : null}
+          ${isExpanded && (!node.children || node.children.length === 0) ? html6`<div class="tree-node" style=${{ paddingLeft: `${(indent + 1) * 14 + 8}px` }}>
+                <span class="name muted">${t4("changes.treeEmpty")}</span>
+              </div>` : null}
+        </div>
+      `;
+    }
+    const { icon, cls } = getFileIcon(node.name);
+    const isModified = modifiedFiles.has(node.path);
+    return html6`
+      <div
+        key=${node.path}
+        class="tree-node"
+        onClick=${() => onSelect(node)}
+        style=${{ paddingLeft: `${indent * 14 + 8}px` }}
+      >
+        <span class=${`icon ${cls}`}>${icon}</span>
+        <span class="name">${node.name}</span>
+        ${isModified ? html6`<span class="mod-indicator" />` : null}
+      </div>
+    `;
+  });
+}
+function FileTree(props) {
+  return html6`
+    <div class="tree">
+      ${renderTree(props)}
+    </div>
+  `;
+}
+function FileTreeToggle(props) {
+  return html6`
+    <div class="file-tree-toggle">
+      <button
+        class=${`toggle-btn ${props.showOnlyModified ? "active" : ""}`}
+        onClick=${props.onToggle}
+      >
+        ${props.modifiedCount} ${t4("changes.changes")}
+      </button>
+      <button
+        class=${`toggle-btn ${!props.showOnlyModified ? "active" : ""}`}
+        onClick=${props.onToggle}
+      >
+        ${t4("changes.allFiles")}
+      </button>
+    </div>
+  `;
+}
+function ReviewTab(props) {
+  return html6`
+    <div
+      class=${`editor-tab review-tab${props.active ? " active" : ""}`}
+      onClick=${props.onClick}
+      style=${{ display: "flex", alignItems: "center", gap: "3px", padding: "4px 6px", cursor: props.onClick ? "pointer" : "default" }}
+    >
+      <span class="review-icon">◑</span>
+      <span>${t4("changes.review")}</span>
+      <span style=${{ color: "var(--fg-3)", fontSize: "10.5px" }}>${props.count}</span>
+    </div>
+  `;
+}
+function ResizeHandle(props) {
+  const { onResize, direction } = props;
+  const dragging = A2(false);
+  const startX = A2(0);
+  const onMouseDown = q2((e3) => {
+    e3.preventDefault();
+    dragging.current = true;
+    startX.current = direction === "horizontal" ? e3.clientX : e3.clientY;
+    document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
+    document.body.style.userSelect = "none";
+  }, [direction]);
+  y2(() => {
+    const onMouseMove = (e3) => {
+      if (!dragging.current) return;
+      const current = direction === "horizontal" ? e3.clientX : e3.clientY;
+      const delta = current - startX.current;
+      startX.current = current;
+      onResize(delta);
+    };
+    const onMouseUp = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [onResize, direction]);
+  const isH = direction === "horizontal";
+  return html6`
+    <div
+      onMouseDown=${onMouseDown}
+      style=${{
+    width: isH ? "4px" : "100%",
+    height: isH ? "100%" : "4px",
+    cursor: isH ? "col-resize" : "row-resize",
+    background: "var(--bd)",
+    flexShrink: 0,
+    transition: "background 0.15s"
+  }}
+      onMouseEnter=${(e3) => {
+    e3.target.style.background = "var(--c-brand)";
+  }}
+      onMouseLeave=${(e3) => {
+    e3.target.style.background = "var(--bd)";
+  }}
+    />
+  `;
+}
+function TabBar(props) {
+  const { files, activePath, onSelect, onClose, reviewTab, fileList, onOpenFile } = props;
+  const popupRef = A2(null);
+  const btnRef = A2(null);
+  y2(() => {
+    const btn = btnRef.current;
+    if (!btn || !fileList || fileList.length === 0) return;
+    const toggle = (e3) => {
+      e3.stopPropagation();
+      if (popupRef.current) {
+        popupRef.current.remove();
+        popupRef.current = null;
+        return;
+      }
+      const allFiles = fileList;
+      const popup = document.createElement("div");
+      popupRef.current = popup;
+      popup.style.cssText = "position:fixed;top:20%;left:50%;transform:translateX(-50%);background:var(--bg-elev-2);border:1px solid var(--bd);border-radius:6px;max-height:400px;display:flex;flex-direction:column;z-index:1000;min-width:380px;max-width:600px;box-shadow:0 8px 24px rgba(0,0,0,.4)";
+      const input = document.createElement("input");
+      input.placeholder = "\u641C\u7D22\u6587\u4EF6...";
+      input.style.cssText = "margin:6px 8px;padding:5px 8px;font-size:12px;background:var(--bg);color:var(--fg-0);border:1px solid var(--bd);border-radius:4px;outline:none;flex-shrink:0";
+      input.onclick = (ev) => ev.stopPropagation();
+      popup.appendChild(input);
+      const listWrap = document.createElement("div");
+      listWrap.style.cssText = "overflow-y:auto;flex:1;padding:0 4px 4px";
+      popup.appendChild(listWrap);
+      function renderList(filter) {
+        listWrap.innerHTML = "";
+        const q4 = filter.toLowerCase();
+        for (const f3 of allFiles) {
+          if (q4 && !f3.toLowerCase().includes(q4)) continue;
+          const row = document.createElement("div");
+          row.textContent = f3;
+          row.style.cssText = "padding:3px 8px;font-size:11px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-mono);border-radius:3px";
+          row.onmouseenter = () => row.style.background = "var(--bg-hover)";
+          row.onmouseleave = () => row.style.background = "transparent";
+          row.onclick = (ev) => {
+            ev.stopPropagation();
+            onOpenFile?.(f3);
+            popup.remove();
+            popupRef.current = null;
+          };
+          listWrap.appendChild(row);
+        }
+      }
+      renderList("");
+      input.oninput = () => renderList(input.value);
+      setTimeout(() => input.focus(), 50);
+      document.body.appendChild(popup);
+      const close = (ev) => {
+        if (popupRef.current && !popup.contains(ev.target) && ev.target !== btn) {
+          popup.remove();
+          popupRef.current = null;
+          document.removeEventListener("mousedown", close, true);
+        }
+      };
+      document.addEventListener("mousedown", close, true);
+    };
+    btn.addEventListener("click", toggle);
+    return () => {
+      btn.removeEventListener("click", toggle);
+      if (popupRef.current) {
+        popupRef.current.remove();
+        popupRef.current = null;
+      }
+    };
+  }, [fileList, onOpenFile]);
+  return html6`
+    <div class="editor-tabs">
+      ${reviewTab || null}
+      ${fileList ? html6`
+        <span
+          ref=${btnRef}
+          style=${{
+    fontSize: "14px",
+    padding: "4px 3px",
+    cursor: "pointer",
+    color: "var(--fg-3)",
+    userSelect: "none",
+    lineHeight: "1",
+    fontFamily: "var(--font-mono)"
+  }}
+          title="Open file"
+        >+</span>
+      ` : null}
+      ${files.map((f3) => html6`
+        <div
+          key=${f3.path}
+          class=${`editor-tab ${f3.path === activePath ? "active" : ""}`}
+          onClick=${() => onSelect(f3.path)}
+          title=${f3.path}
+        >
+          <span>${f3.name}</span>
+          <span
+            class="x"
+            onClick=${(e3) => {
+    e3.stopPropagation();
+    onClose(f3.path);
+  }}
+            title=${t4("changes.tabClose")}
+          >×</span>
+        </div>
+      `)}
+    </div>
+  `;
+}
+function CodeViewer(props) {
+  const { file, comments = [], draft, onStartComment, onEditComment, onCancelComment, onCommentChange, onSubmitComment, onDeleteComment } = props;
+  const codeRef = A2(null);
+  const [hoveredLine, setHoveredLine] = d2(null);
+  y2(() => {
+    if (!file) return;
+    const el = codeRef.current;
+    if (!el) return;
+    el.innerHTML = "";
+    const lines = file.content.split("\n");
+    const commentsByLine = /* @__PURE__ */ new Map();
+    comments.forEach((c3) => {
+      const existing = commentsByLine.get(c3.lineNumber) || [];
+      existing.push(c3);
+      commentsByLine.set(c3.lineNumber, existing);
+    });
+    lines.forEach((line, i3) => {
+      const lineNumber = i3 + 1;
+      const lineComments = commentsByLine.get(lineNumber) || [];
+      const hasComments = lineComments.length > 0;
+      const lineDiv = document.createElement("div");
+      lineDiv.className = "editor-line";
+      lineDiv.dataset.lineNumber = String(lineNumber);
+      lineDiv.style.position = "relative";
+      lineDiv.addEventListener("mouseenter", () => setHoveredLine(lineNumber));
+      lineDiv.addEventListener("mouseleave", () => setHoveredLine(null));
+      const gutter = document.createElement("div");
+      gutter.className = "lineno";
+      gutter.textContent = String(lineNumber);
+      gutter.style.position = "relative";
+      gutter.style.display = "flex";
+      gutter.style.alignItems = "center";
+      gutter.style.justifyContent = "center";
+      gutter.style.gap = "4px";
+      if (onStartComment) {
+        const isVisible = hoveredLine === lineNumber && (!draft || draft.file !== file.path || draft.lineNumber !== lineNumber);
+        const anchorBtn = document.createElement("span");
+        anchorBtn.className = `line-comment-anchor ${isVisible ? "visible" : ""}`;
+        anchorBtn.style.cssText = "width:16px;height:16px;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;cursor:pointer;transition:opacity 0.15s ease;flex-shrink:0;";
+        if (isVisible) {
+          anchorBtn.style.opacity = "1";
+          anchorBtn.style.pointerEvents = "auto";
+        }
+        if (hasComments) {
+          anchorBtn.innerHTML = `<span class="comment-count" style="background:rgba(121,192,255,0.12);border-radius:2px;padding:0 3px;font-size:10px;color:#79c0ff;font-family:monospace;">${lineComments.length}</span>`;
+        } else {
+          anchorBtn.innerHTML = `<span class="plus-icon" style="font-family:monospace;font-size:14px;color:#6e7681;line-height:1;">+</span>`;
+        }
+        anchorBtn.addEventListener("mouseenter", () => {
+          anchorBtn.style.opacity = "1";
+        });
+        anchorBtn.addEventListener("click", (e3) => {
+          e3.stopPropagation();
+          onStartComment(file.path, lineNumber);
+        });
+        gutter.appendChild(anchorBtn);
+      }
+      const content = document.createElement("span");
+      content.className = "ln-content";
+      content.textContent = line || " ";
+      lineDiv.appendChild(gutter);
+      lineDiv.appendChild(content);
+      el.appendChild(lineDiv);
+      if (draft && draft.file === file.path && draft.lineNumber === lineNumber) {
+        const editorContainer = document.createElement("div");
+        editorContainer.className = "line-comment-editor";
+        const labelDiv = document.createElement("div");
+        labelDiv.className = "line-comment-label";
+        labelDiv.textContent = `${t4("changes.commentLabel")} ${lineNumber}`;
+        const textarea = document.createElement("textarea");
+        textarea.className = "line-comment-textarea";
+        textarea.placeholder = t4("changes.commentPlaceholder");
+        textarea.rows = 2;
+        textarea.value = draft.content;
+        let isComposing = false;
+        textarea.addEventListener("compositionstart", () => {
+          isComposing = true;
+        });
+        textarea.addEventListener("compositionend", (e3) => {
+          isComposing = false;
+          if (onCommentChange) onCommentChange(e3.target.value);
+        });
+        textarea.addEventListener("input", (e3) => {
+          if (!isComposing && onCommentChange) onCommentChange(e3.target.value);
+        });
+        textarea.addEventListener("keydown", (e3) => {
+          if (e3.key === "Escape" && onCancelComment) {
+            e3.preventDefault();
+            onCancelComment();
+          } else if (e3.key === "Enter" && e3.ctrlKey && onSubmitComment) {
+            e3.preventDefault();
+            onSubmitComment();
+          }
+        });
+        const actionsDiv = document.createElement("div");
+        actionsDiv.className = "line-comment-actions";
+        actionsDiv.style.cssText = "display:flex;gap:4px;justify-content:flex-end;";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "btn ghost";
+        cancelBtn.textContent = t4("changes.commentCancel");
+        cancelBtn.style.cssText = "background:transparent;border:none;color:#6e7681;padding:3px 8px;font-size:11px;cursor:pointer;";
+        cancelBtn.addEventListener("click", () => {
+          if (onCancelComment) onCancelComment();
+        });
+        const submitBtn = document.createElement("button");
+        submitBtn.className = "btn primary";
+        submitBtn.textContent = t4("changes.commentSubmit");
+        submitBtn.style.cssText = "background:#79c0ff;color:#0a0c10;border:none;padding:3px 8px;font-size:11px;cursor:pointer;border-radius:2px;font-weight:600;";
+        submitBtn.disabled = !draft.content.trim();
+        submitBtn.addEventListener("click", () => {
+          if (onSubmitComment) onSubmitComment();
+        });
+        actionsDiv.appendChild(cancelBtn);
+        actionsDiv.appendChild(submitBtn);
+        editorContainer.appendChild(labelDiv);
+        editorContainer.appendChild(textarea);
+        editorContainer.appendChild(actionsDiv);
+        el.appendChild(editorContainer);
+        setTimeout(() => textarea.focus(), 0);
+      }
+      if (hasComments) {
+        lineComments.forEach((comment) => {
+          if (el.querySelector(`.line-comment-bubble[data-id="${comment.id}"]`)) return;
+          const isEditing = draft && draft.editingId === comment.id;
+          if (isEditing) return;
+          const bubbleDiv = document.createElement("div");
+          bubbleDiv.className = "line-comment-bubble";
+          bubbleDiv.dataset.id = comment.id;
+          const contentDiv = document.createElement("div");
+          contentDiv.className = "bubble-content";
+          contentDiv.textContent = comment.content;
+          const footerDiv = document.createElement("div");
+          footerDiv.className = "bubble-footer";
+          const lineSpan = document.createElement("span");
+          lineSpan.className = "bubble-line";
+          lineSpan.textContent = `\u8BC4\u8BBA\u7B2C ${comment.lineNumber} \u884C`;
+          const actionsDiv = document.createElement("div");
+          actionsDiv.className = "bubble-actions";
+          actionsDiv.style.display = "flex";
+          actionsDiv.style.gap = "4px";
+          if (onEditComment) {
+            const editBtn = document.createElement("button");
+            editBtn.className = "bubble-btn";
+            editBtn.textContent = "\u7F16\u8F91";
+            editBtn.style.cssText = "background:transparent;border:none;color:#6e7681;padding:3px 8px;font-size:11px;cursor:pointer;border-radius:2px;";
+            editBtn.addEventListener("click", (e3) => {
+              e3.stopPropagation();
+              onEditComment(comment.id, comment.content);
+            });
+            actionsDiv.appendChild(editBtn);
+          }
+          if (onDeleteComment) {
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "bubble-btn danger";
+            deleteBtn.textContent = "\u5220\u9664";
+            deleteBtn.style.cssText = "background:transparent;border:none;color:#6e7681;padding:3px 8px;font-size:11px;cursor:pointer;border-radius:2px;";
+            deleteBtn.addEventListener("click", (e3) => {
+              e3.stopPropagation();
+              onDeleteComment(comment.id);
+            });
+            actionsDiv.appendChild(deleteBtn);
+          }
+          footerDiv.appendChild(lineSpan);
+          footerDiv.appendChild(actionsDiv);
+          bubbleDiv.appendChild(contentDiv);
+          bubbleDiv.appendChild(footerDiv);
+          el.appendChild(bubbleDiv);
+        });
+      }
+    });
+    if (common_default) {
+      const codeEl = codeRef.current;
+      if (codeEl) {
+        codeEl.querySelectorAll(".ln-content").forEach((span) => {
+          const text = span.textContent ?? "";
+          try {
+            const result = common_default.highlight(text, { language: file.language, ignoreIllegals: true });
+            span.innerHTML = result.value;
+          } catch {
+            span.textContent = text;
+          }
+        });
+      }
+    }
+  }, [file, comments, draft]);
+  y2(() => {
+    if (!codeRef.current || !file) return;
+    const anchors = codeRef.current.querySelectorAll(".line-comment-anchor");
+    anchors.forEach((anchor) => {
+      const lineDiv = anchor.closest(".editor-line");
+      if (!lineDiv) return;
+      const lineNumber = parseInt(lineDiv.dataset.lineNumber || "0", 10);
+      const isVisible = hoveredLine === lineNumber && (!draft || draft.file !== file.path || draft.lineNumber !== lineNumber);
+      anchor.style.opacity = isVisible ? "1" : "0";
+      anchor.style.pointerEvents = isVisible ? "auto" : "none";
+    });
+  }, [hoveredLine, draft, file]);
+  if (!file) {
+    return html6`
+      <div class="editor-area" style=${{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div class="empty">${t4("changes.viewerPlaceholder")}</div>
+      </div>
+    `;
+  }
+  return html6`
+    <div class="editor-area" ref=${codeRef} />
+    <div class="editor-status">
+      <span class="glyph">◆</span>
+      <span class="v">${file.name}</span>
+      <span class="grow"></span>
+      <span>${file.language}</span>
+      <span class="v">${String(file.content.split("\n").length)} lines</span>
+    </div>
+  `;
+}
+function ChatPane(props) {
+  useLang();
+  const [messages, setMessages] = d2([]);
+  const [streaming, setStreaming] = d2(null);
+  const [activeTool, setActiveTool] = d2(null);
+  const [busy, setBusy] = d2(false);
+  const [input, setInput] = d2("");
+  const [error, setError] = d2(null);
+  const [statusLine, setStatusLine] = d2(null);
+  const [stats, setStats] = d2(null);
+  const [model, setModel] = d2(null);
+  const shouldAutoScroll = A2(true);
+  const feedRef = A2(null);
+  const streamBufRef = A2(null);
+  const streamRafRef = A2(null);
+  const autoScrollInFlight = A2(false);
+  const [slashCommands, setSlashCommands] = d2([]);
+  const [popoverKind, setPopoverKind] = d2(null);
+  const [popoverItems, setPopoverItems] = d2([]);
+  const [popoverSel, setPopoverSel] = d2(0);
+  y2(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r3 = await api("/slash");
+        if (!cancelled) setSlashCommands(r3.commands);
+      } catch {
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  y2(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api("/messages");
+        if (!cancelled) {
+          setMessages(data.messages ?? []);
+          setBusy(Boolean(data.busy));
+        }
+      } catch {
+        if (!cancelled) setMessages([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  y2(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const data = await api("/overview");
+        if (cancelled) return;
+        setStats(data.stats ?? null);
+        setModel(data.model ?? null);
+      } catch {
+      }
+    };
+    tick();
+    const t5 = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(t5);
+    };
+  }, []);
+  const flushStreaming = q2(() => {
+    streamRafRef.current = null;
+    if (streamBufRef.current) setStreaming(streamBufRef.current);
+  }, []);
+  const cancelStreamingRaf = q2(() => {
+    if (streamRafRef.current !== null) {
+      cancelAnimationFrame(streamRafRef.current);
+      streamRafRef.current = null;
+    }
+    streamBufRef.current = null;
+  }, []);
+  const refetchCanonicalState = q2(async () => {
+    try {
+      const data = await api("/messages");
+      setMessages(data.messages ?? []);
+      setBusy(Boolean(data.busy));
+      cancelStreamingRaf();
+      setStreaming(null);
+      setActiveTool(null);
+    } catch {
+    }
+  }, [cancelStreamingRaf]);
+  y2(() => {
+    const es = new EventSource(`/api/events?token=${TOKEN}`);
+    let firstOpen = true;
+    es.onopen = () => {
+      if (firstOpen) {
+        firstOpen = false;
+        return;
+      }
+      void refetchCanonicalState();
+    };
+    es.onmessage = (ev) => {
+      let dash;
+      try {
+        dash = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (dash.kind === "ping") return;
+      if (dash.kind === "busy-change") {
+        setBusy(dash.busy);
+        return;
+      }
+      if (dash.kind === "user") {
+        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text }]);
+        return;
+      }
+      if (dash.kind === "assistant_delta") {
+        const cur = streamBufRef.current;
+        const baseId = cur?.id === dash.id ? cur : null;
+        streamBufRef.current = {
+          id: dash.id,
+          text: (baseId?.text ?? "") + (dash.contentDelta ?? ""),
+          reasoning: (baseId?.reasoning ?? "") + (dash.reasoningDelta ?? "")
+        };
+        if (streamRafRef.current === null) {
+          streamRafRef.current = requestAnimationFrame(flushStreaming);
+        }
+        return;
+      }
+      if (dash.kind === "assistant_final") {
+        cancelStreamingRaf();
+        setStreaming(null);
+        setMessages((prev) => [
+          ...prev,
+          { id: dash.id, role: "assistant", text: dash.text, reasoning: dash.reasoning }
+        ]);
+        return;
+      }
+      if (dash.kind === "tool_start") {
+        setActiveTool({ id: dash.id, toolName: dash.toolName, args: dash.args });
+        return;
+      }
+      if (dash.kind === "tool") {
+        setActiveTool((cur) => cur && cur.id === dash.id ? null : cur);
+        setMessages((prev) => [
+          ...prev,
+          { id: dash.id, role: "tool", text: dash.content, toolName: dash.toolName, toolArgs: dash.args }
+        ]);
+        return;
+      }
+      if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info") {
+        if (dash.kind === "error") setActiveTool(null);
+        setMessages((prev) => [...prev, { id: dash.id, role: dash.kind, text: dash.text }]);
+        return;
+      }
+      if (dash.kind === "status") {
+        setStatusLine(dash.text);
+        setTimeout(() => setStatusLine((cur) => cur === dash.text ? null : cur), 5e3);
+        return;
+      }
+    };
+    es.onerror = () => {
+      setError(t4("chat.eventStreamError"));
+      setTimeout(() => setError(null), 3e3);
+    };
+    return () => {
+      es.close();
+      cancelStreamingRaf();
+    };
+  }, [refetchCanonicalState, cancelStreamingRaf]);
+  y2(() => {
+    if (!shouldAutoScroll.current) return;
+    const el = feedRef.current;
+    if (!el) return;
+    autoScrollInFlight.current = true;
+    el.scrollTop = el.scrollHeight;
+    setTimeout(() => {
+      autoScrollInFlight.current = false;
+    }, 0);
+  }, [messages, streaming]);
+  y2(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (autoScrollInFlight.current) return;
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      shouldAutoScroll.current = distFromBottom < 80;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+  const updatePopover = q2(
+    async (text) => {
+      const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
+      if (slashMatch) {
+        const prefix = slashMatch[1].toLowerCase();
+        const items = slashCommands.filter((c3) => c3.cmd.startsWith(prefix)).slice(0, 12).map((c3) => ({
+          label: `/${c3.cmd}`,
+          meta: c3.summary,
+          insert: `/${c3.cmd}${c3.argsHint ? " " : ""}`
+        }));
+        setPopoverKind("slash");
+        setPopoverItems(items);
+        setPopoverSel(0);
+        return;
+      }
+      setPopoverKind(null);
+    },
+    [slashCommands]
+  );
+  const applyPopover = q2(() => {
+    const item = popoverItems[popoverSel];
+    if (!item) return false;
+    setInput(item.insert);
+    setPopoverKind(null);
+    return true;
+  }, [popoverItems, popoverSel, popoverKind, input]);
+  const onInput = q2(
+    (e3) => {
+      const v3 = e3.target.value;
+      setInput(v3);
+      updatePopover(v3);
+    },
+    [updatePopover]
+  );
+  const send = q2(async () => {
+    const text = input.trim();
+    if (busy) return;
+    if (!text && props.comments.length === 0) return;
+    setError(null);
+    let prompt = text;
+    if (props.comments.length > 0) {
+      const commentRefs = props.comments.map((c3) => `\u{1F4DD} ${c3.file}:${c3.lineNumber} ${c3.content}`).join("\n");
+      prompt = text ? `${text}
+
+${commentRefs}` : commentRefs;
+    }
+    try {
+      const res = await api("/submit", {
+        method: "POST",
+        body: { prompt }
+      });
+      if (!res.accepted) {
+        setError(res.reason ?? "rejected");
+        return;
+      }
+      setInput("");
+      props.comments.forEach((c3) => props.deleteComment(c3.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [input, busy, props.comments]);
+  const abort = q2(async () => {
+    try {
+      await api("/abort", { method: "POST" });
+    } catch {
+    }
+  }, []);
+  const newConversation = q2(async () => {
+    if (busy) {
+      if (!confirm(t4("changes.newConfirmBusy"))) return;
+    }
+    try {
+      await api("/submit", { method: "POST", body: { prompt: "/new" } });
+      setMessages([]);
+      setStreaming(null);
+      setActiveTool(null);
+      showToast(t4("changes.newToast"), "info");
+      setTimeout(async () => {
+        try {
+          const r3 = await api("/messages");
+          setMessages(r3.messages ?? []);
+        } catch {
+        }
+      }, 200);
+    } catch (err) {
+      setError(t4("changes.newFailed", { error: err.message }));
+    }
+  }, [busy, messages.length]);
+  const clearScrollback = q2(async () => {
+    try {
+      await api("/submit", { method: "POST", body: { prompt: "/clear" } });
+      setMessages([]);
+      setStreaming(null);
+      setActiveTool(null);
+      showToast(t4("changes.clearToast"), "info");
+      setTimeout(async () => {
+        try {
+          const r3 = await api("/messages");
+          setMessages(r3.messages ?? []);
+        } catch {
+        }
+      }, 200);
+    } catch (err) {
+      setError(t4("changes.clearFailed", { error: err.message }));
+    }
+  }, []);
+  const onKeyDown = q2((e3) => {
+    if (popoverKind && popoverItems.length > 0) {
+      if (e3.key === "ArrowDown") {
+        e3.preventDefault();
+        setPopoverSel((i3) => (i3 + 1) % popoverItems.length);
+        return;
+      }
+      if (e3.key === "ArrowUp") {
+        e3.preventDefault();
+        setPopoverSel((i3) => (i3 - 1 + popoverItems.length) % popoverItems.length);
+        return;
+      }
+      if (e3.key === "Tab" || e3.key === "Enter" && !e3.shiftKey) {
+        e3.preventDefault();
+        if (applyPopover() && e3.key === "Enter" && popoverKind === "slash") send();
+        return;
+      }
+      if (e3.key === "Escape") {
+        e3.preventDefault();
+        setPopoverKind(null);
+        return;
+      }
+    }
+    if (e3.key === "Escape" && busy) {
+      e3.preventDefault();
+      abort();
+      return;
+    }
+    if (e3.key === "Enter" && !e3.shiftKey) {
+      e3.preventDefault();
+      send();
+    }
+  }, [send, abort, busy, popoverKind, popoverItems, applyPopover]);
+  const allMessages = streaming ? [...messages, { id: streaming.id, role: "assistant", text: streaming.text, reasoning: streaming.reasoning }] : messages;
+  return html6`
+    <div style=${{ display: "flex", flexDirection: "column", height: "100%" }}>
+      ${statusLine ? html6`<div class="changes-panel-header"><span>${statusLine}</span></div>` : null}
+      <div class="chat-feed" style=${{ flex: 1, overflowY: "auto", padding: "8px" }} ref=${feedRef}>
+        ${allMessages.length === 0 && !streaming ? html6`<div class="empty" style=${{ margin: "12px", textAlign: "center" }}>${t4("changes.chatWelcome")}</div>` : null}
+        ${allMessages.map((msg) => {
+    const isStreaming = streaming && msg.id === streaming.id;
+    if (msg.role === "tool") {
+      return html6`
+              <div class="chat-msg tool" key=${msg.id}>
+                <div class="glyph">▣</div>
+                <${ToolCard} msg=${msg} />
+              </div>
+            `;
+    }
+    return html6`
+            <${ChatMessage}
+              key=${msg.id}
+              msg=${{ id: msg.id, role: msg.role, text: msg.text, reasoning: msg.reasoning, toolName: msg.toolName, toolArgs: msg.toolArgs }}
+              streaming=${Boolean(isStreaming)}
+            />
+          `;
+  })}
+      </div>
+      ${error ? html6`<div class="notice err" style=${{ margin: "0 8px 4px" }}>${error}</div>` : null}
+      <div style=${{ padding: "8px", borderTop: "1px solid var(--bd)", flexShrink: 0 }}>
+        ${props.comments.length > 0 ? html6`
+          <div class="comment-cards-container" style=${{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>
+            ${props.comments.map((comment) => html6`
+              <${CommentCard}
+                key=${comment.id}
+                fileName=${comment.file}
+                lineNumber=${comment.lineNumber}
+                content=${comment.content}
+                onRemove=${() => props.deleteComment(comment.id)}
+              />
+            `)}
+          </div>
+        ` : null}
+        <div style=${{ display: "flex", gap: "8px", alignItems: "flex-end", position: "relative" }}>
+          <div style=${{ flex: 1, position: "relative" }}>
+            ${popoverKind && popoverItems.length > 0 ? html6`
+                  <div class="popover" style="position:absolute;bottom:calc(100% + 6px);left:0;width:380px;max-height:280px;overflow-y:auto;z-index:10">
+                    <div class="popover-h">${t4("chat.slashCommands")}</div>
+                    ${popoverItems.map(
+    (it, i3) => html6`
+                        <div
+                          class=${`popover-row ${i3 === popoverSel ? "sel" : ""}`}
+                          onMouseDown=${(e3) => {
+      e3.preventDefault();
+      setPopoverSel(i3);
+      applyPopover();
+    }}
+                        >
+                          <span class="g">/</span>
+                          <span class="name">${it.label}</span>
+                          ${it.meta ? html6`<span class="meta">${it.meta}</span>` : null}
+                        </div>
+                      `
+  )}
+                  </div>
+                ` : null}
+            <textarea
+              class="input"
+              style=${{ width: "100%", resize: "none", minHeight: "36px", fontFamily: "inherit", fontSize: "13px", padding: "8px 10px", lineHeight: "1.4", background: "var(--bg-input)", border: "1px solid var(--bd)", borderRadius: "4px", color: "var(--fg-0)" }}
+              placeholder=${props.comments.length > 0 ? "\u603B\u7ED3\u8BC4\u8BBA..." : t4("changes.chatPlaceholder")}
+              value=${input}
+              onInput=${onInput}
+              onKeyDown=${onKeyDown}
+              onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
+              rows="2"
+            />
+          </div>
+          <div style=${{ display: "flex", flexDirection: "column", gap: "6px", flexShrink: 0 }}>
+            <button class="primary" onClick=${send} disabled=${busy || !input.trim() && props.comments.length === 0} style=${{ padding: "8px 12px", borderRadius: "4px" }}>${t4("changes.chatSend")}</button>
+            <div style=${{ display: "flex", gap: "6px" }}>
+              <button onClick=${newConversation} title=${t4("changes.newTitle")}>${t4("changes.newConversation")}</button>
+              <button onClick=${clearScrollback} title=${t4("changes.clearTitle")}>${t4("changes.clearConversation")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <${ChatStatusBar3} stats=${stats} model=${model} />
+    </div>
+  `;
+}
+
+// dashboard/app.js
+var html7 = htm_module_default.bind(k);
 function tabSections() {
   return [
     {
       label: t4("app.sectionWorkspace"),
       tabs: [
-        { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html5`<${ChatPanel} />` },
-        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html5`<${SessionsPanel} />` },
-        { id: "plans", name: t4("app.tabPlans"), glyph: "\u229E", panel: () => html5`<${PlansPanel} />` }
+        { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
+        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
+        { id: "plans", name: t4("app.tabPlans"), glyph: "\u229E", panel: () => html7`<${PlansPanel} />` }
+      ]
+    },
+    {
+      label: t4("app.sectionChanges"),
+      tabs: [
+        { id: "changes", name: t4("app.tabChanges"), glyph: "\u25A8", panel: () => html7`<${ChangesPanel} />` }
       ]
     },
     {
       label: t4("app.sectionObserve"),
       tabs: [
-        { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html5`<${OverviewPanel} />` },
-        { id: "usage", name: t4("app.tabUsage"), glyph: "$", panel: () => html5`<${UsagePanel} />` },
-        { id: "health", name: t4("app.tabSystem"), glyph: "+", panel: () => html5`<${SystemPanel} />` },
-        { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html5`<${SemanticPanel} />` }
+        { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` },
+        { id: "usage", name: t4("app.tabUsage"), glyph: "$", panel: () => html7`<${UsagePanel} />` },
+        { id: "health", name: t4("app.tabSystem"), glyph: "+", panel: () => html7`<${SystemPanel} />` },
+        { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} />` }
       ]
     },
     {
       label: t4("app.sectionConfigure"),
       tabs: [
-        { id: "tools", name: t4("app.tabTools"), glyph: "\u25A3", panel: () => html5`<${ToolsPanel} />` },
-        { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html5`<${PermissionsPanel} />` },
-        { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html5`<${McpPanel} />` },
-        { id: "skills", name: t4("app.tabSkills"), glyph: "S", panel: () => html5`<${SkillsPanel} />` },
-        { id: "memory", name: t4("app.tabMemory"), glyph: "\xB7", panel: () => html5`<${MemoryPanel} />` },
-        { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html5`<${HooksPanel} />` },
-        { id: "settings", name: t4("app.tabSettings"), glyph: "\u2318", panel: () => html5`<${SettingsPanel} />` }
+        { id: "tools", name: t4("app.tabTools"), glyph: "\u25A3", panel: () => html7`<${ToolsPanel} />` },
+        { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html7`<${PermissionsPanel} />` },
+        { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />` },
+        { id: "skills", name: t4("app.tabSkills"), glyph: "S", panel: () => html7`<${SkillsPanel} />` },
+        { id: "memory", name: t4("app.tabMemory"), glyph: "\xB7", panel: () => html7`<${MemoryPanel} />` },
+        { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html7`<${HooksPanel} />` },
+        { id: "settings", name: t4("app.tabSettings"), glyph: "\u2318", panel: () => html7`<${SettingsPanel} />` }
       ]
     }
   ];
 }
+function ConfirmDialog(_ref2) { var msg=_ref2.msg, onResolve=_ref2.onResolve; if(!msg) return null; return html6`<div style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5)"><div style="background:var(--bg-elev);border:1px solid var(--bd);border-radius:8px;padding:24px;min-width:320px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,.4)"><div style="font-size:14px;color:var(--fg-1);margin-bottom:20px;line-height:1.6">${msg}</div><div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onClick=${function(){onResolve(false)}}>${t4("modal.cancel")}</button><button class="btn primary" onClick=${function(){onResolve(true)}}>${t4("modal.confirm")}</button></div></div></div>`; }
+
 function App() {
   useLang();
   y2(() => {
     initLangFromServer();
   }, []);
+  const [confirmMsg, setConfirmMsg] = d2(null);
+  const [confirmResolve, setConfirmResolve] = d2(null);
+  y2(function() {
+    window._showConfirm = function(msg) {
+      return new Promise(function(resolve) {
+        setConfirmMsg(msg);
+        setConfirmResolve(function() { return resolve; });
+      });
+    };
+  }, []);
+  const handleConfirmResolve = function(result) {
+    if (confirmResolve) { var r = confirmResolve; setConfirmResolve(null); setConfirmMsg(null); r()(result); }
+  };
   const [activeId, setActiveId] = d2(() => {
     try {
       return localStorage.getItem("rx.activeTab") ?? "chat";
@@ -27916,19 +29816,20 @@ function App() {
     return () => appBus.removeEventListener("navigate-tab", onNav);
   }, []);
   const pickTab = q2((id) => setActiveId(id), []);
-  return html5`
+  return html7`
     <div class=${`app ${sidebarCollapsed ? "collapsed" : ""}`}>
       <aside class="app-side">
         <div class="brand">
+          <span class="glyph">◈</span>
           <img src="/assets/v3.png" alt="" height="26" style="flex-shrink:0" />
           <span class="ver">${MODE}</span>
         </div>
         <div class="side-tabs">
           ${TAB_SECTIONS.map(
-    (section) => html5`
+    (section) => html7`
               <div class="side-section">${section.label}</div>
               ${section.tabs.map(
-      (tab) => html5`
+      (tab) => html7`
                   <div
                     class=${`side-tab ${tab.id === active.id ? "active" : ""}`}
                     onClick=${() => pickTab(tab.id)}
@@ -27942,6 +29843,9 @@ function App() {
             `
   )}
         </div>
+        <div style="padding:6px 16px;display:flex;justify-content:flex-start">
+          <span class="theme-btn" onClick=${() => { const h = document.documentElement; const cur = h.getAttribute("data-theme") || "dark"; const next = cur === "light" ? "dark" : "light"; h.setAttribute("data-theme", next); try { document.cookie = "visionox-theme=" + next + ";path=/;max-age=31536000"; } catch {}; location.reload(); }} title="切换深浅色模式">◑</span>
+        </div>
         <div class="side-foot">
           <span class="label">127.0.0.1</span>
           <span
@@ -27953,6 +29857,7 @@ function App() {
       </aside>
       <header class="app-top" style="justify-content:center">
         <span style="font-family:'Microsoft YaHei','微软雅黑',sans-serif;font-size:15px;color:var(--fg-0);font-weight:600;letter-spacing:.02em">维信诺协同办公平台 - 产品工程中心 @2026</span>
+        <span class="grow"></span>
       </header>
       <div class="app-body">
         <${ErrorBoundary}>${active.panel()}<//>
@@ -27964,7 +29869,8 @@ function App() {
     </div>
     <${ToastStack} />
     <${ErrorOverlay} />
+    <${ConfirmDialog} msg=${confirmMsg} onResolve=${handleConfirmResolve} />
   `;
 }
-R(html5`<${App} />`, document.getElementById("root"));
+R(html7`<${App} />`, document.getElementById("root"));
 //# sourceMappingURL=app.js.map

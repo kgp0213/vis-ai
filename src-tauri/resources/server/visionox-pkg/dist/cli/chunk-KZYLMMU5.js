@@ -6,30 +6,33 @@ import {
   resolveDataPath
 } from "./chunk-DAEAAVDF.js";
 import {
-  DeepSeekClient
-} from "./chunk-KMWKGPFZ.js";
+  DeepSeekClient,
+  pickPrimaryBalance
+} from "./chunk-H4OLWRSX.js";
 import {
   loadDotenv
 } from "./chunk-3Q3C4W66.js";
 import {
-  checkOllamaStatus,
+  checkOllamaStatus
+} from "./chunk-2CXPDAWX.js";
+import {
   indexExists
-} from "./chunk-4D662BWT.js";
+} from "./chunk-4H3ZRJ2U.js";
 import {
   loadHooks
-} from "./chunk-CGX5GIW6.js";
+} from "./chunk-WE3YZULK.js";
 import {
   listSessions
-} from "./chunk-6CXT5JRM.js";
+} from "./chunk-YJFKFTAL.js";
 import {
   t
-} from "./chunk-TWJAH4XD.js";
+} from "./chunk-MHGPBJ2T.js";
 import {
   defaultConfigPath,
   loadBaseUrl,
   readConfig,
   resolveSemanticEmbeddingConfig
-} from "./chunk-SWLIVNTP.js";
+} from "./chunk-65Q5HQ26.js";
 import {
   VERSION
 } from "./chunk-CRPQUBP6.js";
@@ -184,21 +187,20 @@ async function checkApiReach() {
         detail: "/user/balance returned null \u2014 auth failed or network blocked"
       };
     }
+    const summary = summarizeBalances(balance.balance_infos);
     if (!balance.is_available) {
-      const info2 = balance.balance_infos[0];
       return {
         id: "api-reach",
         label: "api reach    ",
         level: "warn",
-        detail: `account flagged not-available${info2 ? ` (${info2.total_balance} ${info2.currency})` : ""} \u2014 top up or check your dashboard`
+        detail: `account flagged not-available${summary ? ` (${summary})` : ""} \u2014 top up or check your dashboard`
       };
     }
-    const info = balance.balance_infos[0];
     return {
       id: "api-reach",
       label: "api reach    ",
       level: "ok",
-      detail: info ? `/user/balance ok \u2014 ${info.total_balance} ${info.currency}` : "/user/balance ok"
+      detail: summary ? `/user/balance ok \u2014 ${summary}` : "/user/balance ok"
     };
   } catch (err) {
     return {
@@ -208,6 +210,14 @@ async function checkApiReach() {
       detail: `${err.message}`
     };
   }
+}
+function summarizeBalances(infos) {
+  if (infos.length === 0) return "";
+  const primary = pickPrimaryBalance(infos);
+  if (infos.length === 1 || !primary)
+    return primary ? `${primary.total_balance} ${primary.currency}` : "";
+  const rest = infos.filter((i) => i !== primary).map((i) => `${i.total_balance} ${i.currency}`);
+  return `${primary.total_balance} ${primary.currency} + ${rest.join(" + ")}`;
 }
 async function checkTokenizer() {
   const path = resolveDataPath();
@@ -438,4 +448,4 @@ export {
   formatDoctorJson,
   doctorCommand
 };
-//# sourceMappingURL=chunk-JBBMMYOI.js.map
+//# sourceMappingURL=chunk-KZYLMMU5.js.map

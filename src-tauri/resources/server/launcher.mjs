@@ -97,15 +97,19 @@ const [
   { McpClient, parseMcpSpec, inspectMcpServer },
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
+  { applySkillsIndex },
+  { registerSkillTools },
 ] = await Promise.all([
-  import(distPath("chunk-AT6GGIBV.js")),
-  import(distPath("chunk-AT6GGIBV.js")),
+  import(distPath("chunk-H4OLWRSX.js")),
+  import(distPath("chunk-IEA6JOIP.js")),
   import(distPath("chunk-65Q5HQ26.js")),
   import(distPath("chunk-3Q3C4W66.js")),
   import(distPath("chunk-BYZGO3BX.js")),
   import(distPath("chunk-CFY2XLY6.js")),
   import(distPath("chunk-7G3SESEU.js")),
   import(distPath("chunk-RAUPWSYA.js")),
+  import(distPath("chunk-6DR4F3MC.js")),
+  import(distPath("chunk-A7VHMMDE.js")),
 ]);
 
 // ── Load config ─────────────────────────────────────────────────
@@ -135,9 +139,9 @@ registerFilesystemTools(tools, {
 });
 
 // Shell tools — gated by edit mode (yolo=auto-approve, auto=semi-auto, review=confirm)
-// Default to yolo on first run
+// Default to auto on first run
 if (!config.editMode) {
-  config.editMode = "yolo";
+  config.editMode = "auto";
   writeConfig(config, configPath);
 }
 registerShellTools(tools, {
@@ -188,6 +192,10 @@ try {
 } catch (err) {
   console.error(`[launcher] semantic_search skipped: ${err.message}`);
 }
+
+// ── Skill tools ──────────────────────────────────────────────────
+registerSkillTools(tools, { homeDir: home, projectRoot: workspaceDir });
+console.error(`[launcher] skill tools registered (run_skill), ${tools.size} total tools`);
 
 // ── MCP servers ──────────────────────────────────────────────────
 const mcpSpecs = config.mcp ?? [];
@@ -303,6 +311,9 @@ You have access to the following tools:
 Always use the appropriate tool when you need to access files, run commands, or search the web.
 Respond in the same language as the user's message.${SEMANTIC_ROUTING}`;
 
+// Inject skills index so the model knows which /skills are available
+const SYSTEM_PROMPT_WITH_SKILLS = applySkillsIndex(SYSTEM_PROMPT, { projectRoot: workspaceDir });
+
 let loop = null;
 
 if (apiKey) {
@@ -310,7 +321,7 @@ if (apiKey) {
     const client = new DeepSeekClient({ apiKey, baseUrl });
 
     const prefix = new ImmutablePrefix({
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT_WITH_SKILLS,
       toolSpecs: tools.specs(),
     });
 
@@ -447,7 +458,6 @@ const ctx = {
         const ts = new Date().toISOString().replace(/[:.]/g, "-");
         const sessionFile = resolve(sessionsDir, `${ts}.jsonl`);
         try {
-          // Convert messages to transcript format (role + content)
           const jsonl = messages.map((m) => JSON.stringify({ role: m.role, content: m.text })).join("\n") + "\n";
           writeFileSync(sessionFile, jsonl, "utf8");
           console.error(`[launcher] session saved: ${sessionFile}`);
@@ -455,13 +465,16 @@ const ctx = {
           console.error(`[launcher] failed to save session: ${err.message}`);
         }
       }
+      // Reset the AI's internal context (CacheFirstLoop log)
+      if (loop) loop.clearLog();
+      // Clear dashboard messages
       messages.length = 0;
       nextMsgId = 1;
       // Add welcome message
       const welcomeId = `assistant-${Date.now()}`;
       const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
       messages.push(welcomeMsg);
-      // Notify client: busy-change to trigger refetch, then welcome message
+      // Notify client
       busy = true;
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
       broadcastDashboardEvent({ kind: "assistant_final", id: welcomeId, text: welcomeMsg.text });

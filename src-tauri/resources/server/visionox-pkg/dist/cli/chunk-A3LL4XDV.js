@@ -2,28 +2,196 @@
 import {
   sanitizeName,
   sessionsDir
-} from "./chunk-6CXT5JRM.js";
+} from "./chunk-YJFKFTAL.js";
 
-// src/code/plan-store.ts
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync
-} from "fs";
-import { dirname, join } from "path";
-function planStatePath(sessionName) {
-  return join(sessionsDir(), `${sanitizeName(sessionName)}.plan.json`);
+// src/code/checkpoints.ts
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { dirname, join, relative, resolve, sep } from "path";
+function sanitizeRoot(rootDir) {
+  return resolve(rootDir).replace(/[\\/:]+/g, "_").replace(/^_+/, "");
 }
-function loadPlanState(sessionName) {
-  const path = planStatePath(sessionName);
+function storeRoot(rootDir) {
+  return join(homedir(), ".visionox", "sessions", sanitizeRoot(rootDir), "checkpoints");
+}
+function indexPath(rootDir) {
+  return join(storeRoot(rootDir), "index.json");
+}
+function snapshotPath(rootDir, id) {
+  return join(storeRoot(rootDir), `${id}.json`);
+}
+function listCheckpoints(rootDir) {
+  const path = indexPath(rootDir);
+  if (!existsSync(path)) return [];
+  try {
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (m) => typeof m === "object" && m !== null && typeof m.id === "string" && typeof m.name === "string" && typeof m.createdAt === "number" && typeof m.source === "string" && typeof m.fileCount === "number" && typeof m.bytes === "number"
+    );
+  } catch {
+    return [];
+  }
+}
+function writeIndex(rootDir, items) {
+  const path = indexPath(rootDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(items, null, 2), "utf8");
+}
+function loadCheckpoint(rootDir, id) {
+  const path = snapshotPath(rootDir, id);
   if (!existsSync(path)) return null;
   try {
     const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.files)) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function createCheckpoint(opts) {
+  const absRoot = resolve(opts.rootDir);
+  const id = `cp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const files = [];
+  let bytes = 0;
+  const seen = /* @__PURE__ */ new Set();
+  for (const p of opts.paths) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const abs = resolve(absRoot, p);
+    if (abs !== absRoot && !abs.startsWith(`${absRoot}${sep}`)) continue;
+    const rel = relative(absRoot, abs).split(sep).join("/");
+    if (existsSync(abs)) {
+      try {
+        const content = readFileSync(abs, "utf8");
+        files.push({ path: rel, content });
+        bytes += content.length;
+      } catch {
+        files.push({ path: rel, content: null });
+      }
+    } else {
+      files.push({ path: rel, content: null });
+    }
+  }
+  const checkpoint = {
+    id,
+    name: opts.name,
+    rootDir: absRoot,
+    createdAt: Date.now(),
+    source: opts.source ?? "manual",
+    files,
+    bytes
+  };
+  const cpPath = snapshotPath(absRoot, id);
+  mkdirSync(dirname(cpPath), { recursive: true });
+  writeFileSync(cpPath, JSON.stringify(checkpoint), "utf8");
+  const meta = {
+    id,
+    name: opts.name,
+    createdAt: checkpoint.createdAt,
+    source: checkpoint.source,
+    fileCount: files.length,
+    bytes
+  };
+  const items = listCheckpoints(absRoot);
+  items.push(meta);
+  writeIndex(absRoot, items);
+  return meta;
+}
+function findCheckpoint(rootDir, idOrName) {
+  const items = listCheckpoints(rootDir);
+  const byId = items.find((m) => m.id === idOrName);
+  if (byId) return byId;
+  const byName = [...items].reverse().find((m) => m.name === idOrName);
+  return byName ?? null;
+}
+function restoreCheckpoint(rootDir, id) {
+  const cp = loadCheckpoint(rootDir, id);
+  const absRoot = resolve(rootDir);
+  const result = { restored: [], removed: [], skipped: [] };
+  if (!cp) {
+    result.skipped.push({ path: "(checkpoint)", reason: `not found: ${id}` });
+    return result;
+  }
+  for (const f of cp.files) {
+    const abs = resolve(absRoot, f.path);
+    if (abs !== absRoot && !abs.startsWith(`${absRoot}${sep}`)) {
+      result.skipped.push({ path: f.path, reason: "path escapes rootDir" });
+      continue;
+    }
+    try {
+      if (f.content === null) {
+        if (existsSync(abs)) {
+          rmSync(abs);
+          result.removed.push(f.path);
+        }
+      } else {
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, f.content, "utf8");
+        result.restored.push(f.path);
+      }
+    } catch (err) {
+      result.skipped.push({ path: f.path, reason: err.message });
+    }
+  }
+  return result;
+}
+function deleteCheckpoint(rootDir, id) {
+  const cpPath = snapshotPath(rootDir, id);
+  let removed = false;
+  if (existsSync(cpPath)) {
+    try {
+      rmSync(cpPath);
+      removed = true;
+    } catch {
+      return false;
+    }
+  }
+  const items = listCheckpoints(rootDir);
+  const next = items.filter((m) => m.id !== id);
+  if (next.length !== items.length) {
+    writeIndex(rootDir, next);
+    removed = true;
+  }
+  return removed;
+}
+function fmtAgo(ms) {
+  const now = Date.now();
+  const diff = Math.max(0, now - ms);
+  const s = Math.floor(diff / 1e3);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+// src/code/plan-store.ts
+import {
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync2,
+  readdirSync as readdirSync2,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync as writeFileSync2
+} from "fs";
+import { dirname as dirname2, join as join2 } from "path";
+function planStatePath(sessionName) {
+  return join2(sessionsDir(), `${sanitizeName(sessionName)}.plan.json`);
+}
+function loadPlanState(sessionName) {
+  const path = planStatePath(sessionName);
+  if (!existsSync2(path)) return null;
+  try {
+    const raw = readFileSync2(path, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
     if (parsed.version !== 1) return null;
@@ -61,7 +229,7 @@ function loadPlanState(sessionName) {
 function savePlanState(sessionName, steps, completedStepIds, extras) {
   const path = planStatePath(sessionName);
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync2(dirname2(path), { recursive: true });
     const state = {
       version: 1,
       steps,
@@ -70,7 +238,7 @@ function savePlanState(sessionName, steps, completedStepIds, extras) {
     };
     if (extras?.body) state.body = extras.body;
     if (extras?.summary) state.summary = extras.summary;
-    writeFileSync(path, `${JSON.stringify(state, null, 2)}
+    writeFileSync2(path, `${JSON.stringify(state, null, 2)}
 `, "utf8");
   } catch (err) {
     process.stderr.write(
@@ -82,16 +250,16 @@ function savePlanState(sessionName, steps, completedStepIds, extras) {
 function clearPlanState(sessionName) {
   const path = planStatePath(sessionName);
   try {
-    if (existsSync(path)) unlinkSync(path);
+    if (existsSync2(path)) unlinkSync(path);
   } catch {
   }
 }
 function archivePlanState(sessionName) {
   const active = planStatePath(sessionName);
-  if (!existsSync(active)) return null;
+  if (!existsSync2(active)) return null;
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   const suffix = Math.random().toString(36).slice(2, 6);
-  const archive = join(
+  const archive = join2(
     sessionsDir(),
     `${sanitizeName(sessionName)}.plan.${stamp}-${suffix}.done.json`
   );
@@ -108,21 +276,21 @@ function archivePlanState(sessionName) {
 }
 function listPlanArchives(sessionName) {
   const dir = sessionsDir();
-  if (!existsSync(dir)) return [];
+  if (!existsSync2(dir)) return [];
   const prefix = `${sanitizeName(sessionName)}.plan.`;
   const suffix = ".done.json";
   let entries;
   try {
-    entries = readdirSync(dir);
+    entries = readdirSync2(dir);
   } catch {
     return [];
   }
   const summaries = [];
   for (const name of entries) {
     if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
-    const full = join(dir, name);
+    const full = join2(dir, name);
     try {
-      const raw = readFileSync(full, "utf8");
+      const raw = readFileSync2(full, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.version !== 1) continue;
       if (!Array.isArray(parsed.steps) || parsed.steps.length === 0) continue;
@@ -203,6 +371,12 @@ var SLASH_COMMANDS = [
     cmd: "stop",
     group: "chat",
     summary: "abort the current model turn (typed alternative to Esc)"
+  },
+  {
+    cmd: "btw",
+    group: "chat",
+    argsHint: "<question>",
+    summary: "ask a quick side question \u2014 answered from a blank slate, never added to the conversation context"
   },
   {
     cmd: "preset",
@@ -549,6 +723,13 @@ function parseSlash(text) {
 }
 
 export {
+  listCheckpoints,
+  loadCheckpoint,
+  createCheckpoint,
+  findCheckpoint,
+  restoreCheckpoint,
+  deleteCheckpoint,
+  fmtAgo,
   loadPlanState,
   savePlanState,
   clearPlanState,
@@ -564,4 +745,4 @@ export {
   detectSlashArgContext,
   parseSlash
 };
-//# sourceMappingURL=chunk-TPDWAMG6.js.map
+//# sourceMappingURL=chunk-A3LL4XDV.js.map

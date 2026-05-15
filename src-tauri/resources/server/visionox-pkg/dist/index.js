@@ -339,6 +339,14 @@ var PauseGate = class {
       p.resolve(safeCancelVerdict(p.request.kind));
     }
   }
+  /** Cancel one pending request — used by multi-tab hosts that need per-scope abort. */
+  cancel(id) {
+    const p = this._pending.get(id);
+    if (!p) return false;
+    this._pending.delete(id);
+    p.resolve(safeCancelVerdict(p.request.kind));
+    return true;
+  }
   setAuditListener(fn) {
     this._auditListener = fn;
   }
@@ -396,6 +404,7 @@ function safeCancelVerdict(kind) {
   switch (kind) {
     case "run_command":
     case "run_background":
+    case "path_access":
       return { type: "deny" };
     case "plan_proposed":
       return { type: "cancel" };
@@ -764,6 +773,42 @@ var DEFAULT_INDEX_EXCLUDES = {
 var DEFAULT_MAX_FILE_BYTES = 256 * 1024;
 
 // src/config.ts
+var BUILTIN_TYPE_DOCS = {
+  user: "role / skills / preferences",
+  feedback: "corrections or confirmed approaches",
+  project: "facts / decisions about the current work",
+  reference: "pointers to external systems the user uses"
+};
+function loadMemoryTypeRegistry(cfg = readConfig()) {
+  const out = [];
+  for (const name of ["user", "feedback", "project", "reference"]) {
+    out.push({ name, builtin: true, description: BUILTIN_TYPE_DOCS[name] });
+  }
+  const seen = new Set(out.map((e) => e.name));
+  for (const raw of cfg.memory?.customTypes ?? []) {
+    if (!raw || typeof raw.name !== "string") continue;
+    const name = raw.name.trim();
+    if (!name || !/^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/.test(name)) continue;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const entry = { name, builtin: false };
+    if (typeof raw.description === "string") entry.description = raw.description;
+    if (raw.priority === "low" || raw.priority === "medium" || raw.priority === "high") {
+      entry.priority = raw.priority;
+    }
+    if (raw.expires === "project_end") entry.expires = raw.expires;
+    out.push(entry);
+  }
+  return out;
+}
+function memoryTypeDefaults(typeName, cfg = readConfig()) {
+  const found = loadMemoryTypeRegistry(cfg).find((e) => e.name === typeName);
+  if (!found) return {};
+  const out = {};
+  if (found.priority) out.priority = found.priority;
+  if (found.expires) out.expires = found.expires;
+  return out;
+}
 function defaultConfigPath() {
   return join(homedir(), ".reasonix", "config.json");
 }
@@ -843,6 +888,24 @@ function addProjectShellAllowed(rootDir, prefix, path2 = defaultConfigPath()) {
   cfg.projects[key].shellAllowed = [...existing, trimmed];
   writeConfig(cfg, path2);
 }
+function loadProjectPathAllowed(rootDir, path2 = defaultConfigPath()) {
+  const cfg = readConfig(path2);
+  const key = findProjectKey(cfg, rootDir);
+  if (key === void 0) return [];
+  return cfg.projects?.[key]?.pathAllowed ?? [];
+}
+function addProjectPathAllowed(rootDir, prefix, path2 = defaultConfigPath()) {
+  const trimmed = prefix.trim();
+  if (!trimmed) return;
+  const cfg = readConfig(path2);
+  if (!cfg.projects) cfg.projects = {};
+  const key = findProjectKey(cfg, rootDir) ?? rootDir;
+  if (!cfg.projects[key]) cfg.projects[key] = {};
+  const existing = cfg.projects[key].pathAllowed ?? [];
+  if (existing.includes(trimmed)) return;
+  cfg.projects[key].pathAllowed = [...existing, trimmed];
+  writeConfig(cfg, path2);
+}
 function isPlausibleKey(key) {
   const trimmed = key.trim();
   if (trimmed.length < 16) return false;
@@ -864,7 +927,10 @@ var EN = {
     cancel: "Cancel",
     confirm: "Confirm",
     back: "Back",
-    next: "Next"
+    next: "Next",
+    tool: "tool",
+    running: "running",
+    noTurns: "(no turns yet)"
   },
   cli: {
     description: "DeepSeek-native agent framework \u2014 built for cache hits and cheap tokens.",
@@ -905,8 +971,8 @@ var EN = {
     dashboardAutoStartFailed: "\u25B2 dashboard auto-start failed ({reason}) \u2014 try /dashboard, or pass --no-dashboard to silence",
     systemAppendHint: "Append instructions to the code system prompt. Does NOT replace the default prompt \u2014 adds after it.",
     systemAppendFileHint: "Append file contents to the code system prompt. Does NOT replace the default prompt. UTF-8, relative to cwd or absolute.",
-    resumedSession: '\u25B8 resumed session "{name}" with {count} prior messages \xB7 /forget to start over \xB7 /sessions to list',
-    newSession: '\u25B8 session "{name}" (new) \u2014 auto-saved as you chat \xB7 /forget to delete \xB7 /sessions to list',
+    resumedSession: '\u25B8 resumed session "{name}" with {count} prior messages \xB7 /new to start fresh \xB7 /sessions to manage',
+    newSession: '\u25B8 session "{name}" (new) \u2014 auto-saved as you chat \xB7 /sessions to rename or delete',
     ephemeralSession: "\u25B8 ephemeral chat (no session persistence) \u2014 drop --no-session to enable",
     restoredEdits: "\u25B8 restored {count} pending edit block(s) from an interrupted prior run \u2014 /apply to commit or /discard to drop.",
     resumedPlan: "Resumed plan \xB7 {when}{summary}",
@@ -1336,9 +1402,18 @@ var EN = {
       counterDone: "{done}/{total} done ({pct}%) \xB7 {total} steps",
       counterDoneSingular: "{done}/{total} done ({pct}%) \xB7 {total} step"
     },
+    noPlanSummary: "No plan body submitted yet.",
+    detailCollapsedHint: "Ctrl+P expands full plan details.",
+    detailExpandedHint: "Ctrl+P collapses details.",
+    detailHeader: "Plan details",
+    detailWindow: "showing lines {start}-{end} of {total}",
+    detailScrollHint: "PgUp/PgDn scroll details \xB7 Home/End jump",
     reviseTitle: "Revise plan",
     reviseSteps: "{count} steps",
-    reviseFooter: "\u2191\u2193 focus  \xB7  space toggle skip  \xB7  k/j move  \xB7  \u23CE accept  \xB7  esc cancel"
+    reviseFooter: "\u2191\u2193 focus  \xB7  space toggle skip  \xB7  k/j move  \xB7  \u23CE accept  \xB7  esc cancel",
+    riskMed: " med",
+    riskHigh: " high",
+    completeMsg: "\u25B8 plan complete \u2014 all {total} step{s} done \xB7 archived"
   },
   app: {
     walkCancelledRemaining: "\u25B8 walk cancelled \u2014 {count} block(s) still pending.",
@@ -1358,6 +1433,9 @@ var EN = {
     notedVerbAppended: "appended to",
     memoryWriteFailed: "# memory write failed",
     commandFailed: "! command failed",
+    btwUsage: "\u25B8 /btw <question> \u2014 ask a side question without polluting the conversation context.",
+    btwHeader: "\u226B btw",
+    btwFailed: "/btw failed",
     restoreCodeOnly: "\u25B8 /restore is code-mode only",
     hookUserPromptSubmit: "UserPromptSubmit hook",
     hookStop: "Stop hook",
@@ -1400,6 +1478,7 @@ var EN = {
     flashEscalation: "\u21E7 flash requested escalation \u2014 retrying this turn on {model}{reasonSuffix}",
     harvestStatus: "extracting plan state from reasoning\u2026",
     autoEscalation: "\u21E7 auto-escalating to {model} for the rest of this turn \u2014 flash hit {breakdown}. Next turn falls back to {fallback} unless /pro is armed.",
+    readOnlyLoopEscalation: "\u21E7 auto-escalating to {model} \u2014 flash made {n} consecutive read-only calls without producing an edit or final answer. Next turn falls back to {fallback} unless /pro is armed.",
     repeatToolCallWarning: "Caught a repeated tool call \u2014 let the model see the issue and retry with a different approach.",
     stormStuck: "Stopped a stuck retry loop \u2014 the model kept calling the same tool with identical args after a self-correction nudge. Try /retry, rephrase, or rule out the underlying blocker.",
     stormSuppressed: "Suppressed {count} repeated tool call(s) \u2014 same name + args fired 3+ times.",
@@ -1410,7 +1489,7 @@ var EN = {
     forcingSummary: "context {before}/{ctxMax} ({pct}%) \u2014 forcing summary from what was gathered. Run /compact, /clear, or /new to reset."
   },
   errors: {
-    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Reasonix caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /forget (delete the session) or /clear (drop the displayed history) to start fresh.",
+    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Reasonix caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /new to start fresh, or open /sessions and press [d] to delete this session.",
     contextOverflowTooMany: "too many tokens",
     auth401: "Authentication failed (DeepSeek 401): {inner}. Your API key is rejected. Fix with `reasonix setup` or `export DEEPSEEK_API_KEY=sk-...`. Get one at https://platform.deepseek.com/api_keys.",
     balance402: "Out of balance (DeepSeek 402): {inner}. Top up at https://platform.deepseek.com/top_up \u2014 the panel header shows your balance once it's non-zero.",
@@ -1435,6 +1514,7 @@ var EN = {
     basic: {
       newInfo: "\u25B8 new conversation \u2014 dropped {count} message(s) from context. Same session, fresh slate.",
       newInfoArchived: '\u25B8 new conversation \u2014 dropped {count} message(s) from context. Prior transcript archived as "{archived}" (visible under Sessions).',
+      newInfoSystemReloaded: " \xB7 REASONIX.md / project memory reloaded (next turn pays one cache miss)",
       helpTitle: "Commands:",
       helpShellTitle: "Shell shortcut:",
       helpShell: "  !<cmd>                   run <cmd> in the sandbox root; output goes into",
@@ -1777,7 +1857,9 @@ var EN = {
     escToInterrupt: "s \xB7 esc to interrupt",
     recordingGlyph: "\u25CFREC",
     mb: " MB",
-    evt: " evt"
+    evt: " evt",
+    editsLabel: "edits:",
+    mcpLoading: "MCP"
   },
   editMode: {
     plan: "PLAN MODE",
@@ -1804,7 +1886,28 @@ var EN = {
     hintQuit: "quit",
     abortedHint: "turn aborted by user \xB7 esc again to clear \xB7 \u23CE to ask a follow-up",
     editorNoRawMode: "external editor unavailable \u2014 stdin doesn't support raw-mode toggling on this terminal",
-    editorFailed: "external editor:"
+    editorFailed: "external editor:",
+    editorMissing: "no $EDITOR / $VISUAL / $GIT_EDITOR set \u2014 export one (e.g. `export EDITOR=nano`) and retry",
+    editorExited: "editor exited with code {code}"
+  },
+  pathConfirm: {
+    title: "Outside-sandbox path",
+    subtitleRead: "{tool} wants to READ a file outside the project sandbox",
+    subtitleWrite: "{tool} wants to WRITE a file outside the project sandbox",
+    awaiting: "awaiting",
+    denyTitle: "Deny \u2014 provide context",
+    optional: "optional",
+    denyFooter: "type context  \xB7  \u23CE submit with reason  \xB7  esc skip (deny without reason)",
+    pickFooter: "\u2191\u2193 pick  \xB7  \u23CE confirm  \xB7  Tab add context  \xB7  esc cancel",
+    allowOnce: "allow once",
+    allowOnceDesc: "permit this access; remember the directory for the rest of this session",
+    allowAlways: "allow always",
+    allowAlwaysDesc: "remember `{prefix}` for this project (persisted in ~/.reasonix/config.json)",
+    deny: "deny",
+    denyDesc: "press Tab to add context telling the model why",
+    pathLabel: "path",
+    sandboxLabel: "sandbox",
+    allowPrefixLabel: "prefix"
   },
   shellConfirm: {
     title: "Shell command",
@@ -1821,7 +1924,12 @@ var EN = {
     allowAlways: "allow always",
     allowAlwaysDesc: "remember `{prefix}` for this project",
     deny: "deny",
-    denyDesc: "press Tab to add context telling the model why"
+    denyDesc: "press Tab to add context telling the model why",
+    cwdLabel: "cwd",
+    timeoutLabel: "timeout",
+    waitLabel: "wait",
+    previewMore: "\u2026 {n} more line hidden \u2014 press esc, ask the model to split it",
+    previewMorePlural: "\u2026 {n} more lines hidden \u2014 press esc, ask the model to split it"
   },
   editConfirm: {
     footer: "[y/Enter] apply  \xB7  [n] reject with reason  \xB7  [a] apply rest  \xB7  [A] flip AUTO  \xB7  [\u2191\u2193/Space] scroll  \xB7  [Esc] abort",
@@ -1943,6 +2051,7 @@ var EN = {
     status: "web_search {status} \u2014 try: the search backend returned an error; rephrase the query, or switch engine with /search-engine mojeek|searxng",
     rateLimit429: "web_search 429 \u2014 try: wait 10s before retrying, or rephrase the query; the search backend is rate-limiting this client",
     forbidden403: "web_search 403 \u2014 try: the search backend is blocking this client; switch engine with /search-engine mojeek|searxng, or wait and retry later",
+    serverError5xx: "web_search {status} \u2014 try: open the search URL in a browser; if it loads this is transient and a retry in 30s may help",
     mojeekBlocked: "web_search: Mojeek anti-bot page \u2014 rate-limited or blocked \u2014 try: wait 30s and retry, or switch engine with /search-engine searxng",
     mojeekNoResults: "web_search: 0 results but response doesn't look like a real empty page ({chars} chars, first 120: {preview}) \u2014 try: rephrase the query with simpler terms, or switch engine with /search-engine searxng",
     invalidEndpoint: 'web_search: invalid SearXNG endpoint "{endpoint}" \u2014 try: set a valid URL with /search-endpoint http://host:port',
@@ -1952,6 +2061,7 @@ var EN = {
     fetchStatus: "web_fetch {status} for {url} \u2014 try: confirm the URL resolves in a browser; status suggests the host returned an error page",
     fetchRateLimit429: "web_fetch 429 for {url} \u2014 try: wait 10s before retrying; the host is rate-limiting this client",
     fetchForbidden403: "web_fetch 403 for {url} \u2014 try: the host is blocking this client; the page may require login or block bots \u2014 use web_search snippets instead",
+    fetchServerError5xx: "web_fetch {status} for {url} \u2014 try: open the URL in a browser; if it loads this is transient and a retry in 30s may help",
     fetchTimeout: "web_fetch: timed out after {ms}ms for {url} \u2014 try: a shorter URL or smaller content; this may be a slow CDN, or retry once",
     fetchTooLarge: "web_fetch refused: content-length {len} bytes exceeds {cap}-byte cap ({url}) \u2014 try: a different URL with smaller content; this page is too large to fetch",
     fetchBodyTooLarge: "web_fetch refused: response body exceeded {cap}-byte cap ({seen} bytes seen) \u2014 try: a different URL with smaller content; this page streamed past the size cap",
@@ -1974,7 +2084,8 @@ var EN = {
     reasoningEllipsis: "reasoning\u2026",
     error: "error",
     doctor: "doctor",
-    you: "you"
+    you: "you",
+    task: "task"
   },
   cardLabels: {
     prompt: "prompt",
@@ -2054,7 +2165,9 @@ var EN = {
     noData: "no inspect data",
     healthy: "healthy \xB7 {ms}ms",
     slow: "slow \xB7 {ms}ms",
-    verySlow: "very slow \xB7 {ms}ms"
+    verySlow: "very slow \xB7 {ms}ms",
+    slowToast: "\u26A0 MCP `{name}` slow \xB7 {seconds}s p95 over the last {sampleSize} calls",
+    emptyHint: "\u2139 no MCP servers configured \u2014 try: `reasonix setup` to re-pick, or `reasonix mcp install filesystem`"
   },
   denyContextInput: {
     description: "Tell the agent why you denied this. The next attempt will see your reason as additional context."
@@ -2110,6 +2223,16 @@ var EN = {
     empty: "No MCP servers attached. Run `reasonix setup` to pick some, or launch with --mcp.",
     serverCount: "{count} server{s}",
     footer: "\u2191\u2193 pick \xB7 [r] reconnect \xB7 [d] disable \xB7 esc quit"
+  },
+  mcpLifecycle: {
+    handshake: "handshake\u2026",
+    connected: "connected",
+    failed: "failed",
+    disabled: "disabled",
+    reconnect: "reconnect\u2026",
+    initDetail: "initialise \u2192 tools/list \u2192 resources/list",
+    reconnectDetail: "tearing down \xB7 re-handshake \xB7 listing tools",
+    disabledDetail: "via /mcp disable {name}"
   },
   checkpointPicker: {
     title: "restore a checkpoint \u2014 {workspace}",
@@ -2168,7 +2291,10 @@ var zhCN = {
     cancel: "\u53D6\u6D88",
     confirm: "\u786E\u8BA4",
     back: "\u8FD4\u56DE",
-    next: "\u4E0B\u4E00\u6B65"
+    next: "\u4E0B\u4E00\u6B65",
+    tool: "\u5DE5\u5177",
+    running: "\u8FD0\u884C\u4E2D",
+    noTurns: "(\u6682\u65E0\u5BF9\u8BDD)"
   },
   cli: {
     description: "DeepSeek \u539F\u751F\u667A\u80FD\u4F53\u6846\u67B6 \u2014 \u4E13\u4E3A\u7F13\u5B58\u547D\u4E2D\u548C\u4F4E\u6210\u672C\u4EE4\u724C\u6784\u5EFA\u3002",
@@ -2209,8 +2335,8 @@ var zhCN = {
     dashboardAutoStartFailed: "\u25B2 \u4EEA\u8868\u677F\u81EA\u52A8\u542F\u52A8\u5931\u8D25 ({reason}) \u2014 \u5C1D\u8BD5 /dashboard\uFF0C\u6216\u4F20\u9012 --no-dashboard \u4EE5\u9759\u9ED8",
     systemAppendHint: "\u8FFD\u52A0\u6307\u4EE4\u5230\u4EE3\u7801\u7CFB\u7EDF\u63D0\u793A\u8BCD\u3002\u4E0D\u66FF\u6362\u9ED8\u8BA4\u63D0\u793A\u8BCD \u2014 \u5728\u5176\u540E\u6DFB\u52A0\u3002",
     systemAppendFileHint: "\u8FFD\u52A0\u6587\u4EF6\u5185\u5BB9\u5230\u4EE3\u7801\u7CFB\u7EDF\u63D0\u793A\u8BCD\u3002\u4E0D\u66FF\u6362\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002UTF-8\uFF0C\u76F8\u5BF9\u4E8E cwd \u6216\u7EDD\u5BF9\u8DEF\u5F84\u3002",
-    resumedSession: '\u25B8 \u5DF2\u6062\u590D\u4F1A\u8BDD "{name}"\uFF0C\u5305\u542B {count} \u6761\u5386\u53F2\u6D88\u606F \xB7 /forget \u91CD\u65B0\u5F00\u59CB \xB7 /sessions \u5217\u51FA',
-    newSession: '\u25B8 \u4F1A\u8BDD "{name}" (\u65B0) \u2014 \u968F\u804A\u968F\u5B58 \xB7 /forget \u5220\u9664 \xB7 /sessions \u5217\u51FA',
+    resumedSession: '\u25B8 \u5DF2\u6062\u590D\u4F1A\u8BDD "{name}"\uFF0C\u5305\u542B {count} \u6761\u5386\u53F2\u6D88\u606F \xB7 /new \u91CD\u65B0\u5F00\u59CB \xB7 /sessions \u7BA1\u7406',
+    newSession: '\u25B8 \u4F1A\u8BDD "{name}" (\u65B0) \u2014 \u968F\u804A\u968F\u5B58 \xB7 /sessions \u91CD\u547D\u540D\u6216\u5220\u9664',
     ephemeralSession: "\u25B8 \u4E34\u65F6\u804A\u5929 (\u4E0D\u4FDD\u5B58\u4F1A\u8BDD) \u2014 \u53BB\u6389 --no-session \u4EE5\u542F\u7528\u4FDD\u5B58",
     restoredEdits: "\u25B8 \u4ECE\u4E2D\u65AD\u7684\u8FD0\u884C\u4E2D\u6062\u590D\u4E86 {count} \u4E2A\u5F85\u5904\u7406\u7684\u7F16\u8F91\u5757 \u2014 /apply \u63D0\u4EA4\u6216 /discard \u653E\u5F03\u3002",
     resumedPlan: "\u5DF2\u6062\u590D\u8BA1\u5212 \xB7 {when}{summary}",
@@ -2641,9 +2767,18 @@ var zhCN = {
       counterDone: "{done}/{total} \u5DF2\u5B8C\u6210\uFF08{pct}%\uFF09 \xB7 \u5171 {total} \u6B65",
       counterDoneSingular: "{done}/{total} \u5DF2\u5B8C\u6210\uFF08{pct}%\uFF09 \xB7 \u5171 {total} \u6B65"
     },
+    noPlanSummary: "\u5C1A\u672A\u63D0\u4EA4\u8BA1\u5212\u5185\u5BB9\u3002",
+    detailCollapsedHint: "Ctrl+P \u5C55\u5F00\u5B8C\u6574\u8BA1\u5212\u8BE6\u60C5\u3002",
+    detailExpandedHint: "Ctrl+P \u6536\u8D77\u8BE6\u60C5\u3002",
+    detailHeader: "\u8BA1\u5212\u8BE6\u60C5",
+    detailWindow: "\u663E\u793A\u7B2C {start}-{end} \u884C\uFF0C\u5171 {total} \u884C",
+    detailScrollHint: "PgUp/PgDn \u6EDA\u52A8\u8BE6\u60C5 \xB7 Home/End \u8DF3\u8F6C",
     reviseTitle: "\u4FEE\u6539\u8BA1\u5212",
     reviseSteps: "{count} \u4E2A\u6B65\u9AA4",
-    reviseFooter: "\u2191\u2193 \u7126\u70B9  \xB7  \u7A7A\u683C\u5207\u6362\u8DF3\u8FC7  \xB7  k/j \u79FB\u52A8  \xB7  \u23CE \u786E\u8BA4  \xB7  Esc \u53D6\u6D88"
+    reviseFooter: "\u2191\u2193 \u7126\u70B9  \xB7  \u7A7A\u683C\u5207\u6362\u8DF3\u8FC7  \xB7  k/j \u79FB\u52A8  \xB7  \u23CE \u786E\u8BA4  \xB7  Esc \u53D6\u6D88",
+    riskMed: " \u4E2D",
+    riskHigh: " \u9AD8",
+    completeMsg: "\u25B8 \u8BA1\u5212\u5B8C\u6210 \u2014 \u5168\u90E8 {total} \u4E2A\u6B65\u9AA4\u5DF2\u5B8C\u6210 \xB7 \u5DF2\u5F52\u6863"
   },
   app: {
     walkCancelledRemaining: "\u25B8 \u6D4F\u89C8\u5DF2\u53D6\u6D88 \u2014 \u8FD8\u6709 {count} \u4E2A\u5F85\u5904\u7406\u7F16\u8F91\u5757\u3002",
@@ -2663,6 +2798,9 @@ var zhCN = {
     notedVerbAppended: "\u8FFD\u52A0\u5230",
     memoryWriteFailed: "# \u8BB0\u5FC6\u5199\u5165\u5931\u8D25",
     commandFailed: "! \u547D\u4EE4\u5931\u8D25",
+    btwUsage: "\u25B8 /btw <\u95EE\u9898> \u2014 \u987A\u4FBF\u95EE\u4E2A\u9898\u5916\u8BDD\uFF0C\u4E0D\u4F1A\u5199\u5165\u5F53\u524D\u4F1A\u8BDD\u4E0A\u4E0B\u6587\u3002",
+    btwHeader: "\u226B btw",
+    btwFailed: "/btw \u8C03\u7528\u5931\u8D25",
     restoreCodeOnly: "\u25B8 /restore \u4EC5\u5728\u4EE3\u7801\u6A21\u5F0F\u53EF\u7528",
     hookUserPromptSubmit: "UserPromptSubmit \u94A9\u5B50",
     hookStop: "Stop \u94A9\u5B50",
@@ -2705,6 +2843,7 @@ var zhCN = {
     flashEscalation: "\u21E7 flash \u8BF7\u6C42\u5347\u7EA7 \u2014 \u672C\u8F6E\u6539\u7528 {model}{reasonSuffix}",
     harvestStatus: "\u6B63\u5728\u4ECE\u63A8\u7406\u8FC7\u7A0B\u63D0\u53D6\u8BA1\u5212\u72B6\u6001\u2026",
     autoEscalation: "\u21E7 \u672C\u8F6E\u5269\u4F59\u8C03\u7528\u81EA\u52A8\u5347\u7EA7\u5230 {model} \u2014 flash \u547D\u4E2D {breakdown}\u3002\u4E0B\u4E00\u8F6E\u56DE\u9000\u5230 {fallback}\uFF0C\u9664\u975E\u5DF2\u88C5\u5907 /pro\u3002",
+    readOnlyLoopEscalation: "\u21E7 \u81EA\u52A8\u5347\u7EA7\u5230 {model} \u2014 flash \u8FDE\u7EED {n} \u6B21\u53EA\u8BFB\u8C03\u7528\uFF0C\u672A\u4EA7\u51FA\u4FEE\u6539\u6216\u6700\u7EC8\u7B54\u6848\u3002\u4E0B\u4E00\u8F6E\u56DE\u9000\u5230 {fallback}\uFF0C\u9664\u975E\u5DF2\u88C5\u5907 /pro\u3002",
     repeatToolCallWarning: "\u62E6\u622A\u5230\u91CD\u590D\u5DE5\u5177\u8C03\u7528 \u2014 \u8BA9\u6A21\u578B\u5BDF\u89C9\u95EE\u9898\u5E76\u6362\u79CD\u65B9\u5F0F\u91CD\u8BD5\u3002",
     stormStuck: "\u5DF2\u505C\u6B62\u5361\u6B7B\u7684\u91CD\u8BD5\u5FAA\u73AF \u2014 \u6A21\u578B\u5728\u81EA\u7EA0\u63D0\u793A\u540E\u4ECD\u4EE5\u76F8\u540C\u53C2\u6570\u91CD\u590D\u8C03\u7528\u540C\u4E00\u5DE5\u5177\u3002\u8BF7\u5C1D\u8BD5 /retry\u3001\u6362\u79CD\u8BF4\u6CD5\uFF0C\u6216\u6392\u67E5\u5E95\u5C42\u963B\u585E\u3002",
     stormSuppressed: "\u5DF2\u6291\u5236 {count} \u6B21\u91CD\u590D\u5DE5\u5177\u8C03\u7528 \u2014 \u540C\u4E00\u540D\u79F0 + \u53C2\u6570\u89E6\u53D1 3 \u6B21\u4EE5\u4E0A\u3002",
@@ -2715,7 +2854,7 @@ var zhCN = {
     forcingSummary: "\u4E0A\u4E0B\u6587 {before}/{ctxMax}\uFF08{pct}%\uFF09\u2014 \u57FA\u4E8E\u5DF2\u6536\u96C6\u5230\u7684\u5185\u5BB9\u5F3A\u5236\u603B\u7ED3\u3002\u8BF7\u8FD0\u884C /compact\u3001/clear \u6216 /new \u91CD\u7F6E\u3002"
   },
   errors: {
-    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Reasonix \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /forget\uFF08\u5220\u9664\u4F1A\u8BDD\uFF09\u6216 /clear\uFF08\u4E22\u5F03\u663E\u793A\u4E2D\u7684\u5386\u53F2\uFF09\u4ECE\u5934\u5F00\u59CB\u3002",
+    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Reasonix \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /new \u91CD\u65B0\u5F00\u59CB\uFF0C\u6216\u6253\u5F00 /sessions \u9009\u4E2D\u540E\u6309 [d] \u5220\u9664\u8BE5\u4F1A\u8BDD\u3002",
     contextOverflowTooMany: "tokens \u6570\u91CF\u8FC7\u591A",
     auth401: "\u8BA4\u8BC1\u5931\u8D25\uFF08DeepSeek 401\uFF09\uFF1A{inner}\u3002\u4F60\u7684 API key \u88AB\u62D2\u7EDD\u3002\u8FD0\u884C `reasonix setup` \u6216 `export DEEPSEEK_API_KEY=sk-...` \u4FEE\u590D\u3002\u5728 https://platform.deepseek.com/api_keys \u83B7\u53D6 key\u3002",
     balance402: "\u4F59\u989D\u4E0D\u8DB3\uFF08DeepSeek 402\uFF09\uFF1A{inner}\u3002\u5728 https://platform.deepseek.com/top_up \u5145\u503C \u2014 \u4F59\u989D\u975E\u96F6\u65F6\u9762\u677F\u9876\u680F\u4F1A\u663E\u793A\u3002",
@@ -2740,6 +2879,7 @@ var zhCN = {
     basic: {
       newInfo: "\u25B8 \u65B0\u5BF9\u8BDD \u2014 \u5DF2\u4ECE\u4E0A\u4E0B\u6587\u4E2D\u4E22\u5F03 {count} \u6761\u6D88\u606F\u3002\u540C\u4E00\u4F1A\u8BDD\uFF0C\u5168\u65B0\u5F00\u59CB\u3002",
       newInfoArchived: "\u25B8 \u65B0\u5BF9\u8BDD \u2014 \u5DF2\u4ECE\u4E0A\u4E0B\u6587\u4E2D\u4E22\u5F03 {count} \u6761\u6D88\u606F\u3002\u539F\u5BF9\u8BDD\u5DF2\u5F52\u6863\u4E3A\u300C{archived}\u300D\uFF0C\u53EF\u5728 Sessions \u9762\u677F\u67E5\u770B\u3002",
+      newInfoSystemReloaded: " \xB7 REASONIX.md / \u9879\u76EE\u8BB0\u5FC6\u5DF2\u91CD\u65B0\u52A0\u8F7D\uFF08\u4E0B\u4E00\u8F6E\u4E00\u6B21\u6027 cache miss\uFF09",
       helpTitle: "\u547D\u4EE4\uFF1A",
       helpShellTitle: "Shell \u5FEB\u6377\u65B9\u5F0F\uFF1A",
       helpShell: "  !<cmd>                   \u5728\u6C99\u7BB1\u6839\u76EE\u5F55\u8FD0\u884C <cmd>\uFF1B\u8F93\u51FA\u8FDB\u5165\u5BF9\u8BDD",
@@ -3082,7 +3222,9 @@ var zhCN = {
     escToInterrupt: "\u79D2 \xB7 Esc \u4E2D\u65AD",
     recordingGlyph: "\u25CFREC",
     mb: " MB",
-    evt: " \u4E8B\u4EF6"
+    evt: " \u4E8B\u4EF6",
+    editsLabel: "\u7F16\u8F91:",
+    mcpLoading: "MCP"
   },
   editMode: {
     plan: "\u8BA1\u5212",
@@ -3109,7 +3251,28 @@ var zhCN = {
     hintQuit: "\u9000\u51FA",
     abortedHint: "\u7528\u6237\u5DF2\u4E2D\u6B62\u672C\u8F6E \xB7 \u518D\u6309 Esc \u6E05\u9664 \xB7 \u23CE \u7EE7\u7EED\u63D0\u95EE",
     editorNoRawMode: "\u5916\u90E8\u7F16\u8F91\u5668\u4E0D\u53EF\u7528 \u2014 \u5F53\u524D\u7EC8\u7AEF\u4E0D\u652F\u6301 raw-mode \u5207\u6362",
-    editorFailed: "\u5916\u90E8\u7F16\u8F91\u5668\uFF1A"
+    editorFailed: "\u5916\u90E8\u7F16\u8F91\u5668\uFF1A",
+    editorMissing: "\u672A\u8BBE\u7F6E $EDITOR / $VISUAL / $GIT_EDITOR \u2014 \u8BF7\u5BFC\u51FA\u73AF\u5883\u53D8\u91CF\uFF08\u4F8B\u5982 `export EDITOR=nano`\uFF09\u540E\u91CD\u8BD5",
+    editorExited: "\u7F16\u8F91\u5668\u5F02\u5E38\u9000\u51FA\uFF0C\u8FD4\u56DE\u7801 {code}"
+  },
+  pathConfirm: {
+    title: "\u6C99\u7BB1\u5916\u8DEF\u5F84",
+    subtitleRead: "{tool} \u60F3\u8981\u8BFB\u53D6\u6C99\u7BB1\u5916\u7684\u6587\u4EF6",
+    subtitleWrite: "{tool} \u60F3\u8981\u5199\u5165\u6C99\u7BB1\u5916\u7684\u6587\u4EF6",
+    awaiting: "\u7B49\u5F85\u4E2D",
+    denyTitle: "\u62D2\u7EDD \u2014 \u63D0\u4F9B\u539F\u56E0",
+    optional: "\u53EF\u9009",
+    denyFooter: "\u8F93\u5165\u539F\u56E0 \xB7 \u23CE \u63D0\u4EA4 \xB7 Esc \u8DF3\u8FC7\uFF08\u76F4\u63A5\u62D2\u7EDD\uFF09",
+    pickFooter: "\u2191\u2193 \u9009\u62E9 \xB7 \u23CE \u786E\u8BA4 \xB7 Tab \u6DFB\u52A0\u8BF4\u660E \xB7 Esc \u53D6\u6D88",
+    allowOnce: "\u5141\u8BB8\u4E00\u6B21",
+    allowOnceDesc: "\u672C\u6B21\u5141\u8BB8\uFF0C\u672C\u4F1A\u8BDD\u5185\u6B64\u76EE\u5F55\u4E0D\u518D\u8BE2\u95EE",
+    allowAlways: "\u59CB\u7EC8\u5141\u8BB8",
+    allowAlwaysDesc: "\u8BB0\u4F4F `{prefix}`\uFF0C\u672C\u9879\u76EE\u6C38\u4E45\u5141\u8BB8\uFF08\u5199\u5165 ~/.reasonix/config.json\uFF09",
+    deny: "\u62D2\u7EDD",
+    denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0",
+    pathLabel: "\u8DEF\u5F84",
+    sandboxLabel: "\u6C99\u7BB1",
+    allowPrefixLabel: "\u524D\u7F00"
   },
   shellConfirm: {
     title: "Shell \u547D\u4EE4",
@@ -3126,7 +3289,12 @@ var zhCN = {
     allowAlways: "\u59CB\u7EC8\u5141\u8BB8",
     allowAlwaysDesc: "\u8BB0\u4F4F `{prefix}`\uFF0C\u672C\u9879\u76EE\u5185\u4E0D\u518D\u8BE2\u95EE",
     deny: "\u62D2\u7EDD",
-    denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0"
+    denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0",
+    cwdLabel: "\u5DE5\u4F5C\u76EE\u5F55",
+    timeoutLabel: "\u8D85\u65F6",
+    waitLabel: "\u7B49\u5F85",
+    previewMore: "\u2026 \u8FD8\u6709 {n} \u884C\u672A\u663E\u793A \u2014 \u6309 esc \u53D6\u6D88\uFF0C\u8BA9\u6A21\u578B\u62C6\u5206\u540E\u518D\u8BD5",
+    previewMorePlural: "\u2026 \u8FD8\u6709 {n} \u884C\u672A\u663E\u793A \u2014 \u6309 esc \u53D6\u6D88\uFF0C\u8BA9\u6A21\u578B\u62C6\u5206\u540E\u518D\u8BD5"
   },
   editConfirm: {
     footer: "[y/Enter] \u5E94\u7528 \xB7 [n] \u62D2\u7EDD\u5E76\u8BF4\u660E \xB7 [a] \u5E94\u7528\u5269\u4F59 \xB7 [A] \u5207\u6362 AUTO \xB7 [\u2191\u2193/Space] \u6EDA\u52A8 \xB7 [Esc] \u4E2D\u6B62",
@@ -3248,6 +3416,7 @@ var zhCN = {
     status: "web_search {status} \u2014 try: \u641C\u7D22\u540E\u7AEF\u8FD4\u56DE\u9519\u8BEF\uFF1B\u8BF7\u6539\u5199\u67E5\u8BE2\uFF0C\u6216\u4F7F\u7528 /search-engine mojeek|searxng \u5207\u6362\u5F15\u64CE",
     rateLimit429: "web_search 429 \u2014 try: \u7B49\u5F85 10 \u79D2\u540E\u91CD\u8BD5\uFF0C\u6216\u6539\u5199\u67E5\u8BE2\uFF1B\u641C\u7D22\u540E\u7AEF\u6B63\u5728\u5BF9\u8BE5\u5BA2\u6237\u7AEF\u8FDB\u884C\u9650\u6D41",
     forbidden403: "web_search 403 \u2014 try: \u641C\u7D22\u540E\u7AEF\u62D2\u7EDD\u8BE5\u5BA2\u6237\u7AEF\u8BBF\u95EE\uFF1B\u4F7F\u7528 /search-engine mojeek|searxng \u5207\u6362\u5F15\u64CE\uFF0C\u6216\u7A0D\u540E\u91CD\u8BD5",
+    serverError5xx: "web_search {status} \u2014 try: \u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00\u641C\u7D22 URL\uFF1B\u82E5\u80FD\u52A0\u8F7D\u5219\u5C5E\u4E34\u65F6\u6545\u969C\uFF0C\u7B49 30 \u79D2\u91CD\u8BD5\u5373\u53EF",
     mojeekBlocked: "web_search: Mojeek \u53CD\u722C\u9875\u9762 \u2014 \u9891\u7387\u9650\u5236\u6216\u88AB\u5C4F\u853D \u2014 try: \u7B49\u5F85 30 \u79D2\u540E\u91CD\u8BD5\uFF0C\u6216\u4F7F\u7528 /search-engine searxng \u5207\u6362\u5F15\u64CE",
     mojeekNoResults: "web_search: \u8FD4\u56DE 0 \u6761\u7ED3\u679C\u4F46\u54CD\u5E94\u770B\u8D77\u6765\u4E0D\u662F\u6B63\u5E38\u7A7A\u7ED3\u679C\u9875\uFF08{chars} \u5B57\u7B26\uFF0C\u524D 120 \u5B57\u7B26\uFF1A{preview}\uFF09\u2014 try: \u4F7F\u7528\u66F4\u7B80\u5355\u7684\u5173\u952E\u8BCD\u6539\u5199\u67E5\u8BE2\uFF0C\u6216\u4F7F\u7528 /search-engine searxng \u5207\u6362\u5F15\u64CE",
     invalidEndpoint: 'web_search: \u65E0\u6548\u7684 SearXNG \u7AEF\u70B9 "{endpoint}" \u2014 try: \u4F7F\u7528 /search-endpoint http://host:port \u8BBE\u7F6E\u6709\u6548\u7684 URL',
@@ -3257,6 +3426,7 @@ var zhCN = {
     fetchStatus: "web_fetch {status} for {url} \u2014 try: \u5728\u6D4F\u89C8\u5668\u4E2D\u786E\u8BA4\u8BE5 URL \u80FD\u5426\u8BBF\u95EE\uFF1B\u8BE5\u72B6\u6001\u7801\u8868\u660E\u76EE\u6807\u4E3B\u673A\u8FD4\u56DE\u4E86\u9519\u8BEF\u9875\u9762",
     fetchRateLimit429: "web_fetch 429 for {url} \u2014 try: \u7B49\u5F85 10 \u79D2\u540E\u91CD\u8BD5\uFF1B\u76EE\u6807\u4E3B\u673A\u6B63\u5728\u5BF9\u8BE5\u5BA2\u6237\u7AEF\u8FDB\u884C\u9650\u6D41",
     fetchForbidden403: "web_fetch 403 for {url} \u2014 try: \u76EE\u6807\u4E3B\u673A\u62D2\u7EDD\u8BE5\u5BA2\u6237\u7AEF\u8BBF\u95EE\uFF1B\u8BE5\u9875\u9762\u53EF\u80FD\u9700\u8981\u767B\u5F55\u6216\u5C4F\u853D\u722C\u866B \u2014 \u6539\u7528 web_search \u6458\u8981",
+    fetchServerError5xx: "web_fetch {status} for {url} \u2014 try: \u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00\u8BE5 URL\uFF1B\u82E5\u80FD\u52A0\u8F7D\u5219\u5C5E\u4E34\u65F6\u6545\u969C\uFF0C\u7B49 30 \u79D2\u91CD\u8BD5\u5373\u53EF",
     fetchTimeout: "web_fetch: timed out after {ms}ms for {url} \u2014 try: \u66F4\u77ED\u7684 URL \u6216\u66F4\u5C0F\u7684\u5185\u5BB9\uFF1B\u53EF\u80FD\u662F CDN \u8F83\u6162\uFF0C\u6216\u91CD\u8BD5\u4E00\u6B21",
     fetchTooLarge: "web_fetch \u62D2\u7EDD\uFF1Acontent-length {len} \u5B57\u8282\u8D85\u8FC7\u4E0A\u9650 {cap} \u5B57\u8282\uFF08{url}\uFF09\u2014 try: \u6539\u6362\u5176\u4ED6 URL \u83B7\u53D6\u8F83\u5C0F\u7684\u5185\u5BB9\uFF1B\u8BE5\u9875\u9762\u8FC7\u5927\u65E0\u6CD5\u83B7\u53D6",
     fetchBodyTooLarge: "web_fetch \u62D2\u7EDD\uFF1A\u54CD\u5E94\u4F53\u8D85\u8FC7 {cap} \u5B57\u8282\u4E0A\u9650\uFF08\u5DF2\u63A5\u6536 {seen} \u5B57\u8282\uFF09\u2014 try: \u6539\u6362\u5176\u4ED6 URL \u83B7\u53D6\u8F83\u5C0F\u7684\u5185\u5BB9\uFF1B\u8BE5\u9875\u9762\u6D41\u5F0F\u4F20\u8F93\u8D85\u51FA\u5927\u5C0F\u4E0A\u9650",
@@ -3279,7 +3449,8 @@ var zhCN = {
     reasoningEllipsis: "\u63A8\u7406\u4E2D\u2026",
     error: "\u9519\u8BEF",
     doctor: "\u73AF\u5883\u8BCA\u65AD",
-    you: "\u4F60"
+    you: "\u4F60",
+    task: "\u4EFB\u52A1"
   },
   cardLabels: {
     prompt: "\u63D0\u793A",
@@ -3359,7 +3530,9 @@ var zhCN = {
     noData: "\u65E0\u68C0\u67E5\u6570\u636E",
     healthy: "\u6B63\u5E38 \xB7 {ms}ms",
     slow: "\u7F13\u6162 \xB7 {ms}ms",
-    verySlow: "\u975E\u5E38\u6162 \xB7 {ms}ms"
+    verySlow: "\u975E\u5E38\u6162 \xB7 {ms}ms",
+    slowToast: "\u26A0 MCP `{name}` \u54CD\u5E94\u7F13\u6162 \xB7 P95 {seconds}s \xB7 \u6700\u8FD1 {sampleSize} \u6B21\u8C03\u7528",
+    emptyHint: "\u2139 \u672A\u914D\u7F6E MCP \u670D\u52A1\u5668 \u2014\u2014 \u53EF\u5C1D\u8BD5\uFF1A`reasonix setup` \u91CD\u65B0\u9009\u62E9\uFF0C\u6216 `reasonix mcp install filesystem`"
   },
   denyContextInput: {
     description: "\u544A\u8BC9\u6A21\u578B\u4F60\u4E3A\u4EC0\u4E48\u62D2\u7EDD\u4E86\u3002\u6A21\u578B\u4E0B\u6B21\u4F1A\u770B\u5230\u4F60\u7684\u7406\u7531\u4F5C\u4E3A\u989D\u5916\u7684\u4E0A\u4E0B\u6587\u3002"
@@ -3415,6 +3588,16 @@ var zhCN = {
     empty: "\u6CA1\u6709\u6302\u8F7D MCP \u670D\u52A1\u5668\u3002\u8FD0\u884C `reasonix setup` \u9009\u62E9\u4E00\u4E9B\uFF0C\u6216\u4F7F\u7528 --mcp \u542F\u52A8\u3002",
     serverCount: "{count} \u4E2A\u670D\u52A1\u5668",
     footer: "\u2191\u2193 \u9009\u62E9 \xB7 [r] \u91CD\u8FDE \xB7 [d] \u7981\u7528 \xB7 Esc \u9000\u51FA"
+  },
+  mcpLifecycle: {
+    handshake: "\u63E1\u624B\u4E2D\u2026",
+    connected: "\u5DF2\u8FDE\u63A5",
+    failed: "\u5931\u8D25",
+    disabled: "\u5DF2\u7981\u7528",
+    reconnect: "\u91CD\u8FDE\u4E2D\u2026",
+    initDetail: "\u521D\u59CB\u5316 \u2192 tools/list \u2192 resources/list",
+    reconnectDetail: "\u65AD\u5F00\u65E7\u8FDE\u63A5 \xB7 \u91CD\u65B0\u63E1\u624B \xB7 \u5217\u51FA\u5DE5\u5177",
+    disabledDetail: "\u901A\u8FC7 /mcp disable {name}"
   },
   checkpointPicker: {
     title: "\u6062\u590D\u68C0\u67E5\u70B9 \u2014 {workspace}",
@@ -4128,7 +4311,9 @@ function isReadOnlyCall(tool, args) {
   if (tool.readOnlyCheck) {
     try {
       return Boolean(tool.readOnlyCheck(args));
-    } catch {
+    } catch (err) {
+      process.stderr.write(`readOnlyCheck for ${tool.name} threw: ${err.message}
+`);
       return false;
     }
   }
@@ -4193,6 +4378,7 @@ function computeP95(samples) {
 // src/mcp/registry.ts
 var DEFAULT_MAX_RESULT_CHARS = 32e3;
 var DEFAULT_MAX_RESULT_TOKENS = 8e3;
+var DEFAULT_READY_TIMEOUT_MS = 3e4;
 function registerSingleMcpTool(mcpTool, env) {
   if (!mcpTool.name) return "";
   const registeredName = `${env.prefix}${mcpTool.name}`;
@@ -4201,6 +4387,14 @@ function registerSingleMcpTool(mcpTool, env) {
     description: mcpTool.description ?? "",
     parameters: mcpTool.inputSchema,
     fn: async (args, ctx) => {
+      if (env.ready) {
+        await waitForReady(
+          env.ready,
+          env.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+          env.serverName ?? (env.prefix.replace(/_$/, "") || "anon"),
+          ctx?.signal
+        );
+      }
       const t0 = env.tracker ? Date.now() : 0;
       const live = env.host.client;
       const toolResult = await live.callTool(mcpTool.name, args, {
@@ -4212,6 +4406,55 @@ function registerSingleMcpTool(mcpTool, env) {
     }
   });
   return registeredName;
+}
+async function waitForReady(ready, timeoutMs, serverName, signal) {
+  let settled = false;
+  let timer;
+  let onAbort;
+  try {
+    await new Promise((resolve10, reject) => {
+      ready.then(
+        () => {
+          if (settled) return;
+          settled = true;
+          resolve10();
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      );
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(
+            new Error(
+              `MCP server "${serverName}" still handshaking after ${timeoutMs}ms \u2014 try /mcp reconnect or check the server logs.`
+            )
+          );
+        }, timeoutMs);
+      }
+      if (signal) {
+        if (signal.aborted) {
+          if (settled) return;
+          settled = true;
+          reject(new Error("aborted"));
+          return;
+        }
+        onAbort = () => {
+          if (settled) return;
+          settled = true;
+          reject(new Error("aborted"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 async function bridgeMcpTools(client, opts = {}) {
   const registry = opts.registry ?? new ToolRegistry({ autoFlatten: opts.autoFlatten });
@@ -4227,7 +4470,10 @@ async function bridgeMcpTools(client, opts = {}) {
     prefix,
     maxResultChars,
     tracker,
-    onProgress: opts.onProgress
+    onProgress: opts.onProgress,
+    ready: opts.ready,
+    readyTimeoutMs: opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+    serverName
   };
   const listed = await client.listTools();
   for (const mcpTool of listed.tools) {
@@ -5010,6 +5256,10 @@ function shrinkOversizedToolResultsByTokens(messages, maxTokens) {
 }
 
 // src/loop/healing.ts
+var _stampSeq = 0;
+function stampMissingIds(calls) {
+  return calls.map((c) => c.id ? c : { ...c, id: `z-ext-${Date.now()}-${_stampSeq++}` });
+}
 function fixToolCallPairing(messages) {
   const out = [];
   let droppedAssistantCalls = 0;
@@ -5017,9 +5267,10 @@ function fixToolCallPairing(messages) {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      const calls = stampMissingIds(msg.tool_calls);
       const needed = /* @__PURE__ */ new Set();
-      for (const call of msg.tool_calls) {
-        if (call?.id) needed.add(call.id);
+      for (const call of calls) {
+        if (call.id) needed.add(call.id);
       }
       const candidates = [];
       let j = i + 1;
@@ -5033,7 +5284,7 @@ function fixToolCallPairing(messages) {
         j++;
       }
       if (needed.size === 0) {
-        out.push(msg);
+        out.push({ ...msg, tool_calls: calls });
         for (const r of candidates) out.push(r);
         i = j - 1;
       } else {
@@ -5097,16 +5348,46 @@ function* hookWarnings(outcomes, turn) {
   }
 }
 
+// src/loop/read-only-loop-tracker.ts
+var READONLY_LOOP_ESCALATION_THRESHOLD = 8;
+var ReadOnlyLoopTracker = class {
+  streak = 0;
+  threshold;
+  constructor(threshold = READONLY_LOOP_ESCALATION_THRESHOLD) {
+    this.threshold = Math.max(1, threshold);
+  }
+  reset() {
+    this.streak = 0;
+  }
+  /** True ONLY on the call where the streak crosses the configured threshold. */
+  noteAndCrossedThreshold(isReadOnly) {
+    if (!isReadOnly) {
+      this.streak = 0;
+      return false;
+    }
+    const before = this.streak;
+    this.streak += 1;
+    return before < this.threshold && this.streak >= this.threshold;
+  }
+  get currentStreak() {
+    return this.streak;
+  }
+};
+
 // src/loop/turn-failure-tracker.ts
 var FAILURE_ESCALATION_THRESHOLD = 3;
 var TurnFailureTracker = class {
   count = 0;
   types = {};
+  threshold;
+  constructor(threshold = FAILURE_ESCALATION_THRESHOLD) {
+    this.threshold = threshold;
+  }
   reset() {
     this.count = 0;
     this.types = {};
   }
-  /** True ONLY on the call where the count crosses FAILURE_ESCALATION_THRESHOLD. */
+  /** True ONLY on the call where the count crosses the configured threshold. */
   noteAndCrossedThreshold(resultJson, repair) {
     const before = this.count;
     const bump = (kind, by = 1) => {
@@ -5121,7 +5402,7 @@ var TurnFailureTracker = class {
       if (repair.truncationsFixed > 0) bump("truncated", repair.truncationsFixed);
       if (repair.stormsBroken > 0) bump("repeat-loop", repair.stormsBroken);
     }
-    return before < FAILURE_ESCALATION_THRESHOLD && this.count >= FAILURE_ESCALATION_THRESHOLD;
+    return before < this.threshold && this.count >= this.threshold;
   }
   formatBreakdown() {
     const parts = Object.entries(this.types).filter(([, n]) => n > 0).map(([kind, n]) => `${n}\xD7 ${kind}`);
@@ -5132,16 +5413,24 @@ var TurnFailureTracker = class {
 // src/memory/runtime.ts
 import { createHash } from "crypto";
 var ImmutablePrefix = class {
+  /** Stable across turns; rebuilt only on /new when REASONIX.md changed on disk. */
   system;
   /** Each `addTool` costs one cache-miss turn — DeepSeek's prefix cache is keyed by full tool list. */
   _toolSpecs;
   fewShots;
-  /** Invalidated only via `addTool`; bypassing it leaves cache stale → fingerprint diverges from sent prefix. */
+  /** Invalidated by addTool / removeTool / replaceSystem; bypassing any of those leaves cache stale → fingerprint diverges from sent prefix. */
   _fingerprintCache = null;
   constructor(opts) {
     this.system = opts.system;
     this._toolSpecs = [...opts.toolSpecs ?? []];
     this.fewShots = Object.freeze([...opts.fewShots ?? []]);
+  }
+  /** Replaces the system prompt; returns true iff the string actually changed. Caller must accept a cache miss on the next turn. */
+  replaceSystem(s) {
+    if (this.system === s) return false;
+    this.system = s;
+    this._fingerprintCache = null;
+    return true;
   }
   get toolSpecs() {
     return this._toolSpecs;
@@ -5573,6 +5862,7 @@ var CacheFirstLoop = class {
   confirmationGate;
   /** Number of messages that were pre-loaded from the session file. */
   resumedMessageCount;
+  _rebuildSystem;
   _turn = 0;
   _streamPreference;
   /** Threaded through HTTP + every tool dispatch so Esc cancels in-flight work, not after. */
@@ -5581,7 +5871,8 @@ var CacheFirstLoop = class {
   _inflight = new InflightSet();
   _proArmedForNextTurn = false;
   _escalateThisTurn = false;
-  _turnFailures = new TurnFailureTracker();
+  _turnFailures;
+  _readOnlyLoop;
   _turnSelfCorrected = false;
   _foldedThisTurn = false;
   _toolDispatchesThisStep = 0;
@@ -5601,32 +5892,21 @@ var CacheFirstLoop = class {
     this.reasoningEffort = opts.reasoningEffort ?? "max";
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
     this.budgetUsd = typeof opts.budgetUsd === "number" && opts.budgetUsd > 0 ? opts.budgetUsd : null;
+    this._turnFailures = new TurnFailureTracker(
+      resolveFailureThreshold(opts.failureThreshold, FAILURE_ESCALATION_THRESHOLD)
+    );
+    this._readOnlyLoop = new ReadOnlyLoopTracker(
+      parsePositiveIntEnv(process.env.REASONIX_READONLY_LOOP_THRESHOLD) ?? READONLY_LOOP_ESCALATION_THRESHOLD
+    );
     this.maxToolIters = opts.maxToolIters ?? 64;
     this.hooks = opts.hooks ?? [];
     this.hookCwd = opts.hookCwd ?? process.cwd();
     this.confirmationGate = opts.confirmationGate ?? pauseGate;
+    this._rebuildSystem = opts.rebuildSystem ?? null;
     this._streamPreference = opts.stream ?? true;
     this.stream = this._streamPreference;
     const allowedNames = /* @__PURE__ */ new Set([...this.prefix.toolSpecs.map((s) => s.function.name)]);
     const registry = this.tools;
-    const isMutating = (call) => {
-      const name = call.function?.name;
-      if (!name) return false;
-      const def = registry.get(name);
-      if (!def) return false;
-      if (def.readOnlyCheck) {
-        let args = {};
-        try {
-          args = JSON.parse(call.function?.arguments ?? "{}") ?? {};
-        } catch {
-        }
-        try {
-          if (def.readOnlyCheck(args)) return false;
-        } catch {
-        }
-      }
-      return def.readOnly !== true;
-    };
     const isStormExempt = (call) => {
       const name = call.function?.name;
       if (!name) return false;
@@ -5634,7 +5914,7 @@ var CacheFirstLoop = class {
     };
     this.repair = new ToolCallRepair({
       allowedToolNames: allowedNames,
-      isMutating,
+      isMutating: (call) => this.isMutating(call),
       isStormExempt,
       stormThreshold: parsePositiveIntEnv(process.env.REASONIX_STORM_THRESHOLD),
       stormWindow: parsePositiveIntEnv(process.env.REASONIX_STORM_WINDOW)
@@ -5666,6 +5946,7 @@ var CacheFirstLoop = class {
       const tokensSaved = shrunk.tokensSaved;
       for (const msg of messages) this.log.append(msg);
       this.resumedMessageCount = messages.length;
+      this._turn = messages.reduce((n, m) => m.role === "assistant" ? n + 1 : n, 0);
       if (messages.length > 0) {
         const meta = loadSessionMeta(this.sessionName);
         this.stats.seedCarryover({
@@ -5726,7 +6007,7 @@ var CacheFirstLoop = class {
       }
     }
   }
-  /** "New chat" — drops in-memory messages, archives the on-disk transcript so it survives in Sessions, keeps sessionName so the prefix cache stays warm. */
+  /** "New chat" — drops in-memory messages, archives the on-disk transcript so it survives in Sessions, keeps sessionName so the prefix cache stays warm. Re-runs the system-prompt builder if one was wired (issue #778: REASONIX.md edits otherwise need a restart). */
   clearLog() {
     const dropped = this.log.length;
     this.log.compactInPlace([]);
@@ -5740,7 +6021,14 @@ var CacheFirstLoop = class {
     }
     this.scratch.reset();
     this._inflight.clear();
-    return { dropped, archived };
+    let systemRebuilt = false;
+    if (this._rebuildSystem) {
+      try {
+        systemRebuilt = this.prefix.replaceSystem(this._rebuildSystem());
+      } catch {
+      }
+    }
+    return { dropped, archived, systemRebuilt };
   }
   configure(opts) {
     if (opts.model !== void 0) this.model = opts.model;
@@ -5785,6 +6073,35 @@ var CacheFirstLoop = class {
     if (this._escalateThisTurn || !this.autoEscalate) return false;
     this._escalateThisTurn = true;
     return true;
+  }
+  /** Returns true ONLY on the call where the read-only streak crosses the threshold (#681). */
+  noteReadOnlyToolCall(call) {
+    const isReadOnly = !this.isMutating(call);
+    if (!this._readOnlyLoop.noteAndCrossedThreshold(isReadOnly)) return false;
+    if (this._escalateThisTurn || !this.autoEscalate) return false;
+    this._escalateThisTurn = true;
+    return true;
+  }
+  /** A call counts as mutating when its definition reports `readOnly !== true` and any dynamic `readOnlyCheck` doesn't override that for these args. */
+  isMutating(call) {
+    const name = call.function?.name;
+    if (!name) return false;
+    const def = this.tools.get(name);
+    if (!def) return false;
+    if (def.readOnlyCheck) {
+      let args = {};
+      try {
+        args = JSON.parse(call.function?.arguments ?? "{}") ?? {};
+      } catch {
+      }
+      try {
+        if (def.readOnlyCheck(args)) return false;
+      } catch (err) {
+        process.stderr.write(`readOnlyCheck for ${name} threw: ${err.message}
+`);
+      }
+    }
+    return def.readOnly !== true;
   }
   async runOneToolCall(call, signal) {
     const name = call.function?.name ?? "";
@@ -5906,6 +6223,7 @@ ${reason}`
     this.scratch.reset();
     this.repair.resetStorm();
     this._turnFailures.reset();
+    this._readOnlyLoop.reset();
     this._turnSelfCorrected = false;
     this._escalateThisTurn = false;
     this._foldedThisTurn = false;
@@ -6332,6 +6650,17 @@ ${reason}`
               })
             };
           }
+          if (this.noteReadOnlyToolCall(call)) {
+            yield {
+              turn: this._turn,
+              role: "warning",
+              content: t("loop.readOnlyLoopEscalation", {
+                model: ESCALATION_MODEL,
+                n: this._readOnlyLoop.currentStreak,
+                fallback: this.model
+              })
+            };
+          }
           yield {
             turn: this._turn,
             role: "tool",
@@ -6370,6 +6699,19 @@ function parsePositiveIntEnv(raw) {
   if (!raw) return void 0;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : void 0;
+}
+var FAILURE_THRESHOLD_MIN = 1;
+var FAILURE_THRESHOLD_MAX = 20;
+function resolveFailureThreshold(raw, fallback) {
+  if (raw === void 0) return fallback;
+  if (!Number.isInteger(raw) || raw < FAILURE_THRESHOLD_MIN || raw > FAILURE_THRESHOLD_MAX) {
+    process.stderr.write(
+      `\u25B2 ignoring escalation failureThreshold=${raw} (must be an integer in [${FAILURE_THRESHOLD_MIN},${FAILURE_THRESHOLD_MAX}]) \u2014 using default ${fallback}
+`
+    );
+    return fallback;
+  }
+  return raw;
 }
 
 // src/at-mentions.ts
@@ -6647,7 +6989,7 @@ function parseAtQuery(query) {
     trailingSlash: false
   };
 }
-var AT_PICKER_PREFIX = /(?:^|\s)@([a-zA-Z0-9_./\\-]*)$/;
+var AT_PICKER_PREFIX = /(?:^|\s)@([\p{L}\p{N}_./\\-]*)$/u;
 function detectAtPicker(input) {
   const m = AT_PICKER_PREFIX.exec(input);
   if (!m) return null;
@@ -6733,7 +7075,7 @@ function fuzzySubseqScore(needle, target) {
   const lengthPenalty = Math.floor(target.length / 4);
   return quality + lengthPenalty;
 }
-var AT_MENTION_PATTERN = /(?<=^|\s)@([a-zA-Z0-9_./\\-]+)/g;
+var AT_MENTION_PATTERN = /(?<=^|\s)@([\p{L}\p{N}_./\\-]+)/gu;
 function expandAtMentions(text, rootDir, opts = {}) {
   const maxBytes = opts.maxBytes ?? DEFAULT_AT_MENTION_MAX_BYTES;
   const maxDirEntries = Math.max(1, opts.maxDirEntries ?? DEFAULT_AT_DIR_MAX_ENTRIES);
@@ -6927,6 +7269,53 @@ import {
 import { homedir as homedir5 } from "os";
 import { join as join8, resolve as resolve3 } from "path";
 
+// src/frontmatter.ts
+var KEY_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/;
+var FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+function stripQuotes(s) {
+  if (s.length < 2) return s;
+  const first = s[0];
+  const last = s[s.length - 1];
+  if (first === '"' && last === '"' || first === "'" && last === "'") {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+function parseFrontmatter(raw) {
+  const stripped = raw.charCodeAt(0) === 65279 ? raw.slice(1) : raw;
+  const lines = stripped.split(/\r?\n/);
+  if (lines[0] !== "---") return { data: {}, body: stripped };
+  const end = lines.indexOf("---", 1);
+  if (end < 0) return { data: {}, body: stripped };
+  const entries = /* @__PURE__ */ new Map();
+  let currentKey = null;
+  for (let i = 1; i < end; i++) {
+    const line = lines[i] ?? "";
+    if (line.trim() === "") {
+      currentKey = null;
+      continue;
+    }
+    const m = line.match(KEY_RE);
+    if (m?.[1] && !FORBIDDEN_KEYS.has(m[1])) {
+      currentKey = m[1];
+      entries.set(currentKey, (m[2] ?? "").trim());
+    } else if (currentKey) {
+      const cont = line.trim();
+      const prev = entries.get(currentKey) ?? "";
+      entries.set(currentKey, prev ? `${prev} ${cont}` : cont);
+    }
+  }
+  const data = /* @__PURE__ */ Object.create(null);
+  for (const [k, v] of entries) {
+    if (FORBIDDEN_KEYS.has(k)) continue;
+    data[k] = stripQuotes(v);
+  }
+  return {
+    data,
+    body: lines.slice(end + 1).join("\n").replace(/^\n+/, "")
+  };
+}
+
 // src/skills.ts
 import { existsSync as existsSync6, mkdirSync as mkdirSync3, readFileSync as readFileSync8, readdirSync as readdirSync3, statSync as statSync4, writeFileSync as writeFileSync3 } from "fs";
 import { homedir as homedir4 } from "os";
@@ -6967,23 +7356,6 @@ var SKILLS_DIRNAME = "skills";
 var SKILL_FILE = "SKILL.md";
 var SKILLS_INDEX_MAX_CHARS = 4e3;
 var VALID_SKILL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
-function parseFrontmatter(raw) {
-  const lines = raw.split(/\r?\n/);
-  if (lines[0] !== "---") return { data: {}, body: raw };
-  const end = lines.indexOf("---", 1);
-  if (end < 0) return { data: {}, body: raw };
-  const data = {};
-  for (let i = 1; i < end; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/);
-    if (m?.[1]) data[m[1]] = (m[2] ?? "").trim();
-  }
-  return {
-    data,
-    body: lines.slice(end + 1).join("\n").replace(/^\n+/, "")
-  };
-}
 function isValidSkillName(name) {
   return VALID_SKILL_NAME.test(name);
 }
@@ -7392,34 +7764,25 @@ function scopeDir(opts) {
 function ensureDir(p) {
   if (!existsSync7(p)) mkdirSync4(p, { recursive: true });
 }
-function parseFrontmatter2(raw) {
-  const lines = raw.split(/\r?\n/);
-  if (lines[0] !== "---") return { data: {}, body: raw };
-  const end = lines.indexOf("---", 1);
-  if (end < 0) return { data: {}, body: raw };
-  const data = {};
-  for (let i = 1; i < end; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/);
-    if (m?.[1]) data[m[1]] = (m[2] ?? "").trim();
-  }
-  return {
-    data,
-    body: lines.slice(end + 1).join("\n").replace(/^\n+/, "")
-  };
-}
 function formatFrontmatter(e) {
-  return [
+  const lines = [
     "---",
     `name: ${e.name}`,
     `description: ${e.description.replace(/\n/g, " ")}`,
     `type: ${e.type}`,
     `scope: ${e.scope}`,
-    `created: ${e.createdAt}`,
-    "---",
-    ""
-  ].join("\n");
+    `created: ${e.createdAt}`
+  ];
+  if (e.priority) lines.push(`priority: ${e.priority}`);
+  if (e.expires) lines.push(`expires: ${e.expires}`);
+  lines.push("---", "");
+  return lines.join("\n");
+}
+function coercePriority(v) {
+  return v === "low" || v === "medium" || v === "high" ? v : void 0;
+}
+function coerceExpires(v) {
+  return v === "project_end" ? v : void 0;
 }
 function todayIso() {
   const d = /* @__PURE__ */ new Date();
@@ -7480,8 +7843,8 @@ var MemoryStore = class {
       throw new Error(`memory not found: scope=${scope} name=${name}`);
     }
     const raw = readFileSync9(file, "utf8");
-    const { data, body } = parseFrontmatter2(raw);
-    return {
+    const { data, body } = parseFrontmatter(raw);
+    const entry = {
       name: data.name ?? name,
       type: data.type ?? "project",
       scope: data.scope ?? scope,
@@ -7489,6 +7852,11 @@ var MemoryStore = class {
       body: body.trim(),
       createdAt: data.created ?? ""
     };
+    const priority = coercePriority(data.priority);
+    if (priority) entry.priority = priority;
+    const expires = coerceExpires(data.expires);
+    if (expires) entry.expires = expires;
+    return entry;
   }
   /** Skips malformed files — index stays queryable even if one file is hand-edited into nonsense. */
   list() {
@@ -7531,6 +7899,8 @@ var MemoryStore = class {
       body,
       createdAt: todayIso()
     };
+    if (input.priority) entry.priority = input.priority;
+    if (input.expires) entry.expires = input.expires;
     const dir = this.dir(input.scope);
     const file = join8(dir, `${name}.md`);
     const content = `${formatFrontmatter(entry)}${body}
@@ -7614,13 +7984,36 @@ function applyGlobalReasonixMemory(basePrompt, homeDir) {
     "```"
   ].join("\n");
 }
+function effectivePriority(entry, cfg) {
+  if (entry.priority) return entry.priority;
+  return memoryTypeDefaults(entry.type, cfg).priority;
+}
+function highPriorityBlock(entries, cfg) {
+  const high = entries.filter((e) => effectivePriority(e, cfg) === "high");
+  if (high.length === 0) return null;
+  const lines = [
+    "# HIGH PRIORITY constraints (must observe)",
+    "",
+    "These memories were declared `priority: high` (via config.memory.customTypes or the memory file itself). Treat them as hard rules \u2014 violations override any other guidance below.",
+    ""
+  ];
+  for (const e of high) {
+    const head = `!!! [${e.scope}/${e.type}/${e.name}] ${e.description || "(no description)"}`;
+    lines.push(head);
+    if (e.body) lines.push("", e.body);
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
 function applyUserMemory(basePrompt, opts = {}) {
   if (!memoryEnabled()) return basePrompt;
   const store = new MemoryStore(opts);
   const global = store.loadIndex("global");
   const project = store.hasProjectScope() ? store.loadIndex("project") : null;
-  if (!global && !project) return basePrompt;
+  const high = highPriorityBlock(store.list(), opts.cfg);
+  if (!global && !project && !high) return basePrompt;
   const parts = [basePrompt];
+  if (high) parts.push("", high);
   if (global) {
     parts.push(
       "",
@@ -7656,7 +8049,7 @@ function applyMemoryStack(basePrompt, rootDir) {
 
 // src/tools/filesystem.ts
 import { promises as fs4 } from "fs";
-import * as pathMod4 from "path";
+import * as pathMod5 from "path";
 import picomatch3 from "picomatch";
 
 // src/tools/fs/edit.ts
@@ -7878,15 +8271,149 @@ async function globFiles(ctx, startAbs, args) {
   return lines.join("\n");
 }
 
+// src/tools/fs/outline.ts
+import * as pathMod3 from "path";
+var OUTLINE_MAX_ENTRIES = 30;
+var OUTLINE_TAIL_KEEP = 5;
+var TS_EXPORT_RE = /^export\s+(?:default\s+)?(?:async\s+)?(function|class|const|let|var|interface|type|enum)\s+\*?\s*(\w+)/;
+var PY_DECL_RE = /^(?:async\s+)?(def|class)\s+(\w+)/;
+var GO_DECL_RE = /^(func|type|var|const)\s+(?:\([^)]+\)\s+)?(\w+)/;
+var RUST_DECL_RE = /^(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(fn|struct|enum|trait|mod|type|const|static|union)\s+(\w+)/;
+var RUST_IMPL_RE = /^(?:unsafe\s+)?impl(?:\s*<[^>]+>)?\s+(?:[^{]+\s+for\s+)?(\w+)/;
+var MD_HEADING_RE = /^(#{1,6})\s+(.+?)\s*$/;
+var MD_FENCE_RE = /^```/;
+var EXT_TO_LANG = {
+  ".ts": "ts",
+  ".tsx": "ts",
+  ".mts": "ts",
+  ".cts": "ts",
+  ".js": "ts",
+  ".jsx": "ts",
+  ".mjs": "ts",
+  ".cjs": "ts",
+  ".py": "py",
+  ".pyi": "py",
+  ".go": "go",
+  ".rs": "rust",
+  ".md": "md",
+  ".markdown": "md",
+  ".mdx": "md"
+};
+function extractOutline(filename, lines) {
+  const ext = pathMod3.extname(filename).toLowerCase();
+  const lang = EXT_TO_LANG[ext];
+  if (!lang) return [];
+  switch (lang) {
+    case "ts":
+      return extractTs(lines);
+    case "py":
+      return extractPython(lines);
+    case "go":
+      return extractGo(lines);
+    case "rust":
+      return extractRust(lines);
+    case "md":
+      return extractMarkdown(lines);
+  }
+}
+function extractTs(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("export ")) continue;
+    const m = TS_EXPORT_RE.exec(line);
+    if (!m) continue;
+    out.push({ line: i + 1, text: `export ${m[1]} ${m[2]}` });
+  }
+  return out;
+}
+function extractPython(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith(" ") || line.startsWith("	")) continue;
+    const m = PY_DECL_RE.exec(line);
+    if (!m) continue;
+    out.push({ line: i + 1, text: `${m[1]} ${m[2]}` });
+  }
+  return out;
+}
+function extractGo(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith(" ") || line.startsWith("	")) continue;
+    const m = GO_DECL_RE.exec(line);
+    if (!m) continue;
+    out.push({ line: i + 1, text: `${m[1]} ${m[2]}` });
+  }
+  return out;
+}
+function extractRust(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith(" ") || line.startsWith("	")) continue;
+    const implMatch = RUST_IMPL_RE.exec(line);
+    if (implMatch) {
+      out.push({ line: i + 1, text: `impl ${implMatch[1]}` });
+      continue;
+    }
+    const m = RUST_DECL_RE.exec(line);
+    if (!m) continue;
+    out.push({ line: i + 1, text: `${m[1]} ${m[2]}` });
+  }
+  return out;
+}
+function extractMarkdown(lines) {
+  const out = [];
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (MD_FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = MD_HEADING_RE.exec(line);
+    if (!m) continue;
+    out.push({ line: i + 1, text: `${m[1]} ${m[2]}` });
+  }
+  return out;
+}
+function formatOutline(entries) {
+  const total = entries.length;
+  if (total === 0) return "";
+  const lastEntry = entries[total - 1];
+  const width = String(lastEntry.line).length;
+  const fmt = (e) => `  L${String(e.line).padStart(width, " ")}  ${e.text}`;
+  const header = `[outline: ${total} symbol${total === 1 ? "" : "s"}]`;
+  if (total <= OUTLINE_MAX_ENTRIES) {
+    return [header, ...entries.map(fmt)].join("\n");
+  }
+  const headCount = OUTLINE_MAX_ENTRIES - OUTLINE_TAIL_KEEP;
+  const headEntries = entries.slice(0, headCount);
+  const tailEntries = entries.slice(-OUTLINE_TAIL_KEEP);
+  const omitted = total - OUTLINE_MAX_ENTRIES;
+  const gapStart = headEntries[headEntries.length - 1].line;
+  const gapEnd = tailEntries[0].line;
+  return [
+    header,
+    ...headEntries.map(fmt),
+    `  [\u2026 ${omitted} more symbol${omitted === 1 ? "" : "s"} between L${gapStart} and L${gapEnd} \u2026]`,
+    ...tailEntries.map(fmt)
+  ].join("\n");
+}
+
 // src/tools/fs/search.ts
 import { promises as fs3 } from "fs";
-import * as pathMod3 from "path";
+import * as pathMod4 from "path";
 function throwIfAborted(signal) {
   if (!signal?.aborted) return;
   throw new DOMException("search aborted by user", "AbortError");
 }
 function displayRel3(rootDir, full) {
-  return pathMod3.relative(rootDir, full).replaceAll("\\", "/");
+  return pathMod4.relative(rootDir, full).replaceAll("\\", "/");
 }
 async function searchFiles(ctx, startAbs, args) {
   throwIfAborted(args.signal);
@@ -7910,7 +8437,7 @@ async function searchFiles(ctx, startAbs, args) {
     }
     for (const e of entries) {
       throwIfAborted(args.signal);
-      const full = pathMod3.join(dir, e.name);
+      const full = pathMod4.join(dir, e.name);
       const lower = e.name.toLowerCase();
       const hit = re ? re.test(e.name) : lower.includes(needle);
       if (hit) {
@@ -7989,11 +8516,11 @@ async function searchContent(ctx, startAbs, args) {
       throwIfAborted(args.signal);
       if (e.isDirectory()) {
         if (!includeDeps && ctx.skipDirNames.has(e.name)) continue;
-        await walk2(pathMod3.join(dir, e.name));
+        await walk2(pathMod4.join(dir, e.name));
         continue;
       }
       if (!e.isFile()) continue;
-      const full = pathMod3.join(dir, e.name);
+      const full = pathMod4.join(dir, e.name);
       if (ctx.nameMatch && !ctx.nameMatch(e.name, displayRel3(ctx.rootDir, full))) continue;
       if (ctx.isBinaryByName(e.name)) continue;
       let fh;
@@ -8090,47 +8617,11 @@ var DEFAULT_MAX_LIST_BYTES = 256 * 1024;
 var DEFAULT_AUTO_PREVIEW_LINES = 200;
 var AUTO_PREVIEW_HEAD_LINES = 80;
 var AUTO_PREVIEW_TAIL_LINES = 40;
-var OUTLINE_MAX_ENTRIES = 30;
-var OUTLINE_TAIL_KEEP = 5;
-var TS_EXPORT_RE = /^export\s+(?:default\s+)?(?:async\s+)?(function|class|const|let|var|interface|type|enum)\s+\*?\s*(\w+)/;
-function extractTsExportOutline(lines) {
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.startsWith("export ")) continue;
-    const m = TS_EXPORT_RE.exec(line);
-    if (!m) continue;
-    out.push({ line: i + 1, kind: m[1], name: m[2] });
-  }
-  return out;
-}
-function formatOutline(entries) {
-  const total = entries.length;
-  if (total === 0) return "";
-  const lastEntry = entries[total - 1];
-  const width = String(lastEntry.line).length;
-  const fmt = (e) => `  L${String(e.line).padStart(width, " ")}  export ${e.kind} ${e.name}`;
-  const header = `[outline: ${total} top-level export${total === 1 ? "" : "s"}]`;
-  if (total <= OUTLINE_MAX_ENTRIES) {
-    return [header, ...entries.map(fmt)].join("\n");
-  }
-  const headCount = OUTLINE_MAX_ENTRIES - OUTLINE_TAIL_KEEP;
-  const headEntries = entries.slice(0, headCount);
-  const tailEntries = entries.slice(-OUTLINE_TAIL_KEEP);
-  const omitted = total - OUTLINE_MAX_ENTRIES;
-  const gapStart = headEntries[headEntries.length - 1].line;
-  const gapEnd = tailEntries[0].line;
-  return [
-    header,
-    ...headEntries.map(fmt),
-    `  [\u2026 ${omitted} more export${omitted === 1 ? "" : "s"} between L${gapStart} and L${gapEnd} \u2026]`,
-    ...tailEntries.map(fmt)
-  ].join("\n");
-}
+var OUTLINE_MAX_ENTRIES2 = 30;
 var SKIP_DIR_NAMES = new Set(DEFAULT_INDEX_EXCLUDES.dirs);
 var BINARY_EXTENSIONS = new Set(DEFAULT_INDEX_EXCLUDES.exts);
 function displayRel4(rootDir, full) {
-  return pathMod4.relative(rootDir, full).replaceAll("\\", "/");
+  return pathMod5.relative(rootDir, full).replaceAll("\\", "/");
 }
 var GLOB_METACHARS = /[*?{[]/;
 function compileNameFilter(filter) {
@@ -8149,29 +8640,84 @@ function isLikelyBinaryByName(name) {
   return BINARY_EXTENSIONS.has(name.slice(dot).toLowerCase());
 }
 function registerFilesystemTools(registry, opts) {
-  const rootDir = pathMod4.resolve(opts.rootDir);
+  const rootDir = pathMod5.resolve(opts.rootDir);
   const allowWriting = opts.allowWriting !== false;
   const maxReadBytes = opts.maxReadBytes ?? DEFAULT_MAX_READ_BYTES;
   const maxListBytes = opts.maxListBytes ?? DEFAULT_MAX_LIST_BYTES;
-  const safePath = (raw) => {
+  const normRoot = pathMod5.resolve(rootDir);
+  const sessionApproved = /* @__PURE__ */ new Set();
+  const inflightGate = /* @__PURE__ */ new Map();
+  function pathIsUnder(child, parent) {
+    const rel = pathMod5.relative(parent, child);
+    return rel === "" || !rel.startsWith("..") && !pathMod5.isAbsolute(rel);
+  }
+  function looksLikeAbsoluteSystemPath(raw) {
+    if (/^[A-Za-z]:[\\/]/.test(raw)) return true;
+    return /^\/(?:home|Users|etc|var|opt|tmp|usr|mnt|Library|Volumes|proc|sys|dev|run|srv|media|Applications|System|root|boot|private)(?:[/\\]|$)/.test(
+      raw
+    );
+  }
+  async function ensureOutsideSandboxAllowed(abs, intent, toolName, ctx) {
+    for (const dir of loadProjectPathAllowed(rootDir)) {
+      if (pathIsUnder(abs, dir)) return;
+    }
+    for (const dir of sessionApproved) {
+      if (pathIsUnder(abs, dir)) return;
+    }
+    const stat2 = await safeLstat(abs);
+    const allowPrefix = stat2?.isDirectory() ? abs : pathMod5.dirname(abs);
+    let pending = inflightGate.get(allowPrefix);
+    if (!pending) {
+      const gate = ctx?.confirmationGate ?? pauseGate;
+      pending = gate.ask({
+        kind: "path_access",
+        payload: { path: abs, intent, toolName, sandboxRoot: normRoot, allowPrefix }
+      });
+      inflightGate.set(allowPrefix, pending);
+      void pending.finally(() => inflightGate.delete(allowPrefix));
+    }
+    const choice = await pending;
+    if (choice.type === "deny") {
+      throw new Error(
+        `user denied access to ${abs}${choice.denyContext ? ` \u2014 ${choice.denyContext}` : ""}`
+      );
+    }
+    if (choice.type === "always_allow") {
+      addProjectPathAllowed(rootDir, choice.prefix);
+    } else {
+      sessionApproved.add(allowPrefix);
+    }
+  }
+  const safePath = async (raw, toolName, ctx, intent = "read") => {
     if (typeof raw !== "string" || raw.length === 0) {
       throw new Error("path must be a non-empty string");
+    }
+    if (looksLikeAbsoluteSystemPath(raw)) {
+      const abs = pathMod5.resolve(raw);
+      if (pathIsUnder(abs, normRoot)) return abs;
+      await ensureOutsideSandboxAllowed(abs, intent, toolName, ctx);
+      return abs;
     }
     let normalized = raw;
     while (normalized.startsWith("/") || normalized.startsWith("\\")) {
       normalized = normalized.slice(1);
     }
     if (normalized.length === 0) normalized = ".";
-    const resolved = pathMod4.resolve(rootDir, normalized);
-    const normRoot = pathMod4.resolve(rootDir);
-    const rel = pathMod4.relative(normRoot, resolved);
-    if (rel.startsWith("..") || pathMod4.isAbsolute(rel)) {
+    const resolved = pathMod5.resolve(rootDir, normalized);
+    if (!pathIsUnder(resolved, normRoot)) {
       throw new Error(
-        `path escapes sandbox root (${normRoot}): ${raw} \u2014 workspace is pinned at launch; quit and relaunch with \`reasonix code --dir <path>\` to work in a different folder`
+        `path escapes sandbox root (${normRoot}): ${raw} \u2014 use an absolute system path like /Users/foo or C:\\Users\\foo to request approved outside-sandbox access`
       );
     }
     return resolved;
   };
+  async function safeLstat(p) {
+    try {
+      return await fs4.lstat(p);
+    } catch {
+      return null;
+    }
+  }
   registry.register({
     name: "read_file",
     parallelSafe: true,
@@ -8179,7 +8725,7 @@ function registerFilesystemTools(registry, opts) {
   - head: N  \u2192 first N lines (imports, public API, small configs)
   - tail: N  \u2192 last N lines (recently-added code, log tails)
   - range: "A-B"  \u2192 inclusive line range A..B, 1-indexed (e.g. "120-180" around an edit site)
-When none of these is given AND the file is longer than ${DEFAULT_AUTO_PREVIEW_LINES} lines, the tool auto-returns a head+tail preview with an "N lines omitted" marker, plus a top-level export outline (function / class / const / interface / type / enum names with line numbers, capped at ${OUTLINE_MAX_ENTRIES}) so you can pick a smart range without a follow-up grep. If you need the middle, re-call with a range. Prefer search_content to locate a symbol first only when the outline doesn't have what you want \u2014 one scoped read beats three full-file reads.`,
+When none of these is given AND the file is longer than ${DEFAULT_AUTO_PREVIEW_LINES} lines, the tool auto-returns a head+tail preview with an "N lines omitted" marker, plus a top-level symbol outline (TS/JS exports, Python def/class, Go func/type, Rust fn/struct/impl/trait, Markdown headings, with line numbers, capped at ${OUTLINE_MAX_ENTRIES2}) so you can pick a smart range without a follow-up grep. If you need the middle, re-call with a range. Prefer search_content to locate a symbol first only when the outline doesn't have what you want \u2014 one scoped read beats three full-file reads.`,
     readOnly: true,
     stormExempt: true,
     parameters: {
@@ -8195,8 +8741,8 @@ When none of these is given AND the file is longer than ${DEFAULT_AUTO_PREVIEW_L
       },
       required: ["path"]
     },
-    fn: async (args) => {
-      const abs = safePath(args.path);
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "read_file", ctx);
       const fh = await fs4.open(abs, "r");
       let raw;
       try {
@@ -8247,7 +8793,7 @@ ${slice.join("\n")}`;
       const head = lines.slice(0, AUTO_PREVIEW_HEAD_LINES).join("\n");
       const tail = lines.slice(totalLines - AUTO_PREVIEW_TAIL_LINES).join("\n");
       const omitted = totalLines - AUTO_PREVIEW_HEAD_LINES - AUTO_PREVIEW_TAIL_LINES;
-      const outline = formatOutline(extractTsExportOutline(lines));
+      const outline = formatOutline(extractOutline(abs, lines));
       const parts = [
         `[auto-preview: head ${AUTO_PREVIEW_HEAD_LINES} + tail ${AUTO_PREVIEW_TAIL_LINES} of ${totalLines} lines]`,
         head
@@ -8274,8 +8820,8 @@ ${slice.join("\n")}`;
         path: { type: "string", description: "Directory to list (default: root)." }
       }
     },
-    fn: async (args) => {
-      const abs = safePath(args.path ?? ".");
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path ?? ".", "list_directory", ctx);
       const entries = await fs4.readdir(abs, { withFileTypes: true });
       const lines = [];
       for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -8307,8 +8853,8 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
         }
       }
     },
-    fn: async (args) => {
-      const startAbs = safePath(args.path ?? ".");
+    fn: async (args, ctx) => {
+      const startAbs = await safePath(args.path ?? ".", "directory_tree", ctx);
       const maxDepth = typeof args.maxDepth === "number" ? args.maxDepth : 2;
       const includeDeps = args.include_deps === true;
       const lines = [];
@@ -8355,7 +8901,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
           lines.push(line);
           emitted++;
           if (e.isDirectory() && !skip) {
-            await walk2(pathMod4.join(dir, e.name), depth + 1);
+            await walk2(pathMod5.join(dir, e.name), depth + 1);
           }
         }
       };
@@ -8385,7 +8931,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
     },
     fn: async (args, toolCtx) => searchFiles(
       { rootDir, maxListBytes, skipDirNames: SKIP_DIR_NAMES },
-      safePath(args.path ?? "."),
+      await safePath(args.path ?? ".", "search_files", toolCtx),
       { ...args, signal: toolCtx?.signal }
     )
   });
@@ -8436,7 +8982,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
         isBinaryByName: isLikelyBinaryByName,
         nameMatch: compileNameFilter(typeof args.glob === "string" ? args.glob : null)
       },
-      safePath(args.path ?? "."),
+      await safePath(args.path ?? ".", "search_content", toolCtx),
       { ...args, signal: toolCtx?.signal }
     )
   });
@@ -8472,10 +9018,11 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["pattern"]
     },
-    fn: async (args, toolCtx) => globFiles({ rootDir, skipDirNames: SKIP_DIR_NAMES }, safePath(args.path ?? "."), {
-      ...args,
-      signal: toolCtx?.signal
-    })
+    fn: async (args, toolCtx) => globFiles(
+      { rootDir, skipDirNames: SKIP_DIR_NAMES },
+      await safePath(args.path ?? ".", "glob", toolCtx),
+      { ...args, signal: toolCtx?.signal }
+    )
   });
   registry.register({
     name: "get_file_info",
@@ -8489,8 +9036,8 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["path"]
     },
-    fn: async (args) => {
-      const abs = safePath(args.path);
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "get_file_info", ctx);
       const st = await fs4.lstat(abs);
       const type = st.isDirectory() ? "directory" : st.isSymbolicLink() ? "symlink" : "file";
       return JSON.stringify({
@@ -8512,9 +9059,9 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["path", "content"]
     },
-    fn: async (args) => {
-      const abs = safePath(args.path);
-      await fs4.mkdir(pathMod4.dirname(abs), { recursive: true });
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "write_file", ctx, "write");
+      await fs4.mkdir(pathMod5.dirname(abs), { recursive: true });
       await fs4.writeFile(abs, args.content, "utf8");
       return `wrote ${args.content.length} chars to ${displayRel4(rootDir, abs)}`;
     }
@@ -8531,7 +9078,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["path", "search", "replace"]
     },
-    fn: async (args) => applyEdit(rootDir, safePath(args.path), args)
+    fn: async (args, ctx) => applyEdit(rootDir, await safePath(args.path, "edit_file", ctx, "write"), args)
   });
   registry.register({
     name: "multi_edit",
@@ -8561,12 +9108,14 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["edits"]
     },
-    fn: async (args) => {
-      const resolved = (args.edits ?? []).map((e) => ({
-        abs: safePath(e?.path),
-        search: e?.search,
-        replace: e?.replace
-      }));
+    fn: async (args, ctx) => {
+      const resolved = await Promise.all(
+        (args.edits ?? []).map(async (e) => ({
+          abs: await safePath(e?.path, "multi_edit", ctx, "write"),
+          search: e?.search,
+          replace: e?.replace
+        }))
+      );
       return applyMultiEdit(rootDir, resolved);
     }
   });
@@ -8578,8 +9127,8 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       properties: { path: { type: "string" } },
       required: ["path"]
     },
-    fn: async (args) => {
-      const abs = safePath(args.path);
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "create_directory", ctx, "write");
       await fs4.mkdir(abs, { recursive: true });
       return `created ${displayRel4(rootDir, abs)}/`;
     }
@@ -8595,10 +9144,10 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["source", "destination"]
     },
-    fn: async (args) => {
-      const src = safePath(args.source);
-      const dst = safePath(args.destination);
-      await fs4.mkdir(pathMod4.dirname(dst), { recursive: true });
+    fn: async (args, ctx) => {
+      const src = await safePath(args.source, "move_file", ctx, "write");
+      const dst = await safePath(args.destination, "move_file", ctx, "write");
+      await fs4.mkdir(pathMod5.dirname(dst), { recursive: true });
       await fs4.rename(src, dst);
       return `moved ${displayRel4(rootDir, src)} \u2192 ${displayRel4(rootDir, dst)}`;
     }
@@ -8611,8 +9160,8 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       properties: { path: { type: "string" } },
       required: ["path"]
     },
-    fn: async (args) => {
-      const abs = safePath(args.path);
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "delete_file", ctx, "write");
       const st = await fs4.lstat(abs);
       if (st.isDirectory()) {
         throw new Error(
@@ -8637,8 +9186,8 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["path"]
     },
-    fn: async (args) => {
-      const abs = safePath(args.path);
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "delete_directory", ctx, "write");
       const st = await fs4.lstat(abs);
       if (!st.isDirectory()) {
         throw new Error(`delete_directory: ${args.path} is a file \u2014 use delete_file to remove it`);
@@ -8663,10 +9212,10 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       },
       required: ["source", "destination"]
     },
-    fn: async (args) => {
-      const src = safePath(args.source);
-      const dst = safePath(args.destination);
-      await fs4.mkdir(pathMod4.dirname(dst), { recursive: true });
+    fn: async (args, ctx) => {
+      const src = await safePath(args.source, "copy_file", ctx);
+      const dst = await safePath(args.destination, "copy_file", ctx, "write");
+      await fs4.mkdir(pathMod5.dirname(dst), { recursive: true });
       await fs4.cp(src, dst, { recursive: true, force: false, errorOnExist: true });
       return `copied ${displayRel4(rootDir, src)} \u2192 ${displayRel4(rootDir, dst)}`;
     }
@@ -8678,6 +9227,16 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
 function registerMemoryTools(registry, opts = {}) {
   const store = new MemoryStore({ homeDir: opts.homeDir, projectRoot: opts.projectRoot });
   const hasProject = store.hasProjectScope();
+  const registry_types = loadMemoryTypeRegistry();
+  const customTypeNames = registry_types.filter((r) => !r.builtin).map((r) => r.name);
+  const typeDescParts = [
+    "'user' = role/skills/prefs; 'feedback' = corrections or confirmed approaches; 'project' = facts/decisions about the current work; 'reference' = pointers to external systems the user uses."
+  ];
+  if (customTypeNames.length > 0) {
+    typeDescParts.push(
+      `Custom types declared in config: ${customTypeNames.join(", ")}. Any string is accepted; unknown types are stored verbatim and treated as 'reference' priority.`
+    );
+  }
   registry.register({
     name: "remember",
     description: "Save a memory for future sessions. Use when the user states a preference, corrects your approach, shares a non-obvious fact about this project, or explicitly asks you to remember something. Don't remember transient task state \u2014 only things worth recalling next session. The memory is written now but won't re-load into the system prompt until the next `/new` or launch.",
@@ -8686,8 +9245,7 @@ function registerMemoryTools(registry, opts = {}) {
       properties: {
         type: {
           type: "string",
-          enum: ["user", "feedback", "project", "reference"],
-          description: "'user' = role/skills/prefs; 'feedback' = corrections or confirmed approaches; 'project' = facts/decisions about the current work; 'reference' = pointers to external systems the user uses."
+          description: typeDescParts.join(" ")
         },
         scope: {
           type: "string",
@@ -8705,6 +9263,16 @@ function registerMemoryTools(registry, opts = {}) {
         content: {
           type: "string",
           description: "Full memory body in markdown. For feedback/project types, structure as: rule/fact, then **Why:** line, then **How to apply:** line."
+        },
+        priority: {
+          type: "string",
+          enum: ["low", "medium", "high"],
+          description: "Optional per-memory priority. `high` injects the entry into a `# HIGH PRIORITY constraints` block at the top of the system prompt \u2014 use sparingly, only for hard rules the model must never violate."
+        },
+        expires: {
+          type: "string",
+          enum: ["project_end"],
+          description: "Optional lifecycle hint. `project_end` causes `/memory clear project` to also remove this entry even when it's stored at global scope."
         }
       },
       required: ["type", "scope", "name", "description", "content"]
@@ -8721,7 +9289,9 @@ function registerMemoryTools(registry, opts = {}) {
           type: args.type,
           scope: args.scope,
           description: args.description,
-          body: args.content
+          body: args.content,
+          ...args.priority ? { priority: args.priority } : {},
+          ...args.expires ? { expires: args.expires } : {}
         });
         const key = sanitizeMemoryName(args.name);
         return [
@@ -9664,11 +10234,11 @@ function forkRegistryWithAllowList(parent, allow, alsoExclude) {
 }
 
 // src/tools/shell.ts
-import * as pathMod8 from "path";
+import * as pathMod9 from "path";
 
 // src/tools/jobs.ts
 import { spawn as spawn2 } from "child_process";
-import * as pathMod5 from "path";
+import * as pathMod6 from "path";
 function killProcessTree(pid, signal) {
   if (process.platform === "win32") {
     const args = ["/pid", String(pid), "/T"];
@@ -9728,7 +10298,7 @@ var JobRegistry = class {
     const maxBytes = opts.maxBufferBytes ?? DEFAULT_OUTPUT_CAP_BYTES;
     const { bin, args, spawnOverrides } = prepareSpawn(argv);
     const spawnOpts = {
-      cwd: pathMod5.resolve(opts.cwd),
+      cwd: pathMod6.resolve(opts.cwd),
       shell: false,
       windowsHide: true,
       env: process.env,
@@ -9841,12 +10411,15 @@ ${job.output.slice(start)}`;
       job.signalReady();
       job.signalClosed();
     });
-    child.on("close", (code) => {
+    const settleClosed = (code) => {
+      if (!job.running && job.exitCode !== null) return;
       job.running = false;
       job.exitCode = code;
       job.signalReady();
       job.signalClosed();
-    });
+    };
+    child.on("exit", settleClosed);
+    child.on("close", settleClosed);
     const onAbort = () => this.stop(id, { graceMs: 100 });
     if (opts.signal?.aborted) {
       onAbort();
@@ -9903,21 +10476,26 @@ ${job.output.slice(start)}`;
         latestOutput: job.output
       };
     }
-    const timeoutMs = Math.max(0, Math.min(3e4, opts.timeoutMs ?? 5e3));
+    const timeoutMs = Math.max(0, Math.min(3e5, opts.timeoutMs ?? 5e3));
+    const waitFor = opts.waitFor ?? "exit";
     const startOutput = job.output;
+    const racers = [job.closedPromise];
     let wakeOutput = null;
-    const outputPromise = new Promise((resolve10) => {
-      wakeOutput = resolve10;
-      job.outputWaiters.add(resolve10);
-    });
+    if (waitFor === "output-or-exit") {
+      racers.push(
+        new Promise((resolve10) => {
+          wakeOutput = resolve10;
+          job.outputWaiters.add(resolve10);
+        })
+      );
+    }
     let timer = null;
-    await Promise.race([
-      job.closedPromise,
-      outputPromise,
+    racers.push(
       new Promise((resolve10) => {
         timer = setTimeout(resolve10, timeoutMs);
       })
-    ]);
+    );
+    await Promise.race(racers);
     if (timer) clearTimeout(timer);
     if (wakeOutput) job.outputWaiters.delete(wakeOutput);
     return {
@@ -9951,6 +10529,10 @@ ${job.output.slice(start)}`;
         }
       }
       await Promise.race([job.closedPromise, new Promise((res) => setTimeout(res, 5e3))]);
+      if (job.running) {
+        job.running = false;
+        job.signalClosed();
+      }
     }
     return snapshot(job);
   }
@@ -9984,6 +10566,12 @@ ${job.output.slice(start)}`;
     }
     const remaining = Math.max(800, deadlineMs - elapsed());
     await Promise.race([allClose, new Promise((res) => setTimeout(res, remaining))]);
+    for (const job of runningJobs) {
+      if (job.running) {
+        job.running = false;
+        job.signalClosed();
+      }
+    }
   }
   /** Count of still-running jobs — drives the TUI status-bar indicator. */
   runningCount() {
@@ -10014,12 +10602,12 @@ function latestOutputSince(before, after) {
 // src/tools/shell/exec.ts
 import { spawn as spawn4, spawnSync } from "child_process";
 import { existsSync as existsSync8, statSync as statSync5 } from "fs";
-import * as pathMod7 from "path";
+import * as pathMod8 from "path";
 
 // src/tools/shell-chain.ts
 import { spawn as spawn3 } from "child_process";
 import { closeSync, openSync } from "fs";
-import * as pathMod6 from "path";
+import * as pathMod7 from "path";
 var UnsupportedSyntaxError = class extends Error {
   constructor(detail) {
     super(`run_command: ${detail}`);
@@ -10286,7 +10874,7 @@ function openRedirects(redirects, cwd) {
   let bothFd = null;
   const toClose = [];
   const open = (target, flags) => {
-    const resolved = pathMod6.resolve(cwd, target);
+    const resolved = pathMod7.resolve(cwd, target);
     const fd = openSync(resolved, flags);
     toClose.push(fd);
     return fd;
@@ -10783,16 +11371,16 @@ function resolveExecutable(cmd, opts = {}) {
   const platform = opts.platform ?? process.platform;
   if (platform !== "win32") return cmd;
   if (!cmd) return cmd;
-  if (cmd.includes("/") || cmd.includes("\\") || pathMod7.isAbsolute(cmd)) return cmd;
-  if (pathMod7.extname(cmd)) return cmd;
+  if (cmd.includes("/") || cmd.includes("\\") || pathMod8.isAbsolute(cmd)) return cmd;
+  if (pathMod8.extname(cmd)) return cmd;
   const env = opts.env ?? process.env;
   const pathExt = (getEnvCaseInsensitive(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").split(";").map((e) => e.trim()).filter(Boolean);
-  const delimiter2 = opts.pathDelimiter ?? (platform === "win32" ? ";" : pathMod7.delimiter);
+  const delimiter2 = opts.pathDelimiter ?? (platform === "win32" ? ";" : pathMod8.delimiter);
   const pathDirs = (getEnvCaseInsensitive(env, "PATH") ?? "").split(delimiter2).filter(Boolean);
   const isFile = opts.isFile ?? defaultIsFile;
   for (const dir of pathDirs) {
     for (const ext of pathExt) {
-      const full = pathMod7.win32.join(dir, cmd + ext);
+      const full = pathMod8.win32.join(dir, cmd + ext);
       if (isFile(full)) return full;
     }
   }
@@ -10908,8 +11496,8 @@ function withUtf8Codepage(cmdline) {
 function isBareWindowsName(s) {
   if (!s) return false;
   if (s.includes("/") || s.includes("\\")) return false;
-  if (pathMod7.isAbsolute(s)) return false;
-  if (pathMod7.extname(s)) return false;
+  if (pathMod8.isAbsolute(s)) return false;
+  if (pathMod8.extname(s)) return false;
   return true;
 }
 function quoteForCmdExe(arg) {
@@ -10930,7 +11518,7 @@ var NeedsConfirmationError = class extends Error {
   }
 };
 function registerShellTools(registry, opts) {
-  const rootDir = pathMod8.resolve(opts.rootDir);
+  const rootDir = pathMod9.resolve(opts.rootDir);
   const timeoutSec = opts.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
   const maxOutputChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
   const jobs = opts.jobs ?? new JobRegistry();
@@ -10969,9 +11557,13 @@ function registerShellTools(registry, opts) {
     fn: async (args, ctx) => {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_command: empty command");
+      const effectiveTimeout = Math.max(1, Math.min(600, args.timeoutSec ?? timeoutSec));
       if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed())) {
         const gate = ctx?.confirmationGate ?? pauseGate;
-        const choice = await gate.ask({ kind: "run_command", payload: { command: cmd } });
+        const choice = await gate.ask({
+          kind: "run_command",
+          payload: { command: cmd, cwd: rootDir, timeoutSec: effectiveTimeout }
+        });
         if (choice.type === "deny") {
           throw new Error(
             `user denied: ${cmd}${choice.denyContext ? ` \u2014 ${choice.denyContext}` : ""}`
@@ -10981,7 +11573,6 @@ function registerShellTools(registry, opts) {
           addProjectShellAllowed(rootDir, choice.prefix);
         }
       }
-      const effectiveTimeout = Math.max(1, Math.min(600, args.timeoutSec ?? timeoutSec));
       const result = await runCommand(cmd, {
         cwd: rootDir,
         timeoutSec: effectiveTimeout,
@@ -10993,7 +11584,7 @@ function registerShellTools(registry, opts) {
   });
   registry.register({
     name: "run_background",
-    description: "Spawn a long-running process (dev server, watcher) and detach. Waits up to `waitSec` for startup or a readiness signal ('Local:', 'listening on', 'compiled successfully'), then returns the job id + startup preview. Tail logs with `job_output`, kill with `stop_job`, list with `list_jobs`.\n\nSingle process only \u2014 chains / redirects / `cd` work as in run_command, but a typical dev-server invocation is one binary. Use the binary's own --cwd / --prefix flag for subdirectories. Vite gotcha: npm's `--prefix` only finds package.json; vite's server root still uses process cwd \u2014 pass `vite <project-dir>` instead.\n\nUSE THIS \u2014 not run_command \u2014 for: npm/yarn/pnpm dev, uvicorn / flask run, cargo watch, tsc --watch, webpack serve, anything with dev/serve/watch in the name.",
+    description: "Spawn a long-running process and detach. Waits up to `waitSec` for startup or a readiness signal ('Local:', 'listening on', 'compiled successfully'), then returns the job id + startup preview. Tail logs with `job_output`, block on completion with `wait_for_job`, kill with `stop_job`, list with `list_jobs`.\n\nSingle process only \u2014 chains / redirects / `cd` work as in run_command, but a typical invocation is one binary. Use the binary's own --cwd / --prefix flag for subdirectories. Vite gotcha: npm's `--prefix` only finds package.json; vite's server root still uses process cwd \u2014 pass `vite <project-dir>` instead.\n\nUSE THIS \u2014 not run_command \u2014 for:\n- Dev servers / watchers: npm/yarn/pnpm dev, uvicorn / flask run, cargo watch, tsc --watch, webpack serve, anything with dev/serve/watch in the name.\n- One-shot long jobs: curl / wget large downloads, `huggingface-cli download`, multi-GB `pip install` / `npm install`, big `cargo build` / `docker build`. Start with `run_background`, then call `wait_for_job` once (default `waitFor: 'exit'`, timeoutMs up to 300_000) \u2014 the harness blocks server-side so a 5-minute download costs ONE tool call, not 30 polls.",
     parameters: {
       type: "object",
       properties: {
@@ -11013,7 +11604,10 @@ function registerShellTools(registry, opts) {
       if (!cmd) throw new Error("run_background: empty command");
       if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed())) {
         const gate = ctx?.confirmationGate ?? pauseGate;
-        const choice = await gate.ask({ kind: "run_background", payload: { command: cmd } });
+        const choice = await gate.ask({
+          kind: "run_background",
+          payload: { command: cmd, cwd: rootDir, waitSec: args.waitSec }
+        });
         if (choice.type === "deny") {
           throw new Error(
             `user denied: ${cmd}${choice.denyContext ? ` \u2014 ${choice.denyContext}` : ""}`
@@ -11063,7 +11657,7 @@ function registerShellTools(registry, opts) {
   });
   registry.register({
     name: "wait_for_job",
-    description: "Block until a background job exits or produces new output, bounded by `timeoutMs`. Use this instead of polling `job_output` with identical args when you're intentionally waiting for state to change. Returns JSON with `exited`, `exitCode`, and `latestOutput`.",
+    description: "Block server-side until a background job finishes (or, opt-in, until it produces new output), bounded by `timeoutMs`. Costs ONE tool call regardless of how long the wait runs \u2014 use this instead of polling `job_output` in a loop. Returns JSON with `exited`, `exitCode`, and `latestOutput`.\n\n`waitFor` controls the wake condition:\n- `'exit'` (default) \u2014 only wake on the job exiting (or the timeout). Right for downloads, installs, builds, anything one-shot. Chatty progress bars do NOT wake the wait.\n- `'output-or-exit'` \u2014 also wake whenever the job writes a new line. Right for tailing a dev server / watcher and reacting to a specific log line.\n\nFor a download or install, set `timeoutMs` to the slowest reasonable end-to-end (e.g. 300_000 for a 5-min wheel install).",
     readOnly: true,
     parallelSafe: true,
     stormExempt: true,
@@ -11073,13 +11667,21 @@ function registerShellTools(registry, opts) {
         jobId: { type: "integer", description: "Job id returned by run_background." },
         timeoutMs: {
           type: "integer",
-          description: "Max time to block before returning if nothing changes. Clamped to 0..30000. Default 5000."
+          description: "Max time to block before returning if the wake condition hasn't fired. Clamped to 0..300000. Default 5000."
+        },
+        waitFor: {
+          type: "string",
+          enum: ["exit", "output-or-exit"],
+          description: "Wake condition. 'exit' = only on job exit (right for downloads / installs / builds). 'output-or-exit' = also on any new output (right for tailing a dev server). Default 'exit'."
         }
       },
       required: ["jobId"]
     },
     fn: async (args) => {
-      const out = await jobs.waitForJob(args.jobId, { timeoutMs: args.timeoutMs });
+      const out = await jobs.waitForJob(args.jobId, {
+        timeoutMs: args.timeoutMs,
+        waitFor: args.waitFor
+      });
       if (!out) return `job ${args.jobId}: not found (use list_jobs)`;
       return {
         jobId: args.jobId,
@@ -11171,11 +11773,13 @@ var MOJEEK_ENDPOINT = "https://www.mojeek.com/search";
 function searchStatusError(status) {
   if (status === 429) return t("webErrors.rateLimit429");
   if (status === 403) return t("webErrors.forbidden403");
+  if (status >= 500 && status <= 599) return t("webErrors.serverError5xx", { status });
   return t("webErrors.status", { status });
 }
 function fetchStatusError(status, url) {
   if (status === 429) return t("webErrors.fetchRateLimit429", { url });
   if (status === 403) return t("webErrors.fetchForbidden403", { url });
+  if (status >= 500 && status <= 599) return t("webErrors.fetchServerError5xx", { status, url });
   return t("webErrors.fetchStatus", { status, url });
 }
 async function webSearch(query, opts = {}) {
@@ -12282,8 +12886,12 @@ var McpClient = class {
       }
     });
     promise.catch(() => void 0);
+    const promiseSettled = promise.then(
+      () => void 0,
+      () => void 0
+    );
     try {
-      await Promise.race([this.transport.send(frame), promise.then(() => void 0)]);
+      await Promise.race([this.transport.send(frame), promiseSettled]);
     } catch (err) {
       const pending = this.pending.get(id);
       if (pending) clearTimeout(pending.timeout);
@@ -12432,6 +13040,10 @@ var StdioTransport = class {
         const msg = JSON.parse(line);
         this.push(msg);
       } catch {
+        if (process.env.REASONIX_DEBUG_MCP === "1") {
+          process.stderr.write(`[mcp-stdio] dropped malformed line: ${line}
+`);
+        }
       }
     }
   }
@@ -13208,7 +13820,7 @@ Before exploring the filesystem to answer a factual question, check whether the 
 
 Two different rules depending on which tool:
 
-- **Filesystem tools** (\`read_file\`, \`list_directory\`, \`search_files\`, \`edit_file\`, etc.): paths are sandbox-relative. \`/\` means the project root, \`/src/foo.ts\` means \`<project>/src/foo.ts\`. Both relative (\`src/foo.ts\`) and POSIX-absolute (\`/src/foo.ts\`) forms work.
+- **Filesystem tools** (\`read_file\`, \`list_directory\`, \`search_files\`, \`edit_file\`, etc.): paths resolve against the sandbox root. Relative (\`src/foo.ts\`), POSIX-absolute (\`/src/foo.ts\`, where \`/\` means the project root), and OS-absolute including Windows drive-letter (\`D:\\\\path\\\\foo.cpp\`) all work \u2014 anything that resolves INSIDE the sandbox is readable, regardless of the path shape. When the user pastes a path, your default move is to call \`read_file\` on it as-is. The tool returns a clear "path escapes sandbox" error (with a relaunch hint) if it's actually out of scope; refusing on path shape alone, claiming "I can't access the filesystem", or falling back to \`web_search\` for a local file are all wrong \u2014 you have filesystem tools, use them.
 - **\`run_command\`**: the command runs in a real OS shell with cwd pinned to the project root. Paths inside the shell command are interpreted by THAT shell, not by us. **Never use leading \`/\` in run_command arguments** \u2014 Windows treats \`/tests\` as drive-root \`F:\\tests\` (non-existent), POSIX shells treat it as filesystem root. Use plain relative paths (\`tests\`, \`./tests\`, \`src/loop.ts\`) instead.
 
 # When the user wants to switch project / working directory
@@ -13222,13 +13834,15 @@ Do NOT try to switch via \`run_command\` (\`cd\`, \`pushd\`, etc.) \u2014 your t
 You have TWO tools for running shell commands, and picking the right one is non-negotiable:
 
 - \`run_command\` \u2014 blocks until the process exits. Use for: **tests, builds, lints, typechecks, git operations, one-shot scripts**. Anything that naturally returns in under a minute.
-- \`run_background\` \u2014 spawns and detaches after a brief startup window. Use for: **dev servers, watchers, any command with "dev" / "serve" / "watch" / "start" in the name**. Examples: \`npm run dev\`, \`pnpm dev\`, \`yarn start\`, \`vite\`, \`next dev\`, \`uvicorn app:app --reload\`, \`flask run\`, \`python -m http.server\`, \`cargo watch\`, \`tsc --watch\`, \`webpack serve\`.
+- \`run_background\` \u2014 spawns and detaches after a brief startup window. Use for:
+  - **Dev servers / watchers / anything with "dev" / "serve" / "watch" / "start" in the name.** Examples: \`npm run dev\`, \`pnpm dev\`, \`yarn start\`, \`vite\`, \`next dev\`, \`uvicorn app:app --reload\`, \`flask run\`, \`python -m http.server\`, \`cargo watch\`, \`tsc --watch\`, \`webpack serve\`.
+  - **One-shot long jobs that would blow run_command's 60s ceiling.** Examples: \`curl -L -O <big-url>\`, \`wget\`, \`huggingface-cli download\`, multi-GB \`pip install\` / \`npm install\`, big \`cargo build\` / \`docker build\`. Start with \`run_background\`, then call \`wait_for_job\` ONCE with a long \`timeoutMs\` \u2014 that costs one tool call total, not one per poll.
 
-**Never use run_command for a dev server.** It will block for 60s, time out, and the user will see a frozen tool call while the server was actually running fine. Always \`run_background\`, then \`job_output\` to peek at the logs when you need to verify something.
+**Never use run_command for a dev server or a download likely to exceed a minute.** It will block, time out, and the user will see a frozen tool call while the work was actually running fine. Always \`run_background\` + \`wait_for_job\` / \`job_output\`.
 
 After \`run_background\`, tools available to you:
 - \`job_output(jobId, tailLines?)\` \u2014 read recent logs to verify startup / debug errors.
-- \`wait_for_job(jobId, timeoutMs?)\` \u2014 block until the job exits or emits new output. Prefer this over repeating identical \`job_output\` calls while you're intentionally waiting.
+- \`wait_for_job(jobId, timeoutMs?, waitFor?)\` \u2014 block server-side until the job finishes (or, with \`waitFor: 'output-or-exit'\`, until it writes a new line). ONE tool call per wait regardless of duration. \`timeoutMs\` clamps at 300_000. For downloads / installs / builds: leave \`waitFor\` at the default \`'exit'\` and set \`timeoutMs\` to the slowest reasonable end-to-end. For tailing a dev server and reacting to a specific log line: pass \`waitFor: 'output-or-exit'\` with a short \`timeoutMs\`.
 - \`list_jobs\` \u2014 see every job this session (running + exited).
 - \`stop_job(jobId)\` \u2014 SIGTERM \u2192 SIGKILL after grace. Stop before switching port / config.
 

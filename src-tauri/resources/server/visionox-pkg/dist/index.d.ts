@@ -227,6 +227,7 @@ type ToolConfirmationAuditEvent = {
 interface PauseResponseMap {
     run_command: ConfirmationChoice;
     run_background: ConfirmationChoice;
+    path_access: ConfirmationChoice;
     plan_proposed: PlanVerdict;
     plan_checkpoint: CheckpointVerdict;
     plan_revision: RevisionVerdict;
@@ -236,9 +237,25 @@ type PauseKind = keyof PauseResponseMap;
 interface PausePayloadMap {
     run_command: {
         command: string;
+        cwd?: string;
+        timeoutSec?: number;
     };
     run_background: {
         command: string;
+        cwd?: string;
+        waitSec?: number;
+    };
+    path_access: {
+        /** Absolute path the tool wants to touch. */
+        path: string;
+        /** Why we're being asked — read leaks content, write mutates files. */
+        intent: "read" | "write";
+        /** The filesystem tool calling in — surfaced so users can see what's about to happen. */
+        toolName: string;
+        /** Sandbox root the path is escaping — surfaced for context. */
+        sandboxRoot: string;
+        /** Directory prefix that would be persisted if the user picks "always allow". */
+        allowPrefix: string;
     };
     plan_proposed: {
         plan: string;
@@ -286,6 +303,8 @@ declare class PauseGate {
     resolve(id: number, data: unknown): void;
     /** Safe-cancel every outstanding request — frees stranded tool fns on Esc / /new. */
     cancelAll(): void;
+    /** Cancel one pending request — used by multi-tab hosts that need per-scope abort. */
+    cancel(id: number): boolean;
     setAuditListener(fn: AuditListener | null): void;
     /** Subscribe to new pause requests. Returns an unsubscribe function. */
     on(fn: GateListener): () => void;
@@ -617,13 +636,16 @@ interface ImmutablePrefixOptions {
     fewShots?: readonly ChatMessage[];
 }
 declare class ImmutablePrefix {
-    readonly system: string;
+    /** Stable across turns; rebuilt only on /new when REASONIX.md changed on disk. */
+    system: string;
     /** Each `addTool` costs one cache-miss turn — DeepSeek's prefix cache is keyed by full tool list. */
     private _toolSpecs;
     readonly fewShots: readonly ChatMessage[];
-    /** Invalidated only via `addTool`; bypassing it leaves cache stale → fingerprint diverges from sent prefix. */
+    /** Invalidated by addTool / removeTool / replaceSystem; bypassing any of those leaves cache stale → fingerprint diverges from sent prefix. */
     private _fingerprintCache;
     constructor(opts: ImmutablePrefixOptions);
+    /** Replaces the system prompt; returns true iff the string actually changed. Caller must accept a cache miss on the next turn. */
+    replaceSystem(s: string): boolean;
     get toolSpecs(): readonly ToolSpec[];
     toMessages(): ChatMessage[];
     tools(): ToolSpec[];
@@ -738,6 +760,8 @@ interface CacheFirstLoopOptions {
     autoEscalate?: boolean;
     /** Soft USD cap — warns at 80%, refuses next turn at 100%. Opt-in (default no cap). */
     budgetUsd?: number;
+    /** Per-turn repair/error signal count required to escalate flash→pro. Defaults to FAILURE_ESCALATION_THRESHOLD. Out-of-range values warn + fall back. */
+    failureThreshold?: number;
     session?: string;
     /** PreToolUse + PostToolUse only — UserPromptSubmit / Stop live at the App boundary. */
     hooks?: ResolvedHook[];
@@ -745,6 +769,8 @@ interface CacheFirstLoopOptions {
     hookCwd?: string;
     /** PauseGate bridge — defaults to singleton, injectable for tests. */
     confirmationGate?: PauseGate;
+    /** Re-runs the prompt builder (applyMemoryStack / codeSystemPrompt) on /new so REASONIX.md edits take effect without a restart. Accepting a cache miss is the price. */
+    rebuildSystem?: () => string;
 }
 interface ReconfigurableOptions {
     model?: string;
@@ -777,6 +803,7 @@ declare class CacheFirstLoop {
     readonly confirmationGate: PauseGate;
     /** Number of messages that were pre-loaded from the session file. */
     readonly resumedMessageCount: number;
+    private readonly _rebuildSystem;
     private _turn;
     private _streamPreference;
     /** Threaded through HTTP + every tool dispatch so Esc cancels in-flight work, not after. */
@@ -786,6 +813,7 @@ declare class CacheFirstLoop {
     private _proArmedForNextTurn;
     private _escalateThisTurn;
     private readonly _turnFailures;
+    private readonly _readOnlyLoop;
     private _turnSelfCorrected;
     private _foldedThisTurn;
     private _toolDispatchesThisStep;
@@ -806,10 +834,11 @@ declare class CacheFirstLoop {
     appendAndPersist(message: ChatMessage): void;
     /** Swap the just-appended assistant entry — used by self-correction to restore the original tool_calls without dropping reasoning_content. */
     private replaceTailAssistantMessage;
-    /** "New chat" — drops in-memory messages, archives the on-disk transcript so it survives in Sessions, keeps sessionName so the prefix cache stays warm. */
+    /** "New chat" — drops in-memory messages, archives the on-disk transcript so it survives in Sessions, keeps sessionName so the prefix cache stays warm. Re-runs the system-prompt builder if one was wired (issue #778: REASONIX.md edits otherwise need a restart). */
     clearLog(): {
         dropped: number;
         archived: string | null;
+        systemRebuilt: boolean;
     };
     configure(opts: ReconfigurableOptions): void;
     /** `null` disables the cap; any change re-arms the 80% warning. */
@@ -827,6 +856,10 @@ declare class CacheFirstLoop {
     private modelForCurrentCall;
     /** Returns true ONLY on the tipping call — caller surfaces a one-shot warning. */
     private noteToolFailureSignal;
+    /** Returns true ONLY on the call where the read-only streak crosses the threshold (#681). */
+    private noteReadOnlyToolCall;
+    /** A call counts as mutating when its definition reports `readOnly !== true` and any dynamic `readOnlyCheck` doesn't override that for these args. */
+    private isMutating;
     private runOneToolCall;
     /** Stable per-call id used as the inflight key AND threaded into tool_start / tool events so the UI matches them up. */
     private inflightIdFor;
@@ -907,7 +940,7 @@ interface ParsedAtQuery {
 }
 /** Split `src/auth/log` → `{dir: "src/auth", filter: "log"}`; trailing slash sets `trailingSlash` and clears filter. */
 declare function parseAtQuery(query: string): ParsedAtQuery;
-/** Trailing-token only, anchored at end-of-input — distinct from `AT_MENTION_PATTERN` which scans all. */
+/** Trailing-token only, anchored at end-of-input — distinct from `AT_MENTION_PATTERN` which scans all. `\p{L}\p{N}` for CJK and other non-ASCII filenames. */
 declare const AT_PICKER_PREFIX: RegExp;
 declare function detectAtPicker(input: string): {
     query: string;
@@ -991,13 +1024,136 @@ declare function memoryEnabled(): boolean;
 /** Deterministic — same memory file always yields the same prefix hash. */
 declare function applyProjectMemory(basePrompt: string, rootDir: string): string;
 
+type ThemeName = "default" | "dark" | "light" | "tokyo-night" | "github-dark" | "github-light" | "high-contrast";
+
+type LanguageCode = "EN" | "zh-CN";
+
+/** Shared exclude defaults + resolver — chunker, directory_tree, and dashboard read from here. */
+interface IndexUserConfig {
+    excludeDirs?: string[];
+    excludeFiles?: string[];
+    excludeExts?: string[];
+    excludePatterns?: string[];
+    respectGitignore?: boolean;
+    maxFileBytes?: number;
+}
+
+/** Library reads only DEEPSEEK_API_KEY from env; the CLI bridges config.json → env var. */
+
+/** Legacy `fast|smart|max` kept for back-compat with existing config.json files. */
+type PresetName = "auto" | "flash" | "pro" | "fast" | "smart" | "max";
+/** Single trust dial: review queues edits + gates shell; auto applies + gates shell; yolo skips both gates. */
+type EditMode = "review" | "auto" | "yolo";
+type ReasoningEffort = "high" | "max";
+type EmbeddingProvider = "ollama" | "openai-compat";
+interface OllamaEmbeddingUserConfig {
+    baseUrl?: string;
+    model?: string;
+}
+interface OpenAICompatEmbeddingUserConfig {
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+    extraBody?: Record<string, unknown>;
+}
+interface SemanticEmbeddingUserConfig {
+    provider?: EmbeddingProvider;
+    ollama?: OllamaEmbeddingUserConfig;
+    openaiCompat?: OpenAICompatEmbeddingUserConfig;
+}
+interface ReasonixConfig {
+    apiKey?: string;
+    baseUrl?: string;
+    lang?: LanguageCode;
+    preset?: PresetName;
+    editMode?: EditMode;
+    editModeHintShown?: boolean;
+    mouseClipboardHintShown?: boolean;
+    reasoningEffort?: ReasoningEffort;
+    /** Default workspace root for the desktop client. CLI uses cwd. */
+    workspaceDir?: string;
+    /** Last N workspace paths the desktop client has opened, most recent first. */
+    recentWorkspaces?: string[];
+    /** Desktop only — `openWith` value for clicking file links. Empty/undefined = OS default app. Examples: "code", "cursor", "C:\\path\\to\\editor.exe". */
+    editor?: string;
+    theme?: ThemeName | "auto";
+    /** Stored as `--mcp`-format strings so one parser handles both flag and config. */
+    mcp?: string[];
+    /** Names of servers in `mcp` to skip on bridge — see `/mcp disable <name>`. */
+    mcpDisabled?: string[];
+    /** Env overlay per MCP server name (matches the `name=` prefix of the spec). Stdio transports merge this over process.env; SSE/HTTP ignore it. */
+    mcpEnv?: Record<string, Record<string, string>>;
+    session?: string | null;
+    setupCompleted?: boolean;
+    search?: boolean;
+    /** Web search engine backend: "mojeek" (default, scrapes Mojeek) or "searxng" (self-hosted SearXNG). */
+    webSearchEngine?: "mojeek" | "searxng";
+    /** Base URL for SearXNG instance (default http://localhost:8080). */
+    webSearchEndpoint?: string;
+    dashboard?: {
+        /** Pin the embedded dashboard to a fixed port — required for stable SSH tunnels. 0/absent → ephemeral. */
+        port?: number;
+    };
+    escalation?: {
+        /** Per-turn repair/error signal count required to escalate flash→pro. Defaults to 3. Out-of-range → default. */
+        failureThreshold?: number;
+    };
+    /** Per-field visibility toggles for the bottom status row. All default to true (visible). */
+    statusBar?: {
+        showBalance?: boolean;
+        showSessionCost?: boolean;
+        showTurnCost?: boolean;
+        showCacheHit?: boolean;
+        showVersion?: boolean;
+        showFeedbackHint?: boolean;
+    };
+    projects?: {
+        [absoluteRootDir: string]: {
+            shellAllowed?: string[];
+            /** Absolute directory prefixes the user pre-approved for outside-sandbox file access (#684). */
+            pathAllowed?: string[];
+        };
+    };
+    index?: IndexUserConfig;
+    semantic?: SemanticEmbeddingUserConfig;
+    /** User-declared extensions to the built-in memory types (#709). Unknown types round-trip even without a declaration; declaring one lets you attach a default priority + lifecycle. */
+    memory?: {
+        customTypes?: CustomMemoryTypeConfig[];
+    };
+}
+interface CustomMemoryTypeConfig {
+    name: string;
+    description?: string;
+    priority?: "low" | "medium" | "high";
+    expires?: "project_end";
+}
+declare function defaultConfigPath(): string;
+declare function readConfig(path?: string): ReasonixConfig;
+declare function writeConfig(cfg: ReasonixConfig, path?: string): void;
+/** Resolve the API key from env var first, then the config file. */
+declare function loadApiKey(path?: string): string | undefined;
+/** env > config > undefined. Client falls back to api.deepseek.com when undefined. */
+declare function loadBaseUrl(path?: string): string | undefined;
+declare function saveBaseUrl(url: string, path?: string): void;
+declare function saveApiKey(key: string, path?: string): void;
+/** Self-hosted DeepSeek-compatible endpoints may issue any token shape, so we only typo-guard here — the real auth check is the first API call against `baseUrl`. */
+declare function isPlausibleKey(key: string): boolean;
+/** Mask a key for display: `sk-abcd...wxyz`. */
+declare function redactKey(key: string): string;
+
 /** User-private memory pinned into the immutable prefix; distinct from committable REASONIX.md. */
+
 declare const USER_MEMORY_DIR = "memory";
 declare const MEMORY_INDEX_FILE = "MEMORY.md";
 /** Cap on the index file content loaded into the prefix, per scope. */
 declare const MEMORY_INDEX_MAX_CHARS = 4000;
-type MemoryType = "user" | "feedback" | "project" | "reference";
+declare const BUILTIN_MEMORY_TYPES: readonly ["user", "feedback", "project", "reference"];
+type BuiltinMemoryType = (typeof BUILTIN_MEMORY_TYPES)[number];
+/** Built-ins plus any string declared in `config.memory.customTypes`. Unknown values are accepted (round-tripped verbatim). */
+type MemoryType = BuiltinMemoryType | (string & {});
 type MemoryScope = "global" | "project";
+type MemoryPriority = "low" | "medium" | "high";
+type MemoryExpires = "project_end";
 interface MemoryEntry {
     name: string;
     type: MemoryType;
@@ -1006,6 +1162,10 @@ interface MemoryEntry {
     body: string;
     /** ISO date string (YYYY-MM-DD). */
     createdAt: string;
+    /** Explicit per-entry priority; absent → resolve from config default for `type`, else "medium". */
+    priority?: MemoryPriority;
+    /** Lifecycle hint. `project_end` → cleared by `/memory clear project`. */
+    expires?: MemoryExpires;
 }
 interface MemoryStoreOptions {
     /** Override `~/.reasonix` — tests set this to a tmpdir. */
@@ -1019,6 +1179,8 @@ interface WriteInput {
     scope: MemoryScope;
     description: string;
     body: string;
+    priority?: MemoryPriority;
+    expires?: MemoryExpires;
 }
 /** Throws on path-injection (../, /, leading dot). Allowed: 3-40 chars, alnum/_/-, interior `.`. */
 declare function sanitizeMemoryName(raw: string): string;
@@ -1053,6 +1215,7 @@ declare class MemoryStore {
 declare function applyUserMemory(basePrompt: string, opts?: {
     homeDir?: string;
     projectRoot?: string;
+    cfg?: ReasonixConfig;
 }): string;
 declare function applyMemoryStack(basePrompt: string, rootDir: string): string;
 
@@ -1252,6 +1415,7 @@ declare class JobRegistry {
     }): JobReadResult | null;
     waitForJob(id: number, opts?: {
         timeoutMs?: number;
+        waitFor?: "exit" | "output-or-exit";
     }): Promise<JobWaitResult | null>;
     /** SIGTERM, wait graceMs, then SIGKILL. Idempotent on already-exited jobs. */
     stop(id: number, opts?: {
@@ -1897,6 +2061,10 @@ interface BridgeOptions {
     onSlow?: (ev: SlowEvent) => void;
     /** Indirection so reconnect can swap the underlying client without re-registering tools. */
     host?: McpClientHost;
+    /** Awaited before each `callTool` — resolves on `connected`, rejects on `failed`, caps via `readyTimeoutMs`. */
+    ready?: Promise<void>;
+    /** How long to wait on `ready` before failing the dispatch. Default 30_000ms. */
+    readyTimeoutMs?: number;
 }
 /** Mutable holder so `/mcp reconnect` can swap the underlying client without re-bridging tools. */
 interface McpClientHost {
@@ -1923,6 +2091,12 @@ interface BridgeEnv {
     maxResultChars: number;
     tracker: LatencyTracker | null;
     onProgress?: BridgeOptions["onProgress"];
+    /** Optional readiness gate awaited before each `callTool` dispatch. */
+    ready?: Promise<void>;
+    /** Timeout for waiting on `ready` — milliseconds. Defaults to DEFAULT_READY_TIMEOUT_MS. */
+    readyTimeoutMs?: number;
+    /** Server name surfaced in timeout errors. Defaults to the prefix or "anon". */
+    serverName?: string;
 }
 declare function bridgeMcpTools(client: McpClient, opts?: BridgeOptions): Promise<BridgeResult & {
     env: BridgeEnv;
@@ -2048,92 +2222,6 @@ interface CodeSystemPromptOptions {
     modelId?: string;
 }
 declare function codeSystemPrompt(rootDir: string, opts?: CodeSystemPromptOptions): string;
-
-type ThemeName = "default" | "dark" | "light" | "tokyo-night" | "github-dark" | "github-light" | "high-contrast";
-
-type LanguageCode = "EN" | "zh-CN";
-
-/** Shared exclude defaults + resolver — chunker, directory_tree, and dashboard read from here. */
-interface IndexUserConfig {
-    excludeDirs?: string[];
-    excludeFiles?: string[];
-    excludeExts?: string[];
-    excludePatterns?: string[];
-    respectGitignore?: boolean;
-    maxFileBytes?: number;
-}
-
-/** Library reads only DEEPSEEK_API_KEY from env; the CLI bridges config.json → env var. */
-
-/** Legacy `fast|smart|max` kept for back-compat with existing config.json files. */
-type PresetName = "auto" | "flash" | "pro" | "fast" | "smart" | "max";
-/** Single trust dial: review queues edits + gates shell; auto applies + gates shell; yolo skips both gates. */
-type EditMode = "review" | "auto" | "yolo";
-type ReasoningEffort = "high" | "max";
-type EmbeddingProvider = "ollama" | "openai-compat";
-interface OllamaEmbeddingUserConfig {
-    baseUrl?: string;
-    model?: string;
-}
-interface OpenAICompatEmbeddingUserConfig {
-    baseUrl?: string;
-    apiKey?: string;
-    model?: string;
-    extraBody?: Record<string, unknown>;
-}
-interface SemanticEmbeddingUserConfig {
-    provider?: EmbeddingProvider;
-    ollama?: OllamaEmbeddingUserConfig;
-    openaiCompat?: OpenAICompatEmbeddingUserConfig;
-}
-interface ReasonixConfig {
-    apiKey?: string;
-    baseUrl?: string;
-    lang?: LanguageCode;
-    preset?: PresetName;
-    editMode?: EditMode;
-    editModeHintShown?: boolean;
-    mouseClipboardHintShown?: boolean;
-    reasoningEffort?: ReasoningEffort;
-    theme?: ThemeName | "auto";
-    /** Stored as `--mcp`-format strings so one parser handles both flag and config. */
-    mcp?: string[];
-    /** Names of servers in `mcp` to skip on bridge — see `/mcp disable <name>`. */
-    mcpDisabled?: string[];
-    /** Env overlay per MCP server name (matches the `name=` prefix of the spec). Stdio transports merge this over process.env; SSE/HTTP ignore it. */
-    mcpEnv?: Record<string, Record<string, string>>;
-    session?: string | null;
-    setupCompleted?: boolean;
-    search?: boolean;
-    /** Web search engine backend: "mojeek" (default, scrapes Mojeek) or "searxng" (self-hosted SearXNG). */
-    webSearchEngine?: "mojeek" | "searxng";
-    /** Base URL for SearXNG instance (default http://localhost:8080). */
-    webSearchEndpoint?: string;
-    dashboard?: {
-        /** Pin the embedded dashboard to a fixed port — required for stable SSH tunnels. 0/absent → ephemeral. */
-        port?: number;
-    };
-    projects?: {
-        [absoluteRootDir: string]: {
-            shellAllowed?: string[];
-        };
-    };
-    index?: IndexUserConfig;
-    semantic?: SemanticEmbeddingUserConfig;
-}
-declare function defaultConfigPath(): string;
-declare function readConfig(path?: string): ReasonixConfig;
-declare function writeConfig(cfg: ReasonixConfig, path?: string): void;
-/** Resolve the API key from env var first, then the config file. */
-declare function loadApiKey(path?: string): string | undefined;
-/** env > config > undefined. Client falls back to api.deepseek.com when undefined. */
-declare function loadBaseUrl(path?: string): string | undefined;
-declare function saveBaseUrl(url: string, path?: string): void;
-declare function saveApiKey(key: string, path?: string): void;
-/** Self-hosted DeepSeek-compatible endpoints may issue any token shape, so we only typo-guard here — the real auth check is the first API call against `baseUrl`. */
-declare function isPlausibleKey(key: string): boolean;
-/** Mask a key for display: `sk-abcd...wxyz`. */
-declare function redactKey(key: string): string;
 
 /** VERSION sourced from package.json so it never drifts from npm; latest-check returns null on any failure. */
 /** TTL for the on-disk cache entry. 24h keeps noise low; users who

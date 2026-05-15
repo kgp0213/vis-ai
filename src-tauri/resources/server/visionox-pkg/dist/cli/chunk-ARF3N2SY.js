@@ -4,8 +4,12 @@ import {
   applyProjectMemory,
   applySkillsIndex,
   escalationContract,
-  memoryEnabled
-} from "./chunk-6DR4F3MC.js";
+  memoryEnabled,
+  parseFrontmatter
+} from "./chunk-CD4SCQL4.js";
+import {
+  memoryTypeDefaults
+} from "./chunk-65Q5HQ26.js";
 
 // src/code/prompt.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2 } from "fs";
@@ -52,34 +56,25 @@ function scopeDir(opts) {
 function ensureDir(p) {
   if (!existsSync(p)) mkdirSync(p, { recursive: true });
 }
-function parseFrontmatter(raw) {
-  const lines = raw.split(/\r?\n/);
-  if (lines[0] !== "---") return { data: {}, body: raw };
-  const end = lines.indexOf("---", 1);
-  if (end < 0) return { data: {}, body: raw };
-  const data = {};
-  for (let i = 1; i < end; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const m = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/);
-    if (m?.[1]) data[m[1]] = (m[2] ?? "").trim();
-  }
-  return {
-    data,
-    body: lines.slice(end + 1).join("\n").replace(/^\n+/, "")
-  };
-}
 function formatFrontmatter(e) {
-  return [
+  const lines = [
     "---",
     `name: ${e.name}`,
     `description: ${e.description.replace(/\n/g, " ")}`,
     `type: ${e.type}`,
     `scope: ${e.scope}`,
-    `created: ${e.createdAt}`,
-    "---",
-    ""
-  ].join("\n");
+    `created: ${e.createdAt}`
+  ];
+  if (e.priority) lines.push(`priority: ${e.priority}`);
+  if (e.expires) lines.push(`expires: ${e.expires}`);
+  lines.push("---", "");
+  return lines.join("\n");
+}
+function coercePriority(v) {
+  return v === "low" || v === "medium" || v === "high" ? v : void 0;
+}
+function coerceExpires(v) {
+  return v === "project_end" ? v : void 0;
 }
 function todayIso() {
   const d = /* @__PURE__ */ new Date();
@@ -141,7 +136,7 @@ var MemoryStore = class {
     }
     const raw = readFileSync(file, "utf8");
     const { data, body } = parseFrontmatter(raw);
-    return {
+    const entry = {
       name: data.name ?? name,
       type: data.type ?? "project",
       scope: data.scope ?? scope,
@@ -149,6 +144,11 @@ var MemoryStore = class {
       body: body.trim(),
       createdAt: data.created ?? ""
     };
+    const priority = coercePriority(data.priority);
+    if (priority) entry.priority = priority;
+    const expires = coerceExpires(data.expires);
+    if (expires) entry.expires = expires;
+    return entry;
   }
   /** Skips malformed files — index stays queryable even if one file is hand-edited into nonsense. */
   list() {
@@ -191,6 +191,8 @@ var MemoryStore = class {
       body,
       createdAt: todayIso()
     };
+    if (input.priority) entry.priority = input.priority;
+    if (input.expires) entry.expires = input.expires;
     const dir = this.dir(input.scope);
     const file = join(dir, `${name}.md`);
     const content = `${formatFrontmatter(entry)}${body}
@@ -274,13 +276,36 @@ function applyGlobalReasonixMemory(basePrompt, homeDir) {
     "```"
   ].join("\n");
 }
+function effectivePriority(entry, cfg) {
+  if (entry.priority) return entry.priority;
+  return memoryTypeDefaults(entry.type, cfg).priority;
+}
+function highPriorityBlock(entries, cfg) {
+  const high = entries.filter((e) => effectivePriority(e, cfg) === "high");
+  if (high.length === 0) return null;
+  const lines = [
+    "# HIGH PRIORITY constraints (must observe)",
+    "",
+    "These memories were declared `priority: high` (via config.memory.customTypes or the memory file itself). Treat them as hard rules \u2014 violations override any other guidance below.",
+    ""
+  ];
+  for (const e of high) {
+    const head = `!!! [${e.scope}/${e.type}/${e.name}] ${e.description || "(no description)"}`;
+    lines.push(head);
+    if (e.body) lines.push("", e.body);
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
+}
 function applyUserMemory(basePrompt, opts = {}) {
   if (!memoryEnabled()) return basePrompt;
   const store = new MemoryStore(opts);
   const global = store.loadIndex("global");
   const project = store.hasProjectScope() ? store.loadIndex("project") : null;
-  if (!global && !project) return basePrompt;
+  const high = highPriorityBlock(store.list(), opts.cfg);
+  if (!global && !project && !high) return basePrompt;
   const parts = [basePrompt];
+  if (high) parts.push("", high);
   if (global) {
     parts.push(
       "",
@@ -490,7 +515,7 @@ Before exploring the filesystem to answer a factual question, check whether the 
 
 Two different rules depending on which tool:
 
-- **Filesystem tools** (\`read_file\`, \`list_directory\`, \`search_files\`, \`edit_file\`, etc.): paths are sandbox-relative. \`/\` means the project root, \`/src/foo.ts\` means \`<project>/src/foo.ts\`. Both relative (\`src/foo.ts\`) and POSIX-absolute (\`/src/foo.ts\`) forms work.
+- **Filesystem tools** (\`read_file\`, \`list_directory\`, \`search_files\`, \`edit_file\`, etc.): paths resolve against the sandbox root. Relative (\`src/foo.ts\`), POSIX-absolute (\`/src/foo.ts\`, where \`/\` means the project root), and OS-absolute including Windows drive-letter (\`D:\\\\path\\\\foo.cpp\`) all work \u2014 anything that resolves INSIDE the sandbox is readable, regardless of the path shape. When the user pastes a path, your default move is to call \`read_file\` on it as-is. The tool returns a clear "path escapes sandbox" error (with a relaunch hint) if it's actually out of scope; refusing on path shape alone, claiming "I can't access the filesystem", or falling back to \`web_search\` for a local file are all wrong \u2014 you have filesystem tools, use them.
 - **\`run_command\`**: the command runs in a real OS shell with cwd pinned to the project root. Paths inside the shell command are interpreted by THAT shell, not by us. **Never use leading \`/\` in run_command arguments** \u2014 Windows treats \`/tests\` as drive-root \`F:\\tests\` (non-existent), POSIX shells treat it as filesystem root. Use plain relative paths (\`tests\`, \`./tests\`, \`src/loop.ts\`) instead.
 
 # When the user wants to switch project / working directory
@@ -504,13 +529,15 @@ Do NOT try to switch via \`run_command\` (\`cd\`, \`pushd\`, etc.) \u2014 your t
 You have TWO tools for running shell commands, and picking the right one is non-negotiable:
 
 - \`run_command\` \u2014 blocks until the process exits. Use for: **tests, builds, lints, typechecks, git operations, one-shot scripts**. Anything that naturally returns in under a minute.
-- \`run_background\` \u2014 spawns and detaches after a brief startup window. Use for: **dev servers, watchers, any command with "dev" / "serve" / "watch" / "start" in the name**. Examples: \`npm run dev\`, \`pnpm dev\`, \`yarn start\`, \`vite\`, \`next dev\`, \`uvicorn app:app --reload\`, \`flask run\`, \`python -m http.server\`, \`cargo watch\`, \`tsc --watch\`, \`webpack serve\`.
+- \`run_background\` \u2014 spawns and detaches after a brief startup window. Use for:
+  - **Dev servers / watchers / anything with "dev" / "serve" / "watch" / "start" in the name.** Examples: \`npm run dev\`, \`pnpm dev\`, \`yarn start\`, \`vite\`, \`next dev\`, \`uvicorn app:app --reload\`, \`flask run\`, \`python -m http.server\`, \`cargo watch\`, \`tsc --watch\`, \`webpack serve\`.
+  - **One-shot long jobs that would blow run_command's 60s ceiling.** Examples: \`curl -L -O <big-url>\`, \`wget\`, \`huggingface-cli download\`, multi-GB \`pip install\` / \`npm install\`, big \`cargo build\` / \`docker build\`. Start with \`run_background\`, then call \`wait_for_job\` ONCE with a long \`timeoutMs\` \u2014 that costs one tool call total, not one per poll.
 
-**Never use run_command for a dev server.** It will block for 60s, time out, and the user will see a frozen tool call while the server was actually running fine. Always \`run_background\`, then \`job_output\` to peek at the logs when you need to verify something.
+**Never use run_command for a dev server or a download likely to exceed a minute.** It will block, time out, and the user will see a frozen tool call while the work was actually running fine. Always \`run_background\` + \`wait_for_job\` / \`job_output\`.
 
 After \`run_background\`, tools available to you:
 - \`job_output(jobId, tailLines?)\` \u2014 read recent logs to verify startup / debug errors.
-- \`wait_for_job(jobId, timeoutMs?)\` \u2014 block until the job exits or emits new output. Prefer this over repeating identical \`job_output\` calls while you're intentionally waiting.
+- \`wait_for_job(jobId, timeoutMs?, waitFor?)\` \u2014 block server-side until the job finishes (or, with \`waitFor: 'output-or-exit'\`, until it writes a new line). ONE tool call per wait regardless of duration. \`timeoutMs\` clamps at 300_000. For downloads / installs / builds: leave \`waitFor\` at the default \`'exit'\` and set \`timeoutMs\` to the slowest reasonable end-to-end. For tailing a dev server and reacting to a specific log line: pass \`waitFor: 'output-or-exit'\` with a short \`timeoutMs\`.
 - \`list_jobs\` \u2014 see every job this session (running + exited).
 - \`stop_job(jobId)\` \u2014 SIGTERM \u2192 SIGKILL after grace. Stop before switching port / config.
 
@@ -597,9 +624,10 @@ ${appendParts.join("\n\n")}`;
 export {
   sanitizeMemoryName,
   MemoryStore,
+  effectivePriority,
   applyMemoryStack,
   codeSystemBase,
   CODE_SYSTEM_PROMPT,
   codeSystemPrompt
 };
-//# sourceMappingURL=chunk-DDA76P44.js.map
+//# sourceMappingURL=chunk-ARF3N2SY.js.map

@@ -2,7 +2,7 @@
 import {
   loadLanguage,
   saveLanguage
-} from "./chunk-SWLIVNTP.js";
+} from "./chunk-65Q5HQ26.js";
 
 // src/i18n/EN.ts
 var EN = {
@@ -14,7 +14,10 @@ var EN = {
     cancel: "Cancel",
     confirm: "Confirm",
     back: "Back",
-    next: "Next"
+    next: "Next",
+    tool: "tool",
+    running: "running",
+    noTurns: "(no turns yet)"
   },
   cli: {
     description: "DeepSeek-native agent framework \u2014 built for cache hits and cheap tokens.",
@@ -55,8 +58,8 @@ var EN = {
     dashboardAutoStartFailed: "\u25B2 dashboard auto-start failed ({reason}) \u2014 try /dashboard, or pass --no-dashboard to silence",
     systemAppendHint: "Append instructions to the code system prompt. Does NOT replace the default prompt \u2014 adds after it.",
     systemAppendFileHint: "Append file contents to the code system prompt. Does NOT replace the default prompt. UTF-8, relative to cwd or absolute.",
-    resumedSession: '\u25B8 resumed session "{name}" with {count} prior messages \xB7 /forget to start over \xB7 /sessions to list',
-    newSession: '\u25B8 session "{name}" (new) \u2014 auto-saved as you chat \xB7 /forget to delete \xB7 /sessions to list',
+    resumedSession: '\u25B8 resumed session "{name}" with {count} prior messages \xB7 /new to start fresh \xB7 /sessions to manage',
+    newSession: '\u25B8 session "{name}" (new) \u2014 auto-saved as you chat \xB7 /sessions to rename or delete',
     ephemeralSession: "\u25B8 ephemeral chat (no session persistence) \u2014 drop --no-session to enable",
     restoredEdits: "\u25B8 restored {count} pending edit block(s) from an interrupted prior run \u2014 /apply to commit or /discard to drop.",
     resumedPlan: "Resumed plan \xB7 {when}{summary}",
@@ -486,9 +489,18 @@ var EN = {
       counterDone: "{done}/{total} done ({pct}%) \xB7 {total} steps",
       counterDoneSingular: "{done}/{total} done ({pct}%) \xB7 {total} step"
     },
+    noPlanSummary: "No plan body submitted yet.",
+    detailCollapsedHint: "Ctrl+P expands full plan details.",
+    detailExpandedHint: "Ctrl+P collapses details.",
+    detailHeader: "Plan details",
+    detailWindow: "showing lines {start}-{end} of {total}",
+    detailScrollHint: "PgUp/PgDn scroll details \xB7 Home/End jump",
     reviseTitle: "Revise plan",
     reviseSteps: "{count} steps",
-    reviseFooter: "\u2191\u2193 focus  \xB7  space toggle skip  \xB7  k/j move  \xB7  \u23CE accept  \xB7  esc cancel"
+    reviseFooter: "\u2191\u2193 focus  \xB7  space toggle skip  \xB7  k/j move  \xB7  \u23CE accept  \xB7  esc cancel",
+    riskMed: " med",
+    riskHigh: " high",
+    completeMsg: "\u25B8 plan complete \u2014 all {total} step{s} done \xB7 archived"
   },
   app: {
     walkCancelledRemaining: "\u25B8 walk cancelled \u2014 {count} block(s) still pending.",
@@ -508,6 +520,9 @@ var EN = {
     notedVerbAppended: "appended to",
     memoryWriteFailed: "# memory write failed",
     commandFailed: "! command failed",
+    btwUsage: "\u25B8 /btw <question> \u2014 ask a side question without polluting the conversation context.",
+    btwHeader: "\u226B btw",
+    btwFailed: "/btw failed",
     restoreCodeOnly: "\u25B8 /restore is code-mode only",
     hookUserPromptSubmit: "UserPromptSubmit hook",
     hookStop: "Stop hook",
@@ -550,6 +565,7 @@ var EN = {
     flashEscalation: "\u21E7 flash requested escalation \u2014 retrying this turn on {model}{reasonSuffix}",
     harvestStatus: "extracting plan state from reasoning\u2026",
     autoEscalation: "\u21E7 auto-escalating to {model} for the rest of this turn \u2014 flash hit {breakdown}. Next turn falls back to {fallback} unless /pro is armed.",
+    readOnlyLoopEscalation: "\u21E7 auto-escalating to {model} \u2014 flash made {n} consecutive read-only calls without producing an edit or final answer. Next turn falls back to {fallback} unless /pro is armed.",
     repeatToolCallWarning: "Caught a repeated tool call \u2014 let the model see the issue and retry with a different approach.",
     stormStuck: "Stopped a stuck retry loop \u2014 the model kept calling the same tool with identical args after a self-correction nudge. Try /retry, rephrase, or rule out the underlying blocker.",
     stormSuppressed: "Suppressed {count} repeated tool call(s) \u2014 same name + args fired 3+ times.",
@@ -560,7 +576,7 @@ var EN = {
     forcingSummary: "context {before}/{ctxMax} ({pct}%) \u2014 forcing summary from what was gathered. Run /compact, /clear, or /new to reset."
   },
   errors: {
-    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Reasonix caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /forget (delete the session) or /clear (drop the displayed history) to start fresh.",
+    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Reasonix caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /new to start fresh, or open /sessions and press [d] to delete this session.",
     contextOverflowTooMany: "too many tokens",
     auth401: "Authentication failed (DeepSeek 401): {inner}. Your API key is rejected. Fix with `reasonix setup` or `export DEEPSEEK_API_KEY=sk-...`. Get one at https://platform.deepseek.com/api_keys.",
     balance402: "Out of balance (DeepSeek 402): {inner}. Top up at https://platform.deepseek.com/top_up \u2014 the panel header shows your balance once it's non-zero.",
@@ -585,6 +601,7 @@ var EN = {
     basic: {
       newInfo: "\u25B8 new conversation \u2014 dropped {count} message(s) from context. Same session, fresh slate.",
       newInfoArchived: '\u25B8 new conversation \u2014 dropped {count} message(s) from context. Prior transcript archived as "{archived}" (visible under Sessions).',
+      newInfoSystemReloaded: " \xB7 visionox.md / project memory reloaded (next turn pays one cache miss)",
       helpTitle: "Commands:",
       helpShellTitle: "Shell shortcut:",
       helpShell: "  !<cmd>                   run <cmd> in the sandbox root; output goes into",
@@ -927,7 +944,9 @@ var EN = {
     escToInterrupt: "s \xB7 esc to interrupt",
     recordingGlyph: "\u25CFREC",
     mb: " MB",
-    evt: " evt"
+    evt: " evt",
+    editsLabel: "edits:",
+    mcpLoading: "MCP"
   },
   editMode: {
     plan: "PLAN MODE",
@@ -954,7 +973,28 @@ var EN = {
     hintQuit: "quit",
     abortedHint: "turn aborted by user \xB7 esc again to clear \xB7 \u23CE to ask a follow-up",
     editorNoRawMode: "external editor unavailable \u2014 stdin doesn't support raw-mode toggling on this terminal",
-    editorFailed: "external editor:"
+    editorFailed: "external editor:",
+    editorMissing: "no $EDITOR / $VISUAL / $GIT_EDITOR set \u2014 export one (e.g. `export EDITOR=nano`) and retry",
+    editorExited: "editor exited with code {code}"
+  },
+  pathConfirm: {
+    title: "Outside-sandbox path",
+    subtitleRead: "{tool} wants to READ a file outside the project sandbox",
+    subtitleWrite: "{tool} wants to WRITE a file outside the project sandbox",
+    awaiting: "awaiting",
+    denyTitle: "Deny \u2014 provide context",
+    optional: "optional",
+    denyFooter: "type context  \xB7  \u23CE submit with reason  \xB7  esc skip (deny without reason)",
+    pickFooter: "\u2191\u2193 pick  \xB7  \u23CE confirm  \xB7  Tab add context  \xB7  esc cancel",
+    allowOnce: "allow once",
+    allowOnceDesc: "permit this access; remember the directory for the rest of this session",
+    allowAlways: "allow always",
+    allowAlwaysDesc: "remember `{prefix}` for this project (persisted in ~/.visionox/config.json)",
+    deny: "deny",
+    denyDesc: "press Tab to add context telling the model why",
+    pathLabel: "path",
+    sandboxLabel: "sandbox",
+    allowPrefixLabel: "prefix"
   },
   shellConfirm: {
     title: "Shell command",
@@ -971,7 +1011,12 @@ var EN = {
     allowAlways: "allow always",
     allowAlwaysDesc: "remember `{prefix}` for this project",
     deny: "deny",
-    denyDesc: "press Tab to add context telling the model why"
+    denyDesc: "press Tab to add context telling the model why",
+    cwdLabel: "cwd",
+    timeoutLabel: "timeout",
+    waitLabel: "wait",
+    previewMore: "\u2026 {n} more line hidden \u2014 press esc, ask the model to split it",
+    previewMorePlural: "\u2026 {n} more lines hidden \u2014 press esc, ask the model to split it"
   },
   editConfirm: {
     footer: "[y/Enter] apply  \xB7  [n] reject with reason  \xB7  [a] apply rest  \xB7  [A] flip AUTO  \xB7  [\u2191\u2193/Space] scroll  \xB7  [Esc] abort",
@@ -1093,6 +1138,7 @@ var EN = {
     status: "web_search {status} \u2014 try: the search backend returned an error; rephrase the query, or switch engine with /search-engine mojeek|searxng",
     rateLimit429: "web_search 429 \u2014 try: wait 10s before retrying, or rephrase the query; the search backend is rate-limiting this client",
     forbidden403: "web_search 403 \u2014 try: the search backend is blocking this client; switch engine with /search-engine mojeek|searxng, or wait and retry later",
+    serverError5xx: "web_search {status} \u2014 try: open the search URL in a browser; if it loads this is transient and a retry in 30s may help",
     mojeekBlocked: "web_search: Mojeek anti-bot page \u2014 rate-limited or blocked \u2014 try: wait 30s and retry, or switch engine with /search-engine searxng",
     mojeekNoResults: "web_search: 0 results but response doesn't look like a real empty page ({chars} chars, first 120: {preview}) \u2014 try: rephrase the query with simpler terms, or switch engine with /search-engine searxng",
     invalidEndpoint: 'web_search: invalid SearXNG endpoint "{endpoint}" \u2014 try: set a valid URL with /search-endpoint http://host:port',
@@ -1102,6 +1148,7 @@ var EN = {
     fetchStatus: "web_fetch {status} for {url} \u2014 try: confirm the URL resolves in a browser; status suggests the host returned an error page",
     fetchRateLimit429: "web_fetch 429 for {url} \u2014 try: wait 10s before retrying; the host is rate-limiting this client",
     fetchForbidden403: "web_fetch 403 for {url} \u2014 try: the host is blocking this client; the page may require login or block bots \u2014 use web_search snippets instead",
+    fetchServerError5xx: "web_fetch {status} for {url} \u2014 try: open the URL in a browser; if it loads this is transient and a retry in 30s may help",
     fetchTimeout: "web_fetch: timed out after {ms}ms for {url} \u2014 try: a shorter URL or smaller content; this may be a slow CDN, or retry once",
     fetchTooLarge: "web_fetch refused: content-length {len} bytes exceeds {cap}-byte cap ({url}) \u2014 try: a different URL with smaller content; this page is too large to fetch",
     fetchBodyTooLarge: "web_fetch refused: response body exceeded {cap}-byte cap ({seen} bytes seen) \u2014 try: a different URL with smaller content; this page streamed past the size cap",
@@ -1124,7 +1171,8 @@ var EN = {
     reasoningEllipsis: "reasoning\u2026",
     error: "error",
     doctor: "doctor",
-    you: "you"
+    you: "you",
+    task: "task"
   },
   cardLabels: {
     prompt: "prompt",
@@ -1204,7 +1252,9 @@ var EN = {
     noData: "no inspect data",
     healthy: "healthy \xB7 {ms}ms",
     slow: "slow \xB7 {ms}ms",
-    verySlow: "very slow \xB7 {ms}ms"
+    verySlow: "very slow \xB7 {ms}ms",
+    slowToast: "\u26A0 MCP `{name}` slow \xB7 {seconds}s p95 over the last {sampleSize} calls",
+    emptyHint: "\u2139 no MCP servers configured \u2014 try: `reasonix setup` to re-pick, or `reasonix mcp install filesystem`"
   },
   denyContextInput: {
     description: "Tell the agent why you denied this. The next attempt will see your reason as additional context."
@@ -1260,6 +1310,16 @@ var EN = {
     empty: "No MCP servers attached. Run `reasonix setup` to pick some, or launch with --mcp.",
     serverCount: "{count} server{s}",
     footer: "\u2191\u2193 pick \xB7 [r] reconnect \xB7 [d] disable \xB7 esc quit"
+  },
+  mcpLifecycle: {
+    handshake: "handshake\u2026",
+    connected: "connected",
+    failed: "failed",
+    disabled: "disabled",
+    reconnect: "reconnect\u2026",
+    initDetail: "initialise \u2192 tools/list \u2192 resources/list",
+    reconnectDetail: "tearing down \xB7 re-handshake \xB7 listing tools",
+    disabledDetail: "via /mcp disable {name}"
   },
   checkpointPicker: {
     title: "restore a checkpoint \u2014 {workspace}",
@@ -1318,7 +1378,10 @@ var zhCN = {
     cancel: "\u53D6\u6D88",
     confirm: "\u786E\u8BA4",
     back: "\u8FD4\u56DE",
-    next: "\u4E0B\u4E00\u6B65"
+    next: "\u4E0B\u4E00\u6B65",
+    tool: "\u5DE5\u5177",
+    running: "\u8FD0\u884C\u4E2D",
+    noTurns: "(\u6682\u65E0\u5BF9\u8BDD)"
   },
   cli: {
     description: "DeepSeek \u539F\u751F\u667A\u80FD\u4F53\u6846\u67B6 \u2014 \u4E13\u4E3A\u7F13\u5B58\u547D\u4E2D\u548C\u4F4E\u6210\u672C\u4EE4\u724C\u6784\u5EFA\u3002",
@@ -1359,8 +1422,8 @@ var zhCN = {
     dashboardAutoStartFailed: "\u25B2 \u4EEA\u8868\u677F\u81EA\u52A8\u542F\u52A8\u5931\u8D25 ({reason}) \u2014 \u5C1D\u8BD5 /dashboard\uFF0C\u6216\u4F20\u9012 --no-dashboard \u4EE5\u9759\u9ED8",
     systemAppendHint: "\u8FFD\u52A0\u6307\u4EE4\u5230\u4EE3\u7801\u7CFB\u7EDF\u63D0\u793A\u8BCD\u3002\u4E0D\u66FF\u6362\u9ED8\u8BA4\u63D0\u793A\u8BCD \u2014 \u5728\u5176\u540E\u6DFB\u52A0\u3002",
     systemAppendFileHint: "\u8FFD\u52A0\u6587\u4EF6\u5185\u5BB9\u5230\u4EE3\u7801\u7CFB\u7EDF\u63D0\u793A\u8BCD\u3002\u4E0D\u66FF\u6362\u9ED8\u8BA4\u63D0\u793A\u8BCD\u3002UTF-8\uFF0C\u76F8\u5BF9\u4E8E cwd \u6216\u7EDD\u5BF9\u8DEF\u5F84\u3002",
-    resumedSession: '\u25B8 \u5DF2\u6062\u590D\u4F1A\u8BDD "{name}"\uFF0C\u5305\u542B {count} \u6761\u5386\u53F2\u6D88\u606F \xB7 /forget \u91CD\u65B0\u5F00\u59CB \xB7 /sessions \u5217\u51FA',
-    newSession: '\u25B8 \u4F1A\u8BDD "{name}" (\u65B0) \u2014 \u968F\u804A\u968F\u5B58 \xB7 /forget \u5220\u9664 \xB7 /sessions \u5217\u51FA',
+    resumedSession: '\u25B8 \u5DF2\u6062\u590D\u4F1A\u8BDD "{name}"\uFF0C\u5305\u542B {count} \u6761\u5386\u53F2\u6D88\u606F \xB7 /new \u91CD\u65B0\u5F00\u59CB \xB7 /sessions \u7BA1\u7406',
+    newSession: '\u25B8 \u4F1A\u8BDD "{name}" (\u65B0) \u2014 \u968F\u804A\u968F\u5B58 \xB7 /sessions \u91CD\u547D\u540D\u6216\u5220\u9664',
     ephemeralSession: "\u25B8 \u4E34\u65F6\u804A\u5929 (\u4E0D\u4FDD\u5B58\u4F1A\u8BDD) \u2014 \u53BB\u6389 --no-session \u4EE5\u542F\u7528\u4FDD\u5B58",
     restoredEdits: "\u25B8 \u4ECE\u4E2D\u65AD\u7684\u8FD0\u884C\u4E2D\u6062\u590D\u4E86 {count} \u4E2A\u5F85\u5904\u7406\u7684\u7F16\u8F91\u5757 \u2014 /apply \u63D0\u4EA4\u6216 /discard \u653E\u5F03\u3002",
     resumedPlan: "\u5DF2\u6062\u590D\u8BA1\u5212 \xB7 {when}{summary}",
@@ -1791,9 +1854,18 @@ var zhCN = {
       counterDone: "{done}/{total} \u5DF2\u5B8C\u6210\uFF08{pct}%\uFF09 \xB7 \u5171 {total} \u6B65",
       counterDoneSingular: "{done}/{total} \u5DF2\u5B8C\u6210\uFF08{pct}%\uFF09 \xB7 \u5171 {total} \u6B65"
     },
+    noPlanSummary: "\u5C1A\u672A\u63D0\u4EA4\u8BA1\u5212\u5185\u5BB9\u3002",
+    detailCollapsedHint: "Ctrl+P \u5C55\u5F00\u5B8C\u6574\u8BA1\u5212\u8BE6\u60C5\u3002",
+    detailExpandedHint: "Ctrl+P \u6536\u8D77\u8BE6\u60C5\u3002",
+    detailHeader: "\u8BA1\u5212\u8BE6\u60C5",
+    detailWindow: "\u663E\u793A\u7B2C {start}-{end} \u884C\uFF0C\u5171 {total} \u884C",
+    detailScrollHint: "PgUp/PgDn \u6EDA\u52A8\u8BE6\u60C5 \xB7 Home/End \u8DF3\u8F6C",
     reviseTitle: "\u4FEE\u6539\u8BA1\u5212",
     reviseSteps: "{count} \u4E2A\u6B65\u9AA4",
-    reviseFooter: "\u2191\u2193 \u7126\u70B9  \xB7  \u7A7A\u683C\u5207\u6362\u8DF3\u8FC7  \xB7  k/j \u79FB\u52A8  \xB7  \u23CE \u786E\u8BA4  \xB7  Esc \u53D6\u6D88"
+    reviseFooter: "\u2191\u2193 \u7126\u70B9  \xB7  \u7A7A\u683C\u5207\u6362\u8DF3\u8FC7  \xB7  k/j \u79FB\u52A8  \xB7  \u23CE \u786E\u8BA4  \xB7  Esc \u53D6\u6D88",
+    riskMed: " \u4E2D",
+    riskHigh: " \u9AD8",
+    completeMsg: "\u25B8 \u8BA1\u5212\u5B8C\u6210 \u2014 \u5168\u90E8 {total} \u4E2A\u6B65\u9AA4\u5DF2\u5B8C\u6210 \xB7 \u5DF2\u5F52\u6863"
   },
   app: {
     walkCancelledRemaining: "\u25B8 \u6D4F\u89C8\u5DF2\u53D6\u6D88 \u2014 \u8FD8\u6709 {count} \u4E2A\u5F85\u5904\u7406\u7F16\u8F91\u5757\u3002",
@@ -1813,6 +1885,9 @@ var zhCN = {
     notedVerbAppended: "\u8FFD\u52A0\u5230",
     memoryWriteFailed: "# \u8BB0\u5FC6\u5199\u5165\u5931\u8D25",
     commandFailed: "! \u547D\u4EE4\u5931\u8D25",
+    btwUsage: "\u25B8 /btw <\u95EE\u9898> \u2014 \u987A\u4FBF\u95EE\u4E2A\u9898\u5916\u8BDD\uFF0C\u4E0D\u4F1A\u5199\u5165\u5F53\u524D\u4F1A\u8BDD\u4E0A\u4E0B\u6587\u3002",
+    btwHeader: "\u226B btw",
+    btwFailed: "/btw \u8C03\u7528\u5931\u8D25",
     restoreCodeOnly: "\u25B8 /restore \u4EC5\u5728\u4EE3\u7801\u6A21\u5F0F\u53EF\u7528",
     hookUserPromptSubmit: "UserPromptSubmit \u94A9\u5B50",
     hookStop: "Stop \u94A9\u5B50",
@@ -1855,6 +1930,7 @@ var zhCN = {
     flashEscalation: "\u21E7 flash \u8BF7\u6C42\u5347\u7EA7 \u2014 \u672C\u8F6E\u6539\u7528 {model}{reasonSuffix}",
     harvestStatus: "\u6B63\u5728\u4ECE\u63A8\u7406\u8FC7\u7A0B\u63D0\u53D6\u8BA1\u5212\u72B6\u6001\u2026",
     autoEscalation: "\u21E7 \u672C\u8F6E\u5269\u4F59\u8C03\u7528\u81EA\u52A8\u5347\u7EA7\u5230 {model} \u2014 flash \u547D\u4E2D {breakdown}\u3002\u4E0B\u4E00\u8F6E\u56DE\u9000\u5230 {fallback}\uFF0C\u9664\u975E\u5DF2\u88C5\u5907 /pro\u3002",
+    readOnlyLoopEscalation: "\u21E7 \u81EA\u52A8\u5347\u7EA7\u5230 {model} \u2014 flash \u8FDE\u7EED {n} \u6B21\u53EA\u8BFB\u8C03\u7528\uFF0C\u672A\u4EA7\u51FA\u4FEE\u6539\u6216\u6700\u7EC8\u7B54\u6848\u3002\u4E0B\u4E00\u8F6E\u56DE\u9000\u5230 {fallback}\uFF0C\u9664\u975E\u5DF2\u88C5\u5907 /pro\u3002",
     repeatToolCallWarning: "\u62E6\u622A\u5230\u91CD\u590D\u5DE5\u5177\u8C03\u7528 \u2014 \u8BA9\u6A21\u578B\u5BDF\u89C9\u95EE\u9898\u5E76\u6362\u79CD\u65B9\u5F0F\u91CD\u8BD5\u3002",
     stormStuck: "\u5DF2\u505C\u6B62\u5361\u6B7B\u7684\u91CD\u8BD5\u5FAA\u73AF \u2014 \u6A21\u578B\u5728\u81EA\u7EA0\u63D0\u793A\u540E\u4ECD\u4EE5\u76F8\u540C\u53C2\u6570\u91CD\u590D\u8C03\u7528\u540C\u4E00\u5DE5\u5177\u3002\u8BF7\u5C1D\u8BD5 /retry\u3001\u6362\u79CD\u8BF4\u6CD5\uFF0C\u6216\u6392\u67E5\u5E95\u5C42\u963B\u585E\u3002",
     stormSuppressed: "\u5DF2\u6291\u5236 {count} \u6B21\u91CD\u590D\u5DE5\u5177\u8C03\u7528 \u2014 \u540C\u4E00\u540D\u79F0 + \u53C2\u6570\u89E6\u53D1 3 \u6B21\u4EE5\u4E0A\u3002",
@@ -1865,7 +1941,7 @@ var zhCN = {
     forcingSummary: "\u4E0A\u4E0B\u6587 {before}/{ctxMax}\uFF08{pct}%\uFF09\u2014 \u57FA\u4E8E\u5DF2\u6536\u96C6\u5230\u7684\u5185\u5BB9\u5F3A\u5236\u603B\u7ED3\u3002\u8BF7\u8FD0\u884C /compact\u3001/clear \u6216 /new \u91CD\u7F6E\u3002"
   },
   errors: {
-    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Reasonix \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /forget\uFF08\u5220\u9664\u4F1A\u8BDD\uFF09\u6216 /clear\uFF08\u4E22\u5F03\u663E\u793A\u4E2D\u7684\u5386\u53F2\uFF09\u4ECE\u5934\u5F00\u59CB\u3002",
+    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Reasonix \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /new \u91CD\u65B0\u5F00\u59CB\uFF0C\u6216\u6253\u5F00 /sessions \u9009\u4E2D\u540E\u6309 [d] \u5220\u9664\u8BE5\u4F1A\u8BDD\u3002",
     contextOverflowTooMany: "tokens \u6570\u91CF\u8FC7\u591A",
     auth401: "\u8BA4\u8BC1\u5931\u8D25\uFF08DeepSeek 401\uFF09\uFF1A{inner}\u3002\u4F60\u7684 API key \u88AB\u62D2\u7EDD\u3002\u8FD0\u884C `reasonix setup` \u6216 `export DEEPSEEK_API_KEY=sk-...` \u4FEE\u590D\u3002\u5728 https://platform.deepseek.com/api_keys \u83B7\u53D6 key\u3002",
     balance402: "\u4F59\u989D\u4E0D\u8DB3\uFF08DeepSeek 402\uFF09\uFF1A{inner}\u3002\u5728 https://platform.deepseek.com/top_up \u5145\u503C \u2014 \u4F59\u989D\u975E\u96F6\u65F6\u9762\u677F\u9876\u680F\u4F1A\u663E\u793A\u3002",
@@ -1890,6 +1966,7 @@ var zhCN = {
     basic: {
       newInfo: "\u25B8 \u65B0\u5BF9\u8BDD \u2014 \u5DF2\u4ECE\u4E0A\u4E0B\u6587\u4E2D\u4E22\u5F03 {count} \u6761\u6D88\u606F\u3002\u540C\u4E00\u4F1A\u8BDD\uFF0C\u5168\u65B0\u5F00\u59CB\u3002",
       newInfoArchived: "\u25B8 \u65B0\u5BF9\u8BDD \u2014 \u5DF2\u4ECE\u4E0A\u4E0B\u6587\u4E2D\u4E22\u5F03 {count} \u6761\u6D88\u606F\u3002\u539F\u5BF9\u8BDD\u5DF2\u5F52\u6863\u4E3A\u300C{archived}\u300D\uFF0C\u53EF\u5728 Sessions \u9762\u677F\u67E5\u770B\u3002",
+      newInfoSystemReloaded: " \xB7 visionox.md / \u9879\u76EE\u8BB0\u5FC6\u5DF2\u91CD\u65B0\u52A0\u8F7D\uFF08\u4E0B\u4E00\u8F6E\u4E00\u6B21\u6027 cache miss\uFF09",
       helpTitle: "\u547D\u4EE4\uFF1A",
       helpShellTitle: "Shell \u5FEB\u6377\u65B9\u5F0F\uFF1A",
       helpShell: "  !<cmd>                   \u5728\u6C99\u7BB1\u6839\u76EE\u5F55\u8FD0\u884C <cmd>\uFF1B\u8F93\u51FA\u8FDB\u5165\u5BF9\u8BDD",
@@ -2232,7 +2309,9 @@ var zhCN = {
     escToInterrupt: "\u79D2 \xB7 Esc \u4E2D\u65AD",
     recordingGlyph: "\u25CFREC",
     mb: " MB",
-    evt: " \u4E8B\u4EF6"
+    evt: " \u4E8B\u4EF6",
+    editsLabel: "\u7F16\u8F91:",
+    mcpLoading: "MCP"
   },
   editMode: {
     plan: "\u8BA1\u5212",
@@ -2259,7 +2338,28 @@ var zhCN = {
     hintQuit: "\u9000\u51FA",
     abortedHint: "\u7528\u6237\u5DF2\u4E2D\u6B62\u672C\u8F6E \xB7 \u518D\u6309 Esc \u6E05\u9664 \xB7 \u23CE \u7EE7\u7EED\u63D0\u95EE",
     editorNoRawMode: "\u5916\u90E8\u7F16\u8F91\u5668\u4E0D\u53EF\u7528 \u2014 \u5F53\u524D\u7EC8\u7AEF\u4E0D\u652F\u6301 raw-mode \u5207\u6362",
-    editorFailed: "\u5916\u90E8\u7F16\u8F91\u5668\uFF1A"
+    editorFailed: "\u5916\u90E8\u7F16\u8F91\u5668\uFF1A",
+    editorMissing: "\u672A\u8BBE\u7F6E $EDITOR / $VISUAL / $GIT_EDITOR \u2014 \u8BF7\u5BFC\u51FA\u73AF\u5883\u53D8\u91CF\uFF08\u4F8B\u5982 `export EDITOR=nano`\uFF09\u540E\u91CD\u8BD5",
+    editorExited: "\u7F16\u8F91\u5668\u5F02\u5E38\u9000\u51FA\uFF0C\u8FD4\u56DE\u7801 {code}"
+  },
+  pathConfirm: {
+    title: "\u6C99\u7BB1\u5916\u8DEF\u5F84",
+    subtitleRead: "{tool} \u60F3\u8981\u8BFB\u53D6\u6C99\u7BB1\u5916\u7684\u6587\u4EF6",
+    subtitleWrite: "{tool} \u60F3\u8981\u5199\u5165\u6C99\u7BB1\u5916\u7684\u6587\u4EF6",
+    awaiting: "\u7B49\u5F85\u4E2D",
+    denyTitle: "\u62D2\u7EDD \u2014 \u63D0\u4F9B\u539F\u56E0",
+    optional: "\u53EF\u9009",
+    denyFooter: "\u8F93\u5165\u539F\u56E0 \xB7 \u23CE \u63D0\u4EA4 \xB7 Esc \u8DF3\u8FC7\uFF08\u76F4\u63A5\u62D2\u7EDD\uFF09",
+    pickFooter: "\u2191\u2193 \u9009\u62E9 \xB7 \u23CE \u786E\u8BA4 \xB7 Tab \u6DFB\u52A0\u8BF4\u660E \xB7 Esc \u53D6\u6D88",
+    allowOnce: "\u5141\u8BB8\u4E00\u6B21",
+    allowOnceDesc: "\u672C\u6B21\u5141\u8BB8\uFF0C\u672C\u4F1A\u8BDD\u5185\u6B64\u76EE\u5F55\u4E0D\u518D\u8BE2\u95EE",
+    allowAlways: "\u59CB\u7EC8\u5141\u8BB8",
+    allowAlwaysDesc: "\u8BB0\u4F4F `{prefix}`\uFF0C\u672C\u9879\u76EE\u6C38\u4E45\u5141\u8BB8\uFF08\u5199\u5165 ~/.visionox/config.json\uFF09",
+    deny: "\u62D2\u7EDD",
+    denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0",
+    pathLabel: "\u8DEF\u5F84",
+    sandboxLabel: "\u6C99\u7BB1",
+    allowPrefixLabel: "\u524D\u7F00"
   },
   shellConfirm: {
     title: "Shell \u547D\u4EE4",
@@ -2276,7 +2376,12 @@ var zhCN = {
     allowAlways: "\u59CB\u7EC8\u5141\u8BB8",
     allowAlwaysDesc: "\u8BB0\u4F4F `{prefix}`\uFF0C\u672C\u9879\u76EE\u5185\u4E0D\u518D\u8BE2\u95EE",
     deny: "\u62D2\u7EDD",
-    denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0"
+    denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0",
+    cwdLabel: "\u5DE5\u4F5C\u76EE\u5F55",
+    timeoutLabel: "\u8D85\u65F6",
+    waitLabel: "\u7B49\u5F85",
+    previewMore: "\u2026 \u8FD8\u6709 {n} \u884C\u672A\u663E\u793A \u2014 \u6309 esc \u53D6\u6D88\uFF0C\u8BA9\u6A21\u578B\u62C6\u5206\u540E\u518D\u8BD5",
+    previewMorePlural: "\u2026 \u8FD8\u6709 {n} \u884C\u672A\u663E\u793A \u2014 \u6309 esc \u53D6\u6D88\uFF0C\u8BA9\u6A21\u578B\u62C6\u5206\u540E\u518D\u8BD5"
   },
   editConfirm: {
     footer: "[y/Enter] \u5E94\u7528 \xB7 [n] \u62D2\u7EDD\u5E76\u8BF4\u660E \xB7 [a] \u5E94\u7528\u5269\u4F59 \xB7 [A] \u5207\u6362 AUTO \xB7 [\u2191\u2193/Space] \u6EDA\u52A8 \xB7 [Esc] \u4E2D\u6B62",
@@ -2398,6 +2503,7 @@ var zhCN = {
     status: "web_search {status} \u2014 try: \u641C\u7D22\u540E\u7AEF\u8FD4\u56DE\u9519\u8BEF\uFF1B\u8BF7\u6539\u5199\u67E5\u8BE2\uFF0C\u6216\u4F7F\u7528 /search-engine mojeek|searxng \u5207\u6362\u5F15\u64CE",
     rateLimit429: "web_search 429 \u2014 try: \u7B49\u5F85 10 \u79D2\u540E\u91CD\u8BD5\uFF0C\u6216\u6539\u5199\u67E5\u8BE2\uFF1B\u641C\u7D22\u540E\u7AEF\u6B63\u5728\u5BF9\u8BE5\u5BA2\u6237\u7AEF\u8FDB\u884C\u9650\u6D41",
     forbidden403: "web_search 403 \u2014 try: \u641C\u7D22\u540E\u7AEF\u62D2\u7EDD\u8BE5\u5BA2\u6237\u7AEF\u8BBF\u95EE\uFF1B\u4F7F\u7528 /search-engine mojeek|searxng \u5207\u6362\u5F15\u64CE\uFF0C\u6216\u7A0D\u540E\u91CD\u8BD5",
+    serverError5xx: "web_search {status} \u2014 try: \u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00\u641C\u7D22 URL\uFF1B\u82E5\u80FD\u52A0\u8F7D\u5219\u5C5E\u4E34\u65F6\u6545\u969C\uFF0C\u7B49 30 \u79D2\u91CD\u8BD5\u5373\u53EF",
     mojeekBlocked: "web_search: Mojeek \u53CD\u722C\u9875\u9762 \u2014 \u9891\u7387\u9650\u5236\u6216\u88AB\u5C4F\u853D \u2014 try: \u7B49\u5F85 30 \u79D2\u540E\u91CD\u8BD5\uFF0C\u6216\u4F7F\u7528 /search-engine searxng \u5207\u6362\u5F15\u64CE",
     mojeekNoResults: "web_search: \u8FD4\u56DE 0 \u6761\u7ED3\u679C\u4F46\u54CD\u5E94\u770B\u8D77\u6765\u4E0D\u662F\u6B63\u5E38\u7A7A\u7ED3\u679C\u9875\uFF08{chars} \u5B57\u7B26\uFF0C\u524D 120 \u5B57\u7B26\uFF1A{preview}\uFF09\u2014 try: \u4F7F\u7528\u66F4\u7B80\u5355\u7684\u5173\u952E\u8BCD\u6539\u5199\u67E5\u8BE2\uFF0C\u6216\u4F7F\u7528 /search-engine searxng \u5207\u6362\u5F15\u64CE",
     invalidEndpoint: 'web_search: \u65E0\u6548\u7684 SearXNG \u7AEF\u70B9 "{endpoint}" \u2014 try: \u4F7F\u7528 /search-endpoint http://host:port \u8BBE\u7F6E\u6709\u6548\u7684 URL',
@@ -2407,6 +2513,7 @@ var zhCN = {
     fetchStatus: "web_fetch {status} for {url} \u2014 try: \u5728\u6D4F\u89C8\u5668\u4E2D\u786E\u8BA4\u8BE5 URL \u80FD\u5426\u8BBF\u95EE\uFF1B\u8BE5\u72B6\u6001\u7801\u8868\u660E\u76EE\u6807\u4E3B\u673A\u8FD4\u56DE\u4E86\u9519\u8BEF\u9875\u9762",
     fetchRateLimit429: "web_fetch 429 for {url} \u2014 try: \u7B49\u5F85 10 \u79D2\u540E\u91CD\u8BD5\uFF1B\u76EE\u6807\u4E3B\u673A\u6B63\u5728\u5BF9\u8BE5\u5BA2\u6237\u7AEF\u8FDB\u884C\u9650\u6D41",
     fetchForbidden403: "web_fetch 403 for {url} \u2014 try: \u76EE\u6807\u4E3B\u673A\u62D2\u7EDD\u8BE5\u5BA2\u6237\u7AEF\u8BBF\u95EE\uFF1B\u8BE5\u9875\u9762\u53EF\u80FD\u9700\u8981\u767B\u5F55\u6216\u5C4F\u853D\u722C\u866B \u2014 \u6539\u7528 web_search \u6458\u8981",
+    fetchServerError5xx: "web_fetch {status} for {url} \u2014 try: \u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00\u8BE5 URL\uFF1B\u82E5\u80FD\u52A0\u8F7D\u5219\u5C5E\u4E34\u65F6\u6545\u969C\uFF0C\u7B49 30 \u79D2\u91CD\u8BD5\u5373\u53EF",
     fetchTimeout: "web_fetch: timed out after {ms}ms for {url} \u2014 try: \u66F4\u77ED\u7684 URL \u6216\u66F4\u5C0F\u7684\u5185\u5BB9\uFF1B\u53EF\u80FD\u662F CDN \u8F83\u6162\uFF0C\u6216\u91CD\u8BD5\u4E00\u6B21",
     fetchTooLarge: "web_fetch \u62D2\u7EDD\uFF1Acontent-length {len} \u5B57\u8282\u8D85\u8FC7\u4E0A\u9650 {cap} \u5B57\u8282\uFF08{url}\uFF09\u2014 try: \u6539\u6362\u5176\u4ED6 URL \u83B7\u53D6\u8F83\u5C0F\u7684\u5185\u5BB9\uFF1B\u8BE5\u9875\u9762\u8FC7\u5927\u65E0\u6CD5\u83B7\u53D6",
     fetchBodyTooLarge: "web_fetch \u62D2\u7EDD\uFF1A\u54CD\u5E94\u4F53\u8D85\u8FC7 {cap} \u5B57\u8282\u4E0A\u9650\uFF08\u5DF2\u63A5\u6536 {seen} \u5B57\u8282\uFF09\u2014 try: \u6539\u6362\u5176\u4ED6 URL \u83B7\u53D6\u8F83\u5C0F\u7684\u5185\u5BB9\uFF1B\u8BE5\u9875\u9762\u6D41\u5F0F\u4F20\u8F93\u8D85\u51FA\u5927\u5C0F\u4E0A\u9650",
@@ -2429,7 +2536,8 @@ var zhCN = {
     reasoningEllipsis: "\u63A8\u7406\u4E2D\u2026",
     error: "\u9519\u8BEF",
     doctor: "\u73AF\u5883\u8BCA\u65AD",
-    you: "\u4F60"
+    you: "\u4F60",
+    task: "\u4EFB\u52A1"
   },
   cardLabels: {
     prompt: "\u63D0\u793A",
@@ -2509,7 +2617,9 @@ var zhCN = {
     noData: "\u65E0\u68C0\u67E5\u6570\u636E",
     healthy: "\u6B63\u5E38 \xB7 {ms}ms",
     slow: "\u7F13\u6162 \xB7 {ms}ms",
-    verySlow: "\u975E\u5E38\u6162 \xB7 {ms}ms"
+    verySlow: "\u975E\u5E38\u6162 \xB7 {ms}ms",
+    slowToast: "\u26A0 MCP `{name}` \u54CD\u5E94\u7F13\u6162 \xB7 P95 {seconds}s \xB7 \u6700\u8FD1 {sampleSize} \u6B21\u8C03\u7528",
+    emptyHint: "\u2139 \u672A\u914D\u7F6E MCP \u670D\u52A1\u5668 \u2014\u2014 \u53EF\u5C1D\u8BD5\uFF1A`reasonix setup` \u91CD\u65B0\u9009\u62E9\uFF0C\u6216 `reasonix mcp install filesystem`"
   },
   denyContextInput: {
     description: "\u544A\u8BC9\u6A21\u578B\u4F60\u4E3A\u4EC0\u4E48\u62D2\u7EDD\u4E86\u3002\u6A21\u578B\u4E0B\u6B21\u4F1A\u770B\u5230\u4F60\u7684\u7406\u7531\u4F5C\u4E3A\u989D\u5916\u7684\u4E0A\u4E0B\u6587\u3002"
@@ -2565,6 +2675,16 @@ var zhCN = {
     empty: "\u6CA1\u6709\u6302\u8F7D MCP \u670D\u52A1\u5668\u3002\u8FD0\u884C `reasonix setup` \u9009\u62E9\u4E00\u4E9B\uFF0C\u6216\u4F7F\u7528 --mcp \u542F\u52A8\u3002",
     serverCount: "{count} \u4E2A\u670D\u52A1\u5668",
     footer: "\u2191\u2193 \u9009\u62E9 \xB7 [r] \u91CD\u8FDE \xB7 [d] \u7981\u7528 \xB7 Esc \u9000\u51FA"
+  },
+  mcpLifecycle: {
+    handshake: "\u63E1\u624B\u4E2D\u2026",
+    connected: "\u5DF2\u8FDE\u63A5",
+    failed: "\u5931\u8D25",
+    disabled: "\u5DF2\u7981\u7528",
+    reconnect: "\u91CD\u8FDE\u4E2D\u2026",
+    initDetail: "\u521D\u59CB\u5316 \u2192 tools/list \u2192 resources/list",
+    reconnectDetail: "\u65AD\u5F00\u65E7\u8FDE\u63A5 \xB7 \u91CD\u65B0\u63E1\u624B \xB7 \u5217\u51FA\u5DE5\u5177",
+    disabledDetail: "\u901A\u8FC7 /mcp disable {name}"
   },
   checkpointPicker: {
     title: "\u6062\u590D\u68C0\u67E5\u70B9 \u2014 {workspace}",
@@ -2700,4 +2820,4 @@ export {
   tObj,
   t
 };
-//# sourceMappingURL=chunk-TWJAH4XD.js.map
+//# sourceMappingURL=chunk-MHGPBJ2T.js.map
