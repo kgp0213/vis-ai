@@ -50,6 +50,9 @@
   --s5: #ff8b81;  /* coral */
   --s6: #d2a8ff;  /* purple */
 
+  /* Gradients — derived from accent family; used for h3 pill */
+  --grad-8: #f0abfc;
+
   /* Borders */
   --bd:         #1a1d24;
   --bd-strong:  #232831;
@@ -1144,7 +1147,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   padding: 2px 10px;
   margin: 0.8em 0 0.5em;
   border-radius: var(--r);
-  color: #0a0e14;
+  color: var(--bg);
   font-weight: 700;
   line-height: 1.4;
 }
@@ -3059,8 +3062,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   --c-err:      #f56c6c;   /* error red */
   --c-info:     #409eff;
 
-  /* Code — darken for light bg to keep readability */
-  --c-code:     #b87a14;   /* darker amber for inline code / code blocks on light bg */
+  /* Gradients */
+  --grad-8:     #c084d6;   /* darkened for light bg */
 
   /* Chart spectrum */
   --s1: #409eff;
