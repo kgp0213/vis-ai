@@ -3165,7 +3165,7 @@ async function handleSubmit(method, _rest, body, ctx) {
     };
   }
   const { prompt, session } = parseBody11(body);
-  if (typeof prompt !== "string" || !prompt.trim()) {
+  if (typeof prompt !== "string" || (!prompt.trim() && !session)) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
   const result = await ctx.submitPrompt(prompt, session || null);
