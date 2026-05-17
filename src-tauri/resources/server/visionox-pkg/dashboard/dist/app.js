@@ -29968,7 +29968,7 @@ function App() {
       } catch {}
     };
     tick();
-    const id = setInterval(tick, 3e3);
+    const id = setInterval(tick, 8e3);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
   const TAB_SECTIONS = tabSections();
