@@ -93,7 +93,6 @@ const [
   {
     readConfig, writeConfig, loadApiKey, loadBaseUrl, loadEditMode,
     searchEnabled, webSearchEngine, webSearchEndpoint,
-    loadBingApiKey,
     loadProjectShellAllowed,
     mcpEnvFor,
     loadSemanticEmbeddingUserConfig,
@@ -227,11 +226,7 @@ if (!config.editMode) {
 
 // Web tools — search + fetch (not workspace-dependent)
 if (searchEnabled(configPath)) {
-  registerWebTools(tools, {
-    webSearchEngine: webSearchEngine(configPath),
-    webSearchEndpoint: webSearchEndpoint(configPath),
-    bingApiKey: loadBingApiKey(configPath),
-  });
+  registerWebTools(tools, {});
   console.error(`[launcher] web tools registered`);
 }
 

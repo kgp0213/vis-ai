@@ -44,6 +44,7 @@ import {
 import {
   DEFAULT_INDEX_EXCLUDES,
   addProjectPathAllowed,
+  loadBingApiKey,
   loadMemoryTypeRegistry,
   loadProjectPathAllowed,
   require_picomatch,
@@ -9522,9 +9523,9 @@ function registerWebTools(registry, opts = {}) {
       required: ["query"]
     },
     fn: async (args, ctx) => {
-      const engine = opts.webSearchEngine ?? webSearchEngine();
-      const endpoint = opts.webSearchEndpoint ?? webSearchEndpoint();
-      const bingApiKey = opts.bingApiKey;
+      const engine = webSearchEngine();
+      const endpoint = webSearchEndpoint();
+      const bingApiKey = loadBingApiKey();
       const results = await webSearch(args.query, {
         topK: args.topK ?? defaultTopK,
         signal: ctx?.signal,
