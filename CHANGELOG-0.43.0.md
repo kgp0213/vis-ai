@@ -948,3 +948,37 @@ Web Search:  [ON] [OFF]
 | # | 文件 | 修改内容 |
 |---|------|---------|
 | 1 | `app.css` | 新增 `--c-code` + 3 处浅色主题代码块样式覆盖 |
+
+### 29.7 模型预设切换后状态栏不更新
+
+**问题**：对话框上方选择 auto/flash/pro 后，输入框下方的模型名始终显示 `deepseek-v4-flash`，不随预设变化。
+
+**根因**：`launcher.mjs` 中 `applyPresetLive` 为空实现（只打 log），未调用 `loop?.configure()` 实时切换模型。
+
+**修复**：`applyPresetLive` 根据 preset 值调用 `loop?.configure({ model, autoEscalate })`。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `launcher.mjs` | `applyPresetLive` 从空实现改为实时配置 loop 模型 |
+
+### 29.8 导航栏重复 v3.png 图标
+
+**问题**：导航栏 brand 区域出现两个 v3.png 图标，一大一小重叠。
+
+**根因**：`index.html` 中 CSS `.glyph { background: url(/assets/v3.png) }` 和 `app.js` 中 `<img src="/assets/v3.png">` 同时渲染。
+
+**修复**：删除 `index.html` 中多余的 `.glyph` CSS 规则。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `dashboard/index.html` | 移除 `.app-side .brand .glyph` CSS 背景图 |
+
+---
+
+## 三十、导航栏宽度缩减（2026-05-17）
+
+**内容**：导航栏从 240px → 144px（缩减 40%），折叠态 64px → 40px。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `app.css` | `.app` grid-template-columns 240px→144px, `.collapsed` 64px→40px |

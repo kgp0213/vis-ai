@@ -24184,7 +24184,7 @@ function ChatPanel() {
     (m3) => html4`
                   <button
                     key=${m3}
-                    class="mode-btn ${editMode === m3 ? "active" : ""} ${m3 === "yolo" ? "yolo" : ""} ${m3 === "admin" ? "admin" : ""}"
+                    class="mode-btn ${editMode === m3 ? "active" : ""} ${m3 === "review" ? "review" : ""} ${m3 === "auto" ? "auto" : ""} ${m3 === "yolo" ? "yolo" : ""} ${m3 === "admin" ? "admin" : ""}"
                     onClick=${() => setEditMode(m3)}
                     title=${m3 === "review" ? t4("chat.editReviewTitle") : m3 === "auto" ? t4("chat.editAutoTitle") : m3 === "yolo" ? t4("chat.editYoloTitle") : t4("chat.editAdminTitle")}
                   >${m3}</button>

@@ -47,3 +47,5 @@ icons/
 # Env/secrets
 .env
 .env.local
+.workbuddy/
+.workbuddy/

@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Visionox UI Preview — Design System v2.0</title>
+  <link rel="stylesheet" href="app-v2.css">
+  <style>
+    /* Preview-specific styles */
+    .preview-header {
+      background: var(--surface-base);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: var(--space-4) var(--space-6);
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: var(--space-4);
+    }
+
+    .preview-title {
+      font-size: var(--text-lg);
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .preview-subtitle {
+      font-size: var(--text-sm);
+      color: var(--text-tertiary);
+    }
+
+    .preview-theme-toggle {
+      margin-left: auto;
+      display: flex;
+      gap: var(--space-2);
+    }
+
+    .preview-content {
+      padding: var(--space-6);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .preview-section {
+      margin-bottom: var(--space-12);
+    }
+
+    .preview-section-title {
+      font-size: var(--text-xl);
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: var(--space-2);
+      padding-bottom: var(--space-3);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .preview-section-desc {
+      color: var(--text-secondary);
+      margin-bottom: var(--space-6);
+    }
+
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: var(--space-4);
+    }
+
+    .preview-grid-2 {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .preview-item {
+      padding: var(--space-4);
+      background: var(--surface-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+    }
+
+    .preview-item-title {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: var(--space-3);
+    }
+
+    .preview-item-content {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+
+    .color-swatch {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-2);
+      background: var(--surface-overlay);
+      border-radius: var(--radius-md);
+    }
+
+    .color-swatch-preview {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+
+    .color-swatch-info {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }
+
+    .color-swatch-name {
+      color: var(--text-primary);
+    }
+
+    .color-swatch-hex {
+      color: var(--text-tertiary);
+    }
+
+    .typography-sample {
+      padding: var(--space-4);
+      background: var(--surface-overlay);
+      border-radius: var(--radius-md);
+    }
+
+    .typography-sample .heading {
+      color: var(--text-primary);
+      margin-bottom: var(--space-1);
+    }
+
+    .typography-sample .body-text {
+      color: var(--text-secondary);
+      font-size: var(--text-sm);
+    }
+
+    .spacing-demo {
+      display: flex;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+
+    .spacing-demo-item {
+      background: var(--surface-overlay);
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--text-tertiary);
+    }
+
+    .demo-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-4);
+      padding: var(--space-3) 0;
+      border-bottom: 1px solid var(--border-subtle);
+      flex-wrap: wrap;
+    }
+
+    .demo-row:last-child {
+      border-bottom: none;
+    }
+
+    .demo-row-label {
+      min-width: 150px;
+      font-size: var(--text-sm);
+      color: var(--text-secondary);
+    }
+
+    /* Chat demo */
+    .chat-demo {
+      background: var(--surface-base);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      max-width: 600px;
+    }
+
+    .chat-demo-header {
+      padding: var(--space-3) var(--space-4);
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    .chat-demo-header-title {
+      font-size: var(--text-sm);
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .chat-demo-body {
+      padding: var(--space-4);
+      min-height: 300px;
+    }
+
+    .chat-demo-input {
+      padding: var(--space-3) var(--space-4);
+      border-top: 1px solid var(--border-subtle);
+      background: var(--surface-raised);
+      display: flex;
+      gap: var(--space-3);
+    }
+  </style>
+</head>
+<body>
+  <!-- Preview Header -->
+  <header class="preview-header">
+    <div>
+      <h1 class="preview-title">Visionox UI Design System v2.0</h1>
+      <p class="preview-subtitle">Modern dark theme with warm amber accents</p>
+    </div>
+    <div class="preview-theme-toggle">
+      <button class="btn btn-secondary" onclick="setTheme('dark')">Dark</button>
+      <button class="btn btn-ghost" onclick="setTheme('light')">Light</button>
+    </div>
+  </header>
+
+  <main class="preview-content">
+    <!-- Color System -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Color System</h2>
+      <p class="preview-section-desc">A warm, refined palette centered around amber accents — professional yet distinctive.</p>
+      
+      <h3 style="font-size: var(--text-base); color: var(--text-secondary); margin-bottom: var(--space-3);">Brand Colors</h3>
+      <div class="preview-grid">
+        <div class="preview-item">
+          <div class="preview-item-title">Primary Accent</div>
+          <div class="preview-item-content">
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--accent-primary);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Accent Primary</div>
+                <div class="color-swatch-hex">#f5a623</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--accent-primary-hover);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Accent Hover</div>
+                <div class="color-swatch-hex">#ffc04d</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Semantic Colors</div>
+          <div class="preview-item-content">
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--color-success);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Success</div>
+                <div class="color-swatch-hex">#34d399</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--color-warning);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Warning</div>
+                <div class="color-swatch-hex">#fbbf24</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--color-error);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Error</div>
+                <div class="color-swatch-hex">#f87171</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--color-info);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Info</div>
+                <div class="color-swatch-hex">#60a5fa</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Surface Colors</div>
+          <div class="preview-item-content">
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--surface-base); border: 1px solid var(--border-default);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Base</div>
+                <div class="color-swatch-hex">#0c0d10</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--surface-raised); border: 1px solid var(--border-default);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Raised</div>
+                <div class="color-swatch-hex">#13151a</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--surface-overlay); border: 1px solid var(--border-default);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Overlay</div>
+                <div class="color-swatch-hex">#1a1d24</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Text Colors</div>
+          <div class="preview-item-content">
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--text-primary);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Primary</div>
+                <div class="color-swatch-hex">#f0f0f2</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--text-secondary);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Secondary</div>
+                <div class="color-swatch-hex">#a0a4ad</div>
+              </div>
+            </div>
+            <div class="color-swatch">
+              <div class="color-swatch-preview" style="background: var(--text-tertiary);"></div>
+              <div class="color-swatch-info">
+                <div class="color-swatch-name">Tertiary</div>
+                <div class="color-swatch-hex">#6b7080</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Typography -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Typography</h2>
+      <p class="preview-section-desc">Clean hierarchy with proper spacing and font weights.</p>
+      
+      <div class="preview-grid">
+        <div class="preview-item">
+          <div class="preview-item-title">Type Scale</div>
+          <div class="typography-sample">
+            <p class="heading" style="font-size: var(--text-2xl); font-weight: 700;">2rem — Page Title</p>
+            <p class="heading" style="font-size: var(--text-xl); font-weight: 600;">1.5rem — Section Title</p>
+            <p class="heading" style="font-size: var(--text-lg); font-weight: 500;">1.125rem — Subheading</p>
+            <p class="body-text" style="font-size: var(--text-base);">0.9375rem — Body text for comfortable reading</p>
+            <p class="body-text" style="font-size: var(--text-sm);">0.8125rem — Secondary UI text</p>
+            <p class="body-text" style="font-size: var(--text-xs);">0.75rem — Caption and metadata</p>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Font Stacks</div>
+          <div class="preview-item-content">
+            <div>
+              <div style="font-size: var(--text-xs); color: var(--text-tertiary); margin-bottom: var(--space-1);">Sans-serif</div>
+              <div style="font-family: var(--font-sans); color: var(--text-primary);">The quick brown fox jumps over the lazy dog.</div>
+            </div>
+            <div>
+              <div style="font-size: var(--text-xs); color: var(--text-tertiary); margin-bottom: var(--space-1);">Monospace</div>
+              <div style="font-family: var(--font-mono); color: var(--text-primary);">const greeting = "Hello, Visionox!";</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Buttons -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Buttons</h2>
+      <p class="preview-section-desc">Consistent styling with hover states and focus indicators.</p>
+      
+      <div class="preview-item">
+        <div class="preview-item-title">Button Variants</div>
+        <div style="display: flex; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-4); background: var(--surface-overlay); border-radius: var(--radius-md);">
+          <button class="btn btn-primary">Primary</button>
+          <button class="btn btn-secondary">Secondary</button>
+          <button class="btn btn-ghost">Ghost</button>
+          <button class="btn btn-danger">Danger</button>
+          <button class="btn btn-primary" disabled>Disabled</button>
+        </div>
+      </div>
+      
+      <div class="preview-item" style="margin-top: var(--space-4);">
+        <div class="preview-item-title">Button Sizes</div>
+        <div style="display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-4); background: var(--surface-overlay); border-radius: var(--radius-md);">
+          <button class="btn btn-sm btn-primary">Small</button>
+          <button class="btn btn-primary">Default</button>
+          <button class="btn btn-lg btn-primary">Large</button>
+          <button class="btn btn-icon btn-primary">⬆</button>
+        </div>
+      </div>
+      
+      <div class="preview-item" style="margin-top: var(--space-4);">
+        <div class="preview-item-title">Button with Icons</div>
+        <div style="display: flex; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-4); background: var(--surface-overlay); border-radius: var(--radius-md);">
+          <button class="btn btn-primary">
+            <span>+</span> New Session
+          </button>
+          <button class="btn btn-secondary">
+            <span>⚙</span> Settings
+          </button>
+          <button class="btn btn-ghost">
+            <span>←</span> Back
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Form Elements -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Form Elements</h2>
+      <p class="preview-section-desc">Clean inputs with clear focus states and proper feedback.</p>
+      
+      <div class="preview-grid preview-grid-2">
+        <div class="preview-item">
+          <div class="preview-item-title">Text Inputs</div>
+          <div class="preview-item-content">
+            <div class="form-row">
+              <label class="lbl">Default Input</label>
+              <input type="text" placeholder="Enter your API key...">
+            </div>
+            <div class="form-row">
+              <label class="lbl">Filled Input</label>
+              <input type="text" value="sk-deepseek-xxxxx">
+            </div>
+            <div class="form-row">
+              <label class="lbl">Disabled Input</label>
+              <input type="text" value="Cannot edit" disabled>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Select & Textarea</div>
+          <div class="preview-item-content">
+            <div class="form-row">
+              <label class="lbl">Model Selection</label>
+              <select>
+                <option>deepseek-chat</option>
+                <option>deepseek-coder</option>
+                <option>deepseek-reasoner</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label class="lbl">Description</label>
+              <textarea placeholder="Optional description..."></textarea>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Checkboxes</div>
+          <div class="preview-item-content">
+            <label class="checkbox-row">
+              <div class="box on"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6L5 9L10 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              Enable streaming
+            </label>
+            <label class="checkbox-row">
+              <div class="box"></div>
+              Auto-save sessions
+            </label>
+            <label class="checkbox-row">
+              <div class="box on"></div>
+              Show line numbers
+            </label>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Progress Bars</div>
+          <div class="preview-item-content">
+            <div class="progress-row">
+              <span class="lbl">Context</span>
+              <span class="v">8K / 64K</span>
+              <div class="progress"><div class="progress-fill" style="width: 12.5%;"></div></div>
+            </div>
+            <div class="progress-row">
+              <span class="lbl">Cache</span>
+              <span class="v">89%</span>
+              <div class="progress ok"><div class="progress-fill" style="width: 89%;"></div></div>
+            </div>
+            <div class="progress-row">
+              <span class="lbl">Tokens</span>
+              <span class="v">75%</span>
+              <div class="progress warn"><div class="progress-fill" style="width: 75%;"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Badges & Pills -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Badges & Pills</h2>
+      <p class="preview-section-desc">Status indicators and tags with semantic colors.</p>
+      
+      <div class="preview-item">
+        <div class="preview-item-title">Badge Variants</div>
+        <div style="display: flex; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-4); background: var(--surface-overlay); border-radius: var(--radius-md);">
+          <span class="badge badge-default">Default</span>
+          <span class="badge badge-primary">Primary</span>
+          <span class="badge badge-success">Success</span>
+          <span class="badge badge-warning">Warning</span>
+          <span class="badge badge-error">Error</span>
+        </div>
+      </div>
+      
+      <div class="preview-item" style="margin-top: var(--space-4);">
+        <div class="preview-item-title">Pill Chips</div>
+        <div style="display: flex; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-4); background: var(--surface-overlay); border-radius: var(--radius-md);">
+          <span class="pill active">JavaScript</span>
+          <span class="pill">TypeScript</span>
+          <span class="pill ok">Python</span>
+          <span class="pill warn">Rust</span>
+          <span class="pill err">Go</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Cards -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Cards</h2>
+      <p class="preview-section-desc">Content containers with subtle elevation and hover effects.</p>
+      
+      <div class="preview-grid">
+        <div class="card">
+          <div class="card-h">
+            <span class="glyph">◆</span>
+            <span class="title">Session Card</span>
+          </div>
+          <div class="card-b">
+            This is a basic card with a header and body. Cards have subtle borders and shadow on hover.
+          </div>
+        </div>
+        
+        <div class="card accent-brand">
+          <div class="card-h">
+            <span class="glyph">⚡</span>
+            <span class="title">Accent Card</span>
+          </div>
+          <div class="card-b">
+            Cards can have accent borders on the left to indicate their purpose or category.
+          </div>
+        </div>
+        
+        <div class="card accent-warn">
+          <div class="card-h">
+            <span class="glyph">⚠</span>
+            <span class="title">Warning Card</span>
+          </div>
+          <div class="card-b">
+            Use warning cards for cautionary information that needs attention.
+          </div>
+        </div>
+        
+        <div class="card accent-err">
+          <div class="card-h">
+            <span class="glyph">✕</span>
+            <span class="title">Error Card</span>
+          </div>
+          <div class="card-b">
+            Error cards highlight critical issues that need immediate resolution.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Chat Demo -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Chat Interface</h2>
+      <p class="preview-section-desc">Modern chat UI with message bubbles and tool cards.</p>
+      
+      <div class="chat-demo">
+        <div class="chat-demo-header">
+          <span class="badge badge-success" style="font-size: 8px; padding: 2px 6px;">●</span>
+          <span class="chat-demo-header-title">New Session</span>
+        </div>
+        
+        <div class="chat-demo-body">
+          <div class="chat-msg user">
+            <div class="glyph">Y</div>
+            <div class="body">
+              Can you help me create a REST API with Express and TypeScript?
+            </div>
+          </div>
+          
+          <div class="chat-msg assistant">
+            <div class="glyph">V</div>
+            <div class="body">
+              <p>Of course! I'd be happy to help you set up a REST API with Express and TypeScript.</p>
+              <p>Let me create the basic project structure with proper type definitions and middleware.</p>
+            </div>
+          </div>
+          
+          <div class="chat-msg tool">
+            <div class="glyph">📄</div>
+            <div class="tool-card">
+              <div class="tool-card-head">
+                <span class="tool-card-icon">write_file</span>
+                <span class="tool-card-name">write_file</span>
+                <span class="tool-card-path">src/index.ts</span>
+              </div>
+              <div class="tool-card-cmd">Creating Express server with TypeScript...</div>
+              <div class="tool-card-output">import express from 'express';
+const app = express();
+app.listen(3000);</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="chat-demo-input">
+          <textarea placeholder="Type your message..." style="flex: 1;"></textarea>
+          <button class="chat-send-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tables -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Tables</h2>
+      <p class="preview-section-desc">Clean data tables with hover states.</p>
+      
+      <div class="preview-item">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Language</th>
+              <th class="num">Lines</th>
+              <th>Modified</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="path">src/index.ts</td>
+              <td>TypeScript</td>
+              <td class="num">156</td>
+              <td class="dim">2 hours ago</td>
+            </tr>
+            <tr>
+              <td class="path">src/routes/api.ts</td>
+              <td>TypeScript</td>
+              <td class="num">89</td>
+              <td class="dim">Yesterday</td>
+            </tr>
+            <tr>
+              <td class="path">package.json</td>
+              <td>JSON</td>
+              <td class="num">42</td>
+              <td class="dim">3 days ago</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Mode Picker -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Mode Picker</h2>
+      <p class="preview-section-desc">Segmented control for editing modes.</p>
+      
+      <div class="preview-item">
+        <div class="preview-item-title">Edit Modes</div>
+        <div style="display: flex; gap: var(--space-4); flex-wrap: wrap; padding: var(--space-4); background: var(--surface-overlay); border-radius: var(--radius-md);">
+          <div class="mode-picker">
+            <button class="mode-btn active">Review</button>
+            <button class="mode-btn">Auto</button>
+            <button class="mode-btn">Yolo</button>
+            <button class="mode-btn">Admin</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Spacing -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Spacing Scale</h2>
+      <p class="preview-section-desc">Consistent spacing based on 4px unit.</p>
+      
+      <div class="preview-item">
+        <div class="spacing-demo">
+          <div class="spacing-demo-item" style="width: var(--space-1); height: var(--space-1);">1</div>
+          <div class="spacing-demo-item" style="width: var(--space-2); height: var(--space-2);">2</div>
+          <div class="spacing-demo-item" style="width: var(--space-3); height: var(--space-3);">3</div>
+          <div class="spacing-demo-item" style="width: var(--space-4); height: var(--space-4);">4</div>
+          <div class="spacing-demo-item" style="width: var(--space-5); height: var(--space-5);">5</div>
+          <div class="spacing-demo-item" style="width: var(--space-6); height: var(--space-6);">6</div>
+          <div class="spacing-demo-item" style="width: var(--space-8); height: var(--space-8);">8</div>
+          <div class="spacing-demo-item" style="width: var(--space-10); height: var(--space-10);">10</div>
+          <div class="spacing-demo-item" style="width: var(--space-12); height: var(--space-12);">12</div>
+          <div class="spacing-demo-item" style="width: var(--space-16); height: var(--space-16);">16</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Animation Preview -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Motion & Animation</h2>
+      <p class="preview-section-desc">Smooth transitions with proper easing curves.</p>
+      
+      <div class="preview-grid">
+        <div class="preview-item">
+          <div class="preview-item-title">Message Enter</div>
+          <div style="background: var(--surface-overlay); border-radius: var(--radius-md); padding: var(--space-4);">
+            <div class="chat-msg" style="animation: message-enter 0.3s var(--ease-out-quart);">
+              <div class="glyph">V</div>
+              <div class="body">
+                <p style="margin: 0;">Animated message appearance</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Toast Enter</div>
+          <div style="background: var(--surface-overlay); border-radius: var(--radius-md); padding: var(--space-4);">
+            <div class="toast" style="animation: toast-enter 0.3s var(--ease-out-quart);">
+              <span class="g">✓</span>
+              <div>
+                <div style="font-size: var(--text-sm); font-weight: 500;">Success!</div>
+                <div style="font-size: var(--text-xs); color: var(--text-tertiary);">Session saved</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Progress Bar</div>
+          <div style="background: var(--surface-overlay); border-radius: var(--radius-md); padding: var(--space-4);">
+            <div class="progress-row">
+              <span class="lbl">Uploading</span>
+              <span class="v">67%</span>
+              <div class="progress"><div class="progress-fill" style="width: 67%;"></div></div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="preview-item">
+          <div class="preview-item-title">Ring Progress</div>
+          <div style="background: var(--surface-overlay); border-radius: var(--radius-md); padding: var(--space-4); display: flex; justify-content: center;">
+            <div class="ring" style="width: 80px; height: 80px;">
+              <svg width="80" height="80">
+                <circle class="ring-bg" cx="40" cy="40" r="34" stroke-width="6"/>
+                <circle class="ring-fill" cx="40" cy="40" r="34" stroke-width="6" stroke-dasharray="213.6" stroke-dashoffset="53.4"/>
+              </svg>
+              <div class="ring-label">
+                <span class="v">75%</span>
+                <span class="u">Used</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Code Block -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Code Blocks</h2>
+      <p class="preview-section-desc">Syntax highlighted code with proper styling.</p>
+      
+      <div class="preview-item">
+        <div class="code">
+<span class="com">// DeepSeek API Configuration</span>
+<span class="kw">const</span> config = {
+  <span class="key">model</span>: <span class="str">"deepseek-chat"</span>,
+  <span class="key">temperature</span>: <span class="num">0.7</span>,
+  <span class="key">maxTokens</span>: <span class="num">2048</span>
+};
+
+<span class="kw">async function</span> <span class="fn">generateResponse</span>(prompt) {
+  <span class="kw">const</span> response = <span class="kw">await</span> fetch(apiUrl, {
+    <span class="key">method</span>: <span class="str">"POST"</span>,
+    <span class="key">headers</span>: { <span class="key">"Authorization"</span>: <span class="str">`Bearer <span class="num">${</span>apiKey<span class="num">}</span>`</span> }
+  });
+  <span class="kw">return</span> response.json();
+}</div>
+      </div>
+    </section>
+
+    <!-- Diff Block -->
+    <section class="preview-section">
+      <h2 class="preview-section-title">Diff View</h2>
+      <p class="preview-section-desc">File change visualization with additions and deletions.</p>
+      
+      <div class="preview-item">
+        <div class="diff">
+          <div class="diff-h">
+            <span class="file">src/index.ts</span>
+            <span class="stat"><span class="add">+12</span> <span class="rem">-3</span></span>
+          </div>
+          <div class="diff-row ctx">
+            <div class="gut">1</div>
+            <div class="txt">import express from 'express';</div>
+          </div>
+          <div class="diff-row rem">
+            <div class="gut">2</div>
+            <div class="txt">-const port = 3000;</div>
+          </div>
+          <div class="diff-row add">
+            <div class="gut">2</div>
+            <div class="txt">+const PORT = process.env.PORT || 3000;</div>
+          </div>
+          <div class="diff-row add">
+            <div class="gut">3</div>
+            <div class="txt">+const HOST = process.env.HOST || 'localhost';</div>
+          </div>
+          <div class="diff-row ctx">
+            <div class="gut">4</div>
+            <div class="txt"></div>
+          </div>
+          <div class="diff-row add">
+            <div class="gut">5</div>
+            <div class="txt">+app.use(express.json());</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer style="text-align: center; padding: var(--space-8) 0; border-top: 1px solid var(--border-subtle); margin-top: var(--space-8);">
+      <p style="color: var(--text-tertiary); font-size: var(--text-sm);">
+        Visionox UI Design System v2.0 — Built with care for developers
+      </p>
+    </footer>
+  </main>
+
+  <script>
+    function setTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      
+      // Update button states
+      const buttons = document.querySelectorAll('.preview-theme-toggle .btn');
+      buttons.forEach(btn => {
+        btn.classList.remove('btn-secondary', 'btn-ghost');
+        if (btn.textContent.toLowerCase() === theme) {
+          btn.classList.add('btn-secondary');
+        } else {
+          btn.classList.add('btn-ghost');
+        }
+      });
+    }
+    
+    // Initialize
+    setTheme('dark');
+  </script>
+</body>
+</html>
