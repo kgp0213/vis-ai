@@ -600,7 +600,16 @@ const ctx = {
     return m;
   },
   setPlanMode: () => {},
-  applyPresetLive: (name) => { console.error(`[launcher] preset: ${name}`); },
+  applyPresetLive: (name) => {
+    console.error(`[launcher] preset: ${name}`);
+    if (name === "pro") {
+      loop?.configure({ model: "deepseek-v4-pro", autoEscalate: false });
+    } else if (name === "flash") {
+      loop?.configure({ model: "deepseek-v4-flash", autoEscalate: false });
+    } else {
+      loop?.configure({ model: "deepseek-v4-flash", autoEscalate: true });
+    }
+  },
   applyEffortLive: (effort) => { loop?.configure({ reasoningEffort: effort }); },
   applyModelLive: (m) => { loop?.configure({ model: m }); },
   setProNextLive: () => {},
