@@ -10064,7 +10064,7 @@ function registerFilesystemTools(registry, opts) {
     if (typeof raw !== "string" || raw.length === 0) {
       throw new Error("path must be a non-empty string");
     }
-    if (allowAllPaths()) return pathMod4.resolve(raw);
+    if (allowAllPaths()) return pathMod4.resolve(rootDir, raw);
     if (looksLikeAbsoluteSystemPath(raw)) {
       const abs = pathMod4.resolve(raw);
       if (pathIsUnder(abs, normRoot)) return abs;
