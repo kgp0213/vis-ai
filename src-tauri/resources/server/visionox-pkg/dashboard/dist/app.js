@@ -29961,13 +29961,15 @@ function App() {
   const [buildDate2, setBuildDate] = d2(null);
   y2(() => {
     let cancelled = false;
-    (async () => {
+    const tick = async () => {
       try {
         const data = await api("/health");
         if (!cancelled) { setWsRoot(data.cwd ?? null); setVersion(data.version ?? null); setBuildDate(data.buildDate ?? null); }
       } catch {}
-    })();
-    return () => { cancelled = true; };
+    };
+    tick();
+    const id = setInterval(tick, 3e3);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
   const TAB_SECTIONS = tabSections();
   const ALL_TABS = TAB_SECTIONS.flatMap((s3) => s3.tabs);
