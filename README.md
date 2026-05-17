@@ -1,103 +1,129 @@
 # Visionox Desktop — AI Coding Agent 桌面版
 
-基于 Reasonix（DeepSeek 原生 AI 编程代理）的 Tauri v2 桌面 GUI 封装，
+基于 [Reasonix](https://github.com/esengine/DeepSeek-Reasonix)（DeepSeek 原生 AI 编程代理）的 Tauri v2 桌面 GUI 封装，
 为 Windows 用户提供免命令行的"绿色便携版"体验。
 
-## 上游依赖
+## 仓库地址
+
+| 角色 | 地址 |
+|------|------|
+| **上游** | <https://github.com/esengine/DeepSeek-Reasonix> |
+| **本仓库** | <https://gitee.com/hufz_admin/vis-ai> |
+
+## 依赖
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
-| [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) | v0.39.1 | AI Agent 核心（DeepSeek API、Agent Loop、工具系统、Web 仪表盘） |
+| [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) | v0.43.0 | AI Agent 核心（DeepSeek API、CacheFirstLoop、工具系统、Web 仪表盘） |
 | [Tauri](https://v2.tauri.app/) | v2 | Rust 桌面框架，使用系统 WebView2 |
-| Node.js | v22+ | 运行时，运行 Visionox 服务端 |
-| DeepSeek API | — | AI 模型后端（需要用户自备 API Key） |
+| Node.js | v22+ | 运行时，运行 Visionox 服务端（node.exe 随发行版自带） |
+| DeepSeek API | — | AI 模型后端（需用户自备 API Key） |
 
 ## 项目结构
 
 ```
 vis-ai/
-├── src/                          # 前端加载页
-│   └── index.html                #   启动动画 + 自动导航到仪表盘 URL
-├── server/                       # Node.js 启动器（开发用）
-│   └── launcher.mjs              #   v4 启动脚本，构建完整 Agent 上下文
+├── src/                          # Tauri 加载页
+│   └── index.html                #   极简外壳 (112B)，实际内容由 lib.rs 的 init_script 注入
 ├── src-tauri/                    # Tauri Rust 后端
 │   ├── src/
 │   │   ├── main.rs               #   程序入口
-│   │   └── lib.rs                #   Node.js 进程管理、窗口创建、系统托盘
+│   │   └── lib.rs                #   窗口创建、Node 进程管理、TCP 健康检查、系统托盘
 │   ├── resources/server/         #   随 exe 分发的运行时资源
 │   │   ├── node.exe              #     Node.js 二进制
-│   │   ├── launcher.mjs          #     启动脚本
-│   │   └── visionox-pkg/         #     Visionox 服务端包（从 npm reasonix 同步）
-│   ├── capabilities/default.json #   Tauri 权限配置
+│   │   ├── launcher.mjs          #     启动脚本 — 实例化 DeepSeekClient + CacheFirstLoop
+│   │   └── visionox-pkg/         #     Visionox 服务端包（vendored from npm reasonix 0.43.0）
 │   ├── icons/                    #   应用图标
+│   ├── build.rs                  #   Tauri 构建脚本
+│   ├── Cargo.toml                #   Rust 依赖
 │   └── tauri.conf.json           #   Tauri 构建配置
-├── package.json                  # Node.js 项目配置
+├── CHANGELOG-0.43.0.md           # 二开变更记录（§一 ~ §二十七）
+├── package.json                  # Node.js 项目配置（仅含 Tauri CLI）
 └── README.md
 ```
 
-## 架构概览
+## 架构
 
 ```
 ┌─────────────────────────────────────────────────┐
 │                  Tauri Shell (Rust)               │
-│  ┌──────────────┐  ┌───────────────────────────┐ │
-│  │  main.rs      │  │  lib.rs                    │ │
-│  │  入口点       │  │  启动 Node.js Launcher      │ │
-│  │               │  │  读取 stdout 获取 URL       │ │
-│  │               │  │  系统托盘 + 窗口管理         │ │
-│  └──────────────┘  └───────────┬───────────────┘ │
-│                               │                  │
+│                                                   │
+│  窗口创建 (data URL + initialization_script)       │
+│    → 加载页 spinner 立即可见                       │
+│    → spawn Node.js launcher.mjs                  │
+│    → TCP 直连 /api/health 轮询 (200ms×15次)       │
+│    → 健康检查通过 → eval 注入 __DASHBOARD_URL__    │
+│    → 加载页 JS 自助跳转 dashboard                  │
+│    → 系统托盘 (最小化/退出)                        │
+│                                                   │
 │                    spawn node.exe launcher.mjs    │
-└───────────────────────────────┼──────────────────┘
+└───────────────────────────────┬──────────────────┘
                                 │
         ┌───────────────────────┴──────────────────┐
-        │           Node.js Launcher (v4)           │
-        │  - 加载用户 API Key 配置                  │
+        │           Node.js Launcher                │
+        │  - 加载 ~/.visionox/config.json           │
         │  - 创建 DeepSeekClient + CacheFirstLoop   │
-        │  - 注册 31 个原生工具                     │
-        │  - 构建仪表盘上下文                       │
-        │  - 启动仪表盘 HTTP 服务器                 │
+        │  - 注册 ~40 个工具 (文件/SHELL/WEB/AI)     │
+        │  - 启动仪表盘 HTTP 服务器 (127.0.0.1)       │
+        │  - stdout 输出 {"url","token","port"}     │
         └──────────────────────┬──────────────────┘
                                │
                     HTTP Server on 127.0.0.1:{port}
                                │
         ┌──────────────────────┴──────────────────┐
         │         WebView2 (Dashboard SPA)          │
-        │  Preact + HTM, 14 个面板                  │
-        │  Chat / Plans / Tools / Settings / ...    │
+        │  Chat / Sessions / Plans / Tools /        │
+        │  Permissions / MCP / Skills / Memory /    │
+        │  Settings / System / Usage ...            │
         └──────────────────────────────────────────┘
 ```
 
+## 启动流程（v0.43.0 最终方案）
+
+```
+双击 Visionox.exe
+  → 窗口打开 → 灰背景 (#f3f4f6) → spinner 旋转动画 + "Visionox" + "Starting server…"
+  → Rust 后台 spawn Node → 读 stdout → TCP 健康检查 /api/health (最长 3s)
+  → 健康检查通过 → inject window.__DASHBOARD_URL__
+  → 加载页 JS 检测到 URL → "Server ready…" (绿色) → 跳转 dashboard
+  → 全程无"无法连接"错误闪现
+```
+
+关键设计：
+- **Rust 不执行跳转** — 只注入全局变量，JS 自主决定跳转时机
+- **TCP 健康检查** — 原始 HTTP GET，比 fetch/SSE 更可靠
+- **初始化脚本双保险** — 即使 Tauri 前端嵌入失败，init_script 仍能注入加载页 HTML
+
+详见 `CHANGELOG-0.43.0.md` §二十七。
+
 ## 当前进度
 
-### 已完成
+### v0.43.0 已完成的二开功能
 
-- [x] Tauri v2 桌面壳（窗口管理、系统托盘、最小化到托盘）
-- [x] Node.js 启动器 v4 — 完整 Agent 上下文（DeepSeekClient + CacheFirstLoop）
-- [x] 31 个原生工具注册（文件系统、Shell、Web 搜索、记忆、Plan/Choice/Todo）
-- [x] 仪表盘 Web UI 正常加载（Preact SPA，14 个面板）
-- [x] 聊天对话功能正常（/api/submit → Agent Loop → SSE 流式返回）
-- [x] Agent 工具调用正常（AI 可调用 read_file、run_command 等工具）
-- [x] Settings 页面可读写配置（API Key、模型、语言等）
-- [x] SSE 事件实时推送（assistant_delta、tool_start、tool_result、busy-change）
-- [x] 无 API Key 时优雅降级（提示用户在 Settings 配置）
-- [x] 便携版打包（双击即用，免安装）
+| 功能 | 说明 | 参考 |
+|------|------|------|
+| Admin 编辑模式 | 绕过工具沙箱限制 | §二 |
+| 路径品牌化 | `.reasonix` → `.visionox` 全局替换 (16 JS + 40+ 字符串) | §三 Fix2, §四 |
+| 主题切换修复 | 浅色/暗色主题切换按钮 + CSS 变量 | §三 Fix3 |
+| 数据迁移 | `.reasonix/` → `.visionox/` (sessions/memory/usage) | §三 Fix4 |
+| 会话管理增强 | 删除会话 + 从 GUI 恢复历史会话 | §九 |
+| 图片资源修复 | PNG 路由恢复 + auth skip | §十二 |
+| Embedding 分批修复 | OpenAI-compat API 413 错误 | §十三 |
+| install_skill 增强 | source_dir 目录安装 + 异步化 | §十四~十五 |
+| 浅色主题优化 | 对比度 + 子像素渲染 | §十七 |
+| 导航栏优化 | 会话/计划交换 + 配置折叠 | §十八 |
+| 工作空间热切换 | 沙箱目录切换实时生效 | §十九 |
+| 标题栏增强 | Visionox + 工作空间路径 + 编译日期 | §二十~二十三 |
+| SideRail 删除 | 聊天区域全宽化 | §二十二 |
+| 导航栏/图标缩小 | 110px 侧边栏 | §二十四 |
+| 开发者模式 | Settings 底部日志面板 | §二十六 |
+| **启动闪屏修复** | 加载页动画持续可见 + 健康检查 + 无缝跳转 | **§二十七** |
 
 ### 待完成
 
-- [ ] Shell 命令确认机制（当前 yolo 模式跳过确认，需接入仪表盘 Modal）
-- [ ] Shell 命令 allowlist 持久化
-- [ ] 工作区目录可配置（当前固定为 `~/visionox-workspace/`）
-- [ ] MCP 服务器支持（Model Context Protocol）
-- [ ] 启动时自动检测 API Key 配置状态并引导
-- [ ] 自动更新检测
 - [ ] 安装包构建（NSIS/MSI，当前仅便携版）
 - [ ] macOS/Linux 跨平台适配
-
-### 已知问题
-
-- `src-tauri/resources/server/visionox-pkg/` 不随 Tauri build 自动打包（文件太多太大），需手动同步
-- 构建产物 `target/` 约 1.5GB，已加入 .gitignore
+- [ ] 自动更新检测
 
 ## 开发指南
 
@@ -106,100 +132,69 @@ vis-ai/
 - Windows 10/11
 - Node.js v22+
 - Rust 工具链（rustup + cargo）
-- Git
-- DeepSeek API Key（从 https://platform.deepseek.com/api_keys 获取）
+- DeepSeek API Key（从 <https://platform.deepseek.com/api_keys> 获取）
 
-### 首次配置
+### 首次构建
 
 ```bash
-# 1. 克隆仓库
+# 1. 克隆
 git clone git@gitee.com:hufz_admin/vis-ai.git
 cd vis-ai
 
-# 2. 安装 Node.js 依赖
+# 2. 安装 Tauri CLI
 npm install
 
-# 3. 同步 Reasonix 包到资源目录
-npm install -g reasonix
-robocopy "%APPDATA%\npm\node_modules\reasonix" "src-tauri\resources\server\visionox-pkg" /MIR /NFL /NDL
+# 3. 同步 visionox-pkg 到资源目录
+#    方式 A: 从 upstream-v0.43.0.tar.gz 解压 (推荐)
+#    方式 B: npm install -g reasonix && 手动复制到 src-tauri/resources/server/visionox-pkg/
 
-# 4. 下载 Node.js 二进制到资源目录
-# 从 https://nodejs.org 下载 Windows 64-bit zip，解压 node.exe 到：
-# src-tauri/resources/server/node.exe
+# 4. 放置 Node.js 二进制
+#    从 https://nodejs.org 下载 Windows 64-bit zip
+#    解压 node.exe 到 src-tauri/resources/server/node.exe
 
-# 5. 配置 API Key（二选一）：
-# 方式 A：设置环境变量
-set DEEPSEEK_API_KEY=sk-your-key-here
-# 方式 B：运行一次 reasonix setup
-npx reasonix setup
+# 5. 编译
+cd src-tauri
+cargo build --release
+# 产物: src-tauri/target/release/visionox-desktop.exe
 ```
 
 ### 开发调试
 
 ```bash
-# Tauri 开发模式（热重载前端）
-npm run tauri:dev
-
-# 单独测试 Launcher（不启动 GUI）
-cd src-tauri/resources/server
-node.exe launcher.mjs --port 28980
-# 浏览器打开输出的 URL
-
-# 编译 Rust 部分
+# 编译 Rust（release 模式，含内联加载页）
 cd src-tauri
 cargo build --release
-```
 
-### 构建便携版
+# 单独测试 Launcher（不启动 GUI）
+node src-tauri/resources/server/launcher.mjs --port 28980
 
-```bash
-# 1. 编译 Tauri
-npm run tauri:build
-
-# 2. 组装便携版目录
-mkdir -p visionox-portable\resources
-copy src-tauri\target\release\visionox-desktop.exe visionox-portable\Visionox.exe
-xcopy src-tauri\target\release\resources visionox-portable\resources /E /I
-
-# 3. visionox-portable\ 目录即为可分发的绿色版，压缩后约 44MB
+# 修改 lib.rs 后需重新编译，cargo build --release 会自动处理
+# 修改 src/index.html (加载页外壳) 后同样需重新编译
 ```
 
 ### 关键文件修改指南
 
 | 需求 | 修改文件 |
 |------|----------|
-| 新增工具 | `server/launcher.mjs` — 在工具注册区域追加 |
-| 修改系统提示词 | `server/launcher.mjs` — `ImmutablePrefix` 中的 `system` |
-| 窗口大小/行为 | `src-tauri/src/lib.rs` — `WebviewWindowBuilder` |
+| 启动流程 / 健康检查 | `src-tauri/src/lib.rs` |
+| 加载页外观 | `src-tauri/src/lib.rs` — `LOADING_HTML` 常量 |
 | 系统托盘菜单 | `src-tauri/src/lib.rs` — `TrayIconBuilder` |
 | CSP 安全策略 | `src-tauri/tauri.conf.json` — `app.security.csp` |
-| 前端加载页 | `src/index.html` |
-| 仪表盘 UI | Reasonix 上游仓库 `dashboard/` 目录 |
+| 新增工具 | `src-tauri/resources/server/launcher.mjs` |
+| 修改系统提示词 | `src-tauri/resources/server/launcher.mjs` — `buildSystemPrompt()` |
+| 仪表盘 UI | `src-tauri/resources/server/visionox-pkg/dashboard/` |
+| 构建配置 | `src-tauri/build.rs` + `src-tauri/Cargo.toml` |
 
-## 核心实现细节
+## 与上游的差异
 
-### Launcher 演进
-
-| 版本 | 方式 | 问题 |
-|------|------|------|
-| v1 | 直接 spawn `reasonix code` 子进程 | TUI 输出无法解析，URL 提取失败 |
-| v2 | 直接 `import("startDashboardServer")` 传最小化 ctx | 聊天报 "submit requires an attached dashboard session" |
-| v3 | 创建 DeepSeekClient + CacheFirstLoop，传完整 ctx | 聊天可用，但没有工具（空 ToolRegistry） |
-| **v4** | 注册全部 31 个工具，完整 Agent 上下文 | 聊天 + Agent 功能全部正常 |
-
-### 为什么不用 spawn 子进程？
-
-`reasonix code` 的 TUI 使用 Ink（React 终端渲染框架），当 stdout 不是 TTY 时
-Ink 不渲染任何文本输出。仪表盘 URL（含随机 token）仅在 TUI 渲染中显示，
-因此 Rust 无法从 stdout 解析出 URL。
-
-v4 Launcher 直接导入 Reasonix 的内部模块，绕开 TUI 层，在 Node.js 进程中
-构造完整 Agent 上下文，并通过固定 token 控制仪表盘 URL 格式。
-
-### 工具沙箱
-
-所有文件系统和 Shell 工具默认沙箱在 `~/visionox-workspace/` 目录内。
-工具函数内部调用 `safePath()` 校验路径，拒绝 `../` 逃逸。
+| 差异 | 上游 Reasonix | Visionox |
+|------|--------------|----------|
+| 架构 | React SPA 桌面端 (Vite) → IPC spawn 后端 | 静态加载页 (内联 Rust) → HTTP redirect 到 dashboard |
+| 启动动画 | React `<Splash>` 组件 (水下粒子动画) | Rust 内联 spinner + "Visionox" |
+| 品牌化 | Reasonix | Visionox（所有 UI 文本 + 路径已替换） |
+| 编辑模式 | review / auto / yolo | 新增 admin 模式（绕过沙箱） |
+| 部署方式 | npm 包 + 独立桌面端 | Windows 绿色便携版 (免安装) |
+| 数据目录 | `~/.reasonix/` | `~/.visionox/` |
 
 ## License
 
