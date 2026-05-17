@@ -10198,6 +10198,7 @@ ${slice.join("\n")}`;
       const entries = await fs3.readdir(abs, { withFileTypes: true });
       const lines = [];
       for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        if (e.isDirectory() && e.name.startsWith(".")) continue;
         lines.push(e.isDirectory() ? `${e.name}/` : e.name);
       }
       return lines.join("\n") || "(empty directory)";
