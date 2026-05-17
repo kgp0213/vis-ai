@@ -982,3 +982,17 @@ Web Search:  [ON] [OFF]
 | # | 文件 | 修改内容 |
 |---|------|---------|
 | 1 | `app.css` | `.app` grid-template-columns 240px→144px, `.collapsed` 64px→40px |
+
+---
+
+## 三十一、会话恢复 prompt 校验修复（2026-05-17）
+
+**问题**：点击"加载并继续会话"报 `prompt (non-empty string) required`。
+
+**根因**：`handleSubmit` 强制要求 prompt 非空，但 `doResume` 为恢复会话发送空 prompt。
+
+**修复**：`server-XGDBRWMB.js:3168` → 当请求携带 `session` 参数时，允许 prompt 为空。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `server-XGDBRWMB.js` | prompt 校验：`!prompt.trim()` → `(!prompt.trim() && !session)` |
