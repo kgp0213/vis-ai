@@ -30013,7 +30013,12 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <span class="theme-btn" onClick=${() => { const h = document.documentElement; const cur = h.getAttribute("data-theme") || "dark"; const next = cur === "light" ? "dark" : "light"; h.setAttribute("data-theme", next); try { document.cookie = "visionox-theme=" + next + ";path=/;max-age=31536000"; } catch {}; location.reload(); }} title="切换深浅色模式">◑</span>
+          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + v + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "dark"}>
+            <option value="dark">\u6DF1\u8272</option>
+            <option value="warm-sand">\u6696\u6C99</option>
+            <option value="cool-ash">\u51B7\u7070</option>
+            <option value="soft-sage">\u67D4\u7EFF</option>
+          </select>
         </div>
         <div class="side-foot">
           <span class="label">127.0.0.1</span>

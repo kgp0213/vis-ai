@@ -1,0 +1,41 @@
+/* ============================================================================
+   Visionox UI — Cool Ash Color Scheme
+   Light theme with cool modern aesthetics
+   Usage: <html data-theme="cool-ash">
+   ============================================================================ */
+
+[data-theme="cool-ash"] {
+  /* Surfaces */
+  --surface-base: #f5f7fa;
+  --surface-raised: #ffffff;
+  --surface-overlay: #fafbfc;
+  --surface-input: #e8eaed;
+
+  /* Text */
+  --text-primary: #1f2329;
+  --text-secondary: #667380;
+  --text-tertiary: #99aabb;
+  --text-placeholder: #b8c8d8;
+
+  /* Brand — steel blue */
+  --accent-primary: #7a9fba;
+  --accent-primary-hover: #5f8fa8;
+  --accent-secondary: #5a7f9a;
+
+  /* Semantic */
+  --color-success: #6a9f6a;
+  --color-warning: #b8a06a;
+  --color-error: #b87070;
+  --color-info: #6a8fb0;
+
+  /* Borders */
+  --border-subtle: #d8dde4;
+  --border-default: #c8d0d8;
+  --border-strong: #a8b0b8;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(31, 35, 41, 0.04);
+  --shadow-md: 0 4px 12px rgba(31, 35, 41, 0.06);
+  --shadow-lg: 0 8px 24px rgba(31, 35, 41, 0.08);
+  --shadow-glow: 0 0 20px rgba(122, 159, 186, 0.1);
+}

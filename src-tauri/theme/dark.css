@@ -1,0 +1,41 @@
+/* ============================================================================
+   Visionox UI — Dark Default Color Scheme
+   Warm dark theme with amber accents
+   Usage: <html data-theme="dark"> (or no data-theme for default)
+   ============================================================================ */
+
+[data-theme="dark"] {
+  /* Surfaces */
+  --surface-base: #0c0d10;
+  --surface-raised: #13151a;
+  --surface-overlay: #1a1d24;
+  --surface-input: #0f1014;
+
+  /* Text */
+  --text-primary: #f0f0f2;
+  --text-secondary: #a0a4ad;
+  --text-tertiary: #6b7080;
+  --text-placeholder: #4a4e5a;
+
+  /* Brand — warm amber */
+  --accent-primary: #f5a623;
+  --accent-primary-hover: #ffc04d;
+  --accent-secondary: #e8930a;
+
+  /* Semantic */
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-info: #60a5fa;
+
+  /* Borders */
+  --border-subtle: #1f2229;
+  --border-default: #2a2e38;
+  --border-strong: #3d424f;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(245, 166, 35, 0.15);
+}

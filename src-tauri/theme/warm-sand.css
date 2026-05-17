@@ -1,0 +1,41 @@
+/* ============================================================================
+   Visionox UI — Warm Sand Color Scheme
+   Light theme with warm paper-like aesthetics
+   Usage: <html data-theme="warm-sand">
+   ============================================================================ */
+
+[data-theme="warm-sand"] {
+  /* Surfaces */
+  --surface-base: #faf6f0;
+  --surface-raised: #fffdfa;
+  --surface-overlay: #ffffff;
+  --surface-input: #f5f0e8;
+
+  /* Text */
+  --text-primary: #2d2a26;
+  --text-secondary: #7a7166;
+  --text-tertiary: #b0a898;
+  --text-placeholder: #d0c8bc;
+
+  /* Brand — warm bronze */
+  --accent-primary: #c4935f;
+  --accent-primary-hover: #a67b4d;
+  --accent-secondary: #9a7248;
+
+  /* Semantic */
+  --color-success: #7aaa7a;
+  --color-warning: #c4a45f;
+  --color-error: #c48080;
+  --color-info: #7a9ab8;
+
+  /* Borders */
+  --border-subtle: #e8e0d4;
+  --border-default: #d8d0c4;
+  --border-strong: #b8b0a0;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(45, 42, 38, 0.04);
+  --shadow-md: 0 4px 12px rgba(45, 42, 38, 0.06);
+  --shadow-lg: 0 8px 24px rgba(45, 42, 38, 0.08);
+  --shadow-glow: 0 0 20px rgba(196, 147, 95, 0.1);
+}

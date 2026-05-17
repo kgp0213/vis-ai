@@ -87,6 +87,138 @@
 }
 
 /* ============================================================================
+   Dark Theme (explicit, mirrors :root default)
+   ============================================================================ */
+[data-theme="dark"] {
+  --surface-base: #0c0d10;
+  --surface-raised: #13151a;
+  --surface-overlay: #1a1d24;
+  --surface-input: #0f1014;
+
+  --text-primary: #f0f0f2;
+  --text-secondary: #a0a4ad;
+  --text-tertiary: #6b7080;
+  --text-placeholder: #4a4e5a;
+
+  --accent-primary: #f5a623;
+  --accent-primary-hover: #ffc04d;
+  --accent-secondary: #e8930a;
+
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-info: #60a5fa;
+
+  --border-subtle: #1f2229;
+  --border-default: #2a2e38;
+  --border-strong: #3d424f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(245, 166, 35, 0.15);
+}
+
+/* ============================================================================
+   Warm Sand Theme — warm paper-like
+   ============================================================================ */
+[data-theme="warm-sand"] {
+  --surface-base: #faf6f0;
+  --surface-raised: #fffdfa;
+  --surface-overlay: #ffffff;
+  --surface-input: #f5f0e8;
+
+  --text-primary: #2d2a26;
+  --text-secondary: #7a7166;
+  --text-tertiary: #b0a898;
+  --text-placeholder: #d0c8bc;
+
+  --accent-primary: #c4935f;
+  --accent-primary-hover: #a67b4d;
+  --accent-secondary: #9a7248;
+
+  --color-success: #7aaa7a;
+  --color-warning: #c4a45f;
+  --color-error: #c48080;
+  --color-info: #7a9ab8;
+
+  --border-subtle: #e8e0d4;
+  --border-default: #d8d0c4;
+  --border-strong: #b8b0a0;
+
+  --shadow-sm: 0 1px 2px rgba(45, 42, 38, 0.04);
+  --shadow-md: 0 4px 12px rgba(45, 42, 38, 0.06);
+  --shadow-lg: 0 8px 24px rgba(45, 42, 38, 0.08);
+  --shadow-glow: 0 0 20px rgba(196, 147, 95, 0.1);
+}
+
+/* ============================================================================
+   Cool Ash Theme — cool modern
+   ============================================================================ */
+[data-theme="cool-ash"] {
+  --surface-base: #f5f7fa;
+  --surface-raised: #ffffff;
+  --surface-overlay: #fafbfc;
+  --surface-input: #e8eaed;
+
+  --text-primary: #1f2329;
+  --text-secondary: #667380;
+  --text-tertiary: #99aabb;
+  --text-placeholder: #b8c8d8;
+
+  --accent-primary: #7a9fba;
+  --accent-primary-hover: #5f8fa8;
+  --accent-secondary: #5a7f9a;
+
+  --color-success: #6a9f6a;
+  --color-warning: #b8a06a;
+  --color-error: #b87070;
+  --color-info: #6a8fb0;
+
+  --border-subtle: #d8dde4;
+  --border-default: #c8d0d8;
+  --border-strong: #a8b0b8;
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 41, 0.04);
+  --shadow-md: 0 4px 12px rgba(31, 35, 41, 0.06);
+  --shadow-lg: 0 8px 24px rgba(31, 35, 41, 0.08);
+  --shadow-glow: 0 0 20px rgba(122, 159, 186, 0.1);
+}
+
+/* ============================================================================
+   Soft Sage Theme — natural organic
+   ============================================================================ */
+[data-theme="soft-sage"] {
+  --surface-base: #f7f9f5;
+  --surface-raised: #fcfdfb;
+  --surface-overlay: #ffffff;
+  --surface-input: #f0f2ee;
+
+  --text-primary: #242826;
+  --text-secondary: #667060;
+  --text-tertiary: #99a898;
+  --text-placeholder: #b8c8b8;
+
+  --accent-primary: #8aaa7a;
+  --accent-primary-hover: #6f9f5f;
+  --accent-secondary: #5a8a4a;
+
+  --color-success: #7aaa8a;
+  --color-warning: #a8a070;
+  --color-error: #a87a7a;
+  --color-info: #7a90a0;
+
+  --border-subtle: #d5ddd4;
+  --border-default: #c5d0c4;
+  --border-strong: #a5b0a4;
+
+  --shadow-sm: 0 1px 2px rgba(36, 40, 38, 0.04);
+  --shadow-md: 0 4px 12px rgba(36, 40, 38, 0.06);
+  --shadow-lg: 0 8px 24px rgba(36, 40, 38, 0.08);
+  --shadow-glow: 0 0 20px rgba(138, 170, 122, 0.1);
+}
+
+/* ============================================================================
    Light Theme
    ============================================================================ */
 [data-theme="light"] {
