@@ -2285,6 +2285,8 @@ function searchEnabled(path = defaultConfigPath()) {
 function webSearchEngine(path = defaultConfigPath()) {
   const cfg = readConfig(path).webSearchEngine;
   if (cfg === "searxng") return "searxng";
+  if (cfg === "bing") return "bing";
+  if (cfg === "bing-scrape") return "bing-scrape";
   return "mojeek";
 }
 function webSearchEndpoint(path = defaultConfigPath()) {
