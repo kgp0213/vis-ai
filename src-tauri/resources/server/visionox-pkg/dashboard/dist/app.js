@@ -30013,7 +30013,8 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + v + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "dark"}>
+          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + v + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "light"}>
+            <option value="light">\u6D45\u8272</option>
             <option value="dark">\u6DF1\u8272</option>
             <option value="warm-sand">\u6696\u6C99</option>
             <option value="cool-ash">\u51B7\u7070</option>
