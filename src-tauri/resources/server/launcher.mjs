@@ -93,6 +93,7 @@ const [
   {
     readConfig, writeConfig, loadApiKey, loadBaseUrl, loadEditMode,
     searchEnabled, webSearchEngine, webSearchEndpoint,
+    loadBingApiKey,
     loadProjectShellAllowed,
     mcpEnvFor,
     loadSemanticEmbeddingUserConfig,
@@ -229,6 +230,7 @@ if (searchEnabled(configPath)) {
   registerWebTools(tools, {
     webSearchEngine: webSearchEngine(configPath),
     webSearchEndpoint: webSearchEndpoint(configPath),
+    bingApiKey: loadBingApiKey(configPath),
   });
   console.error(`[launcher] web tools registered`);
 }

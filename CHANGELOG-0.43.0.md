@@ -812,3 +812,51 @@ GUI 启动时窗口先白屏 ~2s，然后短暂闪过"无法连接"错误页面�
 | 8 | `src-tauri/build.rs` | 新增 `println!("cargo:rerun-if-changed=../src")` |
 | 9 | `src-tauri/tauri.conf.json` | `devUrl` 从 `localhost` 改为 `127.0.0.1`（避免 DNS 解析延迟） |
 | 10 | `src-tauri/Cargo.toml` | 无新增依赖 |
+
+---
+
+## 二十八、网页搜索引擎选择器 + Bing 引擎支持（2026-05-17 ✅ 已实施）
+
+### 问题
+
+Dashboard Settings 中 Web Search 仅有关闭/开启开关，无法切换搜索引擎。当默认 Mojeek 返回 403 时用户无法自行切换。SearXNG 配置也只能通过手动编辑 `~/.visionox/config.json` 实现。
+
+### 修复
+
+新增 Dashboard 搜索引擎选择器（Mojeek / SearXNG / Bing），并实现 Bing Web Search API v7 后端。
+
+### 修改清单
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `chunk-2R4QCDOZ.js` | 新增 `BING_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search"` |
+| 2 | `chunk-2R4QCDOZ.js` | 新增 `searchBing(query, opts)` 函数：调用 Bing API v7，JSON 解析结果 |
+| 3 | `chunk-2R4QCDOZ.js` | `webSearch()` 新增 `bing` 分支 |
+| 4 | `chunk-2R4QCDOZ.js` | `registerWebTools` 传递 `bingApiKey` 到工具调用 |
+| 5 | `chunk-2R4QCDOZ.js` | 工具描述更新：`/web-search-engine mojeek|searxng|bing` |
+| 6 | `chunk-XPDVG52A.js` | 新增 `loadBingApiKey(path)` 函数 + 导出 |
+| 7 | `server-XGDBRWMB.js` | `handleSettings` GET 返回 `webSearchEngine`、`webSearchEndpoint`、`bingApiKeySet` |
+| 8 | `server-XGDBRWMB.js` | `handleSettings` POST 接受并校验这三个字段 |
+| 9 | `app.js` | Settings UI 新增搜索引擎下拉框 + SearXNG 地址输入 + Bing API Key 输入 |
+| 10 | `launcher.mjs` | 导入 `loadBingApiKey`，传递到 `registerWebTools` |
+
+### Dashboard Settings UI 效果
+
+```
+Web Search:  [ON] [OFF]
+
+▼ 当开启时显示：
+搜索引擎:  [Mojeek (免费) ▼]
+           [SearXNG (自部署/公共实例)]
+           [Bing (需 API Key)]
+
+  → 选 SearXNG 时：SearXNG 地址 [________________] [保存]
+  → 选 Bing 时：  Bing API Key [________________]
+```
+
+### 三段式生效机制
+
+- `search: true/false` → 即时生效（Dashboard toggle）
+- `webSearchEngine` / `webSearchEndpoint` → 需重启应用（新引擎在 launcher.mjs 启动时传入）
+- `bingApiKey` → 需重启应用（同上）
+- Bing API Key 获取：<https://portal.azure.com> → Bing Search v7（免费层 1000 次/月）

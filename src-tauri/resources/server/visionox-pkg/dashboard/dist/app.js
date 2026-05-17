@@ -27440,6 +27440,50 @@ function SettingsPanel() {
           `,
     t4("settings.webSearchNote")
   )}
+        ${v3.search ? html4`
+          ${fieldRow(
+            "\u641C\u7D22\u5F15\u64CE",
+            html4`
+              <select
+                value=${v3.webSearchEngine ?? "mojeek"}
+                onChange=${(e3) => save({ webSearchEngine: e3.target.value })}
+                disabled=${saving}
+              >
+                <option value="mojeek">Mojeek (\u514D\u8D39)</option>
+                <option value="searxng">SearXNG (\u81EA\u90E8\u7F72/\u516C\u5171\u5B9E\u4F8B)</option>
+                <option value="bing">Bing (\u9700 API Key)</option>
+              </select>
+            `,
+            "\u5207\u6362\u5F15\u64CE\u540E\u9700\u91CD\u542F\u5E94\u7528\u751F\u6548"
+          )}
+          ${v3.webSearchEngine === "searxng" || (v3.webSearchEngine ?? "mojeek") === "searxng" ? fieldRow(
+            "SearXNG \u5730\u5740",
+            html4`
+              <input
+                type="text"
+                value=${v3.webSearchEndpoint ?? "http://localhost:8080"}
+                placeholder="https://searx.be"
+                onInput=${(e3) => save({ webSearchEndpoint: e3.target.value })}
+                style="flex:1"
+              />
+              <button class="btn" disabled=${saving} onClick=${() => save({ webSearchEndpoint: v3.webSearchEndpoint })}>${t4("common.save")}</button>
+            `,
+            "\u586B\u516C\u5171 SearXNG \u5B9E\u4F8B\u5730\u5740\u5373\u53EF\uFF0C\u5982 https://searx.be"
+          ) : null}
+          ${v3.webSearchEngine === "bing" ? fieldRow(
+            "Bing API Key",
+            html4`
+              <input
+                type="password"
+                value=""
+                placeholder=${v3.bingApiKeySet ? "\u5DF2\u8BBE\u7F6E\uFF0C\u7559\u7A7A\u4FDD\u6301\u73B0\u6709" : "32\u4F4D API Key"}
+                onInput=${(e3) => { if(e3.target.value.trim().length >= 16) save({ bingApiKey: e3.target.value.trim() }); }}
+                style="flex:1"
+              />
+            `,
+            "\u4ECE https://portal.azure.com \u514D\u8D39\u83B7\u53D6 (Bing Search v7, 1000\u6B21/\u6708)"
+          ) : null}
+        ` : null}
       </div>
 
       ${sectionH3(t4("settings.sectionCompute"))}
