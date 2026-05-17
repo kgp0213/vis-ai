@@ -27445,7 +27445,7 @@ function SettingsPanel() {
             "\u641C\u7D22\u5F15\u64CE",
             html4`
               <select
-                value=${v3.webSearchEngine ?? "mojeek"}
+                value=${v3.webSearchEngine ?? "bing-scrape"}
                 onChange=${(e3) => save({ webSearchEngine: e3.target.value })}
                 disabled=${saving}
               >
@@ -27457,7 +27457,7 @@ function SettingsPanel() {
             `,
             "\u5207\u6362\u5F15\u64CE\u540E\u9700\u91CD\u542F\u5E94\u7528\u751F\u6548"
           )}
-          ${v3.webSearchEngine === "searxng" || (v3.webSearchEngine ?? "mojeek") === "searxng" ? fieldRow(
+          ${v3.webSearchEngine === "searxng" || (v3.webSearchEngine ?? "bing-scrape") === "searxng" ? fieldRow(
             "SearXNG \u5730\u5740",
             html4`
               <input

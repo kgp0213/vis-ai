@@ -2755,7 +2755,7 @@ async function handleSettings(method, _rest, body, ctx) {
         preset: cfg.preset ?? "auto",
         reasoningEffort: cfg.reasoningEffort ?? "max",
         search: cfg.search !== false,
-        webSearchEngine: cfg.webSearchEngine ?? "mojeek",
+        webSearchEngine: cfg.webSearchEngine ?? "bing-scrape",
         webSearchEndpoint: cfg.webSearchEndpoint ?? null,
         bingApiKeySet: Boolean(cfg.bingApiKey),
         editMode: cfg.editMode ?? "review",
