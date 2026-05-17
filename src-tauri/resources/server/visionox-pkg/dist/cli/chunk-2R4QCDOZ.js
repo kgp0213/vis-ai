@@ -9160,6 +9160,7 @@ function fetchStatusError(status, url) {
 async function webSearch(query, opts = {}) {
   if (opts.engine === "searxng") return searchSearxng(query, opts);
   if (opts.engine === "bing") return searchBing(query, opts);
+  if (opts.engine === "bing-scrape") return searchBingScrape(query, opts);
   return searchMojeek(query, opts);
 }
 async function searchMojeek(query, opts = {}) {
@@ -9325,6 +9326,40 @@ async function searchBing(query, opts = {}) {
     throw new Error("Bing returned no results.");
   }
   return results.slice(0, topK);
+}
+var BING_SCRAPE_URL = "https://cn.bing.com/search";
+async function searchBingScrape(query, opts = {}) {
+  const topK = Math.max(1, Math.min(10, opts.topK ?? DEFAULT_TOPK));
+  const url = `${BING_SCRAPE_URL}?q=${encodeURIComponent(query)}&count=${topK}`;
+  const resp = await fetch(url, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      "Accept": "text/html,application/xhtml+xml",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
+    },
+    signal: opts.signal
+  });
+  if (!resp.ok) throw new Error(searchStatusError(resp.status));
+  const html = await resp.text();
+  const results = [];
+  const algoRe = /<li[^>]*class="b_algo"[^>]*>([\s\S]*?)<\/li>/gi;
+  let m;
+  while ((m = algoRe.exec(html)) !== null) {
+    const block = m[1];
+    const linkM = block.match(/<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkM) continue;
+    const url2 = linkM[1].replace(/&amp;/g, "&");
+    const title = linkM[2].replace(/<[^>]+>/g, "").trim();
+    const snippetM = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = snippetM ? snippetM[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() : "";
+    results.push({ title, url: url2, snippet });
+    if (results.length >= topK) break;
+  }
+  if (results.length === 0) {
+    if (/没有找到任何结果|No results found/i.test(html)) return [];
+    throw new Error("Bing scrape: could not parse results.");
+  }
+  return results;
 }
 async function webFetch(url, opts = {}) {
   const maxChars = opts.maxChars ?? DEFAULT_FETCH_MAX_CHARS;

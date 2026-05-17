@@ -2838,8 +2838,8 @@ async function handleSettings(method, _rest, body, ctx) {
     }
     if (fields.webSearchEngine !== void 0) {
       const v = String(fields.webSearchEngine);
-      if (!["mojeek", "searxng", "bing"].includes(v)) {
-        return { status: 400, body: { error: "webSearchEngine must be mojeek | searxng | bing" } };
+      if (!["mojeek", "searxng", "bing", "bing-scrape"].includes(v)) {
+        return { status: 400, body: { error: "webSearchEngine must be mojeek | searxng | bing | bing-scrape" } };
       }
       cfg.webSearchEngine = v;
       changed.push("webSearchEngine");

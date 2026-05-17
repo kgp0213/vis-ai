@@ -27450,8 +27450,9 @@ function SettingsPanel() {
                 disabled=${saving}
               >
                 <option value="mojeek">Mojeek (\u514D\u8D39)</option>
+                <option value="bing-scrape">Bing \u56FD\u5185\u7248 (\u514D\u8D39\uFF0C\u65E0\u9700API)</option>
                 <option value="searxng">SearXNG (\u81EA\u90E8\u7F72/\u516C\u5171\u5B9E\u4F8B)</option>
-                <option value="bing">Bing (\u9700 API Key)</option>
+                <option value="bing">Bing API (\u9700 API Key)</option>
               </select>
             `,
             "\u5207\u6362\u5F15\u64CE\u540E\u9700\u91CD\u542F\u5E94\u7528\u751F\u6548"
@@ -27461,12 +27462,12 @@ function SettingsPanel() {
             html4`
               <input
                 type="text"
+                id="searxng-endpoint"
                 value=${v3.webSearchEndpoint ?? "http://localhost:8080"}
                 placeholder="https://searx.be"
-                onInput=${(e3) => save({ webSearchEndpoint: e3.target.value })}
                 style="flex:1"
               />
-              <button class="btn" disabled=${saving} onClick=${() => save({ webSearchEndpoint: v3.webSearchEndpoint })}>${t4("common.save")}</button>
+              <button class="btn" disabled=${saving} onClick=${() => { const el=document.getElementById("searxng-endpoint"); if(el&&el.value.trim()) save({ webSearchEndpoint: el.value.trim() }); }}>${t4("common.save")}</button>
             `,
             "\u586B\u516C\u5171 SearXNG \u5B9E\u4F8B\u5730\u5740\u5373\u53EF\uFF0C\u5982 https://searx.be"
           ) : null}
