@@ -3059,6 +3059,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   --c-err:      #f56c6c;   /* error red */
   --c-info:     #409eff;
 
+  /* Code — darken for light bg to keep readability */
+  --c-code:     #b87a14;   /* darker amber for inline code / code blocks on light bg */
+
   /* Chart spectrum */
   --s1: #409eff;
   --s2: #36cfc9;
@@ -3239,9 +3242,20 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
 
 [data-theme="light"] a { color: var(--c-brand); }
 
-/* Light-theme font rendering — subpixel antialiasing prevents the
-   "thin / blurry" look that grayscale antialiasing produces with dark
-   text on white backgrounds on standard-DPI Windows displays. */
+/* Light mode: inline code & code blocks need darker text for contrast */
+[data-theme="light"] .md code {
+  color: var(--c-code);
+  background: #ebedf0;
+}
+[data-theme="light"] .md pre {
+  color: var(--c-code);
+  background: #f0f2f5;
+}
+[data-theme="light"] .cc.tool .tool-args {
+  color: #59636e;
+  background: #f0f2f5;
+}
+
 [data-theme="light"] body {
   -webkit-font-smoothing: subpixel-antialiased;
   -moz-osx-font-smoothing: auto;
