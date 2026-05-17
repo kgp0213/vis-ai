@@ -118,6 +118,8 @@ vis-ai/
 | 导航栏/图标缩小 | 110px 侧边栏 | §二十四 |
 | 开发者模式 | Settings 底部日志面板 | §二十六 |
 | **启动闪屏修复** | 加载页动画持续可见 + 健康检查 + 无缝跳转 | **§二十七** |
+| **搜索引擎选择器** | 4 引擎可选（Bing国内版/Mojeek/SearXNG/Bing API），热切换无需重启 | **§二十八** |
+| **Bug 修复** | yolo模式路径解析、隐藏目录过滤、标题栏轮询更新 | **§二十九** |
 
 ### 待完成
 
@@ -192,6 +194,8 @@ node src-tauri/resources/server/launcher.mjs --port 28980
 | 架构 | React SPA 桌面端 (Vite) → IPC spawn 后端 | 静态加载页 (内联 Rust) → HTTP redirect 到 dashboard |
 | 启动动画 | React `<Splash>` 组件 (水下粒子动画) | Rust 内联 spinner + "Visionox" |
 | 品牌化 | Reasonix | Visionox（所有 UI 文本 + 路径已替换） |
+| 搜索后端 | Mojeek only | 4 引擎可选，默认 Bing 国内版 (cn.bing.com) |
+| 搜索引擎切换 | 需重启 | 热切换，保存即生效 |
 | 编辑模式 | review / auto / yolo | 新增 admin 模式（绕过沙箱） |
 | 部署方式 | npm 包 + 独立桌面端 | Windows 绿色便携版 (免安装) |
 | 数据目录 | `~/.reasonix/` | `~/.visionox/` |

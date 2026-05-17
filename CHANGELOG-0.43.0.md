@@ -872,3 +872,53 @@ Web Search:  [ON] [OFF]
 ### 热切换机制
 
 `webSearchEngine()` / `webSearchEndpoint()` / `loadBingApiKey()` 每次调用都实时 `readConfig()` 读磁盘文件，不再依赖启动时的一次性传参。Settings 保存 → 下一次 `web_search` 立刻生效。
+
+---
+
+## 二十九、Bug 修复汇总（2026-05-17）
+
+### 29.1 yolo/admin 模式工作空间路径解析错误
+
+**问题**：editMode 为 yolo 时，`list_directory` 显示 `C:\` 根目录文件而非工作空间内容。
+
+**根因**：`safePath()` 在 `allowAllPaths()` 为 true 时调用 `resolve(raw)`，`.` 被解析为 Node.js 进程 CWD（`C:\`）而非 `rootDir`。
+
+**修复**：`chunk-2R4QCDOZ.js:10067` → `pathMod4.resolve(rootDir, raw)`
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `chunk-2R4QCDOZ.js` | `pathMod4.resolve(raw)` → `pathMod4.resolve(rootDir, raw)` |
+
+### 29.2 list_directory 显示隐藏目录
+
+**问题**：`list_directory` 工具零过滤，输出 `.visionox/`、`.git/`、`.cache/` 等应用内部目录。
+
+**根因**：`list_directory` 的 `fn` 无隐藏目录过滤逻辑（`directory_tree` 和 `listDirectory` 均有过滤）。
+
+**修复**：`chunk-2R4QCDOZ.js:10201` → 添加 `if (e.isDirectory() && e.name.startsWith(".")) continue;`
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `chunk-2R4QCDOZ.js` | `list_directory` fn 增加 `.` 开头目录过滤 |
+
+### 29.3 标题栏工作空间切换后不更新
+
+**问题**：Dashboard 切换工作空间后，标题栏仍显示旧路径。
+
+**根因**：标题栏 `wsRoot` 来自 `/health` 接口，仅组件挂载时拉取一次（空依赖 `[]`），无轮询。
+
+**修复**：`app.js:29962-29971` → `/health` 改为每 8 秒轮询
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `app.js` | `/health` 从一次性 fetch 改为 `setInterval(tick, 8e3)` |
+
+### 29.4 SearXNG 地址保存按钮 bug
+
+**问题**：SearXNG 地址输入框保存按钮读取的是旧值 `v3.webSearchEndpoint` 而非输入框内容。
+
+**修复**：`app.js:27469` → `onClick` 改为 `document.getElementById("searxng-endpoint").value`
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `app.js` | SearXNG 保存按钮改为读取 input 当前值 |
