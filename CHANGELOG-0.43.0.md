@@ -819,44 +819,56 @@ GUI 启动时窗口先白屏 ~2s，然后短暂闪过"无法连接"错误页面�
 
 ### 问题
 
-Dashboard Settings 中 Web Search 仅有关闭/开启开关，无法切换搜索引擎。当默认 Mojeek 返回 403 时用户无法自行切换。SearXNG 配置也只能通过手动编辑 `~/.visionox/config.json` 实现。
+1. Dashboard Settings 中 Web Search 仅有关闭/开启开关，无法切换搜索引擎
+2. 默认 Mojeek 国内返回 403
+3. SearXNG 公共实例国内大多被墙
+4. 切换搜索引擎需重启应用
 
-### 修复
+### 最终方案
 
-新增 Dashboard 搜索引擎选择器（Mojeek / SearXNG / Bing），并实现 Bing Web Search API v7 后端。
+4 个搜索引擎可选，默认 Bing 国内版（`cn.bing.com` 抓取，免费无需 API Key），**热切换无需重启**。
+
+### 引擎列表
+
+| 引擎 | 引擎值 | 方式 | 免费 | 国内可用 |
+|------|--------|------|------|----------|
+| **Bing 国内版** | `bing-scrape` | 抓取 cn.bing.com HTML | ✅ | ✅ |
+| Mojeek | `mojeek` | 抓取 mojeek.com HTML | ✅ | ❌ |
+| SearXNG | `searxng` | 调用 SearXNG API | ✅ | 自部署 |
+| Bing API | `bing` | Bing Search API v7 | 1000次/月 | ✅ |
 
 ### 修改清单
 
 | # | 文件 | 修改内容 |
 |---|------|---------|
-| 1 | `chunk-2R4QCDOZ.js` | 新增 `BING_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search"` |
-| 2 | `chunk-2R4QCDOZ.js` | 新增 `searchBing(query, opts)` 函数：调用 Bing API v7，JSON 解析结果 |
-| 3 | `chunk-2R4QCDOZ.js` | `webSearch()` 新增 `bing` 分支 |
-| 4 | `chunk-2R4QCDOZ.js` | `registerWebTools` 传递 `bingApiKey` 到工具调用 |
-| 5 | `chunk-2R4QCDOZ.js` | 工具描述更新：`/web-search-engine mojeek|searxng|bing` |
-| 6 | `chunk-XPDVG52A.js` | 新增 `loadBingApiKey(path)` 函数 + 导出 |
-| 7 | `server-XGDBRWMB.js` | `handleSettings` GET 返回 `webSearchEngine`、`webSearchEndpoint`、`bingApiKeySet` |
-| 8 | `server-XGDBRWMB.js` | `handleSettings` POST 接受并校验这三个字段 |
-| 9 | `app.js` | Settings UI 新增搜索引擎下拉框 + SearXNG 地址输入 + Bing API Key 输入 |
-| 10 | `launcher.mjs` | 导入 `loadBingApiKey`，传递到 `registerWebTools` |
+| 1 | `chunk-2R4QCDOZ.js` | import 增加 `loadBingApiKey` |
+| 2 | `chunk-2R4QCDOZ.js` | `registerWebTools` 工具 `fn` 改为每次调用实时读 config（`webSearchEngine()` / `webSearchEndpoint()` / `loadBingApiKey()`），不再从 startup opts 取 |
+| 3 | `chunk-2R4QCDOZ.js` | 新增 `searchBing(query, opts)`：Bing API v7 JSON 解析 |
+| 4 | `chunk-2R4QCDOZ.js` | 新增 `searchBingScrape(query, opts)`：抓取 cn.bing.com HTML 解析 |
+| 5 | `chunk-2R4QCDOZ.js` | `webSearch()` 增加 `bing` / `bing-scrape` 分支 |
+| 6 | `chunk-XPDVG52A.js` | `webSearchEngine()` 识别全部 4 种引擎（之前只认 searxng，其余全返回 mojeek） |
+| 7 | `chunk-XPDVG52A.js` | 默认引擎改为 `"bing-scrape"` |
+| 8 | `chunk-XPDVG52A.js` | 新增 `loadBingApiKey(path)` 函数 + 导出 |
+| 9 | `server-XGDBRWMB.js` | `handleSettings` GET 返回 `webSearchEngine`/`webSearchEndpoint`/`bingApiKeySet`，默认 `"bing-scrape"` |
+| 10 | `server-XGDBRWMB.js` | `handleSettings` POST 校验 4 种引擎值 |
+| 11 | `app.js` | Settings UI：搜索引擎下拉框 4 选项 + SearXNG 地址输入（修复保存按钮 bug）+ Bing API Key 输入 |
+| 12 | `launcher.mjs` | 移除 startup 传参（引擎热切换后不再需要） |
 
-### Dashboard Settings UI 效果
+### Dashboard Settings UI
 
 ```
 Web Search:  [ON] [OFF]
 
 ▼ 当开启时显示：
-搜索引擎:  [Mojeek (免费) ▼]
+搜索引擎:  [Bing 国内版 (免费，无需API) ▼]
+           [Mojeek (免费)]
            [SearXNG (自部署/公共实例)]
-           [Bing (需 API Key)]
+           [Bing API (需 API Key)]
 
   → 选 SearXNG 时：SearXNG 地址 [________________] [保存]
-  → 选 Bing 时：  Bing API Key [________________]
+  → 选 Bing API 时：Bing API Key [________________]
 ```
 
-### 三段式生效机制
+### 热切换机制
 
-- `search: true/false` → 即时生效（Dashboard toggle）
-- `webSearchEngine` / `webSearchEndpoint` → 需重启应用（新引擎在 launcher.mjs 启动时传入）
-- `bingApiKey` → 需重启应用（同上）
-- Bing API Key 获取：<https://portal.azure.com> → Bing Search v7（免费层 1000 次/月）
+`webSearchEngine()` / `webSearchEndpoint()` / `loadBingApiKey()` 每次调用都实时 `readConfig()` 读磁盘文件，不再依赖启动时的一次性传参。Settings 保存 → 下一次 `web_search` 立刻生效。
