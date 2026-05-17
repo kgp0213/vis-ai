@@ -18925,6 +18925,20 @@ async function api(path, opts = {}) {
   return parsed;
 }
 
+// dashboard/src/lib/bus-filter.ts
+var THIRD_PARTY_ORIGIN_PREFIXES = [
+  "chrome-extension://",
+  "moz-extension://",
+  "safari-web-extension://",
+  "safari-extension://",
+  "ms-browser-extension://"
+];
+function isThirdPartyError(error, filename) {
+  const hay = `${filename ?? ""}
+${error?.stack ?? ""}`;
+  return THIRD_PARTY_ORIGIN_PREFIXES.some((prefix) => hay.includes(prefix));
+}
+
 // dashboard/src/lib/bus.ts
 var html = htm_module_default.bind(k);
 var appBus = new EventTarget();
@@ -18940,9 +18954,11 @@ function reportAppError(error, source, info) {
 }
 window.addEventListener("error", (ev) => {
   if (!ev.error) return;
+  if (isThirdPartyError(ev.error, ev.filename)) return;
   reportAppError(ev.error, "window", ev.message);
 });
 window.addEventListener("unhandledrejection", (ev) => {
+  if (isThirdPartyError(ev.reason)) return;
   reportAppError(ev.reason, "promise");
 });
 function ToastStack() {
@@ -19264,7 +19280,6 @@ var en = {
     save: "Save",
     remove: "remove",
     cancel: "Cancel",
-    confirm: "Confirm",
     delete: "Delete",
     add: "Add",
     confirm: "Confirm",
@@ -19328,9 +19343,6 @@ var en = {
     loopIter: "iter {iter}",
     loopFiresIn: "fires in {remaining}",
     sectionRuntime: "Runtime",
-    sectionDev: "Developer",
-    devMode: "Developer Mode",
-    noLogs: "No logs yet.",
     activeModel: "active model",
     modelPricingLine: "${hit} hit \xB7 ${miss} miss \xB7 ${out} out  per 1M tok",
     editMode: "edit mode",
@@ -19338,7 +19350,10 @@ var en = {
     sectionLanguage: "Language",
     language: "language",
     langEn: "English",
-    langZhCn: "\u7B80\u4F53\u4E2D\u6587"
+    langZhCn: "\u7B80\u4F53\u4E2D\u6587",
+    sectionDev: "Developer",
+    devMode: "Developer Mode",
+    devModeNote: "Show background server startup and runtime logs"
   },
   chat: {
     modeMirror: "TUI mirror",
@@ -19432,7 +19447,7 @@ var en = {
     toolsLoaded: "tools loaded",
     mcpServers: "mcp servers",
     editMode: "edit mode",
-    version: "Visionix",
+    version: "Visionox",
     workingDir: "Working directory",
     projectRoot: "project root",
     noPriorData: "no prior data",
@@ -19491,7 +19506,44 @@ var en = {
     colDesc: "description",
     readOnly: "read-only",
     write: "write",
-    flat: "flat"
+    flat: "flat",
+    desc: {
+      web_search: "Search the public web. Returns ranked results with title, url, and snippet. Call this when the answer depends on current state \u2014 events, prices, releases, real-world status.",
+      web_fetch: "Download a URL and return its visible text content (scripts/styles/nav stripped). Use after web_search when a snippet isn't enough.",
+      run_command: "Run a shell command in the project root; returns combined stdout+stderr. Allowlisted read-only commands run immediately; mutations are gated by user confirmation.",
+      run_background: "Spawn a long-running process and detach. Returns a job id for tailing logs, waiting for completion, or killing. Use for dev servers, watchers, and one-shot long jobs.",
+      job_output: "Read the latest output of a background job. Returns the tail of the buffer and tells you whether the job is still running.",
+      wait_for_job: "Block server-side until a background job finishes, bounded by timeout. Use instead of polling job_output in a loop.",
+      stop_job: "Stop a background job. SIGTERM first, SIGKILL after a grace period. Safe to call on an already-exited job.",
+      list_jobs: "List every background job started this session \u2014 running and exited \u2014 with id, command, pid, and status.",
+      remember: "Save a memory for future sessions. Use when the user states a preference, corrects your approach, shares a non-obvious fact, or asks you to remember something.",
+      forget: "Delete a memory file and remove it from MEMORY.md. Use when the user asks to forget something or a remembered fact is now wrong.",
+      recall_memory: "Read the full body of a memory file when its one-line summary isn't enough detail.",
+      read_file: "Read a file under the sandbox root. Supports head/tail/range scoping to save context. Auto-returns a preview for files over 200 lines.",
+      list_directory: "List entries in a directory. Returns one line per entry, marking directories with a trailing slash.",
+      directory_tree: "Recursively list entries in a directory as an indented tree. Budget-aware with auto-collapse for large subtrees.",
+      search_files: "Find files whose NAME matches a substring or regex. Case-insensitive. Skips dependency/build directories by default.",
+      search_content: "Recursively grep file CONTENTS for a substring or regex. Returns matches in path:line:text format. The right tool for finding references.",
+      glob: "List files matching a glob pattern, sorted by mtime. Default limit 200, max 1000. Skips node_modules/.git/dist by default.",
+      get_file_info: "Stat a path under the sandbox root. Returns type, size in bytes, and mtime.",
+      write_file: "Create or overwrite a file with the given content. Parent directories are created as needed.",
+      edit_file: "Apply a SEARCH/REPLACE edit to an existing file. The search must match exactly and be unique in the file.",
+      multi_edit: "Apply N SEARCH/REPLACE edits across one or more files atomically. If any edit fails, no files are written.",
+      create_directory: "Create a directory (and any missing parents) under the sandbox root.",
+      move_file: "Rename or move a file or directory under the sandbox root.",
+      delete_file: "Delete one file under the sandbox root. Refuses directories \u2014 use delete_directory for those.",
+      delete_directory: "Recursively delete a directory under the sandbox root. Pass recursive:false to refuse non-empty directories.",
+      copy_file: "Copy a file or directory under the sandbox root. Refuses to overwrite an existing destination.",
+      submit_plan: "Submit one concrete plan for a review gate. Use for multi-file refactors, architecture changes, or anything expensive to undo.",
+      mark_step_complete: "Mark one step of the approved plan as done. Call exactly once after finishing each step.",
+      revise_plan: "Surgically replace the remaining steps of an in-flight plan. Done steps are never touched.",
+      run_skill: "Invoke a playbook from the Skills index. Pass the bare skill name. Subagent-tagged skills spawn an isolated subagent.",
+      spawn_subagent: "Spawn an isolated subagent for a self-contained subtask. Use for parallel fan-out or when the work needs many file reads.",
+      todo_write: "In-session task tracker for multi-step work. Replaces the entire list every call. No approval gate or file writes.",
+      ask_choice: "Present 2-6 alternatives to the user. Use when the user asks for options or you need a preference decision.",
+      create_skill: "Scaffold a new skill the user can invoke later via /skill. Supports inline and subagent run modes.",
+      add_mcp_server: "Register a new MCP server in the user's config. Takes effect on the next session. Supports stdio, SSE, and streamable-http."
+    }
   },
   permissions: {
     loading: "loading permissions\u2026",
@@ -19764,10 +19816,6 @@ var en = {
     daemonUp: "daemon is up",
     daemonTimeout: "daemon didn't come up in time \u2014 check ollama serve manually",
     pullingModel: "pulling {model} \u2014 this may take a few minutes on first install",
-    validateModel: "Validate Model",
-    validating: "Validating…",
-    validateOk: "Connected · {model} · {dim}d · {latencyMs}ms",
-    validateFailed: "Validation failed",
     savedConfig: "saved \xB7 {count} fields updated \xB7 re-run index to apply",
     runningPreview: "running dry walk against project root\u2026",
     exclude: "exclude"
@@ -19966,7 +20014,10 @@ var zhCN = {
     sectionLanguage: "\u8BED\u8A00",
     language: "\u8BED\u8A00",
     langEn: "English",
-    langZhCn: "\u7B80\u4F53\u4E2D\u6587"
+    langZhCn: "\u7B80\u4F53\u4E2D\u6587",
+    sectionDev: "\u5F00\u53D1\u8005",
+    devMode: "\u5F00\u53D1\u8005\u6A21\u5F0F",
+    devModeNote: "\u663E\u793A\u540E\u53F0\u670D\u52A1\u5668\u542F\u52A8\u548C\u8FD0\u884C\u65F6\u65E5\u5FD7"
   },
   chat: {
     modeMirror: "TUI \u955C\u50CF",
@@ -20060,7 +20111,7 @@ var zhCN = {
     toolsLoaded: "\u5DF2\u52A0\u8F7D\u5DE5\u5177",
     mcpServers: "MCP \u670D\u52A1\u5668",
     editMode: "\u7F16\u8F91\u6A21\u5F0F",
-    version: "Visionix",
+    version: "Visionox",
     workingDir: "\u5DE5\u4F5C\u76EE\u5F55",
     projectRoot: "\u9879\u76EE\u6839\u76EE\u5F55",
     noPriorData: "\u65E0\u5386\u53F2\u6570\u636E",
@@ -20119,7 +20170,44 @@ var zhCN = {
     colDesc: "\u63CF\u8FF0",
     readOnly: "\u53EA\u8BFB",
     write: "\u5199\u5165",
-    flat: "\u6241\u5E73"
+    flat: "\u6241\u5E73",
+    desc: {
+      web_search: "\u641C\u7D22\u516C\u5171\u7F51\u7EDC\u3002\u8FD4\u56DE\u5E26\u6807\u9898\u3001URL \u548C\u6458\u8981\u7684\u6392\u5E8F\u7ED3\u679C\u3002\u5F53\u7B54\u6848\u7684\u6B63\u786E\u6027\u4F9D\u8D56\u4E8E\u5F53\u524D\u72B6\u6001\u65F6\u8C03\u7528\u2014\u2014\u4E8B\u4EF6\u3001\u4EF7\u683C\u3001\u53D1\u5E03\u3001\u73B0\u5B9E\u4E16\u754C\u7684\u72B6\u6001\u3002",
+      web_fetch: "\u4E0B\u8F7D URL \u5E76\u8FD4\u56DE\u5176\u53EF\u89C1\u6587\u672C\u5185\u5BB9\uFF08\u5DF2\u5265\u79BB\u811A\u672C/\u6837\u5F0F/\u5BFC\u822A\uFF09\u3002\u5728 web_search \u6458\u8981\u4E0D\u591F\u65F6\u4F7F\u7528\u3002",
+      run_command: "\u5728\u9879\u76EE\u6839\u76EE\u5F55\u6267\u884C shell \u547D\u4EE4\uFF0C\u8FD4\u56DE\u5408\u5E76\u7684\u6807\u51C6\u8F93\u51FA\u548C\u6807\u51C6\u9519\u8BEF\u3002\u767D\u540D\u5355\u4E2D\u7684\u53EA\u8BFB\u547D\u4EE4\u7ACB\u5373\u6267\u884C\uFF1B\u53EF\u80FD\u4FEE\u6539\u72B6\u6001\u7684\u64CD\u4F5C\u9700\u7528\u6237\u786E\u8BA4\u3002",
+      run_background: "\u542F\u52A8\u4E00\u4E2A\u957F\u65F6\u95F4\u8FD0\u884C\u7684\u8FDB\u7A0B\u5E76\u5206\u79BB\u3002\u8FD4\u56DE\u4EFB\u52A1 ID \u7528\u4E8E\u67E5\u770B\u65E5\u5FD7\u3001\u7B49\u5F85\u5B8C\u6210\u6216\u7EC8\u6B62\u3002\u7528\u4E8E\u5F00\u53D1\u670D\u52A1\u5668\u3001\u6587\u4EF6\u76D1\u542C\u5668\u548C\u4E00\u6B21\u6027\u957F\u65F6\u95F4\u4EFB\u52A1\u3002",
+      job_output: "\u8BFB\u53D6\u540E\u53F0\u4EFB\u52A1\u7684\u6700\u65B0\u8F93\u51FA\u3002\u8FD4\u56DE\u7F13\u51B2\u533A\u672B\u5C3E\u5185\u5BB9\u5E76\u544A\u77E5\u4EFB\u52A1\u662F\u5426\u4ECD\u5728\u8FD0\u884C\u3002",
+      wait_for_job: "\u5728\u670D\u52A1\u7AEF\u963B\u585E\u76F4\u5230\u540E\u53F0\u4EFB\u52A1\u5B8C\u6210\uFF08\u6709\u8D85\u65F6\u9650\u5236\uFF09\u3002\u7528\u4E8E\u66FF\u4EE3\u8F6E\u8BE2 job_output\u3002",
+      stop_job: "\u505C\u6B62\u540E\u53F0\u4EFB\u52A1\u3002\u5148\u53D1\u9001 SIGTERM\uFF0C\u5BBD\u9650\u671F\u540E\u53D1\u9001 SIGKILL\u3002\u53EF\u5B89\u5168\u8C03\u7528\u5DF2\u9000\u51FA\u7684\u4EFB\u52A1\u3002",
+      list_jobs: "\u5217\u51FA\u672C\u6B21\u4F1A\u8BDD\u542F\u52A8\u7684\u6240\u6709\u540E\u53F0\u4EFB\u52A1\u2014\u2014\u8FD0\u884C\u4E2D\u548C\u5DF2\u9000\u51FA\u7684\u2014\u2014\u5305\u542B ID\u3001\u547D\u4EE4\u3001PID \u548C\u72B6\u6001\u3002",
+      remember: "\u4FDD\u5B58\u4E00\u6761\u8BB0\u5FC6\u4F9B\u672A\u6765\u4F1A\u8BDD\u4F7F\u7528\u3002\u5F53\u7528\u6237\u9648\u8FF0\u504F\u597D\u3001\u7EA0\u6B63\u4F60\u7684\u65B9\u6CD5\u3001\u5206\u4EAB\u975E\u663E\u800C\u6613\u89C1\u7684\u4E8B\u5B9E\u6216\u8981\u6C42\u4F60\u8BB0\u4F4F\u67D0\u4E8B\u65F6\u4F7F\u7528\u3002",
+      forget: "\u5220\u9664\u8BB0\u5FC6\u6587\u4EF6\u5E76\u4ECE MEMORY.md \u4E2D\u79FB\u9664\u3002\u5F53\u7528\u6237\u8981\u6C42\u5FD8\u8BB0\u67D0\u4E8B\u6216\u4E4B\u524D\u8BB0\u4F4F\u7684\u4E8B\u5B9E\u5DF2\u4E0D\u518D\u6B63\u786E\u65F6\u4F7F\u7528\u3002",
+      recall_memory: "\u5F53\u8BB0\u5FC6\u6587\u4EF6\u7684\u4E00\u884C\u6458\u8981\u4E0D\u591F\u8BE6\u7EC6\u65F6\uFF0C\u8BFB\u53D6\u5176\u5B8C\u6574\u5185\u5BB9\u3002",
+      read_file: "\u8BFB\u53D6\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u7684\u6587\u4EF6\u3002\u652F\u6301 head/tail/range \u8303\u56F4\u8BFB\u53D6\u4EE5\u8282\u7701\u4E0A\u4E0B\u6587\u3002\u8D85\u8FC7 200 \u884C\u7684\u6587\u4EF6\u81EA\u52A8\u8FD4\u56DE\u9884\u89C8\u3002",
+      list_directory: "\u5217\u51FA\u76EE\u5F55\u4E2D\u7684\u6761\u76EE\u3002\u6BCF\u884C\u4E00\u4E2A\u6761\u76EE\uFF0C\u76EE\u5F55\u4EE5\u659C\u6760\u6807\u8BB0\u3002",
+      directory_tree: "\u9012\u5F52\u5217\u51FA\u76EE\u5F55\u4E2D\u7684\u6761\u76EE\uFF0C\u4EE5\u7F29\u8FDB\u6811\u5F62\u7ED3\u6784\u663E\u793A\u3002\u5BF9\u5927\u5B50\u76EE\u5F55\u81EA\u52A8\u6298\u53E0\u4EE5\u8282\u7701\u9884\u7B97\u3002",
+      search_files: "\u6839\u636E\u540D\u79F0\u5339\u914D\u5B50\u4E32\u6216\u6B63\u5219\u8868\u8FBE\u5F0F\u67E5\u627E\u6587\u4EF6\u3002\u4E0D\u533A\u5206\u5927\u5C0F\u5199\u3002\u9ED8\u8BA4\u8DF3\u8FC7\u4F9D\u8D56/\u6784\u5EFA\u76EE\u5F55\u3002",
+      search_content: "\u9012\u5F52\u641C\u7D22\u6587\u4EF6\u5185\u5BB9\u4E2D\u7684\u5B50\u4E32\u6216\u6B63\u5219\u8868\u8FBE\u5F0F\u3002\u4EE5 path:line:text \u683C\u5F0F\u8FD4\u56DE\u5339\u914D\u7ED3\u679C\u3002\u67E5\u627E\u5F15\u7528\u7684\u6B63\u786E\u5DE5\u5177\u3002",
+      glob: "\u6309 glob \u6A21\u5F0F\u5217\u51FA\u6587\u4EF6\uFF0C\u6309\u4FEE\u6539\u65F6\u95F4\u6392\u5E8F\u3002\u9ED8\u8BA4\u9650\u5236 200\uFF0C\u6700\u5927 1000\u3002\u9ED8\u8BA4\u8DF3\u8FC7 node_modules/.git/dist\u3002",
+      get_file_info: "\u83B7\u53D6\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u8DEF\u5F84\u7684\u72B6\u6001\u4FE1\u606F\u3002\u8FD4\u56DE\u7C7B\u578B\u3001\u5B57\u8282\u5927\u5C0F\u548C\u4FEE\u6539\u65F6\u95F4\u3002",
+      write_file: "\u521B\u5EFA\u6216\u8986\u76D6\u6587\u4EF6\uFF0C\u5185\u5BB9\u7531\u53C2\u6570\u6307\u5B9A\u3002\u6309\u9700\u521B\u5EFA\u7236\u76EE\u5F55\u3002",
+      edit_file: "\u5BF9\u73B0\u6709\u6587\u4EF6\u5E94\u7528 SEARCH/REPLACE \u7F16\u8F91\u3002\u641C\u7D22\u5FC5\u987B\u5B8C\u5168\u5339\u914D\u4E14\u5728\u6587\u4EF6\u4E2D\u552F\u4E00\u3002",
+      multi_edit: "\u8DE8\u4E00\u4E2A\u6216\u591A\u4E2A\u6587\u4EF6\u539F\u5B50\u6027\u5730\u5E94\u7528 N \u4E2A SEARCH/REPLACE \u7F16\u8F91\u3002\u5982\u679C\u4EFB\u4F55\u7F16\u8F91\u5931\u8D25\uFF0C\u4E0D\u5199\u5165\u4EFB\u4F55\u6587\u4EF6\u3002",
+      create_directory: "\u5728\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u521B\u5EFA\u76EE\u5F55\uFF08\u4EE5\u53CA\u4EFB\u4F55\u7F3A\u5931\u7684\u7236\u76EE\u5F55\uFF09\u3002",
+      move_file: "\u91CD\u547D\u540D\u6216\u79FB\u52A8\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u7684\u6587\u4EF6\u6216\u76EE\u5F55\u3002",
+      delete_file: "\u5220\u9664\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u7684\u4E00\u4E2A\u6587\u4EF6\u3002\u62D2\u7EDD\u76EE\u5F55\u2014\u2014\u8BF7\u4F7F\u7528 delete_directory \u5220\u9664\u76EE\u5F55\u3002",
+      delete_directory: "\u9012\u5F52\u5220\u9664\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u7684\u76EE\u5F55\u3002\u4F20\u5165 recursive:false \u53EF\u62D2\u7EDD\u975E\u7A7A\u76EE\u5F55\u3002",
+      copy_file: "\u590D\u5236\u6C99\u7BB1\u6839\u76EE\u5F55\u4E0B\u7684\u6587\u4EF6\u6216\u76EE\u5F55\u3002\u62D2\u7EDD\u8986\u76D6\u5DF2\u5B58\u5728\u7684\u76EE\u6807\u3002",
+      submit_plan: "\u63D0\u4EA4\u4E00\u4E2A\u5177\u4F53\u7684\u8BA1\u5212\u4EE5\u4F9B\u5BA1\u67E5\u5BA1\u6279\u3002\u7528\u4E8E\u591A\u6587\u4EF6\u91CD\u6784\u3001\u67B6\u6784\u53D8\u66F4\u6216\u4EFB\u4F55\u64A4\u9500\u4EE3\u4EF7\u9AD8\u6602\u7684\u64CD\u4F5C\u3002",
+      mark_step_complete: "\u5C06\u5DF2\u6279\u51C6\u8BA1\u5212\u7684\u4E00\u4E2A\u6B65\u9AA4\u6807\u8BB0\u4E3A\u5B8C\u6210\u3002\u5B8C\u6210\u6BCF\u4E2A\u6B65\u9AA4\u540E\u6070\u597D\u8C03\u7528\u4E00\u6B21\u3002",
+      revise_plan: "\u5916\u79D1\u624B\u672F\u5F0F\u66FF\u6362\u8FDB\u884C\u4E2D\u8BA1\u5212\u7684\u5269\u4F59\u6B65\u9AA4\u3002\u5DF2\u5B8C\u6210\u7684\u6B65\u9AA4\u6C38\u8FDC\u4E0D\u4F1A\u88AB\u89E6\u53CA\u3002",
+      run_skill: "\u4ECE\u6280\u80FD\u7D22\u5F15\u4E2D\u8C03\u7528\u4E00\u4E2A playbook\u3002\u4F20\u5165\u88F8\u6280\u80FD\u540D\u79F0\u3002\u6807\u8BB0\u4E3A\u5B50\u4EE3\u7406\u7684\u6280\u80FD\u5C06\u542F\u52A8\u72EC\u7ACB\u7684\u5B50\u4EE3\u7406\u3002",
+      spawn_subagent: "\u4E3A\u4E00\u4E2A\u72EC\u7ACB\u5B50\u4EFB\u52A1\u542F\u52A8\u9694\u79BB\u7684\u5B50\u4EE3\u7406\u3002\u7528\u4E8E\u5E76\u884C\u5206\u53D1\u6216\u9700\u8981\u5927\u91CF\u6587\u4EF6\u8BFB\u53D6\u7684\u5DE5\u4F5C\u3002",
+      todo_write: "\u591A\u6B65\u5DE5\u4F5C\u7684\u4F1A\u8BDD\u5185\u4EFB\u52A1\u8DDF\u8E2A\u5668\u3002\u6BCF\u6B21\u8C03\u7528\u66FF\u6362\u6574\u4E2A\u5217\u8868\u3002\u65E0\u5BA1\u6279\u5173\u5361\uFF0C\u4E0D\u5199\u5165\u6587\u4EF6\u3002",
+      ask_choice: "\u5411\u7528\u6237\u5C55\u793A 2-6 \u4E2A\u9009\u9879\u3002\u5F53\u7528\u6237\u8981\u6C42\u9009\u62E9\u6216\u9700\u8981\u504F\u597D\u51B3\u7B56\u65F6\u4F7F\u7528\u3002",
+      create_skill: "\u521B\u5EFA\u4E00\u4E2A\u65B0\u6280\u80FD\uFF0C\u7528\u6237\u53EF\u901A\u8FC7 /skill \u547D\u4EE4\u8C03\u7528\u3002\u652F\u6301\u5185\u8054\u548C\u5B50\u4EE3\u7406\u4E24\u79CD\u8FD0\u884C\u6A21\u5F0F\u3002",
+      add_mcp_server: "\u5728\u7528\u6237\u914D\u7F6E\u4E2D\u6CE8\u518C\u65B0\u7684 MCP \u670D\u52A1\u5668\u3002\u4E0B\u6B21\u4F1A\u8BDD\u751F\u6548\u3002\u652F\u6301 stdio\u3001SSE \u548C streamable-http\u3002"
+    }
   },
   permissions: {
     loading: "\u52A0\u8F7D\u6743\u9650\u2026",
@@ -22919,7 +23007,10 @@ function hlLine(text, lang) {
 }
 
 // dashboard/src/components/chat-internals.ts
-var ROLE_AVATAR = {user: "/assets/128x128.png", assistant: "/assets/ai-avatar.png"};
+var ROLE_AVATAR = {
+  user: "/assets/128x128.png",
+  assistant: "/assets/ai-avatar.png"
+};
 function renderMessageBody(text) {
   if (!text) return null;
   return html4`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdownToString(text) }}></div>`;
@@ -23033,7 +23124,8 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming }) {
   }
   return html4`
     <div class="chat-msg ${role}">
-      ${avatar ? html4`<img class="avatar" src=${avatar} width="28" height="28" alt="" />` : html4`<div class="glyph">·</div>`}
+      ${avatar ? html4`<img class="avatar" src=${avatar} width="28" height="28" alt="" />`
+                : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
         ${renderMessageBody(msg.text)}
@@ -23580,7 +23672,6 @@ function ChatPanel() {
   const [effort, setEffortLocal] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
-  const [workspaceDir, setWorkspaceDirLocal] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
   const [semanticIndex, setSemanticIndex] = d2(null);
@@ -23588,10 +23679,6 @@ function ChatPanel() {
   const [popoverKind, setPopoverKind] = d2(null);
   const [popoverItems, setPopoverItems] = d2([]);
   const [popoverSel, setPopoverSel] = d2(0);
-  const [showSkillPicker, setShowSkillPicker] = d2(false);
-  const [skillList, setSkillList] = d2([]);
-  const [showWsPicker, setShowWsPicker] = d2(false);
-  const [recentWss, setRecentWss] = d2(() => { try { return JSON.parse(localStorage.getItem("visionox-workspaces") || "[]"); } catch { return []; } });
   const [semanticBannerDismissed, setSemanticBannerDismissed] = d2(() => {
     try {
       return localStorage.getItem("rx.semanticBannerDismissed") === "1";
@@ -23607,6 +23694,11 @@ function ChatPanel() {
   }, [semanticBannerDismissed]);
   const [turnStartedAt, setTurnStartedAt] = d2(null);
   const [nowTick, setNowTick] = d2(0);
+  const [workspaceDir, setWorkspaceDirLocal] = d2(null);
+  const [recentWss, setRecentWss] = d2(() => { try { return JSON.parse(localStorage.getItem("visionox-workspaces") || "[]"); } catch { return []; } });
+  const [showWsPicker, setShowWsPicker] = d2(false);
+  const [showSkillPicker, setShowSkillPicker] = d2(false);
+  const [skillList, setSkillList] = d2([]);
   y2(() => {
     if (!busy) return;
     const id = setInterval(() => setNowTick((n3) => n3 + 1), 500);
@@ -23759,6 +23851,14 @@ function ChatPanel() {
         setTimeout(() => setStatusLine((cur) => cur === dash.text ? null : cur), 5e3);
         return;
       }
+      if (dash.kind === "messages-reset") {
+        setMessages(dash.messages.map((m) => ({
+          id: m.id || `hist-${Math.random()}`,
+          role: m.role,
+          text: m.text || ""
+        })));
+        return;
+      }
       if (dash.kind === "modal-up") {
         setModal(dash.modal);
         return;
@@ -23804,8 +23904,8 @@ function ChatPanel() {
   }, []);
   const newConversation = q2(async () => {
     if (busy) {
-      if (!await window._showConfirm(t4("chat.newConfirmBusy"))) return;
-    } else if (messages.length > 0 && !await window._showConfirm(t4("chat.newConfirm"))) {
+      if (!confirm(t4("chat.newConfirmBusy"))) return;
+    } else if (messages.length > 0 && !confirm(t4("chat.newConfirm"))) {
       return;
     }
     try {
@@ -23843,19 +23943,6 @@ function ChatPanel() {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
   }, []);
-  const pickWorkspace = q2(async (dir) => {
-    setShowWsPicker(false);
-    try {
-      await api("/settings", { method: "POST", body: { workspaceDir: dir } });
-      setWorkspaceDirLocal(dir);
-      const updated = [dir, ...recentWss.filter(w => w !== dir)].slice(0, 5);
-      setRecentWss(updated);
-      try { localStorage.setItem("visionox-workspaces", JSON.stringify(updated)); } catch {}
-      showToast("工作空间已设为 " + dir + "（重启后生效）", "info");
-    } catch (err) {
-      setError(err.message);
-    }
-  }, [recentWss]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -23994,10 +24081,10 @@ function ChatPanel() {
         setEditModeLocal(o3.editMode ?? null);
         setPresetLocal(o3.preset ?? null);
         setEffortLocal(o3.reasoningEffort ?? null);
+        setWorkspaceDirLocal(o3.cwd ?? null);
         setStats(o3.stats ?? null);
         setOverviewModel(o3.model ?? null);
         setBudgetUsd(o3.budgetUsd ?? null);
-        setWorkspaceDirLocal(o3.cwd ?? null);
         const recent = o3.cockpit?.recentPlans ?? [];
         setActivePlan(recent.find((p3) => p3.status === "active") ?? null);
         setSemanticIndex(o3.semanticIndexExists ?? null);
@@ -24039,6 +24126,19 @@ function ChatPanel() {
       }
     }
   }, []);
+  const pickWorkspace = q2(async (dir) => {
+    setShowWsPicker(false);
+    try {
+      await api("/settings", { method: "POST", body: { workspaceDir: dir } });
+      setWorkspaceDirLocal(dir);
+      const updated = [dir, ...recentWss.filter((w2) => w2 !== dir)].slice(0, 5);
+      setRecentWss(updated);
+      try { localStorage.setItem("visionox-workspaces", JSON.stringify(updated)); } catch {}
+      showToast("工作空间已设为 " + dir + "（新对话后生效）", "info");
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [recentWss]);
   return html4`
     <div class="chat-shell">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
@@ -24146,55 +24246,55 @@ function ChatPanel() {
                 ` : null}
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
               <div style="display:flex;gap:6px;align-items:flex-end">
-                <textarea
-                  placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
-                  value=${input}
-                  onInput=${onInput}
-                  onKeyDown=${onKeyDown}
-                  onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
-                  disabled=${busy}
-                  style="flex:1"
-                  rows="4"
-                ></textarea>
-                <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
-                  <button
-                    class="primary"
-                    onClick=${send}
-                    disabled=${busy || !input.trim()}
-                  >${t4("chat.send")}</button>
-                  <div style="display: flex; gap: 6px;">
-                    <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
-                    <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
-                  </div>
-                </div>
-              </div>
-              <div style="display:flex;align-items:center;position:relative;flex-shrink:0;margin:0;gap:12px">
-                <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { api("/skills").then(r => setSkillList([...r.global, ...r.builtin])).catch(() => {}); } }}>🔧 技能</span>
-                ${showSkillPicker && skillList.length > 0 ? html4`
-                  <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
-                    <div class="popover-h">选择技能</div>
-                    ${skillList.map(s => html4`
-                      <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); setInput((prev) => prev + '/' + s.name + ' '); setShowSkillPicker(false); }}>
-                        <span class="name">${s.name}</span>
-                        <span class="meta">${(s.description || '').slice(0,40)}</span>
-                      </div>
-                    `)}
-                  </div>
-                ` : null}
-                <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</span>
-                ${showWsPicker ? html4`
-                  <div class="popover" style="position:absolute;bottom:100%;left:0;width:280px;max-height:220px;overflow-y:auto;z-index:10">
-                    <div class="popover-h">选择工作空间</div>
-                    <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); pickWorkspace(workspaceDir); setShowWsPicker(false); }}><span class="name">🏠 默认沙箱</span></div>
-                    ${recentWss.map(w => html4`
-                      <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); pickWorkspace(w); setShowWsPicker(false); }}><span class="name">📁 ${w}</span></div>
-                    `)}
-                    <div class="popover-row" onMouseDown=${(e) => { e.preventDefault(); const p = prompt('输入工作空间路径:'); if (p && p.trim()) pickWorkspace(p.trim()); setShowWsPicker(false); }}><span class="name">📂 浏览其他目录...</span></div>
-                  </div>
-                ` : null}
-              ${(showSkillPicker || showWsPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); }}></div>` : null}
+            <textarea
+              placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
+              value=${input}
+              onInput=${onInput}
+              onKeyDown=${onKeyDown}
+              onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
+              disabled=${busy}
+              style="flex:1"
+              rows="4"
+            ></textarea>
+            <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
+              <button
+                class="primary"
+                onClick=${send}
+                disabled=${busy || !input.trim()}
+              >${t4("chat.send")}</button>
+              <div style="display: flex; gap: 6px;">
+                <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
+                <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
               </div>
             </div>
+              </div>
+            <div style="display:flex;align-items:center;position:relative;flex-shrink:0;margin:0;gap:12px">
+              <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { api("/skills").then((r2) => setSkillList([...r2.global, ...r2.builtin])).catch(() => {}); } }}>🔧 技能</span>
+              ${showSkillPicker && skillList.length > 0 ? html4`
+                <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
+                  <div class="popover-h">选择技能</div>
+                  ${skillList.map((s2) => html4`
+                    <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setInput((prev) => prev + '/' + s2.name + ' '); setShowSkillPicker(false); }}>
+                      <span class="name">${s2.name}</span>
+                      <span class="meta">${(s2.description || '').slice(0,40)}</span>
+                    </div>
+                  `)}
+                </div>
+              ` : null}
+              <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</span>
+              ${showWsPicker ? html4`
+                <div class="popover" style="position:absolute;bottom:100%;left:0;width:280px;max-height:220px;overflow-y:auto;z-index:10">
+                  <div class="popover-h">选择工作空间</div>
+                  <div class="popover-row" onMouseDown=${(e3) => { e3.preventDefault(); pickWorkspace("visionox-workspace"); }}><span class="name">🏠 默认沙箱</span></div>
+                  ${recentWss.map((w3) => html4`
+                    <div class="popover-row" onMouseDown=${(e4) => { e4.preventDefault(); pickWorkspace(w3); }}><span class="name">📁 ${w3}</span></div>
+                  `)}
+                  <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); const p2 = prompt('输入工作空间路径:'); if (p2 && p2.trim()) pickWorkspace(p2.trim()); }}><span class="name">📂 浏览其他目录...</span></div>
+                </div>
+              ` : null}
+              ${(showSkillPicker || showWsPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); }}></div>` : null}
+            </div>
+              </div>
           </div>
 
           ${busy ? html4`<${InFlightRow}
@@ -24207,8 +24307,6 @@ function ChatPanel() {
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} />
         </div>
-
-        <${SideRail} stats=${stats} budgetUsd=${budgetUsd} activePlan=${activePlan} />
       </div>
     </div>
   `;
@@ -24439,8 +24537,6 @@ function HooksPanel() {
   const [drafts, setDrafts] = d2({});
   const [busy, setBusy] = d2(false);
   const [info, setInfo] = d2(null);
-  const [validating, setValidating] = d2(false);
-  const [validateResult, setValidateResult] = d2(null);
   const [eventFilter, setEventFilter] = d2("all");
   const load = q2(async () => {
     try {
@@ -25827,15 +25923,12 @@ function SemanticPanel() {
   const [error, setError] = d2(null);
   const [busy, setBusy] = d2(false);
   const [info, setInfo] = d2(null);
-  const [validating, setValidating] = d2(false);
-  const [validateResult, setValidateResult] = d2(null);
   const load = q2(async () => {
     try {
       const [semantic, config] = await Promise.all([
         api("/semantic"),
         api("/semantic/config")
       ]);
-      setValidateResult(null);
       setData(semantic);
       setDraft((current) => current && draftDirtyRef.current ? current : toConfigDraft(config));
     } catch (err) {
@@ -25955,28 +26048,6 @@ function SemanticPanel() {
       setBusy(false);
     }
   }, [draft, load]);
-  const validateProvider = q2(async () => {
-    if (!draft) return;
-    setValidating(true);
-    setValidateResult(null);
-    setError(null);
-    try {
-      const v = validateSemanticDraft(draft);
-      const r3 = await api("/semantic/validate-provider", {
-        method: "POST",
-        body: {
-          provider: draft.provider,
-          ollama: { baseUrl: draft.ollama.baseUrl, model: draft.ollama.model },
-          openaiCompat: { baseUrl: draft.openaiCompat.baseUrl, apiKey: draft.openaiCompat.apiKey, model: draft.openaiCompat.model, extraBody: v.extraBody }
-        }
-      });
-      setValidateResult(r3);
-    } catch (err) {
-      setValidateResult({ ok: false, error: err.message });
-    } finally {
-      setValidating(false);
-    }
-  }, [draft]);
   if (!data && !error) {
     return html4`<div class="card" style="color:var(--fg-3)">${t4("common.loading")}</div>`;
   }
@@ -26146,10 +26217,8 @@ function SemanticPanel() {
                 ${semanticValidation.error ? html4`<div style="color:var(--c-err);font-size:12px;margin-top:-2px">${semanticValidation.error}</div>` : null}
               `}
           <div style="display:flex;gap:6px;margin-top:10px">
-            <button class="btn primary" disabled=${busy || validating || semanticValidation.error !== null} onClick=${validateProvider}>${validating ? t4("semantic.validating") : t4("semantic.validateModel")}</button>
-            <button class="btn primary" disabled=${busy || validating || semanticValidation.error !== null} onClick=${saveProviderConfig}>${t4("common.save")}</button>
+            <button class="btn primary" disabled=${busy || semanticValidation.error !== null} onClick=${saveProviderConfig}>${t4("common.save")}</button>
           </div>
-          ${validateResult ? html4`<div style="margin-top:6px"><span class="pill ${validateResult.ok ? 'ok' : 'err'}">${validateResult.ok ? t4("semantic.validateOk", { model: validateResult.model, dim: String(validateResult.dim ?? '?'), latencyMs: String(validateResult.latencyMs ?? 0) }) : t4("semantic.validateFailed") + ': ' + (validateResult.error || '')}</span></div>` : null}
         </div>
         ${info ? html4`<div><span class="pill info">${info}</span></div>` : null}
 
@@ -26695,6 +26764,7 @@ function SessionsPanel() {
   const [openLoading, setOpenLoading] = d2(false);
   const [filter, setFilter] = d2("");
   const [deleting, setDeleting] = d2(false);
+  const [resuming, setResuming] = d2(false);
   const view = q2(async (name) => {
     setOpen({ name, messages: null });
     setOpenLoading(true);
@@ -26708,7 +26778,7 @@ function SessionsPanel() {
     }
   }, []);
   const remove = q2(async (name) => {
-    if (!confirm("删除此会话记录？")) return;
+    if (!confirm("删除此会话记录？此操作不可撤销。")) return;
     setDeleting(true);
     try {
       await api(`/sessions/${encodeURIComponent(name)}`, { method: "DELETE" });
@@ -26717,6 +26787,18 @@ function SessionsPanel() {
       if (open) setOpen({ ...open, error: err.message });
     } finally {
       setDeleting(false);
+    }
+  }, [open]);
+  const doResume = q2(async (name) => {
+    setResuming(true);
+    try {
+      await api("/submit", { method: "POST", body: { prompt: "", session: name } });
+      appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "chat" } }));
+      setOpen(null);
+    } catch (err) {
+      if (open) setOpen({ ...open, error: err.message });
+    } finally {
+      setResuming(false);
     }
   }, [open]);
   if (loading && !data)
@@ -26770,15 +26852,19 @@ function SessionsPanel() {
                     ${open.messages ? t4("sessions.messages", { count: open.messages.length, s: open.messages.length === 1 ? "" : "s" }) : t4("common.loading")}
                   </span>
                   <span class="actions">
-                    <button class="btn ghost" disabled=${deleting} onClick=${() => remove(open.name)}>${t4("common.delete")}</button>
                     <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
+                    <button class="btn ghost danger" disabled=${deleting} onClick=${() => remove(open.name)}>${deleting ? "..." : t4("common.delete")}</button>
                   </span>
                 </div>
                 <div class="card accent-brand" style="margin-bottom:10px">
-                  <div class="card-h"><span class="title">${t4("sessions.resumeTitle")}</span></div>
+                  <div class="card-h"><span class="title">继续会话</span></div>
                   <div class="card-b" style="font-size:12.5px;color:var(--fg-2)">
-                    ${t4("sessions.resumeDesc")}
-                    <code class="mono" style="display:block;margin-top:8px;padding:8px 10px;background:var(--bg-input);border-radius:var(--r);color:var(--fg-0);font-size:12px;user-select:all">visionox chat --session ${open.name}</code>
+                    加载历史消息到当前聊天，AI 将获得完整上下文，你可以直接继续对话。
+                    <button class="btn primary" style="margin-top:8px;width:100%"
+                            disabled=${resuming}
+                            onClick=${() => doResume(open.name)}>
+                      ${resuming ? "加载中..." : "加载并继续会话"}
+                    </button>
                   </div>
                 </div>
                 ${openLoading ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : open.messages && open.messages.length > 0 ? html4`<div class="chat-feed" style="max-height:calc(100vh - 220px);overflow-y:auto">
@@ -27122,11 +27208,10 @@ function SettingsPanel() {
   const [loopStatus, setLoopStatus] = d2(null);
   const [loopAvgCost, setLoopAvgCost] = d2(null);
   const [loopBusy, setLoopBusy] = d2(false);
-  const [showDevLog, setShowDevLog] = d2(false);
-  const [logLines, setLogLines] = d2([]);
-  const refreshLogs = q2(async () => { try { const r3 = await api("/logs"); setLogLines(r3.logs ?? []); } catch { setLogLines([]); } }, []);
   const lastStatusSyncRef = A2(0);
   const [now, setNow] = d2(() => Date.now());
+  const [showDevLog, setShowDevLog] = d2(false);
+  const [devLogs, setDevLogs] = d2([]);
   const load = q2(async () => {
     try {
       const r3 = await api("/settings");
@@ -27197,6 +27282,23 @@ function SettingsPanel() {
       setLoopBusy(false);
     }
   }, [refreshLoop]);
+  const refreshLogs = q2(async () => {
+    try {
+      const r3 = await api("/logs");
+      setDevLogs(r3.logs ?? []);
+    } catch {
+    }
+  }, []);
+  y2(() => {
+    if (!showDevLog) return;
+    refreshLogs();
+    const id = setInterval(refreshLogs, 2e3);
+    return () => clearInterval(id);
+  }, [showDevLog, refreshLogs]);
+  y2(() => {
+    const el = document.getElementById("dev-log-panel");
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [devLogs]);
   const save = q2(
     async (fields) => {
       setSaving(true);
@@ -27392,12 +27494,24 @@ function SettingsPanel() {
   )}
       </div>
 
-      <h3 style="margin:18px 0 8px;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${t4("settings.sectionDev")}</h3>
+      ${sectionH3(t4("settings.sectionDev"))}
       <div class="card">
-        <button class="btn primary" onClick=${() => { setShowDevLog(!showDevLog); if (!showDevLog) refreshLogs(); }}>${t4("settings.devMode")}</button>
+        ${fieldRow(
+          t4("settings.devMode"),
+          html4`<button
+            class=${`btn ${showDevLog ? "primary" : ""}`}
+            onClick=${() => setShowDevLog(!showDevLog)}
+          >${showDevLog ? t4("common.on") : t4("common.off")}</button>`,
+          t4("settings.devModeNote")
+        )}
         ${showDevLog ? html4`
-          <div style="margin-top:10px;max-height:400px;overflow-y:auto;background:var(--bg-code);border:1px solid var(--bd);border-radius:var(--r);padding:10px;font-family:var(--font-mono);font-size:11px;line-height:1.5;white-space:pre-wrap;color:var(--fg-1)">
-            ${logLines.length === 0 ? t4("settings.noLogs") : logLines.map((l) => html4`<div style="padding:1px 0;border-bottom:1px solid var(--bd)"><span style="color:var(--fg-4)">${new Date(l.ts).toLocaleTimeString()}</span>  ${l.msg}</div>`)}
+          <div style="margin-top:10px;max-height:320px;overflow-y:auto;background:var(--bg-0);border:1px solid var(--border-1);border-radius:6px;padding:8px;font-family:var(--font-mono);font-size:11px;line-height:1.6" id="dev-log-panel">
+            ${devLogs.length === 0 ? html4`<span style="color:var(--fg-3)">...</span>` : devLogs.map((e) => html4`
+              <div style="display:flex;gap:8px">
+                <span style="color:var(--fg-3);flex-shrink:0">${new Date(e.ts).toLocaleTimeString()}</span>
+                <span style="color:var(--fg-2);word-break:break-all">${e.msg}</span>
+              </div>
+            `)}
           </div>
         ` : null}
       </div>
@@ -27715,6 +27829,11 @@ function SystemPanel() {
 }
 
 // dashboard/src/panels/tools.ts
+function toolDesc(name, fallback) {
+  const key = `tools.desc.${name}`;
+  const translated = t4(key);
+  return translated === key ? fallback : translated;
+}
 function ToolsPanel() {
   useLang();
   const { data, error, loading } = usePoll("/tools", 4e3);
@@ -27753,7 +27872,7 @@ function ToolsPanel() {
                           ${tool.readOnly ? html4`<span class="pill ok">${t4("tools.readOnly")}</span>` : html4`<span class="pill acc">${t4("tools.write")}</span>`}
                           ${tool.flattened ? html4` <span class="pill">${t4("tools.flat")}</span>` : null}
                         </td>
-                        <td class="dim">${tool.description ?? ""}</td>
+                        <td class="dim">${toolDesc(tool.name, tool.description ?? "")}</td>
                       </tr>
                     `
   )}
@@ -29560,8 +29679,8 @@ ${commentRefs}` : commentRefs;
   }, []);
   const newConversation = q2(async () => {
     if (busy) {
-      if (!await window._showConfirm(t4("changes.newConfirmBusy"))) return;
-    } else if (messages.length > 0 && !await window._showConfirm(t4("changes.newConfirm"))) {
+      if (!confirm(t4("changes.newConfirmBusy"))) return;
+    } else if (messages.length > 0 && !confirm(t4("changes.newConfirm"))) {
       return;
     }
     try {
@@ -29761,26 +29880,11 @@ function tabSections() {
     }
   ];
 }
-function ConfirmDialog(_ref2) { var msg=_ref2.msg, onResolve=_ref2.onResolve; if(!msg) return null; return html6`<div style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5)"><div style="background:var(--bg-elev);border:1px solid var(--bd);border-radius:8px;padding:24px;min-width:320px;max-width:440px;box-shadow:0 8px 32px rgba(0,0,0,.4)"><div style="font-size:14px;color:var(--fg-1);margin-bottom:20px;line-height:1.6">${msg}</div><div style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" onClick=${function(){onResolve(false)}}>${t4("common.cancel")}</button><button class="btn primary" onClick=${function(){onResolve(true)}}>${t4("common.confirm")}</button></div></div></div>`; }
-
 function App() {
   useLang();
   y2(() => {
     initLangFromServer();
   }, []);
-  const [confirmMsg, setConfirmMsg] = d2(null);
-  const [confirmResolve, setConfirmResolve] = d2(null);
-  y2(function() {
-    window._showConfirm = function(msg) {
-      return new Promise(function(resolve) {
-        setConfirmMsg(msg);
-        setConfirmResolve({ fn: resolve });
-      });
-    };
-  }, []);
-  const handleConfirmResolve = function(result) {
-    if (confirmResolve) { var r = confirmResolve; setConfirmResolve(null); setConfirmMsg(null); r.fn(result); }
-  };
   const [activeId, setActiveId] = d2(() => {
     try {
       return localStorage.getItem("rx.activeTab") ?? "chat";
@@ -29807,6 +29911,19 @@ function App() {
     } catch {
     }
   }, [activeId]);
+  const [wsRoot, setWsRoot] = d2(null);
+  const [version2, setVersion] = d2(null);
+  const [buildDate2, setBuildDate] = d2(null);
+  y2(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api("/health");
+        if (!cancelled) { setWsRoot(data.cwd ?? null); setVersion(data.version ?? null); setBuildDate(data.buildDate ?? null); }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const TAB_SECTIONS = tabSections();
   const ALL_TABS = TAB_SECTIONS.flatMap((s3) => s3.tabs);
   const active = ALL_TABS.find((t5) => t5.id === activeId) ?? ALL_TABS[0];
@@ -29827,8 +29944,7 @@ function App() {
       <aside class="app-side">
         <div class="brand">
           <span class="glyph">◈</span>
-          <img src="/assets/v3.png" alt="" height="26" style="flex-shrink:0" />
-          <span class="ver">${MODE}</span>
+          <img src="/assets/v3.png" alt="" height="13" style="flex-shrink:0" />
         </div>
         <div class="side-tabs">
           ${TAB_SECTIONS.map(
@@ -29861,9 +29977,19 @@ function App() {
           >${sidebarCollapsed ? "\xBB" : "\xAB"}</span>
         </div>
       </aside>
-      <header class="app-top" style="justify-content:center">
-        <span style="font-family:'Microsoft YaHei','微软雅黑',sans-serif;font-size:15px;color:var(--fg-0);font-weight:600;letter-spacing:.02em">维信诺协同办公平台 - 产品工程中心 @2026</span>
+      <header class="app-top">
+        <span class="ws">
+          <span class="path">Visionox</span>
+          <span class="sep">·</span>
+          <span class="session" style="color:#1a3a5c;font-family:'Microsoft YaHei','微软雅黑',var(--font-sans);font-size:15px">维信诺协同办公平台</span>
+        </span>
         <span class="grow"></span>
+        <span class="meter">
+          ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
+          <span class="sep">·</span>
+          <span class="lbl">@${(new Date).getFullYear()}</span>
+          ${version2 && buildDate2 ? html7`<span class="sep">·</span><span class="v">v${version2}-${buildDate2}</span>` : version2 ? html7`<span class="sep">·</span><span class="v">v${version2}</span>` : null}
+        </span>
       </header>
       <div class="app-body">
         <${ErrorBoundary}>${active.panel()}<//>
@@ -29875,7 +30001,6 @@ function App() {
     </div>
     <${ToastStack} />
     <${ErrorOverlay} />
-    <${ConfirmDialog} msg=${confirmMsg} onResolve=${handleConfirmResolve} />
   `;
 }
 R(html7`<${App} />`, document.getElementById("root"));

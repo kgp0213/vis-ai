@@ -12,9 +12,13 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cp } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { execSync } from "node:child_process";
+import { exec as execCb } from "node:child_process";
+import { promisify } from "node:util";
+
+const exec = promisify(execCb);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
@@ -70,7 +74,7 @@ const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
 
 // ── Import server module ────────────────────────────────────────
-const serverModUrl = distPath("server-DRFPXXSH.js");
+const serverModUrl = distPath("server-XGDBRWMB.js");
 console.error(`[launcher] importing ${serverModUrl}`);
 const { startDashboardServer } = await import(serverModUrl);
 
@@ -101,16 +105,16 @@ const [
   { applySkillsIndex },
   { registerSkillTools },
 ] = await Promise.all([
-  import(distPath("chunk-H4OLWRSX.js")),
-  import(distPath("chunk-IEA6JOIP.js")),
-  import(distPath("chunk-65Q5HQ26.js")),
-  import(distPath("chunk-3Q3C4W66.js")),
-  import(distPath("chunk-BYZGO3BX.js")),
-  import(distPath("chunk-CFY2XLY6.js")),
-  import(distPath("chunk-7G3SESEU.js")),
-  import(distPath("chunk-RAUPWSYA.js")),
-  import(distPath("chunk-6DR4F3MC.js")),
-  import(distPath("chunk-A7VHMMDE.js")),
+  import(distPath("chunk-2KDUS647.js")),
+  import(distPath("chunk-2R4QCDOZ.js")),
+  import(distPath("chunk-XPDVG52A.js")),
+  import(distPath("chunk-2UQP6H6T.js")),
+  import(distPath("chunk-O52OLQL3.js")),
+  import(distPath("chunk-6AK4EY3D.js")),
+  import(distPath("chunk-PQXPXJBJ.js")),
+  import(distPath("chunk-YYQAUTTN.js")),
+  import(distPath("chunk-2K65GZBT.js")),
+  import(distPath("chunk-45U62RI3.js")),
 ]);
 
 // ── Load config ─────────────────────────────────────────────────
@@ -121,49 +125,106 @@ const model = config.model ?? "deepseek-v4-flash";
 const baseUrl = loadBaseUrl();
 
 // Workspace directory — configurable via config.workspaceDir
-const workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
+let workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
 if (!existsSync(workspaceDir)) {
   mkdirSync(workspaceDir, { recursive: true });
 }
 
-// Deploy skill-creation-guide.md to workspace for agent reference
-const guideSrc = resolve(__dirname, "..", "skill-creation-guide.md");
-const guideDir = resolve(workspaceDir, ".visionox");
-const guideDst = resolve(guideDir, "skill-creation-guide.md");
-if (existsSync(guideSrc) && !existsSync(guideDst)) {
-  if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
-  copyFileSync(guideSrc, guideDst);
-  console.error(`[launcher] skill-creation-guide.md deployed to workspace`);
+function deploySkillGuide(rootDir) {
+  const guideSrc = resolve(__dirname, "..", "skill-creation-guide.md");
+  const guideDir = resolve(rootDir, ".visionox");
+  const guideDst = resolve(guideDir, "skill-creation-guide.md");
+  if (existsSync(guideSrc) && !existsSync(guideDst)) {
+    if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
+    copyFileSync(guideSrc, guideDst);
+    console.error(`[launcher] skill-creation-guide.md deployed to workspace`);
+  }
 }
+deploySkillGuide(workspaceDir);
 
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, model=${model}`);
 console.error(`[launcher] workspace: ${workspaceDir}`);
+
+// Workspace-dependent tool names — for unregister/re-register on workspace switch
+const WORKSPACE_TOOL_NAMES_BASE = [
+  "read_file", "list_directory", "search_files", "get_file_info",
+  "write_file", "create_directory", "move_file", "delete_file",
+  "delete_directory", "copy_file",
+  "run_command", "run_background", "job_output", "wait_for_job",
+  "stop_job", "list_jobs",
+  "remember", "forget", "recall_memory",
+  "semantic_search",
+  "run_skill",
+];
+let wsToolNames = [...WORKSPACE_TOOL_NAMES_BASE];
+let hasSemanticSearch = false;
+
+async function registerWorkspaceTools(tools, rootDir, opts = {}) {
+  const { jobs } = opts;
+
+  registerFilesystemTools(tools, {
+    rootDir,
+    allowWriting: true,
+    allowAllPaths: () => loadEditMode(configPath) === "admin",
+  });
+
+  registerShellTools(tools, {
+    rootDir,
+    extraAllowed: () => loadProjectShellAllowed(rootDir, configPath),
+    allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
+    jobs,
+  });
+
+  registerMemoryTools(tools, { projectRoot: rootDir });
+
+  let hasSemantic = false;
+  try {
+    const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
+    const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
+    const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
+    const providerCfg = semanticCfg[cfgKey];
+    const registered = await registerSemanticSearchTool(tools, {
+      root: rootDir,
+      provider,
+      model: providerCfg?.model,
+      baseUrl: providerCfg?.baseUrl,
+      apiKey: providerCfg?.apiKey,
+      extraBody: providerCfg?.extraBody,
+    });
+    if (registered) {
+      hasSemantic = true;
+      console.error(`[launcher] semantic_search tool registered`);
+    }
+  } catch (err) {
+    console.error(`[launcher] semantic_search skipped: ${err.message}`);
+  }
+
+  registerSkillTools(tools, { homeDir: home, projectRoot: rootDir });
+  console.error(`[launcher] skill tools registered (run_skill), ${tools.size} total tools`);
+  // install_skill is re-registered unconditionally below — skip here
+  // to avoid "tool already exists" errors on re-registration
+
+  return { hasSemantic };
+}
 
 // ── Create registry & register all tools ────────────────────────
 const tools = new ToolRegistry();
 const jobs = new JobRegistry();
 
-// Filesystem tools — sandboxed to workspaceDir
-registerFilesystemTools(tools, {
-  rootDir: workspaceDir,
-  allowWriting: true,
-  allowAllPaths: () => loadEditMode(configPath) === "admin",
-});
+// Workspace-dependent tools — registered via shared function
+const wsResult = await registerWorkspaceTools(tools, workspaceDir, { jobs });
+hasSemanticSearch = wsResult.hasSemantic;
+if (!hasSemanticSearch) {
+  wsToolNames = wsToolNames.filter((n) => n !== "semantic_search");
+}
 
-// Shell tools — gated by edit mode (yolo=auto-approve, auto=semi-auto, review=confirm)
-// Default to auto on first run
+// Shell edit mode — default to auto on first run
 if (!config.editMode) {
   config.editMode = "auto";
   writeConfig(config, configPath);
 }
-registerShellTools(tools, {
-  rootDir: workspaceDir,
-  extraAllowed: () => loadProjectShellAllowed(workspaceDir, configPath),
-  allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
-  jobs,
-});
 
-// Web tools — search + fetch
+// Web tools — search + fetch (not workspace-dependent)
 if (searchEnabled(configPath)) {
   registerWebTools(tools, {
     webSearchEngine: webSearchEngine(configPath),
@@ -172,10 +233,7 @@ if (searchEnabled(configPath)) {
   console.error(`[launcher] web tools registered`);
 }
 
-// Memory tools
-registerMemoryTools(tools, { projectRoot: workspaceDir });
-
-// Utility tools
+// Utility tools (not workspace-dependent)
 registerPlanTool(tools);
 registerChoiceTool(tools);
 registerTodoTool(tools);
@@ -187,9 +245,10 @@ const skillsRoot = resolve(homedir(), ".visionox", "skills");
 
 tools.register({
   name: "install_skill",
-  description: `安装或导入一个 Skill。支持两种方式:
-1. 提供 name + body — 直接写入 SKILL.md 到 ~/.visionox/skills/<name>/
-2. 提供 name + source — 从 .skill 文件（ZIP 格式）解压安装
+  description: `安装或导入一个 Skill。支持三种方式:
+1. name + body — 仅写入 SKILL.md，不含辅助文件。适合快速创建简单 skill。
+2. name + source — 从 .skill 文件（ZIP 格式）解压安装。适合分发打包好的 skill。
+3. name + source_dir — 从本地目录递归复制所有文件（含 scripts/、references/、templates/、README.md 等）。适合开发中的完整 skill 目录。
 Skill 安装后在新对话中自动加载。`,
   parameters: {
     type: "object",
@@ -200,11 +259,15 @@ Skill 安装后在新对话中自动加载。`,
       },
       body: {
         type: "string",
-        description: "SKILL.md 的完整内容（含 YAML frontmatter）。与 source 二选一。",
+        description: "SKILL.md 的完整内容（含 YAML frontmatter）。与 source、source_dir 三选一。",
       },
       source: {
         type: "string",
-        description: ".skill 文件的本地路径（ZIP 格式）。与 body 二选一。",
+        description: ".skill 文件的本地路径（ZIP 格式）。与 body、source_dir 三选一。",
+      },
+      source_dir: {
+        type: "string",
+        description: "本地目录路径，递归复制所有文件到 ~/.visionox/skills/<name>/。目录必须包含 SKILL.md。与 body、source 三选一。",
       },
     },
     required: ["name"],
@@ -251,12 +314,12 @@ Skill 安装后在新对话中自动加载。`,
           copyFileSync(src, zipPath);
         }
         if (process.platform === "win32") {
-          execSync(
+          await exec(
             `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${skillDir}' -Force"`,
-            { stdio: "pipe" }
+            { maxBuffer: 10 * 1024 * 1024 }
           );
         } else {
-          execSync(`unzip -o "${zipPath}" -d "${skillDir}"`, { stdio: "pipe" });
+          await exec(`unzip -o "${zipPath}" -d "${skillDir}"`, { maxBuffer: 10 * 1024 * 1024 });
         }
         if (src.endsWith(".skill")) {
           try { require("fs").unlinkSync(zipPath); } catch {}
@@ -272,40 +335,44 @@ Skill 安装后在新对话中自动加载。`,
       }
     }
 
+    if (args.source_dir) {
+      const srcDir = String(args.source_dir);
+      if (!existsSync(srcDir)) {
+        return JSON.stringify({ error: `source_dir not found: ${srcDir}` });
+      }
+      if (!statSync(srcDir).isDirectory()) {
+        return JSON.stringify({
+          error: `source_dir must be a directory, got a file: ${srcDir}`,
+          hint: "Use 'source' for ZIP/.skill files, or 'body' for SKILL.md content directly.",
+        });
+      }
+      const skillMdPath = resolve(srcDir, "SKILL.md");
+      if (!existsSync(skillMdPath)) {
+        return JSON.stringify({
+          error: `source_dir must contain SKILL.md at its root: ${srcDir}`,
+          hint: "SKILL.md is required (with YAML frontmatter). See skill-creation-guide.md.",
+        });
+      }
+      try {
+        await cp(srcDir, skillDir, { recursive: true });
+        return JSON.stringify({
+          installed: true,
+          name,
+          path: skillDir,
+          hint: "新对话中即可使用此 skill（所有辅助文件已一并复制）。",
+        });
+      } catch (err) {
+        return JSON.stringify({ error: `copy failed: ${err.message}` });
+      }
+    }
+
     return JSON.stringify({
-      error: "provide either body (SKILL.md content) or source (.skill file path).",
+      error: "provide one of: body (SKILL.md content), source (.skill file path), or source_dir (local directory path).",
     });
   },
 });
 
 console.error(`[launcher] install_skill tool registered — skills root: ${skillsRoot}`);
-
-// ── Semantic search ──────────────────────────────────────────────
-let hasSemanticSearch = false;
-try {
-  const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
-  const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
-  const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
-  const providerCfg = semanticCfg[cfgKey];
-  const registered = await registerSemanticSearchTool(tools, {
-    root: workspaceDir,
-    provider,
-    model: providerCfg?.model,
-    baseUrl: providerCfg?.baseUrl,
-    apiKey: providerCfg?.apiKey,
-    extraBody: providerCfg?.extraBody,
-  });
-  if (registered) {
-    hasSemanticSearch = true;
-    console.error(`[launcher] semantic_search tool registered`);
-  }
-} catch (err) {
-  console.error(`[launcher] semantic_search skipped: ${err.message}`);
-}
-
-// ── Skill tools ──────────────────────────────────────────────────
-registerSkillTools(tools, { homeDir: home, projectRoot: workspaceDir });
-console.error(`[launcher] skill tools registered (run_skill), ${tools.size} total tools`);
 
 // ── MCP servers ──────────────────────────────────────────────────
 const mcpSpecs = config.mcp ?? [];
@@ -396,7 +463,8 @@ function invokeMcpTool(serverName, toolName, args) {
 }
 
 // ── Build session ───────────────────────────────────────────────
-const SEMANTIC_ROUTING = hasSemanticSearch ? `
+function buildSystemPrompt(rootDir, hasSemantic) {
+  const routing = hasSemantic ? `
 
 # Search routing
 
@@ -407,11 +475,11 @@ You have BOTH \`semantic_search\` (vector index) and \`search_content\` (literal
 
 If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.` : "";
 
-const SYSTEM_PROMPT = `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
+  return `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
 
 You have access to the following tools:
-- Filesystem tools: read_file, write_file, list_directory, search_files — sandboxed to ${workspaceDir}
-- Shell tools: run_command — execute commands in ${workspaceDir}
+- Filesystem tools: read_file, write_file, list_directory, search_files — sandboxed to ${rootDir}
+- Shell tools: run_command — execute commands in ${rootDir}
 - Web tools: web_search, web_fetch — search the web and fetch pages
 - Memory tools: save and recall project/global memory
 - Plan tools: create and manage plans
@@ -419,31 +487,33 @@ You have access to the following tools:
 - Todo tools: track tasks
 
 Always use the appropriate tool when you need to access files, run commands, or search the web.
-Respond in the same language as the user's message.${SEMANTIC_ROUTING}`;
+Respond in the same language as the user's message.${routing}`;
+}
 
-// Inject skills index so the model knows which /skills are available
-const SYSTEM_PROMPT_WITH_SKILLS = applySkillsIndex(SYSTEM_PROMPT, { projectRoot: workspaceDir });
+function buildLoop(client, rootDir) {
+  const system = buildSystemPrompt(rootDir, hasSemanticSearch);
+  const systemWithSkills = applySkillsIndex(system, { projectRoot: rootDir });
+  const prefix = new ImmutablePrefix({
+    system: systemWithSkills,
+    toolSpecs: tools.specs(),
+  });
+  return new CacheFirstLoop({
+    client,
+    prefix,
+    tools,
+    model,
+    reasoningEffort: config.reasoningEffort ?? "max",
+    autoEscalate: config.autoEscalate !== false,
+  });
+}
 
+let client = null;
 let loop = null;
 
 if (apiKey) {
   try {
-    const client = new DeepSeekClient({ apiKey, baseUrl });
-
-    const prefix = new ImmutablePrefix({
-      system: SYSTEM_PROMPT_WITH_SKILLS,
-      toolSpecs: tools.specs(),
-    });
-
-    loop = new CacheFirstLoop({
-      client,
-      prefix,
-      tools,
-      model,
-      reasoningEffort: config.reasoningEffort ?? "max",
-      autoEscalate: config.autoEscalate !== false,
-    });
-
+    client = new DeepSeekClient({ apiKey, baseUrl });
+    loop = buildLoop(client, workspaceDir);
     console.error(`[launcher] CacheFirstLoop created (model=${model})`);
   } catch (err) {
     console.error(`[launcher] failed to create loop: ${err.message}`);
@@ -530,6 +600,7 @@ const ctx = {
     cfg.editMode = m;
     writeConfig(cfg, configPath);
     console.error(`[launcher] edit mode: ${m}`);
+    return m;
   },
   setPlanMode: () => {},
   applyPresetLive: (name) => { console.error(`[launcher] preset: ${name}`); },
@@ -545,7 +616,44 @@ const ctx = {
     const cfg = readConfig(configPath);
     cfg.workspaceDir = dir;
     writeConfig(cfg, configPath);
-    console.error(`[launcher] workspaceDir saved: ${dir} (restart required)`);
+    console.error(`[launcher] workspaceDir saved to config: ${dir} (takes effect next /new)`);
+  },
+
+  // Sync workspace: unregister old tools, re-register with new root, rebuild loop.
+  // Called at the start of submitPrompt so the new conversation uses the new workspace.
+  syncWorkspace: async () => {
+    const cfg = readConfig(configPath);
+    const configuredDir = resolve(home, cfg.workspaceDir ?? "visionox-workspace");
+    if (configuredDir === workspaceDir) return;
+
+    console.error(`[launcher] workspace switch: ${workspaceDir} → ${configuredDir}`);
+
+    // Unregister old workspace tools
+    for (const name of wsToolNames) {
+      tools.unregister(name);
+      loop?.prefix?.removeTool(name);
+    }
+
+    // Re-register with new root
+    if (!existsSync(configuredDir)) mkdirSync(configuredDir, { recursive: true });
+    const result = await registerWorkspaceTools(tools, configuredDir, { jobs });
+    hasSemanticSearch = result.hasSemantic;
+    wsToolNames = [...WORKSPACE_TOOL_NAMES_BASE];
+    if (!hasSemanticSearch) {
+      wsToolNames = wsToolNames.filter((n) => n !== "semantic_search");
+    }
+    workspaceDir = configuredDir;
+
+    // Rebuild loop with new system prompt & prefix
+    if (loop && client) {
+      loop = buildLoop(client, workspaceDir);
+      console.error(`[launcher] loop rebuilt for new workspace: ${workspaceDir}`);
+    }
+
+    // Deploy skill-creation-guide to new workspace
+    deploySkillGuide(workspaceDir);
+
+    console.error(`[launcher] workspace synced: ${workspaceDir}`);
   },
 
   startAutoLoop: () => {},
@@ -561,7 +669,40 @@ const ctx = {
     };
   },
 
-  submitPrompt: (text) => {
+  submitPrompt: async (text, sessionName) => {
+    // ── Sync workspace if changed ─────────────────────────────
+    await ctx.syncWorkspace();
+
+    // ── Session resume: load historical messages ──────────────
+    if (sessionName && loop) {
+      try {
+        const sessionFile = resolve(sessionsDir, sessionName + ".jsonl");
+        const raw = readFileSync(sessionFile, "utf8");
+        const entries = raw.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
+        // Load into AI context
+        loop.log.compactInPlace(entries);
+        // Populate dashboard messages
+        messages.length = 0;
+        nextMsgId = 1;
+        const loaded = [];
+        for (const entry of entries) {
+          const role = entry.role === "tool" ? "tool" : entry.role;
+          const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
+          messages.push({ id, role, text: entry.content || "" });
+          loaded.push({ id, role, text: entry.content || "" });
+          nextMsgId++;
+        }
+        broadcastDashboardEvent({ kind: "messages-reset", messages: loaded });
+        console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages)`);
+        if (!text || !text.trim()) {
+          return { accepted: true, loaded: true, session: sessionName };
+        }
+      } catch (err) {
+        console.error(`[launcher] failed to load session ${sessionName}: ${err.message}`);
+        return { accepted: false, reason: `Failed to load session: ${err.message}` };
+      }
+    }
+
     // Handle /new and /clear: save session and reset
     if (text === "/new" || text === "/clear") {
       if (messages.length > 0) {
@@ -582,7 +723,7 @@ const ctx = {
       nextMsgId = 1;
       // Add welcome message
       const welcomeId = `assistant-${Date.now()}`;
-      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
+      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
       messages.push(welcomeMsg);
       // Notify client
       busy = true;
@@ -675,7 +816,7 @@ const ctx = {
 messages.push({
   id: "welcome",
   role: "assistant",
-  text: "我是 Visionox，你的 AI 编程助手。我可以帮你浏览代码、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md",
+  text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md",
 });
 
 // ── Start the server ────────────────────────────────────────────

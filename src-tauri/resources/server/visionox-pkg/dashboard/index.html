@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="/assets/vendor-hljs.css?token=__REASONIX_TOKEN__" />
   
     <style>
-      .app-side .brand .glyph { display: inline-block; width: 32px; height: 52px; background: url(/assets/v3.png) no-repeat center/contain; font-size: 0; }
+      .app-side .brand .glyph { display: inline-block; width: 16px; height: 26px; background: url(/assets/v3.png) no-repeat center/contain; font-size: 0; }
     </style></head>
   <body>
     <script>
@@ -29,12 +29,13 @@
     <script type="module" src="/assets/app.js?token=__REASONIX_TOKEN__"></script>
   
     <script>
-      var monitorCollapsed = true;
-      function setupMonitorToggle() {
+      var sectionState = { '\u76D1\u63A7': true, '\u914D\u7F6E': true };
+      function setupSectionToggles() {
         var sections = document.querySelectorAll('.side-section');
         sections.forEach(function(sec) {
-          if (sec.textContent.trim() === '\u76D1\u63A7' && !sec._monitorWired) {
-            sec._monitorWired = true;
+          var label = sec.textContent.trim();
+          if (sectionState.hasOwnProperty(label) && !sec._toggled) {
+            sec._toggled = true;
             sec.style.cursor = 'pointer';
             var tabs = [];
             var el = sec.nextElementSibling;
@@ -43,19 +44,20 @@
               el = el.nextElementSibling;
             }
             tabs.forEach(function(t) { t.style.display = 'none'; });
-            sec.innerHTML = '\u25B6 \u76D1\u63A7';
+            sec.textContent = '\u25B6 ' + label;
             sec.addEventListener('click', function() {
-              monitorCollapsed = !monitorCollapsed;
-              tabs.forEach(function(t) { t.style.display = monitorCollapsed ? 'none' : ''; });
-              sec.innerHTML = monitorCollapsed ? '\u25B6 \u76D1\u63A7' : '\u25BC \u76D1\u63A7';
+              var collapsed = sectionState[label];
+              sectionState[label] = !collapsed;
+              tabs.forEach(function(t) { t.style.display = !collapsed ? '' : 'none'; });
+              sec.textContent = (!collapsed ? '\u25BC ' : '\u25B6 ') + label;
             });
           }
         });
       }
-      var mo = new MutationObserver(function() { setupMonitorToggle(); });
+      var mo = new MutationObserver(function() { setupSectionToggles(); });
       mo.observe(document.getElementById('root'), { childList: true, subtree: true });
-      setTimeout(setupMonitorToggle, 500);
-      setTimeout(setupMonitorToggle, 1500);
+      setTimeout(setupSectionToggles, 500);
+      setTimeout(setupSectionToggles, 1500);
     </script>
 </body>
 </html>

@@ -1,3 +1,12 @@
+# Upstream reference (for development only)
+esengine-DeepSeek-Reasonix-*/
+upstream-*.tar.gz
+*.bak
+
+# Backup / pre-pathfix snapshots
+visionox-pkg-*-backup/
+visionox-pkg-*-pre-pathfix/
+
 # Rust build artifacts
 src-tauri/target/
 

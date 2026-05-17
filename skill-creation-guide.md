@@ -7,7 +7,7 @@ created: 2026-05-15
 ---
 # Skill 新建操作指南（通用版）
 
-基于 `visionox-excel-pro` 等多次 Skill 开发经验总结。
+
 
 ---
 

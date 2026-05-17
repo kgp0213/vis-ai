@@ -1,4 +1,7 @@
 use std::io::BufRead;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -83,7 +86,7 @@ struct ServerState {
 }
 
 /// Spawn the Node.js launcher and block until we parse the dashboard URL.
-fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>> {
+fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::error::Error>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
@@ -113,6 +116,8 @@ fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>
     let reader = std::io::BufReader::new(stdout);
 
     let mut url = String::new();
+    let mut port: u16 = 0;
+    let mut token = String::new();
     for line in reader.lines() {
         let line = line?;
         println!("[launcher] {}", line);
@@ -123,6 +128,14 @@ fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>
             }
             if let Some(u) = parsed["url"].as_str() {
                 url = u.to_string();
+            }
+            if let Some(p) = parsed["port"].as_u64() {
+                port = p as u16;
+            }
+            if let Some(t) = parsed["token"].as_str() {
+                token = t.to_string();
+            }
+            if !url.is_empty() {
                 break;
             }
         }
@@ -133,8 +146,69 @@ fn spawn_server_blocking() -> Result<(Child, String), Box<dyn std::error::Error>
         return Err("failed to discover dashboard URL".into());
     }
 
-    Ok((child, url))
+    Ok((child, url, port, token))
 }
+
+fn check_health(port: u16, token: &str) -> bool {
+    let addr = format!("127.0.0.1:{}", port);
+    let request = format!(
+        "GET /api/health?token={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        token, port
+    );
+    let sockaddr: std::net::SocketAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let mut stream = match TcpStream::connect_timeout(&sockaddr, Duration::from_secs(1)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = [0u8; 200];
+    match stream.read(&mut buf) {
+        Ok(n) => {
+            let head = String::from_utf8_lossy(&buf[..n]);
+            head.contains("200")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Loading page HTML — compiled into the binary so it is always available
+/// regardless of whether Tauri's frontend-dist embedding succeeds.
+const LOADING_HTML: &str = concat!(
+    "<!doctype html><html><head><meta charset=utf-8><title>Visionox</title>",
+    "<style>",
+    "*{margin:0;padding:0;box-sizing:border-box}",
+    "body{background:#f3f4f6;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui,sans-serif}",
+    ".wrap{text-align:center}",
+    ".spin{width:36px;height:36px;border:3px solid #e5e7eb;border-top-color:#1a6fd4;border-radius:50%;margin:0 auto 20px;animation:spin .8s linear infinite}",
+    "@keyframes spin{to{transform:rotate(360deg)}}",
+    "h1{font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#4b5563;margin:0}",
+    "#status{font-size:12px;color:#9ca3af;margin:10px 0 0}",
+    "</style></head><body>",
+    "<div class=wrap>",
+    "<div class=spin></div>",
+    "<h1>Visionox</h1>",
+    "<p id=status>Starting server\u{2026}</p>",
+    "</div>",
+    "<script>",
+    "(function(){var s=document.getElementById('status'),t0=Date.now(),MAX=35000;",
+    "function check(){",
+    " if(window.__DASHBOARD_URL__){",
+    "  s.textContent='Server ready\u{2026}';s.style.color='#22c55e';",
+    "  setTimeout(function(){window.location.href=window.__DASHBOARD_URL__;},200);",
+    "  return;",
+    " }",
+    " if(Date.now()-t0>MAX){s.textContent='Server startup timed out';s.style.color='#ef4444';return;}",
+    " setTimeout(check,250);",
+    "}",
+    "setTimeout(check,300);",
+    "})();",
+    "</script></body></html>",
+);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -146,12 +220,25 @@ pub fn run() {
             job: None,
         }))
         .setup(|app| {
-            // ── Create main window FIRST (shows loading page) ─────
+            // ── Create main window ────────────────────────────────
+            // Uses WebviewUrl::App to load from frontendDist.  If Tauri's
+            // asset embedding didn't pick up index.html (known issue with
+            // certain build configs), the initialization_script injects the
+            // loading page inline — guaranteed to show the spinner.
+            let init_html = LOADING_HTML
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+                .replace('\n', " ");
+            let init_script = format!(
+                "if(!window.location.href.startsWith('http://127.0.0.1')&&!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
+                html = init_html,
+            );
             let main_window = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
+            .initialization_script(&init_script)
             .title("")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
@@ -170,14 +257,14 @@ pub fn run() {
 
             std::thread::spawn(move || {
                 match spawn_server_blocking() {
-                    Ok((child, url)) => {
+                    Ok((child, url, port, token)) => {
                         println!("[tauri] dashboard ready at {}", url);
 
                         // Assign child to job object — kernel kills it when
                         // this process exits regardless of the reason.
                         let _ = job_for_thread.assign(child.id());
 
-                        // Store child handle and job for cleanup
+                        // Store child handle for cleanup
                         let state = app_handle.state::<Mutex<ServerState>>();
                         {
                             let mut s = state.lock().unwrap();
@@ -186,16 +273,38 @@ pub fn run() {
                             s.job = Some(job_for_thread);
                         }
 
-                        // Navigate the loading page to the dashboard
-                        let _ = win_for_url.eval(&format!(
-                            "window.location.replace('{}')",
-                            url.replace('\'', "\\'")
-                        ));
+                        // Poll /api/health via raw TCP until the server truly
+                        // accepts HTTP traffic.  Only then inject the dashboard
+                        // URL so the loading page can navigate.
+                        let mut healthy = false;
+                        for attempt in 0..15 {
+                            if check_health(port, &token) {
+                                healthy = true;
+                                break;
+                            }
+                            if attempt == 0 {
+                                println!("[tauri] waiting for HTTP server...");
+                            }
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+
+                        if healthy {
+                            println!("[tauri] health check passed — injecting URL");
+                            let _ = win_for_url.eval(&format!(
+                                "window.__DASHBOARD_URL__='{url}';",
+                                url = url.replace('\'', "\\'"),
+                            ));
+                        } else {
+                            eprintln!("[tauri] health check timed out after 3s");
+                            let _ = win_for_url.eval(
+                                "document.getElementById('status').textContent='Server did not respond \\u2014 please restart';document.getElementById('status').style.color='#ef4444';"
+                            );
+                        }
                     }
                     Err(e) => {
                         eprintln!("[tauri] server failed: {}", e);
                         let _ = win_for_url.eval(&format!(
-                            "document.getElementById('status').textContent = 'Server failed: {}'",
+                            "document.getElementById('status').textContent='Server failed: {}';document.getElementById('status').style.color='#ef4444';",
                             e.to_string().replace('\'', "\\'")
                         ));
                     }

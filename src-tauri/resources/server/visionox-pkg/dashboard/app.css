@@ -174,7 +174,7 @@ main { padding: 32px 40px 60px 32px; min-width: 0; }
 /* ── App shell — sidebar / topbar / statusrow ──────────────────────────── */
 .app {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 110px minmax(0, 1fr);
   grid-template-rows: 44px 1fr 26px;
   grid-template-areas:
     "side  top"
@@ -198,7 +198,7 @@ main { padding: 32px 40px 60px 32px; min-width: 0; }
   font-family: var(--font-sans); font-size: 13px; font-weight: 700; color: var(--fg-0);
   letter-spacing: .04em;
 }
-.app-side .brand .glyph { color: var(--c-brand); font-size: 16px; }
+.app-side .brand .glyph { color: var(--c-brand); font-size: 8px; }
 .app-side .brand .ver { color: var(--fg-4); font-size: 10.5px; margin-left: auto; font-weight: 400; letter-spacing: .04em; }
 .app.collapsed .app-side .brand .label,
 .app.collapsed .app-side .brand .ver { display: none; }
@@ -207,7 +207,7 @@ main { padding: 32px 40px 60px 32px; min-width: 0; }
 .side-tab {
   display: flex; align-items: center; gap: 10px;
   padding: 6px 10px; margin: 1px 0;
-  color: var(--fg-2); font-family: var(--font-sans); font-size: 13px;
+  color: var(--fg-2); font-family: var(--font-sans); font-size: 12px;
   border-radius: var(--r); cursor: pointer;
   border-left: 2px solid transparent;
   letter-spacing: .02em;
@@ -974,7 +974,7 @@ main { padding: 32px 40px 60px 32px; min-width: 0; }
 .chat-banner .txt b { color: var(--fg-0); }
 .chat-banner .takeover { margin-left: auto; }
 
-.chat-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 20px; }
+.chat-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
 
 .chat-stream { display: flex; flex-direction: column; gap: 12px; }
 
@@ -1351,7 +1351,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 
@@ -1378,13 +1378,6 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   line-height: 1.6;
 }
 
-.chat-msg .avatar {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  object-fit: cover;
-}
-
 .chat-msg .glyph {
   width: 22px;
   flex-shrink: 0;
@@ -1392,6 +1385,13 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
   text-align: center;
   font-size: 14px;
   padding-top: 2px;
+}
+
+.chat-msg .avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
 }
 
 .chat-msg .body {
@@ -3022,46 +3022,232 @@ input:focus, textarea:focus, select:focus { border-color: var(--c-brand); }
 }
 
 
-
-
-/* ── Light theme ─────────────────────────────────────────────── */
-[data-theme="light"] {
-  --bg:         #f3f4f6;
-  --bg-elev:    #ffffff;
-  --bg-elev-2:  #f8f9fb;
-  --bg-input:   #edeff3;
-  --bg-code:    #f6f7f9;
-  --bg-hover:   #e8ebf0;
-
-  --fg-0:       #11151e;
-  --fg-1:       #2a2f3b;
-  --fg-2:       #5c6370;
-  --fg-3:       #8b909c;
-  --fg-4:       #b8bcc4;
-
-  --c-brand:    #1a6fd4;
-  --c-accent:   #723aed;
-  --c-violet:   #7c3aed;
-  --c-ok:       #16a34a;
-  --c-warn:     #c27006;
-  --c-err:      #dc2626;
-  --c-info:     #1a6fd4;
-
-  --s1: #1a6fd4;
-  --s2: #0d9488;
-  --s3: #16a34a;
-  --s4: #c27006;
-  --s5: #dc2626;
-  --s6: #723aed;
-
-  --bd:         #e1e4ea;
-  --bd-strong:  #cdd1d9;
-}
-[data-theme="light"] .chat-banner { background: var(--bg-elev-2); }
-[data-theme="light"] a { color: var(--c-brand); }
-
+/* ── Theme toggle ─────────────────────────────────────────────── */
 .theme-btn { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; cursor:pointer; font-size:14px; background:var(--bg-elev-2); border:1px solid var(--bd); transition:all .2s; }
 .theme-btn:hover { background:var(--bg-hover); border-color:var(--bd-strong); }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Light theme — toggled via data-theme="light" on <html>
+
+   Palette inspired by Element Plus: clean white surfaces, dark body text,
+   and slightly deepened accent colours so they stay legible on light
+   backgrounds.  Every variable from the :root dark set is overridden here;
+   hardcoded-hex fixups follow in a second block.
+   ═══════════════════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  /* Surfaces */
+  --bg:         #f5f7fa;
+  --bg-elev:    #ffffff;
+  --bg-elev-2:  #f0f2f5;
+  --bg-input:   #ffffff;
+  --bg-code:    #f5f7fa;
+  --bg-hover:   #ecf5ff;
+
+  /* Text — deepened ~20% for readability on light backgrounds (WCAG AA+) */
+  --fg-0:       #1f2328;   /* primary   — headings, emphasis */
+  --fg-1:       #34393f;   /* body      — paragraphs, default */
+  --fg-2:       #59636e;   /* secondary — labels, meta */
+  --fg-3:       #7c8490;   /* dim       — placeholders, hints */
+  --fg-4:       #9ca3af;   /* very dim  — separators, disabled */
+
+  /* Accents — deepened ~15% so they hit ≥4.5:1 on white */
+  --c-brand:    #409eff;   /* primary blue (Element Plus) */
+  --c-accent:   #9b6bff;   /* purple */
+  --c-violet:   #8b5cf6;   /* violet */
+  --c-ok:       #67c23a;   /* success green */
+  --c-warn:     #e6a23c;   /* warning amber */
+  --c-err:      #f56c6c;   /* error red */
+  --c-info:     #409eff;
+
+  /* Chart spectrum */
+  --s1: #409eff;
+  --s2: #36cfc9;
+  --s3: #67c23a;
+  --s4: #e6a23c;
+  --s5: #f56c6c;
+  --s6: #9b6bff;
+
+  /* Borders */
+  --bd:         #e4e7ed;
+  --bd-strong:  #dcdfe6;
+}
+
+/* ── Light-theme fixups for hardcoded hex / rgba values ────────────────
+   These selectors use literal colours (not CSS variables) in the dark
+   theme and therefore need explicit overrides to look correct on a
+   white background.  Keep them scoped under [data-theme="light"] so
+   dark mode is never touched. ────────────────────────────────────────── */
+
+/* Hardcoded #14171e borders (dark-theme inner dividers) → var(--bd) */
+[data-theme="light"] .section,
+[data-theme="light"] .ssl-row,
+[data-theme="light"] .sr-card {
+  border-bottom-color: var(--bd);
+}
+[data-theme="light"] .overlay::before {
+  border-color: var(--bd);
+}
+[data-theme="light"] .composer-foot {
+  border-top-color: var(--bd);
+}
+[data-theme="light"] .scale-row {
+  border-bottom-color: var(--bd);
+}
+
+/* Primary button hover — lighten the brand colour instead of the
+   dark-theme hardcoded #94cdff. */
+[data-theme="light"] .btn.primary:hover,
+[data-theme="light"] button.primary:hover {
+  background: #66b1ff;
+  border-color: #66b1ff;
+  color: #fff;
+}
+
+/* Markdown headings — dark theme puts black text on coloured bg;
+   light theme uses white text for cleaner contrast. */
+[data-theme="light"] .md h1,
+[data-theme="light"] .md h2,
+[data-theme="light"] .md h3 {
+  color: #fff;
+}
+
+/* Chat banner — rgba tint references the brand colour so it must
+   switch to the light-mode brand hex. */
+[data-theme="light"] .chat-banner {
+  background: rgba(64,158,255,.06);
+  border-color: rgba(64,158,255,.18);
+}
+
+/* Pills — semi-transparent accent backgrounds must shift hue. */
+[data-theme="light"] .pill.ok   { background: rgba(103,194,58,.10); }
+[data-theme="light"] .pill.warn { background: rgba(230,162,60,.12); }
+[data-theme="light"] .pill.err  { background: rgba(245,108,108,.10); }
+[data-theme="light"] .pill.info { background: rgba(64,158,255,.10); }
+[data-theme="light"] .pill.acc  { background: rgba(155,107,255,.10); }
+[data-theme="light"] .pill-err  { background: rgba(245,108,108,.10); }
+[data-theme="light"] .pill-active { background: rgba(64,158,255,.10); }
+
+/* Step-dot glow — brand-colour box-shadow. */
+[data-theme="light"] .plan-step.active::before {
+  box-shadow: 0 0 0 3px rgba(64,158,255,.18);
+}
+
+/* Filter chips active state. */
+[data-theme="light"] .chip-f.active {
+  background: rgba(64,158,255,.08);
+}
+[data-theme="light"] .chip-f.static.active:hover {
+  background: rgba(64,158,255,.08);
+}
+
+/* Matrix cell on-state. */
+[data-theme="light"] .matrix .cell.on {
+  background: rgba(64,158,255,.05);
+}
+
+/* Editor line hover. */
+[data-theme="light"] .editor-line:hover {
+  background: rgba(64,158,255,.04);
+}
+[data-theme="light"] .editor-line.cur {
+  background: rgba(64,158,255,.06);
+}
+
+/* Markdown search-result highlight. */
+[data-theme="light"] .sr-card .sr-snip mark {
+  background: rgba(230,162,60,.18);
+}
+
+/* Why / notes callout. */
+[data-theme="light"] .why {
+  background: rgba(155,107,255,.04);
+}
+
+/* Diff-line insert / delete. */
+[data-theme="light"] .diff-line.ins {
+  background: rgba(103,194,58,0.10);
+  color: var(--c-ok);
+}
+[data-theme="light"] .diff-line.del {
+  background: rgba(245,108,108,0.10);
+  color: var(--c-err);
+}
+
+/* Diff-row add / remove backgrounds. */
+[data-theme="light"] .diff-row.add { background: rgba(103,194,58,.06); }
+[data-theme="light"] .diff-row.rem { background: rgba(245,108,108,.05); }
+[data-theme="light"] .diff-row .word-add { background: rgba(103,194,58,.22); }
+[data-theme="light"] .diff-row .word-rem { background: rgba(245,108,108,.20); }
+
+/* Edit-diff side-by-side markers and borders. */
+[data-theme="light"] .edit-diff-side-old .edit-diff-marker { color: var(--c-err); }
+[data-theme="light"] .edit-diff-side-new .edit-diff-marker { color: var(--c-ok); }
+[data-theme="light"] .edit-diff-row-del .edit-diff-cell-old,
+[data-theme="light"] .edit-diff-row-change .edit-diff-cell-old {
+  background: rgba(245,108,108,0.10);
+  border-left-color: var(--c-err);
+}
+[data-theme="light"] .edit-diff-row-ins .edit-diff-cell-new,
+[data-theme="light"] .edit-diff-row-change .edit-diff-cell-new {
+  background: rgba(103,194,58,0.10);
+  border-left-color: var(--c-ok);
+}
+
+/* Plan-revision modal border. */
+[data-theme="light"] .modal-revise-reason {
+  border-left-color: var(--c-accent);
+}
+
+/* Picker selected row. */
+[data-theme="light"] .modal-picker-row.selected {
+  border-color: var(--c-warn);
+}
+
+/* Modal viewer step-done mark. */
+[data-theme="light"] .modal-viewer-step-done .modal-viewer-step-mark {
+  color: var(--c-ok);
+}
+
+/* Top-bar status dot glow. */
+[data-theme="light"] .tui-status.online .dot {
+  box-shadow: 0 0 6px rgba(103,194,58,.5);
+}
+
+/* Dialog box-shadow — dark mode uses a deep black shadow; light mode
+   needs a softer grey one. */
+[data-theme="light"] .dialog {
+  box-shadow: 0 18px 48px rgba(0,0,0,.08), 0 0 0 1px rgba(0,0,0,.04);
+}
+[data-theme="light"] .cmd-palette {
+  box-shadow: 0 24px 64px rgba(0,0,0,.10);
+}
+[data-theme="light"] .popover {
+  box-shadow: 0 12px 32px rgba(0,0,0,.08);
+}
+
+/* Scrollbar — lighter thumb for light backgrounds. */
+[data-theme="light"] * {
+  scrollbar-color: var(--bd-strong) transparent;
+}
+[data-theme="light"] *::-webkit-scrollbar-thumb {
+  background: var(--bd);
+  border-color: var(--bg);
+}
+[data-theme="light"] *::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-4);
+}
+
+[data-theme="light"] a { color: var(--c-brand); }
+
+/* Light-theme font rendering — subpixel antialiasing prevents the
+   "thin / blurry" look that grayscale antialiasing produces with dark
+   text on white backgrounds on standard-DPI Windows displays. */
+[data-theme="light"] body {
+  -webkit-font-smoothing: subpixel-antialiased;
+  -moz-osx-font-smoothing: auto;
+  font-weight: 425;
+}
+
+/* ── Composer chip override (Gitee style) ─────────────────────── */
 .composer-chip { display:inline-flex;align-items:center;gap:4px;padding:2px 10px;background:var(--bg-elev-2);border:1px solid var(--bd);border-radius:12px;font-size:11px;color:var(--fg-2);cursor:pointer;transition:all .15s;white-space:nowrap;font-family:var(--font-sans);line-height:1.4; }
 .composer-chip:hover { background:var(--bg-hover);color:var(--fg-0);border-color:var(--bd-strong); }

@@ -17,14 +17,20 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/reasonix"><img src="https://img.shields.io/npm/v/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22" alt="npm version"/></a>
-  <a href="https://github.com/esengine/reasonix/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/esengine/reasonix/ci.yml?style=flat-square&label=ci&color=0d1117&labelColor=161b22" alt="CI"/></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/npm/l/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22" alt="license"/></a>
-  <a href="https://www.npmjs.com/package/reasonix"><img src="https://img.shields.io/npm/dm/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22" alt="downloads"/></a>
-  <a href="./package.json"><img src="https://img.shields.io/node/v/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22" alt="node"/></a>
-  <a href="https://github.com/esengine/reasonix/stargazers"><img src="https://img.shields.io/github/stars/esengine/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22&logo=github" alt="GitHub stars"/></a>
-  <a href="https://github.com/esengine/reasonix/graphs/contributors"><img src="https://img.shields.io/github/contributors/esengine/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22&logo=github" alt="contributors"/></a>
-  <a href="https://github.com/esengine/reasonix/discussions"><img src="https://img.shields.io/github/discussions/esengine/reasonix.svg?style=flat-square&color=0d1117&labelColor=161b22&logo=github" alt="Discussions"/></a>
+  <a href="https://www.npmjs.com/package/reasonix"><img src="https://img.shields.io/npm/v/reasonix.svg?style=flat-square&color=cb3837&labelColor=161b22&logo=npm&logoColor=white" alt="npm version"/></a>
+  <a href="https://github.com/esengine/reasonix/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/esengine/reasonix/ci.yml?style=flat-square&label=ci&labelColor=161b22&logo=githubactions&logoColor=white" alt="CI"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/npm/l/reasonix.svg?style=flat-square&color=8b949e&labelColor=161b22" alt="license"/></a>
+  <a href="https://www.npmjs.com/package/reasonix"><img src="https://img.shields.io/npm/dm/reasonix.svg?style=flat-square&color=3fb950&labelColor=161b22&label=downloads" alt="downloads"/></a>
+  <a href="./package.json"><img src="https://img.shields.io/node/v/reasonix.svg?style=flat-square&color=5fa04e&labelColor=161b22&logo=nodedotjs&logoColor=white" alt="node"/></a>
+  <a href="https://github.com/esengine/reasonix/stargazers"><img src="https://img.shields.io/github/stars/esengine/reasonix.svg?style=flat-square&color=dbab09&labelColor=161b22&logo=github&logoColor=white" alt="GitHub stars"/></a>
+  <a href="https://github.com/esengine/reasonix/graphs/contributors"><img src="https://img.shields.io/github/contributors/esengine/reasonix.svg?style=flat-square&color=bc8cff&labelColor=161b22&logo=github&logoColor=white" alt="contributors"/></a>
+  <a href="https://github.com/esengine/reasonix/discussions"><img src="https://img.shields.io/github/discussions/esengine/reasonix.svg?style=flat-square&color=58a6ff&labelColor=161b22&logo=github&logoColor=white" alt="Discussions"/></a>
+</p>
+
+<p align="center">
+  <a href="https://oosmetrics.com/repo/esengine/reasonix"><img src="https://api.oosmetrics.com/api/v1/badge/achievement/9e931d80-2050-4b10-902e-44970cc133ad.svg" alt="oosmetrics — Top 2 in Agents by velocity"/></a>
+  <a href="https://oosmetrics.com/repo/esengine/reasonix"><img src="https://api.oosmetrics.com/api/v1/badge/achievement/556d94b3-61b7-486b-baf2-888b9327deab.svg" alt="oosmetrics — Top 3 in LLMs by velocity"/></a>
+  <a href="https://oosmetrics.com/repo/esengine/reasonix"><img src="https://api.oosmetrics.com/api/v1/badge/achievement/0f457d4c-efca-4d15-ad2b-139691ff342c.svg" alt="oosmetrics — Top 3 in CLI by velocity"/></a>
 </p>
 
 <br/>
@@ -50,14 +56,25 @@
 
 ## Install
 
+Requires Node ≥ 22. Works on macOS · Linux · Windows (PowerShell · Git Bash · Windows Terminal).
+
+Install Reasonix globally if you want the `reasonix` command available on your `PATH`:
+
 ```bash
-cd my-project
-npx reasonix code   # paste a DeepSeek API key on first run; persists after
+npm install -g reasonix
+reasonix code my-project   # paste a DeepSeek API key on first run; persists after
 ```
 
-Requires Node ≥ 22. Works on macOS · Linux · Windows (PowerShell · Git Bash · Windows Terminal). Grab a [DeepSeek API key →](https://platform.deepseek.com/api_keys) · `reasonix code --help` for flags.
+Or run it once without installing globally:
 
-`npx` is the recommended path — no global install, always latest. If you use Reasonix daily and want it on `PATH`, run `reasonix update` once.
+```bash
+cd my-project
+npx reasonix code          # always uses the latest package by default
+```
+
+Grab a [DeepSeek API key →](https://platform.deepseek.com/api_keys) · `reasonix code --help` for flags.
+
+If you use Reasonix daily, global install is the simplest path. If you just want to try it, use `npx`.
 
 | Command | When |
 |---|---|
@@ -68,6 +85,18 @@ Requires Node ≥ 22. Works on macOS · Linux · Windows (PowerShell · Git Bash
 | `reasonix update` | Upgrade Reasonix itself. |
 
 Other subcommands (`replay` · `diff` · `events` · `stats` · `index` · `mcp` · `prune-sessions`) are in `reasonix --help` and the [CLI reference](https://esengine.github.io/DeepSeek-Reasonix/#cli).
+
+### Desktop client (prerelease)
+
+A native Tauri client for users who want a GUI over the same loop. Multi-tab, the right-panel shows files the agent has read or edited this session, the same cost / cache / token meters live at the bottom. Same DeepSeek API key, same `~/.reasonix` config — the desktop bundles its own Node runtime, no separate `npm install` step.
+
+Download platform installers from [GitHub Releases](https://github.com/esengine/DeepSeek-Reasonix/releases). The desktop ships as a **prerelease**: the loop and protocol are the same as the CLI, but the UI is still being polished and the installers aren't code-signed yet.
+
+- **macOS** — first launch hits Gatekeeper. One-time fix: `xattr -dr com.apple.quarantine /Applications/Reasonix.app` (or right-click → Open → confirm).
+- **Windows** — SmartScreen warns "Unknown publisher". Click **More info → Run anyway**.
+- **Linux** — `.deb` and `.AppImage` ship plain, no extra step.
+
+The CLI remains the canonical surface. Anything that lands in the CLI is also available from the desktop's composer.
 
 <details>
 <summary><strong>Working in another folder · chat vs. code · author a skill</strong></summary>
@@ -195,7 +224,7 @@ Scoped starter tickets — each with background, code pointers, acceptance crite
 
 <p align="center">
   <a href="https://github.com/esengine/reasonix/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=esengine/reasonix&max=100&columns=12" alt="Contributors to esengine/reasonix" width="860"/>
+    <img src="https://contrib.rocks/image?repo=esengine/DeepSeek-Reasonix&max=100&columns=12" alt="Contributors to esengine/DeepSeek-Reasonix" width="860"/>
   </a>
 </p>
 
@@ -215,11 +244,11 @@ Scoped starter tickets — each with background, code pointers, acceptance crite
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=esengine%2Freasonix&type=timeline&logscale=&legend=top-left">
+<a href="https://www.star-history.com/?repos=esengine%2FDeepSeek-Reasonix&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=esengine/reasonix&type=timeline&theme=dark&logscale&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=esengine/reasonix&type=timeline&logscale&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=esengine/reasonix&type=timeline&logscale&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=esengine/DeepSeek-Reasonix&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=esengine/DeepSeek-Reasonix&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=esengine/DeepSeek-Reasonix&type=date&legend=top-left" />
  </picture>
 </a>
 
@@ -231,4 +260,6 @@ Scoped starter tickets — each with background, code pointers, acceptance crite
   <sub>MIT — see <a href="./LICENSE">LICENSE</a></sub>
   <br/>
   <sub>Built by the community at <a href="https://github.com/esengine/reasonix/graphs/contributors">esengine/reasonix</a></sub>
+  <br/>
+  <sub>Special thanks to <a href="https://xhslink.com/m/80ngts127cA">AIGC Link</a> for the promotions on XiaoHongShu.</sub>
 </p>
