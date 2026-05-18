@@ -199,7 +199,7 @@ pub fn run() {
                 .replace('\'', "\\'")
                 .replace('\n', " ");
             let init_script = format!(
-                "if(!window.location.href.startsWith('http://127.0.0.1')){{document.documentElement.innerHTML='{html}';}}",
+                "if(!window.location.href.startsWith('http://127.0.0.1')&&!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
                 html = init_html,
             );
             let main_window = WebviewWindowBuilder::new(
