@@ -163,6 +163,8 @@ npm install
 cd src-tauri
 cargo build --release
 # 产物: src-tauri/target/release/visionox-desktop.exe
+# 注意: 修改 lib.rs 或 src/index.html 后建议先 cargo clean 再编译，
+#       避免增量编译缓存导致加载页/启动逻辑未更新。
 ```
 
 ### 开发调试

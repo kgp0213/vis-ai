@@ -1071,3 +1071,16 @@ Web Search:  [ON] [OFF]
 | # | 文件 | 修改内容 |
 |---|------|---------|
 | 1 | `app.css` | 新增 `.mode-btn.active.accent` |
+
+---
+
+## 三十六、构建注意事项（2026-05-18）
+
+**问题**：修改 `lib.rs`（含 `LOADING_HTML` 常量）或 `src/index.html` 后，Cargo 增量编译可能缓存旧版产物，导致加载页布局异常或启动逻辑未更新。
+
+**解决**：修改这两个文件后执行 `cargo clean && cargo build --release` 确保全量重编。
+
+**影响范围**：
+- `src/index.html` → `tauri::generate_context!()` 宏嵌入
+- `lib.rs` `LOADING_HTML` → `concat!()` 宏展开
+- 两者都可能被增量缓存复用旧版本
