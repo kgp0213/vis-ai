@@ -3282,6 +3282,30 @@ async function handleUsage(method, rest, _body, ctx) {
 }
 
 // src/server/router.ts
+async function handleOpenUrl(method, _rest, body, ctx) {
+  if (method !== "POST") {
+    return { status: 405, body: { error: "POST only" } };
+  }
+  const { url } = parseBody11(body);
+  if (typeof url !== "string" || !url.trim()) {
+    return { status: 400, body: { error: "url required" } };
+  }
+  try {
+    const { exec } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execAsync = promisify(exec);
+    if (process.platform === "win32") {
+      await execAsync(`start "" "${url.trim()}"`);
+    } else if (process.platform === "darwin") {
+      await execAsync(`open "${url.trim()}"`);
+    } else {
+      await execAsync(`xdg-open "${url.trim()}"`);
+    }
+    return { status: 200, body: { opened: true } };
+  } catch (err) {
+    return { status: 500, body: { error: err.message } };
+  }
+}
 async function handleApi(pathTail, method, body, ctx, query = new URLSearchParams()) {
   const normalized = pathTail.replace(/\/+$/, "");
   const [head, ...rest] = normalized.split("/");
@@ -3353,6 +3377,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleLoop(method, rest, body, ctx);
       case "models":
         return await handleModels(method, rest, body, ctx);
+      case "open-url":
+        return await handleOpenUrl(method, rest, body, ctx);
       default:
         return { status: 404, body: { error: `no such endpoint: /${head}` } };
     }
