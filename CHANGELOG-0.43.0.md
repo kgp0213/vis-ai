@@ -1059,3 +1059,15 @@ Web Search:  [ON] [OFF]
 - 删除 `visionox-pkg-*-backup/`、`visionox-pkg-*-pre-pathfix/`（备份目录，72 MB）
 - 删除 `esengine-DeepSeek-Reasonix-*/`（上游参考，9 MB）
 - 项目从 1680 MB 缩减到 269 MB
+
+---
+
+## 三十五、mode-btn 选中态样式修复（2026-05-18）
+
+**问题**：effort (high/max) 和 preset (auto/flash/pro) 按钮点击后无视觉反馈。app.css 重写时丢失了 `.mode-btn.active.accent` 样式。
+
+**修复**：补回 `.mode-btn.active.accent { background: var(--accent-primary); color: #0c0d10; }`
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `app.css` | 新增 `.mode-btn.active.accent` |
