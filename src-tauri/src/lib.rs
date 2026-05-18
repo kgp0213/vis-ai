@@ -196,11 +196,10 @@ pub fn run() {
             // certain build configs), the initialization_script injects the
             // loading page inline — guaranteed to show the spinner.
             let init_html = LOADING_HTML
-                .replace('\\', "\\\\")
                 .replace('\'', "\\'")
                 .replace('\n', " ");
             let init_script = format!(
-                "if(!window.location.href.startsWith('http://127.0.0.1')&&!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
+                "if(!window.location.href.startsWith('http://127.0.0.1')){{document.documentElement.innerHTML='{html}';}}",
                 html = init_html,
             );
             let main_window = WebviewWindowBuilder::new(
