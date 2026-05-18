@@ -30010,8 +30010,8 @@ function App() {
                 `
     )}
               ${i === 0 ? html7`
-                  <div class="side-tab" onClick=${() => { const a = document.createElement('a'); a.href = 'https://oa.visionox.com:8086/gvo/mainPortal/index.html'; a.target = '_blank'; a.click(); }} title="\u529E\u516C OA"><span class="g">O</span><span class="label">OA</span></div>
-                  <div class="side-tab" onClick=${() => { const a = document.createElement('a'); a.href = 'https://cloud.siliconflow.cn/i/1vfZWEo7'; a.target = '_blank'; a.click(); }} title="SiliconFlow API"><span class="g">A</span><span class="label">API</span></div>
+                  <div class="side-tab" onClick=${() => { const a = document.createElement('a'); a.href = 'https://oa.visionox.com:8086/gvo/mainPortal/index.html'; a.target = '_blank'; a.style.display = 'none'; document.body.appendChild(a); a.click(); document.body.removeChild(a); }} title="\u529E\u516C OA"><span class="g">O</span><span class="label">OA</span></div>
+                  <div class="side-tab" onClick=${() => { const a = document.createElement('a'); a.href = 'https://cloud.siliconflow.cn/i/1vfZWEo7'; a.target = '_blank'; a.style.display = 'none'; document.body.appendChild(a); a.click(); document.body.removeChild(a); }} title="SiliconFlow API"><span class="g">A</span><span class="label">API</span></div>
                 ` : null}
             `
   )}
