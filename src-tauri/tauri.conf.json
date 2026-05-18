@@ -23,8 +23,9 @@
       "resources/skill-creation-guide.md"
     ],
     "windows": {
-      "wix": null,
-      "nsis": null
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
     },
     "icon": [
       "icons/32x32.png",
