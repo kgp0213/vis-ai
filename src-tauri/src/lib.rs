@@ -176,39 +176,9 @@ fn check_health(port: u16, token: &str) -> bool {
     }
 }
 
-/// Loading page HTML — compiled into the binary so it is always available
-/// regardless of whether Tauri's frontend-dist embedding succeeds.
-const LOADING_HTML: &str = concat!(
-    "<!doctype html><html><head><meta charset=utf-8><title>Visionox</title>",
-    "<style>",
-    "*{margin:0;padding:0;box-sizing:border-box}",
-    "body{background:#f3f4f6;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui,sans-serif}",
-    ".wrap{text-align:center}",
-    ".spin{width:36px;height:36px;border:3px solid #e5e7eb;border-top-color:#1a6fd4;border-radius:50%;margin:0 auto 20px;animation:spin .8s linear infinite}",
-    "@keyframes spin{to{transform:rotate(360deg)}}",
-    "h1{font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#4b5563;margin:0}",
-    "#status{font-size:12px;color:#9ca3af;margin:10px 0 0}",
-    "</style></head><body>",
-    "<div class=wrap>",
-    "<div class=spin></div>",
-    "<h1>Visionox</h1>",
-    "<p id=status>Starting server\u{2026}</p>",
-    "</div>",
-    "<script>",
-    "(function(){var s=document.getElementById('status'),t0=Date.now(),MAX=35000;",
-    "function check(){",
-    " if(window.__DASHBOARD_URL__){",
-    "  s.textContent='Server ready\u{2026}';s.style.color='#22c55e';",
-    "  setTimeout(function(){window.location.href=window.__DASHBOARD_URL__;},200);",
-    "  return;",
-    " }",
-    " if(Date.now()-t0>MAX){s.textContent='Server startup timed out';s.style.color='#ef4444';return;}",
-    " setTimeout(check,250);",
-    "}",
-    "setTimeout(check,300);",
-    "})();",
-    "</script></body></html>",
-);
+/// Loading page HTML — kept in a standalone file so Cargo's incremental
+/// compilation reliably tracks its content via include_str!().
+const LOADING_HTML: &str = include_str!("loading.html");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
