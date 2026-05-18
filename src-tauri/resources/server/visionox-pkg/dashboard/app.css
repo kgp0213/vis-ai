@@ -2568,6 +2568,11 @@ textarea {
   border-left: 1px solid var(--border-default);
 }
 
+.mode-btn.active.accent {
+  background: var(--accent-primary);
+  color: #0c0d10;
+}
+
 /* ── Unselected state: subtle tinted backgrounds ── */
 
 /* review — safest (green) */
