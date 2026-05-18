@@ -996,3 +996,66 @@ Web Search:  [ON] [OFF]
 | # | 文件 | 修改内容 |
 |---|------|---------|
 | 1 | `server-XGDBRWMB.js` | prompt 校验：`!prompt.trim()` → `(!prompt.trim() && !session)` |
+
+---
+
+## 三十二、多配色方案（2026-05-18 ✅ 已实施）
+
+### 内容
+
+新增 4 套配色方案 + 保留原有浅色，右下角下拉框切换，实时生效无需刷新。
+
+| 方案 | data-theme 值 | 特征 |
+|------|--------------|------|
+| 浅色 | `light` | 原有浅色主题（默认） |
+| 深色 | `dark` | 暗底 + 琥珀强调 |
+| 暖沙 | `warm-sand` | 暖黄底 + 古铜强调 |
+| 冷灰 | `cool-ash` | 冷灰白底 + 灰蓝强调 |
+| 柔绿 | `soft-sage` | 柔绿底 + 鼠尾草绿强调 |
+
+### 修改清单
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `theme/dark.css` | 新建 — 深色显式选择器 |
+| 2 | `theme/warm-sand.css` | 修正 — 去 `:root`，选择器改为 `[data-theme="warm-sand"]` |
+| 3 | `theme/cool-ash.css` | 同上 |
+| 4 | `theme/soft-sage.css` | 同上 |
+| 5 | `theme/COLOR_SCHEME_GUIDE.md` | 重写 — 4 套方案说明 + token 表 |
+| 6 | `app.css` | 合并 4 个 `[data-theme="xxx"]` 块 |
+| 7 | `app.js` | 左下角 `<span class="theme-btn">` 替换为 5 选项 `<select>` |
+
+---
+
+## 三十三、导航栏 OA/API 快捷链接（2026-05-18 ✅ 已实施）
+
+### 内容
+
+导航栏"计划"下方新增 OA 和 API 两个快捷链接。
+
+| 按钮 | 目标 URL |
+|------|----------|
+| OA | `https://oa.visionox.com:8086/gvo/mainPortal/index.html` |
+| API | `https://cloud.siliconflow.cn/i/1vfZWEo7` |
+
+### 技术方案
+
+点击通过 `POST /api/open-url` 调用 Node 服务端，使用 `start ""` (Windows) / `open` (macOS) / `xdg-open` (Linux) 在系统默认浏览器打开。不依赖 WebView 导航。
+
+### 修改清单
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `server-XGDBRWMB.js` | 新增 `handleOpenUrl` + 路由 |
+| 2 | `app.js` | 导航栏注入 OA/API 两个 `<div class="side-tab">` |
+| 3 | `app.css` | 补回 `.composer-chip` 样式（cursor:pointer 等） |
+
+---
+
+## 三十四、项目目录清理（2026-05-18）
+
+- 删除 `src-tauri/target/`（构建产物，1562 MB）
+- 删除 `node_modules/`（45 MB）
+- 删除 `visionox-pkg-*-backup/`、`visionox-pkg-*-pre-pathfix/`（备份目录，72 MB）
+- 删除 `esengine-DeepSeek-Reasonix-*/`（上游参考，9 MB）
+- 项目从 1680 MB 缩减到 269 MB
