@@ -30010,7 +30010,11 @@ function App() {
                 `
     )}
             `
-  )}
+          )}
+          <div style="display:flex;gap:4px;padding:4px 16px">
+            <a href="https://oa.visionox.com:8086/gvo/mainPortal/index.html" target="_blank" class="side-tab" style="flex:1;text-decoration:none;justify-content:center;padding:4px 0;font-size:11px;border-radius:4px" title="\u529E\u516C OA">OA</a>
+            <a href="https://cloud.siliconflow.cn/i/1vfZWEo7" target="_blank" class="side-tab" style="flex:1;text-decoration:none;justify-content:center;padding:4px 0;font-size:11px;border-radius:4px" title="SiliconFlow API">API</a>
+          </div>
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
           <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + v + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "light"}>
