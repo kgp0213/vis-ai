@@ -1724,7 +1724,7 @@ async function applyMultiEdit(rootDir, edits) {
         );
       }
       const le = before.includes("\r\n") ? "\r\n" : "\n";
-      state = { buf: before, le, hunks: [], deltaChars: 0, touched: 0 };
+      state = { before, buf: before, le, hunks: [], deltaChars: 0, touched: 0 };
       filesByPath.set(e.abs, state);
     }
     const adaptedSearch = e.search.replace(/\r?\n/g, state.le);
@@ -1748,8 +1748,25 @@ ${renderEditDiff(adaptedSearch, adaptedReplace, startLine)}`);
     state.deltaChars += adaptedReplace.length - adaptedSearch.length;
     state.touched++;
   }
-  for (const [abs, state] of filesByPath) {
-    await fs.writeFile(abs, state.buf, "utf8");
+  const attempted = [];
+  try {
+    for (const [abs, state] of filesByPath) {
+      attempted.push({ abs, before: state.before });
+      await fs.writeFile(abs, state.buf, "utf8");
+    }
+  } catch (writeErr) {
+    const rollbackFailures = [];
+    for (const item of [...attempted].reverse()) {
+      try {
+        await fs.writeFile(item.abs, item.before, "utf8");
+      } catch (restoreErr) {
+        rollbackFailures.push(`${displayRel(rootDir, item.abs)}: ${restoreErr.message}`);
+      }
+    }
+    if (rollbackFailures.length > 0) {
+      throw new Error(`multi_edit: write failed after partial application: ${writeErr.message}; rollback failed for ${rollbackFailures.join("; ")}`);
+    }
+    throw new Error(`multi_edit: write failed: ${writeErr.message}; rolled back all files that may have been modified`);
   }
   const fileCount = filesByPath.size;
   const editCount = edits.length;

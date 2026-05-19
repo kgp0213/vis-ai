@@ -1084,3 +1084,74 @@ Web Search:  [ON] [OFF]
 - `src/index.html` → `tauri::generate_context!()` 宏嵌入
 - `lib.rs` `LOADING_HTML` → `concat!()` 宏展开
 - 两者都可能被增量缓存复用旧版本
+
+---
+
+## 三十七、上游 Cherry-Pick 合入（2026-05-19）
+
+从 esengine/reasonix 上游合入 4 个补丁，版本对齐至 0.47.1。
+
+### P0-1: login-shell PATH 发现（upstream e7fb669 → c181f67）
+
+**问题**：macOS/Linux 上 GUI 启动的 Node 进程 PATH 不包含 Homebrew/用户安装的工具路径。
+
+**修复**：`launcher.mjs` 新增 `augmentProcessPath()` — 使用 `$SHELL -ilc 'echo $PATH'` 探测真实 login shell PATH，拼接到 `process.env.PATH` 前端。Windows 下为 no-op。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `launcher.mjs` | 新增 `augmentProcessPath()` 函数 + 启动时调用 |
+
+### P0-2: multi_edit 写入失败回滚（upstream c181f67 → 6e5fa83）
+
+**问题**：`multi_edit` 工具批量写入文件时，部分写入失败已成功的修改未回滚，导致文件处于不一致状态。
+
+**修复**：`applyMultiEdit` 的 write 循环改为 try-catch 包裹。写入失败时按逆序将已修改文件恢复为 `before` 内容。若恢复也失败，将恢复失败信息报告到错误消息中。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `chunk-O52OLQL3.js` | `applyMultiEdit` write 循环 → try-catch + 逆序回滚 |
+| 2 | `chunk-2R4QCDOZ.js` | `multi_edit` 工具描述增加回滚说明 |
+
+### P1-1: CODE_SYSTEM_TEMPLATE 压缩 -58%（upstream 6e5fa83 → e7fb669）
+
+**问题**：系统提示词约 22,774 字符，每次 API 请求均发送，显著增加 token 费用。
+
+**修复**：压缩 `CODE_SYSTEM_TEMPLATE` 至约 9,592 字符（-58%）。精简冗余句式，合并重复表述，保留完整功能语义。同时完成品牌化替换（Reasonix → Visionox）。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `chunk-5JJRUIPA.js` | `CODE_SYSTEM_TEMPLATE` 重写压缩 + 品牌化 + 反引号转义修复 |
+
+**品牌化变更**：
+- "You are Reasonix Code, a coding assistant" → "You are Visionox Code, a coding assistant"
+- "You are Reasonix Code, a standalone coding assistant" → "You are a standalone coding assistant"
+- "Reasonix VALIDATES citations" → "the tool validates citations"
+- "critique Reasonix itself" → "critique the tool itself"
+
+**踩坑**：模板文本内的反引号（`` `config.yaml` ``、`` `reasonix.md` ``）在压缩后的 JS 模板字面量中必须转义为 `` \` ``，否则破坏 JS 解析。曾导致应用启动时报 SyntaxError。
+
+### P1-2: 工具描述压缩 -28%（upstream e7fb669 → 6e5fa83）
+
+**问题**：工具描述冗长，每次请求随 tool_specs 发送，增加 token 费用。
+
+**修复**：压缩 6 个工具描述（ask_choice、search_content、glob、todo_write、read_file、multi_edit 描述字段），总计节省约 2,500+ 字符（-28%）。保持功能完整性，仅精简措辞。
+
+| # | 文件 | 修改内容 |
+|---|------|---------|
+| 1 | `chunk-2R4QCDOZ.js` | 6 个工具描述精简 |
+
+### 合入后编译
+
+`cargo build --release` 编译通过（34s），无新增 warning。产物 `visionox-desktop.exe` 启动正常，dashboard 可访问。
+
+---
+
+## 三十八、验证清单（最终更新）
+
+- [x] `cargo build --release` 编译通过
+- [x] P0-1 login-shell PATH 合入
+- [x] P0-2 multi_edit 回滚合入
+- [x] P1-1 系统提示词压缩 -58% 合入
+- [x] P1-2 工具描述压缩 -28% 合入
+- [x] 品牌化替换完成
+- [x] 版本号 0.47.1（tauri.conf.json / Cargo.toml / package.json）

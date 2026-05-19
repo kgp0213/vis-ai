@@ -14,7 +14,7 @@
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
-| [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) | v0.43.0 | AI Agent 核心（DeepSeek API、CacheFirstLoop、工具系统、Web 仪表盘） |
+| [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) | v0.47.1 | AI Agent 核心（DeepSeek API、CacheFirstLoop、工具系统、Web 仪表盘） |
 | [Tauri](https://v2.tauri.app/) | v2 | Rust 桌面框架，使用系统 WebView2 |
 | Node.js | v22+ | 运行时，运行 Visionox 服务端（node.exe 随发行版自带） |
 | DeepSeek API | — | AI 模型后端（需用户自备 API Key） |
@@ -32,12 +32,12 @@ vis-ai/
 │   ├── resources/server/         #   随 exe 分发的运行时资源
 │   │   ├── node.exe              #     Node.js 二进制
 │   │   ├── launcher.mjs          #     启动脚本 — 实例化 DeepSeekClient + CacheFirstLoop
-│   │   └── visionox-pkg/         #     Visionox 服务端包（vendored from npm reasonix 0.43.0）
+│   │   └── visionox-pkg/         #     Visionox 服务端包（vendored from npm reasonix 0.47.1）
 │   ├── icons/                    #   应用图标
 │   ├── build.rs                  #   Tauri 构建脚本
 │   ├── Cargo.toml                #   Rust 依赖
 │   └── tauri.conf.json           #   Tauri 构建配置
-├── CHANGELOG-0.43.0.md           # 二开变更记录（§一 ~ §二十七）
+├── CHANGELOG-0.43.0.md           # 二开变更记录（§一 ~ §三十七）
 ├── package.json                  # Node.js 项目配置（仅含 Tauri CLI）
 └── README.md
 ```
@@ -78,7 +78,7 @@ vis-ai/
         └──────────────────────────────────────────┘
 ```
 
-## 启动流程（v0.43.0 最终方案）
+## 启动流程（v0.47.1 最终方案）
 
 ```
 双击 Visionox.exe
@@ -94,11 +94,11 @@ vis-ai/
 - **TCP 健康检查** — 原始 HTTP GET，比 fetch/SSE 更可靠
 - **初始化脚本双保险** — 即使 Tauri 前端嵌入失败，init_script 仍能注入加载页 HTML
 
-详见 `CHANGELOG-0.43.0.md` §二十七。
+详见 `CHANGELOG-0.43.0.md` §二十七 ~ §三十七。
 
 ## 当前进度
 
-### v0.43.0 已完成的二开功能
+### v0.47.1 已完成的二开功能
 
 | 功能 | 说明 | 参考 |
 |------|------|------|
@@ -125,6 +125,10 @@ vis-ai/
 | **多配色方案** | 5 套（浅色/深色/暖沙/冷灰/柔绿），右下角下拉切换 | **§三十二** |
 | **OA/API 快捷链接** | 导航栏"计划"下方新增 OA + API 入口 | **§三十三** |
 | **项目目录清理** | 从 1680 MB 缩减到 269 MB | **§三十四** |
+| **上游 P0-1 合入** | login-shell PATH 发现（macOS/Linux 工具路径注入） | **§三十七** |
+| **上游 P0-2 合入** | multi_edit 写入失败自动回滚 | **§三十七** |
+| **上游 P1-1 合入** | 系统提示词压缩 -58% + 品牌化（降低 API 费用） | **§三十七** |
+| **上游 P1-2 合入** | 工具描述压缩 -28%（降低 API 费用） | **§三十七** |
 
 ### 待完成
 
@@ -181,12 +185,127 @@ node src-tauri/resources/server/launcher.mjs --port 28980
 # 修改 src/index.html (加载页外壳) 后同样需重新编译
 ```
 
+### 常见构建问题
+
+#### 同一份源码两次编译产物行为不一致（cargo build vs npx tauri build）
+
+**现象**：
+- `cd src-tauri && cargo build --release` 产出的 exe 启动后加载页正常居中
+- `npx tauri build --bundles nsis` 内部调用 cargo 产出的 exe 启动后 spinner 跑偏
+- 两次产物大小不同（差约 28KB），MD5 不同
+- 源码完全相同——`lib.rs`、`index.html`、`Cargo.toml`、`tauri.conf.json`、`build.rs` 已逐行比对无差异
+
+**根因**：
+
+`npx tauri build` 内部实际执行的 cargo 命令为：
+
+```
+cargo build --bins --features tauri/custom-protocol --release
+```
+
+若不进行 `cargo clean` 增量编译两次可能混合编译多个 crate 导致产物不一致。
+
+若 `Cargo.toml` 中 `tauri` 依赖未声明 `custom-protocol` feature：
+
+```toml
+# 错误的配置——缺少 custom-protocol
+tauri = { version = "2", features = ["tray-icon"] }
+```
+
+则裸 `cargo build --release` 产出的二进制**不包含** custom-protocol 协议处理。两个构建入口走了不同的 Tauri asset 加载机制：
+
+| 构建方式 | custom-protocol | asset 加载协议 |
+|----------|:---:|---------------|
+| `cargo build --release` | 缺失 | fallback 机制（非 `tauri://localhost/`） |
+| `npx tauri build` | 有（CLI 自动注入 `--features`） | `tauri://localhost/` 自定义协议 |
+
+custom-protocol 影响 WebView 初始化、CSP 上下文、CSS 渲染环境。这是 spinner 的 `display:flex; align-items:center; justify-content:center` 居中行为不一致的直接原因。
+
+**增量编译放大**：先执行 `cargo build --release`（无 custom-protocol），再执行 `npx tauri build`（有 custom-protocol），Cargo 将重编 `tauri` crate 自身，但 `visionox-desktop` 的部分编译单元可能因增量编译缓存未正确 invalidate，产生 feature 混合状态的二进制——这进一步放大了两次产物的差异。
+
+**排查过程**：
+
+1. 逐行比对源码文件——无差异，排除源码变化
+2. 确认加载页走 `include_str!("../../src/index.html")` 编译期嵌入，非 `generate_context!()` 前端嵌入——排除 asset 嵌入路径差异
+3. 发现 `cargo clean` 后方式一正常，方式二异常——指向增量编译缓存问题
+4. **关键突破**：`npx tauri build --verbose` 输出显示内部 cargo 命令为 `cargo build --bins --features tauri/custom-protocol --release`，与手工执行的 `cargo build --release` feature 集不同
+
+**解决方案**：
+
+在 `Cargo.toml` 中显式声明 `custom-protocol` feature，确保两种构建方式使用相同的 feature 集：
+
+```toml
+# 正确的配置
+tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }
+```
+
+此后 `cargo build --release` 和 `npx tauri build` 产出的二进制行为一致，无需在切换构建方式前 `cargo clean`。
+
+**教训**：
+
+- `npx tauri build` 会自动注入 `--features tauri/custom-protocol`，但不会修改 `Cargo.toml`
+- 裸 `cargo build` 只看 `Cargo.toml` 中声明的 features，不会自动补全
+- 构建入口不一致时，先检查 `--verbose` 输出中的实际 cargo 命令
+
+#### 启动后 spinner 不居中、跑偏到左上角（custom-protocol 已配置）
+
+**现象**：`custom-protocol` feature 已正确配置，构建产物启动后 spinner 仍然不居中，`.wrap` 元素出现在左上角。
+
+**根因**：
+
+`lib.rs` 的 `initialization_script` 通过 `document.write()` 在 WebView 初始化阶段注入加载页 HTML。在 WebView2（Windows）中，`document.write()` 在一个尚未完成初始化的 document 上执行时，可能触发 **quirks 模式渲染**——浏览器没有正确建立 viewport 高度继承链（`html.height: 100%` → viewport），`html` 和 `body` 的高度计算为 `auto`（= 内容高度），导致 `body { display: flex; align-items: center; justify-content: center }` 没有额外的垂直空间可供居中，内容贴到左上角。
+
+原设计存在双重冗余：
+
+| 路径 | 机制 | 说明 |
+|------|------|------|
+| 1 | `generate_context!()` → `frontendDist: "../src"` → 嵌入 `src/index.html` | WebView 通过 `WebviewUrl::App("index.html")` 加载 |
+| 2 | `include_str!("../../src/index.html")` → init_script → `document.write()` | 在 WebView 初始化时拦截页面写入同一份 HTML |
+
+两个路径嵌入的是同一份 `src/index.html`，但路径 2 的 `document.write()` 破坏了正常的 WebView 渲染流程。
+
+**排查过程**：
+
+1. 确认 `custom-protocol` 已配置——排除 feature 不一致
+2. 确认 `src/index.html` CSS `display:flex; align-items:center; justify-content:center` 写法正确
+3. 用浏览器直接打开 `src/index.html`——spinner 完美居中，排除 CSS 本身问题
+4. 定位到 `initialization_script` 中的 `document.write()` ——在 WebView2 中此 API 对 viewport 初始化的影响与标准浏览器不同
+5. 删除 `document.write()` 逻辑后重新编译——spinner 正常居中
+
+**解决方案**：
+
+删除 `initialization_script` 中的 `document.write()` 调用，让 WebView 通过正常页面加载流程渲染嵌入的 `index.html`：
+
+```rust
+// 之前的代码：
+let init_script = format!("...document.open();document.write('{html}');document.close();...", ...);
+WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    .initialization_script(init_script)  // ← 删除这一行
+    ...
+
+// 修复后：
+WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+    // 不再传入 initialization_script
+    // spinner 由 generate_context!() 嵌入的 src/index.html 正常渲染
+    ...
+```
+
+同时删除 `LOADING_HTML` 常量和 `init_html`/`init_script` 变量，因为它们唯一的用途就是构造 `document.write()` 的参数。
+
+`window.location.replace()` 导航到 dashboard 的逻辑走的是 Rust 侧的 `win_for_url.eval(...)`，不受此次修改影响。
+
+**教训**：
+
+- WebView2 不是标准浏览器——`document.write()` 的渲染语义与 Chromium/Chrome 有微妙差异
+- `generate_context!()` 嵌入的前端资源已经提供了完整的加载页，无需再用脚本注入一份
+- `background_color` 窗口属性与加载页背景色一致即可消除白屏闪烁，不需要脚本提前写内容
+
 ### 关键文件修改指南
 
 | 需求 | 修改文件 |
 |------|----------|
 | 启动流程 / 健康检查 | `src-tauri/src/lib.rs` |
-| 加载页外观 | `src-tauri/src/lib.rs` — `LOADING_HTML` 常量 |
+| 加载页外观 | `src/index.html` — spinner 样式 + 状态文字 |
 | 系统托盘菜单 | `src-tauri/src/lib.rs` — `TrayIconBuilder` |
 | CSP 安全策略 | `src-tauri/tauri.conf.json` — `app.security.csp` |
 | 新增工具 | `src-tauri/resources/server/launcher.mjs` |

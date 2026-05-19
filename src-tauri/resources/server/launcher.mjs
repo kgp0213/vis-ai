@@ -15,10 +15,67 @@ import { homedir } from "node:os";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { exec as execCb } from "node:child_process";
+import { exec as execCb, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 
 const exec = promisify(execCb);
+
+// ── Login-shell PATH augmentation (#1252) ───────────────────────────
+// GUI apps on macOS/Linux don't source .zshrc/.bashrc, so nvm/asdf/fnm
+// injected PATH entries are missing.  Probe the user's interactive shell
+// once and prepend any missing directories to process.env.PATH.
+// On Windows the registry PATH is inherited correctly; this is a no-op.
+let _loginPathCached;
+
+function resolveLoginShellPath() {
+  if (_loginPathCached !== undefined) return _loginPathCached;
+  _loginPathCached = null;
+  if (process.platform === "win32") return null;
+
+  const shell = process.env.SHELL || "/bin/bash";
+  const marker = "__VNX_PATH__=";
+  try {
+    const result = spawnSync(shell, ["-ilc", `printf '${marker}%s\\n' "$PATH"`], {
+      encoding: "utf8",
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (result.status !== 0 && result.signal === null) return null;
+    const stdout = result.stdout ?? "";
+    const idx = stdout.lastIndexOf(marker);
+    if (idx < 0) return null;
+    const tail = stdout.slice(idx + marker.length);
+    const nl = tail.indexOf("\n");
+    const path = (nl >= 0 ? tail.slice(0, nl) : tail).trim();
+    if (!path || !path.includes("/")) return null;
+    _loginPathCached = path;
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function augmentProcessPath() {
+  const loginPath = resolveLoginShellPath();
+  if (!loginPath) return { added: [] };
+  const current = process.env.PATH ?? "";
+  const seen = new Set(current.split(":").map((s) => s.trim()).filter(Boolean));
+  const additions = [];
+  for (const entry of loginPath.split(":")) {
+    const t = entry.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    additions.push(t);
+  }
+  if (additions.length > 0) {
+    process.env.PATH = additions.concat(current ? [current] : []).join(":");
+    console.error(`[launcher] augmented PATH with ${additions.length} login-shell entries`);
+  }
+  return { added: additions };
+}
+
+// Probe once at import time — must run before any child_process spawn.
+augmentProcessPath();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");

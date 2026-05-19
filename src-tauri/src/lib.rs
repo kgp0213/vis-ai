@@ -194,11 +194,6 @@ fn check_health(port: u16, token: &str) -> bool {
     }
 }
 
-/// Loading page HTML — read at compile time from the same file that
-/// frontendDist points to.  Embedded in the binary via include_str!()
-/// so it is always available regardless of Tauri's asset embedding.
-const LOADING_HTML: &str = include_str!("../../src/index.html");
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -210,20 +205,28 @@ pub fn run() {
         }))
         .setup(|app| {
             // ── Create main window ────────────────────────────────
-            let init_html = LOADING_HTML
-                .replace('\'', "\\'")
-                .replace('\n', " ");
-            let init_script = format!(
-                "if(!window.location.href.startsWith('http://127.0.0.1')&&!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
-                html = init_html,
-            );
+            //
+            // The loading page (spinner + "Starting server…") lives in
+            // src/index.html, which is embedded in the binary twice:
+            //
+            //   1. `generate_context!()` reads frontendDist=../src and
+            //      serves it when the WebView navigates to WebviewUrl::App
+            //
+            //   2. WebviewWindowBuilder::background_color matches the
+            //      page's #f3f4f6, so the window never flashes white
+            //
+            // We intentionally do NOT inject an initialization_script
+            // that calls document.write().  In WebView2 (Windows),
+            // document.write() on an uninitialised document can trigger
+            // quirks-mode rendering where the CSS `height: 100%` chain
+            // (html → body → viewport) does not resolve, causing the
+            // flexbox-centred spinner to snap to the top-left corner.
             let main_window = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .initialization_script(init_script)
-            .title("Visionox — Starting...")
+            .title("")
             .background_color(Color::from((243u8, 244u8, 246u8)))
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)

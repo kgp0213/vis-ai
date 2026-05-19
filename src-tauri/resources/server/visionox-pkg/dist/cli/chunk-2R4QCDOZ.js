@@ -9073,18 +9073,18 @@ function sanitizeOptions(raw) {
 function registerChoiceTool(registry, opts = {}) {
   registry.register({
     name: "ask_choice",
-    description: "Present 2\u20136 alternatives to the user. The principle: if the user is supposed to pick, the tool picks \u2014 you don't enumerate the choices as prose. Prose menus have no picker in this TUI, so the user gets a wall of text to scroll through and a letter to type, strictly worse than the magenta picker this tool renders. Call it whenever (a) the user has asked for options, (b) you've analyzed multiple approaches and the final call is theirs, or (c) it's a preference fork you can't resolve without them. Skip it when one option is clearly best (just do it, or submit_plan) or a free-form text answer fits (ask in prose). Keep option ids short and stable (A/B/C). Each option: title + optional summary. allowCustom=true when their real answer might not fit. Max 6 options \u2014 narrow first if more. A one-sentence lead-in before the call is fine; don't repeat the options in it.",
+    description: "Render an arrow-key picker with 2\u20136 alternatives. Use when the user is supposed to pick \u2014 never enumerate choices as prose. Skip when one option is clearly best (just do it) or a free-form text answer fits. Max 6 options; set `allowCustom:true` when their real answer might not fit.",
     readOnly: true,
     parameters: {
       type: "object",
       properties: {
         question: {
           type: "string",
-          description: "The question to put in front of the user. One sentence. Don't repeat the options in the question text \u2014 the picker renders them separately."
+          description: "One-sentence question. Don't repeat the options here \u2014 the picker renders them."
         },
         options: {
           type: "array",
-          description: "2\u20134 alternatives. Each needs a stable id and a short title; summary is optional.",
+          description: "2\u20136 alternatives. Each needs a stable id (A/B/C/etc.) and a short title; summary is optional.",
           items: {
             type: "object",
             properties: {
@@ -10094,11 +10094,7 @@ function registerFilesystemTools(registry, opts) {
   registry.register({
     name: "read_file",
     parallelSafe: true,
-    description: `Read a file under the sandbox root. To save context, PREFER to scope the read instead of pulling the whole file:
-  - head: N  \u2192 first N lines (imports, public API, small configs)
-  - tail: N  \u2192 last N lines (recently-added code, log tails)
-  - range: "A-B"  \u2192 inclusive line range A..B, 1-indexed (e.g. "120-180" around an edit site)
-When none of these is given AND the file is longer than ${DEFAULT_AUTO_PREVIEW_LINES} lines, the tool auto-returns a head+tail preview with an "N lines omitted" marker, plus a top-level symbol outline (TS/JS exports, Python def/class, Go func/type, Rust fn/struct/impl/trait, Markdown headings, with line numbers, capped at ${OUTLINE_MAX_ENTRIES2}) so you can pick a smart range without a follow-up grep. If you need the middle, re-call with a range. Prefer search_content to locate a symbol first only when the outline doesn't have what you want \u2014 one scoped read beats three full-file reads.`,
+    description: `Read a file under sandbox root. Supports head/tail/range scoping. Returns content with line numbers (cat -n). Handles images, PDFs (pages, max 20), .ipynb. Do NOT re-read just-edited files.`,
     readOnly: true,
     stormExempt: true,
     parameters: {
@@ -10312,7 +10308,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   registry.register({
     name: "search_content",
     parallelSafe: true,
-    description: "Recursively grep file CONTENTS for a substring or regex. This is the right tool for 'find all places that call X', 'where is Y referenced', 'what files contain Z'. Different from search_files (which matches FILE NAMES). Returns one match per line in 'path:line: text' format. Per-file hits are capped at 30 (a footer reports any extras); when the byte budget is mostly spent the remaining files switch to a 'rel: N matches' histogram so distribution stays visible instead of one popular file drowning the rest. Pass `summary_only:true` to skip line content entirely and get just the histogram. Skips dependency / VCS / build directories (node_modules, .git, dist, build, .next, target, .venv) and binary files by default.",
+    description: "Grep file CONTENTS (regex/substring). Returns path:line:text format. Per-file hits capped at 30; pass summary_only:true for histogram only. Skips dep/VCS/build dirs. Different from search_files (which matches file NAMES).",
     readOnly: true,
     parameters: {
       type: "object",
@@ -10363,7 +10359,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   registry.register({
     name: "glob",
     parallelSafe: true,
-    description: "List files matching a glob pattern, sorted by mtime (most-recently-modified first) by default. Use this for 'what changed lately', 'find all *.test.ts', 'all configs under src/'. Glob syntax matches the cross-tool standard: `*` (any chars in one segment), `**` (any segments), `?` (one char), `{a,b}` (alternation). Pattern matches against the path RELATIVE to the search root (e.g. 'src/**/*.ts' from project root). Skips node_modules / .git / dist / build / etc by default. Default limit 200; raise via `limit` (max 1000). Different from `search_files` (substring on basename) and `search_content` (matches inside file contents).",
+    description: "List files matching a glob pattern, sorted by mtime. Supports *, **, ?, {a,b}. Matches against path relative to search root. Default limit 200 (max 1000). Skips dep/VCS/build dirs. Different from search_files (basename substring) and search_content (inside files).",
     readOnly: true,
     parameters: {
       type: "object",
@@ -10456,7 +10452,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   });
   registry.register({
     name: "multi_edit",
-    description: "Apply N SEARCH/REPLACE edits across ONE OR MORE files in a single atomic call. Edits run sequentially in array order; for edits that touch the same file, a later edit can match text inserted by an earlier one. If ANY edit fails (search not found, ambiguous match, empty search, file unreadable), NO files are written \u2014 atomic at the validation layer. Same per-edit rules as edit_file: `search` is exact text (whitespace sensitive, no regex) and must be unique in its target file at the moment that edit applies. Use this for renames spanning multiple files, cross-file refactors, or any batch where you'd otherwise loop edit_file.",
+    description: "Apply N SEARCH/REPLACE edits across ONE OR MORE files in a single atomic call. Edits run sequentially in array order; for edits that touch the same file, a later edit can match text inserted by an earlier one. If ANY edit fails validation (search not found, ambiguous match, empty search, file unreadable), NO files are written. If a write fails after partial application, any files that were already modified are rolled back to their original content. Same per-edit rules as edit_file: `search` is exact text (whitespace sensitive, no regex) and must be unique in its target file at the moment that edit applies. Use this for renames spanning multiple files, cross-file refactors, or any batch where you'd otherwise loop edit_file.",
     parameters: {
       type: "object",
       properties: {
@@ -10797,7 +10793,7 @@ function registerPlanTool(registry, opts = {}) {
 }
 
 // src/tools/todo.ts
-var DESCRIPTION = 'In-session task tracker for multi-step work. NOT a plan \u2014 no approval gate, no checkpoint pauses, doesn\'t touch any files. The tool replaces the entire todo list every call (set semantics, NOT append). Pass the FULL list every time.\n\nWhen to use:\n\u2022 The task has 3+ distinct steps and you want to keep them straight as you work.\n\u2022 The user gave you a multi-part request ("do A, then B, then C").\n\u2022 You\'re partway through a long task and want to record where you are so a future you doesn\'t lose the thread.\n\nWhen NOT to use:\n\u2022 One-shot edits, single-question answers, single-tool tasks.\n\u2022 User-facing approval gates \u2192 that\'s `submit_plan`.\n\u2022 Branching choices \u2192 that\'s `ask_choice`.\n\nRules:\n\u2022 Exactly ONE todo may have status:"in_progress" at a time (or zero \u2014 between steps).\n\u2022 Mark a todo "completed" the moment it\'s actually done \u2014 don\'t batch.\n\u2022 Each todo: `content` (imperative, e.g. "Add tests"), `activeForm` (gerund shown while running, e.g. "Adding tests"), `status`.\n\u2022 Empty `todos:[]` is allowed \u2014 it clears the list when work is fully done.';
+var DESCRIPTION = "In-session task tracker for 3+ step work. NOT a plan (no approval gate). Set semantics — pass the FULL list every call. One in_progress at a time; mark completed immediately. `content` (imperative), `activeForm` (gerund), `status`. Pass todos:[] to clear.";
 function validateTodos(raw) {
   if (!Array.isArray(raw)) {
     throw new Error("todo_write: `todos` must be an array");
