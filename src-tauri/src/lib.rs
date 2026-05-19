@@ -176,10 +176,6 @@ fn check_health(port: u16, token: &str) -> bool {
     }
 }
 
-/// Loading page HTML — kept in a standalone file so Cargo's incremental
-/// compilation reliably tracks its content via include_str!().
-const LOADING_HTML: &str = include_str!("loading.html");
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -191,23 +187,11 @@ pub fn run() {
         }))
         .setup(|app| {
             // ── Create main window ────────────────────────────────
-            // Uses WebviewUrl::App to load from frontendDist.  If Tauri's
-            // asset embedding didn't pick up index.html (known issue with
-            // certain build configs), the initialization_script injects the
-            // loading page inline — guaranteed to show the spinner.
-            let init_html = LOADING_HTML
-                .replace('\'', "\\'")
-                .replace('\n', " ");
-            let init_script = format!(
-                "if(!window.location.href.startsWith('http://127.0.0.1')&&!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
-                html = init_html,
-            );
             let main_window = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .initialization_script(&init_script)
             .title("")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
