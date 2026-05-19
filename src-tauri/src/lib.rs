@@ -6,6 +6,7 @@ use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -194,22 +195,18 @@ pub fn run() {
         }))
         .setup(|app| {
             // ── Create main window ────────────────────────────────
-            // The loading page is injected via initialization_script.
-            // WebviewUrl::App is kept as the base URL; the script
-            // replaces the body with LOADING_HTML on first load.
-            let init_html = LOADING_HTML
-                .replace('\'', "\\'")
-                .replace('\n', " ");
-            let init_script = format!(
-                "if(!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
-                html = init_html,
-            );
+            // Load the spinner page as a self-contained data URL.
+            // No init_script, no frontendDist embedding — the page
+            // renders immediately when the WebView initializes.
+            let b64 = base64::engine::general_purpose::STANDARD.encode(LOADING_HTML);
+            let data_url = format!("data:text/html;charset=utf-8;base64,{b64}");
+            let parsed = url::Url::parse(&data_url)
+                .expect("invalid data URL");
             let main_window = WebviewWindowBuilder::new(
                 app,
                 "main",
-                WebviewUrl::App("index.html".into()),
+                WebviewUrl::External(parsed),
             )
-            .initialization_script(&init_script)
             .background_color(Color::from((243u8, 244u8, 246u8)))
             .title("")
             .inner_size(1280.0, 800.0)
