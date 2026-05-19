@@ -317,7 +317,7 @@ function looksLikeToolError(content, _toolName) {
 
 // src/core/pause-policy.ts
 function shouldAutoResolveCheckpoint(editMode) {
-  return editMode === "auto" || editMode === "yolo";
+  return editMode === "auto" || editMode === "yolo" || editMode === "admin";
 }
 function autoResolveVerdict(req, editMode) {
   if (req.kind === "plan_checkpoint" && shouldAutoResolveCheckpoint(editMode)) {

@@ -320,11 +320,11 @@ async function buildCodeToolset(opts) {
   const tools = new ToolRegistry();
   const jobs = new JobRegistry();
   const registerRooted = (root) => {
-    registerFilesystemTools(tools, { rootDir: root });
+    registerFilesystemTools(tools, { rootDir: root, allowAllPaths: () => loadEditMode() === "admin" });
     registerShellTools(tools, {
       rootDir: root,
       extraAllowed: () => loadProjectShellAllowed(root),
-      allowAll: () => loadEditMode() === "yolo",
+      allowAll: () => loadEditMode() === "yolo" || loadEditMode() === "admin",
       jobs
     });
     registerMemoryTools(tools, { projectRoot: root });
