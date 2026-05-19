@@ -177,6 +177,11 @@ fn check_health(port: u16, token: &str) -> bool {
     }
 }
 
+/// Loading page HTML — read at compile time from the same file that
+/// frontendDist points to.  Embedded in the binary via include_str!()
+/// so it is always available regardless of Tauri's asset embedding.
+const LOADING_HTML: &str = include_str!("../../src/index.html");
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -188,11 +193,22 @@ pub fn run() {
         }))
         .setup(|app| {
             // ── Create main window ────────────────────────────────
+            // The loading page is injected via initialization_script.
+            // WebviewUrl::App is kept as the base URL; the script
+            // replaces the body with LOADING_HTML on first load.
+            let init_html = LOADING_HTML
+                .replace('\'', "\\'")
+                .replace('\n', " ");
+            let init_script = format!(
+                "if(!document.querySelector('.wrap')){{document.open();document.write('{html}');document.close();}}",
+                html = init_html,
+            );
             let main_window = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
+            .initialization_script(&init_script)
             .title("")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
