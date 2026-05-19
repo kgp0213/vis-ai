@@ -2276,7 +2276,7 @@ function saveBaseUrl(url, path = defaultConfigPath()) {
   writeConfig(cfg, path);
 }
 function searchEnabled(path = defaultConfigPath()) {
-  const env = process.env.REASONIX_SEARCH;
+  const env = process.env.visionox_SEARCH;
   if (env === "off" || env === "false" || env === "0") return false;
   const cfg = readConfig(path).search;
   if (cfg === false) return false;
@@ -2500,7 +2500,7 @@ function resolveSemanticEmbeddingConfig(path = defaultConfigPath()) {
   return {
     provider: "ollama",
     baseUrl: user.ollama?.baseUrl?.trim() || process.env.OLLAMA_URL || DEFAULT_OLLAMA_URL,
-    model: user.ollama?.model?.trim() || process.env.REASONIX_EMBED_MODEL || DEFAULT_EMBED_MODEL,
+    model: user.ollama?.model?.trim() || process.env.visionox_EMBED_MODEL || DEFAULT_EMBED_MODEL,
     timeoutMs: DEFAULT_TIMEOUT_MS
   };
 }
@@ -2510,7 +2510,7 @@ function redactSemanticEmbeddingConfig(user) {
     provider: normalized.provider ?? "ollama",
     ollama: {
       baseUrl: normalized.ollama?.baseUrl?.trim() || process.env.OLLAMA_URL || DEFAULT_OLLAMA_URL,
-      model: normalized.ollama?.model?.trim() || process.env.REASONIX_EMBED_MODEL || DEFAULT_EMBED_MODEL
+      model: normalized.ollama?.model?.trim() || process.env.visionox_EMBED_MODEL || DEFAULT_EMBED_MODEL
     },
     openaiCompat: {
       baseUrl: normalized.openaiCompat?.baseUrl?.trim() ?? "",

@@ -7553,8 +7553,8 @@ var CacheFirstLoop = class {
       allowedToolNames: allowedNames,
       isMutating: (call) => this.isMutating(call),
       isStormExempt,
-      stormThreshold: parsePositiveIntEnv(process.env.REASONIX_STORM_THRESHOLD),
-      stormWindow: parsePositiveIntEnv(process.env.REASONIX_STORM_WINDOW)
+      stormThreshold: parsePositiveIntEnv(process.env.visionox_STORM_THRESHOLD),
+      stormWindow: parsePositiveIntEnv(process.env.visionox_STORM_WINDOW)
     });
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
@@ -8216,8 +8216,8 @@ ${reason}`
         yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "context-guard" });
         return;
       }
-      const dispatchSerial = (process.env.REASONIX_TOOL_DISPATCH ?? "auto").toLowerCase() === "serial";
-      const parallelMaxParsed = Number.parseInt(process.env.REASONIX_PARALLEL_MAX ?? "", 10);
+      const dispatchSerial = (process.env.visionox_TOOL_DISPATCH ?? "auto").toLowerCase() === "serial";
+      const parallelMaxParsed = Number.parseInt(process.env.visionox_PARALLEL_MAX ?? "", 10);
       const parallelMax = Number.isFinite(parallelMaxParsed) && parallelMaxParsed >= 1 ? Math.min(parallelMaxParsed, 16) : 3;
       let callIdx = 0;
       while (callIdx < repairedCalls.length) {

@@ -330,7 +330,7 @@ async function checkOllama(projectRoot) {
     };
   }
   try {
-    const model = meta?.model || process.env.REASONIX_EMBED_MODEL || "nomic-embed-text";
+    const model = meta?.model || process.env.visionox_EMBED_MODEL || "nomic-embed-text";
     const status = await checkOllamaStatus(model);
     if (!status.binaryFound) {
       return {
@@ -373,7 +373,7 @@ async function checkOllama(projectRoot) {
 }
 function readSemanticMeta(projectRoot) {
   try {
-    const raw = readFileSync(join(projectRoot, ".reasonix", "semantic", "index.meta.json"), "utf8");
+    const raw = readFileSync(join(projectRoot, ".visionox", "semantic", "index.meta.json"), "utf8");
     const parsed = JSON.parse(raw);
     return {
       provider: parsed.provider === "openai-compat" ? "openai-compat" : "ollama",

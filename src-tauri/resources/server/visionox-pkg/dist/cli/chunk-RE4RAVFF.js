@@ -177,7 +177,7 @@ var EN = {
     ephemeralHint: "disable session persistence for this run",
     mcpSpecHint: "MCP server spec (repeatable)",
     mcpPrefixHint: "prefix MCP tool names with this string",
-    noConfigHint: "ignore ~/.reasonix/config.json for this run",
+    noConfigHint: "ignore ~/.visionox/config.json for this run",
     presetHintShort: "model bundle \u2014 auto|flash|pro",
     budgetHintShort: "session USD cap",
     transcriptHintShort: "JSONL transcript path",
@@ -267,19 +267,19 @@ var EN = {
       argsHint: "[name]"
     },
     memory: {
-      description: "show / manage pinned memory (REASONIX.md + ~/.reasonix/memory)",
+      description: "show / manage pinned memory (REASONIX.md + ~/.visionox/memory)",
       argsHint: "[list|show <name>|forget <name>|clear <scope> confirm]"
     },
     skill: {
-      description: "list / run user skills (<project>/.reasonix/skills + ~/.reasonix/skills)",
+      description: "list / run user skills (<project>/.visionox/skills + ~/.visionox/skills)",
       argsHint: "[list|show <name>|<name> [args]]"
     },
     hooks: {
-      description: "list active hooks (settings.json under .reasonix/) \xB7 reload re-reads from disk",
+      description: "list active hooks (settings.json under .visionox/) \xB7 reload re-reads from disk",
       argsHint: "[reload]"
     },
     permissions: {
-      description: "show / edit shell allowlist (builtin read-only \xB7 per-project: ~/.reasonix/config.json)",
+      description: "show / edit shell allowlist (builtin read-only \xB7 per-project: ~/.visionox/config.json)",
       argsHint: "[list|add <prefix>|remove <prefix|N>|clear confirm]"
     },
     dashboard: {
@@ -626,7 +626,7 @@ var EN = {
       helpMemoryTitle: "Quick memory:",
       helpMemoryPin: "  #<note>                  append <note> to <project>/REASONIX.md (committable).",
       helpMemoryPinEx: "                             Example: #findByEmail must be case-insensitive",
-      helpMemoryGlobal: "  #g <note>                append <note> to ~/.reasonix/REASONIX.md (global, never committed).",
+      helpMemoryGlobal: "  #g <note>                append <note> to ~/.visionox/REASONIX.md (global, never committed).",
       helpMemoryGlobalEx: "                             Example: #g always run pnpm not npm",
       helpMemoryPinBoth: "                             Both pin into every future session's prefix. Faster than /memory.",
       helpMemoryEscape: "                             Use `\\#text` to send a literal `#text` to the model.",
@@ -664,7 +664,7 @@ var EN = {
       hooksNone: "no hooks configured.",
       hooksDropHint: "drop a settings.json with a `hooks` key into either of:",
       hooksProject: "  \xB7 {path} (project)",
-      hooksProjectFallback: "  \xB7 <project>/.reasonix/settings.json (project)",
+      hooksProjectFallback: "  \xB7 <project>/.visionox/settings.json (project)",
       hooksGlobal: "  \xB7 {path} (global)",
       hooksEvents: "events: PreToolUse, PostToolUse, UserPromptSubmit, Stop",
       hooksExitCodes: "exit 0 = pass \xB7 exit 2 = block (Pre*) \xB7 other = warn",
@@ -747,7 +747,7 @@ var EN = {
       budgetSet: "budget \u2192 ${cap}  (so far: ${spent} \xB7 warns at 80%, refuses next turn at 100% \xB7 /budget off to clear)"
     },
     permissions: {
-      mutateCodeOnly: "/permissions add / remove / clear are only available inside `reasonix code` \u2014 they edit the project-scoped allowlist (`~/.reasonix/config.json` projects[<root>].shellAllowed).",
+      mutateCodeOnly: "/permissions add / remove / clear are only available inside `reasonix code` \u2014 they edit the project-scoped allowlist (`~/.visionox/config.json` projects[<root>].shellAllowed).",
       addUsage: 'usage: /permissions add <prefix>   (multi-token OK: /permissions add "git push origin")',
       addAlready: "\u25B8 already allowed: {prefix}",
       addBuiltin: "\u25B8 `{prefix}` is already in the builtin allowlist \u2014 no per-project entry needed. (Builtin entries are always on.)",
@@ -860,9 +860,9 @@ var EN = {
       logsStopped: "stopped"
     },
     memory: {
-      disabled: "memory is disabled (REASONIX_MEMORY=off in env). Unset the var to re-enable \u2014 no REASONIX.md or ~/.reasonix/memory content will be pinned in the meantime.",
+      disabled: "memory is disabled (REASONIX_MEMORY=off in env). Unset the var to re-enable \u2014 no REASONIX.md or ~/.visionox/memory content will be pinned in the meantime.",
       noRoot: "no working directory on this session \u2014 `/memory` needs a root to resolve REASONIX.md from. (Running in a test harness?)",
-      listEmpty: "no user memories yet. The model can call `remember` to save one, or you can create files by hand in ~/.reasonix/memory/global/ or the per-project subdir.",
+      listEmpty: "no user memories yet. The model can call `remember` to save one, or you can create files by hand in ~/.visionox/memory/global/ or the per-project subdir.",
       listHeader: "User memories ({count}):",
       listFooter: "View body: /memory show <name>   Delete: /memory forget <name>",
       showUsage: "usage: /memory show <name>  or  /memory show <scope>/<name>",
@@ -879,8 +879,8 @@ var EN = {
       noMemory: "no memory pinned in {root}.",
       layers: "Three layers are available:",
       layerProject: "  1. {file} \u2014 committable team memory (in the repo).",
-      layerGlobal: "  2. ~/.reasonix/memory/global/ \u2014 your cross-project private memory.",
-      layerProjectHash: "  3. ~/.reasonix/memory/<project-hash>/ \u2014 this project's private memory.",
+      layerGlobal: "  2. ~/.visionox/memory/global/ \u2014 your cross-project private memory.",
+      layerProjectHash: "  3. ~/.visionox/memory/<project-hash>/ \u2014 this project's private memory.",
       askModel: "Ask the model to `remember` something, or hand-edit files directly.",
       changesNote: "Changes take effect on next /new or launch \u2014 the system prompt is hashed once per session to keep the prefix cache warm.",
       subcommands: "Subcommands: /memory list | /memory show <name> | /memory forget <name> | /memory clear <scope> confirm",
@@ -930,8 +930,8 @@ var EN = {
     },
     skill: {
       listEmpty: "no skills found. Reasonix reads skills from:",
-      listProjectScope: "  \xB7 <project>/.reasonix/skills/<name>/SKILL.md  (or <name>.md)  \u2014 project scope",
-      listGlobalScope: "  \xB7 ~/.reasonix/skills/<name>/SKILL.md  (or <name>.md)  \u2014 global scope",
+      listProjectScope: "  \xB7 <project>/.visionox/skills/<name>/SKILL.md  (or <name>.md)  \u2014 project scope",
+      listGlobalScope: "  \xB7 ~/.visionox/skills/<name>/SKILL.md  (or <name>.md)  \u2014 global scope",
       listProjectOnly: "  (project scope is only active in `reasonix code`)",
       listFrontmatter: "Each file's frontmatter needs at least `name` and `description`.",
       listInvoke: "Invoke a skill with `/skill <name> [args]` or by asking the model to call `run_skill`.",
@@ -1005,7 +1005,7 @@ var EN = {
     allowOnce: "allow once",
     allowOnceDesc: "permit this access; remember the directory for the rest of this session",
     allowAlways: "allow always",
-    allowAlwaysDesc: "remember `{prefix}` for this project (persisted in ~/.reasonix/config.json)",
+    allowAlwaysDesc: "remember `{prefix}` for this project (persisted in ~/.visionox/config.json)",
     deny: "deny",
     denyDesc: "press Tab to add context telling the model why",
     pathLabel: "path",
@@ -1555,7 +1555,7 @@ var zhCN = {
     ephemeralHint: "\u7981\u7528\u672C\u6B21\u8FD0\u884C\u7684\u4F1A\u8BDD\u6301\u4E45\u5316",
     mcpSpecHint: "MCP \u670D\u52A1\u5668\u89C4\u683C\uFF08\u53EF\u91CD\u590D\uFF09",
     mcpPrefixHint: "\u7528\u6B64\u5B57\u7B26\u4E32\u4E3A MCP \u5DE5\u5177\u540D\u6DFB\u52A0\u524D\u7F00",
-    noConfigHint: "\u672C\u6B21\u8FD0\u884C\u5FFD\u7565 ~/.reasonix/config.json",
+    noConfigHint: "\u672C\u6B21\u8FD0\u884C\u5FFD\u7565 ~/.visionox/config.json",
     presetHintShort: "\u6A21\u578B\u7EC4\u5408 \u2014 auto|flash|pro",
     budgetHintShort: "\u4F1A\u8BDD\u7F8E\u5143\u4E0A\u9650",
     transcriptHintShort: "JSONL \u8F6C\u5F55\u7A3F\u8DEF\u5F84",
@@ -1645,19 +1645,19 @@ var zhCN = {
       argsHint: "[name]"
     },
     memory: {
-      description: "\u663E\u793A / \u7BA1\u7406\u56FA\u5B9A\u8BB0\u5FC6\uFF08REASONIX.md + ~/.reasonix/memory\uFF09",
+      description: "\u663E\u793A / \u7BA1\u7406\u56FA\u5B9A\u8BB0\u5FC6\uFF08REASONIX.md + ~/.visionox/memory\uFF09",
       argsHint: "[list|show <name>|forget <name>|clear <scope> confirm]"
     },
     skill: {
-      description: "\u5217\u51FA / \u8FD0\u884C\u7528\u6237\u6280\u80FD\uFF08<project>/.reasonix/skills + ~/.reasonix/skills\uFF09",
+      description: "\u5217\u51FA / \u8FD0\u884C\u7528\u6237\u6280\u80FD\uFF08<project>/.visionox/skills + ~/.visionox/skills\uFF09",
       argsHint: "[list|show <name>|<name> [args]]"
     },
     hooks: {
-      description: "\u5217\u51FA\u6D3B\u8DC3\u7684 hooks\uFF08.reasonix/ \u4E0B\u7684 settings.json\uFF09\xB7 reload \u4ECE\u78C1\u76D8\u91CD\u65B0\u8BFB\u53D6",
+      description: "\u5217\u51FA\u6D3B\u8DC3\u7684 hooks\uFF08.visionox/ \u4E0B\u7684 settings.json\uFF09\xB7 reload \u4ECE\u78C1\u76D8\u91CD\u65B0\u8BFB\u53D6",
       argsHint: "[reload]"
     },
     permissions: {
-      description: "\u663E\u793A / \u7F16\u8F91 shell \u5141\u8BB8\u5217\u8868\uFF08\u5185\u7F6E\u53EA\u8BFB \xB7 \u9879\u76EE\u7EA7\uFF1A~/.reasonix/config.json\uFF09",
+      description: "\u663E\u793A / \u7F16\u8F91 shell \u5141\u8BB8\u5217\u8868\uFF08\u5185\u7F6E\u53EA\u8BFB \xB7 \u9879\u76EE\u7EA7\uFF1A~/.visionox/config.json\uFF09",
       argsHint: "[list|add <prefix>|remove <prefix|N>|clear confirm]"
     },
     dashboard: {
@@ -2008,7 +2008,7 @@ var zhCN = {
       helpMemoryTitle: "\u5FEB\u901F\u8BB0\u5FC6\uFF1A",
       helpMemoryPin: "  #<note>                  \u5C06 <note> \u8FFD\u52A0\u5230 <project>/REASONIX.md\uFF08\u53EF\u63D0\u4EA4\uFF09\u3002",
       helpMemoryPinEx: "                             \u793A\u4F8B\uFF1A#findByEmail \u5FC5\u987B\u533A\u5206\u5927\u5C0F\u5199",
-      helpMemoryGlobal: "  #g <note>                \u5C06 <note> \u8FFD\u52A0\u5230 ~/.reasonix/REASONIX.md\uFF08\u5168\u5C40\uFF0C\u4E0D\u63D0\u4EA4\uFF09\u3002",
+      helpMemoryGlobal: "  #g <note>                \u5C06 <note> \u8FFD\u52A0\u5230 ~/.visionox/REASONIX.md\uFF08\u5168\u5C40\uFF0C\u4E0D\u63D0\u4EA4\uFF09\u3002",
       helpMemoryGlobalEx: "                             \u793A\u4F8B\uFF1A#g \u59CB\u7EC8\u4F7F\u7528 pnpm \u800C\u975E npm",
       helpMemoryPinBoth: "                             \u4E24\u8005\u90FD\u56FA\u5B9A\u5230\u6BCF\u4E2A\u672A\u6765\u4F1A\u8BDD\u7684\u524D\u7F00\u4E2D\u3002\u6BD4 /memory \u66F4\u5FEB\u3002",
       helpMemoryEscape: "                             \u4F7F\u7528 `\\#text` \u53D1\u9001\u5B57\u9762\u91CF `#text` \u7ED9\u6A21\u578B\u3002",
@@ -2046,7 +2046,7 @@ var zhCN = {
       hooksNone: "\u672A\u914D\u7F6E hooks\u3002",
       hooksDropHint: "\u5C06\u5305\u542B `hooks` \u952E\u7684 settings.json \u653E\u5165\u4EE5\u4E0B\u4EFB\u4E00\u4F4D\u7F6E\uFF1A",
       hooksProject: "  \xB7 {path}\uFF08\u9879\u76EE\uFF09",
-      hooksProjectFallback: "  \xB7 <project>/.reasonix/settings.json\uFF08\u9879\u76EE\uFF09",
+      hooksProjectFallback: "  \xB7 <project>/.visionox/settings.json\uFF08\u9879\u76EE\uFF09",
       hooksGlobal: "  \xB7 {path}\uFF08\u5168\u5C40\uFF09",
       hooksEvents: "\u4E8B\u4EF6\uFF1APreToolUse, PostToolUse, UserPromptSubmit, Stop",
       hooksExitCodes: "exit 0 = \u901A\u8FC7 \xB7 exit 2 = \u963B\u6B62\uFF08Pre*\uFF09\xB7 \u5176\u4ED6 = \u8B66\u544A",
@@ -2129,7 +2129,7 @@ var zhCN = {
       budgetSet: "budget \u2192 ${cap}  \uFF08\u8FC4\u4ECA\uFF1A${spent} \xB7 80% \u65F6\u8B66\u544A\uFF0C100% \u65F6\u62D2\u7EDD\u4E0B\u4E00\u8F6E \xB7 /budget off \u6E05\u9664\uFF09"
     },
     permissions: {
-      mutateCodeOnly: "/permissions add / remove / clear \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528 \u2014 \u5B83\u4EEC\u7F16\u8F91\u9879\u76EE\u8303\u56F4\u7684\u5141\u8BB8\u5217\u8868\uFF08`~/.reasonix/config.json` projects[<root>].shellAllowed\uFF09\u3002",
+      mutateCodeOnly: "/permissions add / remove / clear \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528 \u2014 \u5B83\u4EEC\u7F16\u8F91\u9879\u76EE\u8303\u56F4\u7684\u5141\u8BB8\u5217\u8868\uFF08`~/.visionox/config.json` projects[<root>].shellAllowed\uFF09\u3002",
       addUsage: '\u7528\u6CD5\uFF1A/permissions add <prefix>   \uFF08\u591A token \u53EF\u7528\uFF1A/permissions add "git push origin"\uFF09',
       addAlready: "\u25B8 \u5DF2\u5141\u8BB8\uFF1A{prefix}",
       addBuiltin: "\u25B8 `{prefix}` \u5DF2\u5728\u5185\u7F6E\u5141\u8BB8\u5217\u8868\u4E2D \u2014 \u65E0\u9700\u9879\u76EE\u6761\u76EE\u3002\uFF08\u5185\u7F6E\u6761\u76EE\u59CB\u7EC8\u5F00\u542F\u3002\uFF09",
@@ -2242,9 +2242,9 @@ var zhCN = {
       logsStopped: "\u5DF2\u505C\u6B62"
     },
     memory: {
-      disabled: "\u8BB0\u5FC6\u5DF2\u7981\u7528\uFF08\u73AF\u5883\u53D8\u91CF REASONIX_MEMORY=off\uFF09\u3002\u53D6\u6D88\u8BBE\u7F6E\u8BE5\u53D8\u91CF\u4EE5\u91CD\u65B0\u542F\u7528 \u2014 \u6B64\u671F\u95F4\u4E0D\u4F1A\u56FA\u5B9A\u4EFB\u4F55 REASONIX.md \u6216 ~/.reasonix/memory \u5185\u5BB9\u3002",
+      disabled: "\u8BB0\u5FC6\u5DF2\u7981\u7528\uFF08\u73AF\u5883\u53D8\u91CF REASONIX_MEMORY=off\uFF09\u3002\u53D6\u6D88\u8BBE\u7F6E\u8BE5\u53D8\u91CF\u4EE5\u91CD\u65B0\u542F\u7528 \u2014 \u6B64\u671F\u95F4\u4E0D\u4F1A\u56FA\u5B9A\u4EFB\u4F55 REASONIX.md \u6216 ~/.visionox/memory \u5185\u5BB9\u3002",
       noRoot: "\u6B64\u4F1A\u8BDD\u65E0\u5DE5\u4F5C\u76EE\u5F55 \u2014 `/memory` \u9700\u8981\u4E00\u4E2A\u6839\u76EE\u5F55\u6765\u89E3\u6790 REASONIX.md\u3002\uFF08\u5728\u6D4B\u8BD5\u73AF\u5883\u4E2D\u8FD0\u884C\uFF1F\uFF09",
-      listEmpty: "\u5C1A\u65E0\u7528\u6237\u8BB0\u5FC6\u3002\u6A21\u578B\u53EF\u4EE5\u8C03\u7528 `remember` \u4FDD\u5B58\u4E00\u4E2A\uFF0C\u6216\u60A8\u53EF\u4EE5\u5728 ~/.reasonix/memory/global/ \u6216\u9879\u76EE\u5B50\u76EE\u5F55\u4E2D\u624B\u52A8\u521B\u5EFA\u6587\u4EF6\u3002",
+      listEmpty: "\u5C1A\u65E0\u7528\u6237\u8BB0\u5FC6\u3002\u6A21\u578B\u53EF\u4EE5\u8C03\u7528 `remember` \u4FDD\u5B58\u4E00\u4E2A\uFF0C\u6216\u60A8\u53EF\u4EE5\u5728 ~/.visionox/memory/global/ \u6216\u9879\u76EE\u5B50\u76EE\u5F55\u4E2D\u624B\u52A8\u521B\u5EFA\u6587\u4EF6\u3002",
       listHeader: "\u7528\u6237\u8BB0\u5FC6\uFF08{count}\uFF09\uFF1A",
       listFooter: "\u67E5\u770B\u6B63\u6587\uFF1A/memory show <name>   \u5220\u9664\uFF1A/memory forget <name>",
       showUsage: "\u7528\u6CD5\uFF1A/memory show <name>  \u6216  /memory show <scope>/<name>",
@@ -2261,8 +2261,8 @@ var zhCN = {
       noMemory: "\u5728 {root} \u4E2D\u672A\u56FA\u5B9A\u8BB0\u5FC6\u3002",
       layers: "\u53EF\u7528\u7684\u4E09\u4E2A\u5C42\u7EA7\uFF1A",
       layerProject: "  1. {file} \u2014 \u53EF\u63D0\u4EA4\u7684\u56E2\u961F\u8BB0\u5FC6\uFF08\u5728\u4ED3\u5E93\u4E2D\uFF09\u3002",
-      layerGlobal: "  2. ~/.reasonix/memory/global/ \u2014 \u60A8\u7684\u8DE8\u9879\u76EE\u79C1\u6709\u8BB0\u5FC6\u3002",
-      layerProjectHash: "  3. ~/.reasonix/memory/<project-hash>/ \u2014 \u6B64\u9879\u76EE\u7684\u79C1\u6709\u8BB0\u5FC6\u3002",
+      layerGlobal: "  2. ~/.visionox/memory/global/ \u2014 \u60A8\u7684\u8DE8\u9879\u76EE\u79C1\u6709\u8BB0\u5FC6\u3002",
+      layerProjectHash: "  3. ~/.visionox/memory/<project-hash>/ \u2014 \u6B64\u9879\u76EE\u7684\u79C1\u6709\u8BB0\u5FC6\u3002",
       askModel: "\u8BA9\u6A21\u578B `remember` \u67D0\u4E9B\u5185\u5BB9\uFF0C\u6216\u76F4\u63A5\u624B\u7F16\u8F91\u6587\u4EF6\u3002",
       changesNote: "\u66F4\u6539\u5728\u4E0B\u6B21 /new \u6216\u542F\u52A8\u65F6\u751F\u6548 \u2014 \u7CFB\u7EDF\u63D0\u793A\u8BCD\u6BCF\u4F1A\u8BDD\u54C8\u5E0C\u4E00\u6B21\u4EE5\u4FDD\u6301\u524D\u7F00\u7F13\u5B58\u70ED\u5EA6\u3002",
       subcommands: "\u5B50\u547D\u4EE4\uFF1A/memory list | /memory show <name> | /memory forget <name> | /memory clear <scope> confirm",
@@ -2312,8 +2312,8 @@ var zhCN = {
     },
     skill: {
       listEmpty: "\u672A\u627E\u5230\u6280\u80FD\u3002Reasonix \u4ECE\u4EE5\u4E0B\u4F4D\u7F6E\u8BFB\u53D6\u6280\u80FD\uFF1A",
-      listProjectScope: "  \xB7 <project>/.reasonix/skills/<name>/SKILL.md  \uFF08\u6216 <name>.md\uFF09 \u2014 \u9879\u76EE\u8303\u56F4",
-      listGlobalScope: "  \xB7 ~/.reasonix/skills/<name>/SKILL.md  \uFF08\u6216 <name>.md\uFF09 \u2014 \u5168\u5C40\u8303\u56F4",
+      listProjectScope: "  \xB7 <project>/.visionox/skills/<name>/SKILL.md  \uFF08\u6216 <name>.md\uFF09 \u2014 \u9879\u76EE\u8303\u56F4",
+      listGlobalScope: "  \xB7 ~/.visionox/skills/<name>/SKILL.md  \uFF08\u6216 <name>.md\uFF09 \u2014 \u5168\u5C40\u8303\u56F4",
       listProjectOnly: "  \uFF08\u9879\u76EE\u8303\u56F4\u4EC5\u5728 `reasonix code` \u4E2D\u6D3B\u8DC3\uFF09",
       listFrontmatter: "\u6BCF\u4E2A\u6587\u4EF6\u7684 frontmatter \u81F3\u5C11\u9700\u8981 `name` \u548C `description`\u3002",
       listInvoke: "\u4F7F\u7528 `/skill <name> [args]` \u8C03\u7528\u6280\u80FD\uFF0C\u6216\u8BA9\u6A21\u578B\u8C03\u7528 `run_skill`\u3002",
@@ -2387,7 +2387,7 @@ var zhCN = {
     allowOnce: "\u5141\u8BB8\u4E00\u6B21",
     allowOnceDesc: "\u672C\u6B21\u5141\u8BB8\uFF0C\u672C\u4F1A\u8BDD\u5185\u6B64\u76EE\u5F55\u4E0D\u518D\u8BE2\u95EE",
     allowAlways: "\u59CB\u7EC8\u5141\u8BB8",
-    allowAlwaysDesc: "\u8BB0\u4F4F `{prefix}`\uFF0C\u672C\u9879\u76EE\u6C38\u4E45\u5141\u8BB8\uFF08\u5199\u5165 ~/.reasonix/config.json\uFF09",
+    allowAlwaysDesc: "\u8BB0\u4F4F `{prefix}`\uFF0C\u672C\u9879\u76EE\u6C38\u4E45\u5141\u8BB8\uFF08\u5199\u5165 ~/.visionox/config.json\uFF09",
     deny: "\u62D2\u7EDD",
     denyDesc: "\u6309 Tab \u6DFB\u52A0\u8BF4\u660E\uFF0C\u544A\u8BC9\u6A21\u578B\u539F\u56E0",
     pathLabel: "\u8DEF\u5F84",

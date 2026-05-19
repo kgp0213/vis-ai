@@ -22,7 +22,7 @@ import { resolve } from "path";
 var cachedLocale = null;
 function detectLocale() {
   if (cachedLocale) return cachedLocale;
-  const override = (process.env.REASONIX_LANG ?? "").toLowerCase();
+  const override = (process.env.visionox_LANG ?? "").toLowerCase();
   if (override === "zh" || override === "en") {
     cachedLocale = override;
     return cachedLocale;

@@ -44356,9 +44356,9 @@ import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as rea
 import { homedir } from "os";
 import { dirname as dirname2, join as join2 } from "path";
 function slashUsagePath() {
-  const override = process.env.REASONIX_SLASH_USAGE_PATH;
+  const override = process.env.visionox_SLASH_USAGE_PATH;
   if (override) return override;
-  return join2(homedir(), ".reasonix", "slash-usage.json");
+  return join2(homedir(), ".visionox", "slash-usage.json");
 }
 function loadSlashUsage() {
   const path = slashUsagePath();
@@ -50946,7 +50946,7 @@ function detectHashMemory(text) {
 function appendProjectMemory(rootDir, note) {
   return appendBulletToFile(resolveProjectMemoryWritePath(rootDir), note, PROJECT_HEADER);
 }
-var GLOBAL_MEMORY_DIR = ".reasonix";
+var GLOBAL_MEMORY_DIR = ".visionox";
 var GLOBAL_MEMORY_FILE = "REASONIX.md";
 function globalMemoryPath(homeDir = homedir4()) {
   return join5(homeDir, GLOBAL_MEMORY_DIR, GLOBAL_MEMORY_FILE);
@@ -54603,7 +54603,7 @@ import { spawn as spawn2 } from "child_process";
 import { platform } from "os";
 function openUrl(url) {
   if (process.env.CI) return { opened: false, reason: "ci" };
-  if (process.env.REASONIX_NO_OPEN) return { opened: false, reason: "disabled" };
+  if (process.env.visionox_NO_OPEN) return { opened: false, reason: "disabled" };
   const os = platform();
   let cmd;
   let args;
@@ -56161,7 +56161,7 @@ function estimateCost(userText, loop2) {
   return { info: lines.join("\n") };
 }
 var feedback = (_args, loop2, ctx) => {
-  const themeName = resolveThemePreference(loadTheme(), process.env.REASONIX_THEME);
+  const themeName = resolveThemePreference(loadTheme(), process.env.visionox_THEME);
   const diagnostic = buildFeedbackDiagnostic({
     version: VERSION,
     latestVersion: ctx.latestVersion ?? void 0,
@@ -56556,7 +56556,7 @@ var theme = (args) => {
 available: ${themeChoices.join(", ")}` };
   }
   saveTheme(next);
-  const active = resolveThemePreference(next, process.env.REASONIX_THEME);
+  const active = resolveThemePreference(next, process.env.visionox_THEME);
   return { info: `theme saved: ${next}
 active on next launch: ${active}` };
 };
@@ -57616,7 +57616,7 @@ function useSubagent({
 
 // src/cli/ui/App.tsx
 var FLUSH_INTERVAL_MS = (() => {
-  const raw = process.env.REASONIX_FLUSH_MS;
+  const raw = process.env.visionox_FLUSH_MS;
   if (!raw) return 50;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 16 || parsed > 1e3) return 50;
@@ -57677,7 +57677,7 @@ function App(props) {
     [props.session]
   );
   const [themeName, setThemeName] = import_react87.default.useState(
-    () => resolveThemePreference(loadTheme(), process.env.REASONIX_THEME)
+    () => resolveThemePreference(loadTheme(), process.env.visionox_THEME)
   );
   const statusBar = import_react87.default.useMemo(() => {
     const cfg = readConfig().statusBar ?? {};
@@ -60138,7 +60138,7 @@ ${answer}`, "brand");
         saveTheme(outcome.value);
         const active = resolveThemePreference(
           outcome.value,
-          process.env.REASONIX_THEME
+          process.env.visionox_THEME
         );
         setThemeName(active);
         log.pushInfo(`\u25B8 theme saved: ${outcome.value}

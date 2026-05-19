@@ -29,7 +29,7 @@ function buildByteToChar() {
 }
 var cached = null;
 function resolveDataPath() {
-  if (process.env.REASONIX_TOKENIZER_PATH) return process.env.REASONIX_TOKENIZER_PATH;
+  if (process.env.visionox_TOKENIZER_PATH) return process.env.visionox_TOKENIZER_PATH;
   const candidates = [];
   try {
     const here = dirname(fileURLToPath(import.meta.url));

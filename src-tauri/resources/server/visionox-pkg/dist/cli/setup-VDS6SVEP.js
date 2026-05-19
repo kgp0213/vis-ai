@@ -166,12 +166,12 @@ function Wizard({
   const [, setLanguageVersion] = (0, import_react2.useState)(0);
   (0, import_react2.useEffect)(() => onLanguageChange(() => setLanguageVersion((v) => v + 1)), []);
   const [previewTheme, setPreviewTheme] = (0, import_react2.useState)(
-    () => resolveThemePreference(initial?.theme ?? loadTheme(), process.env.REASONIX_THEME)
+    () => resolveThemePreference(initial?.theme ?? loadTheme(), process.env.visionox_THEME)
   );
   const [step, setStep] = (0, import_react2.useState)("language");
   const [data, setData] = (0, import_react2.useState)(() => ({
     language: getLanguage(),
-    theme: resolveThemePreference(initial?.theme ?? loadTheme(), process.env.REASONIX_THEME),
+    theme: resolveThemePreference(initial?.theme ?? loadTheme(), process.env.visionox_THEME),
     apiKey: existingApiKey ?? "",
     preset: initial?.preset ?? "auto",
     selectedCatalog: deriveInitialCatalog(initial?.mcp ?? []),

@@ -53,7 +53,7 @@ function readProjectMemory(rootDir) {
   return { path, content, originalChars, truncated };
 }
 function memoryEnabled() {
-  const env = process.env.REASONIX_MEMORY;
+  const env = process.env.visionox_MEMORY;
   if (env === "off" || env === "false" || env === "0") return false;
   return true;
 }
@@ -203,11 +203,11 @@ var SkillStore = class {
     const out = [];
     if (this.projectRoot) {
       out.push({
-        dir: join2(this.projectRoot, ".reasonix", SKILLS_DIRNAME),
+        dir: join2(this.projectRoot, ".visionox", SKILLS_DIRNAME),
         scope: "project"
       });
     }
-    out.push({ dir: join2(this.homeDir, ".reasonix", SKILLS_DIRNAME), scope: "global" });
+    out.push({ dir: join2(this.homeDir, ".visionox", SKILLS_DIRNAME), scope: "global" });
     return out;
   }
   /** Higher-priority root wins on collision (project > global > builtin); sorted for stable prefix hash. */
@@ -246,7 +246,7 @@ var SkillStore = class {
     if (scope === "project" && !this.projectRoot) {
       return { error: "project scope requires a workspace \u2014 run from `reasonix code`" };
     }
-    const root = scope === "project" ? join2(this.projectRoot ?? "", ".reasonix", SKILLS_DIRNAME) : join2(this.homeDir, ".reasonix", SKILLS_DIRNAME);
+    const root = scope === "project" ? join2(this.projectRoot ?? "", ".visionox", SKILLS_DIRNAME) : join2(this.homeDir, ".visionox", SKILLS_DIRNAME);
     const flat = join2(root, `${name}.md`);
     const folder = join2(root, name, SKILL_FILE);
     if (existsSync2(folder)) {

@@ -444,7 +444,7 @@ var StdioTransport = class {
         const msg = JSON.parse(line);
         this.push(msg);
       } catch {
-        if (process.env.REASONIX_DEBUG_MCP === "1") {
+        if (process.env.visionox_DEBUG_MCP === "1") {
           process.stderr.write(`[mcp-stdio] dropped malformed line: ${line}
 `);
         }

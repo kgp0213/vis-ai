@@ -234,7 +234,7 @@ async function probeOllama(opts = {}) {
 }
 async function embedOllama(text, opts) {
   const baseUrl = opts.baseUrl ?? process.env.OLLAMA_URL ?? DEFAULT_OLLAMA_URL;
-  const model = opts.model ?? process.env.REASONIX_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
+  const model = opts.model ?? process.env.visionox_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const { controller, cleanup } = composeAbort(opts.signal, timeoutMs, "embedding timeout");
   let res;
@@ -644,7 +644,7 @@ function normalizeMeta(meta) {
 }
 
 // src/index/semantic/builder.ts
-var INDEX_DIR_NAME = path3.join(".reasonix", "semantic");
+var INDEX_DIR_NAME = path3.join(".visionox", "semantic");
 function emptyBuckets() {
   return {
     defaultDir: 0,
@@ -836,7 +836,7 @@ function resolveBuildEmbeddingConfig(opts) {
     return {
       provider: "ollama",
       baseUrl: opts.baseUrl ?? process.env.OLLAMA_URL ?? "http://localhost:11434",
-      model: opts.model ?? process.env.REASONIX_EMBED_MODEL ?? "nomic-embed-text",
+      model: opts.model ?? process.env.visionox_EMBED_MODEL ?? "nomic-embed-text",
       timeoutMs: opts.timeoutMs ?? 3e4
     };
   }

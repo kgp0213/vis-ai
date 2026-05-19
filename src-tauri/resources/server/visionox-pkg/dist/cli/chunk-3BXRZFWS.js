@@ -13,7 +13,7 @@ function sanitizeRoot(rootDir) {
   return resolve(rootDir).replace(/[\\/:]+/g, "_").replace(/^_+/, "");
 }
 function storeRoot(rootDir) {
-  return join(homedir(), ".reasonix", "sessions", sanitizeRoot(rootDir), "checkpoints");
+  return join(homedir(), ".visionox", "sessions", sanitizeRoot(rootDir), "checkpoints");
 }
 function indexPath(rootDir) {
   return join(storeRoot(rootDir), "index.json");
@@ -527,13 +527,13 @@ var SLASH_COMMANDS = [
     cmd: "memory",
     group: "extend",
     argsHint: "[list|show <name>|forget <name>|clear <scope> confirm]",
-    summary: "show / manage pinned memory (REASONIX.md + ~/.reasonix/memory)"
+    summary: "show / manage pinned memory (REASONIX.md + ~/.visionox/memory)"
   },
   {
     cmd: "skill",
     group: "extend",
     argsHint: "[list|show <name>|new <name>|<name> [args]]",
-    summary: "list / run / scaffold user skills (<project>/.reasonix/skills + ~/.reasonix/skills)",
+    summary: "list / run / scaffold user skills (<project>/.visionox/skills + ~/.visionox/skills)",
     argCompleter: "skills"
   },
   {
@@ -675,13 +675,13 @@ var SLASH_COMMANDS = [
     cmd: "hooks",
     group: "advanced",
     argsHint: "[reload]",
-    summary: "list active hooks (settings.json under .reasonix/) \xB7 reload re-reads from disk"
+    summary: "list active hooks (settings.json under .visionox/) \xB7 reload re-reads from disk"
   },
   {
     cmd: "permissions",
     group: "advanced",
     argsHint: "[list|add <prefix>|remove <prefix|N>|clear confirm]",
-    summary: "show / edit shell allowlist (builtin read-only \xB7 per-project: ~/.reasonix/config.json)",
+    summary: "show / edit shell allowlist (builtin read-only \xB7 per-project: ~/.visionox/config.json)",
     argCompleter: ["list", "add", "remove", "clear"]
   },
   {

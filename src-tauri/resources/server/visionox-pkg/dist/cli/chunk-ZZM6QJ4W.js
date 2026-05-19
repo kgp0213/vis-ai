@@ -73,7 +73,7 @@ import { performance } from "perf_hooks";
 var marks = [];
 var dumped = false;
 function envFlag() {
-  const v = process.env.REASONIX_PROFILE_STARTUP;
+  const v = process.env.visionox_PROFILE_STARTUP;
   return v === "1" || v === "true" || v === "yes";
 }
 function markPhase(name) {

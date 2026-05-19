@@ -91,7 +91,7 @@ var MemoryStore = class {
   homeDir;
   projectRoot;
   constructor(opts = {}) {
-    this.homeDir = opts.homeDir ?? join(homedir(), ".reasonix");
+    this.homeDir = opts.homeDir ?? join(homedir(), ".visionox");
     this.projectRoot = opts.projectRoot ? resolve(opts.projectRoot) : void 0;
   }
   /** Directory this store writes `scope` files into, creating it if needed. */
@@ -243,7 +243,7 @@ var MemoryStore = class {
 `, "utf8");
   }
 };
-function readGlobalReasonixMemory(homeDir = join(homedir(), ".reasonix")) {
+function readGlobalReasonixMemory(homeDir = join(homedir(), ".visionox")) {
   const path = join(homeDir, "REASONIX.md");
   if (!existsSync(path)) return null;
   let raw;
@@ -262,13 +262,13 @@ function readGlobalReasonixMemory(homeDir = join(homedir(), ".reasonix")) {
 }
 function applyGlobalReasonixMemory(basePrompt, homeDir) {
   if (!memoryEnabled()) return basePrompt;
-  const dir = homeDir ?? join(homedir(), ".reasonix");
+  const dir = homeDir ?? join(homedir(), ".visionox");
   const mem = readGlobalReasonixMemory(dir);
   if (!mem) return basePrompt;
   return [
     basePrompt,
     "",
-    "# Global memory (~/.reasonix/REASONIX.md)",
+    "# Global memory (~/.visionox/REASONIX.md)",
     "",
     "Cross-project notes the user pinned via the `#g` prompt prefix. Treat as authoritative \u2014 same level of trust as project memory.",
     "",
@@ -310,7 +310,7 @@ function applyUserMemory(basePrompt, opts = {}) {
   if (global) {
     parts.push(
       "",
-      "# User memory \u2014 global (~/.reasonix/memory/global/MEMORY.md)",
+      "# User memory \u2014 global (~/.visionox/memory/global/MEMORY.md)",
       "",
       "Cross-project facts and preferences the user has told you in prior sessions. TREAT AS AUTHORITATIVE \u2014 don't re-verify via filesystem or web. One-liners index detail files; call `recall_memory` for full bodies only when the one-liner isn't enough.",
       "",
