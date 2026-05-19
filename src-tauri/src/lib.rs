@@ -10,6 +10,7 @@ use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    window::Color,
 };
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::JobObjects::{
@@ -209,6 +210,7 @@ pub fn run() {
                 WebviewUrl::App("index.html".into()),
             )
             .initialization_script(&init_script)
+            .background_color(Color::from((243u8, 244u8, 246u8)))
             .title("")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
