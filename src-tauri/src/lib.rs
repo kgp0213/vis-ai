@@ -20,6 +20,7 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
 struct JobObject {
     handle: HANDLE,
@@ -108,8 +109,8 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         .arg("--port")
         .arg("0")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .creation_flags(0)
+        .stderr(Stdio::inherit())
+        .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
