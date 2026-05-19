@@ -109,7 +109,7 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         .arg("0")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(0)
         .spawn()?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
