@@ -110,8 +110,8 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         .arg("--port")
         .arg("0")
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .creation_flags(CREATE_NEW_CONSOLE)
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
