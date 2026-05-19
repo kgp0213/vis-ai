@@ -110,12 +110,28 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         .arg("--port")
         .arg("0")
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .creation_flags(CREATE_NEW_CONSOLE)
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
     let reader = std::io::BufReader::new(stdout);
+
+    // Read stderr into a log file for debugging
+    let stderr = child.stderr.take().expect("failed to capture stderr");
+    let exe_dir_clone = exe_dir.clone();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let log_path = exe_dir_clone.join("launcher-stderr.log");
+        let r = std::io::BufReader::new(stderr);
+        for line in r.lines() {
+            if let Ok(l) = line {
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+                    let _ = writeln!(f, "{}", l);
+                }
+            }
+        }
+    });
 
     let mut url = String::new();
     let mut port: u16 = 0;
