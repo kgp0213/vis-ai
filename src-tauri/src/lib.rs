@@ -248,9 +248,9 @@ pub fn run() {
                             std::thread::sleep(Duration::from_millis(200));
                         }
                         if healthy {
-                            println!("[tauri] health check passed — injecting URL");
+                            println!("[tauri] health check passed — navigating to dashboard");
                             let _ = win_for_url.eval(&format!(
-                                "sessionStorage.setItem('DASHBOARD_URL','{url}');",
+                                "window.location.replace('{url}');",
                                 url = url.replace('\'', "\\'"),
                             ));
                         } else {
