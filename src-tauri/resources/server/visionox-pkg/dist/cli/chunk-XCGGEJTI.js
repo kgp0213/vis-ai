@@ -286,19 +286,27 @@ async function embedOpenAICompat(text, opts) {
 async function embedAllOpenAICompat(texts, opts) {
   if (texts.length === 0) return [];
   if (opts.signal?.aborted) throw new EmbeddingError("embedding aborted");
-  const vectors = await requestOpenAICompatEmbeddings([...texts], opts);
-  for (let i = 0; i < vectors.length; i++) {
-    if (vectors[i] === null) {
-      opts.onError?.(
-        i,
-        new EmbeddingError(
-          `provider dropped input ${i} from the batch (model ${opts.model} returned no embedding for it)`
-        )
-      );
-    }
+  const OPENAI_COMPAT_MAX_BATCH = 64;
+  const allVectors = new Array(texts.length);
+  const chunks = [];
+  for (let i = 0; i < texts.length; i += OPENAI_COMPAT_MAX_BATCH) {
+    chunks.push({ start: i, batch: texts.slice(i, i + OPENAI_COMPAT_MAX_BATCH) });
   }
-  opts.onProgress?.(texts.length, texts.length);
-  return vectors;
+  for (const { start, batch } of chunks) {
+    if (opts.signal?.aborted) throw new EmbeddingError("embedding aborted");
+    const vectors = await requestOpenAICompatEmbeddings(batch, opts);
+    for (let j = 0; j < vectors.length; j++) {
+      allVectors[start + j] = vectors[j];
+      if (vectors[j] === null) {
+        opts.onError?.(
+          start + j,
+          new EmbeddingError(`provider dropped input ${start + j} from the batch (model ${opts.model} returned no embedding for it)`)
+        );
+      }
+    }
+    opts.onProgress?.(start + vectors.length, texts.length);
+  }
+  return allVectors;
 }
 async function requestOpenAICompatEmbeddings(input, opts) {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
