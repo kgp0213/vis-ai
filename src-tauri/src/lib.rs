@@ -261,7 +261,7 @@ pub fn run() {
                         if healthy {
                             println!("[tauri] health check passed — injecting URL");
                             let _ = win_for_url.eval(&format!(
-                                "window.__DASHBOARD_URL__='{url}';",
+                                "sessionStorage.setItem('DASHBOARD_URL','{url}');",
                                 url = url.replace('\'', "\\'"),
                             ));
                         } else {
