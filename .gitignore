@@ -48,4 +48,8 @@ icons/
 .env
 .env.local
 .workbuddy/
+
+# Build artifacts (not source)
+package-lock.json
+*.map
 .workbuddy/
