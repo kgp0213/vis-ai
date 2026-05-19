@@ -206,9 +206,9 @@ pub fn run() {
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .initialization_script(&init_script)
+            .initialization_script(init_script)
+            .title("Visionox — Starting...")
             .background_color(Color::from((243u8, 244u8, 246u8)))
-            .title("")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
             .center()
@@ -228,12 +228,7 @@ pub fn run() {
                 match spawn_server_blocking() {
                     Ok((child, url, port, token)) => {
                         println!("[tauri] dashboard ready at {}", url);
-
-                        // Assign child to job object — kernel kills it when
-                        // this process exits regardless of the reason.
                         let _ = job_for_thread.assign(child.id());
-
-                        // Store child handle for cleanup
                         let state = app_handle.state::<Mutex<ServerState>>();
                         {
                             let mut s = state.lock().unwrap();
@@ -241,10 +236,6 @@ pub fn run() {
                             s.url = Some(url.clone());
                             s.job = Some(job_for_thread);
                         }
-
-                        // Poll /api/health via raw TCP until the server truly
-                        // accepts HTTP traffic.  Only then inject the dashboard
-                        // URL so the loading page can navigate.
                         let mut healthy = false;
                         for attempt in 0..15 {
                             if check_health(port, &token) {
@@ -256,7 +247,6 @@ pub fn run() {
                             }
                             std::thread::sleep(Duration::from_millis(200));
                         }
-
                         if healthy {
                             println!("[tauri] health check passed — injecting URL");
                             let _ = win_for_url.eval(&format!(
