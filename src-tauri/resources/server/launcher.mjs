@@ -176,10 +176,10 @@ const [
 
 // ── Load config ─────────────────────────────────────────────────
 loadDotenv();
-const apiKey = loadApiKey();
+let apiKey = loadApiKey();
 const config = readConfig(configPath);
 const model = config.model ?? "deepseek-v4-flash";
-const baseUrl = loadBaseUrl();
+let baseUrl = loadBaseUrl();
 
 // Workspace directory — configurable via config.workspaceDir
 let workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
@@ -645,7 +645,7 @@ const ctx = {
   getModels: () => null,
   getLoopRunStatus: () => null,
   getActiveModal: () => null,
-  hasApiKey: !!apiKey,
+  hasApiKey: () => !!apiKey,
   getLogs: () => logBuffer.slice(),
 
   // ── Setters / actions ──────────────────────────────────────
@@ -686,6 +686,25 @@ const ctx = {
   // Called at the start of submitPrompt so the new conversation uses the new workspace.
   syncWorkspace: async () => {
     const cfg = readConfig(configPath);
+
+    // Reload API key & baseUrl — may have been changed in Settings
+    const newApiKey = loadApiKey();
+    const newBaseUrl = loadBaseUrl();
+    if (newApiKey !== apiKey || newBaseUrl !== baseUrl) {
+      console.error(`[launcher] apiKey/baseUrl changed, recreating client`);
+      apiKey = newApiKey;
+      baseUrl = newBaseUrl;
+      if (apiKey) {
+        client = new DeepSeekClient({ apiKey, baseUrl });
+        loop = buildLoop(client, workspaceDir);
+        console.error(`[launcher] client & loop recreated with new credentials`);
+      } else {
+        client = null;
+        loop = null;
+        console.error(`[launcher] apiKey removed, client cleared`);
+      }
+    }
+
     const configuredDir = resolve(home, cfg.workspaceDir ?? "visionox-workspace");
     if (configuredDir === workspaceDir) return;
 
