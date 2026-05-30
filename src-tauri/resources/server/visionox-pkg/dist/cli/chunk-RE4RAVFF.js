@@ -36,12 +36,12 @@ var EN = {
     replay: "Interactive Ink TUI to scrub through a transcript.",
     diff: "Compare two transcripts in a split-pane Ink TUI.",
     mcp: "Model Context Protocol helpers \u2014 discover servers, test your setup.",
-    version: "Print Reasonix version.",
-    update: "Check for a newer Reasonix and install it.",
+    version: "Print Visionox version.",
+    update: "Check for a newer Visionox and install it.",
     index: "Build (or incrementally refresh) a local semantic search index."
   },
   ui: {
-    welcome: "Run `reasonix` any time to start chatting \u2014 your settings are remembered.",
+    welcome: "Run `visionox` any time to start chatting \u2014 your settings are remembered.",
     taglineChat: "DeepSeek-native agent",
     taglineCode: "DeepSeek-native coding agent",
     taglineSub: "cache-first \xB7 flash-first",
@@ -102,7 +102,7 @@ var EN = {
       footer: "Run /keys for the full keyboard + mouse reference"
     },
     keysReference: {
-      topic: "Reasonix keys + mouse reference",
+      topic: "Visionox keys + mouse reference",
       sections: [
         {
           title: "keyboard",
@@ -223,7 +223,7 @@ var EN = {
     yoloHint: "auto-approve plan checkpoints for this invocation (equivalent to editMode=yolo without mutating config)"
   },
   code: {
-    workspaceConflict: "\u26A0 workspace contains another agent platform's files ({platforms}). Reasonix Code may read them as project content; relaunch with --dir <your-project> if that's not what you want.\n",
+    workspaceConflict: "\u26A0 workspace contains another agent platform's files ({platforms}). Visionox Code may read them as project content; relaunch with --dir <your-project> if that's not what you want.\n",
     systemAppendEmpty: "--system-append is empty \u2014 no prompt text will be appended\n",
     systemAppendFileReadError: 'Error: cannot read --system-append-file "{filePath}": {errorDetails}\n'
   },
@@ -314,7 +314,7 @@ var EN = {
       argsHint: "[N]"
     },
     sessions: { description: "list saved sessions (current marked with \u25B8)" },
-    setup: { description: "reminds you to exit and run `reasonix setup`" },
+    setup: { description: "reminds you to exit and run `visionox setup`" },
     semantic: {
       description: "show semantic_search status \u2014 built? Ollama installed? how to enable"
     },
@@ -384,7 +384,7 @@ var EN = {
   wizard: {
     languageTitle: "Choose your language",
     languageSubtitle: "Detected from your system locale. Switch later via /language.",
-    welcomeTitle: "Welcome to Reasonix.",
+    welcomeTitle: "Welcome to Visionox.",
     apiKeyPrompt: "Paste your DeepSeek API key to get started.",
     apiKeyGetOne: "Get one at: https://platform.deepseek.com/api_keys",
     apiKeySavedLocally: "Saved locally to {path}",
@@ -409,7 +409,7 @@ var EN = {
     },
     reviewLabelTheme: "Theme",
     presetTitle: "Pick a preset",
-    mcpTitle: "Which MCP servers should Reasonix wire up for you?",
+    mcpTitle: "Which MCP servers should Visionox wire up for you?",
     mcpUserArgsHint: "(you'll provide {arg})",
     mcpFooterMulti: "[\u2191\u2193] navigate  \xB7  [Space] toggle  \xB7  [Enter] confirm  \xB7  [Esc] cancel  \xB7  empty = skip",
     mcpArgsTitle: "Configure {name}",
@@ -442,7 +442,7 @@ var EN = {
     footer: "\u2191\u2193 pick \xB7 \u23CE confirm \xB7 esc cancel",
     currentPref: "current preference",
     activeNow: "active now",
-    autoDesc: "use REASONIX_THEME or default"
+    autoDesc: "use VISIONOX_THEME or default"
   },
   planFlow: {
     approveCardTitle: "Approve plan",
@@ -591,13 +591,13 @@ var EN = {
     forcingSummary: "context {before}/{ctxMax} ({pct}%) \u2014 forcing summary from what was gathered. Run /compact, /clear, or /new to reset."
   },
   errors: {
-    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Reasonix caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /new to start fresh, or open /sessions and press [d] to delete this session.",
+    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Visionox caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /new to start fresh, or open /sessions and press [d] to delete this session.",
     contextOverflowTooMany: "too many tokens",
-    auth401: "Authentication failed (DeepSeek 401): {inner}. Your API key is rejected. Fix with `reasonix setup` or `export DEEPSEEK_API_KEY=sk-...`. Get one at https://platform.deepseek.com/api_keys.",
+    auth401: "Authentication failed (DeepSeek 401): {inner}. Your API key is rejected. Fix with `visionox setup` or `export DEEPSEEK_API_KEY=sk-...`. Get one at https://platform.deepseek.com/api_keys.",
     balance402: "Out of balance (DeepSeek 402): {inner}. Top up at https://platform.deepseek.com/top_up \u2014 the panel header shows your balance once it's non-zero.",
     badparam422: "Invalid parameter (DeepSeek 422): {inner}",
     badrequest400: "Bad request (DeepSeek 400): {inner}",
-    deepseek5xxHead: "DeepSeek service unavailable ({status}) \u2014 this is a DeepSeek-side problem, not Reasonix. Already retried 4\xD7 with backoff.",
+    deepseek5xxHead: "DeepSeek service unavailable ({status}) \u2014 this is a DeepSeek-side problem, not Visionox. Already retried 4\xD7 with backoff.",
     deepseek5xxReachable: " DeepSeek's main API answered our health check, but /chat/completions is failing \u2014 partial outage on their side.",
     deepseek5xxUnreachable: " DeepSeek API is unreachable from your network \u2014 could be a wider DS outage or a local network issue.",
     deepseek5xxActionNetwork: " Try: (1) check your network, (2) wait 30s and retry, (3) status page: https://status.deepseek.com.",
@@ -642,8 +642,8 @@ var EN = {
       helpPresetFlash: "  flash  v4-flash always                  cheapest \xB7 predictable per-turn cost",
       helpPresetPro: "  pro    v4-pro   always                  ~3\xD7 flash (5/31) \xB7 hard multi-turn work",
       helpSessionsTitle: "Sessions (auto-enabled by default, named 'default'):",
-      helpSessionCustom: "  reasonix chat --session <name>   use a different named session",
-      helpSessionNone: "  reasonix chat --no-session       disable persistence for this run",
+      helpSessionCustom: "  visionox chat --session <name>   use a different named session",
+      helpSessionNone: "  visionox chat --no-session       disable persistence for this run",
       retryNone: "nothing to retry \u2014 no prior user message in this session's log.",
       retryInfo: '\u25B8 retrying: "{preview}"',
       loopTuiOnly: "/loop is only available in the interactive TUI (not in run/replay).",
@@ -670,16 +670,16 @@ var EN = {
       hooksExitCodes: "exit 0 = pass \xB7 exit 2 = block (Pre*) \xB7 other = warn",
       hooksLoaded: "\u25B8 {count} hook(s) loaded",
       hooksSources: "sources: project={project} \xB7 global={global}",
-      updateCurrent: "current: reasonix {version}",
+      updateCurrent: "current: visionox {version}",
       updateLatestPending: "latest:  (not yet resolved \u2014 background check in flight or offline)",
       updateRetryHint: "triggered a fresh registry fetch \u2014 retry `/update` in a few seconds,",
-      updateRetryHint2: "or run `reasonix update` in another terminal to force it synchronously.",
-      updateLatest: "latest:  reasonix {version}",
+      updateRetryHint2: "or run `visionox update` in another terminal to force it synchronously.",
+      updateLatest: "latest:  visionox {version}",
       updateUpToDate: "you're on the latest. nothing to do.",
-      updateNpxHint: "you're running via npx \u2014 the next `npx reasonix ...` launch will auto-fetch.",
+      updateNpxHint: "you're running via npx \u2014 the next `npx visionox ...` launch will auto-fetch.",
       updateNpxForce: "to force a refresh sooner: `npm cache clean --force`.",
       updateUpgradeHint: "to upgrade, exit this session and run:",
-      updateUpgradeCmd1: "  reasonix update           (interactive, dry-run supported via --dry-run)",
+      updateUpgradeCmd1: "  visionox update           (interactive, dry-run supported via --dry-run)",
       updateUpgradeCmd2: "  {command}   (direct)",
       updateInSessionDisabled: "in-session install is deliberately disabled \u2014 the install spawn would",
       updateInSessionDisabled2: "corrupt this TUI's rendering and Windows can lock the running binary.",
@@ -688,23 +688,23 @@ var EN = {
       statsWillAppear: "will show up in the dashboard once you send a message."
     },
     edits: {
-      undoCodeOnly: "/undo is only available inside `reasonix code` \u2014 chat mode doesn't apply edits.",
-      historyCodeOnly: "/history is only available inside `reasonix code`.",
-      showCodeOnly: "/show is only available inside `reasonix code`.",
-      applyCodeOnly: "/apply is only available inside `reasonix code` (nothing to apply here).",
-      discardCodeOnly: "/discard is only available inside `reasonix code`.",
-      planCodeOnly: "/plan is only available inside `reasonix code` \u2014 chat mode doesn't gate tool writes.",
+      undoCodeOnly: "/undo is only available inside `visionox code` \u2014 chat mode doesn't apply edits.",
+      historyCodeOnly: "/history is only available inside `visionox code`.",
+      showCodeOnly: "/show is only available inside `visionox code`.",
+      applyCodeOnly: "/apply is only available inside `visionox code` (nothing to apply here).",
+      discardCodeOnly: "/discard is only available inside `visionox code`.",
+      planCodeOnly: "/plan is only available inside `visionox code` \u2014 chat mode doesn't gate tool writes.",
       planOn: "\u25B8 plan mode ON \u2014 write tools are gated; the model MUST call `submit_plan` before anything executes. (The model can also call submit_plan on its own for big tasks even when plan mode is off \u2014 this toggle is the stronger, explicit constraint.) Type /plan off to leave.",
       planOff: "\u25B8 plan mode OFF \u2014 write tools are live again. Model can still propose plans autonomously for large tasks.",
-      modeCodeOnly: "/mode is only available inside `reasonix code`.",
+      modeCodeOnly: "/mode is only available inside `visionox code`.",
       modeUsage: "usage: /mode <review|auto|yolo>   (Shift+Tab also cycles)",
       modeYolo: "\u25B8 edit mode: YOLO \u2014 edits AND shell commands auto-run with no prompt. /undo still rolls back edits. Use carefully.",
       modeAuto: "\u25B8 edit mode: AUTO \u2014 edits apply immediately; press u within 5s to undo, or /undo later. Shell commands still ask.",
       modeReview: "\u25B8 edit mode: review \u2014 edits queue for /apply (or y) / /discard (or n)",
-      commitCodeOnly: "/commit is only available inside `reasonix code` (needs a rooted git repo).",
+      commitCodeOnly: "/commit is only available inside `visionox code` (needs a rooted git repo).",
       commitUsage: 'usage: /commit "your commit message"  \u2014 runs `git add -A && git commit -m "\u2026"` in {root}',
-      walkCodeOnly: "/walk is only available inside `reasonix code`.",
-      checkpointCodeOnly: "/checkpoint is only available inside `reasonix code` \u2014 chat mode doesn't apply edits.",
+      walkCodeOnly: "/walk is only available inside `visionox code`.",
+      checkpointCodeOnly: "/checkpoint is only available inside `visionox code` \u2014 chat mode doesn't apply edits.",
       checkpointNone: "no checkpoints yet \u2014 `/checkpoint <name>` snapshots every file the session has touched. Restore later with `/restore <name>`.",
       checkpointHeader: "\u25C8 checkpoints \xB7 {count} stored",
       checkpointRestoreHint: "  /restore <name|id> \xB7 /checkpoint forget <id> \xB7 /checkpoint <name> to add",
@@ -715,14 +715,14 @@ var EN = {
       checkpointSaveUsage: "usage: /checkpoint <name>   (or /checkpoint list to see existing)",
       checkpointSavedEmpty: `\u25B8 checkpoint "{name}" saved ({id}) \u2014 but no files have been touched yet, so it's an empty baseline. Edits made after this point will be revertable.`,
       checkpointSaved: '\u25B8 checkpoint "{name}" saved ({id}) \u2014 {files} file{s}, {size} KB. Restore: /restore {name}',
-      restoreCodeOnly: "/restore is only available inside `reasonix code`.",
+      restoreCodeOnly: "/restore is only available inside `visionox code`.",
       restoreUsage: "usage: /restore <name|id>   (see /checkpoint list for ids)",
       restoreNoMatch: '\u25B8 no checkpoint matching "{target}" \u2014 try /checkpoint list',
       restoreInfo: '\u25B8 restored "{name}" ({id}) from {when}',
       restoreWrote: "  \xB7 wrote back {count} file{s}",
       restoreRemoved: "  \xB7 removed {count} file{s} (didn't exist at checkpoint time)",
       restoreSkipped: "  \u2717 {count} file{s} skipped:",
-      cwdCodeOnly: "/cwd is only available inside `reasonix code`.",
+      cwdCodeOnly: "/cwd is only available inside `visionox code`.",
       cwdUsage: "usage: /cwd <path>   (current root: {current}). Re-points filesystem / shell / memory tools to <path>.",
       cwdUsageNoCurrent: "usage: /cwd <path>   re-points the workspace root to <path>."
     },
@@ -739,7 +739,7 @@ var EN = {
       proDisarmed: "\u25B8 /pro disarmed \u2014 next turn falls back to the current preset",
       proUsage: "usage: /pro       arm pro for the next turn (one-shot, auto-disarms after)\n       /pro off  cancel armed state before the next turn",
       proArmed: "\u25B8 /pro armed \u2014 your NEXT message runs on {model} regardless of preset. Auto-disarms after one turn. Use /preset max for a persistent switch.",
-      budgetNoCap: "no session budget set \u2014 Reasonix will keep going until you stop it. Set one with: /budget <usd>   (e.g. /budget 5)",
+      budgetNoCap: "no session budget set \u2014 Visionox will keep going until you stop it. Set one with: /budget <usd>   (e.g. /budget 5)",
       budgetStatus: "budget: ${spent} of ${cap} ({pct}%) \xB7 /budget off to clear, /budget <usd> to change",
       budgetOff: "budget \u2192 off (no cap)",
       budgetUsage: 'usage: /budget <usd>   (got "{arg}" \u2014 must be a positive number, e.g. /budget 5 or /budget 12.50)',
@@ -747,7 +747,7 @@ var EN = {
       budgetSet: "budget \u2192 ${cap}  (so far: ${spent} \xB7 warns at 80%, refuses next turn at 100% \xB7 /budget off to clear)"
     },
     permissions: {
-      mutateCodeOnly: "/permissions add / remove / clear are only available inside `reasonix code` \u2014 they edit the project-scoped allowlist (`~/.visionox/config.json` projects[<root>].shellAllowed).",
+      mutateCodeOnly: "/permissions add / remove / clear are only available inside `visionox code` \u2014 they edit the project-scoped allowlist (`~/.visionox/config.json` projects[<root>].shellAllowed).",
       addUsage: 'usage: /permissions add <prefix>   (multi-token OK: /permissions add "git push origin")',
       addAlready: "\u25B8 already allowed: {prefix}",
       addBuiltin: "\u25B8 `{prefix}` is already in the builtin allowlist \u2014 no per-project entry needed. (Builtin entries are always on.)",
@@ -818,12 +818,12 @@ var EN = {
       statusDash: "  dash    {url} (open in browser \xB7 /dashboard stop)"
     },
     plans: {
-      noSession: "no session attached \u2014 `/plans` is per-session. Run `reasonix code` in a project to get a session.",
+      noSession: "no session attached \u2014 `/plans` is per-session. Run `visionox code` in a project to get a session.",
       activePlan: "\u25B8 active plan{label} \u2014 {done}/{total} step{s} done \xB7 last touched {when}",
       activeNone: "\u25B8 active plan: (none)",
       noArchives: "no archived plans yet for this session \u2014 they auto-archive when every step is done",
       archivedHeader: "Archived ({count}):",
-      replayNoSession: "no session attached \u2014 `/replay` is per-session. Run `reasonix code` in a project to get a session.",
+      replayNoSession: "no session attached \u2014 `/replay` is per-session. Run `visionox code` in a project to get a session.",
       replayNoArchives: "no archived plans yet for this session \u2014 `/replay` lights up once a plan completes (auto-archives when every step is done).",
       replayInvalidIndex: "invalid index \u2014 `/replay` takes 1..{max} (newest = 1). Use `/plans` to see the list.",
       archivedRow: "  \u2713 {when}  {total} step{s} \xB7 {completion}  {label}",
@@ -839,9 +839,9 @@ var EN = {
       doneAllOk: "\u25B8 marked {count} step(s) done."
     },
     jobs: {
-      codeOnly: "/jobs is only available inside `reasonix code`.",
-      killCodeOnly: "/kill is only available inside `reasonix code`.",
-      logsCodeOnly: "/logs is only available inside `reasonix code`.",
+      codeOnly: "/jobs is only available inside `visionox code`.",
+      killCodeOnly: "/kill is only available inside `visionox code`.",
+      logsCodeOnly: "/logs is only available inside `visionox code`.",
       empty: "\u25C8 jobs \xB7 0 running \xB7 0 total\n  (run_background spawns one \u2014 dev servers, watchers, long-running scripts)",
       header: "\u25C8 jobs \xB7 {running} running \xB7 {total} total",
       footer: "  /logs <id> tail \xB7 /kill <id> SIGTERM \u2192 SIGKILL",
@@ -860,7 +860,7 @@ var EN = {
       logsStopped: "stopped"
     },
     memory: {
-      disabled: "memory is disabled (REASONIX_MEMORY=off in env). Unset the var to re-enable \u2014 no REASONIX.md or ~/.visionox/memory content will be pinned in the meantime.",
+      disabled: "memory is disabled (VISIONOX_MEMORY=off in env). Unset the var to re-enable \u2014 no REASONIX.md or ~/.visionox/memory content will be pinned in the meantime.",
       noRoot: "no working directory on this session \u2014 `/memory` needs a root to resolve REASONIX.md from. (Running in a test harness?)",
       listEmpty: "no user memories yet. The model can call `remember` to save one, or you can create files by hand in ~/.visionox/memory/global/ or the per-project subdir.",
       listHeader: "User memories ({count}):",
@@ -887,15 +887,15 @@ var EN = {
       changesNoteShort: "Changes take effect on next /new or launch. Subcommands: /memory list | show | forget | clear"
     },
     mcp: {
-      noServers: 'no MCP servers attached. Run `reasonix setup` to pick some, or launch with --mcp "<spec>". `reasonix mcp list` shows the catalog.',
+      noServers: 'no MCP servers attached. Run `visionox setup` to pick some, or launch with --mcp "<spec>". `visionox mcp list` shows the catalog.',
       toolsLabel: "  tools     {count}",
       resourcesHint: "`/resource` to browse+read",
       promptsHint: "`/prompt` to browse+fetch",
       awarenessOnly: "Chat mode consumes tools today; resources+prompts are surfaced here for awareness.",
-      catalogHint: "Full catalog: `reasonix mcp list` \xB7 deeper diagnosis: `reasonix mcp inspect <spec>`.",
+      catalogHint: "Full catalog: `visionox mcp list` \xB7 deeper diagnosis: `visionox mcp inspect <spec>`.",
       fallbackServers: "MCP servers ({count}):",
       fallbackTools: "Tools in registry ({count}):",
-      fallbackChange: "To change this set, exit and run `reasonix setup`.",
+      fallbackChange: "To change this set, exit and run `visionox setup`.",
       usageDisableEnable: "usage: /mcp {action} <name>  \xB7  pick a name shown in /mcp (anonymous servers can't be named-toggled).",
       usageReconnect: "usage: /mcp reconnect <name>  \xB7  pick a name shown in /mcp.",
       unknownServer: 'unknown MCP server "{name}". Known: {list}.',
@@ -906,7 +906,7 @@ var EN = {
       tabHint: "tab to switch"
     },
     init: {
-      codeOnly: "/init only works in code mode (it needs filesystem tools).\nRun `reasonix code [path]` to start a session rooted at the\nproject you want to initialize, then run /init.",
+      codeOnly: "/init only works in code mode (it needs filesystem tools).\nRun `visionox code [path]` to start a session rooted at the\nproject you want to initialize, then run /init.",
       exists: "\u25B8 REASONIX.md already exists at {path}",
       existsForce: "  /init force   regenerate from scratch (overwrites)",
       existsEdit: "  Or edit it by hand \u2014 it's just markdown. The current file is",
@@ -929,10 +929,10 @@ var EN = {
       confirmedDetail: " ({endpoint})"
     },
     skill: {
-      listEmpty: "no skills found. Reasonix reads skills from:",
+      listEmpty: "no skills found. Visionox reads skills from:",
       listProjectScope: "  \xB7 <project>/.visionox/skills/<name>/SKILL.md  (or <name>.md)  \u2014 project scope",
       listGlobalScope: "  \xB7 ~/.visionox/skills/<name>/SKILL.md  (or <name>.md)  \u2014 global scope",
-      listProjectOnly: "  (project scope is only active in `reasonix code`)",
+      listProjectOnly: "  (project scope is only active in `visionox code`)",
       listFrontmatter: "Each file's frontmatter needs at least `name` and `description`.",
       listInvoke: "Invoke a skill with `/skill <name> [args]` or by asking the model to call `run_skill`.",
       listHeader: "User skills ({count}):",
@@ -1050,7 +1050,7 @@ var EN = {
     linesBelowPlural: "  \u2193 {count} lines below  (\u2193/j or Space/PgDn)"
   },
   sessionPicker: {
-    header: " \u25C8 REASONIX \xB7 pick a session ",
+    header: " \u25C8 VISIONOX \xB7 pick a session ",
     title: "pick a session \u2014 {workspace}",
     messages: "{count} message",
     messagesPlural: "{count} messages",
@@ -1068,7 +1068,7 @@ var EN = {
     daysAgo: "{count} days ago"
   },
   modelPicker: {
-    header: " \u25C8 REASONIX \xB7 pick a setup ",
+    header: " \u25C8 VISIONOX \xB7 pick a setup ",
     loading: "  \xB7  loading catalog\u2026",
     catalogEmpty: "  \xB7  catalog empty \u2014 using known fallbacks",
     modelsAvailable: "  \xB7  {count} models available",
@@ -1140,7 +1140,7 @@ var EN = {
     turnLabel: "turn"
   },
   startup: {
-    codeRooted: '\u25B8 reasonix code: rooted at {rootDir}, session "{session}" \xB7 {tools} native tool(s){semantic}',
+    codeRooted: '\u25B8 visionox code: rooted at {rootDir}, session "{session}" \xB7 {tools} native tool(s){semantic}',
     ephemeral: "(ephemeral)",
     semanticOn: " \xB7 semantic_search on"
   },
@@ -1270,7 +1270,7 @@ var EN = {
     slow: "slow \xB7 {ms}ms",
     verySlow: "very slow \xB7 {ms}ms",
     slowToast: "\u26A0 MCP `{name}` slow \xB7 {seconds}s p95 over the last {sampleSize} calls",
-    emptyHint: "\u2139 no MCP servers configured \u2014 try: `reasonix setup` to re-pick, or `reasonix mcp install filesystem`"
+    emptyHint: "\u2139 no MCP servers configured \u2014 try: `visionox setup` to re-pick, or `visionox mcp install filesystem`"
   },
   denyContextInput: {
     description: "Tell the agent why you denied this. The next attempt will see your reason as additional context."
@@ -1310,8 +1310,8 @@ var EN = {
     notInstalled: "not installed: {name}",
     bridged: "\u2713 installed {name} - bridged",
     bridgeFailed: "\u25B2 installed {name} - bridge failed: {reason}",
-    bridgeReloadFailed: "\u2713 installed {name} - restart `reasonix code` to bridge (reload failed: {message})",
-    restartBridge: "\u2713 installed {name} - restart `reasonix code` to bridge",
+    bridgeReloadFailed: "\u2713 installed {name} - restart `visionox code` to bridge (reload failed: {message})",
+    restartBridge: "\u2713 installed {name} - restart `visionox code` to bridge",
     needsEnv: "  \xB7  needs env: {env}",
     badgeOfficial: "[off]",
     badgeSmithery: "[smt]",
@@ -1323,7 +1323,7 @@ var EN = {
   },
   mcpBrowser: {
     title: "\u25C8 MCP browser",
-    empty: "No MCP servers attached. Run `reasonix setup` to pick some, or launch with --mcp.",
+    empty: "No MCP servers attached. Run `visionox setup` to pick some, or launch with --mcp.",
     serverCount: "{count} server{s}",
     footer: "\u2191\u2193 pick \xB7 [r] reconnect \xB7 [d] disable \xB7 esc quit"
   },
@@ -1336,12 +1336,12 @@ var EN = {
     initDetail: "initialise \u2192 tools/list \u2192 resources/list",
     reconnectDetail: "tearing down \xB7 re-handshake \xB7 listing tools",
     disabledDetail: "via /mcp disable {name}",
-    failedSetupHint: "\u2192 run `reasonix setup` to remove this entry, or fix the underlying issue (missing npm package, network, etc.).",
-    failedSetupConfigHint: "\u2192 run `reasonix setup` to remove broken entries from your saved config."
+    failedSetupHint: "\u2192 run `visionox setup` to remove this entry, or fix the underlying issue (missing npm package, network, etc.).",
+    failedSetupConfigHint: "\u2192 run `visionox setup` to remove broken entries from your saved config."
   },
   checkpointPicker: {
     title: "restore a checkpoint \u2014 {workspace}",
-    header: " \u25C8 REASONIX \xB7 pick a checkpoint ",
+    header: " \u25C8 VISIONOX \xB7 pick a checkpoint ",
     empty: "  no checkpoints in this workspace yet - see /checkpoint to make one",
     more: "     \u2026 {hidden} more",
     footer: "  \u2191\u2193 pick  \xB7  \u23CE restore  \xB7  [d] forget  \xB7  esc quit",
@@ -1357,7 +1357,7 @@ var EN = {
     rejectHint: "Drops the proposal. Model continues with the original remaining steps."
   },
   diffApp: {
-    title: "reasonix diff",
+    title: "visionox diff",
     turnLabel: "turn {turn} ({current}/{total})",
     turnsAligned: "{count} turns aligned",
     paneEmpty: "(no records on this side for this turn)",
@@ -1417,12 +1417,12 @@ var zhCN = {
     replay: "\u4EA4\u4E92\u5F0F Ink TUI\uFF0C\u7528\u4E8E\u6D4F\u89C8\u8F6C\u5F55\u7A3F\u3002",
     diff: "\u5728\u5206\u680F Ink TUI \u4E2D\u6BD4\u8F83\u4E24\u4E2A\u8F6C\u5F55\u7A3F\u3002",
     mcp: "\u6A21\u578B\u4E0A\u4E0B\u6587\u534F\u8BAE (MCP) \u52A9\u624B \u2014 \u53D1\u73B0\u670D\u52A1\u5668\uFF0C\u6D4B\u8BD5\u60A8\u7684\u8BBE\u7F6E\u3002",
-    version: "\u6253\u5370 Reasonix \u7248\u672C\u3002",
-    update: "\u68C0\u67E5\u8F83\u65B0\u7248\u672C\u7684 Reasonix \u5E76\u5B89\u88C5\u3002",
+    version: "\u6253\u5370 Visionox \u7248\u672C\u3002",
+    update: "\u68C0\u67E5\u8F83\u65B0\u7248\u672C\u7684 Visionox \u5E76\u5B89\u88C5\u3002",
     index: "\u6784\u5EFA\uFF08\u6216\u589E\u91CF\u5237\u65B0\uFF09\u672C\u5730\u8BED\u4E49\u641C\u7D22\u7D22\u5F15\u3002"
   },
   ui: {
-    welcome: "\u968F\u65F6\u8FD0\u884C `reasonix` \u5F00\u59CB\u804A\u5929 \u2014 \u60A8\u7684\u8BBE\u7F6E\u5C06\u88AB\u8BB0\u4F4F\u3002",
+    welcome: "\u968F\u65F6\u8FD0\u884C `visionox` \u5F00\u59CB\u804A\u5929 \u2014 \u60A8\u7684\u8BBE\u7F6E\u5C06\u88AB\u8BB0\u4F4F\u3002",
     taglineChat: "DeepSeek \u539F\u751F\u667A\u80FD\u4F53",
     taglineCode: "DeepSeek \u539F\u751F\u4EE3\u7801\u667A\u80FD\u4F53",
     taglineSub: "\u7F13\u5B58\u4F18\u5148 \xB7 Flash \u4F18\u5148",
@@ -1480,7 +1480,7 @@ var zhCN = {
       footer: "\u8FD0\u884C /keys \u67E5\u770B\u5B8C\u6574\u952E\u76D8 + \u9F20\u6807\u53C2\u8003"
     },
     keysReference: {
-      topic: "Reasonix \u952E\u76D8 + \u9F20\u6807\u53C2\u8003",
+      topic: "Visionox \u952E\u76D8 + \u9F20\u6807\u53C2\u8003",
       sections: [
         {
           title: "\u952E\u76D8",
@@ -1601,7 +1601,7 @@ var zhCN = {
     yoloHint: "\u81EA\u52A8\u6279\u51C6\u672C\u6B21\u8C03\u7528\u7684\u8BA1\u5212\u68C0\u67E5\u70B9\uFF08\u7B49\u540C\u4E8E editMode=yolo\uFF0C\u4F46\u4E0D\u4FEE\u6539\u914D\u7F6E\u6587\u4EF6\uFF09"
   },
   code: {
-    workspaceConflict: "\u26A0 \u5DE5\u4F5C\u533A\u5305\u542B\u53E6\u4E00\u4E2A\u667A\u80FD\u4F53\u5E73\u53F0\u7684\u6587\u4EF6 ({platforms})\u3002Reasonix Code \u53EF\u80FD\u4F1A\u5C06\u5176\u4F5C\u4E3A\u9879\u76EE\u5185\u5BB9\u8BFB\u53D6\uFF1B\u5982\u679C\u4E0D\u662F\u60A8\u60F3\u8981\u7684\uFF0C\u8BF7\u4F7F\u7528 --dir <your-project> \u91CD\u65B0\u542F\u52A8\u3002\n",
+    workspaceConflict: "\u26A0 \u5DE5\u4F5C\u533A\u5305\u542B\u53E6\u4E00\u4E2A\u667A\u80FD\u4F53\u5E73\u53F0\u7684\u6587\u4EF6 ({platforms})\u3002Visionox Code \u53EF\u80FD\u4F1A\u5C06\u5176\u4F5C\u4E3A\u9879\u76EE\u5185\u5BB9\u8BFB\u53D6\uFF1B\u5982\u679C\u4E0D\u662F\u60A8\u60F3\u8981\u7684\uFF0C\u8BF7\u4F7F\u7528 --dir <your-project> \u91CD\u65B0\u542F\u52A8\u3002\n",
     systemAppendEmpty: "--system-append \u4E3A\u7A7A \u2014 \u4E0D\u4F1A\u8FFD\u52A0\u4EFB\u4F55\u63D0\u793A\u6587\u672C\n",
     systemAppendFileReadError: '\u9519\u8BEF\uFF1A\u65E0\u6CD5\u8BFB\u53D6 --system-append-file "{filePath}"\uFF1A{errorDetails}\n'
   },
@@ -1694,7 +1694,7 @@ var zhCN = {
       argsHint: "[N]"
     },
     sessions: { description: "\u5217\u51FA\u5DF2\u4FDD\u5B58\u7684\u4F1A\u8BDD\uFF08\u5F53\u524D\u6807\u8BB0\u4E3A \u25B8\uFF09" },
-    setup: { description: "\u63D0\u9192\u60A8\u9000\u51FA\u5E76\u8FD0\u884C `reasonix setup`" },
+    setup: { description: "\u63D0\u9192\u60A8\u9000\u51FA\u5E76\u8FD0\u884C `visionox setup`" },
     semantic: {
       description: "\u663E\u793A semantic_search \u72B6\u6001 \u2014 \u5DF2\u6784\u5EFA\uFF1FOllama \u5DF2\u5B89\u88C5\uFF1F\u5982\u4F55\u542F\u7528"
     },
@@ -1766,7 +1766,7 @@ var zhCN = {
   wizard: {
     languageTitle: "\u9009\u62E9\u8BED\u8A00",
     languageSubtitle: "\u5DF2\u6839\u636E\u7CFB\u7EDF\u8BED\u8A00\u81EA\u52A8\u9009\u4E2D\u3002\u4E4B\u540E\u53EF\u7528 /language \u5207\u6362\u3002",
-    welcomeTitle: "\u6B22\u8FCE\u4F7F\u7528 Reasonix\u3002",
+    welcomeTitle: "\u6B22\u8FCE\u4F7F\u7528 Visionox\u3002",
     apiKeyPrompt: "\u7C98\u8D34\u4F60\u7684 DeepSeek API key \u5F00\u59CB\u4F7F\u7528\u3002",
     apiKeyGetOne: "\u5728\u6B64\u83B7\u53D6\uFF1Ahttps://platform.deepseek.com/api_keys",
     apiKeySavedLocally: "\u4FDD\u5B58\u5728\u672C\u5730\uFF1A{path}",
@@ -1791,7 +1791,7 @@ var zhCN = {
     },
     reviewLabelTheme: "\u4E3B\u9898",
     presetTitle: "\u9009\u62E9\u9884\u8BBE",
-    mcpTitle: "Reasonix \u8981\u4E3A\u4F60\u63A5\u5165\u54EA\u4E9B MCP \u670D\u52A1\u5668\uFF1F",
+    mcpTitle: "Visionox \u8981\u4E3A\u4F60\u63A5\u5165\u54EA\u4E9B MCP \u670D\u52A1\u5668\uFF1F",
     mcpUserArgsHint: "\uFF08\u9700\u8981\u4F60\u63D0\u4F9B {arg}\uFF09",
     mcpFooterMulti: "[\u2191\u2193] \u79FB\u52A8  \xB7  [\u7A7A\u683C] \u9009\u62E9  \xB7  [Enter] \u786E\u8BA4  \xB7  [Esc] \u53D6\u6D88  \xB7  \u5168\u4E0D\u9009 = \u8DF3\u8FC7",
     mcpArgsTitle: "\u914D\u7F6E {name}",
@@ -1824,7 +1824,7 @@ var zhCN = {
     footer: "\u2191\u2193 \u9009\u62E9 \xB7 \u23CE \u786E\u8BA4 \xB7 Esc \u53D6\u6D88",
     currentPref: "\u5F53\u524D\u504F\u597D",
     activeNow: "\u5F53\u524D\u751F\u6548",
-    autoDesc: "\u4F7F\u7528 REASONIX_THEME \u6216\u9ED8\u8BA4\u4E3B\u9898"
+    autoDesc: "\u4F7F\u7528 VISIONOX_THEME \u6216\u9ED8\u8BA4\u4E3B\u9898"
   },
   planFlow: {
     approveCardTitle: "\u786E\u8BA4\u8BA1\u5212",
@@ -1973,13 +1973,13 @@ var zhCN = {
     forcingSummary: "\u4E0A\u4E0B\u6587 {before}/{ctxMax}\uFF08{pct}%\uFF09\u2014 \u57FA\u4E8E\u5DF2\u6536\u96C6\u5230\u7684\u5185\u5BB9\u5F3A\u5236\u603B\u7ED3\u3002\u8BF7\u8FD0\u884C /compact\u3001/clear \u6216 /new \u91CD\u7F6E\u3002"
   },
   errors: {
-    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Reasonix \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /new \u91CD\u65B0\u5F00\u59CB\uFF0C\u6216\u6253\u5F00 /sessions \u9009\u4E2D\u540E\u6309 [d] \u5220\u9664\u8BE5\u4F1A\u8BDD\u3002",
+    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Visionox \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /new \u91CD\u65B0\u5F00\u59CB\uFF0C\u6216\u6253\u5F00 /sessions \u9009\u4E2D\u540E\u6309 [d] \u5220\u9664\u8BE5\u4F1A\u8BDD\u3002",
     contextOverflowTooMany: "tokens \u6570\u91CF\u8FC7\u591A",
-    auth401: "\u8BA4\u8BC1\u5931\u8D25\uFF08DeepSeek 401\uFF09\uFF1A{inner}\u3002\u4F60\u7684 API key \u88AB\u62D2\u7EDD\u3002\u8FD0\u884C `reasonix setup` \u6216 `export DEEPSEEK_API_KEY=sk-...` \u4FEE\u590D\u3002\u5728 https://platform.deepseek.com/api_keys \u83B7\u53D6 key\u3002",
+    auth401: "\u8BA4\u8BC1\u5931\u8D25\uFF08DeepSeek 401\uFF09\uFF1A{inner}\u3002\u4F60\u7684 API key \u88AB\u62D2\u7EDD\u3002\u8FD0\u884C `visionox setup` \u6216 `export DEEPSEEK_API_KEY=sk-...` \u4FEE\u590D\u3002\u5728 https://platform.deepseek.com/api_keys \u83B7\u53D6 key\u3002",
     balance402: "\u4F59\u989D\u4E0D\u8DB3\uFF08DeepSeek 402\uFF09\uFF1A{inner}\u3002\u5728 https://platform.deepseek.com/top_up \u5145\u503C \u2014 \u4F59\u989D\u975E\u96F6\u65F6\u9762\u677F\u9876\u680F\u4F1A\u663E\u793A\u3002",
     badparam422: "\u53C2\u6570\u9519\u8BEF\uFF08DeepSeek 422\uFF09\uFF1A{inner}",
     badrequest400: "\u8BF7\u6C42\u9519\u8BEF\uFF08DeepSeek 400\uFF09\uFF1A{inner}",
-    deepseek5xxHead: "DeepSeek \u670D\u52A1\u4E0D\u53EF\u7528\uFF08{status}\uFF09 \u2014 \u8FD9\u662F DeepSeek \u670D\u52A1\u7AEF\u95EE\u9898\uFF0C\u4E0D\u662F Reasonix \u6545\u969C\u3002\u5DF2\u6309\u6307\u6570\u9000\u907F\u91CD\u8BD5 4 \u6B21\u3002",
+    deepseek5xxHead: "DeepSeek \u670D\u52A1\u4E0D\u53EF\u7528\uFF08{status}\uFF09 \u2014 \u8FD9\u662F DeepSeek \u670D\u52A1\u7AEF\u95EE\u9898\uFF0C\u4E0D\u662F Visionox \u6545\u969C\u3002\u5DF2\u6309\u6307\u6570\u9000\u907F\u91CD\u8BD5 4 \u6B21\u3002",
     deepseek5xxReachable: " DeepSeek \u4E3B API \u5065\u5EB7\u68C0\u67E5\u901A\u8FC7\uFF0C\u4F46 /chat/completions \u5728\u6302 \u2014 \u4ED6\u4EEC\u90A3\u8FB9\u90E8\u5206\u670D\u52A1\u5F02\u5E38\u3002",
     deepseek5xxUnreachable: " \u65E0\u6CD5\u4ECE\u4F60\u7684\u7F51\u7EDC\u8BBF\u95EE DeepSeek API \u2014 \u53EF\u80FD\u662F DS \u6574\u4F53\u6545\u969C\uFF0C\u4E5F\u53EF\u80FD\u662F\u672C\u5730\u7F51\u7EDC\u95EE\u9898\u3002",
     deepseek5xxActionNetwork: " \u5EFA\u8BAE\uFF1A(1) \u68C0\u67E5\u7F51\u7EDC\uFF0C(2) \u7B49 30 \u79D2\u540E\u91CD\u8BD5\uFF0C(3) \u67E5\u770B\u72B6\u6001\u9875 https://status.deepseek.com\u3002",
@@ -2024,8 +2024,8 @@ var zhCN = {
       helpPresetFlash: "  flash  \u59CB\u7EC8\u4F7F\u7528 v4-flash                  \u6700\u4FBF\u5B9C \xB7 \u6BCF\u8F6E\u6210\u672C\u53EF\u9884\u6D4B",
       helpPresetPro: "  pro    \u59CB\u7EC8\u4F7F\u7528 v4-pro                     \u7EA6 3 \u500D flash \xB7 \u7528\u4E8E\u56F0\u96BE\u7684\u591A\u8F6E\u5DE5\u4F5C",
       helpSessionsTitle: "\u4F1A\u8BDD\uFF08\u9ED8\u8BA4\u81EA\u52A8\u542F\u7528\uFF0C\u547D\u540D\u4E3A 'default'\uFF09\uFF1A",
-      helpSessionCustom: "  reasonix chat --session <name>   \u4F7F\u7528\u4E0D\u540C\u7684\u547D\u540D\u4F1A\u8BDD",
-      helpSessionNone: "  reasonix chat --no-session       \u7981\u7528\u672C\u6B21\u8FD0\u884C\u7684\u6301\u4E45\u5316",
+      helpSessionCustom: "  visionox chat --session <name>   \u4F7F\u7528\u4E0D\u540C\u7684\u547D\u540D\u4F1A\u8BDD",
+      helpSessionNone: "  visionox chat --no-session       \u7981\u7528\u672C\u6B21\u8FD0\u884C\u7684\u6301\u4E45\u5316",
       retryNone: "\u6CA1\u6709\u53EF\u91CD\u8BD5\u7684\u5185\u5BB9 \u2014 \u6B64\u4F1A\u8BDD\u65E5\u5FD7\u4E2D\u6CA1\u6709\u5148\u524D\u7684\u7528\u6237\u6D88\u606F\u3002",
       retryInfo: '\u25B8 \u91CD\u8BD5\u4E2D\uFF1A"{preview}"',
       loopTuiOnly: "/loop \u4EC5\u5728\u4EA4\u4E92\u5F0F TUI \u4E2D\u53EF\u7528\uFF08\u4E0D\u5728 run/replay \u4E2D\uFF09\u3002",
@@ -2052,16 +2052,16 @@ var zhCN = {
       hooksExitCodes: "exit 0 = \u901A\u8FC7 \xB7 exit 2 = \u963B\u6B62\uFF08Pre*\uFF09\xB7 \u5176\u4ED6 = \u8B66\u544A",
       hooksLoaded: "\u25B8 \u5DF2\u52A0\u8F7D {count} \u4E2A hook",
       hooksSources: "\u6765\u6E90\uFF1Aproject={project} \xB7 global={global}",
-      updateCurrent: "\u5F53\u524D\uFF1Areasonix {version}",
+      updateCurrent: "\u5F53\u524D\uFF1Avisionox {version}",
       updateLatestPending: "\u6700\u65B0\uFF1A\uFF08\u5C1A\u672A\u89E3\u6790 \u2014 \u540E\u53F0\u68C0\u67E5\u8FDB\u884C\u4E2D\u6216\u79BB\u7EBF\uFF09",
       updateRetryHint: "\u5DF2\u89E6\u53D1\u65B0\u7684\u6CE8\u518C\u8868\u83B7\u53D6 \u2014 \u51E0\u79D2\u540E\u91CD\u8BD5 `/update`\uFF0C",
-      updateRetryHint2: "\u6216\u5728\u53E6\u4E00\u4E2A\u7EC8\u7AEF\u8FD0\u884C `reasonix update` \u5F3A\u5236\u540C\u6B65\u6267\u884C\u3002",
-      updateLatest: "\u6700\u65B0\uFF1Areasonix {version}",
+      updateRetryHint2: "\u6216\u5728\u53E6\u4E00\u4E2A\u7EC8\u7AEF\u8FD0\u884C `visionox update` \u5F3A\u5236\u540C\u6B65\u6267\u884C\u3002",
+      updateLatest: "\u6700\u65B0\uFF1Avisionox {version}",
       updateUpToDate: "\u60A8\u5DF2\u662F\u6700\u65B0\u7248\u672C\u3002\u65E0\u9700\u64CD\u4F5C\u3002",
-      updateNpxHint: "\u60A8\u6B63\u5728\u901A\u8FC7 npx \u8FD0\u884C \u2014 \u4E0B\u6B21 `npx reasonix ...` \u542F\u52A8\u65F6\u5C06\u81EA\u52A8\u83B7\u53D6\u3002",
+      updateNpxHint: "\u60A8\u6B63\u5728\u901A\u8FC7 npx \u8FD0\u884C \u2014 \u4E0B\u6B21 `npx visionox ...` \u542F\u52A8\u65F6\u5C06\u81EA\u52A8\u83B7\u53D6\u3002",
       updateNpxForce: "\u8981\u5F3A\u5236\u5237\u65B0\uFF1A`npm cache clean --force`\u3002",
       updateUpgradeHint: "\u8981\u5347\u7EA7\uFF0C\u8BF7\u9000\u51FA\u6B64\u4F1A\u8BDD\u5E76\u8FD0\u884C\uFF1A",
-      updateUpgradeCmd1: "  reasonix update           \uFF08\u4EA4\u4E92\u5F0F\uFF0C\u652F\u6301 --dry-run \u9884\u89C8\uFF09",
+      updateUpgradeCmd1: "  visionox update           \uFF08\u4EA4\u4E92\u5F0F\uFF0C\u652F\u6301 --dry-run \u9884\u89C8\uFF09",
       updateUpgradeCmd2: "  {command}   \uFF08\u76F4\u63A5\u5B89\u88C5\uFF09",
       updateInSessionDisabled: "\u4F1A\u8BDD\u5185\u5B89\u88C5\u88AB\u523B\u610F\u7981\u7528 \u2014 \u5B89\u88C5\u547D\u4EE4\u4F1A",
       updateInSessionDisabled2: "\u7834\u574F\u6B64 TUI \u7684\u6E32\u67D3\uFF0C\u4E14 Windows \u53EF\u80FD\u9501\u5B9A\u8FD0\u884C\u4E2D\u7684\u4E8C\u8FDB\u5236\u6587\u4EF6\u3002",
@@ -2070,23 +2070,23 @@ var zhCN = {
       statsWillAppear: "\u5C06\u5728\u60A8\u53D1\u9001\u6D88\u606F\u540E\u663E\u793A\u5728\u4EEA\u8868\u677F\u4E2D\u3002"
     },
     edits: {
-      undoCodeOnly: "/undo \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528 \u2014 \u804A\u5929\u6A21\u5F0F\u4E0D\u5E94\u7528\u7F16\u8F91\u3002",
-      historyCodeOnly: "/history \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
-      showCodeOnly: "/show \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
-      applyCodeOnly: "/apply \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\uFF08\u6B64\u5904\u65E0\u5185\u5BB9\u53EF\u5E94\u7528\uFF09\u3002",
-      discardCodeOnly: "/discard \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
-      planCodeOnly: "/plan \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528 \u2014 \u804A\u5929\u6A21\u5F0F\u4E0D\u9650\u5236\u5DE5\u5177\u5199\u5165\u3002",
+      undoCodeOnly: "/undo \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528 \u2014 \u804A\u5929\u6A21\u5F0F\u4E0D\u5E94\u7528\u7F16\u8F91\u3002",
+      historyCodeOnly: "/history \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
+      showCodeOnly: "/show \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
+      applyCodeOnly: "/apply \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\uFF08\u6B64\u5904\u65E0\u5185\u5BB9\u53EF\u5E94\u7528\uFF09\u3002",
+      discardCodeOnly: "/discard \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
+      planCodeOnly: "/plan \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528 \u2014 \u804A\u5929\u6A21\u5F0F\u4E0D\u9650\u5236\u5DE5\u5177\u5199\u5165\u3002",
       planOn: "\u25B8 \u8BA1\u5212\u6A21\u5F0F\u5F00\u542F \u2014 \u5199\u5165\u5DE5\u5177\u88AB\u9650\u5236\uFF1B\u6A21\u578B\u5FC5\u987B\u5148\u8C03\u7528 `submit_plan` \u624D\u80FD\u6267\u884C\u4EFB\u4F55\u64CD\u4F5C\u3002\uFF08\u6A21\u578B\u4E5F\u53EF\u4EE5\u5728\u8BA1\u5212\u6A21\u5F0F\u5173\u95ED\u65F6\u81EA\u4E3B\u8C03\u7528 submit_plan \u5904\u7406\u5927\u578B\u4EFB\u52A1 \u2014 \u6B64\u5F00\u5173\u662F\u66F4\u5F3A\u7684\u663E\u5F0F\u7EA6\u675F\u3002\uFF09\u8F93\u5165 /plan off \u9000\u51FA\u3002",
       planOff: "\u25B8 \u8BA1\u5212\u6A21\u5F0F\u5173\u95ED \u2014 \u5199\u5165\u5DE5\u5177\u518D\u6B21\u53EF\u7528\u3002\u6A21\u578B\u4ECD\u53EF\u4E3A\u5927\u578B\u4EFB\u52A1\u81EA\u4E3B\u63D0\u51FA\u8BA1\u5212\u3002",
-      modeCodeOnly: "/mode \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
+      modeCodeOnly: "/mode \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
       modeUsage: "\u7528\u6CD5\uFF1A/mode <review|auto|yolo>   \uFF08Shift+Tab \u4E5F\u53EF\u5FAA\u73AF\uFF09",
       modeYolo: "\u25B8 \u7F16\u8F91\u6A21\u5F0F\uFF1AYOLO \u2014 \u7F16\u8F91\u548C Shell \u547D\u4EE4\u81EA\u52A8\u8FD0\u884C\uFF0C\u65E0\u63D0\u793A\u3002/undo \u4ECD\u53EF\u56DE\u6EDA\u7F16\u8F91\u3002\u8BF7\u8C28\u614E\u4F7F\u7528\u3002",
       modeAuto: "\u25B8 \u7F16\u8F91\u6A21\u5F0F\uFF1AAUTO \u2014 \u7F16\u8F91\u7ACB\u5373\u5E94\u7528\uFF1B\u5728 5 \u79D2\u5185\u6309 u \u64A4\u6D88\uFF0C\u6216\u7A0D\u540E\u4F7F\u7528 /undo\u3002Shell \u547D\u4EE4\u4ECD\u4F1A\u8BE2\u95EE\u3002",
       modeReview: "\u25B8 \u7F16\u8F91\u6A21\u5F0F\uFF1Areview \u2014 \u7F16\u8F91\u6392\u961F\u7B49\u5F85 /apply\uFF08\u6216 y\uFF09/ /discard\uFF08\u6216 n\uFF09",
-      commitCodeOnly: "/commit \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\uFF08\u9700\u8981\u6709\u6839\u7684 git \u4ED3\u5E93\uFF09\u3002",
+      commitCodeOnly: "/commit \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\uFF08\u9700\u8981\u6709\u6839\u7684 git \u4ED3\u5E93\uFF09\u3002",
       commitUsage: '\u7528\u6CD5\uFF1A/commit "\u63D0\u4EA4\u6D88\u606F"  \u2014 \u5728 {root} \u4E2D\u8FD0\u884C `git add -A && git commit -m "\u2026"`',
-      walkCodeOnly: "/walk \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
-      checkpointCodeOnly: "/checkpoint \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528 \u2014 \u804A\u5929\u6A21\u5F0F\u4E0D\u5E94\u7528\u7F16\u8F91\u3002",
+      walkCodeOnly: "/walk \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
+      checkpointCodeOnly: "/checkpoint \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528 \u2014 \u804A\u5929\u6A21\u5F0F\u4E0D\u5E94\u7528\u7F16\u8F91\u3002",
       checkpointNone: "\u5C1A\u65E0\u68C0\u67E5\u70B9 \u2014 `/checkpoint <name>` \u5FEB\u7167\u4F1A\u8BDD\u6D89\u53CA\u7684\u6BCF\u4E2A\u6587\u4EF6\u3002\u7A0D\u540E\u4F7F\u7528 `/restore <name>` \u6062\u590D\u3002",
       checkpointHeader: "\u25C8 \u68C0\u67E5\u70B9 \xB7 \u5DF2\u5B58\u50A8 {count} \u4E2A",
       checkpointRestoreHint: "  /restore <name|id> \xB7 /checkpoint forget <id> \xB7 /checkpoint <name> \u6DFB\u52A0",
@@ -2097,14 +2097,14 @@ var zhCN = {
       checkpointSaveUsage: "\u7528\u6CD5\uFF1A/checkpoint <name>   \uFF08\u6216 /checkpoint list \u67E5\u770B\u73B0\u6709\uFF09",
       checkpointSavedEmpty: '\u25B8 \u68C0\u67E5\u70B9 "{name}" \u5DF2\u4FDD\u5B58\uFF08{id}\uFF09\u2014 \u4F46\u5C1A\u672A\u6D89\u53CA\u4EFB\u4F55\u6587\u4EF6\uFF0C\u56E0\u6B64\u662F\u7A7A\u57FA\u7EBF\u3002\u6B64\u540E\u7684\u7F16\u8F91\u5C06\u53EF\u64A4\u6D88\u3002',
       checkpointSaved: '\u25B8 \u68C0\u67E5\u70B9 "{name}" \u5DF2\u4FDD\u5B58\uFF08{id}\uFF09\u2014 {files} \u4E2A\u6587\u4EF6\uFF0C{size} KB\u3002\u6062\u590D\uFF1A/restore {name}',
-      restoreCodeOnly: "/restore \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
+      restoreCodeOnly: "/restore \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
       restoreUsage: "\u7528\u6CD5\uFF1A/restore <name|id>   \uFF08\u89C1 /checkpoint list \u83B7\u53D6 ID\uFF09",
       restoreNoMatch: '\u25B8 \u672A\u627E\u5230\u5339\u914D "{target}" \u7684\u68C0\u67E5\u70B9 \u2014 \u5C1D\u8BD5 /checkpoint list',
       restoreInfo: '\u25B8 \u5DF2\u6062\u590D "{name}"\uFF08{id}\uFF09\uFF0C\u6765\u81EA {when}',
       restoreWrote: "  \xB7 \u5199\u56DE\u4E86 {count} \u4E2A\u6587\u4EF6",
       restoreRemoved: "  \xB7 \u79FB\u9664\u4E86 {count} \u4E2A\u6587\u4EF6\uFF08\u68C0\u67E5\u70B9\u65F6\u4E0D\u5B58\u5728\uFF09",
       restoreSkipped: "  \u2717 \u8DF3\u8FC7\u4E86 {count} \u4E2A\u6587\u4EF6\uFF1A",
-      cwdCodeOnly: "/cwd \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
+      cwdCodeOnly: "/cwd \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
       cwdUsage: "\u7528\u6CD5\uFF1A/cwd <path>   \uFF08\u5F53\u524D\u6839\u76EE\u5F55\uFF1A{current}\uFF09\u3002\u91CD\u65B0\u6307\u5411 filesystem / shell / memory \u5DE5\u5177\u5230 <path>\u3002",
       cwdUsageNoCurrent: "\u7528\u6CD5\uFF1A/cwd <path>   \u5C06\u5DE5\u4F5C\u533A\u6839\u76EE\u5F55\u5207\u6362\u5230 <path>\u3002"
     },
@@ -2121,7 +2121,7 @@ var zhCN = {
       proDisarmed: "\u25B8 /pro \u5DF2\u89E3\u9664 \u2014 \u4E0B\u4E00\u8F6E\u56DE\u9000\u5230\u5F53\u524D\u9884\u8BBE",
       proUsage: "\u7528\u6CD5\uFF1A/pro       \u4E3A\u4E0B\u4E00\u8F6E\u542F\u7528 pro\uFF08\u4E00\u6B21\u6027\uFF0C\u81EA\u52A8\u89E3\u9664\uFF09\n       /pro off  \u5728\u4E0B\u4E00\u8F6E\u524D\u53D6\u6D88\u542F\u7528\u72B6\u6001",
       proArmed: "\u25B8 /pro \u5DF2\u542F\u7528 \u2014 \u60A8\u7684\u4E0B\u4E00\u6761\u6D88\u606F\u5C06\u5728 {model} \u4E0A\u8FD0\u884C\uFF0C\u65E0\u8BBA\u9884\u8BBE\u5982\u4F55\u3002\u4E00\u8F6E\u540E\u81EA\u52A8\u89E3\u9664\u3002\u4F7F\u7528 /preset max \u8FDB\u884C\u6301\u4E45\u5207\u6362\u3002",
-      budgetNoCap: "\u672A\u8BBE\u7F6E\u4F1A\u8BDD\u9884\u7B97 \u2014 Reasonix \u5C06\u6301\u7EED\u8FD0\u884C\u76F4\u5230\u60A8\u505C\u6B62\u3002\u4F7F\u7528\u4EE5\u4E0B\u65B9\u5F0F\u8BBE\u7F6E\uFF1A/budget <usd>   \uFF08\u4F8B\u5982 /budget 5\uFF09",
+      budgetNoCap: "\u672A\u8BBE\u7F6E\u4F1A\u8BDD\u9884\u7B97 \u2014 Visionox \u5C06\u6301\u7EED\u8FD0\u884C\u76F4\u5230\u60A8\u505C\u6B62\u3002\u4F7F\u7528\u4EE5\u4E0B\u65B9\u5F0F\u8BBE\u7F6E\uFF1A/budget <usd>   \uFF08\u4F8B\u5982 /budget 5\uFF09",
       budgetStatus: "\u9884\u7B97\uFF1A${spent} / ${cap}\uFF08{pct}%\uFF09\xB7 /budget off \u6E05\u9664\uFF0C/budget <usd> \u66F4\u6539",
       budgetOff: "budget \u2192 \u5173\u95ED\uFF08\u65E0\u4E0A\u9650\uFF09",
       budgetUsage: '\u7528\u6CD5\uFF1A/budget <usd>   \uFF08\u6536\u5230 "{arg}" \u2014 \u5FC5\u987B\u662F\u6B63\u6570\uFF0C\u4F8B\u5982 /budget 5 \u6216 /budget 12.50\uFF09',
@@ -2129,7 +2129,7 @@ var zhCN = {
       budgetSet: "budget \u2192 ${cap}  \uFF08\u8FC4\u4ECA\uFF1A${spent} \xB7 80% \u65F6\u8B66\u544A\uFF0C100% \u65F6\u62D2\u7EDD\u4E0B\u4E00\u8F6E \xB7 /budget off \u6E05\u9664\uFF09"
     },
     permissions: {
-      mutateCodeOnly: "/permissions add / remove / clear \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528 \u2014 \u5B83\u4EEC\u7F16\u8F91\u9879\u76EE\u8303\u56F4\u7684\u5141\u8BB8\u5217\u8868\uFF08`~/.visionox/config.json` projects[<root>].shellAllowed\uFF09\u3002",
+      mutateCodeOnly: "/permissions add / remove / clear \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528 \u2014 \u5B83\u4EEC\u7F16\u8F91\u9879\u76EE\u8303\u56F4\u7684\u5141\u8BB8\u5217\u8868\uFF08`~/.visionox/config.json` projects[<root>].shellAllowed\uFF09\u3002",
       addUsage: '\u7528\u6CD5\uFF1A/permissions add <prefix>   \uFF08\u591A token \u53EF\u7528\uFF1A/permissions add "git push origin"\uFF09',
       addAlready: "\u25B8 \u5DF2\u5141\u8BB8\uFF1A{prefix}",
       addBuiltin: "\u25B8 `{prefix}` \u5DF2\u5728\u5185\u7F6E\u5141\u8BB8\u5217\u8868\u4E2D \u2014 \u65E0\u9700\u9879\u76EE\u6761\u76EE\u3002\uFF08\u5185\u7F6E\u6761\u76EE\u59CB\u7EC8\u5F00\u542F\u3002\uFF09",
@@ -2200,12 +2200,12 @@ var zhCN = {
       statusDash: "  \u4EEA\u8868\u677F  {url}\uFF08\u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00 \xB7 /dashboard stop\uFF09"
     },
     plans: {
-      noSession: "\u672A\u9644\u52A0\u4F1A\u8BDD \u2014 `/plans` \u662F\u6309\u4F1A\u8BDD\u7684\u3002\u5728\u9879\u76EE\u4E2D\u8FD0\u884C `reasonix code` \u4EE5\u83B7\u53D6\u4F1A\u8BDD\u3002",
+      noSession: "\u672A\u9644\u52A0\u4F1A\u8BDD \u2014 `/plans` \u662F\u6309\u4F1A\u8BDD\u7684\u3002\u5728\u9879\u76EE\u4E2D\u8FD0\u884C `visionox code` \u4EE5\u83B7\u53D6\u4F1A\u8BDD\u3002",
       activePlan: "\u25B8 \u6D3B\u8DC3\u8BA1\u5212{label} \u2014 {done}/{total} \u6B65\u9AA4\u5DF2\u5B8C\u6210 \xB7 \u6700\u540E\u89E6\u53CA {when}",
       activeNone: "\u25B8 \u6D3B\u8DC3\u8BA1\u5212\uFF1A\uFF08\u65E0\uFF09",
       noArchives: "\u6B64\u4F1A\u8BDD\u5C1A\u65E0\u5F52\u6863\u8BA1\u5212 \u2014 \u5F53\u6BCF\u4E2A\u6B65\u9AA4\u5B8C\u6210\u65F6\u81EA\u52A8\u5F52\u6863",
       archivedHeader: "\u5DF2\u5F52\u6863\uFF08{count}\uFF09\uFF1A",
-      replayNoSession: "\u672A\u9644\u52A0\u4F1A\u8BDD \u2014 `/replay` \u662F\u6309\u4F1A\u8BDD\u7684\u3002\u5728\u9879\u76EE\u4E2D\u8FD0\u884C `reasonix code` \u4EE5\u83B7\u53D6\u4F1A\u8BDD\u3002",
+      replayNoSession: "\u672A\u9644\u52A0\u4F1A\u8BDD \u2014 `/replay` \u662F\u6309\u4F1A\u8BDD\u7684\u3002\u5728\u9879\u76EE\u4E2D\u8FD0\u884C `visionox code` \u4EE5\u83B7\u53D6\u4F1A\u8BDD\u3002",
       replayNoArchives: "\u6B64\u4F1A\u8BDD\u5C1A\u65E0\u5F52\u6863\u8BA1\u5212 \u2014 `/replay` \u5728\u8BA1\u5212\u5B8C\u6210\u540E\u542F\u7528\uFF08\u6BCF\u4E2A\u6B65\u9AA4\u5B8C\u6210\u65F6\u81EA\u52A8\u5F52\u6863\uFF09\u3002",
       replayInvalidIndex: "\u65E0\u6548\u7D22\u5F15 \u2014 `/replay` \u63A5\u53D7 1..{max}\uFF08\u6700\u65B0 = 1\uFF09\u3002\u4F7F\u7528 `/plans` \u67E5\u770B\u5217\u8868\u3002",
       archivedRow: "  \u2713 {when}  {total}\u6B65 \xB7 {completion}  {label}",
@@ -2221,9 +2221,9 @@ var zhCN = {
       doneAllOk: "\u25B8 \u5DF2\u6807\u8BB0 {count} \u4E2A\u6B65\u9AA4\u4E3A\u5B8C\u6210\u3002"
     },
     jobs: {
-      codeOnly: "/jobs \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
-      killCodeOnly: "/kill \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
-      logsCodeOnly: "/logs \u4EC5\u5728 `reasonix code` \u4E2D\u53EF\u7528\u3002",
+      codeOnly: "/jobs \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
+      killCodeOnly: "/kill \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
+      logsCodeOnly: "/logs \u4EC5\u5728 `visionox code` \u4E2D\u53EF\u7528\u3002",
       empty: "\u25C8 \u4F5C\u4E1A \xB7 0 \u8FD0\u884C\u4E2D \xB7 \u5171 0 \u4E2A\n  \uFF08run_background \u751F\u6210\u4E00\u4E2A \u2014 \u5F00\u53D1\u670D\u52A1\u5668\u3001\u76D1\u89C6\u5668\u3001\u957F\u65F6\u95F4\u8FD0\u884C\u7684\u811A\u672C\uFF09",
       header: "\u25C8 \u4F5C\u4E1A \xB7 {running} \u8FD0\u884C\u4E2D \xB7 \u5171 {total} \u4E2A",
       footer: "  /logs <id> \u8DDF\u8E2A \xB7 /kill <id> SIGTERM \u2192 SIGKILL",
@@ -2242,7 +2242,7 @@ var zhCN = {
       logsStopped: "\u5DF2\u505C\u6B62"
     },
     memory: {
-      disabled: "\u8BB0\u5FC6\u5DF2\u7981\u7528\uFF08\u73AF\u5883\u53D8\u91CF REASONIX_MEMORY=off\uFF09\u3002\u53D6\u6D88\u8BBE\u7F6E\u8BE5\u53D8\u91CF\u4EE5\u91CD\u65B0\u542F\u7528 \u2014 \u6B64\u671F\u95F4\u4E0D\u4F1A\u56FA\u5B9A\u4EFB\u4F55 REASONIX.md \u6216 ~/.visionox/memory \u5185\u5BB9\u3002",
+      disabled: "\u8BB0\u5FC6\u5DF2\u7981\u7528\uFF08\u73AF\u5883\u53D8\u91CF VISIONOX_MEMORY=off\uFF09\u3002\u53D6\u6D88\u8BBE\u7F6E\u8BE5\u53D8\u91CF\u4EE5\u91CD\u65B0\u542F\u7528 \u2014 \u6B64\u671F\u95F4\u4E0D\u4F1A\u56FA\u5B9A\u4EFB\u4F55 REASONIX.md \u6216 ~/.visionox/memory \u5185\u5BB9\u3002",
       noRoot: "\u6B64\u4F1A\u8BDD\u65E0\u5DE5\u4F5C\u76EE\u5F55 \u2014 `/memory` \u9700\u8981\u4E00\u4E2A\u6839\u76EE\u5F55\u6765\u89E3\u6790 REASONIX.md\u3002\uFF08\u5728\u6D4B\u8BD5\u73AF\u5883\u4E2D\u8FD0\u884C\uFF1F\uFF09",
       listEmpty: "\u5C1A\u65E0\u7528\u6237\u8BB0\u5FC6\u3002\u6A21\u578B\u53EF\u4EE5\u8C03\u7528 `remember` \u4FDD\u5B58\u4E00\u4E2A\uFF0C\u6216\u60A8\u53EF\u4EE5\u5728 ~/.visionox/memory/global/ \u6216\u9879\u76EE\u5B50\u76EE\u5F55\u4E2D\u624B\u52A8\u521B\u5EFA\u6587\u4EF6\u3002",
       listHeader: "\u7528\u6237\u8BB0\u5FC6\uFF08{count}\uFF09\uFF1A",
@@ -2269,15 +2269,15 @@ var zhCN = {
       changesNoteShort: "\u66F4\u6539\u5728\u4E0B\u6B21 /new \u6216\u542F\u52A8\u65F6\u751F\u6548\u3002\u5B50\u547D\u4EE4\uFF1A/memory list | show | forget | clear"
     },
     mcp: {
-      noServers: '\u672A\u9644\u52A0 MCP \u670D\u52A1\u5668\u3002\u8FD0\u884C `reasonix setup` \u9009\u62E9\u4E00\u4E9B\uFF0C\u6216\u4F7F\u7528 --mcp "<spec>" \u542F\u52A8\u3002`reasonix mcp list` \u663E\u793A\u76EE\u5F55\u3002',
+      noServers: '\u672A\u9644\u52A0 MCP \u670D\u52A1\u5668\u3002\u8FD0\u884C `visionox setup` \u9009\u62E9\u4E00\u4E9B\uFF0C\u6216\u4F7F\u7528 --mcp "<spec>" \u542F\u52A8\u3002`visionox mcp list` \u663E\u793A\u76EE\u5F55\u3002',
       toolsLabel: "  \u5DE5\u5177     {count}",
       resourcesHint: "`/resource` \u6D4F\u89C8+\u8BFB\u53D6",
       promptsHint: "`/prompt` \u6D4F\u89C8+\u83B7\u53D6",
       awarenessOnly: "\u804A\u5929\u6A21\u5F0F\u76EE\u524D\u6D88\u8017\u5DE5\u5177\uFF1B\u8D44\u6E90+\u63D0\u793A\u5728\u6B64\u5C55\u793A\u4F9B\u4E86\u89E3\u3002",
-      catalogHint: "\u5B8C\u6574\u76EE\u5F55\uFF1A`reasonix mcp list` \xB7 \u6DF1\u5EA6\u8BCA\u65AD\uFF1A`reasonix mcp inspect <spec>`\u3002",
+      catalogHint: "\u5B8C\u6574\u76EE\u5F55\uFF1A`visionox mcp list` \xB7 \u6DF1\u5EA6\u8BCA\u65AD\uFF1A`visionox mcp inspect <spec>`\u3002",
       fallbackServers: "MCP \u670D\u52A1\u5668\uFF08{count}\uFF09\uFF1A",
       fallbackTools: "\u6CE8\u518C\u8868\u4E2D\u7684\u5DE5\u5177\uFF08{count}\uFF09\uFF1A",
-      fallbackChange: "\u8981\u66F4\u6539\u6B64\u8BBE\u7F6E\uFF0C\u8BF7\u9000\u51FA\u5E76\u8FD0\u884C `reasonix setup`\u3002",
+      fallbackChange: "\u8981\u66F4\u6539\u6B64\u8BBE\u7F6E\uFF0C\u8BF7\u9000\u51FA\u5E76\u8FD0\u884C `visionox setup`\u3002",
       usageDisableEnable: "\u7528\u6CD5\uFF1A/mcp {action} <name>  \xB7  \u4ECE /mcp \u5217\u8868\u4E2D\u6311\u4E00\u4E2A\u540D\u5B57\uFF08\u533F\u540D\u670D\u52A1\u5668\u65E0\u6CD5\u6309\u540D\u5207\u6362\uFF09\u3002",
       usageReconnect: "\u7528\u6CD5\uFF1A/mcp reconnect <name>  \xB7  \u4ECE /mcp \u5217\u8868\u4E2D\u6311\u4E00\u4E2A\u540D\u5B57\u3002",
       unknownServer: '\u672A\u77E5 MCP \u670D\u52A1\u5668 "{name}"\u3002\u5DF2\u77E5\uFF1A{list}\u3002',
@@ -2288,7 +2288,7 @@ var zhCN = {
       tabHint: "\u6309 tab \u5207\u6362"
     },
     init: {
-      codeOnly: "/init \u4EC5\u5728\u4EE3\u7801\u6A21\u5F0F\u4E0B\u5DE5\u4F5C\uFF08\u9700\u8981\u6587\u4EF6\u7CFB\u7EDF\u5DE5\u5177\uFF09\u3002\n\u8FD0\u884C `reasonix code [path]` \u542F\u52A8\u4E00\u4E2A\u4EE5\u60A8\u8981\u521D\u59CB\u5316\u7684\u9879\u76EE\u4E3A\u6839\u7684\u4F1A\u8BDD\uFF0C\n\u7136\u540E\u8FD0\u884C /init\u3002",
+      codeOnly: "/init \u4EC5\u5728\u4EE3\u7801\u6A21\u5F0F\u4E0B\u5DE5\u4F5C\uFF08\u9700\u8981\u6587\u4EF6\u7CFB\u7EDF\u5DE5\u5177\uFF09\u3002\n\u8FD0\u884C `visionox code [path]` \u542F\u52A8\u4E00\u4E2A\u4EE5\u60A8\u8981\u521D\u59CB\u5316\u7684\u9879\u76EE\u4E3A\u6839\u7684\u4F1A\u8BDD\uFF0C\n\u7136\u540E\u8FD0\u884C /init\u3002",
       exists: "\u25B8 REASONIX.md \u5DF2\u5B58\u5728\u4E8E {path}",
       existsForce: "  /init force   \u4ECE\u5934\u91CD\u65B0\u751F\u6210\uFF08\u8986\u76D6\uFF09",
       existsEdit: "  \u6216\u624B\u52A8\u7F16\u8F91 \u2014 \u5B83\u53EA\u662F markdown\u3002\u5F53\u524D\u6587\u4EF6\u5DF2",
@@ -2311,10 +2311,10 @@ var zhCN = {
       confirmedDetail: "\uFF08{endpoint}\uFF09"
     },
     skill: {
-      listEmpty: "\u672A\u627E\u5230\u6280\u80FD\u3002Reasonix \u4ECE\u4EE5\u4E0B\u4F4D\u7F6E\u8BFB\u53D6\u6280\u80FD\uFF1A",
+      listEmpty: "\u672A\u627E\u5230\u6280\u80FD\u3002Visionox \u4ECE\u4EE5\u4E0B\u4F4D\u7F6E\u8BFB\u53D6\u6280\u80FD\uFF1A",
       listProjectScope: "  \xB7 <project>/.visionox/skills/<name>/SKILL.md  \uFF08\u6216 <name>.md\uFF09 \u2014 \u9879\u76EE\u8303\u56F4",
       listGlobalScope: "  \xB7 ~/.visionox/skills/<name>/SKILL.md  \uFF08\u6216 <name>.md\uFF09 \u2014 \u5168\u5C40\u8303\u56F4",
-      listProjectOnly: "  \uFF08\u9879\u76EE\u8303\u56F4\u4EC5\u5728 `reasonix code` \u4E2D\u6D3B\u8DC3\uFF09",
+      listProjectOnly: "  \uFF08\u9879\u76EE\u8303\u56F4\u4EC5\u5728 `visionox code` \u4E2D\u6D3B\u8DC3\uFF09",
       listFrontmatter: "\u6BCF\u4E2A\u6587\u4EF6\u7684 frontmatter \u81F3\u5C11\u9700\u8981 `name` \u548C `description`\u3002",
       listInvoke: "\u4F7F\u7528 `/skill <name> [args]` \u8C03\u7528\u6280\u80FD\uFF0C\u6216\u8BA9\u6A21\u578B\u8C03\u7528 `run_skill`\u3002",
       listHeader: "\u7528\u6237\u6280\u80FD\uFF08{count}\uFF09\uFF1A",
@@ -2432,7 +2432,7 @@ var zhCN = {
     linesBelowPlural: "  \u2193 \u4E0B\u65B9 {count} \u884C\uFF08\u2193/j \u6216 Space/PgDn\uFF09"
   },
   sessionPicker: {
-    header: " \u25C8 REASONIX \xB7 \u9009\u62E9\u4F1A\u8BDD ",
+    header: " \u25C8 VISIONOX \xB7 \u9009\u62E9\u4F1A\u8BDD ",
     title: "\u9009\u62E9\u4F1A\u8BDD \u2014 {workspace}",
     messages: "{count} \u6761\u6D88\u606F",
     messagesPlural: "{count} \u6761\u6D88\u606F",
@@ -2450,7 +2450,7 @@ var zhCN = {
     daysAgo: "{count} \u5929\u524D"
   },
   modelPicker: {
-    header: " \u25C8 REASONIX \xB7 \u9009\u62E9\u914D\u7F6E ",
+    header: " \u25C8 VISIONOX \xB7 \u9009\u62E9\u914D\u7F6E ",
     loading: "  \xB7  \u52A0\u8F7D\u76EE\u5F55\u2026",
     catalogEmpty: "  \xB7  \u76EE\u5F55\u4E3A\u7A7A \u2014 \u4F7F\u7528\u5DF2\u77E5\u5907\u9009",
     modelsAvailable: "  \xB7  {count} \u4E2A\u6A21\u578B\u53EF\u7528",
@@ -2522,7 +2522,7 @@ var zhCN = {
     turnLabel: "\u8F6E"
   },
   startup: {
-    codeRooted: '\u25B8 reasonix code\uFF1A\u6839\u76EE\u5F55 {rootDir}\uFF0C\u4F1A\u8BDD "{session}" \xB7 {tools} \u4E2A\u539F\u751F\u5DE5\u5177{semantic}',
+    codeRooted: '\u25B8 visionox code\uFF1A\u6839\u76EE\u5F55 {rootDir}\uFF0C\u4F1A\u8BDD "{session}" \xB7 {tools} \u4E2A\u539F\u751F\u5DE5\u5177{semantic}',
     ephemeral: "\uFF08\u4E34\u65F6\uFF09",
     semanticOn: " \xB7 \u8BED\u4E49\u641C\u7D22\u5DF2\u5F00\u542F"
   },
@@ -2652,7 +2652,7 @@ var zhCN = {
     slow: "\u7F13\u6162 \xB7 {ms}ms",
     verySlow: "\u975E\u5E38\u6162 \xB7 {ms}ms",
     slowToast: "\u26A0 MCP `{name}` \u54CD\u5E94\u7F13\u6162 \xB7 P95 {seconds}s \xB7 \u6700\u8FD1 {sampleSize} \u6B21\u8C03\u7528",
-    emptyHint: "\u2139 \u672A\u914D\u7F6E MCP \u670D\u52A1\u5668 \u2014\u2014 \u53EF\u5C1D\u8BD5\uFF1A`reasonix setup` \u91CD\u65B0\u9009\u62E9\uFF0C\u6216 `reasonix mcp install filesystem`"
+    emptyHint: "\u2139 \u672A\u914D\u7F6E MCP \u670D\u52A1\u5668 \u2014\u2014 \u53EF\u5C1D\u8BD5\uFF1A`visionox setup` \u91CD\u65B0\u9009\u62E9\uFF0C\u6216 `visionox mcp install filesystem`"
   },
   denyContextInput: {
     description: "\u544A\u8BC9\u6A21\u578B\u4F60\u4E3A\u4EC0\u4E48\u62D2\u7EDD\u4E86\u3002\u6A21\u578B\u4E0B\u6B21\u4F1A\u770B\u5230\u4F60\u7684\u7406\u7531\u4F5C\u4E3A\u989D\u5916\u7684\u4E0A\u4E0B\u6587\u3002"
@@ -2692,8 +2692,8 @@ var zhCN = {
     notInstalled: "\u672A\u5B89\u88C5\uFF1A{name}",
     bridged: "\u2713 \u5DF2\u5B89\u88C5 {name} \u2014 \u5DF2\u6865\u63A5",
     bridgeFailed: "\u25B2 \u5DF2\u5B89\u88C5 {name} \u2014 \u6865\u63A5\u5931\u8D25\uFF1A{reason}",
-    bridgeReloadFailed: "\u2713 \u5DF2\u5B89\u88C5 {name} \u2014 \u91CD\u542F `reasonix code` \u4EE5\u6865\u63A5\uFF08\u91CD\u8F7D\u5931\u8D25\uFF1A{message}\uFF09",
-    restartBridge: "\u2713 \u5DF2\u5B89\u88C5 {name} \u2014 \u91CD\u542F `reasonix code` \u4EE5\u6865\u63A5",
+    bridgeReloadFailed: "\u2713 \u5DF2\u5B89\u88C5 {name} \u2014 \u91CD\u542F `visionox code` \u4EE5\u6865\u63A5\uFF08\u91CD\u8F7D\u5931\u8D25\uFF1A{message}\uFF09",
+    restartBridge: "\u2713 \u5DF2\u5B89\u88C5 {name} \u2014 \u91CD\u542F `visionox code` \u4EE5\u6865\u63A5",
     needsEnv: "  \xB7  \u9700\u8981\u73AF\u5883\u53D8\u91CF\uFF1A{env}",
     badgeOfficial: "[\u5B98\u65B9]",
     badgeSmithery: "[\u4E09\u65B9]",
@@ -2705,7 +2705,7 @@ var zhCN = {
   },
   mcpBrowser: {
     title: "\u25C8 MCP \u6D4F\u89C8\u5668",
-    empty: "\u6CA1\u6709\u6302\u8F7D MCP \u670D\u52A1\u5668\u3002\u8FD0\u884C `reasonix setup` \u9009\u62E9\u4E00\u4E9B\uFF0C\u6216\u4F7F\u7528 --mcp \u542F\u52A8\u3002",
+    empty: "\u6CA1\u6709\u6302\u8F7D MCP \u670D\u52A1\u5668\u3002\u8FD0\u884C `visionox setup` \u9009\u62E9\u4E00\u4E9B\uFF0C\u6216\u4F7F\u7528 --mcp \u542F\u52A8\u3002",
     serverCount: "{count} \u4E2A\u670D\u52A1\u5668",
     footer: "\u2191\u2193 \u9009\u62E9 \xB7 [r] \u91CD\u8FDE \xB7 [d] \u7981\u7528 \xB7 Esc \u9000\u51FA"
   },
@@ -2718,12 +2718,12 @@ var zhCN = {
     initDetail: "\u521D\u59CB\u5316 \u2192 tools/list \u2192 resources/list",
     reconnectDetail: "\u65AD\u5F00\u65E7\u8FDE\u63A5 \xB7 \u91CD\u65B0\u63E1\u624B \xB7 \u5217\u51FA\u5DE5\u5177",
     disabledDetail: "\u901A\u8FC7 /mcp disable {name}",
-    failedSetupHint: "\u2192 \u8FD0\u884C `reasonix setup` \u79FB\u9664\u6B64\u6761\u76EE\uFF0C\u6216\u4FEE\u590D\u5E95\u5C42\u95EE\u9898\uFF08\u7F3A\u5C11 npm \u5305\u3001\u7F51\u7EDC\u7B49\uFF09\u3002",
-    failedSetupConfigHint: "\u2192 \u8FD0\u884C `reasonix setup` \u4ECE\u5DF2\u4FDD\u5B58\u914D\u7F6E\u4E2D\u79FB\u9664\u635F\u574F\u7684\u6761\u76EE\u3002"
+    failedSetupHint: "\u2192 \u8FD0\u884C `visionox setup` \u79FB\u9664\u6B64\u6761\u76EE\uFF0C\u6216\u4FEE\u590D\u5E95\u5C42\u95EE\u9898\uFF08\u7F3A\u5C11 npm \u5305\u3001\u7F51\u7EDC\u7B49\uFF09\u3002",
+    failedSetupConfigHint: "\u2192 \u8FD0\u884C `visionox setup` \u4ECE\u5DF2\u4FDD\u5B58\u914D\u7F6E\u4E2D\u79FB\u9664\u635F\u574F\u7684\u6761\u76EE\u3002"
   },
   checkpointPicker: {
     title: "\u6062\u590D\u68C0\u67E5\u70B9 \u2014 {workspace}",
-    header: " \u25C8 REASONIX \xB7 \u9009\u62E9\u68C0\u67E5\u70B9 ",
+    header: " \u25C8 VISIONOX \xB7 \u9009\u62E9\u68C0\u67E5\u70B9 ",
     empty: "  \u6B64\u5DE5\u4F5C\u533A\u6682\u65E0\u68C0\u67E5\u70B9 \u2014 \u53C2\u89C1 /checkpoint \u521B\u5EFA",
     more: "     \u2026 \u8FD8\u6709 {hidden} \u4E2A",
     footer: "  \u2191\u2193 \u9009\u62E9  \xB7  \u23CE \u6062\u590D  \xB7  [d] \u5220\u9664  \xB7  Esc \u9000\u51FA",
@@ -2739,7 +2739,7 @@ var zhCN = {
     rejectHint: "\u653E\u5F03\u4FEE\u6539\u3002\u6A21\u578B\u7EE7\u7EED\u6309\u539F\u6B65\u9AA4\u6267\u884C\u3002"
   },
   diffApp: {
-    title: "reasonix diff",
+    title: "visionox diff",
     turnLabel: "\u7B2C {turn} \u8F6E\uFF08{current}/{total}\uFF09",
     turnsAligned: "{count} \u8F6E\u5DF2\u5BF9\u9F50",
     paneEmpty: "\uFF08\u6B64\u8F6E\u8BE5\u4FA7\u65E0\u8BB0\u5F55\uFF09",

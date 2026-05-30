@@ -6,7 +6,7 @@
 //   version — reasonix version (default: "0.39.1")
 
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, cpSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,7 +41,7 @@ try {
     process.exit(1);
   }
 
-  // Extract
+  // Extract — Windows 10 1803+ has tar.exe built-in
   execSync(`tar -xzf "${tarball}" -C "${tmpDir}"`, { stdio: "inherit" });
 
   const extracted = join(tmpDir, "package");
@@ -58,7 +58,7 @@ try {
   mkdirSync(dirname(target), { recursive: true });
 
   // Copy extracted package to target
-  execSync(`xcopy /E /I /Y "${extracted}" "${target}"`, { stdio: "inherit" });
+  cpSync(extracted, target, { recursive: true });
 
   // Install production dependencies
   console.log("[restore] Installing production dependencies...");

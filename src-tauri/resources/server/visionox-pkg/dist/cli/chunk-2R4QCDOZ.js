@@ -8934,7 +8934,7 @@ function registerMemoryTools(registry, opts = {}) {
         scope: {
           type: "string",
           enum: ["global", "project"],
-          description: "'global' = applies across every project (preferences, tooling); 'project' = scoped to the current sandbox (decisions, local facts). Only available in `reasonix code`."
+          description: "'global' = applies across every project (preferences, tooling); 'project' = scoped to the current sandbox (decisions, local facts). Only available in `visionox code`."
         },
         name: {
           type: "string",
@@ -8964,7 +8964,7 @@ function registerMemoryTools(registry, opts = {}) {
     fn: async (args) => {
       if (args.scope === "project" && !hasProject) {
         return JSON.stringify({
-          error: "scope='project' is unavailable in this session (no sandbox root). Retry with scope='global', or ask the user to switch to `reasonix code` for project-scoped memory."
+          error: "scope='project' is unavailable in this session (no sandbox root). Retry with scope='global', or ask the user to switch to `visionox code` for project-scoped memory."
         });
       }
       try {
@@ -9139,10 +9139,15 @@ function registerChoiceTool(registry, opts = {}) {
 
 // src/tools/web.ts
 var import_node_html_parser = __toESM(require_dist(), 1);
+var import_dns_promises = require("node:dns/promises");
+var import_net = require("node:net");
+var { lookup } = import_dns_promises;
+var { isIP } = import_net;
 var DEFAULT_FETCH_MAX_CHARS = 32e3;
 var DEFAULT_FETCH_TIMEOUT_MS = 15e3;
 var DEFAULT_TOPK = 5;
 var FETCH_MAX_BYTES = 10 * 1024 * 1024;
+var FETCH_MAX_REDIRECTS = 5;
 var USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 var MOJEEK_ENDPOINT = "https://www.mojeek.com/search";
 var BING_ENDPOINT = "https://api.bing.microsoft.com/v7.0/search";
@@ -9362,6 +9367,106 @@ async function searchBingScrape(query, opts = {}) {
   }
   return results;
 }
+function parseIpv4(address) {
+  const octets = address.split(".");
+  if (octets.length !== 4) return null;
+  let value = 0;
+  for (let i = 0; i < 4; i++) {
+    const n = Number(octets[i]);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    value = (value << 8) | n;
+  }
+  return value;
+}
+function ipv4InRange(value, base, bits) {
+  const mask = ~(2 ** (32 - bits) - 1) >>> 0;
+  return (value & mask) === (base & mask);
+}
+function isPrivateIpv4(address) {
+  const value = parseIpv4(address);
+  if (value === null) return false;
+  const ranges = [
+    [0x00000000, 8],
+    [0x0A000000, 8],
+    [0x64400000, 10],
+    [0x7F000000, 8],
+    [0xA9FE0000, 16],
+    [0xAC100000, 12],
+    [0xC0000000, 24],
+    [0xC0000200, 24],
+    [0xC0A80000, 16],
+    [0xC6120000, 15],
+    [0xCB007100, 24],
+    [0xE0000000, 4],
+    [0xF0000000, 4]
+  ];
+  for (const [base, bits] of ranges) {
+    if (ipv4InRange(value, base, bits)) return true;
+  }
+  return false;
+}
+function normalizeIpv6(address) {
+  const simple = address.toLowerCase();
+  if (simple.includes("%")) {
+    const zoneIdx = simple.lastIndexOf("%");
+    return simple.slice(0, zoneIdx);
+  }
+  return simple;
+}
+function isPrivateIpv6(address) {
+  const normalized = normalizeIpv6(address);
+  if (normalized === "::1" || normalized.startsWith("::1/")) return true;
+  if (normalized.startsWith("fe80:")) return true;
+  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
+  if (normalized.startsWith("ff")) return true;
+  if (normalized.startsWith("::ffff:")) {
+    const ipv4Part = normalized.slice(7);
+    return isPrivateIpv4(ipv4Part);
+  }
+  return false;
+}
+function isInternalAddress(address) {
+  if (isIP(address) === 4) return isPrivateIpv4(address);
+  if (isIP(address) === 6) return isPrivateIpv6(address);
+  return false;
+}
+async function assertPublicHttpUrl(rawUrl) {
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`SSRF blocked: ${rawUrl} (protocol ${parsed.protocol})`);
+  }
+  const hostname = parsed.hostname;
+  if (!hostname || hostname === "localhost" || hostname === "0.0.0.0") {
+    throw new Error(`SSRF blocked: ${rawUrl} (internal hostname)`);
+  }
+  if (isIP(hostname) || hostname.split(".").every((p) => /^\d+$/.test(p))) {
+    if (isInternalAddress(hostname)) {
+      throw new Error(`SSRF blocked: ${rawUrl} (private/reserved address ${hostname})`);
+    }
+    return;
+  }
+  let addresses;
+  try {
+    addresses = await lookup(hostname, { all: true });
+  } catch (err) {
+    throw new Error(`SSRF blocked: ${rawUrl} — DNS lookup failed (${err.message})`);
+  }
+  for (const addr of addresses) {
+    if (isInternalAddress(addr.address)) {
+      throw new Error(`SSRF blocked: ${rawUrl} resolves to ${addr.address} (private/reserved)`);
+    }
+  }
+}
+function redirectLocation(resp, currentUrl) {
+  const loc = resp.headers.get("location");
+  if (!loc) return null;
+  try {
+    return new URL(loc, currentUrl).href;
+  } catch {
+    return null;
+  }
+}
+
 async function webFetch(url, opts = {}) {
   const maxChars = opts.maxChars ?? DEFAULT_FETCH_MAX_CHARS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
@@ -9373,27 +9478,41 @@ async function webFetch(url, opts = {}) {
   }, timeoutMs);
   const cancel = () => ctl.abort();
   opts.signal?.addEventListener("abort", cancel, { once: true });
+  let currentUrl = url;
   let resp;
   try {
-    resp = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain,*/*" },
-      signal: ctl.signal,
-      redirect: "follow"
-    });
+    for (let hop = 0; hop <= FETCH_MAX_REDIRECTS; hop++) {
+      if (hop === FETCH_MAX_REDIRECTS + 1) {
+        throw new Error(t("webErrors.tooManyRedirects", { url: currentUrl }));
+      }
+      await assertPublicHttpUrl(currentUrl);
+      resp = await fetch(currentUrl, {
+        headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain,*/*" },
+        signal: ctl.signal,
+        redirect: "manual"
+      });
+      if (resp.status >= 300 && resp.status < 400) {
+        const next = redirectLocation(resp, currentUrl);
+        if (!next) break;
+        currentUrl = next;
+        continue;
+      }
+      break;
+    }
   } catch (err) {
     if (timedOut) {
-      throw new Error(t("webErrors.fetchTimeout", { ms: timeoutMs, url }));
+      throw new Error(t("webErrors.fetchTimeout", { ms: timeoutMs, url: currentUrl }));
     }
     throw err;
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener("abort", cancel);
   }
-  if (!resp.ok) throw new Error(fetchStatusError(resp.status, url));
+  if (!resp.ok) throw new Error(fetchStatusError(resp.status, currentUrl));
   const contentType = resp.headers.get("content-type") ?? "";
   const declaredLen = Number(resp.headers.get("content-length") ?? "");
   if (Number.isFinite(declaredLen) && declaredLen > FETCH_MAX_BYTES) {
-    throw new Error(t("webErrors.fetchTooLarge", { len: declaredLen, cap: FETCH_MAX_BYTES, url }));
+    throw new Error(t("webErrors.fetchTooLarge", { len: declaredLen, cap: FETCH_MAX_BYTES, url: currentUrl }));
   }
   const raw = await readBodyCapped(resp, FETCH_MAX_BYTES);
   const title = extractTitle(raw);
@@ -9401,8 +9520,8 @@ async function webFetch(url, opts = {}) {
   const truncated = text.length > maxChars;
   const finalText = truncated ? `${text.slice(0, maxChars)}
 
-[\u2026 truncated ${text.length - maxChars} chars \u2026]` : text;
-  return { url, title, text: finalText, truncated };
+[… truncated ${text.length - maxChars} chars …]` : text;
+  return { url: currentUrl, title, text: finalText, truncated };
 }
 async function readBodyCapped(resp, maxBytes) {
   if (!resp.body) return await resp.text();
@@ -9578,6 +9697,7 @@ ${i + 1}. ${r.title}`);
 var import_picomatch2 = __toESM(require_picomatch(), 1);
 import { promises as fs3 } from "fs";
 import * as pathMod4 from "path";
+var import_iconv = require("iconv-lite");
 
 // src/tools/fs/glob.ts
 var import_picomatch = __toESM(require_picomatch(), 1);
@@ -9918,7 +10038,7 @@ async function searchContent(ctx, startAbs, args) {
       throwIfAborted(args.signal);
       const firstNul = raw.indexOf(0);
       if (firstNul !== -1 && firstNul < 8 * 1024) continue;
-      const text = raw.toString("utf8");
+      const { text } = decodeFileBuffer(raw);
       const rel = displayRel2(ctx.rootDir, full);
       const lines = text.split(/\r?\n/);
       const hits = [];
@@ -9983,6 +10103,41 @@ async function searchContent(ctx, startAbs, args) {
 }
 
 // src/tools/filesystem.ts
+function decodeFileBuffer(buf) {
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+    return { text: buf.slice(3).toString("utf8"), encoding: "utf8bom" };
+  }
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    return { text: buf.slice(2).toString("utf16le"), encoding: "utf16le" };
+  }
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    return { text: buf.slice(2).toString("utf16be"), encoding: "utf16be" };
+  }
+  const utf8Text = buf.toString("utf8");
+  if (!utf8Text.includes("\uFFFD")) {
+    return { text: utf8Text, encoding: "utf8" };
+  }
+  try {
+    const gbkText = import_iconv.decode(buf, "gb18030");
+    return { text: gbkText, encoding: "gb18030" };
+  } catch {
+    return { text: utf8Text, encoding: "utf8" };
+  }
+}
+function encodeFile(text, encoding) {
+  if (encoding === "gb18030" || encoding === "gbk" || encoding === "gb2312") {
+    return import_iconv.encode(text, "gb18030");
+  }
+  if (encoding === "utf16le" || encoding === "utf16be") {
+    return Buffer.from(text, encoding);
+  }
+  if (encoding === "utf8bom") {
+    const bom = Buffer.from([0xEF, 0xBB, 0xBF]);
+    const body = Buffer.from(text, "utf8");
+    return Buffer.concat([bom, body]);
+  }
+  return Buffer.from(text, "utf8");
+}
 var DEFAULT_MAX_READ_BYTES = 2 * 1024 * 1024;
 var DEFAULT_MAX_LIST_BYTES = 256 * 1024;
 var DEFAULT_AUTO_PREVIEW_LINES = 200;
@@ -10940,7 +11095,7 @@ function nextRunId() {
   runIdCounter++;
   return `sub-${runIdCounter.toString(36)}`;
 }
-var SUBAGENT_BASE_SYSTEM = `You are a Reasonix subagent. The parent agent spawned you to handle one focused subtask, then return.
+var SUBAGENT_BASE_SYSTEM = `You are a Visionox subagent. The parent agent spawned you to handle one focused subtask, then return.
 
 Rules:
 - Stay on the task you were given. Do not expand scope.
@@ -11312,7 +11467,7 @@ function applyEditBlock(block, rootDir) {
         if (n <= 0) break;
         readBytes += n;
       }
-      const content = inBuf.toString("utf8", 0, readBytes);
+      const { text: content, encoding } = decodeFileBuffer(inBuf.slice(0, readBytes));
       const le = lineEndingOf(content);
       const adaptedSearch = block.search.replace(/\r?\n/g, le);
       const adaptedReplace = block.replace.replace(/\r?\n/g, le);
@@ -11325,7 +11480,7 @@ function applyEditBlock(block, rootDir) {
         };
       }
       const replaced = `${content.slice(0, idx)}${adaptedReplace}${content.slice(idx + adaptedSearch.length)}`;
-      const outBuf = Buffer.from(replaced, "utf8");
+      const outBuf = encodeFile(replaced, encoding);
       ftruncateSync(fd, outBuf.length);
       let written = 0;
       while (written < outBuf.length) {
@@ -11369,7 +11524,9 @@ function snapshotBeforeEdits(blocks, rootDir) {
       continue;
     }
     try {
-      snapshots.push({ path: b.path, prevContent: readFileSync2(abs, "utf8") });
+      const raw = readFileSync2(abs);
+      const { text: decodedText, encoding: prevEncoding } = decodeFileBuffer(raw);
+      snapshots.push({ path: b.path, prevContent: decodedText, prevEncoding });
     } catch {
       snapshots.push({ path: b.path, prevContent: null });
     }
@@ -11396,7 +11553,7 @@ function restoreSnapshots(snapshots, rootDir) {
           message: "removed (the edit had created it)"
         };
       }
-      writeFileSync(abs, snap.prevContent, "utf8");
+      writeFileSync(abs, encodeFile(snap.prevContent, snap.prevEncoding || "utf8"));
       return {
         path: snap.path,
         status: "applied",

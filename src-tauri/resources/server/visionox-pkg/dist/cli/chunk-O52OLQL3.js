@@ -16,7 +16,7 @@ var PauseGate = class {
     const { kind, payload } = opts;
     if (this._listeners.size === 0) {
       throw new Error(
-        `${kind}: no confirmation listener registered \u2014 cannot prompt the user. This tool can only be used inside an interactive Reasonix session.`
+        `${kind}: no confirmation listener registered \u2014 cannot prompt the user. This tool can only be used inside an interactive Visionox session.`
       );
     }
     return new Promise((resolve4) => {
@@ -142,7 +142,7 @@ import * as pathMod2 from "path";
 
 // src/tools/shell-chain.ts
 import { spawn } from "child_process";
-import { closeSync, openSync } from "fs";
+import { closeSync, constants, lstatSync, openSync, realpathSync } from "fs";
 import { devNull } from "os";
 import * as pathMod from "path";
 var UnsupportedSyntaxError = class extends Error {
@@ -327,6 +327,33 @@ function validateRedirectFds(redirects) {
       "multiple stderr redirects in one segment (`2>` / `2>>` / `&>` / `2>&1` conflict)"
     );
 }
+function redirectTargets(cmd) {
+  try {
+    const chain = parseCommandChain(cmd);
+    if (!chain) return [];
+    const targets = [];
+    for (const seg of chain.segments) {
+      for (const r of seg.redirects) {
+        if (r.kind !== "2>&1") targets.push(r.target);
+      }
+    }
+    return targets;
+  } catch {
+    return [];
+  }
+}
+function redirectsEscapeSandbox(cmd, projectRoot) {
+  if (!projectRoot) return false;
+  const targets = redirectTargets(cmd);
+  if (targets.length === 0) return false;
+  const absRoot = pathMod.resolve(projectRoot);
+  for (const t of targets) {
+    if (isNullDeviceAlias(t)) continue;
+    const resolved = pathMod.resolve(t);
+    if (!pathIsUnder(resolved, absRoot)) return true;
+  }
+  return false;
+}
 function parseCommandChain(cmd) {
   const { segs, ops } = splitOnChainOps(cmd);
   const segments = [];
@@ -388,7 +415,8 @@ async function runChain(chain, opts) {
       cwd: opts.cwd,
       timeoutMs: remainingMs,
       buf,
-      signal: opts.signal
+      signal: opts.signal,
+      projectRoot: opts.projectRoot
     });
     lastExit = result.exitCode;
     if (result.timedOut) {
@@ -409,16 +437,62 @@ function isNullDeviceAlias(target) {
   if (process.platform === "win32" && lower === "nul") return true;
   return false;
 }
-function openRedirects(redirects, cwd) {
+function pathIsUnder(child, parent) {
+  const rel = pathMod.relative(parent, child);
+  if (!rel) return true;
+  if (rel.startsWith("..")) return false;
+  if (pathMod.isAbsolute(rel)) return false;
+  return true;
+}
+function openFlags(target, flags) {
+  if (isNullDeviceAlias(target)) return "r" === flags ? constants.O_RDONLY : constants.O_WRONLY | constants.O_CREAT | ("a" === flags ? constants.O_APPEND : constants.O_TRUNC);
+  let numeric = "r" === flags ? constants.O_RDONLY : constants.O_WRONLY | constants.O_CREAT | ("a" === flags ? constants.O_APPEND : constants.O_TRUNC);
+  numeric |= constants.O_NOFOLLOW;
+  return numeric;
+}
+function ensureUnderSandbox(target, projectRoot) {
+  if (!projectRoot) return target;
+  const resolved = pathMod.resolve(target);
+  if (!pathIsUnder(resolved, pathMod.resolve(projectRoot))) {
+    throw new Error(`run_command: redirect target "${target}" escapes the project sandbox (${projectRoot})`);
+  }
+  return resolved;
+}
+function resolveRedirectTarget(target, cwd, projectRoot) {
+  if (isNullDeviceAlias(target)) return target;
+  const candidate = pathMod.resolve(cwd, target);
+  let resolved;
+  try {
+    resolved = realpathSync(candidate);
+  } catch {
+    resolved = candidate;
+  }
+  if (projectRoot) {
+    const absRoot = pathMod.resolve(projectRoot);
+    const absTarget = pathMod.resolve(resolved);
+    if (!pathIsUnder(absTarget, absRoot)) {
+      throw new Error(`run_command: redirect target "${target}" resolves to "${resolved}" which escapes the project sandbox (${projectRoot})`);
+    }
+  }
+  return resolved;
+}
+function validateRedirectTargets(redirects, cwd, projectRoot) {
+  for (const r of redirects) {
+    if (r.kind === "2>&1") continue;
+    resolveRedirectTarget(r.target, cwd, projectRoot);
+  }
+}
+function openRedirects(redirects, cwd, projectRoot) {
   let stdinFd = null;
   let stdoutFd = null;
   let stderrFd = null;
   let mergeStderrToStdout = false;
   let bothFd = null;
   const toClose = [];
+  validateRedirectTargets(redirects, cwd, projectRoot);
   const open = (target, flags) => {
-    const resolved = isNullDeviceAlias(target) ? devNull : pathMod.resolve(cwd, target);
-    const fd = openSync(resolved, flags);
+    const resolved = isNullDeviceAlias(target) ? devNull : resolveRedirectTarget(target, cwd, projectRoot);
+    const fd = openSync(resolved, openFlags(target, flags));
     toClose.push(fd);
     return fd;
   };
@@ -461,7 +535,7 @@ async function runPipeGroup(segments, opts) {
       const isFirst = i === 0;
       const isLast = i === segments.length - 1;
       const seg = segments[i];
-      const io = openRedirects(seg.redirects, opts.cwd);
+      const io = openRedirects(seg.redirects, opts.cwd, opts.projectRoot);
       allFds.push(...io.toClose);
       const { bin, args, spawnOverrides } = prepareSpawn(seg.argv);
       const stdoutSpec = io.stdoutFd !== null ? io.stdoutFd : "pipe";
@@ -769,7 +843,8 @@ function isAllowed(cmd, extra = []) {
   }
   return false;
 }
-function isCommandAllowed(cmd, extra = []) {
+function isCommandAllowed(cmd, extra = [], projectRoot) {
+  if (projectRoot && redirectsEscapeSandbox(cmd, projectRoot)) return false;
   let chain;
   try {
     chain = parseCommandChain(cmd);
@@ -816,7 +891,8 @@ async function runCommand(cmd, opts) {
       cwd: opts.cwd,
       timeoutSec,
       maxOutputChars: maxChars,
-      signal: opts.signal
+      signal: opts.signal,
+      projectRoot: opts.projectRoot
     });
   }
   const timeoutMs = timeoutSec * 1e3;
@@ -1071,7 +1147,7 @@ function registerShellTools(registry, opts) {
       if (isAllowAll()) return true;
       const cmd = typeof args?.command === "string" ? args.command.trim() : "";
       if (!cmd) return false;
-      return isCommandAllowed(cmd, getExtraAllowed());
+      return isCommandAllowed(cmd, getExtraAllowed(), rootDir);
     },
     parameters: {
       type: "object",
@@ -1091,7 +1167,7 @@ function registerShellTools(registry, opts) {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_command: empty command");
       const effectiveTimeout = Math.max(1, Math.min(600, args.timeoutSec ?? timeoutSec));
-      if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed())) {
+      if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed(), rootDir)) {
         const gate = ctx?.confirmationGate ?? pauseGate;
         const choice = await gate.ask({
           kind: "run_command",
@@ -1135,7 +1211,7 @@ function registerShellTools(registry, opts) {
     fn: async (args, ctx) => {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_background: empty command");
-      if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed())) {
+      if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed(), rootDir)) {
         const gate = ctx?.confirmationGate ?? pauseGate;
         const choice = await gate.ask({
           kind: "run_background",
@@ -1659,14 +1735,51 @@ function latestOutputSince(before, after) {
 // src/tools/fs/edit.ts
 import { promises as fs } from "fs";
 import * as pathMod5 from "path";
+var import_iconv = require("iconv-lite");
 function displayRel(rootDir, full) {
   return pathMod5.relative(rootDir, full).replaceAll("\\", "/");
+}
+function decodeFileBuffer(buf) {
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+    return { text: buf.slice(3).toString("utf8"), encoding: "utf8bom" };
+  }
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    return { text: buf.slice(2).toString("utf16le"), encoding: "utf16le" };
+  }
+  if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+    return { text: buf.slice(2).toString("utf16be"), encoding: "utf16be" };
+  }
+  const utf8Text = buf.toString("utf8");
+  if (!utf8Text.includes("\uFFFD")) {
+    return { text: utf8Text, encoding: "utf8" };
+  }
+  try {
+    const gbkText = import_iconv.decode(buf, "gb18030");
+    return { text: gbkText, encoding: "gb18030" };
+  } catch {
+    return { text: utf8Text, encoding: "utf8" };
+  }
+}
+function encodeFile(text, encoding) {
+  if (encoding === "gb18030" || encoding === "gbk" || encoding === "gb2312") {
+    return import_iconv.encode(text, "gb18030");
+  }
+  if (encoding === "utf16le" || encoding === "utf16be") {
+    return Buffer.from(text, encoding);
+  }
+  if (encoding === "utf8bom") {
+    const bom = Buffer.from([0xEF, 0xBB, 0xBF]);
+    const body = Buffer.from(text, "utf8");
+    return Buffer.concat([bom, body]);
+  }
+  return Buffer.from(text, "utf8");
 }
 async function applyEdit(rootDir, abs, args) {
   if (args.search.length === 0) {
     throw new Error("edit_file: search cannot be empty");
   }
-  const before = await fs.readFile(abs, "utf8");
+  const raw = await fs.readFile(abs);
+  const { text: before, encoding } = decodeFileBuffer(raw);
   const le = before.includes("\r\n") ? "\r\n" : "\n";
   const adaptedSearch = args.search.replace(/\r?\n/g, le);
   const adaptedReplace = args.replace.replace(/\r?\n/g, le);
@@ -1681,7 +1794,7 @@ async function applyEdit(rootDir, abs, args) {
     );
   }
   const after = before.slice(0, firstIdx) + adaptedReplace + before.slice(firstIdx + adaptedSearch.length);
-  await fs.writeFile(abs, after, "utf8");
+  await fs.writeFile(abs, encodeFile(after, encoding));
   const rel = displayRel(rootDir, abs);
   const header = `edited ${rel} (${adaptedSearch.length}\u2192${adaptedReplace.length} chars)`;
   const startLine = before.slice(0, firstIdx).split(/\r?\n/).length;
@@ -1716,15 +1829,18 @@ async function applyMultiEdit(rootDir, edits) {
     let state = filesByPath.get(e.abs);
     if (!state) {
       let before;
+      let decoded;
       try {
-        before = await fs.readFile(e.abs, "utf8");
+        const rawBuf = await fs.readFile(e.abs);
+        decoded = decodeFileBuffer(rawBuf);
+        before = decoded.text;
       } catch (err) {
         throw new Error(
           `multi_edit: edit #${i + 1} cannot read ${rel}: ${err.message} (no edits applied)`
         );
       }
       const le = before.includes("\r\n") ? "\r\n" : "\n";
-      state = { before, buf: before, le, hunks: [], deltaChars: 0, touched: 0 };
+      state = { before, buf: before, le, hunks: [], deltaChars: 0, touched: 0, encoding: decoded.encoding };
       filesByPath.set(e.abs, state);
     }
     const adaptedSearch = e.search.replace(/\r?\n/g, state.le);
@@ -1751,14 +1867,14 @@ ${renderEditDiff(adaptedSearch, adaptedReplace, startLine)}`);
   const attempted = [];
   try {
     for (const [abs, state] of filesByPath) {
-      attempted.push({ abs, before: state.before });
-      await fs.writeFile(abs, state.buf, "utf8");
+      attempted.push({ abs, before: state.before, encoding: state.encoding });
+      await fs.writeFile(abs, encodeFile(state.buf, state.encoding || "utf8"));
     }
   } catch (writeErr) {
     const rollbackFailures = [];
     for (const item of [...attempted].reverse()) {
       try {
-        await fs.writeFile(item.abs, item.before, "utf8");
+        await fs.writeFile(item.abs, encodeFile(item.before, item.encoding || "utf8"));
       } catch (restoreErr) {
         rollbackFailures.push(`${displayRel(rootDir, item.abs)}: ${restoreErr.message}`);
       }
@@ -1836,6 +1952,7 @@ export {
   lineDiff,
   JobRegistry,
   BUILTIN_ALLOWLIST,
+  isNullDeviceAlias,
   runCommand,
   registerShellTools,
   formatCommandResult

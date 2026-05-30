@@ -12,7 +12,7 @@ var signalHandlerInstalled = false;
 var stopping = false;
 function defaultOutPath() {
   const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").replace("Z", "");
-  return resolve(process.cwd(), `reasonix-cpu-${stamp}.cpuprofile`);
+  return resolve(process.cwd(), `visionox-cpu-${stamp}.cpuprofile`);
 }
 async function startCpuProfile(pathArg) {
   if (session) return outPath ?? defaultOutPath();
@@ -94,7 +94,7 @@ function dumpStartupProfile(stream = process.stderr) {
     prev = m.t;
   }
   lines.push(
-    `\u2500\u2500\u2500 ${Math.round(totalMs)}ms total \xB7 last phase ${marks[marks.length - 1].name} \xB7 set REASONIX_PROFILE_STARTUP=0 to silence`
+    `\u2500\u2500\u2500 ${Math.round(totalMs)}ms total \xB7 last phase ${marks[marks.length - 1].name} \xB7 set VISIONOX_PROFILE_STARTUP=0 to silence`
   );
   stream.write(`${lines.join("\n")}
 `);

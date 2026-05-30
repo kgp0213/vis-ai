@@ -1756,7 +1756,7 @@ var require_picomatch2 = __commonJS({
 });
 
 // src/config.ts
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 
@@ -2231,13 +2231,39 @@ function readConfig(path = defaultConfigPath()) {
   }
   return {};
 }
-function writeConfig(cfg, path = defaultConfigPath()) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(cfg, null, 2), "utf8");
+function atomicWriteSync(path, body, tmp, mode = 384) {
   try {
-    chmodSync(path, 384);
+    writeFileSync(tmp, body, "utf8");
+    try {
+      chmodSync(tmp, mode);
+    } catch {
+    }
+    try {
+      renameSync(tmp, path);
+    } catch (err) {
+      if (err.code !== "EXDEV") throw err;
+      copyFileSync(tmp, path);
+      try {
+        chmodSync(path, mode);
+      } catch {
+      }
+    }
+  } catch (err2) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+    }
+    throw err2;
+  }
+  try {
+    unlinkSync(tmp);
   } catch {
   }
+}
+function writeConfig(cfg, path = defaultConfigPath()) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  atomicWriteSync(path, JSON.stringify(cfg, null, 2), tmp);
 }
 function loadLanguage(path = defaultConfigPath()) {
   return readConfig(path).lang;

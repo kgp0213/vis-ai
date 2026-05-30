@@ -3134,11 +3134,11 @@ async function maybeStartCpuProfile(flag) {
 installProxyIfConfigured();
 markPhase("cli_module_loaded");
 function defaultSystemPrompt(modelId) {
-  return `You are Reasonix, a helpful DeepSeek-powered assistant. Be concise and accurate. Use tools when available.
+  return `You are Visionox, a helpful DeepSeek-powered assistant. Be concise and accurate. Use tools when available.
 
 # Cite or shut up \u2014 non-negotiable
 
-Every factual claim about a codebase must be backed by evidence. Reasonix VALIDATES your citations \u2014 broken paths render in **red strikethrough with \u274C** in front of the user.
+Every factual claim about a codebase must be backed by evidence. Visionox VALIDATES your citations \u2014 broken paths render in **red strikethrough with \u274C** in front of the user.
 
 **Positive claims** \u2014 append a markdown link:
 - \u2705 \`The MCP client supports listResources [listResources](src/mcp/client.ts:142).\`
@@ -3209,7 +3209,7 @@ function resolveDashboardPort(flagValue, noConfig) {
   return typeof fromCfg === "number" && Number.isInteger(fromCfg) && fromCfg >= 1 && fromCfg <= 65535 ? fromCfg : void 0;
 }
 var program2 = new Command();
-program2.name("reasonix").description(t("cli.description")).version(VERSION).option("-c, --continue", t("cli.continue"));
+program2.name("visionox").description(t("cli.description")).version(VERSION).option("-c, --continue", t("cli.continue"));
 program2.action(async (opts) => {
   const cfg = readConfig();
   const cwd = process.cwd();
@@ -3233,7 +3233,7 @@ program2.action(async (opts) => {
 `)
   );
   process.stderr.write(
-    "\u2139 chat mode (no filesystem tools). Run `reasonix code` to work on files in this folder.\n"
+    "\u2139 chat mode (no filesystem tools). Run `visionox code` to work on files in this folder.\n"
   );
   const { chatCommand } = await import("./chat-7ES4IBNH.js");
   const defaultBase = defaultSystemPrompt(defaults.model);
@@ -3378,7 +3378,7 @@ program2.command("run <task>").description(t("cli.run")).option("-m, --model <id
     mcpPrefix: opts.mcpPrefix
   });
 });
-program2.command("acp").description("run reasonix as an Agent Client Protocol (ACP) agent on stdio NDJSON JSON-RPC").option("-m, --model <id>", t("ui.modelIdHint")).option("--dir <path>", "root directory for filesystem tools (default: cwd)").option("--preset <name>", t("ui.presetHintShort")).option("--budget <usd>", t("ui.budgetHintShort"), (v) => Number.parseFloat(v)).option("--transcript <path>", t("ui.transcriptHint")).option("--yolo", t("ui.yoloHint")).option(
+program2.command("acp").description("run visionox as an Agent Client Protocol (ACP) agent on stdio NDJSON JSON-RPC").option("-m, --model <id>", t("ui.modelIdHint")).option("--dir <path>", "root directory for filesystem tools (default: cwd)").option("--preset <name>", t("ui.presetHintShort")).option("--budget <usd>", t("ui.budgetHintShort"), (v) => Number.parseFloat(v)).option("--transcript <path>", t("ui.transcriptHint")).option("--yolo", t("ui.yoloHint")).option(
   "--mcp <spec>",
   t("ui.mcpSpecHintShort"),
   (value, previous = []) => [...previous, value],

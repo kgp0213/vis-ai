@@ -25,13 +25,13 @@ function planUpdate(input) {
     };
   }
   if (diff === 0) {
-    return { action: "up-to-date", message: `reasonix ${input.current} is up to date.` };
+    return { action: "up-to-date", message: `visionox ${input.current} is up to date.` };
   }
   if (input.installSource === "npx") {
     return {
       action: "npx-hint",
       message: [
-        `reasonix ${input.latest} is available.`,
+        `visionox ${input.latest} is available.`,
         "you're running via npx \u2014 the next `npx reasonix ...` launch will auto-fetch",
         "the latest (npx caches packages for a short window). to force a refresh",
         "sooner, clear the cache: `npm cache clean --force`."
@@ -42,8 +42,8 @@ function planUpdate(input) {
     return {
       action: "manual-hint",
       message: [
-        `reasonix ${input.latest} is available, but the install source could not be determined automatically.`,
-        "run one of these manually based on how you installed reasonix:",
+        `visionox ${input.latest} is available, but the install source could not be determined automatically.`,
+        "run one of these manually based on how you installed visionox:",
         ...MANUAL_UPDATE_COMMANDS.map((c) => `  ${c}`)
       ].join("\n")
     };
@@ -51,7 +51,7 @@ function planUpdate(input) {
   const command = buildUpdateCommand(input.installSource, input.npmPrefix ?? null);
   return {
     action: "run-install",
-    message: `upgrading reasonix ${input.current} \u2192 ${input.latest} (via ${input.installSource})`,
+    message: `upgrading visionox ${input.current} \u2192 ${input.latest} (via ${input.installSource})`,
     command
   };
 }
@@ -84,7 +84,7 @@ async function updateCommand(opts = {}) {
   const detectSource = opts.detectSource ?? (() => detectInstallSource());
   const detectPrefix = opts.detectPrefix ?? (() => detectNpmInstallPrefix());
   const doSpawn = opts.spawnInstall ?? defaultSpawn;
-  write(`current: reasonix ${VERSION}
+  write(`current: visionox ${VERSION}
 `);
   const latest = await fetchLatest();
   if (!latest) {
@@ -92,7 +92,7 @@ async function updateCommand(opts = {}) {
     exit(1);
     return;
   }
-  write(`latest:  reasonix ${latest}
+  write(`latest:  visionox ${latest}
 `);
   const installSource = detectSource();
   const npmPrefix = installSource === "npm" ? detectPrefix() : null;

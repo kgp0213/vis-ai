@@ -119,14 +119,14 @@ async function mcpListCommand(opts = {}) {
   for (const e of shown) printEntry(e);
   if (ranked.length > limit) {
     console.log(
-      `  \u2026 ${ranked.length - limit} more loaded \u2014 use \`reasonix mcp search <query>\` to filter`
+      `  \u2026 ${ranked.length - limit} more loaded \u2014 use \`visionox mcp search <query>\` to filter`
     );
   }
   if (result.hasMore) {
-    console.log("  \u25B8 more pages available \u2014 `reasonix mcp list --pages <n>` or --all");
+    console.log("  \u25B8 more pages available \u2014 `visionox mcp list --pages <n>` or --all");
   }
   console.log("");
-  console.log("Install:  reasonix mcp install <name>");
+  console.log("Install:  visionox mcp install <name>");
 }
 function matchFilter(query) {
   const q = query.toLowerCase();
@@ -135,7 +135,7 @@ function matchFilter(query) {
 async function mcpSearchCommand(query, opts = {}) {
   const q = query.trim();
   if (!q) {
-    console.error("usage: reasonix mcp search <query>");
+    console.error("usage: visionox mcp search <query>");
     process.exit(1);
   }
   const handle = await openRegistry({ noCache: opts.refresh, onProgress: progressToStderr });
@@ -195,7 +195,7 @@ function findEntry(entries, name) {
 async function mcpInstallCommand(name, opts = {}) {
   const target = name.trim();
   if (!target) {
-    console.error("usage: reasonix mcp install <name>");
+    console.error("usage: visionox mcp install <name>");
     process.exit(1);
   }
   const handle = await openRegistry({ noCache: opts.refresh, onProgress: progressToStderr });
@@ -218,7 +218,7 @@ async function mcpInstallCommand(name, opts = {}) {
       `No MCP server named "${target}" found after walking ${handle.cache.pagination.pagesLoaded} page(s) of the ${handle.source} registry.`
     );
     if (handle.cache.pagination.nextCursor !== null) {
-      console.error(`Try: reasonix mcp install ${target} --max-pages 100`);
+      console.error(`Try: visionox mcp install ${target} --max-pages 100`);
     }
     process.exit(1);
   }
@@ -262,7 +262,7 @@ async function mcpInstallCommand(name, opts = {}) {
   }
   console.log("");
   console.log(
-    "Use it:  reasonix chat   (or `reasonix code`) \u2014 the server will be bridged automatically."
+    "Use it:  visionox chat   (or `visionox code`) \u2014 the server will be bridged automatically."
   );
 }
 function parseInstalledName(spec) {

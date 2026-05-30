@@ -89,7 +89,7 @@ var EN = {
   slashEnabledDetail: "  index size: {chunks} chunks across {files} files",
   slashEnabledHowto: "  the model will call semantic_search automatically when it fits.",
   slashIndexMissing: "\u2717 no index built yet for this project.",
-  slashHowToBuild: "  to enable, exit Reasonix and run in your shell:\n      reasonix index",
+  slashHowToBuild: "  to enable, exit Visionox and run in your shell:\n      visionox index",
   slashOllamaMissing: "  prerequisite: install Ollama from https://ollama.com",
   slashDaemonDown: "  Ollama is installed but the daemon isn't running. start it with: ollama serve",
   slashIndexInfo: "  what semantic_search does: cross-language code understanding via local embeddings.\n  better than grep when you describe WHAT something does, not WHICH token to find."
@@ -123,7 +123,7 @@ var ZH = {
   slashEnabledDetail: "  \u7D22\u5F15\u89C4\u6A21\uFF1A{chunks} \u4E2A\u7247\u6BB5\uFF0C{files} \u4E2A\u6587\u4EF6",
   slashEnabledHowto: "  \u6A21\u578B\u5728\u5408\u9002\u7684\u65F6\u5019\u4F1A\u81EA\u52A8\u8C03\u7528 semantic_search\u3002",
   slashIndexMissing: "\u2717 \u5F53\u524D\u9879\u76EE\u8FD8\u6CA1\u6709\u7D22\u5F15\u3002",
-  slashHowToBuild: "  \u542F\u7528\u65B9\u5F0F\uFF1A\u9000\u51FA Reasonix\uFF0C\u5728\u7EC8\u7AEF\u8FD0\u884C\uFF1A\n      reasonix index",
+  slashHowToBuild: "  \u542F\u7528\u65B9\u5F0F\uFF1A\u9000\u51FA Visionox\uFF0C\u5728\u7EC8\u7AEF\u8FD0\u884C\uFF1A\n      visionox index",
   slashOllamaMissing: "  \u524D\u7F6E\u4F9D\u8D56\uFF1A\u4ECE https://ollama.com \u5B89\u88C5 Ollama",
   slashDaemonDown: "  \u5DF2\u88C5 Ollama \u4F46\u5B88\u62A4\u8FDB\u7A0B\u672A\u542F\u52A8\uFF0C\u8BF7\u8FD0\u884C\uFF1Aollama serve",
   slashIndexInfo: '  semantic_search \u7528\u672C\u5730 embedding \u505A\u8DE8\u8BED\u8A00\u4EE3\u7801\u7406\u89E3\u3002\n  \u5F53\u4F60\u63CF\u8FF0"\u505A\u4EC0\u4E48"\u800C\u4E0D\u662F\u5177\u4F53 token \u65F6\uFF0C\u6BD4 grep \u66F4\u597D\u3002'

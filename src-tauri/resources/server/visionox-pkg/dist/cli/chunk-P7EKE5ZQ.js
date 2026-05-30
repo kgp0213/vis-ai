@@ -44415,8 +44415,8 @@ async function openInExternalEditor(initial2) {
       detail: t("composer.editorMissing")
     };
   }
-  const dir = mkdtempSync(join3(tmpdir(), "reasonix-compose-"));
-  const path = join3(dir, "REASONIX_INPUT.md");
+  const dir = mkdtempSync(join3(tmpdir(), "visionox-compose-"));
+  const path = join3(dir, "VISIONOX_INPUT.md");
   try {
     writeFileSync3(path, initial2, "utf8");
     await spawnEditor(editor, path);
@@ -44518,7 +44518,7 @@ function FooterRow({ isBrowse, hasFolder }) {
 
 // src/cli/ui/BootSplash.tsx
 var import_react2 = __toESM(require_react(), 1);
-var REASONIX_LOGO = [
+var VISIONOX_LOGO = [
   "\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2557\u2588\u2588\u2557  \u2588\u2588\u2557",
   "\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255D\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255D\u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551\u2588\u2588\u2551\u255A\u2588\u2588\u2557\u2588\u2588\u2554\u255D",
   "\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255D\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551\u2588\u2588\u2551 \u255A\u2588\u2588\u2588\u2554\u255D ",
@@ -44562,7 +44562,7 @@ function BootSplash() {
   const waveOffset = frame % 4;
   const wave = WAVE_SOURCE.slice(waveOffset, waveOffset + WAVE_WIDTH);
   const dots = ".".repeat(frame % 4 + 1);
-  return /* @__PURE__ */ import_react2.default.createElement(Box_default, { flexDirection: "column", alignItems: "center", marginY: 1 }, /* @__PURE__ */ import_react2.default.createElement(Box_default, { flexDirection: "column", alignItems: "flex-start", marginBottom: 1 }, REASONIX_LOGO.map((line) => /* @__PURE__ */ import_react2.default.createElement(Text, { key: line, color: TONE.brand, bold: true }, line))), /* @__PURE__ */ import_react2.default.createElement(Box_default, { flexDirection: "column", alignItems: "flex-start" }, spout.map((line, i) => (
+  return /* @__PURE__ */ import_react2.default.createElement(Box_default, { flexDirection: "column", alignItems: "center", marginY: 1 }, /* @__PURE__ */ import_react2.default.createElement(Box_default, { flexDirection: "column", alignItems: "flex-start", marginBottom: 1 }, VISIONOX_LOGO.map((line) => /* @__PURE__ */ import_react2.default.createElement(Text, { key: line, color: TONE.brand, bold: true }, line))), /* @__PURE__ */ import_react2.default.createElement(Box_default, { flexDirection: "column", alignItems: "flex-start" }, spout.map((line, i) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length spout column, position is the identity
     /* @__PURE__ */ import_react2.default.createElement(Text, { key: i, color: TONE.accent }, line.length > 0 ? line : " ")
   )), WHALE_LINES.map((line) => /* @__PURE__ */ import_react2.default.createElement(Text, { key: line, color: TONE.brand, bold: true }, line)), /* @__PURE__ */ import_react2.default.createElement(Text, { color: FG.faint }, wave)), /* @__PURE__ */ import_react2.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react2.default.createElement(Text, { color: FG.meta }, `${t("common.loading")}${dots}`)));
@@ -45365,15 +45365,15 @@ function driftReason(kind) {
 }
 function driftMessage(drift) {
   if (drift.kind === "append") {
-    return `tool list grew (${drift.added.length} added: ${drift.added.join(", ")}). Restart Reasonix to bridge the new tool(s).`;
+    return `tool list grew (${drift.added.length} added: ${drift.added.join(", ")}). Restart Visionox to bridge the new tool(s).`;
   }
   if (drift.kind === "edit") {
-    return `tool description/schema changed for ${drift.edited.join(", ")}. Restart Reasonix to apply.`;
+    return `tool description/schema changed for ${drift.edited.join(", ")}. Restart Visionox to apply.`;
   }
   if (drift.kind === "remove") {
-    return `tool(s) removed: ${drift.removed.join(", ")}. Restart Reasonix to drop them from the registry.`;
+    return `tool(s) removed: ${drift.removed.join(", ")}. Restart Visionox to drop them from the registry.`;
   }
-  return "tool list reordered or restructured \u2014 cache prefix would be invalidated. Restart Reasonix.";
+  return "tool list reordered or restructured \u2014 cache prefix would be invalidated. Restart Visionox.";
 }
 function toolsToSpecs(tools) {
   return tools.map((t2) => ({
@@ -45610,11 +45610,11 @@ function McpMarketplace({ onClose, postInfo, reloadMcp, pickerPorts }) {
           postInfo(`\u2713 uninstalled ${entry.name} \u2014 bridge dropped`);
         } catch (err) {
           postInfo(
-            `\u2713 uninstalled ${entry.name} \u2014 restart \`reasonix code\` to drop the bridge (reload failed: ${err.message})`
+            `\u2713 uninstalled ${entry.name} \u2014 restart \`visionox code\` to drop the bridge (reload failed: ${err.message})`
           );
         }
       } else {
-        postInfo(`\u2713 uninstalled ${entry.name} \u2014 restart \`reasonix code\` to drop the bridge`);
+        postInfo(`\u2713 uninstalled ${entry.name} \u2014 restart \`visionox code\` to drop the bridge`);
       }
     },
     [postInfo, reloadMcp]
@@ -45668,11 +45668,11 @@ function McpMarketplace({ onClose, postInfo, reloadMcp, pickerPorts }) {
             }
           } catch (err) {
             postInfo(
-              `\u2713 installed ${entry.name} \u2014 restart \`reasonix code\` to bridge (reload failed: ${err.message})${envHint}`
+              `\u2713 installed ${entry.name} \u2014 restart \`visionox code\` to bridge (reload failed: ${err.message})${envHint}`
             );
           }
         } else {
-          postInfo(`\u2713 installed ${entry.name} \u2014 restart \`reasonix code\` to bridge${envHint}`);
+          postInfo(`\u2713 installed ${entry.name} \u2014 restart \`visionox code\` to bridge${envHint}`);
         }
       } catch (err) {
         setState((s) => ({ ...s, status: `install failed: ${err.message}` }));
@@ -50552,7 +50552,7 @@ function WelcomeBanner({
       paddingX: 4,
       paddingY: 1
     },
-    /* @__PURE__ */ import_react32.default.createElement(Box_default, { flexDirection: "row", gap: 2 }, /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.brand, bold: true }, "REASONIX"), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.faint }, "\xD7"), /* @__PURE__ */ import_react32.default.createElement(Box_default, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ import_react32.default.createElement(Text, null, "\u{1F40B}"), /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.accent, bold: true }, "DeepSeek"))),
+    /* @__PURE__ */ import_react32.default.createElement(Box_default, { flexDirection: "row", gap: 2 }, /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.brand, bold: true }, "VISIONOX"), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.faint }, "\xD7"), /* @__PURE__ */ import_react32.default.createElement(Box_default, { flexDirection: "row", gap: 1 }, /* @__PURE__ */ import_react32.default.createElement(Text, null, "\u{1F40B}"), /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.accent, bold: true }, "DeepSeek"))),
     /* @__PURE__ */ import_react32.default.createElement(Box_default, { marginTop: 1, flexDirection: "column", alignItems: "center" }, /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.body }, tagline), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.meta }, taglineSub))
   ), /* @__PURE__ */ import_react32.default.createElement(Box_default, { marginTop: 1 }, /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.sub }, startTextRaw)), /* @__PURE__ */ import_react32.default.createElement(Box_default, { marginTop: 1, flexDirection: "row", gap: 3 }, HINTS.map((cmd) => /* @__PURE__ */ import_react32.default.createElement(Text, { key: cmd, color: FG.meta }, cmd))), inCodeMode && workspaceRoot ? /* @__PURE__ */ import_react32.default.createElement(Box_default, { marginTop: 1, flexDirection: "row", gap: 1 }, /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.brand }, t("welcomeBanner.workspace")), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.faint }, "\xB7"), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.body }, workspaceRoot), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.faint }, t("welcomeBanner.relaunchHint"))) : null, dashboardUrl ? /* @__PURE__ */ import_react32.default.createElement(Box_default, { marginTop: 1, flexDirection: "row", gap: 1 }, /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.brand, bold: true }, t("welcomeBanner.dashboard")), /* @__PURE__ */ import_react32.default.createElement(Text, { color: FG.faint }, "\xB7"), /* @__PURE__ */ import_react32.default.createElement(Text, { color: TONE.accent }, dashboardUrl)) : null);
 }
@@ -50625,7 +50625,7 @@ import { tmpdir as tmpdir2 } from "os";
 import { join as join4 } from "path";
 var OSC_52_LIMIT = 75e3;
 function writeClipboard(text) {
-  const dir = mkdtempSync2(join4(tmpdir2(), "reasonix-clip-"));
+  const dir = mkdtempSync2(join4(tmpdir2(), "visionox-clip-"));
   const filePath = join4(dir, "clip.txt");
   let osc52 = false;
   if (text.length <= OSC_52_LIMIT) {
@@ -50913,16 +50913,16 @@ function loopEventToDashboard(ev, ctx) {
 import { closeSync, fstatSync, mkdirSync as mkdirSync3, openSync, readSync, writeSync } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join5 } from "path";
-var PROJECT_HEADER = `# Reasonix project memory
+var PROJECT_HEADER = `# Visionox project memory
 
 Notes the user pinned via the \`#\` prompt prefix. The whole file is
 loaded into the immutable system prefix every session \u2014 keep it terse.
 
 `;
-var GLOBAL_HEADER = `# Reasonix global memory
+var GLOBAL_HEADER = `# Visionox global memory
 
 Cross-project notes the user pinned via the \`#g\` prompt prefix. Loaded
-into every Reasonix session's prefix regardless of working directory.
+into every Visionox session's prefix regardless of working directory.
 Private to this machine \u2014 not committed anywhere.
 
 `;
@@ -55272,7 +55272,7 @@ var INIT_PROMPT = [
   "# Task: Initialize REASONIX.md",
   "",
   "I want you to generate a REASONIX.md at the project root that captures",
-  "the working knowledge a future Reasonix session needs to be productive",
+  "the working knowledge a future Visionox session needs to be productive",
   "here. This file is auto-pinned into your system prompt every launch,",
   "so its size and accuracy matter.",
   "",
@@ -57889,7 +57889,7 @@ function AppInner({
   if (transcript && !transcriptRef.current) {
     transcriptRef.current = openTranscriptFile(transcript, {
       version: 1,
-      source: "reasonix chat",
+      source: "visionox chat",
       model: model2,
       startedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
@@ -58044,7 +58044,7 @@ function AppInner({
         log.pushWarning(
           `MCP \xB7 ${notice.name} failed`,
           `${notice.reason}
-\u2192 run \`reasonix setup\` to remove this entry, or fix the underlying issue (missing npm package, network, etc.).`
+\u2192 run \`visionox setup\` to remove this entry, or fix the underlying issue (missing npm package, network, etc.).`
         );
         bumpReady();
       } else if (notice.kind === "slow") {
@@ -58540,7 +58540,7 @@ function AppInner({
   } = useLoopMode({ log, busyRef, handleSubmitRef });
   const startWalkthrough = (0, import_react87.useCallback)(() => {
     if (!codeMode) {
-      return "/walk is only available inside `reasonix code`.";
+      return "/walk is only available inside `visionox code`.";
     }
     if (pendingEdits.current.length === 0) {
       return "nothing pending \u2014 nothing to walk through.";
@@ -60096,7 +60096,7 @@ ${answer}`, "brand");
             onSwitchSession(outcome.name);
           } else {
             log.pushInfo(
-              `\u25B8 to switch to "${outcome.name}", quit and run: reasonix chat --session ${outcome.name}`
+              `\u25B8 to switch to "${outcome.name}", quit and run: visionox chat --session ${outcome.name}`
             );
           }
           return;
@@ -60107,7 +60107,7 @@ ${answer}`, "brand");
             onSwitchSession(freshSessionName(session));
           } else {
             log.pushInfo(
-              "\u25B8 to start a fresh session, quit and run: reasonix chat (no --session flag)"
+              "\u25B8 to start a fresh session, quit and run: visionox chat (no --session flag)"
             );
           }
           return;

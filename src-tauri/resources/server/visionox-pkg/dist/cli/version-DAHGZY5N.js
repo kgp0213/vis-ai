@@ -25,7 +25,7 @@ import "./chunk-TUK7OWJA.js";
 
 // src/cli/commands/version.ts
 function versionCommand() {
-  console.log(`reasonix ${VERSION}`);
+  console.log(`visionox ${VERSION}`);
 }
 export {
   versionCommand

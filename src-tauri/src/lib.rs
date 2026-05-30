@@ -1,27 +1,49 @@
-use std::io::BufRead;
-use std::io::{Read, Write};
+use std::io::{BufRead, Write};
 use std::net::TcpStream;
-use std::time::Duration;
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
     window::Color,
+    Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+use windows_sys::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    PROCESS_TERMINATE,
+};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+const STILL_ACTIVE: u32 = 259;
+
+static DIAG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+fn log_diag(msg: &str) {
+    use std::io::Write;
+    let path = match DIAG_PATH.get() {
+        Some(p) => p,
+        None => return,
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
 
 struct JobObject {
     handle: HANDLE,
@@ -29,15 +51,22 @@ struct JobObject {
 
 impl JobObject {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // SAFETY: null name creates an unnamed job object; null attributes
+        // uses the default security descriptor. Both are valid arguments.
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if handle.is_null() {
             return Err("CreateJobObjectW failed".into());
         }
 
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION =
-            unsafe { std::mem::zeroed() };
+        // SAFETY: JOBOBJECT_EXTENDED_LIMIT_INFORMATION is a C struct
+        // composed of integer fields; all bit patterns are valid and
+        // zero-initialization is safe.
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 
+        // SAFETY: handle is a valid job object handle verified non-null above;
+        // &limits points to a correctly initialized JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+        // the size argument matches the struct size exactly.
         let ret = unsafe {
             SetInformationJobObject(
                 handle,
@@ -47,6 +76,8 @@ impl JobObject {
             )
         };
         if ret == 0 {
+            // SAFETY: handle is a valid handle that was successfully created
+            // above and is about to be abandoned on this error path.
             unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
             return Err("SetInformationJobObject failed".into());
         }
@@ -55,13 +86,18 @@ impl JobObject {
     }
 
     fn assign(&self, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
-        let proc_handle =
-            unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        // SAFETY: pid comes from Child::id() which is a valid OS process ID;
+        // 0 = no handle inheritance; PROCESS_SET_QUOTA | PROCESS_TERMINATE
+        // are the minimum rights needed for job assignment.
+        let proc_handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
         if proc_handle.is_null() {
             return Err("OpenProcess failed".into());
         }
 
+        // SAFETY: self.handle is a valid job object handle; proc_handle is a
+        // valid process handle verified non-null above.
         let ret = unsafe { AssignProcessToJobObject(self.handle, proc_handle) };
+        // SAFETY: proc_handle is no longer needed after job assignment.
         unsafe { windows_sys::Win32::Foundation::CloseHandle(proc_handle) };
         if ret == 0 {
             return Err("AssignProcessToJobObject failed".into());
@@ -77,6 +113,9 @@ unsafe impl Sync for JobObject {}
 
 impl Drop for JobObject {
     fn drop(&mut self) {
+        // SAFETY: self.handle is a valid job object handle created in new().
+        // Closing the handle causes KILL_ON_JOB_CLOSE to terminate all
+        // assigned processes if this is the last handle.
         unsafe { windows_sys::Win32::Foundation::CloseHandle(self.handle) };
     }
 }
@@ -88,13 +127,20 @@ struct ServerState {
 }
 
 /// Spawn the Node.js launcher and block until we parse the dashboard URL.
-fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::error::Error>> {
+/// The child is assigned to `job` immediately after spawn so that
+/// KILL_ON_JOB_CLOSE guarantees cleanup even if the parent exits early.
+fn spawn_server_blocking(
+    job: &JobObject,
+) -> Result<(Child, String, u16, String), Box<dyn std::error::Error>> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_default();
 
-    let launcher = exe_dir.join("resources").join("server").join("launcher.mjs");
+    let launcher = exe_dir
+        .join("resources")
+        .join("server")
+        .join("launcher.mjs");
     let node_exe = exe_dir.join("resources").join("server").join("node.exe");
 
     let node_path = if node_exe.exists() {
@@ -103,7 +149,10 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         std::path::PathBuf::from("node")
     };
 
-    println!("[tauri] launching: {:?} {:?}", node_path, launcher);
+    log_diag(&format!(
+        "[tauri] launching: {:?} {:?}",
+        node_path, launcher
+    ));
 
     let mut child = Command::new(&node_path)
         .arg(&launcher)
@@ -113,6 +162,9 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
+
+    // P1-2: assign to job object immediately to prevent orphan processes
+    job.assign(child.id())?;
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
     let reader = std::io::BufReader::new(stdout);
@@ -124,25 +176,41 @@ fn spawn_server_blocking() -> Result<(Child, String, u16, String), Box<dyn std::
         use std::io::Write;
         let log_path = exe_dir_clone.join("launcher-stderr.log");
         let r = std::io::BufReader::new(stderr);
-        for line in r.lines() {
-            if let Ok(l) = line {
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
-                    let _ = writeln!(f, "{}", l);
-                }
+        for l in r.lines().map_while(Result::ok) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                let _ = writeln!(f, "{}", l);
             }
         }
+    });
+
+    // P0-2: watchdog thread — if Node never writes a URL line within 30s, abort
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let timed_out_flag = timed_out.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(30));
+        timed_out_flag.store(true, Ordering::Release);
+        log_diag("[rust] readline timeout — child did not produce URL in 30s");
     });
 
     let mut url = String::new();
     let mut port: u16 = 0;
     let mut token = String::new();
     for line in reader.lines() {
+        // Check timeout flag each iteration
+        if timed_out.load(Ordering::Acquire) {
+            let _ = child.kill();
+            return Err("launcher timed out waiting for dashboard URL".into());
+        }
         let line = line?;
-        println!("[launcher] {}", line);
+        log_diag(&format!("[launcher] {line}"));
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
             if let Some(err) = parsed["error"].as_str() {
                 let _ = child.kill();
-                return Err(format!("launcher error: {}", err).into());
+                return Err(format!("launcher error: {err}").into());
             }
             if let Some(u) = parsed["url"].as_str() {
                 url = u.to_string();
@@ -184,18 +252,27 @@ fn check_health(port: u16, token: &str) -> bool {
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
-    let mut buf = [0u8; 200];
-    match stream.read(&mut buf) {
-        Ok(n) => {
-            let head = String::from_utf8_lossy(&buf[..n]);
-            head.contains("200")
-        }
-        Err(_) => false,
+    // P2: use BufRead::read_line to read the full HTTP status line
+    // — TcpStream::read() may return a partial line
+    let mut reader = std::io::BufReader::new(&mut stream);
+    let mut head = String::new();
+    if reader.read_line(&mut head).is_err() {
+        return false;
     }
+    let head = head.trim_end();
+    head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // P3: initialize diagnostics log path early so background threads
+    // spawned in setup() can write diag entries regardless of ordering.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default();
+    let _ = DIAG_PATH.set(exe_dir.join("launcher-diag.log"));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
         .manage(Mutex::new(ServerState {
@@ -205,28 +282,12 @@ pub fn run() {
         }))
         .setup(|app| {
             // ── Create main window ────────────────────────────────
-            //
-            // The loading page (spinner + "Starting server…") lives in
-            // src/index.html, which is embedded in the binary twice:
-            //
-            //   1. `generate_context!()` reads frontendDist=../src and
-            //      serves it when the WebView navigates to WebviewUrl::App
-            //
-            //   2. WebviewWindowBuilder::background_color matches the
-            //      page's #f3f4f6, so the window never flashes white
-            //
-            // We intentionally do NOT inject an initialization_script
-            // that calls document.write().  In WebView2 (Windows),
-            // document.write() on an uninitialised document can trigger
-            // quirks-mode rendering where the CSS `height: 100%` chain
-            // (html → body → viewport) does not resolve, causing the
-            // flexbox-centred spinner to snap to the top-left corner.
             let main_window = WebviewWindowBuilder::new(
                 app,
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .title("")
+            .title("Visionox")
             .background_color(Color::from((243u8, 244u8, 246u8)))
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 500.0)
@@ -243,49 +304,122 @@ pub fn run() {
             let win_for_url = main_window.clone();
             let app_handle = app.handle().clone();
 
+            // P0-4: catch_unwind so a panic doesn't silently kill the thread
             std::thread::spawn(move || {
-                match spawn_server_blocking() {
-                    Ok((child, url, port, token)) => {
-                        println!("[tauri] dashboard ready at {}", url);
-                        let _ = job_for_thread.assign(child.id());
-                        let state = app_handle.state::<Mutex<ServerState>>();
-                        {
-                            let mut s = state.lock().unwrap();
-                            s.child = Some(child);
-                            s.url = Some(url.clone());
-                            s.job = Some(job_for_thread);
-                        }
-                        let mut healthy = false;
-                        for attempt in 0..15 {
-                            if check_health(port, &token) {
-                                healthy = true;
-                                break;
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        log_diag("[rust] background thread started");
+                        match spawn_server_blocking(&job_for_thread) {
+                            Ok((child, url, port, token)) => {
+                                log_diag(&format!(
+                                    "[rust] server spawned — url={url}, port={port}"
+                                ));
+                                let child_pid = child.id();
+                                let state = app_handle.state::<Mutex<ServerState>>();
+                                {
+                                    // P1-4: poison-safe lock
+                                    let mut s = state
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    s.child = Some(child);
+                                    s.url = Some(url.clone());
+                                    s.job = Some(job_for_thread);
+                                }
+                                let mut healthy = false;
+                                let health_start = std::time::Instant::now();
+                                for attempt in 0..15 {
+                                    log_diag(&format!(
+                                        "[rust] health check attempt {}/15",
+                                        attempt + 1
+                                    ));
+                                    if check_health(port, &token) {
+                                        healthy = true;
+                                        break;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(200));
+                                }
+                                if healthy {
+                                    log_diag(
+                                        "[rust] health check passed — navigating to dashboard",
+                                    );
+                                    let nav_js = format!(
+                                        "window.location.replace('{url}');",
+                                        url = url.replace('\'', "\\'"),
+                                    );
+                                    log_diag(&format!("[rust] eval js: {nav_js}"));
+                                    // P1-5: log eval failure instead of silently discarding
+                                    if let Err(e) = win_for_url.eval(&nav_js) {
+                                        log_diag(&format!(
+                                            "eval(navigate) failed: {e}"
+                                        ));
+                                    }
+
+                                    // P0-3: monitor child process for unexpected exit
+                                    let win_for_monitor = win_for_url.clone();
+                                    std::thread::spawn(move || loop {
+                                        std::thread::sleep(Duration::from_secs(2));
+                                        let exited = unsafe {
+                                            let handle = OpenProcess(
+                                                PROCESS_QUERY_LIMITED_INFORMATION,
+                                                0,
+                                                child_pid,
+                                            );
+                                            if handle.is_null() {
+                                                true
+                                            } else {
+                                                let mut code: u32 = 0;
+                                                let ok = GetExitCodeProcess(
+                                                    handle, &mut code,
+                                                );
+                                                windows_sys::Win32::Foundation::CloseHandle(handle);
+                                                ok != 0 && code != STILL_ACTIVE
+                                            }
+                                        };
+                                        if exited {
+                                            log_diag("[rust] child process exited unexpectedly after navigation");
+                                            let _ = win_for_monitor.eval(
+                                                "document.body.innerHTML='<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#ef4444;font-size:18px\">Server process has stopped unexpectedly.<br>Please restart the application.</div>';"
+                                            );
+                                            break;
+                                        }
+                                    });
+                                } else {
+                                    log_diag(&format!(
+                                        "[rust] health check TIMED OUT after {:?}",
+                                        health_start.elapsed()
+                                    ));
+                                    // P1-5: log failures
+                                    if let Err(e) = win_for_url.eval(
+                                        "document.getElementById('status').textContent='Server did not respond \\u2014 please restart';document.getElementById('status').style.color='#ef4444';",
+                                    ) {
+                                        log_diag(&format!("eval(timeout) failed: {e}"));
+                                    }
+                                }
                             }
-                            if attempt == 0 {
-                                println!("[tauri] waiting for HTTP server...");
+                            Err(e) => {
+                                log_diag(&format!("[rust] server FAILED: {e}"));
+                                if let Err(ev_err) = win_for_url.eval(format!(
+                                    "document.getElementById('status').textContent='Server failed: {}';document.getElementById('status').style.color='#ef4444';",
+                                    e.to_string().replace('\'', "\\'")
+                                )) {
+                                    log_diag(&format!("eval(server-fail) failed: {ev_err}"));
+                                }
                             }
-                            std::thread::sleep(Duration::from_millis(200));
                         }
-                        if healthy {
-                            println!("[tauri] health check passed — navigating to dashboard");
-                            let _ = win_for_url.eval(&format!(
-                                "window.location.replace('{url}');",
-                                url = url.replace('\'', "\\'"),
-                            ));
-                        } else {
-                            eprintln!("[tauri] health check timed out after 3s");
-                            let _ = win_for_url.eval(
-                                "document.getElementById('status').textContent='Server did not respond \\u2014 please restart';document.getElementById('status').style.color='#ef4444';"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[tauri] server failed: {}", e);
-                        let _ = win_for_url.eval(&format!(
-                            "document.getElementById('status').textContent='Server failed: {}';document.getElementById('status').style.color='#ef4444';",
-                            e.to_string().replace('\'', "\\'")
-                        ));
-                    }
+                    }));
+                if let Err(panic_payload) = result {
+                    let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        format!("background thread panicked: {s}")
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        format!("background thread panicked: {s}")
+                    } else {
+                        "background thread panicked (unknown payload)".to_string()
+                    };
+                    log_diag(&msg);
+                    let _ = win_for_url.eval(format!(
+                        "document.getElementById('status').textContent='Internal error: {}';document.getElementById('status').style.color='#ef4444';",
+                        msg.replace('\'', "\\'").replace('\n', " ")
+                    ));
                 }
             });
 
@@ -310,8 +444,13 @@ pub fn run() {
                     "quit" => app.exit(0),
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                            // P1-5: log failures
+                            if let Err(e) = w.show() {
+                                log_diag(&format!("show failed: {e}"));
+                            }
+                            if let Err(e) = w.set_focus() {
+                                log_diag(&format!("set_focus failed: {e}"));
+                            }
                         }
                     }
                     _ => {}
@@ -325,8 +464,12 @@ pub fn run() {
                     {
                         let win = tray.app_handle().get_webview_window("main");
                         if let Some(w) = win {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                            if let Err(e) = w.show() {
+                                log_diag(&format!("show failed: {e}"));
+                            }
+                            if let Err(e) = w.set_focus() {
+                                log_diag(&format!("set_focus failed: {e}"));
+                            }
                         }
                     }
                 })
@@ -338,7 +481,10 @@ pub fn run() {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     if let Some(w) = app_handle_for_close.get_webview_window("main") {
-                        let _ = w.hide();
+                        // P1-5: log failure
+                        if let Err(e) = w.hide() {
+                            log_diag(&format!("hide failed: {e}"));
+                        }
                     }
                 }
             });
@@ -351,13 +497,120 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 {
                     let state = app_handle.state::<Mutex<ServerState>>();
-                    let mut guard = state.lock().unwrap();
+                    // P1-4: poison-safe lock
+                    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(ref mut child) = guard.child {
-                        println!("[tauri] shutting down server...");
+                        log_diag("[tauri] shutting down server...");
                         let _ = child.kill();
-                        let _ = child.wait();
+                        // P1-1: wait with timeout, then force-kill
+                        let deadline = Instant::now();
+                        loop {
+                            match child.try_wait() {
+                                Ok(Some(status)) => {
+                                    log_diag(&format!(
+                                        "[tauri] server exited with {status:?}"
+                                    ));
+                                    break;
+                                }
+                                Ok(None) => {
+                                    if deadline.elapsed() > Duration::from_secs(5) {
+                                        log_diag("[tauri] server did not exit within 5s, forcing kill");
+                                        let _ = child.kill();
+                                        let _ = child.wait();
+                                        break;
+                                    }
+                                    std::thread::sleep(Duration::from_millis(100));
+                                }
+                                Err(e) => {
+                                    log_diag(&format!("[tauri] try_wait error: {e}"));
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::thread;
+
+    #[test]
+    fn job_object_create() {
+        let job = JobObject::new();
+        assert!(job.is_ok(), "JobObject::new() should succeed");
+    }
+
+    #[test]
+    fn job_object_assign_child_process() {
+        let job = JobObject::new().expect("create job object");
+        // Spawn a short-lived child to test assignment
+        let child = Command::new("cmd.exe")
+            .args(["/c", "exit", "0"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id();
+        let result = job.assign(pid);
+        assert!(result.is_ok(), "assign child pid should succeed");
+        // Child will exit on its own; job handle close will clean up
+    }
+
+    #[test]
+    fn check_health_rejects_non_200_status() {
+        // Spin up a listener that returns a 404
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        });
+
+        // Give the thread a moment to start
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!check_health(port, "test-token"));
+    }
+
+    #[test]
+    fn check_health_accepts_200() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let token = "test-token-12345";
+
+        thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // Real server response: token is NOT in the body
+                let body = "{\"version\":\"260530\",\"status\":\"ok\"}";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(check_health(port, token));
+    }
+
+    #[test]
+    fn check_health_connection_refused() {
+        // Use a dynamic port to avoid collisions with real listeners
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        assert!(!check_health(port, "test-token"));
+    }
 }

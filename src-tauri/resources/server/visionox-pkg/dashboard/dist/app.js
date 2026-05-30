@@ -24092,7 +24092,7 @@ function ChatPanel() {
       }
     };
     tick();
-    const t5 = setInterval(tick, 2500);
+    const t5 = setInterval(tick, 5e3);
     return () => {
       cancelled = true;
       clearInterval(t5);
@@ -25553,7 +25553,7 @@ function toolActivityFeed(c3) {
 }
 function OverviewPanel() {
   useLang();
-  const { data, error, loading } = usePoll("/overview", 2500);
+  const { data, error, loading } = usePoll("/overview", 5e3);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("overview.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("overview.failed", { error: error.message })}</div>`;
@@ -25587,30 +25587,14 @@ function OverviewPanel() {
         ${t4("overview.cockpit")}
       </h3>
       <div class="cockpit">
-        ${balanceKpi(c3)}
-        ${tokens7dKpi(c3)}
-        ${cacheHitKpi(c3)}
-        ${toolCallsKpi(c3)}
-        ${budgetKpi(o3)}
-
-        ${currentSessionBlock(c3)}
-        ${costTrendSpark(c3)}
-
-        ${recentPlansRail(c3)}
+        <div class="cock-w-2" style="display:flex;flex-direction:column;gap:var(--space-4)">
+          ${recentPlansRail(c3)}
+          <div class="card">
+            <div class="card-h"><span class="title">${t4("overview.projectRoot")}</span></div>
+            <code class="mono" style="color:var(--fg-2);font-size:12px">${o3.cwd ?? "\u2014"}</code>
+          </div>
+        </div>
         ${toolActivityFeed(c3)}
-
-        ${kpi(t4("overview.toolsLoaded"), fmtNum(o3.toolCount), o3.toolCount ? t4("overview.active") : "\u2014", "flat")}
-        ${kpi(t4("overview.mcpServers"), fmtNum(o3.mcpServerCount), o3.mcpServerCount ? t4("overview.allUp") : "\u2014", o3.mcpServerCount ? "up" : "flat")}
-        ${kpi(t4("overview.editMode"), o3.editMode ?? "\u2014", o3.editMode === "yolo" ? t4("overview.yoloWarning") : null, o3.editMode === "yolo" ? "down" : "flat")}
-        ${kpi(t4("overview.version"), o3.version ?? "\u2014", versionDelta, versionTone)}
-      </div>
-
-      <h3 style="margin:0;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">
-        ${t4("overview.workingDir")}
-      </h3>
-      <div class="card">
-        <div class="card-h"><span class="title">${t4("overview.projectRoot")}</span></div>
-        <code class="mono" style="color:var(--fg-2);font-size:12px">${o3.cwd ?? "\u2014"}</code>
       </div>
     </div>
   `;
@@ -27817,13 +27801,13 @@ function SystemPanel() {
         </div>
 
         <div class="health-item">
-          <div class="lbl">${t4("system.sessions")} <span class="pill ok">${t4("system.ok")}</span></div>
+          <div class="lbl">${t4("system.sessions")} ${h3.sessions.count > 0 ? html4`<span class="pill ok">${t4("system.ok")}</span>` : html4`<span class="pill">${t4("system.none")}</span>`}</div>
           <div class="v">${fmtBytes(h3.sessions.totalBytes)}</div>
           <div class="meta">${fmtNum(h3.sessions.count)} ${t4("system.files")}</div>
         </div>
 
         <div class="health-item">
-          <div class="lbl">${t4("system.memory")} <span class="pill ok">${t4("system.ok")}</span></div>
+          <div class="lbl">${t4("system.memory")} ${h3.memory.fileCount > 0 ? html4`<span class="pill ok">${t4("system.ok")}</span>` : html4`<span class="pill">${t4("system.none")}</span>`}</div>
           <div class="v">${fmtBytes(h3.memory.totalBytes)}</div>
           <div class="meta">${fmtNum(h3.memory.fileCount)} ${t4("system.files")}</div>
         </div>
@@ -27840,9 +27824,9 @@ function SystemPanel() {
         </div>
 
         <div class="health-item">
-          <div class="lbl">${t4("system.usageLog")} <span class="pill ok">${t4("system.ok")}</span></div>
+          <div class="lbl">${t4("system.usageLog")} ${h3.usageLog.bytes > 0 ? html4`<span class="pill ok">${t4("system.ok")}</span>` : html4`<span class="pill">${t4("system.none")}</span>`}</div>
           <div class="v">${fmtBytes(h3.usageLog.bytes)}</div>
-          <div class="meta">~/.visionox/usage.jsonl</div>
+          <div class="meta">${h3.usageLog.path}</div>
         </div>
 
         <div class="health-item">
@@ -29526,7 +29510,7 @@ function ChatPane(props) {
       }
     };
     tick();
-    const t5 = setInterval(tick, 2500);
+    const t5 = setInterval(tick, 5e3);
     return () => {
       cancelled = true;
       clearInterval(t5);
@@ -29906,7 +29890,6 @@ function tabSections() {
       label: t4("app.sectionObserve"),
       tabs: [
         { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` },
-        { id: "usage", name: t4("app.tabUsage"), glyph: "$", panel: () => html7`<${UsagePanel} />` },
         { id: "health", name: t4("app.tabSystem"), glyph: "+", panel: () => html7`<${SystemPanel} />` },
         { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} />` }
       ]
@@ -30045,7 +30028,7 @@ function App() {
           ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
           <span class="sep">·</span>
           <span class="lbl">@${(new Date).getFullYear()}</span>
-          ${version2 && buildDate2 ? html7`<span class="sep">·</span><span class="v">v${version2}-${buildDate2}</span>` : version2 ? html7`<span class="sep">·</span><span class="v">v${version2}</span>` : null}
+          ${version2 && buildDate2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}-${buildDate2}</span>` : version2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}</span>` : null}
         </span>
       </header>
       <div class="app-body">

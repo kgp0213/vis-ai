@@ -126,7 +126,7 @@ async function checkApiKey() {
     id: "api-key",
     label: "api key      ",
     level: "fail",
-    detail: "not set \u2014 `reasonix setup` to save one, or export DEEPSEEK_API_KEY. Get a key at https://platform.deepseek.com/api_keys"
+    detail: "not set \u2014 `visionox setup` to save one, or export DEEPSEEK_API_KEY. Get a key at https://platform.deepseek.com/api_keys"
   };
 }
 async function checkConfig() {
@@ -136,7 +136,7 @@ async function checkConfig() {
       id: "config",
       label: "config       ",
       level: "warn",
-      detail: "missing \u2014 running with library defaults. `reasonix setup` writes one."
+      detail: "missing \u2014 running with library defaults. `visionox setup` writes one."
     };
   }
   try {
@@ -264,7 +264,7 @@ async function checkSessions() {
         id: "sessions",
         label: "sessions     ",
         level: "warn",
-        detail: `${detail} \xB7 ${stale} idle \u226590d (run \`reasonix prune-sessions\`)`
+        detail: `${detail} \xB7 ${stale} idle \u226590d (run \`visionox prune-sessions\`)`
       };
     }
     return { id: "sessions", label: "sessions     ", level: "ok", detail };
@@ -308,7 +308,7 @@ async function checkOllama(projectRoot) {
       id: "semantic",
       label: "semantic     ",
       level: "ok",
-      detail: "not in use (no semantic index built; `reasonix index` to enable)"
+      detail: "not in use (no semantic index built; `visionox index` to enable)"
     };
   }
   const meta = readSemanticMeta(projectRoot);
@@ -391,7 +391,7 @@ async function checkProject(projectRoot) {
       id: "project",
       label: "project      ",
       level: "warn",
-      detail: `${projectRoot} has none of: ${markers.slice(0, 3).join(", ")} \u2026 \u2014 \`reasonix code\` will still run, but @-mentions and project memory have nothing to anchor`
+      detail: `${projectRoot} has none of: ${markers.slice(0, 3).join(", ")} \u2026 \u2014 \`visionox code\` will still run, but @-mentions and project memory have nothing to anchor`
     };
   }
   return {
@@ -416,7 +416,7 @@ async function doctorCommand(opts = {}) {
   const projectRoot = resolve(process.cwd());
   const json = !!opts.json;
   if (!json) {
-    console.log(`${color(`reasonix ${VERSION}  \xB7  doctor`, "1")}  (cwd: ${projectRoot})`);
+    console.log(`${color(`visionox ${VERSION}  \xB7  doctor`, "1")}  (cwd: ${projectRoot})`);
     console.log(`  home: ${homedir()}`);
     console.log("");
   }

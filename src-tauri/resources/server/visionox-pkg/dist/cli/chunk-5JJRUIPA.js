@@ -243,7 +243,7 @@ var MemoryStore = class {
 `, "utf8");
   }
 };
-function readGlobalReasonixMemory(homeDir = join(homedir(), ".visionox")) {
+function readGlobalVisionoxMemory(homeDir = join(homedir(), ".visionox")) {
   const path = join(homeDir, "REASONIX.md");
   if (!existsSync(path)) return null;
   let raw;
@@ -260,10 +260,10 @@ function readGlobalReasonixMemory(homeDir = join(homedir(), ".visionox")) {
 \u2026 (truncated ${originalChars - 8e3} chars)` : trimmed;
   return { path, content, originalChars, truncated };
 }
-function applyGlobalReasonixMemory(basePrompt, homeDir) {
+function applyGlobalVisionoxMemory(basePrompt, homeDir) {
   if (!memoryEnabled()) return basePrompt;
   const dir = homeDir ?? join(homedir(), ".visionox");
-  const mem = readGlobalReasonixMemory(dir);
+  const mem = readGlobalVisionoxMemory(dir);
   if (!mem) return basePrompt;
   return [
     basePrompt,
@@ -271,6 +271,39 @@ function applyGlobalReasonixMemory(basePrompt, homeDir) {
     "# Global memory (~/.visionox/REASONIX.md)",
     "",
     "Cross-project notes the user pinned via the `#g` prompt prefix. Treat as authoritative \u2014 same level of trust as project memory.",
+    "",
+    "```",
+    mem.content,
+    "```"
+  ].join("\n");
+}
+function readGlobalClaudeMemory(homeDir = join(homedir(), ".claude")) {
+  const path = join(homeDir, "CLAUDE.md");
+  if (!existsSync(path)) return null;
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const originalChars = trimmed.length;
+  const truncated = originalChars > 8e3;
+  const content = truncated ? `${trimmed.slice(0, 8e3)}
+\u2026 (truncated ${originalChars - 8e3} chars)` : trimmed;
+  return { path, content, originalChars, truncated };
+}
+function applyGlobalClaudeMemory(basePrompt2) {
+  if (!memoryEnabled()) return basePrompt2;
+  const mem = readGlobalClaudeMemory();
+  if (!mem) return basePrompt2;
+  return [
+    basePrompt2,
+    "",
+    "# Global memory (~/.claude/CLAUDE.md)",
+    "",
+    "Cross-project notes from your Claude Code configuration. Treat as authoritative \u2014 same level of trust as project memory.",
     "",
     "```",
     mem.content,
@@ -335,8 +368,9 @@ function applyUserMemory(basePrompt, opts = {}) {
 }
 function applyMemoryStack(basePrompt, rootDir) {
   const withProject = applyProjectMemory(basePrompt, rootDir);
-  const withGlobal = applyGlobalReasonixMemory(withProject);
-  const withMemory = applyUserMemory(withGlobal, { projectRoot: rootDir });
+  const withGlobal = applyGlobalVisionoxMemory(withProject);
+  const withGlobalClaude = applyGlobalClaudeMemory(withGlobal);
+  const withMemory = applyUserMemory(withGlobalClaude, { projectRoot: rootDir });
   return applySkillsIndex(withMemory, { projectRoot: rootDir });
 }
 
@@ -432,7 +466,7 @@ Skip dependency, build, and VCS directories unless asked (the pinned .gitignore 
 
 # Workspace is pinned
 
-You can't switch project / working directory mid-session — tell the user to quit and relaunch (e.g. \`cd ../other-project && reasonix code\`). Don't try \`cd\` via \`run_command\` either; the sandbox is pinned and \`cd\` doesn't carry between calls.
+You can't switch project / working directory mid-session — tell the user to quit and relaunch (e.g. \`cd ../other-project && visionox code\`). Don't try \`cd\` via \`run_command\` either; the sandbox is pinned and \`cd\` doesn't carry between calls.
 
 # Foreground vs background
 

@@ -217,7 +217,7 @@ function loadCss() {
 function renderIndexHtml(token, mode) {
   const tpl = loadIndexTemplate();
   const safeToken = token.replace(/[^a-zA-Z0-9]/g, "");
-  return tpl.replaceAll("__REASONIX_TOKEN__", safeToken).replaceAll("__REASONIX_MODE__", mode);
+  return tpl.replaceAll("__VISIONOX_TOKEN__", safeToken).replaceAll("__VISIONOX_MODE__", mode);
 }
 var VENDOR_CSS_NAMES = /* @__PURE__ */ new Set(["vendor-hljs.css", "vendor-uplot.css"]);
 function loadVendorCss(name) {
@@ -463,7 +463,7 @@ async function handleEditMode(method, _rest, body, ctx) {
     if (!ctx.setEditMode) {
       return {
         status: 503,
-        body: { error: "edit-mode mutation requires an attached `reasonix code` session." }
+        body: { error: "edit-mode mutation requires an attached `visionox code` session." }
       };
     }
     const { mode } = parseBody(body);
@@ -762,10 +762,12 @@ async function handleHealth(method, _rest, _body, ctx) {
     return { status: 405, body: { error: "GET only" } };
   }
   const home = homedir();
-  const reasonixHome = join4(home, ".visionox");
-  const sessionsStat = dirSize(join4(reasonixHome, "sessions"));
-  const memoryStat = dirSize(join4(reasonixHome, "memory"));
-  const semanticStat = dirSize(join4(reasonixHome, "semantic"));
+  const visionoxHome = join4(home, ".visionox");
+  const sessionsStat = dirSize(join4(visionoxHome, "sessions"));
+  const memoryStat = dirSize(join4(visionoxHome, "memory"));
+  const cwd2 = ctx.getCurrentCwd?.();
+  const semanticPath = cwd2 ? join4(cwd2, ".visionox", "semantic") : join4(visionoxHome, "semantic");
+  const semanticStat = dirSize(semanticPath);
   let usageBytes = 0;
   if (existsSync2(ctx.usageLogPath)) {
     try {
@@ -779,10 +781,10 @@ async function handleHealth(method, _rest, _body, ctx) {
     body: {
       version: VERSION,
       latestVersion: ctx.getLatestVersion?.() ?? null,
-      reasonixHome,
+      visionoxHome,
       sessions: {
         path: sessionsStat.path,
-        count: sessions.length,
+        count: sessionsStat.fileCount,
         totalBytes: sessionsStat.totalBytes
       },
       memory: {
@@ -802,7 +804,7 @@ async function handleHealth(method, _rest, _body, ctx) {
       },
       jobs: ctx.jobs ? ctx.jobs.list().length : null,
       cwd: ctx.getCurrentCwd?.() ?? null,
-      buildDate: "0517"
+      buildDate: new Date().getHours().toString().padStart(2, "0")
     }
   };
 }
@@ -912,7 +914,7 @@ async function handleHooks(method, rest, body, ctx) {
       if (!cwd) {
         return {
           status: 503,
-          body: { error: "no active project \u2014 open `/dashboard` from inside `reasonix code`" }
+          body: { error: "no active project \u2014 open `/dashboard` from inside `visionox code`" }
         };
       }
       path = projectSettingsPath(cwd);
@@ -1258,7 +1260,7 @@ async function handleMcp(method, rest, body, ctx, query = new URLSearchParams())
       return {
         status: 503,
         body: {
-          error: "live MCP reload not wired in this session \u2014 restart `reasonix code` to apply spec edits."
+          error: "live MCP reload not wired in this session \u2014 restart `visionox code` to apply spec edits."
         }
       };
     }
@@ -1883,7 +1885,7 @@ function parseTs(ts) {
 }
 
 // src/server/api/cockpit.ts
-var TTL_MS = 3e4;
+var TTL_MS = 5e3;
 var cache = /* @__PURE__ */ new Map();
 function computeCockpit(ctx, now = Date.now()) {
   return {
@@ -2029,7 +2031,7 @@ async function handlePermissions(method, rest, body, ctx) {
     return {
       status: 503,
       body: {
-        error: "no active project \u2014 mutations require an attached dashboard session (run `/dashboard` from inside `reasonix code`)."
+        error: "no active project \u2014 mutations require an attached dashboard session (run `/dashboard` from inside `visionox code`)."
       }
     };
   }
@@ -2297,7 +2299,7 @@ async function getStatus(ctx) {
       status: 200,
       body: {
         attached: false,
-        reason: "Semantic indexing requires a code-mode session \u2014 run `/dashboard` from inside `reasonix code` instead of standalone `reasonix dashboard`."
+        reason: "Semantic indexing requires a code-mode session \u2014 run `/dashboard` from inside `visionox code` instead of standalone `visionox dashboard`."
       }
     };
   }
@@ -3082,7 +3084,7 @@ async function handleSkills(method, rest, body, ctx) {
     if (!cwd) {
       return {
         status: 503,
-        body: { error: "no active project \u2014 open `/dashboard` from `reasonix code`" }
+        body: { error: "no active project \u2014 open `/dashboard` from `visionox code`" }
       };
     }
     dir = projectSkillsDir(cwd);
@@ -3160,7 +3162,7 @@ async function handleSubmit(method, _rest, body, ctx) {
     return {
       status: 503,
       body: {
-        error: "submit requires an attached dashboard session \u2014 open `/dashboard` from inside `reasonix code` or `reasonix chat`."
+        error: "submit requires an attached dashboard session \u2014 open `/dashboard` from inside `visionox code` or `visionox chat`."
       }
     };
   }
@@ -3192,7 +3194,7 @@ async function handleTools(method, _rest, _body, ctx) {
     return {
       status: 503,
       body: {
-        error: "live tools view requires an attached session \u2014 run `/dashboard` from inside `reasonix code` instead of standalone `reasonix dashboard`.",
+        error: "live tools view requires an attached session \u2014 run `/dashboard` from inside `visionox code` instead of standalone `visionox dashboard`.",
         available: false
       }
     };

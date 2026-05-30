@@ -564,13 +564,13 @@ async function openStore(indexDir, identity) {
   if (meta) {
     if (meta.version !== STORE_VERSION) {
       throw new Error(
-        `Index format version ${meta.version} does not match current ${STORE_VERSION}. Run \`reasonix index --rebuild\`.`
+        `Index format version ${meta.version} does not match current ${STORE_VERSION}. Run \`visionox index --rebuild\`.`
       );
     }
     const mismatch = compareIndexIdentity(meta, identity);
     if (mismatch !== null) {
       throw new Error(
-        `Index was built with provider "${meta.provider}" model "${meta.model}" but current config is provider "${identity.provider}" model "${identity.model}". Run \`reasonix index --rebuild\`.`
+        `Index was built with provider "${meta.provider}" model "${meta.model}" but current config is provider "${identity.provider}" model "${identity.model}". Run \`visionox index --rebuild\`.`
       );
     }
   }

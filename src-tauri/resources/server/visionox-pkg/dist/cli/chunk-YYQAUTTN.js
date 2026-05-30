@@ -46,7 +46,7 @@ async function registerSemanticSearchTool(registry, opts) {
         signal: ctx?.signal
       });
       if (hits === null) {
-        return "No semantic index found for this project. Run `reasonix index` to build one.";
+        return "No semantic index found for this project. Run `visionox index` to build one.";
       }
       if (hits.length === 0) {
         return `query: ${args.query}

@@ -37,7 +37,7 @@ function listAll() {
   const items = listSessions();
   if (items.length === 0) {
     console.log(
-      "no saved sessions yet \u2014 run `reasonix chat` (sessions are auto-saved unless --no-session)."
+      "no saved sessions yet \u2014 run `visionox chat` (sessions are auto-saved unless --no-session)."
     );
     return;
   }
@@ -53,8 +53,8 @@ function listAll() {
     );
   }
   console.log("");
-  console.log("Inspect:  reasonix sessions <name>");
-  console.log("Resume:   reasonix chat --session <name>");
+  console.log("Inspect:  visionox sessions <name>");
+  console.log("Resume:   visionox chat --session <name>");
 }
 function inspectSession(name, verbose) {
   const path = sessionPath(name);

@@ -27,22 +27,29 @@ vis-ai/
 │   └── index.html                #   加载页 UI (spinner + 状态文字)，由 generate_context!() 嵌入
 ├── src-tauri/                    # Tauri Rust 后端
 │   ├── src/
-│   │   ├── main.rs               #   程序入口
-│   │   └── lib.rs                #   窗口创建、Node 进程管理、TCP 健康检查、系统托盘、全局诊断日志
+│   │   ├── main.rs               #   程序入口（2 行，调用 lib.rs 的 run()）
+│   │   └── lib.rs                #   窗口创建、JobObject 进程管理、TCP 健康检查（15×200ms）、
+│   │                             #     系统托盘（最小化→托盘、右键退出）、全局诊断日志、
+│   │                             #     子进程崩溃监控（2s 轮询）、30s 启动超时 watchdog
 │   ├── resources/server/         #   随 exe 分发的运行时资源
 │   │   ├── node.exe              #     Node.js 二进制
 │   │   ├── launcher.mjs          #     启动脚本 — 实例化 DeepSeekClient + CacheFirstLoop
 │   │   └── visionox-pkg/         #     Visionox 服务端包（260530）
+│   ├── theme/                    #   7 套配色方案 CSS 参考文件
 │   ├── icons/                    #   应用图标
 │   ├── build.rs                  #   Tauri 构建脚本
 │   ├── Cargo.toml                #   Rust 依赖
-│   └── tauri.conf.json           #   Tauri 构建配置
-├── CHANGELOG-0.43.0.md           # 二开变更记录（§一 ~ §三十七）
-├── package.json                  # Node.js 项目配置（仅含 Tauri CLI）
-├── README.md
+│   ├── capabilities/default.json #   Tauri 权限配置
+│   └── tauri.conf.json           #   Tauri 构建配置（windows:[] 为空 — 窗口由 lib.rs 动态创建）
+├── docs/                         # 设计文档
+│   ├── COLOR_SCHEMES.md          #   7 套配色方案完整指南
+│   └── UI_DESIGN_SYSTEM.md       #   UI 设计系统规范
+├── CHANGELOG.md                  # 二开变更记录（§一 ~ §三十八）
+├── CODE_REVIEW.md                # 源码审查终稿（P0-P4 修复状态，31 项）
 ├── RULES.md                      # 项目开发规则（Rust/Tauri 编码规范）
-├── CODE_REVIEW_FINAL.md          # 源码审查终稿（P0-P4 修复状态）
 ├── cherry-claude.cjs             # CLAUDE.md 全局记忆注入脚本（仅开发用）
+├── skill-creation-guide.md       # Skill 开发通用指南
+├── package.json                  # Node.js 项目配置（仅含 Tauri CLI）
 └── scripts/
     └── restore-visionox-pkg.js   # Visionox 服务端包恢复脚本
 ```
@@ -62,7 +69,7 @@ vis-ai/
 │    → spawn Node.js launcher.mjs                  │
 │    → 读取 stdout 获取 {url, port, token}          │
 │    → TCP 直连 /api/health?token=xxx 轮询         │
-│      (200ms×15次, 仅校验 HTTP 200 状态行)         │
+│      (200ms×15次, 校验 HTTP 200 状态行)           │
 │    → 健康检查通过 → eval window.location.replace  │
 │    → 加载页跳转 dashboard                          │
 │    → 系统托盘 (最小化/退出)                        │
@@ -113,7 +120,7 @@ vis-ai/
 - **catch_unwind 兜底** — 后台线程 panic 时捕获并通过 eval 通知 UI，避免静默失败
 - **30s 启动超时** — Node 卡住时不会永久 spinner
 
-详见 `CHANGELOG-0.43.0.md` §二十七 ~ §三十七。
+详见 `CHANGELOG.md` §二十七 ~ §三十七。
 
 ## 当前进度
 
@@ -141,7 +148,7 @@ vis-ai/
 | **Bug 修复** | yolo模式路径解析、隐藏目录过滤、标题栏轮询更新 | **§二十九** |
 | **导航栏缩减 40%** | 240px → 144px，折叠态 64px → 40px | **§三十** |
 | **会话恢复修复** | "加载并继续会话" prompt required 错误 | **§三十一** |
-| **多配色方案** | 5 套（浅色/深色/暖沙/冷灰/柔绿），右下角下拉切换 | **§三十二** |
+| **多配色方案** | 7 套（深色/浅色/暖沙/冷灰/柔绿/深炭灰/午夜墨蓝/浓缩咖啡），左下角下拉切换 | **§三十二** |
 | **OA/API 快捷链接** | 导航栏"计划"下方新增 OA + API 入口 | **§三十三** |
 | **项目目录清理** | 从 1680 MB 缩减到 269 MB | **§三十四** |
 | **上游 P0-1 合入** | login-shell PATH 发现（macOS/Linux 工具路径注入） | **§三十七** |
@@ -153,6 +160,8 @@ vis-ai/
 | **P2 工具链修复** | MCP 清理、install_skill 速率限制、YAML 校验、会话名校验、console.warn | 2026-05-30 |
 | **P4 代码质量** | 全局 diag 日志、SAFETY 注释、单元测试(5)、硬编码路径修复、文档更新 | 2026-05-30 |
 | **会话记录去重** | assistant_final 每次只写一条到 JSONL，消除 38 条重复/空消息膨胀 | 2026-05-30 |
+| **Karpathy 审查修复×6** | U3(ISO-8601时间戳)、P3(DIAG_PATH前移)、P2(BufReader::read_line)、测试动态端口、U1(buildSystemPrompt扩容)、U7(Windows tar注释) | 2026-05-30 |
+| **健康检查数据修复×4** | H1(语义索引路径修正→workspace级)、H2(sessions count统一dirSize)、H3(用量日志路径动态化)、H4(pill状态条件渲染) | 2026-05-30 |
 
 ### 待完成
 
@@ -371,7 +380,7 @@ WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
 | 搜索后端 | Mojeek only | 4 引擎可选，默认 Bing 国内版 (cn.bing.com) |
 | 搜索引擎切换 | 需重启 | 热切换，保存即生效 |
 | 编辑模式 | review / auto / yolo | 新增 admin 模式（绕过沙箱） |
-| 配色方案 | dark / light 双色 | 5 套（浅色/深色/暖沙/冷灰/柔绿） |
+| 配色方案 | dark / light 双色 | 7 套（深色/浅色/暖沙/冷灰/柔绿/深炭灰/午夜墨蓝/浓缩咖啡） |
 | 导航栏 | 仅功能分区 | 新增 OA/API 快捷链接 |
 | 部署方式 | npm 包 + 独立桌面端 | Windows 绿色便携版 (免安装) |
 | 数据目录 | `~/.reasonix/` | `~/.visionox/` |

@@ -49,8 +49,8 @@ function dashboard(opts) {
     console.log("");
     console.log(`  ${path}`);
     console.log("");
-    console.log("run `reasonix chat`, `reasonix code`, or `reasonix run <task>` \u2014 every turn");
-    console.log("appends one line to the log and `reasonix stats` will roll it up.");
+    console.log("run `visionox chat`, `visionox code`, or `visionox run <task>` \u2014 every turn");
+    console.log("appends one line to the log and `visionox stats` will roll it up.");
     return;
   }
   const agg = aggregateUsage(records, { now: opts.now });
@@ -59,7 +59,7 @@ function dashboard(opts) {
 function renderDashboard(agg, logPath) {
   const lines = [];
   const size = formatLogSize(logPath);
-  lines.push(`Reasonix usage \u2014 ${logPath}${size ? ` (${size})` : ""}`);
+  lines.push(`Visionox usage \u2014 ${logPath}${size ? ` (${size})` : ""}`);
   lines.push("");
   lines.push(header());
   lines.push(divider());

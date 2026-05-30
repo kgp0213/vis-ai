@@ -75,7 +75,7 @@ function registerScaffoldTools(registry, opts = {}) {
         scope: {
           type: "string",
           enum: ["project", "global"],
-          description: "`project` = `.visionox/skills/` under the workspace (default, requires `reasonix code`); `global` = `~/.visionox/skills/` shared across all repos."
+          description: "`project` = `.visionox/skills/` under the workspace (default, requires `visionox code`); `global` = `~/.visionox/skills/` shared across all repos."
         },
         allowed_tools: {
           type: "array",
@@ -146,7 +146,7 @@ function registerScaffoldTools(registry, opts = {}) {
   });
   registry.register({
     name: "add_mcp_server",
-    description: 'Register a new MCP server in the user\'s Reasonix config (`mcp` array). Takes effect on the next session \u2014 does NOT spawn the server now. Use stdio for local commands (npx packages, local binaries), `sse` or `streamable-http` for remote endpoints. Pass `from_catalog: "<name>"` (e.g. `"filesystem"`, `"memory"`, `"github"`) to auto-fill `command` + `args` from the bundled catalog \u2014 the user still has to supply user-args (filesystem: a sandbox dir; github: GITHUB_PERSONAL_ACCESS_TOKEN in env). Refuses to add a server whose name collides with an existing entry.',
+    description: 'Register a new MCP server in the user\'s Visionox config (`mcp` array). Takes effect on the next session \u2014 does NOT spawn the server now. Use stdio for local commands (npx packages, local binaries), `sse` or `streamable-http` for remote endpoints. Pass `from_catalog: "<name>"` (e.g. `"filesystem"`, `"memory"`, `"github"`) to auto-fill `command` + `args` from the bundled catalog \u2014 the user still has to supply user-args (filesystem: a sandbox dir; github: GITHUB_PERSONAL_ACCESS_TOKEN in env). Refuses to add a server whose name collides with an existing entry.',
     parameters: {
       type: "object",
       properties: {

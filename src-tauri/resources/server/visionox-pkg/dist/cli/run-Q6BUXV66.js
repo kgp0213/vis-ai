@@ -63,7 +63,7 @@ async function ensureApiKey() {
   if (existing) return existing;
   if (!stdin.isTTY) {
     process.stderr.write(
-      "DEEPSEEK_API_KEY is not set and stdin is not a TTY (cannot prompt).\nSet the env var, or run `reasonix chat` once interactively to save a key.\n"
+      "DEEPSEEK_API_KEY is not set and stdin is not a TTY (cannot prompt).\nSet the env var, or run `visionox chat` once interactively to save a key.\n"
     );
     process.exit(1);
   }
@@ -145,7 +145,7 @@ async function runCommand(opts) {
         await mcp?.close().catch(() => void 0);
         process.stderr.write(
           `${formatMcpLifecycleEvent({ state: "failed", name: label, reason: err.message })}
-  \u2192 run \`reasonix setup\` to remove broken entries from your saved config.
+  \u2192 run \`visionox setup\` to remove broken entries from your saved config.
 `
         );
       }
@@ -170,7 +170,7 @@ async function runCommand(opts) {
   if (opts.transcript) {
     transcriptStream = openTranscriptFile(opts.transcript, {
       version: 1,
-      source: "reasonix run",
+      source: "visionox run",
       model: opts.model,
       startedAt: (/* @__PURE__ */ new Date()).toISOString()
     });

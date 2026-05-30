@@ -1,6 +1,6 @@
 [package]
 name = "visionox-desktop"
-version = "0.47.1"
+version = "1.0.0"
 edition = "2021"
 description = "Visionox AI Coding Agent — Desktop GUI"
 
@@ -15,6 +15,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
     "Win32_Security",
 ] }
+chrono = "0.4"
 
 
 [build-dependencies]

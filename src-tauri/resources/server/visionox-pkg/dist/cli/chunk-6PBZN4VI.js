@@ -6,6 +6,7 @@ import { execFileSync } from "child_process";
 import {
   appendFileSync,
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -224,16 +225,47 @@ function deleteSession(name) {
     return false;
   }
 }
+function atomicWriteSync2(path, body, tmp, mode = 384) {
+  try {
+    writeFileSync(tmp, body, "utf8");
+    try {
+      chmodSync(tmp, mode);
+    } catch {
+    }
+    try {
+      renameSync(tmp, path);
+    } catch (err) {
+      if (err.code !== "EXDEV") throw err;
+      copyFileSync(tmp, path);
+      try {
+        chmodSync(path, mode);
+      } catch {
+      }
+    }
+  } catch (err2) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+    }
+    throw err2;
+  }
+  try {
+    unlinkSync(tmp);
+  } catch {
+  }
+}
 function rewriteSession(name, messages) {
   const path = sessionPath(name);
   mkdirSync(dirname(path), { recursive: true });
   const body = messages.map((m) => JSON.stringify(m)).join("\n");
-  writeFileSync(path, body ? `${body}
-` : "", "utf8");
-  try {
-    chmodSync(path, 384);
-  } catch {
+  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  if (existsSync(path) && statSync(path).size > 0) {
+    const backup = `${path}.backup`;
+    copyFileSync(path, backup);
+    try { chmodSync(backup, 384); } catch {}
   }
+  atomicWriteSync2(path, body ? `${body}
+` : "", tmp);
 }
 function archiveSession(name) {
   const path = sessionPath(name);

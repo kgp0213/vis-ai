@@ -167,7 +167,9 @@ const [
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
   { applySkillsIndex },
-  { registerSkillTools },
+  { registerSkillTools, Eventizer },
+  { openEventSink, eventLogPath },
+  { getLatestVersion, VERSION },
 ] = await Promise.all([
   import(distPath("chunk-2KDUS647.js")),
   import(distPath("chunk-2R4QCDOZ.js")),
@@ -179,6 +181,8 @@ const [
   import(distPath("chunk-YYQAUTTN.js")),
   import(distPath("chunk-2K65GZBT.js")),
   import(distPath("chunk-45U62RI3.js")),
+  import(distPath("chunk-4QUNBQQ2.js")),
+  import(distPath("chunk-XXC2BYTV.js")),
 ]);
 
 // ── Load config ─────────────────────────────────────────────────
@@ -580,16 +584,39 @@ If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.`
 
   return `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
 
-You have access to the following tools:
-- Filesystem tools: read_file, write_file, list_directory, search_files — sandboxed to ${rootDir}
-- Shell tools: run_command — execute commands in ${rootDir}
-- Web tools: web_search, web_fetch — search the web and fetch pages
-- Memory tools: save and recall project/global memory
-- Plan tools: create and manage plans
-- Choice tools: ask the user to make choices
-- Todo tools: track tasks
+## Tools
 
-Always use the appropriate tool when you need to access files, run commands, or search the web.
+- **Filesystem**: read_file, write_file, list_directory, search_files — sandboxed to ${rootDir}
+- **Shell**: run_command — execute commands in ${rootDir}
+- **Web**: web_search, web_fetch — search the web and fetch pages
+- **Memory**: save and recall project/global memory
+- **Planning**: create and manage plans, track todos
+- **Choices**: ask the user to make choices when needed
+
+## Tool selection strategy
+
+- To find code by **meaning or intent** ("where is auth handled?") → use semantic_search (if available) or search_files with keywords
+- To find **exact symbols or strings** ("every call to login()") → use search_files with literal patterns
+- To **read or edit files** → use read_file / write_file directly by path
+- To **run commands** → use run_command; prefer single commands over chained scripts
+- To **search the internet** → use web_search for broad queries, web_fetch for reading a specific URL
+- When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
+
+## Safety boundaries
+
+- All file operations are sandboxed to the workspace: ${rootDir}
+- Shell commands execute inside the workspace by default; do NOT attempt to escape the sandbox
+- In admin mode, the sandbox restriction is lifted — but always confirm destructive operations with the user
+- Never expose or transmit API keys, tokens, or credentials shown in conversation
+
+## Error handling
+
+When a tool call fails:
+1. Check whether the path, command, or argument is correct
+2. Verify file/command permissions (read-only files, missing executables)
+3. Try an alternative approach — e.g., if run_command fails, read the relevant files directly
+4. Report the failure clearly to the user with enough context for them to decide next steps
+
 Respond in the same language as the user's message.${routing}`;
 }
 
@@ -622,6 +649,22 @@ if (apiKey) {
     console.error(`[launcher] failed to create loop: ${err.message}`);
   }
 }
+
+// ── Event sink (writes .events.jsonl for cockpit tool activity) ──
+let eventSink = null;
+let eventizer = null;
+try {
+  eventSink = openEventSink(eventLogPath("desktop"));
+  eventizer = new Eventizer();
+  eventSink.append(eventizer.emitSessionOpened(0, "desktop", 0));
+  console.error(`[launcher] event sink opened`);
+} catch (err) {
+  console.error(`[launcher] event sink init failed: ${err.message}`);
+}
+
+// Async version check (populates latestVersion for health page)
+let latestVersion = VERSION;
+getLatestVersion().then((v) => { if (v) latestVersion = v; }).catch(() => {});
 
 // ── Event subscribers ───────────────────────────────────────────
 const eventSubscribers = new Set();
@@ -697,7 +740,7 @@ const ctx = {
   getEditMode: () => loadEditMode(configPath),
   getPlanMode: () => false,
   getPendingEditCount: () => 0,
-  getLatestVersion: () => null,
+  getLatestVersion: () => latestVersion,
   getSessionName: () => "desktop",
   getModels: () => null,
   getLoopRunStatus: () => null,
@@ -884,6 +927,11 @@ const ctx = {
         }
         // Reset the AI's internal context (CacheFirstLoop log)
         if (loop) loop.clearLog();
+        // Reset eventizer for new session
+        if (eventizer) {
+          eventizer = new Eventizer();
+          try { eventSink?.append(eventizer.emitSessionOpened(0, "desktop", 0)); } catch {}
+        }
         // Clear dashboard messages
         messages.length = 0;
         nextMsgId = 1;
@@ -920,6 +968,14 @@ const ctx = {
         let assistantText = "";
         try {
           for await (const ev of loop.step(text)) {
+            // Write event to .events.jsonl for cockpit tool activity
+            if (eventSink && eventizer) {
+              try {
+                const ectx = { model: ev.stats?.model ?? loop.model ?? model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
+                for (const out of eventizer.consume(ev, ectx)) eventSink.append(out);
+              } catch {}
+            }
+
             const dashev = loopEventToDashboard(ev, assistantId);
             broadcastDashboardEvent(dashev);
 
@@ -990,6 +1046,12 @@ const ctx = {
   },
 };
 
+// Sync preset → loop model on startup so the dashboard /overview
+// returns consistent preset and model fields from the first poll
+if (config.preset && config.preset !== "auto") {
+  ctx.applyPresetLive(config.preset);
+}
+
 // ── Initial welcome message ──────────────────────────────────────
 messages.push({
   id: "welcome",
@@ -1018,6 +1080,7 @@ try {
   // ── Keep running until terminated ──────────────────────────
   const cleanup = () => {
     console.error("[launcher] shutting down...");
+    try { eventSink?.close(); } catch {}
     close().then(() => process.exit(0)).catch(() => process.exit(1));
   };
 

@@ -53,14 +53,14 @@ function runGit(args, opts = {}) {
 function dieIfNotGitRepo() {
   const r = runGit(["rev-parse", "--is-inside-work-tree"]);
   if (r.status !== 0) {
-    process.stderr.write("reasonix commit: not inside a git repository.\n");
+    process.stderr.write("visionox commit: not inside a git repository.\n");
     process.exit(1);
   }
 }
 function readDiff() {
   const staged = runGit(["diff", "--staged", "--no-color"]);
   if (staged.status !== 0) {
-    process.stderr.write(`reasonix commit: git diff --staged failed: ${staged.stderr.trim()}
+    process.stderr.write(`visionox commit: git diff --staged failed: ${staged.stderr.trim()}
 `);
     process.exit(1);
   }
@@ -156,11 +156,11 @@ function editInExternal(initial) {
   const editor = process.env.GIT_EDITOR ?? process.env.VISUAL ?? process.env.EDITOR;
   if (!editor) {
     process.stderr.write(
-      "reasonix commit: no $EDITOR / $VISUAL / $GIT_EDITOR set \u2014 can't open editor. Pick [a]ccept and `git commit --amend` afterwards.\n"
+      "visionox commit: no $EDITOR / $VISUAL / $GIT_EDITOR set \u2014 can't open editor. Pick [a]ccept and `git commit --amend` afterwards.\n"
     );
     return null;
   }
-  const dir = mkdtempSync(join(tmpdir(), "reasonix-commit-"));
+  const dir = mkdtempSync(join(tmpdir(), "visionox-commit-"));
   const path = join(dir, "COMMIT_EDITMSG");
   writeFileSync(path, initial, "utf8");
   const result = spawnSync(`${editor} "${path}"`, {
@@ -173,7 +173,7 @@ function editInExternal(initial) {
     } catch {
     }
     process.stderr.write(
-      `reasonix commit: editor exited ${result.status} \u2014 keeping prior draft.
+      `visionox commit: editor exited ${result.status} \u2014 keeping prior draft.
 `
     );
     return null;
@@ -200,7 +200,7 @@ function commitWithMessage(message) {
   child.stdin.end();
   child.on("close", (code) => {
     if (code !== 0) {
-      process.stderr.write(`reasonix commit: git commit exited ${code}.
+      process.stderr.write(`visionox commit: git commit exited ${code}.
 `);
       process.exit(code ?? 1);
     }
@@ -212,25 +212,25 @@ async function commitCommand(opts = {}) {
   const apiKey = loadApiKey() ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     process.stderr.write(
-      "reasonix commit: DEEPSEEK_API_KEY not set. Run `reasonix setup` to save one, or export it.\n"
+      "visionox commit: DEEPSEEK_API_KEY not set. Run `visionox setup` to save one, or export it.\n"
     );
     process.exit(1);
   }
   const diff = readDiff();
   if (!diff) {
     process.stderr.write(
-      "reasonix commit: no staged changes and working tree is clean \u2014 nothing to commit.\n"
+      "visionox commit: no staged changes and working tree is clean \u2014 nothing to commit.\n"
     );
     process.exit(1);
   }
   if (diff.source === "working-tree") {
     process.stderr.write(
-      "reasonix commit: nothing staged \u2014 drafting from working-tree diff. Stage your changes and re-run, or use the draft as a starting point.\n"
+      "visionox commit: nothing staged \u2014 drafting from working-tree diff. Stage your changes and re-run, or use the draft as a starting point.\n"
     );
   }
   if (diff.truncated) {
     process.stderr.write(
-      "reasonix commit: diff exceeded 80KB; head + tail sent to the model. Large diffs often produce vague drafts \u2014 consider committing in smaller chunks.\n"
+      "visionox commit: diff exceeded 80KB; head + tail sent to the model. Large diffs often produce vague drafts \u2014 consider committing in smaller chunks.\n"
     );
   }
   const client = new DeepSeekClient({ apiKey, baseUrl: loadBaseUrl() });
@@ -248,12 +248,12 @@ async function commitCommand(opts = {}) {
     try {
       message = await draftMessage(client, model, diff, recentCommits);
     } catch (err) {
-      process.stderr.write(`reasonix commit: model call failed \u2014 ${err.message}
+      process.stderr.write(`visionox commit: model call failed \u2014 ${err.message}
 `);
       process.exit(1);
     }
     if (!message) {
-      process.stderr.write("reasonix commit: model returned an empty draft. Try again.\n");
+      process.stderr.write("visionox commit: model returned an empty draft. Try again.\n");
       process.exit(1);
     }
     printDraft(message);

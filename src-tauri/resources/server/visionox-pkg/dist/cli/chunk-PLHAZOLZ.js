@@ -31,7 +31,7 @@ var MCP_CATALOG = [
     name: "everything",
     summary: "official test server \u2014 exercises every MCP feature",
     package: "@modelcontextprotocol/server-everything",
-    note: "useful for debugging your Reasonix setup"
+    note: "useful for debugging your Visionox setup"
   }
 ];
 function mcpCommandFor(entry) {

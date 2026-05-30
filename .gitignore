@@ -52,4 +52,3 @@ icons/
 # Build artifacts (not source)
 package-lock.json
 *.map
-.workbuddy/

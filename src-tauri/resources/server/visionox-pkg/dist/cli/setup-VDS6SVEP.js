@@ -561,7 +561,7 @@ function mcpItems() {
   });
 }
 function placeholderFor(entry) {
-  if (entry.name === "filesystem") return "e.g. /tmp/reasonix-sandbox";
+  if (entry.name === "filesystem") return "e.g. /tmp/visionox-sandbox";
   if (entry.name === "sqlite") return "e.g. ./notes.sqlite";
   return entry.userArgs ?? "";
 }
