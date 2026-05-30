@@ -373,7 +373,7 @@ async function checkOllama(projectRoot) {
 }
 function readSemanticMeta(projectRoot) {
   try {
-    const raw = readFileSync(join(projectRoot, ".visionox", "semantic", "index.meta.json"), "utf8");
+    const raw = readFileSync(join(homedir(), ".visionox", "semantic", "index.meta.json"), "utf8");
     const parsed = JSON.parse(raw);
     return {
       provider: parsed.provider === "openai-compat" ? "openai-compat" : "ollama",

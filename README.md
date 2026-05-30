@@ -161,7 +161,11 @@ vis-ai/
 | **P4 代码质量** | 全局 diag 日志、SAFETY 注释、单元测试(5)、硬编码路径修复、文档更新 | 2026-05-30 |
 | **会话记录去重** | assistant_final 每次只写一条到 JSONL，消除 38 条重复/空消息膨胀 | 2026-05-30 |
 | **Karpathy 审查修复×6** | U3(ISO-8601时间戳)、P3(DIAG_PATH前移)、P2(BufReader::read_line)、测试动态端口、U1(buildSystemPrompt扩容)、U7(Windows tar注释) | 2026-05-30 |
-| **健康检查数据修复×4** | H1(语义索引路径修正→workspace级)、H2(sessions count统一dirSize)、H3(用量日志路径动态化)、H4(pill状态条件渲染) | 2026-05-30 |
+| **健康检查数据修复×4** | H1(语义索引路径修正→home级)、H2(sessions count统一dirSize)、H3(用量日志路径动态化)、H4(pill状态条件渲染) | 2026-05-30 |
+| **VX 极小修复×5** | vx-02(孤儿进程)、vx-05(API Key 警告)、vx-08(--port=N)、vx-09(默认版本)、vx-13(托盘提示) | 2026-05-30 |
+| **余额功能移植** | 从上游移植 DeepSeek 余额显示，非 DeepSeek API 显示 "---"，概览页 cockpit 余额 KPI | 2026-05-30 |
+| **工具活动扩容** | 概览页工具活动列表从 6 条增至 12 条 | 2026-05-30 |
+| **语义索引路径重构** | 从 workspace/.visionox/semantic → ~/.visionox/semantic，统一到 home 目录，健康检查复用 INDEX_DIR_NAME 变量 | 2026-05-30 |
 
 ### 待完成
 

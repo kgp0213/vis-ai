@@ -13,6 +13,7 @@ import {
 // src/index/semantic/builder.ts
 import { promises as fs3 } from "fs";
 import path3 from "path";
+import { homedir } from "node:os";
 
 // src/index/semantic/chunker.ts
 import { promises as fs } from "fs";
@@ -644,7 +645,7 @@ function normalizeMeta(meta) {
 }
 
 // src/index/semantic/builder.ts
-var INDEX_DIR_NAME = path3.join(".visionox", "semantic");
+var INDEX_DIR_NAME = path3.join(homedir(), ".visionox", "semantic");
 function emptyBuckets() {
   return {
     defaultDir: 0,
@@ -659,7 +660,7 @@ function emptyBuckets() {
 }
 async function buildIndex(root, opts = {}) {
   const t0 = Date.now();
-  const indexDir = path3.join(root, INDEX_DIR_NAME);
+  const indexDir = INDEX_DIR_NAME;
   const resolved = resolveBuildEmbeddingConfig(opts);
   opts.onProgress?.({ phase: "setup" });
   throwIfAborted(opts.signal);
@@ -791,7 +792,7 @@ async function buildIndex(root, opts = {}) {
   };
 }
 async function querySemantic(root, query, opts = {}) {
-  const indexDir = path3.join(root, INDEX_DIR_NAME);
+  const indexDir = INDEX_DIR_NAME;
   const resolved = resolveQueryEmbeddingConfig(opts);
   const store = await openStore(indexDir, {
     provider: resolved.provider,
@@ -803,7 +804,7 @@ async function querySemantic(root, query, opts = {}) {
   return store.search(qvec, opts.topK ?? 8, opts.minScore ?? 0.3);
 }
 async function indexExists(root) {
-  const meta = path3.join(root, INDEX_DIR_NAME, "index.meta.json");
+  const meta = path3.join(INDEX_DIR_NAME, "index.meta.json");
   try {
     await fs3.access(meta);
     return true;
@@ -812,7 +813,7 @@ async function indexExists(root) {
   }
 }
 async function indexCompatible(root, opts = {}) {
-  const meta = await readIndexMeta(path3.join(root, INDEX_DIR_NAME));
+  const meta = await readIndexMeta(INDEX_DIR_NAME);
   if (!meta) return false;
   return compareIndexIdentity(meta, resolveIndexIdentity(opts)) === null;
 }

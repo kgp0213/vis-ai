@@ -112,9 +112,13 @@ let tokenOverride = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--port" && i + 1 < args.length) {
     port = parseInt(args[++i], 10);
+  } else if (args[i].startsWith("--port=")) {
+    port = parseInt(args[i].split("=")[1], 10);
   }
   if (args[i] === "--token" && i + 1 < args.length) {
     tokenOverride = args[++i];
+  } else if (args[i].startsWith("--token=")) {
+    tokenOverride = args[i].split("=").slice(1).join("=");
   }
 }
 
@@ -146,7 +150,7 @@ const { startDashboardServer } = await import(serverModUrl);
 console.error(`[launcher] importing core modules...`);
 
 const [
-  { DeepSeekClient },
+  { DeepSeekClient, pickPrimaryBalance },
   {
     CacheFirstLoop, ImmutablePrefix, ToolRegistry,
     registerFilesystemTools, registerMemoryTools,
@@ -191,6 +195,32 @@ let apiKey = loadApiKey();
 const config = readConfig(configPath);
 const model = config.model ?? "deepseek-v4-flash";
 let baseUrl = loadBaseUrl();
+
+// ── Balance ──────────────────────────────────────────────────────
+let balanceData = null;
+
+function isDeepSeekApi(url) {
+  if (!url) return false;
+  try {
+    const host = new URL(url).host;
+    return host === "api.deepseek.com" || host.endsWith(".deepseek.com");
+  } catch {
+    return url.includes("deepseek.com");
+  }
+}
+
+async function refreshBalance() {
+  if (!client || !apiKey || !isDeepSeekApi(baseUrl)) {
+    balanceData = null;
+    return;
+  }
+  try {
+    const data = await client.getBalance({ signal: AbortSignal.timeout(5000) });
+    balanceData = data;
+  } catch {
+    balanceData = null;
+  }
+}
 
 // Workspace directory — configurable via config.workspaceDir
 let workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
@@ -649,6 +679,7 @@ if (apiKey) {
     console.error(`[launcher] failed to create loop: ${err.message}`);
   }
 }
+if (client) refreshBalance();
 
 // ── Event sink (writes .events.jsonl for cockpit tool activity) ──
 let eventSink = null;
@@ -797,10 +828,12 @@ const ctx = {
       if (apiKey) {
         client = new DeepSeekClient({ apiKey, baseUrl });
         loop = buildLoop(client, workspaceDir);
+        refreshBalance();
         console.error(`[launcher] client & loop recreated with new credentials`);
       } else {
         client = null;
         loop = null;
+        balanceData = null;
         console.error(`[launcher] apiKey removed, client cleared`);
       }
     }
@@ -1041,7 +1074,7 @@ const ctx = {
       cacheHitRatio: s.cacheHitRatio,
       lastPromptTokens: s.lastPromptTokens,
       contextCapTokens: 65536,
-      balance: null,
+      balance: balanceData?.balance_infos ?? null,
     };
   },
 };
@@ -1056,7 +1089,8 @@ if (config.preset && config.preset !== "auto") {
 messages.push({
   id: "welcome",
   role: "assistant",
-  text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md",
+  text: (apiKey ? "" : "⚠️ 未配置 API Key，请在 设置 → 模型服务 中配置后开始对话。\n\n")
+    + "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md",
 });
 
 // ── Start the server ────────────────────────────────────────────

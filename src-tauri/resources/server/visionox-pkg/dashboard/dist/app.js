@@ -25587,6 +25587,7 @@ function OverviewPanel() {
         ${t4("overview.cockpit")}
       </h3>
       <div class="cockpit">
+        ${balanceKpi(c3)}
         <div class="cock-w-2" style="display:flex;flex-direction:column;gap:var(--space-4)">
           ${recentPlansRail(c3)}
           <div class="card">

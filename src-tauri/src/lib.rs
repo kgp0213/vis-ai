@@ -164,7 +164,11 @@ fn spawn_server_blocking(
         .spawn()?;
 
     // P1-2: assign to job object immediately to prevent orphan processes
-    job.assign(child.id())?;
+    if let Err(e) = job.assign(child.id()) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("JobObject assign failed: {e}").into());
+    }
 
     let stdout = child.stdout.take().expect("failed to capture stdout");
     let reader = std::io::BufReader::new(stdout);
@@ -477,14 +481,19 @@ pub fn run() {
 
             // ── Close → minimize to tray ─────────────────────────
             let app_handle_for_close = app.handle().clone();
+            let app_handle_for_tray = app.handle().clone();
             main_window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     if let Some(w) = app_handle_for_close.get_webview_window("main") {
-                        // P1-5: log failure
                         if let Err(e) = w.hide() {
                             log_diag(&format!("hide failed: {e}"));
                         }
+                    }
+                    if let Some(tray) = app_handle_for_tray.tray_by_id("main") {
+                        let _ = tray.set_tooltip(Some(
+                            "Visionox — 仍在运行中\n点击托盘图标恢复窗口，右键退出",
+                        ));
                     }
                 }
             });

@@ -765,9 +765,7 @@ async function handleHealth(method, _rest, _body, ctx) {
   const visionoxHome = join4(home, ".visionox");
   const sessionsStat = dirSize(join4(visionoxHome, "sessions"));
   const memoryStat = dirSize(join4(visionoxHome, "memory"));
-  const cwd2 = ctx.getCurrentCwd?.();
-  const semanticPath = cwd2 ? join4(cwd2, ".visionox", "semantic") : join4(visionoxHome, "semantic");
-  const semanticStat = dirSize(semanticPath);
+  const semanticStat = dirSize(INDEX_DIR_NAME);
   let usageBytes = 0;
   if (existsSync2(ctx.usageLogPath)) {
     try {
@@ -1747,7 +1745,7 @@ import { existsSync as existsSync6 } from "fs";
 var DAY_MS = 864e5;
 var RECENT_FILES_CAP = 8;
 var PLAN_FEED_CAP = 4;
-var TOOL_FEED_CAP = 6;
+var TOOL_FEED_CAP = 12;
 function computeEventsCockpit(now = Date.now(), sessionsDirOverride) {
   const dir = sessionsDirOverride ?? sessionsDir();
   if (!existsSync6(dir)) {
@@ -2329,7 +2327,7 @@ async function getStatus(ctx) {
   };
 }
 async function readIndexMeta2(root, current) {
-  const dir = join7(root, INDEX_DIR_NAME);
+  const dir = INDEX_DIR_NAME;
   const dataPath = join7(dir, "index.jsonl");
   const diskMeta = await readIndexMeta(dir);
   if (!diskMeta) return { exists: false };

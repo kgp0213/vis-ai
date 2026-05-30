@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 const target = join(root, "src-tauri", "resources", "server", "visionox-pkg");
-const version = process.argv[2] || "0.39.1";
+const version = process.argv[2] || "260530";
 const pkgName = "reasonix";
 
 // Check if dist/ already exists — if so, skip unless --force
