@@ -1,0 +1,41 @@
+/* ============================================================================
+   Visionox UI — Midnight Ink Color Scheme
+   Dark theme with cool ink-blue aesthetics, professional and restrained
+   Usage: <html data-theme="midnight-ink">
+   ============================================================================ */
+
+[data-theme="midnight-ink"] {
+  /* Surfaces */
+  --surface-base: #171920;
+  --surface-raised: #1c1e27;
+  --surface-overlay: #222530;
+  --surface-input: #1f212a;
+
+  /* Text */
+  --text-primary: #d0d4e0;
+  --text-secondary: #848a9a;
+  --text-tertiary: #555a6a;
+  --text-placeholder: #454a5a;
+
+  /* Brand — muted steel blue */
+  --accent-primary: #7a9ab8;
+  --accent-primary-hover: #8aaaca;
+  --accent-secondary: #5a7a98;
+
+  /* Semantic */
+  --color-success: #6a9a8a;
+  --color-warning: #a89a6a;
+  --color-error: #a07080;
+  --color-info: #6a8aaa;
+
+  /* Borders */
+  --border-subtle: #252838;
+  --border-default: #303548;
+  --border-strong: #404558;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(122, 154, 184, 0.08);
+}

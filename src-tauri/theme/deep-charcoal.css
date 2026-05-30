@@ -1,0 +1,41 @@
+/* ============================================================================
+   Visionox UI — Deep Charcoal Color Scheme
+   Dark theme with warm graphite aesthetics, low saturation, eye-comfort
+   Usage: <html data-theme="deep-charcoal">
+   ============================================================================ */
+
+[data-theme="deep-charcoal"] {
+  /* Surfaces */
+  --surface-base: #1a1c20;
+  --surface-raised: #1f2127;
+  --surface-overlay: #252830;
+  --surface-input: #22252a;
+
+  /* Text */
+  --text-primary: #d4d6db;
+  --text-secondary: #8a8e96;
+  --text-tertiary: #5a5e66;
+  --text-placeholder: #4a4e56;
+
+  /* Brand — muted warm gold */
+  --accent-primary: #b8a07a;
+  --accent-primary-hover: #c9b48e;
+  --accent-secondary: #8a7a5e;
+
+  /* Semantic */
+  --color-success: #6a9a7a;
+  --color-warning: #b8a06a;
+  --color-error: #b07070;
+  --color-info: #6a8aaa;
+
+  /* Borders */
+  --border-subtle: #2a2d33;
+  --border-default: #353840;
+  --border-strong: #454850;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(184, 160, 122, 0.08);
+}

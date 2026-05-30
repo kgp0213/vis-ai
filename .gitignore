@@ -35,6 +35,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # Portable distribution output (not source)
 portable/

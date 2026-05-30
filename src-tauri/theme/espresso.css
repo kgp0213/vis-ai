@@ -1,0 +1,41 @@
+/* ============================================================================
+   Visionox UI — Espresso Color Scheme
+   Dark theme with warm brown-leather aesthetics, cozy and private
+   Usage: <html data-theme="espresso">
+   ============================================================================ */
+
+[data-theme="espresso"] {
+  /* Surfaces */
+  --surface-base: #1c1917;
+  --surface-raised: #211e1b;
+  --surface-overlay: #282520;
+  --surface-input: #252220;
+
+  /* Text */
+  --text-primary: #ddd8d3;
+  --text-secondary: #9a9590;
+  --text-tertiary: #6a6560;
+  --text-placeholder: #5a5550;
+
+  /* Brand — muted coffee gold */
+  --accent-primary: #b0906a;
+  --accent-primary-hover: #c0a07a;
+  --accent-secondary: #8a7050;
+
+  /* Semantic */
+  --color-success: #7a9a6a;
+  --color-warning: #b0a06a;
+  --color-error: #b07070;
+  --color-info: #7a8aaa;
+
+  /* Borders */
+  --border-subtle: #2a2724;
+  --border-default: #35322e;
+  --border-strong: #45423e;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(176, 144, 106, 0.08);
+}
