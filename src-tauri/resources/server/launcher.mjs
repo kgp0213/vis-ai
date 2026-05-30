@@ -12,7 +12,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { exec as execCb, spawnSync } from "node:child_process";
@@ -85,6 +85,7 @@ const LOG_MAX = 500;
 const logBuffer = [];
 const _origError = console.error;
 const _origLog = console.log;
+const _origWarn = console.warn;
 console.error = (...args) => {
   const msg = args.join(" ");
   logBuffer.push({ ts: Date.now(), msg });
@@ -96,6 +97,12 @@ console.log = (...args) => {
   logBuffer.push({ ts: Date.now(), msg });
   if (logBuffer.length > LOG_MAX) logBuffer.shift();
   _origLog.apply(console, args);
+};
+console.warn = (...args) => {
+  const msg = args.join(" ");
+  logBuffer.push({ ts: Date.now(), msg });
+  if (logBuffer.length > LOG_MAX) logBuffer.shift();
+  _origWarn.apply(console, args);
 };
 
 // ── Parse args ─────────────────────────────────────────────────
@@ -333,6 +340,35 @@ Skill 安装后在新对话中自动加载。`,
         error: `invalid name: "${name}". Use lowercase + hyphens only, e.g. "my-skill". No spaces, no Chinese, no uppercase.`,
       });
     }
+
+    // P2-3: rate limit — max 10 installs per minute
+    const now = Date.now();
+    while (skillInstallTimes.length > 0 && now - skillInstallTimes[0] > SKILL_RATE_WINDOW) {
+      skillInstallTimes.shift();
+    }
+    if (skillInstallTimes.length >= SKILL_RATE_LIMIT) {
+      return JSON.stringify({
+        error: `rate limit: max ${SKILL_RATE_LIMIT} installs per minute. Please wait and retry.`,
+      });
+    }
+
+    // P2-3: concurrency guard
+    if (installingSkill) {
+      return JSON.stringify({
+        error: "another skill installation is in progress, please wait",
+      });
+    }
+
+    // P2-3: body size cap
+    if (args.body && typeof args.body === 'string' && args.body.length > MAX_BODY_SIZE) {
+      return JSON.stringify({
+        error: `body too large: ${args.body.length} bytes (max ${MAX_BODY_SIZE})`,
+      });
+    }
+
+    skillInstallTimes.push(now);
+    installingSkill = true;
+    try {
     const skillDir = resolve(skillsRoot, name);
     if (!existsSync(skillDir)) {
       mkdirSync(skillDir, { recursive: true });
@@ -340,9 +376,11 @@ Skill 安装后在新对话中自动加载。`,
 
     if (args.body) {
       const body = String(args.body);
-      if (!body.includes("---") || body.indexOf("---") === body.lastIndexOf("---")) {
+      const trimmed = body.trimStart();
+      const delimCount = (trimmed.match(/^---\s*$/gm) || []).length;
+      if (!trimmed.startsWith('---') || delimCount < 2) {
         return JSON.stringify({
-          error: "SKILL.md must have YAML frontmatter (start and end with ---). See skill-creation-guide.md for the format.",
+          error: "SKILL.md must have YAML frontmatter starting with --- on the first line and ending with --- on its own line. See skill-creation-guide.md for the format.",
         });
       }
       writeFileSync(resolve(skillDir, "SKILL.md"), body, "utf8");
@@ -362,6 +400,13 @@ Skill 安装后在新对话中自动加载。`,
       if (!src.endsWith(".skill") && !src.endsWith(".zip")) {
         return JSON.stringify({ error: `source must be a .skill or .zip file, got: ${src}` });
       }
+      // P2-3: size check before extraction
+      const srcStat = statSync(src);
+      if (srcStat.size > MAX_ZIP_SIZE) {
+        return JSON.stringify({
+          error: `source file too large: ${srcStat.size} bytes (max ${MAX_ZIP_SIZE})`,
+        });
+      }
       try {
         const zipPath = src.endsWith(".skill") ? src.replace(/\.skill$/, ".zip") : src;
         if (src.endsWith(".skill")) {
@@ -376,7 +421,7 @@ Skill 安装后在新对话中自动加载。`,
           await exec(`unzip -o "${zipPath}" -d "${skillDir}"`, { maxBuffer: 10 * 1024 * 1024 });
         }
         if (src.endsWith(".skill")) {
-          try { require("fs").unlinkSync(zipPath); } catch {}
+          try { unlinkSync(zipPath); } catch {}
         }
         return JSON.stringify({
           installed: true,
@@ -423,6 +468,9 @@ Skill 安装后在新对话中自动加载。`,
     return JSON.stringify({
       error: "provide one of: body (SKILL.md content), source (.skill file path), or source_dir (local directory path).",
     });
+    } finally {
+      installingSkill = false;
+    }
   },
 });
 
@@ -463,7 +511,8 @@ if (mcpServers.length > 0) {
 
 async function reloadMcp() {
   const cfg = readConfig(configPath);
-  const specs = cfg.mcp ?? [];
+  // P2-2: trim specs so comparison with mcpServers[i].spec (already trimmed) is reliable
+  const specs = (cfg.mcp ?? []).map(s => s.trim());
   // Remove servers no longer in config
   for (let i = mcpServers.length - 1; i >= 0; i--) {
     if (!specs.includes(mcpServers[i].spec)) {
@@ -621,6 +670,14 @@ function loopEventToDashboard(ev, assistantId) {
 // ── Busy state ──────────────────────────────────────────────────
 let busy = false;
 
+// P2-3: install_skill rate limiter
+const skillInstallTimes = [];
+const SKILL_RATE_LIMIT = 10;
+const SKILL_RATE_WINDOW = 60_000;
+const MAX_BODY_SIZE = 1024 * 1024;     // 1 MB
+const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50 MB
+let installingSkill = false;
+
 // ── Messages store ──────────────────────────────────────────────
 let nextMsgId = 1;
 const messages = [];
@@ -710,6 +767,14 @@ const ctx = {
 
     console.error(`[launcher] workspace switch: ${workspaceDir} → ${configuredDir}`);
 
+    // P2-1: unregister MCP tools from old workspace
+    for (const srv of mcpServers) {
+      for (const name of srv.toolNames) {
+        tools.unregister(name);
+        loop?.prefix?.removeTool(name);
+      }
+    }
+
     // Unregister old workspace tools
     for (const name of wsToolNames) {
       tools.unregister(name);
@@ -735,6 +800,9 @@ const ctx = {
     // Deploy skill-creation-guide to new workspace
     deploySkillGuide(workspaceDir);
 
+    // P2-1: re-register MCP tools for new workspace
+    await reloadMcp();
+
     console.error(`[launcher] workspace synced: ${workspaceDir}`);
   },
 
@@ -751,122 +819,150 @@ const ctx = {
     };
   },
 
+  // P0-1: busy guard must be checked and set BEFORE any await to prevent
+  // race conditions where two rapid calls both pass the busy check.
   submitPrompt: async (text, sessionName) => {
-    // ── Sync workspace if changed ─────────────────────────────
-    await ctx.syncWorkspace();
-
-    // ── Session resume: load historical messages ──────────────
-    if (sessionName && loop) {
-      try {
-        const sessionFile = resolve(sessionsDir, sessionName + ".jsonl");
-        const raw = readFileSync(sessionFile, "utf8");
-        const entries = raw.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
-        // Load into AI context
-        loop.log.compactInPlace(entries);
-        // Populate dashboard messages
-        messages.length = 0;
-        nextMsgId = 1;
-        const loaded = [];
-        for (const entry of entries) {
-          const role = entry.role === "tool" ? "tool" : entry.role;
-          const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
-          messages.push({ id, role, text: entry.content || "" });
-          loaded.push({ id, role, text: entry.content || "" });
-          nextMsgId++;
-        }
-        broadcastDashboardEvent({ kind: "messages-reset", messages: loaded });
-        console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages)`);
-        if (!text || !text.trim()) {
-          return { accepted: true, loaded: true, session: sessionName };
-        }
-      } catch (err) {
-        console.error(`[launcher] failed to load session ${sessionName}: ${err.message}`);
-        return { accepted: false, reason: `Failed to load session: ${err.message}` };
-      }
-    }
-
-    // Handle /new and /clear: save session and reset
-    if (text === "/new" || text === "/clear") {
-      if (messages.length > 0) {
-        const ts = new Date().toISOString().replace(/[:.]/g, "-");
-        const sessionFile = resolve(sessionsDir, `${ts}.jsonl`);
-        try {
-          const jsonl = messages.map((m) => JSON.stringify({ role: m.role, content: m.text })).join("\n") + "\n";
-          writeFileSync(sessionFile, jsonl, "utf8");
-          console.error(`[launcher] session saved: ${sessionFile}`);
-        } catch (err) {
-          console.error(`[launcher] failed to save session: ${err.message}`);
-        }
-      }
-      // Reset the AI's internal context (CacheFirstLoop log)
-      if (loop) loop.clearLog();
-      // Clear dashboard messages
-      messages.length = 0;
-      nextMsgId = 1;
-      // Add welcome message
-      const welcomeId = `assistant-${Date.now()}`;
-      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
-      messages.push(welcomeMsg);
-      // Notify client
-      busy = true;
-      broadcastDashboardEvent({ kind: "busy-change", busy: true });
-      broadcastDashboardEvent({ kind: "assistant_final", id: welcomeId, text: welcomeMsg.text });
-      busy = false;
-      broadcastDashboardEvent({ kind: "busy-change", busy: false });
-      return { accepted: true };
-    }
-
-    if (!loop) {
-      return {
-        accepted: false,
-        reason: "API key not configured. Open Settings tab to add your DeepSeek API key, then restart the app."
-      };
-    }
     if (busy) {
       return { accepted: false, reason: "loop is busy with a turn" };
     }
-
     busy = true;
-    broadcastDashboardEvent({ kind: "busy-change", busy: true });
 
-    const userMsgId = String(nextMsgId++);
-    messages.push({ id: userMsgId, role: "user", text });
-    broadcastDashboardEvent({ kind: "user", id: userMsgId, text });
+    // committed: set to true when the fire-and-forget IIFE takes ownership
+    // of busy-reset. Early-return paths leave it false so the outer finally
+    // block resets busy.
+    let committed = false;
+    try {
+      // ── Sync workspace if changed ─────────────────────────────
+      await ctx.syncWorkspace();
 
-    const assistantId = `assistant-${Date.now()}`;
-
-    // Fire-and-forget: process the turn asynchronously
-    (async () => {
-      let assistantText = "";
-      try {
-        for await (const ev of loop.step(text)) {
-          const dashev = loopEventToDashboard(ev, assistantId);
-          broadcastDashboardEvent(dashev);
-
-          if (ev.role === "assistant_delta") {
-            assistantText += ev.content ?? "";
+      // ── Session resume: load historical messages ──────────────
+      if (sessionName && loop) {
+        // P2-7: validate sessionName to prevent path traversal
+        if (!/^[\w.-]+$/.test(sessionName)) {
+          return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only alphanumeric, underscore, dot, or hyphen.` };
+        }
+        try {
+          const sessionFile = resolve(sessionsDir, sessionName + ".jsonl");
+          const raw = readFileSync(sessionFile, "utf8");
+          const entries = raw.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
+          // Load into AI context
+          loop.log.compactInPlace(entries);
+          // Populate dashboard messages
+          messages.length = 0;
+          nextMsgId = 1;
+          const loaded = [];
+          for (const entry of entries) {
+            const role = entry.role === "tool" ? "tool" : entry.role;
+            const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
+            messages.push({ id, role, text: entry.content || "" });
+            loaded.push({ id, role, text: entry.content || "" });
+            nextMsgId++;
           }
-          if (ev.role === "assistant_final") {
+          broadcastDashboardEvent({ kind: "messages-reset", messages: loaded });
+          console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages)`);
+          if (!text || !text.trim()) {
+            return { accepted: true, loaded: true, session: sessionName };
+          }
+        } catch (err) {
+          console.error(`[launcher] failed to load session ${sessionName}: ${err.message}`);
+          return { accepted: false, reason: `Failed to load session: ${err.message}` };
+        }
+      }
+
+      // Handle /new and /clear: save session and reset
+      if (text === "/new" || text === "/clear") {
+        if (messages.length > 0) {
+          const ts = new Date().toISOString().replace(/[:.]/g, "-");
+          const sessionFile = resolve(sessionsDir, `${ts}.jsonl`);
+          try {
+            const jsonl = messages.map((m) => JSON.stringify({ role: m.role, content: m.text })).join("\n") + "\n";
+            writeFileSync(sessionFile, jsonl, "utf8");
+            console.error(`[launcher] session saved: ${sessionFile}`);
+          } catch (err) {
+            console.error(`[launcher] failed to save session: ${err.message}`);
+          }
+        }
+        // Reset the AI's internal context (CacheFirstLoop log)
+        if (loop) loop.clearLog();
+        // Clear dashboard messages
+        messages.length = 0;
+        nextMsgId = 1;
+        // Add welcome message
+        const welcomeId = `assistant-${Date.now()}`;
+        const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
+        messages.push(welcomeMsg);
+        // busy is already true from the outer guard; just broadcast events
+        broadcastDashboardEvent({ kind: "busy-change", busy: true });
+        broadcastDashboardEvent({ kind: "assistant_final", id: welcomeId, text: welcomeMsg.text });
+        return { accepted: true };
+      }
+
+      if (!loop) {
+        return {
+          accepted: false,
+          reason: "API key not configured. Open Settings tab to add your DeepSeek API key, then restart the app."
+        };
+      }
+
+      broadcastDashboardEvent({ kind: "busy-change", busy: true });
+
+      const userMsgId = String(nextMsgId++);
+      messages.push({ id: userMsgId, role: "user", text });
+      broadcastDashboardEvent({ kind: "user", id: userMsgId, text });
+
+      const assistantId = `assistant-${Date.now()}`;
+
+      // Fire-and-forget: process the turn asynchronously
+      // When committed=true, the outer finally skips busy-reset because
+      // the fire-and-forget's own finally handles it.
+      committed = true;
+      (async () => {
+        let assistantText = "";
+        try {
+          for await (const ev of loop.step(text)) {
+            const dashev = loopEventToDashboard(ev, assistantId);
+            broadcastDashboardEvent(dashev);
+
+            if (ev.role === "assistant_delta") {
+              assistantText += ev.content ?? "";
+            }
+            if (ev.role === "assistant_final") {
+              // Keep the longest content — the last real answer wins over
+              // shorter intermediate reasoning/tool-use summaries
+              if (ev.content && ev.content.length > assistantText.length) {
+                assistantText = ev.content;
+              }
+            }
+          }
+          // Push only once, after the loop finishes, to avoid duplicates
+          // from multi-iteration tool-call turns and DeepSeek thinking phases
+          if (assistantText) {
             messages.push({
               id: assistantId,
               role: "assistant",
-              text: ev.content || assistantText,
+              text: assistantText,
             });
           }
+        } catch (err) {
+          broadcastDashboardEvent({
+            kind: "error",
+            id: `${assistantId}-error-${Date.now()}`,
+            text: err.message,
+          });
+        } finally {
+          busy = false;
+          broadcastDashboardEvent({ kind: "busy-change", busy: false });
         }
-      } catch (err) {
-        broadcastDashboardEvent({
-          kind: "error",
-          id: `${assistantId}-error-${Date.now()}`,
-          text: err.message,
-        });
-      } finally {
+      })();
+
+      return { accepted: true };
+    } finally {
+      // Reset busy on any early-return path (session load, /new, no-loop, etc.)
+      if (!committed) {
         busy = false;
         broadcastDashboardEvent({ kind: "busy-change", busy: false });
       }
-    })();
-
-    return { accepted: true };
+    }
   },
 
   abortTurn: () => {
@@ -922,7 +1018,7 @@ try {
   // ── Keep running until terminated ──────────────────────────
   const cleanup = () => {
     console.error("[launcher] shutting down...");
-    close().then(() => process.exit(0));
+    close().then(() => process.exit(0)).catch(() => process.exit(1));
   };
 
   process.on("SIGTERM", cleanup);

@@ -14,7 +14,7 @@
 
 | 组件 | 版本 | 说明 |
 |------|------|------|
-| [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) | v0.47.1 | AI Agent 核心（DeepSeek API、CacheFirstLoop、工具系统、Web 仪表盘） |
+| [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) | 260530 | AI Agent 核心
 | [Tauri](https://v2.tauri.app/) | v2 | Rust 桌面框架，使用系统 WebView2 |
 | Node.js | v22+ | 运行时，运行 Visionox 服务端（node.exe 随发行版自带） |
 | DeepSeek API | — | AI 模型后端（需用户自备 API Key） |
@@ -24,23 +24,32 @@
 ```
 vis-ai/
 ├── src/                          # Tauri 加载页
-│   └── index.html                #   极简外壳 (112B)，实际内容由 lib.rs 的 init_script 注入
+│   └── index.html                #   加载页 UI (spinner + 状态文字)，由 generate_context!() 嵌入
 ├── src-tauri/                    # Tauri Rust 后端
 │   ├── src/
 │   │   ├── main.rs               #   程序入口
-│   │   └── lib.rs                #   窗口创建、Node 进程管理、TCP 健康检查、系统托盘
+│   │   └── lib.rs                #   窗口创建、Node 进程管理、TCP 健康检查、系统托盘、全局诊断日志
 │   ├── resources/server/         #   随 exe 分发的运行时资源
 │   │   ├── node.exe              #     Node.js 二进制
 │   │   ├── launcher.mjs          #     启动脚本 — 实例化 DeepSeekClient + CacheFirstLoop
-│   │   └── visionox-pkg/         #     Visionox 服务端包（vendored from npm reasonix 0.47.1）
+│   │   └── visionox-pkg/         #     Visionox 服务端包（260530）
 │   ├── icons/                    #   应用图标
 │   ├── build.rs                  #   Tauri 构建脚本
 │   ├── Cargo.toml                #   Rust 依赖
 │   └── tauri.conf.json           #   Tauri 构建配置
 ├── CHANGELOG-0.43.0.md           # 二开变更记录（§一 ~ §三十七）
 ├── package.json                  # Node.js 项目配置（仅含 Tauri CLI）
-└── README.md
+├── README.md
+├── RULES.md                      # 项目开发规则（Rust/Tauri 编码规范）
+├── CODE_REVIEW_FINAL.md          # 源码审查终稿（P0-P4 修复状态）
+├── cherry-claude.cjs             # CLAUDE.md 全局记忆注入脚本（仅开发用）
+└── scripts/
+    └── restore-visionox-pkg.js   # Visionox 服务端包恢复脚本
 ```
+
+运行时生成的文件（exe 同级目录）：
+- `launcher-diag.log` — Rust 侧全局诊断日志
+- `launcher-stderr.log` — Node.js stderr 输出
 
 ## 架构
 
@@ -48,15 +57,20 @@ vis-ai/
 ┌─────────────────────────────────────────────────┐
 │                  Tauri Shell (Rust)               │
 │                                                   │
-│  窗口创建 (data URL + initialization_script)       │
+│  窗口创建 (WebviewUrl::App + generate_context!)    │
 │    → 加载页 spinner 立即可见                       │
 │    → spawn Node.js launcher.mjs                  │
-│    → TCP 直连 /api/health 轮询 (200ms×15次)       │
-│    → 健康检查通过 → eval 注入 __DASHBOARD_URL__    │
-│    → 加载页 JS 自助跳转 dashboard                  │
+│    → 读取 stdout 获取 {url, port, token}          │
+│    → TCP 直连 /api/health?token=xxx 轮询         │
+│      (200ms×15次, 仅校验 HTTP 200 状态行)         │
+│    → 健康检查通过 → eval window.location.replace  │
+│    → 加载页跳转 dashboard                          │
 │    → 系统托盘 (最小化/退出)                        │
+│    → 后台监控子进程存活 (2s 轮询)                  │
+│    → 全局诊断日志 (launcher-diag.log)             │
 │                                                   │
-│                    spawn node.exe launcher.mjs    │
+│        spawn node.exe launcher.mjs --port 0       │
+│        (JobObject KILL_ON_JOB_CLOSE 兜底)         │
 └───────────────────────────────┬──────────────────┘
                                 │
         ┌───────────────────────┴──────────────────┐
@@ -64,6 +78,7 @@ vis-ai/
         │  - 加载 ~/.visionox/config.json           │
         │  - 创建 DeepSeekClient + CacheFirstLoop   │
         │  - 注册 ~40 个工具 (文件/SHELL/WEB/AI)     │
+        │  - 连接 MCP 服务器                         │
         │  - 启动仪表盘 HTTP 服务器 (127.0.0.1)       │
         │  - stdout 输出 {"url","token","port"}     │
         └──────────────────────┬──────────────────┘
@@ -78,27 +93,31 @@ vis-ai/
         └──────────────────────────────────────────┘
 ```
 
-## 启动流程（v0.47.1 最终方案）
+## 启动流程（260530）
 
 ```
 双击 Visionox.exe
   → 窗口打开 → 灰背景 (#f3f4f6) → spinner 旋转动画 + "Visionox" + "Starting server…"
-  → Rust 后台 spawn Node → 读 stdout → TCP 健康检查 /api/health (最长 3s)
-  → 健康检查通过 → inject window.__DASHBOARD_URL__
-  → 加载页 JS 检测到 URL → "Server ready…" (绿色) → 跳转 dashboard
-  → 全程无"无法连接"错误闪现
+  → Rust 后台 spawn Node → 读 stdout JSON {url, token, port}
+  → 30s watchdog 超时保护 → 超时则显示错误并停止等待
+  → TCP 健康检查 GET /api/health?token=xxx (最长 ~3s, 15 次 × 200ms)
+  → 健康检查通过 → win_for_url.eval("window.location.replace('{url}')") 跳转 dashboard
+  → spawn 子进程存活监控线程 (每 2s 检查, 崩溃时显示错误页面)
+  → 全局诊断日志写入 launcher-diag.log
 ```
 
 关键设计：
-- **Rust 不执行跳转** — 只注入全局变量，JS 自主决定跳转时机
-- **TCP 健康检查** — 原始 HTTP GET，比 fetch/SSE 更可靠
-- **初始化脚本双保险** — 即使 Tauri 前端嵌入失败，init_script 仍能注入加载页 HTML
+- **Rust 直接执行跳转** — 健康检查通过后通过 `eval()` 注入 `window.location.replace(url)`
+- **TCP 健康检查** — 原始 HTTP GET，仅校验 HTTP 200 状态行，比 fetch/SSE 更可靠
+- **JobObject KILL_ON_JOB_CLOSE** — 父进程退出时 Windows 自动终止所有子进程，防止残留 node.exe
+- **catch_unwind 兜底** — 后台线程 panic 时捕获并通过 eval 通知 UI，避免静默失败
+- **30s 启动超时** — Node 卡住时不会永久 spinner
 
 详见 `CHANGELOG-0.43.0.md` §二十七 ~ §三十七。
 
 ## 当前进度
 
-### v0.47.1 已完成的二开功能
+### 260530 已完成的二开功能
 
 | 功能 | 说明 | 参考 |
 |------|------|------|
@@ -129,6 +148,11 @@ vis-ai/
 | **上游 P0-2 合入** | multi_edit 写入失败自动回滚 | **§三十七** |
 | **上游 P1-1 合入** | 系统提示词压缩 -58% + 品牌化（降低 API 费用） | **§三十七** |
 | **上游 P1-2 合入** | 工具描述压缩 -28%（降低 API 费用） | **§三十七** |
+| **P0 功能修复** | submitPrompt 竞态、read_line 超时、Node 崩溃监控、健康检查收紧、后台 panic 通知 | 2026-05-30 |
+| **P1 稳定性修复** | JobObject 竞态、child.wait 超时、Mutex 中毒、静默 Result、close reject | 2026-05-30 |
+| **P2 工具链修复** | MCP 清理、install_skill 速率限制、YAML 校验、会话名校验、console.warn | 2026-05-30 |
+| **P4 代码质量** | 全局 diag 日志、SAFETY 注释、单元测试(5)、硬编码路径修复、文档更新 | 2026-05-30 |
+| **会话记录去重** | assistant_final 每次只写一条到 JSONL，消除 38 条重复/空消息膨胀 | 2026-05-30 |
 
 ### 待完成
 
@@ -184,6 +208,25 @@ node src-tauri/resources/server/launcher.mjs --port 28980
 # 修改 lib.rs 后需重新编译，cargo build --release 会自动处理
 # 修改 src/index.html (加载页外壳) 后同样需重新编译
 ```
+
+### 故障排查
+
+启动失败时，检查 exe 同级目录下的诊断日志：
+
+```bash
+# Rust 侧全局诊断日志（启动流程、健康检查、进程管理、错误信息）
+type launcher-diag.log
+
+# Node.js 侧 stderr 输出（AI Agent 初始化、工具注册、请求处理）
+type launcher-stderr.log
+```
+
+关键错误信息（含时间戳）会写入 `launcher-diag.log`，常见：
+- `readline timeout` — Node 启动超过 30s
+- `health check TIMED OUT` — 服务器 HTTP 健康检查失败
+- `server FAILED` — 服务器启动阶段异常
+- `thread panicked` — Rust 后台线程崩溃
+- `child process exited unexpectedly` — Node 进程意外退出
 
 ### 常见构建问题
 
@@ -304,21 +347,26 @@ WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
 
 | 需求 | 修改文件 |
 |------|----------|
-| 启动流程 / 健康检查 | `src-tauri/src/lib.rs` |
+| 启动流程 / 健康检查 / 子进程管理 | `src-tauri/src/lib.rs` |
 | 加载页外观 | `src/index.html` — spinner 样式 + 状态文字 |
 | 系统托盘菜单 | `src-tauri/src/lib.rs` — `TrayIconBuilder` |
 | CSP 安全策略 | `src-tauri/tauri.conf.json` — `app.security.csp` |
-| 新增工具 | `src-tauri/resources/server/launcher.mjs` |
+| 新增工具 / 速率限制 | `src-tauri/resources/server/launcher.mjs` |
 | 修改系统提示词 | `src-tauri/resources/server/launcher.mjs` — `buildSystemPrompt()` |
 | 仪表盘 UI | `src-tauri/resources/server/visionox-pkg/dashboard/` |
 | 构建配置 | `src-tauri/build.rs` + `src-tauri/Cargo.toml` |
+| 全局记忆注入 | `cherry-claude.cjs` — CLAUDE.md 导入逻辑 |
+| 服务端包恢复 | `scripts/restore-visionox-pkg.js` |
+| 诊断日志 | exe 同级 `launcher-diag.log` (Rust) + `launcher-stderr.log` (Node) |
 
 ## 与上游的差异
 
 | 差异 | 上游 Reasonix | Visionox |
 |------|--------------|----------|
-| 架构 | React SPA 桌面端 (Vite) → IPC spawn 后端 | 静态加载页 (内联 Rust) → HTTP redirect 到 dashboard |
-| 启动动画 | React `<Splash>` 组件 (水下粒子动画) | Rust 内联 spinner + "Visionox" |
+| 架构 | React SPA 桌面端 (Vite) → IPC spawn 后端 | WebView2 → eval window.location.replace → dashboard |
+| 启动方式 | React `<Splash>` 组件 (水下粒子动画) | WebviewUrl::App 嵌入 spinner + "Visionox" |
+| 进程管理 | 无 | JobObject KILL_ON_JOB_CLOSE + 崩溃监控 + 30s 启动超时 |
+| 诊断 | stdout/stderr | 全局 launcher-diag.log + launcher-stderr.log |
 | 品牌化 | Reasonix | Visionox（所有 UI 文本 + 路径已替换） |
 | 搜索后端 | Mojeek only | 4 引擎可选，默认 Bing 国内版 (cn.bing.com) |
 | 搜索引擎切换 | 需重启 | 热切换，保存即生效 |
