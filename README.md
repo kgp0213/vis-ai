@@ -1,6 +1,6 @@
 # Visionox Desktop — AI Coding Agent 桌面版
 
-基于 [Reasonix](https://github.com/esengine/DeepSeek-Reasonix)（DeepSeek 原生 AI 编程代理）的 Tauri v2 桌面 GUI 封装，
+基于 [DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix)（DeepSeek 原生 AI 编程代理）的 Tauri v2 桌面 GUI 封装，
 为 Windows 用户提供免命令行的"绿色便携版"体验。
 
 ## 仓库地址
@@ -199,9 +199,9 @@ vis-ai/
 | 功能 | 说明 | 参考 |
 |------|------|------|
 | Admin 编辑模式 | 绕过工具沙箱限制 | §二 |
-| 路径品牌化 | `.reasonix` → `.visionox` 全局替换 (16 JS + 40+ 字符串) | §三 Fix2, §四 |
+| 路径品牌化 | `.[上游]` → `.visionox` 全局替换 (16 JS + 40+ 字符串) | §三 Fix2, §四 |
 | 主题切换修复 | 浅色/暗色主题切换按钮 + CSS 变量 | §三 Fix3 |
-| 数据迁移 | `.reasonix/` → `.visionox/` (sessions/memory/usage) | §三 Fix4 |
+| 数据迁移 | `.[上游]/` → `.visionox/` (sessions/memory/usage) | §三 Fix4 |
 | 会话管理增强 | 删除会话 + 从 GUI 恢复历史会话 | §九 |
 | 图片资源修复 | PNG 路由恢复 + auth skip | §十二 |
 | Embedding 分批修复 | OpenAI-compat API 413 错误 | §十三 |
@@ -459,20 +459,20 @@ WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
 
 ## 与上游的差异
 
-| 差异 | 上游 Reasonix | Visionox |
+| 差异 | 上游 | Visionox |
 |------|--------------|----------|
 | 架构 | React SPA 桌面端 (Vite) → IPC spawn 后端 | WebView2 → eval window.location.replace → dashboard |
 | 启动方式 | React `<Splash>` 组件 (水下粒子动画) | WebviewUrl::App 嵌入 spinner + "Visionox" |
 | 进程管理 | 无 | JobObject KILL_ON_JOB_CLOSE + 崩溃监控 + 30s 启动超时 |
 | 诊断 | stdout/stderr | 全局 launcher-diag.log + launcher-stderr.log |
-| 品牌化 | Reasonix | Visionox（所有 UI 文本 + 路径已替换） |
+| 品牌化 | [上游] | Visionox（所有 UI 文本 + 路径已替换） |
 | 搜索后端 | Mojeek only | 4 引擎可选，默认 Bing 国内版 (cn.bing.com) |
 | 搜索引擎切换 | 需重启 | 热切换，保存即生效 |
 | 编辑模式 | review / auto / yolo | 新增 admin 模式（绕过沙箱） |
 | 配色方案 | dark / light 双色 | 7 套（深色/浅色/暖沙/冷灰/柔绿/深炭灰/午夜墨蓝/浓缩咖啡） |
 | 导航栏 | 仅功能分区 | 新增 OA/API 快捷链接 |
 | 部署方式 | npm 包 + 独立桌面端 | Windows 绿色便携版 (免安装) |
-| 数据目录 | `~/.reasonix/` | `~/.visionox/` |
+| 数据目录 | `~/.[上游]/` | `~/.visionox/` |
 | 记忆系统 | 仅 project + global 两层 | 7 层（soul/project/mode/rules/skills/persistent/session） |
 | 工作模式 | 无 | 4 模式（通用/编程/办公/设计），主界面切换 |
 | ECC 集成 | 无 | Skills (18 编码) + Rules (26 文件) + Hooks |
@@ -481,4 +481,4 @@ WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
 
 ## License
 
-MIT（继承自 Reasonix）
+MIT

@@ -1,7 +1,7 @@
 # Visionox 开发规则
 
 > 来源：`.claude/rules/ecc/rust/`，适用本项目的 Rust + Tauri 开发
-> 应用版本：1.0.0 | 上游基线：reasonix 0.47.1 | 最后更新：2026-06-07
+> 应用版本：1.0.0 | 上游基线：0.47.1 | 最后更新：2026-06-07
 
 ## 编码规范
 
@@ -57,4 +57,4 @@
 | `src-tauri/tauri.conf.json` | 窗口配置、资源打包、NSIS 配置。`windows:[]` 为空——主窗口在 `lib.rs` 中通过 `WebviewWindowBuilder` 动态创建，不在配置中静态声明 |
 | `src-tauri/capabilities/default.json` | 权限配置，`"windows":["main"]` 对应动态创建的 main 窗口 |
 | `src-tauri/build.rs` | 编译脚本、资源复制 |
-| `src-tauri/resources/server/visionox-pkg/dist/cli/` | Vendored Reasonix CLI chunks |
+| `src-tauri/resources/server/visionox-pkg/dist/cli/` | Vendored CLI chunks |

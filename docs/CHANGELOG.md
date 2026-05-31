@@ -1,13 +1,13 @@
 # Visionox 二开变更记录
 
-> **版本说明**：本文档按上游 Reasonix 基线版本组织（v0.43.0 → v0.47.1）。
+> **版本说明**：本文档按上游基线版本组织（v0.43.0 → v0.47.1）。
 > Visionox Desktop 应用自身版本：**1.0.0**（定义于 `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）。
 > `package.json` 版本号 `0.1.0` 仅为 npm workspace 占位（不随应用分发）。
 
 ## v0.47.1（2026-05-26 至今）
 
-> 基础版本：reasonix 0.47.1
-> 上一版本：reasonix 0.43.0 (2026-05-15)
+> 基础版本：上游 0.47.1
+> 上一版本：上游 0.43.0 (2026-05-15)
 
 | 变更 | 说明 |
 |------|------|
@@ -22,8 +22,8 @@
 
 ## v0.43.0（2026-05-17）
 
-> 基础版本：reasonix 0.43.0 (2026-05-15)
-> 上一版本：reasonix 0.39.1 (2026-05-11)
+> 基础版本：上游 0.43.0 (2026-05-15)
+> 上一版本：上游 0.39.1 (2026-05-11)
 
 ---
 
@@ -64,11 +64,11 @@
 
 ### Fix 2: 系统路径显示不一致
 
-- **问题**：会话/记忆/语义显示 `.reasonix`，用量显示 `.visionox`
-- **根因**：`/health` API 及其他 16 个 CLI chunk 文件硬编码了 `.reasonix`
-- **修复**：对 16 个 `dist/cli/*.js` 文件做 `.reasonix` → `.visionox` 全局替换
-- **安全保护**：HTTP headers（`X-Reasonix-Token`、`reasonix-token`、`reasonix-mode`）和 GitHub URL（`esengine/reasonix`）使用占位符保护后还原
-- **结果**：JS 文件中 0 处 `.reasonix` 残留，64 处 `.visionox`
+- **问题**：会话/记忆/语义显示 `.[上游]`，用量显示 `.visionox`
+- **根因**：`/health` API 及其他 16 个 CLI chunk 文件硬编码了 `.[上游]`
+- **修复**：对 16 个 `dist/cli/*.js` 文件做 `.[上游]` → `.visionox` 全局替换
+- **安全保护**：HTTP headers（`X-[上游]-Token`、`[上游]-token`、`[上游]-mode`）和 GitHub URL（`esengine/[上游]`）使用占位符保护后还原
+- **结果**：JS 文件中 0 处 `.[上游]` 残留，64 处 `.visionox`
 
 ### Fix 3: 主题切换按钮不可点击
 
@@ -78,8 +78,8 @@
 
 ### Fix 4: 数据迁移
 
-- **问题**：历史会话/记忆/用量数据在 `.reasonix/` 下，升级后代码读写 `.visionox/` 导致历史数据不可见
-- **修复**：将 `.reasonix/` 下的 sessions、memory、usage.jsonl、slash-usage.json、version-cache.json 迁移到 `.visionox/`
+- **问题**：历史会话/记忆/用量数据在 `.[上游]/` 下，升级后代码读写 `.visionox/` 导致历史数据不可见
+- **修复**：将 `.[上游]/` 下的 sessions、memory、usage.jsonl、slash-usage.json、version-cache.json 迁移到 `.visionox/`
 - **配置合并**：以旧 config.json 为基础，合并新版本字段（`search: true`）
 
 ---
@@ -101,15 +101,15 @@
 - 新增 `.theme-btn` 和 `[data-theme="light"]` 浅色主题变量
 
 ### dashboard/dist/app.js（~40+ 处字符串替换）
-- `[reasonix dashboard]` → `[visionox dashboard]`
-- `` `- Reasonix: ${MODE}` `` → `` `- Visionox: ${MODE}` ``
-- 英文 i18n 中 Reasonix → Visionox（UI 文本）
+- `[[上游] dashboard]` → `[visionox dashboard]`
+- `` `- [上游]: ${MODE}` `` → `` `- Visionox: ${MODE}` ``
+- 英文 i18n 中 [上游] → Visionox（UI 文本）
 - 中文 i18n 对应翻译
-- `~/.reasonix/` → `~/.visionox/`
+- `~/.[上游]/` → `~/.visionox/`
 - `REASONIX.md` → `visionox.md`
 - 品牌区域改为 `<img src="/assets/v3.png">`
 - 添加主题切换按钮（cookie `visionox-theme`）
-- **保留不变**：HTTP headers（`X-Reasonix-Token`、`reasonix-token`、`reasonix-mode`）、GitHub URL（`esengine/reasonix`）
+- **保留不变**：HTTP headers（`X-[上游]-Token`、`[上游]-token`、`[上游]-mode`）、GitHub URL（`esengine/[上游]`）
 
 ### 自定义图片（从 backup 复制）
 | 文件 | 用途 |
@@ -126,7 +126,7 @@
 | 项目 | 说明 |
 |------|------|
 | ROLE_AVATAR → ROLE_GLYPH | 0.43.0 用 unicode 符号（◇/◆）替代了自定义头像图片系统 |
-| reasonix-workspaces → rx.* | localStorage key 重构，上游改动 |
+| [上游]-workspaces → rx.* | localStorage key 重构，上游改动 |
 | 工具描述 `desc` i18n | 0.43.0 新增 40+ 工具的中英文描述 |
 
 ---
@@ -177,7 +177,7 @@ cargo build --release
 
 # 数据回滚（如需要）
 rm -r -force ~/.visionox
-mv ~/.reasonix ~/.visionox.bak  # 或其他恢复方式
+mv ~/.[上游] ~/.visionox.bak  # 或其他恢复方式
 ```
 
 ---
@@ -1078,7 +1078,7 @@ Web Search:  [ON] [OFF]
 - 删除 `src-tauri/target/`（构建产物，1562 MB）
 - 删除 `node_modules/`（45 MB）
 - 删除 `visionox-pkg-*-backup/`、`visionox-pkg-*-pre-pathfix/`（备份目录，72 MB）
-- 删除 `esengine-DeepSeek-Reasonix-*/`（上游参考，9 MB）
+- 删除 `esengine-DeepSeek-[上游]-*/`（上游参考，9 MB）
 - 项目从 1680 MB 缩减到 269 MB
 
 ---
@@ -1110,7 +1110,7 @@ Web Search:  [ON] [OFF]
 
 ## 三十七、上游 Cherry-Pick 合入（2026-05-19）
 
-从 esengine/reasonix 上游合入 4 个补丁，版本对齐至 0.47.1。
+从 esengine/[上游] 上游合入 4 个补丁，版本对齐至 0.47.1。
 
 ### P0-1: login-shell PATH 发现（upstream e7fb669 → c181f67）
 
@@ -1137,19 +1137,19 @@ Web Search:  [ON] [OFF]
 
 **问题**：系统提示词约 22,774 字符，每次 API 请求均发送，显著增加 token 费用。
 
-**修复**：压缩 `CODE_SYSTEM_TEMPLATE` 至约 9,592 字符（-58%）。精简冗余句式，合并重复表述，保留完整功能语义。同时完成品牌化替换（Reasonix → Visionox）。
+**修复**：压缩 `CODE_SYSTEM_TEMPLATE` 至约 9,592 字符（-58%）。精简冗余句式，合并重复表述，保留完整功能语义。同时完成品牌化替换（[上游] → Visionox）。
 
 | # | 文件 | 修改内容 |
 |---|------|---------|
 | 1 | `chunk-5JJRUIPA.js` | `CODE_SYSTEM_TEMPLATE` 重写压缩 + 品牌化 + 反引号转义修复 |
 
 **品牌化变更**：
-- "You are Reasonix Code, a coding assistant" → "You are Visionox Code, a coding assistant"
-- "You are Reasonix Code, a standalone coding assistant" → "You are a standalone coding assistant"
-- "Reasonix VALIDATES citations" → "the tool validates citations"
-- "critique Reasonix itself" → "critique the tool itself"
+- "You are [上游] Code, a coding assistant" → "You are Visionox Code, a coding assistant"
+- "You are [上游] Code, a standalone coding assistant" → "You are a standalone coding assistant"
+- "[上游] VALIDATES citations" → "the tool validates citations"
+- "critique [上游] itself" → "critique the tool itself"
 
-**踩坑**：模板文本内的反引号（`` `config.yaml` ``、`` `reasonix.md` ``）在压缩后的 JS 模板字面量中必须转义为 `` \` ``，否则破坏 JS 解析。曾导致应用启动时报 SyntaxError。
+**踩坑**：模板文本内的反引号（`` `config.yaml` ``、`` `[上游].md` ``）在压缩后的 JS 模板字面量中必须转义为 `` \` ``，否则破坏 JS 解析。曾导致应用启动时报 SyntaxError。
 
 ### P1-2: 工具描述压缩 -28%（upstream e7fb669 → 6e5fa83）
 
