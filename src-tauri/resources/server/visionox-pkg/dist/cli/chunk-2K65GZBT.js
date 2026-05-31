@@ -5,7 +5,7 @@ import { createRequire as __cr } from 'node:module'; if (typeof globalThis.requi
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename, join } from "path";
 var PROJECT_MEMORY_FILE = "REASONIX.md";
-var PROJECT_MEMORY_FILES = ["REASONIX.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
+var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
 var PROJECT_MEMORY_MAX_CHARS = 8e3;
 var FOREIGN_PLATFORM_FILE_MARKERS = ["SOUL.md", "PERSONA.md"];
 function detectForeignAgentPlatform(rootDir) {

@@ -41,14 +41,17 @@ vis-ai/
 │   ├── Cargo.toml                #   Rust 依赖
 │   ├── capabilities/default.json #   Tauri 权限配置
 │   └── tauri.conf.json           #   Tauri 构建配置（windows:[] 为空 — 窗口由 lib.rs 动态创建）
-├── docs/                         # 设计文档
+├── docs/                         # 项目文档
+│   ├── CHANGELOG.md              #   二开变更记录（§一 ~ §三十八）
+│   ├── CODE_QUALITY_AUDIT.md     #   源码审查终稿（17 项）
 │   ├── COLOR_SCHEMES.md          #   7 套配色方案完整指南
-│   └── UI_DESIGN_SYSTEM.md       #   UI 设计系统规范
-├── CHANGELOG.md                  # 二开变更记录（§一 ~ §三十八）
-├── CODE_REVIEW.md                # 源码审查终稿（P0-P4 修复状态，31 项）
-├── RULES.md                      # 项目开发规则（Rust/Tauri 编码规范）
+│   ├── DEVELOPMENT_RULES.md      #   开发规则（Rust/Tauri 编码规范）
+│   ├── ECC_INTEGRATION.md        #   ECC 集成文档（skills/rules/mode/hooks）
+│   ├── OPTIMIZATION_PLAN.md      #   Karpathy 风格优化建议（8 项）
+│   ├── SECURITY_AUDIT.md         #   安全性问题清单（11 项）
+│   ├── UI_DESIGN_SYSTEM.md       #   UI 设计系统规范
+│   └── skill-creation-guide.md   #   Skill 开发通用指南
 ├── cherry-claude.cjs             # CLAUDE.md 全局记忆注入脚本（仅开发用）
-├── skill-creation-guide.md       # Skill 开发通用指南
 ├── package.json                  # Node.js 项目配置（仅含 Tauri CLI）
 └── scripts/
     └── restore-visionox-pkg.js   # Visionox 服务端包恢复脚本
@@ -120,7 +123,74 @@ vis-ai/
 - **catch_unwind 兜底** — 后台线程 panic 时捕获并通过 eval 通知 UI，避免静默失败
 - **30s 启动超时** — Node 卡住时不会永久 spinner
 
-详见 `CHANGELOG.md` §二十七 ~ §三十七。
+ 详见 `CHANGELOG.md` §二十七 ~ §三十七。
+
+## 记忆系统
+
+### 层级架构
+
+每次新对话时，以下内容按顺序加载到 AI 系统提示词中：
+
+| 层级 | 文件 | 用途 |
+|------|------|------|
+| L0 | `~/.visionox/soul.md` | AI 身份 + 行为准则 |
+| L1 | `workspace/visionox.md` | 项目信息（工具路径、Skills、工作流） |
+| L2 | `config.json` → `modes[mode].prompt` | 当前工作模式的行为指令 |
+| L3 | `~/.claude/rules/ecc/{common,rust,...}/` | 编码规范（由 mode 决定加载哪些） |
+| L4 | `~/.visionox/rules/` | 用户自定义规则 |
+| L5 | `~/.visionox/skills/*/SKILL.md` | 36 个 Skills（YAML frontmatter 注入） |
+| L6 | `~/.visionox/memory/*/MEMORY.md` | 持久记忆（跨会话） |
+| L7 | 内存（`remember_session` 工具） | 短期记忆（/new 后清除） |
+
+### 文件职责
+
+| 文件 | 位置 | 内容 |
+|------|------|------|
+| `soul.md` | `~/.visionox/` | AI 身份声明、行为准则、沟通风格 |
+| `visionox.md` | workspace 根目录 | 项目专属信息（工具路径、目录结构） |
+| ECC rules | `~/.claude/rules/ecc/{lang}/` | 编程规范（来自 ECC v2.0.0-rc.1） |
+| Skills | `~/.visionox/skills/*/` | 36 个领域 skill（18 个编码类 + 18 个 domain 类） |
+
+### 短期 vs 长期
+
+| 工具 | scope | 存储 | 生命周期 |
+|------|-------|------|----------|
+| `remember` | global / project | 磁盘文件 | 跨会话持久 |
+| `remember_session` | session | 内存 | `/new` 或重启后清除 |
+
+## 工作模式
+
+主界面右上角提供 **4 个模式按钮**，切换后 `/new` 生效：
+
+| 模式 | ECC Rules | 适用场景 | 提示词量 |
+|------|-----------|----------|----------|
+| 通用 | common + rust | 默认，日常使用 | ~9,500 token |
+| 编程 | common + rust + ts + python | 代码开发，26 个规则文件 | ~15,300 token |
+| 办公 | common only | 文档处理、数据分析 | ~5,500 token |
+| 设计 | common only | UI/UX、前端布局 | ~5,500 token |
+
+> 配置存储在 `~/.visionox/config.json` 的 `mode` 和 `modes` 字段，首次运行自动写入默认值。
+
+## ECC 集成
+
+集成了 [ECC](https://github.com/affaan-m/ECC)（Everything Claude Code）的 Skills 和 Rules 体系：
+
+| 组件 | 数量 | 位置 |
+|------|------|------|
+| ECC Skills | 18 个编码类 | `~/.visionox/skills/`（从 `~/.claude/skills/ecc/` 复制） |
+| ECC Rules | 5 套（26 个文件, 45 KB） | `~/.claude/rules/ecc/{common,rust,typescript,python}/` |
+| Hook 系统 | preTool / postTool | `launcher.mjs` 内置 |
+| Session Memory | `remember_session` 工具 | launcher 内存 |
+
+### 数据流
+
+```
+~/.claude/skills/ecc/           ──复制──→  ~/.visionox/skills/
+~/.claude/rules/ecc/{lang}/     ──读取──→  system prompt (mode 控制)
+~/.visionox/rules/              ──读取──→  system prompt (始终加载)
+```
+
+详见 [`docs/ECC_INTEGRATION.md`](docs/ECC_INTEGRATION.md)。
 
 ## 当前进度
 
@@ -166,6 +236,21 @@ vis-ai/
 | **余额功能移植** | 从上游移植 DeepSeek 余额显示，非 DeepSeek API 显示 "---"，概览页 cockpit 余额 KPI | 2026-05-30 |
 | **工具活动扩容** | 概览页工具活动列表从 6 条增至 12 条 | 2026-05-30 |
 | **语义索引路径重构** | 从 workspace/.visionox/semantic → ~/.visionox/semantic，统一到 home 目录，健康检查复用 INDEX_DIR_NAME 变量 | 2026-05-30 |
+
+### 260531 已完成的 ECC 集成
+
+| 功能 | 说明 | 参考 |
+|------|------|------|
+| **ECC Skills 集成** | 从 ECC v2.0.0-rc.1 复制 18 个编码类 skill 到 `~/.visionox/skills/` | `docs/ECC_INTEGRATION.md` §三 |
+| **ECC Rules 集成** | 加载 5 套规则集（26 个文件, 45 KB），由工作模式控制选择 | `docs/ECC_INTEGRATION.md` §四 |
+| **工作模式系统** | 4 模式（通用/编程/办公/设计），主界面右上角按钮切换，`/new` 生效 | `docs/ECC_INTEGRATION.md` §三 |
+| **soul.md 身份文件** | 新建 `~/.visionox/soul.md`，定义 AI 核心身份和行为准则 | `docs/ECC_INTEGRATION.md` §二 |
+| **短期记忆** | 新增 `remember_session` 工具（scope: session），`/new` 时清除 | `docs/ECC_INTEGRATION.md` §七 |
+| **记忆系统重构** | 7 层加载架构（soul → project → mode → rules → skills → persistent → session） | `docs/ECC_INTEGRATION.md` §二 |
+| **记忆页修复** | Dashboard 过滤 MEMORY.md 索引文件；项目文件动态名 + 路径截断 | `docs/ECC_INTEGRATION.md` §八 |
+| **Hook 系统** | 新增 preTool/postTool hook 框架 + `ctx` API | `docs/ECC_INTEGRATION.md` §六 |
+| **Karpathy 优化×6** | 动态工具清单、日志截断、消息上限、stderr 非 UTF-8、补丁失败退出码、ESM TDZ 修复 | `docs/OPTIMIZATION_PLAN.md` |
+| **RAII Guard 修复** | `ServerState.job` 误删导致进程崩溃，已恢复并添加 SAFETY 注释 | — |
 
 ### 待完成
 
@@ -388,6 +473,11 @@ WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
 | 导航栏 | 仅功能分区 | 新增 OA/API 快捷链接 |
 | 部署方式 | npm 包 + 独立桌面端 | Windows 绿色便携版 (免安装) |
 | 数据目录 | `~/.reasonix/` | `~/.visionox/` |
+| 记忆系统 | 仅 project + global 两层 | 7 层（soul/project/mode/rules/skills/persistent/session） |
+| 工作模式 | 无 | 4 模式（通用/编程/办公/设计），主界面切换 |
+| ECC 集成 | 无 | Skills (18 编码) + Rules (26 文件) + Hooks |
+| 编码规范 | 无 | ECC Rules，按模式加载 5 套规则集 |
+| 短期记忆 | 无 | `remember_session` 工具（session scope） |
 
 ## License
 

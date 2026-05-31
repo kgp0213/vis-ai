@@ -3,7 +3,7 @@
 // directory. Run this when setting up a fresh clone or updating the reasonix version.
 //
 // Usage: node scripts/restore-visionox-pkg.js [version]
-//   version — reasonix version (default: "0.39.1")
+//   version — reasonix version (default: "260530")
 
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, cpSync } from "node:fs";
@@ -50,10 +50,7 @@ try {
     process.exit(1);
   }
 
-  // Remove old visionox-pkg (keep node_modules if exists)
-  const nodeModulesBackup = join(target, "node_modules");
-  const hasNodeModules = existsSync(nodeModulesBackup);
-
+  // Remove old visionox-pkg
   rmSync(target, { recursive: true, force: true });
   mkdirSync(dirname(target), { recursive: true });
 

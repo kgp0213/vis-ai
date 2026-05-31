@@ -19629,7 +19629,7 @@ var en = {
     create: "create",
     noFiles: "No memory files yet.",
     pickHint: "Pick a memory file on the left.",
-    pickDesc: "Project visionox.md is committable; global notes live in ~/.visionox/memory/.",
+    pickDesc: "Project memory file; global notes live in ~/.visionox/memory/.",
     chars: "{count} chars",
     saved: "saved {scope}",
     reloadHint: "re-applied on next /new or session restart"
@@ -20293,7 +20293,7 @@ var zhCN = {
     create: "\u521B\u5EFA",
     noFiles: "\u6682\u65E0\u8BB0\u5FC6\u6587\u4EF6\u3002",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684\u8BB0\u5FC6\u6587\u4EF6\u3002",
-    pickDesc: "\u9879\u76EE visionox.md \u53EF\u63D0\u4EA4\uFF1B\u5168\u5C40\u7B14\u8BB0\u5B58\u50A8\u5728 ~/.visionox/memory/\u3002",
+    pickDesc: "\u9879\u76EE \u9879\u76EE\u8BB0\u5FC6\u6587\u4EF6\uFF1B\u5168\u5C40\u7B14\u8BB0\u5B58\u50A8\u5728 ~/.visionox/memory/\u3002",
     chars: "{count} \u4E2A\u5B57\u7B26",
     saved: "\u5DF2\u4FDD\u5B58 {scope}",
     reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D"
@@ -23670,6 +23670,8 @@ function ChatPanel() {
   const [editMode, setEditModeLocal] = d2(null);
   const [preset, setPresetLocal] = d2(null);
   const [effort, setEffortLocal] = d2(null);
+const [mode, setModeLocal] = d2("general");
+const [modes, setModesLocal] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
@@ -24081,6 +24083,8 @@ function ChatPanel() {
         setEditModeLocal(o3.editMode ?? null);
         setPresetLocal(o3.preset ?? null);
         setEffortLocal(o3.reasoningEffort ?? null);
+        setModeLocal(o3.workMode ?? "general");
+        setModesLocal(o3.modes ?? null);
         setWorkspaceDirLocal(o3.cwd ?? null);
         setStats(o3.stats ?? null);
         setOverviewModel(o3.model ?? null);
@@ -24114,6 +24118,7 @@ function ChatPanel() {
   const setSetting = q2(async (key, value) => {
     if (key === "preset") setPresetLocal(value);
     if (key === "reasoningEffort") setEffortLocal(value);
+      if (key === "mode") setModeLocal(value);
     try {
       await api("/settings", { method: "POST", body: { [key]: value } });
     } catch (err) {
@@ -24122,6 +24127,8 @@ function ChatPanel() {
         const o3 = await api("/overview");
         setPresetLocal(o3.preset ?? null);
         setEffortLocal(o3.reasoningEffort ?? null);
+        setModeLocal(o3.workMode ?? "general");
+        setModesLocal(o3.modes ?? null);
       } catch {
       }
     }
@@ -24145,7 +24152,19 @@ function ChatPanel() {
         <div class="chips" style="padding:0">
           <span class="chip-f static active">${MODE === "attached" ? t4("chat.modeMirror") : t4("chat.modeView")}</span>
         </div>
-        <div class="header-pickers" style="margin-left:auto">
+        <div class="header-pickers" style="margin-left:auto">${modes ? html4`
+              <div class="mode-picker" title="work mode \u2014 applies on /new">
+                ${modes.map((m) => html4`
+                  <button
+                    key=${m.id}
+                    class="mode-btn ${mode === m.id ? "active accent" : ""}"
+                    onClick=${() => setSetting("mode", m.id)}
+                    title="${m.label} (${(m.rules||[]).join("+")})"
+                  >${m.label}</button>
+                `)}
+              </div>
+            ` : null}
+
           ${effort ? html4`
               <div class="mode-picker" title=${t4("chat.effortTitle")}>
                 ${["high", "max"].map(
@@ -25259,10 +25278,10 @@ function MemoryPanel() {
                   onClick=${() => openFile("project")}
                 >
                   <span class="name">
-                    visionox.md
+                    ${tree.project.file ?? "project.md"}
                     ${tree.project.exists ? html4`<span class="pill ok">${t4("memory.exists")}</span>` : html4`<span class="pill">${t4("memory.create")}</span>`}
                   </span>
-                  <span class="preview">${tree.project.path}</span>
+                  <span class="preview dim">~/${(()=>{const p=tree.project.path??"";const i=p.lastIndexOf("\\");return i>0?p.slice(i+1):p})()}</span>
                   <span class="meta"><span class="dim">project</span></span>
                 </div>
               ` : null}

@@ -50,6 +50,12 @@ icons/
 .env.local
 .workbuddy/
 
+# Upstream source reference (temp, for diff comparison)
+tep/
+
+# ECC reference (external harness operator system)
+ECC/
+
 # Build artifacts (not source)
 package-lock.json
 *.map

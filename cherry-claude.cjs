@@ -1,6 +1,8 @@
 const path = require('path');
 const fs = require('fs');
 
+let failCount = 0;
+
 const serverDir = path.join(__dirname, 'src-tauri', 'resources', 'server', 'visionox-pkg', 'dist', 'cli');
 
 // ============================================================
@@ -10,7 +12,7 @@ let file = path.join(serverDir, 'chunk-2K65GZBT.js');
 let content = fs.readFileSync(file, 'utf8');
 
 const oldArr = 'var PROJECT_MEMORY_FILES = ["REASONIX.md", "AGENTS.md", "AGENT.md"];';
-const newArr = 'var PROJECT_MEMORY_FILES = ["REASONIX.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];';
+const newArr = 'var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];';
 
 if (content.includes(oldArr)) {
   content = content.replace(oldArr, newArr);
@@ -18,6 +20,7 @@ if (content.includes(oldArr)) {
   console.log('OK: chunk-2K65GZBT.js — PROJECT_MEMORY_FILES updated');
 } else {
   console.log('FAIL: chunk-2K65GZBT.js — PROJECT_MEMORY_FILES not found');
+  failCount++;
 }
 
 // ============================================================
@@ -104,7 +107,12 @@ if (content.includes(oldStack)) {
   console.log('OK: chunk-5JJRUIPA.js — applyMemoryStack updated');
 } else {
   console.log('FAIL: chunk-5JJRUIPA.js — applyMemoryStack not matched');
+  failCount++;
 }
 
 fs.writeFileSync(file, content, 'utf8');
+if (failCount > 0) {
+  console.log(`DONE: CLAUDE.md import cherry-pick complete (${failCount} FAIL)`);
+  process.exit(1);
+}
 console.log('DONE: CLAUDE.md import cherry-pick complete');

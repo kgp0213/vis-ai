@@ -1448,7 +1448,7 @@ var SAFE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 function listMemoryFiles(dir) {
   if (!existsSync5(dir)) return [];
   try {
-    return readdirSync3(dir).filter((f) => f.endsWith(".md")).map((f) => {
+    return readdirSync3(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md").map((f) => {
       const stat = statSync3(join5(dir, f));
       return {
         name: f.replace(/\.md$/, ""),
@@ -1982,6 +1982,8 @@ async function handleOverview(method, _rest, _body, ctx) {
   const overview = {
     version: VERSION,
     mode: ctx.mode,
+    workMode: cfg.mode ?? "general",
+    modes: (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
     latestVersion: ctx.getLatestVersion?.() ?? null,
     session: ctx.getSessionName?.() ?? null,
     cwd,
@@ -2759,6 +2761,8 @@ async function handleSettings(method, _rest, body, ctx) {
         webSearchEndpoint: cfg.webSearchEndpoint ?? null,
         bingApiKeySet: Boolean(cfg.bingApiKey),
         editMode: cfg.editMode ?? "review",
+        mode: cfg.mode ?? "general",
+        modes: (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
         session: cfg.session ?? null,
         model: live?.model ?? null,
         proNext: live?.proArmed ?? false,
@@ -2776,7 +2780,8 @@ async function handleSettings(method, _rest, body, ctx) {
           bingApiKey: "next-session",
           model: "next-turn",
           proNext: "next-turn",
-          budgetUsd: "live"
+          budgetUsd: "live",
+          mode: "next-session"
         }
       }
     };
@@ -2860,6 +2865,13 @@ async function handleSettings(method, _rest, body, ctx) {
         return { status: 400, body: { error: "bingApiKey must be null or a string (16+ chars)" } };
       }
       changed.push("bingApiKey");
+    }
+    if (fields.mode !== void 0) {
+      if (typeof fields.mode !== "string" || !cfg.modes || !cfg.modes[fields.mode]) {
+        return { status: 400, body: { error: "mode must be one of: " + Object.keys(cfg.modes??{}).join(", ") } };
+      }
+      cfg.mode = fields.mode;
+      changed.push("mode");
     }
     let modelPendingLive = null;
     let proNextPending = null;

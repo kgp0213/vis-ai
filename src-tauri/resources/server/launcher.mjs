@@ -12,7 +12,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { exec as execCb, spawnSync } from "node:child_process";
@@ -82,24 +82,28 @@ const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
 
 // ── Log buffer for developer mode ─────────────────────────────────
 const LOG_MAX = 500;
+const LOG_MSG_MAX = 2000;
 const logBuffer = [];
 const _origError = console.error;
 const _origLog = console.log;
 const _origWarn = console.warn;
 console.error = (...args) => {
-  const msg = args.join(" ");
+  let msg = args.join(" ");
+  if (msg.length > LOG_MSG_MAX) msg = msg.slice(0, LOG_MSG_MAX) + `… (truncated ${msg.length - LOG_MSG_MAX} chars)`;
   logBuffer.push({ ts: Date.now(), msg });
   if (logBuffer.length > LOG_MAX) logBuffer.shift();
   _origError.apply(console, args);
 };
 console.log = (...args) => {
-  const msg = args.join(" ");
+  let msg = args.join(" ");
+  if (msg.length > LOG_MSG_MAX) msg = msg.slice(0, LOG_MSG_MAX) + `… (truncated ${msg.length - LOG_MSG_MAX} chars)`;
   logBuffer.push({ ts: Date.now(), msg });
   if (logBuffer.length > LOG_MAX) logBuffer.shift();
   _origLog.apply(console, args);
 };
 console.warn = (...args) => {
-  const msg = args.join(" ");
+  let msg = args.join(" ");
+  if (msg.length > LOG_MSG_MAX) msg = msg.slice(0, LOG_MSG_MAX) + `… (truncated ${msg.length - LOG_MSG_MAX} chars)`;
   logBuffer.push({ ts: Date.now(), msg });
   if (logBuffer.length > LOG_MAX) logBuffer.shift();
   _origWarn.apply(console, args);
@@ -243,21 +247,12 @@ deploySkillGuide(workspaceDir);
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, model=${model}`);
 console.error(`[launcher] workspace: ${workspaceDir}`);
 
-// Workspace-dependent tool names — for unregister/re-register on workspace switch
-const WORKSPACE_TOOL_NAMES_BASE = [
-  "read_file", "list_directory", "search_files", "get_file_info",
-  "write_file", "create_directory", "move_file", "delete_file",
-  "delete_directory", "copy_file",
-  "run_command", "run_background", "job_output", "wait_for_job",
-  "stop_job", "list_jobs",
-  "remember", "forget", "recall_memory",
-  "semantic_search",
-  "run_skill",
-];
-let wsToolNames = [...WORKSPACE_TOOL_NAMES_BASE];
+// Workspace-dependent tool names — populated by registerWorkspaceTools() return value
+let wsToolNames = [];
 let hasSemanticSearch = false;
 
 async function registerWorkspaceTools(tools, rootDir, opts = {}) {
+  const before = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
   const { jobs } = opts;
 
   registerFilesystemTools(tools, {
@@ -299,10 +294,12 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 
   registerSkillTools(tools, { homeDir: home, projectRoot: rootDir });
   console.error(`[launcher] skill tools registered (run_skill), ${tools.size} total tools`);
-  // install_skill is re-registered unconditionally below — skip here
-  // to avoid "tool already exists" errors on re-registration
 
-  return { hasSemantic };
+  const after = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
+  if (hasSemantic) after.add("semantic_search");
+  const toolNames = [...after].filter(n => !before.has(n));
+
+  return { toolNames, hasSemantic };
 }
 
 // ── Create registry & register all tools ────────────────────────
@@ -311,16 +308,27 @@ const jobs = new JobRegistry();
 
 // Workspace-dependent tools — registered via shared function
 const wsResult = await registerWorkspaceTools(tools, workspaceDir, { jobs });
+wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
-if (!hasSemanticSearch) {
-  wsToolNames = wsToolNames.filter((n) => n !== "semantic_search");
-}
 
 // Shell edit mode — default to auto on first run
 if (!config.editMode) {
   config.editMode = "auto";
   writeConfig(config, configPath);
 }
+
+// ESM TDZ: DEFAULT_MODES must be declared before initModesConfig() call
+// Prompts reference skills verified present in ~/.visionox/skills/
+const DEFAULT_MODES = {
+  general: { label: "通用", eccRules: ["common", "rust"], prompt: "" },
+  coding: { label: "编程", eccRules: ["common", "rust", "typescript", "python"], prompt: "你处于编程模式。遵循严格编码规范，代码优先英文注释，修改前阅读上下文。可用技能: coding-standards, tdd-workflow, rust-patterns, python-patterns, api-design, verification-loop, error-handling。" },
+  office: { label: "办公", eccRules: ["common"], prompt: "你处于办公模式。专注于文档处理、数据分析、报告生成。可用技能: docx, xlsx, pdf, pdf-extract, pptx, pptx-generator, visionox-excel-pro, md-to-pdf-cjk。" },
+  design: { label: "设计", eccRules: ["common"], prompt: "你处于设计模式。专注于 UI/UX 设计、前端布局、视觉方案。可用技能: frontend-patterns, e2e-testing。如需更多设计技能可通过 install_skill 安装。" },
+};
+
+// Modes & ECC rules — initialize on first run
+initModesConfig();
+console.error(`[launcher] active mode: ${config.mode} (rules: ${getModeConfig().eccRules.join(", ")})`);
 
 // Web tools — search + fetch (not workspace-dependent)
 if (searchEnabled(configPath)) {
@@ -510,6 +518,29 @@ Skill 安装后在新对话中自动加载。`,
 
 console.error(`[launcher] install_skill tool registered — skills root: ${skillsRoot}`);
 
+// ── Session memory tool ────────────────────────────────────────
+tools.register({
+  name: "remember_session",
+  description: "保存一条仅当前对话有效的临时记忆。对话结束或 /new 后自动清除。适合记录临时的上下文、中间结论、用户偏好等信息。",
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "简短名称，用于在记忆列表中标识" },
+      body: { type: "string", description: "记忆的完整内容" },
+    },
+    required: ["name", "body"],
+  },
+  fn: async (args) => {
+    const name = String(args.name ?? "").trim();
+    const body = String(args.body ?? "").trim();
+    if (!name || !body) return JSON.stringify({ error: "name and body are required" });
+    const desc = body.length > 80 ? body.slice(0, 80) + "…" : body;
+    addSessionMemory(name, desc, body);
+    return JSON.stringify({ remembered: true, name, chars: body.length, hint: "此记忆在当前对话中生效，/new 后清除" });
+  },
+});
+console.error(`[launcher] remember_session tool registered`);
+
 // ── MCP servers ──────────────────────────────────────────────────
 const mcpSpecs = config.mcp ?? [];
 const mcpServers = [];
@@ -599,7 +630,99 @@ function invokeMcpTool(serverName, toolName, args) {
   return srv.host.client.callTool(toolName, args);
 }
 
+// ── Soul (identity) ────────────────────────────────────────────
+const SOUL_HOME = resolve(home, ".visionox", "soul.md");
+
+function loadSoul() {
+  try {
+    if (existsSync(SOUL_HOME)) {
+      const content = readFileSync(SOUL_HOME, "utf8").trim();
+      if (content) return content;
+    }
+  } catch {}
+  return null;
+}
+
+// ── Mode system ────────────────────────────────────────────────
+function initModesConfig() {
+  if (!config.modes) {
+    config.modes = DEFAULT_MODES;
+    writeConfig(config, configPath);
+    console.error(`[launcher] modes initialized (${Object.keys(DEFAULT_MODES).join(", ")})`);
+  }
+  if (!config.mode || !config.modes[config.mode]) {
+    config.mode = "general";
+    writeConfig(config, configPath);
+  }
+}
+
+function getModeConfig() {
+  const mode = config.mode || "general";
+  return config.modes?.[mode] || DEFAULT_MODES.general;
+}
+
+// ── Session memory (volatile) ──────────────────────────────────
+const sessionMemories = [];
+
+function addSessionMemory(name, description, body) {
+  sessionMemories.push({ name, description, body, ts: Date.now() });
+  if (sessionMemories.length > 50) sessionMemories.shift();
+}
+function clearSessionMemories() { sessionMemories.length = 0; }
+function getSessionMemoryBlock() {
+  if (sessionMemories.length === 0) return "";
+  const lines = sessionMemories.map(m => `- **${m.name}**: ${m.description}`);
+  return `\n# Session memory (this conversation only)\n\n${lines.join("\n")}`;
+}
+
 // ── Build session ───────────────────────────────────────────────
+const ALL_ECC_RULES = Object.create(null);
+ALL_ECC_RULES["common"]     = resolve(home, ".claude", "rules", "ecc", "common");
+ALL_ECC_RULES["rust"]       = resolve(home, ".claude", "rules", "ecc", "rust");
+ALL_ECC_RULES["typescript"] = resolve(home, ".claude", "rules", "ecc", "typescript");
+ALL_ECC_RULES["python"]     = resolve(home, ".claude", "rules", "ecc", "python");
+ALL_ECC_RULES["custom"]     = resolve(home, ".visionox", "rules");
+
+function getEnabledRuleSets() {
+  return getModeConfig().eccRules || ["common", "rust"];
+}
+
+function loadRules() {
+  const enabled = getEnabledRuleSets();
+  const rules = [];
+  for (const [name, dir] of Object.entries(ALL_ECC_RULES)) {
+    if (!enabled.includes(name)) continue;
+    if (!existsSync(dir)) continue;
+    try {
+      const files = readdirSync(dir);
+      for (const f of files) {
+        if (!f.endsWith(".md")) continue;
+        try {
+          const content = readFileSync(resolve(dir, f), "utf8").trim();
+          if (content) rules.push(`<!-- rule: ${f} (${name}) -->\n${content}`);
+        } catch {}
+      }
+    } catch {}
+  }
+  return rules;
+}
+
+// ── Hook system ─────────────────────────────────────────────────
+const hooks = { preTool: [], postTool: [], onStart: [], onStop: [] };
+
+function registerHook(event, pattern, handler) {
+  hooks[event] = hooks[event] || [];
+  hooks[event].push({ pattern, handler });
+}
+
+function runHooks(event, ctx) {
+  const list = hooks[event] || [];
+  for (const h of list) {
+    if (!h.pattern || h.pattern.test(ctx.name)) {
+      try { h.handler(ctx); } catch (e) { console.error(`[hook] ${event}:${h.pattern} failed: ${e.message}`); }
+    }
+  }
+}
 function buildSystemPrompt(rootDir, hasSemantic) {
   const routing = hasSemantic ? `
 
@@ -612,16 +735,20 @@ You have BOTH \`semantic_search\` (vector index) and \`search_content\` (literal
 
 If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.` : "";
 
+  const toolList = tools.specs()
+    .map(s => s.function)
+    .filter(f => f?.name)
+    .map(f => {
+      const firstSentence = (f.description || "").split(".")[0].trim();
+      return `- **${f.name}**: ${firstSentence}`;
+    })
+    .join("\n");
+
   return `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
 
 ## Tools
 
-- **Filesystem**: read_file, write_file, list_directory, search_files — sandboxed to ${rootDir}
-- **Shell**: run_command — execute commands in ${rootDir}
-- **Web**: web_search, web_fetch — search the web and fetch pages
-- **Memory**: save and recall project/global memory
-- **Planning**: create and manage plans, track todos
-- **Choices**: ask the user to make choices when needed
+${toolList}
 
 ## Tool selection strategy
 
@@ -651,8 +778,17 @@ Respond in the same language as the user's message.${routing}`;
 }
 
 function buildLoop(client, rootDir) {
+  const soul = loadSoul();
+  const mc = getModeConfig();
   const system = buildSystemPrompt(rootDir, hasSemanticSearch);
-  const systemWithSkills = applySkillsIndex(system, { projectRoot: rootDir });
+  const systemWithSoul = soul ? `# Identity\n\n${soul}\n\n---\n\n${system}` : system;
+  const systemWithMode = mc.prompt ? systemWithSoul + `\n\n# Mode: ${mc.label}\n\n${mc.prompt}` : systemWithSoul;
+  const loadedRules = loadRules();
+  const systemWithRules = loadedRules.length > 0
+    ? systemWithMode + "\n\n# Coding Rules\n\n" + loadedRules.join("\n\n")
+    : systemWithMode;
+  const systemWithSession = systemWithRules + getSessionMemoryBlock();
+  const systemWithSkills = applySkillsIndex(systemWithSession, { projectRoot: rootDir });
   const prefix = new ImmutablePrefix({
     system: systemWithSkills,
     toolSpecs: tools.specs(),
@@ -689,6 +825,12 @@ try {
   eventizer = new Eventizer();
   eventSink.append(eventizer.emitSessionOpened(0, "desktop", 0));
   console.error(`[launcher] event sink opened`);
+
+  // ── Register built-in hooks ──────────────────────────────────
+  registerHook("postTool", /write_file|edit/, (ctx) => {
+    console.error(`[hook] file written: ${ctx.args?.filePath || ctx.args?.path || "unknown"}`);
+  });
+  console.error(`[launcher] hooks registered`);
 } catch (err) {
   console.error(`[launcher] event sink init failed: ${err.message}`);
 }
@@ -755,6 +897,11 @@ let installingSkill = false;
 // ── Messages store ──────────────────────────────────────────────
 let nextMsgId = 1;
 const messages = [];
+const MESSAGES_CAP = 10_000;
+function pushMessage(msg) {
+  messages.push(msg);
+  while (messages.length > MESSAGES_CAP) messages.shift();
+}
 
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
@@ -778,6 +925,16 @@ const ctx = {
   getActiveModal: () => null,
   hasApiKey: () => !!apiKey,
   getLogs: () => logBuffer.slice(),
+  getEccRules: () => ({
+    available: Object.keys(ALL_ECC_RULES),
+    enabled: getEnabledRuleSets(),
+  }),
+  getModes: () => ({
+    current: config.mode,
+    list: Object.entries(config.modes || DEFAULT_MODES).map(([id, m]) => ({
+      id, label: m.label, rules: m.eccRules,
+    })),
+  }),
 
   // ── Setters / actions ──────────────────────────────────────
   setEditMode: (m) => {
@@ -788,6 +945,22 @@ const ctx = {
     return m;
   },
   setPlanMode: () => {},
+  setEccRules: (rules) => {
+    const cfg = readConfig(configPath);
+    cfg.eccRules = rules;
+    writeConfig(cfg, configPath);
+    console.error(`[launcher] eccRules: ${rules.join(", ")}`);
+    return true;
+  },
+  setMode: (modeId) => {
+    const cfg = readConfig(configPath);
+    if (!cfg.modes || !cfg.modes[modeId]) return false;
+    cfg.mode = modeId;
+    writeConfig(cfg, configPath);
+    config.mode = modeId;
+    console.error(`[launcher] mode: ${modeId} (${cfg.modes[modeId].label})`);
+    return true;
+  },
   applyPresetLive: (name) => {
     console.error(`[launcher] preset: ${name}`);
     if (name === "pro") {
@@ -861,10 +1034,7 @@ const ctx = {
     if (!existsSync(configuredDir)) mkdirSync(configuredDir, { recursive: true });
     const result = await registerWorkspaceTools(tools, configuredDir, { jobs });
     hasSemanticSearch = result.hasSemantic;
-    wsToolNames = [...WORKSPACE_TOOL_NAMES_BASE];
-    if (!hasSemanticSearch) {
-      wsToolNames = wsToolNames.filter((n) => n !== "semantic_search");
-    }
+    wsToolNames = result.toolNames;
     workspaceDir = configuredDir;
 
     // Rebuild loop with new system prompt & prefix
@@ -930,7 +1100,7 @@ const ctx = {
           for (const entry of entries) {
             const role = entry.role === "tool" ? "tool" : entry.role;
             const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
-            messages.push({ id, role, text: entry.content || "" });
+            pushMessage({ id, role, text: entry.content || "" });
             loaded.push({ id, role, text: entry.content || "" });
             nextMsgId++;
           }
@@ -960,6 +1130,13 @@ const ctx = {
         }
         // Reset the AI's internal context (CacheFirstLoop log)
         if (loop) loop.clearLog();
+        // Clear session memories
+        clearSessionMemories();
+        // Rebuild loop to pick up mode/rules changes
+        if (client) {
+          loop = buildLoop(client, workspaceDir);
+          console.error(`[launcher] loop rebuilt (mode: ${config.mode})`);
+        }
         // Reset eventizer for new session
         if (eventizer) {
           eventizer = new Eventizer();
@@ -971,7 +1148,7 @@ const ctx = {
         // Add welcome message
         const welcomeId = `assistant-${Date.now()}`;
         const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
-        messages.push(welcomeMsg);
+        pushMessage(welcomeMsg);
         // busy is already true from the outer guard; just broadcast events
         broadcastDashboardEvent({ kind: "busy-change", busy: true });
         broadcastDashboardEvent({ kind: "assistant_final", id: welcomeId, text: welcomeMsg.text });
@@ -988,7 +1165,7 @@ const ctx = {
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
 
       const userMsgId = String(nextMsgId++);
-      messages.push({ id: userMsgId, role: "user", text });
+      pushMessage({ id: userMsgId, role: "user", text });
       broadcastDashboardEvent({ kind: "user", id: userMsgId, text });
 
       const assistantId = `assistant-${Date.now()}`;
@@ -1026,7 +1203,7 @@ const ctx = {
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
           if (assistantText) {
-            messages.push({
+            pushMessage({
               id: assistantId,
               role: "assistant",
               text: assistantText,
@@ -1077,6 +1254,9 @@ const ctx = {
       balance: balanceData?.balance_infos ?? null,
     };
   },
+
+  getHooks: () => hooks,
+  registerHook: (event, pattern, handler) => registerHook(event, pattern, handler),
 };
 
 // Sync preset → loop model on startup so the dashboard /overview
@@ -1086,7 +1266,7 @@ if (config.preset && config.preset !== "auto") {
 }
 
 // ── Initial welcome message ──────────────────────────────────────
-messages.push({
+pushMessage({
   id: "welcome",
   role: "assistant",
   text: (apiKey ? "" : "⚠️ 未配置 API Key，请在 设置 → 模型服务 中配置后开始对话。\n\n")

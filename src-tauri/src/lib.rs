@@ -123,6 +123,10 @@ impl Drop for JobObject {
 struct ServerState {
     child: Option<Child>,
     url: Option<String>,
+    // SAFETY: This field is a RAII guard. The Arc keeps the JobObject
+    // alive; when the last Arc is dropped, KILL_ON_JOB_CLOSE terminates
+    // all child processes. Do NOT remove this field — it is "read" by
+    // Arc::drop, not by any explicit code path.
     job: Option<Arc<JobObject>>,
 }
 
@@ -176,17 +180,30 @@ fn spawn_server_blocking(
     // Read stderr into a log file for debugging
     let stderr = child.stderr.take().expect("failed to capture stderr");
     let exe_dir_clone = exe_dir.clone();
-    std::thread::spawn(move || {
+    let _handle = std::thread::spawn(move || {
         use std::io::Write;
         let log_path = exe_dir_clone.join("launcher-stderr.log");
         let r = std::io::BufReader::new(stderr);
-        for l in r.lines().map_while(Result::ok) {
+        for lr in r.lines() {
+            let line = match lr {
+                Ok(l) => l,
+                Err(_) => {
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&log_path)
+                    {
+                        let _ = writeln!(f, "[binary line skipped]");
+                    }
+                    continue;
+                }
+            };
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&log_path)
             {
-                let _ = writeln!(f, "{}", l);
+                let _ = writeln!(f, "{}", line);
             }
         }
     });
@@ -194,7 +211,7 @@ fn spawn_server_blocking(
     // P0-2: watchdog thread — if Node never writes a URL line within 30s, abort
     let timed_out = Arc::new(AtomicBool::new(false));
     let timed_out_flag = timed_out.clone();
-    std::thread::spawn(move || {
+    let _handle = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(30));
         timed_out_flag.store(true, Ordering::Release);
         log_diag("[rust] readline timeout — child did not produce URL in 30s");
@@ -309,7 +326,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
 
             // P0-4: catch_unwind so a panic doesn't silently kill the thread
-            std::thread::spawn(move || {
+            let _handle = std::thread::spawn(move || {
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         log_diag("[rust] background thread started");
@@ -360,7 +377,7 @@ pub fn run() {
 
                                     // P0-3: monitor child process for unexpected exit
                                     let win_for_monitor = win_for_url.clone();
-                                    std::thread::spawn(move || loop {
+                                    let _handle = std::thread::spawn(move || loop {
                                         std::thread::sleep(Duration::from_secs(2));
                                         let exited = unsafe {
                                             let handle = OpenProcess(
@@ -584,8 +601,6 @@ mod tests {
             }
         });
 
-        // Give the thread a moment to start
-        std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(!check_health(port, "test-token"));
     }
 
@@ -608,7 +623,6 @@ mod tests {
             }
         });
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(check_health(port, token));
     }
 
