@@ -42,8 +42,8 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 │  L2  MODE PROMPT          config.json modes[mode].prompt      │
 │       当前工作模式的行为指令，随模式切换而变化                    │
 ├──────────────────────────────────────────────────────────────┤
-│  L3  MODE PREFERENCES     ~/.visionox/mode-memory/{mode}.json │
-│       用户明确保存的当前模式偏好，摘要注入，不改默认 prompt        │
+│  L3  MODE MEMORY          ~/.visionox/mode-memory/{mode}.json │
+│       用户明确保存的当前模式记忆/偏好/知识点，摘要注入              │
 ├──────────────────────────────────────────────────────────────┤
 │  L4  MODE ECC RULES       config.json modes[mode].eccRules    │
 │       该模式所需的编码规范，从 ~/.claude/rules/ecc/ 读取        │
@@ -68,7 +68,7 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 |------|------|------|
 | `soul.md` | AI 身份 + 行为准则（WHO I am） | `~/.visionox/soul.md` |
 | `visionox.md` | 项目信息（WHAT this workspace is） | `workspace/visionox.md` |
-| Mode Preferences | 模式内用户偏好（HOW I like this mode to work） | `~/.visionox/mode-memory/{mode}.json` |
+| Mode Memory | 模式内长期记忆、偏好、知识点（WHAT this mode should remember） | `~/.visionox/mode-memory/{mode}.json` |
 | ECC rules | 编码规范（HOW to code） | `~/.claude/rules/ecc/{lang}/` |
 | Skills | 技术能力（WHAT techniques available） | `~/.visionox/skills/*/` |
 | MEMORY.md (global) | 全局持久记忆索引 | `~/.visionox/memory/global/MEMORY.md` |
@@ -79,12 +79,12 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 | 类型 | 工具 | 存储 | 生命周期 |
 |------|------|------|----------|
 | 长期记忆 | `remember` (scope: global / project) | `~/.visionox/memory/` 磁盘文件 | 跨会话持久 |
-| 模式偏好 | `remember_mode_preference` | `~/.visionox/mode-memory/` JSON 文件 | 按工作模式持久 |
+| 场景记忆 | `remember_mode_preference` | `~/.visionox/mode-memory/` JSON 文件 | 按工作模式持久 |
 | 短期记忆 | `remember_session` (scope: session) | launcher 内存 | `/new` 或重启后清除 |
 
-普通“记住某个稳定事实/称呼/偏好”的请求必须走 `remember`，新对话通过 `MEMORY.md` 索引重新注入；只有用户明确说“用于优化当前工作模式提示词”时才写入 `remember_mode_preference`。`remember_session` 只用于临时上下文，不跨 `/new`。
+普通“记住某个跨场景稳定事实/称呼/偏好”的请求走 `remember`，新对话通过 `MEMORY.md` 索引重新注入；用户说“在当前/编程/办公/设计场景下记住”或内容明显只属于当前工作场景时，写入 `remember_mode_preference`。`remember_session` 只用于临时上下文，不跨 `/new`。
 
-Dashboard “配置 → 记忆”页面统一展示 soul、全局长期记忆、当前项目记忆和工作模式偏好。AI name 属于 soul 层，通过 `soul.md` 受控区块维护，不作为普通 memory 或 mode preference 保存。
+Dashboard “配置 → 记忆”页面统一展示 soul、全局长期记忆、当前项目记忆和工作场景记忆。AI name 属于 soul 层，通过 `soul.md` 受控区块维护，不作为普通 memory 或 mode memory 保存。
 
 ### PROJECT_MEMORY_FILES 搜索顺序
 
@@ -103,13 +103,13 @@ Dashboard “配置 → 记忆”页面统一展示 soul、全局长期记忆、
 
 Dashboard "配置 → 记忆" 页面的 `listMemoryFiles()` 已过滤 `MEMORY.md` 索引文件，只显示用户创建的记忆。
 
-### 工作模式偏好记忆
+### 工作场景记忆
 
-当用户明确要求“记住某段关键字用于优化当前工作模式提示词”时，Visionox 不会直接修改 `config.json modes[mode].prompt`。默认 mode prompt 属于内置场景模板，升级迁移时可以安全覆盖；用户偏好写入独立的 `~/.visionox/mode-memory/{mode}.json`，按模式隔离、可启用/停用/删除。
+当用户明确要求“在当前工作场景记住某段知识/偏好/关键词关联”时，Visionox 不会直接修改 `config.json modes[mode].prompt`，也不会写入 global memory。默认 mode prompt 属于内置场景模板，升级迁移时可以安全覆盖；用户场景记忆写入独立的 `~/.visionox/mode-memory/{mode}.json`，按模式隔离、可启用/停用/删除。
 
-提示词拼装顺序为：`soul.md` → 项目记忆 → 当前工作模式 prompt → 当前模式偏好摘要 → ECC rules → 自定义 rules → skills → 持久记忆 → session memory。模式偏好只补充用户习惯，不能覆盖用户当前明确指令，也不能覆盖 ECC 工程规则。
+提示词拼装顺序为：`soul.md` → 项目记忆 → 当前工作模式 prompt → 当前模式记忆摘要 → ECC rules → 自定义 rules → skills → 持久记忆 → session memory。模式记忆只补充当前场景的用户习惯、术语和知识点，不能覆盖用户当前明确指令，也不能覆盖 ECC 工程规则。
 
-注入预算：每个模式最多注入少量启用项，单条偏好会被压缩到短文本，并按优先级与更新时间排序。这样可以避免长期使用后提示词膨胀、重复或互相冲突。
+注入预算：每个模式最多注入少量启用项，单条记忆会被压缩到短文本，并按优先级与更新时间排序。这样可以避免长期使用后提示词膨胀、重复或互相冲突。
 
 ---
 
@@ -180,11 +180,11 @@ Dashboard "配置 → 记忆" 页面的 `listMemoryFiles()` 已过滤 `MEMORY.md
 | `GET /api/overview` | `workMode`, `modes` | SPA 读取当前模式和可选模式列表 |
 | `GET /api/settings` | `mode`, `modes` | Settings 页读取 |
 | `POST /api/settings` | `fields.mode` | 用户点击按钮后写入 config.json |
-| `GET /api/mode-memory` | `items` | 读取当前或指定工作模式偏好 |
-| `GET /api/mode-memory/all` | `modes` | 读取所有模式偏好摘要 |
-| `POST /api/mode-memory` | `text`, `keywords` | 新增当前工作模式偏好 |
-| `PATCH /api/mode-memory/:id` | `enabled`, `text`, `priority` | 更新偏好 |
-| `DELETE /api/mode-memory/:id` | - | 删除偏好 |
+| `GET /api/mode-memory` | `items` | 读取当前或指定工作模式记忆 |
+| `GET /api/mode-memory/all` | `modes` | 读取所有模式记忆摘要 |
+| `POST /api/mode-memory` | `text`, `keywords` | 新增当前工作模式记忆 |
+| `PATCH /api/mode-memory/:id` | `enabled`, `text`, `priority` | 更新场景记忆 |
+| `DELETE /api/mode-memory/:id` | - | 删除场景记忆 |
 
 **代码位置**：
 - `launcher.mjs:320-326` — `DEFAULT_MODES` 定义
@@ -360,7 +360,7 @@ runHooks(event, ctx)
 
 | 文件 | 变更摘要 |
 |------|----------|
-| `launcher.mjs` | 新增 `loadSoul()`, `DEFAULT_MODES`, `initModesConfig()`, `getModeConfig()`, `loadRules()`(重写), `sessionMemories`, `remember_session` tool, `remember_mode_preference` tool, `ctx.getModes()`, `ctx.setMode()`, `ctx.getHooks()`, `ctx.registerHook()`；修改 `buildLoop()` 注入 soul、mode、mode preferences、ECC、persistent memory、session memory、skills 等层级；`/new` 时重建 loop + 清除 session memory |
+| `launcher.mjs` | 新增 `loadSoul()`, `DEFAULT_MODES`, `initModesConfig()`, `getModeConfig()`, `loadRules()`(重写), `sessionMemories`, `remember_session` tool, `remember_mode_preference` tool, `ctx.getModes()`, `ctx.setMode()`, `ctx.getHooks()`, `ctx.registerHook()`；修改 `buildLoop()` 注入 soul、mode、mode memory、ECC、persistent memory、session memory、skills 等层级；`/new` 时重建 loop + 清除 session memory |
 | `lib.rs` | `ServerState` 添加 SAFETY 注释（RAII guard）；stderr reader 修复非 UTF-8 处理 |
 | `cherry-claude.cjs` | FAIL 计数 + 非零退出码；`newArr` 加入 `"visionox.md"` |
 | `server-XGDBRWMB.js` | `listMemoryFiles()` 过滤 MEMORY.md；`/overview` 新增 `workMode` + `modes`；`/settings` POST 新增 mode 处理 |

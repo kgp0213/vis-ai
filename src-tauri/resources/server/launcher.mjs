@@ -582,13 +582,13 @@ console.error(`[launcher] remember_session tool registered`);
 
 tools.register({
   name: "remember_mode_preference",
-  description: "保存一条用户明确要求记住、用于优化当前工作模式的偏好。偏好会按当前 work mode 独立存储，并在新对话提示词中以精简摘要注入；不要用它记录普通事实或临时上下文。",
+  description: "保存一条用户明确要求记住、只应在当前工作场景生效的长期记忆。可记录当前场景的偏好、常用知识点、术语解释、流程或关键词关联；内容会按 work mode 独立存储，并在该场景的新对话提示词中注入。不要用它记录跨所有场景都应生效的身份信息或临时上下文。",
   parameters: {
     type: "object",
     properties: {
       text: {
         type: "string",
-        description: "精简后的偏好内容。应表达为可执行的工作习惯，不要原样粘贴长对话。",
+        description: "精简后的场景记忆内容。可以是可执行的工作习惯，也可以是该场景常用知识点或关键词关联，不要原样粘贴长对话。",
       },
       keywords: {
         type: "array",
@@ -616,7 +616,7 @@ tools.register({
       mode,
       item,
       count: memory.items.length,
-      hint: "此偏好只影响当前工作模式的新对话提示词，不会改写默认 mode prompt 或 ECC 规则。",
+      hint: "此记忆只影响当前工作场景的新对话提示词，不会写入全局长期记忆，也不会改写默认 mode prompt 或 ECC 规则。",
     });
   },
 });
@@ -713,6 +713,28 @@ function invokeMcpTool(serverName, toolName, args) {
 
 // ── Soul (identity) ────────────────────────────────────────────
 const SOUL_HOME = resolve(home, ".visionox", "soul.md");
+const DEFAULT_SOUL = `# Visionox Core Identity
+
+## 我是谁
+我是 Visionox，一个运行在 Windows 桌面环境中的 AI 助手。
+我可以通过文件系统、Shell、Web 搜索和项目工具帮助用户完成软件工程、文档整理、信息分析和自动化任务。
+
+## 协作方式
+- 优先直接解决问题，减少套话和冗余前置语。
+- 先利用已有上下文、文件和工具自行确认，再在确实需要时提问。
+- 对不确定的信息明确说明，并在重要事实可能变化时主动核验。
+- 可以给出判断和建议，但必须尊重用户的最新指令。
+
+## 记忆边界
+- 使用 \`remember\` 保存跨工作场景都应生效的长期记忆。
+- 使用 \`remember_mode_preference\` 保存仅属于当前工作场景的长期记忆、术语、流程和偏好。
+- 使用 \`remember_session\` 保存只在当前对话生效的临时记忆。
+- 身份、名称和长期风格属于 soul 层；场景知识不要写进 soul。
+
+## 安全与隐私
+- 私密信息只在完成用户任务所需范围内使用，不主动外传。
+- 对删除、覆盖、发布、提交、推送等有外部影响的动作保持谨慎。
+- 不把历史测试数据当作长期身份或事实保留。`;
 
 function loadSoul() {
   try {
@@ -721,7 +743,7 @@ function loadSoul() {
       if (content) return content;
     }
   } catch {}
-  return null;
+  return DEFAULT_SOUL;
 }
 
 // ── Mode system ────────────────────────────────────────────────
@@ -991,7 +1013,7 @@ function formatModeMemoryForPrompt(modeId = config.mode || "general") {
     const suffix = item.keywords.length ? ` [${item.keywords.join(", ")}]` : "";
     return `- ${compactText(item.text, MODE_MEMORY_TEXT_LIMIT)}${suffix}`;
   });
-  return `\n\n# Current work mode preferences\n\nThese are compact, user-approved preferences for the current work mode. Apply them only when relevant; they do not override the user's current explicit instructions or ECC rules.\n\n${lines.join("\n")}`;
+  return `\n\n# Current work mode memory\n\nThese are compact, user-approved memories for the current work mode. They may include scenario-specific preferences, recurring knowledge, terminology, workflows, and keyword associations. Apply them only in this work mode and only when relevant; they do not override the user's current explicit instructions, global identity, or ECC rules.\n\n${lines.join("\n")}`;
 }
 
 // ── Session memory (volatile) ──────────────────────────────────
@@ -1159,8 +1181,9 @@ ${toolList}
 - To **read or edit files** → use read_file / write_file directly by path
 - To **run commands** → use run_command; prefer single commands over chained scripts
 - To **search the internet** → use web_search for broad queries, web_fetch for reading a specific URL
-- When the user asks you to **remember** a stable fact, name, preference, or correction for future chats → use remember with global scope unless it is clearly project-specific
-- Use remember_mode_preference only when the user explicitly says the memory is for optimizing the current work mode prompt
+- When the user asks you to **remember** identity, name, or facts/preferences that should apply across all work modes → use remember with global scope unless it is clearly project-specific
+- When the user asks to remember something for the current/active work mode, a named scenario (coding/office/design/general), or phrases it as "在当前场景/编程场景/办公场景/设计场景下记住" → use remember_mode_preference so it stays isolated to that work mode. This includes scenario-specific knowledge, terminology, workflows, keyword associations, and answering preferences.
+- If the user says only "remember" while the content is obviously tied to the current work scenario rather than global identity or cross-mode preference, prefer remember_mode_preference and mention that it is scoped to the current work mode.
 - Use remember_session only for temporary context that should disappear after /new
 - When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
 
@@ -1317,6 +1340,62 @@ function pushMessage(msg) {
   while (messages.length > MESSAGES_CAP) messages.shift();
 }
 
+function isValidSessionName(name) {
+  return /^[\w.-]+$/.test(String(name || ""));
+}
+
+function sessionMetaPath(name) {
+  if (!isValidSessionName(name)) throw new Error(`Invalid session name: ${name}`);
+  return resolve(sessionsDir, `${name}.meta.json`);
+}
+
+function readSessionMeta(name) {
+  try {
+    const path = sessionMetaPath(name);
+    if (!existsSync(path)) return {};
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSessionMeta(name, patch = {}) {
+  const path = sessionMetaPath(name);
+  const current = readSessionMeta(name);
+  const mode = config.mode || "general";
+  const modeInfo = modeSummary(mode);
+  const next = {
+    version: 1,
+    ...current,
+    ...patch,
+    mode,
+    modeLabel: modeInfo.label,
+    modeDescription: modeInfo.description,
+    workspace: workspaceDir,
+    savedAt: patch.savedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  return next;
+}
+
+function applyModeForSessionMeta(meta) {
+  const modeId = typeof meta?.mode === "string" ? meta.mode : "";
+  if (!modeId) return { changed: false, mode: config.mode || "general", skipped: "no mode metadata" };
+  const modes = config.modes || DEFAULT_MODES;
+  if (!modes[modeId]) return { changed: false, mode: config.mode || "general", skipped: `unknown mode: ${modeId}` };
+  const previous = config.mode || "general";
+  if (previous !== modeId) {
+    ctx.setMode(modeId);
+  }
+  if (client) {
+    loop = buildLoop(client, workspaceDir);
+    ctx.loop = loop;
+  }
+  return { changed: previous !== modeId, mode: modeId, previous };
+}
+
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
   mode: "desktop",
@@ -1421,11 +1500,13 @@ const ctx = {
       if (apiKey) {
         client = new DeepSeekClient({ apiKey, baseUrl });
         loop = buildLoop(client, workspaceDir);
+        ctx.loop = loop;
         refreshBalance();
         console.error(`[launcher] client & loop recreated with new credentials`);
       } else {
         client = null;
         loop = null;
+        ctx.loop = loop;
         balanceData = null;
         console.error(`[launcher] apiKey removed, client cleared`);
       }
@@ -1460,6 +1541,7 @@ const ctx = {
     // Rebuild loop with new system prompt & prefix
     if (loop && client) {
       loop = buildLoop(client, workspaceDir);
+      ctx.loop = loop;
       console.error(`[launcher] loop rebuilt for new workspace: ${workspaceDir}`);
     }
 
@@ -1504,11 +1586,13 @@ const ctx = {
       // ── Session resume: load historical messages ──────────────
       if (sessionName && loop) {
         // P2-7: validate sessionName to prevent path traversal
-        if (!/^[\w.-]+$/.test(sessionName)) {
+        if (!isValidSessionName(sessionName)) {
           return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only alphanumeric, underscore, dot, or hyphen.` };
         }
         try {
           const sessionFile = resolve(sessionsDir, sessionName + ".jsonl");
+          const sessionMeta = readSessionMeta(sessionName);
+          const modeRestore = applyModeForSessionMeta(sessionMeta);
           const raw = readFileSync(sessionFile, "utf8");
           const entries = raw.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
           // Load into AI context
@@ -1524,10 +1608,10 @@ const ctx = {
             loaded.push({ id, role, text: entry.content || "" });
             nextMsgId++;
           }
-          broadcastDashboardEvent({ kind: "messages-reset", messages: loaded });
-          console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages)`);
+          broadcastDashboardEvent({ kind: "messages-reset", messages: loaded, mode: modeRestore.mode, modeChanged: modeRestore.changed });
+          console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages, mode: ${modeRestore.mode}${modeRestore.changed ? `, restored from ${modeRestore.previous}` : ""})`);
           if (!text || !text.trim()) {
-            return { accepted: true, loaded: true, session: sessionName };
+            return { accepted: true, loaded: true, session: sessionName, mode: modeRestore.mode, modeChanged: modeRestore.changed };
           }
         } catch (err) {
           console.error(`[launcher] failed to load session ${sessionName}: ${err.message}`);
@@ -1543,7 +1627,8 @@ const ctx = {
           try {
             const jsonl = messages.map((m) => JSON.stringify({ role: m.role, content: m.text })).join("\n") + "\n";
             writeFileSync(sessionFile, jsonl, "utf8");
-            console.error(`[launcher] session saved: ${sessionFile}`);
+            const savedMeta = writeSessionMeta(ts, { messageCount: messages.length });
+            console.error(`[launcher] session saved: ${sessionFile} (mode: ${savedMeta.mode})`);
           } catch (err) {
             console.error(`[launcher] failed to save session: ${err.message}`);
           }
@@ -1555,6 +1640,7 @@ const ctx = {
         // Rebuild loop to pick up mode/rules changes
         if (client) {
           loop = buildLoop(client, workspaceDir);
+          ctx.loop = loop;
           console.error(`[launcher] loop rebuilt (mode: ${config.mode})`);
         }
         // Reset eventizer for new session

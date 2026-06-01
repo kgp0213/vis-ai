@@ -25254,7 +25254,7 @@ function MemoryPanel() {
   const save = q2(async () => {
     if (!open) return;
     if (open.scope === "mode-memory") {
-      setError("工作模式偏好请在 Settings 的“当前工作场景偏好”区域编辑。");
+      setError("工作场景记忆请在 Settings 的“当前工作场景记忆”区域编辑。");
       return;
     }
     setBusy(true);
@@ -25407,7 +25407,7 @@ function MemoryPanel() {
               class=${`ssl-row ${open?.scope === "mode-memory" && open?.name === m3.id ? "sel" : ""}`}
               onClick=${() => openFile("mode-memory", m3.id)}
             >
-              <span class="name">${m3.label ?? m3.id}<span class="pill">模式偏好</span></span>
+              <span class="name">${m3.label ?? m3.id}<span class="pill">场景记忆</span></span>
               <span class="preview dim">${m3.enabledCount ?? 0}/${m3.count ?? 0} 启用</span>
               <span class="meta"><span class="dim">${m3.id}</span></span>
             </div>
@@ -25454,7 +25454,7 @@ function MemoryPanel() {
                 ` : null}
                 ${open.scope === "mode-memory" ? html4`
                   <div class="card accent-brand" style="margin-bottom:8px">
-                    <div class="card-b">工作模式偏好在 Settings 的“当前工作场景偏好”区域编辑；这里提供统一预览。</div>
+                    <div class="card-b">工作场景记忆在 Settings 的“当前工作场景记忆”区域编辑；这里提供统一预览。</div>
                   </div>
                 ` : null}
                 <textarea
@@ -26919,7 +26919,14 @@ function SessionsPanel() {
     setOpenLoading(true);
     try {
       const detail = await api(`/sessions/${encodeURIComponent(name)}`);
-      setOpen({ name, messages: detail.messages });
+      setOpen({
+        name,
+        messages: detail.messages,
+        mode: detail.mode ?? null,
+        modeLabel: detail.modeLabel ?? null,
+        modeDescription: detail.modeDescription ?? "",
+        meta: detail.meta ?? {}
+      });
     } catch (err) {
       setOpen({ name, messages: null, error: err.message });
     } finally {
@@ -26982,6 +26989,7 @@ function SessionsPanel() {
                 <span class="name">${s3.name}</span>
                 <span class="meta">
                   <span><span class="v">${fmtNum(s3.messageCount)}</span> ${t4("sessions.msgs")}</span>
+                  ${s3.modeLabel ? html4`<span>${s3.modeLabel}</span>` : null}
                   <span><span class="v">${fmtBytes(s3.size)}</span></span>
                   <span>${fmtRelativeTime(s3.mtime)}</span>
                 </span>
@@ -26999,6 +27007,7 @@ function SessionsPanel() {
                   <span class="name">${open.name}</span>
                   <span class="ws">
                     ${open.messages ? t4("sessions.messages", { count: open.messages.length, s: open.messages.length === 1 ? "" : "s" }) : t4("common.loading")}
+                    ${open.modeLabel ? html4` · ${open.modeLabel}` : null}
                   </span>
                   <span class="actions">
                     <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
@@ -27008,7 +27017,7 @@ function SessionsPanel() {
                 <div class="card accent-brand" style="margin-bottom:10px">
                   <div class="card-h"><span class="title">继续会话</span></div>
                   <div class="card-b" style="font-size:12.5px;color:var(--fg-2)">
-                    加载历史消息到当前聊天，AI 将获得完整上下文，你可以直接继续对话。
+                    加载历史消息到当前聊天，并恢复保存时的工作场景${open.modeLabel ? html4`（${open.modeLabel}）` : null}，AI 将获得完整上下文，你可以直接继续对话。
                     <button class="btn primary" style="margin-top:8px;width:100%"
                             disabled=${resuming}
                             onClick=${() => doResume(open.name)}>
@@ -27489,7 +27498,7 @@ function SettingsPanel() {
       setModeMemoryDraft("");
       setModeMemoryKeywords("");
       await loadModeMemory(activeMemoryMode);
-      setSaved("工作场景偏好已保存");
+      setSaved("工作场景记忆已保存");
       setTimeout(() => setSaved(null), 3e3);
     } catch (err) {
       setError(err.message);
@@ -27705,17 +27714,17 @@ function SettingsPanel() {
         ` : null}
       </div>
 
-      ${sectionH3("当前工作场景偏好")}
+      ${sectionH3("当前工作场景记忆")}
       <div class="card mode-memory-card">
         <div class="mode-memory-head">
           <div>
             <div class="mode-memory-title">${v3.activeMode?.label ?? v3.mode ?? "通用"}</div>
-            <div class="mode-memory-note">仅影响当前工作场景的新对话提示词，不改写默认 mode prompt 或 ECC 规则。</div>
+            <div class="mode-memory-note">仅影响当前工作场景的新对话提示词，可保存该场景的偏好、术语、流程和常用知识点。</div>
           </div>
           <button class="btn" disabled=${saving} onClick=${() => loadModeMemory(activeMemoryMode)}>刷新</button>
         </div>
         <div class="mode-memory-list">
-          ${(modeMemory?.items ?? []).length === 0 ? html4`<div class="mode-memory-empty">暂无偏好</div>` : (modeMemory?.items ?? []).map((item) => html4`
+          ${(modeMemory?.items ?? []).length === 0 ? html4`<div class="mode-memory-empty">暂无场景记忆</div>` : (modeMemory?.items ?? []).map((item) => html4`
             <div class=${`mode-memory-item ${item.enabled ? "" : "disabled"}`}>
               <div class="mode-memory-text">${item.text}</div>
               <div class="mode-memory-tags">
@@ -27732,7 +27741,7 @@ function SettingsPanel() {
         <div class="mode-memory-new">
           <textarea
             rows="3"
-            placeholder="新增偏好，例如：写技术方案时先给结论，再列风险和验证步骤"
+            placeholder="新增场景记忆，例如：8K点屏指通过 USB ADB 连接 RK3588 平台并参考 vismm 脚本点亮屏幕"
             value=${modeMemoryDraft}
             onInput=${(e3) => setModeMemoryDraft(e3.target.value)}
           ></textarea>
@@ -27742,7 +27751,7 @@ function SettingsPanel() {
             value=${modeMemoryKeywords}
             onInput=${(e3) => setModeMemoryKeywords(e3.target.value)}
           />
-          <button class="btn primary" disabled=${saving || !modeMemoryDraft.trim()} onClick=${addModePreference}>新增偏好</button>
+          <button class="btn primary" disabled=${saving || !modeMemoryDraft.trim()} onClick=${addModePreference}>新增记忆</button>
         </div>
       </div>
 

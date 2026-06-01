@@ -75,17 +75,17 @@ vis-ai/
 | Soul | `~/.visionox/soul.md` | AI 身份与行为准则 |
 | Project | `workspace/{visionox,REASONIX,...}.md` | 项目专属信息 |
 | Mode | `config.json` → `modes[mode].prompt` | 场景行为指令 |
-| Mode Preferences | `~/.visionox/mode-memory/{mode}.json` | 当前工作模式的用户偏好摘要 |
+| Mode Memory | `~/.visionox/mode-memory/{mode}.json` | 当前工作场景的长期记忆、偏好与知识点摘要 |
 | Rules | `~/.claude/rules/ecc/{lang}/` | 编码规范（mode 控制） |
 | Custom | `~/.visionox/rules/*.md` | 用户自定义规则 |
 | Skills | `~/.visionox/skills/*/SKILL.md` | 领域技术能力索引 |
 | Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆 |
 
-普通长期记忆通过 `remember` 工具写入 `~/.visionox/memory/`，并在 `/new` 或应用重启后的新对话中注入 `MEMORY.md` 索引。短期记忆通过 `remember_session` 工具（仅当前对话，`/new` 清除）。当用户明确要求“记住某段关键字用于优化当前工作模式提示词”时，使用 `remember_mode_preference` 写入独立的 mode-memory 层，而不是直接追加到默认 mode prompt。
+普通跨场景长期记忆通过 `remember` 工具写入 `~/.visionox/memory/`，并在 `/new` 或应用重启后的新对话中注入 `MEMORY.md` 索引。短期记忆通过 `remember_session` 工具（仅当前对话，`/new` 清除）。当用户要求“在当前/编程/办公/设计工作场景下记住”某个偏好、知识点、术语、流程或关键词关联时，使用 `remember_mode_preference` 写入独立的 mode-memory 层，避免泄露到其他工作场景。
 
-Mode Preferences 按工作模式隔离存储，提示词注入时最多选取少量启用项并压缩为摘要，避免默认提示词越来越臃肿。注入顺序为：`soul.md` → 项目记忆 → 工作模式 prompt → 当前模式偏好 → ECC rules → 自定义 rules → skills → 持久/短期记忆；ECC 规则优先级高于模式偏好。
+Mode Memory 按工作模式隔离存储，提示词注入时最多选取少量启用项并压缩为摘要，避免默认提示词越来越臃肿。注入顺序为：`soul.md` → 项目记忆 → 工作模式 prompt → 当前模式记忆 → ECC rules → 自定义 rules → skills → 持久/短期记忆；ECC 规则优先级高于模式记忆。
 
-Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展示和编辑 `soul.md`、全局长期记忆、当前项目记忆和工作模式偏好。AI 名称属于 soul 层，写入 `soul.md` 的受控区块，不单独保存为普通 memory 或独立配置项。
+Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展示和编辑 `soul.md`、全局长期记忆、当前项目记忆和工作场景记忆。AI 名称属于 soul 层，写入 `soul.md` 的受控区块，不单独保存为普通 memory 或独立配置项。若 `~/.visionox/soul.md` 不存在或为空，launcher 会使用内置的 Visionox 默认 soul；用户保存该文件后优先使用本机版本。
 
 #### 记忆触发话术
 
@@ -95,10 +95,12 @@ Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展�
 |------|----------|------|
 | 跨项目长期事实、称呼、稳定偏好 | `请长期记住：我的常用称呼是……` | `remember` → `~/.visionox/memory/global/` |
 | 当前项目专属知识、流程、路径 | `请长期记住到当前项目记忆：这个项目的发布流程是……` | `remember` → `~/.visionox/memory/<project-hash>/` |
-| 当前工作模式的回答习惯 | `请记住为当前工作模式偏好：编程模式下先给结论，再给修改文件和验证命令。` | `remember_mode_preference` → `~/.visionox/mode-memory/{mode}.json` |
+| 当前工作场景的回答习惯或知识点 | `请在编程场景下长期记住：8K点屏指通过 USB ADB 连接 RK3588 平台并参考 vismm 脚本点亮屏幕。` | `remember_mode_preference` → `~/.visionox/mode-memory/{mode}.json` |
 | 只在当前对话有效的临时上下文 | `请临时记住：本轮先按方案 B 处理。` | `remember_session` → 内存 |
 
-避免只说“记一下这个”。如果内容要跨 `/new` 或重启保留，优先使用 `长期记住`；如果只想优化某个工作场景的新对话提示词，使用 `当前工作模式偏好`。
+避免只说“记一下这个”。如果内容要跨所有场景保留，使用 `长期记住`；如果只应在某个工作场景保留，使用 `在当前/编程/办公/设计场景下长期记住`。例如 8K 点屏、编程排错习惯应存入编程场景记忆，办公场景不会自动读取。
+
+历史会话保存时会同时写入 `*.meta.json`，记录保存时的工作场景、工作空间和消息数量。通过导航栏“会话”页面点击“加载并继续会话”时，会先恢复该会话对应的工作场景并重建提示词，再加载历史消息上下文。
 
 ### 工作模式 (4 种)
 
@@ -213,7 +215,7 @@ type launcher-stderr.log  # Node.js 侧
 
 - **ECC 集成** — 18 个编码 Skills + 26 个 Rules 文件，由工作模式控制加载
 - **工作模式** — 通用/编程/办公/设计 4 模式，主界面一键切换
-- **记忆系统重构** — 8 层加载架构 + 短期记忆 + 工作模式偏好记忆 + soul.md 身份文件
+- **记忆系统重构** — 8 层加载架构 + 短期记忆 + 工作场景记忆 + soul.md 身份文件
 - **Dashboard 修复** — 记忆页过滤系统索引文件 + 动态文件名显示
 - **Hook 系统** — preTool/postTool 框架
 

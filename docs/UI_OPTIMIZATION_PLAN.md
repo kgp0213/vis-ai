@@ -50,7 +50,7 @@
 - `~/.visionox/soul.md`：AI 身份、人格、名称和长期风格，优先级最高。
 - `~/.visionox/memory/global/*.md`：跨项目长期记忆。
 - `~/.visionox/memory/<project-hash>/*.md`：当前项目长期记忆。
-- `~/.visionox/mode-memory/{mode}.json`：按工作模式隔离的模式偏好。
+- `~/.visionox/mode-memory/{mode}.json`：按工作模式隔离的场景记忆、偏好和常用知识点。
 - workspace 项目说明记忆：`visionox.md` / `REASONIX.md` / `CLAUDE.md` / `AGENTS.md` 等。
 
 AI name 不单独存入配置项，而是写入 `soul.md` 受控区块：

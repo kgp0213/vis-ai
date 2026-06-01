@@ -2831,6 +2831,14 @@ function parseTranscript(path, maxBytes = 4 * 1024 * 1024) {
   }
   return out;
 }
+function sessionModeInfo(meta = {}) {
+  const mode = typeof meta.mode === "string" && meta.mode ? meta.mode : null;
+  return {
+    mode,
+    modeLabel: typeof meta.modeLabel === "string" && meta.modeLabel ? meta.modeLabel : mode,
+    modeDescription: typeof meta.modeDescription === "string" ? meta.modeDescription : ""
+  };
+}
 async function handleSessions(method, rest, _body, _ctx) {
   if (method === "DELETE") {
     const name2 = decodeURIComponent(rest[0] || "");
@@ -2851,7 +2859,9 @@ async function handleSessions(method, rest, _body, _ctx) {
           path: s.path,
           size: s.size,
           messageCount: s.messageCount,
-          mtime: s.mtime.getTime()
+          mtime: s.mtime.getTime(),
+          meta: s.meta ?? {},
+          ...sessionModeInfo(s.meta)
         }))
       }
     };
@@ -2862,13 +2872,17 @@ async function handleSessions(method, rest, _body, _ctx) {
     return { status: 404, body: { error: `no such session: ${name}` } };
   }
   const messages = parseTranscript(path);
+  const session = listSessions().find((s) => s.name === name);
+  const meta = session?.meta ?? {};
   return {
     status: 200,
     body: {
       name,
       path,
       messages,
-      messageCount: messages.length
+      messageCount: messages.length,
+      meta,
+      ...sessionModeInfo(meta)
     }
   };
 }
@@ -3342,7 +3356,7 @@ async function handleSubmit(method, _rest, body, ctx) {
     action: "submit-prompt",
     payload: { length: prompt.length }
   });
-  return { status: 202, body: { accepted: true } };
+  return { status: 202, body: { accepted: true, ...result } };
 }
 
 // src/server/api/tools.ts
