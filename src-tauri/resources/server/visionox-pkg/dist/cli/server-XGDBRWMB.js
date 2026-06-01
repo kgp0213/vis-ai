@@ -1426,6 +1426,9 @@ import {
 } from "fs";
 import { homedir as homedir2 } from "os";
 import { basename, dirname as dirname3, join as join5, resolve as resolvePath } from "path";
+var SOUL_FILE = join5(homedir2(), ".visionox", "soul.md");
+var SOUL_NAME_START = "<!-- visionox:soul:name:start -->";
+var SOUL_NAME_END = "<!-- visionox:soul:name:end -->";
 function projectHash(rootDir) {
   return createHash("sha1").update(resolvePath(rootDir)).digest("hex").slice(0, 16);
 }
@@ -1460,6 +1463,60 @@ function listMemoryFiles(dir) {
     return [];
   }
 }
+function memoryDescription(raw, fallback) {
+  const match = String(raw ?? "").match(/^description:\s*(.+)$/m);
+  if (!match) return fallback;
+  return match[1].replace(/^["']|["']$/g, "").trim() || fallback;
+}
+function rebuildMemoryIndex(dir) {
+  if (!dir || !existsSync5(dir)) return;
+  let files = [];
+  try {
+    files = readdirSync3(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md").sort((a, b) => a.localeCompare(b));
+  } catch {
+    return;
+  }
+  const indexPath = join5(dir, "MEMORY.md");
+  if (files.length === 0) {
+    if (existsSync5(indexPath)) unlinkSync(indexPath);
+    return;
+  }
+  const lines = files.map((file) => {
+    const name = file.replace(/\.md$/, "");
+    let raw = "";
+    try {
+      raw = readFileSync4(join5(dir, file), "utf8");
+    } catch {
+    }
+    return `- [${name}](${file}) — ${memoryDescription(raw, name)}`;
+  });
+  writeFileSync2(indexPath, `${lines.join("\n")}\n`, "utf8");
+}
+function fileMeta(path) {
+  if (!path || !existsSync5(path)) return { path, exists: false, size: 0, mtime: null };
+  try {
+    const stat = statSync3(path);
+    return { path, exists: true, size: stat.size, mtime: stat.mtime.getTime() };
+  } catch {
+    return { path, exists: false, size: 0, mtime: null };
+  }
+}
+function readSoulName(raw) {
+  const match = String(raw ?? "").match(new RegExp(`${SOUL_NAME_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n([\\s\\S]*?)\\n${SOUL_NAME_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  if (!match) return "";
+  const line = match[1].trim();
+  return line.replace(/^你的名字是\s*/, "").replace(/[。.\s]+$/, "").trim();
+}
+function setSoulNameBlock(raw, name) {
+  const trimmedName = String(name ?? "").trim();
+  const current = String(raw ?? "").trim();
+  const block = trimmedName ? `${SOUL_NAME_START}\n你的名字是 ${trimmedName}。\n${SOUL_NAME_END}` : "";
+  const re = new RegExp(`${SOUL_NAME_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?\\n${SOUL_NAME_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n*`);
+  if (re.test(current)) {
+    return current.replace(re, block ? `${block}\n\n` : "").trim() + "\n";
+  }
+  return block ? `${block}\n\n${current}`.trim() + "\n" : `${current}\n`;
+}
 async function handleMemory(method, rest, body, ctx) {
   const cwd = ctx.getCurrentCwd?.();
   const globalDir = globalMemoryDir();
@@ -1483,13 +1540,22 @@ async function handleMemory(method, rest, body, ctx) {
         projectMem: {
           path: projectMemDir,
           files: projectMemDir ? listMemoryFiles(projectMemDir) : []
-        }
+        },
+        soul: {
+          ...fileMeta(SOUL_FILE),
+          name: existsSync5(SOUL_FILE) ? readSoulName(readFileSync4(SOUL_FILE, "utf8")) : ""
+        },
+        modeMemory: ctx.getAllModeMemory?.() ?? null
       }
     };
   }
   const [scope, ...nameParts] = rest;
   const name = nameParts.join("/");
   if (method === "GET") {
+    if (scope === "soul") {
+      const body2 = existsSync5(SOUL_FILE) ? readFileSync4(SOUL_FILE, "utf8") : "";
+      return { status: 200, body: { path: SOUL_FILE, body: body2, name: readSoulName(body2) } };
+    }
     if (scope === "project") {
       if (!cwd) return { status: 503, body: { error: "no active project" } };
       const path = findProjectMemoryPath(cwd);
@@ -1506,7 +1572,17 @@ async function handleMemory(method, rest, body, ctx) {
     return { status: 400, body: { error: "bad scope or name" } };
   }
   if (method === "POST") {
-    const { body: contents } = parseBody6(body);
+    const parsed = parseBody6(body);
+    const { body: contents } = parsed;
+    if (scope === "soul") {
+      const current = existsSync5(SOUL_FILE) ? readFileSync4(SOUL_FILE, "utf8") : "";
+      const next = typeof contents === "string" ? contents : setSoulNameBlock(current, parsed.aiName ?? "");
+      const finalBody = parsed.aiName !== void 0 && typeof contents === "string" ? setSoulNameBlock(next, parsed.aiName) : next;
+      mkdirSync2(dirname3(SOUL_FILE), { recursive: true });
+      writeFileSync2(SOUL_FILE, finalBody, "utf8");
+      ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope: "soul", path: SOUL_FILE } });
+      return { status: 200, body: { saved: true, path: SOUL_FILE, name: readSoulName(finalBody) } };
+    }
     if (typeof contents !== "string") {
       return { status: 400, body: { error: "body (string) required" } };
     }
@@ -1524,6 +1600,7 @@ async function handleMemory(method, rest, body, ctx) {
       mkdirSync2(dir, { recursive: true });
       const path = join5(dir, `${name}.md`);
       writeFileSync2(path, contents, "utf8");
+      rebuildMemoryIndex(dir);
       ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope, name, path } });
       return { status: 200, body: { saved: true, path } };
     }
@@ -1536,6 +1613,7 @@ async function handleMemory(method, rest, body, ctx) {
       const path = join5(dir, `${name}.md`);
       if (existsSync5(path)) {
         unlinkSync(path);
+        rebuildMemoryIndex(dir);
         ctx.audit?.({ ts: Date.now(), action: "delete-memory", payload: { scope, name, path } });
         return { status: 200, body: { deleted: true } };
       }
@@ -1568,9 +1646,14 @@ function parseBodyModeMemory(raw) {
 }
 async function handleModeMemory(method, rest, body, ctx, query = new URLSearchParams()) {
   const bodyObj = parseBodyModeMemory(body);
-  const currentMode = ctx.getModes?.()?.current ?? "general";
+  const modesInfo = ctx.getModes?.() ?? null;
+  const currentMode = modesInfo?.current ?? "general";
   const queryMode = query.get("mode");
   const mode = typeof bodyObj.mode === "string" && bodyObj.mode ? bodyObj.mode : typeof queryMode === "string" && queryMode ? queryMode : currentMode;
+  const modeIds = modesInfo?.list?.map((m) => m.id) ?? [];
+  if (modeIds.length > 0 && !modeIds.includes(mode)) {
+    return { status: 400, body: { error: "mode must be one of: " + modeIds.join(", ") } };
+  }
   if (method === "GET") {
     if (rest[0] === "all") {
       const all = ctx.getAllModeMemory?.();

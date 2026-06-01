@@ -84,6 +84,8 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 
 普通“记住某个稳定事实/称呼/偏好”的请求必须走 `remember`，新对话通过 `MEMORY.md` 索引重新注入；只有用户明确说“用于优化当前工作模式提示词”时才写入 `remember_mode_preference`。`remember_session` 只用于临时上下文，不跨 `/new`。
 
+Dashboard “配置 → 记忆”页面统一展示 soul、全局长期记忆、当前项目记忆和工作模式偏好。AI name 属于 soul 层，通过 `soul.md` 受控区块维护，不作为普通 memory 或 mode preference 保存。
+
 ### PROJECT_MEMORY_FILES 搜索顺序
 
 ```

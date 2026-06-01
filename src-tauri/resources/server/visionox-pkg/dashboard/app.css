@@ -84,6 +84,28 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+
+  /* Legacy aliases used by bundled dashboard panels */
+  --bg: var(--surface-base);
+  --bg-0: var(--surface-base);
+  --bg-input: var(--surface-input);
+  --bg-elev: var(--surface-raised);
+  --bg-elev-2: var(--surface-overlay);
+  --bg-hover: var(--surface-overlay);
+  --fg-0: var(--text-primary);
+  --fg-1: var(--text-primary);
+  --fg-2: var(--text-secondary);
+  --fg-3: var(--text-tertiary);
+  --fg-4: var(--text-placeholder);
+  --bd: var(--border-default);
+  --border-1: var(--border-subtle);
+  --r: var(--radius-md);
+  --primary: var(--accent-primary);
+  --c-brand: var(--accent-primary);
+  --c-ok: var(--color-success);
+  --c-warn: var(--color-warning);
+  --c-err: var(--color-error);
+  --c-info: var(--color-info);
 }
 
 /* ============================================================================
@@ -846,7 +868,7 @@ textarea {
   transition: all var(--duration-normal) var(--ease-out-quart);
 }
 
-.card:hover {
+.card.interactive:hover {
   border-color: var(--border-default);
   box-shadow: var(--shadow-md);
 }
@@ -2691,6 +2713,37 @@ textarea {
   min-width: 0;
 }
 
+.memory-create-card {
+  margin-bottom: var(--space-3);
+}
+
+.memory-create-grid {
+  display: grid;
+  grid-template-columns: 150px minmax(120px, 1fr);
+  gap: var(--space-2);
+}
+
+.memory-create-grid textarea,
+.memory-create-grid input,
+.memory-create-grid select {
+  min-width: 0;
+}
+
+.memory-create-grid textarea,
+.memory-create-content {
+  grid-column: 1 / -1;
+}
+
+.memory-create-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
 .mode-btn {
   position: relative;
   background: transparent;
@@ -2751,6 +2804,9 @@ textarea {
     flex-direction: column;
   }
   .mode-memory-item {
+    grid-template-columns: 1fr;
+  }
+  .memory-create-grid {
     grid-template-columns: 1fr;
   }
 }

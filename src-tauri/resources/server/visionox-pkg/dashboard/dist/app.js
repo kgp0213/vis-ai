@@ -25217,6 +25217,11 @@ function MemoryPanel() {
   const [body, setBody] = d2("");
   const [busy, setBusy] = d2(false);
   const [info, setInfo] = d2(null);
+  const [newScope, setNewScope] = d2("global");
+  const [newName, setNewName] = d2("");
+  const [newDesc, setNewDesc] = d2("");
+  const [newBody, setNewBody] = d2("");
+  const [aiName, setAiName] = d2("");
   const load = q2(async () => {
     try {
       setTree(await api("/memory"));
@@ -25231,9 +25236,15 @@ function MemoryPanel() {
     setOpen({ scope, name });
     setBusy(true);
     try {
-      const path = scope === "project" ? "/memory/project" : `/memory/${scope}/${encodeURIComponent(name ?? "")}`;
+      if (scope === "mode-memory") {
+        const r4 = await api(`/mode-memory?mode=${encodeURIComponent(name ?? "")}`);
+        setBody(JSON.stringify(r4, null, 2));
+        return;
+      }
+      const path = scope === "project" ? "/memory/project" : scope === "soul" ? "/memory/soul" : `/memory/${scope}/${encodeURIComponent(name ?? "")}`;
       const r3 = await api(path);
       setBody(r3.body);
+      if (scope === "soul") setAiName(r3.name ?? "");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -25242,11 +25253,15 @@ function MemoryPanel() {
   }, []);
   const save = q2(async () => {
     if (!open) return;
+    if (open.scope === "mode-memory") {
+      setError("工作模式偏好请在 Settings 的“当前工作场景偏好”区域编辑。");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const path = open.scope === "project" ? "/memory/project" : `/memory/${open.scope}/${encodeURIComponent(open.name ?? "")}`;
-      await api(path, { method: "POST", body: { body } });
+      const path = open.scope === "project" ? "/memory/project" : open.scope === "soul" ? "/memory/soul" : `/memory/${open.scope}/${encodeURIComponent(open.name ?? "")}`;
+      await api(path, { method: "POST", body: open.scope === "soul" ? { body, aiName } : { body } });
       setInfo(t4("memory.saved", { scope: open.scope + (open.name ? `/${open.name}` : "") }));
       setTimeout(() => setInfo(null), 3e3);
       await load();
@@ -25255,7 +25270,47 @@ function MemoryPanel() {
     } finally {
       setBusy(false);
     }
-  }, [open, body, load]);
+  }, [open, body, aiName, load]);
+  const safeMemoryName = q2((raw) => {
+    const base = String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+    return /^[a-z0-9][a-z0-9._-]*$/.test(base) ? base : `memory-${Date.now().toString(36)}`;
+  }, []);
+  const createMemory = q2(async () => {
+    const desc = newDesc.trim();
+    const content = newBody.trim();
+    if (!desc || !content) return;
+    const name = safeMemoryName(newName || desc);
+    const scope = newScope === "project-mem" ? "project-mem" : "global";
+    const memoryBody = [
+      "---",
+      `name: ${name}`,
+      `description: ${desc.replace(/\r?\n/g, " ")}`,
+      "type: user",
+      `scope: ${scope === "project-mem" ? "project" : "global"}`,
+      `created: ${new Date().toISOString().slice(0, 10)}`,
+      "---",
+      "",
+      content,
+      "",
+    ].join("\n");
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/memory/${scope}/${encodeURIComponent(name)}`, { method: "POST", body: { body: memoryBody } });
+      setNewName("");
+      setNewDesc("");
+      setNewBody("");
+      setInfo(`已新增记忆：${scope}/${name}`);
+      setTimeout(() => setInfo(null), 3e3);
+      await load();
+      setOpen({ scope, name });
+      setBody(memoryBody);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [newScope, newName, newDesc, newBody, safeMemoryName, load]);
   if (!tree && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("memory.loading")}</div>`;
   if (error && !tree) return html4`<div class="card accent-err">${error}</div>`;
@@ -25276,14 +25331,62 @@ function MemoryPanel() {
       </div>
     `;
   };
-  const totalFiles = (tree.project.path ? 1 : 0) + tree.global.files.length + tree.projectMem.files.length;
+  const totalFiles = (tree.soul?.path ? 1 : 0) + (tree.project.path ? 1 : 0) + tree.global.files.length + tree.projectMem.files.length + (tree.modeMemory?.modes?.length ?? 0);
   return html4`
     <div class="sessions-grid">
       <div class="sessions-list">
+        <div class="card memory-create-card">
+          <div class="card-h"><span class="title">新增长期记忆</span></div>
+          <div class="memory-create-grid">
+            <select value=${newScope} onChange=${(e3) => setNewScope(e3.target.value)} disabled=${busy}>
+              <option value="global">全局长期记忆</option>
+              <option value="project-mem">当前项目记忆</option>
+            </select>
+            <input
+              type="text"
+              placeholder="文件名，可留空自动生成"
+              value=${newName}
+              onInput=${(e3) => setNewName(e3.target.value)}
+              disabled=${busy}
+            />
+            <input
+              class="memory-create-content"
+              type="text"
+              placeholder="一句话摘要，例如：常用称呼、报告结构、项目发布流程"
+              value=${newDesc}
+              onInput=${(e3) => setNewDesc(e3.target.value)}
+              disabled=${busy}
+            />
+            <textarea
+              rows="4"
+              placeholder="完整记忆内容。新对话会先看到摘要，需要细节时可 recall_memory。"
+              value=${newBody}
+              onInput=${(e3) => setNewBody(e3.target.value)}
+              disabled=${busy}
+            ></textarea>
+            <div class="memory-create-actions">
+              <span>${newScope === "global" ? "跨项目生效" : "仅当前工作区生效"}</span>
+              <button class="btn primary" disabled=${busy || !newDesc.trim() || !newBody.trim()} onClick=${createMemory}>新增记忆</button>
+            </div>
+          </div>
+        </div>
         <div class="ssl-h" style="font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">
           ${t4("memory.files", { count: totalFiles })}
         </div>
         <div class="ssl-rows">
+          ${tree.soul?.path ? html4`
+                <div
+                  class=${`ssl-row ${open?.scope === "soul" ? "sel" : ""}`}
+                  onClick=${() => openFile("soul")}
+                >
+                  <span class="name">
+                    soul.md
+                    ${tree.soul.exists ? html4`<span class="pill ok">AI 身份</span>` : html4`<span class="pill">创建</span>`}
+                  </span>
+                  <span class="preview dim">${tree.soul.name ? `AI 名称：${tree.soul.name}` : "~/.visionox/soul.md"}</span>
+                  <span class="meta"><span class="dim">soul</span></span>
+                </div>
+              ` : null}
           ${tree.project.path ? html4`
                 <div
                   class=${`ssl-row ${open?.scope === "project" ? "sel" : ""}`}
@@ -25299,6 +25402,16 @@ function MemoryPanel() {
               ` : null}
           ${tree.global.files.map((f3) => fileRow("global", f3))}
           ${tree.projectMem.files.map((f3) => fileRow("project-mem", f3))}
+          ${(tree.modeMemory?.modes ?? []).map((m3) => html4`
+            <div
+              class=${`ssl-row ${open?.scope === "mode-memory" && open?.name === m3.id ? "sel" : ""}`}
+              onClick=${() => openFile("mode-memory", m3.id)}
+            >
+              <span class="name">${m3.label ?? m3.id}<span class="pill">模式偏好</span></span>
+              <span class="preview dim">${m3.enabledCount ?? 0}/${m3.count ?? 0} 启用</span>
+              <span class="meta"><span class="dim">${m3.id}</span></span>
+            </div>
+          `)}
           ${tree.global.files.length === 0 && tree.projectMem.files.length === 0 && !tree.project.path ? html4`<div style="color:var(--fg-3);padding:14px;font-size:12px">
                   ${t4("memory.noFiles")}
                 </div>` : null}
@@ -25318,17 +25431,37 @@ function MemoryPanel() {
                   </span>
                   <span class="ws">${t4("memory.chars", { count: body.length.toLocaleString() })}</span>
                   <span class="actions">
-                    <button class="btn primary" disabled=${busy} onClick=${save}>${t4("common.save")}</button>
+                    <button class="btn primary" disabled=${busy || open.scope === "mode-memory"} onClick=${save}>${t4("common.save")}</button>
                     <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
                   </span>
                 </div>
                 ${info ? html4`<div style="margin-bottom:8px"><span class="pill ok">${info}</span></div>` : null}
                 ${error ? html4`<div class="card accent-err" style="margin-bottom:8px">${error}</div>` : null}
+                ${open.scope === "soul" ? html4`
+                  <div class="card" style="margin-bottom:8px">
+                    <div class="card-h"><span class="title">AI 名称</span></div>
+                    <div class="memory-create-grid">
+                      <input
+                        type="text"
+                        placeholder="例如：Visionox"
+                        value=${aiName}
+                        onInput=${(e3) => setAiName(e3.target.value)}
+                        disabled=${busy}
+                      />
+                      <span style="color:var(--fg-3);font-size:11.5px;align-self:center">保存后写入 soul.md，/new 后生效。</span>
+                    </div>
+                  </div>
+                ` : null}
+                ${open.scope === "mode-memory" ? html4`
+                  <div class="card accent-brand" style="margin-bottom:8px">
+                    <div class="card-b">工作模式偏好在 Settings 的“当前工作场景偏好”区域编辑；这里提供统一预览。</div>
+                  </div>
+                ` : null}
                 <textarea
                   style="width:100%;min-height:480px;background:var(--bg-input);color:var(--fg-0);border:1px solid var(--bd);border-radius:var(--r);padding:12px;font-family:var(--font-mono);font-size:13px;line-height:1.55;resize:vertical"
                   value=${body}
                   onInput=${(e3) => setBody(e3.target.value)}
-                  disabled=${busy}
+                  disabled=${busy || open.scope === "mode-memory"}
                 ></textarea>
                 <div style="margin-top:8px;color:var(--fg-3);font-size:11.5px">
                   ${t4("memory.reloadHint")}
