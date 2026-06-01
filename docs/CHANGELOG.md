@@ -17,6 +17,8 @@
 | 文档整理 | 2026-06-03 合并精简开发文档 12→6，删除重复/过时内容 |
 | Karpathy 审查 | 2026-06-03 基于 Karpathy Guidelines 方法论完成源码审查 |
 | 文档交叉验证 | 2026-06-07 逐行核对代码与文档，修复配色方案计数(5→7)、版本号说明、目录结构等 |
+| ECC 集成复核 | 2026-05-31 核对 `docs/ECC_INTEGRATION.md` 与实现，修复 mode 同步、custom rules 常驻加载、session memory 完整注入、项目记忆搜索顺序和补丁脚本幂等性 |
+| 构建验证 | 2026-05-31 `npx tauri build` 产出 `src-tauri/target/release/bundle/msi/Visionox_1.0.0_x64_en-US.msi`（101,724,751 B）；首次失败原因是旧 release 进程占用 `resources/server/node.exe`，关闭后构建产物生成 |
 
 ---
 

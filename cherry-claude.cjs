@@ -14,7 +14,9 @@ let content = fs.readFileSync(file, 'utf8');
 const oldArr = 'var PROJECT_MEMORY_FILES = ["REASONIX.md", "AGENTS.md", "AGENT.md"];';
 const newArr = 'var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];';
 
-if (content.includes(oldArr)) {
+if (content.includes(newArr)) {
+  console.log('SKIP: chunk-2K65GZBT.js — PROJECT_MEMORY_FILES already updated');
+} else if (content.includes(oldArr)) {
   content = content.replace(oldArr, newArr);
   fs.writeFileSync(file, content, 'utf8');
   console.log('OK: chunk-2K65GZBT.js — PROJECT_MEMORY_FILES updated');

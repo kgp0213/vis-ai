@@ -401,6 +401,33 @@ server overview workMode + modes    ✅ 字段存在
 server settings POST mode handler   ✅ 处理正确
 ```
 
+### 2026-05-31 实现复核与优化
+
+本次按本文档逐项复核实际代码后，确认并优化以下实现点：
+
+| 项目 | 结果 |
+|------|------|
+| Mode 配置同步 | `launcher.mjs` 增加运行时 config 同步。Dashboard `POST /api/settings` 修改 mode 后会调用 `ctx.setMode()`，避免磁盘配置已变但 `/new` 仍按旧 mode 重建 loop。 |
+| 默认 mode 合并 | `initModesConfig()` 改为合并默认 mode，补齐缺失的 `general/coding/office/design`，同时保留用户自定义额外 mode。 |
+| Custom Rules | `loadRules()` 改为按 mode 声明顺序加载，并始终追加 `custom` 规则集，符合 L4 CUSTOM RULES 始终加载的架构。 |
+| Session Memory | `getSessionMemoryBlock()` 从只注入摘要改为注入完整 body，当前会话短期记忆不再丢失细节。 |
+| Project Memory | `PROJECT_MEMORY_FILES` 在 CLI 分块和 SDK 导出中均包含 `visionox.md`、`.claude/CLAUDE.md`、`CLAUDE.md`，与本文档搜索顺序一致。 |
+| Cherry-pick 脚本 | `cherry-claude.cjs` 对 `PROJECT_MEMORY_FILES` 补丁改为幂等，列表已更新时不再误报 FAIL。 |
+| Dashboard Memory | `listMemoryFiles()` 已过滤 `MEMORY.md`；项目记忆文件名和路径展示已避免硬编码 `visionox.md` 与完整绝对路径。 |
+
+复核命令：
+
+```
+node --check src-tauri/resources/server/launcher.mjs                  ✅ 通过
+node --check src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js ✅ 通过
+node --check cherry-claude.cjs                                         ✅ 通过
+node --check src-tauri/resources/server/visionox-pkg/dist/index.js     ✅ 通过
+cargo check                                                            ✅ 通过
+npx tauri build                                                        ✅ 生成 MSI
+```
+
+构建产物：`src-tauri/target/release/bundle/msi/Visionox_1.0.0_x64_en-US.msi`（101,724,751 B）。首次构建失败是旧 release 应用进程占用 `resources/server/node.exe`，关闭 `visionox-desktop.exe` / bundled `node.exe` 后构建产物正常生成。
+
 ---
 
 ## 十二、与上游 ECC 的关系

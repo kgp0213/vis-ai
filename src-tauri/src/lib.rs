@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
+
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -50,12 +52,12 @@ struct JobObject {
 }
 
 impl JobObject {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    fn new() -> anyhow::Result<Self> {
         // SAFETY: null name creates an unnamed job object; null attributes
         // uses the default security descriptor. Both are valid arguments.
         let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
         if handle.is_null() {
-            return Err("CreateJobObjectW failed".into());
+            anyhow::bail!("CreateJobObjectW failed")
         }
 
         // SAFETY: JOBOBJECT_EXTENDED_LIMIT_INFORMATION is a C struct
@@ -79,19 +81,19 @@ impl JobObject {
             // SAFETY: handle is a valid handle that was successfully created
             // above and is about to be abandoned on this error path.
             unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
-            return Err("SetInformationJobObject failed".into());
+            anyhow::bail!("SetInformationJobObject failed")
         }
 
         Ok(Self { handle })
     }
 
-    fn assign(&self, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    fn assign(&self, pid: u32) -> anyhow::Result<()> {
         // SAFETY: pid comes from Child::id() which is a valid OS process ID;
         // 0 = no handle inheritance; PROCESS_SET_QUOTA | PROCESS_TERMINATE
         // are the minimum rights needed for job assignment.
         let proc_handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
         if proc_handle.is_null() {
-            return Err("OpenProcess failed".into());
+            anyhow::bail!("OpenProcess failed")
         }
 
         // SAFETY: self.handle is a valid job object handle; proc_handle is a
@@ -100,7 +102,7 @@ impl JobObject {
         // SAFETY: proc_handle is no longer needed after job assignment.
         unsafe { windows_sys::Win32::Foundation::CloseHandle(proc_handle) };
         if ret == 0 {
-            return Err("AssignProcessToJobObject failed".into());
+            anyhow::bail!("AssignProcessToJobObject failed")
         }
 
         Ok(())
@@ -174,11 +176,17 @@ fn spawn_server_blocking(
         return Err(format!("JobObject assign failed: {e}").into());
     }
 
-    let stdout = child.stdout.take().expect("failed to capture stdout");
+    let stdout = child
+        .stdout
+        .take()
+        .context("failed to capture server stdout")?;
     let reader = std::io::BufReader::new(stdout);
 
     // Read stderr into a log file for debugging
-    let stderr = child.stderr.take().expect("failed to capture stderr");
+    let stderr = child
+        .stderr
+        .take()
+        .context("failed to capture server stderr")?;
     let exe_dir_clone = exe_dir.clone();
     let _handle = std::thread::spawn(move || {
         use std::io::Write;
@@ -285,7 +293,7 @@ fn check_health(port: u16, token: &str) -> bool {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> anyhow::Result<()> {
     // P3: initialize diagnostics log path early so background threads
     // spawned in setup() can write diag entries regardless of ordering.
     let exe_dir = std::env::current_exe()
@@ -317,7 +325,7 @@ pub fn run() {
             .build()?;
 
             // Create Job Object for guaranteed child cleanup on exit
-            let job = JobObject::new().expect("failed to create job object");
+            let job = JobObject::new().context("failed to create job object")?;
             let job = Arc::new(job);
             let job_for_thread = job.clone();
 
@@ -458,7 +466,7 @@ pub fn run() {
                 .build()?;
 
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(app.default_window_icon().context("default window icon not found")?.clone())
                 .menu(&tray_menu)
                 .tooltip("Visionox")
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -518,7 +526,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error building tauri app")
+        ?
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
                 {
@@ -557,6 +565,7 @@ pub fn run() {
                 }
             }
         });
+    Ok(())
 }
 
 #[cfg(test)]

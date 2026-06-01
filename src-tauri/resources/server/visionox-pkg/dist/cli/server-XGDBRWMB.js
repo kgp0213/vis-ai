@@ -1979,11 +1979,12 @@ async function handleOverview(method, _rest, _body, ctx) {
   const cfg = readConfig(ctx.configPath);
   const cwd = ctx.getCurrentCwd?.() ?? null;
   const semanticIndexExists = cwd ? await indexExists(cwd).catch(() => false) : null;
+  const modeInfo = ctx.getModes?.() ?? null;
   const overview = {
     version: VERSION,
     mode: ctx.mode,
-    workMode: cfg.mode ?? "general",
-    modes: (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
+    workMode: modeInfo?.current ?? cfg.mode ?? "general",
+    modes: modeInfo?.list ?? (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
     latestVersion: ctx.getLatestVersion?.() ?? null,
     session: ctx.getSessionName?.() ?? null,
     cwd,
@@ -2761,8 +2762,8 @@ async function handleSettings(method, _rest, body, ctx) {
         webSearchEndpoint: cfg.webSearchEndpoint ?? null,
         bingApiKeySet: Boolean(cfg.bingApiKey),
         editMode: cfg.editMode ?? "review",
-        mode: cfg.mode ?? "general",
-        modes: (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
+        mode: ctx.getModes?.()?.current ?? cfg.mode ?? "general",
+        modes: ctx.getModes?.()?.list ?? (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
         session: cfg.session ?? null,
         model: live?.model ?? null,
         proNext: live?.proArmed ?? false,
@@ -2867,8 +2868,9 @@ async function handleSettings(method, _rest, body, ctx) {
       changed.push("bingApiKey");
     }
     if (fields.mode !== void 0) {
-      if (typeof fields.mode !== "string" || !cfg.modes || !cfg.modes[fields.mode]) {
-        return { status: 400, body: { error: "mode must be one of: " + Object.keys(cfg.modes??{}).join(", ") } };
+      const modeIds = ctx.getModes?.()?.list?.map((m) => m.id) ?? Object.keys(cfg.modes ?? {});
+      if (typeof fields.mode !== "string" || !modeIds.includes(fields.mode)) {
+        return { status: 400, body: { error: "mode must be one of: " + modeIds.join(", ") } };
       }
       cfg.mode = fields.mode;
       changed.push("mode");
@@ -2913,6 +2915,7 @@ async function handleSettings(method, _rest, body, ctx) {
     }
     if (changed.length > 0) {
       writeConfig(cfg, ctx.configPath);
+      if (changed.includes("mode")) ctx.setMode?.(cfg.mode);
       if (langPending) setLanguage(langPending);
       if (presetPendingLive) ctx.applyPresetLive?.(presetPendingLive);
       if (effortPendingLive) ctx.applyEffortLive?.(effortPendingLive);

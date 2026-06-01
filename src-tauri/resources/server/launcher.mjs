@@ -644,19 +644,49 @@ function loadSoul() {
 }
 
 // ── Mode system ────────────────────────────────────────────────
+function mergeDefaultModes(modes) {
+  const merged = Object.fromEntries(
+    Object.entries(DEFAULT_MODES).map(([id, defaults]) => [
+      id,
+      { ...defaults, ...(modes?.[id] ?? {}) },
+    ])
+  );
+  for (const [id, mode] of Object.entries(modes ?? {})) {
+    if (!merged[id]) merged[id] = mode;
+  }
+  return merged;
+}
+
+function syncRuntimeConfig(next) {
+  for (const key of Object.keys(config)) {
+    if (!(key in next)) delete config[key];
+  }
+  Object.assign(config, next);
+}
+
 function initModesConfig() {
-  if (!config.modes) {
-    config.modes = DEFAULT_MODES;
-    writeConfig(config, configPath);
-    console.error(`[launcher] modes initialized (${Object.keys(DEFAULT_MODES).join(", ")})`);
+  let changed = false;
+  const merged = mergeDefaultModes(config.modes);
+  if (JSON.stringify(config.modes) !== JSON.stringify(merged)) {
+    config.modes = merged;
+    changed = true;
   }
   if (!config.mode || !config.modes[config.mode]) {
     config.mode = "general";
+    changed = true;
+  }
+  if (changed) {
     writeConfig(config, configPath);
+    console.error(`[launcher] modes initialized (${Object.keys(DEFAULT_MODES).join(", ")})`);
   }
 }
 
 function getModeConfig() {
+  const fresh = readConfig(configPath);
+  if (fresh.mode !== config.mode || JSON.stringify(fresh.modes ?? null) !== JSON.stringify(config.modes ?? null)) {
+    syncRuntimeConfig(fresh);
+    initModesConfig();
+  }
   const mode = config.mode || "general";
   return config.modes?.[mode] || DEFAULT_MODES.general;
 }
@@ -671,8 +701,11 @@ function addSessionMemory(name, description, body) {
 function clearSessionMemories() { sessionMemories.length = 0; }
 function getSessionMemoryBlock() {
   if (sessionMemories.length === 0) return "";
-  const lines = sessionMemories.map(m => `- **${m.name}**: ${m.description}`);
-  return `\n# Session memory (this conversation only)\n\n${lines.join("\n")}`;
+  const lines = sessionMemories.map((m) => {
+    const title = String(m.name).replace(/[\r\n]/g, " ").trim();
+    return `## ${title}\n\n${m.body}`;
+  });
+  return `\n# Session memory (this conversation only)\n\n${lines.join("\n\n")}`;
 }
 
 // ── Build session ───────────────────────────────────────────────
@@ -687,16 +720,26 @@ function getEnabledRuleSets() {
   return getModeConfig().eccRules || ["common", "rust"];
 }
 
+function orderedRuleSets(enabled) {
+  const seen = new Set();
+  const ordered = [];
+  for (const name of [...enabled, "custom"]) {
+    if (!ALL_ECC_RULES[name] || seen.has(name)) continue;
+    seen.add(name);
+    ordered.push(name);
+  }
+  return ordered;
+}
+
 function loadRules() {
-  const enabled = getEnabledRuleSets();
+  const enabled = orderedRuleSets(getEnabledRuleSets());
   const rules = [];
-  for (const [name, dir] of Object.entries(ALL_ECC_RULES)) {
-    if (!enabled.includes(name)) continue;
+  for (const name of enabled) {
+    const dir = ALL_ECC_RULES[name];
     if (!existsSync(dir)) continue;
     try {
-      const files = readdirSync(dir);
+      const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort((a, b) => a.localeCompare(b));
       for (const f of files) {
-        if (!f.endsWith(".md")) continue;
         try {
           const content = readFileSync(resolve(dir, f), "utf8").trim();
           if (content) rules.push(`<!-- rule: ${f} (${name}) -->\n${content}`);
@@ -954,10 +997,11 @@ const ctx = {
   },
   setMode: (modeId) => {
     const cfg = readConfig(configPath);
-    if (!cfg.modes || !cfg.modes[modeId]) return false;
+    cfg.modes = mergeDefaultModes(cfg.modes);
+    if (!cfg.modes[modeId]) return false;
     cfg.mode = modeId;
     writeConfig(cfg, configPath);
-    config.mode = modeId;
+    syncRuntimeConfig(cfg);
     console.error(`[launcher] mode: ${modeId} (${cfg.modes[modeId].label})`);
     return true;
   },

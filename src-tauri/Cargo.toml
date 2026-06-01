@@ -7,6 +7,7 @@ description = "Visionox AI Coding Agent — Desktop GUI"
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "custom-protocol"] }
 tauri-plugin-single-instance = "2"
+anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows-sys = { version = "0.59", features = [

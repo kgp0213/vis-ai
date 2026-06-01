@@ -2,5 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    visionox_desktop::run()
+    if let Err(e) = visionox_desktop::run() {
+        eprintln!("FATAL: {e:#}");
+        std::process::exit(1);
+    }
 }
