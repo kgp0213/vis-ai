@@ -23,6 +23,7 @@ server/launcher.mjs
 
 # Temp files
 tmp_*
+record.txt
 launcher_*.log
 launcher_url*.txt
 

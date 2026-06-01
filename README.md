@@ -143,10 +143,14 @@ node scripts/restore-visionox-pkg.js
 
 # 放置 node.exe 到 src-tauri/resources/server/
 
-# 编译
+# 编译 Windows 安装器（NSIS exe）
+npm run tauri:build
+# → src-tauri/target/release/bundle/nsis/Visionox_1.0.0_x64-setup.exe
+
+# 仅编译调试/开发用可执行文件
 cd src-tauri
 cargo build --release
-# → target/release/visionox-desktop.exe
+# → src-tauri/target/release/visionox-desktop.exe
 ```
 
 ### 调试
@@ -179,7 +183,8 @@ type launcher-stderr.log  # Node.js 侧
 
 ### 构建注意事项
 
-- `Cargo.toml` 中 `tauri` 须声明 `custom-protocol` feature，否则 `cargo build --release` 和 `npx tauri build` 行为不一致
+- `tauri.conf.json` 当前固定 `bundle.targets = ["nsis"]`，`npm run tauri:build` 会生成 Windows NSIS `.exe` 安装器
+- `Cargo.toml` 中 `tauri` 须声明 `custom-protocol` feature，否则 `cargo build --release` 和 `npm run tauri:build` 行为不一致
 - 修改 `lib.rs` 或 `src/index.html` 后建议 `cargo clean` 再编译
 - 修改 `launcher.mjs` 或 chunk 文件后需手动同步到 `target/release/` 再打包
 
@@ -199,7 +204,8 @@ type launcher-stderr.log  # Node.js 侧
 
 ### 待完成
 
-- [ ] 安装包构建（NSIS/MSI）
+- [x] Windows NSIS exe 安装包构建
+- [ ] MSI 安装包/自动更新策略
 - [ ] macOS/Linux 适配
 - [ ] 自动更新
 

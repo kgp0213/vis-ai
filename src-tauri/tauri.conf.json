@@ -16,6 +16,7 @@
   },
   "bundle": {
     "active": true,
+    "targets": ["nsis"],
     "resources": [
       "resources/server/node.exe",
       "resources/server/launcher.mjs",
