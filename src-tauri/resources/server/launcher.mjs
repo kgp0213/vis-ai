@@ -179,6 +179,7 @@ const [
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
   { applySkillsIndex },
+  { MemoryStore },
   { registerSkillTools, Eventizer },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
@@ -192,6 +193,7 @@ const [
   import(distPath("chunk-PQXPXJBJ.js")),
   import(distPath("chunk-YYQAUTTN.js")),
   import(distPath("chunk-2K65GZBT.js")),
+  import(distPath("chunk-5JJRUIPA.js")),
   import(distPath("chunk-45U62RI3.js")),
   import(distPath("chunk-4QUNBQQ2.js")),
   import(distPath("chunk-XXC2BYTV.js")),
@@ -1009,6 +1011,42 @@ function getSessionMemoryBlock() {
   return `\n# Session memory (this conversation only)\n\n${lines.join("\n\n")}`;
 }
 
+function formatPersistentMemoryForPrompt(rootDir) {
+  let store;
+  try {
+    store = new MemoryStore({ projectRoot: rootDir });
+  } catch (err) {
+    console.error(`[launcher] persistent memory skipped: ${err.message}`);
+    return "";
+  }
+  const blocks = [];
+  const global = store.loadIndex("global");
+  if (global) {
+    blocks.push([
+      "# User memory - global",
+      "",
+      "Cross-project facts and preferences the user explicitly asked to remember. Treat these as authoritative unless the current user message updates or contradicts them. Use `recall_memory` only when the one-line index is not enough.",
+      "",
+      "```",
+      global.content,
+      "```",
+    ].join("\n"));
+  }
+  const project = store.hasProjectScope() ? store.loadIndex("project") : null;
+  if (project) {
+    blocks.push([
+      "# User memory - this project",
+      "",
+      "Per-project facts and decisions the user established in prior sessions. Treat these as authoritative for this workspace unless the current user message updates or contradicts them.",
+      "",
+      "```",
+      project.content,
+      "```",
+    ].join("\n"));
+  }
+  return blocks.length ? `\n\n${blocks.join("\n\n")}` : "";
+}
+
 // ── Build session ───────────────────────────────────────────────
 const ALL_ECC_RULES = Object.create(null);
 ALL_ECC_RULES["common"]     = resolve(home, ".claude", "rules", "ecc", "common");
@@ -1121,6 +1159,9 @@ ${toolList}
 - To **read or edit files** → use read_file / write_file directly by path
 - To **run commands** → use run_command; prefer single commands over chained scripts
 - To **search the internet** → use web_search for broad queries, web_fetch for reading a specific URL
+- When the user asks you to **remember** a stable fact, name, preference, or correction for future chats → use remember with global scope unless it is clearly project-specific
+- Use remember_mode_preference only when the user explicitly says the memory is for optimizing the current work mode prompt
+- Use remember_session only for temporary context that should disappear after /new
 - When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
 
 ## Safety boundaries
@@ -1159,7 +1200,8 @@ function buildLoop(client, rootDir) {
   const systemWithRules = loadedRules.length > 0
     ? systemWithMode + "\n\n# Coding Rules\n\n" + loadedRules.join("\n\n")
     : systemWithMode;
-  const systemWithSession = systemWithRules + getSessionMemoryBlock();
+  const systemWithPersistentMemory = systemWithRules + formatPersistentMemoryForPrompt(rootDir);
+  const systemWithSession = systemWithPersistentMemory + getSessionMemoryBlock();
   const systemWithSkills = applySkillsIndex(systemWithSession, { projectRoot: rootDir });
   const prefix = new ImmutablePrefix({
     system: systemWithSkills,

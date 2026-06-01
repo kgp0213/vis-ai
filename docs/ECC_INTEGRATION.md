@@ -82,6 +82,8 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 | 模式偏好 | `remember_mode_preference` | `~/.visionox/mode-memory/` JSON 文件 | 按工作模式持久 |
 | 短期记忆 | `remember_session` (scope: session) | launcher 内存 | `/new` 或重启后清除 |
 
+普通“记住某个稳定事实/称呼/偏好”的请求必须走 `remember`，新对话通过 `MEMORY.md` 索引重新注入；只有用户明确说“用于优化当前工作模式提示词”时才写入 `remember_mode_preference`。`remember_session` 只用于临时上下文，不跨 `/new`。
+
 ### PROJECT_MEMORY_FILES 搜索顺序
 
 ```
@@ -356,7 +358,7 @@ runHooks(event, ctx)
 
 | 文件 | 变更摘要 |
 |------|----------|
-| `launcher.mjs` | 新增 `loadSoul()`, `DEFAULT_MODES`, `initModesConfig()`, `getModeConfig()`, `loadRules()`(重写), `sessionMemories`, `remember_session` tool, `ctx.getModes()`, `ctx.setMode()`, `ctx.getHooks()`, `ctx.registerHook()`；修改 `buildLoop()` 注入 L0-L7 全部层级；`/new` 时重建 loop + 清除 session memory |
+| `launcher.mjs` | 新增 `loadSoul()`, `DEFAULT_MODES`, `initModesConfig()`, `getModeConfig()`, `loadRules()`(重写), `sessionMemories`, `remember_session` tool, `remember_mode_preference` tool, `ctx.getModes()`, `ctx.setMode()`, `ctx.getHooks()`, `ctx.registerHook()`；修改 `buildLoop()` 注入 soul、mode、mode preferences、ECC、persistent memory、session memory、skills 等层级；`/new` 时重建 loop + 清除 session memory |
 | `lib.rs` | `ServerState` 添加 SAFETY 注释（RAII guard）；stderr reader 修复非 UTF-8 处理 |
 | `cherry-claude.cjs` | FAIL 计数 + 非零退出码；`newArr` 加入 `"visionox.md"` |
 | `server-XGDBRWMB.js` | `listMemoryFiles()` 过滤 MEMORY.md；`/overview` 新增 `workMode` + `modes`；`/settings` POST 新增 mode 处理 |

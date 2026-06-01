@@ -81,9 +81,22 @@ vis-ai/
 | Skills | `~/.visionox/skills/*/SKILL.md` | 领域技术能力索引 |
 | Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆 |
 
-短期记忆通过 `remember_session` 工具（仅当前对话，`/new` 清除）。当用户明确要求“记住某段关键字用于优化当前工作模式提示词”时，使用 `remember_mode_preference` 写入独立的 mode-memory 层，而不是直接追加到默认 mode prompt。
+普通长期记忆通过 `remember` 工具写入 `~/.visionox/memory/`，并在 `/new` 或应用重启后的新对话中注入 `MEMORY.md` 索引。短期记忆通过 `remember_session` 工具（仅当前对话，`/new` 清除）。当用户明确要求“记住某段关键字用于优化当前工作模式提示词”时，使用 `remember_mode_preference` 写入独立的 mode-memory 层，而不是直接追加到默认 mode prompt。
 
 Mode Preferences 按工作模式隔离存储，提示词注入时最多选取少量启用项并压缩为摘要，避免默认提示词越来越臃肿。注入顺序为：`soul.md` → 项目记忆 → 工作模式 prompt → 当前模式偏好 → ECC rules → 自定义 rules → skills → 持久/短期记忆；ECC 规则优先级高于模式偏好。
+
+#### 记忆触发话术
+
+为了让 AI 正确选择存储层，用户应在对话里明确说明记忆类型：
+
+| 目标 | 推荐说法 | 存储 |
+|------|----------|------|
+| 跨项目长期事实、称呼、稳定偏好 | `请长期记住：我的常用称呼是……` | `remember` → `~/.visionox/memory/global/` |
+| 当前项目专属知识、流程、路径 | `请长期记住到当前项目记忆：这个项目的发布流程是……` | `remember` → `~/.visionox/memory/<project-hash>/` |
+| 当前工作模式的回答习惯 | `请记住为当前工作模式偏好：编程模式下先给结论，再给修改文件和验证命令。` | `remember_mode_preference` → `~/.visionox/mode-memory/{mode}.json` |
+| 只在当前对话有效的临时上下文 | `请临时记住：本轮先按方案 B 处理。` | `remember_session` → 内存 |
+
+避免只说“记一下这个”。如果内容要跨 `/new` 或重启保留，优先使用 `长期记住`；如果只想优化某个工作场景的新对话提示词，使用 `当前工作模式偏好`。
 
 ### 工作模式 (4 种)
 
