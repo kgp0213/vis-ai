@@ -1178,3 +1178,38 @@ Web Search:  [ON] [OFF]
 - [x] P1-2 工具描述压缩 -28% 合入
 - [x] 品牌化替换完成
 - [x] 版本号：上游基线 0.47.1，应用版本 1.0.0（Cargo.toml / tauri.conf.json），npm workspace 0.1.0（package.json）
+
+---
+
+## 三十九、文档合并精简（2026-06-07）
+
+### 源码核实发现
+
+| # | 问题 | 影响文件 | 修正 |
+|---|------|---------|------|
+| 1 | 配色方案声明 7 套，实际 app.css 仅 5 套生效（deep-charcoal/midnight-ink/espresso 存在于 `src-tauri/theme/` 但未合并） | COLOR_SCHEMES.md | 修正为 5 套生效 + 3 套待合并 |
+| 2 | ECC 规则路径引用 `~/.claude/rules/ecc/rust/` 不存在 | DEVELOPMENT_RULES.md | 修正为 `.cursor/rules/` + `.kiro/steering/` |
+| 3 | ECC Skills 数量 "181 个" 为上游数据 | ECC_INTEGRATION.md | 修正为 Visionox 实际 ~36 个 |
+| 4 | Fix 3 `.theme-btn` 声称已添加到 app.css，实际仅在 .bak 备份中 | CHANGELOG.md | 注明实际状态 |
+| 5 | `skill-creation-guide.md` 与 `src-tauri/resources/skill-creation-guide.md` 完全重复 | docs/skill-creation-guide.md | 替换为指针 |
+| 6 | UI_DESIGN_SYSTEM.md 2100 行含大量未实现的 Component Library 假想设计 | UI_DESIGN_SYSTEM.md | 精简至 ~80 行，仅保留实际生效的 Design Tokens |
+| 7 | UI_OPTIMIZATION_PLAN.md 多个条目无时间戳无完成状态 | UI_OPTIMIZATION_PLAN.md | 仅保留当前执行批次，合并到 DEVELOPMENT_RULES.md |
+
+### 操作
+
+| 操作 | 文件 |
+|------|------|
+| 合并 | COLOR_SCHEMES.md + ECC_INTEGRATION.md + UI_OPTIMIZATION_PLAN.md → DEVELOPMENT_RULES.md |
+| 精简 | UI_DESIGN_SYSTEM.md（2100→80 行） |
+| 替换 | skill-creation-guide.md → 指针 |
+| 删除 | COLOR_SCHEMES.md、UI_OPTIMIZATION_PLAN.md、ECC_INTEGRATION.md |
+| 结果 | docs/ 7 文件 → 4 文件（CHANGELOG + DEVELOPMENT_RULES + UI_DESIGN_SYSTEM + skill-creation-guide 指针） |
+
+### 已确认正确的声明
+
+- ✅ 版本号 Cargo.toml/tauri.conf.json 1.0.0、package.json 0.1.0
+- ✅ lib.rs `background_color` 匹配 `#f3f4f6`
+- ✅ `PROJECT_MEMORY_FILES` 含 visionox.md（chunk-2K65GZBT.js）
+- ✅ Fix 1 `setEditMode` 返回 `return m`（launcher.mjs:1708）
+- ✅ Fix 2 路径替换 `.visionox` 覆盖 32 个 CLI 文件
+- ✅ `src-tauri/theme/` 7 个 CSS 源文件全部存在

@@ -1,0 +1,42 @@
+name: validate
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  smoke:
+    name: smoke checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate Tauri config
+        shell: pwsh
+        run: node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8')); console.log('tauri config ok')"
+
+      - name: Check launcher and bundled dashboard syntax
+        shell: pwsh
+        run: |
+          node --check src-tauri/resources/server/launcher.mjs
+          node --check src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js
+          node --check src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js
+
+      - name: Check Rust crate
+        working-directory: src-tauri
+        run: cargo check --locked
+
+      - name: Verify whitespace
+        shell: pwsh
+        run: git diff --check
