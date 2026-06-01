@@ -19666,7 +19666,9 @@ var en = {
     builtinDesc: "Built-in skills ship with Visionox; the model picks them up automatically. To customize, create a project- or global-scoped skill with the same name.",
     saved: "saved {scope}/{name}",
     deleteConfirm: "Delete skill {scope}/{name}?",
-    reloadHint: "re-loaded on next /new or session restart"
+    reloadHint: "re-loaded on next /new or session restart",
+    repairEnv: "repair skill env",
+    repairOk: "skill environment repaired"
   },
   system: {
     loading: "loading health\u2026",
@@ -20330,7 +20332,9 @@ var zhCN = {
     builtinDesc: "\u5185\u7F6E\u6280\u80FD\u968F Visionox \u4E00\u8D77\u53D1\u5E03\uFF1B\u6A21\u578B\u4F1A\u81EA\u52A8\u8BC6\u522B\u3002\u5982\u9700\u81EA\u5B9A\u4E49\uFF0C\u8BF7\u521B\u5EFA\u540C\u540D\u7684\u9879\u76EE\u6216\u5168\u5C40\u6280\u80FD\u3002",
     saved: "\u5DF2\u4FDD\u5B58 {scope}/{name}",
     deleteConfirm: "\u5220\u9664\u6280\u80FD {scope}/{name}\uFF1F",
-    reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D"
+    reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D",
+    repairEnv: "\u4FEE\u590D Skill \u73AF\u5883",
+    repairOk: "Skill \u73AF\u5883\u5DF2\u4FEE\u590D"
   },
   system: {
     loading: "\u52A0\u8F7D\u5065\u5EB7\u72B6\u6001\u2026",
@@ -27843,6 +27847,7 @@ function SkillsPanel() {
   const [info, setInfo] = d2(null);
   const [newName, setNewName] = d2("");
   const [newScope, setNewScope] = d2("global");
+  const [repairInfo, setRepairInfo] = d2(null);
   const [filter, setFilter] = d2("");
   const [scopeFilter, setScopeFilter] = d2("all");
   const load = q2(async () => {
@@ -27927,6 +27932,20 @@ description: TODO \u2014 one-line description that helps the model match this sk
       setBusy(false);
     }
   }, [newName, newScope, load, openSkill]);
+  const repairEnvironment = q2(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/skills/repair", { method: "POST" });
+      await load();
+      setRepairInfo(t4("skills.repairOk"));
+      setTimeout(() => setRepairInfo(null), 4e3);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [load]);
   if (!data && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("skills.loading")}</div>`;
   if (error && !data) return html4`<div class="card accent-err">${error}</div>`;
@@ -27988,7 +28007,10 @@ description: TODO \u2014 one-line description that helps the model match this sk
             style="flex:1;min-width:0"
           />
           <button class="btn primary" disabled=${busy || !newName.trim()} onClick=${create} style="flex:0 0 auto">+</button>
+          <button class="btn" disabled=${busy} onClick=${repairEnvironment} style="flex:0 0 auto">${t4("skills.repairEnv")}</button>
         </div>
+        ${repairInfo ? html4`<div style="padding:0 12px 8px"><span class="pill ok">${repairInfo}</span></div>` : null}
+        ${error ? html4`<div class="notice err" style="margin:0 12px 8px">${error}</div>` : null}
 
         <div class="ssl-rows">
           ${filtered.map((s3) => {

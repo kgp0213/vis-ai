@@ -12,13 +12,9 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { cp } from "node:fs/promises";
-import { randomBytes, randomUUID } from "node:crypto";
-import { exec as execCb, spawnSync } from "node:child_process";
-import { promisify } from "node:util";
-
-const exec = promisify(execCb);
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 
 // ── Login-shell PATH augmentation (#1252) ───────────────────────────
 // GUI apps on macOS/Linux don't source .zshrc/.bashrc, so nvm/asdf/fnm
@@ -80,6 +76,7 @@ augmentProcessPath();
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
 const DEFAULT_SOUL_RESOURCE = resolve(__dirname, "..", "default-soul.md");
+const bootstrapSkillsRoot = resolve(__dirname, "..", "bootstrap-skills");
 const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
 
 ## 我是谁
@@ -162,6 +159,7 @@ if (!existsSync(visionoxDataDir)) {
 }
 const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
+const skillsRoot = resolve(visionoxDataDir, "skills");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
 }
@@ -285,16 +283,178 @@ if (!existsSync(workspaceDir)) {
   mkdirSync(workspaceDir, { recursive: true });
 }
 
+function hashBuffer(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function hashFile(path) {
+  return hashBuffer(readFileSync(path));
+}
+
+function hashDirectory(rootDir) {
+  const hash = createHash("sha256");
+  const visit = (dir, rel = "") => {
+    const entries = readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.name !== "_visionox_builtin.json")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const abs = resolve(dir, entry.name);
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      hash.update(childRel);
+      if (entry.isDirectory()) {
+        visit(abs, childRel);
+      } else if (entry.isFile()) {
+        hash.update(readFileSync(abs));
+      }
+    }
+  };
+  visit(rootDir);
+  return hash.digest("hex");
+}
+
+function validateSkillMarkdown(contents) {
+  const trimmed = String(contents ?? "").trimStart();
+  const match = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/.exec(trimmed);
+  if (!match) {
+    return { ok: false, error: "SKILL.md must start with YAML frontmatter delimited by ---." };
+  }
+  const frontmatter = match[1];
+  const nameMatch = /^name:\s*["']?([a-z0-9][a-z0-9-]*[a-z0-9]|[a-z0-9])["']?\s*$/m.exec(frontmatter);
+  if (!nameMatch) {
+    return { ok: false, error: "SKILL.md frontmatter must include a valid lowercase-hyphen name." };
+  }
+  return { ok: true, name: nameMatch[1], frontmatter };
+}
+
+function readSkillVersion(skillDir) {
+  try {
+    const skillMd = readFileSync(resolve(skillDir, "SKILL.md"), "utf8");
+    return /^version:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(skillMd)?.[1]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function readBuiltinMarker(skillDir) {
+  try {
+    const marker = JSON.parse(readFileSync(resolve(skillDir, "_visionox_builtin.json"), "utf8"));
+    return marker?.owner === "visionox-bootstrap" ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBuiltinMarker(skillDir, name, sourceHash) {
+  const marker = {
+    owner: "visionox-bootstrap",
+    name,
+    version: readSkillVersion(skillDir),
+    sourceHash,
+    installedAt: new Date().toISOString(),
+  };
+  writeFileSync(resolve(skillDir, "_visionox_builtin.json"), `${JSON.stringify(marker, null, 2)}\n`, "utf8");
+}
+
+function backupPathFor(target) {
+  return `${target}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+}
+
+function installBootstrapSkill(name, { force = false } = {}) {
+  const sourceDir = resolve(bootstrapSkillsRoot, name);
+  const targetDir = resolve(skillsRoot, name);
+  const skillMdPath = resolve(sourceDir, "SKILL.md");
+  if (!existsSync(skillMdPath)) {
+    return { name, installed: false, reason: "missing bootstrap SKILL.md" };
+  }
+  const validation = validateSkillMarkdown(readFileSync(skillMdPath, "utf8"));
+  if (!validation.ok || validation.name !== name) {
+    return { name, installed: false, reason: validation.error || "bootstrap name mismatch" };
+  }
+  const sourceHash = hashDirectory(sourceDir);
+  if (existsSync(targetDir)) {
+    const marker = readBuiltinMarker(targetDir);
+    if (!marker) {
+      return { name, installed: false, skipped: true, reason: "user skill with same name exists" };
+    }
+    const currentHash = marker.sourceHash || hashDirectory(targetDir);
+    if (!force && currentHash === sourceHash) {
+      return { name, installed: false, skipped: true, reason: "already up to date" };
+    }
+    const backupDir = backupPathFor(targetDir);
+    cpSync(targetDir, backupDir, { recursive: true });
+    rmSync(targetDir, { recursive: true, force: true });
+    cpSync(sourceDir, targetDir, { recursive: true });
+    writeBuiltinMarker(targetDir, name, sourceHash);
+    return { name, installed: true, upgraded: true, backup: backupDir, path: targetDir };
+  }
+  cpSync(sourceDir, targetDir, { recursive: true });
+  writeBuiltinMarker(targetDir, name, sourceHash);
+  return { name, installed: true, path: targetDir };
+}
+
+function deployBootstrapSkills({ force = false } = {}) {
+  const result = { root: skillsRoot, source: bootstrapSkillsRoot, installed: [], skipped: [], errors: [] };
+  if (!existsSync(bootstrapSkillsRoot)) {
+    result.errors.push({ reason: "bootstrap-skills resource directory not found", path: bootstrapSkillsRoot });
+    return result;
+  }
+  if (!existsSync(skillsRoot)) mkdirSync(skillsRoot, { recursive: true });
+  for (const entry of readdirSync(bootstrapSkillsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const item = installBootstrapSkill(entry.name, { force });
+    if (item.installed) result.installed.push(item);
+    else if (item.skipped) result.skipped.push(item);
+    else result.errors.push(item);
+  }
+  console.error(`[launcher] bootstrap skills: installed=${result.installed.length}, skipped=${result.skipped.length}, errors=${result.errors.length}`);
+  return result;
+}
+
+function getSkillEnvironmentStatus() {
+  const bootstrap = [];
+  if (existsSync(bootstrapSkillsRoot)) {
+    for (const entry of readdirSync(bootstrapSkillsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const targetDir = resolve(skillsRoot, entry.name);
+      const skillMd = resolve(targetDir, "SKILL.md");
+      bootstrap.push({
+        name: entry.name,
+        installed: existsSync(skillMd),
+        builtin: Boolean(readBuiltinMarker(targetDir)),
+        version: readSkillVersion(targetDir),
+      });
+    }
+  }
+  return {
+    skillsRoot,
+    bootstrapSkillsRoot,
+    skillsRootExists: existsSync(skillsRoot),
+    bootstrap,
+    ok: bootstrap.length > 0 && bootstrap.every((s) => s.installed),
+  };
+}
+
 function deploySkillGuide(rootDir) {
   const guideSrc = resolve(__dirname, "..", "skill-creation-guide.md");
   const guideDir = resolve(rootDir, ".visionox");
   const guideDst = resolve(guideDir, "skill-creation-guide.md");
-  if (existsSync(guideSrc) && !existsSync(guideDst)) {
-    if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
+  if (!existsSync(guideSrc)) return { deployed: false, reason: "source guide not found" };
+  if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
+  if (!existsSync(guideDst)) {
     copyFileSync(guideSrc, guideDst);
     console.error(`[launcher] skill-creation-guide.md deployed to workspace`);
+    return { deployed: true, path: guideDst };
   }
+  if (hashFile(guideSrc) !== hashFile(guideDst)) {
+    const backup = backupPathFor(guideDst);
+    copyFileSync(guideDst, backup);
+    copyFileSync(guideSrc, guideDst);
+    console.error(`[launcher] skill-creation-guide.md refreshed in workspace`);
+    return { deployed: true, refreshed: true, backup, path: guideDst };
+  }
+  return { deployed: false, skipped: true, reason: "already up to date", path: guideDst };
 }
+deployBootstrapSkills();
 deploySkillGuide(workspaceDir);
 
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, model=${model}`);
@@ -430,7 +590,99 @@ registerTodoTool(tools);
 console.error(`[launcher] ${tools.size} tools registered`);
 
 // ── install_skill tool ────────────────────────────────────────────
-const skillsRoot = resolve(homedir(), ".visionox", "skills");
+function createInstallTempDir(prefix) {
+  const dir = resolve(skillsRoot, `.${prefix}-${randomUUID()}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function findSkillPayloadRoot(dir, expectedName) {
+  const directSkill = resolve(dir, "SKILL.md");
+  if (existsSync(directSkill)) {
+    return dir;
+  }
+  const candidates = readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => resolve(dir, entry.name))
+    .filter((candidate) => existsSync(resolve(candidate, "SKILL.md")));
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+  const named = candidates.find((candidate) => {
+    const validation = validateSkillMarkdown(readFileSync(resolve(candidate, "SKILL.md"), "utf8"));
+    return validation.ok && validation.name === expectedName;
+  });
+  return named || null;
+}
+
+function validateSkillDirForInstall(dir, expectedName) {
+  const skillMd = resolve(dir, "SKILL.md");
+  if (!existsSync(skillMd)) {
+    return { ok: false, error: `skill directory must contain SKILL.md at its root: ${dir}` };
+  }
+  const validation = validateSkillMarkdown(readFileSync(skillMd, "utf8"));
+  if (!validation.ok) return validation;
+  if (validation.name !== expectedName) {
+    return { ok: false, error: `SKILL.md name "${validation.name}" does not match install name "${expectedName}".` };
+  }
+  return { ok: true };
+}
+
+function installSkillDirectoryAtomic(name, srcDir, { overwrite = false } = {}) {
+  const skillDir = resolve(skillsRoot, name);
+  if (existsSync(skillDir) && !overwrite) {
+    return {
+      error: `skill already exists: ${skillDir}`,
+      hint: "Pass overwrite: true only when replacing this skill is intentional.",
+    };
+  }
+
+  const validation = validateSkillDirForInstall(srcDir, name);
+  if (!validation.ok) {
+    return { error: validation.error };
+  }
+
+  if (!existsSync(skillsRoot)) mkdirSync(skillsRoot, { recursive: true });
+  const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
+  let backup = null;
+  try {
+    cpSync(srcDir, stagingDir, { recursive: true });
+    const stagedValidation = validateSkillDirForInstall(stagingDir, name);
+    if (!stagedValidation.ok) return { error: stagedValidation.error };
+
+    if (existsSync(skillDir)) {
+      backup = backupPathFor(skillDir);
+      cpSync(skillDir, backup, { recursive: true });
+      rmSync(skillDir, { recursive: true, force: true });
+    }
+    renameSync(stagingDir, skillDir);
+    return {
+      installed: true,
+      name,
+      path: skillDir,
+      backup,
+      hint: "新对话或 /new 后即可使用此 skill。",
+    };
+  } catch (err) {
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch {}
+    return { error: `install failed: ${err.message}` };
+  }
+}
+
+function extractSkillArchive(sourcePath, destDir) {
+  const result = process.platform === "win32"
+    ? spawnSync(
+        "powershell.exe",
+        ["-NoProfile", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force", sourcePath, destDir],
+        { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }
+      )
+    : spawnSync("unzip", ["-o", sourcePath, "-d", destDir], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  if (result.error) return { error: result.error.message };
+  if (result.status !== 0) {
+    return { error: (result.stderr || result.stdout || `archive extraction exited with ${result.status}`).trim() };
+  }
+  return { ok: true };
+}
 
 tools.register({
   name: "install_skill",
@@ -438,7 +690,7 @@ tools.register({
 1. name + body — 仅写入 SKILL.md，不含辅助文件。适合快速创建简单 skill。
 2. name + source — 从 .skill 文件（ZIP 格式）解压安装。适合分发打包好的 skill。
 3. name + source_dir — 从本地目录递归复制所有文件（含 scripts/、references/、templates/、README.md 等）。适合开发中的完整 skill 目录。
-Skill 安装后在新对话中自动加载。`,
+默认不会覆盖已有 Skill；需要替换时必须显式传 overwrite: true。Skill 安装后在新对话或 /new 后加载。`,
   parameters: {
     type: "object",
     properties: {
@@ -457,6 +709,10 @@ Skill 安装后在新对话中自动加载。`,
       source_dir: {
         type: "string",
         description: "本地目录路径，递归复制所有文件到 ~/.visionox/skills/<name>/。目录必须包含 SKILL.md。与 body、source 三选一。",
+      },
+      overwrite: {
+        type: "boolean",
+        description: "是否允许覆盖同名已有 Skill。默认 false。",
       },
     },
     required: ["name"],
@@ -494,108 +750,93 @@ Skill 安装后在新对话中自动加载。`,
       });
     }
 
-    skillInstallTimes.push(now);
-    installingSkill = true;
-    try {
-    const skillDir = resolve(skillsRoot, name);
-    if (!existsSync(skillDir)) {
-      mkdirSync(skillDir, { recursive: true });
-    }
-
-    if (args.body) {
-      const body = String(args.body);
-      const trimmed = body.trimStart();
-      const delimCount = (trimmed.match(/^---\s*$/gm) || []).length;
-      if (!trimmed.startsWith('---') || delimCount < 2) {
-        return JSON.stringify({
-          error: "SKILL.md must have YAML frontmatter starting with --- on the first line and ending with --- on its own line. See skill-creation-guide.md for the format.",
-        });
-      }
-      writeFileSync(resolve(skillDir, "SKILL.md"), body, "utf8");
+    const modes = ["body", "source", "source_dir"].filter((key) => args[key]);
+    if (modes.length !== 1) {
       return JSON.stringify({
-        installed: true,
-        name,
-        path: skillDir,
-        hint: "新对话中即可使用此 skill。",
+        error: "provide exactly one of: body (SKILL.md content), source (.skill/.zip file path), or source_dir (local directory path).",
       });
     }
 
-    if (args.source) {
-      const src = String(args.source);
-      if (!existsSync(src)) {
-        return JSON.stringify({ error: `source file not found: ${src}` });
-      }
-      if (!src.endsWith(".skill") && !src.endsWith(".zip")) {
-        return JSON.stringify({ error: `source must be a .skill or .zip file, got: ${src}` });
-      }
-      // P2-3: size check before extraction
-      const srcStat = statSync(src);
-      if (srcStat.size > MAX_ZIP_SIZE) {
-        return JSON.stringify({
-          error: `source file too large: ${srcStat.size} bytes (max ${MAX_ZIP_SIZE})`,
-        });
-      }
-      try {
-        const zipPath = src.endsWith(".skill") ? src.replace(/\.skill$/, ".zip") : src;
-        if (src.endsWith(".skill")) {
-          copyFileSync(src, zipPath);
-        }
-        if (process.platform === "win32") {
-          await exec(
-            `powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${skillDir}' -Force"`,
-            { maxBuffer: 10 * 1024 * 1024 }
-          );
-        } else {
-          await exec(`unzip -o "${zipPath}" -d "${skillDir}"`, { maxBuffer: 10 * 1024 * 1024 });
-        }
-        if (src.endsWith(".skill")) {
-          try { unlinkSync(zipPath); } catch {}
-        }
-        return JSON.stringify({
-          installed: true,
-          name,
-          path: skillDir,
-          hint: "新对话中即可使用此 skill。",
-        });
-      } catch (err) {
-        return JSON.stringify({ error: `extract failed: ${err.message}` });
-      }
-    }
+    skillInstallTimes.push(now);
+    installingSkill = true;
+    try {
+      const overwrite = Boolean(args.overwrite);
 
-    if (args.source_dir) {
-      const srcDir = String(args.source_dir);
-      if (!existsSync(srcDir)) {
-        return JSON.stringify({ error: `source_dir not found: ${srcDir}` });
+      if (args.body) {
+        const body = String(args.body);
+        const validation = validateSkillMarkdown(body);
+        if (!validation.ok) return JSON.stringify({ error: validation.error });
+        if (validation.name !== name) {
+          return JSON.stringify({ error: `SKILL.md name "${validation.name}" does not match install name "${name}".` });
+        }
+        const sourceDir = createInstallTempDir(`${name}-body`);
+        try {
+          writeFileSync(resolve(sourceDir, "SKILL.md"), body, "utf8");
+          return JSON.stringify(installSkillDirectoryAtomic(name, sourceDir, { overwrite }));
+        } finally {
+          try { rmSync(sourceDir, { recursive: true, force: true }); } catch {}
+        }
       }
-      if (!statSync(srcDir).isDirectory()) {
-        return JSON.stringify({
-          error: `source_dir must be a directory, got a file: ${srcDir}`,
-          hint: "Use 'source' for ZIP/.skill files, or 'body' for SKILL.md content directly.",
-        });
-      }
-      const skillMdPath = resolve(srcDir, "SKILL.md");
-      if (!existsSync(skillMdPath)) {
-        return JSON.stringify({
-          error: `source_dir must contain SKILL.md at its root: ${srcDir}`,
-          hint: "SKILL.md is required (with YAML frontmatter). See skill-creation-guide.md.",
-        });
-      }
-      try {
-        await cp(srcDir, skillDir, { recursive: true });
-        return JSON.stringify({
-          installed: true,
-          name,
-          path: skillDir,
-          hint: "新对话中即可使用此 skill（所有辅助文件已一并复制）。",
-        });
-      } catch (err) {
-        return JSON.stringify({ error: `copy failed: ${err.message}` });
-      }
-    }
 
-    return JSON.stringify({
-      error: "provide one of: body (SKILL.md content), source (.skill file path), or source_dir (local directory path).",
-    });
+      if (args.source) {
+        const src = String(args.source);
+        if (!existsSync(src)) {
+          return JSON.stringify({ error: `source file not found: ${src}` });
+        }
+        if (!src.endsWith(".skill") && !src.endsWith(".zip")) {
+          return JSON.stringify({ error: `source must be a .skill or .zip file, got: ${src}` });
+        }
+        const srcStat = statSync(src);
+        if (srcStat.size > MAX_ZIP_SIZE) {
+          return JSON.stringify({
+            error: `source file too large: ${srcStat.size} bytes (max ${MAX_ZIP_SIZE})`,
+          });
+        }
+        const extractDir = createInstallTempDir(`${name}-extract`);
+        const archivePath = src.endsWith(".skill") ? resolve(extractDir, `${name}.zip`) : src;
+        try {
+          if (src.endsWith(".skill")) copyFileSync(src, archivePath);
+          const extracted = extractSkillArchive(archivePath, extractDir);
+          if (!extracted.ok) return JSON.stringify({ error: `extract failed: ${extracted.error}` });
+          if (src.endsWith(".skill")) {
+            try { rmSync(archivePath, { force: true }); } catch {}
+          }
+          const payloadRoot = findSkillPayloadRoot(extractDir, name);
+          if (!payloadRoot) {
+            return JSON.stringify({
+              error: "archive must contain SKILL.md at its root or in a single top-level skill directory.",
+            });
+          }
+          return JSON.stringify(installSkillDirectoryAtomic(name, payloadRoot, { overwrite }));
+        } finally {
+          try { rmSync(extractDir, { recursive: true, force: true }); } catch {}
+        }
+      }
+
+      if (args.source_dir) {
+        const srcDir = String(args.source_dir);
+        if (!existsSync(srcDir)) {
+          return JSON.stringify({ error: `source_dir not found: ${srcDir}` });
+        }
+        if (!statSync(srcDir).isDirectory()) {
+          return JSON.stringify({
+            error: `source_dir must be a directory, got a file: ${srcDir}`,
+            hint: "Use 'source' for ZIP/.skill files, or 'body' for SKILL.md content directly.",
+          });
+        }
+        const payloadRoot = findSkillPayloadRoot(srcDir, name);
+        if (!payloadRoot) {
+          return JSON.stringify({
+            error: `source_dir must contain SKILL.md at its root or in a single top-level skill directory: ${srcDir}`,
+            hint: "SKILL.md is required (with YAML frontmatter). See skill-creation-guide.md.",
+          });
+        }
+        return JSON.stringify(installSkillDirectoryAtomic(name, payloadRoot, { overwrite }));
+      }
+
+      return JSON.stringify({
+        error: "provide exactly one of: body (SKILL.md content), source (.skill/.zip file path), or source_dir (local directory path).",
+      });
     } finally {
       installingSkill = false;
     }
@@ -1451,6 +1692,7 @@ const ctx = {
     active: modeSummary(config.mode),
     list: Object.keys(config.modes || DEFAULT_MODES).map((id) => modeSummary(id)),
   }),
+  getSkillEnvironmentStatus,
   getModeMemory: (modeId) => listModeMemory(modeId || config.mode || "general"),
   getAllModeMemory: () => listAllModeMemory(),
   addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
@@ -1500,6 +1742,12 @@ const ctx = {
 
   reloadMcp,
   invokeMcpTool,
+  repairSkillEnvironment: () => {
+    const bootstrap = deployBootstrapSkills();
+    const guide = deploySkillGuide(workspaceDir);
+    console.error(`[launcher] skill environment repaired`);
+    return { repaired: true, bootstrap, guide, status: getSkillEnvironmentStatus() };
+  },
 
   setWorkspaceDir: (dir) => {
     const cfg = readConfig(configPath);
@@ -1676,7 +1924,7 @@ const ctx = {
         nextMsgId = 1;
         // Add welcome message
         const welcomeId = `assistant-${Date.now()}`;
-        const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md" };
+        const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
         pushMessage(welcomeMsg);
         // busy is already true from the outer guard; just broadcast events
         broadcastDashboardEvent({ kind: "busy-change", busy: true });
@@ -1799,7 +2047,7 @@ pushMessage({
   id: "welcome",
   role: "assistant",
   text: (apiKey ? "" : "⚠️ 未配置 API Key，请在 设置 → 模型服务 中配置后开始对话。\n\n")
-    + "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。\n需要创建或导入 skill 时使用 install_skill 工具；编写规范参考 .visionox/skill-creation-guide.md",
+    + "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。",
 });
 
 // ── Start the server ────────────────────────────────────────────

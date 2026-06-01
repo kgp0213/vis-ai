@@ -3212,6 +3212,18 @@ function countSubagentRuns(usageLogPath) {
   return counts;
 }
 async function handleSkills(method, rest, body, ctx) {
+  if (method === "GET" && rest[0] === "status") {
+    if (!ctx.getSkillEnvironmentStatus) {
+      return { status: 503, body: { error: "skill environment status is unavailable" } };
+    }
+    return { status: 200, body: ctx.getSkillEnvironmentStatus() };
+  }
+  if (method === "POST" && rest[0] === "repair") {
+    if (!ctx.repairSkillEnvironment) {
+      return { status: 503, body: { error: "skill environment repair is unavailable" } };
+    }
+    return { status: 200, body: ctx.repairSkillEnvironment() };
+  }
   const cwd = ctx.getCurrentCwd?.();
   if (method === "GET" && rest.length === 0) {
     const runs7d = countSubagentRuns(ctx.usageLogPath);

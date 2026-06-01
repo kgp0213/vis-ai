@@ -240,7 +240,7 @@ EOF
 
 # 3. 安装依赖
 cd ~/.visionox/skills/<name>
-npm install <pkg
+npm install <pkg>
 
 # 4.（可选）打包为 .skill 分发
 # 开发阶段可跳过此步，直接用 source_dir 安装到目标机器
