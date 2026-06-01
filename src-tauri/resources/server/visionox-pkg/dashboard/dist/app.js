@@ -23672,6 +23672,8 @@ function ChatPanel() {
   const [effort, setEffortLocal] = d2(null);
 const [mode, setModeLocal] = d2("general");
 const [modes, setModesLocal] = d2(null);
+const [activeMode, setActiveModeLocal] = d2(null);
+const [eccRules, setEccRulesLocal] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
@@ -24085,6 +24087,8 @@ const [modes, setModesLocal] = d2(null);
         setEffortLocal(o3.reasoningEffort ?? null);
         setModeLocal(o3.workMode ?? "general");
         setModesLocal(o3.modes ?? null);
+        setActiveModeLocal(o3.activeMode ?? null);
+        setEccRulesLocal(o3.eccRules ?? null);
         setWorkspaceDirLocal(o3.cwd ?? null);
         setStats(o3.stats ?? null);
         setOverviewModel(o3.model ?? null);
@@ -24121,6 +24125,7 @@ const [modes, setModesLocal] = d2(null);
       if (key === "mode") setModeLocal(value);
     try {
       await api("/settings", { method: "POST", body: { [key]: value } });
+      if (key === "mode") showToast("工作场景已切换，下次新对话生效", "info");
     } catch (err) {
       setError(`${key} switch failed: ${err.message}`);
       try {
@@ -24129,6 +24134,8 @@ const [modes, setModesLocal] = d2(null);
         setEffortLocal(o3.reasoningEffort ?? null);
         setModeLocal(o3.workMode ?? "general");
         setModesLocal(o3.modes ?? null);
+        setActiveModeLocal(o3.activeMode ?? null);
+        setEccRulesLocal(o3.eccRules ?? null);
       } catch {
       }
     }
@@ -24153,13 +24160,18 @@ const [modes, setModesLocal] = d2(null);
           <span class="chip-f static active">${MODE === "attached" ? t4("chat.modeMirror") : t4("chat.modeView")}</span>
         </div>
         <div class="header-pickers" style="margin-left:auto">${modes ? html4`
-              <div class="mode-picker" title="work mode \u2014 applies on /new">
+              <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
+                <span class="work-mode-label">${activeMode?.label ?? mode}</span>
+                <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
+                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || "common"}${eccRules?.status ? ` · ${eccRules.status.filter((r) => r.available).length}/${eccRules.status.length}` : ""}</span>
+              </div>
+              <div class="mode-picker work-mode-picker" title="工作场景 \u2014 下次新对话生效">
                 ${modes.map((m) => html4`
                   <button
                     key=${m.id}
                     class="mode-btn ${mode === m.id ? "active accent" : ""}"
                     onClick=${() => setSetting("mode", m.id)}
-                    title="${m.label} (${(m.rules||[]).join("+")})"
+                    title="${m.label}: ${m.description || "切换工作场景"} · ECC ${(m.effectiveRules||m.rules||[]).join("+")} · 下次新对话生效"
                   >${m.label}</button>
                 `)}
               </div>
@@ -27216,15 +27228,27 @@ function SettingsPanel() {
   const [now, setNow] = d2(() => Date.now());
   const [showDevLog, setShowDevLog] = d2(false);
   const [devLogs, setDevLogs] = d2([]);
+  const [modeMemory, setModeMemory] = d2(null);
+  const [modeMemoryDraft, setModeMemoryDraft] = d2("");
+  const [modeMemoryKeywords, setModeMemoryKeywords] = d2("");
+  const loadModeMemory = q2(async (mode) => {
+    try {
+      const suffix = mode ? `?mode=${encodeURIComponent(mode)}` : "";
+      setModeMemory(await api(`/mode-memory${suffix}`));
+    } catch (err) {
+      setError(err.message);
+    }
+  }, []);
   const load = q2(async () => {
     try {
       const r3 = await api("/settings");
       setData(r3);
       setDraft({});
+      await loadModeMemory(r3.mode ?? r3.activeMode?.id ?? "general");
     } catch (err) {
       setError(err.message);
     }
-  }, []);
+  }, [loadModeMemory]);
   y2(() => {
     load();
   }, [load]);
@@ -27320,6 +27344,50 @@ function SettingsPanel() {
     },
     [load]
   );
+  const activeMemoryMode = data?.mode ?? data?.activeMode?.id ?? "general";
+  const addModePreference = q2(async () => {
+    const text = modeMemoryDraft.trim();
+    if (!text) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const keywords = modeMemoryKeywords.split(/[,\s，]+/).map((v4) => v4.trim()).filter(Boolean).slice(0, 8);
+      await api("/mode-memory", { method: "POST", body: { mode: activeMemoryMode, text, keywords } });
+      setModeMemoryDraft("");
+      setModeMemoryKeywords("");
+      await loadModeMemory(activeMemoryMode);
+      setSaved("工作场景偏好已保存");
+      setTimeout(() => setSaved(null), 3e3);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [activeMemoryMode, loadModeMemory, modeMemoryDraft, modeMemoryKeywords]);
+  const toggleModePreference = q2(async (item) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api(`/mode-memory/${encodeURIComponent(item.id)}`, { method: "PATCH", body: { mode: activeMemoryMode, enabled: !item.enabled } });
+      await loadModeMemory(activeMemoryMode);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [activeMemoryMode, loadModeMemory]);
+  const deleteModePreference = q2(async (item) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await api(`/mode-memory/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { mode: activeMemoryMode } });
+      await loadModeMemory(activeMemoryMode);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [activeMemoryMode, loadModeMemory]);
   if (!data && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("settings.loading")}</div>`;
   if (error && !data) return html4`<div class="card accent-err">${error}</div>`;
@@ -27404,6 +27472,19 @@ function SettingsPanel() {
 
       ${sectionH3(t4("settings.sectionDefaults"))}
       <div class="card">
+        ${v3.modes ? fieldRow(
+    "工作场景",
+    html4`
+            <select
+              value=${v3.mode ?? "general"}
+              onChange=${(e3) => save({ mode: e3.target.value })}
+              disabled=${saving}
+            >
+              ${v3.modes.map((m) => html4`<option value=${m.id}>${m.label} — ${m.description || (m.effectiveRules || m.rules || []).join("+")}</option>`)}
+            </select>
+          `,
+    `${(v3.activeMode?.hint || "切换后下次新对话生效")} · ECC ${((v3.activeMode?.effectiveRules || v3.activeMode?.rules || [])).join("+") || "common"}`
+  ) : null}
         ${fieldRow(
     t4("settings.preset"),
     html4`
@@ -27489,6 +27570,47 @@ function SettingsPanel() {
             "\u4ECE https://portal.azure.com \u514D\u8D39\u83B7\u53D6 (Bing Search v7, 1000\u6B21/\u6708)"
           ) : null}
         ` : null}
+      </div>
+
+      ${sectionH3("当前工作场景偏好")}
+      <div class="card mode-memory-card">
+        <div class="mode-memory-head">
+          <div>
+            <div class="mode-memory-title">${v3.activeMode?.label ?? v3.mode ?? "通用"}</div>
+            <div class="mode-memory-note">仅影响当前工作场景的新对话提示词，不改写默认 mode prompt 或 ECC 规则。</div>
+          </div>
+          <button class="btn" disabled=${saving} onClick=${() => loadModeMemory(activeMemoryMode)}>刷新</button>
+        </div>
+        <div class="mode-memory-list">
+          ${(modeMemory?.items ?? []).length === 0 ? html4`<div class="mode-memory-empty">暂无偏好</div>` : (modeMemory?.items ?? []).map((item) => html4`
+            <div class=${`mode-memory-item ${item.enabled ? "" : "disabled"}`}>
+              <div class="mode-memory-text">${item.text}</div>
+              <div class="mode-memory-tags">
+                ${(item.keywords ?? []).map((kw) => html4`<span>${kw}</span>`)}
+                <span>优先级 ${item.priority ?? 50}</span>
+              </div>
+              <div class="mode-memory-actions">
+                <button class="btn" disabled=${saving} onClick=${() => toggleModePreference(item)}>${item.enabled ? "停用" : "启用"}</button>
+                <button class="btn danger" disabled=${saving} onClick=${() => deleteModePreference(item)}>删除</button>
+              </div>
+            </div>
+          `)}
+        </div>
+        <div class="mode-memory-new">
+          <textarea
+            rows="3"
+            placeholder="新增偏好，例如：写技术方案时先给结论，再列风险和验证步骤"
+            value=${modeMemoryDraft}
+            onInput=${(e3) => setModeMemoryDraft(e3.target.value)}
+          ></textarea>
+          <input
+            type="text"
+            placeholder="关键词，可用空格或逗号分隔"
+            value=${modeMemoryKeywords}
+            onInput=${(e3) => setModeMemoryKeywords(e3.target.value)}
+          />
+          <button class="btn primary" disabled=${saving || !modeMemoryDraft.trim()} onClick=${addModePreference}>新增偏好</button>
+        </div>
       </div>
 
       ${sectionH3(t4("settings.sectionCompute"))}

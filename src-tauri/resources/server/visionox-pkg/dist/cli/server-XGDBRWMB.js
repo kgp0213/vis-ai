@@ -1556,6 +1556,66 @@ async function handleMemory(method, rest, body, ctx) {
   return { status: 405, body: { error: `method ${method} not supported` } };
 }
 
+// src/server/api/mode-memory.ts
+function parseBodyModeMemory(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+async function handleModeMemory(method, rest, body, ctx, query = new URLSearchParams()) {
+  const bodyObj = parseBodyModeMemory(body);
+  const currentMode = ctx.getModes?.()?.current ?? "general";
+  const queryMode = query.get("mode");
+  const mode = typeof bodyObj.mode === "string" && bodyObj.mode ? bodyObj.mode : typeof queryMode === "string" && queryMode ? queryMode : currentMode;
+  if (method === "GET") {
+    if (rest[0] === "all") {
+      const all = ctx.getAllModeMemory?.();
+      if (!all) return { status: 501, body: { error: "mode memory is not available" } };
+      return { status: 200, body: all };
+    }
+    const memory = ctx.getModeMemory?.(mode);
+    if (!memory) return { status: 501, body: { error: "mode memory is not available" } };
+    return { status: 200, body: memory };
+  }
+  if (method === "POST" && rest.length === 0) {
+    if (typeof bodyObj.text !== "string" || !bodyObj.text.trim()) {
+      return { status: 400, body: { error: "text (string) required" } };
+    }
+    const result = ctx.addModeMemory?.({
+      text: bodyObj.text,
+      keywords: Array.isArray(bodyObj.keywords) ? bodyObj.keywords : [],
+      priority: bodyObj.priority
+    }, mode);
+    if (!result) return { status: 501, body: { error: "mode memory is not available" } };
+    ctx.audit?.({ ts: Date.now(), action: "add-mode-memory", payload: { mode, id: result.item?.id } });
+    return { status: 200, body: result };
+  }
+  const id = decodeURIComponent(rest[0] || "");
+  if (!id) return { status: 400, body: { error: "id required" } };
+  if (method === "PATCH") {
+    const patch = {};
+    if (bodyObj.text !== void 0) patch.text = bodyObj.text;
+    if (bodyObj.keywords !== void 0) patch.keywords = Array.isArray(bodyObj.keywords) ? bodyObj.keywords : [];
+    if (bodyObj.priority !== void 0) patch.priority = bodyObj.priority;
+    if (bodyObj.enabled !== void 0) patch.enabled = Boolean(bodyObj.enabled);
+    const result = ctx.updateModeMemory?.(id, patch, mode);
+    if (!result) return { status: 404, body: { error: "not found" } };
+    ctx.audit?.({ ts: Date.now(), action: "update-mode-memory", payload: { mode, id } });
+    return { status: 200, body: result };
+  }
+  if (method === "DELETE") {
+    const deleted = ctx.deleteModeMemory?.(id, mode);
+    if (!deleted) return { status: 404, body: { error: "not found" } };
+    ctx.audit?.({ ts: Date.now(), action: "delete-mode-memory", payload: { mode, id } });
+    return { status: 200, body: { deleted: true } };
+  }
+  return { status: 405, body: { error: `method ${method} not supported` } };
+}
+
 // src/server/api/messages.ts
 async function handleMessages(method, _rest, _body, ctx) {
   if (method !== "GET") {
@@ -1985,6 +2045,8 @@ async function handleOverview(method, _rest, _body, ctx) {
     mode: ctx.mode,
     workMode: modeInfo?.current ?? cfg.mode ?? "general",
     modes: modeInfo?.list ?? (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
+    activeMode: modeInfo?.active ?? null,
+    eccRules: ctx.getEccRules?.() ?? null,
     latestVersion: ctx.getLatestVersion?.() ?? null,
     session: ctx.getSessionName?.() ?? null,
     cwd,
@@ -2764,6 +2826,8 @@ async function handleSettings(method, _rest, body, ctx) {
         editMode: cfg.editMode ?? "review",
         mode: ctx.getModes?.()?.current ?? cfg.mode ?? "general",
         modes: ctx.getModes?.()?.list ?? (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
+        activeMode: ctx.getModes?.()?.active ?? null,
+        eccRules: ctx.getEccRules?.() ?? null,
         session: cfg.session ?? null,
         model: live?.model ?? null,
         proNext: live?.proArmed ?? false,
@@ -3358,6 +3422,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleHooks(method, rest, body, ctx);
       case "memory":
         return await handleMemory(method, rest, body, ctx);
+      case "mode-memory":
+        return await handleModeMemory(method, rest, body, ctx, query);
       case "skills":
         return await handleSkills(method, rest, body, ctx);
       case "mcp":

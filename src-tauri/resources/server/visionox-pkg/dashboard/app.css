@@ -2540,6 +2540,51 @@ textarea {
 /* ============================================================================
    Mode Picker
    ============================================================================ */
+.header-pickers {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.work-mode-summary {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(520px, 45vw);
+  min-height: 32px;
+  padding: 4px var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  overflow: hidden;
+}
+
+.work-mode-label {
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.work-mode-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+}
+
+.work-mode-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
 /* ── Mode Picker: Safety-level segmented control ── */
 .mode-picker {
   display: inline-flex;
@@ -2547,6 +2592,103 @@ textarea {
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--surface-raised);
+}
+
+.work-mode-picker .mode-btn {
+  min-width: 42px;
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.mode-memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mode-memory-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mode-memory-title {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mode-memory-note {
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.mode-memory-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mode-memory-empty {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  padding: var(--space-2) 0;
+}
+
+.mode-memory-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-input);
+}
+
+.mode-memory-item.disabled {
+  opacity: 0.55;
+}
+
+.mode-memory-text {
+  color: var(--text-primary);
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.mode-memory-tags {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.mode-memory-tags span {
+  padding: 2px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.mode-memory-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mode-memory-new {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px auto;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.mode-memory-new textarea,
+.mode-memory-new input {
+  min-width: 0;
 }
 
 .mode-btn {
@@ -2571,6 +2713,46 @@ textarea {
 .mode-btn.active.accent {
   background: var(--accent-primary);
   color: #0c0d10;
+}
+
+@media (max-width: 1080px) {
+  .work-mode-summary {
+    grid-template-columns: auto minmax(80px, 1fr);
+    max-width: 100%;
+  }
+  .work-mode-meta {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .header-pickers {
+    justify-content: flex-start;
+    margin-left: 0 !important;
+    width: 100%;
+  }
+  .work-mode-summary,
+  .work-mode-picker {
+    width: 100%;
+  }
+  .work-mode-picker {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .work-mode-picker .mode-btn {
+    min-width: 0;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+  .mode-memory-head,
+  .mode-memory-actions,
+  .mode-memory-new {
+    display: flex;
+    flex-direction: column;
+  }
+  .mode-memory-item {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Unselected state: subtle tinted backgrounds ── */

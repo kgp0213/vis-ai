@@ -42,19 +42,22 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 │  L2  MODE PROMPT          config.json modes[mode].prompt      │
 │       当前工作模式的行为指令，随模式切换而变化                    │
 ├──────────────────────────────────────────────────────────────┤
-│  L3  MODE ECC RULES       config.json modes[mode].eccRules    │
+│  L3  MODE PREFERENCES     ~/.visionox/mode-memory/{mode}.json │
+│       用户明确保存的当前模式偏好，摘要注入，不改默认 prompt        │
+├──────────────────────────────────────────────────────────────┤
+│  L4  MODE ECC RULES       config.json modes[mode].eccRules    │
 │       该模式所需的编码规范，从 ~/.claude/rules/ecc/ 读取        │
 ├──────────────────────────────────────────────────────────────┤
-│  L4  CUSTOM RULES         ~/.visionox/rules/*.md             │
+│  L5  CUSTOM RULES         ~/.visionox/rules/*.md             │
 │       用户自定义规则（始终加载，不受模式影响）                    │
 ├──────────────────────────────────────────────────────────────┤
-│  L5  SKILLS               ~/.visionox/skills/*/SKILL.md      │
+│  L6  SKILLS               ~/.visionox/skills/*/SKILL.md      │
 │       可用的技术能力（YAML frontmatter 注入，body 按需读取）      │
 ├──────────────────────────────────────────────────────────────┤
-│  L6  PERSISTENT MEMORY    ~/.visionox/memory/*/MEMORY.md     │
+│  L7  PERSISTENT MEMORY    ~/.visionox/memory/*/MEMORY.md     │
 │       持久用户记忆（remember 工具，scope: global / project）     │
 ├──────────────────────────────────────────────────────────────┤
-│  L7  SESSION MEMORY       (内存，不持久化)                     │
+│  L8  SESSION MEMORY       (内存，不持久化)                     │
 │       当前对话临时记忆（remember_session 工具，/new 清除）       │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -65,6 +68,7 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 |------|------|------|
 | `soul.md` | AI 身份 + 行为准则（WHO I am） | `~/.visionox/soul.md` |
 | `visionox.md` | 项目信息（WHAT this workspace is） | `workspace/visionox.md` |
+| Mode Preferences | 模式内用户偏好（HOW I like this mode to work） | `~/.visionox/mode-memory/{mode}.json` |
 | ECC rules | 编码规范（HOW to code） | `~/.claude/rules/ecc/{lang}/` |
 | Skills | 技术能力（WHAT techniques available） | `~/.visionox/skills/*/` |
 | MEMORY.md (global) | 全局持久记忆索引 | `~/.visionox/memory/global/MEMORY.md` |
@@ -75,6 +79,7 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 | 类型 | 工具 | 存储 | 生命周期 |
 |------|------|------|----------|
 | 长期记忆 | `remember` (scope: global / project) | `~/.visionox/memory/` 磁盘文件 | 跨会话持久 |
+| 模式偏好 | `remember_mode_preference` | `~/.visionox/mode-memory/` JSON 文件 | 按工作模式持久 |
 | 短期记忆 | `remember_session` (scope: session) | launcher 内存 | `/new` 或重启后清除 |
 
 ### PROJECT_MEMORY_FILES 搜索顺序
@@ -93,6 +98,14 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 ### MEMORY.md 过滤
 
 Dashboard "配置 → 记忆" 页面的 `listMemoryFiles()` 已过滤 `MEMORY.md` 索引文件，只显示用户创建的记忆。
+
+### 工作模式偏好记忆
+
+当用户明确要求“记住某段关键字用于优化当前工作模式提示词”时，Visionox 不会直接修改 `config.json modes[mode].prompt`。默认 mode prompt 属于内置场景模板，升级迁移时可以安全覆盖；用户偏好写入独立的 `~/.visionox/mode-memory/{mode}.json`，按模式隔离、可启用/停用/删除。
+
+提示词拼装顺序为：`soul.md` → 项目记忆 → 当前工作模式 prompt → 当前模式偏好摘要 → ECC rules → 自定义 rules → skills → 持久记忆 → session memory。模式偏好只补充用户习惯，不能覆盖用户当前明确指令，也不能覆盖 ECC 工程规则。
+
+注入预算：每个模式最多注入少量启用项，单条偏好会被压缩到短文本，并按优先级与更新时间排序。这样可以避免长期使用后提示词膨胀、重复或互相冲突。
 
 ---
 
@@ -163,6 +176,11 @@ Dashboard "配置 → 记忆" 页面的 `listMemoryFiles()` 已过滤 `MEMORY.md
 | `GET /api/overview` | `workMode`, `modes` | SPA 读取当前模式和可选模式列表 |
 | `GET /api/settings` | `mode`, `modes` | Settings 页读取 |
 | `POST /api/settings` | `fields.mode` | 用户点击按钮后写入 config.json |
+| `GET /api/mode-memory` | `items` | 读取当前或指定工作模式偏好 |
+| `GET /api/mode-memory/all` | `modes` | 读取所有模式偏好摘要 |
+| `POST /api/mode-memory` | `text`, `keywords` | 新增当前工作模式偏好 |
+| `PATCH /api/mode-memory/:id` | `enabled`, `text`, `priority` | 更新偏好 |
+| `DELETE /api/mode-memory/:id` | - | 删除偏好 |
 
 **代码位置**：
 - `launcher.mjs:320-326` — `DEFAULT_MODES` 定义
@@ -409,6 +427,7 @@ server settings POST mode handler   ✅ 处理正确
 |------|------|
 | Mode 配置同步 | `launcher.mjs` 增加运行时 config 同步。Dashboard `POST /api/settings` 修改 mode 后会调用 `ctx.setMode()`，避免磁盘配置已变但 `/new` 仍按旧 mode 重建 loop。 |
 | 默认 mode 合并 | `initModesConfig()` 改为合并默认 mode，补齐缺失的 `general/coding/office/design`，同时保留用户自定义额外 mode。 |
+| 首启 mode prompt 迁移 | 内置四个 mode 带 `version`。安装包升级后首次运行如检测到旧版内置 mode prompt，会覆盖为新版默认提示词，并把旧配置备份到 `config.modePromptBackups`；API Key、workspace、sessions、memory、skills、自定义额外 mode 不会被改动。 |
 | Custom Rules | `loadRules()` 改为按 mode 声明顺序加载，并始终追加 `custom` 规则集，符合 L4 CUSTOM RULES 始终加载的架构。 |
 | Session Memory | `getSessionMemoryBlock()` 从只注入摘要改为注入完整 body，当前会话短期记忆不再丢失细节。 |
 | Project Memory | `PROJECT_MEMORY_FILES` 在 CLI 分块和 SDK 导出中均包含 `visionox.md`、`.claude/CLAUDE.md`、`CLAUDE.md`，与本文档搜索顺序一致。 |

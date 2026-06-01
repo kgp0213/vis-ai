@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { exec as execCb, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -140,6 +140,10 @@ if (!existsSync(visionoxDataDir)) {
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
+}
+const modeMemoryDir = resolve(visionoxDataDir, "mode-memory");
+if (!existsSync(modeMemoryDir)) {
+  mkdirSync(modeMemoryDir, { recursive: true });
 }
 
 const configPath = resolve(visionoxDataDir, "config.json");
@@ -319,11 +323,44 @@ if (!config.editMode) {
 
 // ESM TDZ: DEFAULT_MODES must be declared before initModesConfig() call
 // Prompts reference skills verified present in ~/.visionox/skills/
+const DEFAULT_MODE_VERSION = 2;
 const DEFAULT_MODES = {
-  general: { label: "通用", eccRules: ["common", "rust"], prompt: "" },
-  coding: { label: "编程", eccRules: ["common", "rust", "typescript", "python"], prompt: "你处于编程模式。遵循严格编码规范，代码优先英文注释，修改前阅读上下文。可用技能: coding-standards, tdd-workflow, rust-patterns, python-patterns, api-design, verification-loop, error-handling。" },
-  office: { label: "办公", eccRules: ["common"], prompt: "你处于办公模式。专注于文档处理、数据分析、报告生成。可用技能: docx, xlsx, pdf, pdf-extract, pptx, pptx-generator, visionox-excel-pro, md-to-pdf-cjk。" },
-  design: { label: "设计", eccRules: ["common"], prompt: "你处于设计模式。专注于 UI/UX 设计、前端布局、视觉方案。可用技能: frontend-patterns, e2e-testing。如需更多设计技能可通过 install_skill 安装。" },
+  general: {
+    version: DEFAULT_MODE_VERSION,
+    label: "通用",
+    description: "日常问答、资料梳理、轻量排查和跨领域任务。",
+    hint: "平衡准确性和简洁度，必要时再切换到专业模式。",
+    eccRules: ["common", "rust"],
+    skills: ["coding-standards", "verification-loop"],
+    prompt: "你处于通用模式。先判断用户目标属于问答、代码、办公还是设计；若任务明显属于专业场景，按该场景的工作习惯组织答案，但不要擅自切换模式。保持回答直接、可执行，必要时指出下一步。",
+  },
+  coding: {
+    version: DEFAULT_MODE_VERSION,
+    label: "编程",
+    description: "代码阅读、修复、重构、测试、构建和工程审查。",
+    hint: "优先读上下文，改动小而准，完成后运行针对性验证。",
+    eccRules: ["common", "rust", "typescript", "python"],
+    skills: ["coding-standards", "tdd-workflow", "rust-patterns", "python-patterns", "api-design", "verification-loop", "error-handling"],
+    prompt: "你处于编程模式。修改前先阅读相关上下文，优先沿用项目既有模式；代码注释优先英文且只解释非显然逻辑。实现后运行与风险匹配的验证，清楚报告改动、验证结果和残余风险。",
+  },
+  office: {
+    version: DEFAULT_MODE_VERSION,
+    label: "办公",
+    description: "文档、表格、PDF、PPT、报告、数据整理和格式转换。",
+    hint: "关注结构、准确性、可交付文件和中文排版质量。",
+    eccRules: ["common"],
+    skills: ["docx", "xlsx", "pdf", "pdf-extract", "pptx", "pptx-generator", "visionox-excel-pro", "md-to-pdf-cjk"],
+    prompt: "你处于办公模式。优先明确输入文件、目标格式、输出位置和质量要求；处理表格、文档、PDF、PPT 时保持原始数据可追溯，必要时生成中间检查结果。中文文档注意标题层级、表格可读性和交付文件路径。",
+  },
+  design: {
+    version: DEFAULT_MODE_VERSION,
+    label: "设计",
+    description: "界面体验、前端布局、视觉风格、交互状态和可用性优化。",
+    hint: "先服务真实工作流，再处理视觉细节和状态反馈。",
+    eccRules: ["common"],
+    skills: ["frontend-patterns", "e2e-testing"],
+    prompt: "你处于设计模式。先理解用户场景、目标用户和主要任务流；界面应清晰、克制、可扫描，控件行为符合用户直觉。涉及前端实现时同时考虑响应式布局、空/错/加载状态和可验证的交互结果。",
+  },
 };
 
 // Modes & ECC rules — initialize on first run
@@ -541,6 +578,48 @@ tools.register({
 });
 console.error(`[launcher] remember_session tool registered`);
 
+tools.register({
+  name: "remember_mode_preference",
+  description: "保存一条用户明确要求记住、用于优化当前工作模式的偏好。偏好会按当前 work mode 独立存储，并在新对话提示词中以精简摘要注入；不要用它记录普通事实或临时上下文。",
+  parameters: {
+    type: "object",
+    properties: {
+      text: {
+        type: "string",
+        description: "精简后的偏好内容。应表达为可执行的工作习惯，不要原样粘贴长对话。",
+      },
+      keywords: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选关键词，用于帮助用户识别这条偏好。",
+      },
+      priority: {
+        type: "number",
+        description: "0-100，越高越优先注入；默认 50。",
+      },
+    },
+    required: ["text"],
+  },
+  fn: async (args) => {
+    const text = compactText(args.text, MODE_MEMORY_TEXT_LIMIT);
+    if (!text) return JSON.stringify({ error: "text is required" });
+    const mode = config.mode || "general";
+    const { item, memory } = addModeMemory(mode, {
+      text,
+      keywords: Array.isArray(args.keywords) ? args.keywords : [],
+      priority: args.priority,
+    });
+    return JSON.stringify({
+      remembered: true,
+      mode,
+      item,
+      count: memory.items.length,
+      hint: "此偏好只影响当前工作模式的新对话提示词，不会改写默认 mode prompt 或 ECC 规则。",
+    });
+  },
+});
+console.error(`[launcher] remember_mode_preference tool registered`);
+
 // ── MCP servers ──────────────────────────────────────────────────
 const mcpSpecs = config.mcp ?? [];
 const mcpServers = [];
@@ -646,15 +725,62 @@ function loadSoul() {
 // ── Mode system ────────────────────────────────────────────────
 function mergeDefaultModes(modes) {
   const merged = Object.fromEntries(
-    Object.entries(DEFAULT_MODES).map(([id, defaults]) => [
-      id,
-      { ...defaults, ...(modes?.[id] ?? {}) },
-    ])
+    Object.entries(DEFAULT_MODES).map(([id, defaults]) => {
+      const existing = modes?.[id];
+      const source = existing?.version === DEFAULT_MODE_VERSION
+        ? { ...defaults, ...existing }
+        : defaults;
+      return [id, normalizeModeConfig(source, id)];
+    })
   );
   for (const [id, mode] of Object.entries(modes ?? {})) {
-    if (!merged[id]) merged[id] = mode;
+    if (!merged[id]) merged[id] = normalizeModeConfig(mode, id);
   }
   return merged;
+}
+
+function collectModePromptMigration(modes) {
+  const migrated = [];
+  const backup = {};
+  for (const id of Object.keys(DEFAULT_MODES)) {
+    const existing = modes?.[id];
+    if (!existing || existing.version === DEFAULT_MODE_VERSION) continue;
+    migrated.push(id);
+    backup[id] = existing;
+  }
+  return migrated.length > 0 ? { migrated, backup } : null;
+}
+
+function appendModePromptBackup(migration) {
+  if (!migration) return;
+  const backups = Array.isArray(config.modePromptBackups) ? config.modePromptBackups : [];
+  backups.push({
+    migratedAt: new Date().toISOString(),
+    fromVersion: "legacy",
+    toVersion: DEFAULT_MODE_VERSION,
+    modes: migration.backup,
+  });
+  config.modePromptBackups = backups.slice(-5);
+  config.modePromptMigration = {
+    version: DEFAULT_MODE_VERSION,
+    migratedAt: config.modePromptBackups[config.modePromptBackups.length - 1].migratedAt,
+    migratedModes: migration.migrated,
+  };
+}
+
+function normalizeModeConfig(mode, id) {
+  const fallback = DEFAULT_MODES[id] ?? {};
+  const rules = Array.isArray(mode?.eccRules) ? mode.eccRules.filter(Boolean) : (fallback.eccRules ?? ["common"]);
+  const skills = Array.isArray(mode?.skills) ? mode.skills.filter(Boolean) : (fallback.skills ?? []);
+  return {
+    label: String(mode?.label ?? fallback.label ?? id),
+    description: String(mode?.description ?? fallback.description ?? ""),
+    hint: String(mode?.hint ?? fallback.hint ?? ""),
+    version: Number(mode?.version ?? fallback.version ?? DEFAULT_MODE_VERSION),
+    eccRules: rules,
+    skills,
+    prompt: String(mode?.prompt ?? fallback.prompt ?? ""),
+  };
 }
 
 function syncRuntimeConfig(next) {
@@ -666,8 +792,10 @@ function syncRuntimeConfig(next) {
 
 function initModesConfig() {
   let changed = false;
+  const migration = collectModePromptMigration(config.modes);
   const merged = mergeDefaultModes(config.modes);
   if (JSON.stringify(config.modes) !== JSON.stringify(merged)) {
+    appendModePromptBackup(migration);
     config.modes = merged;
     changed = true;
   }
@@ -677,7 +805,8 @@ function initModesConfig() {
   }
   if (changed) {
     writeConfig(config, configPath);
-    console.error(`[launcher] modes initialized (${Object.keys(DEFAULT_MODES).join(", ")})`);
+    const suffix = migration ? `; migrated legacy prompts: ${migration.migrated.join(", ")}` : "";
+    console.error(`[launcher] modes initialized (${Object.keys(DEFAULT_MODES).join(", ")})${suffix}`);
   }
 }
 
@@ -689,6 +818,178 @@ function getModeConfig() {
   }
   const mode = config.mode || "general";
   return config.modes?.[mode] || DEFAULT_MODES.general;
+}
+
+function modeSummary(modeId = config.mode || "general") {
+  const mode = config.modes?.[modeId] || DEFAULT_MODES.general;
+  const enabledRules = orderedRuleSets(mode.eccRules || []);
+  return {
+    id: modeId,
+    label: mode.label,
+    description: mode.description,
+    hint: mode.hint,
+    rules: mode.eccRules || [],
+    effectiveRules: enabledRules,
+    skills: mode.skills || [],
+    appliesOn: "new-chat",
+  };
+}
+
+// ── Mode preference memory (persistent, per work mode) ──────────
+const MODE_MEMORY_VERSION = 1;
+const MODE_MEMORY_ITEM_LIMIT = 60;
+const MODE_MEMORY_PROMPT_LIMIT = 8;
+const MODE_MEMORY_TEXT_LIMIT = 180;
+const MODE_MEMORY_KEYWORD_LIMIT = 8;
+
+function safeModeId(modeId = config.mode || "general") {
+  const raw = String(modeId || "general").trim();
+  return /^[a-zA-Z0-9_-]{1,32}$/.test(raw) ? raw : "general";
+}
+
+function modeMemoryPath(modeId = config.mode || "general") {
+  return resolve(modeMemoryDir, `${safeModeId(modeId)}.json`);
+}
+
+function compactText(value, max = MODE_MEMORY_TEXT_LIMIT) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function normalizeModeMemoryItem(item, index = 0) {
+  const now = new Date().toISOString();
+  const text = compactText(item?.text ?? item?.body ?? item?.summary ?? "");
+  if (!text) return null;
+  const keywords = Array.isArray(item?.keywords)
+    ? item.keywords.map((k) => compactText(k, 32)).filter(Boolean).slice(0, MODE_MEMORY_KEYWORD_LIMIT)
+    : [];
+  return {
+    id: String(item?.id || randomUUID()),
+    text,
+    keywords,
+    scope: "current-mode",
+    priority: Number.isFinite(Number(item?.priority)) ? Math.max(0, Math.min(100, Number(item.priority))) : 50,
+    enabled: item?.enabled !== false,
+    source: String(item?.source || "user-explicit"),
+    createdAt: String(item?.createdAt || now),
+    updatedAt: String(item?.updatedAt || item?.createdAt || now),
+    order: Number.isFinite(Number(item?.order)) ? Number(item.order) : index,
+  };
+}
+
+function readModeMemory(modeId = config.mode || "general") {
+  const mode = safeModeId(modeId);
+  const path = modeMemoryPath(mode);
+  let parsed = null;
+  if (existsSync(path)) {
+    try {
+      parsed = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      parsed = null;
+    }
+  }
+  const rawItems = Array.isArray(parsed?.items) ? parsed.items : [];
+  const items = rawItems.map((item, index) => normalizeModeMemoryItem(item, index)).filter(Boolean);
+  return { version: MODE_MEMORY_VERSION, mode, path, updatedAt: parsed?.updatedAt || null, items };
+}
+
+function writeModeMemory(modeId, payload) {
+  const mode = safeModeId(modeId);
+  const items = (Array.isArray(payload?.items) ? payload.items : [])
+    .map((item, index) => normalizeModeMemoryItem(item, index))
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.enabled !== a.enabled) return Number(b.enabled) - Number(a.enabled);
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return String(b.updatedAt).localeCompare(String(a.updatedAt));
+    })
+    .slice(0, MODE_MEMORY_ITEM_LIMIT);
+  const data = { version: MODE_MEMORY_VERSION, mode, updatedAt: new Date().toISOString(), items };
+  const path = modeMemoryPath(mode);
+  mkdirSync(modeMemoryDir, { recursive: true });
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  return { ...data, path };
+}
+
+function listModeMemory(modeId = config.mode || "general") {
+  return readModeMemory(modeId);
+}
+
+function listAllModeMemory() {
+  const modes = config.modes || DEFAULT_MODES;
+  return {
+    version: MODE_MEMORY_VERSION,
+    modes: Object.keys(modes).map((id) => {
+      const memory = readModeMemory(id);
+      return {
+        id,
+        label: modes[id]?.label || id,
+        count: memory.items.length,
+        enabledCount: memory.items.filter((item) => item.enabled).length,
+        updatedAt: memory.updatedAt || null,
+      };
+    }),
+  };
+}
+
+function addModeMemory(modeId, input = {}) {
+  const current = readModeMemory(modeId);
+  const item = normalizeModeMemoryItem({
+    ...input,
+    id: input.id || randomUUID(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  if (!item) throw new Error("text is required");
+  const exists = current.items.find((old) => old.text === item.text);
+  const items = exists
+    ? current.items.map((old) => old.id === exists.id ? { ...old, ...item, id: old.id, createdAt: old.createdAt } : old)
+    : [item, ...current.items];
+  return { item: exists ? items.find((old) => old.id === exists.id) : item, memory: writeModeMemory(current.mode, { items }) };
+}
+
+function updateModeMemory(modeId, id, patch = {}) {
+  const current = readModeMemory(modeId);
+  const now = new Date().toISOString();
+  let updated = null;
+  const items = current.items.map((item) => {
+    if (item.id !== id) return item;
+    updated = normalizeModeMemoryItem({
+      ...item,
+      ...patch,
+      id: item.id,
+      createdAt: item.createdAt,
+      updatedAt: now,
+    });
+    return updated;
+  });
+  if (!updated) return null;
+  return { item: updated, memory: writeModeMemory(current.mode, { items }) };
+}
+
+function deleteModeMemory(modeId, id) {
+  const current = readModeMemory(modeId);
+  const items = current.items.filter((item) => item.id !== id);
+  if (items.length === current.items.length) return false;
+  writeModeMemory(current.mode, { items });
+  return true;
+}
+
+function formatModeMemoryForPrompt(modeId = config.mode || "general") {
+  const memory = readModeMemory(modeId);
+  const items = memory.items
+    .filter((item) => item.enabled)
+    .sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return String(b.updatedAt).localeCompare(String(a.updatedAt));
+    })
+    .slice(0, MODE_MEMORY_PROMPT_LIMIT);
+  if (items.length === 0) return "";
+  const lines = items.map((item) => {
+    const suffix = item.keywords.length ? ` [${item.keywords.join(", ")}]` : "";
+    return `- ${compactText(item.text, MODE_MEMORY_TEXT_LIMIT)}${suffix}`;
+  });
+  return `\n\n# Current work mode preferences\n\nThese are compact, user-approved preferences for the current work mode. Apply them only when relevant; they do not override the user's current explicit instructions or ECC rules.\n\n${lines.join("\n")}`;
 }
 
 // ── Session memory (volatile) ──────────────────────────────────
@@ -748,6 +1049,26 @@ function loadRules() {
     } catch {}
   }
   return rules;
+}
+
+function getRuleSetStatus(enabled = getEnabledRuleSets()) {
+  return orderedRuleSets(enabled).map((name) => {
+    const dir = ALL_ECC_RULES[name];
+    let files = [];
+    if (dir && existsSync(dir)) {
+      try {
+        files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort((a, b) => a.localeCompare(b));
+      } catch {
+        files = [];
+      }
+    }
+    return {
+      name,
+      path: dir,
+      available: Boolean(dir && existsSync(dir)),
+      fileCount: files.length,
+    };
+  });
 }
 
 // ── Hook system ─────────────────────────────────────────────────
@@ -825,7 +1146,15 @@ function buildLoop(client, rootDir) {
   const mc = getModeConfig();
   const system = buildSystemPrompt(rootDir, hasSemanticSearch);
   const systemWithSoul = soul ? `# Identity\n\n${soul}\n\n---\n\n${system}` : system;
-  const systemWithMode = mc.prompt ? systemWithSoul + `\n\n# Mode: ${mc.label}\n\n${mc.prompt}` : systemWithSoul;
+  const modeLines = [
+    `Current work mode: ${mc.label}`,
+    mc.description ? `Scenario: ${mc.description}` : "",
+    mc.hint ? `User-facing behavior: ${mc.hint}` : "",
+    mc.skills?.length ? `Relevant skills: ${mc.skills.join(", ")}` : "",
+    `Mode changes made in the dashboard apply after /new; do not claim a prompt changed mid-turn unless this prefix was rebuilt.`,
+    mc.prompt || "",
+  ].filter(Boolean);
+  const systemWithMode = systemWithSoul + `\n\n# Work mode\n\n${modeLines.join("\n")}${formatModeMemoryForPrompt(config.mode)}`;
   const loadedRules = loadRules();
   const systemWithRules = loadedRules.length > 0
     ? systemWithMode + "\n\n# Coding Rules\n\n" + loadedRules.join("\n\n")
@@ -971,13 +1300,18 @@ const ctx = {
   getEccRules: () => ({
     available: Object.keys(ALL_ECC_RULES),
     enabled: getEnabledRuleSets(),
+    status: getRuleSetStatus(),
   }),
   getModes: () => ({
     current: config.mode,
-    list: Object.entries(config.modes || DEFAULT_MODES).map(([id, m]) => ({
-      id, label: m.label, rules: m.eccRules,
-    })),
+    active: modeSummary(config.mode),
+    list: Object.keys(config.modes || DEFAULT_MODES).map((id) => modeSummary(id)),
   }),
+  getModeMemory: (modeId) => listModeMemory(modeId || config.mode || "general"),
+  getAllModeMemory: () => listAllModeMemory(),
+  addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
+  updateModeMemory: (id, patch, modeId) => updateModeMemory(modeId || config.mode || "general", id, patch),
+  deleteModeMemory: (id, modeId) => deleteModeMemory(modeId || config.mode || "general", id),
 
   // ── Setters / actions ──────────────────────────────────────
   setEditMode: (m) => {
