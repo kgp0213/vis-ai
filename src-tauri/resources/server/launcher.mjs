@@ -79,6 +79,29 @@ augmentProcessPath();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
+const DEFAULT_SOUL_RESOURCE = resolve(__dirname, "..", "default-soul.md");
+const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
+
+## 我是谁
+我是 Visionox，一个运行在 Windows 桌面环境中的 AI 助手。
+我可以通过文件系统、Shell、Web 搜索和项目工具帮助用户完成软件工程、文档整理、信息分析和自动化任务。
+
+## 协作方式
+- 优先直接解决问题，减少套话和冗余前置语。
+- 先利用已有上下文、文件和工具自行确认，再在确实需要时提问。
+- 对不确定的信息明确说明，并在重要事实可能变化时主动核验。
+- 可以给出判断和建议，但必须尊重用户的最新指令。
+
+## 记忆边界
+- 使用 \`remember\` 保存跨工作场景都应生效的长期记忆。
+- 使用 \`remember_mode_preference\` 保存仅属于当前工作场景的长期记忆、术语、流程和偏好。
+- 使用 \`remember_session\` 保存只在当前对话生效的临时记忆。
+- 身份、名称和长期风格属于 soul 层；场景知识不要写进 soul。
+
+## 安全与隐私
+- 私密信息只在完成用户任务所需范围内使用，不主动外传。
+- 对删除、覆盖、发布、提交、推送等有外部影响的动作保持谨慎。
+- 不把历史测试数据当作长期身份或事实保留。`;
 
 // ── Log buffer for developer mode ─────────────────────────────────
 const LOG_MAX = 500;
@@ -137,6 +160,7 @@ const visionoxDataDir = resolve(home, ".visionox");
 if (!existsSync(visionoxDataDir)) {
   mkdirSync(visionoxDataDir, { recursive: true });
 }
+const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
@@ -148,6 +172,29 @@ if (!existsSync(modeMemoryDir)) {
 
 const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
+
+function readDefaultSoul() {
+  try {
+    if (existsSync(DEFAULT_SOUL_RESOURCE)) {
+      const content = readFileSync(DEFAULT_SOUL_RESOURCE, "utf8").trim();
+      if (content) return content;
+    }
+  } catch {}
+  return DEFAULT_SOUL_FALLBACK;
+}
+
+function deployDefaultSoul() {
+  try {
+    const current = existsSync(SOUL_HOME) ? readFileSync(SOUL_HOME, "utf8").trim() : "";
+    if (current) return;
+    writeFileSync(SOUL_HOME, `${readDefaultSoul()}\n`, "utf8");
+    console.error(`[launcher] default soul.md deployed to ${SOUL_HOME}`);
+  } catch (err) {
+    console.error(`[launcher] failed to deploy default soul.md: ${err.message}`);
+  }
+}
+
+deployDefaultSoul();
 
 // ── Import server module ────────────────────────────────────────
 const serverModUrl = distPath("server-XGDBRWMB.js");
@@ -712,30 +759,6 @@ function invokeMcpTool(serverName, toolName, args) {
 }
 
 // ── Soul (identity) ────────────────────────────────────────────
-const SOUL_HOME = resolve(home, ".visionox", "soul.md");
-const DEFAULT_SOUL = `# Visionox Core Identity
-
-## 我是谁
-我是 Visionox，一个运行在 Windows 桌面环境中的 AI 助手。
-我可以通过文件系统、Shell、Web 搜索和项目工具帮助用户完成软件工程、文档整理、信息分析和自动化任务。
-
-## 协作方式
-- 优先直接解决问题，减少套话和冗余前置语。
-- 先利用已有上下文、文件和工具自行确认，再在确实需要时提问。
-- 对不确定的信息明确说明，并在重要事实可能变化时主动核验。
-- 可以给出判断和建议，但必须尊重用户的最新指令。
-
-## 记忆边界
-- 使用 \`remember\` 保存跨工作场景都应生效的长期记忆。
-- 使用 \`remember_mode_preference\` 保存仅属于当前工作场景的长期记忆、术语、流程和偏好。
-- 使用 \`remember_session\` 保存只在当前对话生效的临时记忆。
-- 身份、名称和长期风格属于 soul 层；场景知识不要写进 soul。
-
-## 安全与隐私
-- 私密信息只在完成用户任务所需范围内使用，不主动外传。
-- 对删除、覆盖、发布、提交、推送等有外部影响的动作保持谨慎。
-- 不把历史测试数据当作长期身份或事实保留。`;
-
 function loadSoul() {
   try {
     if (existsSync(SOUL_HOME)) {
@@ -743,7 +766,7 @@ function loadSoul() {
       if (content) return content;
     }
   } catch {}
-  return DEFAULT_SOUL;
+  return readDefaultSoul();
 }
 
 // ── Mode system ────────────────────────────────────────────────

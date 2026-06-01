@@ -85,7 +85,7 @@ vis-ai/
 
 Mode Memory 按工作模式隔离存储，提示词注入时最多选取少量启用项并压缩为摘要，避免默认提示词越来越臃肿。注入顺序为：`soul.md` → 项目记忆 → 工作模式 prompt → 当前模式记忆 → ECC rules → 自定义 rules → skills → 持久/短期记忆；ECC 规则优先级高于模式记忆。
 
-Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展示和编辑 `soul.md`、全局长期记忆、当前项目记忆和工作场景记忆。AI 名称属于 soul 层，写入 `soul.md` 的受控区块，不单独保存为普通 memory 或独立配置项。若 `~/.visionox/soul.md` 不存在或为空，launcher 会使用内置的 Visionox 默认 soul；用户保存该文件后优先使用本机版本。
+Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展示和编辑 `soul.md`、全局长期记忆、当前项目记忆和工作场景记忆。AI 名称属于 soul 层，写入 `soul.md` 的受控区块，不单独保存为普通 memory 或独立配置项。安装包会携带 `resources/default-soul.md`；首次启动时如果 `~/.visionox/soul.md` 不存在或为空，launcher 会释放该默认文件到用户目录并使用它。用户保存过本机 `soul.md` 后不会被升级或重启覆盖。
 
 #### 记忆触发话术
 

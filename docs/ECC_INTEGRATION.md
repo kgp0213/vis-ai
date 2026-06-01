@@ -86,6 +86,8 @@ ECC (Everything Claude Code) 是一个跨 harness 的 AI agent 工作流系统�
 
 Dashboard “配置 → 记忆”页面统一展示 soul、全局长期记忆、当前项目记忆和工作场景记忆。AI name 属于 soul 层，通过 `soul.md` 受控区块维护，不作为普通 memory 或 mode memory 保存。
 
+安装包资源中包含 `resources/default-soul.md`。首次启动时 launcher 会在 `~/.visionox/soul.md` 缺失或为空的情况下释放该默认文件；如果用户已经编辑过本机 `soul.md`，不会覆盖。
+
 ### PROJECT_MEMORY_FILES 搜索顺序
 
 ```
@@ -162,7 +164,7 @@ Dashboard "配置 → 记忆" 页面的 `listMemoryFiles()` 已过滤 `MEMORY.md
 | **办公** | common only | 10 个, 16 KB | ~5,500 token | 8% |
 | **设计** | common only | 10 个, 16 KB | ~5,500 token | 8% |
 
-> 基数: soul.md (555 B) + visionox.md (570 B) + system prompt (~3,000 B) + skills frontmatter (36 个, ~13 KB) ≈ 17,000 B / 4,250 token
+> 基数: soul.md + visionox.md + system prompt (~3,000 B) + skills frontmatter (36 个, ~13 KB) ≈ 17,000 B / 4,250 token
 
 ### Dashboard UI
 
@@ -374,7 +376,7 @@ runHooks(event, ctx)
 |------|------|
 | `docs/ECC_INTEGRATION.md` | 本文档 |
 | `docs/OPTIMIZATION_PLAN.md` | Karpathy 风格优化建议（8 项） |
-| `~/.visionox/soul.md` | AI 身份文件（555 B） |
+| `~/.visionox/soul.md` | AI 身份文件，由安装资源 `resources/default-soul.md` 首次释放 |
 | `~/.visionox/skills/{18 个 ECC skills}/` | 从 `~/.claude/skills/ecc/` 复制 |
 
 ### 未修改

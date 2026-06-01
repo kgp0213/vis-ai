@@ -21,6 +21,7 @@
       "resources/server/node.exe",
       "resources/server/launcher.mjs",
       "resources/server/visionox-pkg/**/*",
+      "resources/default-soul.md",
       "resources/skill-creation-guide.md"
     ],
     "windows": {
