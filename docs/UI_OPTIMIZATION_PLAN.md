@@ -53,6 +53,8 @@
 - `~/.visionox/mode-memory/{mode}.json`：按工作模式隔离的场景记忆、偏好和常用知识点。
 - workspace 项目说明记忆：`visionox.md` / `REASONIX.md` / `CLAUDE.md` / `AGENTS.md` 等。
 
+安装包或首次启动流程只能补齐缺失的默认记忆相关文件，不能覆盖用户已经存在的 `soul.md`、global/project memory、mode-memory 或项目说明记忆。
+
 AI name 不单独存入配置项，而是写入 `soul.md` 受控区块：
 
 ```md

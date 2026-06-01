@@ -87,6 +87,16 @@ Mode Memory 按工作模式隔离存储，提示词注入时最多选取少量�
 
 Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展示和编辑 `soul.md`、全局长期记忆、当前项目记忆和工作场景记忆。AI 名称属于 soul 层，写入 `soul.md` 的受控区块，不单独保存为普通 memory 或独立配置项。安装包会携带 `resources/default-soul.md`；首次启动时如果 `~/.visionox/soul.md` 不存在或为空，launcher 会释放该默认文件到用户目录并使用它。用户保存过本机 `soul.md` 后不会被升级或重启覆盖。
 
+#### 安装初始化与覆盖策略
+
+| 目标 | 首次启动行为 | 覆盖策略 |
+|------|--------------|----------|
+| `~/.visionox/soul.md` | 从安装资源 `resources/default-soul.md` 释放默认身份文件 | 仅当文件不存在或为空时写入；已有内容绝不覆盖 |
+| `~/.visionox/mode-memory/` | 创建工作场景记忆目录 | 只创建目录；已有 `{mode}.json` 不会被安装过程改写 |
+| `~/.visionox/memory/global/` | 不安装默认全局长期记忆 | 用户通过 `remember` 生成；安装/升级不写入、不覆盖 |
+| `~/.visionox/memory/<project-hash>/` | 不安装默认项目记忆 | 用户通过项目记忆生成；安装/升级不写入、不覆盖 |
+| `~/.visionox/config.json` | 合并默认工作模式配置 | 保留 API Key、workspace、sessions、memory、skills 和自定义 mode；旧内置 mode prompt 迁移前会备份到 `modePromptBackups` |
+
 #### 记忆触发话术
 
 为了让 AI 正确选择存储层，用户应在对话里明确说明记忆类型：

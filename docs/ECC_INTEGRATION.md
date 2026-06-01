@@ -88,6 +88,18 @@ Dashboard “配置 → 记忆”页面统一展示 soul、全局长期记忆、
 
 安装包资源中包含 `resources/default-soul.md`。首次启动时 launcher 会在 `~/.visionox/soul.md` 缺失或为空的情况下释放该默认文件；如果用户已经编辑过本机 `soul.md`，不会覆盖。
 
+### 安装初始化与不覆盖策略
+
+| 文件/目录 | 初始化来源 | 不覆盖规则 |
+|----------|------------|------------|
+| `~/.visionox/soul.md` | 安装资源 `resources/default-soul.md` | 仅当目标文件不存在或为空时释放；已有 soul 不覆盖 |
+| `~/.visionox/mode-memory/` | launcher 启动时创建目录 | 只创建目录；已有 `{mode}.json` 场景记忆不覆盖 |
+| `~/.visionox/memory/global/` | 用户通过 `remember` 生成 | 安装/升级不释放默认全局记忆，不覆盖用户记忆 |
+| `~/.visionox/memory/<project-hash>/` | 用户通过项目记忆生成 | 安装/升级不释放默认项目记忆，不覆盖用户记忆 |
+| `~/.visionox/config.json` | `readConfig()` + `initModesConfig()` 合并默认 mode | 保留用户配置；旧内置 mode prompt 迁移前写入 `modePromptBackups`，不改 API Key、workspace、sessions、memory、skills 和自定义 mode |
+
+原则：安装包可以补齐“缺失的默认文件”，但不能把升级包里的默认值直接覆盖到用户已经拥有的记忆文件。需要迁移时必须先保留旧值或写入显式备份字段。
+
 ### PROJECT_MEMORY_FILES 搜索顺序
 
 ```
@@ -107,7 +119,7 @@ Dashboard "配置 → 记忆" 页面的 `listMemoryFiles()` 已过滤 `MEMORY.md
 
 ### 工作场景记忆
 
-当用户明确要求“在当前工作场景记住某段知识/偏好/关键词关联”时，Visionox 不会直接修改 `config.json modes[mode].prompt`，也不会写入 global memory。默认 mode prompt 属于内置场景模板，升级迁移时可以安全覆盖；用户场景记忆写入独立的 `~/.visionox/mode-memory/{mode}.json`，按模式隔离、可启用/停用/删除。
+当用户明确要求“在当前工作场景记住某段知识/偏好/关键词关联”时，Visionox 不会直接修改 `config.json modes[mode].prompt`，也不会写入 global memory。默认 mode prompt 属于内置场景模板，升级迁移时先备份旧配置再写入新版默认值；用户场景记忆写入独立的 `~/.visionox/mode-memory/{mode}.json`，按模式隔离、可启用/停用/删除。
 
 提示词拼装顺序为：`soul.md` → 项目记忆 → 当前工作模式 prompt → 当前模式记忆摘要 → ECC rules → 自定义 rules → skills → 持久记忆 → session memory。模式记忆只补充当前场景的用户习惯、术语和知识点，不能覆盖用户当前明确指令，也不能覆盖 ECC 工程规则。
 
@@ -433,7 +445,7 @@ server settings POST mode handler   ✅ 处理正确
 |------|------|
 | Mode 配置同步 | `launcher.mjs` 增加运行时 config 同步。Dashboard `POST /api/settings` 修改 mode 后会调用 `ctx.setMode()`，避免磁盘配置已变但 `/new` 仍按旧 mode 重建 loop。 |
 | 默认 mode 合并 | `initModesConfig()` 改为合并默认 mode，补齐缺失的 `general/coding/office/design`，同时保留用户自定义额外 mode。 |
-| 首启 mode prompt 迁移 | 内置四个 mode 带 `version`。安装包升级后首次运行如检测到旧版内置 mode prompt，会覆盖为新版默认提示词，并把旧配置备份到 `config.modePromptBackups`；API Key、workspace、sessions、memory、skills、自定义额外 mode 不会被改动。 |
+| 首启 mode prompt 迁移 | 内置四个 mode 带 `version`。安装包升级后首次运行如检测到旧版内置 mode prompt，会先把旧配置备份到 `config.modePromptBackups`，再迁移为新版默认提示词；API Key、workspace、sessions、memory、skills、自定义额外 mode 不会被改动。 |
 | Custom Rules | `loadRules()` 改为按 mode 声明顺序加载，并始终追加 `custom` 规则集，符合 L4 CUSTOM RULES 始终加载的架构。 |
 | Session Memory | `getSessionMemoryBlock()` 从只注入摘要改为注入完整 body，当前会话短期记忆不再丢失细节。 |
 | Project Memory | `PROJECT_MEMORY_FILES` 在 CLI 分块和 SDK 导出中均包含 `visionox.md`、`.claude/CLAUDE.md`、`CLAUDE.md`，与本文档搜索顺序一致。 |
