@@ -9,9 +9,10 @@
     "frontendDist": "../src"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; connect-src http://127.0.0.1:*; style-src 'unsafe-inline' 'self' http://127.0.0.1:*; font-src 'self' http://127.0.0.1:*"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; connect-src 'self' http://127.0.0.1:* https://tauri.localhost tauri://localhost; style-src 'unsafe-inline' 'self' http://127.0.0.1:*; font-src 'self' http://127.0.0.1:*; frame-src 'self' http://127.0.0.1:*"
     }
   },
   "bundle": {

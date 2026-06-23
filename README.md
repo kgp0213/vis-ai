@@ -10,7 +10,6 @@
 
 | 角色 | 地址 |
 |------|------|
-| 上游 | <https://github.com/esengine/DeepSeek-Reasonix> |
 | 本仓库 | <https://gitee.com/hufz_admin/vis-ai> |
 
 ### 依赖

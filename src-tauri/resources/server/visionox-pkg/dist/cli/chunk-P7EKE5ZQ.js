@@ -56857,6 +56857,7 @@ function hydrateCardsFromMessages(messages) {
       }
       if (m.tool_calls?.length) {
         for (const tc of m.tool_calls) {
+          if (!tc.function) continue;
           let parsedArgs = tc.function.arguments;
           try {
             parsedArgs = JSON.parse(tc.function.arguments);

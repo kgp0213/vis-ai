@@ -21,10 +21,16 @@ use windows_sys::Win32::System::JobObjects::{
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW,
+    OpenClipboard, RegisterClipboardFormatW,
+};
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
     PROCESS_TERMINATE,
 };
+use windows_sys::Win32::UI::Shell::DragQueryFileW;
+const CF_HDROP: u32 = 15;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const STILL_ACTIVE: u32 = 259;
@@ -369,10 +375,10 @@ pub fn run() -> anyhow::Result<()> {
                                 }
                                 if healthy {
                                     log_diag(
-                                        "[rust] health check passed — navigating to dashboard",
+                                        "[rust] health check passed — loading dashboard in iframe",
                                     );
                                     let nav_js = format!(
-                                        "window.location.replace('{url}');",
+                                        "(function(){{var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.innerHTML='';document.body.appendChild(f);}}f.src='{url}';}})();window.addEventListener('message',function(e){{if(e.data&&e.data.type==='vis_get_clipboard'){{var api=window.__TAURI__;if(api&&api.invoke){{api.invoke('get_clipboard_files').then(function(p){{e.source.postMessage({{type:'vis_clipboard_result',paths:p||[]}},e.origin);}}).catch(function(err){{e.source.postMessage({{type:'vis_clipboard_result',error:String(err),paths:[]}},e.origin);}});}}else{{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'__TAURI__ not available',paths:[]}},e.origin||'*');}}}}}});",
                                         url = url.replace('\'', "\\'"),
                                     );
                                     log_diag(&format!("[rust] eval js: {nav_js}"));
@@ -525,6 +531,7 @@ pub fn run() -> anyhow::Result<()> {
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![get_clipboard_files])
         .build(tauri::generate_context!())
         ?
         .run(|app_handle, event| {
@@ -566,6 +573,100 @@ pub fn run() -> anyhow::Result<()> {
             }
         });
     Ok(())
+}
+
+/// Read full file paths from the Windows clipboard (CF_HDROP format).
+/// This captures paths from File Explorer copies, which are inaccessible
+/// from the JavaScript clipboard API.
+#[tauri::command]
+fn get_clipboard_files() -> Vec<String> {
+    log_diag("[rust] get_clipboard_files invoked");
+    let mut paths = Vec::new();
+    // SAFETY: OpenClipboard requires a valid owner window handle.
+    // Passing null means the current task's clipboard is opened.
+    let opened = unsafe { OpenClipboard(std::ptr::null_mut()) };
+    if opened == 0 {
+        log_diag("[rust] OpenClipboard failed");
+        return paths;
+    }
+    log_diag("[rust] OpenClipboard succeeded");
+
+    // Enumerate available formats for diagnostics.
+    unsafe {
+        let mut format = 0u32;
+        let mut formats = Vec::new();
+        loop {
+            format = EnumClipboardFormats(format);
+            if format == 0 {
+                break;
+            }
+            let mut name_buf = [0u16; 256];
+            let name_len = GetClipboardFormatNameW(format, name_buf.as_mut_ptr(), name_buf.len() as i32);
+            let name = if name_len > 0 {
+                String::from_utf16_lossy(&name_buf[..name_len as usize])
+            } else {
+                format!("#{}", format)
+            };
+            formats.push(name);
+        }
+        log_diag(&format!("[rust] clipboard formats: {:?}", formats));
+    }
+
+    // Try CF_HDROP first.
+    // SAFETY: GetClipboardData returns a handle to the clipboard data in
+    // the requested format. CF_HDROP contains file paths.
+    let hdrop = unsafe { GetClipboardData(CF_HDROP) };
+    if hdrop.is_null() {
+        log_diag("[rust] GetClipboardData(CF_HDROP) returned null");
+    } else {
+        // SAFETY: DragQueryFileW queries the HDROP handle for file count
+        // and file paths. The HDROP handle is valid at this point.
+        let count = unsafe { DragQueryFileW(hdrop, 0xFFFFFFFF, std::ptr::null_mut(), 0) };
+        log_diag(&format!("[rust] DragQueryFileW count={count}"));
+        for i in 0..count {
+            // First call to get required buffer size
+            let len = unsafe { DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0) };
+            if len == 0 {
+                continue;
+            }
+            let mut buf: Vec<u16> = vec![0; len as usize + 1];
+            let copied = unsafe { DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as u32) };
+            if copied > 0 {
+                buf.truncate(copied as usize);
+                if let Ok(s) = String::from_utf16(&buf) {
+                    log_diag(&format!("[rust] clipboard file {i}: {s}"));
+                    paths.push(s);
+                }
+            }
+        }
+    }
+
+    // Fallback: try "FileNameW" registered clipboard format.
+    if paths.is_empty() {
+        unsafe {
+            let name: Vec<u16> = "FileNameW".encode_utf16().chain(std::iter::once(0)).collect();
+            let fmt = RegisterClipboardFormatW(name.as_ptr());
+            if fmt != 0 {
+                let h = GetClipboardData(fmt);
+                if !h.is_null() {
+                    let ptr = h as *const u16;
+                    let mut len = 0usize;
+                    while *ptr.add(len) != 0 {
+                        len += 1;
+                    }
+                    let slice = std::slice::from_raw_parts(ptr, len);
+                    let s = String::from_utf16_lossy(slice);
+                    log_diag(&format!("[rust] FileNameW fallback: {s}"));
+                    paths.push(s);
+                }
+            }
+        }
+    }
+
+    // SAFETY: CloseClipboard closes the clipboard opened by OpenClipboard.
+    unsafe { CloseClipboard() };
+    log_diag(&format!("[rust] get_clipboard_files returning {} paths", paths.len()));
+    paths
 }
 
 #[cfg(test)]
@@ -622,7 +723,7 @@ mod tests {
         thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 // Real server response: token is NOT in the body
-                let body = "{\"version\":\"260530\",\"status\":\"ok\"}";
+                let body = "{\"version\":\"260603\",\"status\":\"ok\"}";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),

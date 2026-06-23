@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visionox 记忆功能使用说明</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --card: #ffffff;
+    --text: #1a1a2e;
+    --secondary: #4a5568;
+    --border: #e2e8f0;
+    --accent: #5b6abf;
+    --accent-light: #eef0fa;
+    --code-bg: #f1f5f9;
+    --highlight: #fef9c3;
+    --green: #059669;
+    --green-bg: #ecfdf5;
+    --blue: #2563eb;
+    --blue-bg: #eff6ff;
+    --orange: #d97706;
+    --orange-bg: #fffbeb;
+    --purple: #7c3aed;
+    --purple-bg: #f5f3ff;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem 1rem;
+  }
+  .container {
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  /* ── header ── */
+  .header {
+    text-align: center;
+    margin-bottom: 2.5rem;
+    padding: 2rem 1rem;
+    background: linear-gradient(135deg, #5b6abf 0%, #8b5cf6 100%);
+    border-radius: 16px;
+    color: #fff;
+  }
+  .header h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+  }
+  .header .subtitle {
+    font-size: 0.95rem;
+    opacity: 0.88;
+  }
+  .header .version {
+    display: inline-block;
+    margin-top: 0.6rem;
+    padding: 0.2rem 0.8rem;
+    background: rgba(255,255,255,0.18);
+    border-radius: 20px;
+    font-size: 0.8rem;
+  }
+  /* ── cards ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.6rem 1.8rem;
+    margin-bottom: 1.2rem;
+  }
+  .card h2 {
+    font-size: 1.25rem;
+    color: var(--accent);
+    margin-bottom: 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--accent-light);
+  }
+  .card h3 {
+    font-size: 1.05rem;
+    color: #2d3748;
+    margin: 1.2rem 0 0.6rem;
+  }
+  .card h3:first-child { margin-top: 0; }
+  .card p { margin: 0.5rem 0; }
+  .card ul, .card ol { margin: 0.4rem 0 0.4rem 1.4rem; }
+  .card li { margin: 0.2rem 0; }
+  /* ── tables ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.8rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border);
+  }
+  th {
+    background: var(--accent-light);
+    font-weight: 600;
+    color: var(--accent);
+  }
+  tr:nth-child(even) td { background: #fafbfc; }
+  /* ── code / inline code ── */
+  code {
+    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+  }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 0.6rem 0;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  /* ── blockquote ── */
+  blockquote {
+    margin: 0.8rem 0;
+    padding: 0.6rem 1rem;
+    border-left: 4px solid var(--accent);
+    background: var(--accent-light);
+    border-radius: 0 8px 8px 0;
+    color: #2d3748;
+  }
+  blockquote p { margin: 0; }
+  /* ── callout tags ── */
+  .tag { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 0.15rem 0.6rem; border-radius: 12px; margin-right: 0.3rem; }
+  .tag-green { background: var(--green-bg); color: var(--green); }
+  .tag-blue { background: var(--blue-bg); color: var(--blue); }
+  .tag-orange { background: var(--orange-bg); color: var(--orange); }
+  .tag-purple { background: var(--purple-bg); color: var(--purple); }
+  /* ── dialog example ── */
+  .dialog { background: #f8fafc; border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin: 0.8rem 0; }
+  .dialog .you { color: var(--blue); font-weight: 600; }
+  .dialog .ai { color: var(--green); font-weight: 600; }
+  .dialog p { margin: 0.3rem 0; font-size: 0.92rem; }
+  .dialog .divider { border: none; border-top: 1px dashed var(--border); margin: 0.5rem 0; }
+  /* ── faq ── */
+  .faq-item { padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+  .faq-item:last-child { border-bottom: none; }
+  .faq-q { font-weight: 600; color: #2d3748; }
+  .faq-a { margin-top: 0.2rem; color: var(--secondary); font-size: 0.92rem; }
+  /* ── hr ── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 1.6rem 0; }
+  /* ── rule highlight ── */
+  .rule { background: var(--highlight); border-left: 3px solid #eab308; padding: 0.5rem 1rem; border-radius: 0 8px 8px 0; margin: 0.8rem 0; font-size: 0.92rem; }
+  /* ── responsive ── */
+  @media (max-width: 600px) {
+    body { padding: 1rem 0.6rem; }
+    .card { padding: 1rem; }
+    .header h1 { font-size: 1.4rem; }
+    table { font-size: 0.82rem; }
+    th, td { padding: 0.4rem 0.5rem; }
+  }
+  .toc { list-style: none; padding: 0; }
+  .toc li { margin: 0.3rem 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ────── HEADER ────── -->
+<div class="header">
+  <h1>🧠 Visionox 记忆功能使用说明</h1>
+  <div class="subtitle">让 AI 记住你——三类记忆 × 四种工作模式，总有一种适合你</div>
+  <div class="version">Visionox Desktop ≥ 1.0.0</div>
+</div>
+
+<!-- ────── 一、快速概览 ────── -->
+<div class="card">
+<h2>一、快速概览</h2>
+<table>
+  <thead>
+    <tr><th>记忆类型</th><th>什么时候用</th><th>说一句话就能存</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="tag tag-green">会话记忆</span></td>
+      <td>临时记住当前讨论的上下文</td>
+      <td><code>"记住我们正在分析 Bug #42"</code></td>
+    </tr>
+    <tr>
+      <td><span class="tag tag-blue">模式偏好记忆</span></td>
+      <td>让当前模式记住你的工作习惯</td>
+      <td><code>"在编程场景下记住我用 Vite 构建"</code></td>
+    </tr>
+    <tr>
+      <td><span class="tag tag-orange">全局记忆</span></td>
+      <td>让 AI 始终记住你的身份/偏好</td>
+      <td><code>"记住我叫张三"</code></td>
+    </tr>
+    <tr>
+      <td><span class="tag tag-purple">项目记忆</span></td>
+      <td>让 AI 记住当前项目的关键信息</td>
+      <td><code>"记住这个项目用 Rust + Tauri"</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="rule">
+  <strong>📌 规则一</strong>：同一件事不要用不同的记忆方式重复存，选一个最合适的即可。<br>
+  <strong>📌 规则二</strong>：如果只说"记住"，AI 会自动判断该存到哪里。
+</div>
+</div>
+
+<!-- ────── 二、工作场景与记忆切换 ────── -->
+<div class="card">
+<h2>二、三种工作场景与记忆切换</h2>
+
+<h3>2.1 切换工作模式</h3>
+<p>Visionox 有四种内置工作模式，每种模式自动加载对应的提示词和技能：</p>
+
+<table>
+  <thead>
+    <tr><th>模式</th><th>ID</th><th>适合做什么</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>通用</td><td><code>general</code></td><td>日常问答、资料梳理、轻量排查</td></tr>
+    <tr><td>编程</td><td><code>coding</code></td><td>代码阅读、修复、重构、测试、构建</td></tr>
+    <tr><td>办公</td><td><code>office</code></td><td>文档、表格、PDF、PPT、格式转换</td></tr>
+    <tr><td>设计</td><td><code>design</code></td><td>界面体验、前端布局、视觉风格</td></tr>
+  </tbody>
+</table>
+
+<p><strong>切换方式</strong>：在设置页的"工作场景"下拉框中选择。切换后需要输入 <code>/new</code> 或重启对话生效。</p>
+
+<h3>2.2 模式偏好记忆的隔离规则</h3>
+<blockquote>在编程模式记住的快捷操作，不会跑到办公模式去；反之亦然。</blockquote>
+
+<p>每个模式有自己的记忆库，存储在 <code>~/.visionox/mode-memory/</code> 目录下，互不干扰：</p>
+
+<pre><code>~/.visionox/mode-memory/
+├── general.json       # 通用模式记忆
+├── coding.json        # 编程模式记忆
+├── office.json        # 办公模式记忆
+└── design.json        # 设计模式记忆</code></pre>
+
+<p>切换到某模式后，该模式的记忆会自动注入到 AI 的提示词中，但最多只取最重要的 <strong>8 条</strong>，不会让提示词变得臃肿。</p>
+</div>
+
+<!-- ────── 三、具体使用场景与示例 ────── -->
+<div class="card">
+<h2>三、具体使用场景与示例</h2>
+
+<h3>3.1 会话记忆 <span class="tag tag-green">当前对话有效</span></h3>
+<p><strong>适用场景</strong>：临时讨论的上下文、还没确定要不要长期记住的信息。</p>
+
+<div class="dialog">
+  <p><span class="you">你</span>：记住我们当前分析的 Bug 是 SQLite WAL 模式下的并发写入问题</p>
+  <p><span class="ai">AI</span>：已记住，在当前对话中生效</p>
+  <hr class="divider">
+  <p><span class="you">你</span>：我们刚才的结论是什么？</p>
+  <p><span class="ai">AI</span>：根据刚才的记忆，Bug 是 SQLite WAL 模式下的并发写入问题…</p>
+</div>
+
+<blockquote>会话记忆在输入 <code>/new</code> 或关闭窗口后自动清除，不需要手动删除。</blockquote>
+
+<h3>3.2 模式偏好记忆 <span class="tag tag-blue">按工作模式隔离</span></h3>
+<p><strong>适用场景</strong>：在某类工作中反复用到的知识点、术语、快捷方式，只想让对应模式记住。</p>
+
+<div class="dialog">
+  <p><span class="you">你（在编程模式下）</span>：在编程场景下记住 8K 点屏通过 USB ADB 连接</p>
+  <p><span class="ai">AI</span>：已记住，只影响编程模式</p>
+  <hr class="divider">
+  <p><span class="you">你（切换到办公模式后）</span>：8K 点屏怎么连？</p>
+  <p><span class="ai">AI</span>：抱歉，我没有这方面的记忆（办公模式没有这条记忆）</p>
+</div>
+
+<div class="dialog">
+  <p><span class="you">你（在编程模式下）</span>：编程场景下记住我习惯用 Vite + pnpm 构建项目</p>
+  <p><span class="ai">AI</span>：已保存到编程模式偏好记忆</p>
+</div>
+
+<h3>3.3 全局记忆 <span class="tag tag-orange">跨对话跨项目</span></h3>
+<p><strong>适用场景</strong>：你的名字、语言偏好、跨项目的通用偏好。</p>
+
+<div class="dialog">
+  <p><span class="you">你</span>：记住我叫李工，用英文技术术语交流</p>
+  <p><span class="ai">AI</span>：已记住，跨所有对话和项目生效</p>
+</div>
+
+<div class="dialog">
+  <p><span class="you">你</span>：记住我默认使用 VS Code 作为编辑器</p>
+  <p><span class="ai">AI</span>：已记住</p>
+</div>
+
+<h3>3.4 项目记忆 <span class="tag tag-purple">当前项目背景</span></h3>
+<p><strong>适用场景</strong>：当前项目的技术栈、约定、关键决策。</p>
+
+<div class="dialog">
+  <p><span class="you">你</span>：记住这个项目用 Rust + Tauri 2.0，测试框架用 cargo test</p>
+  <p><span class="ai">AI</span>：已保存到项目记忆</p>
+</div>
+
+<div class="dialog">
+  <p><span class="you">你</span>：记住项目编码规范要求 unsafe 块必须有 SAFETY 注释</p>
+  <p><span class="ai">AI</span>：已保存到项目记忆</p>
+</div>
+</div>
+
+<!-- ────── 四、记忆管理 ────── -->
+<div class="card">
+<h2>四、记忆管理</h2>
+
+<h3>4.1 查看已记住的内容</h3>
+<p>AI 启动时会在对话开头列出所有已注入的记忆摘要（每条一行）。如果某条不够详细：</p>
+
+<div class="dialog">
+  <p><span class="you">你</span>：查看我关于编辑器偏好的完整记忆</p>
+  <p><span class="ai">AI</span>：（展示完整内容）</p>
+</div>
+
+<h3>4.2 删除记忆</h3>
+<div class="dialog">
+  <p><span class="you">你</span>：忘记我刚才说的编辑器偏好</p>
+  <p><span class="ai">AI</span>：已删除</p>
+</div>
+
+<h3>4.3 如果 AI 记错了</h3>
+<div class="dialog">
+  <p><span class="you">你</span>：之前说的打包工具不是 webpack，是 vite，更新一下</p>
+  <p><span class="ai">AI</span>：已更新</p>
+</div>
+</div>
+
+<!-- ────── 五、记忆优先级说明 ────── -->
+<div class="card">
+<h2>五、记忆优先级说明</h2>
+<p>AI 在构建提示词时按以下优先级注入记忆：</p>
+
+<ol>
+  <li><strong>高优先级</strong>（<code>priority: high</code>）— 作为硬约束注入，最优先遵守</li>
+  <li><strong>模式偏好记忆</strong> — 按优先级排序，取前 8 条</li>
+  <li><strong>全局记忆</strong> — 全部加载到提示词</li>
+  <li><strong>项目记忆</strong> — 全部加载到提示词</li>
+  <li><strong>会话记忆</strong> — 追加在末尾</li>
+</ol>
+
+<blockquote>默认情况下，明确说"这个很重要"的记忆会被标记为较高优先级。</blockquote>
+</div>
+
+<!-- ────── 六、存储位置 ────── -->
+<div class="card">
+<h2>六、存储位置（仅供参考，无需手动操作）</h2>
+
+<table>
+  <thead>
+    <tr><th>记忆类型</th><th>存储位置</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>会话记忆</td><td>进程内存，不落盘</td></tr>
+    <tr><td>模式偏好记忆</td><td><code>~/.visionox/mode-memory/{模式名}.json</code></td></tr>
+    <tr><td>全局记忆</td><td><code>~/.reasonix/memory/global/*.md</code></td></tr>
+    <tr><td>项目记忆</td><td><code>~/.reasonix/memory/{项目哈希}/*.md</code></td></tr>
+    <tr><td>项目文件记忆</td><td>项目目录下的 <code>REASONIX.md</code> / <code>visionox.md</code> / <code>AGENTS.md</code> 等</td></tr>
+  </tbody>
+</table>
+
+<blockquote>不建议直接在文件系统中增删改，通过对话操作即可。</blockquote>
+</div>
+
+<!-- ────── 七、常见问题 ────── -->
+<div class="card">
+<h2>七、常见问题</h2>
+
+<div class="faq-item">
+  <div class="faq-q">Q：我在编程模式记住的内容，切换到通用模式还能用吗？</div>
+  <div class="faq-a">不能。模式偏好记忆是按模式隔离的。如果某条记忆应该在所有模式都生效，请使用全局记忆而不是模式偏好记忆。</div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-q">Q：记忆内容有长度限制吗？</div>
+  <div class="faq-a">单条模式偏好记忆建议不超过 180 个字符，太长的内容会被自动截断。全局和项目记忆的单条上限是 8000 字符。</div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-q">Q：怎么知道当前是什么模式？</div>
+  <div class="faq-a">对话开始时 AI 会显示"当前工作模式"信息和已加载的模式记忆。也可以在设置页查看。</div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-q">Q：模式偏好记忆最多能存多少条？</div>
+  <div class="faq-a">每个模式最多 60 条，但注入提示词时最多只取 8 条（按优先级排序）。旧的、低优先级的条目不会丢失，但不会自动注入——除非提升其优先级。</div>
+</div>
+
+<div class="faq-item">
+  <div class="faq-q">Q：如何完全关闭记忆功能？</div>
+  <div class="faq-a">设置环境变量 <code>REASONIX_MEMORY=off</code> 可禁用所有记忆注入。</div>
+</div>
+</div>
+
+</div>
+</body>
+</html>

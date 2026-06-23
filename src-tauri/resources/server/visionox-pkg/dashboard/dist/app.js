@@ -19356,8 +19356,8 @@ var en = {
     devModeNote: "Show background server startup and runtime logs"
   },
   chat: {
-    modeMirror: "TUI mirror",
-    modeView: "session view",
+    modeMirror: "mirror",
+    modeView: "chat",
     placeholder: "Type a prompt \u2014 Enter sends, Shift+Enter for a newline \xB7 / @ for pickers",
     placeholderBusy: "wait for the current turn to finish\u2026",
     send: "Send",
@@ -20022,8 +20022,8 @@ var zhCN = {
     devModeNote: "\u663E\u793A\u540E\u53F0\u670D\u52A1\u5668\u542F\u52A8\u548C\u8FD0\u884C\u65F6\u65E5\u5FD7"
   },
   chat: {
-    modeMirror: "TUI \u955C\u50CF",
-    modeView: "\u4F1A\u8BDD\u89C6\u56FE",
+    modeMirror: "\u955C\u50CF",
+    modeView: "\u5BF9\u8BDD",
     placeholder: "\u8F93\u5165\u63D0\u793A\u8BCD \u2014 Enter \u53D1\u9001\uFF0CShift+Enter \u6362\u884C \xB7 / @ \u6253\u5F00\u9009\u62E9\u5668",
     placeholderBusy: "\u8BF7\u7B49\u5F85\u5F53\u524D\u8F6E\u6B21\u5B8C\u6210\u2026",
     send: "\u53D1\u9001",
@@ -23133,6 +23133,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming }) {
       <div class="body">
         ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
         ${renderMessageBody(msg.text)}
+        ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
       </div>
     </div>
@@ -23619,6 +23620,17 @@ function fmtCost(usd, currency, fractionDigits) {
   const digits = fractionDigits ?? (Math.abs(amount) < 0.01 ? 6 : 4);
   return `${sym}${amount.toFixed(digits)}`;
 }
+function pickDashboardBalance(infos) {
+  if (!Array.isArray(infos) || infos.length === 0) return null;
+  let best = infos[0];
+  for (let i3 = 1; i3 < infos.length; i3++) {
+    if (Number(infos[i3]?.total_balance ?? infos[i3]?.total ?? 0) > Number(best?.total_balance ?? best?.total ?? 0)) best = infos[i3];
+  }
+  return best;
+}
+function primaryBalance(stats) {
+  return stats?.primaryBalance ?? pickDashboardBalance(stats?.balance);
+}
 function fmtPct(n3) {
   if (n3 === null || n3 === void 0) return "\u2014";
   return `${(n3 * 100).toFixed(1)}%`;
@@ -23707,6 +23719,8 @@ const [eccRules, setEccRulesLocal] = d2(null);
   const [showWsPicker, setShowWsPicker] = d2(false);
   const [showSkillPicker, setShowSkillPicker] = d2(false);
   const [skillList, setSkillList] = d2([]);
+  const [pendingImages, setPendingImages] = d2([]);
+  var fileInputRef = A2(null);
   y2(() => {
     if (!busy) return;
     const id = setInterval(() => setNowTick((n3) => n3 + 1), 500);
@@ -23799,7 +23813,7 @@ const [eccRules, setEccRulesLocal] = d2(null);
         return;
       }
       if (dash.kind === "user") {
-        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text }]);
+        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
         return;
       }
       if (dash.kind === "assistant_delta") {
@@ -23885,24 +23899,80 @@ const [eccRules, setEccRulesLocal] = d2(null);
       cancelStreamingRaf();
     };
   }, [refetchCanonicalState, cancelStreamingRaf]);
+  var handleFileChange = q2(async function(e) {
+    var files = e.target.files;
+    if (!files || files.length === 0) return;
+    var newImages = pendingImages.slice();
+    for (var i = 0; i < files.length && newImages.length < 5; i++) {
+      try {
+        var dataUrl = await compressImage(files[i]);
+        newImages.push(dataUrl);
+      } catch (err) {
+        console.error("Image compression failed:", err);
+      }
+    }
+    setPendingImages(newImages);
+    e.target.value = "";
+  }, [pendingImages]);
+  var compressImage = function(file) {
+    return new Promise(function(resolve, reject) {
+      if (file.size < 100 * 1024) {
+        var reader = new FileReader();
+        reader.onload = function() { resolve(reader.result); };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function() {
+        URL.revokeObjectURL(url);
+        var maxEdge = 1024;
+        var w = img.width, h = img.height;
+        if (w > maxEdge || h > maxEdge) {
+          var ratio = Math.min(maxEdge / w, maxEdge / h);
+          w = Math.round(w * ratio); h = Math.round(h * ratio);
+        }
+        var canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        var dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        if (dataUrl.length > 200 * 1024) {
+          dataUrl = canvas.toDataURL("image/jpeg", 0.4);
+        }
+        if (dataUrl.length > 200 * 1024 && w > 512) {
+          var r2 = Math.min(512 / img.width, 512 / img.height);
+          canvas.width = Math.round(img.width * r2);
+          canvas.height = Math.round(img.height * r2);
+          var ctx2 = canvas.getContext("2d");
+          ctx2.drawImage(img, 0, 0, canvas.width, canvas.height);
+          dataUrl = canvas.toDataURL("image/jpeg", 0.5);
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = function() { URL.revokeObjectURL(url); reject(new Error("Failed to load image")); };
+      img.src = url;
+    });
+  };
   const send = q2(async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if ((!text && pendingImages.length === 0) || busy) return;
     setError(null);
     try {
-      const res = await api("/submit", {
-        method: "POST",
-        body: { prompt: text }
-      });
+      var body = { prompt: text };
+      if (pendingImages.length > 0) { body.images = pendingImages; }
+      const res = await api("/submit", { method: "POST", body: body });
       if (!res.accepted) {
         setError(res.reason ?? "rejected");
         return;
       }
       setInput("");
+      setPendingImages([]);
     } catch (err) {
       setError(err.message);
     }
-  }, [input, busy]);
+  }, [input, busy, pendingImages]);
   const abort = q2(async () => {
     try {
       await api("/abort", { method: "POST" });
@@ -24045,6 +24115,121 @@ const [eccRules, setEccRulesLocal] = d2(null);
     },
     [send, popoverKind, popoverItems, applyPopover]
   );
+  var onPaste = q2(function(e) {
+    e.preventDefault();
+    var items = e.clipboardData?.items;
+    var imageFiles = [];
+    var fileNames = [];
+    var fullPaths = [];
+    var gotFullPaths = false;
+    if (items) {
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        if (item.type.startsWith("image/")) {
+          var f = item.getAsFile();
+          if (f) imageFiles.push(f);
+        } else if (item.kind === "file") {
+          var f2 = item.getAsFile();
+          if (f2?.name) fileNames.push(f2.name);
+        }
+      }
+    }
+    try {
+      var uriList = e.clipboardData.getData("text/uri-list");
+      if (uriList) {
+        var uris = uriList.split(/\r?\n/).filter(function(s) { return s.trim() && !s.startsWith("#"); });
+        fullPaths = uris.map(function(u) {
+          try { return decodeURI(u.replace(/^file:\/\/\//, "").replace(/\//g, "\\")); }
+          catch (_) { return u; }
+        });
+        gotFullPaths = fullPaths.length > 0;
+      }
+    } catch (_) {}
+    if (!gotFullPaths) {
+      try {
+        var plainText = e.clipboardData.getData("text/plain");
+        if (plainText) {
+          var lines = plainText.split(/\r?\n/).filter(function(s) { return s.trim(); });
+          if (lines.length > 0 && lines[0].indexOf("\\") >= 0) {
+            fullPaths = lines;
+            gotFullPaths = true;
+          }
+        }
+      } catch (_) {}
+    }
+    if (!gotFullPaths && fileNames.length > 0) {
+      fullPaths = fileNames;
+    }
+    var inIframe = false;
+    try { inIframe = window.parent !== window; } catch (_) {}
+    var pasteDebug = "[PASTE-DEBUG] items=" + (items ? items.length : "null") + " img=" + imageFiles.length + " names=" + fileNames.length + " paths=" + fullPaths.length + " gotFull=" + gotFullPaths + " inIframe=" + (inIframe ? "yes" : "no");
+    var ta = e.target;
+    var start = ta.selectionStart;
+    var end = ta.selectionEnd;
+    var before = input.slice(0, start);
+    var after = input.slice(end);
+    var inserted = false;
+    function insertAtCursor(txt) {
+      if (inserted) return;
+      inserted = true;
+      setInput(before + txt + after);
+      setTimeout(function() {
+        ta.selectionStart = ta.selectionEnd = start + txt.length;
+      }, 0);
+    }
+    if (imageFiles.length > 0) {
+      var remaining = 5 - pendingImages.length;
+      if (remaining > 0) {
+        var toProcess = imageFiles.slice(0, remaining);
+        Promise.all(toProcess.map(function(f2) {
+          return compressImage(f2).catch(function() { return null; });
+        })).then(function(results) {
+          var valid = results.filter(function(r) { return r !== null; });
+          if (valid.length > 0) {
+            setPendingImages(pendingImages.slice().concat(valid).slice(0, 5));
+          }
+        });
+      }
+    }
+    if (inIframe && !gotFullPaths) {
+      var timedOut = false;
+      var msgTimeout = setTimeout(function() {
+        timedOut = true;
+        window.removeEventListener("message", msgHandler);
+        if (plainText) { insertAtCursor(plainText); } else { fullPaths.unshift(pasteDebug + " [postMessage timeout]"); insertAtCursor(fullPaths.join("\n")); }
+      }, 500);
+      var msgHandler = function(ev) {
+        if (ev.data && ev.data.type === "vis_clipboard_result") {
+          if (timedOut) return;
+          clearTimeout(msgTimeout);
+          window.removeEventListener("message", msgHandler);
+          var paths = ev.data.paths || [];
+          if (ev.data.error) {
+            fullPaths.unshift(pasteDebug + " [CF_HDROP error: " + ev.data.error + "]");
+            insertAtCursor(fullPaths.join("\n"));
+          } else if (paths.length > 0) {
+            paths.unshift(pasteDebug + " [CF_HDROP " + paths.length + " files]");
+            insertAtCursor(paths.join("\n"));
+          } else if (plainText) {
+            insertAtCursor(plainText);
+          } else {
+            fullPaths.unshift(pasteDebug + " [CF_HDROP empty]");
+            insertAtCursor(fullPaths.join("\n"));
+          }
+        }
+      };
+      window.addEventListener("message", msgHandler);
+      window.parent.postMessage({type: "vis_get_clipboard"}, "*");
+    } else if (fullPaths.length > 0) {
+      fullPaths.unshift(pasteDebug + " [browser]");
+      insertAtCursor(fullPaths.join("\n"));
+    } else {
+      try {
+        var text = e.clipboardData.getData("text/plain");
+        if (text) insertAtCursor(text);
+      } catch (_) {}
+    }
+  }, [pendingImages, input]);
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -24159,11 +24344,8 @@ const [eccRules, setEccRulesLocal] = d2(null);
   }, [recentWss]);
   return html4`
     <div class="chat-shell">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
-        <div class="chips" style="padding:0">
-          <span class="chip-f static active">${MODE === "attached" ? t4("chat.modeMirror") : t4("chat.modeView")}</span>
-        </div>
-        <div class="header-pickers" style="margin-left:auto">${modes ? html4`
+      <div class="chat-toolbar">
+        <div class="header-pickers">${modes ? html4`
               <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
                 <span class="work-mode-label">${activeMode?.label ?? mode}</span>
                 <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
@@ -24281,30 +24463,22 @@ const [eccRules, setEccRulesLocal] = d2(null);
                 ` : null}
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
               <div style="display:flex;gap:6px;align-items:flex-end">
+            <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
+            ${html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />`}
+            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:0;right:0;width:18px;height:18px;background:var(--color-error,#f87171);color:#fff;border:none;border-radius:0 0 0 6px;font-size:10px;line-height:18px;cursor:pointer;padding:0;opacity:0" onMouseEnter=${function(e) { e.currentTarget.style.opacity = "1"; }} onMouseLeave=${function(e) { e.currentTarget.style.opacity = "0"; }} title="Remove image">✕</button></div>`; })}</div>` : null}
             <textarea
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
               value=${input}
               onInput=${onInput}
               onKeyDown=${onKeyDown}
+              onPaste=${onPaste}
               onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
               disabled=${busy}
               style="flex:1"
               rows="4"
             ></textarea>
-            <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
-              <button
-                class="primary"
-                onClick=${send}
-                disabled=${busy || !input.trim()}
-              >${t4("chat.send")}</button>
-              <div style="display: flex; gap: 6px;">
-                <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
-                <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
-              </div>
-            </div>
-              </div>
             <div style="display:flex;align-items:center;position:relative;flex-shrink:0;margin:0;gap:12px">
-              <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { api("/skills").then((r2) => setSkillList([...r2.global, ...r2.builtin])).catch(() => {}); } }}>🔧 技能</span>
+              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { api("/skills").then((r2) => setSkillList([...r2.global, ...r2.builtin])).catch(() => {}); } }}>🔧 技能</span>
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择技能</div>
@@ -24316,7 +24490,7 @@ const [eccRules, setEccRulesLocal] = d2(null);
                   `)}
                 </div>
               ` : null}
-              <span class="composer-chip" style="font-size:11px;padding:2px 10px" onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</span>
+              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</span>
               ${showWsPicker ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:280px;max-height:220px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择工作空间</div>
@@ -24328,8 +24502,26 @@ const [eccRules, setEccRulesLocal] = d2(null);
                 </div>
               ` : null}
               ${(showSkillPicker || showWsPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); }}></div>` : null}
+              <div style="flex:1"></div>
+              <button
+                onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
+                title="Attach images"
+                disabled=${busy}
+                style="padding:4px 8px;border-radius:4px;background:var(--surface-input, #1e2029);border:1px solid var(--border-default, #2a2e38);color:var(--text-primary, #f0f0f2);cursor:pointer;font-size:16px;flex-shrink:0"
+              >📎</button>
+            </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
+              <button
+                class="primary"
+                onClick=${send}
+                disabled=${busy || (!input.trim() && pendingImages.length === 0)}
+              >${t4("chat.send")}</button>
+              <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
+              <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
             </div>
               </div>
+            </div>
           </div>
 
           ${busy ? html4`<${InFlightRow}
@@ -24379,7 +24571,7 @@ var SideRail = N2(function SideRail2({ stats, budgetUsd, activePlan }) {
   const showBudget = stats != null && typeof budgetUsd === "number" && budgetUsd > 0;
   const budgetPct = showBudget ? Math.min(120, stats.totalCostUsd / budgetUsd * 100) : 0;
   const budgetTone2 = budgetPct >= 100 ? "err" : budgetPct >= 80 ? "warn" : "";
-  const walletCurrency = stats?.balance?.[0]?.currency;
+  const walletCurrency = primaryBalance(stats)?.currency;
   return html4`
     <aside class="chat-rail">
       ${activePlan ? html4`<${ActivePlanCard} plan=${activePlan} />` : null}
@@ -24504,7 +24696,7 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
     `;
   }
   const ctxPct = stats.contextCapTokens > 0 ? stats.lastPromptTokens / stats.contextCapTokens * 100 : 0;
-  const balance = stats.balance && stats.balance.length > 0 ? stats.balance[0] : null;
+  const balance = primaryBalance(stats);
   return html4`
     <div class="chat-statusbar">
       <span class="status-item">
@@ -24538,7 +24730,7 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
       ${balance ? html4`
           <span class="status-item">
             <span class="status-label">${t4("chat.statusBalance")}</span>
-            <code>${balance.total_balance} ${balance.currency}</code>
+            <code>${balance.total_balance ?? balance.total} ${balance.currency}</code>
           </span>
         ` : null}
     </div>
@@ -25557,7 +25749,7 @@ function compareVersions(a3, b2) {
 
 // dashboard/src/panels/overview.ts
 function kpi(label, value, delta, deltaTone) {
-  const muted = value === "\u2014" || value === null || value === void 0;
+  const muted = value === "\u2014" || value === "-" || value === null || value === void 0;
   return html4`
     <div class="kpi cock-w-1">
       <div class="label">${label}</div>
@@ -25587,7 +25779,8 @@ function deltaCountText(delta) {
   return { text: `${arrow} ${Math.abs(delta)}`, tone: delta > 0 ? "up" : "down" };
 }
 function balanceKpi(c3) {
-  if (!c3.balance) return kpi(t4("overview.balance"), "\u2014", "open in TUI", "flat");
+  if (c3.balanceSupported === false) return kpi(t4("overview.balance"), "-", null, "flat");
+  if (!c3.balance) return kpi(t4("overview.balance"), "\u2014", null, "flat");
   const symbol = c3.balance.currency === "CNY" ? "\xA5" : c3.balance.currency === "USD" ? "$" : "";
   return kpi(t4("overview.balance"), `${symbol}${c3.balance.total}`, c3.balance.currency, "flat");
 }
@@ -27100,6 +27293,7 @@ function ModelRow({
   current,
   catalog,
   saving,
+  locked,
   onPick
 }) {
   const list2 = catalog?.models ?? null;
@@ -27117,7 +27311,7 @@ function ModelRow({
     const next = e3.target.value;
     if (next && next !== current) onPick(next);
   }}
-        disabled=${saving}
+        disabled=${saving || locked}
         style="font-family:var(--font-mono);min-width:200px"
       >
         ${options2.map((m3) => html4`<option key=${m3} value=${m3}>${m3}</option>`)}
@@ -27539,6 +27733,10 @@ function SettingsPanel() {
   if (error && !data) return html4`<div class="card accent-err">${error}</div>`;
   if (!data) return null;
   const v3 = data;
+  const lockedPreset = ["flash", "pro"].includes(v3.preset ?? "");
+  const modelControlValue = lockedPreset ? v3.effectiveModel ?? v3.displayModel ?? v3.model ?? "\u2014" : v3.configuredModel ?? v3.effectiveModel ?? v3.model ?? "\u2014";
+  const runtimeModel = v3.runtimeModel ?? v3.displayModel ?? v3.model ?? "\u2014";
+  const modelNote = v3.modelDrift ? `运行模型 ${runtimeModel} 与预设期望 ${v3.effectiveModel ?? "\u2014"} 不一致，请新建对话或重启应用。` : lockedPreset ? `实际模型由 ${v3.preset} 预设锁定为 ${v3.effectiveModel ?? v3.model ?? "\u2014"}；基础配置 ${v3.configuredModel ?? "\u2014"} 仅在 auto 下使用。` : runtimeModel !== modelControlValue ? `当前运行 ${runtimeModel}；基础模型 ${modelControlValue} 将用于后续新对话。` : t4("settings.appliesNextTurn");
   const sectionH3 = (text) => html4`
     <h3 style="margin:18px 0 8px;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${text}</h3>
   `;
@@ -27797,12 +27995,14 @@ function SettingsPanel() {
         ${fieldRow(
     t4("settings.activeModel"),
     html4`<${ModelRow}
-            current=${v3.model ?? "\u2014"}
+            current=${modelControlValue}
             catalog=${catalog}
             saving=${saving}
+            locked=${lockedPreset}
             onPick=${(m3) => save({ model: m3 })}
           />`,
-    t4("settings.appliesNextTurn")
+    // When preset locks the model, avoid showing cfg.model as if it were active.
+    modelNote
   )}
         ${fieldRow(
     t4("settings.editMode"),
@@ -29239,7 +29439,7 @@ function ChatStatusBar3({ stats, model }) {
     `;
   }
   const ctxPct = stats.contextCapTokens > 0 ? stats.lastPromptTokens / stats.contextCapTokens * 100 : 0;
-  const balance = stats.balance && stats.balance.length > 0 ? stats.balance[0] : null;
+  const balance = primaryBalance(stats);
   return html6`
     <div class="chat-statusbar">
       <span class="status-item">
@@ -29273,7 +29473,7 @@ function ChatStatusBar3({ stats, model }) {
       ${balance ? html6`
           <span class="status-item">
             <span class="status-label">${t4("chat.statusBalance")}</span>
-            <code>${balance.total_balance} ${balance.currency}</code>
+            <code>${balance.total_balance ?? balance.total} ${balance.currency}</code>
           </span>
         ` : null}
     </div>
@@ -29867,7 +30067,7 @@ function ChatPane(props) {
         return;
       }
       if (dash.kind === "user") {
-        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text }]);
+        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
         return;
       }
       if (dash.kind === "assistant_delta") {
@@ -30306,7 +30506,7 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + v + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "light"}>
+          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "dark"}>
             <option value="light">\u6D45\u8272</option>
             <option value="dark">\u6DF1\u8272</option>
             <option value="warm-sand">\u6696\u6C99</option>

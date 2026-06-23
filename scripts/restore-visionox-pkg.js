@@ -3,7 +3,7 @@
 // directory. Run this when setting up a fresh clone or updating the reasonix version.
 //
 // Usage: node scripts/restore-visionox-pkg.js [version]
-//   version — reasonix version (default: "260530")
+//   version — reasonix version (default: "260603")
 
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, cpSync } from "node:fs";
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 const target = join(root, "src-tauri", "resources", "server", "visionox-pkg");
-const version = process.argv[2] || "260530";
+const version = process.argv[2] || "260603";
 const pkgName = "reasonix";
 
 // Check if dist/ already exists — if so, skip unless --force

@@ -17,8 +17,9 @@
       (function() {
         try {
           var m = document.cookie.match(/(?:^|;\s*)visionox-theme=([^;]*)/);
-          var t = m ? m[1] : '';
-          if (t) document.documentElement.setAttribute('data-theme', t);
+          var t = m ? decodeURIComponent(m[1]) : 'dark';
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage)$/.test(t)) t = 'dark';
+          document.documentElement.setAttribute('data-theme', t);
         } catch(e) {}
       })();
     </script>

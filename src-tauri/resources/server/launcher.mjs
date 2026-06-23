@@ -248,11 +248,42 @@ const [
 loadDotenv();
 let apiKey = loadApiKey();
 const config = readConfig(configPath);
-const model = config.model ?? "deepseek-v4-flash";
 let baseUrl = loadBaseUrl();
+
+const DEFAULT_MODEL = "deepseek-v4-flash";
+const PRESET_MODELS = {
+  flash: "deepseek-v4-flash",
+  pro: "deepseek-v4-pro",
+};
+const LEGACY_PRESET_ALIASES = {
+  fast: "flash",
+  smart: "auto",
+  max: "pro",
+};
+
+// Keep preset and model semantics centralized. `preset` is the user's model
+// commitment; `model` is only the baseline model used when preset=auto.
+// New loops, live updates, and dashboard APIs must use this effective model
+// instead of reading config.model directly, otherwise pro/flash labels drift.
+// Legacy names mirror resolvePreset(): fast→flash, smart→auto, max→pro.
+function effectiveModelConfig(source = config) {
+  const rawPreset = source.preset ?? "auto";
+  const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
+  const configuredModel = source.model ?? DEFAULT_MODEL;
+  const lockedModel = PRESET_MODELS[preset];
+  return {
+    rawPreset,
+    preset,
+    configuredModel,
+    model: lockedModel ?? configuredModel,
+    locked: Boolean(lockedModel),
+    autoEscalate: preset === "auto" ? source.autoEscalate !== false : false,
+  };
+}
 
 // ── Balance ──────────────────────────────────────────────────────
 let balanceData = null;
+const BALANCE_REFRESH_MS = 60_000;
 
 function isDeepSeekApi(url) {
   if (!url) return false;
@@ -271,10 +302,31 @@ async function refreshBalance() {
   }
   try {
     const data = await client.getBalance({ signal: AbortSignal.timeout(5000) });
-    balanceData = data;
+    if (data?.balance_infos?.length) balanceData = data;
   } catch {
-    balanceData = null;
+    // Keep the last successful balance. The dashboard polls /overview, so a
+    // transient startup/network failure should not blank every balance surface.
   }
+}
+
+function normalizedBalanceInfos() {
+  const infos = Array.isArray(balanceData?.balance_infos) ? balanceData.balance_infos : [];
+  if (infos.length === 0) return null;
+  const primary = pickPrimaryBalance(infos);
+  if (!primary) return infos;
+  return [primary, ...infos.filter((info) => info !== primary)];
+}
+
+function primaryBalanceSummary() {
+  const infos = normalizedBalanceInfos();
+  if (!infos?.length) return null;
+  const primary = infos[0];
+  return {
+    currency: primary.currency,
+    total: Number(primary.total_balance),
+    total_balance: primary.total_balance,
+    is_available: balanceData?.is_available,
+  };
 }
 
 // Workspace directory — configurable via config.workspaceDir
@@ -457,7 +509,8 @@ function deploySkillGuide(rootDir) {
 deployBootstrapSkills();
 deploySkillGuide(workspaceDir);
 
-console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, model=${model}`);
+const startupModelConfig = effectiveModelConfig();
+console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, preset=${startupModelConfig.preset}, model=${startupModelConfig.model}`);
 console.error(`[launcher] workspace: ${workspaceDir}`);
 
 // Workspace-dependent tool names — populated by registerWorkspaceTools() return value
@@ -1470,6 +1523,7 @@ Respond in the same language as the user's message.${routing}`;
 }
 
 function buildLoop(client, rootDir) {
+  const modelConfig = effectiveModelConfig();
   const soul = loadSoul();
   const mc = getModeConfig();
   const system = buildSystemPrompt(rootDir, hasSemanticSearch);
@@ -1494,13 +1548,19 @@ function buildLoop(client, rootDir) {
     system: systemWithSkills,
     toolSpecs: tools.specs(),
   });
+  const VISION_MODELS = {
+    "deepseek-v4-pro": { vision: true, visionDetail: "high" },
+  };
+  const visionCfg = VISION_MODELS[modelConfig.model] || {};
   return new CacheFirstLoop({
     client,
     prefix,
     tools,
-    model,
+    model: modelConfig.model,
     reasoningEffort: config.reasoningEffort ?? "max",
-    autoEscalate: config.autoEscalate !== false,
+    autoEscalate: modelConfig.autoEscalate,
+    vision: visionCfg.vision ?? false,
+    visionDetail: visionCfg.visionDetail ?? "",
   });
 }
 
@@ -1511,12 +1571,13 @@ if (apiKey) {
   try {
     client = new DeepSeekClient({ apiKey, baseUrl });
     loop = buildLoop(client, workspaceDir);
-    console.error(`[launcher] CacheFirstLoop created (model=${model})`);
+    console.error(`[launcher] CacheFirstLoop created (model=${effectiveModelConfig().model}, effort=${config.reasoningEffort ?? "max"})`);
   } catch (err) {
     console.error(`[launcher] failed to create loop: ${err.message}`);
   }
 }
 if (client) refreshBalance();
+setInterval(() => { if (client) refreshBalance(); }, BALANCE_REFRESH_MS);
 
 // ── Event sink (writes .events.jsonl for cockpit tool activity) ──
 let eventSink = null;
@@ -1727,16 +1788,23 @@ const ctx = {
   },
   applyPresetLive: (name) => {
     console.error(`[launcher] preset: ${name}`);
-    if (name === "pro") {
-      loop?.configure({ model: "deepseek-v4-pro", autoEscalate: false });
-    } else if (name === "flash") {
-      loop?.configure({ model: "deepseek-v4-flash", autoEscalate: false });
-    } else {
-      loop?.configure({ model: "deepseek-v4-flash", autoEscalate: true });
-    }
+    syncRuntimeConfig({ ...config, preset: name });
+    // Re-resolve through effectiveModelConfig so locked presets override
+    // stale config.model values when switching live or rebuilding after /new.
+    const modelConfig = effectiveModelConfig();
+    loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
   },
-  applyEffortLive: (effort) => { loop?.configure({ reasoningEffort: effort }); },
-  applyModelLive: (m) => { loop?.configure({ model: m }); },
+  applyEffortLive: (effort) => {
+    syncRuntimeConfig({ ...config, reasoningEffort: effort });
+    loop?.configure({ reasoningEffort: effort });
+  },
+  applyModelLive: (m) => {
+    syncRuntimeConfig({ ...config, model: m });
+    // A manual model pick updates the auto baseline only; pro/flash presets stay
+    // locked to their preset model to keep every UI surface consistent.
+    const modelConfig = effectiveModelConfig();
+    loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
+  },
   setProNextLive: () => {},
   setBudgetUsdLive: (usd) => { loop?.setBudget(usd); },
 
@@ -1840,7 +1908,7 @@ const ctx = {
 
   // P0-1: busy guard must be checked and set BEFORE any await to prevent
   // race conditions where two rapid calls both pass the busy check.
-  submitPrompt: async (text, sessionName) => {
+  submitPrompt: async (text, sessionName, images) => {
     if (busy) {
       return { accepted: false, reason: "loop is busy with a turn" };
     }
@@ -1912,7 +1980,7 @@ const ctx = {
         if (client) {
           loop = buildLoop(client, workspaceDir);
           ctx.loop = loop;
-          console.error(`[launcher] loop rebuilt (mode: ${config.mode})`);
+          console.error(`[launcher] loop rebuilt (mode: ${config.mode}, model=${effectiveModelConfig().model}, effort=${config.reasoningEffort ?? "max"})`);
         }
         // Reset eventizer for new session
         if (eventizer) {
@@ -1941,9 +2009,13 @@ const ctx = {
 
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
 
+      if (loop && images && images.length > 0) {
+        loop.setPendingImages(images);
+      }
+
       const userMsgId = String(nextMsgId++);
-      pushMessage({ id: userMsgId, role: "user", text });
-      broadcastDashboardEvent({ kind: "user", id: userMsgId, text });
+      pushMessage({ id: userMsgId, role: "user", text, images: images?.length ? images : undefined });
+      broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: images?.length ? images : undefined });
 
       const assistantId = `assistant-${Date.now()}`;
 
@@ -1958,7 +2030,7 @@ const ctx = {
             // Write event to .events.jsonl for cockpit tool activity
             if (eventSink && eventizer) {
               try {
-                const ectx = { model: ev.stats?.model ?? loop.model ?? model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
+                const ectx = { model: ev.stats?.model ?? loop.model ?? effectiveModelConfig().model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
                 for (const out of eventizer.consume(ev, ectx)) eventSink.append(out);
               } catch {}
             }
@@ -2019,6 +2091,8 @@ const ctx = {
   getStats: () => {
     if (!loop) return null;
     const s = loop.stats.summary();
+    const balance = normalizedBalanceInfos();
+    const balanceSupported = isDeepSeekApi(baseUrl);
     return {
       turns: s.turns,
       totalCostUsd: s.totalCostUsd,
@@ -2028,7 +2102,9 @@ const ctx = {
       cacheHitRatio: s.cacheHitRatio,
       lastPromptTokens: s.lastPromptTokens,
       contextCapTokens: 65536,
-      balance: balanceData?.balance_infos ?? null,
+      balanceSupported,
+      balance,
+      primaryBalance: primaryBalanceSummary(),
     };
   },
 
@@ -2041,6 +2117,7 @@ const ctx = {
 if (config.preset && config.preset !== "auto") {
   ctx.applyPresetLive(config.preset);
 }
+ctx.applyEffortLive(config.reasoningEffort ?? "max");
 
 // ── Initial welcome message ──────────────────────────────────────
 pushMessage({

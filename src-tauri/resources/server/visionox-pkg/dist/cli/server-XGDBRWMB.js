@@ -1803,6 +1803,7 @@ async function handleModal(method, rest, body, ctx) {
       if (choice !== "approve" && choice !== "refine" && choice !== "cancel") {
         return { status: 400, body: { error: "plan choice must be approve / refine / cancel" } };
       }
+      if (choice === "cancel") ctx.abortTurn?.();
       ctx.resolvePlanConfirm(choice, typeof text === "string" && text.trim() ? text : void 0);
       return { status: 200, body: { resolved: true } };
     }
@@ -1872,11 +1873,19 @@ async function handleModal(method, rest, body, ctx) {
 async function handleModels(method, _rest, _body, ctx) {
   if (method !== "GET") return { status: 405, body: { error: "GET only" } };
   const models = ctx.getModels?.() ?? null;
+  const cfg = readConfig(ctx.configPath);
+  const state = modelState(ctx, cfg);
   return {
     status: 200,
     body: {
       models,
-      current: ctx.loop?.model ?? null,
+      current: state.displayModel,
+      configuredModel: state.configuredModel,
+      effectiveModel: state.effectiveModel,
+      runtimeModel: state.runtimeModel,
+      displayModel: state.displayModel,
+      modelDrift: state.modelDrift,
+      preset: state.preset,
       /** USD per 1M tokens — same table the cost gauge uses. */
       pricing: DEEPSEEK_PRICING
     }
@@ -2029,16 +2038,26 @@ function parseTs(ts) {
 var TTL_MS = 5e3;
 var cache = /* @__PURE__ */ new Map();
 function computeCockpit(ctx, now = Date.now()) {
+  const stats = ctx.getStats?.() ?? null;
   return {
-    balance: extractBalance(ctx.getStats?.() ?? null),
+    balanceSupported: stats?.balanceSupported === true,
+    balance: extractBalance(stats),
     currentSession: extractCurrentSession(ctx),
     ...readWarmCached(ctx.usageLogPath, now, ctx.sessionsDir)
   };
 }
+function pickDashboardBalance(infos) {
+  if (!Array.isArray(infos) || infos.length === 0) return null;
+  let best = infos[0];
+  for (let i = 1; i < infos.length; i++) {
+    if (Number(infos[i]?.total_balance ?? infos[i]?.total ?? 0) > Number(best?.total_balance ?? best?.total ?? 0)) best = infos[i];
+  }
+  return best;
+}
 function extractBalance(stats) {
-  const first = stats?.balance?.[0];
+  const first = stats?.primaryBalance ?? pickDashboardBalance(stats?.balance);
   if (!first) return null;
-  return { currency: first.currency, total: first.total_balance };
+  return { currency: first.currency, total: Number(first.total_balance ?? first.total) };
 }
 function extractCurrentSession(ctx) {
   const id = ctx.getSessionName?.() ?? null;
@@ -2120,6 +2139,7 @@ async function handleOverview(method, _rest, _body, ctx) {
     return { status: 405, body: { error: "GET only" } };
   }
   const cfg = readConfig(ctx.configPath);
+  const model = modelState(ctx, cfg);
   const cwd = ctx.getCurrentCwd?.() ?? null;
   const semanticIndexExists = cwd ? await indexExists(cwd).catch(() => false) : null;
   const modeInfo = ctx.getModes?.() ?? null;
@@ -2133,14 +2153,19 @@ async function handleOverview(method, _rest, _body, ctx) {
     latestVersion: ctx.getLatestVersion?.() ?? null,
     session: ctx.getSessionName?.() ?? null,
     cwd,
-    model: ctx.loop?.model ?? null,
+    model: model.displayModel,
+    configuredModel: model.configuredModel,
+    effectiveModel: model.effectiveModel,
+    runtimeModel: model.runtimeModel,
+    displayModel: model.displayModel,
+    modelDrift: model.modelDrift,
     editMode: ctx.getEditMode?.() ?? null,
     planMode: ctx.getPlanMode?.() ?? null,
     pendingEdits: ctx.getPendingEditCount?.() ?? null,
     mcpServerCount: ctx.mcpServers?.length ?? null,
     toolCount: ctx.tools ? ctx.tools.size : null,
-    preset: cfg.preset ?? "auto",
-    reasoningEffort: cfg.reasoningEffort ?? "max",
+    preset: model.preset,
+    reasoningEffort: ctx.loop?.reasoningEffort ?? cfg.reasoningEffort ?? "max",
     budgetUsd: ctx.loop?.budgetUsd ?? null,
     stats: ctx.getStats?.() ?? null,
     semanticIndexExists,
@@ -2899,6 +2924,50 @@ function parseBody9(raw) {
 }
 var VALID_PRESETS = /* @__PURE__ */ new Set(["auto", "flash", "pro", "fast", "smart", "max"]);
 var VALID_EFFORTS = /* @__PURE__ */ new Set(["high", "max"]);
+var DEFAULT_MODEL = "deepseek-v4-flash";
+var PRESET_MODELS = {
+  flash: "deepseek-v4-flash",
+  pro: "deepseek-v4-pro"
+};
+var LEGACY_PRESET_ALIASES = {
+  fast: "flash",
+  smart: "auto",
+  max: "pro"
+};
+// Dashboard consumers must keep these concepts separate:
+// cfg.model is the auto-mode baseline, effectiveModel is the preset commitment,
+// runtimeModel is the live loop, and displayModel is the primary UI label.
+// Legacy names mirror resolvePreset(): fast->flash, smart->auto, max->pro.
+function effectiveModelConfig(cfg) {
+  const rawPreset = cfg.preset ?? "auto";
+  const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
+  const configuredModel = cfg.model ?? DEFAULT_MODEL;
+  const lockedModel = PRESET_MODELS[preset];
+  return {
+    rawPreset,
+    preset,
+    configuredModel,
+    model: lockedModel ?? configuredModel,
+    locked: Boolean(lockedModel)
+  };
+}
+function modelState(ctx, cfg) {
+  const effective = effectiveModelConfig(cfg);
+  const runtimeModel = ctx.loop?.model ?? null;
+  // `displayModel` is the UI's primary label: actual loop model when available,
+  // otherwise the model that will be used when the next loop is created.
+  const displayModel = runtimeModel ?? effective.model;
+  const modelDrift = effective.locked && Boolean(runtimeModel) && runtimeModel !== effective.model;
+  return {
+    rawPreset: effective.rawPreset,
+    preset: effective.preset,
+    configuredModel: effective.configuredModel,
+    effectiveModel: effective.model,
+    runtimeModel,
+    displayModel,
+    modelDrift
+  };
+}
 async function handleSettings(method, _rest, body, ctx) {
   if (method === "GET") {
     const cfg = readConfig(ctx.configPath);
@@ -2907,6 +2976,7 @@ async function handleSettings(method, _rest, body, ctx) {
       writeConfig(cfg, ctx.configPath);
     }
     const live = ctx.loop;
+    const state = modelState(ctx, cfg);
     return {
       status: 200,
       body: {
@@ -2914,8 +2984,8 @@ async function handleSettings(method, _rest, body, ctx) {
         apiKeySet: Boolean(cfg.apiKey),
         baseUrl: cfg.baseUrl ?? null,
         lang: getLanguage(),
-        preset: cfg.preset ?? "auto",
-        reasoningEffort: cfg.reasoningEffort ?? "max",
+        preset: state.preset,
+        reasoningEffort: ctx.loop?.reasoningEffort ?? cfg.reasoningEffort ?? "max",
         search: cfg.search !== false,
         webSearchEngine: cfg.webSearchEngine ?? "bing-scrape",
         webSearchEndpoint: cfg.webSearchEndpoint ?? null,
@@ -2926,7 +2996,12 @@ async function handleSettings(method, _rest, body, ctx) {
         activeMode: ctx.getModes?.()?.active ?? null,
         eccRules: ctx.getEccRules?.() ?? null,
         session: cfg.session ?? null,
-        model: live?.model ?? null,
+        model: state.displayModel,
+        configuredModel: state.configuredModel,
+        effectiveModel: state.effectiveModel,
+        runtimeModel: state.runtimeModel,
+        displayModel: state.displayModel,
+        modelDrift: state.modelDrift,
         proNext: live?.proArmed ?? false,
         budgetUsd: live?.budgetUsd ?? null,
         sessionSpendUsd: ctx.getStats?.()?.totalCostUsd ?? null,
@@ -3044,6 +3119,8 @@ async function handleSettings(method, _rest, body, ctx) {
         return { status: 400, body: { error: "model must be a non-empty string" } };
       }
       modelPendingLive = fields.model.trim();
+      // Persist the baseline model; preset=pro/flash still overrides it at runtime.
+      cfg.model = modelPendingLive;
       changed.push("model");
     }
     if (fields.proNext !== void 0) {
@@ -3352,11 +3429,16 @@ async function handleSubmit(method, _rest, body, ctx) {
       }
     };
   }
-  const { prompt, session } = parseBody11(body);
-  if (typeof prompt !== "string" || (!prompt.trim() && !session)) {
+  const { prompt, session, images } = parseBody11(body);
+  let parsedImages = null;
+  if (Array.isArray(images) && images.length > 0) {
+    parsedImages = images.filter(function(i) { return typeof i === "string" && i.startsWith("data:image/"); });
+    if (parsedImages.length === 0) parsedImages = null;
+  }
+  if (typeof prompt !== "string" || (!prompt.trim() && !parsedImages && !session)) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
-  const result = await ctx.submitPrompt(prompt, session || null);
+  const result = await ctx.submitPrompt(prompt, session || null, parsedImages);
   if (!result.accepted) {
     return {
       status: 409,
@@ -3615,7 +3697,7 @@ function checkAuth(req, expectedToken, isMutation) {
     body: JSON.stringify({ error: "missing or invalid token" })
   };
 }
-var MAX_BODY_BYTES = 256 * 1024;
+var MAX_BODY_BYTES = 2 * 1024 * 1024; // 2MB (was 256KB) — for base64 image uploads
 async function readBody(req) {
   let total = 0;
   const chunks = [];

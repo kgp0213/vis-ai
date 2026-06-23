@@ -7530,6 +7530,9 @@ var CacheFirstLoop = class {
     this.model = opts.model ?? "deepseek-v4-flash";
     this.reasoningEffort = opts.reasoningEffort ?? "max";
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
+    this.vision = opts.vision ?? false;
+    this.visionDetail = opts.visionDetail ?? "";
+    this._pendingImages = null;
     this.budgetUsd = typeof opts.budgetUsd === "number" && opts.budgetUsd > 0 ? opts.budgetUsd : null;
     this._turnFailures = new TurnFailureTracker(
       resolveFailureThreshold(opts.failureThreshold, FAILURE_ESCALATION_THRESHOLD)
@@ -7675,6 +7678,8 @@ var CacheFirstLoop = class {
     }
     if (opts.reasoningEffort !== void 0) this.reasoningEffort = opts.reasoningEffort;
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
+    if (opts.vision !== void 0) this.vision = opts.vision;
+    if (opts.visionDetail !== void 0) this.visionDetail = opts.visionDetail;
   }
   /** `null` disables the cap; any change re-arms the 80% warning. */
   setBudget(usd) {
@@ -7789,14 +7794,47 @@ ${reason}`
     return generated;
   }
   _inflightCounter = 0;
+  buildUserContent(text, images, visionDetail) {
+    if (!images || images.length === 0) return text || "";
+    const parts = [];
+    if (text && text.trim()) {
+      parts.push({ type: "text", text });
+    }
+    for (const dataUrl of images) {
+      if (!dataUrl || !dataUrl.startsWith("data:image/")) continue;
+      const rawBase64 = dataUrl.replace(/^data:image\/[^;]+;base64,/, "");
+      const mimeMatch = dataUrl.match(/^data:(image\/[^;]+);base64,/);
+      const mediaType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+      const block = {
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: rawBase64 }
+      };
+      parts.push(block);
+    }
+    if (parts.length === 0) return text || "";
+    if (!parts.some((p) => p.type === "text")) {
+      parts.unshift({ type: "text", text: text || "" });
+    }
+    return parts;
+  }
   buildMessages(pendingUser) {
     const healed = healLoadedMessages(this.log.toMessages(), DEFAULT_MAX_RESULT_CHARS);
     const msgs = [...this.prefix.toMessages(), ...healed.messages];
-    if (pendingUser !== null) msgs.push({ role: "user", content: pendingUser });
+    if (pendingUser !== null) {
+      const images = this._pendingImages;
+      if (this.vision && images && images.length > 0) {
+        msgs.push({ role: "user", content: this.buildUserContent(pendingUser, images, this.visionDetail) });
+      } else {
+        msgs.push({ role: "user", content: pendingUser });
+      }
+    }
     return msgs;
   }
   abort() {
     this._turnAbort.abort();
+  }
+  setPendingImages(images) {
+    this._pendingImages = images && images.length > 0 ? images : null;
   }
   /** Drop the last user message + everything after; caller re-sends. Persists to session file. */
   retryLastUser() {
@@ -7912,6 +7950,7 @@ ${reason}`
         };
       }
       let messages = this.buildMessages(pendingUser);
+      this._pendingImages = null;
       {
         const decision2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
         if (decision2.needsAction) {
