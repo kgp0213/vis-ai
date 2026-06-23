@@ -179,7 +179,7 @@ node scripts/restore-visionox-pkg.js
 
 # 编译 Windows 安装器（NSIS exe）
 npm run tauri:build
-# → src-tauri/target/release/bundle/nsis/Visionox_1.0.0_x64-setup.exe
+# → src-tauri/target/release/bundle/nsis/Visionox_1.0.1_x64-setup.exe
 
 # 仅编译调试/开发用可执行文件
 cd src-tauri
