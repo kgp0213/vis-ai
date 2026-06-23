@@ -24125,12 +24125,10 @@ const [eccRules, setEccRulesLocal] = d2(null);
     if (items) {
       for (var i = 0; i < items.length; i++) {
         var item = items[i];
-        if (item.type.startsWith("image/")) {
+        if (item.kind === "file") {
           var f = item.getAsFile();
-          if (f) imageFiles.push(f);
-        } else if (item.kind === "file") {
-          var f2 = item.getAsFile();
-          if (f2?.name) fileNames.push(f2.name);
+          if (f?.name) fileNames.push(f.name);
+          if (item.type.startsWith("image/") && f) imageFiles.push(f);
         }
       }
     }
@@ -24177,51 +24175,87 @@ const [eccRules, setEccRulesLocal] = d2(null);
         ta.selectionStart = ta.selectionEnd = start + txt.length;
       }, 0);
     }
-    if (imageFiles.length > 0) {
+    function addPendingImages(files) {
       var remaining = 5 - pendingImages.length;
-      if (remaining > 0) {
-        var toProcess = imageFiles.slice(0, remaining);
-        Promise.all(toProcess.map(function(f2) {
-          return compressImage(f2).catch(function() { return null; });
-        })).then(function(results) {
-          var valid = results.filter(function(r) { return r !== null; });
-          if (valid.length > 0) {
-            setPendingImages(pendingImages.slice().concat(valid).slice(0, 5));
-          }
-        });
-      }
-    }
-    if (inIframe && !gotFullPaths) {
-      var timedOut = false;
-      var msgTimeout = setTimeout(function() {
-        timedOut = true;
-        window.removeEventListener("message", msgHandler);
-        if (plainText) { insertAtCursor(plainText); } else { fullPaths.unshift(pasteDebug + " [postMessage timeout]"); insertAtCursor(fullPaths.join("\n")); }
-      }, 500);
-      var msgHandler = function(ev) {
-        if (ev.data && ev.data.type === "vis_clipboard_result") {
-          if (timedOut) return;
-          clearTimeout(msgTimeout);
-          window.removeEventListener("message", msgHandler);
-          var paths = ev.data.paths || [];
-          if (ev.data.error) {
-            fullPaths.unshift(pasteDebug + " [CF_HDROP error: " + ev.data.error + "]");
-            insertAtCursor(fullPaths.join("\n"));
-          } else if (paths.length > 0) {
-            paths.unshift(pasteDebug + " [CF_HDROP " + paths.length + " files]");
-            insertAtCursor(paths.join("\n"));
-          } else if (plainText) {
-            insertAtCursor(plainText);
-          } else {
-            fullPaths.unshift(pasteDebug + " [CF_HDROP empty]");
-            insertAtCursor(fullPaths.join("\n"));
-          }
+      if (remaining <= 0) return;
+      var toProcess = files.slice(0, remaining);
+      Promise.all(toProcess.map(function(f2) {
+        return compressImage(f2).catch(function() { return null; });
+      })).then(function(results) {
+        var valid = results.filter(function(r) { return r !== null; });
+        if (valid.length > 0) {
+          setPendingImages(pendingImages.slice().concat(valid).slice(0, 5));
         }
-      };
-      window.addEventListener("message", msgHandler);
-      window.parent.postMessage({type: "vis_get_clipboard"}, "*");
-    } else if (fullPaths.length > 0) {
-      fullPaths.unshift(pasteDebug + " [browser]");
+      });
+    }
+    if (imageFiles.length > 0 && fileNames.length === 0) {
+      addPendingImages(imageFiles);
+    }
+    if (!gotFullPaths && fullPaths.length > 0) {
+      var capBefore = before, capAfter = after, capStart = start;
+      function insertPaths(paths) {
+        if (inserted) return;
+        inserted = true;
+        var text = paths.join("\n");
+        setInput(capBefore + text + capAfter);
+        setTimeout(function() {
+          ta.selectionStart = ta.selectionEnd = capStart + text.length;
+        }, 0);
+      }
+      function insertPathReadFailure(reason) {
+        var names = fileNames.length > 0 ? fileNames.join(", ") : fullPaths.join(", ");
+        insertPaths(["无法获取剪贴板中文件的完整本地路径：" + names + "。" + reason]);
+      }
+      function tryPostMessage() {
+        if (!inIframe) {
+          insertPathReadFailure("请从 Windows 文件资源管理器复制文件后重试。");
+          return;
+        }
+        try {
+          var handled = false;
+          var listener = function(e2) {
+            if (e2.data && e2.data.type === 'vis_clipboard_result') {
+              handled = true;
+              window.removeEventListener('message', listener);
+              clearTimeout(timer);
+              if (e2.data.paths && e2.data.paths.length > 0) {
+                insertPaths(e2.data.paths.slice());
+              } else if (e2.data.error) {
+                insertPathReadFailure(e2.data.error);
+              } else {
+                insertPathReadFailure("本地剪贴板没有返回文件路径。");
+              }
+            }
+          };
+          window.addEventListener('message', listener);
+          window.parent.postMessage({ type: 'vis_get_clipboard' }, '*');
+          var timer = setTimeout(function() {
+            if (!handled) {
+              window.removeEventListener('message', listener);
+              insertPathReadFailure("本地剪贴板接口超时。");
+            }
+          }, 2000);
+        } catch (_) {
+          insertPathReadFailure("本地剪贴板接口调用失败。");
+        }
+      }
+      var clipboardUrl = "/api/clipboard-files" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
+      fetch(clipboardUrl).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.paths && data.paths.length > 0) {
+          insertPaths(data.paths);
+        } else if (imageFiles.length > 0 && fileNames.length === 0) {
+          addPendingImages(imageFiles);
+        } else {
+          tryPostMessage();
+        }
+      }).catch(function() {
+        if (imageFiles.length > 0 && fileNames.length === 0) {
+          addPendingImages(imageFiles);
+        } else {
+          tryPostMessage();
+        }
+      });
+    } else if (gotFullPaths && fullPaths.length > 0) {
       insertAtCursor(fullPaths.join("\n"));
     } else {
       try {

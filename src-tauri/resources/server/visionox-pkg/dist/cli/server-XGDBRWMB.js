@@ -3576,6 +3576,46 @@ async function handleOpenUrl(method, _rest, body, ctx) {
     return { status: 500, body: { error: err.message } };
   }
 }
+// src/server/api/clipboard-files.ts
+var _psScriptPath = null;
+function getPsScriptPath() {
+  if (_psScriptPath) return _psScriptPath;
+  _psScriptPath = join(dirname(fileURLToPath(import.meta.url)), 'read-clipboard.ps1');
+  return _psScriptPath;
+}
+
+function readClipboardPaths() {
+  var ps1 = getPsScriptPath();
+
+  // Try pwsh (PS 7+) first — better STA/OLE handling in newer runtimes
+  try {
+    var out = execSync(
+      'pwsh -Sta -NoProfile -NonInteractive -File "' + ps1 + '"',
+      { encoding: "utf8", timeout: 5000, windowsHide: true }
+    );
+    var paths = out.split(/\r?\n/).filter(function(s) { return s.trim(); });
+    if (paths.length > 0) return paths;
+  } catch (_) { /* pwsh not available or failed */ }
+
+  // Fallback: powershell (PS 5.1, present on all Windows 10/11)
+  try {
+    var out = execSync(
+      'powershell -Sta -NoProfile -File "' + ps1 + '"',
+      { encoding: "utf8", timeout: 5000, windowsHide: true }
+    );
+    var paths = out.split(/\r?\n/).filter(function(s) { return s.trim(); });
+    return paths;
+  } catch (_) {
+    return [];
+  }
+}
+
+function handleClipboardFiles(method, _rest, _body, _ctx) {
+  if (method !== "GET") return { status: 405, body: { error: "GET only" } };
+  if (process.platform !== "win32") return { status: 200, body: { paths: [] } };
+  return { status: 200, body: { paths: readClipboardPaths() } };
+}
+
 async function handleApi(pathTail, method, body, ctx, query = new URLSearchParams()) {
   const normalized = pathTail.replace(/\/+$/, "");
   const [head, ...rest] = normalized.split("/");
@@ -3651,6 +3691,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleModels(method, rest, body, ctx);
       case "open-url":
         return await handleOpenUrl(method, rest, body, ctx);
+      case "clipboard-files":
+        return await handleClipboardFiles(method, rest, body, ctx);
       default:
         return { status: 404, body: { error: `no such endpoint: /${head}` } };
     }

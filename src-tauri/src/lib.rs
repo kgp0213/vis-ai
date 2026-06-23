@@ -378,7 +378,7 @@ pub fn run() -> anyhow::Result<()> {
                                         "[rust] health check passed — loading dashboard in iframe",
                                     );
                                     let nav_js = format!(
-                                        "(function(){{var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.innerHTML='';document.body.appendChild(f);}}f.src='{url}';}})();window.addEventListener('message',function(e){{if(e.data&&e.data.type==='vis_get_clipboard'){{var api=window.__TAURI__;if(api&&api.invoke){{api.invoke('get_clipboard_files').then(function(p){{e.source.postMessage({{type:'vis_clipboard_result',paths:p||[]}},e.origin);}}).catch(function(err){{e.source.postMessage({{type:'vis_clipboard_result',error:String(err),paths:[]}},e.origin);}});}}else{{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'__TAURI__ not available',paths:[]}},e.origin||'*');}}}}}});",
+                                        "(function(){{var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.innerHTML='';document.body.appendChild(f);}}f.src='{url}';}})();(function waitForTauri(cb){{if(window.__TAURI__&&window.__TAURI__.invoke){{cb();return;}}if(!waitForTauri.n)waitForTauri.n=0;if(++waitForTauri.n>50)return;setTimeout(function(){{waitForTauri(cb);}},100);}})(function(){{window.addEventListener('message',function(e){{if(e.data&&e.data.type==='vis_get_clipboard'){{if(window.__TAURI__&&window.__TAURI__.invoke){{window.__TAURI__.invoke('ping').then(function(r){{if(r==='pong'){{window.__TAURI__.invoke('get_clipboard_files').then(function(p){{e.source.postMessage({{type:'vis_clipboard_result',paths:p||[]}},e.origin);}}).catch(function(err){{e.source.postMessage({{type:'vis_clipboard_result',error:'get_clipboard_files: '+String(err),paths:[]}},e.origin);}});}}else{{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'ping returned: '+String(r),paths:[]}},e.origin||'*');}}}}).catch(function(err){{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'ping failed: '+String(err),paths:[]}},e.origin||'*');}});}}else{{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'__TAURI__ not available',paths:[]}},e.origin||'*');}}}}}});}});",
                                         url = url.replace('\'', "\\'"),
                                     );
                                     log_diag(&format!("[rust] eval js: {nav_js}"));
@@ -531,7 +531,7 @@ pub fn run() -> anyhow::Result<()> {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_clipboard_files])
+        .invoke_handler(tauri::generate_handler![ping, get_clipboard_files])
         .build(tauri::generate_context!())
         ?
         .run(|app_handle, event| {
@@ -578,6 +578,12 @@ pub fn run() -> anyhow::Result<()> {
 /// Read full file paths from the Windows clipboard (CF_HDROP format).
 /// This captures paths from File Explorer copies, which are inaccessible
 /// from the JavaScript clipboard API.
+#[tauri::command]
+fn ping() -> String {
+    log_diag("[rust] ping invoked");
+    "pong".to_string()
+}
+
 #[tauri::command]
 fn get_clipboard_files() -> Vec<String> {
     log_diag("[rust] get_clipboard_files invoked");
