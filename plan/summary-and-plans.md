@@ -115,21 +115,32 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
 
 #### 2.1.2 effort 兼容性设计
 
-根据胡老师确认：**本地模型推理强度只支持 high，模型 id 只支持 flash**。
+根据胡老师确认及 [`plan/本地模型对比报告_DeepSeek-V4-vs-Qwen3.5-397B.md`](本地模型对比报告_DeepSeek-V4-vs-Qwen3.5-397B.md) 的实测数据：
 
-三个 provider 的能力矩阵：
+**本地模型推理强度只支持 high，模型 id 只支持 flash**。
 
-| Provider | preset 可选 | effort 可选 | 模型 id | autoEscalate | 说明 |
-|----------|------------|------------|---------|:----------:|------|
-| DeepSeek 官方 | auto, flash, pro | high, max | deepseek-v4-flash, deepseek-v4-pro | ✅ | 全功能，auto 可升级到 pro |
-| 本地 DeepSeek | flash | high | deepseek-v4-flash | ❌ | 仅 flash + high，无 auto 升级 |
-| 本地 Qwen | flash | high | qwen3.5-397b-a17b | ❌ | 非 deepseek 模型，preset=flash 但 model 映射到 qwen |
+> ⚠️ **报告关键发现（纠正之前计划中的错误）**：
+> - **两个本地模型均不支持独立思考 token**：`reasoning.effort` 参数无效，`reasoning` 始终返回 null，`thinking`/`extra_body.thinking` 参数无效。
+> - **本地 DeepSeek-V4-Flash 的 thinkingMode 应为 `disabled`**（之前计划误写为 `enabled`）。报告实测 `reasoning` 始终 null。
+> - **同一个模型 ID 在官方和本地能力不同**：官方 `deepseek-v4-flash` 支持 thinking 模式（`isThinkingModeModel` 返回 enabled），本地 vLLM 部署的 `deepseek-v4-flash` **不支持**。
+> - **effort 参数对本地模型 API 层面无效**，但 UI 层面仍需限制（避免发送无效参数、避免用户误以为 max 可用）。
+> - **Qwen 支持多模态（图像识别）**，DeepSeek 本地版明确拒绝（400: "not a multimodal model"）。影响 vision 配置。
+> - **上下文长度差异巨大**：DeepSeek 本地 1M tokens，Qwen 81K tokens。影响 max_tokens 和长文档处理。
+> - **Qwen JSON Mode 限制**：根节点必须为对象 `{}`，数组 `[]` 会报错。
+
+三个 provider 的能力矩阵（基于实测报告修正）：
+
+| Provider | preset 可选 | effort 可选 | 模型 id | thinkingMode | autoEscalate | 多模态 | 最大上下文 | JSON Mode |
+|----------|------------|------------|---------|:----------:|:----------:|:------:|:----------:|:---------:|
+| DeepSeek 官方 | auto, flash, pro | high, max | deepseek-v4-flash, deepseek-v4-pro | enabled | ✅ | ❌ | — | 正常 |
+| 本地 DeepSeek | flash | high | deepseek-v4-flash | **disabled** | ❌ | ❌ | 1,048,576 | 正常 |
+| 本地 Qwen | flash | high | qwen3.5-397b-a17b | disabled | ❌ | ✅ | 81,920 | 根节点必须 `{}` |
 
 **兼容设计要点**：
 
 1. **preset 维度**：本地 provider 只有 `flash`，没有 `auto`（无 autoEscalate）和 `pro`（无 pro 模型）。UI 需隐藏/禁用不支持的 preset 按钮。
 
-2. **effort 维度**：本地 provider 只有 `high`，没有 `max`。UI 需隐藏/禁用不支持的 effort 按钮。
+2. **effort 维度**：本地 provider 只有 `high`，没有 `max`。UI 需隐藏/禁用不支持的 effort 按钮。**注意**：effort 参数对本地模型 API 无效（`reasoning.effort` 被忽略），UI 限制仅用于避免用户困惑。
 
 3. **Qwen 的 preset 映射**：Qwen 不是 deepseek 模型，但 UI 上仍用 `flash` 这个 preset 标签（表示"使用快速模型"）。实际 model id 是 `qwen3.5-397b-a17b`。需要 provider schema 声明 `presets: ["flash"]` 对应的实际 model id。
 
@@ -138,9 +149,17 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
    - 若当前 effort 不在新 provider 支持列表 → 回退到该 provider 的 `defaultEffort`（通常为 `high`）
    - 回退后立即 `loop.configure()` 生效
 
-5. **isThinkingModeModel 适配**：当前硬编码判断 `deepseek-v4-flash`/`deepseek-v4-pro`。Qwen 模型不在列表中，`thinkingModeForModel` 返回 `undefined`。需确认 Qwen 是否支持 thinking 模式。若不确定，保守方案是**不启用**（返回 `"disabled"`），避免发送 thinking 参数导致 API 报错。
+5. **thinkingMode 适配**（报告纠正）：`thinkingMode` 是 **per-model per-provider** 的属性，不能按模型 ID 全局判断。同一个 `deepseek-v4-flash` 在官方支持 thinking，在本地 vLLM 不支持。`isThinkingModeModel` 的硬编码逻辑必须改为从 provider model 配置读取。保守策略：不支持的模型返回 `"disabled"`，避免发送 thinking 参数导致 API 报错。
+
+6. **多模态适配**：Qwen 支持图像识别，DeepSeek 本地版不支持。当前 `lib.rs` 的 vision 配置（`chunk-2R4QCDOZ.js:1609` 硬编码 `deepseek-v4-pro` 有 vision）需要改为从 provider model 配置读取 `multimodal` 字段。切到 DeepSeek 本地版时粘贴图片应提示"不支持"，切到 Qwen 时正常处理。
+
+7. **上下文长度适配**：Qwen 仅 81K tokens（约为 DeepSeek 1M 的 8%）。schema 增加 `maxContextLength` 字段，launcher 在构建请求时据此限制 max_tokens，避免超出上下文导致 API 报错。
+
+8. **JSON Mode 适配**：Qwen 要求 JSON 根节点为对象。若 tool calling 的参数解析依赖数组根节点，需在 Qwen provider 下加额外提示或降级处理。
 
 #### 2.1.3 修订后的 JSON Schema
+
+> 基于 [`plan/本地模型对比报告`](本地模型对比报告_DeepSeek-V4-vs-Qwen3.5-397B.md) 实测数据修正。
 
 ```json
 {
@@ -156,14 +175,18 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
           "name": "Flash",
           "presets": ["auto", "flash"],
           "efforts": ["high", "max"],
-          "thinkingMode": "enabled"
+          "thinkingMode": "enabled",
+          "multimodal": false,
+          "maxContextLength": 131072
         },
         {
           "id": "deepseek-v4-pro",
           "name": "Pro",
           "presets": ["pro"],
           "efforts": ["high", "max"],
-          "thinkingMode": "enabled"
+          "thinkingMode": "enabled",
+          "multimodal": true,
+          "maxContextLength": 131072
         }
       ],
       "defaultPreset": "auto",
@@ -182,7 +205,9 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
           "name": "Flash",
           "presets": ["flash"],
           "efforts": ["high"],
-          "thinkingMode": "enabled"
+          "thinkingMode": "disabled",
+          "multimodal": false,
+          "maxContextLength": 1048576
         }
       ],
       "defaultPreset": "flash",
@@ -200,7 +225,10 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
           "name": "Qwen3.5-397B",
           "presets": ["flash"],
           "efforts": ["high"],
-          "thinkingMode": "disabled"
+          "thinkingMode": "disabled",
+          "multimodal": true,
+          "maxContextLength": 81920,
+          "jsonModeRootObjectOnly": true
         }
       ],
       "defaultPreset": "flash",
@@ -212,8 +240,15 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
 }
 ```
 
+**与上一版 schema 的差异（基于实测报告修正）**：
+- 本地 DeepSeek `thinkingMode` 从 `enabled` 改为 **`disabled`**（报告实测 `reasoning` 始终 null）
+- 新增 `multimodal` 字段：Qwen ✅，DeepSeek 本地 ❌（影响图片粘贴处理）
+- 新增 `maxContextLength` 字段：DeepSeek 本地 1M，Qwen 81K（影响 max_tokens 限制）
+- 新增 `jsonModeRootObjectOnly` 字段：Qwen 为 true（JSON 根节点必须为对象）
+- DeepSeek 官方 `maxContextLength` 暂设 131072（官方未公开 1M，保守值，待确认）
+
 **与原 schema 的差异**：
-- `models[]` 增加 `presets`、`thinkingMode` 字段
+- `models[]` 增加 `presets`、`thinkingMode`、`multimodal`、`maxContextLength`、`jsonModeRootObjectOnly` 字段
 - provider 级别增加 `defaultPreset`、`defaultEffort`、`autoEscalate`、`escalationModel`
 - 移除了原 schema 中不存在的 `low`/`medium` effort（代码只认 `high`/`max`）
 - `defaultModel` 改为通过 `defaultPreset` + `models[].presets` 推导，不再单独声明
@@ -433,7 +468,39 @@ async function handleProviders(method, rest, body, ctx) {
 - 若 model 在 provider.models 中有 `thinkingMode`，用该值
 - 否则回退到现有硬编码逻辑（兼容无 provider 场景）
 
+> ⚠️ **实测报告纠正**：同一个 `deepseek-v4-flash` 在官方支持 thinking，在本地 vLLM 部署**不支持**（`reasoning` 始终 null）。因此 `thinkingMode` 必须是 per-model per-provider 的属性，不能按模型 ID 全局判断。
+
 > 注意：`chunk-2R4QCDOZ.js` 是上游编译产物，修改需谨慎。可通过 `launcher.mjs` 在创建 loop 时注入 `thinkingModeOverride` 配置，避免直接改 chunk。
+
+#### 2.8 多模态适配（基于实测报告新增）
+
+报告确认：DeepSeek 本地版明确拒绝图片输入（400: "not a multimodal model"），Qwen 支持图像识别。
+
+当前 vision 配置在 `launcher.mjs:1609` 硬编码：
+```js
+"deepseek-v4-pro": { vision: true, visionDetail: "high" },
+```
+
+改造：
+- `buildLoop` 时从 active provider 的 model 配置读取 `multimodal` 字段
+- 切到不支持多模态的 provider 时，粘贴图片应在 Dashboard 前端拦截提示（而非发到 API 后报 400）
+- Qwen 的 `multimodal: true` 时，vision 配置自动启用
+
+#### 2.9 上下文长度适配（基于实测报告新增）
+
+报告确认：DeepSeek 本地 1,048,576 tokens，Qwen 仅 81,920 tokens。
+
+- schema 中 `maxContextLength` 字段供 launcher 参考
+- `buildLoop` 时根据 `maxContextLength` 限制 `max_tokens`，避免超出上下文
+- Dashboard 状态栏可选择性展示当前 provider 的上下文上限（可选，非必须）
+
+#### 2.10 JSON Mode 适配（基于实测报告新增）
+
+报告确认：Qwen 的 `response_format: json_object` 要求根节点为对象 `{}`，数组 `[]` 会报错。
+
+- schema 中 `jsonModeRootObjectOnly` 字段标记此限制
+- 若 Visionox 的 tool calling 参数解析依赖数组根节点 JSON，需在 Qwen provider 下加额外提示
+- 保守方案：Qwen provider 下 tool calling 的 JSON 解析增加 try-catch 容错
 
 ### 步骤 3：Dashboard 改造（路径 B — 手术式修改压缩产物）
 
@@ -592,6 +659,10 @@ providerImportBtn: "导入",
   - **切换后立即生效**（验证 `syncProvider()` 独立调用，不等下次 `submitPrompt`）。
 - **验证 Qwen 模型**：切到本地 Qwen，发送消息，确认 API 请求使用 `qwen3.5-397b-a17b` 模型，thinking 模式为 disabled。
 - **验证 autoEscalate**：切到官方 provider + preset=auto，触发困难轮次，确认自动升级到 pro；切到本地 provider 确认不升级。
+- **【实测报告新增】验证 thinkingMode**：切到本地 DeepSeek，发送消息，确认不发送 thinking 参数（`reasoning` 始终 null）；切回官方确认 thinking 正常。
+- **【实测报告新增】验证多模态**：切到本地 DeepSeek，粘贴图片，确认前端拦截提示"不支持多模态"；切到 Qwen 确认图片正常发送识别。
+- **【实测报告新增】验证上下文长度**：切到 Qwen，发送超长文本（>81K tokens），确认 max_tokens 被限制，不报 API 错误。
+- **【实测报告新增】验证 JSON Mode**：切到 Qwen，触发 tool calling，确认 JSON 根节点为对象的场景正常；若遇到数组根节点场景确认有容错处理。
 - 关闭重启后，保留上次激活的 provider。
 
 ---
@@ -636,3 +707,7 @@ providerImportBtn: "导入",
 | R9 | schema effort 值错误 | 事实错误 | 原 schema 写 `low`/`medium`/`high`/`max`，代码 `VALID_EFFORTS` 只认 `high`/`max`。已修正。 |
 | R10 | thinkingMode 硬编码 | 适配风险 | `isThinkingModeModel` 硬编码 flash/pro，Qwen 不在列表。schema 增加 `thinkingMode` 字段，Qwen 设为 `disabled`。 |
 | R11 | autoEscalate/escalationModel 硬编码 | 适配风险 | `ESCALATION_MODEL` 硬编码 `deepseek-v4-pro`，本地 provider 无 pro 模型。改为 provider 级别声明 `autoEscalate`/`escalationModel`。 |
+| R12 | 本地 DeepSeek thinkingMode 误写 enabled | 事实错误 | 实测报告确认本地 vLLM 部署的 deepseek-v4-flash 不支持 thinking（`reasoning` 始终 null）。已改为 `disabled`。同一模型 ID 在官方和本地能力不同，thinkingMode 必须是 per-model per-provider 属性。 |
+| R13 | 缺少多模态能力维度 | 设计缺陷 | 实测报告确认 DeepSeek 本地版拒绝图片（400），Qwen 支持图像识别。schema 增加 `multimodal` 字段，步骤 2.8 补充多模态适配。 |
+| R14 | 缺少上下文长度维度 | 设计缺陷 | 实测报告确认 DeepSeek 本地 1M tokens，Qwen 仅 81K tokens。schema 增加 `maxContextLength` 字段，步骤 2.9 补充上下文适配。 |
+| R15 | 缺少 JSON Mode 限制维度 | 设计缺陷 | 实测报告确认 Qwen JSON Mode 要求根节点为对象。schema 增加 `jsonModeRootObjectOnly` 字段，步骤 2.10 补充 JSON 适配。 |
