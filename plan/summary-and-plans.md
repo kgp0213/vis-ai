@@ -711,3 +711,164 @@ providerImportBtn: "导入",
 | R13 | 缺少多模态能力维度 | 设计缺陷 | 实测报告确认 DeepSeek 本地版拒绝图片（400），Qwen 支持图像识别。schema 增加 `multimodal` 字段，步骤 2.8 补充多模态适配。 |
 | R14 | 缺少上下文长度维度 | 设计缺陷 | 实测报告确认 DeepSeek 本地 1M tokens，Qwen 仅 81K tokens。schema 增加 `maxContextLength` 字段，步骤 2.9 补充上下文适配。 |
 | R15 | 缺少 JSON Mode 限制维度 | 设计缺陷 | 实测报告确认 Qwen JSON Mode 要求根节点为对象。schema 增加 `jsonModeRootObjectOnly` 字段，步骤 2.10 补充 JSON 适配。 |
+
+---
+
+## 七、落地计划（2026-06-25）
+
+> 本节是可执行的施工方案，基于前三至六节的分析和实测报告，遵循"简单至上、手术式修改、目标驱动"原则。
+
+### 7.0 假设与决策
+
+**假设（明确陈述）**：
+
+1. **config.json 结构**：`providers[]` + `activeProviderId` 与现有字段并存。旧 `apiKey`/`baseUrl` 迁移后保留不删，但后续读取统一走 provider。
+2. **切换即时生效**：`syncProvider()` 立即重建 client + loop，不等 `/new`。
+3. **provider `<select>` 位置**：`.header-pickers` 最左侧，在 work-mode-summary 之前。
+4. **thinkingMode 必须修**：发送 `thinking: "enabled"` 到不支持的模型虽不报错（报告实测 `reasoning` 返回 null），但浪费请求参数且语义错误。
+5. **summaryModel 必须修**（代码核实新发现）：`chunk-2R4QCDOZ.js` 三处硬编码 `"deepseek-v4-flash"` 作为摘要/压缩模型（行 6717、6918、6928）。切到 Qwen 后，压缩会调用 Qwen API 的 `deepseek-v4-flash` 模型 → **必然 404 报错**。这是阻塞性 bug，必须修。
+
+**决策：本轮不做（YAGNI）**：
+
+| 项目 | 原因 | 风险 |
+|------|------|------|
+| 多模态适配（Qwen 图片识别） | 用户未要求；当前 vision 仅 deepseek-v4-pro 启用，Qwen 切过去也是 disabled，不会报错 | 低。后续需要时再加 |
+| 上下文长度限制（maxContextLength） | 当前代码不按上下文长度动态设 max_tokens | 中。Qwen 81K 可能超限，但先跑起来看是否实际报错 |
+| JSON Mode 根节点限制 | tool calling 的 JSON 通常是对象，数组根节点罕见 | 低。遇到再修 |
+
+**待确认（需要胡老师决定）**：
+
+| # | 问题 | 选项 A | 选项 B |
+|---|------|--------|--------|
+| Q1 | thinkingMode/summaryModel 覆盖方式 | **改 chunk（推荐）**：在 `chunk-2R4QCDOZ.js` 的 `thinkingModeForModel` 和 3 处 summaryModel 加 `globalThis.__visionoxXxx` 检查，共改 ~6 行。launcher 设 global。直接、可读。 | 从 launcher 注入：不改 chunk，但需要在 loop 构造时传参 + override 原型方法。间接、绕弯。 |
+| Q2 | provider 切换后是否需要 `/new` | **不需要（推荐）**：syncProvider 立即重建 loop，当前对话继续用新 provider。 | 需要：切换后提示用户 `/new`。更安全但体验差。 |
+
+### 7.1 施工阶段
+
+#### 阶段 1：后端 — config 迁移 + provider 函数
+
+**文件**：`launcher.mjs`、`chunk-XPDVG52A.js`
+
+**改动**：
+
+1. `chunk-XPDVG52A.js:2286` `loadApiKey()` — 环境变量优先 → 否则读 active provider 的 apiKey → 兼容回退顶层 `cfg.apiKey`
+2. `chunk-XPDVG52A.js:2290` `loadBaseUrl()` — 同上
+3. `launcher.mjs:282` 初始化后调 `migrateProviders(config)` — 若无 `providers` 字段但有 `apiKey`/`baseUrl`，构造 `providers[0]`（id=`legacy`）+ `activeProviderId`
+4. `launcher.mjs:314` 后新增函数：`getActiveProvider()`、`getProviderCapabilities()`、`resolvePresetForProvider()`、`resolveEffortForProvider()`、`resolveModelForProvider()`（代码见步骤 2.2）
+5. `launcher.mjs:301` `effectiveModelConfig()` — provider 优先，无 provider 走旧逻辑（代码见步骤 2.3）
+
+**验证目标**：
+- [ ] 旧 config.json（仅 apiKey/baseUrl）启动后，`config.providers` 自动生成，`activeProviderId="legacy"`
+- [ ] `loadApiKey()` 返回 active provider 的 apiKey
+- [ ] `effectiveModelConfig()` 在 provider 模式下从 provider 解析 model
+
+#### 阶段 2：后端 — API 端点 + syncProvider
+
+**文件**：`server-XGDBRWMB.js`、`launcher.mjs`
+
+**改动**：
+
+1. `server-XGDBRWMB.js:3679` 后新增 `case "providers": return await handleProviders(...)`
+2. 新增 `handleProviders()` — GET 列表 / POST active / POST import（代码见步骤 2.5）
+3. `launcher.mjs` ctx 对象新增 `syncProvider: async (providerId)` — 写 config + 回退 preset/effort + 重建 client/loop + 设 global override（代码见步骤 2.4）
+4. `server-XGDBRWMB.js:2999` `handleSettings` GET — 响应增加 `providers`、`activeProviderId`、`providerCapabilities`（当前 provider 的可选 presets/efforts）
+5. `server-XGDBRWMB.js:3087` `handleSettings` POST — preset 校验改为结合 provider capabilities（本地 provider 不允许设 pro/auto）
+
+**验证目标**：
+- [ ] `GET /api/providers` 返回 3 个 provider（导入后）
+- [ ] `POST /api/providers/active {id:"local-qwen"}` 后，`launcher-diag.log` 出现 `provider switched: local-qwen`
+- [ ] `GET /api/settings` 返回的 `providerCapabilities` 随 active provider 变化
+- [ ] 切到本地 provider 后 POST preset=pro 返回 400
+
+#### 阶段 3：后端 — thinkingMode + summaryModel 覆盖
+
+**文件**：`chunk-2R4QCDOZ.js`、`launcher.mjs`
+
+**改动**（假设 Q1 选 A）：
+
+1. `chunk-2R4QCDOZ.js:6889` `thinkingModeForModel(model)` — 首行加：`if (globalThis.__visionoxThinkingModeMap?.[model]) return globalThis.__visionoxThinkingModeMap[model];`
+2. `chunk-2R4QCDOZ.js:6884` `isThinkingModeModel(model)` — 首行加：`const tm = globalThis.__visionoxThinkingModeMap?.[model]; if (tm === "enabled") return true; if (tm === "disabled") return false;`
+3. `chunk-2R4QCDOZ.js:6717` — `const summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";`
+4. `chunk-2R4QCDOZ.js:6928` — 同上
+5. `chunk-2R4QCDOZ.js:6973` — `model: globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL,`
+6. `chunk-2R4QCDOZ.js:6976` — `thinking: thinkingModeForModel(globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL),`
+7. `launcher.mjs` `buildLoop()` 末尾（1621 行前）和 `syncProvider()` 中，设 global：
+   ```js
+   const provider = getActiveProvider();
+   if (provider) {
+     const tmMap = {};
+     for (const m of provider.models ?? []) tmMap[m.id] = m.thinkingMode;
+     globalThis.__visionoxThinkingModeMap = tmMap;
+     globalThis.__visionoxSummaryModel = provider.models?.[0]?.id;
+   }
+   ```
+
+**验证目标**：
+- [ ] 切到本地 DeepSeek，`thinkingModeForModel("deepseek-v4-flash")` 返回 `"disabled"`（不再 `"enabled"`）
+- [ ] 切到 Qwen，摘要/压缩调用使用 `qwen3.5-397b-a17b` 而非 `deepseek-v4-flash`
+- [ ] 切回官方，`thinkingModeForModel("deepseek-v4-flash")` 返回 `"enabled"`
+
+#### 阶段 4：前端 — UI
+
+**文件**：`app.js`、`app.css`
+
+**改动**：
+
+1. `app.js:23688` 附近新增 3 个 state：`providers`、`activeProviderId`、`providerCaps`
+2. `app.js:24306` `api("/overview")` 附近加 `api("/providers")` 加载
+3. 新增 `switchProvider(id)` — POST + 刷新 overview/providers
+4. `app.js:24382` `.header-pickers` 开头插入 provider `<select>`
+5. `app.js:24402` effort 按钮 — `["high","max"]` → `(providerCaps?.efforts ?? ["high","max"])`
+6. `app.js:24417` preset 按钮 — `["auto","flash","pro"]` → `(providerCaps?.presets ?? ["auto","flash","pro"])`
+7. `app.js:27851` Settings 面板 — 新增"模型服务商" section（列表 + JSON 导入）
+8. `app.js:19299/19965` i18n — 补 provider 相关中英文
+9. `app.css:2627` 附近 — 新增 `.provider-select` 样式
+
+**验证目标**：
+- [ ] 状态栏左侧出现 provider 下拉框，显示 3 个选项
+- [ ] 切到本地 DeepSeek：effort 只显示 `high`，preset 只显示 `flash`
+- [ ] 切回官方：effort 显示 `high`/`max`，preset 显示 `auto`/`flash`/`pro`
+- [ ] Settings 面板可粘贴 JSON 导入 provider
+- [ ] 切换后 toast 提示 provider 名称
+
+#### 阶段 5：构建 + 端到端验证
+
+**操作**：
+1. `cargo build --release`
+2. 启动 exe，导入 3 个 provider 的 JSON
+3. 逐项验证
+
+**验证清单（可验证目标）**：
+
+| # | 目标 | 验证方法 | 预期 |
+|---|------|----------|------|
+| G1 | 旧 config 迁移 | 删除 config.json 中 providers，保留 apiKey/baseUrl，启动 | providers[0] 自动生成，activeProviderId=legacy |
+| G2 | provider 切换即时生效 | 切到 local-qwen，立即发消息 | launcher-diag.log 显示 provider switched，API 请求到 10.40.5.70:8000 |
+| G3 | preset 按钮过滤 | 切到 local-deepseek | UI 只显示 flash 按钮，无 auto/pro |
+| G4 | effort 按钮过滤 | 切到 local-deepseek | UI 只显示 high 按钮，无 max |
+| G5 | thinkingMode 覆盖 | 切到 local-deepseek，触发压缩 | API 请求不含 thinking 参数或 thinking=disabled |
+| G6 | summaryModel 覆盖 | 切到 local-qwen，触发压缩 | 压缩调用使用 qwen3.5-397b-a17b，不报 404 |
+| G7 | 切回官方恢复 | 从 local 切回 deepseek-official | thinking 恢复 enabled，summary 恢复 flash，preset/effort 恢复全选项 |
+| G8 | JSON 导入 | Settings 粘贴 3 个 provider JSON | config.json 写入 3 个 provider |
+| G9 | 重启保持 | 切到 local-qwen，关闭重启 | 启动后 activeProviderId 仍为 local-qwen |
+| G10 | preset 不兼容回退 | 在官方选 pro，切到 local-deepseek | preset 自动回退到 flash |
+
+### 7.2 施工顺序与依赖
+
+```
+阶段1 (config+函数) ──→ 阶段2 (API+sync) ──→ 阶段3 (thinking+summary)
+                                                  │
+                                                  ▼
+                                            阶段4 (前端UI) ──→ 阶段5 (构建+验证)
+```
+
+阶段 1-3 全是后端，可连续做。阶段 4 依赖阶段 2 的 API 端点。阶段 5 依赖全部完成。
+
+### 7.3 风险与回退
+
+| 风险 | 概率 | 影响 | 回退 |
+|------|:---:|:---:|------|
+| chunk-2R4QCDOZ.js 改 6 行引入语法错误 | 低 | 启动崩溃 | git revert chunk，保留 launcher 改动（launcher 有兼容回退） |
+| config 迁移覆盖用户已有 providers | 低 | 数据丢失 | 迁移前检查 `providers` 字段是否存在，存在则跳过 |
+| Qwen 81K 上下文超限 | 中 | API 报错 | 记录错误，后续迭代加 maxContextLength 限制 |
+| provider 切换后 SSE 断连 | 低 | 需手动刷新 | syncProvider 后广播 settings 变更事件，前端自动刷新 |
