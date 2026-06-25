@@ -62,7 +62,85 @@
 | 本地 DeepSeek | `http://10.40.5.70:8001/v1` | `deepseek-v4-flash-base-8c72nc00` | `deepseek-v4-flash` | 本地，仅支持 flash/high |
 | 本地 Qwen | `http://10.40.5.70:8000/v1` | `qwen35-secret-8c72nc00` | `qwen3.5-397b-a17b` | 本地，仅支持 flash/high |
 
-**建议的 JSON Schema（待用户确认）**：
+#### 2.1.1 现有数据流梳理（代码核实结果）
+
+在动手前，我完整读了 `launcher.mjs`、`server-XGDBRWMB.js`、`chunk-2R4QCDOZ.js`、`chunk-XPDVG52A.js`、`app.js`、`app.css` 的相关逻辑。现有 model/preset/effort 三层语义如下：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ config.json 字段                                            │
+│   apiKey        — API 密钥（单值，待迁移为 provider）        │
+│   baseUrl       — API 地址（单值，待迁移为 provider）        │
+│   model         — auto 模式下的基线模型（默认 flash）        │
+│   preset        — 模型预设：auto / flash / pro              │
+│   reasoningEffort — 推理强度：high / max                    │
+│   autoEscalate  — auto 模式是否允许自动升级到 pro            │
+└─────────────────────────────────────────────────────────────┘
+
+preset 与 model 的关系（launcher.mjs:286-314, server:2956-2980）:
+  PRESET_MODELS = { flash: "deepseek-v4-flash", pro: "deepseek-v4-pro" }
+  effectiveModelConfig():
+    preset=flash → model 锁定为 deepseek-v4-flash（locked=true）
+    preset=pro   → model 锁定为 deepseek-v4-pro（locked=true）
+    preset=auto  → model = config.model（默认 deepseek-v4-flash），autoEscalate 可升级
+
+effort 与 model 的关系（chunk-2R4QCDOZ.js:7477-7717）:
+  CacheFirstLoop.model = deepseek-v4-flash（默认）
+  CacheFirstLoop.reasoningEffort = max（默认）
+  autoEscalate=true 时，困难轮次自动切到 ESCALATION_MODEL=deepseek-v4-pro
+  isThinkingModeModel(): flash/pro 启用 thinking 模式，其他模型返回 undefined
+
+UI 状态栏布局（app.js:24379-24446）:
+  .header-pickers (flex, gap, flex-wrap)
+    ├─ .work-mode-summary + .work-mode-picker  （通用/编程/办公/设计）
+    ├─ .mode-picker (effort: high / max)
+    ├─ .mode-picker (preset: auto / flash / pro)
+    └─ .mode-picker (editMode: review / auto / yolo / admin)
+
+数据更新链:
+  UI setSetting(key, value) → POST /api/settings {key: value}
+    → handleSettings POST → cfg[key] = value → writeConfig
+    → preset/effort: 走 applyPresetLive/applyEffortLive → loop.configure()
+    → apiKey/baseUrl: 不走 live，等 syncWorkspace（下次 submitPrompt）重建 client
+
+GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
+  preset, reasoningEffort, model(displayModel), configuredModel, effectiveModel, runtimeModel, modelDrift
+```
+
+**关键发现**：
+1. preset 和 effort 是**独立维度**，分别通过 `applyPresetLive` 和 `applyEffortLive` 实时生效（`loop.configure()`），不需要等 `/new`。
+2. `apiKey`/`baseUrl` 切换目前**不走 live**，只写 config，等 `syncWorkspace` 在下次 `submitPrompt` 时重建 client。provider 切换需要打破这个延迟。
+3. `PRESET_MODELS` 硬编码为 deepseek-v4-flash/pro，`ESCALATION_MODEL` 硬编码为 deepseek-v4-pro，`isThinkingModeModel` 硬编码判断 flash/pro。换 provider 后这些需要适配。
+4. effort 只有 `high`/`max` 两个值（`VALID_EFFORTS = Set(["high", "max"])`），不是文档原 schema 写的 low/medium/high/max。
+
+#### 2.1.2 effort 兼容性设计
+
+根据胡老师确认：**本地模型推理强度只支持 high，模型 id 只支持 flash**。
+
+三个 provider 的能力矩阵：
+
+| Provider | preset 可选 | effort 可选 | 模型 id | autoEscalate | 说明 |
+|----------|------------|------------|---------|:----------:|------|
+| DeepSeek 官方 | auto, flash, pro | high, max | deepseek-v4-flash, deepseek-v4-pro | ✅ | 全功能，auto 可升级到 pro |
+| 本地 DeepSeek | flash | high | deepseek-v4-flash | ❌ | 仅 flash + high，无 auto 升级 |
+| 本地 Qwen | flash | high | qwen3.5-397b-a17b | ❌ | 非 deepseek 模型，preset=flash 但 model 映射到 qwen |
+
+**兼容设计要点**：
+
+1. **preset 维度**：本地 provider 只有 `flash`，没有 `auto`（无 autoEscalate）和 `pro`（无 pro 模型）。UI 需隐藏/禁用不支持的 preset 按钮。
+
+2. **effort 维度**：本地 provider 只有 `high`，没有 `max`。UI 需隐藏/禁用不支持的 effort 按钮。
+
+3. **Qwen 的 preset 映射**：Qwen 不是 deepseek 模型，但 UI 上仍用 `flash` 这个 preset 标签（表示"使用快速模型"）。实际 model id 是 `qwen3.5-397b-a17b`。需要 provider schema 声明 `presets: ["flash"]` 对应的实际 model id。
+
+4. **切换 provider 时的回退规则**：
+   - 若当前 preset 不在新 provider 支持列表 → 回退到该 provider 的 `defaultPreset`（通常为 `flash`）
+   - 若当前 effort 不在新 provider 支持列表 → 回退到该 provider 的 `defaultEffort`（通常为 `high`）
+   - 回退后立即 `loop.configure()` 生效
+
+5. **isThinkingModeModel 适配**：当前硬编码判断 `deepseek-v4-flash`/`deepseek-v4-pro`。Qwen 模型不在列表中，`thinkingModeForModel` 返回 `undefined`。需确认 Qwen 是否支持 thinking 模式。若不确定，保守方案是**不启用**（返回 `"disabled"`），避免发送 thinking 参数导致 API 报错。
+
+#### 2.1.3 修订后的 JSON Schema
 
 ```json
 {
@@ -73,10 +151,25 @@
       "baseUrl": "https://api.deepseek.com",
       "apiKey": "sk-...",
       "models": [
-        { "id": "deepseek-v4-flash", "name": "Flash", "efforts": ["low", "medium", "high"] },
-        { "id": "deepseek-v4-pro",   "name": "Pro",   "efforts": ["low", "medium", "high", "max"] }
+        {
+          "id": "deepseek-v4-flash",
+          "name": "Flash",
+          "presets": ["auto", "flash"],
+          "efforts": ["high", "max"],
+          "thinkingMode": "enabled"
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "Pro",
+          "presets": ["pro"],
+          "efforts": ["high", "max"],
+          "thinkingMode": "enabled"
+        }
       ],
-      "defaultModel": "deepseek-v4-flash"
+      "defaultPreset": "auto",
+      "defaultEffort": "max",
+      "autoEscalate": true,
+      "escalationModel": "deepseek-v4-pro"
     },
     {
       "id": "local-deepseek",
@@ -84,9 +177,17 @@
       "baseUrl": "http://10.40.5.70:8001/v1",
       "apiKey": "deepseek-v4-flash-base-8c72nc00",
       "models": [
-        { "id": "deepseek-v4-flash", "name": "Flash", "efforts": ["high"] }
+        {
+          "id": "deepseek-v4-flash",
+          "name": "Flash",
+          "presets": ["flash"],
+          "efforts": ["high"],
+          "thinkingMode": "enabled"
+        }
       ],
-      "defaultModel": "deepseek-v4-flash"
+      "defaultPreset": "flash",
+      "defaultEffort": "high",
+      "autoEscalate": false
     },
     {
       "id": "local-qwen",
@@ -94,64 +195,247 @@
       "baseUrl": "http://10.40.5.70:8000/v1",
       "apiKey": "qwen35-secret-8c72nc00",
       "models": [
-        { "id": "qwen3.5-397b-a17b", "name": "Qwen3.5-397B", "efforts": ["high"] }
+        {
+          "id": "qwen3.5-397b-a17b",
+          "name": "Qwen3.5-397B",
+          "presets": ["flash"],
+          "efforts": ["high"],
+          "thinkingMode": "disabled"
+        }
       ],
-      "defaultModel": "qwen3.5-397b-a17b"
+      "defaultPreset": "flash",
+      "defaultEffort": "high",
+      "autoEscalate": false
     }
   ],
   "activeProviderId": "deepseek-official"
 }
 ```
 
-**导入语义**：追加/合并，同 `id` 则覆盖 `apiKey` 等字段。
+**与原 schema 的差异**：
+- `models[]` 增加 `presets`、`thinkingMode` 字段
+- provider 级别增加 `defaultPreset`、`defaultEffort`、`autoEscalate`、`escalationModel`
+- 移除了原 schema 中不存在的 `low`/`medium` effort（代码只认 `high`/`max`）
+- `defaultModel` 改为通过 `defaultPreset` + `models[].presets` 推导，不再单独声明
 
-**兼容现有 UI 选项的策略**：
-- 顶部状态栏新增 **provider 下拉框**。
-- 切换 provider 时，根据 `models` 和 `efforts` 过滤可用选项。
-- 若当前选中的 model/effort 在新 provider 不支持，自动回退到该 provider 的 `defaultModel` 和可用 effort。
-- `pro / flash / auto / high / max` 等选项保留，但对本地 provider 隐藏或禁用不支持的项。
-
-**待确认点**：
-- `flash` 是 **preset**（模型预设），`high` 是 **effort**（推理强度），两者是不同维度。当前 schema 的 `models[].efforts` 只覆盖 effort 维度，**缺少 preset 维度**。需确认本地模型"只支持 flash/high"是否意味着：preset 仅 `flash`、effort 仅 `high`？若是，schema 应增加 `presets` 字段：
-  ```json
-  { "id": "deepseek-v4-flash", "name": "Flash", "presets": ["flash"], "efforts": ["high"] }
-  ```
-- 确认上述 JSON schema 是否符合预期。
-- 导入语义边界：同 `id` 但 `models` 列表不同时，是整体覆盖还是合并 models？需明确。
+**导入语义**：同 `id` 整体覆盖（包括 models），不同 `id` 追加。
 
 ---
 
 ## 三、实施计划（Provider 切换功能）
 
 > ⚠️ 本节原方案存在若干问题，已按评审意见修订。修订以 **【修订】** 标注。
+> 本计划基于代码核实结果制定，所有行号和函数名均来自实际源码。
 
-### 步骤 1：确定 JSON schema
+### 步骤 1：确定 JSON schema ✅ 已完成
 
-- 与用户确认 provider 配置字段、导入格式、本地模型 preset/effort 映射。
-- schema 补充 `presets` 维度（原 schema 缺失，只有 `efforts`）。
-- 明确导入语义：同 `id` 整体覆盖还是合并。
-- 将 schema 写入 `docs/provider-config-schema.md`（可选）。
+见 2.1.3 节修订后的 JSON Schema。关键决策：
+- `models[]` 含 `presets`、`efforts`、`thinkingMode` 三个维度
+- provider 级别 `defaultPreset`/`defaultEffort`/`autoEscalate`/`escalationModel`
+- 导入语义：同 `id` 整体覆盖（含 models），不同 `id` 追加
+- effort 只有 `high`/`max`（代码 `VALID_EFFORTS` 只认这两个值）
 
-### 步骤 2：后端改造 `launcher.mjs`
+### 步骤 2：后端改造 `launcher.mjs` + `server-XGDBRWMB.js` + `chunk-XPDVG52A.js`
 
-**文件**：`src-tauri/resources/server/launcher.mjs`
+#### 2.1 config.json 迁移（`chunk-XPDVG52A.js` / `launcher.mjs`）
 
-- 在 `~/.visionox/config.json` 中新增 `providers` 和 `activeProviderId` 字段。
-- **【修订】config.json 迁移策略**（原方案缺失）：现有顶层 `apiKey` / `baseUrl`（单 provider）需自动迁移。策略：首次检测到无 `providers` 字段时，将旧 `apiKey`/`baseUrl` 迁移为 `providers[0]`（id=`legacy`），设为 active；迁移后旧字段保留但标记 deprecated，后续读取统一走 `providers`。
-- 新增函数：
-  - `loadProviders()`：读取 providers 列表。
-  - `getActiveProvider()`：返回当前激活 provider。
-  - `setActiveProvider(id)`：切换激活 provider。
-  - `importProviders(json)`：合并/覆盖 providers（按 step 1 确认的语义）。
-- 修改 `loadApiKey()` / `loadBaseUrl()`：从激活 provider 读取。
-- 修改 `effectiveModelConfig()`：根据 provider 支持的 `models` / `presets` / `efforts` 做校验和回退。
-- **【修订】API 路由风格**（原方案称"后端命令"，实际项目用 HTTP API）：遵循 `/api/providers` RESTful 路由：
-  - `GET /api/providers` — 列表
-  - `POST /api/providers/active` — 切换激活
-  - `POST /api/providers/import` — JSON 导入
-- **【修订】provider 切换独立 `syncProvider()`**（原方案耦合 `syncWorkspace`）：provider 切换是独立动作，不应等下次 `submitPrompt` 才生效。`POST /api/providers/active` 调用后立即重建 client + loop。`syncWorkspace` 保持职责单一（只管 workspace）。
+**文件**：`chunk-XPDVG52A.js:2286-2293`（`loadApiKey`/`loadBaseUrl`）、`launcher.mjs:282-284`
 
-### 步骤 3：Dashboard 改造
+- 新增 `migrateProviders(config)` 函数，在 `readConfig` 后调用：
+  - 若 `config.providers` 不存在但有顶层 `apiKey`/`baseUrl`：
+    - 构造 `providers[0]` = `{ id: "legacy", name: "默认", baseUrl: config.baseUrl, apiKey: config.apiKey, models: [默认 flash/pro], defaultPreset: config.preset ?? "auto", defaultEffort: config.reasoningEffort ?? "max", autoEscalate: config.autoEscalate ?? true, escalationModel: "deepseek-v4-pro" }`
+    - 设 `activeProviderId = "legacy"`
+    - 保留顶层 `apiKey`/`baseUrl` 不删（向后兼容），但后续读取统一走 `getActiveProvider()`
+  - 若 `config.providers` 已存在，跳过迁移
+
+- 修改 `loadApiKey()`（`chunk-XPDVG52A.js:2286`）：
+  - 环境变量 `DEEPSEEK_API_KEY` 优先（保留）
+  - 否则 `readConfig(path)` → 找 `activeProviderId` → 返回对应 provider 的 `apiKey`
+  - 无 provider 则回退到顶层 `cfg.apiKey`（兼容）
+
+- 修改 `loadBaseUrl()`（`chunk-XPDVG52A.js:2290`）：
+  - 同上逻辑，环境变量优先，否则从 active provider 读取
+
+#### 2.2 provider 管理函数（`launcher.mjs`）
+
+新增以下函数（放在 `effectiveModelConfig` 附近，约 `launcher.mjs:314` 后）：
+
+```js
+function getActiveProvider(cfg = config) {
+  const providers = cfg.providers ?? [];
+  return providers.find(p => p.id === cfg.activeProviderId) ?? providers[0] ?? null;
+}
+
+function getProviderCapabilities(provider) {
+  // 汇总 provider 所有 models 的 presets/efforts
+  const allPresets = new Set();
+  const allEfforts = new Set();
+  const modelIds = [];
+  for (const m of provider?.models ?? []) {
+    for (const p of m.presets ?? []) allPresets.add(p);
+    for (const e of m.efforts ?? []) allEfforts.add(e);
+    modelIds.push(m.id);
+  }
+  return { presets: [...allPresets], efforts: [...allEfforts], modelIds };
+}
+
+function resolvePresetForProvider(preset, provider) {
+  // 当前 preset 是否被 provider 支持？不支持则回退到 defaultPreset
+  const caps = getProviderCapabilities(provider);
+  if (caps.presets.includes(preset)) return preset;
+  return provider?.defaultPreset ?? "flash";
+}
+
+function resolveEffortForProvider(effort, provider) {
+  const caps = getProviderCapabilities(provider);
+  if (caps.efforts.includes(effort)) return effort;
+  return provider?.defaultEffort ?? "high";
+}
+
+function resolveModelForProvider(preset, provider) {
+  // 根据 preset 找到 provider 中支持该 preset 的 model
+  const model = provider?.models?.find(m => m.presets?.includes(preset));
+  return model?.id ?? provider?.models?.[0]?.id ?? "deepseek-v4-flash";
+}
+```
+
+#### 2.3 修改 `effectiveModelConfig`（`launcher.mjs:301`）
+
+现有逻辑用硬编码的 `PRESET_MODELS`。改为优先从 active provider 解析：
+
+```js
+function effectiveModelConfig(source = config) {
+  const rawPreset = source.preset ?? "auto";
+  const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
+  const provider = getActiveProvider(source);
+
+  if (provider) {
+    // Provider 模式：从 provider 解析
+    const resolvedPreset = resolvePresetForProvider(preset, provider);
+    const model = resolveModelForProvider(resolvedPreset, provider);
+    const caps = getProviderCapabilities(provider);
+    return {
+      rawPreset,
+      preset: resolvedPreset,
+      configuredModel: model,
+      model,
+      locked: true, // provider 模式下 model 由 preset 决定
+      autoEscalate: provider.autoEscalate === true && resolvedPreset === "auto",
+    };
+  }
+
+  // 兼容模式：无 provider 时走旧逻辑
+  const configuredModel = source.model ?? CONSTANTS.DEFAULT_MODEL;
+  const lockedModel = PRESET_MODELS[preset];
+  return {
+    rawPreset,
+    preset,
+    configuredModel,
+    model: lockedModel ?? configuredModel,
+    locked: Boolean(lockedModel),
+    autoEscalate: preset === "auto" ? source.autoEscalate !== false : false,
+  };
+}
+```
+
+#### 2.4 `syncProvider()` 独立函数（`launcher.mjs`，约 1996 `syncWorkspace` 旁）
+
+```js
+syncProvider: async (providerId) => {
+  const cfg = readConfig(configPath);
+  const provider = cfg.providers?.find(p => p.id === providerId);
+  if (!provider) return;
+
+  cfg.activeProviderId = providerId;
+  writeConfig(cfg, configPath);
+  syncRuntimeConfig(cfg);
+
+  // 回退不兼容的 preset/effort
+  const newPreset = resolvePresetForProvider(cfg.preset ?? "auto", provider);
+  const newEffort = resolveEffortForProvider(cfg.reasoningEffort ?? "max", provider);
+  if (newPreset !== cfg.preset) cfg.preset = newPreset;
+  if (newEffort !== cfg.reasoningEffort) cfg.reasoningEffort = newEffort;
+  writeConfig(cfg, configPath);
+
+  // 重建 client + loop（立即生效，不等 submitPrompt）
+  const newApiKey = provider.apiKey;
+  const newBaseUrl = provider.baseUrl;
+  apiKey = newApiKey;
+  baseUrl = newBaseUrl;
+  if (apiKey) {
+    client = new DeepSeekClient({ apiKey, baseUrl });
+    loop = buildLoop(client, workspaceDir);
+    ctx.loop = loop;
+    refreshBalance();
+    console.error(`[launcher] provider switched: ${providerId} (preset=${newPreset}, effort=${newEffort})`);
+  }
+
+  // 广播 settings 变更
+  broadcastSettings?.(cfg);
+},
+```
+
+#### 2.5 API 端点（`server-XGDBRWMB.js`）
+
+在 `handleApi` switch 中新增（约 3679 `case "settings"` 后）：
+
+```js
+case "providers":
+  return await handleProviders(method, rest, body, ctx);
+```
+
+新增 `handleProviders` 函数：
+
+```js
+async function handleProviders(method, rest, body, ctx) {
+  if (method === "GET") {
+    const cfg = readConfig(ctx.configPath);
+    const providers = (cfg.providers ?? []).map(p => ({
+      ...p,
+      apiKey: p.apiKey ? redactKey(p.apiKey) : null,
+      apiKeySet: Boolean(p.apiKey),
+    }));
+    return { status: 200, body: { providers, activeProviderId: cfg.activeProviderId ?? null } };
+  }
+  if (method === "POST" && rest[0] === "active") {
+    // POST /api/providers/active { id: "xxx" }
+    const parsed = JSON.parse(body || "{}");
+    await ctx.syncProvider?.(parsed.id);
+    return { status: 200, body: { ok: true } };
+  }
+  if (method === "POST" && rest[0] === "import") {
+    // POST /api/providers/import { providers: [...] }
+    const parsed = JSON.parse(body || "{}");
+    const cfg = readConfig(ctx.configPath);
+    const incoming = parsed.providers ?? [];
+    const existing = cfg.providers ?? [];
+    for (const p of incoming) {
+      const idx = existing.findIndex(e => e.id === p.id);
+      if (idx >= 0) existing[idx] = p; // 整体覆盖
+      else existing.push(p);           // 追加
+    }
+    cfg.providers = existing;
+    writeConfig(cfg, ctx.configPath);
+    return { status: 200, body: { ok: true, count: existing.length } };
+  }
+  return { status: 404, body: { error: "not found" } };
+}
+```
+
+#### 2.6 修改 `handleSettings` GET/POST（`server-XGDBRWMB.js:2999`）
+
+- GET：响应增加 `providers`、`activeProviderId`、`providerCapabilities`（当前 provider 的 presets/efforts 可选值），供 UI 过滤按钮
+- POST：`preset` 校验从 `VALID_PRESETS` 改为结合当前 provider capabilities 校验；`reasoningEffort` 同理
+
+#### 2.7 `isThinkingModeModel` / `thinkingModeForModel` 适配（`chunk-2R4QCDOZ.js:6884-6893`）
+
+当前硬编码 `deepseek-v4-flash`/`deepseek-v4-pro`。改为从 provider model 的 `thinkingMode` 字段读取：
+- 若 model 在 provider.models 中有 `thinkingMode`，用该值
+- 否则回退到现有硬编码逻辑（兼容无 provider 场景）
+
+> 注意：`chunk-2R4QCDOZ.js` 是上游编译产物，修改需谨慎。可通过 `launcher.mjs` 在创建 loop 时注入 `thinkingModeOverride` 配置，避免直接改 chunk。
+
+### 步骤 3：Dashboard 改造（路径 B — 手术式修改压缩产物）
 
 > ⚠️ **【修订】致命前提错误**：原方案步骤 3-4 声称"dashboard 源码在 `tep/dashboard/src/`，可以正规修改 UI 并重新 build"。经核实，此前提不成立：
 
@@ -168,16 +452,126 @@
 
 **文件**：`src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js`（压缩产物）
 
-与项目历史上所有 UI 修改（品牌化、admin、配色、会话恢复、开发者模式、搜索引擎选择器）保持一致，在压缩产物中增量添加：
+与项目历史上所有 UI 修改（品牌化、admin、配色、会话恢复、开发者模式、搜索引擎选择器）保持一致，在压缩产物中增量添加。
 
-- `statusbar` 区域：在 model/effort 下拉左侧新增 provider 下拉框（`<select>`），复用现有 `api()` fetch 封装调用 `/api/providers`。
-- `settings` Models 页面：注入 provider 列表展示 + JSON 导入按钮，调用 `/api/providers/import`。
-- 切换 provider 后，刷新 settings 并更新状态栏显示。
-- i18n：补 `provider` 相关中英文翻译字符串。
+#### 3.1 UI 布局设计
 
-> 维护成本：压缩产物中变量名混淆（如 `d2(`、`q2(`、`y2(`），改大功能比源码痛苦，但零框架风险、零版本跳跃。
+当前 `.header-pickers` 布局（`app.js:24382-24446`）：
 
-> **备选——路径 C（先全量升级再加功能）**：作为独立"上游升级"项目单独立项，先完成 0.47.1→0.53.2 全量升级 + 二开补丁重新应用 + 回归验证，再在此基础上加 provider。不要把升级和加功能混在一个迭代里。
+```
+[工作场景: 通用/编程/办公/设计] [effort: high/max] [preset: auto/flash/pro] [editMode: review/auto/yolo/admin]
+```
+
+新增 provider 后的目标布局：
+
+```
+[Provider▼] [工作场景: 通用/编程/办公/设计] [effort: high/max] [preset: auto/flash/pro] [editMode: review/auto/yolo/admin]
+```
+
+- provider 放在最左侧，用 `<select>` 下拉框（而非 mode-btn 分段控件），因为 provider 数量可能多且名称较长
+- 切换 provider 后，effort/preset 按钮根据 provider capabilities 动态过滤（隐藏不支持的按钮）
+
+#### 3.2 具体改动点（`app.js`）
+
+**a) 新增 state（约 23688 行附近）**：
+```js
+const [providers, setProviders] = d2(null);
+const [activeProviderId, setActiveProviderId] = d2(null);
+const [providerCaps, setProviderCaps] = d2(null);
+```
+
+**b) 加载 provider 数据（约 24306 行 `api("/overview")` 附近）**：
+```js
+const pr = await api("/providers");
+setProviders(pr.providers ?? []);
+setActiveProviderId(pr.activeProviderId);
+const caps = pr.providers?.find(p => p.id === pr.activeProviderId);
+setProviderCaps(getCaps(caps)); // { presets: [...], efforts: [...] }
+```
+
+**c) 新增 provider 切换函数**：
+```js
+const switchProvider = q2(async (id) => {
+  await api("/providers/active", { method: "POST", body: { id } });
+  // 后端会回退 preset/effort 并重建 client
+  // 前端刷新 overview 拿新状态
+  const o3 = await api("/overview");
+  setPresetLocal(o3.preset);
+  setEffortLocal(o3.reasoningEffort);
+  const pr = await api("/providers");
+  setProviders(pr.providers);
+  setActiveProviderId(id);
+  const caps = pr.providers?.find(p => p.id === id);
+  setProviderCaps(getCaps(caps));
+  showToast(`已切换到 ${caps?.name ?? id}`, "info");
+}, []);
+```
+
+**d) 渲染 provider `<select>`（约 24382 行 `.header-pickers` 开头）**：
+```js
+${providers ? html4`
+  <select
+    class="provider-select"
+    value=${activeProviderId ?? ""}
+    onChange=${(e) => switchProvider(e.target.value)}
+    title="模型服务商"
+  >
+    ${providers.map(p => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${p.name}</option>`)}
+  </select>
+` : null}
+```
+
+**e) effort/preset 按钮过滤（约 24402/24417 行）**：
+
+effort 按钮：
+```js
+// 原: ${["high", "max"].map(...)}
+// 改: ${(providerCaps?.efforts ?? ["high", "max"]).map(...)}
+```
+
+preset 按钮：
+```js
+// 原: ${["auto", "flash", "pro"].map(...)}
+// 改: ${(providerCaps?.presets ?? ["auto", "flash", "pro"]).map(...)}
+```
+
+**f) Settings 面板增加 provider 管理（约 27851 行 `sectionApi` 附近）**：
+- 新增 "模型服务商" section
+- 展示 provider 列表（名称、baseUrl、apiKeySet 状态）
+- JSON 导入 textarea + 导入按钮
+- 调用 `POST /api/providers/import`
+
+**g) i18n 补充（约 19299/19965 行）**：
+```js
+// en
+provider: "Provider",
+providerImport: "Import JSON",
+providerImportBtn: "Import",
+// zh-CN
+provider: "服务商",
+providerImport: "导入 JSON",
+providerImportBtn: "导入",
+```
+
+#### 3.3 CSS 改动（`app.css`）
+
+在 `.mode-picker` 附近新增：
+```css
+.provider-select {
+  height: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+  cursor: pointer;
+}
+.provider-select:hover {
+  border-color: var(--border-strong);
+}
+```
 
 ### 步骤 4：构建并替换 dashboard
 
@@ -191,10 +585,13 @@
 - 导入用户提供的 JSON，确认三个 provider 都写入 `config.json`。
 - **【修订】验证 config.json 迁移**：用旧版 config.json（仅顶层 `apiKey`/`baseUrl`）启动，确认自动迁移为 `providers[0]`。
 - 在 UI 切换 provider，确认：
-  - 状态栏显示正确。
-  - 可用 model/preset/effort 自动过滤（原方案漏了 preset 维度）。
+  - 状态栏 provider 下拉框显示正确。
+  - **effort 按钮动态过滤**：切到本地 provider 只显示 `high`，切回官方显示 `high`/`max`。
+  - **preset 按钮动态过滤**：切到本地 provider 只显示 `flash`，切回官方显示 `auto`/`flash`/`pro`。
   - 发送消息后，后端使用正确的 `baseUrl` + `apiKey` + `model`。
-  - **【修订】切换后立即生效**（验证 `syncProvider()` 独立调用，不等下次 `submitPrompt`）。
+  - **切换后立即生效**（验证 `syncProvider()` 独立调用，不等下次 `submitPrompt`）。
+- **验证 Qwen 模型**：切到本地 Qwen，发送消息，确认 API 请求使用 `qwen3.5-397b-a17b` 模型，thinking 模式为 disabled。
+- **验证 autoEscalate**：切到官方 provider + preset=auto，触发困难轮次，确认自动升级到 pro；切到本地 provider 确认不升级。
 - 关闭重启后，保留上次激活的 provider。
 
 ---
@@ -236,3 +633,6 @@
 | R6 | "后端命令"命名混淆 | 术语错误 | 项目实际用 HTTP API 风格（`/api/settings` 等），非 Tauri command。改为 `/api/providers` RESTful 路由。 |
 | R7 | schema 缺少 preset 维度 | 设计缺陷 | `flash` 是 preset，`high` 是 effort，不同维度。原 schema 只有 `efforts`，需补 `presets` 字段。 |
 | R8 | 导入语义边界未明确 | 设计缺陷 | 同 `id` 但 `models` 列表不同时，整体覆盖还是合并？需在 step 1 明确。 |
+| R9 | schema effort 值错误 | 事实错误 | 原 schema 写 `low`/`medium`/`high`/`max`，代码 `VALID_EFFORTS` 只认 `high`/`max`。已修正。 |
+| R10 | thinkingMode 硬编码 | 适配风险 | `isThinkingModeModel` 硬编码 flash/pro，Qwen 不在列表。schema 增加 `thinkingMode` 字段，Qwen 设为 `disabled`。 |
+| R11 | autoEscalate/escalationModel 硬编码 | 适配风险 | `ESCALATION_MODEL` 硬编码 `deepseek-v4-pro`，本地 provider 无 pro 模型。改为 provider 级别声明 `autoEscalate`/`escalationModel`。 |
