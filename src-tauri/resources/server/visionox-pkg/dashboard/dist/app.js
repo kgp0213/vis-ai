@@ -23690,6 +23690,9 @@ const [mode, setModeLocal] = d2("general");
 const [modes, setModesLocal] = d2(null);
 const [activeMode, setActiveModeLocal] = d2(null);
 const [eccRules, setEccRulesLocal] = d2(null);
+const [providers, setProviders] = d2(null);
+const [activeProviderId, setActiveProviderId] = d2(null);
+const [providerCaps, setProviderCaps] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
@@ -24316,6 +24319,14 @@ const [eccRules, setEccRulesLocal] = d2(null);
         setStats(o3.stats ?? null);
         setOverviewModel(o3.model ?? null);
         setBudgetUsd(o3.budgetUsd ?? null);
+        setActiveProviderId(o3.activeProviderId ?? null);
+        setProviderCaps(o3.providerCapabilities ?? null);
+        if (!providers) {
+          try {
+            const pr = await api("/providers");
+            if (!cancelled) setProviders(pr.providers ?? []);
+          } catch {}
+        }
         const recent = o3.cockpit?.recentPlans ?? [];
         setActivePlan(recent.find((p3) => p3.status === "active") ?? null);
         setSemanticIndex(o3.semanticIndexExists ?? null);
@@ -24363,6 +24374,24 @@ const [eccRules, setEccRulesLocal] = d2(null);
       }
     }
   }, []);
+  const switchProvider = q2(async (id) => {
+    try {
+      await api("/providers/active", { method: "POST", body: { id } });
+      const o3 = await api("/overview");
+      setPresetLocal(o3.preset ?? null);
+      setEffortLocal(o3.reasoningEffort ?? null);
+      setActiveProviderId(o3.activeProviderId ?? null);
+      setProviderCaps(o3.providerCapabilities ?? null);
+      try {
+        const pr = await api("/providers");
+        setProviders(pr.providers ?? []);
+      } catch {}
+      const pn = (providers ?? []).find((p) => p.id === id)?.name ?? id;
+      showToast("已切换到 " + pn, "info");
+    } catch (err) {
+      setError("provider switch failed: " + err.message);
+    }
+  }, [providers]);
   const pickWorkspace = q2(async (dir) => {
     setShowWsPicker(false);
     try {
@@ -24379,7 +24408,11 @@ const [eccRules, setEccRulesLocal] = d2(null);
   return html4`
     <div class="chat-shell">
       <div class="chat-toolbar">
-        <div class="header-pickers">${modes ? html4`
+        <div class="header-pickers">${(providers && providers.length > 0) ? html4`
+              <select class="provider-select" title="模型服务商" onChange=${(e) => switchProvider(e.target.value)}>
+                ${providers.map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${p.name}</option>`)}
+              </select>
+            ` : null}${modes ? html4`
               <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
                 <span class="work-mode-label">${activeMode?.label ?? mode}</span>
                 <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
@@ -24399,7 +24432,7 @@ const [eccRules, setEccRulesLocal] = d2(null);
 
           ${effort ? html4`
               <div class="mode-picker" title=${t4("chat.effortTitle")}>
-                ${["high", "max"].map(
+                ${(providerCaps?.efforts ?? ["high", "max"]).map(
     (e3) => html4`
                   <button
                     key=${e3}
@@ -24416,7 +24449,8 @@ const [eccRules, setEccRulesLocal] = d2(null);
                 ${(() => {
     const KNOWN = ["auto", "flash", "pro"];
     const canonical = KNOWN.includes(preset) ? preset : "auto";
-    return ["auto", "flash", "pro"].map(
+    const available = providerCaps?.presets ?? ["auto", "flash", "pro"];
+    return available.map(
       (p3) => html4`
                       <button
                         key=${p3}

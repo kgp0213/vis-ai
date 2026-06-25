@@ -2197,7 +2197,18 @@ async function handleOverview(method, _rest, _body, ctx) {
     budgetUsd: ctx.loop?.budgetUsd ?? null,
     stats: ctx.getStats?.() ?? null,
     semanticIndexExists,
-    cockpit: computeCockpit(ctx)
+    cockpit: computeCockpit(ctx),
+    activeProviderId: cfg.activeProviderId ?? null,
+    providerCapabilities: (() => {
+      const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+      const allPresets = new Set();
+      const allEfforts = new Set();
+      for (const m of provider?.models ?? []) {
+        for (const pr of m.presets ?? []) allPresets.add(pr);
+        for (const ef of m.efforts ?? []) allEfforts.add(ef);
+      }
+      return { presets: [...allPresets], efforts: [...allEfforts] };
+    })()
   };
   return { status: 200, body: overview };
 }
@@ -2996,6 +3007,67 @@ function modelState(ctx, cfg) {
     modelDrift
   };
 }
+async function handleProviders(method, rest, body, ctx) {
+  if (method === "GET") {
+    const cfg = readConfig(ctx.configPath);
+    const providers = (cfg.providers ?? []).map((p) => ({
+      ...p,
+      apiKey: p.apiKey ? redactKey(p.apiKey) : null,
+      apiKeySet: Boolean(p.apiKey),
+    }));
+    const activeProvider = providers.find((p) => p.id === cfg.activeProviderId) ?? providers[0] ?? null;
+    const allPresets = new Set();
+    const allEfforts = new Set();
+    for (const m of activeProvider?.models ?? []) {
+      for (const pr of m.presets ?? []) allPresets.add(pr);
+      for (const ef of m.efforts ?? []) allEfforts.add(ef);
+    }
+    return {
+      status: 200,
+      body: {
+        providers,
+        activeProviderId: cfg.activeProviderId ?? null,
+        providerCapabilities: { presets: [...allPresets], efforts: [...allEfforts] },
+      },
+    };
+  }
+  if (method === "POST" && rest[0] === "active") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    if (!parsed.id || typeof parsed.id !== "string") {
+      return { status: 400, body: { error: "id is required" } };
+    }
+    const cfg = readConfig(ctx.configPath);
+    if (!cfg.providers?.find((p) => p.id === parsed.id)) {
+      return { status: 404, body: { error: `provider "${parsed.id}" not found` } };
+    }
+    await ctx.syncProvider?.(parsed.id);
+    return { status: 200, body: { ok: true } };
+  }
+  if (method === "POST" && rest[0] === "import") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    const incoming = parsed.providers;
+    if (!Array.isArray(incoming)) {
+      return { status: 400, body: { error: "providers must be an array" } };
+    }
+    const cfg = readConfig(ctx.configPath);
+    const existing = cfg.providers ?? [];
+    for (const p of incoming) {
+      if (!p.id || typeof p.id !== "string") continue;
+      const idx = existing.findIndex((e) => e.id === p.id);
+      if (idx >= 0) {
+        for (const key of Object.keys(p)) existing[idx][key] = p[key];
+      } else {
+        existing.push(p);
+      }
+    }
+    cfg.providers = existing;
+    writeConfig(cfg, ctx.configPath);
+    return { status: 200, body: { ok: true, count: existing.length } };
+  }
+  return { status: 404, body: { error: "not found" } };
+}
 async function handleSettings(method, _rest, body, ctx) {
   if (method === "GET") {
     const cfg = readConfig(ctx.configPath);
@@ -3033,6 +3105,17 @@ async function handleSettings(method, _rest, body, ctx) {
         proNext: live?.proArmed ?? false,
         budgetUsd: live?.budgetUsd ?? null,
         sessionSpendUsd: ctx.getStats?.()?.totalCostUsd ?? null,
+        activeProviderId: cfg.activeProviderId ?? null,
+        providerCapabilities: (() => {
+          const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+          const allPresets = new Set();
+          const allEfforts = new Set();
+          for (const m of provider?.models ?? []) {
+            for (const pr of m.presets ?? []) allPresets.add(pr);
+            for (const ef of m.efforts ?? []) allEfforts.add(ef);
+          }
+          return { presets: [...allPresets], efforts: [...allEfforts] };
+        })(),
         // Hint to the SPA which fields require restart.
         appliesAt: {
           apiKey: "next-session",
@@ -3087,6 +3170,15 @@ async function handleSettings(method, _rest, body, ctx) {
       if (typeof fields.preset !== "string" || !VALID_PRESETS.has(fields.preset)) {
         return { status: 400, body: { error: "preset must be auto | flash | pro" } };
       }
+      const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+      if (provider) {
+        const capsPresets = new Set();
+        for (const m of provider.models ?? []) for (const pr of m.presets ?? []) capsPresets.add(pr);
+        const resolvedPreset = LEGACY_PRESET_ALIASES[fields.preset] ?? fields.preset;
+        if (!capsPresets.has(resolvedPreset)) {
+          return { status: 400, body: { error: `preset "${fields.preset}" not supported by active provider "${provider.id}"` } };
+        }
+      }
       cfg.preset = fields.preset;
       presetPendingLive = fields.preset;
       changed.push("preset");
@@ -3094,6 +3186,14 @@ async function handleSettings(method, _rest, body, ctx) {
     if (fields.reasoningEffort !== void 0) {
       if (typeof fields.reasoningEffort !== "string" || !VALID_EFFORTS.has(fields.reasoningEffort)) {
         return { status: 400, body: { error: "reasoningEffort must be high | max" } };
+      }
+      const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+      if (provider) {
+        const capsEfforts = new Set();
+        for (const m of provider.models ?? []) for (const ef of m.efforts ?? []) capsEfforts.add(ef);
+        if (!capsEfforts.has(fields.reasoningEffort)) {
+          return { status: 400, body: { error: `effort "${fields.reasoningEffort}" not supported by active provider "${provider.id}"` } };
+        }
       }
       cfg.reasoningEffort = fields.reasoningEffort;
       effortPendingLive = fields.reasoningEffort;
@@ -3675,6 +3775,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleModal(method, rest, body, ctx);
       case "edit-mode":
         return await handleEditMode(method, rest, body, ctx);
+      case "providers":
+        return await handleProviders(method, rest, body, ctx);
       case "settings":
         return await handleSettings(method, rest, body, ctx);
       case "hooks":

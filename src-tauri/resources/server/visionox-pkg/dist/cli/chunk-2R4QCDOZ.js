@@ -6714,7 +6714,7 @@ ${pinnedBodies.join("\n\n")}` : "";
     return true;
   }
   async summarizeForFold(messagesToSummarize) {
-    const summaryModel = "deepseek-v4-flash";
+    const summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";
     const systemPrompt = "You compress conversation history for a coding agent. Output one prose recap that preserves: the user's overall goal, decisions and conclusions reached, files inspected or modified, important tool results still relevant to ongoing work, and any open todos. Skip turn-by-turn play-by-play. No tool calls, no markdown headings, no SEARCH/REPLACE blocks \u2014 plain prose only.";
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
     const messages = [
@@ -6882,11 +6882,16 @@ function looksLikePartialEscalationMarker(buf) {
 
 // src/loop/thinking.ts
 function isThinkingModeModel(model) {
+  const tm = globalThis.__visionoxThinkingModeMap?.[model];
+  if (tm === "enabled") return true;
+  if (tm === "disabled") return false;
   if (model.includes("reasoner")) return true;
   if (model === "deepseek-v4-flash" || model === "deepseek-v4-pro") return true;
   return false;
 }
 function thinkingModeForModel(model) {
+  const tm = globalThis.__visionoxThinkingModeMap?.[model];
+  if (tm) return tm;
   if (model === "deepseek-chat") return "disabled";
   if (model.includes("reasoner")) return "enabled";
   if (model === "deepseek-v4-flash" || model === "deepseek-v4-pro") return "enabled";
@@ -6925,7 +6930,7 @@ async function* forceSummaryAfterIterLimit(ctx, opts = { reason: "budget" }) {
       role: "user",
       content: "I'm out of tool-call budget for this turn. Summarize in plain prose what you learned from the tool results above. Do NOT emit any tool calls, function-call markup, DSML invocations, or SEARCH/REPLACE edit blocks \u2014 they will be silently discarded. Just plain text."
     });
-    const summaryModel = "deepseek-v4-flash";
+    const summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";
     const summaryEffort = "high";
     const resp = await ctx.client.chat({
       model: summaryModel,
@@ -6970,15 +6975,15 @@ async function summarizePartialProgress(ctx) {
       content: "You're being paused at a checkpoint, not stopped. In 3-6 sentences of plain prose, tell the parent agent: (1) what you accomplished so far, (2) what's still left, (3) any blockers or open questions. Be concrete \u2014 mention specific files / functions / tool results \u2014 so the parent can decide whether to resume you or take over. Do NOT emit any tool calls, function-call markup, DSML invocations, or SEARCH/REPLACE edit blocks \u2014 they will be silently discarded. Just plain text."
     });
     const resp = await ctx.client.chat({
-      model: PAUSE_SUMMARY_MODEL,
+      model: globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL,
       messages,
       signal: ctx.signal,
-      thinking: thinkingModeForModel(PAUSE_SUMMARY_MODEL),
+      thinking: thinkingModeForModel(globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL),
       reasoningEffort: PAUSE_SUMMARY_EFFORT
     });
     const cleaned = stripHallucinatedToolMarkup(resp.content?.trim() ?? "");
     if (!cleaned) return null;
-    const stats = ctx.recordStats(PAUSE_SUMMARY_MODEL, resp.usage ?? new Usage());
+    const stats = ctx.recordStats(globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL, resp.usage ?? new Usage());
     return { summary: cleaned, stats };
   } catch {
     return null;

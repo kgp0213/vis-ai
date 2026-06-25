@@ -2623,6 +2623,23 @@ textarea {
   white-space: nowrap;
 }
 
+/* ── Provider Select ── */
+.provider-select {
+  height: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+  cursor: pointer;
+  transition: border-color var(--duration-fast);
+}
+.provider-select:hover {
+  border-color: var(--border-strong);
+}
+
 /* ── Mode Picker: Safety-level segmented control ── */
 .mode-picker {
   display: inline-flex;

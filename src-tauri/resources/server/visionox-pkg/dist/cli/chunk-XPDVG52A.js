@@ -2285,11 +2285,17 @@ function saveLanguage(lang, path = defaultConfigPath()) {
 }
 function loadApiKey(path = defaultConfigPath()) {
   if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
-  return readConfig(path).apiKey;
+  const cfg = readConfig(path);
+  const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+  if (provider?.apiKey) return provider.apiKey;
+  return cfg.apiKey;
 }
 function loadBaseUrl(path = defaultConfigPath()) {
   if (process.env.DEEPSEEK_BASE_URL) return process.env.DEEPSEEK_BASE_URL;
-  return readConfig(path).baseUrl;
+  const cfg = readConfig(path);
+  const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+  if (provider?.baseUrl) return provider.baseUrl;
+  return cfg.baseUrl;
 }
 function saveBaseUrl(url, path = defaultConfigPath()) {
   const cfg = readConfig(path);

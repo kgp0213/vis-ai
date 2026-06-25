@@ -279,8 +279,35 @@ const [
 
 // ── Load config ─────────────────────────────────────────────────
 loadDotenv();
-let apiKey = loadApiKey();
 const config = readConfig(configPath);
+
+// ── Provider migration & helpers ───────────────────────────────
+// Migrate legacy single-provider config (apiKey/baseUrl) to providers[] on first run.
+function migrateProviders(cfg) {
+  if (cfg.providers) return;
+  if (!cfg.apiKey && !cfg.baseUrl) return;
+  cfg.providers = [{
+    id: "legacy",
+    name: "默认",
+    baseUrl: cfg.baseUrl ?? "https://api.deepseek.com",
+    apiKey: cfg.apiKey ?? "",
+    models: [
+      { id: "deepseek-v4-flash", name: "Flash", presets: ["auto", "flash"], efforts: ["high", "max"], thinkingMode: "enabled" },
+      { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled" },
+    ],
+    defaultPreset: cfg.preset ?? "auto",
+    defaultEffort: cfg.reasoningEffort ?? "max",
+    autoEscalate: cfg.autoEscalate !== false,
+    escalationModel: "deepseek-v4-pro",
+  }];
+  cfg.activeProviderId = "legacy";
+  writeConfig(cfg, configPath);
+  console.error("[launcher] migrated legacy apiKey/baseUrl to providers[0] (id=legacy)");
+}
+
+migrateProviders(config);
+
+let apiKey = loadApiKey();
 let baseUrl = loadBaseUrl();
 
 const PRESET_MODELS = {
@@ -293,6 +320,41 @@ const LEGACY_PRESET_ALIASES = {
   max: "pro",
 };
 
+// ── Provider management functions ──────────────────────────────
+function getActiveProvider(cfg = config) {
+  const providers = cfg.providers ?? [];
+  return providers.find((p) => p.id === cfg.activeProviderId) ?? providers[0] ?? null;
+}
+
+function getProviderCapabilities(provider) {
+  const allPresets = new Set();
+  const allEfforts = new Set();
+  const modelIds = [];
+  for (const m of provider?.models ?? []) {
+    for (const p of m.presets ?? []) allPresets.add(p);
+    for (const e of m.efforts ?? []) allEfforts.add(e);
+    modelIds.push(m.id);
+  }
+  return { presets: [...allPresets], efforts: [...allEfforts], modelIds };
+}
+
+function resolvePresetForProvider(preset, provider) {
+  const caps = getProviderCapabilities(provider);
+  if (caps.presets.includes(preset)) return preset;
+  return provider?.defaultPreset ?? "flash";
+}
+
+function resolveEffortForProvider(effort, provider) {
+  const caps = getProviderCapabilities(provider);
+  if (caps.efforts.includes(effort)) return effort;
+  return provider?.defaultEffort ?? "high";
+}
+
+function resolveModelForProvider(preset, provider) {
+  const model = provider?.models?.find((m) => m.presets?.includes(preset));
+  return model?.id ?? provider?.models?.[0]?.id ?? "deepseek-v4-flash";
+}
+
 // Keep preset and model semantics centralized. `preset` is the user's model
 // commitment; `model` is only the baseline model used when preset=auto.
 // New loops, live updates, and dashboard APIs must use this effective model
@@ -301,6 +363,23 @@ const LEGACY_PRESET_ALIASES = {
 function effectiveModelConfig(source = config) {
   const rawPreset = source.preset ?? "auto";
   const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
+  const provider = getActiveProvider(source);
+
+  if (provider) {
+    // Provider mode: resolve from provider config
+    const resolvedPreset = resolvePresetForProvider(preset, provider);
+    const model = resolveModelForProvider(resolvedPreset, provider);
+    return {
+      rawPreset,
+      preset: resolvedPreset,
+      configuredModel: model,
+      model,
+      locked: true,
+      autoEscalate: provider.autoEscalate === true && resolvedPreset === "auto",
+    };
+  }
+
+  // Fallback: no provider, use legacy hardcoded logic
   const configuredModel = source.model ?? CONSTANTS.DEFAULT_MODEL;
   const lockedModel = PRESET_MODELS[preset];
   return {
@@ -1609,6 +1688,16 @@ function buildLoop(client, rootDir) {
     "deepseek-v4-pro": { vision: true, visionDetail: "high" },
   };
   const visionCfg = VISION_MODELS[modelConfig.model] || {};
+
+  // Set provider-driven globals for chunk-2R4QCDOZ.js thinkingMode/summaryModel overrides
+  const provider = getActiveProvider(config);
+  if (provider) {
+    const tmMap = {};
+    for (const m of provider.models ?? []) tmMap[m.id] = m.thinkingMode;
+    globalThis.__visionoxThinkingModeMap = tmMap;
+    globalThis.__visionoxSummaryModel = provider.models?.[0]?.id;
+  }
+
   return new CacheFirstLoop({
     client,
     prefix,
@@ -1989,6 +2078,45 @@ const ctx = {
     cfg.workspaceDir = dir;
     writeConfig(cfg, configPath);
     console.error(`[launcher] workspaceDir saved to config: ${dir} (takes effect next /new)`);
+  },
+
+  // Sync provider switch: immediately rebuild client + loop with new provider.
+  // Falls back preset/effort if current values are not supported by the new provider.
+  syncProvider: async (providerId) => {
+    const cfg = readConfig(configPath);
+    const provider = cfg.providers?.find((p) => p.id === providerId);
+    if (!provider) {
+      console.error(`[launcher] syncProvider: provider "${providerId}" not found`);
+      return;
+    }
+
+    cfg.activeProviderId = providerId;
+    writeConfig(cfg, configPath);
+    syncRuntimeConfig(cfg);
+
+    // Resolve preset/effort for new provider — fallback if unsupported
+    const newPreset = resolvePresetForProvider(cfg.preset ?? "auto", provider);
+    const newEffort = resolveEffortForProvider(cfg.reasoningEffort ?? "max", provider);
+    if (newPreset !== cfg.preset) cfg.preset = newPreset;
+    if (newEffort !== cfg.reasoningEffort) cfg.reasoningEffort = newEffort;
+    writeConfig(cfg, configPath);
+
+    // Rebuild client + loop immediately (no /new needed)
+    apiKey = provider.apiKey;
+    baseUrl = provider.baseUrl;
+    if (apiKey) {
+      client = new DeepSeekClient({ apiKey, baseUrl });
+      loop = buildLoop(client, workspaceDir);
+      ctx.loop = loop;
+      refreshBalance();
+      console.error(`[launcher] provider switched: ${providerId} (preset=${newPreset}, effort=${newEffort})`);
+    } else {
+      client = null;
+      loop = null;
+      ctx.loop = loop;
+      balanceData = null;
+      console.error(`[launcher] provider switched: ${providerId} but no apiKey, client cleared`);
+    }
   },
 
   // Sync workspace: unregister old tools, re-register with new root, rebuild loop.
