@@ -175,8 +175,8 @@ AI 在构建提示词时按以下优先级注入记忆：
 |----------|----------|
 | 会话记忆 | 进程内存，不落盘 |
 | 模式偏好记忆 | `~/.visionox/mode-memory/{模式名}.json` |
-| 全局记忆 | `~/.reasonix/memory/global/*.md` |
-| 项目记忆 | `~/.reasonix/memory/{项目哈希}/*.md` |
+| 全局记忆 | `~/.visionox/memory/global/*.md` |
+| 项目记忆 | `~/.visionox/memory/{项目哈希}/*.md` |
 | 项目文件记忆 | 项目目录下的 `REASONIX.md` / `visionox.md` / `AGENTS.md` 等 |
 
 > 不建议直接在文件系统中增删改，通过对话操作即可。
@@ -198,4 +198,4 @@ A：对话开始时 AI 会显示"当前工作模式"信息和已加载的模式�
 A：每个模式最多 60 条，但注入提示词时最多只取 8 条（按优先级排序）。旧的、低优先级的条目不会丢失，但不会自动注入——除非提升其优先级。
 
 **Q：如何完全关闭记忆功能？**
-A：设置环境变量 `REASONIX_MEMORY=off` 可禁用所有记忆注入。
+A：设置环境变量 `VISIONOX_MEMORY=off`（旧版本也兼容 `REASONIX_MEMORY=off`）可禁用所有记忆注入。

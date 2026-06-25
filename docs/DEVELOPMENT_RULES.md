@@ -1,6 +1,6 @@
 # Visionox 开发手册
 
-> 应用版本：1.0.0 | 上游基线：0.47.1 | 最后更新：2026-06-07
+> 应用版本：1.0.2 | 上游基线：0.47.1 | 最后更新：2026-06-25
 > 本文档合并了原 COLOR_SCHEMES.md / ECC_INTEGRATION.md / UI_OPTIMIZATION_PLAN.md 的关键内容。
 
 ---
@@ -43,8 +43,18 @@
 - 加载页 HTML 来源：`src/index.html`
 - 注入方式：`generate_context!()` + `WebviewUrl::App("index.html".into())`，不再使用 `document.write()`
 - URL 守卫：`!window.location.href.startsWith('http://127.0.0.1')` 防止覆盖 dashboard
-- 导航方式：健康检查通过后 `window.location.replace(url)` 直接跳转
+- 导航方式：健康检查通过后创建全屏 iframe 加载 dashboard，保留 Tauri 父页面上下文
 - 窗口背景色：`Color::from((243u8, 244u8, 246u8))` 匹配 `#f3f4f6`
+
+### 刷新恢复机制（1.0.2）
+
+iframe 方案下 F5 刷新的是顶层壳页面，sessionStorage 会清空。恢复依赖三层机制：
+
+1. **localStorage 后备**：`src/index.html` 所有 `sessionStorage.getItem` 读取点增加 `|| localStorage.getItem(...)` 回退，localStorage 在 WebView2 中跨刷新持久化
+2. **Rust 兜底**：`lib.rs` 新增 `get_dashboard_url` 命令返回 `ServerState.url`；前端 `restoreFromRustAndShow()` 在 storage 均无 URL 时 `invoke("get_dashboard_url")` 直接取当前有效 URL
+3. **iframe 失败回退**：`restoreDashboard()` 对新建 iframe 注册 `error` 事件 + 6s 超时守卫，触发 `fallbackToRust()` 清空残留并从 Rust 重建
+
+`lib.rs` 两处 eval（首次启动 / 崩溃重启）同时写入 sessionStorage + localStorage（统一 `try{...}catch`），并调用 `window.__visionoxRestoreDashboard()` 触发前端恢复。
 
 ---
 
@@ -73,7 +83,7 @@
 
 ### 当前生效方案（5 套）
 
-通过 `<select>` 下拉框切换 `html[data-theme="..."]`，选择通过 cookie `visionox-theme` 持久化。
+通过 `<select>` 下拉框切换 `html[data-theme="..."]`，选择通过 `localStorage` 持久化，cookie `visionox-theme` 作为兼容兜底。
 
 | data-theme | 类型 | 说明 |
 |------------|------|------|

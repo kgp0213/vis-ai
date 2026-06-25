@@ -1,10 +1,113 @@
 # Visionox 二开变更记录
 
 > **版本说明**：本文档按上游基线版本组织（v0.43.0 → v0.47.1）。
-> Visionox Desktop 应用自身版本：**1.0.0**（定义于 `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）。
+> Visionox Desktop 应用自身版本：**1.0.2**（定义于 `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）。
 > `package.json` 版本号 `0.1.0` 仅为 npm workspace 占位（不随应用分发）。
 
-## v0.47.1（2026-05-26 至今）
+## v0.47.1 — Visionox 1.0.2（2026-06-25）
+
+> 本次发布聚焦 **WebView2 刷新卡死修复** 与启动健壮性增强，并补齐 effort 推理强度切换的运行日志。
+
+### WebView2 刷新卡死修复（P2-7）
+
+| 变更 | 说明 |
+|------|------|
+| 根因 | commit `03b21c81` 将 dashboard 加载从顶层导航（`window.location.replace`）改为全屏 iframe。iframe 方案引入时壳页面 `src/index.html` 为纯静态加载页（无 JS），刷新壳页面后 sessionStorage 清空、iframe 被丢弃、无任何恢复机制，页面永久停在 "Starting server..."。 |
+| localStorage 后备 | `src/index.html` 所有 sessionStorage 读取点（`restoreDashboard` / `installTauriBridge` / `vis_theme_changed` / `forwardArgsToDashboard`）增加 `|| localStorage.getItem(...)` 回退，localStorage 在 WebView2 中跨刷新持久化。 |
+| Rust 兜底 | `src-tauri/src/lib.rs` 新增 `get_dashboard_url` 命令，返回 `ServerState.url`；`index.html` 新增 `restoreFromRustAndShow()`，当 storage 均无 URL 时 `invoke("get_dashboard_url")` 直接从 Rust 取当前有效 URL 重建 iframe。 |
+| eval 注入 | `lib.rs` 两处 eval（598 首次启动 / 677 崩溃重启）在 sessionStorage 之外同步写入 localStorage，并调用 `window.__visionoxRestoreDashboard()` 触发前端恢复。 |
+
+### 健壮性优化
+
+| 变更 | 说明 |
+|------|------|
+| try 统一 | `lib.rs` 两处 eval 的 `sessionStorage.setItem` + `localStorage.setItem` 合并进同一个 `try{...}catch(e){}` 块，消除 sessionStorage 裸调用（原仅 localStorage 包 try），避免极端情况下 eval 抛错中断后续语句。 |
+| iframe 失败回退 | `index.html` `restoreDashboard()` 对新建 iframe 注册 `error` 事件 + 6s 超时守卫（`load` 成功则清除）；触发 `fallbackToRust()` 清空 storage 残留、移除坏 frame、恢复 spinner（文案 "Reconnecting..."）、从 Rust 取最新 URL 重建。用 `__visionoxRustFallbackDone` 防重入。应对 localStorage 残留旧端口 URL 的边缘情况。 |
+
+### effort 切换日志
+
+| 变更 | 说明 |
+|------|------|
+| 运行日志输出 | dashboard 右上角切换 `high` / `max` 推理强度时，运行日志面板打印对应信息（如 `▸ effort: high`），与 preset/model 切换日志风格一致。 |
+| 涉及文件 | `launcher.mjs`（standalone `applyEffortLive`）、`chunk-P7EKE5ZQ.js`（attached `applyEffortLive`）。 |
+
+### 版本与配置
+
+| 变更 | 说明 |
+|------|------|
+| 版本号 | `1.0.1` → `1.0.2`（`Cargo.toml` + `tauri.conf.json`） |
+| url 依赖 | `Cargo.toml` 新增 `url = "2"` crate |
+| officecli 资源 | `tauri.conf.json` `bundle.resources` 新增 `resources/server/officecli.exe` |
+
+### 构建产出
+
+| 平台 | 文件 | 大小 |
+|------|------|------|
+| Windows x64 NSIS | `Visionox_1.0.2_x64-setup.exe` | ~99 MB |
+| 调试可执行 | `src-tauri/target/release/visionox-desktop.exe` | ~9.1 MB |
+
+### 升级说明
+
+- **全新安装**：直接运行安装包
+- **从 1.0.1 升级**：覆盖安装即可，无数据迁移
+- 本次修复解决 ISSUES_CHECKLIST 中 P2-7（sessionStorage 信任问题）
+
+---
+
+## v0.47.1 — Visionox 1.0.1（2026-06-23）
+
+> 本次发布聚焦 **OfficeCLI 集成**，将 AI 原生的 Office 文档操作能力打包内置。
+
+### OfficeCLI 集成
+
+| 变更 | 说明 |
+|------|------|
+| 二进制内置 | `officecli-win-x64.exe` v1.0.117 打包到安装包（`resources/server/officecli.exe`，~31 MB），用户开箱即用 |
+| auto-MCP 注入 | 启动时自动检测内置 `officecli.exe`，通过 stdio MCP 桥接 ~20 个工具到 Agent ToolRegistry，用户零配置 |
+| MCP 自动保留 | `reloadMcp()` 热重载时通过 `_autoKey` 标记保留自动注入的 OfficeCLI，避免被覆盖 |
+| bootstrap skill | `bootstrap-skills/officecli/SKILL.md`，MCP 不可用时 Agent 通过 shell 调用 OfficeCLI 兜底 |
+| vs 旧技能 | 一个 OfficeCLI 替代 `docx`、`xlsx`、`pptx`、`pptx-generator`、`visionox-excel-pro`、`minimax-xlsx` 六个 Python 技能 |
+
+### 办公模式重构
+
+| 变更 | 说明 |
+|------|------|
+| skills 精简 | `["officecli", "pdf", "pdf-extract", "md-to-pdf-cjk"]`，从 8 个减至 4 个 |
+| prompt 更新 | 明确引用 OfficeCLI MCP 工具名称，指导 Agent 优先使用 MCP |
+| mode version 3 | 办公模式独立升级至 v3，支持向前迁移而不影响其他模式 |
+| 多版本迁移 | `mergeDefaultModes` / `collectModePromptMigration` 改为按模式版本比对，旧 prompt 自动备份 |
+
+### 启动与配置
+
+| 变更 | 说明 |
+|------|------|
+| tauri.conf.json | `bundle.resources` 新增 `resources/server/officecli.exe` |
+| install 步骤 | README 新增 OfficeCLI MCP 章节，说明用户安装/配置流程（打包内置后已简化） |
+| 集成文档 | `docs/OFFICECLI_INTEGRATION.md` 新增「打包内置方案」章节 |
+
+### Bug 修复
+
+| 变更 | 说明 |
+|------|------|
+| 路径解析修复 | `resolve("server", "officecli.exe")` → `join("server", "officecli.exe")`，避免 CWD 绝对路径覆盖 |
+| MCP spec 空格 | 路径含空格时用双引号包裹，防止 `parseMcpSpec` 解析断裂 |
+| `join` 导入 | `node:path` 新增 `join` 导入 |
+
+### 构建产出
+
+| 平台 | 文件 | 大小 |
+|------|------|------|
+| Windows x64 NSIS | `Visionox_1.0.1_x64-setup.exe` | ~68 MB |
+
+### 升级说明
+
+- **全新安装**：直接运行安装包，办公模式自动启用 OfficeCLI
+- **从 1.0.0 升级**：安装包覆盖安装，旧办公模式 prompt 自动备份到 `config.modePromptBackups`
+- **手动控制**：在 `config.json` 的 `mcp` 中删除 `officecli=...` 条目即可禁用自动注入；手动配置的 `officecli` MCP 路径会被优先使用
+
+---
+
+## v0.47.1（2026-05-26 至 2026-06-22）
 
 > 基础版本：上游 0.47.1
 > 上一版本：上游 0.43.0 (2026-05-15)

@@ -47,16 +47,19 @@ Dashboard SPA (WebView2)
 
 ```
 vis-ai/
-├── src/index.html                    加载页
+├── src/index.html                    加载页（含 iframe 恢复 + Rust 兜底逻辑）
 ├── src-tauri/
 │   ├── src/main.rs                   入口
-│   ├── src/lib.rs                    窗口/进程管理/托盘/健康检查
+│   ├── src/lib.rs                    窗口/进程管理/托盘/健康检查/刷新恢复
 │   ├── resources/server/
-│   │   ├── node.exe                  Node.js 二进制
+│   │   ├── node.exe                  Node.js 二进制（gitignore，需手动放置）
+│   │   ├── officecli.exe             OfficeCLI 二进制（gitignore，需手动放置）
 │   │   ├── launcher.mjs              启动脚本
 │   │   └── visionox-pkg/             Visionox 服务端
+│   ├── resources/bootstrap-skills/   内置 bootstrap skills
 │   └── tauri.conf.json               Tauri 配置
 ├── docs/                             项目文档
+├── archive/                          归档的旧实现（tep-desktop）
 ├── cherry-claude.cjs                 CLAUDE.md 记忆注入
 └── scripts/restore-visionox-pkg.js   服务端包恢复
 ```
@@ -67,9 +70,12 @@ vis-ai/
 
 ### 最近变更
 
+- **WebView2 刷新卡死修复** — iframe 方案下 F5/右键刷新壳页面会永久卡在 "Starting server..."。现已通过 localStorage 后备 + Rust `get_dashboard_url` 兜底 + iframe 加载失败回退三层机制恢复，刷新后自动重建 dashboard。
 - 聊天输入框支持从 Windows 10/11 文件资源管理器复制文件后直接粘贴完整本地路径，发送消息时只传递文件引用信息，不上传文件内容，避免重复传输和 token 浪费。
 - 粘贴路径读取采用多层兜底：Dashboard 携带 token 调用本地 `/api/clipboard-files`，Node 侧通过 PowerShell 读取 Windows 剪贴板，Tauri 父窗口 IPC 作为备用通道。
 - 普通截图/剪贴板图片仍保留为图片预览，普通文本粘贴行为不变；无法读取完整路径时会在输入框中给出明确失败提示。
+- 办公模式默认采用 OfficeCLI MCP 处理 Word/Excel/PPT，替换 `docx`、`xlsx`、`pptx`、`pptx-generator`、`visionox-excel-pro`、`minimax-xlsx` 六个旧 Office 技能，PDF 相关技能保留。
+- effort（推理强度 high/max）切换现在会在运行日志面板输出对应信息。
 
 ### 记忆系统 (8 层)
 
@@ -103,6 +109,20 @@ Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展�
 | `~/.visionox/memory/global/` | 不安装默认全局长期记忆 | 用户通过 `remember` 生成；安装/升级不写入、不覆盖 |
 | `~/.visionox/memory/<project-hash>/` | 不安装默认项目记忆 | 用户通过项目记忆生成；安装/升级不写入、不覆盖 |
 | `~/.visionox/config.json` | 合并默认工作模式配置 | 保留 API Key、workspace、sessions、memory、skills 和自定义 mode；旧内置 mode prompt 迁移前会备份到 `modePromptBackups` |
+
+#### OfficeCLI MCP（办公模式）
+
+办公模式通过 MCP stdio 接入 OfficeCLI。启动时会自动发现内置的 `resources/server/officecli.exe` 并注入 `officecli` MCP server；不会把自动发现结果写回 `%USERPROFILE%\.visionox\config.json`。出于安全考虑，未内置二进制时不会自动执行 Windows `PATH` 中的 `officecli`，如需使用 PATH 或自定义路径请手动配置 MCP。
+
+如需手动覆盖 OfficeCLI 路径，可在 `%USERPROFILE%\.visionox\config.json` 添加 MCP server：
+
+```json
+{
+  "mcp": ["officecli=officecli mcp"]
+}
+```
+
+重启 Visionox 后，Dashboard 的 MCP 面板应显示 `officecli` server 和工具列表。新办公模式默认用 OfficeCLI 替代 `docx`、`xlsx`、`pptx`、`pptx-generator`、`visionox-excel-pro`、`minimax-xlsx` 六个旧 Office 技能；`pdf`、`pdf-extract`、`md-to-pdf-cjk` 等 PDF 技能继续保留。若 MCP 面板未显示，优先检查内置 `resources/server/officecli.exe`、手动 `mcp` 配置和 `launcher-stderr.log`；手动使用 PATH 时再检查 `officecli --version`。
 
 #### 记忆触发话术
 
@@ -140,7 +160,7 @@ Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展�
 | Rules | 26 个文件 | `~/.claude/rules/ecc/{common,rust,ts,python}/` |
 | Hooks | preTool/postTool | `launcher.mjs` 内置 |
 
-详见 [`docs/ECC_INTEGRATION.md`](docs/ECC_INTEGRATION.md)。
+详见 [`docs/ECC_GAP_ANALYSIS.md`](docs/ECC_GAP_ANALYSIS.md)。
 
 ### 与上游差异
 
@@ -175,11 +195,12 @@ npm install
 # 恢复 visionox-pkg
 node scripts/restore-visionox-pkg.js
 
-# 放置 node.exe 到 src-tauri/resources/server/
+# 放置 node.exe 和 officecli.exe 到 src-tauri/resources/server/
+# （这两个大二进制被 gitignore，需单独获取；officecli.exe 见 docs/OFFICECLI_INTEGRATION.md）
 
 # 编译 Windows 安装器（NSIS exe）
 npm run tauri:build
-# → src-tauri/target/release/bundle/nsis/Visionox_1.0.1_x64-setup.exe
+# → src-tauri/target/release/bundle/nsis/Visionox_1.0.2_x64-setup.exe
 
 # 仅编译调试/开发用可执行文件
 cd src-tauri
@@ -207,10 +228,11 @@ type launcher-stderr.log  # Node.js 侧
 
 | 需求 | 文件 |
 |------|------|
-| 启动流程/进程管理 | `src-tauri/src/lib.rs` |
-| 加载页外观 | `src/index.html` |
+| 启动流程/进程管理/刷新恢复 | `src-tauri/src/lib.rs` |
+| 加载页外观 + iframe 恢复逻辑 | `src/index.html` |
 | 系统提示词/工具注册 | `src-tauri/resources/server/launcher.mjs` |
 | Dashboard UI | `src-tauri/resources/server/visionox-pkg/dashboard/` |
+| OfficeCLI 集成 | `src-tauri/resources/server/officecli.exe` + `docs/OFFICECLI_INTEGRATION.md` |
 | 构建配置 | `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json` |
 | 记忆注入 | `cherry-claude.cjs` |
 | 服务端包恢复 | `scripts/restore-visionox-pkg.js` |
@@ -228,8 +250,10 @@ type launcher-stderr.log  # Node.js 侧
 
 完整变更记录见 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 
-### 近期更新 (260531)
+### 近期更新 (260625)
 
+- **WebView2 刷新修复** — iframe 方案下 F5 刷新卡死问题修复，三层恢复机制（localStorage + Rust 兜底 + iframe 失败回退）
+- **effort 日志** — 推理强度切换输出运行日志
 - **ECC 集成** — 18 个编码 Skills + 26 个 Rules 文件，由工作模式控制加载
 - **工作模式** — 通用/编程/办公/设计 4 模式，主界面一键切换
 - **记忆系统重构** — 8 层加载架构 + 短期记忆 + 工作场景记忆 + soul.md 身份文件

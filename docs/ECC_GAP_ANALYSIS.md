@@ -1,6 +1,6 @@
 # ECC 上游未合入功能分析
 
-> 分析日期：2026-06-01 | ECC 版本：v2.0.0-rc.1 | Visionox 版本：1.0.0  
+> 分析日期：2026-06-01 | ECC 版本：v2.0.0-rc.1 | Visionox 版本：1.0.2  
 > 上游仓库：[github.com/affaan-m/ECC](https://github.com/affaan-m/ECC)  
 > 本地副本：`C:\Users\Lenovo\Documents\vis-ai\ECC\`
 

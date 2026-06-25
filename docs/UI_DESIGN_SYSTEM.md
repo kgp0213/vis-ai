@@ -89,7 +89,7 @@
 ## 六、主题切换
 
 - 通过 `<select>` 下拉框切换 `html[data-theme="..."]`
-- 选择通过 cookie `visionox-theme` 持久化
+- 选择通过 `localStorage` 持久化，cookie `visionox-theme` 作为兼容兜底
 - 当前可用：`dark`（默认）、`light`、`warm-sand`、`cool-ash`、`soft-sage`
 - 3 个深色变体源文件（deep-charcoal/midnight-ink/espresso）存在于 `src-tauri/theme/`，尚未合并到 `app.css`
 
