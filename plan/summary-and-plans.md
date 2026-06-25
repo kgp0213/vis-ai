@@ -253,7 +253,7 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
 - 移除了原 schema 中不存在的 `low`/`medium` effort（代码只认 `high`/`max`）
 - `defaultModel` 改为通过 `defaultPreset` + `models[].presets` 推导，不再单独声明
 
-**导入语义**：同 `id` 整体覆盖（包括 models），不同 `id` 追加。
+**导入语义**：合并式覆盖——同 `id` 的 provider，只覆盖 JSON 中**显式提供的字段**，未提供的字段保留原值（包括 `models`）。不同 `id` 追加。
 
 ---
 
@@ -267,7 +267,7 @@ GET /api/settings 和 GET /api/overview 都返回 modelState() 结果:
 见 2.1.3 节修订后的 JSON Schema。关键决策：
 - `models[]` 含 `presets`、`efforts`、`thinkingMode` 三个维度
 - provider 级别 `defaultPreset`/`defaultEffort`/`autoEscalate`/`escalationModel`
-- 导入语义：同 `id` 整体覆盖（含 models），不同 `id` 追加
+- 导入语义：合并式覆盖——同 `id` 只覆盖 JSON 显式提供的字段，保留原有未提供字段（含 `models`）；不同 `id` 追加
 - effort 只有 `high`/`max`（代码 `VALID_EFFORTS` 只认这两个值）
 
 ### 步骤 2：后端改造 `launcher.mjs` + `server-XGDBRWMB.js` + `chunk-XPDVG52A.js`
@@ -440,14 +440,21 @@ async function handleProviders(method, rest, body, ctx) {
   }
   if (method === "POST" && rest[0] === "import") {
     // POST /api/providers/import { providers: [...] }
+    // 合并式覆盖：同 id 只覆盖 JSON 显式提供的字段，保留原有未提供字段
     const parsed = JSON.parse(body || "{}");
     const cfg = readConfig(ctx.configPath);
     const incoming = parsed.providers ?? [];
     const existing = cfg.providers ?? [];
     for (const p of incoming) {
       const idx = existing.findIndex(e => e.id === p.id);
-      if (idx >= 0) existing[idx] = p; // 整体覆盖
-      else existing.push(p);           // 追加
+      if (idx >= 0) {
+        // 合并：只覆盖 p 中显式提供的顶层字段（非 undefined）
+        for (const key of Object.keys(p)) {
+          existing[idx][key] = p[key];
+        }
+      } else {
+        existing.push(p); // 追加
+      }
     }
     cfg.providers = existing;
     writeConfig(cfg, ctx.configPath);
@@ -703,7 +710,7 @@ providerImportBtn: "导入",
 | R5 | provider 切换耦合 `syncWorkspace` | 设计缺陷 | provider 切换是独立动作，不应等下次 `submitPrompt` 才生效。改为独立 `syncProvider()`。 |
 | R6 | "后端命令"命名混淆 | 术语错误 | 项目实际用 HTTP API 风格（`/api/settings` 等），非 Tauri command。改为 `/api/providers` RESTful 路由。 |
 | R7 | schema 缺少 preset 维度 | 设计缺陷 | `flash` 是 preset，`high` 是 effort，不同维度。原 schema 只有 `efforts`，需补 `presets` 字段。 |
-| R8 | 导入语义边界未明确 | 设计缺陷 | 同 `id` 但 `models` 列表不同时，整体覆盖还是合并？需在 step 1 明确。 |
+| R8 | 导入语义边界未明确 | 设计缺陷 | 同 `id` 但 `models` 列表不同时，整体覆盖还是合并？**已确定：合并式覆盖**——只覆盖 JSON 显式提供的字段，保留原有未提供字段（含 `models`）。 |
 | R9 | schema effort 值错误 | 事实错误 | 原 schema 写 `low`/`medium`/`high`/`max`，代码 `VALID_EFFORTS` 只认 `high`/`max`。已修正。 |
 | R10 | thinkingMode 硬编码 | 适配风险 | `isThinkingModeModel` 硬编码 flash/pro，Qwen 不在列表。schema 增加 `thinkingMode` 字段，Qwen 设为 `disabled`。 |
 | R11 | autoEscalate/escalationModel 硬编码 | 适配风险 | `ESCALATION_MODEL` 硬编码 `deepseek-v4-pro`，本地 provider 无 pro 模型。改为 provider 级别声明 `autoEscalate`/`escalationModel`。 |
