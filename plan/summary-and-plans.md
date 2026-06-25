@@ -738,10 +738,10 @@ providerImportBtn: "导入",
 
 **待确认（需要胡老师决定）**：
 
-| # | 问题 | 选项 A | 选项 B |
-|---|------|--------|--------|
-| Q1 | thinkingMode/summaryModel 覆盖方式 | **改 chunk（推荐）**：在 `chunk-2R4QCDOZ.js` 的 `thinkingModeForModel` 和 3 处 summaryModel 加 `globalThis.__visionoxXxx` 检查，共改 ~6 行。launcher 设 global。直接、可读。 | 从 launcher 注入：不改 chunk，但需要在 loop 构造时传参 + override 原型方法。间接、绕弯。 |
-| Q2 | provider 切换后是否需要 `/new` | **不需要（推荐）**：syncProvider 立即重建 loop，当前对话继续用新 provider。 | 需要：切换后提示用户 `/new`。更安全但体验差。 |
+| # | 问题 | 选项 A | 选项 B | 决定 |
+|---|------|--------|--------|------|
+| Q1 | thinkingMode/summaryModel 覆盖方式 | **改 chunk（推荐）**：在 `chunk-2R4QCDOZ.js` 的 `thinkingModeForModel` 和 3 处 summaryModel 加 `globalThis.__visionoxXxx` 检查，共改 ~6 行。launcher 设 global。直接、可读。 | 从 launcher 注入：不改 chunk，但需要在 loop 构造时传参 + override 原型方法。间接、绕弯。 | ✅ **A（胡老师确认）** |
+| Q2 | provider 切换后是否需要 `/new` | **不需要（推荐）**：syncProvider 立即重建 loop，当前对话继续用新 provider。 | 需要：切换后提示用户 `/new`。更安全但体验差。 | ✅ **A（胡老师确认）** |
 
 ### 7.1 施工阶段
 
