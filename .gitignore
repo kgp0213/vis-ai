@@ -17,6 +17,7 @@ src-tauri/gen/
 # Node.js
 node_modules/
 src-tauri/resources/server/node.exe
+src-tauri/resources/server/officecli.exe
 src-tauri/resources/server/visionox-pkg/dist/
 src-tauri/resources/server/visionox-pkg/node_modules/
 server/visionox-pkg/

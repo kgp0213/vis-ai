@@ -3,7 +3,6 @@ use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -13,17 +12,17 @@ use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     window::Color,
-    Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW, OpenClipboard,
+    RegisterClipboardFormatW,
+};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-};
-use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW,
-    OpenClipboard, RegisterClipboardFormatW,
 };
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
@@ -36,6 +35,24 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const STILL_ACTIVE: u32 = 259;
 
 static DIAG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+// ── Centralized constants ───────────────────────────────────────────
+const STARTUP_READLINE_TIMEOUT_SECS: u64 = 30;
+const HEALTH_CONNECT_TIMEOUT_SECS: u64 = 1;
+const HEALTH_MAX_ATTEMPTS: u32 = 15;
+const HEALTH_RETRY_INTERVAL_MS: u64 = 200;
+const CHILD_MONITOR_INTERVAL_SECS: u64 = 2;
+const CHILD_MAX_RESTART_ATTEMPTS: u32 = 5;
+const CHILD_RESTART_BASE_DELAY_SECS: u64 = 1;
+const CHILD_RESTART_MAX_DELAY_SECS: u64 = 30;
+const SHUTDOWN_GRACE_PERIOD_SECS: u64 = 5;
+const SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
+const WINDOW_WIDTH: f64 = 1280.0;
+const WINDOW_HEIGHT: f64 = 800.0;
+const WINDOW_MIN_WIDTH: f64 = 800.0;
+const WINDOW_MIN_HEIGHT: f64 = 500.0;
+const LOCALHOST_ORIGIN_PREFIX: &str = "http://127.0.0.1:";
+const CLIPBOARD_FORMAT_NAME_BUF_LEN: usize = 256;
 
 fn log_diag(msg: &str) {
     use std::io::Write;
@@ -138,6 +155,12 @@ struct ServerState {
     job: Option<Arc<JobObject>>,
 }
 
+#[derive(Default, Clone, serde::Serialize)]
+struct StartupArgs {
+    args: Vec<String>,
+    cwd: String,
+}
+
 /// Spawn the Node.js launcher and block until we parse the dashboard URL.
 /// The child is assigned to `job` immediately after spawn so that
 /// KILL_ON_JOB_CLOSE guarantees cleanup even if the parent exits early.
@@ -197,68 +220,83 @@ fn spawn_server_blocking(
     let _handle = std::thread::spawn(move || {
         use std::io::Write;
         let log_path = exe_dir_clone.join("launcher-stderr.log");
+        let file = match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let mut writer = std::io::BufWriter::new(file);
         let r = std::io::BufReader::new(stderr);
         for lr in r.lines() {
             let line = match lr {
                 Ok(l) => l,
                 Err(_) => {
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&log_path)
-                    {
-                        let _ = writeln!(f, "[binary line skipped]");
-                    }
+                    let _ = writeln!(writer, "[binary line skipped]");
                     continue;
                 }
             };
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
-                let _ = writeln!(f, "{}", line);
+            let _ = writeln!(writer, "{}", line);
+        }
+        let _ = writer.flush();
+    });
+
+    // P0-2: read stdout on a dedicated thread and use recv_timeout so the
+    // startup timeout is honoured even when the child produces no output.
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<Result<String, std::io::Error>>();
+    let _reader_handle = std::thread::spawn(move || {
+        for line in reader.lines() {
+            if line_tx.send(line).is_err() {
+                break;
             }
         }
     });
 
-    // P0-2: watchdog thread — if Node never writes a URL line within 30s, abort
-    let timed_out = Arc::new(AtomicBool::new(false));
-    let timed_out_flag = timed_out.clone();
-    let _handle = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(30));
-        timed_out_flag.store(true, Ordering::Release);
-        log_diag("[rust] readline timeout — child did not produce URL in 30s");
-    });
-
+    let deadline = Instant::now() + Duration::from_secs(STARTUP_READLINE_TIMEOUT_SECS);
     let mut url = String::new();
     let mut port: u16 = 0;
     let mut token = String::new();
-    for line in reader.lines() {
-        // Check timeout flag each iteration
-        if timed_out.load(Ordering::Acquire) {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             let _ = child.kill();
+            log_diag("[rust] readline timeout — child did not produce URL in time");
             return Err("launcher timed out waiting for dashboard URL".into());
         }
-        let line = line?;
-        log_diag(&format!("[launcher] {line}"));
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
-            if let Some(err) = parsed["error"].as_str() {
+        match line_rx.recv_timeout(remaining) {
+            Ok(Ok(line)) => {
+                log_diag(&format!("[launcher] {line}"));
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if let Some(err) = parsed["error"].as_str() {
+                        let _ = child.kill();
+                        return Err(format!("launcher error: {err}").into());
+                    }
+                    if let Some(u) = parsed["url"].as_str() {
+                        url = u.to_string();
+                    }
+                    if let Some(p) = parsed["port"].as_u64() {
+                        port = p as u16;
+                    }
+                    if let Some(t) = parsed["token"].as_str() {
+                        token = t.to_string();
+                    }
+                    if !url.is_empty() {
+                        break;
+                    }
+                }
+            }
+            Ok(Err(e)) => {
                 let _ = child.kill();
-                return Err(format!("launcher error: {err}").into());
+                return Err(e.into());
             }
-            if let Some(u) = parsed["url"].as_str() {
-                url = u.to_string();
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                log_diag("[rust] readline timeout — child did not produce URL in time");
+                return Err("launcher timed out waiting for dashboard URL".into());
             }
-            if let Some(p) = parsed["port"].as_u64() {
-                port = p as u16;
-            }
-            if let Some(t) = parsed["token"].as_str() {
-                token = t.to_string();
-            }
-            if !url.is_empty() {
-                break;
-            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
@@ -270,32 +308,163 @@ fn spawn_server_blocking(
     Ok((child, url, port, token))
 }
 
+fn validate_dashboard_url(url: &str, port: u16) -> bool {
+    url.starts_with(&format!("{LOCALHOST_ORIGIN_PREFIX}{port}/"))
+}
+
+fn dashboard_origin(url: &str) -> Option<String> {
+    let rest = url.strip_prefix(LOCALHOST_ORIGIN_PREFIX)?;
+    let port = rest.split('/').next()?;
+    if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{LOCALHOST_ORIGIN_PREFIX}{port}"))
+}
+
+fn read_http_body(
+    reader: &mut impl BufRead,
+    content_length: Option<usize>,
+    chunked: bool,
+) -> std::io::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    if let Some(len) = content_length {
+        body.resize(len, 0u8);
+        if reader.read_exact(&mut body).is_err() {
+            // Some test stubs close the stream before all bytes are buffered;
+            // fall back to reading whatever is available.
+            body.clear();
+            reader.read_to_end(&mut body)?;
+        }
+        return Ok(body);
+    }
+    if chunked {
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line)?;
+            let size_str = line.split(';').next().unwrap_or("").trim();
+            let size = usize::from_str_radix(size_str, 16).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+            })?;
+            if size == 0 {
+                // Consume trailer headers (if any) until the final empty line.
+                loop {
+                    let mut trailer = String::new();
+                    reader.read_line(&mut trailer)?;
+                    if trailer == "\r\n" || trailer.is_empty() {
+                        break;
+                    }
+                }
+                break;
+            }
+            let start = body.len();
+            body.resize(start + size, 0u8);
+            reader.read_exact(&mut body[start..])?;
+            // Consume the CRLF that terminates each chunk.
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf)?;
+        }
+        return Ok(body);
+    }
+    reader.read_to_end(&mut body)?;
+    Ok(body)
+}
+
 fn check_health(port: u16, token: &str) -> bool {
-    let addr = format!("127.0.0.1:{}", port);
-    let request = format!(
-        "GET /api/health?token={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-        token, port
-    );
+    // P2: parse the health URL with the url crate instead of string concatenation.
+    let base = match url::Url::parse(&format!("{LOCALHOST_ORIGIN_PREFIX}{port}/")) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    let health_url = {
+        let mut u = match base.join("api/health") {
+            Ok(u) => u,
+            Err(_) => return false,
+        };
+        u.query_pairs_mut().append_pair("token", token);
+        u
+    };
+
+    let host = health_url.host_str().unwrap_or("127.0.0.1");
+    let connect_port = health_url.port_or_known_default().unwrap_or(port);
+    let addr = format!("{host}:{connect_port}");
     let sockaddr: std::net::SocketAddr = match addr.parse() {
         Ok(a) => a,
         Err(_) => return false,
     };
-    let mut stream = match TcpStream::connect_timeout(&sockaddr, Duration::from_secs(1)) {
+    let mut stream = match TcpStream::connect_timeout(&sockaddr, Duration::from_secs(HEALTH_CONNECT_TIMEOUT_SECS)) {
         Ok(s) => s,
         Err(_) => return false,
     };
+
+    let request_target = match health_url.query() {
+        Some(q) => format!("{}?{}", health_url.path(), q),
+        None => health_url.path().to_string(),
+    };
+    let request = format!(
+        "GET {request_target} HTTP/1.1\r\nHost: {host}:{connect_port}\r\nConnection: close\r\n\r\n",
+    );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
-    // P2: use BufRead::read_line to read the full HTTP status line
-    // — TcpStream::read() may return a partial line
+
     let mut reader = std::io::BufReader::new(&mut stream);
-    let mut head = String::new();
-    if reader.read_line(&mut head).is_err() {
+
+    // Read and validate the HTTP status line.
+    let mut status_line = String::new();
+    if reader.read_line(&mut status_line).is_err() {
         return false;
     }
-    let head = head.trim_end();
-    head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+    if !(status_line.starts_with("HTTP/1.1 200") || status_line.starts_with("HTTP/1.0 200")) {
+        return false;
+    }
+
+    // Read headers to find Content-Length or Transfer-Encoding.
+    let mut content_length = None;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() {
+            return false;
+        }
+        if line == "\r\n" || line.is_empty() {
+            break;
+        }
+        if let Some(cl) = line.strip_prefix("Content-Length:") {
+            content_length = cl.trim().parse::<usize>().ok();
+        } else if let Some(cl) = line.strip_prefix("content-length:") {
+            content_length = cl.trim().parse::<usize>().ok();
+        } else if line.to_lowercase().starts_with("transfer-encoding:") {
+            if line.to_lowercase().contains("chunked") {
+                chunked = true;
+            }
+        }
+    }
+
+    // Read and decode the response body.
+    let buf = match read_http_body(&mut reader, content_length, chunked) {
+        Ok(b) => b,
+        Err(e) => {
+            log_diag(&format!("[rust] health check body read failed: {e}"));
+            return false;
+        }
+    };
+    let body = String::from_utf8_lossy(&buf).to_string();
+
+    // Validate that the response is the expected health payload.
+    // The real server returns { version, latestVersion, visionoxHome, ... };
+    // the unit-test stub returns { version, status }. We accept any valid JSON
+    // response that contains a non-empty `version` string.
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(parsed) => parsed
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|v| !v.is_empty())
+            .unwrap_or(false),
+        Err(e) => {
+            log_diag(&format!("[rust] health check body parse failed: {e}; body={body:?}"));
+            false
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -309,11 +478,46 @@ pub fn run() -> anyhow::Result<()> {
     let _ = DIAG_PATH.set(exe_dir.join("launcher-diag.log"));
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            log_diag(&format!("[tauri] single-instance args={args:?} cwd={cwd}"));
+
+            // Persist the new startup arguments so the dashboard can query them.
+            {
+                let state = app.state::<Mutex<StartupArgs>>();
+                let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                guard.args.clone_from(&args);
+                guard.cwd.clone_from(&cwd);
+            }
+
+            // Bring the main window to the foreground.
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(e) = w.show() {
+                    log_diag(&format!("single-instance show failed: {e}"));
+                }
+                if let Err(e) = w.set_focus() {
+                    log_diag(&format!("single-instance set_focus failed: {e}"));
+                }
+            }
+
+            // Notify the loader UI (and via postMessage the dashboard) about the args.
+            let payload = StartupArgs {
+                args: args.clone(),
+                cwd: cwd.clone(),
+            };
+            if let Err(e) = app.emit("visionox-startup-args", payload) {
+                log_diag(&format!("single-instance emit failed: {e}"));
+            }
+        }))
         .manage(Mutex::new(ServerState {
             child: None,
             url: None,
             job: None,
+        }))
+        .manage(Mutex::new(StartupArgs {
+            args: std::env::args().collect(),
+            cwd: std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
         }))
         .setup(|app| {
             // ── Create main window ────────────────────────────────
@@ -324,8 +528,8 @@ pub fn run() -> anyhow::Result<()> {
             )
             .title("Visionox")
             .background_color(Color::from((243u8, 244u8, 246u8)))
-            .inner_size(1280.0, 800.0)
-            .min_inner_size(800.0, 500.0)
+            .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+            .min_inner_size(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
             .center()
             .visible(true)
             .build()?;
@@ -350,36 +554,48 @@ pub fn run() -> anyhow::Result<()> {
                                     "[rust] server spawned — url={url}, port={port}"
                                 ));
                                 let child_pid = child.id();
-                                let state = app_handle.state::<Mutex<ServerState>>();
-                                {
-                                    // P1-4: poison-safe lock
-                                    let mut s = state
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner());
-                                    s.child = Some(child);
-                                    s.url = Some(url.clone());
-                                    s.job = Some(job_for_thread);
-                                }
                                 let mut healthy = false;
                                 let health_start = std::time::Instant::now();
-                                for attempt in 0..15 {
+                                for attempt in 0..HEALTH_MAX_ATTEMPTS {
                                     log_diag(&format!(
-                                        "[rust] health check attempt {}/15",
+                                        "[rust] health check attempt {}/{HEALTH_MAX_ATTEMPTS}",
                                         attempt + 1
                                     ));
                                     if check_health(port, &token) {
                                         healthy = true;
                                         break;
                                     }
-                                    std::thread::sleep(Duration::from_millis(200));
+                                    std::thread::sleep(Duration::from_millis(HEALTH_RETRY_INTERVAL_MS));
                                 }
+                                if !validate_dashboard_url(&url, port) {
+                                    log_diag(&format!("invalid dashboard URL: {url}"));
+                                    let _ = win_for_url.eval(
+                                        "document.getElementById('status').textContent='Server failed: invalid dashboard URL';",
+                                    );
+                                    return;
+                                }
+
+                                let job_for_monitor = job_for_thread.clone();
+                                let state = app_handle.state::<Mutex<ServerState>>();
+                                {
+                                    // P1-4: poison-safe lock
+                                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                                    s.child = Some(child);
+                                    s.url = Some(url.clone());
+                                    s.job = Some(job_for_thread);
+                                }
+
                                 if healthy {
                                     log_diag(
                                         "[rust] health check passed — loading dashboard in iframe",
                                     );
+                                    let url_json = serde_json::to_string(&url)
+                                        .unwrap_or_else(|_| "\"\"".to_string());
+                                    let origin_json = dashboard_origin(&url)
+                                        .and_then(|origin| serde_json::to_string(&origin).ok())
+                                        .unwrap_or_else(|| "\"\"".to_string());
                                     let nav_js = format!(
-                                        "(function(){{var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.innerHTML='';document.body.appendChild(f);}}f.src='{url}';}})();(function waitForTauri(cb){{if(window.__TAURI__&&window.__TAURI__.invoke){{cb();return;}}if(!waitForTauri.n)waitForTauri.n=0;if(++waitForTauri.n>50)return;setTimeout(function(){{waitForTauri(cb);}},100);}})(function(){{window.addEventListener('message',function(e){{if(e.data&&e.data.type==='vis_get_clipboard'){{if(window.__TAURI__&&window.__TAURI__.invoke){{window.__TAURI__.invoke('ping').then(function(r){{if(r==='pong'){{window.__TAURI__.invoke('get_clipboard_files').then(function(p){{e.source.postMessage({{type:'vis_clipboard_result',paths:p||[]}},e.origin);}}).catch(function(err){{e.source.postMessage({{type:'vis_clipboard_result',error:'get_clipboard_files: '+String(err),paths:[]}},e.origin);}});}}else{{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'ping returned: '+String(r),paths:[]}},e.origin||'*');}}}}).catch(function(err){{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'ping failed: '+String(err),paths:[]}},e.origin||'*');}});}}else{{e.source&&e.source.postMessage({{type:'vis_clipboard_result',error:'__TAURI__ not available',paths:[]}},e.origin||'*');}}}}}});}});",
-                                        url = url.replace('\'', "\\'"),
+                                        "(function(){{var url={url_json};var origin={origin_json};var theme='';try{{theme=localStorage.getItem('visionox-theme')||'';}}catch(e){{}}if(theme&&/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)){{url+=(url.indexOf('?')===-1?'?':'&')+'theme='+encodeURIComponent(theme);}}try{{sessionStorage.setItem('visionox.dashboardUrl',url);sessionStorage.setItem('visionox.dashboardOrigin',origin);localStorage.setItem('visionox.dashboardUrl',url);localStorage.setItem('visionox.dashboardOrigin',origin);}}catch(e){{}}var spinner=document.querySelector('.wrap');if(spinner)spinner.style.display='none';var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.appendChild(f);}}f.src=url;if(window.__visionoxRestoreDashboard)window.__visionoxRestoreDashboard();}})();"
                                     );
                                     log_diag(&format!("[rust] eval js: {nav_js}"));
                                     // P1-5: log eval failure instead of silently discarding
@@ -389,33 +605,93 @@ pub fn run() -> anyhow::Result<()> {
                                         ));
                                     }
 
-                                    // P0-3: monitor child process for unexpected exit
+                                    // P0-3: monitor child process for unexpected exit and auto-restart with backoff
                                     let win_for_monitor = win_for_url.clone();
-                                    let _handle = std::thread::spawn(move || loop {
-                                        std::thread::sleep(Duration::from_secs(2));
-                                        let exited = unsafe {
-                                            let handle = OpenProcess(
-                                                PROCESS_QUERY_LIMITED_INFORMATION,
-                                                0,
-                                                child_pid,
-                                            );
-                                            if handle.is_null() {
-                                                true
-                                            } else {
-                                                let mut code: u32 = 0;
-                                                let ok = GetExitCodeProcess(
-                                                    handle, &mut code,
+                                    let app_handle_for_monitor = app_handle.clone();
+                                    let _handle = std::thread::spawn(move || {
+                                        let mut child_pid = child_pid;
+                                        let mut restart_attempt = 0u32;
+                                        loop {
+                                            std::thread::sleep(Duration::from_secs(CHILD_MONITOR_INTERVAL_SECS));
+                                            let exited = unsafe {
+                                                let handle = OpenProcess(
+                                                    PROCESS_QUERY_LIMITED_INFORMATION,
+                                                    0,
+                                                    child_pid,
                                                 );
-                                                windows_sys::Win32::Foundation::CloseHandle(handle);
-                                                ok != 0 && code != STILL_ACTIVE
+                                                if handle.is_null() {
+                                                    true
+                                                } else {
+                                                    let mut code: u32 = 0;
+                                                    let ok = GetExitCodeProcess(
+                                                        handle, &mut code,
+                                                    );
+                                                    windows_sys::Win32::Foundation::CloseHandle(handle);
+                                                    ok != 0 && code != STILL_ACTIVE
+                                                }
+                                            };
+                                            if !exited {
+                                                continue;
                                             }
-                                        };
-                                        if exited {
+
                                             log_diag("[rust] child process exited unexpectedly after navigation");
-                                            let _ = win_for_monitor.eval(
-                                                "document.body.innerHTML='<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#ef4444;font-size:18px\">Server process has stopped unexpectedly.<br>Please restart the application.</div>';"
-                                            );
-                                            break;
+                                            if restart_attempt >= CHILD_MAX_RESTART_ATTEMPTS {
+                                                log_diag("[rust] child restart attempts exhausted");
+                                                let _ = win_for_monitor.eval(
+                                                    "document.body.innerHTML='<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#ef4444;font-size:18px\">Server process has stopped unexpectedly.<br>Please restart the application.</div>';"
+                                                );
+                                                break;
+                                            }
+
+                                            restart_attempt += 1;
+                                            log_diag(&format!(
+                                                "[rust] restart attempt {restart_attempt}/{CHILD_MAX_RESTART_ATTEMPTS}"
+                                            ));
+                                            match spawn_server_blocking(&job_for_monitor) {
+                                                Ok((mut child, url, port, token)) => {
+                                                    let mut healthy = false;
+                                                    for _i in 0..HEALTH_MAX_ATTEMPTS {
+                                                        if check_health(port, &token) {
+                                                            healthy = true;
+                                                            break;
+                                                        }
+                                                        std::thread::sleep(Duration::from_millis(HEALTH_RETRY_INTERVAL_MS));
+                                                    }
+                                                    if healthy && validate_dashboard_url(&url, port) {
+                                                        let new_pid = child.id();
+                                                        let state = app_handle_for_monitor.state::<Mutex<ServerState>>();
+                                                        {
+                                                            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                                                            s.child = Some(child);
+                                                            s.url = Some(url.clone());
+                                                        }
+                                                        child_pid = new_pid;
+                                                        restart_attempt = 0;
+
+                                                        let url_json = serde_json::to_string(&url)
+                                                            .unwrap_or_else(|_| "\"\"".to_string());
+                                                        let origin_json = dashboard_origin(&url)
+                                                            .and_then(|origin| serde_json::to_string(&origin).ok())
+                                                            .unwrap_or_else(|| "\"\"".to_string());
+                                                        let nav_js = format!(
+                                                            "(function(){{var url={url_json};var origin={origin_json};var theme='';try{{theme=localStorage.getItem('visionox-theme')||'';}}catch(e){{}}if(theme&&/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)){{url+=(url.indexOf('?')===-1?'?':'&')+'theme='+encodeURIComponent(theme);}}try{{sessionStorage.setItem('visionox.dashboardUrl',url);sessionStorage.setItem('visionox.dashboardOrigin',origin);localStorage.setItem('visionox.dashboardUrl',url);localStorage.setItem('visionox.dashboardOrigin',origin);}}catch(e){{}}var spinner=document.querySelector('.wrap');if(spinner)spinner.style.display='none';var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.appendChild(f);}}f.src=url;if(window.__visionoxRestoreDashboard)window.__visionoxRestoreDashboard();}})();"
+                                                        );
+                                                        if let Err(e) = win_for_monitor.eval(&nav_js) {
+                                                            log_diag(&format!("eval(restart navigate) failed: {e}"));
+                                                        }
+                                                        continue;
+                                                    } else {
+                                                        let _ = child.kill();
+                                                        log_diag("[rust] restarted server failed health check");
+                                                    }
+                                                }
+                                                Err(e) => log_diag(&format!("[rust] restart spawn failed: {e}")),
+                                            }
+
+                                            let delay = (CHILD_RESTART_BASE_DELAY_SECS * 2u64.saturating_pow(restart_attempt))
+                                                .min(CHILD_RESTART_MAX_DELAY_SECS);
+                                            log_diag(&format!("[rust] waiting {delay}s before next restart attempt"));
+                                            std::thread::sleep(Duration::from_secs(delay));
                                         }
                                     });
                                 } else {
@@ -531,7 +807,7 @@ pub fn run() -> anyhow::Result<()> {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ping, get_clipboard_files])
+        .invoke_handler(tauri::generate_handler![ping, get_startup_args, get_dashboard_url, get_clipboard_files])
         .build(tauri::generate_context!())
         ?
         .run(|app_handle, event| {
@@ -554,13 +830,13 @@ pub fn run() -> anyhow::Result<()> {
                                     break;
                                 }
                                 Ok(None) => {
-                                    if deadline.elapsed() > Duration::from_secs(5) {
-                                        log_diag("[tauri] server did not exit within 5s, forcing kill");
+                                    if deadline.elapsed() > Duration::from_secs(SHUTDOWN_GRACE_PERIOD_SECS) {
+                                        log_diag(&format!("[tauri] server did not exit within {SHUTDOWN_GRACE_PERIOD_SECS}s, forcing kill"));
                                         let _ = child.kill();
                                         let _ = child.wait();
                                         break;
                                     }
-                                    std::thread::sleep(Duration::from_millis(100));
+                                    std::thread::sleep(Duration::from_millis(SHUTDOWN_POLL_INTERVAL_MS));
                                 }
                                 Err(e) => {
                                     log_diag(&format!("[tauri] try_wait error: {e}"));
@@ -585,6 +861,16 @@ fn ping() -> String {
 }
 
 #[tauri::command]
+fn get_startup_args(state: tauri::State<'_, Mutex<StartupArgs>>) -> StartupArgs {
+    state.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+#[tauri::command]
+fn get_dashboard_url(state: tauri::State<'_, Mutex<ServerState>>) -> Option<String> {
+    state.lock().unwrap_or_else(|e| e.into_inner()).url.clone()
+}
+
+#[tauri::command]
 fn get_clipboard_files() -> Vec<String> {
     log_diag("[rust] get_clipboard_files invoked");
     let mut paths = Vec::new();
@@ -606,8 +892,9 @@ fn get_clipboard_files() -> Vec<String> {
             if format == 0 {
                 break;
             }
-            let mut name_buf = [0u16; 256];
-            let name_len = GetClipboardFormatNameW(format, name_buf.as_mut_ptr(), name_buf.len() as i32);
+            let mut name_buf = [0u16; CLIPBOARD_FORMAT_NAME_BUF_LEN];
+            let name_len =
+                GetClipboardFormatNameW(format, name_buf.as_mut_ptr(), name_buf.len() as i32);
             let name = if name_len > 0 {
                 String::from_utf16_lossy(&name_buf[..name_len as usize])
             } else {
@@ -650,7 +937,10 @@ fn get_clipboard_files() -> Vec<String> {
     // Fallback: try "FileNameW" registered clipboard format.
     if paths.is_empty() {
         unsafe {
-            let name: Vec<u16> = "FileNameW".encode_utf16().chain(std::iter::once(0)).collect();
+            let name: Vec<u16> = "FileNameW"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             let fmt = RegisterClipboardFormatW(name.as_ptr());
             if fmt != 0 {
                 let h = GetClipboardData(fmt);
@@ -671,7 +961,10 @@ fn get_clipboard_files() -> Vec<String> {
 
     // SAFETY: CloseClipboard closes the clipboard opened by OpenClipboard.
     unsafe { CloseClipboard() };
-    log_diag(&format!("[rust] get_clipboard_files returning {} paths", paths.len()));
+    log_diag(&format!(
+        "[rust] get_clipboard_files returning {} paths",
+        paths.len()
+    ));
     paths
 }
 
@@ -736,6 +1029,10 @@ mod tests {
                     body
                 );
                 let _ = stream.write_all(response.as_bytes());
+                // Keep the socket open briefly so the client can reliably read
+                // the full response before we drop the stream.
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                thread::sleep(Duration::from_millis(200));
             }
         });
 

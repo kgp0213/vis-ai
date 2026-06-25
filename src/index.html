@@ -1,1 +1,258 @@
-<!doctype html><html><head><meta charset=utf-8><title>Visionox</title><style>html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden}body{display:flex;align-items:center;justify-content:center;background:#f3f4f6;font-family:system-ui,sans-serif}.wrap{text-align:center}.spin{width:36px;height:36px;border:3px solid #e5e7eb;border-top-color:#1a6fd4;border-radius:50%;margin:0 auto 20px;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}h1{font-size:15px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#4b5563;margin:0}#status{font-size:12px;color:#9ca3af;margin:10px 0 0}</style></head><body><div class=wrap><div class=spin></div><h1>Visionox</h1><p id=status>Starting server...</p></div></body></html>
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Visionox</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f3f4f6;
+        font-family: system-ui, sans-serif;
+      }
+
+      .wrap {
+        text-align: center;
+      }
+
+      .spin {
+        width: 36px;
+        height: 36px;
+        border: 3px solid #e5e7eb;
+        border-top-color: #1a6fd4;
+        border-radius: 50%;
+        margin: 0 auto 20px;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      h1 {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #4b5563;
+        margin: 0;
+      }
+
+      #status {
+        font-size: 12px;
+        color: #9ca3af;
+        margin: 10px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="spin"></div>
+      <h1>Visionox</h1>
+      <p id="status">Starting server...</p>
+    </div>
+    <script>
+      (function () {
+        function installTauriBridge() {
+          if (window.__visionoxBridgeInstalled) return;
+          window.__visionoxBridgeInstalled = true;
+          window.addEventListener("message", function (event) {
+            if (!event.data || event.data.type !== "vis_get_clipboard") return;
+            var frame = document.getElementById("vis-app-frame");
+            var dashboardUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
+            var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
+            if (!dashboardOrigin) return;
+            if (!frame || event.source !== frame.contentWindow || event.origin !== dashboardOrigin) return;
+            var source = event.source;
+            var origin = event.origin;
+            function reply(payload) {
+              if (source) source.postMessage(payload, origin);
+            }
+            if (!window.__TAURI__ || !window.__TAURI__.invoke) {
+              reply({ type: "vis_clipboard_result", error: "__TAURI__ not available", paths: [] });
+              return;
+            }
+            window.__TAURI__.invoke("ping")
+              .then(function (result) {
+                if (result !== "pong") {
+                  reply({ type: "vis_clipboard_result", error: "ping returned: " + String(result), paths: [] });
+                  return;
+                }
+                return window.__TAURI__.invoke("get_clipboard_files")
+                  .then(function (paths) {
+                    reply({ type: "vis_clipboard_result", paths: paths || [] });
+                  });
+              })
+              .catch(function (error) {
+                reply({ type: "vis_clipboard_result", error: String(error), paths: [] });
+              });
+          });
+        }
+
+        function getStoredTheme() {
+          try {
+            var t = window.localStorage ? localStorage.getItem("visionox-theme") : "";
+            if (t && /^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) return t;
+          } catch (e) {}
+          return "";
+        }
+
+        function applyThemeToUrl(url, theme) {
+          url = url.replace(/([?&])theme=[^&]*/g, "$1").replace(/[?&]$/g, "").replace(/\?&/g, "?");
+          if (theme) {
+            url += (url.indexOf("?") === -1 ? "?" : "&") + "theme=" + encodeURIComponent(theme);
+          }
+          return url;
+        }
+
+        function restoreDashboard() {
+          var url = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
+          if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) return;
+          url = applyThemeToUrl(url, getStoredTheme());
+          var frame = document.getElementById("vis-app-frame");
+          var spinner = document.querySelector(".wrap");
+          var isFreshFrame = false;
+          if (!frame) {
+            frame = document.createElement("iframe");
+            frame.id = "vis-app-frame";
+            frame.style.position = "fixed";
+            frame.style.top = "0";
+            frame.style.left = "0";
+            frame.style.width = "100%";
+            frame.style.height = "100%";
+            frame.style.border = "none";
+            if (spinner) spinner.style.display = "none";
+            document.body.appendChild(frame);
+            isFreshFrame = true;
+          } else {
+            if (spinner) spinner.style.display = "none";
+          }
+          if (frame.src !== url) frame.src = url;
+          if (isFreshFrame) {
+            frame.addEventListener("error", function () { fallbackToRust(); });
+            var guardTimer = setTimeout(function () {
+              if (frame.dataset.loaded !== "1") fallbackToRust();
+            }, 6000);
+            frame.addEventListener("load", function () {
+              frame.dataset.loaded = "1";
+              clearTimeout(guardTimer);
+            });
+          }
+        }
+
+        function fallbackToRust() {
+          if (window.__visionoxRustFallbackDone) return;
+          window.__visionoxRustFallbackDone = true;
+          try {
+            sessionStorage.removeItem("visionox.dashboardUrl");
+            sessionStorage.removeItem("visionox.dashboardOrigin");
+            localStorage.removeItem("visionox.dashboardUrl");
+            localStorage.removeItem("visionox.dashboardOrigin");
+          } catch (e) {}
+          var oldFrame = document.getElementById("vis-app-frame");
+          if (oldFrame) { try { oldFrame.parentNode.removeChild(oldFrame); } catch (e) {} }
+          var spinner = document.querySelector(".wrap");
+          if (spinner) spinner.style.display = "";
+          var status = document.getElementById("status");
+          if (status) status.textContent = "Reconnecting...";
+          restoreFromRustAndShow();
+        }
+
+        installTauriBridge();
+        window.addEventListener("message", function (event) {
+          var data = event.data;
+          if (!data || data.type !== "vis_theme_changed") return;
+          var frame = document.getElementById("vis-app-frame");
+          var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
+          if (!frame || event.source !== frame.contentWindow || event.origin !== dashboardOrigin) return;
+          try {
+            localStorage.setItem("visionox-theme", String(data.theme || ""));
+          } catch (e) {}
+          try {
+            var currentUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
+            if (currentUrl) {
+              sessionStorage.setItem("visionox.dashboardUrl", applyThemeToUrl(currentUrl, data.theme));
+            }
+          } catch (e) {}
+        });
+        function forwardArgsToDashboard(args, cwd) {
+          var frame = document.getElementById("vis-app-frame");
+          var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
+          if (!frame || !dashboardOrigin) return;
+          try {
+            frame.contentWindow.postMessage({ type: "vis_open_args", args: args, cwd: cwd }, dashboardOrigin);
+          } catch (e) {}
+        }
+
+        if (window.__TAURI__ && window.__TAURI__.invoke && window.__TAURI__.event && window.__TAURI__.event.listen) {
+          window.__TAURI__.event.listen("visionox-startup-args", function (event) {
+            if (event && event.payload) {
+              forwardArgsToDashboard(event.payload.args || [], event.payload.cwd || "");
+            }
+          });
+          window.__TAURI__.invoke("get_startup_args")
+            .then(function (res) {
+              if (res && res.args && res.args.length > 1) {
+                forwardArgsToDashboard(res.args, res.cwd || "");
+              }
+            })
+            .catch(function () {});
+        }
+
+        function waitForTauri(cb, attemptsLeft) {
+          attemptsLeft = attemptsLeft || 50;
+          if (window.__TAURI__ && window.__TAURI__.invoke) {
+            cb();
+            return;
+          }
+          if (attemptsLeft <= 0) {
+            restoreDashboard();
+            return;
+          }
+          setTimeout(function () { waitForTauri(cb, attemptsLeft - 1); }, 100);
+        }
+
+        function restoreFromRustAndShow() {
+          waitForTauri(function () {
+            window.__TAURI__.invoke("get_dashboard_url")
+              .then(function (url) {
+                if (url && /^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
+                  try { sessionStorage.setItem("visionox.dashboardUrl", url); } catch (e) {}
+                  try { localStorage.setItem("visionox.dashboardUrl", url); } catch (e) {}
+                  var originMatch = url.match(/^http:\/\/127\.0\.0\.1:\d+/);
+                  if (originMatch) {
+                    try { sessionStorage.setItem("visionox.dashboardOrigin", originMatch[0]); } catch (e) {}
+                    try { localStorage.setItem("visionox.dashboardOrigin", originMatch[0]); } catch (e) {}
+                  }
+                }
+                restoreDashboard();
+              })
+              .catch(function () {
+                restoreDashboard();
+              });
+          });
+        }
+
+        var hasStoredUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl");
+        if (hasStoredUrl) {
+          restoreDashboard();
+        } else {
+          restoreFromRustAndShow();
+        }
+        window.__visionoxRestoreDashboard = restoreDashboard;
+      })();
+    </script>
+  </body>
+</html>

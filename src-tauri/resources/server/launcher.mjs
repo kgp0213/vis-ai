@@ -9,10 +9,11 @@
  * Usage: node launcher.mjs [--port <n>] [--token <hex>]
  */
 
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat as fsStat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
@@ -33,7 +34,7 @@ function resolveLoginShellPath() {
   try {
     const result = spawnSync(shell, ["-ilc", `printf '${marker}%s\\n' "$PATH"`], {
       encoding: "utf8",
-      timeout: 2000,
+      timeout: CONSTANTS.LOGIN_SHELL_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "ignore"],
     });
     if (result.status !== 0 && result.signal === null) return null;
@@ -77,6 +78,40 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
 const DEFAULT_SOUL_RESOURCE = resolve(__dirname, "..", "default-soul.md");
 const bootstrapSkillsRoot = resolve(__dirname, "..", "bootstrap-skills");
+
+// ── Centralized constants ───────────────────────────────────────
+const CONSTANTS = {
+  // Model defaults
+  DEFAULT_MODEL: "deepseek-v4-flash",
+
+  // Logging
+  LOG_MAX: 500,
+  LOG_MSG_MAX: 2000,
+
+  // Timing
+  LOGIN_SHELL_TIMEOUT_MS: 2000,
+  BALANCE_REFRESH_MS: 60_000,
+  BALANCE_FETCH_TIMEOUT_MS: 5000,
+  SKILL_RATE_LIMIT: 10,
+  SKILL_RATE_WINDOW_MS: 60_000,
+
+  // Size limits
+  MAX_BODY_SIZE: 1024 * 1024,       // 1 MB
+  MAX_ZIP_SIZE: 50 * 1024 * 1024,   // 50 MB
+  MAX_UNZIP_BUFFER_BYTES: 10 * 1024 * 1024, // 10 MB
+  MESSAGES_CAP: 10_000,
+
+  // Mode memory
+  MODE_MEMORY_VERSION: 1,
+  MODE_MEMORY_ITEM_LIMIT: 60,
+  MODE_MEMORY_PROMPT_LIMIT: 8,
+  MODE_MEMORY_TEXT_LIMIT: 180,
+  MODE_MEMORY_KEYWORD_LIMIT: 8,
+
+  // Mode versions
+  DEFAULT_MODE_VERSION: 2,
+  OFFICE_MODE_VERSION: 3,
+};
 const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
 
 ## 我是谁
@@ -101,31 +136,29 @@ const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
 - 不把历史测试数据当作长期身份或事实保留。`;
 
 // ── Log buffer for developer mode ─────────────────────────────────
-const LOG_MAX = 500;
-const LOG_MSG_MAX = 2000;
 const logBuffer = [];
 const _origError = console.error;
 const _origLog = console.log;
 const _origWarn = console.warn;
 console.error = (...args) => {
   let msg = args.join(" ");
-  if (msg.length > LOG_MSG_MAX) msg = msg.slice(0, LOG_MSG_MAX) + `… (truncated ${msg.length - LOG_MSG_MAX} chars)`;
+  if (msg.length > CONSTANTS.LOG_MSG_MAX) msg = msg.slice(0, CONSTANTS.LOG_MSG_MAX) + `… (truncated ${msg.length - CONSTANTS.LOG_MSG_MAX} chars)`;
   logBuffer.push({ ts: Date.now(), msg });
-  if (logBuffer.length > LOG_MAX) logBuffer.shift();
+  if (logBuffer.length > CONSTANTS.LOG_MAX) logBuffer.shift();
   _origError.apply(console, args);
 };
 console.log = (...args) => {
   let msg = args.join(" ");
-  if (msg.length > LOG_MSG_MAX) msg = msg.slice(0, LOG_MSG_MAX) + `… (truncated ${msg.length - LOG_MSG_MAX} chars)`;
+  if (msg.length > CONSTANTS.LOG_MSG_MAX) msg = msg.slice(0, CONSTANTS.LOG_MSG_MAX) + `… (truncated ${msg.length - CONSTANTS.LOG_MSG_MAX} chars)`;
   logBuffer.push({ ts: Date.now(), msg });
-  if (logBuffer.length > LOG_MAX) logBuffer.shift();
+  if (logBuffer.length > CONSTANTS.LOG_MAX) logBuffer.shift();
   _origLog.apply(console, args);
 };
 console.warn = (...args) => {
   let msg = args.join(" ");
-  if (msg.length > LOG_MSG_MAX) msg = msg.slice(0, LOG_MSG_MAX) + `… (truncated ${msg.length - LOG_MSG_MAX} chars)`;
+  if (msg.length > CONSTANTS.LOG_MSG_MAX) msg = msg.slice(0, CONSTANTS.LOG_MSG_MAX) + `… (truncated ${msg.length - CONSTANTS.LOG_MSG_MAX} chars)`;
   logBuffer.push({ ts: Date.now(), msg });
-  if (logBuffer.length > LOG_MAX) logBuffer.shift();
+  if (logBuffer.length > CONSTANTS.LOG_MAX) logBuffer.shift();
   _origWarn.apply(console, args);
 };
 
@@ -250,7 +283,6 @@ let apiKey = loadApiKey();
 const config = readConfig(configPath);
 let baseUrl = loadBaseUrl();
 
-const DEFAULT_MODEL = "deepseek-v4-flash";
 const PRESET_MODELS = {
   flash: "deepseek-v4-flash",
   pro: "deepseek-v4-pro",
@@ -269,7 +301,7 @@ const LEGACY_PRESET_ALIASES = {
 function effectiveModelConfig(source = config) {
   const rawPreset = source.preset ?? "auto";
   const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
-  const configuredModel = source.model ?? DEFAULT_MODEL;
+  const configuredModel = source.model ?? CONSTANTS.DEFAULT_MODEL;
   const lockedModel = PRESET_MODELS[preset];
   return {
     rawPreset,
@@ -283,7 +315,7 @@ function effectiveModelConfig(source = config) {
 
 // ── Balance ──────────────────────────────────────────────────────
 let balanceData = null;
-const BALANCE_REFRESH_MS = 60_000;
+
 
 function isDeepSeekApi(url) {
   if (!url) return false;
@@ -301,7 +333,7 @@ async function refreshBalance() {
     return;
   }
   try {
-    const data = await client.getBalance({ signal: AbortSignal.timeout(5000) });
+    const data = await client.getBalance({ signal: AbortSignal.timeout(CONSTANTS.BALANCE_FETCH_TIMEOUT_MS) });
     if (data?.balance_infos?.length) balanceData = data;
   } catch {
     // Keep the last successful balance. The dashboard polls /overview, so a
@@ -339,14 +371,14 @@ function hashBuffer(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-function hashFile(path) {
-  return hashBuffer(readFileSync(path));
+async function hashFile(path) {
+  return hashBuffer(await readFile(path));
 }
 
-function hashDirectory(rootDir) {
+async function hashDirectory(rootDir) {
   const hash = createHash("sha256");
-  const visit = (dir, rel = "") => {
-    const entries = readdirSync(dir, { withFileTypes: true })
+  const visit = async (dir, rel = "") => {
+    const entries = (await readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.name !== "_visionox_builtin.json")
       .sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -354,13 +386,13 @@ function hashDirectory(rootDir) {
       const childRel = rel ? `${rel}/${entry.name}` : entry.name;
       hash.update(childRel);
       if (entry.isDirectory()) {
-        visit(abs, childRel);
+        await visit(abs, childRel);
       } else if (entry.isFile()) {
-        hash.update(readFileSync(abs));
+        hash.update(await readFile(abs));
       }
     }
   };
-  visit(rootDir);
+  await visit(rootDir);
   return hash.digest("hex");
 }
 
@@ -378,29 +410,29 @@ function validateSkillMarkdown(contents) {
   return { ok: true, name: nameMatch[1], frontmatter };
 }
 
-function readSkillVersion(skillDir) {
+async function readSkillVersion(skillDir) {
   try {
-    const skillMd = readFileSync(resolve(skillDir, "SKILL.md"), "utf8");
+    const skillMd = await readFile(resolve(skillDir, "SKILL.md"), "utf8");
     return /^version:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(skillMd)?.[1]?.trim() || null;
   } catch {
     return null;
   }
 }
 
-function readBuiltinMarker(skillDir) {
+async function readBuiltinMarker(skillDir) {
   try {
-    const marker = JSON.parse(readFileSync(resolve(skillDir, "_visionox_builtin.json"), "utf8"));
+    const marker = JSON.parse(await readFile(resolve(skillDir, "_visionox_builtin.json"), "utf8"));
     return marker?.owner === "visionox-bootstrap" ? marker : null;
   } catch {
     return null;
   }
 }
 
-function writeBuiltinMarker(skillDir, name, sourceHash) {
+async function writeBuiltinMarker(skillDir, name, sourceHash) {
   const marker = {
     owner: "visionox-bootstrap",
     name,
-    version: readSkillVersion(skillDir),
+    version: await readSkillVersion(skillDir),
     sourceHash,
     installedAt: new Date().toISOString(),
   };
@@ -411,49 +443,49 @@ function backupPathFor(target) {
   return `${target}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
 
-function installBootstrapSkill(name, { force = false } = {}) {
+async function installBootstrapSkill(name, { force = false } = {}) {
   const sourceDir = resolve(bootstrapSkillsRoot, name);
   const targetDir = resolve(skillsRoot, name);
   const skillMdPath = resolve(sourceDir, "SKILL.md");
   if (!existsSync(skillMdPath)) {
     return { name, installed: false, reason: "missing bootstrap SKILL.md" };
   }
-  const validation = validateSkillMarkdown(readFileSync(skillMdPath, "utf8"));
+  const validation = validateSkillMarkdown(await readFile(skillMdPath, "utf8"));
   if (!validation.ok || validation.name !== name) {
     return { name, installed: false, reason: validation.error || "bootstrap name mismatch" };
   }
-  const sourceHash = hashDirectory(sourceDir);
+  const sourceHash = await hashDirectory(sourceDir);
   if (existsSync(targetDir)) {
-    const marker = readBuiltinMarker(targetDir);
+    const marker = await readBuiltinMarker(targetDir);
     if (!marker) {
       return { name, installed: false, skipped: true, reason: "user skill with same name exists" };
     }
-    const currentHash = marker.sourceHash || hashDirectory(targetDir);
+    const currentHash = marker.sourceHash || await hashDirectory(targetDir);
     if (!force && currentHash === sourceHash) {
       return { name, installed: false, skipped: true, reason: "already up to date" };
     }
     const backupDir = backupPathFor(targetDir);
-    cpSync(targetDir, backupDir, { recursive: true });
-    rmSync(targetDir, { recursive: true, force: true });
-    cpSync(sourceDir, targetDir, { recursive: true });
-    writeBuiltinMarker(targetDir, name, sourceHash);
+    await cp(targetDir, backupDir, { recursive: true });
+    await rm(targetDir, { recursive: true, force: true });
+    await cp(sourceDir, targetDir, { recursive: true });
+    await writeBuiltinMarker(targetDir, name, sourceHash);
     return { name, installed: true, upgraded: true, backup: backupDir, path: targetDir };
   }
-  cpSync(sourceDir, targetDir, { recursive: true });
-  writeBuiltinMarker(targetDir, name, sourceHash);
+  await cp(sourceDir, targetDir, { recursive: true });
+  await writeBuiltinMarker(targetDir, name, sourceHash);
   return { name, installed: true, path: targetDir };
 }
 
-function deployBootstrapSkills({ force = false } = {}) {
+async function deployBootstrapSkills({ force = false } = {}) {
   const result = { root: skillsRoot, source: bootstrapSkillsRoot, installed: [], skipped: [], errors: [] };
   if (!existsSync(bootstrapSkillsRoot)) {
     result.errors.push({ reason: "bootstrap-skills resource directory not found", path: bootstrapSkillsRoot });
     return result;
   }
   if (!existsSync(skillsRoot)) mkdirSync(skillsRoot, { recursive: true });
-  for (const entry of readdirSync(bootstrapSkillsRoot, { withFileTypes: true })) {
+  for (const entry of await readdir(bootstrapSkillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const item = installBootstrapSkill(entry.name, { force });
+    const item = await installBootstrapSkill(entry.name, { force });
     if (item.installed) result.installed.push(item);
     else if (item.skipped) result.skipped.push(item);
     else result.errors.push(item);
@@ -462,18 +494,18 @@ function deployBootstrapSkills({ force = false } = {}) {
   return result;
 }
 
-function getSkillEnvironmentStatus() {
+async function getSkillEnvironmentStatus() {
   const bootstrap = [];
   if (existsSync(bootstrapSkillsRoot)) {
-    for (const entry of readdirSync(bootstrapSkillsRoot, { withFileTypes: true })) {
+    for (const entry of await readdir(bootstrapSkillsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const targetDir = resolve(skillsRoot, entry.name);
       const skillMd = resolve(targetDir, "SKILL.md");
       bootstrap.push({
         name: entry.name,
         installed: existsSync(skillMd),
-        builtin: Boolean(readBuiltinMarker(targetDir)),
-        version: readSkillVersion(targetDir),
+        builtin: Boolean(await readBuiltinMarker(targetDir)),
+        version: await readSkillVersion(targetDir),
       });
     }
   }
@@ -486,28 +518,28 @@ function getSkillEnvironmentStatus() {
   };
 }
 
-function deploySkillGuide(rootDir) {
+async function deploySkillGuide(rootDir) {
   const guideSrc = resolve(__dirname, "..", "skill-creation-guide.md");
   const guideDir = resolve(rootDir, ".visionox");
   const guideDst = resolve(guideDir, "skill-creation-guide.md");
   if (!existsSync(guideSrc)) return { deployed: false, reason: "source guide not found" };
   if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
   if (!existsSync(guideDst)) {
-    copyFileSync(guideSrc, guideDst);
+    await copyFile(guideSrc, guideDst);
     console.error(`[launcher] skill-creation-guide.md deployed to workspace`);
     return { deployed: true, path: guideDst };
   }
-  if (hashFile(guideSrc) !== hashFile(guideDst)) {
+  if (await hashFile(guideSrc) !== await hashFile(guideDst)) {
     const backup = backupPathFor(guideDst);
-    copyFileSync(guideDst, backup);
-    copyFileSync(guideSrc, guideDst);
+    await copyFile(guideDst, backup);
+    await copyFile(guideSrc, guideDst);
     console.error(`[launcher] skill-creation-guide.md refreshed in workspace`);
     return { deployed: true, refreshed: true, backup, path: guideDst };
   }
   return { deployed: false, skipped: true, reason: "already up to date", path: guideDst };
 }
-deployBootstrapSkills();
-deploySkillGuide(workspaceDir);
+await deployBootstrapSkills();
+await deploySkillGuide(workspaceDir);
 
 const startupModelConfig = effectiveModelConfig();
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, preset=${startupModelConfig.preset}, model=${startupModelConfig.model}`);
@@ -585,10 +617,9 @@ if (!config.editMode) {
 
 // ESM TDZ: DEFAULT_MODES must be declared before initModesConfig() call
 // Prompts reference skills verified present in ~/.visionox/skills/
-const DEFAULT_MODE_VERSION = 2;
 const DEFAULT_MODES = {
   general: {
-    version: DEFAULT_MODE_VERSION,
+    version: CONSTANTS.DEFAULT_MODE_VERSION,
     label: "通用",
     description: "日常问答、资料梳理、轻量排查和跨领域任务。",
     hint: "平衡准确性和简洁度，必要时再切换到专业模式。",
@@ -597,7 +628,7 @@ const DEFAULT_MODES = {
     prompt: "你处于通用模式。先判断用户目标属于问答、代码、办公还是设计；若任务明显属于专业场景，按该场景的工作习惯组织答案，但不要擅自切换模式。保持回答直接、可执行，必要时指出下一步。",
   },
   coding: {
-    version: DEFAULT_MODE_VERSION,
+    version: CONSTANTS.DEFAULT_MODE_VERSION,
     label: "编程",
     description: "代码阅读、修复、重构、测试、构建和工程审查。",
     hint: "优先读上下文，改动小而准，完成后运行针对性验证。",
@@ -606,16 +637,16 @@ const DEFAULT_MODES = {
     prompt: "你处于编程模式。修改前先阅读相关上下文，优先沿用项目既有模式；代码注释优先英文且只解释非显然逻辑。实现后运行与风险匹配的验证，清楚报告改动、验证结果和残余风险。",
   },
   office: {
-    version: DEFAULT_MODE_VERSION,
+    version: CONSTANTS.OFFICE_MODE_VERSION,
     label: "办公",
     description: "文档、表格、PDF、PPT、报告、数据整理和格式转换。",
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
-    skills: ["docx", "xlsx", "pdf", "pdf-extract", "pptx", "pptx-generator", "visionox-excel-pro", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。优先明确输入文件、目标格式、输出位置和质量要求；处理表格、文档、PDF、PPT 时保持原始数据可追溯，必要时生成中间检查结果。中文文档注意标题层级、表格可读性和交付文件路径。",
+    skills: ["officecli", "pdf", "pdf-extract", "md-to-pdf-cjk"],
+    prompt: "你处于办公模式。优先明确输入文件、目标格式、输出位置和质量要求；OfficeCLI（Word/Excel/PPT）通过 MCP 工具注入时，优先使用 create/view/get/query/set/add/remove/move/validate/batch/merge/watch 等工具处理 Office 文档。交付前先 validate 检查质量，并通过 view issues 定位问题和自修复；PDF 仍使用 pdf、pdf-extract、md-to-pdf-cjk 等专项技能。",
   },
   design: {
-    version: DEFAULT_MODE_VERSION,
+    version: CONSTANTS.DEFAULT_MODE_VERSION,
     label: "设计",
     description: "界面体验、前端布局、视觉风格、交互状态和可用性优化。",
     hint: "先服务真实工作流，再处理视觉细节和状态反馈。",
@@ -727,9 +758,9 @@ function extractSkillArchive(sourcePath, destDir) {
     ? spawnSync(
         "powershell.exe",
         ["-NoProfile", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force", sourcePath, destDir],
-        { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 }
+        { encoding: "utf8", maxBuffer: CONSTANTS.MAX_UNZIP_BUFFER_BYTES }
       )
-    : spawnSync("unzip", ["-o", sourcePath, "-d", destDir], { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+    : spawnSync("unzip", ["-o", sourcePath, "-d", destDir], { encoding: "utf8", maxBuffer: CONSTANTS.MAX_UNZIP_BUFFER_BYTES });
   if (result.error) return { error: result.error.message };
   if (result.status !== 0) {
     return { error: (result.stderr || result.stdout || `archive extraction exited with ${result.status}`).trim() };
@@ -780,12 +811,12 @@ tools.register({
 
     // P2-3: rate limit — max 10 installs per minute
     const now = Date.now();
-    while (skillInstallTimes.length > 0 && now - skillInstallTimes[0] > SKILL_RATE_WINDOW) {
+    while (skillInstallTimes.length > 0 && now - skillInstallTimes[0] > CONSTANTS.SKILL_RATE_WINDOW_MS) {
       skillInstallTimes.shift();
     }
-    if (skillInstallTimes.length >= SKILL_RATE_LIMIT) {
+    if (skillInstallTimes.length >= CONSTANTS.SKILL_RATE_LIMIT) {
       return JSON.stringify({
-        error: `rate limit: max ${SKILL_RATE_LIMIT} installs per minute. Please wait and retry.`,
+        error: `rate limit: max ${CONSTANTS.SKILL_RATE_LIMIT} installs per minute. Please wait and retry.`,
       });
     }
 
@@ -797,9 +828,9 @@ tools.register({
     }
 
     // P2-3: body size cap
-    if (args.body && typeof args.body === 'string' && args.body.length > MAX_BODY_SIZE) {
+    if (args.body && typeof args.body === 'string' && args.body.length > CONSTANTS.MAX_BODY_SIZE) {
       return JSON.stringify({
-        error: `body too large: ${args.body.length} bytes (max ${MAX_BODY_SIZE})`,
+        error: `body too large: ${args.body.length} bytes (max ${CONSTANTS.MAX_BODY_SIZE})`,
       });
     }
 
@@ -840,19 +871,19 @@ tools.register({
           return JSON.stringify({ error: `source must be a .skill or .zip file, got: ${src}` });
         }
         const srcStat = statSync(src);
-        if (srcStat.size > MAX_ZIP_SIZE) {
+        if (srcStat.size > CONSTANTS.MAX_ZIP_SIZE) {
           return JSON.stringify({
-            error: `source file too large: ${srcStat.size} bytes (max ${MAX_ZIP_SIZE})`,
+            error: `source file too large: ${srcStat.size} bytes (max ${CONSTANTS.MAX_ZIP_SIZE})`,
           });
         }
         const extractDir = createInstallTempDir(`${name}-extract`);
         const archivePath = src.endsWith(".skill") ? resolve(extractDir, `${name}.zip`) : src;
         try {
-          if (src.endsWith(".skill")) copyFileSync(src, archivePath);
+          if (src.endsWith(".skill")) await copyFile(src, archivePath);
           const extracted = extractSkillArchive(archivePath, extractDir);
           if (!extracted.ok) return JSON.stringify({ error: `extract failed: ${extracted.error}` });
           if (src.endsWith(".skill")) {
-            try { rmSync(archivePath, { force: true }); } catch {}
+            try { await rm(archivePath, { force: true }); } catch {}
           }
           const payloadRoot = findSkillPayloadRoot(extractDir, name);
           if (!payloadRoot) {
@@ -944,7 +975,7 @@ tools.register({
     required: ["text"],
   },
   fn: async (args) => {
-    const text = compactText(args.text, MODE_MEMORY_TEXT_LIMIT);
+    const text = compactText(args.text, CONSTANTS.MODE_MEMORY_TEXT_LIMIT);
     if (!text) return JSON.stringify({ error: "text is required" });
     const mode = config.mode || "general";
     const { item, memory } = addModeMemory(mode, {
@@ -964,42 +995,68 @@ tools.register({
 console.error(`[launcher] remember_mode_preference tool registered`);
 
 // ── MCP servers ──────────────────────────────────────────────────
-const mcpSpecs = config.mcp ?? [];
-const mcpServers = [];
-
-for (const rawSpec of mcpSpecs) {
-  try {
-    const spec = parseMcpSpec(rawSpec.trim());
-    if (!spec) continue;
-    const transport = buildTransportFromSpec(spec, { env: mcpEnvFor(spec.name, config) });
-    const client = new McpClient({ transport });
-    await client.initialize();
-    const report = await inspectMcpServer(client);
-    const { registeredNames } = bridgeMcpTools(client, { registry: tools });
-    mcpServers.push({
-      label: spec.name,
-      spec: rawSpec.trim(),
-      toolCount: registeredNames.length,
-      toolNames: registeredNames,
-      report,
-      host: { client },
-      readResource: (uri) => client.readResource(uri),
-      getPrompt: (name, args) => client.getPrompt(name, args),
-    });
-    console.error(`[launcher] MCP "${spec.name}": ${registeredNames.length} tools bridged`);
-  } catch (err) {
-    console.error(`[launcher] MCP "${rawSpec}" failed: ${err.message}`);
-  }
+function hasOfficecliMcpSpec(specs) {
+  return specs.some((rawSpec) => {
+    const specText = String(rawSpec).trim();
+    try {
+      const spec = parseMcpSpec(specText);
+      const commandName = basename(spec?.command ?? "").toLowerCase();
+      return spec?.name === "officecli" || commandName === "officecli" || commandName === "officecli.exe";
+    } catch {
+      return specText.toLowerCase().includes("officecli");
+    }
+  });
 }
 
-if (mcpServers.length > 0) {
-  console.error(`[launcher] ${mcpServers.length} MCP server(s) connected, ${tools.size} total tools`);
+function quoteMcpCommand(command) {
+  return JSON.stringify(command);
+}
+
+function resolveBundledOfficecli() {
+  const base = process.resourcesPath || __dirname;
+  const rel = process.resourcesPath ? join("server", "officecli.exe") : "officecli.exe";
+  const candidate = resolve(base, rel);
+  return existsSync(candidate) ? candidate : null;
+}
+
+function autoOfficecliMcpSpec() {
+  const bundled = resolveBundledOfficecli();
+  if (bundled) return `officecli=${quoteMcpCommand(bundled)} mcp`;
+  return null;
+}
+
+function effectiveMcpSpecs(cfg) {
+  const manualSpecs = (cfg.mcp ?? []).map((spec) => String(spec).trim()).filter(Boolean);
+  if (hasOfficecliMcpSpec(manualSpecs)) return manualSpecs;
+  const autoSpec = autoOfficecliMcpSpec();
+  if (!autoSpec) {
+    console.error("[launcher] auto-MCP: bundled officecli.exe not found; configure config.mcp manually to use a PATH or custom OfficeCLI executable");
+    return manualSpecs;
+  }
+  console.error(`[launcher] auto-MCP: officecli injected as ${autoSpec}`);
+  return [...manualSpecs, autoSpec];
+}
+
+const mcpServers = [];
+let mcpStartupPromise = null;
+
+function startMcpInBackground() {
+  if (mcpStartupPromise) return mcpStartupPromise;
+  mcpStartupPromise = reloadMcp()
+    .then((count) => {
+      if (count > 0) console.error(`[launcher] ${count} MCP server(s) connected, ${tools.size} total tools`);
+      return count;
+    })
+    .catch((err) => {
+      console.error(`[launcher] MCP startup failed: ${err.message}`);
+      return mcpServers.length;
+    });
+  return mcpStartupPromise;
 }
 
 async function reloadMcp() {
   const cfg = readConfig(configPath);
-  // P2-2: trim specs so comparison with mcpServers[i].spec (already trimmed) is reliable
-  const specs = (cfg.mcp ?? []).map(s => s.trim());
+  const specs = effectiveMcpSpecs(cfg);
   // Remove servers no longer in config
   for (let i = mcpServers.length - 1; i >= 0; i--) {
     if (!specs.includes(mcpServers[i].spec)) {
@@ -1023,7 +1080,7 @@ async function reloadMcp() {
       const client = new McpClient({ transport });
       await client.initialize();
       const report = await inspectMcpServer(client);
-      const { registeredNames } = bridgeMcpTools(client, { registry: tools });
+      const { registeredNames } = await bridgeMcpTools(client, { registry: tools });
       // Add new tool specs to loop prefix
       for (const ts of tools.specs().filter((s) => registeredNames.includes(s.function?.name))) {
         loop?.prefix?.addTool(ts);
@@ -1068,7 +1125,7 @@ function mergeDefaultModes(modes) {
   const merged = Object.fromEntries(
     Object.entries(DEFAULT_MODES).map(([id, defaults]) => {
       const existing = modes?.[id];
-      const source = existing?.version === DEFAULT_MODE_VERSION
+      const source = existing?.version === defaults.version
         ? { ...defaults, ...existing }
         : defaults;
       return [id, normalizeModeConfig(source, id)];
@@ -1085,25 +1142,30 @@ function collectModePromptMigration(modes) {
   const backup = {};
   for (const id of Object.keys(DEFAULT_MODES)) {
     const existing = modes?.[id];
-    if (!existing || existing.version === DEFAULT_MODE_VERSION) continue;
+    if (!existing || existing.version === DEFAULT_MODES[id].version) continue;
     migrated.push(id);
     backup[id] = existing;
   }
   return migrated.length > 0 ? { migrated, backup } : null;
 }
 
+function migrationTargetVersion(migration) {
+  return Math.max(...migration.migrated.map((id) => DEFAULT_MODES[id]?.version ?? CONSTANTS.DEFAULT_MODE_VERSION));
+}
+
 function appendModePromptBackup(migration) {
   if (!migration) return;
+  const targetVersion = migrationTargetVersion(migration);
   const backups = Array.isArray(config.modePromptBackups) ? config.modePromptBackups : [];
   backups.push({
     migratedAt: new Date().toISOString(),
     fromVersion: "legacy",
-    toVersion: DEFAULT_MODE_VERSION,
+    toVersion: targetVersion,
     modes: migration.backup,
   });
   config.modePromptBackups = backups.slice(-5);
   config.modePromptMigration = {
-    version: DEFAULT_MODE_VERSION,
+    version: targetVersion,
     migratedAt: config.modePromptBackups[config.modePromptBackups.length - 1].migratedAt,
     migratedModes: migration.migrated,
   };
@@ -1117,7 +1179,7 @@ function normalizeModeConfig(mode, id) {
     label: String(mode?.label ?? fallback.label ?? id),
     description: String(mode?.description ?? fallback.description ?? ""),
     hint: String(mode?.hint ?? fallback.hint ?? ""),
-    version: Number(mode?.version ?? fallback.version ?? DEFAULT_MODE_VERSION),
+    version: Number(mode?.version ?? fallback.version ?? CONSTANTS.DEFAULT_MODE_VERSION),
     eccRules: rules,
     skills,
     prompt: String(mode?.prompt ?? fallback.prompt ?? ""),
@@ -1177,11 +1239,6 @@ function modeSummary(modeId = config.mode || "general") {
 }
 
 // ── Mode preference memory (persistent, per work mode) ──────────
-const MODE_MEMORY_VERSION = 1;
-const MODE_MEMORY_ITEM_LIMIT = 60;
-const MODE_MEMORY_PROMPT_LIMIT = 8;
-const MODE_MEMORY_TEXT_LIMIT = 180;
-const MODE_MEMORY_KEYWORD_LIMIT = 8;
 
 function safeModeId(modeId = config.mode || "general") {
   const raw = String(modeId || "general").trim();
@@ -1192,7 +1249,7 @@ function modeMemoryPath(modeId = config.mode || "general") {
   return resolve(modeMemoryDir, `${safeModeId(modeId)}.json`);
 }
 
-function compactText(value, max = MODE_MEMORY_TEXT_LIMIT) {
+function compactText(value, max = CONSTANTS.MODE_MEMORY_TEXT_LIMIT) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -1202,7 +1259,7 @@ function normalizeModeMemoryItem(item, index = 0) {
   const text = compactText(item?.text ?? item?.body ?? item?.summary ?? "");
   if (!text) return null;
   const keywords = Array.isArray(item?.keywords)
-    ? item.keywords.map((k) => compactText(k, 32)).filter(Boolean).slice(0, MODE_MEMORY_KEYWORD_LIMIT)
+    ? item.keywords.map((k) => compactText(k, 32)).filter(Boolean).slice(0, CONSTANTS.MODE_MEMORY_KEYWORD_LIMIT)
     : [];
   return {
     id: String(item?.id || randomUUID()),
@@ -1231,7 +1288,7 @@ function readModeMemory(modeId = config.mode || "general") {
   }
   const rawItems = Array.isArray(parsed?.items) ? parsed.items : [];
   const items = rawItems.map((item, index) => normalizeModeMemoryItem(item, index)).filter(Boolean);
-  return { version: MODE_MEMORY_VERSION, mode, path, updatedAt: parsed?.updatedAt || null, items };
+  return { version: CONSTANTS.MODE_MEMORY_VERSION, mode, path, updatedAt: parsed?.updatedAt || null, items };
 }
 
 function writeModeMemory(modeId, payload) {
@@ -1244,8 +1301,8 @@ function writeModeMemory(modeId, payload) {
       if (b.priority !== a.priority) return b.priority - a.priority;
       return String(b.updatedAt).localeCompare(String(a.updatedAt));
     })
-    .slice(0, MODE_MEMORY_ITEM_LIMIT);
-  const data = { version: MODE_MEMORY_VERSION, mode, updatedAt: new Date().toISOString(), items };
+    .slice(0, CONSTANTS.MODE_MEMORY_ITEM_LIMIT);
+  const data = { version: CONSTANTS.MODE_MEMORY_VERSION, mode, updatedAt: new Date().toISOString(), items };
   const path = modeMemoryPath(mode);
   mkdirSync(modeMemoryDir, { recursive: true });
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
@@ -1259,7 +1316,7 @@ function listModeMemory(modeId = config.mode || "general") {
 function listAllModeMemory() {
   const modes = config.modes || DEFAULT_MODES;
   return {
-    version: MODE_MEMORY_VERSION,
+    version: CONSTANTS.MODE_MEMORY_VERSION,
     modes: Object.keys(modes).map((id) => {
       const memory = readModeMemory(id);
       return {
@@ -1324,11 +1381,11 @@ function formatModeMemoryForPrompt(modeId = config.mode || "general") {
       if (b.priority !== a.priority) return b.priority - a.priority;
       return String(b.updatedAt).localeCompare(String(a.updatedAt));
     })
-    .slice(0, MODE_MEMORY_PROMPT_LIMIT);
+    .slice(0, CONSTANTS.MODE_MEMORY_PROMPT_LIMIT);
   if (items.length === 0) return "";
   const lines = items.map((item) => {
     const suffix = item.keywords.length ? ` [${item.keywords.join(", ")}]` : "";
-    return `- ${compactText(item.text, MODE_MEMORY_TEXT_LIMIT)}${suffix}`;
+    return `- ${compactText(item.text, CONSTANTS.MODE_MEMORY_TEXT_LIMIT)}${suffix}`;
   });
   return `\n\n# Current work mode memory\n\nThese are compact, user-approved memories for the current work mode. They may include scenario-specific preferences, recurring knowledge, terminology, workflows, and keyword associations. Apply them only in this work mode and only when relevant; they do not override the user's current explicit instructions, global identity, or ECC rules.\n\n${lines.join("\n")}`;
 }
@@ -1577,7 +1634,7 @@ if (apiKey) {
   }
 }
 if (client) refreshBalance();
-setInterval(() => { if (client) refreshBalance(); }, BALANCE_REFRESH_MS);
+setInterval(() => { if (client) refreshBalance(); }, CONSTANTS.BALANCE_REFRESH_MS);
 
 // ── Event sink (writes .events.jsonl for cockpit tool activity) ──
 let eventSink = null;
@@ -1650,19 +1707,129 @@ let busy = false;
 
 // P2-3: install_skill rate limiter
 const skillInstallTimes = [];
-const SKILL_RATE_LIMIT = 10;
-const SKILL_RATE_WINDOW = 60_000;
-const MAX_BODY_SIZE = 1024 * 1024;     // 1 MB
-const MAX_ZIP_SIZE = 50 * 1024 * 1024; // 50 MB
 let installingSkill = false;
 
 // ── Messages store ──────────────────────────────────────────────
 let nextMsgId = 1;
 const messages = [];
-const MESSAGES_CAP = 10_000;
 function pushMessage(msg) {
   messages.push(msg);
-  while (messages.length > MESSAGES_CAP) messages.shift();
+  while (messages.length > CONSTANTS.MESSAGES_CAP) messages.shift();
+}
+
+// ── Active session autosave ─────────────────────────────────────
+// The current conversation is incrementally saved to disk so that
+// crashes or forced exits do not lose messages. The active file lives
+// outside sessionsDir so it is never shown in the saved-sessions list.
+const activeSessionFile = resolve(visionoxDataDir, "active-session.jsonl");
+const activeSessionMetaFile = resolve(visionoxDataDir, "active-session.meta.json");
+
+function hasUserMessage() {
+  return messages.some((m) => m.role === "user");
+}
+
+async function appendActiveMessage(msg) {
+  try {
+    const record = { role: msg.role, content: msg.text ?? "" };
+    await appendFile(activeSessionFile, `${JSON.stringify(record)}\n`, "utf8");
+  } catch (err) {
+    console.error(`[launcher] active-session append failed: ${err.message}`);
+  }
+}
+
+async function finalizeActiveSession() {
+  try {
+    await access(activeSessionFile);
+  } catch {
+    return null;
+  }
+  try {
+    const st = await fsStat(activeSessionFile);
+    if (st.size === 0 || !hasUserMessage()) {
+      await rm(activeSessionFile, { force: true });
+      await rm(activeSessionMetaFile, { force: true });
+      return null;
+    }
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const destFile = resolve(sessionsDir, `${ts}.jsonl`);
+    const destMeta = resolve(sessionsDir, `${ts}.meta.json`);
+    await rename(activeSessionFile, destFile);
+    try {
+      await rename(activeSessionMetaFile, destMeta);
+    } catch {
+      writeSessionMeta(ts, { messageCount: messages.length });
+    }
+    console.error(`[launcher] active session finalized: ${destFile}`);
+    return ts;
+  } catch (err) {
+    console.error(`[launcher] failed to finalize active session: ${err.message}`);
+    return null;
+  }
+}
+
+async function clearActiveSession() {
+  try {
+    await rm(activeSessionFile, { force: true });
+    await rm(activeSessionMetaFile, { force: true });
+  } catch (err) {
+    console.error(`[launcher] failed to clear active session: ${err.message}`);
+  }
+}
+
+async function writeActiveSessionMeta() {
+  try {
+    const mode = config.mode || "general";
+    const modeInfo = modeSummary(mode);
+    const meta = {
+      version: 1,
+      mode,
+      modeLabel: modeInfo.label,
+      modeDescription: modeInfo.description,
+      workspace: workspaceDir,
+      messageCount: messages.length,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+  } catch (err) {
+    console.error(`[launcher] failed to write active session meta: ${err.message}`);
+  }
+}
+
+async function loadActiveSession() {
+  try {
+    await access(activeSessionFile);
+  } catch {
+    return false;
+  }
+  try {
+    const raw = await readFile(activeSessionFile, "utf8");
+    const entries = raw.split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+    if (entries.length === 0) {
+      await clearActiveSession();
+      return false;
+    }
+    messages.length = 0;
+    nextMsgId = 1;
+    for (const entry of entries) {
+      const role = entry.role === "tool" ? "tool" : entry.role;
+      const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
+      pushMessage({ id, role, text: entry.content || "" });
+      nextMsgId++;
+    }
+    try {
+      const metaRaw = await readFile(activeSessionMetaFile, "utf8");
+      const meta = JSON.parse(metaRaw);
+      applyModeForSessionMeta(meta);
+    } catch {
+      // ignore missing/broken meta
+    }
+    console.error(`[launcher] active session restored: ${entries.length} messages`);
+    return true;
+  } catch (err) {
+    console.error(`[launcher] failed to load active session: ${err.message}`);
+    await clearActiveSession();
+    return false;
+  }
 }
 
 function isValidSessionName(name) {
@@ -1768,7 +1935,6 @@ const ctx = {
     console.error(`[launcher] edit mode: ${m}`);
     return m;
   },
-  setPlanMode: () => {},
   setEccRules: (rules) => {
     const cfg = readConfig(configPath);
     cfg.eccRules = rules;
@@ -1797,6 +1963,7 @@ const ctx = {
   applyEffortLive: (effort) => {
     syncRuntimeConfig({ ...config, reasoningEffort: effort });
     loop?.configure({ reasoningEffort: effort });
+    console.error(`[launcher] effort: ${effort}`);
   },
   applyModelLive: (m) => {
     syncRuntimeConfig({ ...config, model: m });
@@ -1804,17 +1971,17 @@ const ctx = {
     // locked to their preset model to keep every UI surface consistent.
     const modelConfig = effectiveModelConfig();
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
+    console.error(`[launcher] model: ${modelConfig.model}`);
   },
-  setProNextLive: () => {},
   setBudgetUsdLive: (usd) => { loop?.setBudget(usd); },
 
   reloadMcp,
   invokeMcpTool,
-  repairSkillEnvironment: () => {
-    const bootstrap = deployBootstrapSkills();
-    const guide = deploySkillGuide(workspaceDir);
+  repairSkillEnvironment: async () => {
+    const bootstrap = await deployBootstrapSkills();
+    const guide = await deploySkillGuide(workspaceDir);
     console.error(`[launcher] skill environment repaired`);
-    return { repaired: true, bootstrap, guide, status: getSkillEnvironmentStatus() };
+    return { repaired: true, bootstrap, guide, status: await getSkillEnvironmentStatus() };
   },
 
   setWorkspaceDir: (dir) => {
@@ -1885,16 +2052,13 @@ const ctx = {
     }
 
     // Deploy skill-creation-guide to new workspace
-    deploySkillGuide(workspaceDir);
+    await deploySkillGuide(workspaceDir);
 
     // P2-1: re-register MCP tools for new workspace
     await reloadMcp();
 
     console.error(`[launcher] workspace synced: ${workspaceDir}`);
   },
-
-  startAutoLoop: () => {},
-  stopAutoLoop: () => {},
 
   // ── Chat bridge ────────────────────────────────────────────
   getMessages: () => messages,
@@ -1922,6 +2086,11 @@ const ctx = {
       // ── Sync workspace if changed ─────────────────────────────
       await ctx.syncWorkspace();
 
+      // ── Session switch: archive current active session first ───
+      if (sessionName && loop) {
+        await finalizeActiveSession();
+      }
+
       // ── Session resume: load historical messages ──────────────
       if (sessionName && loop) {
         // P2-7: validate sessionName to prevent path traversal
@@ -1947,6 +2116,19 @@ const ctx = {
             loaded.push({ id, role, text: entry.content || "" });
             nextMsgId++;
           }
+          // Seed active-session file with the resumed session so continued
+          // conversation survives a crash/restart with full context.
+          try {
+            await writeFile(activeSessionFile, raw, "utf8");
+            try {
+              const metaRaw = readFileSync(resolve(sessionsDir, sessionName + ".meta.json"), "utf8");
+              await writeFile(activeSessionMetaFile, metaRaw, "utf8");
+            } catch {
+              await writeActiveSessionMeta();
+            }
+          } catch (err) {
+            console.error(`[launcher] failed to seed active session from ${sessionName}: ${err.message}`);
+          }
           broadcastDashboardEvent({ kind: "messages-reset", messages: loaded, mode: modeRestore.mode, modeChanged: modeRestore.changed });
           console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages, mode: ${modeRestore.mode}${modeRestore.changed ? `, restored from ${modeRestore.previous}` : ""})`);
           if (!text || !text.trim()) {
@@ -1958,20 +2140,9 @@ const ctx = {
         }
       }
 
-      // Handle /new and /clear: save session and reset
+      // Handle /new and /clear: finalize active session and reset
       if (text === "/new" || text === "/clear") {
-        if (messages.length > 0) {
-          const ts = new Date().toISOString().replace(/[:.]/g, "-");
-          const sessionFile = resolve(sessionsDir, `${ts}.jsonl`);
-          try {
-            const jsonl = messages.map((m) => JSON.stringify({ role: m.role, content: m.text })).join("\n") + "\n";
-            writeFileSync(sessionFile, jsonl, "utf8");
-            const savedMeta = writeSessionMeta(ts, { messageCount: messages.length });
-            console.error(`[launcher] session saved: ${sessionFile} (mode: ${savedMeta.mode})`);
-          } catch (err) {
-            console.error(`[launcher] failed to save session: ${err.message}`);
-          }
-        }
+        await finalizeActiveSession();
         // Reset the AI's internal context (CacheFirstLoop log)
         if (loop) loop.clearLog();
         // Clear session memories
@@ -2015,6 +2186,7 @@ const ctx = {
 
       const userMsgId = String(nextMsgId++);
       pushMessage({ id: userMsgId, role: "user", text, images: images?.length ? images : undefined });
+      appendActiveMessage({ role: "user", text });
       broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: images?.length ? images : undefined });
 
       const assistantId = `assistant-${Date.now()}`;
@@ -2057,6 +2229,7 @@ const ctx = {
               role: "assistant",
               text: assistantText,
             });
+            appendActiveMessage({ role: "assistant", text: assistantText });
           }
         } catch (err) {
           broadcastDashboardEvent({
@@ -2119,13 +2292,18 @@ if (config.preset && config.preset !== "auto") {
 }
 ctx.applyEffortLive(config.reasoningEffort ?? "max");
 
+// ── Restore active session (crash recovery) ─────────────────────
+const restoredActiveSession = await loadActiveSession();
+
 // ── Initial welcome message ──────────────────────────────────────
-pushMessage({
-  id: "welcome",
-  role: "assistant",
-  text: (apiKey ? "" : "⚠️ 未配置 API Key，请在 设置 → 模型服务 中配置后开始对话。\n\n")
-    + "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。",
-});
+if (!restoredActiveSession) {
+  pushMessage({
+    id: "welcome",
+    role: "assistant",
+    text: (apiKey ? "" : "⚠️ 未配置 API Key，请在 设置 → 模型服务 中配置后开始对话。\n\n")
+      + "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。",
+  });
+}
 
 // ── Start the server ────────────────────────────────────────────
 const token = tokenOverride ?? randomBytes(32).toString("hex");
@@ -2144,6 +2322,10 @@ try {
   // Write URL as JSON to stdout so the Rust sidecar can parse it
   const msg = JSON.stringify({ url, token: actualToken, port: actualPort });
   process.stdout.write(msg + "\n");
+
+  setImmediate(() => {
+    startMcpInBackground();
+  });
 
   // ── Keep running until terminated ──────────────────────────
   const cleanup = () => {

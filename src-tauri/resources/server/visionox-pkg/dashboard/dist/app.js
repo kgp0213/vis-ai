@@ -23133,7 +23133,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming }) {
       <div class="body">
         ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
         ${renderMessageBody(msg.text)}
-        ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
+        ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
       </div>
     </div>
@@ -25732,7 +25732,7 @@ function budgetTone(state) {
 }
 
 // dashboard/src/lib/use-poll.ts
-function usePoll(path, intervalMs = 2e3) {
+function usePoll(path, intervalMs = 2e3, sseKind = null) {
   const [data, setData] = d2(null);
   const [error, setError] = d2(null);
   const [loading, setLoading] = d2(true);
@@ -25748,6 +25748,15 @@ function usePoll(path, intervalMs = 2e3) {
     }
   }, [path]);
   y2(() => {
+    if (sseKind) {
+      setLoading(false);
+      const unsub = subscribeSse(sseKind, (ev) => {
+        const { kind, ...rest } = ev;
+        setData(rest);
+        setError(null);
+      });
+      return unsub;
+    }
     let cancelled = false;
     let timer = null;
     const tick = async () => {
@@ -25761,8 +25770,39 @@ function usePoll(path, intervalMs = 2e3) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [refresh, intervalMs]);
+  }, [refresh, intervalMs, sseKind]);
   return { data, error, loading, refresh };
+}
+
+var __sseSource = null;
+var __sseListeners = /* @__PURE__ */ new Map();
+function subscribeSse(kind, handler) {
+  if (!__sseSource) {
+    const url = new URL("/api/events", window.location.origin);
+    url.searchParams.set("token", TOKEN);
+    __sseSource = new EventSource(url.toString());
+    __sseSource.onmessage = (e3) => {
+      try {
+        const ev = JSON.parse(e3.data);
+        const handlers = __sseListeners.get(ev.kind) || [];
+        for (let i3 = 0; i3 < handlers.length; i3++) handlers[i3](ev);
+      } catch {
+      }
+    };
+  }
+  if (!__sseListeners.has(kind)) __sseListeners.set(kind, []);
+  __sseListeners.get(kind).push(handler);
+  return () => {
+    const arr = __sseListeners.get(kind) || [];
+    const idx = arr.indexOf(handler);
+    if (idx >= 0) arr.splice(idx, 1);
+    const hasListeners = Array.from(__sseListeners.values()).some((a) => a.length > 0);
+    if (!hasListeners && __sseSource) {
+      __sseSource.close();
+      __sseSource = null;
+      __sseListeners.clear();
+    }
+  };
 }
 
 // dashboard/src/lib/version.ts
@@ -25948,7 +25988,7 @@ function toolActivityFeed(c3) {
 }
 function OverviewPanel() {
   useLang();
-  const { data, error, loading } = usePoll("/overview", 5e3);
+  const { data, error, loading } = usePoll("/overview", 5e3, "overview");
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("overview.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("overview.failed", { error: error.message })}</div>`;
@@ -27694,8 +27734,10 @@ function SettingsPanel() {
   y2(() => {
     if (!showDevLog) return;
     refreshLogs();
-    const id = setInterval(refreshLogs, 2e3);
-    return () => clearInterval(id);
+    const unsub = subscribeSse("logs", (ev) => {
+      setDevLogs(ev.logs ?? []);
+    });
+    return unsub;
   }, [showDevLog, refreshLogs]);
   y2(() => {
     const el = document.getElementById("dev-log-panel");
@@ -29721,9 +29763,20 @@ function TabBar(props) {
           popup.remove();
           popupRef.current = null;
           document.removeEventListener("mousedown", close, true);
+          document.removeEventListener("keydown", closeOnEsc, true);
+        }
+      };
+      const closeOnEsc = (ev) => {
+        if (popupRef.current && ev.key === "Escape") {
+          ev.stopPropagation();
+          popup.remove();
+          popupRef.current = null;
+          document.removeEventListener("mousedown", close, true);
+          document.removeEventListener("keydown", closeOnEsc, true);
         }
       };
       document.addEventListener("mousedown", close, true);
+      document.addEventListener("keydown", closeOnEsc, true);
     };
     btn.addEventListener("click", toggle);
     return () => {
@@ -30483,16 +30536,12 @@ function App() {
   const [version2, setVersion] = d2(null);
   const [buildDate2, setBuildDate] = d2(null);
   y2(() => {
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const data = await api("/health");
-        if (!cancelled) { setWsRoot(data.cwd ?? null); setVersion(data.version ?? null); setBuildDate(data.buildDate ?? null); }
-      } catch {}
-    };
-    tick();
-    const id = setInterval(tick, 8e3);
-    return () => { cancelled = true; clearInterval(id); };
+    const unsub = subscribeSse("health", (ev) => {
+      setWsRoot(ev.cwd ?? null);
+      setVersion(ev.version ?? null);
+      setBuildDate(ev.buildDate ?? null);
+    });
+    return unsub;
   }, []);
   const TAB_SECTIONS = tabSections();
   const ALL_TABS = TAB_SECTIONS.flatMap((s3) => s3.tabs);
@@ -30540,12 +30589,15 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "dark"}>
+          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { localStorage.setItem("visionox-theme", v); } catch {}; try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}; try { if (window.parent && window.parent !== window) { window.parent.postMessage({ type: 'vis_theme_changed', theme: v }, '*'); } } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "dark"}>
             <option value="light">\u6D45\u8272</option>
             <option value="dark">\u6DF1\u8272</option>
             <option value="warm-sand">\u6696\u6C99</option>
             <option value="cool-ash">\u51B7\u7070</option>
             <option value="soft-sage">\u67D4\u7EFF</option>
+            <option value="espresso">\u6D53\u7F29\u5496\u5561</option>
+            <option value="midnight-ink">\u5348\u591C\u58A8\u84DD</option>
+            <option value="deep-charcoal">\u6DF1\u70AD\u7070</option>
           </select>
         </div>
         <div class="side-foot">

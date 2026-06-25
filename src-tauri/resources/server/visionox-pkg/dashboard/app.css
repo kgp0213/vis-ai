@@ -1025,7 +1025,7 @@ textarea {
 
 .chip-f .ct {
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .chip-f .x {
@@ -1190,7 +1190,7 @@ textarea {
 
 .ring-label .u {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1886,7 +1886,7 @@ textarea {
   background: var(--surface-raised);
   padding: 2px 8px;
   border-radius: var(--radius-sm);
-  font-size: 10px;
+  font-size: 11px;
   margin-left: auto;
 }
 
@@ -2037,7 +2037,7 @@ textarea {
 
 .status-label {
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -2103,7 +2103,7 @@ textarea {
   padding: 2px 8px;
   border-radius: var(--radius-sm);
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -2253,7 +2253,7 @@ textarea {
   display: flex;
   gap: var(--space-3);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   margin-top: var(--space-1);
 }
@@ -2317,7 +2317,7 @@ textarea {
 
 .sessions-detail-kpis .kp .lbl {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -2371,7 +2371,7 @@ textarea {
 .tree-node .arrow {
   width: 12px;
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .tree-node.open .arrow {
@@ -2396,7 +2396,7 @@ textarea {
 }
 
 .tree-node .badge {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--color-warning);
   margin-left: var(--space-1);
 }
@@ -2618,7 +2618,7 @@ textarea {
 
 .work-mode-meta {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
 }
@@ -3093,7 +3093,7 @@ textarea {
 }
 
 .health-item .lbl .pill {
-  font-size: 9px;
+  font-size: 11px;
   padding: 0 4px;
 }
 
@@ -3165,13 +3165,13 @@ textarea {
 
 .sr-card .sr-loc {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
 }
 
 .sr-card .sr-score {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   margin-left: auto;
 }
@@ -3225,7 +3225,7 @@ textarea {
 .feed-row .when {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 /* ============================================================================
@@ -3542,7 +3542,7 @@ textarea {
 .md th {
   color: var(--accent-primary);
   font-weight: 600;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -3688,7 +3688,7 @@ textarea {
 
 .plan-step .lbl {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -3705,7 +3705,7 @@ textarea {
 
 .plan-step .meta {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
 }
 
@@ -3741,7 +3741,7 @@ textarea {
 
 .schema .key { color: var(--accent-primary); }
 .schema .typ { color: var(--color-info); }
-.schema .req { color: var(--color-warning); font-style: italic; font-size: 10px; }
+.schema .req { color: var(--color-warning); font-style: italic; font-size: 11px; }
 .schema .com { color: var(--text-tertiary); font-style: italic; }
 .schema .str { color: var(--color-success); }
 
@@ -3962,4 +3962,103 @@ textarea {
   width: 100%;
   height: auto;
   display: block;
+}
+
+/* ============================================================================
+   Espresso Theme — warm brown-leather, cozy and private
+   ============================================================================ */
+[data-theme="espresso"] {
+  --surface-base: #1c1917;
+  --surface-raised: #211e1b;
+  --surface-overlay: #282520;
+  --surface-input: #252220;
+
+  --text-primary: #ddd8d3;
+  --text-secondary: #9a9590;
+  --text-tertiary: #6a6560;
+  --text-placeholder: #5a5550;
+
+  --accent-primary: #b0906a;
+  --accent-primary-hover: #c0a07a;
+  --accent-secondary: #8a7050;
+
+  --color-success: #7a9a6a;
+  --color-warning: #b0a06a;
+  --color-error: #b07070;
+  --color-info: #7a8aaa;
+
+  --border-subtle: #2a2520;
+  --border-default: #3a3530;
+  --border-strong: #4d4840;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(176, 144, 106, 0.15);
+}
+
+/* ============================================================================
+   Midnight Ink Theme — cool ink-blue, professional and restrained
+   ============================================================================ */
+[data-theme="midnight-ink"] {
+  --surface-base: #171920;
+  --surface-raised: #1c1e27;
+  --surface-overlay: #222530;
+  --surface-input: #1f212a;
+
+  --text-primary: #d0d4e0;
+  --text-secondary: #848a9a;
+  --text-tertiary: #555a6a;
+  --text-placeholder: #454a5a;
+
+  --accent-primary: #7a9ab8;
+  --accent-primary-hover: #8aaaca;
+  --accent-secondary: #5a7a98;
+
+  --color-success: #6a9a8a;
+  --color-warning: #a89a6a;
+  --color-error: #a07080;
+  --color-info: #6a8aaa;
+
+  --border-subtle: #222630;
+  --border-default: #2e3340;
+  --border-strong: #3e4455;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(122, 154, 184, 0.15);
+}
+
+/* ============================================================================
+   Deep Charcoal Theme — warm graphite, low saturation, eye-comfort
+   ============================================================================ */
+[data-theme="deep-charcoal"] {
+  --surface-base: #1a1c20;
+  --surface-raised: #1f2127;
+  --surface-overlay: #252830;
+  --surface-input: #22252a;
+
+  --text-primary: #d4d6db;
+  --text-secondary: #8a8e96;
+  --text-tertiary: #5a5e66;
+  --text-placeholder: #4a4e56;
+
+  --accent-primary: #b8a07a;
+  --accent-primary-hover: #c9b48e;
+  --accent-secondary: #8a7a5e;
+
+  --color-success: #6a9a7a;
+  --color-warning: #b8a06a;
+  --color-error: #b07070;
+  --color-info: #6a8aaa;
+
+  --border-subtle: #2a2d32;
+  --border-default: #3a3d44;
+  --border-strong: #4d5058;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(184, 160, 122, 0.15);
 }

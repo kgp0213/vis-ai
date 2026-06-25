@@ -58595,6 +58595,7 @@ function AppInner({
           },
           applyEffortLive: (effort) => {
             loop2.configure({ reasoningEffort: effort });
+            log.pushInfo(`\u25B8 effort: ${effort}`);
           },
           applyModelLive: (model3) => {
             loop2.configure({ model: model3 });

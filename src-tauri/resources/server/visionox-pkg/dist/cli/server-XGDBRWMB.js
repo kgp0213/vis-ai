@@ -134,12 +134,45 @@ function handleEvents(req, res, ctx) {
     } catch {
     }
   };
+  const pushOverview = async () => {
+    try {
+      const result = await handleOverview("GET", [], "", ctx);
+      if (result.status === 200) writeEvent({ kind: "overview", ...result.body });
+    } catch {
+    }
+  };
+  const pushHealth = async () => {
+    try {
+      const result = await handleHealth("GET", [], "", ctx);
+      if (result.status === 200) writeEvent({ kind: "health", ...result.body });
+    } catch {
+    }
+  };
+  const pushLogs = async () => {
+    try {
+      const result = await handleLogs("GET", [], "", ctx);
+      if (result.status === 200) writeEvent({ kind: "logs", logs: result.body.logs });
+    } catch {
+    }
+  };
+  pushOverview();
+  pushHealth();
+  pushLogs();
+  const overviewInterval = setInterval(pushOverview, 5e3);
+  const healthInterval = setInterval(pushHealth, 5e3);
+  const logsInterval = setInterval(pushLogs, 2e3);
+  overviewInterval.unref?.();
+  healthInterval.unref?.();
+  logsInterval.unref?.();
   if (ctx.isBusy) writeEvent({ kind: "busy-change", busy: ctx.isBusy() });
   const unsubscribe = ctx.subscribeEvents(writeEvent);
   const ping = setInterval(() => writeEvent({ kind: "ping" }), PING_INTERVAL_MS);
   ping.unref?.();
   const cleanup = () => {
     clearInterval(ping);
+    clearInterval(overviewInterval);
+    clearInterval(healthInterval);
+    clearInterval(logsInterval);
     try {
       unsubscribe();
     } catch {
@@ -157,7 +190,8 @@ function handleEvents(req, res, ctx) {
 }
 
 // src/server/assets.ts
-import { closeSync, fstatSync, openSync, readFileSync, readSync } from "fs";
+import { readFileSync } from "fs";
+import { readFile, stat } from "fs/promises";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 function resolveAssetDir() {
@@ -178,69 +212,63 @@ function resolveAssetDir() {
 }
 var ASSET_DIR = resolveAssetDir();
 var fileCache = /* @__PURE__ */ new Map();
-function loadCachedFile(path) {
-  const fd = openSync(path, "r");
-  try {
-    const stat = fstatSync(fd);
-    const cached = fileCache.get(path);
-    if (cached && cached.mtimeMs === stat.mtimeMs) return cached.body;
-    const buf = Buffer.alloc(stat.size);
-    let read = 0;
-    while (read < stat.size) {
-      const n = readSync(fd, buf, read, stat.size - read, read);
-      if (n <= 0) break;
-      read += n;
-    }
-    const body = buf.toString("utf8", 0, read);
-    fileCache.set(path, { body, mtimeMs: stat.mtimeMs });
-    return body;
-  } finally {
-    closeSync(fd);
+async function loadCachedFile(path, encoding = "utf8") {
+  const s = await stat(path);
+  const cached = fileCache.get(path);
+  if (cached && cached.mtimeMs === s.mtimeMs && cached.encoding === encoding) {
+    return { body: cached.body, mtimeMs: s.mtimeMs };
   }
+  const body = await readFile(path, encoding);
+  fileCache.set(path, { body, mtimeMs: s.mtimeMs, encoding });
+  return { body, mtimeMs: s.mtimeMs };
 }
-function loadIndexTemplate() {
+async function loadIndexTemplate() {
   return loadCachedFile(join(ASSET_DIR, "index.html"));
 }
-function loadApp() {
+async function loadApp() {
   return loadCachedFile(join(ASSET_DIR, "dist", "app.js"));
 }
-function loadAppMap() {
+async function loadAppMap() {
   try {
     return loadCachedFile(join(ASSET_DIR, "dist", "app.js.map"));
   } catch {
     return null;
   }
 }
-function loadCss() {
+async function loadCss() {
   return loadCachedFile(join(ASSET_DIR, "app.css"));
 }
-function renderIndexHtml(token, mode) {
-  const tpl = loadIndexTemplate();
+async function renderIndexHtml(token, mode) {
+  const { body: tpl } = await loadIndexTemplate();
   const safeToken = token.replace(/[^a-zA-Z0-9]/g, "");
   return tpl.replaceAll("__VISIONOX_TOKEN__", safeToken).replaceAll("__VISIONOX_MODE__", mode);
 }
 var VENDOR_CSS_NAMES = /* @__PURE__ */ new Set(["vendor-hljs.css", "vendor-uplot.css"]);
-function loadVendorCss(name) {
+async function loadVendorCss(name) {
   return loadCachedFile(join(ASSET_DIR, "dist", name));
 }
-function serveAsset(name) {
+async function serveAsset(name) {
+  const assetPath = (sub) => join(ASSET_DIR, sub, name);
   if (name === "app.js") {
-    return { body: loadApp(), contentType: "application/javascript; charset=utf-8" };
+    const { body, mtimeMs } = await loadApp();
+    return { body, mtimeMs, contentType: "application/javascript; charset=utf-8" };
   }
   if (name === "app.js.map") {
-    const body = loadAppMap();
-    return body == null ? null : { body, contentType: "application/json; charset=utf-8" };
+    const result = await loadAppMap();
+    return result == null ? null : { body: result.body, mtimeMs: result.mtimeMs, contentType: "application/json; charset=utf-8" };
   }
   if (name === "app.css") {
-    return { body: loadCss(), contentType: "text/css; charset=utf-8" };
+    const { body, mtimeMs } = await loadCss();
+    return { body, mtimeMs, contentType: "text/css; charset=utf-8" };
   }
   if (VENDOR_CSS_NAMES.has(name)) {
-    return { body: loadVendorCss(name), contentType: "text/css; charset=utf-8" };
+    const { body, mtimeMs } = await loadVendorCss(name);
+    return { body, mtimeMs, contentType: "text/css; charset=utf-8" };
   }
   if (name.endsWith(".png")) {
     try {
-      const body = readFileSync(join(ASSET_DIR, "dist", name));
-      return { body, contentType: "image/png" };
+      const { body, mtimeMs } = await loadCachedFile(assetPath("dist"), null);
+      return { body, mtimeMs, contentType: "image/png" };
     } catch { return null; }
   }
   return null;
@@ -3293,13 +3321,13 @@ async function handleSkills(method, rest, body, ctx) {
     if (!ctx.getSkillEnvironmentStatus) {
       return { status: 503, body: { error: "skill environment status is unavailable" } };
     }
-    return { status: 200, body: ctx.getSkillEnvironmentStatus() };
+    return { status: 200, body: await ctx.getSkillEnvironmentStatus() };
   }
   if (method === "POST" && rest[0] === "repair") {
     if (!ctx.repairSkillEnvironment) {
       return { status: 503, body: { error: "skill environment repair is unavailable" } };
     }
-    return { status: 200, body: ctx.repairSkillEnvironment() };
+    return { status: 200, body: await ctx.repairSkillEnvironment() };
   }
   const cwd = ctx.getCurrentCwd?.();
   if (method === "GET" && rest.length === 0) {
@@ -3769,7 +3797,7 @@ async function dispatch(req, res, ctx, expectedToken) {
       res.end("unauthorized \u2014 open the URL printed by /dashboard, including ?token=\u2026");
       return;
     }
-    const html = renderIndexHtml(expectedToken, ctx.mode);
+    const html = await renderIndexHtml(expectedToken, ctx.mode);
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(html);
     return;
@@ -3784,13 +3812,24 @@ async function dispatch(req, res, ctx, expectedToken) {
         return;
       }
     }
-    const asset = serveAsset(assetName);
+    const asset = await serveAsset(assetName);
     if (!asset) {
       res.writeHead(404);
       res.end("not found");
       return;
     }
-    res.writeHead(200, { "content-type": asset.contentType });
+    const etag = String(asset.mtimeMs);
+    const headers = {
+      "content-type": asset.contentType,
+      "cache-control": "public, max-age=0, must-revalidate",
+      "etag": etag
+    };
+    if (req.headers["if-none-match"] === etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    res.writeHead(200, headers);
     res.end(asset.body);
     return;
   }

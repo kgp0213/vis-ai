@@ -365,7 +365,7 @@ var StdioTransport = class {
     const shell = opts.shell ?? process.platform === "win32";
     if (shell) {
       const line = [
-        opts.command,
+        quoteArg(opts.command, process.platform === "win32"),
         ...(opts.args ?? []).map((a) => quoteArg(a, process.platform === "win32"))
       ].join(" ");
       this.child = spawn(line, [], {
