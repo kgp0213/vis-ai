@@ -342,9 +342,8 @@ fn read_http_body(
             let mut line = String::new();
             reader.read_line(&mut line)?;
             let size_str = line.split(';').next().unwrap_or("").trim();
-            let size = usize::from_str_radix(size_str, 16).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
-            })?;
+            let size = usize::from_str_radix(size_str, 16)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
             if size == 0 {
                 // Consume trailer headers (if any) until the final empty line.
                 loop {
@@ -391,7 +390,10 @@ fn check_health(port: u16, token: &str) -> bool {
         Ok(a) => a,
         Err(_) => return false,
     };
-    let mut stream = match TcpStream::connect_timeout(&sockaddr, Duration::from_secs(HEALTH_CONNECT_TIMEOUT_SECS)) {
+    let mut stream = match TcpStream::connect_timeout(
+        &sockaddr,
+        Duration::from_secs(HEALTH_CONNECT_TIMEOUT_SECS),
+    ) {
         Ok(s) => s,
         Err(_) => return false,
     };
@@ -461,7 +463,9 @@ fn check_health(port: u16, token: &str) -> bool {
             .map(|v| !v.is_empty())
             .unwrap_or(false),
         Err(e) => {
-            log_diag(&format!("[rust] health check body parse failed: {e}; body={body:?}"));
+            log_diag(&format!(
+                "[rust] health check body parse failed: {e}; body={body:?}"
+            ));
             false
         }
     }
@@ -870,16 +874,35 @@ fn get_dashboard_url(state: tauri::State<'_, Mutex<ServerState>>) -> Option<Stri
     state.lock().unwrap_or_else(|e| e.into_inner()).url.clone()
 }
 
+#[derive(serde::Serialize)]
+struct ClipboardFilesResult {
+    paths: Vec<String>,
+    error: Option<String>,
+}
+
 #[tauri::command]
-fn get_clipboard_files() -> Vec<String> {
+fn get_clipboard_files() -> ClipboardFilesResult {
     log_diag("[rust] get_clipboard_files invoked");
     let mut paths = Vec::new();
-    // SAFETY: OpenClipboard requires a valid owner window handle.
-    // Passing null means the current task's clipboard is opened.
-    let opened = unsafe { OpenClipboard(std::ptr::null_mut()) };
+
+    // Retry OpenClipboard a few times — another application may briefly hold the lock.
+    let mut opened = 0;
+    for attempt in 0..4 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        opened = unsafe { OpenClipboard(std::ptr::null_mut()) };
+        if opened != 0 {
+            break;
+        }
+    }
     if opened == 0 {
-        log_diag("[rust] OpenClipboard failed");
-        return paths;
+        let msg = "OpenClipboard failed after retries".to_string();
+        log_diag(&format!("[rust] {msg}"));
+        return ClipboardFilesResult {
+            paths,
+            error: Some(msg),
+        };
     }
     log_diag("[rust] OpenClipboard succeeded");
 
@@ -928,7 +951,9 @@ fn get_clipboard_files() -> Vec<String> {
                 buf.truncate(copied as usize);
                 if let Ok(s) = String::from_utf16(&buf) {
                     log_diag(&format!("[rust] clipboard file {i}: {s}"));
-                    paths.push(s);
+                    if std::path::Path::new(&s).exists() {
+                        paths.push(s);
+                    }
                 }
             }
         }
@@ -953,7 +978,9 @@ fn get_clipboard_files() -> Vec<String> {
                     let slice = std::slice::from_raw_parts(ptr, len);
                     let s = String::from_utf16_lossy(slice);
                     log_diag(&format!("[rust] FileNameW fallback: {s}"));
-                    paths.push(s);
+                    if std::path::Path::new(&s).exists() {
+                        paths.push(s);
+                    }
                 }
             }
         }
@@ -965,7 +992,7 @@ fn get_clipboard_files() -> Vec<String> {
         "[rust] get_clipboard_files returning {} paths",
         paths.len()
     ));
-    paths
+    ClipboardFilesResult { paths, error: None }
 }
 
 #[cfg(test)]

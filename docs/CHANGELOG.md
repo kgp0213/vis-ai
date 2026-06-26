@@ -1,8 +1,58 @@
 # Visionox 二开变更记录
 
 > **版本说明**：本文档按上游基线版本组织（v0.43.0 → v0.47.1）。
-> Visionox Desktop 应用自身版本：**1.0.2**（定义于 `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）。
+> Visionox Desktop 应用自身版本：**1.10.0**（定义于 `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）。
 > `package.json` 版本号 `0.1.0` 仅为 npm workspace 占位（不随应用分发）。
+
+## v0.47.1 — Visionox 1.10.0（2026-06-26）
+
+> 本次发布聚焦 **剪贴板粘贴体验**、**模型配置导入** 与 **Superpowers 技能包内置**。
+
+### 模型配置 JSON 导入
+
+| 变更 | 说明 |
+|------|------|
+| 入口 | 对话框底部“🤖 模型”按钮弹出的面板中新增 JSON 文件导入 |
+| 行为 | 选择 JSON 文件后确认导入，同 `id` 的 provider 会被覆盖，其余字段保留 |
+| 用途 | 便于在多台电脑或不同环境间同步模型/Provider 配置 |
+
+### 剪贴板粘贴增强
+
+| 变更 | 说明 |
+|------|------|
+| 图片/截图 | 复制图片后按 `Ctrl + V` 自动添加为待发送附件，与之前行为一致 |
+| 文件/文件夹 | 从 Windows 文件资源管理器复制后按 `Ctrl + V`，自动贴入完整本地路径 |
+| 多格式支持 | PowerShell 读取器覆盖 FileDropList、FileDrop、FileNameW、FileGroupDescriptorW、Shell IDList Array 等格式，提升 OneDrive/Outlook/远程桌面等场景成功率 |
+| 失败提示 | 读取失败时不再把错误文字插入输入框，改为显示临时提示条 |
+| Rust 兜底 | `get_clipboard_files` 命令增加重试和路径存在性校验 |
+
+### Superpowers 技能包
+
+| 变更 | 说明 |
+|------|------|
+| 内置 skills | 将 `plan/superpowers.7z` 中的 14 个子技能解压到 `resources/bootstrap-skills/`，安装后自动可用 |
+| 技能示例 | brainstorming、writing-plans、subagent-driven-development、systematic-debugging、test-driven-development、verification-before-completion 等 |
+
+### 版本与配置
+
+| 变更 | 说明 |
+|------|------|
+| 版本号 | `1.0.2` → `1.10.0`（`Cargo.toml` + `tauri.conf.json` + `visionox-pkg/package.json`） |
+| 安装包 | `Visionox_1.10.0_x64-setup.exe` |
+
+### 构建产出
+
+| 平台 | 文件 | 大小 |
+|------|------|------|
+| Windows x64 NSIS | `Visionox_1.10.0_x64-setup.exe` | ~99 MB |
+| 调试可执行 | `src-tauri/target/release/visionox-desktop.exe` | ~9.1 MB |
+
+### 升级说明
+
+- **全新安装**：直接运行安装包。
+- **从 1.0.2 升级**：覆盖安装即可，已有的会话、记忆和配置会自动保留。
+
+---
 
 ## v0.47.1 — Visionox 1.0.2（2026-06-25）
 

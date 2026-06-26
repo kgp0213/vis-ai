@@ -23721,6 +23721,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [recentWss, setRecentWss] = d2(() => { try { return JSON.parse(localStorage.getItem("visionox-workspaces") || "[]"); } catch { return []; } });
   const [showWsPicker, setShowWsPicker] = d2(false);
   const [showSkillPicker, setShowSkillPicker] = d2(false);
+  const [showModelPicker, setShowModelPicker] = d2(false);
   const [skillList, setSkillList] = d2([]);
   const [pendingImages, setPendingImages] = d2([]);
   var fileInputRef = A2(null);
@@ -24163,7 +24164,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
     var inIframe = false;
     try { inIframe = window.parent !== window; } catch (_) {}
-    var pasteDebug = "[PASTE-DEBUG] items=" + (items ? items.length : "null") + " img=" + imageFiles.length + " names=" + fileNames.length + " paths=" + fullPaths.length + " gotFull=" + gotFullPaths + " inIframe=" + (inIframe ? "yes" : "no");
+
     var ta = e.target;
     var start = ta.selectionStart;
     var end = ta.selectionEnd;
@@ -24191,10 +24192,16 @@ const [providerCaps, setProviderCaps] = d2(null);
         }
       });
     }
-    if (imageFiles.length > 0 && fileNames.length === 0) {
+    function showClipboardNotice(msg) {
+      setError(msg);
+      setTimeout(function() { setError(null); }, 3000);
+    }
+    if (imageFiles.length > 0 && !gotFullPaths) {
       addPendingImages(imageFiles);
     }
-    if (!gotFullPaths && fullPaths.length > 0) {
+    if (gotFullPaths && fullPaths.length > 0) {
+      insertAtCursor(fullPaths.join("\n"));
+    } else if (fileNames.length > 0 && imageFiles.length === 0) {
       var capBefore = before, capAfter = after, capStart = start;
       function insertPaths(paths) {
         if (inserted) return;
@@ -24205,13 +24212,9 @@ const [providerCaps, setProviderCaps] = d2(null);
           ta.selectionStart = ta.selectionEnd = capStart + text.length;
         }, 0);
       }
-      function insertPathReadFailure(reason) {
-        var names = fileNames.length > 0 ? fileNames.join(", ") : fullPaths.join(", ");
-        insertPaths(["无法获取剪贴板中文件的完整本地路径：" + names + "。" + reason]);
-      }
-      function tryPostMessage() {
+      function tryRustBridge() {
         if (!inIframe) {
-          insertPathReadFailure("请从 Windows 文件资源管理器复制文件后重试。");
+          showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
           return;
         }
         try {
@@ -24223,10 +24226,8 @@ const [providerCaps, setProviderCaps] = d2(null);
               clearTimeout(timer);
               if (e2.data.paths && e2.data.paths.length > 0) {
                 insertPaths(e2.data.paths.slice());
-              } else if (e2.data.error) {
-                insertPathReadFailure(e2.data.error);
               } else {
-                insertPathReadFailure("本地剪贴板没有返回文件路径。");
+                showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
               }
             }
           };
@@ -24235,31 +24236,24 @@ const [providerCaps, setProviderCaps] = d2(null);
           var timer = setTimeout(function() {
             if (!handled) {
               window.removeEventListener('message', listener);
-              insertPathReadFailure("本地剪贴板接口超时。");
+              showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
             }
           }, 2000);
         } catch (_) {
-          insertPathReadFailure("本地剪贴板接口调用失败。");
+          showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
         }
       }
       var clipboardUrl = "/api/clipboard-files" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
       fetch(clipboardUrl).then(function(r) { return r.json(); }).then(function(data) {
-        if (data.paths && data.paths.length > 0) {
-          insertPaths(data.paths);
-        } else if (imageFiles.length > 0 && fileNames.length === 0) {
-          addPendingImages(imageFiles);
+        var paths = data.paths || [];
+        if (paths.length > 0) {
+          insertPaths(paths);
         } else {
-          tryPostMessage();
+          tryRustBridge();
         }
       }).catch(function() {
-        if (imageFiles.length > 0 && fileNames.length === 0) {
-          addPendingImages(imageFiles);
-        } else {
-          tryPostMessage();
-        }
+        tryRustBridge();
       });
-    } else if (gotFullPaths && fullPaths.length > 0) {
-      insertAtCursor(fullPaths.join("\n"));
     } else {
       try {
         var text = e.clipboardData.getData("text/plain");
@@ -24408,11 +24402,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   return html4`
     <div class="chat-shell">
       <div class="chat-toolbar">
-        <div class="header-pickers">${(providers && providers.length > 0) ? html4`
-              <select class="provider-select" title="模型服务商" onChange=${(e) => switchProvider(e.target.value)}>
-                ${providers.map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${p.name}</option>`)}
-              </select>
-            ` : null}${modes ? html4`
+        <div class="header-pickers">${modes ? html4`
               <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
                 <span class="work-mode-label">${activeMode?.label ?? mode}</span>
                 <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
@@ -24427,40 +24417,6 @@ const [providerCaps, setProviderCaps] = d2(null);
                     title="${m.label}: ${m.description || "切换工作场景"} · ECC ${(m.effectiveRules||m.rules||[]).join("+")} · 下次新对话生效"
                   >${m.label}</button>
                 `)}
-              </div>
-            ` : null}
-
-          ${effort ? html4`
-              <div class="mode-picker" title=${t4("chat.effortTitle")}>
-                ${(providerCaps?.efforts ?? ["high", "max"]).map(
-    (e3) => html4`
-                  <button
-                    key=${e3}
-                    class="mode-btn ${effort === e3 ? "active accent" : ""}"
-                    onClick=${() => setSetting("reasoningEffort", e3)}
-                    title=${e3 === "max" ? t4("chat.effortMaxTitle") : t4("chat.effortHighTitle")}
-                  >${e3}</button>
-                `
-  )}
-              </div>
-            ` : null}
-          ${preset ? html4`
-              <div class="mode-picker" title=${t4("chat.presetTitle")}>
-                ${(() => {
-    const KNOWN = ["auto", "flash", "pro"];
-    const canonical = KNOWN.includes(preset) ? preset : "auto";
-    const available = providerCaps?.presets ?? ["auto", "flash", "pro"];
-    return available.map(
-      (p3) => html4`
-                      <button
-                        key=${p3}
-                        class="mode-btn ${canonical === p3 ? "active accent" : ""}"
-                        onClick=${() => setSetting("preset", p3)}
-                        title=${p3 === "auto" ? t4("chat.presetAutoTitle") : p3 === "flash" ? t4("chat.presetFlashTitle") : t4("chat.presetProTitle")}
-                      >${p3}</button>
-                    `
-    );
-  })()}
               </div>
             ` : null}
           ${editMode ? html4`
@@ -24533,7 +24489,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               <div style="display:flex;gap:6px;align-items:flex-end">
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
             ${html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />`}
-            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:0;right:0;width:18px;height:18px;background:var(--color-error,#f87171);color:#fff;border:none;border-radius:0 0 0 6px;font-size:10px;line-height:18px;cursor:pointer;padding:0;opacity:0" onMouseEnter=${function(e) { e.currentTarget.style.opacity = "1"; }} onMouseLeave=${function(e) { e.currentTarget.style.opacity = "0"; }} title="Remove image">✕</button></div>`; })}</div>` : null}
+            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`; })}</div>` : null}
             <textarea
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
               value=${input}
@@ -24569,7 +24525,44 @@ const [providerCaps, setProviderCaps] = d2(null);
                   <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); const p2 = prompt('输入工作空间路径:'); if (p2 && p2.trim()) pickWorkspace(p2.trim()); }}><span class="name">📂 浏览其他目录...</span></div>
                 </div>
               ` : null}
-              ${(showSkillPicker || showWsPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); }}></div>` : null}
+              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowModelPicker(!showModelPicker); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</span>
+              ${showModelPicker ? html4`
+                <div class="popover" style="position:absolute;bottom:100%;left:0;width:260px;z-index:10">
+                  <div class="popover-h">选择模型</div>
+                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">服务商</label>
+                    <select style="width:100%;font-size:12px;padding:4px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-default);color:var(--text-primary);" onChange=${(e3) => { switchProvider(e3.target.value); }}>
+                      ${providers.map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${p.name}</option>`)}
+                    </select>
+                  </div>
+                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模式</label>
+                    ${(providerCaps?.presets?.length ?? 0) > 1 ? html4`
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                        ${providerCaps.presets.map((p3) => html4`<button key=${p3} style="flex:1;padding:4px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:4px;background:${preset === p3 ? 'rgb(138,170,122)' : 'var(--surface-default)'};color:${preset === p3 ? 'rgb(12,13,16)' : 'var(--text-primary)'};cursor:pointer;" onClick=${() => { setSetting('preset', p3); }}>${p3}</button>`)}
+                      </div>
+                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}（固定）</div>`}
+                  </div>
+                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">强度</label>
+                    ${(providerCaps?.efforts?.length ?? 0) > 1 ? html4`
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                        ${providerCaps.efforts.map((e3) => html4`<button key=${e3} style="flex:1;padding:4px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:4px;background:${effort === e3 ? 'rgb(138,170,122)' : 'var(--surface-default)'};color:${effort === e3 ? 'rgb(12,13,16)' : 'var(--text-primary)'};cursor:pointer;" onClick=${() => { setSetting('reasoningEffort', e3); }}>${e3}</button>`)}
+                      </div>
+                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
+                  </div>
+                  <div style="padding:8px;">
+                    <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none;" onChange=${async (e3) => { const file = e3.target.files?.[0]; if (!file) return; try { const text = await file.text(); document.getElementById('provider-import-json').value = text; document.getElementById('provider-import-file-name').textContent = file.name; } catch (err) { setError('读取文件失败: ' + err.message); } }} />
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      <button style="padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${() => { const inp = document.getElementById('provider-import-file'); inp.value = ''; inp.click(); }}>选择 JSON 文件</button>
+                      <span id="provider-import-file-name" style="font-size:11px;color:var(--text-secondary);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                    </div>
+                    <textarea id="provider-import-json" placeholder="已选文件内容预览..." readonly style="width:100%;height:60px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
+                    <button style="margin-top:6px;padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${async () => { const ta = document.getElementById('provider-import-json'); try { const body = JSON.parse(ta.value || '{}'); if (!body.providers || !Array.isArray(body.providers)) throw new Error('JSON 必须包含 providers 数组'); const r = await api('/providers/import', { method: 'POST', body }); if (!r.ok) throw new Error('导入失败'); const pr = await api('/providers'); setProviders(pr.providers ?? []); ta.value = ''; document.getElementById('provider-import-file-name').textContent = ''; setShowModelPicker(false); showToast('provider 导入成功', 'info'); } catch (err) { setError('provider 导入失败: ' + err.message); } }}>确认导入</button>
+                  </div>
+                </div>
+              ` : null}
+              ${(showSkillPicker || showWsPicker || showModelPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); }}></div>` : null}
               <div style="flex:1"></div>
               <button
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}

@@ -1,6 +1,6 @@
 [package]
 name = "visionox-desktop"
-version = "1.0.2"
+version = "1.10.0"
 edition = "2021"
 description = "Visionox AI Coding Agent — Desktop GUI"
 

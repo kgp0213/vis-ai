@@ -1,6 +1,6 @@
 # Visionox 开发手册
 
-> 应用版本：1.0.2 | 上游基线：0.47.1 | 最后更新：2026-06-25
+> 应用版本：1.10.0 | 上游基线：0.47.1 | 最后更新：2026-06-26
 > 本文档合并了原 COLOR_SCHEMES.md / ECC_INTEGRATION.md / UI_OPTIMIZATION_PLAN.md 的关键内容。
 
 ---

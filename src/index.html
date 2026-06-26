@@ -80,24 +80,37 @@
             function reply(payload) {
               if (source) source.postMessage(payload, origin);
             }
-            if (!window.__TAURI__ || !window.__TAURI__.invoke) {
-              reply({ type: "vis_clipboard_result", error: "__TAURI__ not available", paths: [] });
-              return;
+            function doClipboardInvoke() {
+              window.__TAURI__.invoke("ping")
+                .then(function (result) {
+                  if (result !== "pong") {
+                    reply({ type: "vis_clipboard_result", error: "ping returned: " + String(result), paths: [] });
+                    return;
+                  }
+                  return window.__TAURI__.invoke("get_clipboard_files")
+                    .then(function (result) {
+                      var paths = (result && Array.isArray(result.paths)) ? result.paths : [];
+                      reply({ type: "vis_clipboard_result", paths: paths, error: result && result.error ? String(result.error) : undefined });
+                    });
+                })
+                .catch(function (error) {
+                  reply({ type: "vis_clipboard_result", error: String(error), paths: [] });
+                });
             }
-            window.__TAURI__.invoke("ping")
-              .then(function (result) {
-                if (result !== "pong") {
-                  reply({ type: "vis_clipboard_result", error: "ping returned: " + String(result), paths: [] });
-                  return;
+            if (window.__TAURI__ && window.__TAURI__.invoke) {
+              doClipboardInvoke();
+            } else {
+              var attempts = 30;
+              var timer = setInterval(function () {
+                if (window.__TAURI__ && window.__TAURI__.invoke) {
+                  clearInterval(timer);
+                  doClipboardInvoke();
+                } else if (--attempts <= 0) {
+                  clearInterval(timer);
+                  reply({ type: "vis_clipboard_result", error: "本地桥接未就绪", paths: [] });
                 }
-                return window.__TAURI__.invoke("get_clipboard_files")
-                  .then(function (paths) {
-                    reply({ type: "vis_clipboard_result", paths: paths || [] });
-                  });
-              })
-              .catch(function (error) {
-                reply({ type: "vis_clipboard_result", error: String(error), paths: [] });
-              });
+              }, 100);
+            }
           });
         }
 

@@ -2980,6 +2980,17 @@ var LEGACY_PRESET_ALIASES = {
 function effectiveModelConfig(cfg) {
   const rawPreset = cfg.preset ?? "auto";
   const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
+  const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+  if (provider) {
+    const supportedPresets = new Set();
+    for (const m of provider.models ?? []) {
+      for (const pr of m.presets ?? []) supportedPresets.add(pr);
+    }
+    const resolvedPreset = supportedPresets.has(preset) ? preset : (provider.defaultPreset ?? "flash");
+    const modelObj = provider.models?.find((m) => m.presets?.includes(resolvedPreset)) ?? provider.models?.[0];
+    const model = modelObj?.id ?? DEFAULT_MODEL;
+    return { rawPreset, preset: resolvedPreset, configuredModel: model, model, locked: true };
+  }
   const configuredModel = cfg.model ?? DEFAULT_MODEL;
   const lockedModel = PRESET_MODELS[preset];
   return {
@@ -3714,34 +3725,46 @@ function getPsScriptPath() {
 
 function readClipboardPaths() {
   var ps1 = getPsScriptPath();
-
-  // Try pwsh (PS 7+) first — better STA/OLE handling in newer runtimes
-  try {
-    var out = execSync(
-      'pwsh -Sta -NoProfile -NonInteractive -File "' + ps1 + '"',
-      { encoding: "utf8", timeout: 5000, windowsHide: true }
-    );
-    var paths = out.split(/\r?\n/).filter(function(s) { return s.trim(); });
-    if (paths.length > 0) return paths;
-  } catch (_) { /* pwsh not available or failed */ }
-
-  // Fallback: powershell (PS 5.1, present on all Windows 10/11)
-  try {
-    var out = execSync(
-      'powershell -Sta -NoProfile -File "' + ps1 + '"',
-      { encoding: "utf8", timeout: 5000, windowsHide: true }
-    );
-    var paths = out.split(/\r?\n/).filter(function(s) { return s.trim(); });
-    return paths;
-  } catch (_) {
-    return [];
+  if (!existsSync(ps1)) {
+    console.error('[clipboard-files] read-clipboard.ps1 not found: ' + ps1);
+    return { paths: [], error: 'read-clipboard.ps1 not found' };
   }
+
+  var shells = [
+    { cmd: 'powershell', args: '-ExecutionPolicy Bypass -Sta -NoProfile -NonInteractive' },
+    { cmd: 'pwsh', args: '-ExecutionPolicy Bypass -NoProfile -NonInteractive' }
+  ];
+  var lastError = '';
+  for (var i = 0; i < shells.length; i++) {
+    try {
+      var shell = shells[i];
+      var out = execSync(
+        shell.cmd + ' ' + shell.args + ' -File "' + ps1 + '"',
+        { encoding: "utf8", timeout: 5000, windowsHide: true }
+      );
+      var line = out.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean).pop();
+      if (!line) {
+        lastError = shell.cmd + ' returned no output';
+        continue;
+      }
+      var data = JSON.parse(line);
+      if (data.ok && data.paths && data.paths.length > 0) {
+        console.error('[clipboard-files] ' + shell.cmd + ' returned ' + data.paths.length + ' path(s) via ' + data.sourceFormat);
+        return { paths: data.paths, sourceFormat: data.sourceFormat, diagnostics: data.diagnostics };
+      }
+      lastError = data.error || (shell.cmd + ' returned empty paths');
+    } catch (err) {
+      lastError = err.message || String(err);
+    }
+  }
+  console.error('[clipboard-files] failed: ' + lastError);
+  return { paths: [], error: lastError };
 }
 
 function handleClipboardFiles(method, _rest, _body, _ctx) {
   if (method !== "GET") return { status: 405, body: { error: "GET only" } };
   if (process.platform !== "win32") return { status: 200, body: { paths: [] } };
-  return { status: 200, body: { paths: readClipboardPaths() } };
+  return { status: 200, body: readClipboardPaths() };
 }
 
 async function handleApi(pathTail, method, body, ctx, query = new URLSearchParams()) {

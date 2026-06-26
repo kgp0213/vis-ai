@@ -68,12 +68,13 @@ vis-ai/
 
 ## 核心特性
 
-### 最近变更
+### 最近变更（1.10.0）
 
+- **模型配置支持 JSON 导入** — 点击对话框底部“🤖 模型”，在弹出面板中选择 JSON 文件即可批量导入/更新 provider 配置，无需逐条手动添加。
+- **对话框直接粘贴图片和文件** — 复制图片/截图后按 `Ctrl + V` 自动变成附件；从文件资源管理器复制文件/文件夹后按 `Ctrl + V` 自动贴入完整本地路径，方便写提示词。
+- **剪贴板路径读取更稳定** — 支持更多 Windows 剪贴板格式（FileDrop、FileNameW、FileGroupDescriptorW、Shell IDList Array 等），在 OneDrive 在线文件、Outlook 附件、远程桌面等复杂环境下成功率更高；读取失败时不再往输入框里塞错误文字。
+- **内置 Superpowers 技能包** — 安装包自带 Superpowers 工作流技能，安装后自动可用，辅助做需求梳理、方案规划、代码评审与任务执行。
 - **WebView2 刷新卡死修复** — iframe 方案下 F5/右键刷新壳页面会永久卡在 "Starting server..."。现已通过 localStorage 后备 + Rust `get_dashboard_url` 兜底 + iframe 加载失败回退三层机制恢复，刷新后自动重建 dashboard。
-- 聊天输入框支持从 Windows 10/11 文件资源管理器复制文件后直接粘贴完整本地路径，发送消息时只传递文件引用信息，不上传文件内容，避免重复传输和 token 浪费。
-- 粘贴路径读取采用多层兜底：Dashboard 携带 token 调用本地 `/api/clipboard-files`，Node 侧通过 PowerShell 读取 Windows 剪贴板，Tauri 父窗口 IPC 作为备用通道。
-- 普通截图/剪贴板图片仍保留为图片预览，普通文本粘贴行为不变；无法读取完整路径时会在输入框中给出明确失败提示。
 - 办公模式默认采用 OfficeCLI MCP 处理 Word/Excel/PPT，替换 `docx`、`xlsx`、`pptx`、`pptx-generator`、`visionox-excel-pro`、`minimax-xlsx` 六个旧 Office 技能，PDF 相关技能保留。
 - effort（推理强度 high/max）切换现在会在运行日志面板输出对应信息。
 
@@ -200,7 +201,7 @@ node scripts/restore-visionox-pkg.js
 
 # 编译 Windows 安装器（NSIS exe）
 npm run tauri:build
-# → src-tauri/target/release/bundle/nsis/Visionox_1.0.2_x64-setup.exe
+# → src-tauri/target/release/bundle/nsis/Visionox_1.10.0_x64-setup.exe
 
 # 仅编译调试/开发用可执行文件
 cd src-tauri

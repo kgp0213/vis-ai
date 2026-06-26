@@ -1684,13 +1684,14 @@ function buildLoop(client, rootDir) {
     system: systemWithSkills,
     toolSpecs: tools.specs(),
   });
-  const VISION_MODELS = {
-    "deepseek-v4-pro": { vision: true, visionDetail: "high" },
-  };
-  const visionCfg = VISION_MODELS[modelConfig.model] || {};
+  // Determine vision capability from the active provider model config.
+  const provider = getActiveProvider(config);
+  const activeModel = provider?.models?.find((m) => m.id === modelConfig.model);
+  const visionCfg = activeModel?.multimodal
+    ? { vision: true, visionDetail: "high" }
+    : { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
 
   // Set provider-driven globals for chunk-2R4QCDOZ.js thinkingMode/summaryModel overrides
-  const provider = getActiveProvider(config);
   if (provider) {
     const tmMap = {};
     for (const m of provider.models ?? []) tmMap[m.id] = m.thinkingMode;
@@ -2100,6 +2101,7 @@ const ctx = {
     if (newPreset !== cfg.preset) cfg.preset = newPreset;
     if (newEffort !== cfg.reasoningEffort) cfg.reasoningEffort = newEffort;
     writeConfig(cfg, configPath);
+    syncRuntimeConfig(cfg);
 
     // Rebuild client + loop immediately (no /new needed)
     apiKey = provider.apiKey;
