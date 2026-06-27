@@ -408,7 +408,6 @@ function orderSlashCommandsByGroup(commands) {
   }).map((entry) => entry.command);
 }
 var SLASH_COMMANDS = [
-  { cmd: "help", group: "chat", summary: "show the full command reference", aliases: ["?"] },
   {
     cmd: "new",
     group: "chat",
@@ -445,14 +444,6 @@ var SLASH_COMMANDS = [
     argsHint: "<id>",
     summary: "switch DeepSeek model id. Bare opens picker.",
     argCompleter: "models"
-  },
-  {
-    cmd: "language",
-    group: "setup",
-    argsHint: "<EN|zh-CN>",
-    summary: "switch the runtime language",
-    argCompleter: ["EN", "zh-CN"],
-    aliases: ["lang"]
   },
   {
     cmd: "theme",
@@ -492,23 +483,6 @@ var SLASH_COMMANDS = [
     group: "info",
     summary: "health check (api / config / api-reach / index / hooks / project)"
   },
-  {
-    cmd: "keys",
-    group: "info",
-    summary: "keyboard + mouse + copy/paste reference"
-  },
-  {
-    cmd: "copy",
-    group: "chat",
-    summary: "vim/tmux-style copy mode \u2014 j/k navigate, v select, y yank to clipboard"
-  },
-  {
-    cmd: "feedback",
-    group: "info",
-    summary: "open a GitHub issue with diagnostic info copied to clipboard"
-  },
-  { cmd: "sessions", group: "session", summary: "list saved sessions (current marked with \u25B8)" },
-  { cmd: "mcp", group: "extend", summary: "list MCP servers + tools attached to this session" },
   {
     cmd: "resource",
     group: "extend",
@@ -657,27 +631,6 @@ var SLASH_COMMANDS = [
     argCompleter: ["off"]
   },
   {
-    cmd: "budget",
-    group: "advanced",
-    argsHint: "[usd|off]",
-    summary: "session USD cap \u2014 warns at 80%, refuses next turn at 100%. Off by default. /budget alone shows status",
-    argCompleter: ["off", "1", "5", "10", "20", "50"]
-  },
-  {
-    cmd: "search-engine",
-    group: "advanced",
-    argsHint: "<mojeek|searxng> [<endpoint>]",
-    summary: "switch web search backend \u2014 mojeek (default, no deps) or searxng (self-hosted)",
-    argCompleter: ["mojeek", "searxng"],
-    aliases: ["se"]
-  },
-  {
-    cmd: "hooks",
-    group: "advanced",
-    argsHint: "[reload]",
-    summary: "list active hooks (settings.json under .visionox/) \xB7 reload re-reads from disk"
-  },
-  {
     cmd: "permissions",
     group: "advanced",
     argsHint: "[list|add <prefix>|remove <prefix|N>|clear confirm]",
@@ -685,35 +638,11 @@ var SLASH_COMMANDS = [
     argCompleter: ["list", "add", "remove", "clear"]
   },
   {
-    cmd: "dashboard",
-    group: "advanced",
-    argsHint: "[stop]",
-    summary: "launch the embedded web dashboard (127.0.0.1, token-gated)",
-    argCompleter: ["stop"]
-  },
-  {
-    cmd: "loop",
-    group: "advanced",
-    argsHint: "<5s..6h> <prompt>  \xB7  stop  \xB7  (no args = status)",
-    summary: "auto-resubmit <prompt> every <interval> until you type something / Esc / /loop stop"
-  },
-  {
-    cmd: "plans",
-    group: "advanced",
-    summary: "list this session's active + archived plans, newest first"
-  },
-  {
     cmd: "replay",
     group: "advanced",
     summary: "load an archived plan as a read-only Time Travel snapshot (default: newest)",
     argsHint: "[N]"
   },
-  {
-    cmd: "update",
-    group: "advanced",
-    summary: "show current vs latest version + the shell command to upgrade"
-  },
-  { cmd: "exit", group: "advanced", summary: "quit the TUI", aliases: ["quit", "q"] }
 ];
 function suggestSlashCommands(prefix, codeMode = false, counts) {
   const p = prefix.toLowerCase();

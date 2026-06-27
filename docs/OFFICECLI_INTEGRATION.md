@@ -2,7 +2,7 @@
 
 > **结论：已通过 MCP stdio 协议完成软集成（办公模式默认优先 OfficeCLI）。也支持进一步打包 OfficeCLI 二进制到安装包（硬集成），让用户开箱即用无需单独下载。**
 >
-> 最后更新：2026-06-25（1.0.2：officecli.exe 纳入 tauri.conf.json bundle.resources）
+> 最后更新：2026-06-27（1.10.0：officecli.exe 已纳入 tauri.conf.json bundle.resources，启动时自动注入 MCP）
 
 ---
 
@@ -10,7 +10,7 @@
 
 ### 1.1 Visionox Desktop（本仓库）
 
-- 基于 [DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) 的 Tauri v2 Windows 桌面 AI 编程代理
+- 基于上游 DeepSeek 推理框架的 Tauri v2 Windows 桌面 AI 编程代理
 - 技术栈：Rust（桌面壳）+ TypeScript/Node.js（AI Agent 运行时）+ WebView2（Dashboard SPA）
 - 已具备完整的 **MCP 客户端基础设施**，支持 stdio / SSE / Streamable HTTP 三种传输
 - 现有 4 种工作模式：通用 / 编程 / 办公 / 设计

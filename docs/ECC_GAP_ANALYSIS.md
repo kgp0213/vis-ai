@@ -1,6 +1,6 @@
 # ECC 上游未合入功能分析
 
-> 分析日期：2026-06-01 | ECC 版本：v2.0.0-rc.1 | Visionox 版本：1.0.2  
+> 分析日期：2026-06-01 | 复核日期：2026-06-27 | ECC 版本：v2.0.0-rc.1 | Visionox 版本：1.10.0  
 > 上游仓库：[github.com/affaan-m/ECC](https://github.com/affaan-m/ECC)  
 > 本地副本：`C:\Users\Lenovo\Documents\vis-ai\ECC\`
 
@@ -25,15 +25,19 @@
 
 ## 二、Skills（技能）
 
-### 2.1 已集成（~36 个）
+### 2.1 已集成（动态变化中）
 
-Visionox bootstrap 自带 4 个：
+Visionox 安装包内置的 `src-tauri/resources/bootstrap-skills/` 当前共有 **34 个** Skill（含基础示例、编码规范、办公、安全、计划、验证、Superpowers 包等）。首次启动时由 launcher 释放/修复到 `~/.visionox/skills/`；用户自定义 Skill 与同名用户 Skill 不会被覆盖。
+
+常见内置 Skill 示例：
 - `basic-skill-example` — 示例模板
 - `coding-standards` — 编码规范
 - `skill-creation-guide` — 创建指南
 - `verification-loop` — 验证循环
+- `officecli` — OfficeCLI 兜底 Skill
+- `systematic-debugging`、`test-driven-development`、`subagent-driven-development` — Superpowers 工作流
 
-运行时通过 launcher.mjs 从 `~/.visionox/skills/` 加载约 36 个（18 coding + 18 domain）。
+运行时通过 launcher.mjs 从 `~/.visionox/skills/` 加载实际可用的 Skill 集合，数量随安装版本和用户增删而变化。
 
 ### 2.2 未集成（~302 个）
 
@@ -353,7 +357,7 @@ Visionox 不按 ECC 缺口数量补齐，而按收益、风险和维护成本分
 | 项目 | 状态 | 说明 |
 |------|------|------|
 | CI smoke workflow | ✅ 已合入 | `.github/workflows/validate.yml`：校验 Tauri config、launcher/dashboard JS 语法、Rust `cargo check --locked`、`git diff --check` |
-| Bootstrap skills 扩展 | ✅ 已合入 | 从 ECC 复制 15 个高频 skills 到 `src-tauri/resources/bootstrap-skills/`，随安装资源打包，由 launcher 首次释放/修复 |
+| Bootstrap skills 扩展 | ✅ 已合入 | 已从 ECC / Superpowers 等来源合入多批 skills，当前 `src-tauri/resources/bootstrap-skills/` 共 34 个，随安装资源打包，由 launcher 首次释放/修复 |
 | Skill 环境修复入口 | ✅ 已有 | Dashboard Skills 页提供 repair action，launcher 只替换带 `_visionox_builtin.json` 标记的内置 skill；同名用户 skill 不覆盖 |
 | 规则按需策略 | 🟡 计划中 | 暂不把所有语言 rules 塞进 coding mode，优先做项目结构/文件扩展名触发建议 |
 
@@ -376,6 +380,8 @@ search-first
 security-review
 tdd-workflow
 ```
+
+> 以上为第一批示例；完整内置列表见 `src-tauri/resources/bootstrap-skills/`（当前共 34 个）。
 
 ### 8.3 下一批建议
 

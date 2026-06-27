@@ -111,6 +111,29 @@ Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展�
 | `~/.visionox/memory/<project-hash>/` | 不安装默认项目记忆 | 用户通过项目记忆生成；安装/升级不写入、不覆盖 |
 | `~/.visionox/config.json` | 合并默认工作模式配置 | 保留 API Key、workspace、sessions、memory、skills 和自定义 mode；旧内置 mode prompt 迁移前会备份到 `modePromptBackups` |
 
+### 学习命令 `/learn`
+
+Visionox 把四种常见的“学习”需求统一为 `/learn` 命令，让你在对话中就能把项目知识转化为 AI 的长期能力：
+
+```text
+/learn skill <目录> [名称]        # 技能萃取：把目录提炼为 SKILL.md 并安装
+/learn project [名称]              # 项目 onboarding：扫描 workspace 并更新 REASONIX.md
+/learn index <目录>                # 知识库索引：为目录构建语义索引
+/learn ask <问题>                  # 知识库问答：基于已索引内容提问
+/learn tutor [socratic|hint|pair|off]     # 主动教学：切换导师风格
+/learn track [on|senior|off|stats|add|due|review]  # 学习追踪：间隔重复与概念库
+/learn status                      # 查看学习系统状态
+```
+
+**Phase 1（已实现）**：`/learn skill`、`/learn project`、`/learn status`、`/learn help`。  
+**Phase 2（已实现）**：`/learn index`、`/learn ask`（基于语义索引问答，支持 LLM 合成回答）。  
+**Phase 3（已实现）**：`/learn tutor [socratic|hint|pair|off]`（会话级导师模式，注入系统提示词）。  
+**Phase 4（已实现）**：`/learn track [on|senior|off|stats|due|add|review]`（概念库 + SM-2 间隔重复，注入学习模式提示词）。
+
+`/learn skill` 会自动读取目录中的文本文件，调用 LLM 提炼规则与流程，生成符合规范的 `SKILL.md` 并安装到 `~/.visionox/skills/<名称>/`，`/new` 后即可通过 Skill 索引调用。`/learn project` 会扫描当前 workspace，生成或更新项目记忆文件（优先 `REASONIX.md`，若已存在 `AGENTS.md` 则更新它）。
+
+`/learn track` 是 Visionox 独特的“边做边学”系统：概念库存储在 `~/.visionox/learn-track.json`，使用 SM-2 算法调度复习；开启 `/learn track on` 或 `/learn track senior` 后，AI 会在每次回复中围绕到期概念主动提问、串联上下文。`/learn skill` 和 `/learn project` 会自动从生成的 SKILL.md / 项目记忆中提取核心概念写入概念库。你也可以用 `/learn track add <概念名> [level=1-5] [source=...]` 手动添加，用 `/learn track review <概念名> <again|hard|good|easy>` 记录掌握程度，`/learn track due` 查看今日到期，`/learn track stats` 查看统计。
+
 #### OfficeCLI MCP（办公模式）
 
 办公模式通过 MCP stdio 接入 OfficeCLI。启动时会自动发现内置的 `resources/server/officecli.exe` 并注入 `officecli` MCP server；不会把自动发现结果写回 `%USERPROFILE%\.visionox\config.json`。出于安全考虑，未内置二进制时不会自动执行 Windows `PATH` 中的 `officecli`，如需使用 PATH 或自定义路径请手动配置 MCP。

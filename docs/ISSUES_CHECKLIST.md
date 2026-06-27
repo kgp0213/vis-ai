@@ -60,7 +60,7 @@
 
 | ID | 问题 | 位置 | 影响 | 状态 | 建议修复 |
 |----|------|------|------|:----:|----------|
-| P3-1 | 命名不一致 | 仓库各处 | `Visionox`、`vis-ai`、`visionox-desktop`、`reasonix`、`vnx` 混用。 | ⏳ | 统一品牌名和目录/包名；清理 `~/.reasonix` 兼容代码中的旧命名。 |
+| P3-1 | 命名不一致 | 仓库各处 | `Visionox`、`vis-ai`、`visionox-desktop`、`vnx` 混用。 | ⏳ | 统一品牌名和目录/包名；清理旧命名兼容代码。 |
 | P3-2 | 遗留 `tep/desktop/` 代码 | `tep/desktop/src-tauri/` | 包含未使用的旧 Tauri 实现，可能误导。 | ✅ | 删除或明确标记为 deprecated/归档。已移至 `archive/tep-desktop/` 并标注说明（1.0.2）。 |
 | P3-3 | 硬编码魔法值 | `src-tauri/src/lib.rs`、`launcher.mjs` | 超时、轮询间隔、大小限制等分散且硬编码。 | ⏳ | 提取到配置文件或常量模块。 |
 | P3-4 | `single_instance` 插件丢弃启动参数 | `src-tauri/src/lib.rs:325` | 第二实例的参数被忽略，无法从 shell 打开文件/项目。 | ⏳ | 在回调中处理 `_args` 并传给主窗口。 |
@@ -77,7 +77,7 @@
 | FIXED-7 | eval 中 sessionStorage 裸调用未 try-catch | `src-tauri/src/lib.rs`（两处 eval 统一 try） | 2026-06-25 |
 | FIXED-8 | iframe 加载失败无回退（localStorage 残留旧端口） | `src/index.html`（error + 6s 超时 → fallbackToRust） | 2026-06-25 |
 | FIXED-9 | effort 切换无运行日志 | `launcher.mjs`、`chunk-P7EKE5ZQ.js` | 2026-06-24 |
-| FIXED-1 | docs 目录 `~/.reasonix` 路径漂移 | `docs/memory-work-modes-guide.md/html` | 2026-06-23 |
+| FIXED-1 | docs 目录记忆存储路径漂移 | `docs/memory-work-modes-guide.md/html` | 2026-06-23 |
 | FIXED-2 | README 断链 `docs/ECC_INTEGRATION.md` | `README.md` | 2026-06-23 |
 | FIXED-3 | `DEVELOPMENT_RULES.md` / `UI_DESIGN_SYSTEM.md` 主题持久化描述过时 | `docs/DEVELOPMENT_RULES.md`、`docs/UI_DESIGN_SYSTEM.md` | 2026-06-23 |
 | FIXED-4 | `CHANGELOG.md` 混合换行符 | `docs/CHANGELOG.md` | 2026-06-23 |

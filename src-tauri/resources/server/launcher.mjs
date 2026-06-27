@@ -17,6 +17,9 @@ import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat a
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
+// NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
+// resource file cannot brick the whole launcher startup.
+
 // ── Login-shell PATH augmentation (#1252) ───────────────────────────
 // GUI apps on macOS/Linux don't source .zshrc/.bashrc, so nvm/asdf/fnm
 // injected PATH entries are missing.  Probe the user's interactive shell
@@ -73,6 +76,33 @@ function augmentProcessPath() {
 
 // Probe once at import time — must run before any child_process spawn.
 augmentProcessPath();
+
+// ── Lazy-loaded learn modules ─────────────────────────────────────
+// These are loaded on demand so a missing file cannot break startup.
+let learnModule = null;
+let learnTrackModule = null;
+
+async function loadLearnModule() {
+  if (learnModule) return learnModule;
+  try {
+    learnModule = await import("./learn.mjs");
+  } catch (err) {
+    console.error(`[launcher] failed to load learn.mjs: ${err.message}`);
+    learnModule = null;
+  }
+  return learnModule;
+}
+
+async function loadLearnTrackModule() {
+  if (learnTrackModule) return learnTrackModule;
+  try {
+    learnTrackModule = await import("./learn-track.mjs");
+  } catch (err) {
+    console.error(`[launcher] failed to load learn-track.mjs: ${err.message}`);
+    learnTrackModule = null;
+  }
+  return learnTrackModule;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
@@ -230,10 +260,42 @@ deployDefaultSoul();
 // ── Import server module ────────────────────────────────────────
 const serverModUrl = distPath("server-XGDBRWMB.js");
 console.error(`[launcher] importing ${serverModUrl}`);
-const { startDashboardServer } = await import(serverModUrl);
+
+let startDashboardServer;
+try {
+  ({ startDashboardServer } = await import(serverModUrl));
+} catch (err) {
+  console.error(`[launcher] server module import failed: ${err.message}`);
+  process.stdout.write(JSON.stringify({ error: `server module import failed: ${err.message}` }) + "\n");
+  process.exit(1);
+}
 
 // ── Import core modules ─────────────────────────────────────────
 console.error(`[launcher] importing core modules...`);
+
+let modules;
+try {
+  modules = await Promise.all([
+    import(distPath("chunk-2KDUS647.js")),
+    import(distPath("chunk-2R4QCDOZ.js")),
+    import(distPath("chunk-XPDVG52A.js")),
+    import(distPath("chunk-2UQP6H6T.js")),
+    import(distPath("chunk-O52OLQL3.js")),
+    import(distPath("chunk-6AK4EY3D.js")),
+    import(distPath("chunk-PQXPXJBJ.js")),
+    import(distPath("chunk-YYQAUTTN.js")),
+    import(distPath("chunk-2K65GZBT.js")),
+    import(distPath("chunk-5JJRUIPA.js")),
+    import(distPath("chunk-45U62RI3.js")),
+    import(distPath("chunk-4QUNBQQ2.js")),
+    import(distPath("chunk-XXC2BYTV.js")),
+    import(distPath("chunk-XCGGEJTI.js")),
+  ]);
+} catch (err) {
+  console.error(`[launcher] chunk import failed: ${err.message}`);
+  process.stdout.write(JSON.stringify({ error: `chunk import failed: ${err.message}` }) + "\n");
+  process.exit(1);
+}
 
 const [
   { DeepSeekClient, pickPrimaryBalance },
@@ -261,21 +323,8 @@ const [
   { registerSkillTools, Eventizer },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
-] = await Promise.all([
-  import(distPath("chunk-2KDUS647.js")),
-  import(distPath("chunk-2R4QCDOZ.js")),
-  import(distPath("chunk-XPDVG52A.js")),
-  import(distPath("chunk-2UQP6H6T.js")),
-  import(distPath("chunk-O52OLQL3.js")),
-  import(distPath("chunk-6AK4EY3D.js")),
-  import(distPath("chunk-PQXPXJBJ.js")),
-  import(distPath("chunk-YYQAUTTN.js")),
-  import(distPath("chunk-2K65GZBT.js")),
-  import(distPath("chunk-5JJRUIPA.js")),
-  import(distPath("chunk-45U62RI3.js")),
-  import(distPath("chunk-4QUNBQQ2.js")),
-  import(distPath("chunk-XXC2BYTV.js")),
-]);
+  { buildIndex, querySemantic, indexExists },
+] = modules;
 
 // ── Load config ─────────────────────────────────────────────────
 loadDotenv();
@@ -1477,6 +1526,125 @@ function addSessionMemory(name, description, body) {
   if (sessionMemories.length > 50) sessionMemories.shift();
 }
 function clearSessionMemories() { sessionMemories.length = 0; }
+
+// ── Tutor mode (session-level) ──────────────────────────────────
+let sessionTutorMode = null; // { enabled: true, style: "socratic" | "hint" | "pair" }
+
+function setTutorMode(style) {
+  if (!style || style === "off") {
+    sessionTutorMode = null;
+    return null;
+  }
+  const valid = ["socratic", "hint", "pair"].includes(style) ? style : "socratic";
+  sessionTutorMode = { enabled: true, style: valid };
+  return sessionTutorMode;
+}
+
+function getTutorMode() {
+  return sessionTutorMode;
+}
+
+function clearTutorMode() {
+  sessionTutorMode = null;
+}
+
+// ── Learning-track mode (session-level) ─────────────────────────
+let sessionLearningMode = null; // { enabled: true, style: "on" | "senior" }
+
+function setLearningMode(style) {
+  if (!style || style === "off") {
+    sessionLearningMode = null;
+    return null;
+  }
+  const valid = ["on", "senior"].includes(style) ? style : "on";
+  sessionLearningMode = { enabled: true, style: valid };
+  return sessionLearningMode;
+}
+
+function getLearningMode() {
+  return sessionLearningMode;
+}
+
+function clearLearningMode() {
+  sessionLearningMode = null;
+}
+
+function formatTutorPrompt(style) {
+  const socratic = `# Tutor mode — Socratic
+
+You are now a Socratic programming tutor. Your goal is to help the user learn and understand, not to write code for them.
+- Do NOT give complete solutions or full implementations directly.
+- Guide the user to the answer through focused, open-ended questions.
+- If you provide code examples, keep them under 8 lines and use them only to illustrate a concept.
+- Before the user finalizes any implementation, prompt them to review: ownership, safety, error handling, testability, readability, and edge cases.
+- Always respond in the same language as the user's message.`;
+
+  const hint = `# Tutor mode — Hint assistant
+
+You are a supportive coding tutor who helps users when they are stuck.
+- Observe the user's question and current approach, then provide hints rather than full answers.
+- Break complex problems into smaller steps and ask the user which part they want to tackle next.
+- Offer targeted suggestions: "Have you considered...?" / "What would happen if...?"
+- Only provide larger code snippets if the user explicitly asks for them.`;
+
+  const pair = `# Tutor mode — Pair programmer
+
+You are a collaborative pair programming partner.
+- Work together with the user to design, write, and review code.
+- Propose options and trade-offs, then let the user decide.
+- You may write code, but always explain your reasoning and ask for confirmation before making significant changes.
+- Keep the user in the driver's seat.`;
+
+  const fragments = { socratic, hint, pair };
+  return fragments[style] ?? socratic;
+}
+
+function formatLearningPrompt(style, rootDir) {
+  let dueList = "- (none)";
+  let activeList = "- (none)";
+  if (learnTrackModule) {
+    try {
+      const mgr = new learnTrackModule.LearningConceptManager();
+      const due = mgr.getDueConcepts();
+      const active = mgr.getActiveConcepts(20);
+      dueList = due.slice(0, 10).map((c) => `- ${c.name} (${c.id})`).join("\n") || "- (none)";
+      activeList = active.slice(0, 10).map((c) => `- ${c.name} (${c.id})`).join("\n") || "- (none)";
+    } catch (err) {
+      console.error(`[launcher] learn-track query failed: ${err.message}`);
+    }
+  }
+
+  const on = `# Active-learning mode
+
+You are in an active-learning / spaced-repetition loop. Help the user deliberately practice concepts in this project.
+- Review concepts below and weave them into explanations when relevant to the user's question.
+- For any concept the user seems to be using, pause briefly and ask them to explain it in their own words or point to where it lives in this project.
+- Encourage the user to make connections between new code and the concepts in the library.
+
+## Concepts due for review now
+${dueList}
+
+## Recently active concepts
+${activeList}`;
+
+  const senior = `# Senior-engineer learning mode
+
+You are a senior engineer mentoring the user toward ownership of this codebase. Treat every interaction as a learning opportunity.
+- When discussing any implementation, explain *why* the project chose this approach and what alternatives were rejected.
+- Reference concepts from the library and ask the user to locate the relevant code, tests, and docs.
+- Push for depth: edge cases, failure modes, observability, maintainability, and design trade-offs.
+- Occasionally assign tiny "senior-review challenges": "How would you verify this works?" / "What would break if X changes?"
+
+## Concepts due for review now
+${dueList}
+
+## Recently active concepts
+${activeList}`;
+
+  const fragments = { on, senior };
+  return fragments[style] ?? on;
+}
+
 function getSessionMemoryBlock() {
   if (sessionMemories.length === 0) return "";
   const lines = sessionMemories.map((m) => {
@@ -1679,7 +1847,13 @@ function buildLoop(client, rootDir) {
     : systemWithMode;
   const systemWithPersistentMemory = systemWithRules + formatPersistentMemoryForPrompt(rootDir);
   const systemWithSession = systemWithPersistentMemory + getSessionMemoryBlock();
-  const systemWithSkills = applySkillsIndex(systemWithSession, { projectRoot: rootDir });
+  const systemWithTutor = sessionTutorMode?.enabled
+    ? systemWithSession + "\n\n" + formatTutorPrompt(sessionTutorMode.style)
+    : systemWithSession;
+  const systemWithLearning = sessionLearningMode?.enabled
+    ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
+    : systemWithTutor;
+  const systemWithSkills = applySkillsIndex(systemWithLearning, { projectRoot: rootDir });
   const prefix = new ImmutablePrefix({
     system: systemWithSkills,
     toolSpecs: tools.specs(),
@@ -2270,13 +2444,63 @@ const ctx = {
         }
       }
 
+      // Handle /learn: Visionox learning command (does not enter AI loop)
+      // Lazy-load learn modules so a missing resource file cannot break startup.
+      const [learn, learnTrack] = await Promise.all([loadLearnModule(), loadLearnTrackModule()]);
+      const learnCmd = learn?.parseLearnCommand(text) ?? null;
+      if (learnCmd) {
+        if (!learn) {
+          const assistantId = `assistant-${Date.now()}`;
+          const errMsg = "/learn 模块加载失败：请确认 resources/server/learn.mjs 存在，然后重启应用。";
+          pushMessage({ id: assistantId, role: "assistant", text: errMsg });
+          appendActiveMessage({ role: "assistant", text: errMsg });
+          broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text: errMsg });
+          return { accepted: true };
+        }
+        const modelConfig = effectiveModelConfig();
+        const learnOpts = {
+          client,
+          model: modelConfig.model,
+          workspaceDir,
+          skillsRoot,
+          hasSemanticSearch,
+          configPath,
+          tail: learnCmd.tail,
+          allowAllPaths: () => loadEditMode(configPath) === "admin" || loadEditMode(configPath) === "yolo",
+          buildIndex,
+          querySemantic,
+          indexExists,
+          loadSemanticEmbeddingUserConfig,
+          setTutorMode,
+          getTutorMode,
+          setLearningMode,
+          getLearningMode,
+          rebuildLoop: () => {
+            if (client) {
+              loop = buildLoop(client, workspaceDir);
+              ctx.loop = loop;
+            }
+          },
+        };
+        const result = await learn.executeLearnCommand(learnCmd, learnOpts);
+        const assistantId = `assistant-${Date.now()}`;
+        const assistantMsg = { id: assistantId, role: "assistant", text: result.message };
+        pushMessage(assistantMsg);
+        appendActiveMessage({ role: "assistant", text: result.message });
+        broadcastDashboardEvent({ kind: "busy-change", busy: true });
+        broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text: result.message });
+        return { accepted: true };
+      }
+
       // Handle /new and /clear: finalize active session and reset
       if (text === "/new" || text === "/clear") {
         await finalizeActiveSession();
         // Reset the AI's internal context (CacheFirstLoop log)
         if (loop) loop.clearLog();
-        // Clear session memories
+        // Clear session memories, tutor mode, and learning mode
         clearSessionMemories();
+        clearTutorMode();
+        clearLearningMode();
         // Rebuild loop to pick up mode/rules changes
         if (client) {
           loop = buildLoop(client, workspaceDir);

@@ -153,6 +153,36 @@ ren skill-name.skill skill-name.zip
 
 **注意**：body 模式**只会写入一个 SKILL.md 文件**，不会安装 `scripts/`、`references/`、`templates/` 等辅助文件。如果你的 skill 需要脚本或参考文档，请使用方式一（source_dir）或方式二（.skill）。
 
+#### 方式四：用 `/learn skill <目录>` 自动萃取（Visionox ≥ 1.11.0）
+
+如果你已经有一组文档、脚本或代码想快速变成 Skill，可以直接在对话中输入：
+
+```
+/learn skill <本地目录> [skill-name]
+```
+
+Visionox 会：
+1. 扫描目录中的文本文件（代码、Markdown、配置等）。
+2. 调用 LLM 提炼核心规则、流程和示例。
+3. 生成符合规范的 `SKILL.md` 并自动安装到 `~/.visionox/skills/<skill-name>/`。
+4. 提示你 `/new` 后使用。
+
+**示例**：
+
+```
+/learn skill ./docs/api api-design-guide
+```
+
+**适用场景**：
+- 把项目文档快速转为可复用 Skill
+- 把常用脚本/工具目录封装成统一能力
+- 从上游仓库或教程资料中萃取个人 Skill
+
+**限制**：
+- 仅读取文本文件，二进制文件会被跳过。
+- 默认只处理 workspace 内的目录；处理外部目录需在 admin/yolo 编辑模式下。
+- 生成的是单一 `SKILL.md` 的 Skill，若需要 `scripts/`、`references/` 等辅助文件，仍需使用方式一补充。
+
 #### 依赖处理
 - 在 `README.md` 写明安装命令：`npm install <pkg>` / `pip install <pkg>`
 - 在脚本入口处尝试 `require()` / `import`，失败时提示用户安装而不是直接报错

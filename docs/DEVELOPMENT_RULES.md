@@ -72,7 +72,7 @@ iframe 方案下 F5 刷新的是顶层壳页面，sessionStorage 会清空。恢
 | `src-tauri/capabilities/default.json` | 权限配置，`"windows":["main"]` 对应动态创建的 main 窗口 |
 | `src-tauri/build.rs` | 编译脚本、资源复制 |
 | `src-tauri/resources/server/visionox-pkg/dist/cli/` | Vendored CLI chunks |
-| `src-tauri/theme/` | 配色方案 CSS 源文件（7 套，实际 app.css 已合并 5 套） |
+| `src-tauri/theme/` | 配色方案 CSS 源文件（7 套源文件，已全部合并到 app.css，UI 可选 8 套） |
 
 ---
 
@@ -81,31 +81,24 @@ iframe 方案下 F5 刷新的是顶层壳页面，sessionStorage 会清空。恢
 > 实际生效的 CSS 位于 `src-tauri/resources/server/visionox-pkg/dashboard/app.css`。
 > 源文件位于 `src-tauri/theme/`（设计参考）。
 
-### 当前生效方案（5 套）
+### 当前生效方案（8 套）
 
 通过 `<select>` 下拉框切换 `html[data-theme="..."]`，选择通过 `localStorage` 持久化，cookie `visionox-theme` 作为兼容兜底。
 
 | data-theme | 类型 | 说明 |
 |------------|------|------|
-| *(无)* | 深色（默认） | 暗底 `#0c0d10` + 琥珀强调 `#f5a623` |
+| *(无)* / `dark` | 深色（默认） | 暗底 `#0c0d10` + 琥珀强调 `#f5a623` |
 | `light` | 浅色 | 白底 + 深琥珀 |
 | `warm-sand` | 浅色 | 暖黄底 `#faf6f0` + 古铜 `#c4935f` |
 | `cool-ash` | 浅色 | 冷灰底 + 蓝灰强调 |
 | `soft-sage` | 浅色 | 柔绿底 + 自然绿强调 |
-
-### 源码待合并方案（3 套深色变体）
-
-以下文件存在于 `src-tauri/theme/` 但尚未合并到 `app.css`：
-
-| 文件 | 说明 |
-|------|------|
-| `deep-charcoal.css` | 深炭灰 — 暖石墨质感 |
-| `midnight-ink.css` | 午夜墨蓝 — 墨水专业感 |
-| `espresso.css` | 浓缩咖啡 — 皮革温润感 |
+| `deep-charcoal` | 深色 | 深炭灰 — 暖石墨质感 |
+| `midnight-ink` | 深色 | 午夜墨蓝 — 墨水专业感 |
+| `espresso` | 深色 | 浓缩咖啡 — 皮革温润感 |
 
 ### 新增方案步骤
 
-1. 在 `src-tauri/theme/` 创建 `new-theme.css`
+1. 在 `src-tauri/theme/` 创建 `new-theme.css`（可选，仅作为源码参考）
 2. 在 `app.css` 末尾追加 `[data-theme="new-theme"] { ... }` 块
 3. 在 `app.js` 的 `<select>` 中加 `<option value="new-theme">`
 
@@ -120,7 +113,7 @@ iframe 方案下 F5 刷新的是顶层壳页面，sessionStorage 会清空。恢
 | 层 | 内容 | 来源 |
 |----|------|------|
 | L0 | SOUL（核心身份） | `~/.visionox/soul.md` |
-| L1 | 项目记忆 | workspace `{visionox,REASONIX,...}.md`（按 PROJECT_MEMORY_FILES 顺序搜索） |
+| L1 | 项目记忆 | workspace `{visionox,...}.md`（按 PROJECT_MEMORY_FILES 顺序搜索） |
 | L2 | 模式 Prompt | config.json `modes[mode].prompt` |
 | L3 | 模式记忆 | `~/.visionox/mode-memory/{mode}.json` |
 | L4 | ECC Rules | config.json `modes[mode].eccRules`，从 `.cursor/rules/` 和 `.kiro/steering/` 读取 |
@@ -132,7 +125,7 @@ iframe 方案下 F5 刷新的是顶层壳页面，sessionStorage 会清空。恢
 ### PROJECT_MEMORY_FILES 搜索顺序
 
 ```
-["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"]
+["visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"]
 ```
 
 ### 规则集（~5 套可用，按 mode 选择）

@@ -21,6 +21,8 @@
     "resources": [
       "resources/server/node.exe",
       "resources/server/launcher.mjs",
+      "resources/server/learn.mjs",
+      "resources/server/learn-track.mjs",
       "resources/server/visionox-pkg/**/*",
       "resources/server/officecli.exe",
       "resources/default-soul.md",

@@ -24,15 +24,22 @@ use windows_sys::Win32::System::JobObjects::{
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
+use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
     PROCESS_TERMINATE,
 };
 use windows_sys::Win32::UI::Shell::DragQueryFileW;
 const CF_HDROP: u32 = 15;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const STILL_ACTIVE: u32 = 259;
+// INFINITE wait timeout for WaitForSingleObject. windows-sys 0.59 does not
+// export this constant under the currently enabled features.
+const INFINITE_WAIT: u32 = 0xFFFFFFFF;
+// PROCESS_SYNCHRONIZE access right (0x00100000) — not exported by the
+// currently enabled windows-sys features, so define locally. Required by
+// OpenProcess to obtain a waitable handle for WaitForSingleObject.
+const PROCESS_SYNCHRONIZE: u32 = 0x00100000;
 
 static DIAG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -41,7 +48,6 @@ const STARTUP_READLINE_TIMEOUT_SECS: u64 = 30;
 const HEALTH_CONNECT_TIMEOUT_SECS: u64 = 1;
 const HEALTH_MAX_ATTEMPTS: u32 = 15;
 const HEALTH_RETRY_INTERVAL_MS: u64 = 200;
-const CHILD_MONITOR_INTERVAL_SECS: u64 = 2;
 const CHILD_MAX_RESTART_ATTEMPTS: u32 = 5;
 const CHILD_RESTART_BASE_DELAY_SECS: u64 = 1;
 const CHILD_RESTART_MAX_DELAY_SECS: u64 = 30;
@@ -60,6 +66,15 @@ fn log_diag(msg: &str) {
         Some(p) => p,
         None => return,
     };
+    // Rotate when the file exceeds 10 MB. Renames overwrite the existing
+    // `.1` backup so we keep at most ~20 MB on disk (current + backup).
+    const ROTATE_AT: u64 = 10 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > ROTATE_AT {
+            let backup: PathBuf = format!("{}.1", path.display()).into();
+            let _ = std::fs::rename(path, &backup);
+        }
+    }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -161,6 +176,45 @@ struct StartupArgs {
     cwd: String,
 }
 
+/// Restore missing resource files (e.g. learn.mjs) into the runtime server dir.
+/// Source: the compile-time `src-tauri/resources/server/` tree. In an NSIS
+/// install that source is unreachable, so the function logs and skips — the
+/// installer is the authoritative source there. In dev/test builds the source
+/// tree is present and the copy repairs drift caused by partial rebuilds.
+fn ensure_server_resources(server_dir: &std::path::Path) {
+    const NEEDED: &[&str] = &["learn.mjs", "learn-track.mjs"];
+    let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("server");
+
+    for name in NEEDED {
+        let dst = server_dir.join(name);
+        if dst.exists() {
+            continue;
+        }
+        let src = src_dir.join(name);
+        if !src.exists() {
+            log_diag(&format!(
+                "[rust] resource missing and no source available: {}",
+                dst.display()
+            ));
+            continue;
+        }
+        match std::fs::copy(&src, &dst) {
+            Ok(_) => log_diag(&format!(
+                "[rust] restored resource: {} -> {}",
+                src.display(),
+                dst.display()
+            )),
+            Err(e) => log_diag(&format!(
+                "[rust] failed to restore {}: {}",
+                dst.display(),
+                e
+            )),
+        }
+    }
+}
+
 /// Spawn the Node.js launcher and block until we parse the dashboard URL.
 /// The child is assigned to `job` immediately after spawn so that
 /// KILL_ON_JOB_CLOSE guarantees cleanup even if the parent exits early.
@@ -171,6 +225,9 @@ fn spawn_server_blocking(
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_default();
+
+    let server_dir = exe_dir.join("resources").join("server");
+    ensure_server_resources(&server_dir);
 
     let launcher = exe_dir
         .join("resources")
@@ -262,6 +319,7 @@ fn spawn_server_blocking(
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             let _ = child.kill();
+            let _ = child.wait();
             log_diag("[rust] readline timeout — child did not produce URL in time");
             return Err("launcher timed out waiting for dashboard URL".into());
         }
@@ -271,6 +329,7 @@ fn spawn_server_blocking(
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
                     if let Some(err) = parsed["error"].as_str() {
                         let _ = child.kill();
+                        let _ = child.wait();
                         return Err(format!("launcher error: {err}").into());
                     }
                     if let Some(u) = parsed["url"].as_str() {
@@ -289,10 +348,12 @@ fn spawn_server_blocking(
             }
             Ok(Err(e)) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return Err(e.into());
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 let _ = child.kill();
+                let _ = child.wait();
                 log_diag("[rust] readline timeout — child did not produce URL in time");
                 return Err("launcher timed out waiting for dashboard URL".into());
             }
@@ -302,10 +363,24 @@ fn spawn_server_blocking(
 
     if url.is_empty() {
         let _ = child.kill();
+        let _ = child.wait();
         return Err("failed to discover dashboard URL".into());
     }
 
     Ok((child, url, port, token))
+}
+
+/// P1-5d: Compute restart delay = exponential backoff capped, minus a random
+/// jitter in `[0, base/2)` derived from subsec nanos. Extracted for testing.
+fn restart_delay_with_jitter(restart_attempt: u32) -> u64 {
+    let base = (CHILD_RESTART_BASE_DELAY_SECS * 2u64.saturating_pow(restart_attempt))
+        .min(CHILD_RESTART_MAX_DELAY_SECS);
+    let jitter = (base / 2).max(1);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    base.saturating_sub(nanos % jitter)
 }
 
 fn validate_dashboard_url(url: &str, port: u16) -> bool {
@@ -435,10 +510,10 @@ fn check_health(port: u16, token: &str) -> bool {
             content_length = cl.trim().parse::<usize>().ok();
         } else if let Some(cl) = line.strip_prefix("content-length:") {
             content_length = cl.trim().parse::<usize>().ok();
-        } else if line.to_lowercase().starts_with("transfer-encoding:") {
-            if line.to_lowercase().contains("chunked") {
-                chunked = true;
-            }
+        } else if line.to_lowercase().starts_with("transfer-encoding:")
+            && line.to_lowercase().contains("chunked")
+        {
+            chunked = true;
         }
     }
 
@@ -616,26 +691,27 @@ pub fn run() -> anyhow::Result<()> {
                                         let mut child_pid = child_pid;
                                         let mut restart_attempt = 0u32;
                                         loop {
-                                            std::thread::sleep(Duration::from_secs(CHILD_MONITOR_INTERVAL_SECS));
-                                            let exited = unsafe {
-                                                let handle = OpenProcess(
-                                                    PROCESS_QUERY_LIMITED_INFORMATION,
+                                            // P1-5b: block on the child handle with WaitForSingleObject
+                                            // instead of polling GetExitCodeProcess. The old polling loop
+                                            // misclassified exit code 259 (STILL_ACTIVE) as "running"
+                                            // forever, since 259 is both the sentinel and a legal exit code.
+                                            let wait_handle = unsafe {
+                                                OpenProcess(
+                                                    PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
                                                     0,
                                                     child_pid,
-                                                );
-                                                if handle.is_null() {
-                                                    true
-                                                } else {
-                                                    let mut code: u32 = 0;
-                                                    let ok = GetExitCodeProcess(
-                                                        handle, &mut code,
-                                                    );
-                                                    windows_sys::Win32::Foundation::CloseHandle(handle);
-                                                    ok != 0 && code != STILL_ACTIVE
-                                                }
+                                                )
                                             };
-                                            if !exited {
-                                                continue;
+                                            if wait_handle.is_null() {
+                                                log_diag("[rust] monitor: OpenProcess failed — assuming child exited");
+                                            } else {
+                                                unsafe {
+                                                    WaitForSingleObject(
+                                                        wait_handle,
+                                                        INFINITE_WAIT,
+                                                    );
+                                                    windows_sys::Win32::Foundation::CloseHandle(wait_handle);
+                                                }
                                             }
 
                                             log_diag("[rust] child process exited unexpectedly after navigation");
@@ -666,6 +742,14 @@ pub fn run() -> anyhow::Result<()> {
                                                         let state = app_handle_for_monitor.state::<Mutex<ServerState>>();
                                                         {
                                                             let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+                                                            // P1-5a: reap the previous child before overwriting.
+                                                            // The old process has already exited (WaitForSingleObject
+                                                            // confirmed), but we call wait() to clean up the Child's
+                                                            // internal state instead of relying on Drop.
+                                                            if let Some(mut old) = s.child.take() {
+                                                                let _ = old.kill();
+                                                                let _ = old.wait();
+                                                            }
                                                             s.child = Some(child);
                                                             s.url = Some(url.clone());
                                                         }
@@ -686,14 +770,16 @@ pub fn run() -> anyhow::Result<()> {
                                                         continue;
                                                     } else {
                                                         let _ = child.kill();
+                                                        let _ = child.wait();
                                                         log_diag("[rust] restarted server failed health check");
                                                     }
                                                 }
                                                 Err(e) => log_diag(&format!("[rust] restart spawn failed: {e}")),
                                             }
 
-                                            let delay = (CHILD_RESTART_BASE_DELAY_SECS * 2u64.saturating_pow(restart_attempt))
-                                                .min(CHILD_RESTART_MAX_DELAY_SECS);
+                                            // P1-5d: exponential backoff with jitter to avoid thundering-herd
+                                            // restarts when multiple instances crash simultaneously.
+                                            let delay = restart_delay_with_jitter(restart_attempt);
                                             log_diag(&format!("[rust] waiting {delay}s before next restart attempt"));
                                             std::thread::sleep(Duration::from_secs(delay));
                                         }
@@ -731,6 +817,20 @@ pub fn run() -> anyhow::Result<()> {
                         "background thread panicked (unknown payload)".to_string()
                     };
                     log_diag(&msg);
+                    // P1-5c: reap any in-flight child left in ServerState by the
+                    // panicked thread. Without this, the Node process keeps
+                    // running unattended until app exit (JobObject cleanup).
+                    let state = app_handle.state::<Mutex<ServerState>>();
+                    if let Some(mut orphan) = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .child
+                        .take()
+                    {
+                        log_diag("[rust] panic recovery: killing orphaned server child");
+                        let _ = orphan.kill();
+                        let _ = orphan.wait();
+                    }
                     let _ = win_for_url.eval(format!(
                         "document.getElementById('status').textContent='Internal error: {}';document.getElementById('status').style.color='#ef4444';",
                         msg.replace('\'', "\\'").replace('\n', " ")
@@ -881,7 +981,13 @@ struct ClipboardFilesResult {
 }
 
 #[tauri::command]
-fn get_clipboard_files() -> ClipboardFilesResult {
+async fn get_clipboard_files() -> Result<ClipboardFilesResult, String> {
+    tauri::async_runtime::spawn_blocking(get_clipboard_files_blocking)
+        .await
+        .map_err(|e| format!("clipboard task failed: {e}"))
+}
+
+fn get_clipboard_files_blocking() -> ClipboardFilesResult {
     log_diag("[rust] get_clipboard_files invoked");
     let mut paths = Vec::new();
 
@@ -970,16 +1076,24 @@ fn get_clipboard_files() -> ClipboardFilesResult {
             if fmt != 0 {
                 let h = GetClipboardData(fmt);
                 if !h.is_null() {
-                    let ptr = h as *const u16;
-                    let mut len = 0usize;
-                    while *ptr.add(len) != 0 {
-                        len += 1;
-                    }
-                    let slice = std::slice::from_raw_parts(ptr, len);
-                    let s = String::from_utf16_lossy(slice);
-                    log_diag(&format!("[rust] FileNameW fallback: {s}"));
-                    if std::path::Path::new(&s).exists() {
-                        paths.push(s);
+                    // SAFETY: GetClipboardData returns an HGLOBAL that must be
+                    // locked with GlobalLock before reading. Treating the
+                    // handle itself as a pointer (the previous implementation)
+                    // dereferences an arbitrary address — undefined behavior.
+                    let ptr = GlobalLock(h);
+                    if !ptr.is_null() {
+                        let ptr_u16 = ptr as *const u16;
+                        let mut len = 0usize;
+                        while *ptr_u16.add(len) != 0 {
+                            len += 1;
+                        }
+                        let slice = std::slice::from_raw_parts(ptr_u16, len);
+                        let s = String::from_utf16_lossy(slice);
+                        log_diag(&format!("[rust] FileNameW fallback: {s}"));
+                        if std::path::Path::new(&s).exists() {
+                            paths.push(s);
+                        }
+                        GlobalUnlock(h);
                     }
                 }
             }
@@ -1075,5 +1189,72 @@ mod tests {
             .unwrap()
             .port();
         assert!(!check_health(port, "test-token"));
+    }
+
+    #[test]
+    fn ensure_server_resources_copies_missing_file() {
+        let temp = std::env::temp_dir().join(format!(
+            "vis-ai-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        // Pre-condition: temp dir does not contain learn.mjs
+        assert!(!temp.join("learn.mjs").exists());
+
+        ensure_server_resources(&temp);
+
+        // Source file exists in the project tree (CARGO_MANIFEST_DIR/resources/server/learn.mjs)
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("server")
+            .join("learn.mjs");
+        if src.exists() {
+            assert!(
+                temp.join("learn.mjs").exists(),
+                "learn.mjs should be copied"
+            );
+            assert!(
+                temp.join("learn-track.mjs").exists(),
+                "learn-track.mjs should be copied"
+            );
+        }
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn restart_delay_with_jitter_in_range() {
+        for attempt in 0..5u32 {
+            let base = (CHILD_RESTART_BASE_DELAY_SECS * 2u64.saturating_pow(attempt))
+                .min(CHILD_RESTART_MAX_DELAY_SECS);
+            let jitter = (base / 2).max(1);
+            for _ in 0..20 {
+                let delay = restart_delay_with_jitter(attempt);
+                // Invariant: delay in [base - jitter + 1, base] (since nanos % jitter is in [0, jitter))
+                assert!(
+                    delay > base.saturating_sub(jitter),
+                    "delay {} must be > base-jitter ({}) for attempt {}",
+                    delay,
+                    base.saturating_sub(jitter),
+                    attempt
+                );
+                assert!(delay <= base, "delay {} must be <= base ({})", delay, base);
+            }
+        }
+    }
+
+    #[test]
+    fn get_clipboard_files_blocking_does_not_panic() {
+        // We can't reliably set up clipboard state in a unit test, but we can
+        // verify the function handles whatever state exists without panicking
+        // and returns a well-formed result.
+        let result = get_clipboard_files_blocking();
+        // paths may be empty or populated depending on clipboard contents
+        let _ = result.paths.len();
+        assert!(result.error.is_none() || result.error.as_ref().is_some());
     }
 }

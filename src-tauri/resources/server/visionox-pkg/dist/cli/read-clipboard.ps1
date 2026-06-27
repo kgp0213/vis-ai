@@ -5,7 +5,14 @@ param()
 $null = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# C# helpers for formats not directly exposed by System.Windows.Forms.Clipboard.
+# System.Windows.Forms must be loaded explicitly — Add-Type -Path for the DLL
+# does not auto-load its referenced assemblies, and the script below uses
+# [System.Windows.Forms.Clipboard] directly.
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue | Out-Null
+
+# Load ClipboardHelper. Prefer the pre-compiled DLL (~18ms) over compiling
+# the C# source at runtime (~280ms). Fall back to source compilation if the
+# DLL is missing or fails to load, so the script remains self-contained.
 $helperSource = @'
 using System;
 using System.IO;
@@ -182,15 +189,26 @@ public static class ClipboardHelper {
 '@
 
 $typeLoaded = $false
-try {
-    Add-Type -TypeDefinition $helperSource -ReferencedAssemblies System.Windows.Forms -Language CSharp -ErrorAction Stop | Out-Null
-    $typeLoaded = $true
-} catch {
+$dllPath = Join-Path $PSScriptRoot "clipboard-helper.dll"
+if (Test-Path $dllPath) {
     try {
-        Add-Type -TypeDefinition $helperSource -Language CSharp -ErrorAction Stop | Out-Null
+        Add-Type -Path $dllPath -ErrorAction Stop
         $typeLoaded = $true
     } catch {
-        # Leave typeLoaded false; fall back to basic methods.
+        # Fall through to source compilation below.
+    }
+}
+if (-not $typeLoaded) {
+    try {
+        Add-Type -TypeDefinition $helperSource -ReferencedAssemblies System.Windows.Forms -Language CSharp -ErrorAction Stop | Out-Null
+        $typeLoaded = $true
+    } catch {
+        try {
+            Add-Type -TypeDefinition $helperSource -Language CSharp -ErrorAction Stop | Out-Null
+            $typeLoaded = $true
+        } catch {
+            # Leave typeLoaded false; fall back to basic methods.
+        }
     }
 }
 

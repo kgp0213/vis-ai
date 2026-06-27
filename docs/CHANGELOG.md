@@ -4,6 +4,78 @@
 > Visionox Desktop 应用自身版本：**1.10.0**（定义于 `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json`）。
 > `package.json` 版本号 `0.1.0` 仅为 npm workspace 占位（不随应用分发）。
 
+## Unreleased — Visionox 1.11.0（开发中）
+
+> 本次迭代聚焦 **统一学习命令 `/learn`**，把项目知识转化为 AI 可复用的长期能力。
+
+### `/learn` 学习命令（Phase 1-4）
+
+| 命令 | 说明 |
+|------|------|
+| `/learn skill <目录> [名称]` | 扫描目录文本文件，调用 LLM 生成 `SKILL.md` 并自动安装到 `~/.visionox/skills/<名称>/` |
+| `/learn project [名称]` | 扫描当前 workspace，生成或更新项目记忆文件（优先 `visionox.md`，已存在 `AGENTS.md` 则更新） |
+| `/learn index <目录>` | 为目录构建语义索引（复用 Dashboard 语义搜索配置） |
+| `/learn ask <问题>` | 基于语义索引检索片段，并用 LLM 合成带来源引用的回答 |
+| `/learn tutor [socratic|hint|pair|off]` | 开启/关闭/切换导师模式，修改当前会话系统提示词 |
+| `/learn track [on|senior|off|stats|due|add|review]` | 概念库 + SM-2 间隔重复，开启后 AI 围绕到期概念主动教学 |
+| `/learn status` | 显示已安装 Skill 数量、项目记忆文件、语义搜索状态、导师/学习模式状态、概念库统计 |
+| `/learn help` | 显示 `/learn` 完整用法 |
+
+### 自动概念萃取
+
+- `/learn skill` 和 `/learn project` 在生成 SKILL.md / 项目记忆后，会再调用一次 LLM 提取核心概念（`name`、`level`、`tags`）。
+- 新概念自动写入 `~/.visionox/learn-track.json`，来源标记为 `skill:<name>` 或 `project:<name>`。
+- 已存在的同名概念会跳过，避免重复。
+
+### 导师模式（`/learn tutor`）
+
+| 风格 | 行为 |
+|------|------|
+| `socratic` | 不直接给答案，通过提问引导；代码示例不超过 8 行；引导用户通过质量关卡 |
+| `hint` | 根据问题提供提示，把复杂问题拆成小步骤 |
+| `pair` | 结对编程伙伴，提出选项和权衡，由用户决策 |
+
+- 导师模式为**会话级**：`/new` 后自动清除。
+- 通过重建 `CacheFirstLoop` 向系统提示词追加导师角色片段实现。
+
+### 学习追踪模式（`/learn track`）
+
+| 子命令 | 说明 |
+|--------|------|
+| `on` | 主动学习模式：AI 在回复中穿插对到期/活跃概念的提问与串联 |
+| `senior` | 资深工程师模式：AI 要求用户解释设计取舍、定位代码、分析故障场景 |
+| `off` | 关闭学习模式 |
+| `stats` | 显示概念总数、今日到期、掌握层级分布、平均 ease |
+| `due` | 列出今日到期的概念 |
+| `add <概念名> [level=1-5] [source=...]` | 手动添加概念到概念库 |
+| `review <概念名/ID> <again|hard|good|easy>` | 记录复习结果并更新 SM-2 调度 |
+
+- 概念库存储在 `~/.visionox/learn-track.json`，字段：`id, name, level, ease, interval, repetitions, nextReview, lastReview, source, createdAt`。
+- SM-2 算法：根据 `again/hard/good/easy` 更新 `ease`、`interval`、`repetitions` 与下次复习日期；最小 `ease` 为 1.3。
+- 学习模式与导师模式一样为**会话级**，`/new` 后自动清除。
+- `buildLoop` 在学习模式开启时向系统提示词追加“到期概念 + 最近活跃概念”以及角色指令。
+
+### 实现说明
+
+- 所有 `/learn` 命令处理逻辑集中在 `src-tauri/resources/server/launcher.mjs` 和 `src-tauri/resources/server/learn.mjs` 中，**不修改上游 vendored dist**。
+- `/learn` 在 `submitPrompt` 中被拦截，结果直接以助手消息返回，不进入 AI loop。
+- 路径沙箱：默认只允许处理 workspace 内目录；admin/yolo 编辑模式下可处理外部路径。
+- 语义索引复用 Dashboard 已配置的嵌入模型（Ollama / OpenAI-compatible），索引存储在全局位置。
+- 文档更新：`README.md` 新增 `/learn` 章节，`src-tauri/resources/skill-creation-guide.md` 新增“方式四：用 `/learn skill` 自动萃取”。
+
+### 文档准确性修正（2026-06-27）
+
+> 逐行核对 `docs/` 目录后发现以下事实已变化，已在对应文档中修正。
+
+| 问题 | 修正 |
+|------|------|
+| 配色方案仍记为 5 套 + 3 套未合并源文件 | `DEVELOPMENT_RULES.md` / `UI_DESIGN_SYSTEM.md` 更新为当前 UI 可选 **8 套**（dark / light / warm-sand / cool-ash / soft-sage / deep-charcoal / midnight-ink / espresso） |
+| `docs/skill-creation-guide.md` 称与资源目录版本“内容完全一致” | 已改为指针说明；完整内容见 `src-tauri/resources/skill-creation-guide.md` |
+| 第三十九章称 docs/ 精简后只剩 4 个文件 | 补充说明：后续新增/保留至当前 **10 个文件**（CHANGELOG、DEVELOPMENT_RULES、ECC_GAP_ANALYSIS、ISSUES_CHECKLIST、MODEL_STATE_LOGIC、OFFICECLI_INTEGRATION、UI_DESIGN_SYSTEM、memory-work-modes-guide.md/html、skill-creation-guide.md） |
+| `src-tauri/resources/server/visionox-pkg-*-backup/` 目录仍列在目录结构中 | 这些备份目录已在第三十四条清理；当前构建产物和备份统一在 `archive/` 或已从仓库移除 |
+| `ECC_GAP_ANALYSIS.md` 日期/版本仍停留在 1.0.2 | 已更新为当前应用版本 **1.10.0**，并修正 bootstrap skills 数量 |
+| `OFFICECLI_INTEGRATION.md` 日期/版本仍停留在 1.0.2 | 已更新为当前应用版本 **1.10.0** |
+
 ## v0.47.1 — Visionox 1.10.0（2026-06-26）
 
 > 本次发布聚焦 **剪贴板粘贴体验**、**模型配置导入** 与 **Superpowers 技能包内置**。
@@ -261,7 +333,6 @@
 - 英文 i18n 中 [上游] → Visionox（UI 文本）
 - 中文 i18n 对应翻译
 - `~/.[上游]/` → `~/.visionox/`
-- `REASONIX.md` → `visionox.md`
 - 品牌区域改为 `<img src="/assets/v3.png">`
 - 添加主题切换按钮（cookie `visionox-theme`）
 - **保留不变**：HTTP headers（`X-[上游]-Token`、`[上游]-token`、`[上游]-mode`）、GitHub URL（`esengine/[上游]`）
@@ -315,8 +386,8 @@ src-tauri/resources/server/
 │   │       ├── v1.png        # 品牌图标
 │   │       └── v3.png        # 品牌图标
 │   └── dist/cli/             # 16 个 JS 文件已完成路径替换
-├── visionox-pkg-0.39.1-backup/  # 原始 0.39.1 备份
-└── visionox-pkg-0.43.0-pre-pathfix/  # 路径修复前的 0.43.0 备份
+├── visionox-pkg-0.39.1-backup/  # 原始 0.39.1 备份（已于 2026-05-18 清理）
+└── visionox-pkg-0.43.0-pre-pathfix/  # 路径修复前的 0.43.0 备份（已于 2026-05-18 清理）
 ```
 
 ---
@@ -1179,15 +1250,17 @@ Web Search:  [ON] [OFF]
 
 ### 内容
 
-新增 4 套配色方案 + 保留原有浅色，右下角下拉框切换，实时生效无需刷新。
+新增 4 套配色方案 + 保留原有深色/浅色，右下角下拉框切换，实时生效无需刷新。
 
 | 方案 | data-theme 值 | 特征 |
 |------|--------------|------|
-| 浅色 | `light` | 原有浅色主题（默认） |
-| 深色 | `dark` | 暗底 + 琥珀强调 |
+| 深色 | `dark` | 暗底 + 琥珀强调（默认） |
+| 浅色 | `light` | 白底 + 深琥珀 |
 | 暖沙 | `warm-sand` | 暖黄底 + 古铜强调 |
 | 冷灰 | `cool-ash` | 冷灰白底 + 灰蓝强调 |
 | 柔绿 | `soft-sage` | 柔绿底 + 鼠尾草绿强调 |
+
+> **后续更新**：`src-tauri/theme/` 中的 `deep-charcoal.css`、`midnight-ink.css`、`espresso.css` 也已合并到 `app.css`，当前 UI 共 8 套配色方案，详见 `DEVELOPMENT_RULES.md`。
 
 ### 修改清单
 
@@ -1356,7 +1429,7 @@ Web Search:  [ON] [OFF]
 | 精简 | UI_DESIGN_SYSTEM.md（2100→80 行） |
 | 替换 | skill-creation-guide.md → 指针 |
 | 删除 | COLOR_SCHEMES.md、UI_OPTIMIZATION_PLAN.md、ECC_INTEGRATION.md |
-| 结果 | docs/ 7 文件 → 4 文件（CHANGELOG + DEVELOPMENT_RULES + UI_DESIGN_SYSTEM + skill-creation-guide 指针） |
+| 结果 | 2026-06-07 合并后 docs/ 精简为 4 个文件；后续又新增/保留至当前 10 个文件（CHANGELOG、DEVELOPMENT_RULES、ECC_GAP_ANALYSIS、ISSUES_CHECKLIST、MODEL_STATE_LOGIC、OFFICECLI_INTEGRATION、UI_DESIGN_SYSTEM、memory-work-modes-guide.md/html、skill-creation-guide.md 指针） |
 
 ### 已确认正确的声明
 
