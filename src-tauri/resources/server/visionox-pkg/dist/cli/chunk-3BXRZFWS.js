@@ -643,6 +643,13 @@ var SLASH_COMMANDS = [
     summary: "load an archived plan as a read-only Time Travel snapshot (default: newest)",
     argsHint: "[N]"
   },
+  {
+    cmd: "report",
+    group: "advanced",
+    summary: "generate a daily/weekly/yearly summary report from conversation history",
+    argsHint: "daily|weekly|yearly [YYYY-MM-DD]",
+    argCompleter: ["daily", "weekly", "yearly"]
+  },
 ];
 function suggestSlashCommands(prefix, codeMode = false, counts) {
   const p = prefix.toLowerCase();

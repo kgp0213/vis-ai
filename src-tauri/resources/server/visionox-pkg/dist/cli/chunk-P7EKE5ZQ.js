@@ -56412,8 +56412,26 @@ function handleDone(rest, ctx) {
       return { info: t("handlers.plans.doneNoPlan") };
   }
 }
+var report = async (args, _loop, ctx) => {
+  const period = ["daily", "weekly", "yearly"].includes(args[0]) ? args[0] : "daily";
+  const anchorDate = args[1] ? new Date(args[1]) : new Date();
+  if (Number.isNaN(anchorDate.getTime())) {
+    return { info: "invalid date: " + args[1] };
+  }
+  if (!ctx.generateReport) {
+    return { info: "report engine not available" };
+  }
+  try {
+    const { markdown, stats } = await ctx.generateReport(period, anchorDate);
+    const header = `## Report · ${period} · ${stats.sessions} sessions · ${stats.messages} messages`;
+    return { info: `${header}\n\n${markdown}` };
+  } catch (err) {
+    return { info: `report failed: ${err.message}` };
+  }
+};
 var handlers13 = {
   replay,
+  report,
   stop
 };
 

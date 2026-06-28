@@ -2951,6 +2951,137 @@ async function handleSessions(method, rest, _body, _ctx) {
   };
 }
 
+// src/server/api/report.ts
+async function handleReport(method, _rest, _body, ctx, query = new URLSearchParams()) {
+  if (_rest[0] === "export") {
+    if (method !== "POST") {
+      return { status: 405, body: { error: "POST only" } };
+    }
+    const body = parseBody(_body);
+    const markdown = String(body.markdown || "");
+    if (!markdown) {
+      return { status: 400, body: { error: "markdown is required" } };
+    }
+    const safeName = String(body.filename || `Visionox_Report_${new Date().toISOString().slice(0, 10)}.md`).replace(/[\\/:*?"<>|]/g, "_");
+    const dir = join4(homedir(), "Downloads");
+    const filePath = join4(dir, safeName);
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(filePath, markdown, "utf8");
+      return { status: 200, body: { path: filePath, filename: safeName } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+  }
+  if (_rest[0] === "preview") {
+    if (method !== "GET") {
+      return { status: 405, body: { error: "GET only" } };
+    }
+    if (!ctx.previewReportSources) {
+      return { status: 503, body: { error: "report preview engine not available" } };
+    }
+    const period = query.get("period") || "daily";
+    if (!["daily", "weekly", "yearly", "custom"].includes(period)) {
+      return { status: 400, body: { error: "period must be daily, weekly, yearly or custom" } };
+    }
+    let customRange = null;
+    if (period === "custom") {
+      const rawStart = query.get("start");
+      const rawEnd = query.get("end");
+      if (!rawStart || !rawEnd) {
+        return { status: 400, body: { error: "custom period requires start and end dates" } };
+      }
+      const start2 = new Date(rawStart);
+      const end2 = new Date(rawEnd);
+      if (Number.isNaN(start2.getTime()) || Number.isNaN(end2.getTime())) {
+        return { status: 400, body: { error: "invalid start or end date" } };
+      }
+      if (end2 < start2) {
+        return { status: 400, body: { error: "end date must be after start date" } };
+      }
+      customRange = { start: start2, end: end2 };
+    }
+    const rawDate = query.get("date");
+    const anchorDate = rawDate ? new Date(rawDate) : new Date();
+    if (Number.isNaN(anchorDate.getTime())) {
+      return { status: 400, body: { error: "invalid date" } };
+    }
+    try {
+      const preview = await ctx.previewReportSources(period, anchorDate, customRange);
+      return { status: 200, body: preview };
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+  }
+  if (_rest[0] === "prompt") {
+    if (method === "GET") {
+      const prompt = ctx.getReportPromptTemplate?.() || { default: "", addendum: "" };
+      return { status: 200, body: { default: prompt.default || "", addendum: prompt.addendum || "" } };
+    }
+    if (method === "POST") {
+      const body = parseBody(_body);
+      const result = ctx.setReportPromptAddendum?.(body.addendum);
+      return { status: 200, body: { default: result?.default || "", addendum: result?.addendum || "", saved: true } };
+    }
+    if (method === "DELETE") {
+      const result = ctx.setReportPromptAddendum?.(null);
+      return { status: 200, body: { default: result?.default || "", addendum: result?.addendum || "", reset: true } };
+    }
+    return { status: 405, body: { error: "GET/POST/DELETE only" } };
+  }
+  if (method !== "GET") {
+    return { status: 405, body: { error: "GET only" } };
+  }
+  if (!ctx.generateReport) {
+    return { status: 503, body: { error: "report engine not available" } };
+  }
+  const period = query.get("period") || "daily";
+  if (!["daily", "weekly", "yearly", "custom"].includes(period)) {
+    return { status: 400, body: { error: "period must be daily, weekly, yearly or custom" } };
+  }
+  let customRange = null;
+  if (period === "custom") {
+    const rawStart = query.get("start");
+    const rawEnd = query.get("end");
+    if (!rawStart || !rawEnd) {
+      return { status: 400, body: { error: "custom period requires start and end dates" } };
+    }
+    const start2 = new Date(rawStart);
+    const end2 = new Date(rawEnd);
+    if (Number.isNaN(start2.getTime()) || Number.isNaN(end2.getTime())) {
+      return { status: 400, body: { error: "invalid start or end date" } };
+    }
+    if (end2 < start2) {
+      return { status: 400, body: { error: "end date must be after start date" } };
+    }
+    customRange = { start: start2, end: end2 };
+  }
+  const rawDate = query.get("date");
+  const anchorDate = rawDate ? new Date(rawDate) : new Date();
+  if (Number.isNaN(anchorDate.getTime())) {
+    return { status: 400, body: { error: "invalid date" } };
+  }
+  try {
+    const { markdown, stats } = await ctx.generateReport(period, anchorDate, customRange);
+    return {
+      status: 200,
+      body: {
+        markdown,
+        stats: {
+          period: stats.period,
+          sessions: stats.sessions,
+          messages: stats.messages,
+          start: stats.start.toISOString(),
+          end: stats.end.toISOString()
+        }
+      }
+    };
+  } catch (err) {
+    console.error(`[report] ${err.message}`);
+    return { status: 500, body: { error: err.message } };
+  }
+}
+
 // src/server/api/settings.ts
 function parseBody9(raw) {
   if (!raw) return {};
@@ -3792,6 +3923,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleLogs(method, rest, body, ctx);
       case "sessions":
         return await handleSessions(method, rest, body, ctx);
+      case "report":
+        return await handleReport(method, rest, body, ctx, query);
       case "plans":
         return await handlePlans(method, rest, body, ctx);
       case "modal":

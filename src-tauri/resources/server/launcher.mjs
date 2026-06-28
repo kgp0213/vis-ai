@@ -290,6 +290,7 @@ try {
     import(distPath("chunk-4QUNBQQ2.js")),
     import(distPath("chunk-XXC2BYTV.js")),
     import(distPath("chunk-XCGGEJTI.js")),
+    import(distPath("chunk-6PBZN4VI.js")),
   ]);
 } catch (err) {
   console.error(`[launcher] chunk import failed: ${err.message}`);
@@ -324,6 +325,7 @@ const [
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
   { buildIndex, querySemantic, indexExists },
+  { listSessions, loadSessionMessages, sessionPath },
 ] = modules;
 
 // ── Load config ─────────────────────────────────────────────────
@@ -1080,6 +1082,68 @@ tools.register({
 });
 console.error(`[launcher] remember_session tool registered`);
 
+// ── Session history tools ───────────────────────────────────────
+tools.register({
+  name: "list_sessions",
+  description: "列出用户的历史对话会话。返回每个会话的名称、消息数、最后活跃时间、工作区、模式、摘要等元信息。当用户要求查找、回顾或总结历史对话记录时应优先调用此工具。",
+  parameters: {
+    type: "object",
+    properties: {
+      limit: { type: "number", description: "最多返回多少个会话，默认 50" },
+    },
+  },
+  fn: async (args) => {
+    const limit = Number.isFinite(args.limit) && args.limit > 0 ? args.limit : 50;
+    const sessions = listSessions().slice(0, limit);
+    return JSON.stringify({
+      count: sessions.length,
+      sessions: sessions.map((s) => ({
+        name: s.name,
+        messageCount: s.messageCount,
+        lastActive: s.mtime.toISOString(),
+        workspace: s.meta?.workspace || null,
+        mode: s.meta?.mode || null,
+        summary: s.meta?.summary || null,
+      })),
+    });
+  },
+});
+
+tools.register({
+  name: "read_session",
+  description: "读取指定历史会话的消息内容。参数 name 来自 list_sessions。为避免 token 过多，默认只返回最近 200 条消息；如需更多可传入 limit。当用户要求查看某个历史会话的具体内容时调用。",
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "会话名称" },
+      limit: { type: "number", description: "最多返回最近多少条消息，默认 200" },
+    },
+    required: ["name"],
+  },
+  fn: async (args) => {
+    const name = String(args.name ?? "").trim();
+    if (!name) return JSON.stringify({ error: "name is required" });
+    const limit = Number.isFinite(args.limit) && args.limit > 0 ? args.limit : 200;
+    const messages = loadSessionMessages(name);
+    if (messages.length === 0) return JSON.stringify({ error: `session not found or empty: ${name}` });
+    const trimmed = messages.slice(-limit);
+    const text = trimmed.map((m) => {
+      const role = m.role || "unknown";
+      const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+      return `[${role}] ${content}`;
+    }).join("\n\n");
+    const MAX_CHARS = 30_000;
+    return JSON.stringify({
+      name,
+      totalMessages: messages.length,
+      returnedMessages: trimmed.length,
+      truncated: text.length > MAX_CHARS,
+      transcript: text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) + "\n\n...[内容已截断]" : text,
+    });
+  },
+});
+console.error(`[launcher] session history tools registered`);
+
 tools.register({
   name: "remember_mode_preference",
   description: "保存一条用户明确要求记住、只应在当前工作场景生效的长期记忆。可记录当前场景的偏好、常用知识点、术语解释、流程或关键词关联；内容会按 work mode 独立存储，并在该场景的新对话提示词中注入。不要用它记录跨所有场景都应生效的身份信息或临时上下文。",
@@ -1806,6 +1870,7 @@ ${toolList}
 - When the user asks to remember something for the current/active work mode, a named scenario (coding/office/design/general), or phrases it as "在当前场景/编程场景/办公场景/设计场景下记住" → use remember_mode_preference so it stays isolated to that work mode. This includes scenario-specific knowledge, terminology, workflows, keyword associations, and answering preferences.
 - If the user says only "remember" while the content is obviously tied to the current work scenario rather than global identity or cross-mode preference, prefer remember_mode_preference and mention that it is scoped to the current work mode.
 - Use remember_session only for temporary context that should disappear after /new
+- 当用户要求**查找、回顾、总结历史对话记录**时，先调用 \`list_sessions\` 获取会话列表，再按名称调用 \`read_session\` 读取具体内容
 - When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
 
 ## Safety boundaries
@@ -2152,6 +2217,324 @@ function applyModeForSessionMeta(meta) {
   return { changed: previous !== modeId, mode: modeId, previous };
 }
 
+// ── Conversation report engine ─────────────────────────────────
+// Generate daily / weekly / yearly summaries from archived sessions and the
+// active session.  Uses the currently active LLM provider and returns the
+// report markdown in-memory (no file is persisted).
+
+const REPORT_MAX_PROMPT_CHARS = 80_000;
+const REPORT_MAX_PER_MESSAGE_CHARS = 6_000;
+
+function getLocalDateRange(period, anchorDate = new Date()) {
+  const d = new Date(anchorDate);
+  if (Number.isNaN(d.getTime())) throw new Error(`invalid anchor date: ${anchorDate}`);
+  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+  let end;
+  if (period === "daily") {
+    end = new Date(start);
+    end.setDate(end.getDate() + 1);
+  } else if (period === "weekly") {
+    const day = start.getDay();
+    const mondayOffset = day === 0 ? -6 : 1 - day; // Monday as first day
+    start.setDate(start.getDate() + mondayOffset);
+    end = new Date(start);
+    end.setDate(end.getDate() + 7);
+  } else if (period === "yearly") {
+    start.setMonth(0, 1);
+    end = new Date(start.getFullYear() + 1, 0, 1);
+  } else {
+    throw new Error(`unsupported report period: ${period}`);
+  }
+  return { start, end };
+}
+
+function formatDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+async function loadJsonlMessages(filePath) {
+  try {
+    const raw = await readFile(filePath, "utf8");
+    return raw
+      .split(/\r?\n/)
+      .filter((l) => l.trim())
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function collectConversations(start, end) {
+  const conversations = [];
+  let totalMessages = 0;
+
+  // Archived sessions
+  try {
+    const files = await readdir(sessionsDir);
+    for (const name of files) {
+      if (!name.endsWith(".jsonl")) continue;
+      const filePath = resolve(sessionsDir, name);
+      let mtime;
+      try {
+        mtime = (await fsStat(filePath)).mtime;
+      } catch {
+        continue;
+      }
+      if (mtime < start || mtime >= end) continue;
+      const messages = await loadJsonlMessages(filePath);
+      if (messages.length === 0) continue;
+      conversations.push({ source: name.replace(/\.jsonl$/, ""), mtime, messages });
+      totalMessages += messages.length;
+    }
+  } catch (err) {
+    console.error(`[report] failed to list sessions: ${err.message}`);
+  }
+
+  // Active session (if current moment falls inside the requested range)
+  const now = new Date();
+  if (now >= start && now < end && hasUserMessage()) {
+    const messages = await loadJsonlMessages(activeSessionFile);
+    if (messages.length > 0) {
+      conversations.push({ source: "active", mtime: now, messages });
+      totalMessages += messages.length;
+    }
+  }
+
+  // Sort oldest first
+  conversations.sort((a, b) => a.mtime - b.mtime);
+  return { conversations, totalMessages };
+}
+
+async function previewReportSources(period, anchorDate, customRange = null) {
+  let start;
+  let end;
+  if (customRange && customRange.start && customRange.end) {
+    const s = new Date(customRange.start);
+    const e = new Date(customRange.end);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+      throw new Error("自定义时间范围无效");
+    }
+    start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0, 0);
+    end = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1, 0, 0, 0, 0);
+  } else {
+    ({ start, end } = getLocalDateRange(period, anchorDate));
+  }
+  const { conversations, totalMessages } = await collectConversations(start, end);
+  const MAX_PREVIEW_CHARS = 8_000;
+  const sources = [];
+  let chars = 0;
+  for (const conv of conversations) {
+    const preview = conv.messages.slice(-5).map((m) => {
+      let content = String(m.content ?? "").trim().replace(/\s+/g, " ");
+      if (content.length > 160) content = content.slice(0, 160) + "…";
+      return { role: m.role || "unknown", content };
+    });
+    const entry = {
+      source: conv.source,
+      mtime: conv.mtime.toISOString(),
+      messageCount: conv.messages.length,
+      preview
+    };
+    const entryChars = JSON.stringify(entry).length;
+    if (chars + entryChars > MAX_PREVIEW_CHARS && sources.length > 0) break;
+    sources.push(entry);
+    chars += entryChars;
+  }
+  return {
+    period,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    totalSessions: conversations.length,
+    totalMessages,
+    sources
+  };
+}
+
+function buildConversationText(conversations) {
+  let chars = 0;
+  const lines = [];
+  for (const conv of conversations) {
+    lines.push(`\n## 会话: ${conv.source} (${formatDateKey(conv.mtime)})`);
+    for (const msg of conv.messages) {
+      const role = msg.role || "unknown";
+      let content = String(msg.content ?? "").trim();
+      if (content.length > REPORT_MAX_PER_MESSAGE_CHARS) {
+        content = content.slice(0, REPORT_MAX_PER_MESSAGE_CHARS) + "\n\n… (truncated)";
+      }
+      if (!content) continue;
+      const text = `### ${role}\n${content}`;
+      chars += text.length;
+      lines.push(text);
+    }
+  }
+  let combined = lines.join("\n\n");
+  if (combined.length > REPORT_MAX_PROMPT_CHARS) {
+    // Drop oldest messages until it fits
+    while (combined.length > REPORT_MAX_PROMPT_CHARS && lines.length > 4) {
+      lines.shift();
+      combined = lines.join("\n\n");
+    }
+    combined = `> 部分早期消息因长度限制被省略。\n\n${combined}`;
+  }
+  return combined;
+}
+
+const DEFAULT_REPORT_PROMPT_TEMPLATE = `你是一位高效的对话记录整理助手。请仅根据下方提供的 Visionox Desktop 历史会话记录生成一份结构化的 {periodLabel}。
+要求：
+1. 使用 Markdown 格式，标题为「{date} {periodLabel}」。
+2. 你只能基于提供的对话记录进行总结；不要主动读取或引用工作区文件、代码库、网络内容。
+3. 如果某些信息在对话记录中不清楚或缺失，请在报告中直接说明，不要编造。
+4. 只有在用户明确要求、或对话记录本身明确提到工作区文件时，才可以补充引用工作区内容。
+5. 包含以下章节：
+   - 概览：统计会话数、消息数、涉及的主要工作区/模式（从会话 meta 推断，不读取文件）。
+   - 主要话题与任务：按主题分组，列出用户重点关注的事项。
+   - 关键决策与变更：总结明确做出的决定、代码改动、文件操作。
+   - 待办 / 阻塞 / 风险：提取尚未完成或需要跟进的事项。
+   - 下一步建议：给出 3-5 条可执行的建议。
+6. 保持客观、简洁，不要编造记录中没有的信息。
+7. 如果记录为空或无法识别有效内容，直接返回「本期暂无有效对话记录」。
+8. 报告应总结"对话中发生了什么"——不要把对话记录里 assistant 提到的文件路径、代码片段、命令输出复述进报告。文件细节只在"关键决策与变更"章节用一句话概括（例如"修改了 launcher.mjs 的报告生成逻辑"），不要展开原文。`;
+
+function buildReportPrompt(periodLabel, date, conversationText, stats) {
+  const cfg = readConfig(configPath);
+  const baseSystem = DEFAULT_REPORT_PROMPT_TEMPLATE.replace(/\{periodLabel\}/g, periodLabel).replace(/\{date\}/g, date);
+  const addendum = cfg.reportPromptAddendum?.trim();
+  const systemContent = addendum ? `${baseSystem}\n\n# 用户自定义要求\n\n${addendum}` : baseSystem;
+  return [
+    {
+      role: "system",
+      content: systemContent,
+    },
+    {
+      role: "user",
+      content:
+        `会话数：${stats.sessions}，消息数：${stats.messages}，时间范围：${formatDateKey(stats.start)} 至 ${formatDateKey(stats.end)}\n\n` +
+        `---\n${conversationText}\n---\n\n请生成 ${periodLabel}。`,
+    },
+  ];
+}
+
+async function migrateReportPromptAddendum() {
+  const cfg = readConfig(configPath);
+  const oldTemplate = cfg.reportPromptTemplate;
+  if (typeof oldTemplate !== "string" || oldTemplate.trim() === "") {
+    return { migrated: false, reason: "no-legacy-template" };
+  }
+  const trimmedOld = oldTemplate.trim();
+  const trimmedNew = DEFAULT_REPORT_PROMPT_TEMPLATE.trim();
+  if (trimmedOld === trimmedNew) {
+    delete cfg.reportPromptTemplate;
+    writeConfig(cfg, configPath);
+    console.error("[launcher] report prompt migration: legacy template equals current default, removed");
+    return { migrated: true, reason: "equal-to-default", addendum: "" };
+  }
+  let addendum = "";
+  if (client) {
+    try {
+      const modelConfig = effectiveModelConfig();
+      const migrationMessages = [
+        {
+          role: "system",
+          content:
+            "你是提示词迁移助手。下面给你两份报告生成提示词：一份是用户在旧版本里自定义的模板，另一份是新版本默认模板。" +
+            "请识别用户旧模板中**相对于新默认的特有意图**（标题偏好、章节要求、风格要求、语言要求等），" +
+            "把这些特有意图提取为简洁的中文追加说明（addendum）。" +
+            "如果旧模板与新默认本质相同（仅措辞或版本差异、占位符差异），返回空字符串。" +
+            "只输出 addendum 本身，不要解释、不要包裹在代码块里。最多 300 字。",
+        },
+        {
+          role: "user",
+          content:
+            `# 新版本默认模板\n\n${DEFAULT_REPORT_PROMPT_TEMPLATE}\n\n` +
+            `# 用户旧模板\n\n${oldTemplate}\n\n` +
+            `请输出 addendum（若无需保留则输出空字符串）：`,
+        },
+      ];
+      const result = await client.chat({
+        model: modelConfig.model,
+        messages: migrationMessages,
+        temperature: 0.2,
+        maxTokens: 600,
+      });
+      addendum = (result.content || "").trim();
+      if (addendum.startsWith("```")) {
+        addendum = addendum.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "").trim();
+      }
+      console.error(`[launcher] report prompt migration: LLM summarized addendum (${addendum.length} chars)`);
+    } catch (err) {
+      console.error(`[launcher] report prompt migration: LLM summarize failed (${err.message}), fallback to raw legacy template`);
+      addendum = `（从旧版本迁移的用户自定义提示词，建议清理后重新编辑）\n\n${oldTemplate}`;
+    }
+  } else {
+    console.error("[launcher] report prompt migration: no LLM client, fallback to raw legacy template");
+    addendum = `（从旧版本迁移的用户自定义提示词，建议清理后重新编辑）\n\n${oldTemplate}`;
+  }
+  const next = readConfig(configPath);
+  delete next.reportPromptTemplate;
+  if (addendum) {
+    next.reportPromptAddendum = addendum;
+  } else {
+    delete next.reportPromptAddendum;
+  }
+  writeConfig(next, configPath);
+  return { migrated: true, reason: "summarized", addendum };
+}
+
+async function generateReport(period, anchorDate, customRange = null) {
+  if (!client) {
+    throw new Error("当前未配置可用的 LLM provider，无法生成报告");
+  }
+  await migrateReportPromptAddendum();
+  let start;
+  let end;
+  if (customRange && customRange.start && customRange.end) {
+    const s = new Date(customRange.start);
+    const e = new Date(customRange.end);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+      throw new Error("自定义时间范围无效");
+    }
+    start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0, 0);
+    end = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1, 0, 0, 0, 0);
+  } else {
+    ({ start, end } = getLocalDateRange(period, anchorDate));
+  }
+  const { conversations, totalMessages } = await collectConversations(start, end);
+  const stats = { period, start, end, sessions: conversations.length, messages: totalMessages };
+
+  const periodLabel = period === "daily" ? "日报" : period === "weekly" ? "周报" : period === "yearly" ? "年度报告" : "自定义报告";
+
+  if (conversations.length === 0) {
+    return {
+      markdown: `## Visionox ${periodLabel}\n\n` +
+        `时间范围：**${formatDateKey(start)}** 至 **${formatDateKey(end)}**\n\n本期暂无有效对话记录。`,
+      stats,
+    };
+  }
+
+  const conversationText = buildConversationText(conversations);
+  const date = formatDateKey(start);
+  const messages = buildReportPrompt(periodLabel, date, conversationText, stats);
+  const cfg = effectiveModelConfig();
+  const model = cfg.model;
+
+  console.error(`[report] generating ${period} report: ${conversations.length} sessions, ${totalMessages} messages, model=${model}`);
+  const result = await client.chat({
+    model,
+    messages,
+    temperature: 0.3,
+    maxTokens: 4096,
+  });
+  const markdown = result.content?.trim() || "生成失败：模型返回空内容";
+  return { markdown, stats };
+}
+
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
   mode: "desktop",
@@ -2190,6 +2573,26 @@ const ctx = {
   addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
   updateModeMemory: (id, patch, modeId) => updateModeMemory(modeId || config.mode || "general", id, patch),
   deleteModeMemory: (id, modeId) => deleteModeMemory(modeId || config.mode || "general", id),
+
+  // ── Reports ────────────────────────────────────────────────
+  generateReport,
+  previewReportSources,
+  getReportPromptTemplate: () => ({
+    default: DEFAULT_REPORT_PROMPT_TEMPLATE,
+    addendum: readConfig(configPath).reportPromptAddendum || "",
+  }),
+  setReportPromptAddendum: (addendum) => {
+    const cfg = readConfig(configPath);
+    const v = addendum === null || addendum === undefined ? "" : String(addendum).trim();
+    if (v) {
+      cfg.reportPromptAddendum = v;
+    } else {
+      delete cfg.reportPromptAddendum;
+    }
+    writeConfig(cfg, configPath);
+    console.error(`[launcher] report prompt addendum ${cfg.reportPromptAddendum ? "updated" : "cleared"}`);
+    return { default: DEFAULT_REPORT_PROMPT_TEMPLATE, addendum: v };
+  },
 
   // ── Setters / actions ──────────────────────────────────────
   setEditMode: (m) => {

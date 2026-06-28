@@ -19205,8 +19205,8 @@ function createT(translations) {
 var en = {
   app: {
     sectionWorkspace: "workspace",
-    sectionObserve: "observe",
-    sectionConfigure: "configure",
+    sectionObserve: "observe & changes",
+    sectionConfigure: "advanced",
     tabChat: "Chat",
     tabPlans: "Plans",
     tabSessions: "Sessions",
@@ -19220,6 +19220,7 @@ var en = {
     tabSkills: "Skills",
     tabMemory: "Memory",
     tabHooks: "Hooks",
+    tabReports: "Reports",
     tabSettings: "Settings",
     sectionChanges: "Changes",
     tabChanges: "Changes",
@@ -19291,6 +19292,30 @@ var en = {
     off: "off",
     enabled: "enabled",
     disabled: "disabled"
+  },
+  reports: {
+    title: "Conversation Report",
+    period: "Period",
+    daily: "Daily",
+    weekly: "Weekly",
+    yearly: "Yearly",
+    custom: "Custom",
+    startDate: "Start",
+    endDate: "End",
+    date: "Date",
+    generate: "Generate Report",
+    generating: "Generating report\u2026",
+    generatingPreview: "Generating report from {sessions} sessions / {messages} messages\u2026",
+    empty: "No report generated yet.",
+    stats: "Sessions: {sessions} \u00B7 Messages: {messages}",
+    sendToChat: "Send to chat",
+    export: "Export Markdown",
+    prompt: "Report prompt",
+    savePrompt: "Save",
+    resetPrompt: "Reset default",
+    cancelPrompt: "Cancel",
+    promptSaved: "Prompt template saved",
+    error: "Failed to generate report: {error}"
   },
   settings: {
     title: "Settings",
@@ -19879,8 +19904,8 @@ var en = {
 var zhCN = {
   app: {
     sectionWorkspace: "\u5DE5\u4F5C\u533A",
-    sectionObserve: "\u76D1\u63A7",
-    sectionConfigure: "\u914D\u7F6E",
+    sectionObserve: "\u76D1\u63A7\u4E0E\u53D8\u66F4",
+    sectionConfigure: "\u9AD8\u7EA7",
     tabChat: "\u5BF9\u8BDD",
     tabPlans: "\u8BA1\u5212",
     tabSessions: "\u4F1A\u8BDD",
@@ -19894,6 +19919,7 @@ var zhCN = {
     tabSkills: "\u6280\u80FD",
     tabMemory: "\u8BB0\u5FC6",
     tabHooks: "\u94A9\u5B50",
+    tabReports: "\u62A5\u544A",
     tabSettings: "\u8BBE\u7F6E",
     sectionChanges: "\u53D8\u66F4",
     tabChanges: "\u53D8\u66F4",
@@ -19957,6 +19983,30 @@ var zhCN = {
     off: "\u5173\u95ED",
     enabled: "\u5DF2\u542F\u7528",
     disabled: "\u5DF2\u7981\u7528"
+  },
+  reports: {
+    title: "\u5BF9\u8BDD\u62A5\u544A",
+    period: "\u5468\u671F",
+    daily: "\u65E5\u62A5",
+    weekly: "\u5468\u62A5",
+    yearly: "\u5E74\u5EA6\u62A5\u544A",
+    custom: "\u81EA\u5B9A\u4E49",
+    startDate: "\u5F00\u59CB",
+    endDate: "\u7ED3\u675F",
+    date: "\u65E5\u671F",
+    generate: "\u751F\u6210\u62A5\u544A",
+    generating: "\u6B63\u5728\u751F\u6210\u62A5\u544A\u2026",
+    generatingPreview: "\u6B63\u5728\u57FA\u4E8E {sessions} \u4E2A\u4F1A\u8BDD\u3001{messages} \u6761\u6D88\u606F\u751F\u6210\u62A5\u544A\u2026",
+    empty: "\u6682\u672A\u751F\u6210\u62A5\u544A\u3002",
+    stats: "\u4F1A\u8BDD\u6570\uFF1A{sessions} \u00B7 \u6D88\u606F\u6570\uFF1A{messages}",
+    sendToChat: "\u53D1\u9001\u5230\u5BF9\u8BDD",
+    export: "\u5BFC\u51FA Markdown",
+    prompt: "\u62A5\u544A\u63D0\u793A\u8BCD",
+    savePrompt: "\u4FDD\u5B58",
+    resetPrompt: "\u91CD\u7F6E\u9ED8\u8BA4",
+    cancelPrompt: "\u53D6\u6D88",
+    promptSaved: "\u63D0\u793A\u8BCD\u6A21\u677F\u5DF2\u4FDD\u5B58",
+    error: "\u62A5\u544A\u751F\u6210\u5931\u8D25\uFF1A{error}"
   },
   settings: {
     title: "\u8BBE\u7F6E",
@@ -28386,6 +28436,227 @@ description: TODO \u2014 one-line description that helps the model match this sk
   `;
 }
 
+// dashboard/src/panels/reports.ts
+const reportStore = {
+  period: "daily",
+  date: new Date().toISOString().slice(0, 10),
+  startDate: new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10),
+  endDate: new Date().toISOString().slice(0, 10),
+  markdown: "",
+  stats: null,
+  error: null
+};
+function ReportsPanel() {
+  useLang();
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
+  const [period, setPeriod] = d2(reportStore.period ?? "daily");
+  const [date, setDate] = d2(reportStore.date ?? today);
+  const [startDate, setStartDate] = d2(reportStore.startDate ?? weekAgo);
+  const [endDate, setEndDate] = d2(reportStore.endDate ?? today);
+  const [markdown, setMarkdown] = d2(reportStore.markdown ?? "");
+  const [stats, setStats] = d2(reportStore.stats ?? null);
+  const [busy, setBusy] = d2(false);
+  const [error, setError] = d2(reportStore.error ?? null);
+  const [info, setInfo] = d2(null);
+  const [previewSources, setPreviewSources] = d2(null);
+  const isCustom = period === "custom";
+
+  y2(() => {
+    reportStore.period = period;
+    reportStore.date = date;
+    reportStore.startDate = startDate;
+    reportStore.endDate = endDate;
+    reportStore.markdown = markdown;
+    reportStore.stats = stats;
+    reportStore.error = error;
+  }, [period, date, startDate, endDate, markdown, stats, error]);
+
+  const generate = q2(async () => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    setMarkdown("");
+    setStats(null);
+    setPreviewSources(null);
+    try {
+      let previewUrl = `/report/preview?period=${encodeURIComponent(period)}&date=${encodeURIComponent(date)}`;
+      let reportUrl = `/report?period=${encodeURIComponent(period)}&date=${encodeURIComponent(date)}`;
+      if (isCustom) {
+        const range = `&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`;
+        previewUrl += range;
+        reportUrl += range;
+      }
+      const previewRes = await api(previewUrl);
+      setPreviewSources(previewRes.sources || []);
+      const res = await api(reportUrl);
+      setMarkdown(res.markdown || "");
+      setStats(res.stats || null);
+    } catch (err) {
+      setError(err.message || String(err));
+      setMarkdown("");
+      setStats(null);
+    } finally {
+      setBusy(false);
+    }
+  }, [period, date, startDate, endDate]);
+
+  const exportMd = q2(async () => {
+    if (!markdown) return;
+    setInfo(null);
+    setError(null);
+    try {
+      const suffix = isCustom ? `${startDate}_${endDate}` : date;
+      const filename = `Visionox_Report_${suffix}.md`;
+      const res = await api("/report/export", {
+        method: "POST",
+        body: { markdown, filename }
+      });
+      setInfo(`\u5DF2\u5BFC\u51FA\u5230 ${res.path || res.filename}`);
+    } catch (err) {
+      setError(`\u5BFC\u51FA\u5931\u8D25\uFF1A${err.message || String(err)}`);
+    }
+  }, [markdown, isCustom, startDate, endDate, date]);
+
+  const [showPromptEditor, setShowPromptEditor] = d2(false);
+  const [promptDefault, setPromptDefault] = d2("");
+  const [promptAddendum, setPromptAddendum] = d2("");
+  const [promptBusy, setPromptBusy] = d2(false);
+
+  const openPromptEditor = q2(async () => {
+    setError(null);
+    setInfo(null);
+    setShowPromptEditor(true);
+    setPromptBusy(true);
+    try {
+      const res = await api("/report/prompt");
+      setPromptDefault(res.default || "");
+      setPromptAddendum(res.addendum || "");
+    } catch (err) {
+      setError(`\u52A0\u8F7D\u63D0\u793A\u8BCD\u5931\u8D25\uFF1A${err.message || String(err)}`);
+    } finally {
+      setPromptBusy(false);
+    }
+  }, []);
+
+  const savePromptTemplate = q2(async () => {
+    setPromptBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await api("/report/prompt", {
+        method: "POST",
+        body: { addendum: promptAddendum }
+      });
+      setPromptAddendum(res.addendum || "");
+      setShowPromptEditor(false);
+      setInfo(t4("reports.promptSaved"));
+    } catch (err) {
+      setError(`\u4FDD\u5B58\u63D0\u793A\u8BCD\u5931\u8D25\uFF1A${err.message || String(err)}`);
+    } finally {
+      setPromptBusy(false);
+    }
+  }, [promptAddendum]);
+
+  const resetPromptTemplate = q2(async () => {
+    setPromptBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await api("/report/prompt", { method: "DELETE" });
+      setPromptAddendum(res.addendum || "");
+      setInfo(t4("reports.promptSaved"));
+    } catch (err) {
+      setError(`\u91CD\u7F6E\u63D0\u793A\u8BCD\u5931\u8D25\uFF1A${err.message || String(err)}`);
+    } finally {
+      setPromptBusy(false);
+    }
+  }, []);
+
+  return html4`
+    <div class="reports-panel">
+      <div class="reports-controls">
+        <label>
+          <span>${t4("reports.period")}</span>
+          <select value=${period} onChange=${(e3) => setPeriod(e3.target.value)} disabled=${busy}>
+            <option value="daily">${t4("reports.daily")}</option>
+            <option value="weekly">${t4("reports.weekly")}</option>
+            <option value="yearly">${t4("reports.yearly")}</option>
+            <option value="custom">${t4("reports.custom")}</option>
+          </select>
+        </label>
+        ${isCustom ? html4`
+          <label>
+            <span>${t4("reports.startDate")}</span>
+            <input type="date" value=${startDate} onChange=${(e3) => setStartDate(e3.target.value)} disabled=${busy} />
+          </label>
+          <label>
+            <span>${t4("reports.endDate")}</span>
+            <input type="date" value=${endDate} onChange=${(e3) => setEndDate(e3.target.value)} disabled=${busy} />
+          </label>
+        ` : html4`
+          <label>
+            <span>${t4("reports.date")}</span>
+            <input type="date" value=${date} onChange=${(e3) => setDate(e3.target.value)} disabled=${busy} />
+          </label>
+        `}
+        <button class="btn primary" onClick=${generate} disabled=${busy}>
+          ${busy ? t4("reports.generating") : t4("reports.generate")}
+        </button>
+        <button class="btn" onClick=${exportMd} disabled=${!markdown || busy} title=${t4("reports.export")}>
+          ${t4("reports.export")}
+        </button>
+        <button class="btn" onClick=${openPromptEditor} disabled=${busy} title=${t4("reports.prompt")}>
+          ${t4("reports.prompt")}
+        </button>
+      </div>
+
+      ${showPromptEditor ? html4`
+        <div class="reports-prompt-editor">
+          <div class="reports-prompt-default">
+            <div class="reports-prompt-default-label">\u9ED8\u8BA4\u63D0\u793A\u8BCD\uFF08\u968F\u7248\u672C\u66F4\u65B0\uFF0C\u53EA\u8BFB\uFF09</div>
+            <pre>${promptDefault}</pre>
+          </div>
+          <textarea
+            value=${promptAddendum}
+            onChange=${(e3) => setPromptAddendum(e3.target.value)}
+            disabled=${promptBusy}
+            placeholder="\u5728\u6B64\u8FFD\u52A0\u4F60\u7684\u7279\u6B8A\u8981\u6C42\uFF08\u6807\u9898\u504F\u597D\u3001\u7AE0\u8282\u8981\u6C42\u3001\u98CE\u683C\u8981\u6C42\u7B49\uFF09\u3002\u9ED8\u8BA4\u63D0\u793A\u8BCD\u4F1A\u968F\u7248\u672C\u81EA\u52A8\u66F4\u65B0\uFF0C\u8FD9\u91CC\u7684\u5185\u5BB9\u4F1A\u88AB\u4FDD\u7559\u3002"
+          />
+          <div class="reports-prompt-actions">
+            <button class="btn primary" onClick=${savePromptTemplate} disabled=${promptBusy}>${t4("reports.savePrompt")}</button>
+            <button class="btn" onClick=${resetPromptTemplate} disabled=${promptBusy}>${t4("reports.resetPrompt")}</button>
+            <button class="btn" onClick=${() => setShowPromptEditor(false)} disabled=${promptBusy}>${t4("reports.cancelPrompt")}</button>
+          </div>
+        </div>
+      ` : null}
+
+      ${error ? html4`<div class="notice err">${t4("reports.error", { error })}</div>` : null}
+      ${info ? html4`<div class="notice">${info}</div>` : null}
+      ${stats && !busy ? html4`<div class="reports-stats">
+        ${t4("reports.stats", { sessions: String(stats.sessions), messages: String(stats.messages) })}
+        <span class="dim">${new Date(stats.start).toLocaleDateString()} – ${new Date(stats.end).toLocaleDateString()}</span>
+      </div>` : null}
+
+      <div class="reports-output">
+        ${markdown ? html4`<div class="reports-md" dangerouslySetInnerHTML=${{ __html: marked(markdown, { breaks: true, gfm: true }) }} />` : busy && previewSources ? html4`
+          <div class="reports-preview">
+            <div class="reports-preview-h">${t4("reports.generatingPreview", { sessions: String(previewSources.length), messages: String(previewSources.reduce((a, s) => a + (s.messageCount || 0), 0)) })}</div>
+            ${previewSources.map((src) => html4`
+              <div class="reports-preview-source" key=${src.source}>
+                <div class="reports-preview-title">${src.source} · ${new Date(src.mtime).toLocaleString()} · ${src.messageCount} msgs</div>
+                ${src.preview.map((m, idx) => html4`
+                  <div class="reports-preview-msg" key=${idx}><strong>${m.role}:</strong> ${m.content}</div>
+                `)}
+              </div>
+            `)}
+          </div>
+        ` : html4`<div class="reports-empty">${t4("reports.empty")}</div>`}
+      </div>
+    </div>
+  `;
+}
+
 // dashboard/src/panels/system.ts
 function SystemPanel() {
   useLang();
@@ -30497,32 +30768,23 @@ function tabSections() {
       tabs: [
         { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
         { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
+        { id: "reports", name: t4("app.tabReports"), glyph: "R", panel: () => html7`<${ReportsPanel} />` },
         { id: "plans", name: t4("app.tabPlans"), glyph: "\u229E", panel: () => html7`<${PlansPanel} />` }
-      ]
-    },
-    {
-      label: t4("app.sectionChanges"),
-      tabs: [
-        { id: "changes", name: t4("app.tabChanges"), glyph: "\u25A8", panel: () => html7`<${ChangesPanel} />` }
-      ]
-    },
-    {
-      label: t4("app.sectionObserve"),
-      tabs: [
-        { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` },
-        { id: "health", name: t4("app.tabSystem"), glyph: "+", panel: () => html7`<${SystemPanel} />` },
-        { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} />` }
       ]
     },
     {
       label: t4("app.sectionConfigure"),
       tabs: [
         { id: "tools", name: t4("app.tabTools"), glyph: "\u25A3", panel: () => html7`<${ToolsPanel} />` },
-        { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html7`<${PermissionsPanel} />` },
-        { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />` },
         { id: "skills", name: t4("app.tabSkills"), glyph: "S", panel: () => html7`<${SkillsPanel} />` },
         { id: "memory", name: t4("app.tabMemory"), glyph: "\xB7", panel: () => html7`<${MemoryPanel} />` },
+        { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />` },
         { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html7`<${HooksPanel} />` },
+        { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` },
+        { id: "changes", name: t4("app.tabChanges"), glyph: "\u25A8", panel: () => html7`<${ChangesPanel} />` },
+        { id: "health", name: t4("app.tabSystem"), glyph: "+", panel: () => html7`<${SystemPanel} />` },
+        { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} />` },
+        { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html7`<${PermissionsPanel} />` },
         { id: "settings", name: t4("app.tabSettings"), glyph: "\u2318", panel: () => html7`<${SettingsPanel} />` }
       ]
     }
@@ -30559,6 +30821,15 @@ function App() {
     } catch {
     }
   }, [activeId]);
+  const [openSections, setOpenSections] = d2(() => /* @__PURE__ */ new Set([0]));
+  const toggleSection = q2((idx) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }, []);
   const [wsRoot, setWsRoot] = d2(null);
   const [version2, setVersion] = d2(null);
   const [buildDate2, setBuildDate] = d2(null);
@@ -30594,25 +30865,36 @@ function App() {
         </div>
         <div class="side-tabs">
           ${TAB_SECTIONS.map(
-    (section, i) => html7`
-              <div class="side-section">${section.label}</div>
-              ${section.tabs.map(
-      (tab) => html7`
-                  <div
-                    class=${`side-tab ${tab.id === active.id ? "active" : ""}`}
-                    onClick=${() => pickTab(tab.id)}
-                    title=${tab.name}
-                  >
-                    <span class="g">${tab.glyph}</span>
-                    <span class="label">${tab.name}</span>
-                  </div>
-                `
-    )}
-              ${i === 0 ? html7`
-                  <div class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://oa.visionox.com:8086/gvo/mainPortal/index.html" } }).catch(() => {})} title="\u529E\u516C OA"><span class="g">O</span><span class="label">OA</span></div>
-                  <div class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://cloud.siliconflow.cn/i/1vfZWEo7" } }).catch(() => {})} title="SiliconFlow API"><span class="g">A</span><span class="label">API</span></div>
+    (section, i) => {
+      const isOpen = openSections.has(i);
+      return html7`
+              <div class="side-section side-section-toggle" onClick=${() => toggleSection(i)}>
+                <span>${section.label}</span>
+                <span class="side-section-chev">${isOpen ? "\u25BC" : "\u25B6"}</span>
+              </div>
+              ${isOpen ? html7`
+                  ${section.tabs.map(
+        (tab) => html7`
+                      <div
+                        class=${`side-tab ${tab.id === active.id ? "active" : ""}`}
+                        onClick=${() => pickTab(tab.id)}
+                        title=${tab.name}
+                      >
+                        <span class="g">${tab.glyph}</span>
+                        <span class="label">${tab.name}</span>
+                      </div>
+                    `
+      )}
+                  ${i === 0 ? html7`
+                      <div class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://oa.visionox.com:8086/gvo/mainPortal/index.html" } }).catch(() => {})} title="\u529E\u516C OA"><span class="g">O</span><span class="label">OA</span></div>
+                      <div class="side-divider"></div>
+                    ` : null}
+                  ${section.label === t4("app.sectionConfigure") ? html7`
+                      <div class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://cloud.siliconflow.cn/i/1vfZWEo7" } }).catch(() => {})} title="SiliconFlow API"><span class="g">A</span><span class="label">API</span></div>
+                    ` : null}
                 ` : null}
-            `
+            `;
+    }
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
