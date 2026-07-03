@@ -1,296 +1,95 @@
 # Visionox Desktop
 
-基于 [DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) 的 Tauri v2 Windows 桌面 AI 编程代理。
+AI 编程代理桌面应用 — 基于 DeepSeek 的 Tauri v2 Windows 桌面 AI 助手。
 
 ---
 
-## 基础说明
+## ✨ 核心特性
 
-### 仓库
-
-| 角色 | 地址 |
+| 特性 | 说明 |
 |------|------|
-| 本仓库 | <https://gitee.com/hufz_admin/vis-ai> |
-
-### 依赖
-
-| 组件 | 说明 |
-|------|------|
-| Tauri v2 + WebView2 | Rust 桌面框架（Windows 系统自带 WebView2） |
-| Node.js v22+ | AI Agent 运行时（`node.exe` 随 exe 分发） |
-| DeepSeek API | 需用户自备 API Key |
-
-
-### 架构
-
-```
-Tauri Shell (Rust)
-  ├─ WebView2 窗口 → 加载页 spinner
-  ├─ spawn node.exe launcher.mjs --port 0
-  ├─ 读取 stdout → {url, token, port}
-  ├─ TCP 健康检查 (15×200ms) → 通过后导航到 dashboard
-  ├─ 子进程崩溃监控 (2s 轮询)
-  ├─ JobObject KILL_ON_JOB_CLOSE 兜底
-  └─ 系统托盘 (最小化/退出)
-
-Node.js Launcher
-  ├─ DeepSeekClient + CacheFirstLoop
-  ├─ 注册 33+ 工具 (文件/Shell/Web/Memory/MCP)
-  ├─ 启动 Dashboard HTTP Server (127.0.0.1)
-  └─ 全局诊断日志 → launcher-diag.log / launcher-stderr.log
-
-Dashboard SPA (WebView2)
-  └─ Chat / Sessions / Tools / Memory / Settings / MCP ...
-```
-
-### 项目结构
-
-```
-vis-ai/
-├── src/index.html                    加载页（含 iframe 恢复 + Rust 兜底逻辑）
-├── src-tauri/
-│   ├── src/main.rs                   入口
-│   ├── src/lib.rs                    窗口/进程管理/托盘/健康检查/刷新恢复
-│   ├── resources/server/
-│   │   ├── node.exe                  Node.js 二进制（gitignore，需手动放置）
-│   │   ├── officecli.exe             OfficeCLI 二进制（gitignore，需手动放置）
-│   │   ├── launcher.mjs              启动脚本
-│   │   └── visionox-pkg/             Visionox 服务端
-│   ├── resources/bootstrap-skills/   内置 bootstrap skills
-│   └── tauri.conf.json               Tauri 配置
-├── docs/                             项目文档
-├── archive/                          归档的旧实现（tep-desktop）
-├── cherry-claude.cjs                 CLAUDE.md 记忆注入
-└── scripts/restore-visionox-pkg.js   服务端包恢复
-```
+| 🤖 **AI 编程代理** | 多模型支持（DeepSeek / 硅基流动 / OpenAI 兼容）、33+ 内置工具（文件/Shell/Web/Memory/MCP），可扩展 |
+| 🧠 **8 层记忆系统** | Soul 身份 → 项目记忆 → 工作模式 → 场景记忆 → 编码规范 → 自定义规则 → 技能索引 → 持久记忆，逐层注入 |
+| 🎯 **4 种工作模式** | 通用 / 编程 / 办公 / 设计，一键切换，每种模式有独立的提示词、技能集和场景记忆 |
+| 📚 **`/learn` 学习命令** | 技能萃取、项目 onboarding、语义索引问答、导师模式、SM-2 间隔重复学习追踪 |
+| 📎 **OfficeCLI 办公集成** | 内置 OfficeCLI MCP，原生操作 Word/Excel/PPT，替代 6 个旧 Office 技能 |
+| 🔍 **多引擎搜索** | 4 个搜索引擎热切换（Bing 国内版 / Mojeek / SearXNG / Bing API），默认 Bing 免费可用 |
+| 📋 **剪贴板增强** | `Ctrl+V` 直接粘贴图片为附件、粘贴文件为路径，支持 OneDrive/Outlook/远程桌面等复杂场景 |
+| 🎨 **8 套配色方案** | 深色 / 浅色 / 暖沙 / 冷灰 / 柔绿 / 深炭灰 / 午夜墨蓝 / 浓缩咖啡，下拉框实时切换 |
+| 🧩 **Superpowers 技能包** | 内置 14+ 工作流技能（需求梳理、方案规划、代码评审、系统调试、TDD 等），安装即用 |
+| 💬 **会话管理** | 历史会话保存/删除/继续，跨会话记忆持久化，工作场景自动恢复 |
+| 🔌 **MCP 协议支持** | stdio / SSE / Streamable HTTP 三种传输，可接入任意 MCP Server 扩展能力 |
+| 🛡️ **4 级编辑模式** | review（需审批）/ auto（自动）/ yolo（全自动）/ admin（无限制），灵活控制 AI 自主度 |
+| 📦 **绿色便携** | Windows NSIS 安装包，开箱即用，无需配置 Node.js/Python 环境 |
 
 ---
 
-## 核心特性
-
-### 最近变更（1.10.0）
-
-- **模型配置支持 JSON 导入** — 点击对话框底部“🤖 模型”，在弹出面板中选择 JSON 文件即可批量导入/更新 provider 配置，无需逐条手动添加。
-- **对话框直接粘贴图片和文件** — 复制图片/截图后按 `Ctrl + V` 自动变成附件；从文件资源管理器复制文件/文件夹后按 `Ctrl + V` 自动贴入完整本地路径，方便写提示词。
-- **剪贴板路径读取更稳定** — 支持更多 Windows 剪贴板格式（FileDrop、FileNameW、FileGroupDescriptorW、Shell IDList Array 等），在 OneDrive 在线文件、Outlook 附件、远程桌面等复杂环境下成功率更高；读取失败时不再往输入框里塞错误文字。
-- **内置 Superpowers 技能包** — 安装包自带 Superpowers 工作流技能，安装后自动可用，辅助做需求梳理、方案规划、代码评审与任务执行。
-- **WebView2 刷新卡死修复** — iframe 方案下 F5/右键刷新壳页面会永久卡在 "Starting server..."。现已通过 localStorage 后备 + Rust `get_dashboard_url` 兜底 + iframe 加载失败回退三层机制恢复，刷新后自动重建 dashboard。
-- 办公模式默认采用 OfficeCLI MCP 处理 Word/Excel/PPT，替换 `docx`、`xlsx`、`pptx`、`pptx-generator`、`visionox-excel-pro`、`minimax-xlsx` 六个旧 Office 技能，PDF 相关技能保留。
-- effort（推理强度 high/max）切换现在会在运行日志面板输出对应信息。
-
-### 记忆系统 (8 层)
-
-每次 `/new` 重建上下文时，按顺序加载：
-
-| 层 | 来源 | 用途 |
-|----|------|------|
-| Soul | `~/.visionox/soul.md` | AI 身份与行为准则 |
-| Project | `workspace/{visionox,REASONIX,...}.md` | 项目专属信息 |
-| Mode | `config.json` → `modes[mode].prompt` | 场景行为指令 |
-| Mode Memory | `~/.visionox/mode-memory/{mode}.json` | 当前工作场景的长期记忆、偏好与知识点摘要 |
-| Rules | `~/.claude/rules/ecc/{lang}/` | 编码规范（mode 控制） |
-| Custom | `~/.visionox/rules/*.md` | 用户自定义规则 |
-| Skills | `~/.visionox/skills/*/SKILL.md` | 领域技术能力索引 |
-| Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆 |
-
-普通跨场景长期记忆通过 `remember` 工具写入 `~/.visionox/memory/`，并在 `/new` 或应用重启后的新对话中注入 `MEMORY.md` 索引。短期记忆通过 `remember_session` 工具（仅当前对话，`/new` 清除）。当用户要求“在当前/编程/办公/设计工作场景下记住”某个偏好、知识点、术语、流程或关键词关联时，使用 `remember_mode_preference` 写入独立的 mode-memory 层，避免泄露到其他工作场景。
-
-Mode Memory 按工作模式隔离存储，提示词注入时最多选取少量启用项并压缩为摘要，避免默认提示词越来越臃肿。注入顺序为：`soul.md` → 项目记忆 → 工作模式 prompt → 当前模式记忆 → ECC rules → 自定义 rules → skills → 持久/短期记忆；ECC 规则优先级高于模式记忆。
-
-工作模式提示词会写入当前会话的系统前缀，不会在普通多轮对话中丢失。切换工作模式、修改 mode prompt 或新增场景记忆后，需要 `/new`、应用重启或历史会话恢复时重建 loop，新的提示词才会进入后续对话；当前未重建的对话仍继续使用创建时的模式提示词。
-
-Dashboard 的“配置 → 记忆”页面作为长期记忆中心，集中展示和编辑 `soul.md`、全局长期记忆、当前项目记忆和工作场景记忆。AI 名称属于 soul 层，写入 `soul.md` 的受控区块，不单独保存为普通 memory 或独立配置项。安装包会携带 `resources/default-soul.md`；首次启动时如果 `~/.visionox/soul.md` 不存在或为空，launcher 会释放该默认文件到用户目录并使用它。用户保存过本机 `soul.md` 后不会被升级或重启覆盖。
-
-#### 安装初始化与覆盖策略
-
-| 目标 | 首次启动行为 | 覆盖策略 |
-|------|--------------|----------|
-| `~/.visionox/soul.md` | 从安装资源 `resources/default-soul.md` 释放默认身份文件 | 仅当文件不存在或为空时写入；已有内容绝不覆盖 |
-| `~/.visionox/mode-memory/` | 创建工作场景记忆目录 | 只创建目录；已有 `{mode}.json` 不会被安装过程改写 |
-| `~/.visionox/memory/global/` | 不安装默认全局长期记忆 | 用户通过 `remember` 生成；安装/升级不写入、不覆盖 |
-| `~/.visionox/memory/<project-hash>/` | 不安装默认项目记忆 | 用户通过项目记忆生成；安装/升级不写入、不覆盖 |
-| `~/.visionox/config.json` | 合并默认工作模式配置 | 保留 API Key、workspace、sessions、memory、skills 和自定义 mode；旧内置 mode prompt 迁移前会备份到 `modePromptBackups` |
-
-### 学习命令 `/learn`
-
-Visionox 把四种常见的“学习”需求统一为 `/learn` 命令，让你在对话中就能把项目知识转化为 AI 的长期能力：
-
-```text
-/learn skill <目录> [名称]        # 技能萃取：把目录提炼为 SKILL.md 并安装
-/learn project [名称]              # 项目 onboarding：扫描 workspace 并更新 REASONIX.md
-/learn index <目录>                # 知识库索引：为目录构建语义索引
-/learn ask <问题>                  # 知识库问答：基于已索引内容提问
-/learn tutor [socratic|hint|pair|off]     # 主动教学：切换导师风格
-/learn track [on|senior|off|stats|add|due|review]  # 学习追踪：间隔重复与概念库
-/learn status                      # 查看学习系统状态
-```
-
-**Phase 1（已实现）**：`/learn skill`、`/learn project`、`/learn status`、`/learn help`。  
-**Phase 2（已实现）**：`/learn index`、`/learn ask`（基于语义索引问答，支持 LLM 合成回答）。  
-**Phase 3（已实现）**：`/learn tutor [socratic|hint|pair|off]`（会话级导师模式，注入系统提示词）。  
-**Phase 4（已实现）**：`/learn track [on|senior|off|stats|due|add|review]`（概念库 + SM-2 间隔重复，注入学习模式提示词）。
-
-`/learn skill` 会自动读取目录中的文本文件，调用 LLM 提炼规则与流程，生成符合规范的 `SKILL.md` 并安装到 `~/.visionox/skills/<名称>/`，`/new` 后即可通过 Skill 索引调用。`/learn project` 会扫描当前 workspace，生成或更新项目记忆文件（优先 `REASONIX.md`，若已存在 `AGENTS.md` 则更新它）。
-
-`/learn track` 是 Visionox 独特的“边做边学”系统：概念库存储在 `~/.visionox/learn-track.json`，使用 SM-2 算法调度复习；开启 `/learn track on` 或 `/learn track senior` 后，AI 会在每次回复中围绕到期概念主动提问、串联上下文。`/learn skill` 和 `/learn project` 会自动从生成的 SKILL.md / 项目记忆中提取核心概念写入概念库。你也可以用 `/learn track add <概念名> [level=1-5] [source=...]` 手动添加，用 `/learn track review <概念名> <again|hard|good|easy>` 记录掌握程度，`/learn track due` 查看今日到期，`/learn track stats` 查看统计。
-
-#### OfficeCLI MCP（办公模式）
-
-办公模式通过 MCP stdio 接入 OfficeCLI。启动时会自动发现内置的 `resources/server/officecli.exe` 并注入 `officecli` MCP server；不会把自动发现结果写回 `%USERPROFILE%\.visionox\config.json`。出于安全考虑，未内置二进制时不会自动执行 Windows `PATH` 中的 `officecli`，如需使用 PATH 或自定义路径请手动配置 MCP。
-
-如需手动覆盖 OfficeCLI 路径，可在 `%USERPROFILE%\.visionox\config.json` 添加 MCP server：
-
-```json
-{
-  "mcp": ["officecli=officecli mcp"]
-}
-```
-
-重启 Visionox 后，Dashboard 的 MCP 面板应显示 `officecli` server 和工具列表。新办公模式默认用 OfficeCLI 替代 `docx`、`xlsx`、`pptx`、`pptx-generator`、`visionox-excel-pro`、`minimax-xlsx` 六个旧 Office 技能；`pdf`、`pdf-extract`、`md-to-pdf-cjk` 等 PDF 技能继续保留。若 MCP 面板未显示，优先检查内置 `resources/server/officecli.exe`、手动 `mcp` 配置和 `launcher-stderr.log`；手动使用 PATH 时再检查 `officecli --version`。
-
-#### 记忆触发话术
-
-为了让 AI 正确选择存储层，用户应在对话里明确说明记忆类型：
-
-| 目标 | 推荐说法 | 存储 |
-|------|----------|------|
-| 跨项目长期事实、称呼、稳定偏好 | `请长期记住：我的常用称呼是……` | `remember` → `~/.visionox/memory/global/` |
-| 当前项目专属知识、流程、路径 | `请长期记住到当前项目记忆：这个项目的发布流程是……` | `remember` → `~/.visionox/memory/<project-hash>/` |
-| 当前工作场景的回答习惯或知识点 | `请在编程场景下长期记住：8K点屏指通过 USB ADB 连接 RK3588 平台并参考 vismm 脚本点亮屏幕。` | `remember_mode_preference` → `~/.visionox/mode-memory/{mode}.json` |
-| 只在当前对话有效的临时上下文 | `请临时记住：本轮先按方案 B 处理。` | `remember_session` → 内存 |
-
-避免只说“记一下这个”。如果内容要跨所有场景保留，使用 `长期记住`；如果只应在某个工作场景保留，使用 `在当前/编程/办公/设计场景下长期记住`。例如 8K 点屏、编程排错习惯应存入编程场景记忆，办公场景不会自动读取。
-
-历史会话保存时会同时写入 `*.meta.json`，记录保存时的工作场景、工作空间和消息数量。通过导航栏“会话”页面点击“加载并继续会话”时，会先恢复该会话对应的工作场景并重建提示词，再加载历史消息上下文。
-
-### 工作模式 (4 种)
-
-主界面右上角水平排列，切换后 `/new` 生效：
-
-| 模式 | 规则集 | 适用场景 |
-|------|--------|----------|
-| 通用 | common + rust | 日常问答、轻量排查 |
-| 编程 | common + rust + ts + python | 代码开发、测试、审查 |
-| 办公 | common | 文档、表格、PDF、报告 |
-| 设计 | common | UI/UX、前端布局 |
-
-### ECC 集成
-
-集成了 [ECC](https://github.com/affaan-m/ECC) v2.0.0-rc.1 的 Skills 和 Rules：
-
-| 组件 | 数量 | 位置 |
-|------|------|------|
-| Skills | 18 个编码类 | `~/.visionox/skills/` |
-| Rules | 26 个文件 | `~/.claude/rules/ecc/{common,rust,ts,python}/` |
-| Hooks | preTool/postTool | `launcher.mjs` 内置 |
-
-详见 [`docs/ECC_GAP_ANALYSIS.md`](docs/ECC_GAP_ANALYSIS.md)。
-
-### 与上游差异
-
-| 方面 | 上游 | Visionox |
-|------|------|----------|
-| 进程管理 | 无 | JobObject + 崩溃监控 + 启动超时 |
-| 诊断 | stdout/stderr | 全局 launcher-diag.log |
-| 编辑模式 | review/auto/yolo | + admin |
-| 配色 | dark/light | 7 套 |
-| 搜索 | Mojeek only | 4 引擎热切换 |
-| 记忆 | 2 层 | 8 层 + 短期记忆 |
-| 工作模式 | 无 | 4 模式切换 |
-| 部署 | npm 包 | Windows 绿色便携版 |
-
----
-
-## 开发维护
+## 🚀 快速开始
 
 ### 环境要求
 
-- Windows 10/11
-- Node.js v22+, Rust 工具链
-- DeepSeek API Key
+- **Windows 10/11**（WebView2 系统自带）
+- **DeepSeek API Key**（或其他兼容 OpenAI 接口的 API Key）
 
-### 构建
+### 安装
 
-```bash
-git clone git@gitee.com:hufz_admin/vis-ai.git
-cd vis-ai
-npm install
+1. 下载最新 `Visionox_x.x.x_x64-setup.exe` 安装包
+2. 运行安装，选择安装目录
+3. 启动 Visionox，在设置页填入 API Key
+4. 开始对话
 
-# 恢复 visionox-pkg
-node scripts/restore-visionox-pkg.js
+### 基本使用
 
-# 放置 node.exe 和 officecli.exe 到 src-tauri/resources/server/
-# （这两个大二进制被 gitignore，需单独获取；officecli.exe 见 docs/OFFICECLI_INTEGRATION.md）
-
-# 编译 Windows 安装器（NSIS exe）
-npm run tauri:build
-# → src-tauri/target/release/bundle/nsis/Visionox_1.10.0_x64-setup.exe
-
-# 仅编译调试/开发用可执行文件
-cd src-tauri
-cargo build --release
-# → src-tauri/target/release/visionox-desktop.exe
-```
-
-### 调试
-
-```bash
-# 单独测试 Launcher
-node src-tauri/resources/server/launcher.mjs --port 28980
-
-# 诊断日志
-type launcher-diag.log    # Rust 侧
-type launcher-stderr.log  # Node.js 侧
-```
-
-常见错误：
-- `readline timeout` — Node 启动超过 30s
-- `health check TIMED OUT` — 服务器无响应
-- `child process exited unexpectedly` — Node 进程意外退出
-
-### 关键文件
-
-| 需求 | 文件 |
+| 操作 | 方式 |
 |------|------|
-| 启动流程/进程管理/刷新恢复 | `src-tauri/src/lib.rs` |
-| 加载页外观 + iframe 恢复逻辑 | `src/index.html` |
-| 系统提示词/工具注册 | `src-tauri/resources/server/launcher.mjs` |
-| Dashboard UI | `src-tauri/resources/server/visionox-pkg/dashboard/` |
-| OfficeCLI 集成 | `src-tauri/resources/server/officecli.exe` + `docs/OFFICECLI_INTEGRATION.md` |
-| 构建配置 | `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json` |
-| 记忆注入 | `cherry-claude.cjs` |
-| 服务端包恢复 | `scripts/restore-visionox-pkg.js` |
-
-### 构建注意事项
-
-- `tauri.conf.json` 当前固定 `bundle.targets = ["nsis"]`，`npm run tauri:build` 会生成 Windows NSIS `.exe` 安装器
-- `Cargo.toml` 中 `tauri` 须声明 `custom-protocol` feature，否则 `cargo build --release` 和 `npm run tauri:build` 行为不一致
-- 修改 `lib.rs` 或 `src/index.html` 后建议 `cargo clean` 再编译
-- 修改 `launcher.mjs` 或 chunk 文件后需手动同步到 `target/release/` 再打包
+| 切换工作模式 | 主界面右上角按钮（通用/编程/办公/设计），切换后 `/new` 生效 |
+| 切换模型 | 对话框上方 auto/flash/pro 预设，或底部「🤖 模型」面板 |
+| 粘贴图片/文件 | `Ctrl+V` 粘贴剪贴板中的图片或文件路径 |
+| 导入模型配置 | 底部「🤖 模型」面板 → 选择 JSON 文件批量导入 Provider |
+| 管理记忆 | 设置页「记忆」面板，或对话中说「记住…」 |
+| 学习命令 | 输入 `/learn help` 查看所有学习功能 |
 
 ---
 
-## 更新
+## 📚 文档导航
 
-完整变更记录见 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
+详细文档见 [`docs/`](docs/) 目录：
 
-### 近期更新 (260625)
+| 文档 | 内容 |
+|------|------|
+| [用户使用指南](docs/USER_GUIDE.md) | 记忆系统、工作模式、`/learn` 命令、OfficeCLI 办公 |
+| [功能详解](docs/FEATURES.md) | 8 层记忆、ECC 集成、编辑模式、搜索配置 |
+| [架构说明](docs/ARCHITECTURE.md) | 系统架构、项目结构、技术栈 |
+| [更新日志](docs/CHANGELOG.md) | 版本变更记录 |
+| [OfficeCLI 指南](docs/OFFICECLI_GUIDE.md) | Office 办公功能配置与使用 |
+| [开发指南](docs/DEVELOPMENT.md) | 二次开发、构建、调试 |
+| [Skill 创建](docs/skill-creation-guide.md) | 自定义技能开发完整指南 |
+| [设计系统](docs/UI_DESIGN_SYSTEM.md) | Design Tokens 与配色方案 |
 
-- **WebView2 刷新修复** — iframe 方案下 F5 刷新卡死问题修复，三层恢复机制（localStorage + Rust 兜底 + iframe 失败回退）
-- **effort 日志** — 推理强度切换输出运行日志
-- **ECC 集成** — 18 个编码 Skills + 26 个 Rules 文件，由工作模式控制加载
-- **工作模式** — 通用/编程/办公/设计 4 模式，主界面一键切换
-- **记忆系统重构** — 8 层加载架构 + 短期记忆 + 工作场景记忆 + soul.md 身份文件
-- **Dashboard 修复** — 记忆页过滤系统索引文件 + 动态文件名显示
-- **Hook 系统** — preTool/postTool 框架
+---
 
-### 待完成
+## 🏗️ 技术架构
 
-- [x] Windows NSIS exe 安装包构建
-- [ ] MSI 安装包/自动更新策略
-- [ ] macOS/Linux 适配
-- [ ] 自动更新
+```
+Tauri Shell (Rust)
+  ├─ WebView2 窗口 → 加载页 → Dashboard SPA
+  ├─ Node.js Launcher → AI Agent 运行时
+  ├─ 进程管理（JobObject + 崩溃监控 + 健康检查）
+  └─ 系统托盘（最小化/退出）
 
-## License
+Node.js Agent
+  ├─ DeepSeekClient + CacheFirstLoop
+  ├─ 33+ 工具（文件/Shell/Web/Memory/MCP/Skill）
+  └─ Dashboard HTTP Server (127.0.0.1)
+```
+
+- **桌面壳**：Rust + Tauri v2
+- **AI 运行时**：Node.js + DeepSeek API
+- **前端界面**：WebView2 + Preact SPA
+- **打包分发**：Windows NSIS 安装器
+
+---
+
+## 📄 License
 
 MIT
