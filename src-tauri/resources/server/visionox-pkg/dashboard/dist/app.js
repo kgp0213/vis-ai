@@ -19403,6 +19403,9 @@ var en = {
     semanticBannerBtn: "Build it \u2192",
     semanticBannerDismiss: "dismiss (don't show again)",
     slashCommands: "slash commands",
+    slashHints: {
+      help: "show available slash commands"
+    },
     projectFiles: "project files",
     effortTitle: "reasoning_effort \u2014 applies next turn",
     effortMaxTitle: "max (default \u2014 best quality)",
@@ -19519,7 +19522,10 @@ var en = {
     resumeDesc: "Mid-session swap requires a restart so the message log can rewind cleanly. Quit your current session, then run:",
     loadingTranscript: "loading transcript\u2026",
     emptyTranscript: "empty transcript.",
-    messages: "{count} message{s}"
+    messages: "{count} message{s}",
+    rename: "Rename",
+    renamePlaceholder: "new session name",
+    renameFailed: "Rename failed: {error}"
   },
   tools: {
     loading: "loading tools\u2026",
@@ -20094,6 +20100,47 @@ var zhCN = {
     semanticBannerBtn: "\u6784\u5EFA \u2192",
     semanticBannerDismiss: "\u5173\u95ED\uFF08\u4E0D\u518D\u663E\u793A\uFF09",
     slashCommands: "\u659C\u6760\u547D\u4EE4",
+    slashHints: {
+      help: "\u663E\u793A\u53EF\u7528\u7684\u659C\u6760\u547D\u4EE4",
+      new: "\u5F00\u59CB\u65B0\u5BF9\u8BDD\uFF08\u6E05\u9664\u4E0A\u4E0B\u6587+\u5386\u53F2\uFF09",
+      retry: "\u622A\u65AD\u5E76\u91CD\u65B0\u53D1\u9001\u4E0A\u4E00\u6761\u6D88\u606F",
+      compact: "\u5C06\u8F83\u65E9\u7684\u5BF9\u8BDD\u6298\u53E0\u4E3A\u6458\u8981\uFF08\u7F13\u5B58\u5B89\u5168\uFF09\u300250% \u65F6\u81EA\u52A8\u89E6\u53D1\uFF0C\u6B64\u4E3A\u624B\u52A8\u89E6\u53D1\u3002",
+      stop: "\u4E2D\u6B62\u5F53\u524D\u6A21\u578B\u56DE\u590D\uFF08\u7B49\u540C\u4E8E Esc\uFF09",
+      btw: "\u5FEB\u901F\u65C1\u8DEF\u63D0\u95EE \u2014 \u4ECE\u7A7A\u767D\u72B6\u6001\u56DE\u7B54\uFF0C\u4E0D\u52A0\u5165\u5BF9\u8BDD\u4E0A\u4E0B\u6587",
+      preset: "\u6A21\u578B\u9884\u8BBE \u2014 auto \u81EA\u52A8\u5347\u7EA7 flash\u2192pro\uFF0Cflash/pro \u9501\u5B9A\u3002\u65E0\u53C2\u6570\u6253\u5F00\u9009\u62E9\u5668\u3002",
+      model: "\u5207\u6362 DeepSeek \u6A21\u578B ID\u3002\u65E0\u53C2\u6570\u6253\u5F00\u9009\u62E9\u5668\u3002",
+      theme: "\u663E\u793A\u6216\u4FDD\u5B58\u7EC8\u7AEF\u4E3B\u9898\u3002\u65E0\u53C2\u6570\u6253\u5F00\u9009\u62E9\u5668\u3002",
+      status: "\u5F53\u524D\u6A21\u578B\u3001\u6807\u5FD7\u3001\u4E0A\u4E0B\u6587\u3001\u4F1A\u8BDD\u4FE1\u606F",
+      cost: "\u65E0\u53C2\u6570\u2192\u4E0A\u8F6E\u82B1\u8D39\uFF1B\u5E26\u6587\u672C\u2192\u4F30\u7B97\u53D1\u9001\u6210\u672C",
+      context: "\u663E\u793A\u4E0A\u4E0B\u6587\u7A97\u53E3\u5206\u89E3\uFF08\u7CFB\u7EDF/\u5DE5\u5177/\u65E5\u5FD7/\u8F93\u5165\uFF09",
+      stats: "\u8DE8\u4F1A\u8BDD\u8D39\u7528\u770B\u677F\uFF08\u4ECA\u65E5/\u672C\u5468/\u672C\u6708/\u5168\u90E8\u00B7\u7F13\u5B58\u547D\u4E2D\u00B7\u5BF9\u6BD4 Claude\uFF09",
+      doctor: "\u5065\u5EB7\u68C0\u67E5\uFF08API/\u914D\u7F6E/\u53EF\u8FBE\u6027/\u7D22\u5F15/\u94A9\u5B50/\u9879\u76EE\uFF09",
+      resource: "\u6D4F\u89C8+\u8BFB\u53D6 MCP \u8D44\u6E90",
+      prompt: "\u6D4F\u89C8+\u83B7\u53D6 MCP \u63D0\u793A",
+      memory: "\u663E\u793A/\u7BA1\u7406\u56FA\u5B9A\u8BB0\u5FC6",
+      skill: "\u5217\u51FA/\u8FD0\u884C/\u521B\u5EFA\u7528\u6237\u6280\u80FD",
+      init: "\u626B\u63CF\u9879\u76EE\u5E76\u751F\u6210\u57FA\u7840 REASONIX.md",
+      apply: "\u5C06\u5F85\u5904\u7406\u7F16\u8F91\u5757\u5199\u5165\u78C1\u76D8",
+      discard: "\u4E22\u5F03\u5F85\u5904\u7406\u7F16\u8F91\u5757\uFF08\u4E0D\u5199\u5165\uFF09",
+      walk: "\u9010\u5757\u6D4F\u89C8\u5F85\u5904\u7406\u7F16\u8F91",
+      undo: "\u56DE\u6EDA\u4E0A\u4E00\u6279\u5DF2\u5E94\u7528\u7F16\u8F91",
+      history: "\u5217\u51FA\u672C\u4F1A\u8BDD\u6240\u6709\u7F16\u8F91\u6279\u6B21",
+      show: "\u67E5\u770B\u5DF2\u5B58\u50A8\u7684\u7F16\u8F91\u5DEE\u5F02",
+      commit: "git add -A && git commit",
+      mode: "\u7F16\u8F91\u95E8\u63A7\uFF1Areview\u00B7auto\u00B7yolo",
+      plan: "\u5207\u6362\u53EA\u8BFB\u8BA1\u5212\u6A21\u5F0F",
+      checkpoint: "\u5FEB\u7167\u672C\u4F1A\u8BDD\u89E6\u53CA\u7684\u6240\u6709\u6587\u4EF6",
+      restore: "\u56DE\u6EDA\u6587\u4EF6\u5230\u6307\u5B9A\u68C0\u67E5\u70B9",
+      cwd: "\u5207\u6362\u5DE5\u4F5C\u533A\u6839\u76EE\u5F55",
+      jobs: "\u5217\u51FA\u540E\u53F0\u4EFB\u52A1",
+      kill: "\u6309 ID \u505C\u6B62\u540E\u53F0\u4EFB\u52A1",
+      logs: "\u67E5\u770B\u540E\u53F0\u4EFB\u52A1\u8F93\u51FA",
+      pro: "\u4E3A\u4E0B\u4E00\u8F6E\u542F\u7528 v4-pro\uFF08\u4E00\u6B21\u6027\u00B7\u8F6E\u6B21\u540E\u81EA\u52A8\u89E3\u9664\uFF09",
+      permissions: "\u663E\u793A/\u7F16\u8F91 shell \u767D\u540D\u5355",
+      replay: "\u52A0\u8F7D\u5F52\u6863\u8BA1\u5212\u4E3A\u53EA\u8BFB\u65F6\u95F4\u65C5\u884C\u5FEB\u7167",
+      report: "\u4ECE\u5BF9\u8BDD\u5386\u53F2\u751F\u6210\u65E5\u62A5/\u5468\u62A5/\u5E74\u62A5",
+      learn: "\u5B66\u4E60\u7CFB\u7EDF\uFF08\u6280\u80FD\u63D0\u53D6/\u9879\u76EE\u8BB0\u5FC6/\u8BED\u4E49\u7D22\u5F15/\u95EE\u7B54/\u5BFC\u5E08\u6A21\u5F0F\uFF09"
+    },
     projectFiles: "\u9879\u76EE\u6587\u4EF6",
     effortTitle: "reasoning_effort \u2014 \u4E0B\u4E00\u8F6E\u751F\u6548",
     effortMaxTitle: "max\uFF08\u9ED8\u8BA4 \u2014 \u6700\u4F73\u8D28\u91CF\uFF09",
@@ -20210,7 +20257,10 @@ var zhCN = {
     resumeDesc: "\u4F1A\u8BDD\u4E2D\u9014\u5207\u6362\u9700\u8981\u91CD\u542F\uFF0C\u4EE5\u4FBF\u6D88\u606F\u65E5\u5FD7\u53EF\u4EE5\u5E72\u51C0\u5730\u56DE\u9000\u3002\u8BF7\u9000\u51FA\u5F53\u524D\u4F1A\u8BDD\uFF0C\u7136\u540E\u8FD0\u884C\uFF1A",
     loadingTranscript: "\u52A0\u8F7D\u8F6C\u5F55\u7A3F\u2026",
     emptyTranscript: "\u7A7A\u7684\u8F6C\u5F55\u7A3F\u3002",
-    messages: "{count} \u6761\u6D88\u606F"
+    messages: "{count} \u6761\u6D88\u606F",
+    rename: "\u91CD\u547D\u540D",
+    renamePlaceholder: "\u65B0\u4F1A\u8BDD\u540D\u79F0",
+    renameFailed: "\u91CD\u547D\u540D\u5931\u8D25\uFF1A{error}"
   },
   tools: {
     loading: "\u52A0\u8F7D\u5DE5\u5177\u2026",
@@ -20473,6 +20523,7 @@ var zhCN = {
     openaiCompat: "OpenAI-Compatible",
     apiUrl: "API URL",
     apiKey: "API Key",
+    apiKeyStoredNote: "API key 保存在 ~/.visionox/config.json \u2014\u2014 请勿分享该文件。",
     customRequestBody: "\u81EA\u5B9A\u4E49\u8BF7\u6C42\u4F53",
     invalidCustomRequestBody: "\u81EA\u5B9A\u4E49\u8BF7\u6C42\u4F53\u5FC5\u987B\u662F\u5408\u6CD5 JSON\uFF1A{error}",
     customRequestBodyMustBeObject: "\u81EA\u5B9A\u4E49\u8BF7\u6C42\u4F53\u5FC5\u987B\u662F JSON \u5BF9\u8C61\u3002",
@@ -24082,9 +24133,9 @@ const [providerCaps, setProviderCaps] = d2(null);
         const prefix = slashMatch[1].toLowerCase();
         const items = slashCommands.filter((c3) => c3.cmd.startsWith(prefix)).slice(0, 12).map((c3) => ({
           label: `/${c3.cmd}`,
-          meta: c3.summary,
+          meta: (() => { const k = "chat.slashHints." + c3.cmd; const v = t4(k); return v === k ? c3.summary : v; })(),
           insert: `/${c3.cmd}${c3.argsHint ? " " : ""}`
-        }));
+        })).sort((a, b) => a.label === "/help" ? -1 : b.label === "/help" ? 1 : a.label.localeCompare(b.label));
         setPopoverKind("slash");
         setPopoverItems(items);
         setPopoverSel(0);
@@ -24114,8 +24165,8 @@ const [providerCaps, setProviderCaps] = d2(null);
     },
     [slashCommands]
   );
-  const applyPopover = q2(() => {
-    const item = popoverItems[popoverSel];
+  const applyPopover = q2((idx) => {
+    const item = popoverItems[idx ?? popoverSel];
     if (!item) return false;
     if (popoverKind === "slash") {
       setInput(item.insert);
@@ -24524,7 +24575,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                           onMouseDown=${(e3) => {
       e3.preventDefault();
       setPopoverSel(i3);
-      applyPopover();
+      applyPopover(i3);
     }}
                         >
                           <span class="g">${popoverKind === "slash" ? "/" : "@"}</span>
@@ -24818,6 +24869,9 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
         <span class="status-label">${t4("chat.statusCtx")}</span>
         <span class="status-bar-mini">
           <span class="status-bar-mini-fill" style=${`width: ${Math.min(100, ctxPct).toFixed(1)}%;`}></span>
+          <span class="fold-mark" style="left:50%" title="\u666E\u901A\u6298\u53E0 50%"></span>
+          <span class="fold-mark" style="left:70%" title="\u6FC0\u8FDB\u6298\u53E0 70%"></span>
+          <span class="fold-mark" style="left:80%" title="\u5F3A\u5236\u6458\u8981 80%"></span>
         </span>
         <span class="muted">${stats.lastPromptTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
       </span>
@@ -26634,7 +26688,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="text"
-                    placeholder="https://api.openai.com/v1/embeddings"
+                    placeholder="http://10.71.4.202:10307/v1/embeddings"
                     value=${draft.openaiCompat.baseUrl}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;
@@ -26654,7 +26708,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="password"
-                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "sk-..."}
+                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "qwen3-embedding-j29c7suqz"}
                     value=${draft.openaiCompat.apiKey}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;
@@ -26675,6 +26729,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="text"
+                    placeholder="Qwen3-Embedding"
                     value=${draft.openaiCompat.model}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;
@@ -27305,6 +27360,41 @@ function SessionsPanel() {
       setResuming(false);
     }
   }, [open]);
+  const [renaming, setRenaming] = d2(false);
+  const [renameText, setRenameText] = d2("");
+  const [renameBusy, setRenameBusy] = d2(false);
+  const startRename = q2(() => {
+    if (!open) return;
+    setRenameText(open.name);
+    setRenaming(true);
+  }, [open]);
+  const cancelRename = q2(() => {
+    setRenaming(false);
+    setRenameText("");
+  }, []);
+  const doRename = q2(async () => {
+    if (!open || !renameText.trim()) return;
+    const oldName = open.name;
+    const newName = renameText.trim();
+    if (newName === oldName) {
+      setRenaming(false);
+      return;
+    }
+    setRenameBusy(true);
+    try {
+      const res = await api(`/sessions/${encodeURIComponent(oldName)}/rename`, {
+        method: "POST",
+        body: { newName }
+      });
+      setRenaming(false);
+      setRenameText("");
+      if (res.newName) await view(res.newName);
+    } catch (err) {
+      if (open) setOpen({ ...open, error: t4("sessions.renameFailed", { error: err.message }) });
+    } finally {
+      setRenameBusy(false);
+    }
+  }, [open, renameText]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("sessions.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "sessions", error: error.message })}</div>`;
@@ -27352,15 +27442,31 @@ function SessionsPanel() {
                 ${t4("sessions.pickHint")}
               </div>` : html4`
                 <div class="sessions-detail-h">
-                  <span class="name">${open.name}</span>
-                  <span class="ws">
-                    ${open.messages ? t4("sessions.messages", { count: open.messages.length, s: open.messages.length === 1 ? "" : "s" }) : t4("common.loading")}
-                    ${open.modeLabel ? html4` · ${open.modeLabel}` : null}
-                  </span>
-                  <span class="actions">
-                    <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
-                    <button class="btn ghost danger" disabled=${deleting} onClick=${() => remove(open.name)}>${deleting ? "..." : t4("common.delete")}</button>
-                  </span>
+                  ${renaming ? html4`
+                    <div class="sessions-rename-row">
+                      <input
+                        type="text"
+                        value=${renameText}
+                        onInput=${(e3) => setRenameText(e3.target.value)}
+                        onKeyDown=${(e3) => { if (e3.key === "Enter") doRename(); if (e3.key === "Escape") cancelRename(); }}
+                        placeholder=${t4("sessions.renamePlaceholder")}
+                        disabled=${renameBusy}
+                      />
+                      <button class="btn primary" onClick=${doRename} disabled=${!renameText.trim() || renameBusy}>${t4("common.save")}</button>
+                      <button class="btn" onClick=${cancelRename} disabled=${renameBusy}>${t4("common.cancel")}</button>
+                    </div>
+                  ` : html4`
+                    <span class="name">${open.name}</span>
+                    <span class="ws">
+                      ${open.messages ? t4("sessions.messages", { count: open.messages.length, s: open.messages.length === 1 ? "" : "s" }) : t4("common.loading")}
+                      ${open.modeLabel ? html4` · ${open.modeLabel}` : null}
+                    </span>
+                    <span class="actions">
+                      <button class="btn ghost" onClick=${startRename} disabled=${renameBusy}>${t4("sessions.rename")}</button>
+                      <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
+                      <button class="btn ghost danger" disabled=${deleting} onClick=${() => remove(open.name)}>${deleting ? "..." : t4("common.delete")}</button>
+                    </span>
+                  `}
                 </div>
                 <div class="card accent-brand" style="margin-bottom:10px">
                   <div class="card-h"><span class="title">继续会话</span></div>
@@ -28010,6 +28116,24 @@ function SettingsPanel() {
             </select>
           `,
     t4("settings.appliesNextTurn")
+  )}
+        ${fieldRow(
+    "\u4E0A\u4E0B\u6587\u957F\u5EA6",
+    html4`
+            <select
+              value=${v3.contextCapTokens ?? v3.providerContextCap ?? "auto"}
+              onChange=${(e3) => save({ contextCapTokens: e3.target.value === "auto" ? null : parseInt(e3.target.value, 10) })}
+              disabled=${saving}
+            >
+              <option value="auto">\u6A21\u578B\u9ED8\u8BA4</option>
+              <option value="32768">32K</option>
+              <option value="65536">64K</option>
+              <option value="131072">128K</option>
+              <option value="262144">256K</option>
+              <option value="1048576">1M</option>
+            </select>
+          `,
+    "\u91CD\u542F\u6216 /new \u540E\u751F\u6548"
   )}
         ${fieldRow(
     t4("settings.webSearch"),
@@ -29824,6 +29948,9 @@ function ChatStatusBar3({ stats, model }) {
         <span class="status-label">${t4("chat.statusCtx")}</span>
         <span class="status-bar-mini">
           <span class="status-bar-mini-fill" style=${`width: ${Math.min(100, ctxPct).toFixed(1)}%;`}></span>
+          <span class="fold-mark" style="left:50%" title="\u666E\u901A\u6298\u53E0 50%"></span>
+          <span class="fold-mark" style="left:70%" title="\u6FC0\u8FDB\u6298\u53E0 70%"></span>
+          <span class="fold-mark" style="left:80%" title="\u5F3A\u5236\u6458\u8981 80%"></span>
         </span>
         <span class="muted">${stats.lastPromptTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
       </span>
@@ -30537,9 +30664,9 @@ function ChatPane(props) {
         const prefix = slashMatch[1].toLowerCase();
         const items = slashCommands.filter((c3) => c3.cmd.startsWith(prefix)).slice(0, 12).map((c3) => ({
           label: `/${c3.cmd}`,
-          meta: c3.summary,
+          meta: (() => { const k = "chat.slashHints." + c3.cmd; const v = t4(k); return v === k ? c3.summary : v; })(),
           insert: `/${c3.cmd}${c3.argsHint ? " " : ""}`
-        }));
+        })).sort((a, b) => a.label === "/help" ? -1 : b.label === "/help" ? 1 : a.label.localeCompare(b.label));
         setPopoverKind("slash");
         setPopoverItems(items);
         setPopoverSel(0);
@@ -30549,8 +30676,8 @@ function ChatPane(props) {
     },
     [slashCommands]
   );
-  const applyPopover = q2(() => {
-    const item = popoverItems[popoverSel];
+  const applyPopover = q2((idx) => {
+    const item = popoverItems[idx ?? popoverSel];
     if (!item) return false;
     setInput(item.insert);
     setPopoverKind(null);
@@ -30723,7 +30850,7 @@ ${commentRefs}` : commentRefs;
                           onMouseDown=${(e3) => {
       e3.preventDefault();
       setPopoverSel(i3);
-      applyPopover();
+      applyPopover(i3);
     }}
                         >
                           <span class="g">/</span>

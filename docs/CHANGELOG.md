@@ -6,6 +6,43 @@
 
 ## v1.11.0（开发中）
 
+### 报告生成优化
+
+- 报告标题格式改为「{日期} Visionox {日报/周报}」（如 `2026-07-03 Visionox 日报`）
+- 报告提示词拆分为**默认提示词**（随版本更新）+ **用户追加指令**（跨升级保留），解决升级覆盖问题
+- 首次生成报告时自动迁移旧版自定义提示词为追加指令（LLM 辅助提取差异）
+- 报告严格基于历史会话记录生成，不主动读取工作区文件；信息缺失时如实说明而非编造
+- 前端「报告提示词」编辑器拆分为只读默认区 + 可编辑追加区
+- 报告生成排除 `.events.jsonl` 噪声文件，预览→生成增加 30s 缓存消除双读
+- `/report` 斜杠命令改为调用异步报告引擎，不再阻塞事件循环
+
+### 8 层记忆系统修复
+
+- **L1 项目记忆注入修复**：`buildLoop` 现在正确调用 `applyProjectMemory`，`REASONIX.md`/`visionox.md`/`CLAUDE.md`/`AGENTS.md` 等项目记忆文件在新对话中自动注入（此前因未导入该函数而缺失）
+- **L6/L7 注入顺序统一**：技能索引（L6）现在在持久记忆（L7）之前注入，与文档描述一致
+- README 8 层描述补充 L8 会话记忆
+
+### 工作模式即时切换
+
+- Dashboard 切换工作模式后**立即重建 loop**，下一条消息即生效（此前需 `/new` 才刷新，且 `/status` 会谎报新模式）
+- 技能索引按当前模式标注 ⭐ 推荐技能，消除「Relevant skills」提示与技能目录的矛盾信号
+- Work mode 块增加护栏声明：模式提示与 soul 身份冲突时以 soul 为准
+
+### 性能优化（第一梯队）
+
+- **config 读取缓存**：`readConfig` 增加 mtime 缓存，消除每次工具调用权限检查的同步读盘（`loadEditMode`/`loadProjectShellAllowed` 等），单 turn 减少 10+ 次 `readFileSync`+`JSON.parse`
+- **buildLoop 前缀记忆化**：系统提示词静态前缀按源文件 mtime 指纹缓存，`/new`、切模式、旁路问句等 11 个调用点命中缓存时跳过 `loadRules`/`applySkillsIndex`/`loadSoul` 等全部磁盘读取
+- **bootstrap 技能 hash 优化**：启动时通过 marker 中的 `sourceMtime` 跳过未变更技能源目录的全量 hash，稳态启动零文件读取（此前每次启动读 58 个文件）
+- **active-session 持久流**：会话自动保存改用持久 `WriteStream` 替代每条消息 `appendFile`（open/write/close 三连），user 消息不再被磁盘 I/O 阻塞
+
+### 性能优化（第二梯队）
+
+- **升级首字延迟优化**：`autoEscalate` 的标记检测缓冲从 256 字符改为首行检测（检测到换行即 flush），常见路径首字延迟从「最多 256 字符」降到「最多一行」，检测语义不变
+- `NEEDS_PRO_BUFFER_CHARS` 支持环境变量 `visionox_NEEDS_PRO_BUFFER_CHARS` 覆盖
+- 升级时被丢弃的 flash 请求 token 成本现在计入统计（此前 `usage=null` 完全隐藏）
+- **session memory 子预算**：每条 body 上限 2000 字符，集体块上限 6000 字符（超限丢最旧整条），防止模型写入的临时记忆膨胀提示词
+- **rules 子预算**：编码规则集体上限 12000 字符（超限从 custom 起尾弃整条），防止 coding 模式加载 ~100KB 规则
+
 ### `/learn` 学习命令
 
 新增统一学习命令，在对话中把项目知识转化为 AI 可复用的长期能力：

@@ -11,14 +11,16 @@
 | 层 | 来源 | 用途 |
 |----|------|------|
 | L0 Soul | `~/.visionox/soul.md` | AI 身份与行为准则 |
-| L1 Project | `workspace/{visionox,...}.md` | 项目专属信息 |
+| L1 Project | `workspace/{REASONIX,visionox,CLAUDE,AGENTS}.md` | 项目专属信息（自动注入） |
 | L2 Mode | `config.json` → `modes[mode].prompt` | 场景行为指令 |
 | L3 Mode Memory | `~/.visionox/mode-memory/{mode}.json` | 当前工作场景的长期记忆、偏好与知识点摘要 |
 | L4 ECC Rules | `~/.claude/rules/ecc/{lang}/` | 编码规范（mode 控制） |
 | L5 Custom Rules | `~/.visionox/rules/*.md` | 用户自定义规则 |
-| L6 Skills | `~/.visionox/skills/*/SKILL.md` | 领域技术能力索引 |
+| L6 Skills | `~/.visionox/skills/*/SKILL.md` | 领域技术能力索引（按模式 ⭐ 标注推荐） |
 | L7 Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆 |
-| L8 Session | `remember_session` 工具（内存） | 当前对话临时上下文 |
+| L8 Session | `remember_session` 工具（内存） | 当前对话临时上下文（每条≤2000字符，总量≤6000字符） |
+
+> 注：L1 项目记忆会自动扫描 `REASONIX.md`、`visionox.md`、`.claude/CLAUDE.md`、`CLAUDE.md`、`AGENTS.md`、`AGENT.md` 并注入。工作模式切换后立即重建 loop 生效，无需 `/new`。
 
 ### 记忆触发话术
 
@@ -43,7 +45,7 @@ Mode Memory 按工作模式隔离存储，注入时最多选取 8 条高优先�
 
 ## 二、4 种工作模式
 
-主界面右上角水平排列，切换后 `/new` 生效：
+主界面右上角水平排列，切换后**立即生效**（下一条消息即使用新模式的提示词、记忆、规则和技能目录）：
 
 | 模式 | 规则集 | 适用场景 |
 |------|--------|----------|
@@ -51,6 +53,8 @@ Mode Memory 按工作模式隔离存储，注入时最多选取 8 条高优先�
 | 编程 | common + rust + ts + python | 代码开发、测试、审查 |
 | 办公 | common | 文档、表格、PDF、报告 |
 | 设计 | common | UI/UX、前端布局 |
+
+> 技能索引会按当前模式在技能名前标注 ⭐ 推荐标记，其余技能仍可跨模式调用。
 
 ---
 
@@ -108,6 +112,19 @@ Mode Memory 按工作模式隔离存储，注入时最多选取 8 条高优先�
 
 ---
 
-## 七、模型配置 JSON 导入
+## 七、对话报告生成
+
+导航栏「报告」面板可基于历史会话记录生成日报/周报/年度报告：
+
+- **标题格式**：「{日期} Visionox {日报/周报}」（如 `2026-07-03 Visionox 日报`）
+- **数据来源**：仅基于历史会话记录，不主动读取工作区文件；信息缺失时如实说明而非编造
+- **提示词分离**：默认提示词（随版本更新）+ 用户追加指令（跨升级保留），升级不会覆盖用户自定义
+- **旧版迁移**：首次生成报告时自动将旧版自定义提示词迁移为追加指令（LLM 辅助提取差异）
+- **导出**：支持导出为 Markdown 文件
+- `/report daily|weekly|yearly [YYYY-MM-DD]` 斜杠命令也可触发报告生成
+
+---
+
+## 八、模型配置 JSON 导入
 
 对话框底部「🤖 模型」面板中可选择 JSON 文件批量导入/更新 Provider 配置。同 `id` 的 Provider 仅覆盖显式字段，其余字段保留。适用于多设备间同步模型配置。

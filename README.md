@@ -9,8 +9,9 @@ AI 编程代理桌面应用 — 基于 DeepSeek 的 Tauri v2 Windows 桌面 AI �
 | 特性 | 说明 |
 |------|------|
 | 🤖 **AI 编程代理** | 多模型支持（DeepSeek / 硅基流动 / OpenAI 兼容）、33+ 内置工具（文件/Shell/Web/Memory/MCP），可扩展 |
-| 🧠 **8 层记忆系统** | Soul 身份 → 项目记忆 → 工作模式 → 场景记忆 → 编码规范 → 自定义规则 → 技能索引 → 持久记忆，逐层注入 |
-| 🎯 **4 种工作模式** | 通用 / 编程 / 办公 / 设计，一键切换，每种模式有独立的提示词、技能集和场景记忆 |
+| 🧠 **8 层记忆系统** | Soul 身份 → 项目记忆 → 工作模式 → 场景记忆 → 编码规范 → 自定义规则 → 技能索引 → 持久记忆 → 会话记忆，逐层注入 |
+| 🎯 **4 种工作模式** | 通用 / 编程 / 办公 / 设计，一键切换即时生效，每种模式有独立的提示词、技能集和场景记忆 |
+| 📊 **对话报告** | 基于历史会话生成日报/周报/年报，标题含日期，提示词分离保护用户自定义跨升级不丢 |
 | 📚 **`/learn` 学习命令** | 技能萃取、项目 onboarding、语义索引问答、导师模式、SM-2 间隔重复学习追踪 |
 | 📎 **OfficeCLI 办公集成** | 内置 OfficeCLI MCP，原生操作 Word/Excel/PPT，替代 6 个旧 Office 技能 |
 | 🔍 **多引擎搜索** | 4 个搜索引擎热切换（Bing 国内版 / Mojeek / SearXNG / Bing API），默认 Bing 免费可用 |
@@ -48,6 +49,48 @@ AI 编程代理桌面应用 — 基于 DeepSeek 的 Tauri v2 Windows 桌面 AI �
 | 导入模型配置 | 底部「🤖 模型」面板 → 选择 JSON 文件批量导入 Provider |
 | 管理记忆 | 设置页「记忆」面板，或对话中说「记住…」 |
 | 学习命令 | 输入 `/learn help` 查看所有学习功能 |
+| 语义索引 | Dashboard「高级 → 语义」面板构建索引，对话中自然语言检索 |
+
+---
+
+## 🧠 语义索引与个人知识库
+
+Visionox 支持对工作区目录建立语义索引，把代码、文档、笔记等变成可自然语言检索的个人知识库。
+
+### 工作原理
+
+1. 把文本文件按窗口切分为 chunk。
+2. 通过 embedding 模型生成向量并保存到本地索引。
+3. 对话中用自然语言提问时，模型自动调用 `semantic_search` 找到最相关的片段。
+
+### 配置本地 embedding 模型
+
+如果局域网内已部署兼容 OpenAI 的 embedding 服务，可在「语义」面板选择 `openai-compat` 并按如下参数配置：
+
+| 配置项 | 值 |
+|--------|-----|
+| `provider` | `openai-compat` |
+| `api_url` | `http://10.71.4.202:10307/v1/embeddings` |
+| `model_name` | `Qwen3-Embedding` |
+| `api_key` | `qwen3-embeding-j29c7suqz` |
+
+配置完成后点击「构建索引」，即可向该本地服务请求 embedding。
+
+### 使用方式
+
+- **Dashboard 图形界面**：「高级 → 语义」→ 选择 provider / 模型 → 构建索引。
+- **斜杠命令**：
+  - `/learn index ./docs` —— 只索引 docs 目录
+  - `/learn ask 如何配置 MCP？` —— 基于已索引内容问答
+
+### 重要说明
+
+- 索引范围是**当前工作区目录**，默认排除 `node_modules`、`.git`、`dist`、`target`、二进制文件等，并遵守 `.gitignore`。
+- 索引**不会自动更新**：工作区文件修改后需要重新构建或增量索引。
+- 每个工作区的索引相互隔离，切换工作区后需要重新构建。
+- 语义索引**不索引对话记录**；查找历史对话请使用 `list_sessions` / `read_session`。
+
+更详细的说明见 [`visionox-workspace/visionox_indexing_guide.html`](visionox-workspace/visionox_indexing_guide.html)。
 
 ---
 

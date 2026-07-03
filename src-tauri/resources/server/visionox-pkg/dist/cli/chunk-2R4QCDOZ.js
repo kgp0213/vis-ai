@@ -6858,7 +6858,7 @@ function extractDeepSeekErrorMessage(body) {
 // src/loop/escalation.ts
 var NEEDS_PRO_MARKER_PREFIX = "<<<NEEDS_PRO";
 var NEEDS_PRO_MARKER_RE = /^<<<NEEDS_PRO(?::\s*([^>]*))?>>>/;
-var NEEDS_PRO_BUFFER_CHARS = 256;
+var NEEDS_PRO_BUFFER_CHARS = parsePositiveIntEnv(process.env.visionox_NEEDS_PRO_BUFFER_CHARS) ?? 256;
 function parseEscalationMarker(content) {
   const m = NEEDS_PRO_MARKER_RE.exec(content.trimStart());
   if (!m) return { matched: false };
@@ -8027,7 +8027,7 @@ ${reason}`
                 if (isEscalationRequest(escalationBuf)) {
                   break;
                 }
-                if (escalationBuf.length >= NEEDS_PRO_BUFFER_CHARS || !looksLikePartialEscalationMarker(escalationBuf)) {
+                if (escalationBuf.includes("\n") || escalationBuf.length >= NEEDS_PRO_BUFFER_CHARS || !looksLikePartialEscalationMarker(escalationBuf)) {
                   escalationBufFlushed = true;
                   yield {
                     turn: this._turn,
@@ -8115,6 +8115,12 @@ ${reason}`
       }
       if (this.autoEscalate && this.modelForCurrentCall() !== ESCALATION_MODEL && isEscalationRequest(assistantContent)) {
         const { reason } = parseEscalationMarker(assistantContent);
+        const discardedModel = this.modelForCurrentCall();
+        // Record the wasted flash-tier usage before discarding it, so the
+        // escalation cost is visible in stats instead of silently dropped.
+        if (usage) {
+          try { this.stats.record(this._turn, discardedModel, usage); } catch {}
+        }
         this._escalateThisTurn = true;
         const reasonSuffix = reason ? ` \u2014 ${reason}` : "";
         yield {

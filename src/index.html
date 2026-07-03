@@ -146,11 +146,8 @@
             frame.style.width = "100%";
             frame.style.height = "100%";
             frame.style.border = "none";
-            if (spinner) spinner.style.display = "none";
             document.body.appendChild(frame);
             isFreshFrame = true;
-          } else {
-            if (spinner) spinner.style.display = "none";
           }
           if (frame.src !== url) frame.src = url;
           if (isFreshFrame) {
@@ -161,7 +158,10 @@
             frame.addEventListener("load", function () {
               frame.dataset.loaded = "1";
               clearTimeout(guardTimer);
+              if (spinner) spinner.style.display = "none";
             });
+          } else {
+            if (spinner) spinner.style.display = "none";
           }
         }
 
@@ -258,7 +258,7 @@
           });
         }
 
-        var hasStoredUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl");
+        var hasStoredUrl = sessionStorage.getItem("visionox.dashboardUrl");
         if (hasStoredUrl) {
           restoreDashboard();
         } else {

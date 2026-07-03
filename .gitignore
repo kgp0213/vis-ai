@@ -62,3 +62,4 @@ ECC/
 # Build artifacts (not source)
 package-lock.json
 *.map
+tools/

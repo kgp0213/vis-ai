@@ -22,22 +22,47 @@ import { getConceptManager } from "./learn-track.mjs";
 // ── Constants ───────────────────────────────────────────────────
 const LEARN_COMMANDS = ["skill", "project", "index", "ask", "tutor", "track", "status", "help"];
 
-const LEARN_HELP = `Visionox /learn — 把项目知识转化为 AI 可复用的长期能力
+const LEARN_HELP = `🧠 Visionox /learn — 把项目知识转化为 AI 可复用的长期能力
 
-用法:
-  /learn skill <目录> [名称]   把目录提炼为 SKILL.md 并安装
-  /learn project [名称]        扫描当前 workspace 并更新项目记忆
-  /learn index <目录>          为目录构建语义索引（需配置嵌入模型）
-  /learn ask <问题>            基于已索引内容问答
-  /learn tutor [socratic|hint|pair|off]     开启/关闭导师模式
-  /learn track [on|senior|off|stats|add|due]  开启/关闭学习追踪，管理概念
-  /learn status                显示学习系统状态
-  /learn help                  显示本帮助
+━━━ 命令列表 ━━━
 
-说明:
-  • skill/project 的结果会写入 ~/.visionox/skills/ 或项目记忆，/new 后生效。
-  • index/ask 依赖 Dashboard → 设置 → 语义搜索中配置的嵌入模型（Ollama 或 OpenAI-compatible）。
-  • tutor/track 会修改当前会话的系统提示词，/new 后清除。概念库存储在 ~/.visionox/learn-track.json。`;
+  /learn skill <目录> [名称]
+      把目录提炼为 SKILL.md 并安装为可复用技能
+      示例: /learn skill ./src/utils 字符串工具
+
+  /learn project [名称]
+      扫描当前 workspace 并更新项目记忆
+      示例: /learn project
+
+  /learn index <目录>
+      为目录构建语义索引（需先在设置→语义搜索中配置嵌入模型）
+      示例: /learn index ./src
+
+  /learn ask <问题>
+      基于已索引内容进行语义问答
+      示例: /learn ask 认证逻辑在哪里实现？
+
+  /learn tutor [socratic|hint|pair|off]
+      开启/关闭导师模式（修改系统提示词，/new 后清除）
+      示例: /learn tutor socratic
+
+  /learn track [on|senior|off|stats|add|due]
+      开启/关闭学习追踪，管理概念库
+      示例: /learn track on
+      示例: /learn track add "闭包" --due 3d
+
+  /learn status
+      显示学习系统当前状态
+
+  /learn help
+      显示本帮助
+
+━━━ 说明 ━━━
+
+  • skill/project 结果写入 ~/.visionox/skills/ 或项目记忆，/new 后生效
+  • index/ask 依赖嵌入模型（Ollama 或 OpenAI-compatible）
+  • tutor/track 修改当前会话提示词，/new 后清除
+  • 概念库存储在 ~/.visionox/learn-track.json`;
 
 const TEXT_EXTS = new Set([
   ".md", ".txt", ".rst", ".adoc",

@@ -54908,7 +54908,8 @@ var keys = (_args, _loop, ctx) => {
 var copy = () => ({ openCopyMode: true });
 var handlers2 = {
   new: resetLog,
-  retry
+  retry,
+  help
 };
 
 // src/cli/ui/slash/handlers/dashboard.ts

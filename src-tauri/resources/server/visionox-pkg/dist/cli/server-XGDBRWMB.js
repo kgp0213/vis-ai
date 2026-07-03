@@ -63,6 +63,8 @@ import "./chunk-S4XVGLRW.js";
 import {
   deleteSession,
   listSessions,
+  renameSession,
+  sanitizeName,
   sessionPath,
   sessionsDir
 } from "./chunk-6PBZN4VI.js";
@@ -2910,8 +2912,22 @@ async function handleSessions(method, rest, _body, _ctx) {
     const ok = deleteSession(name2);
     return { status: ok ? 200 : 404, body: { deleted: ok } };
   }
+  if (method === "POST" && rest[1] === "rename") {
+    const name2 = decodeURIComponent(rest[0] || "");
+    if (!name2) return { status: 400, body: { error: "session name required" } };
+    const body = parseBody(_body);
+    const newNameRaw = String(body.newName || "").trim();
+    if (!newNameRaw) return { status: 400, body: { error: "newName is required" } };
+    const safeNew = sanitizeName(newNameRaw);
+    if (!safeNew || safeNew !== newNameRaw) {
+      return { status: 400, body: { error: "newName contains invalid characters" } };
+    }
+    const ok = renameSession(name2, safeNew);
+    if (!ok) return { status: 409, body: { error: "rename failed: name conflict, invalid name, or source not found" } };
+    return { status: 200, body: { renamed: true, oldName: name2, newName: safeNew } };
+  }
   if (method !== "GET") {
-    return { status: 405, body: { error: "GET/DELETE only" } };
+    return { status: 405, body: { error: "GET/POST/DELETE only" } };
   }
   if (rest.length === 0) {
     const sessions = listSessions();
@@ -3205,6 +3221,7 @@ async function handleProviders(method, rest, body, ctx) {
       }
     }
     cfg.providers = existing;
+    cfg.contextCapTokens = void 0;
     writeConfig(cfg, ctx.configPath);
     return { status: 200, body: { ok: true, count: existing.length } };
   }
@@ -3247,6 +3264,12 @@ async function handleSettings(method, _rest, body, ctx) {
         proNext: live?.proArmed ?? false,
         budgetUsd: live?.budgetUsd ?? null,
         sessionSpendUsd: ctx.getStats?.()?.totalCostUsd ?? null,
+        contextCapTokens: cfg.contextCapTokens ?? null,
+        providerContextCap: (() => {
+          const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+          const mc = effectiveModelConfig(cfg);
+          return provider?.models?.find((m) => m.id === mc.model)?.maxContextLength ?? null;
+        })(),
         activeProviderId: cfg.activeProviderId ?? null,
         providerCapabilities: (() => {
           const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
@@ -3271,7 +3294,8 @@ async function handleSettings(method, _rest, body, ctx) {
           model: "next-turn",
           proNext: "next-turn",
           budgetUsd: "live",
-          mode: "next-session"
+          mode: "next-session",
+          contextCapTokens: "next-session"
         }
       }
     };
@@ -3380,6 +3404,16 @@ async function handleSettings(method, _rest, body, ctx) {
       }
       cfg.mode = fields.mode;
       changed.push("mode");
+    }
+    if (fields.contextCapTokens !== void 0) {
+      if (fields.contextCapTokens === null) {
+        cfg.contextCapTokens = void 0;
+      } else if (typeof fields.contextCapTokens === "number" && fields.contextCapTokens > 0 && Number.isFinite(fields.contextCapTokens)) {
+        cfg.contextCapTokens = Math.floor(fields.contextCapTokens);
+      } else {
+        return { status: 400, body: { error: "contextCapTokens must be null or a positive finite number" } };
+      }
+      changed.push("contextCapTokens");
     }
     let modelPendingLive = null;
     let proNextPending = null;
@@ -3667,13 +3701,23 @@ async function handleSkills(method, rest, body, ctx) {
 async function handleSlash(method, _rest, _body, ctx) {
   if (method !== "GET") return { status: 405, body: { error: "GET only" } };
   const codeMode = ctx.getCurrentCwd?.() != null;
-  const commands = SLASH_COMMANDS.filter((c) => c.contextual !== "code" || codeMode).map((c) => ({
-    cmd: c.cmd,
-    summary: c.summary,
-    argsHint: c.argsHint,
-    contextual: c.contextual,
-    aliases: c.aliases
-  }));
+  const HIDDEN_CMDS = new Set([
+    "preset","model","theme","mode","pro","permissions","stop",
+    "init","apply","discard","walk","undo","history","show",
+    "commit","plan","checkpoint","restore","cwd","jobs","kill","logs",
+    "resource","prompt","memory","skill","replay","stats","doctor"
+  ]);
+  const commands = SLASH_COMMANDS
+    .filter((c) => c.contextual !== "code" || codeMode)
+    .filter((c) => !HIDDEN_CMDS.has(c.cmd))
+    .map((c) => ({ cmd: c.cmd, summary: c.summary, argsHint: c.argsHint, contextual: c.contextual, aliases: c.aliases }));
+  commands.push({
+    cmd: "learn",
+    summary: "\u5B66\u4E60\u7CFB\u7EDF\uFF08\u6280\u80FD\u63D0\u53D6/\u9879\u76EE\u8BB0\u5FC6/\u8BED\u4E49\u7D22\u5F15/\u95EE\u7B54/\u5BFC\u5E08\u6A21\u5F0F\uFF09",
+    argsHint: "<subcommand>",
+    contextual: null,
+    aliases: []
+  });
   return { status: 200, body: { commands, codeMode } };
 }
 

@@ -1,38 +1,8 @@
 {
-  "providers": [
-    {
-      "id": "deepseek-official",
-      "name": "DeepSeek 官方",
-      "baseUrl": "https://api.deepseek.com",
-      "apiKey": "sk-请替换为你的真实apiKey",
-      "models": [
-        {
-          "id": "deepseek-v4-flash",
-          "name": "Flash",
-          "presets": ["auto", "flash"],
-          "efforts": ["high", "max"],
-          "thinkingMode": "enabled",
-          "multimodal": false,
-          "maxContextLength": 131072
-        },
-        {
-          "id": "deepseek-v4-pro",
-          "name": "Pro",
-          "presets": ["pro"],
-          "efforts": ["high", "max"],
-          "thinkingMode": "enabled",
-          "multimodal": true,
-          "maxContextLength": 131072
-        }
-      ],
-      "defaultPreset": "auto",
-      "defaultEffort": "max",
-      "autoEscalate": true,
-      "escalationModel": "deepseek-v4-pro"
-    },
+  "providers": [   
     {
       "id": "local-deepseek",
-      "name": "本地 DeepSeek",
+      "name": "维信诺DeepSeek",
       "baseUrl": "http://10.40.5.70:8001/v1",
       "apiKey": "deepseek-v4-flash-base-8c72nc00",
       "models": [
@@ -52,7 +22,7 @@
     },
     {
       "id": "local-qwen",
-      "name": "本地 Qwen",
+      "name": "Qwen多模态",
       "baseUrl": "http://10.40.5.70:8000/v1",
       "apiKey": "qwen35-secret-8c72nc00",
       "models": [

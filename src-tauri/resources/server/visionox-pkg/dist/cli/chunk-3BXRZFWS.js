@@ -414,6 +414,7 @@ var SLASH_COMMANDS = [
     summary: "start a fresh conversation (clear context + scrollback)",
     aliases: ["reset", "clear"]
   },
+  { cmd: "help", group: "info", summary: "show available slash commands" },
   { cmd: "retry", group: "chat", summary: "truncate & resend your last message (fresh sample)" },
   {
     cmd: "compact",

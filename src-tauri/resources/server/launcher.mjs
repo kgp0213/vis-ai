@@ -12,7 +12,7 @@
 import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat as fsStat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -137,6 +137,16 @@ const CONSTANTS = {
   MODE_MEMORY_PROMPT_LIMIT: 8,
   MODE_MEMORY_TEXT_LIMIT: 180,
   MODE_MEMORY_KEYWORD_LIMIT: 8,
+
+  // Session memory sub-budgets — session memory is model-writable and volatile,
+  // so cap per-entry body and the collective block to bound the system prompt.
+  SESSION_MEMORY_BODY_MAX_CHARS: 2000,
+  SESSION_MEMORY_BLOCK_MAX_CHARS: 6000,
+
+  // Rules sub-budget — coding mode can load ~100KB of rule files; cap the
+  // collective rules block. Tail-drop (custom rules first to go) keeps each
+  // rule file intact rather than truncating mid-rule.
+  RULES_MAX_CHARS: 12000,
 
   // Mode versions
   DEFAULT_MODE_VERSION: 2,
@@ -291,6 +301,8 @@ try {
     import(distPath("chunk-XXC2BYTV.js")),
     import(distPath("chunk-XCGGEJTI.js")),
     import(distPath("chunk-6PBZN4VI.js")),
+    import(distPath("chunk-YQ6NTIIE.js")),
+    import(distPath("chunk-PV55UMTO.js")),
   ]);
 } catch (err) {
   console.error(`[launcher] chunk import failed: ${err.message}`);
@@ -319,13 +331,15 @@ const [
   { McpClient, parseMcpSpec, inspectMcpServer },
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
-  { applySkillsIndex },
+  { applySkillsIndex, applyProjectMemory },
   { MemoryStore },
   { registerSkillTools, Eventizer },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
   { buildIndex, querySemantic, indexExists },
   { listSessions, loadSessionMessages, sessionPath },
+  { DEEPSEEK_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEEPSEEK_PRICING },
+  { countTokens, estimateRequestTokens },
 ] = modules;
 
 // ── Load config ─────────────────────────────────────────────────
@@ -558,12 +572,13 @@ async function readBuiltinMarker(skillDir) {
   }
 }
 
-async function writeBuiltinMarker(skillDir, name, sourceHash) {
+async function writeBuiltinMarker(skillDir, name, sourceHash, sourceMtime) {
   const marker = {
     owner: "visionox-bootstrap",
     name,
     version: await readSkillVersion(skillDir),
     sourceHash,
+    sourceMtime,
     installedAt: new Date().toISOString(),
   };
   writeFileSync(resolve(skillDir, "_visionox_builtin.json"), `${JSON.stringify(marker, null, 2)}\n`, "utf8");
@@ -571,6 +586,13 @@ async function writeBuiltinMarker(skillDir, name, sourceHash) {
 
 function backupPathFor(target) {
   return `${target}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+}
+
+// Source skill directories are build-time artifacts — their mtime doesn't change
+// after install. Cache the hash in the marker keyed by source dir mtime so we
+// can skip reading all source files on steady-state startup.
+function sourceDirMtime(sourceDir) {
+  try { return statSync(sourceDir).mtimeMs; } catch { return null; }
 }
 
 async function installBootstrapSkill(name, { force = false } = {}) {
@@ -584,11 +606,18 @@ async function installBootstrapSkill(name, { force = false } = {}) {
   if (!validation.ok || validation.name !== name) {
     return { name, installed: false, reason: validation.error || "bootstrap name mismatch" };
   }
-  const sourceHash = await hashDirectory(sourceDir);
+  const srcMtime = sourceDirMtime(sourceDir);
   if (existsSync(targetDir)) {
     const marker = await readBuiltinMarker(targetDir);
     if (!marker) {
       return { name, installed: false, skipped: true, reason: "user skill with same name exists" };
+    }
+    // Fast path: source dir unchanged since last install → reuse cached hash.
+    let sourceHash;
+    if (!force && srcMtime !== null && marker.sourceMtime === srcMtime && marker.sourceHash) {
+      sourceHash = marker.sourceHash;
+    } else {
+      sourceHash = await hashDirectory(sourceDir);
     }
     const currentHash = marker.sourceHash || await hashDirectory(targetDir);
     if (!force && currentHash === sourceHash) {
@@ -598,11 +627,12 @@ async function installBootstrapSkill(name, { force = false } = {}) {
     await cp(targetDir, backupDir, { recursive: true });
     await rm(targetDir, { recursive: true, force: true });
     await cp(sourceDir, targetDir, { recursive: true });
-    await writeBuiltinMarker(targetDir, name, sourceHash);
+    await writeBuiltinMarker(targetDir, name, sourceHash, srcMtime);
     return { name, installed: true, upgraded: true, backup: backupDir, path: targetDir };
   }
+  const sourceHash = await hashDirectory(sourceDir);
   await cp(sourceDir, targetDir, { recursive: true });
-  await writeBuiltinMarker(targetDir, name, sourceHash);
+  await writeBuiltinMarker(targetDir, name, sourceHash, srcMtime);
   return { name, installed: true, path: targetDir };
 }
 
@@ -673,6 +703,23 @@ await deploySkillGuide(workspaceDir);
 
 const startupModelConfig = effectiveModelConfig();
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, preset=${startupModelConfig.preset}, model=${startupModelConfig.model}`);
+
+// Apply context cap: manual override > provider maxContextLength > hardcoded map.
+// Mutating DEEPSEEK_CONTEXT_TOKENS directly is intentional — ESM live bindings
+// mean ContextManager.fold() and getStats() both read from the same object.
+function applyContextCap(model) {
+  if (config.contextCapTokens && typeof config.contextCapTokens === "number") {
+    DEEPSEEK_CONTEXT_TOKENS[model] = config.contextCapTokens;
+    return;
+  }
+  const provider = getActiveProvider(config);
+  const modelObj = provider?.models?.find((m) => m.id === model);
+  if (modelObj?.maxContextLength && typeof modelObj.maxContextLength === "number") {
+    DEEPSEEK_CONTEXT_TOKENS[model] = modelObj.maxContextLength;
+    return;
+  }
+  // No override — DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS falls back naturally
+}
 console.error(`[launcher] workspace: ${workspaceDir}`);
 
 // Workspace-dependent tool names — populated by registerWorkspaceTools() return value
@@ -1586,7 +1633,11 @@ function formatModeMemoryForPrompt(modeId = config.mode || "general") {
 const sessionMemories = [];
 
 function addSessionMemory(name, description, body) {
-  sessionMemories.push({ name, description, body, ts: Date.now() });
+  const trimmedBody = String(body ?? "");
+  const cappedBody = trimmedBody.length > CONSTANTS.SESSION_MEMORY_BODY_MAX_CHARS
+    ? `${trimmedBody.slice(0, CONSTANTS.SESSION_MEMORY_BODY_MAX_CHARS)}\n\n… (truncated ${trimmedBody.length - CONSTANTS.SESSION_MEMORY_BODY_MAX_CHARS} chars)`
+    : trimmedBody;
+  sessionMemories.push({ name, description, body: cappedBody, ts: Date.now() });
   if (sessionMemories.length > 50) sessionMemories.shift();
 }
 function clearSessionMemories() { sessionMemories.length = 0; }
@@ -1711,11 +1762,23 @@ ${activeList}`;
 
 function getSessionMemoryBlock() {
   if (sessionMemories.length === 0) return "";
-  const lines = sessionMemories.map((m) => {
+  // Build entries newest-last (insertion order); if the collective block
+  // exceeds the budget, drop oldest entries (front of the array) whole —
+  // never truncate a single memory mid-body, to avoid corrupting conclusions.
+  let entries = sessionMemories.map((m) => {
     const title = String(m.name).replace(/[\r\n]/g, " ").trim();
     return `## ${title}\n\n${m.body}`;
   });
-  return `\n# Session memory (this conversation only)\n\n${lines.join("\n\n")}`;
+  let dropped = 0;
+  while (entries.length > 1) {
+    const joined = entries.join("\n\n");
+    if (joined.length <= CONSTANTS.SESSION_MEMORY_BLOCK_MAX_CHARS) break;
+    // Drop the oldest (front).
+    entries.shift();
+    dropped++;
+  }
+  const suffix = dropped > 0 ? `\n\n… (dropped ${dropped} older session memories to fit budget)` : "";
+  return `\n# Session memory (this conversation only)\n\n${entries.join("\n\n")}${suffix}`;
 }
 
 function formatPersistentMemoryForPrompt(rootDir) {
@@ -1792,6 +1855,21 @@ function loadRules() {
         } catch {}
       }
     } catch {}
+  }
+  // Enforce a collective budget: drop trailing rules (custom set is loaded
+  // last by orderedRuleSets, so it is dropped first) until the joined block
+  // fits. Keep each rule file intact rather than truncating mid-rule.
+  if (rules.length === 0) return rules;
+  let joined = rules.join("\n\n");
+  if (joined.length <= CONSTANTS.RULES_MAX_CHARS) return rules;
+  let dropped = 0;
+  while (rules.length > 1 && joined.length > CONSTANTS.RULES_MAX_CHARS) {
+    rules.pop();
+    dropped++;
+    joined = rules.join("\n\n");
+  }
+  if (dropped > 0) {
+    rules.push(`<!-- rules truncated: dropped ${dropped} rule file(s) (lowest priority first) to fit ${CONSTANTS.RULES_MAX_CHARS}-char budget -->`);
   }
   return rules;
 }
@@ -1891,36 +1969,116 @@ When a tool call fails:
 Respond in the same language as the user's message.${routing}`;
 }
 
+// ── System-prompt assembly cache ─────────────────────────────────
+// buildLoop is invoked from 11 call sites (/new, mode switch, workspace sync,
+// side-question paths...). Each call re-reads soul, all rule files, every
+// SKILL.md, project memory, and persistent memory from disk synchronously.
+// Cache the assembled static prefix (everything up to session memory) keyed
+// by an mtime fingerprint of its sources. Session memory, tutor, and learning
+// blocks stay dynamic (per-turn). writeConfig/edit-skill/edit-rule update
+// mtimes on disk, so the cache self-invalidates.
+let _prefixCache = { fingerprint: null, upToPersistent: null, mc: null };
+
+function safeMtime(p) {
+  try { return statSync(p).mtimeMs; } catch { return 0; }
+}
+
+function dirMtime(p) {
+  // Directory mtime updates on direct child add/remove (not on nested edits),
+  // which is sufficient for "skill/rule added or removed" detection. Content
+  // edits inside existing files are caught by the per-file mtime in loadRules
+  // only on cache miss; acceptable trade-off — a /new or restart refreshes.
+  try { return statSync(p).mtimeMs; } catch { return 0; }
+}
+
+function computePrefixFingerprint(rootDir) {
+  const mc = getModeConfig();
+  const parts = [
+    `mode=${config.mode}`,
+    `soul=${safeMtime(SOUL_HOME)}`,
+    `root=${rootDir}`,
+    `sem=${hasSemanticSearch ? 1 : 0}`,
+  ];
+  for (const name of orderedRuleSets(mc.eccRules || [])) {
+    const dir = ALL_ECC_RULES[name];
+    parts.push(`rule:${name}=${dir ? dirMtime(dir) : 0}`);
+  }
+  // Project + global skill roots read by SkillStore
+  parts.push(`skills:proj=${dirMtime(resolve(rootDir, ".visionox", "skills"))}`);
+  parts.push(`skills:home=${dirMtime(skillsRoot)}`);
+  // Mode memory file
+  parts.push(`mmode=${safeMtime(resolve(modeMemoryDir, `${safeModeId(config.mode)}.json`))}`);
+  // Project memory candidates (REASONIX.md / CLAUDE.md / AGENTS.md ...)
+  const pmPath = findProjectMemoryPathCached(rootDir);
+  parts.push(`pmem=${pmPath ? safeMtime(pmPath) : 0}`);
+  // Persistent memory: global + project-scoped index files. MemoryStore derives
+  // the project path internally via hash; include rootDir (already above) plus
+  // the global memory dir mtime as a proxy for global edits.
+  parts.push(`memg=${dirMtime(resolve(visionoxDataDir, "memory"))}`);
+  return parts.join("|");
+}
+
+// Small memo of project-memory path lookups (avoids 6x existsSync per buildLoop).
+const _pmPathCache = new Map();
+function findProjectMemoryPathCached(rootDir) {
+  if (_pmPathCache.has(rootDir)) return _pmPathCache.get(rootDir);
+  const candidates = ["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
+  let found = null;
+  for (const name of candidates) {
+    const p = resolve(rootDir, name);
+    if (existsSync(p)) { found = p; break; }
+  }
+  _pmPathCache.set(rootDir, found);
+  return found;
+}
+
 function buildLoop(client, rootDir) {
   const modelConfig = effectiveModelConfig();
-  const soul = loadSoul();
-  const mc = getModeConfig();
-  const system = buildSystemPrompt(rootDir, hasSemanticSearch);
-  const systemWithSoul = soul ? `# Identity\n\n${soul}\n\n---\n\n${system}` : system;
-  const modeLines = [
-    `Current work mode: ${mc.label}`,
-    mc.description ? `Scenario: ${mc.description}` : "",
-    mc.hint ? `User-facing behavior: ${mc.hint}` : "",
-    mc.skills?.length ? `Relevant skills: ${mc.skills.join(", ")}` : "",
-    `Mode changes made in the dashboard apply after /new; do not claim a prompt changed mid-turn unless this prefix was rebuilt.`,
-    mc.prompt || "",
-  ].filter(Boolean);
-  const systemWithMode = systemWithSoul + `\n\n# Work mode\n\n${modeLines.join("\n")}${formatModeMemoryForPrompt(config.mode)}`;
-  const loadedRules = loadRules();
-  const systemWithRules = loadedRules.length > 0
-    ? systemWithMode + "\n\n# Coding Rules\n\n" + loadedRules.join("\n\n")
-    : systemWithMode;
-  const systemWithPersistentMemory = systemWithRules + formatPersistentMemoryForPrompt(rootDir);
-  const systemWithSession = systemWithPersistentMemory + getSessionMemoryBlock();
+  const fingerprint = computePrefixFingerprint(rootDir);
+  let system, mc;
+  if (_prefixCache.fingerprint === fingerprint && _prefixCache.upToPersistent !== null) {
+    // Cache hit: skip all disk reads for soul/project-memory/mode/rules/skills/persistent.
+    system = _prefixCache.upToPersistent;
+    mc = _prefixCache.mc;
+  } else {
+    mc = getModeConfig();
+    const soul = loadSoul();
+    const baseSystem = buildSystemPrompt(rootDir, hasSemanticSearch);
+    const systemWithSoul = soul ? `# Identity\n\n${soul}\n\n---\n\n${baseSystem}` : baseSystem;
+    // L1 Project memory — injected right after Soul, before work mode.
+    const systemWithProject = applyProjectMemory(systemWithSoul, rootDir);
+    const modeLines = [
+      `Current work mode: ${mc.label}`,
+      mc.description ? `Scenario: ${mc.description}` : "",
+      mc.hint ? `User-facing behavior: ${mc.hint}` : "",
+      mc.skills?.length ? `Relevant skills: ${mc.skills.join(", ")}` : "",
+      `Mode changes made in the dashboard apply after /new; do not claim a prompt changed mid-turn unless this prefix was rebuilt.`,
+      mc.prompt || "",
+    ].filter(Boolean);
+    const systemWithMode = systemWithProject + `\n\n# Work mode\n\nThis block only defines the working habits for the current scenario. If it conflicts with the identity/environment assumptions in # Identity (soul) above, soul wins.\n${modeLines.join("\n")}${formatModeMemoryForPrompt(config.mode)}`;
+    const loadedRules = loadRules();
+    const systemWithRules = loadedRules.length > 0
+      ? systemWithMode + "\n\n# Coding Rules\n\n" + loadedRules.join("\n\n")
+      : systemWithMode;
+    // L6 Skills index — injected before persistent memory to match the documented
+    // "技能索引 → 持久记忆" order. applySkillsIndex appends a skills catalogue block.
+    // modeSkills marks the current mode's recommended skills with ★ so the
+    // catalogue and the "Relevant skills" hint above no longer contradict.
+    const systemWithSkills = applySkillsIndex(systemWithRules, { projectRoot: rootDir, modeSkills: mc.skills });
+    system = systemWithSkills + formatPersistentMemoryForPrompt(rootDir);
+    _prefixCache = { fingerprint, upToPersistent: system, mc };
+    console.error(`[launcher] system prefix rebuilt (fingerprint changed)`);
+  }
+  // Session-scoped layers stay dynamic — never cached.
+  const systemWithSession = system + getSessionMemoryBlock();
   const systemWithTutor = sessionTutorMode?.enabled
     ? systemWithSession + "\n\n" + formatTutorPrompt(sessionTutorMode.style)
     : systemWithSession;
   const systemWithLearning = sessionLearningMode?.enabled
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
-  const systemWithSkills = applySkillsIndex(systemWithLearning, { projectRoot: rootDir });
   const prefix = new ImmutablePrefix({
-    system: systemWithSkills,
+    system: systemWithLearning,
     toolSpecs: tools.specs(),
   });
   // Determine vision capability from the active provider model config.
@@ -1937,6 +2095,8 @@ function buildLoop(client, rootDir) {
     globalThis.__visionoxThinkingModeMap = tmMap;
     globalThis.__visionoxSummaryModel = provider.models?.[0]?.id;
   }
+
+  applyContextCap(modelConfig.model);
 
   return new CacheFirstLoop({
     client,
@@ -2057,16 +2217,44 @@ function hasUserMessage() {
   return messages.some((m) => m.role === "user");
 }
 
-async function appendActiveMessage(msg) {
+// Persistent append stream for the active session — avoids open/write/close per
+// message (appendFile does all three every call). Lazily opened; closed before
+// any rename/rm so Windows doesn't hold the file open.
+let activeSessionStream = null;
+
+function getActiveSessionStream() {
+  if (!activeSessionStream) {
+    activeSessionStream = createWriteStream(activeSessionFile, { flags: "a" });
+    activeSessionStream.on("error", (err) => {
+      console.error(`[launcher] active-session stream error: ${err.message}`);
+    });
+  }
+  return activeSessionStream;
+}
+
+function closeActiveSessionStream() {
+  if (activeSessionStream) {
+    const s = activeSessionStream;
+    activeSessionStream = null;
+    return new Promise((resolve) => {
+      s.end(() => resolve());
+    });
+  }
+  return Promise.resolve();
+}
+
+function appendActiveMessage(msg) {
   try {
     const record = { role: msg.role, content: msg.text ?? "" };
-    await appendFile(activeSessionFile, `${JSON.stringify(record)}\n`, "utf8");
+    const stream = getActiveSessionStream();
+    stream.write(`${JSON.stringify(record)}\n`);
   } catch (err) {
     console.error(`[launcher] active-session append failed: ${err.message}`);
   }
 }
 
 async function finalizeActiveSession() {
+  await closeActiveSessionStream();
   try {
     await access(activeSessionFile);
   } catch {
@@ -2097,6 +2285,7 @@ async function finalizeActiveSession() {
 }
 
 async function clearActiveSession() {
+  await closeActiveSessionStream();
   try {
     await rm(activeSessionFile, { force: true });
     await rm(activeSessionMetaFile, { force: true });
@@ -2271,7 +2460,18 @@ async function loadJsonlMessages(filePath) {
   }
 }
 
+// Short-TTL cache for collectConversations: the dashboard's "Generate" click
+// calls /report/preview then /report back-to-back, each invoking
+// collectConversations independently → double full-read of all in-range
+// sessions. Cache the result for 30s so the second call is free.
+const REPORT_CONV_CACHE_TTL_MS = 30_000;
+let _reportConvCache = { key: null, ts: 0, value: null };
+
 async function collectConversations(start, end) {
+  const cacheKey = `${start.getTime()}-${end.getTime()}`;
+  if (_reportConvCache.key === cacheKey && Date.now() - _reportConvCache.ts < REPORT_CONV_CACHE_TTL_MS) {
+    return _reportConvCache.value;
+  }
   const conversations = [];
   let totalMessages = 0;
 
@@ -2279,7 +2479,7 @@ async function collectConversations(start, end) {
   try {
     const files = await readdir(sessionsDir);
     for (const name of files) {
-      if (!name.endsWith(".jsonl")) continue;
+      if (!name.endsWith(".jsonl") || name.endsWith(".events.jsonl")) continue;
       const filePath = resolve(sessionsDir, name);
       let mtime;
       try {
@@ -2309,7 +2509,9 @@ async function collectConversations(start, end) {
 
   // Sort oldest first
   conversations.sort((a, b) => a.mtime - b.mtime);
-  return { conversations, totalMessages };
+  const result = { conversations, totalMessages };
+  _reportConvCache = { key: cacheKey, ts: Date.now(), value: result };
+  return result;
 }
 
 async function previewReportSources(period, anchorDate, customRange = null) {
@@ -2388,7 +2590,7 @@ function buildConversationText(conversations) {
 
 const DEFAULT_REPORT_PROMPT_TEMPLATE = `你是一位高效的对话记录整理助手。请仅根据下方提供的 Visionox Desktop 历史会话记录生成一份结构化的 {periodLabel}。
 要求：
-1. 使用 Markdown 格式，标题为「{date} {periodLabel}」。
+1. 使用 Markdown 格式，标题为「{date} Visionox {periodLabel}」。
 2. 你只能基于提供的对话记录进行总结；不要主动读取或引用工作区文件、代码库、网络内容。
 3. 如果某些信息在对话记录中不清楚或缺失，请在报告中直接说明，不要编造。
 4. 只有在用户明确要求、或对话记录本身明确提到工作区文件时，才可以补充引用工作区内容。
@@ -2617,6 +2819,14 @@ const ctx = {
     writeConfig(cfg, configPath);
     syncRuntimeConfig(cfg);
     console.error(`[launcher] mode: ${modeId} (${cfg.modes[modeId].label})`);
+    // Rebuild the loop immediately so the new mode's prompt, memory, rules,
+    // and skills catalogue take effect on the very next turn — not deferred
+    // until /new. Without this, /status would report the new mode while the
+    // cached system prefix still carried the old mode's content.
+    if (client) {
+      loop = buildLoop(client, workspaceDir);
+      ctx.loop = loop;
+    }
     return true;
   },
   applyPresetLive: (name) => {
@@ -2625,6 +2835,7 @@ const ctx = {
     // Re-resolve through effectiveModelConfig so locked presets override
     // stale config.model values when switching live or rebuilding after /new.
     const modelConfig = effectiveModelConfig();
+    applyContextCap(modelConfig.model);
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
   },
   applyEffortLive: (effort) => {
@@ -2637,6 +2848,7 @@ const ctx = {
     // A manual model pick updates the auto baseline only; pro/flash presets stay
     // locked to their preset model to keep every UI surface consistent.
     const modelConfig = effectiveModelConfig();
+    applyContextCap(modelConfig.model);
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
     console.error(`[launcher] model: ${modelConfig.model}`);
   },
@@ -2895,6 +3107,44 @@ const ctx = {
         return { accepted: true };
       }
 
+      // /status — show model, context, cost, balance (no AI loop, instant)
+      if (text === "/status") {
+        const mc = effectiveModelConfig();
+        const s = loop ? loop.stats.summary() : null;
+        const ctxCap = loop ? (DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS) : 0;
+        const ctxPct = s && ctxCap > 0 ? (s.lastPromptTokens / ctxCap * 100) : 0;
+        const bal = primaryBalanceSummary();
+        const lines = [
+          `\u{1F4CB} \u72B6\u6001`,
+          ``,
+          `\u6A21\u578B: ${loop?.model ?? mc.model ?? "\u2014"}`,
+          `\u9884\u8BBE: ${mc.preset} (${mc.locked ? "\u9501\u5B9A" : "auto"})`,
+          `\u63A8\u7406\u5F3A\u5EA6: ${config.reasoningEffort ?? "max"}`,
+          `\u5DE5\u4F5C\u6A21\u5F0F: ${config.mode ?? "general"}`,
+          ``,
+          `\u4E0A\u4E0B\u6587: ${s ? s.lastPromptTokens.toLocaleString() : 0} / ${(ctxCap / 1e3).toFixed(0)}K (${ctxPct.toFixed(1)}%)`,
+          `  \u251C \u666E\u901A\u6298\u53E0: 50% (${(ctxCap * 0.5 / 1e3).toFixed(0)}K)`,
+          `  \u251C \u6FC0\u8FDB\u6298\u53E0: 70% (${(ctxCap * 0.7 / 1e3).toFixed(0)}K)`,
+          `  \u2514 \u5F3A\u5236\u6458\u8981: 80% (${(ctxCap * 0.8 / 1e3).toFixed(0)}K)`,
+          ``,
+          `\u8F6E\u6B21: ${s?.turns ?? 0}`,
+          `\u7F13\u5B58\u547D\u4E2D: ${s ? (s.cacheHitRatio * 100).toFixed(1) + "%" : "\u2014"}`,
+          `\u672C\u8F6E\u8D39\u7528: ${s ? "$" + s.lastTurnCostUsd.toFixed(6) : "\u2014"}`,
+          `\u7D2F\u8BA1\u8D39\u7528: ${s ? "$" + s.totalCostUsd.toFixed(6) : "\u2014"}`,
+        ];
+        if (bal) {
+          lines.push(``, `\u4F59\u989D: ${bal.total} ${bal.currency}`);
+        }
+        if (!loop) {
+          lines.push(``, `\u26A0\uFE0F API Key \u672A\u914D\u7F6E\uFF0C\u5BF9\u8BDD\u4E0D\u53EF\u7528`);
+        }
+        const statusId = `assistant-${Date.now()}`;
+        const statusText = lines.join("\n");
+        pushMessage({ id: statusId, role: "assistant", text: statusText });
+        broadcastDashboardEvent({ kind: "assistant_final", id: statusId, text: statusText });
+        return { accepted: true };
+      }
+
       // Handle /new and /clear: finalize active session and reset
       if (text === "/new" || text === "/clear") {
         await finalizeActiveSession();
@@ -2933,6 +3183,197 @@ const ctx = {
           accepted: false,
           reason: "API key not configured. Open Settings tab to add your DeepSeek API key, then restart the app."
         };
+      }
+
+      // /compact — manually trigger context compression (async LLM summarization)
+      if (text === "/compact") {
+        broadcastDashboardEvent({ kind: "busy-change", busy: true });
+        const compactId = `assistant-${Date.now()}`;
+        pushMessage({ id: compactId, role: "assistant", text: "\u23F3 \u6B63\u5728\u538B\u7F29\u4E0A\u4E0B\u6587..." });
+        broadcastDashboardEvent({ kind: "assistant_final", id: compactId, text: "\u23F3 \u6B63\u5728\u538B\u7F29\u4E0A\u4E0B\u6587..." });
+        try {
+          const result = await loop.compactHistory();
+          let resultText;
+          if (result.folded) {
+            resultText = `\u2705 \u4E0A\u4E0B\u6587\u5DF2\u538B\u7F29\n\n\u6D88\u606F: ${result.beforeMessages} \u2192 ${result.afterMessages}\n\u6458\u8981: ${result.summaryChars} \u5B57\u7B26`;
+          } else {
+            resultText = `\u2139\uFE0F \u65E0\u9700\u538B\u7F29\uFF08\u5BF9\u8BDD\u592A\u77ED\u6216\u5C3E\u90E8\u5360\u6BD4\u4E0D\u8DB3\uFF09`;
+          }
+          const doneId = `assistant-${Date.now()}`;
+          pushMessage({ id: doneId, role: "assistant", text: resultText });
+          broadcastDashboardEvent({ kind: "assistant_final", id: doneId, text: resultText });
+        } catch (err) {
+          const errId = `assistant-${Date.now()}`;
+          const errText = `\u274C \u538B\u7F29\u5931\u8D25: ${err.message}`;
+          pushMessage({ id: errId, role: "assistant", text: errText });
+          broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: errText });
+        } finally {
+          busy = false;
+          broadcastDashboardEvent({ kind: "busy-change", busy: false });
+        }
+        return { accepted: true };
+      }
+
+      // /retry — truncate & resend last user message (fresh sample)
+      if (text === "/retry") {
+        const lastUserIdx = messages.map((m) => m.role).lastIndexOf("user");
+        if (lastUserIdx < 0) {
+          const id = `assistant-${Date.now()}`;
+          const msg = "\u2139\uFE0F \u6CA1\u6709\u53EF\u91CD\u53D1\u7684\u6D88\u606F";
+          pushMessage({ id, role: "assistant", text: msg });
+          broadcastDashboardEvent({ kind: "assistant_final", id, text: msg });
+          return { accepted: true };
+        }
+        const lastUserText = messages[lastUserIdx].text;
+        messages.splice(lastUserIdx);
+        // Broadcast truncated message list
+        broadcastDashboardEvent({ kind: "messages-reset", messages: [...messages] });
+        text = lastUserText;
+        // Fall through to AI loop with the retried text
+      }
+
+      // /cost — show last turn cost or estimate cost of sending text
+      if (text === "/cost" || text.startsWith("/cost ")) {
+        const id = `assistant-${Date.now()}`;
+        let costText;
+        if (text === "/cost") {
+          const s = loop.stats.summary();
+          const ctxCap = DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS;
+          const ctxPct = s.lastPromptTokens / ctxCap * 100;
+          costText = [
+            `\u{1F4B8} \u8D39\u7528\u4FE1\u606F`,
+            ``,
+            `\u6A21\u578B: ${loop.model}`,
+            `\u8F6E\u6B21: ${s.turns}`,
+            ``,
+            `\u4E0A\u8F6E\u8F93\u5165: ${s.lastPromptTokens.toLocaleString()} tokens (${ctxPct.toFixed(1)}% of ${(ctxCap / 1e3).toFixed(0)}K)`,
+            `\u7F13\u5B58\u547D\u4E2D: ${(s.cacheHitRatio * 100).toFixed(1)}%`,
+            `\u4E0A\u8F6E\u8D39\u7528: $${s.lastTurnCostUsd.toFixed(6)}`,
+            `\u7D2F\u8BA1\u8F93\u5165\u8D39\u7528: $${s.totalInputCostUsd.toFixed(6)}`,
+            `\u7D2E\u8BA1\u8F93\u51FA\u8D39\u7528: $${s.totalOutputCostUsd.toFixed(6)}`,
+            `\u7D2E\u8BA1\u8D39\u7528: $${s.totalCostUsd.toFixed(6)}`,
+          ].join("\n");
+        } else {
+          const sample = text.slice(6).trim();
+          const msgs = loop.log.toMessages();
+          const estInput = estimateRequestTokens([...msgs, { role: "user", content: sample }], loop.prefix.toolSpecs);
+          const ctxCap = DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS;
+          const pricing = DEEPSEEK_PRICING[loop.model];
+          const estCost = pricing ? (estInput * pricing.inputCacheMiss / 1e6).toFixed(6) : "\u2014";
+          costText = [
+            `\u{1F4CD} \u6210\u672C\u4F30\u7B97`,
+            ``,
+            `\u9884\u4F30\u8F93\u5165: ${estInput.toLocaleString()} tokens (${(estInput / ctxCap * 100).toFixed(1)}% of ${(ctxCap / 1e3).toFixed(0)}K)`,
+            `\u9884\u4F30\u8D39\u7528: $${estCost}${pricing ? ` (\u6309 ${loop.model} cache-miss \u4EF7)` : ""}`,
+          ].join("\n");
+        }
+        pushMessage({ id, role: "assistant", text: costText });
+        broadcastDashboardEvent({ kind: "assistant_final", id, text: costText });
+        return { accepted: true };
+      }
+
+      // /context — show context window breakdown
+      if (text === "/context") {
+        const id = `assistant-${Date.now()}`;
+        const systemTokens = countTokens(loop.prefix.system);
+        const toolsTokens = countTokens(JSON.stringify(loop.prefix.toolSpecs));
+        const entries = loop.log.toMessages();
+        let userTokens = 0, assistantTokens = 0, toolResultTokens = 0;
+        for (const e of entries) {
+          const content = typeof e.content === "string" ? e.content : "";
+          if (e.role === "user") userTokens += countTokens(content);
+          else if (e.role === "assistant") assistantTokens += countTokens(content);
+          else if (e.role === "tool") toolResultTokens += countTokens(content);
+        }
+        const logTokens = userTokens + assistantTokens + toolResultTokens;
+        const total = systemTokens + toolsTokens + logTokens;
+        const ctxCap = DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS;
+        const ctxText = [
+          `\u{1F4D0} \u4E0A\u4E0B\u6587\u5206\u89E3`,
+          ``,
+          `\u7CFB\u7EDF\u63D0\u793A\u8BCD: ${systemTokens.toLocaleString()} tokens`,
+          `\u5DE5\u5177\u5B9A\u4E49: ${toolsTokens.toLocaleString()} tokens (${loop.prefix.toolSpecs.length} \u4E2A\u5DE5\u5177)`,
+          `\u5BF9\u8BDD\u65E5\u5FD7: ${logTokens.toLocaleString()} tokens (${entries.length} \u6761\u6D88\u606F)`,
+          `  \u251C \u7528\u6237: ${userTokens.toLocaleString()}`,
+          `  \u251C \u52A9\u624B: ${assistantTokens.toLocaleString()}`,
+          `  \u2514 \u5DE5\u5177\u7ED3\u679C: ${toolResultTokens.toLocaleString()}`,
+          ``,
+          `\u603B\u8BA1: ${total.toLocaleString()} / ${ctxCap.toLocaleString()} (${(total / ctxCap * 100).toFixed(1)}%)`,
+          `\u5269\u4F59: ${(ctxCap - total).toLocaleString()} tokens`,
+        ].join("\n");
+        pushMessage({ id, role: "assistant", text: ctxText });
+        broadcastDashboardEvent({ kind: "assistant_final", id, text: ctxText });
+        return { accepted: true };
+      }
+
+      // /btw <question> — side question from blank slate (no context pollution)
+      if (text.startsWith("/btw ")) {
+        const question = text.slice(5).trim();
+        if (!question) {
+          const id = `assistant-${Date.now()}`;
+          pushMessage({ id, role: "assistant", text: "\u2139\uFE0F \u7528\u6CD5: /btw <\u95EE\u9898>" });
+          broadcastDashboardEvent({ kind: "assistant_final", id, text: "\u2139\uFE0F \u7528\u6CD5: /btw <\u95EE\u9898>" });
+          return { accepted: true };
+        }
+        broadcastDashboardEvent({ kind: "busy-change", busy: true });
+        const btwId = `assistant-${Date.now()}`;
+        pushMessage({ id: btwId, role: "assistant", text: "\u{1F4AC} \u65C1\u8DEF\u63D0\u95EE\u4E2D..." });
+        broadcastDashboardEvent({ kind: "assistant_final", id: btwId, text: "\u{1F4AC} \u65C1\u8DEF\u63D0\u95EE\u4E2D..." });
+        try {
+          const tmpLoop = buildLoop(client, workspaceDir);
+          tmpLoop.clearLog();
+          let answer = "";
+          for await (const ev of tmpLoop.step(question)) {
+            if (ev.role === "assistant_delta") answer += ev.content ?? "";
+            if (ev.role === "assistant_final" && ev.content && ev.content.length > answer.length) answer = ev.content;
+          }
+          const doneId = `assistant-${Date.now()}`;
+          pushMessage({ id: doneId, role: "assistant", text: `\u{1F4AC} \u65C1\u8DEF\u56DE\u7B54\n\n${answer}` });
+          broadcastDashboardEvent({ kind: "assistant_final", id: doneId, text: `\u{1F4AC} \u65C1\u8DEF\u56DE\u7B54\n\n${answer}` });
+        } catch (err) {
+          const errId = `assistant-${Date.now()}`;
+          pushMessage({ id: errId, role: "assistant", text: `\u274C \u65C1\u8DEF\u63D0\u95EE\u5931\u8D25: ${err.message}` });
+          broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: `\u274C \u65C1\u8DEF\u63D0\u95EE\u5931\u8D25: ${err.message}` });
+        } finally {
+          busy = false;
+          broadcastDashboardEvent({ kind: "busy-change", busy: false });
+        }
+        return { accepted: true };
+      }
+
+      // /report daily|weekly [date] — generate summary report from session history
+      if (text.startsWith("/report")) {
+        const parts = text.split(/\s+/);
+        const period = parts[1] ?? "daily";
+        if (!["daily", "weekly", "yearly"].includes(period)) {
+          const id = `assistant-${Date.now()}`;
+          pushMessage({ id, role: "assistant", text: "\u2139\uFE0F \u7528\u6CD5: /report daily|weekly|yearly [YYYY-MM-DD]" });
+          broadcastDashboardEvent({ kind: "assistant_final", id, text: "\u2139\uFE0F \u7528\u6CD5: /report daily|weekly|yearly [YYYY-MM-DD]" });
+          return { accepted: true };
+        }
+        broadcastDashboardEvent({ kind: "busy-change", busy: true });
+        const reportId = `assistant-${Date.now()}`;
+        pushMessage({ id: reportId, role: "assistant", text: `\u{1F4CA} \u6B63\u5728\u751F\u6210${period === "daily" ? "\u65E5\u62A5" : period === "weekly" ? "\u5468\u62A5" : "\u5E74\u62A5"}...` });
+        broadcastDashboardEvent({ kind: "assistant_final", id: reportId, text: `\u{1F4CA} \u6B63\u5728\u751F\u6210${period === "daily" ? "\u65E5\u62A5" : period === "weekly" ? "\u5468\u62A5" : "\u5E74\u62A5"}...` });
+        try {
+          // Delegate to the async report engine (same path as the dashboard
+          // ReportsPanel) instead of a duplicate synchronous reader that
+          // blocked the event loop and used the stale `entry.text` field.
+          const dateArg = parts[2];
+          const anchorDate = dateArg ? new Date(dateArg) : new Date();
+          const { markdown, stats } = await generateReport(period, Number.isNaN(anchorDate.getTime()) ? new Date() : anchorDate);
+          const doneId = `assistant-${Date.now()}`;
+          pushMessage({ id: doneId, role: "assistant", text: `${markdown}\n\n---\n\u4F1A\u8BDD\u6570\uFF1A${stats.sessions} \u6D88\u606F\u6570\uFF1A${stats.messages}` });
+          broadcastDashboardEvent({ kind: "assistant_final", id: doneId, text: `${markdown}\n\n---\n\u4F1A\u8BDD\u6570\uFF1A${stats.sessions} \u6D88\u606F\u6570\uFF1A${stats.messages}` });
+        } catch (err) {
+          const errId = `assistant-${Date.now()}`;
+          pushMessage({ id: errId, role: "assistant", text: `\u274C \u62A5\u544A\u751F\u6210\u5931\u8D25: ${err.message}` });
+          broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: `\u274C \u62A5\u544A\u751F\u6210\u5931\u8D25: ${err.message}` });
+        } finally {
+          busy = false;
+          broadcastDashboardEvent({ kind: "busy-change", busy: false });
+        }
+        return { accepted: true };
       }
 
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
@@ -3031,7 +3472,7 @@ const ctx = {
       totalOutputCostUsd: s.totalOutputCostUsd,
       cacheHitRatio: s.cacheHitRatio,
       lastPromptTokens: s.lastPromptTokens,
-      contextCapTokens: 65536,
+      contextCapTokens: DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS,
       balanceSupported,
       balance,
       primaryBalance: primaryBalanceSummary(),
@@ -3088,7 +3529,13 @@ try {
   const cleanup = () => {
     console.error("[launcher] shutting down...");
     try { eventSink?.close(); } catch {}
-    close().then(() => process.exit(0)).catch(() => process.exit(1));
+    // Flush the active-session append stream before exiting so buffered
+    // messages are not lost. closeActiveSessionStream resolves immediately
+    // when no stream was opened.
+    closeActiveSessionStream()
+      .then(() => close())
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
   };
 
   process.on("SIGTERM", cleanup);

@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visionox 语义索引与个人知识库指南</title>
+<style>
+  :root {
+    --bg: #f5f5f0;
+    --card: #ffffff;
+    --border: #ddd;
+    --text: #333;
+    --muted: #666;
+    --accent: #1a73e8;
+    --green: #2e7d32;
+    --orange: #e65100;
+    --red: #c62828;
+    --blue: #1565c0;
+    --code-bg: #f0f0ec;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem 1rem;
+  }
+  .container { max-width: 860px; margin: 0 auto; }
+  h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: #111;
+  }
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin-bottom: 2rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 0.75rem;
+  }
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 2rem 0 0.75rem;
+    color: #111;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  h2::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 1.2em;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 1.25rem 0 0.5rem;
+    color: #222;
+  }
+  p, li { font-size: 0.95rem; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin: 1rem 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  code {
+    font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+    font-size: 0.85rem;
+    background: var(--code-bg);
+    padding: 0.15em 0.45em;
+    border-radius: 4px;
+    word-break: break-all;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15em 0.6em;
+    border-radius: 4px;
+    margin-right: 0.4em;
+  }
+  .tag-green { background: #e8f5e9; color: var(--green); }
+  .tag-orange { background: #fff3e0; color: var(--orange); }
+  .tag-red { background: #ffebee; color: var(--red); }
+  .tag-blue { background: #e3f2fd; color: var(--accent); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.6rem 0.8rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: #f8f8f4;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tr:nth-child(even) td { background: #fafaf7; }
+
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 0;
+    font-size: 0.9rem;
+  }
+  .flow .step {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.35rem 0.8rem;
+  }
+  .flow .arrow { color: var(--muted); font-size: 1.1rem; }
+
+  .note {
+    background: #fff8e1;
+    border-left: 4px solid #f9a825;
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  .note strong { color: var(--orange); }
+
+  .tip {
+    background: #e8f5e9;
+    border-left: 4px solid var(--green);
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  .tip strong { color: var(--green); }
+
+  .excluded-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0.5rem 0;
+  }
+  .excluded-list code {
+    background: #fce4ec;
+    color: var(--red);
+  }
+
+  ol.steps, ul.bullets {
+    margin-left: 1.25rem;
+  }
+  ol.steps li, ul.bullets li {
+    margin: 0.5rem 0;
+  }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Visionox 语义索引与个人知识库</h1>
+<p class="subtitle">把工作区变成可语义检索的个人知识库，并在对话中自然调用</p>
+
+<!-- ─── 一句话说明 ─── -->
+<div class="tip">
+  <strong>核心概念：</strong>语义索引会把工作区里的文本文件（代码、文档、笔记等）切成片段并生成向量。之后你只要用自然语言提问，模型就能“理解意思”并找到相关内容，而不需要你记住确切的关键词。
+</div>
+
+<!-- ─── 能做什么 ─── -->
+<h2>语义索引能做什么</h2>
+
+<div class="card">
+  <ul class="bullets">
+    <li><strong>个人知识库：</strong>把 Markdown 笔记、技术文档、项目说明放进工作区，构建索引后直接向 AI 提问。</li>
+    <li><strong>代码语义检索：</strong>问“哪里处理登录失败”“数据加载逻辑在哪儿”，即使文件名里没有这些字也能定位。</li>
+    <li><strong>项目 onboarding：</strong>新人问“这个项目的入口文件是什么”“配置项怎么改”，模型基于索引回答。</li>
+  </ul>
+</div>
+
+<!-- ─── 配置工作区 ─── -->
+<h2>第一步：配置工作区位置</h2>
+
+<div class="card">
+  <p>语义索引的<strong>根目录就是当前工作区</strong>。默认位置：</p>
+  <ul class="bullets">
+    <li>Windows：<code>C:\Users\&lt;用户名&gt;\visionox-workspace</code></li>
+    <li>macOS / Linux：<code>~/visionox-workspace</code></li>
+  </ul>
+
+  <h3>如何更换工作区</h3>
+  <ol class="steps">
+    <li>在 Dashboard 中点击工作区选择器，选择或输入新的目录。</li>
+    <li>或在命令行启动时指定：<code>visionox code D:\MyKnowledgeBase</code></li>
+    <li>修改后建议执行 <code>/new</code> 或重启会话，让新工作区生效。</li>
+  </ol>
+
+  <div class="note">
+    <strong>提示：</strong>把工作区设成你专门存放知识资料的文件夹，就相当于给这个文件夹建了一个私有语义搜索引擎。
+  </div>
+</div>
+
+<!-- ─── 构建索引 ─── -->
+<h2>第二步：构建语义索引</h2>
+
+<div class="card">
+  <h3>方式 A：Dashboard 图形界面</h3>
+  <ol class="steps">
+    <li>打开 Dashboard →「高级」→「语义」面板。</li>
+    <li>配置 embedding 服务：默认使用本地 Ollama（如 <code>nomic-embed-text</code>），也可切换为 OpenAI 兼容 API。</li>
+    <li>点击「构建索引」或「重建索引」。</li>
+    <li>等待状态显示“索引已构建”。</li>
+  </ol>
+
+  <h3>方式 B：斜杠命令（可索引子目录）</h3>
+  <ul class="bullets">
+    <li><code>/learn index ./docs</code> —— 只索引 <code>docs</code> 目录</li>
+    <li><code>/learn index ./notes</code> —— 只索引笔记目录</li>
+    <li><code>/learn ask 如何配置 MCP？</code> —— 基于已索引内容直接问答</li>
+  </ul>
+
+  <div class="note">
+    <strong>依赖：</strong>使用 Ollama 时请确保本地服务已启动且模型已下载；使用 OpenAI 兼容服务时请配置好 baseUrl、apiKey 和模型名。
+  </div>
+
+  <h3>本地模型配置示例</h3>
+  <div class="card" style="background:#f8f9fa;">
+    <p>如果你的局域网内已经部署了兼容 OpenAI 的 embedding 服务，可以按如下参数配置：</p>
+    <table>
+      <tbody>
+        <tr><th style="width:30%">配置项</th><th>值</th></tr>
+        <tr><td><code>provider</code></td><td><code>openai-compat</code></td></tr>
+        <tr><td><code>api_url</code></td><td><code>http://10.71.4.202:10307/v1/embeddings</code></td></tr>
+        <tr><td><code>model_name</code></td><td><code>Qwen3-Embedding</code></td></tr>
+        <tr><td><code>api_key</code></td><td><code>qwen3-embeding-j29c7suqz</code></td></tr>
+      </tbody>
+    </table>
+    <p>配置完成后点击「构建索引」，系统会向该地址发送 embedding 请求。</p>
+  </div>
+</div>
+
+<!-- ─── 第三步：对话中使用 ─── -->
+<h2>第三步：在对话中使用</h2>
+
+<div class="card">
+  <p>索引构建完成后，直接在聊天里用自然语言提问即可，例如：</p>
+  <ul class="bullets">
+    <li>“这个项目里用户认证逻辑在哪里？”</li>
+    <li>“我们之前定义的 API 错误码规范是什么？”</li>
+    <li>“给我总结一下 docs/architecture.md 里的设计思路。”</li>
+  </ul>
+
+  <div class="flow">
+    <span class="step">用户提问</span>
+    <span class="arrow">→</span>
+    <span class="step">模型调用 <code>semantic_search</code></span>
+    <span class="arrow">→</span>
+    <span class="step">返回最相关的文本片段</span>
+    <span class="arrow">→</span>
+    <span class="step">模型组织语言回答</span>
+  </div>
+
+  <div class="tip">
+    <strong>自动触发：</strong>模型会根据问题判断是否调用语义搜索，不需要你手动输入任何命令。
+  </div>
+</div>
+
+<!-- ─── 索引范围 ─── -->
+<h2>索引范围与排除项</h2>
+
+<div class="card">
+  <h3>索引什么</h3>
+  <ul class="bullets">
+    <li>当前工作区目录下的文本文件。</li>
+    <li>代码、Markdown、TXT、JSON、YAML 等常见文本。</li>
+    <li>默认按 <strong>60 行窗口、12 行重叠</strong>切分为 chunk 后生成 embedding。</li>
+  </ul>
+
+  <h3>默认排除</h3>
+  <p><strong>目录</strong>：</p>
+  <div class="excluded-list">
+    <code>node_modules/</code>
+    <code>.git/</code>
+    <code>dist/</code>
+    <code>build/</code>
+    <code>target/</code>
+    <code>.venv/</code>
+    <code>__pycache__/</code>
+    <code>.visionox/</code>
+  </div>
+  <p><strong>文件</strong>：</p>
+  <div class="excluded-list">
+    <code>package-lock.json</code>
+    <code>Cargo.lock</code>
+    <code>yarn.lock</code>
+    <code>.DS_Store</code>
+  </div>
+  <p><strong>扩展名</strong>（二进制/媒体/压缩）：</p>
+  <div class="excluded-list">
+    <code>.png</code>
+    <code>.jpg</code>
+    <code>.jpeg</code>
+    <code>.gif</code>
+    <code>.webp</code>
+    <code>.woff</code>
+    <code>.woff2</code>
+    <code>.ttf</code>
+    <code>.zip</code>
+    <code>.tar</code>
+    <code>.gz</code>
+  </div>
+  <p>同时遵守 <code>.gitignore</code> 规则。</p>
+</div>
+
+<!-- ─── 对话记录 ─── -->
+<h2>重要：语义索引不索引对话记录</h2>
+
+<div class="note">
+  <strong>范围说明：</strong>对话记录保存在 <code>~/.visionox/sessions/</code>，不在工作区目录内，因此不会被语义索引覆盖。
+</div>
+
+<p>查找历史对话的正确流程：</p>
+
+<div class="flow">
+  <span class="step">🧠 用户问“之前聊过 XXX”</span>
+  <span class="arrow">→</span>
+  <span class="step"><code>list_sessions</code><br>列出历史会话</span>
+  <span class="arrow">→</span>
+  <span class="step"><code>read_session</code><br>读取目标会话内容</span>
+</div>
+
+<!-- ─── 三种检索工具速查 ─── -->
+<h2>速查表：三种检索工具</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>工具</th>
+      <th>索引/搜索范围</th>
+      <th>查询方式</th>
+      <th>何时使用</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>semantic_search</code></td>
+      <td>当前工作区文本文件<br><span class="tag tag-green">语义索引</span></td>
+      <td>自然语言描述<br>（“哪里处理登录逻辑”）</td>
+      <td>找代码/文档的 <strong>意图和含义</strong></td>
+    </tr>
+    <tr>
+      <td><code>search_content</code></td>
+      <td>当前工作区文本文件<br><span class="tag tag-orange">全文 grep</span></td>
+      <td>精确字符串或正则<br>（“login()”）</td>
+      <td>找 <strong>精确符号或字符串</strong></td>
+    </tr>
+    <tr>
+      <td><code>list_sessions</code> → <code>read_session</code></td>
+      <td><code>~/.visionox/sessions/</code><br><span class="tag tag-blue">对话记录</span></td>
+      <td>按会话名读取</td>
+      <td>查看 <strong>历史对话</strong> 的完整内容</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ─── 注意事项 ─── -->
+<h2>使用注意事项</h2>
+
+<div class="card">
+  <ol class="steps">
+    <li><strong>按工作区隔离：</strong>每个工作区有独立索引。切换工作区后需要重新构建索引。</li>
+    <li><strong>不会自动更新：</strong>工作区文件修改后，需要手动「重建索引」或「增量索引」，否则模型可能基于旧内容回答。</li>
+    <li><strong>需要 embedding 服务：</strong>本地 Ollama 或 OpenAI 兼容 API 必须可用，否则无法生成向量。</li>
+    <li><strong>隐私性好：</strong>使用 Ollama 时，embedding 计算和索引文件全部保存在本地。</li>
+    <li><strong>可只索引子目录：</strong>不需要把整个工作区都索引，用 <code>/learn index &lt;dir&gt;</code> 按需构建。</li>
+  </ol>
+</div>
+
+<!-- ─── 常见误区 ─── -->
+<h2>常见误区</h2>
+
+<div class="card">
+  <p><strong>❌ 误区：</strong><code>semantic_search</code> 能搜到所有跟我聊过的东西</p>
+  <p><strong>✅ 事实：</strong>它只索引工作区目录下的文本文件。对话记录存在别处，需要 <code>list_sessions</code> / <code>read_session</code>。</p>
+</div>
+
+<div class="card">
+  <p><strong>❌ 误区：</strong><code>semantic_search</code> 搜不到 = 不存在</p>
+  <p><strong>✅ 事实：</strong>可能是索引范围未覆盖、索引未更新，或内容在对话记录里。先确认目标内容属于哪个范围。</p>
+</div>
+
+<footer>
+  Visionox · 语义索引与个人知识库指南 · 2026
+</footer>
+
+</div>
+</body>
+</html>

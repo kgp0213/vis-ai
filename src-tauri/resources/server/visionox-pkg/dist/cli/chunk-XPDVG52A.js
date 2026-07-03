@@ -1756,7 +1756,7 @@ var require_picomatch2 = __commonJS({
 });
 
 // src/config.ts
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 
@@ -2222,11 +2222,23 @@ var DEFAULT_TIMEOUT_MS = 3e4;
 function defaultConfigPath() {
   return join(homedir(), ".visionox", "config.json");
 }
+// In-process config cache keyed by file mtime. readConfig is called on every
+// tool invocation's permission checks (loadEditMode, loadProjectShellAllowed,
+// ...); statSync is 1-2 orders of magnitude cheaper than readFileSync+JSON.parse.
+// writeConfig updates mtime on disk, so the next read naturally invalidates.
+var _configCache = { path: null, mtimeMs: -1, parsed: {} };
 function readConfig(path = defaultConfigPath()) {
   try {
+    const mtimeMs = statSync(path).mtimeMs;
+    if (_configCache.path === path && _configCache.mtimeMs === mtimeMs) {
+      return _configCache.parsed;
+    }
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") return parsed;
+    if (parsed && typeof parsed === "object") {
+      _configCache = { path, mtimeMs, parsed };
+      return parsed;
+    }
   } catch {
   }
   return {};

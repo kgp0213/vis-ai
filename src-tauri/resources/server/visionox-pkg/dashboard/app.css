@@ -2049,12 +2049,23 @@ textarea {
   background: var(--surface-input);
   border-radius: 2px;
   overflow: hidden;
+  position: relative;
 }
 
 .status-bar-mini-fill {
   display: block;
   height: 100%;
   background: var(--accent-primary);
+}
+
+.fold-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--fg-3);
+  opacity: 0.4;
+  z-index: 1;
 }
 
 .status-ok { color: var(--color-success); }
@@ -2300,6 +2311,28 @@ textarea {
   margin-left: auto;
   display: flex;
   gap: var(--space-2);
+}
+
+.sessions-rename-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+.sessions-rename-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: var(--text-sm);
+  outline: none;
+}
+.sessions-rename-row input:focus {
+  border-color: var(--accent-primary);
 }
 
 .sessions-detail-kpis {

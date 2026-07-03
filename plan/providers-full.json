@@ -1,0 +1,76 @@
+{
+  "providers": [
+    {
+      "id": "deepseek-official",
+      "name": "DeepSeek-pro",
+      "baseUrl": "https://api.deepseek.com",
+      "apiKey": "sk-dd7aad9bd90b4a41ab89fcad1770b5ba",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "Flash",
+          "presets": ["auto", "flash"],
+          "efforts": ["high", "max"],
+          "thinkingMode": "enabled",
+          "multimodal": false,
+          "maxContextLength": 1048576
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "Pro",
+          "presets": ["pro"],
+          "efforts": ["high", "max"],
+          "thinkingMode": "enabled",
+          "multimodal": true,
+          "maxContextLength": 1048576
+        }
+      ],
+      "defaultPreset": "auto",
+      "defaultEffort": "max",
+      "autoEscalate": true,
+      "escalationModel": "deepseek-v4-pro"
+    },
+    {
+      "id": "local-deepseek",
+      "name": "Vis-DeepSeek",
+      "baseUrl": "http://10.40.5.70:8001/v1",
+      "apiKey": "deepseek-v4-flash-base-8c72nc00",
+      "models": [
+        {
+          "id": "deepseek-v4-flash",
+          "name": "Flash",
+          "presets": ["flash"],
+          "efforts": ["high"],
+          "thinkingMode": "disabled",
+          "multimodal": false,
+          "maxContextLength": 1048576
+        }
+      ],
+      "defaultPreset": "flash",
+      "defaultEffort": "high",
+      "autoEscalate": false
+    },
+    {
+      "id": "local-qwen",
+      "name": "Qwen图片",
+      "baseUrl": "http://10.40.5.70:8000/v1",
+      "apiKey": "qwen35-secret-8c72nc00",
+      "models": [
+        {
+          "id": "qwen3.5-397b-a17b",
+          "name": "Qwen3.5-397B",
+          "presets": ["flash"],
+          "efforts": ["high"],
+          "thinkingMode": "disabled",
+          "multimodal": true,
+          "maxContextLength": 81920,
+          "jsonModeRootObjectOnly": true
+        }
+      ],
+      "defaultPreset": "flash",
+      "defaultEffort": "high",
+      "autoEscalate": false
+    }
+  ],
+  "activeProviderId": "deepseek-official"
+}
