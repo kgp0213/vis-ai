@@ -28,4 +28,4 @@
 
 - 面向用户的功能文档使用中文，技术术语保留英文
 - 开发文档中代码块标注语言，命令行示例使用 PowerShell 语法
-- 版本号格式：Visionox 应用版本（`Cargo.toml`）+ 上游基线版本（DeepSeek-Reasonix）
+- 版本号格式：Visionox 应用版本（`Cargo.toml`）+ 上游基线版本
