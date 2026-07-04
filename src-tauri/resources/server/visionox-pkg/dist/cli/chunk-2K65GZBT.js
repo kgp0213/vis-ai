@@ -307,16 +307,39 @@ var SkillStore = class {
     }
     const { data, body } = parseFrontmatter(raw);
     const name = data.name && isValidSkillName(data.name) ? data.name : stem;
+    let fullBody = body.trim();
+    const skillDir = dirname(path);
+    try {
+      const refDir = join2(skillDir, "references");
+      if (existsSync2(refDir) && statSync2(refDir).isDirectory()) {
+        const refs = readdirSync(refDir).filter((f) => f.endsWith(".md")).sort();
+        if (refs.length > 0) {
+          fullBody += "\n\n## Available References\n\n" + refs.map((r) => `- references/${r}`).join("\n") + "\n\nRead these with read_file when the skill instructions reference them.";
+        }
+      }
+    } catch {
+    }
+    try {
+      const scriptsDir = join2(skillDir, "scripts");
+      if (existsSync2(scriptsDir) && statSync2(scriptsDir).isDirectory()) {
+        const scripts = readdirSync(scriptsDir).sort();
+        if (scripts.length > 0) {
+          fullBody += "\n\n## Available Scripts\n\n" + scripts.map((s) => `- scripts/${s}`).join("\n") + "\n\nRun these via run_command. The skill directory is: " + skillDir;
+        }
+      }
+    } catch {
+    }
     return {
       name,
       description: (data.description ?? "").trim(),
-      body: body.trim(),
+      body: fullBody,
       scope,
       path,
       allowedTools: parseAllowedTools(data["allowed-tools"]),
       runAs: parseRunAs(data.runAs),
       model: data.model?.startsWith("deepseek-") ? data.model : void 0,
-      maxToolIters: parseMaxToolIters(data["max-iters"])
+      maxToolIters: parseMaxToolIters(data["max-iters"]),
+      triggers: (data.triggers ?? "").trim()
     };
   }
 };
@@ -343,9 +366,10 @@ Tips:
 function skillIndexLine(s) {
   const safeDesc = s.description.replace(/\n/g, " ").trim();
   const tag = s.runAs === "subagent" ? " [\u{1F9EC} subagent]" : "";
-  const max = 130 - s.name.length - tag.length;
+  const trig = s.triggers ? ` [triggers: ${s.triggers}]` : "";
+  const max = 130 - s.name.length - tag.length - trig.length;
   const clipped = safeDesc.length > max ? `${safeDesc.slice(0, Math.max(1, max - 1))}\u2026` : safeDesc;
-  return clipped ? `- ${s.name}${tag} \u2014 ${clipped}` : `- ${s.name}${tag}`;
+  return clipped ? `- ${s.name}${tag}${trig} \u2014 ${clipped}` : `- ${s.name}${tag}${trig}`;
 }
 var MISSING_DESCRIPTION_PLACEHOLDER = '(no description \u2014 frontmatter is missing a "description:" line; tell the user to add one)';
 function applySkillsIndex(basePrompt, opts = {}) {

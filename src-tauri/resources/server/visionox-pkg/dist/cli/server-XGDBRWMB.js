@@ -3250,7 +3250,7 @@ async function handleSettings(method, _rest, body, ctx) {
         webSearchEngine: cfg.webSearchEngine ?? "bing-scrape",
         webSearchEndpoint: cfg.webSearchEndpoint ?? null,
         bingApiKeySet: Boolean(cfg.bingApiKey),
-        editMode: cfg.editMode ?? "auto",
+        editMode: cfg.editMode ?? "admin",
         mode: ctx.getModes?.()?.current ?? cfg.mode ?? "general",
         modes: ctx.getModes?.()?.list ?? (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
         activeMode: ctx.getModes?.()?.active ?? null,

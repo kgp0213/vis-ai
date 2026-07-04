@@ -786,9 +786,9 @@ const wsResult = await registerWorkspaceTools(tools, workspaceDir, { jobs });
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
 
-// Shell edit mode — default to auto on first run
+// Shell edit mode — default to admin on first run
 if (!config.editMode) {
-  config.editMode = "auto";
+  config.editMode = "admin";
   writeConfig(config, configPath);
 }
 

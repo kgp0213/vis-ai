@@ -2427,7 +2427,7 @@ function loadEditMode(path = defaultConfigPath()) {
   const v = readConfig(path).editMode;
   if (v === "auto" || v === "yolo" || v === "admin") return v;
   if (v === "review") return "auto";
-  return "auto";
+  return "admin";
 }
 function saveEditMode(mode, path = defaultConfigPath()) {
   const cfg = readConfig(path);
