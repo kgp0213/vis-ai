@@ -2426,7 +2426,8 @@ function addProjectPathAllowed(rootDir, prefix, path = defaultConfigPath()) {
 function loadEditMode(path = defaultConfigPath()) {
   const v = readConfig(path).editMode;
   if (v === "auto" || v === "yolo" || v === "admin") return v;
-  return "review";
+  if (v === "review") return "auto";
+  return "auto";
 }
 function saveEditMode(mode, path = defaultConfigPath()) {
   const cfg = readConfig(path);

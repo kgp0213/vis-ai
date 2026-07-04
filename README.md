@@ -133,6 +133,95 @@ Node.js Agent
 
 ---
 
+## 🔧 开发构建
+
+### 环境要求
+
+- **Rust** 1.94+
+- **Node.js** 22+
+- **Windows 10/11** + WebView2
+
+### 项目结构
+
+```
+visionox-desktop/
+├── src-tauri/                     # Tauri 桌面壳
+│   ├── src/lib.rs                 # Rust 主逻辑
+│   ├── src/main.rs                # 入口
+│   ├── resources/server/          # Node.js 运行时资源
+│   │   ├── launcher.mjs           # ★ 核心入口（AI Agent + HTTP Server）
+│   │   ├── learn.mjs              # /learn 学习模块
+│   │   ├── learn-track.mjs        # SM-2 追踪模块
+│   │   ├── learn-sandbox-impl.mjs # 沙箱检查
+│   │   ├── node.exe               # 嵌入的 Node.js
+│   │   ├── officecli.exe          # Office MCP 工具
+│   │   └── visionox-pkg/          # ★ 核心包（reasonix npm 包）
+│   │       ├── dist/cli/          # 打包后的 JS chunk 文件
+│   │       ├── dist/index.js      # 主入口
+│   │       ├── dashboard/dist/    # 前端 SPA（app.js + app.css）
+│   │       ├── dashboard/index.html
+│   │       └── package.json       # reasonix 版本
+│   ├── tauri.conf.json            # Tauri 配置（bundle.resources 列表）
+│   └── Cargo.toml
+├── tep/                           # reasonix 上游源码（0.53.2，与 dist 版本不同）
+├── plan/                          # 设计文档
+└── scripts/
+    └── restore-visionox-pkg.js    # 从 npm 下载最新 reasonix 包
+```
+
+### 快速构建（开发测试）
+
+适用于修改了 `launcher.mjs`、`visionox-pkg/dist/cli/*.js`、`app.js`、`app.css` 后的快速构建：
+
+```bash
+# 1. 切换到项目根目录
+cd C:\Users\Lenovo\Documents\vis-ai
+
+# 2. 确保没有进程占用文件（构建需要锁定 node.exe）
+taskkill /F /IM visionox-desktop.exe 2>nul
+taskkill /F /IM node.exe 2>nul
+
+# 3. 构建（不生成安装包）
+npx tauri build --no-bundle
+```
+
+构建产物在 `src-tauri\target\release\visionox-desktop.exe`。
+
+### 即时测试（不重新构建）
+
+如果只想快速迭代测试，不重新编译 Rust：
+
+```bash
+# 源码目录
+SRC=C:\Users\Lenovo\Documents\vis-ai\src-tauri\resources\server
+# AppData 安装目录
+APP=C:\Users\Lenovo\AppData\Local\Visionox\resources\server
+
+# 复制修改的文件到 AppData
+cp "$SRC\launcher.mjs"                    "$APP\launcher.mjs"
+cp "$SRC\visionox-pkg\dist\cli\*.js"      "$APP\visionox-pkg\dist\cli\"
+cp "$SRC\visionox-pkg\dashboard\dist\app.js" "$APP\visionox-pkg\dashboard\dist\app.js"
+cp "$SRC\visionox-pkg\dashboard\app.css"  "$APP\visionox-pkg\dashboard\app.css"
+```
+
+然后重启 Visionox 即可生效。
+
+### 构建时的常见问题
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| `os error 32` (文件被占用) | visionox-desktop.exe 或 node.exe 正在运行 | `taskkill /F /IM visionox-desktop.exe` |
+| `server module import failed` | `visionox-pkg` 版本不匹配（chunk 文件名变了） | 从 AppData 恢复旧版 visionox-pkg，不要运行 `restore-visionox-pkg.js` |
+| `learn-sandbox-impl.mjs` 缺失 | 文件未在 `tauri.conf.json` 的 `resources` 列表和 `lib.rs` 的 `NEEDED` 列表中 | 确认两个配置都已添加该文件 |
+
+### ⚠️ 重要提醒
+
+**不要运行 `scripts/restore-visionox-pkg.js`**（或 `npm install`），这会将 `visionox-pkg` 更新为最新 npm 版本，导致打包后的 chunk 文件名改变，`launcher.mjs` 中的 `import(distPath("server-XGDBRWMB.js"))` 等引用将失效。
+
+所有对 `visionox-pkg/dist/` 和 `visionox-pkg/dashboard/` 的修改都是直接在打包文件上进行的。如需同步到上游，应将改动迁移到 `tep/src/` 中重新构建。
+
+---
+
 ## 📄 License
 
 MIT

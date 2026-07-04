@@ -6587,12 +6587,18 @@ var VolatileScratch = class {
 
 // src/context-manager.ts
 var HISTORY_FOLD_THRESHOLD = 0.5;
+var HISTORY_FOLD_ABSOLUTE_CAP = 200000;
 var HISTORY_FOLD_TAIL_FRACTION = 0.2;
+var HISTORY_FOLD_TAIL_ABSOLUTE_CAP = 40000;
 var HISTORY_FOLD_AGGRESSIVE_THRESHOLD = 0.7;
+var HISTORY_FOLD_AGGRESSIVE_ABSOLUTE_CAP = 280000;
 var HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION = 0.1;
+var HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP = 20000;
 var HISTORY_FOLD_MIN_SAVINGS_FRACTION = 0.3;
 var FORCE_SUMMARY_THRESHOLD = 0.8;
+var FORCE_SUMMARY_ABSOLUTE_CAP = 320000;
 var PREFLIGHT_EMERGENCY_THRESHOLD = 0.95;
+var PREFLIGHT_EMERGENCY_ABSOLUTE_CAP = 380000;
 var HISTORY_FOLD_MARKER = "[CONVERSATION HISTORY SUMMARY \u2014 earlier turns folded for context efficiency]\n\n";
 var SKILL_PIN_MEMO_HEADER = "[Active skill memos \u2014 preserved verbatim across the fold:]";
 var SKILL_PIN_REGEX = /<skill-pin name="([^"]+)">\n[\s\S]*?\n<\/skill-pin>/g;
@@ -6622,23 +6628,26 @@ var ContextManager = class {
     if (!usage) return { kind: "none", promptTokens: 0, ctxMax, ratio: 0 };
     const ratio = usage.promptTokens / ctxMax;
     const base = { promptTokens: usage.promptTokens, ctxMax, ratio };
-    if (ratio > FORCE_SUMMARY_THRESHOLD) {
+    const forceSummaryThr = Math.min(FORCE_SUMMARY_THRESHOLD, FORCE_SUMMARY_ABSOLUTE_CAP / ctxMax);
+    const aggressiveThr = Math.min(HISTORY_FOLD_AGGRESSIVE_THRESHOLD, HISTORY_FOLD_AGGRESSIVE_ABSOLUTE_CAP / ctxMax);
+    const foldThr = Math.min(HISTORY_FOLD_THRESHOLD, HISTORY_FOLD_ABSOLUTE_CAP / ctxMax);
+    if (ratio > forceSummaryThr) {
       return { kind: "exit-with-summary", ...base };
     }
     if (alreadyFoldedThisTurn) return { kind: "none", ...base };
-    if (ratio > HISTORY_FOLD_AGGRESSIVE_THRESHOLD) {
+    if (ratio > aggressiveThr) {
       return {
         kind: "fold",
         ...base,
-        tailBudget: Math.floor(ctxMax * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION),
+        tailBudget: Math.min(Math.floor(ctxMax * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION), HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP),
         aggressive: true
       };
     }
-    if (ratio > HISTORY_FOLD_THRESHOLD) {
+    if (ratio > foldThr) {
       return {
         kind: "fold",
         ...base,
-        tailBudget: Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION),
+        tailBudget: Math.min(Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION), HISTORY_FOLD_TAIL_ABSOLUTE_CAP),
         aggressive: false
       };
     }
@@ -6648,8 +6657,9 @@ var ContextManager = class {
   decidePreflight(messages, toolSpecs, model) {
     const ctxMax = DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS;
     const estimate = estimateRequestTokens(messages, toolSpecs ?? null);
+    const emergencyThr = Math.min(PREFLIGHT_EMERGENCY_THRESHOLD, PREFLIGHT_EMERGENCY_ABSOLUTE_CAP / ctxMax);
     return {
-      needsAction: estimate / ctxMax > PREFLIGHT_EMERGENCY_THRESHOLD,
+      needsAction: estimate / ctxMax > emergencyThr,
       estimateTokens: estimate,
       ctxMax
     };
@@ -6657,7 +6667,7 @@ var ContextManager = class {
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
   async fold(model, opts) {
     const ctxMax = DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS;
-    const tailBudget = opts?.keepRecentTokens ?? Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION);
+    const tailBudget = opts?.keepRecentTokens ?? Math.min(Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION), HISTORY_FOLD_TAIL_ABSOLUTE_CAP);
     const all = this.deps.log.toMessages();
     const noop = {
       folded: false,
@@ -7978,6 +7988,27 @@ ${reason}`
               })
             };
             messages = this.buildMessages(pendingUser);
+            // Re-check after fold — if still over emergency threshold, try a
+            // second aggressive fold (keepRecentTokens: 0) to avoid API 400.
+            const recheck = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
+            if (recheck.needsAction) {
+              const result2 = await this.context.fold(this.model, { keepRecentTokens: 0 });
+              if (result2.folded) {
+                messages = this.buildMessages(pendingUser);
+              }
+              const recheck2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
+              if (recheck2.needsAction) {
+                yield {
+                  turn: this._turn,
+                  role: "warning",
+                  content: t("loop.preflightStillOver", {
+                    estimate: recheck2.estimateTokens.toLocaleString(),
+                    ctxMax: recheck2.ctxMax.toLocaleString(),
+                    pct: Math.round(recheck2.estimateTokens / recheck2.ctxMax * 100)
+                  })
+                };
+              }
+            }
           } else {
             yield {
               turn: this._turn,

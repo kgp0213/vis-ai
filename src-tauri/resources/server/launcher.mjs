@@ -12,7 +12,7 @@
 import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat as fsStat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -327,13 +327,13 @@ const [
     loadSemanticEmbeddingUserConfig,
   },
   { loadDotenv },
-  { registerShellTools, JobRegistry },
+  { registerShellTools, JobRegistry, pauseGate },
   { McpClient, parseMcpSpec, inspectMcpServer },
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
   { applySkillsIndex, applyProjectMemory },
   { MemoryStore },
-  { registerSkillTools, Eventizer },
+  { registerSkillTools, Eventizer, autoResolveVerdict, shouldAutoResolveCheckpoint },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
   { buildIndex, querySemantic, indexExists },
@@ -846,7 +846,9 @@ if (searchEnabled(configPath)) {
 // Utility tools (not workspace-dependent)
 registerPlanTool(tools);
 registerChoiceTool(tools);
-registerTodoTool(tools);
+registerTodoTool(tools, {
+  onTodosUpdated: (todos) => broadcastDashboardEvent({ kind: "todo-update", todos })
+});
 
 console.error(`[launcher] ${tools.size} tools registered`);
 
@@ -1949,6 +1951,8 @@ ${toolList}
 - If the user says only "remember" while the content is obviously tied to the current work scenario rather than global identity or cross-mode preference, prefer remember_mode_preference and mention that it is scoped to the current work mode.
 - Use remember_session only for temporary context that should disappear after /new
 - 当用户要求**查找、回顾、总结历史对话记录**时，先调用 \`list_sessions\` 获取会话列表，再按名称调用 \`read_session\` 读取具体内容
+- For **multi-step tasks** (3+ steps): call \`todo_write\` at the start with all steps, then update status after each step — mark in_progress when starting, completed when done
+- For **complex tasks needing approval**: call \`submit_plan\` first, wait for approval, then use \`todo_write\` to track implementation
 - When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
 
 ## Safety boundaries
@@ -2093,7 +2097,13 @@ function buildLoop(client, rootDir) {
     const tmMap = {};
     for (const m of provider.models ?? []) tmMap[m.id] = m.thinkingMode;
     globalThis.__visionoxThinkingModeMap = tmMap;
-    globalThis.__visionoxSummaryModel = provider.models?.[0]?.id;
+    // Prefer a lightweight model (flash/lite/mini) for context summarization to
+    // avoid invoking an expensive pro model on every history fold. Fall back to
+    // the model with the smallest maxContextLength, then the first model listed.
+    const models = provider.models ?? [];
+    const flash = models.find((m) => /flash|lite|mini/i.test(m.id));
+    const smallest = models.slice().sort((a, b) => (a.maxContextLength ?? Infinity) - (b.maxContextLength ?? Infinity))[0];
+    globalThis.__visionoxSummaryModel = flash?.id ?? smallest?.id ?? models[0]?.id;
   }
 
   applyContextCap(modelConfig.model);
@@ -2737,6 +2747,121 @@ async function generateReport(period, anchorDate, customRange = null) {
   return { markdown, stats };
 }
 
+// ── pauseGate modal bridge ──────────────────────────────────────
+// Bridges tool confirmation requests (pauseGate.ask) to dashboard modals via SSE.
+// Without this listener, gate.ask() throws "no confirmation listener registered".
+let activeModal = null;
+let activeGateId = null;
+
+function setActiveModal(modal) {
+  if (activeModal) {
+    broadcastDashboardEvent({ kind: "modal-down", modalKind: activeModal.kind });
+  }
+  activeModal = modal;
+  activeGateId = modal?._gateId ?? null;
+  if (modal) {
+    broadcastDashboardEvent({ kind: "modal-up", modal });
+  }
+}
+
+function resolveActiveGate(verdict) {
+  if (activeGateId !== null) {
+    pauseGate.resolve(activeGateId, verdict);
+  }
+}
+
+// Register pauseGate listener — maps tool confirmation requests to dashboard modals.
+pauseGate.on((request) => {
+  const { id, kind, payload } = request;
+
+  // 1. Auto-resolve policy (e.g., plan_checkpoint auto-continues in auto/yolo/admin)
+  const auto = autoResolveVerdict(request, loadEditMode(configPath));
+  if (auto) {
+    pauseGate.resolve(id, auto);
+    return;
+  }
+
+  // 2. path_access — auto-deny (HTTP dashboard has no path-access modal kind)
+  if (kind === "path_access") {
+    broadcastDashboardEvent({
+      turn: 0,
+      role: "warning",
+      kind: "warning",
+      id: `warn-${Date.now()}`,
+      text: `沙箱外路径访问被拒绝: ${payload.path}。如需访问，请切换到 admin 模式。`
+    });
+    pauseGate.resolve(id, { type: "deny", denyContext: "path_access not supported in desktop dashboard" });
+    return;
+  }
+
+  // 3. Map pauseGate kind to dashboard modal
+  let modal = null;
+  switch (kind) {
+    case "run_command":
+    case "run_background":
+      modal = {
+        kind: "shell", _gateId: id,
+        command: payload.command,
+        allowPrefix: payload.command?.split(/\s+/)[0] ?? "",
+        shellKind: kind === "run_background" ? "background" : "foreground",
+      };
+      break;
+    case "choice":
+      modal = {
+        kind: "choice", _gateId: id,
+        question: payload.question,
+        options: payload.options,
+        allowCustom: payload.allowCustom,
+      };
+      break;
+    case "plan_proposed":
+      modal = {
+        kind: "plan", _gateId: id,
+        plan: payload.plan,
+        steps: payload.steps,
+        summary: payload.summary,
+      };
+      break;
+    case "plan_checkpoint":
+      modal = {
+        kind: "checkpoint", _gateId: id,
+        stepId: payload.stepId,
+        title: payload.title,
+        result: payload.result,
+        notes: payload.notes,
+        completed: payload.completed,
+        total: payload.total,
+      };
+      break;
+    case "plan_revision":
+      modal = {
+        kind: "revision", _gateId: id,
+        reason: payload.reason,
+        remainingSteps: payload.remainingSteps,
+        summary: payload.summary,
+      };
+      break;
+    default:
+      broadcastDashboardEvent({
+        turn: 0, role: "warning", kind: "warning",
+        id: `warn-${Date.now()}`,
+        text: `未知的确认请求类型: ${kind}，已自动取消。`
+      });
+      pauseGate.cancel(id);
+      return;
+  }
+
+  setActiveModal(modal);
+});
+
+// Wire audit listener for tool confirmations (allow/deny/always_allow)
+pauseGate.setAuditListener((event) => {
+  try {
+    appendFileSync(resolve(visionoxDataDir, "audit.jsonl"),
+      JSON.stringify({ ts: Date.now(), action: "tool-confirm", payload: event }) + "\n");
+  } catch { /* swallow */ }
+});
+
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
   mode: "desktop",
@@ -2756,7 +2881,7 @@ const ctx = {
   getSessionName: () => "desktop",
   getModels: () => null,
   getLoopRunStatus: () => null,
-  getActiveModal: () => null,
+  getActiveModal: () => activeModal,
   hasApiKey: () => !!apiKey,
   getLogs: () => logBuffer.slice(),
   getEccRules: () => ({
@@ -2797,12 +2922,55 @@ const ctx = {
   },
 
   // ── Setters / actions ──────────────────────────────────────
+  audit: (entry) => {
+    try {
+      appendFileSync(resolve(visionoxDataDir, "audit.jsonl"), JSON.stringify(entry) + "\n");
+    } catch { /* swallow — audit must never break the caller */ }
+  },
+  // ── Modal resolution callbacks (called by POST /modal/resolve) ──
+  resolveShellConfirm: (choice) => {
+    const prefix = activeModal?.allowPrefix ?? "";
+    const verdict = choice === "deny" ? { type: "deny", denyContext: "user denied" }
+      : choice === "always_allow" ? { type: "always_allow", prefix }
+      : { type: "run_once" };
+    resolveActiveGate(verdict);
+    setActiveModal(null);
+  },
+  resolveChoiceConfirm: (resolution) => {
+    const verdict = resolution?.kind === "pick" ? { type: "pick", optionId: resolution.optionId }
+      : resolution?.kind === "custom" ? { type: "text", text: resolution.text }
+      : { type: "cancel" };
+    resolveActiveGate(verdict);
+    setActiveModal(null);
+  },
+  resolvePlanConfirm: (choice, text) => {
+    const feedback = text || "";
+    const verdict = choice === "approve" ? { type: "approve", feedback }
+      : choice === "refine" ? { type: "refine", feedback }
+      : { type: "cancel", feedback };
+    resolveActiveGate(verdict);
+    setActiveModal(null);
+  },
+  resolveCheckpointConfirm: (choice, text) => {
+    const verdict = choice === "continue" ? { type: "continue" }
+      : choice === "revise" ? { type: "revise", feedback: text || "" }
+      : { type: "stop" };
+    resolveActiveGate(verdict);
+    setActiveModal(null);
+  },
+  resolveReviseConfirm: (choice) => {
+    const verdict = choice === "accept" ? { type: "accepted" } : { type: "rejected" };
+    resolveActiveGate(verdict);
+    setActiveModal(null);
+  },
   setEditMode: (m) => {
+    // "review" is a legacy alias for "auto" after the merge
+    const resolved = m === "review" ? "auto" : m;
     const cfg = readConfig(configPath);
-    cfg.editMode = m;
+    cfg.editMode = resolved;
     writeConfig(cfg, configPath);
-    console.error(`[launcher] edit mode: ${m}`);
-    return m;
+    console.error(`[launcher] edit mode: ${resolved}`);
+    return resolved;
   },
   setEccRules: (rules) => {
     const cfg = readConfig(configPath);
@@ -2837,6 +3005,7 @@ const ctx = {
     const modelConfig = effectiveModelConfig();
     applyContextCap(modelConfig.model);
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
+    broadcastDashboardEvent({ kind: "config-changed" });
   },
   applyEffortLive: (effort) => {
     syncRuntimeConfig({ ...config, reasoningEffort: effort });
@@ -2851,6 +3020,32 @@ const ctx = {
     applyContextCap(modelConfig.model);
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
     console.error(`[launcher] model: ${modelConfig.model}`);
+    broadcastDashboardEvent({ kind: "config-changed" });
+  },
+  // Refresh context cap after provider/model config changes (e.g. JSON import).
+  // Re-reads config, clears stale DEEPSEEK_CONTEXT_TOKENS[model] if manual cap
+  // was removed, and re-applies the priority chain: manual > maxContextLength > hardcoded.
+  refreshContextCap: () => {
+    const cfg = readConfig(configPath);
+    syncRuntimeConfig(cfg);
+    const modelConfig = effectiveModelConfig();
+    // If manual cap was cleared, delete the stale entry so applyContextCap
+    // can fall through to maxContextLength or hardcoded defaults.
+    if (!cfg.contextCapTokens) {
+      delete DEEPSEEK_CONTEXT_TOKENS[modelConfig.model];
+    }
+    applyContextCap(modelConfig.model);
+    // Re-select summary model in case provider models were updated by import.
+    const provider = getActiveProvider(cfg);
+    if (provider) {
+      const models = provider.models ?? [];
+      const flash = models.find((m) => /flash|lite|mini/i.test(m.id));
+      const smallest = models.slice().sort((a, b) => (a.maxContextLength ?? Infinity) - (b.maxContextLength ?? Infinity))[0];
+      globalThis.__visionoxSummaryModel = flash?.id ?? smallest?.id ?? models[0]?.id;
+    }
+    loop?.configure({ model: modelConfig.model });
+    console.error(`[launcher] context cap refreshed: model=${modelConfig.model}, cap=${DEEPSEEK_CONTEXT_TOKENS[modelConfig.model] ?? DEFAULT_CONTEXT_TOKENS}`);
+    broadcastDashboardEvent({ kind: "config-changed" });
   },
   setBudgetUsdLive: (usd) => { loop?.setBudget(usd); },
 
@@ -2908,6 +3103,7 @@ const ctx = {
       balanceData = null;
       console.error(`[launcher] provider switched: ${providerId} but no apiKey, client cleared`);
     }
+    broadcastDashboardEvent({ kind: "config-changed" });
   },
 
   // Sync workspace: unregister old tools, re-register with new root, rebuild loop.
@@ -3081,7 +3277,7 @@ const ctx = {
           hasSemanticSearch,
           configPath,
           tail: learnCmd.tail,
-          allowAllPaths: () => loadEditMode(configPath) === "admin" || loadEditMode(configPath) === "yolo",
+          allowAllPaths: () => loadEditMode(configPath) === "admin",
           buildIndex,
           querySemantic,
           indexExists,
@@ -3091,6 +3287,9 @@ const ctx = {
           setLearningMode,
           getLearningMode,
           rebuildLoop: () => {
+            pauseGate.cancelAll();
+            setActiveModal(null);
+            broadcastDashboardEvent({ kind: "todo-update", todos: [] });
             if (client) {
               loop = buildLoop(client, workspaceDir);
               ctx.loop = loop;
@@ -3452,6 +3651,9 @@ const ctx = {
   },
 
   abortTurn: () => {
+    pauseGate.cancelAll();
+    setActiveModal(null);
+    broadcastDashboardEvent({ kind: "todo-update", todos: [] });
     if (busy) {
       loop?.abort();
     }

@@ -182,7 +182,7 @@ struct StartupArgs {
 /// installer is the authoritative source there. In dev/test builds the source
 /// tree is present and the copy repairs drift caused by partial rebuilds.
 fn ensure_server_resources(server_dir: &std::path::Path) {
-    const NEEDED: &[&str] = &["learn.mjs", "learn-track.mjs"];
+    const NEEDED: &[&str] = &["learn.mjs", "learn-track.mjs", "learn-sandbox-impl.mjs"];
     let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("server");

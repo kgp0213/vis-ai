@@ -340,22 +340,20 @@ Tips:
 - Add \`max-iters: N\` to change the subagent's pause cadence (default 16). This isn't a budget \u2014 the parent resumes on pause, so N is how often the parent gets a checkpoint, not how much total work the subagent gets.
 `;
 }
-function skillIndexLine(s, recommended = false) {
+function skillIndexLine(s) {
   const safeDesc = s.description.replace(/\n/g, " ").trim();
   const tag = s.runAs === "subagent" ? " [\u{1F9EC} subagent]" : "";
-  const star = recommended ? "\u2B50 " : "";
-  const max = 130 - s.name.length - tag.length - star.length;
+  const max = 130 - s.name.length - tag.length;
   const clipped = safeDesc.length > max ? `${safeDesc.slice(0, Math.max(1, max - 1))}\u2026` : safeDesc;
-  return clipped ? `- ${star}${s.name}${tag} \u2014 ${clipped}` : `- ${star}${s.name}${tag}`;
+  return clipped ? `- ${s.name}${tag} \u2014 ${clipped}` : `- ${s.name}${tag}`;
 }
 var MISSING_DESCRIPTION_PLACEHOLDER = '(no description \u2014 frontmatter is missing a "description:" line; tell the user to add one)';
 function applySkillsIndex(basePrompt, opts = {}) {
   const store = new SkillStore(opts);
   const skills = store.list();
   if (skills.length === 0) return basePrompt;
-  const modeSkills = Array.isArray(opts.modeSkills) ? new Set(opts.modeSkills.filter(Boolean)) : null;
   const lines = skills.map(
-    (s) => skillIndexLine(s.description ? s : { ...s, description: MISSING_DESCRIPTION_PLACEHOLDER }, modeSkills ? modeSkills.has(s.name) : false)
+    (s) => skillIndexLine(s.description ? s : { ...s, description: MISSING_DESCRIPTION_PLACEHOLDER })
   );
   const joined = lines.join("\n");
   const truncated = joined.length > SKILLS_INDEX_MAX_CHARS ? `${joined.slice(0, SKILLS_INDEX_MAX_CHARS)}
@@ -365,7 +363,7 @@ function applySkillsIndex(basePrompt, opts = {}) {
     "",
     "# Skills \u2014 playbooks you can invoke",
     "",
-    'One-liner index. Each entry is either a built-in or a user-authored playbook. Call `run_skill({ name: "<skill-name>", arguments: "<task>" })` \u2014 the `name` is JUST the skill identifier (e.g. `"explore"`), NOT the `[\u{1F9EC} subagent]` tag that appears after it. Entries tagged `[\u{1F9EC} subagent]` spawn an **isolated subagent** \u2014 its tool calls and reasoning never enter your context, only its final answer does. Use subagent skills for tasks that would otherwise flood your context (deep exploration, multi-step research, anything where you only need the conclusion). Plain skills are inlined: their body becomes a tool result you read and act on directly. The user can also invoke a skill via `/skill <name>`.' + (modeSkills ? " Entries marked with \u2B50 are recommended for the current work mode; others remain available but are not the primary fit." : ""),
+    'One-liner index. Each entry is either a built-in or a user-authored playbook. Call `run_skill({ name: "<skill-name>", arguments: "<task>" })` \u2014 the `name` is JUST the skill identifier (e.g. `"explore"`), NOT the `[\u{1F9EC} subagent]` tag that appears after it. Entries tagged `[\u{1F9EC} subagent]` spawn an **isolated subagent** \u2014 its tool calls and reasoning never enter your context, only its final answer does. Use subagent skills for tasks that would otherwise flood your context (deep exploration, multi-step research, anything where you only need the conclusion). Plain skills are inlined: their body becomes a tool result you read and act on directly. The user can also invoke a skill via `/skill <name>`.',
     "",
     "```",
     truncated,

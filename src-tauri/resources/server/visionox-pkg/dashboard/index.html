@@ -16,19 +16,9 @@
     <script>
       (function() {
         try {
-          var t = '';
-          try {
-            var params = new URLSearchParams(window.location.search);
-            t = params.get('theme') || '';
-          } catch(e) {}
-          if (!t) {
-            try { t = window.localStorage ? window.localStorage.getItem('visionox-theme') : ''; } catch(e) {}
-          }
-          if (!t) {
-            var m = document.cookie.match(/(?:^|;\s*)visionox-theme=([^;]*)/);
-            t = m ? decodeURIComponent(m[1]) : '';
-          }
-          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) t = 'dark';
+          var m = document.cookie.match(/(?:^|;\s*)visionox-theme=([^;]*)/);
+          var t = m ? decodeURIComponent(m[1]) : 'dark';
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage)$/.test(t)) t = 'dark';
           document.documentElement.setAttribute('data-theme', t);
         } catch(e) {}
       })();

@@ -6235,8 +6235,10 @@ ${reason}`
       const rawBase64 = dataUrl.replace(/^data:image\/[^;]+;base64,/, "");
       const mimeMatch = dataUrl.match(/^data:(image\/[^;]+);base64,/);
       const mediaType = mimeMatch ? mimeMatch[1] : "image/jpeg";
-      const block = { type: "image_url", image_url: { url: dataUrl } };
-      if (visionDetail) block.image_url.detail = visionDetail;
+      const block = {
+        type: "image",
+        source: { type: "base64", media_type: mediaType, data: rawBase64 }
+      };
       parts.push(block);
     }
     if (parts.length === 0) return text || "";

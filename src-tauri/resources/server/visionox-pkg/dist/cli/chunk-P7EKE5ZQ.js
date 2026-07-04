@@ -54779,6 +54779,8 @@ var stats = () => {
 };
 var handlers = {
   hook: hooks,
+  hooks,
+  update,
   stats,
   doctor
 };
@@ -54907,9 +54909,13 @@ var keys = (_args, _loop, ctx) => {
 };
 var copy = () => ({ openCopyMode: true });
 var handlers2 = {
+  exit,
   new: resetLog,
+  help,
   retry,
-  help
+  loop,
+  keys,
+  copy
 };
 
 // src/cli/ui/slash/handlers/dashboard.ts
@@ -54949,7 +54955,7 @@ var dashboard = (args, _loop, ctx) => {
   });
   return { info: t("handlers.dashboard.starting") };
 };
-var handlers3 = {};
+var handlers3 = { dashboard };
 
 // src/cli/ui/slash/helpers.ts
 import { spawnSync } from "child_process";
@@ -55453,6 +55459,28 @@ var handlers6 = {
   logs
 };
 
+// src/cli/ui/slash/handlers/language.ts
+var handlers7 = {
+  language: (args, _loop, ctx) => {
+    const lang = args[0];
+    if (!lang) {
+      return { openArgPickerFor: "language" };
+    }
+    const supported = getSupportedLanguages();
+    if (!supported.includes(lang)) {
+      return {
+        info: t("slash.language.unsupported", {
+          code: lang,
+          supported: supported.join(", ")
+        })
+      };
+    }
+    setLanguage(lang);
+    notifyLanguageChange();
+    ctx.dispatch?.({ type: "language.change", lang });
+    return { info: t("slash.language.success") };
+  }
+};
 
 // src/cli/ui/slash/handlers/mcp.ts
 var mcp = (args, loop2, ctx) => {
@@ -55558,6 +55586,7 @@ function triggerReconnect(rawName, servers, postInfo, loop2) {
     )
   };
 }
+var handlers8 = { mcp };
 
 // src/cli/ui/slash/handlers/memory.ts
 import { basename } from "path";
@@ -55851,7 +55880,8 @@ var budget = (args, loop2) => {
 var handlers10 = {
   model,
   preset,
-  pro
+  pro,
+  budget
 };
 
 // src/cli/ui/slash/handlers/observability.ts
@@ -56170,7 +56200,8 @@ var handlers11 = {
   context,
   status,
   compact,
-  cost
+  cost,
+  feedback
 };
 
 // src/cli/ui/slash/handlers/permissions.ts
@@ -56413,27 +56444,16 @@ function handleDone(rest, ctx) {
       return { info: t("handlers.plans.doneNoPlan") };
   }
 }
-var report = async (args, _loop, ctx) => {
-  const period = ["daily", "weekly", "yearly"].includes(args[0]) ? args[0] : "daily";
-  const anchorDate = args[1] ? new Date(args[1]) : new Date();
-  if (Number.isNaN(anchorDate.getTime())) {
-    return { info: "invalid date: " + args[1] };
-  }
-  if (!ctx.generateReport) {
-    return { info: "report engine not available" };
-  }
-  try {
-    const { markdown, stats } = await ctx.generateReport(period, anchorDate);
-    const header = `## Report · ${period} · ${stats.sessions} sessions · ${stats.messages} messages`;
-    return { info: `${header}\n\n${markdown}` };
-  } catch (err) {
-    return { info: `report failed: ${err.message}` };
-  }
-};
 var handlers13 = {
+  plans,
   replay,
-  report,
   stop
+};
+
+// src/cli/ui/slash/handlers/sessions.ts
+var sessions = () => ({ openSessionsPicker: true });
+var handlers14 = {
+  sessions
 };
 
 // src/cli/ui/slash/handlers/skill.ts
@@ -56544,6 +56564,43 @@ var handlers16 = {
   theme
 };
 
+// src/cli/ui/slash/handlers/web-search-engine.ts
+var handlers17 = {
+  "search-engine": (args, _loop, ctx) => {
+    const engine = args[0];
+    if (!engine || engine !== "mojeek" && engine !== "searxng") {
+      return {
+        info: [
+          t("handlers.webSearchEngine.currentEngine", { engine: webSearchEngine() }),
+          t("handlers.webSearchEngine.endpoint", { url: webSearchEndpoint() }),
+          "",
+          t("handlers.webSearchEngine.usageHeader"),
+          t("handlers.webSearchEngine.usageMojeek"),
+          t("handlers.webSearchEngine.usageSearxng"),
+          t("handlers.webSearchEngine.usageSearxngUrl"),
+          "",
+          t("handlers.webSearchEngine.alias"),
+          "",
+          t("handlers.webSearchEngine.searxngInfo"),
+          t("handlers.webSearchEngine.searxngInstall")
+        ].join("\n")
+      };
+    }
+    const cfg = readConfig();
+    cfg.webSearchEngine = engine;
+    if (engine === "searxng" && args[1]) {
+      const raw = args[1];
+      cfg.webSearchEndpoint = raw.includes("://") ? raw : `http://${raw}`;
+    }
+    writeConfig(cfg);
+    const note = engine === "searxng" ? t("handlers.webSearchEngine.switchedSearxngNote", { endpoint: webSearchEndpoint() }) : "";
+    ctx.postInfo?.(t("handlers.webSearchEngine.switched", { engine, note }));
+    const detail = engine === "searxng" ? t("handlers.webSearchEngine.confirmedDetail", { endpoint: webSearchEndpoint() }) : "";
+    return { info: t("handlers.webSearchEngine.confirmed", { engine, detail }) };
+  },
+  se: (args, loop2, ctx) => handlers17["search-engine"](args, loop2, ctx)
+};
+
 // src/cli/ui/slash/nearest.ts
 function nearestCommands(input, all, opts = {}) {
   if (!input) return [];
@@ -56577,13 +56634,17 @@ var HANDLERS = {
   ...handlers4,
   ...handlers5,
   ...handlers6,
+  ...handlers7,
+  ...handlers8,
   ...handlers9,
   ...handlers10,
   ...handlers11,
   ...handlers12,
   ...handlers13,
+  ...handlers14,
   ...handlers16,
-  ...handlers15
+  ...handlers15,
+  ...handlers17
 };
 function handleSlash(cmd, args, loop2, ctx = {}) {
   const h = HANDLERS[resolveSlashAlias(cmd)];
@@ -58534,7 +58595,6 @@ function AppInner({
           },
           applyEffortLive: (effort) => {
             loop2.configure({ reasoningEffort: effort });
-            log.pushInfo(`\u25B8 effort: ${effort}`);
           },
           applyModelLive: (model3) => {
             loop2.configure({ model: model3 });

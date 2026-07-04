@@ -323,9 +323,6 @@ function autoResolveVerdict(req, editMode) {
   if (req.kind === "plan_checkpoint" && shouldAutoResolveCheckpoint(editMode)) {
     return { type: "continue" };
   }
-  if (req.kind === "path_access" && editMode === "yolo") {
-    return { type: "run_once" };
-  }
   return null;
 }
 

@@ -19415,10 +19415,9 @@ var en = {
     presetFlashTitle: "flash \u2014 always flash; no auto-escalate. /pro still works for one-shot manual",
     presetProTitle: "pro \u2014 always pro; ~3\xD7 flash cost (5/31 discount). Locks in on hard architecture work.",
     editGateTitle: "edit gate \u2014 Shift+Tab cycles in TUI",
-    editReviewTitle: "review \u2014 both edits and non-allowlisted shell ask first",
-    editAutoTitle: "auto \u2014 edits auto-apply, shell still asks",
-    editYoloTitle: "yolo \u2014 edits AND shell auto-run, allowlist bypassed",
-    editAdminTitle: "admin \u2014 yolo + unrestricted filesystem access (no sandbox)",
+    editAutoTitle: "auto \u2014 edits auto-apply; shell limited to allowlist, filesystem sandboxed",
+    editYoloTitle: "yolo \u2014 edits and shell auto-run; filesystem stays sandboxed to project dir",
+    editAdminTitle: "admin \u2014 all restrictions removed: unrestricted shell and filesystem",
     railSession: "Session",
     railTurns: "turns",
     railPromptTok: "prompt tok",
@@ -20150,10 +20149,9 @@ var zhCN = {
     presetFlashTitle: "flash \u2014 \u59CB\u7EC8 flash\uFF1B\u4E0D\u81EA\u52A8\u5347\u7EA7\u3002/pro \u4ECD\u53EF\u7528\u4E8E\u4E00\u6B21\u6027\u624B\u52A8\u63D0\u5347",
     presetProTitle: "pro \u2014 \u59CB\u7EC8 pro\uFF1B\u7EA6 3 \u500D flash \u6210\u672C\uFF085/31 \u6298\u6263\uFF09\u3002\u9501\u5B9A\u56F0\u96BE\u7684\u67B6\u6784\u5DE5\u4F5C\u3002",
     editGateTitle: "\u7F16\u8F91\u95E8\u63A7 \u2014 Shift+Tab \u5728 TUI \u4E2D\u5FAA\u73AF",
-    editReviewTitle: "review \u2014 \u7F16\u8F91\u548C\u975E\u5141\u8BB8\u5217\u8868\u7684 shell \u547D\u4EE4\u90FD\u4F1A\u5148\u8BE2\u95EE",
-    editAutoTitle: "auto \u2014 \u7F16\u8F91\u81EA\u52A8\u5E94\u7528\uFF0Cshell \u4ECD\u4F1A\u8BE2\u95EE",
-    editYoloTitle: "yolo \u2014 \u7F16\u8F91\u548C shell \u90FD\u81EA\u52A8\u8FD0\u884C\uFF0C\u7ED5\u8FC7\u5141\u8BB8\u5217\u8868",
-    editAdminTitle: "admin \u2014 yolo + \u65E0\u9650\u5236\u6587\u4EF6\u7CFB\u7EDF\u8BBF\u95EE\uFF08\u65E0\u6C99\u7BB1\uFF09",
+    editAutoTitle: "auto \u2014 \u7F16\u8F91\u81EA\u52A8\u5E94\u7528\uFF1BShell \u53D7\u767D\u540D\u5355\u9650\u5236\uFF0C\u6587\u4EF6\u7CFB\u7EDF\u6C99\u7BB1\u9694\u79BB",
+    editYoloTitle: "yolo \u2014 \u7F16\u8F91\u548C Shell \u81EA\u52A8\u8FD0\u884C\uFF1B\u6587\u4EF6\u7CFB\u7EDF\u9650\u5236\u5728\u9879\u76EE\u76EE\u5F55\u5185",
+    editAdminTitle: "admin \u2014 \u6240\u6709\u9650\u5236\u79FB\u9664\uFF1AShell \u548C\u6587\u4EF6\u7CFB\u7EDF\u5747\u65E0\u9650\u5236",
     railSession: "\u4F1A\u8BDD",
     railTurns: "\u8F6E\u6B21",
     railPromptTok: "\u63D0\u793A tokens",
@@ -23329,8 +23327,19 @@ function PlanModal({ modal, onResolve }) {
   const [stage, setStage] = d2(null);
   const send = () => onResolve("plan", stage, feedback);
   return html4`
-    <${ModalCard} accent="#67e8f9" icon="◆" title=${t4("modal.planTitle")} subtitle=${t4("modal.planSubtitle")}>
-      <div class="md modal-plan-body" dangerouslySetInnerHTML=${{ __html: marked.parse(modal.body || "") }}></div>
+    <${ModalCard} accent="#67e8f9" icon="◆" title=${t4("modal.planTitle")} subtitle=${modal.summary || t4("modal.planSubtitle")}>
+      <div class="md modal-plan-body" dangerouslySetInnerHTML=${{ __html: marked.parse(modal.plan || "") }}></div>
+      ${modal.steps?.length ? html4`
+        <div class="modal-plan-steps">
+          ${modal.steps.map((s) => html4`
+            <div class="modal-plan-step">
+              <span class=${`modal-step-risk modal-step-risk-${s.risk || "low"}`}></span>
+              <span class="modal-step-id">${s.id}</span>
+              <span class="modal-step-title">${s.title}</span>
+            </div>
+          `)}
+        </div>
+      ` : null}
       ${stage ? html4`
           <textarea
             placeholder=${stage === "approve" ? t4("modal.approveInstructions") : t4("modal.refinePlaceholder")}
@@ -23465,7 +23474,6 @@ function EditReviewModal({ modal, onResolve }) {
         <button class="primary" onClick=${() => onResolve("edit-review", "apply")}>${t4("chat.confirmBtn")}</button>
         <button onClick=${() => onResolve("edit-review", "reject")}>${t4("chat.rejectBtn")}</button>
         <button onClick=${() => onResolve("edit-review", "apply-rest-of-turn")}>${t4("chat.applyRestBtn")}</button>
-        <button onClick=${() => onResolve("edit-review", "flip-to-auto")}>${t4("chat.flipAutoBtn")}</button>
       </div>
     <//>
   `;
@@ -23500,6 +23508,8 @@ function CheckpointModal({ modal, onResolve }) {
       title=${t4("modal.stepComplete", { counter })}
       subtitle=${label}
     >
+      ${modal.result ? html4`<div class="modal-checkpoint-result">${modal.result}</div>` : null}
+      ${modal.notes ? html4`<div class="modal-checkpoint-notes">${modal.notes}</div>` : null}
       ${staged ? html4`
           <textarea
             placeholder=${t4("modal.revisePlaceholder")}
@@ -23798,6 +23808,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
+  const [todos, setTodos] = d2([]);
+  const [todoExpanded, setTodoExpanded] = d2(false);
   const [semanticIndex, setSemanticIndex] = d2(null);
   const [slashCommands, setSlashCommands] = d2([]);
   const [popoverKind, setPopoverKind] = d2(null);
@@ -23984,6 +23996,22 @@ const [providerCaps, setProviderCaps] = d2(null);
           role: m.role,
           text: m.text || ""
         })));
+        return;
+      }
+      if (dash.kind === "config-changed") {
+        api("/overview").then((o3) => {
+          setStats(o3.stats ?? null);
+          setOverviewModel(o3.model ?? null);
+          setPresetLocal(o3.preset ?? null);
+          setEffortLocal(o3.reasoningEffort ?? null);
+          setEditModeLocal(o3.editMode ?? null);
+          setActiveProviderId(o3.activeProviderId ?? null);
+          setProviderCaps(o3.providerCapabilities ?? null);
+        }).catch(() => {});
+        return;
+      }
+      if (dash.kind === "todo-update") {
+        setTodos(dash.todos ?? []);
         return;
       }
       if (dash.kind === "modal-up") {
@@ -24436,6 +24464,12 @@ const [providerCaps, setProviderCaps] = d2(null);
     };
   }, []);
   const setEditMode = q2(async (next) => {
+    if (next === "yolo" || next === "admin") {
+      const msg = next === "admin"
+        ? "\u5207\u6362\u5230 admin \u6A21\u5F0F\u5C06\u79FB\u9664\u6240\u6709\u5B89\u5168\u9650\u5236\uFF08Shell \u548C\u6587\u4EF6\u7CFB\u7EDF\u5747\u65E0\u9650\u5236\uFF09\u3002\u786E\u5B9A\uFF1F"
+        : "\u5207\u6362\u5230 yolo \u6A21\u5F0F\u5C06\u81EA\u52A8\u6267\u884C\u6240\u6709 Shell \u547D\u4EE4\uFF08\u4E0D\u518D\u9010\u6761\u786E\u8BA4\uFF09\u3002\u786E\u5B9A\uFF1F";
+      if (!confirm(msg)) return;
+    }
     setEditModeLocal(next);
     try {
       await api("/edit-mode", { method: "POST", body: { mode: next } });
@@ -24455,6 +24489,13 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       await api("/settings", { method: "POST", body: { [key]: value } });
       if (key === "mode") showToast("工作场景已切换，下次新对话生效", "info");
+      try {
+        const o3 = await api("/overview");
+        setStats(o3.stats ?? null);
+        setOverviewModel(o3.model ?? null);
+        setPresetLocal(o3.preset ?? null);
+        setEffortLocal(o3.reasoningEffort ?? null);
+      } catch {}
     } catch (err) {
       setError(`${key} switch failed: ${err.message}`);
       try {
@@ -24522,13 +24563,13 @@ const [providerCaps, setProviderCaps] = d2(null);
             ` : null}
           ${editMode ? html4`
               <div class="mode-picker" title=${t4("chat.editGateTitle")}>
-                ${["review", "auto", "yolo", "admin"].map(
+                ${["auto", "yolo", "admin"].map(
     (m3) => html4`
                   <button
                     key=${m3}
-                    class="mode-btn ${editMode === m3 ? "active" : ""} ${m3 === "review" ? "review" : ""} ${m3 === "auto" ? "auto" : ""} ${m3 === "yolo" ? "yolo" : ""} ${m3 === "admin" ? "admin" : ""}"
+                    class="mode-btn ${editMode === m3 ? "active" : ""} ${m3 === "auto" ? "auto" : ""} ${m3 === "yolo" ? "yolo" : ""} ${m3 === "admin" ? "admin" : ""}"
                     onClick=${() => setEditMode(m3)}
-                    title=${m3 === "review" ? t4("chat.editReviewTitle") : m3 === "auto" ? t4("chat.editAutoTitle") : m3 === "yolo" ? t4("chat.editYoloTitle") : t4("chat.editAdminTitle")}
+                    title=${m3 === "auto" ? t4("chat.editAutoTitle") : m3 === "yolo" ? t4("chat.editYoloTitle") : t4("chat.editAdminTitle")}
                   >${m3}</button>
                 `
   )}
@@ -24558,11 +24599,13 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>` : null}
       ${error ? html4`<div class="notice err">${error}</div>` : null}
 
-      ${modal ? modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null : null}
-
       <div class="chat-body">
         <div class="chat-main">
           <${ChatFeed} messages=${messages} streaming=${streaming} innerRef=${feedRef} />
+
+          ${modal ? modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null : null}
+
+          ${todos.length > 0 ? html4`<${TodoBar} todos=${todos} expanded=${todoExpanded} onToggle=${() => setTodoExpanded(!todoExpanded)} />` : null}
 
           <div class="chat-input-area" style="position:relative;flex-direction:column;gap:2px;padding-top:6px">
             ${popoverKind && popoverItems.length > 0 ? html4`
@@ -24845,6 +24888,38 @@ function InFlightRow({
             <span class="muted">${statusLine}</span>
           ` : null}
       <button class="chat-inflight-abort" onClick=${onAbort}>${t4("chat.abortBtn")}</button>
+    </div>
+  `;
+}
+function TodoBar({ todos, expanded, onToggle }) {
+  const total = todos.length;
+  if (total === 0) return null;
+  const done = todos.filter((t) => t.status === "completed").length;
+  const inProgress = todos.filter((t) => t.status === "in_progress").length;
+  const pct = total > 0 ? Math.round(done / total * 100) : 0;
+  const current = todos.find((t) => t.status === "in_progress");
+  const allDone = done === total;
+  return html4`
+    <div class="todo-bar">
+      <div class="todo-bar-header" onClick=${onToggle}>
+        <span class="todo-bar-icon">${allDone ? "\u2705" : "\u{1F4CB}"}</span>
+        <span class="todo-bar-count">${allDone ? "\u5168\u90E8\u5B8C\u6210" : `${done}/${total} \u5B8C\u6210`}</span>
+        <div class="todo-bar-progress">
+          <div class="todo-bar-progress-fill" style=${`width: ${pct}%;`}></div>
+        </div>
+        ${current && !allDone ? html4`<span class="todo-bar-current">${current.activeForm || current.content}</span>` : null}
+        <span class="todo-bar-toggle">${expanded ? "\u25B4" : "\u25BE"}</span>
+      </div>
+      ${expanded ? html4`
+        <div class="todo-bar-list">
+          ${todos.map((t) => html4`
+            <div class=${`todo-item todo-item-${t.status}`}>
+              <span class="todo-item-mark">${t.status === "completed" ? "[x]" : t.status === "in_progress" ? "[>]" : "[ ]"}</span>
+              <span class="todo-item-text">${t.status === "in_progress" ? (t.activeForm || t.content) : t.content}</span>
+            </div>
+          `)}
+        </div>
+      ` : null}
     </div>
   `;
 }
@@ -26253,6 +26328,12 @@ function PermissionsPanel() {
       >${feedback.text}</span>` : null;
   return html4`
     <div style="display:flex;flex-direction:column;gap:14px">
+      ${p3.editMode === "admin" ? html4`<div class="card accent-err">
+              <div class="card-h"><span class="title" style="color:var(--c-err)">Admin \u6A21\u5F0F</span></div>
+              <div class="card-b">
+                \u6240\u6709\u5B89\u5168\u9650\u5236\u5DF2\u79FB\u9664\u3002\u6A21\u578B\u53EF\u6267\u884C\u4EFB\u610F Shell \u547D\u4EE4\u5E76\u8BBF\u95EE\u78C1\u76D8\u4EFB\u610F\u4F4D\u7F6E\u7684\u6587\u4EF6\u3002
+              </div>
+            </div>` : null}
       ${p3.editMode === "yolo" ? html4`<div class="card accent-warn">
               <div class="card-h"><span class="title" style="color:var(--c-warn)">${t4("permissions.yoloTitle")}</span></div>
               <div class="card-b">
@@ -28121,19 +28202,20 @@ function SettingsPanel() {
     "\u4E0A\u4E0B\u6587\u957F\u5EA6",
     html4`
             <select
-              value=${v3.contextCapTokens ?? v3.providerContextCap ?? "auto"}
+              value=${v3.contextCapTokens ?? "auto"}
               onChange=${(e3) => save({ contextCapTokens: e3.target.value === "auto" ? null : parseInt(e3.target.value, 10) })}
               disabled=${saving}
             >
-              <option value="auto">\u6A21\u578B\u9ED8\u8BA4</option>
+              <option value="auto">${v3.providerContextCap ? `\u6A21\u578B\u9ED8\u8BA4 (${Math.round(v3.providerContextCap / 1024)}K)` : "\u6A21\u578B\u9ED8\u8BA4"}</option>
               <option value="32768">32K</option>
               <option value="65536">64K</option>
               <option value="131072">128K</option>
               <option value="262144">256K</option>
               <option value="1048576">1M</option>
+              ${v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? html4`<option value="${v3.contextCapTokens}">${Math.round(v3.contextCapTokens / 1024)}K</option>` : null}
             </select>
           `,
-    "\u91CD\u542F\u6216 /new \u540E\u751F\u6548"
+    "\u5373\u65F6\u751F\u6548"
   )}
         ${fieldRow(
     t4("settings.webSearch"),
@@ -30477,6 +30559,8 @@ function ChatPane(props) {
   const [statusLine, setStatusLine] = d2(null);
   const [stats, setStats] = d2(null);
   const [model, setModel] = d2(null);
+  const [todos, setTodos] = d2([]);
+  const [todoExpanded, setTodoExpanded] = d2(false);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const streamBufRef = A2(null);
@@ -30624,6 +30708,17 @@ function ChatPane(props) {
       if (dash.kind === "status") {
         setStatusLine(dash.text);
         setTimeout(() => setStatusLine((cur) => cur === dash.text ? null : cur), 5e3);
+        return;
+      }
+      if (dash.kind === "config-changed") {
+        api("/overview").then((data) => {
+          setStats(data.stats ?? null);
+          setModel(data.model ?? null);
+        }).catch(() => {});
+        return;
+      }
+      if (dash.kind === "todo-update") {
+        setTodos(dash.todos ?? []);
         return;
       }
     };
@@ -30824,6 +30919,7 @@ ${commentRefs}` : commentRefs;
   })}
       </div>
       ${error ? html6`<div class="notice err" style=${{ margin: "0 8px 4px" }}>${error}</div>` : null}
+      ${todos.length > 0 ? html6`<${TodoBar} todos=${todos} expanded=${todoExpanded} onToggle=${() => setTodoExpanded(!todoExpanded)} />` : null}
       <div style=${{ padding: "8px", borderTop: "1px solid var(--bd)", flexShrink: 0 }}>
         ${props.comments.length > 0 ? html6`
           <div class="comment-cards-container" style=${{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "8px" }}>

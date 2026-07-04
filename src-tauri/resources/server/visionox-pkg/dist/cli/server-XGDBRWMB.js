@@ -498,7 +498,7 @@ async function handleEditMode(method, _rest, body, ctx) {
     }
     const { mode } = parseBody(body);
     if (typeof mode !== "string" || !VALID.has(mode)) {
-      return { status: 400, body: { error: "mode must be review | auto | yolo | admin" } };
+      return { status: 400, body: { error: "mode must be auto | yolo | admin (review is accepted as alias for auto)" } };
     }
     const resolved = ctx.setEditMode(mode);
     ctx.audit?.({ ts: Date.now(), action: "set-edit-mode", payload: { mode: resolved } });
@@ -3223,6 +3223,7 @@ async function handleProviders(method, rest, body, ctx) {
     cfg.providers = existing;
     cfg.contextCapTokens = void 0;
     writeConfig(cfg, ctx.configPath);
+    ctx.refreshContextCap?.();
     return { status: 200, body: { ok: true, count: existing.length } };
   }
   return { status: 404, body: { error: "not found" } };
@@ -3249,7 +3250,7 @@ async function handleSettings(method, _rest, body, ctx) {
         webSearchEngine: cfg.webSearchEngine ?? "bing-scrape",
         webSearchEndpoint: cfg.webSearchEndpoint ?? null,
         bingApiKeySet: Boolean(cfg.bingApiKey),
-        editMode: cfg.editMode ?? "review",
+        editMode: cfg.editMode ?? "auto",
         mode: ctx.getModes?.()?.current ?? cfg.mode ?? "general",
         modes: ctx.getModes?.()?.list ?? (()=>{const all=cfg.modes??{};return Object.entries(all).map(([id,m])=>({id,label:m.label??id,rules:m.eccRules??[]}));})(),
         activeMode: ctx.getModes?.()?.active ?? null,
@@ -3285,17 +3286,17 @@ async function handleSettings(method, _rest, body, ctx) {
         appliesAt: {
           apiKey: "next-session",
           baseUrl: "next-session",
-          preset: "next-session",
+          preset: "live",
           reasoningEffort: "next-turn",
           search: "next-session",
           webSearchEngine: "next-session",
           webSearchEndpoint: "next-session",
           bingApiKey: "next-session",
-          model: "next-turn",
+          model: "live",
           proNext: "next-turn",
           budgetUsd: "live",
           mode: "next-session",
-          contextCapTokens: "next-session"
+          contextCapTokens: "live"
         }
       }
     };
@@ -3410,6 +3411,13 @@ async function handleSettings(method, _rest, body, ctx) {
         cfg.contextCapTokens = void 0;
       } else if (typeof fields.contextCapTokens === "number" && fields.contextCapTokens > 0 && Number.isFinite(fields.contextCapTokens)) {
         cfg.contextCapTokens = Math.floor(fields.contextCapTokens);
+        const capProvider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+        const capMc = effectiveModelConfig(cfg);
+        const capModelObj = capProvider?.models?.find((m) => m.id === capMc.model);
+        const capMaxLen = capModelObj?.maxContextLength;
+        if (capMaxLen && typeof capMaxLen === "number" && cfg.contextCapTokens > capMaxLen) {
+          return { status: 400, body: { error: `contextCapTokens (${cfg.contextCapTokens}) exceeds model "${capMc.model}" maxContextLength (${capMaxLen})` } };
+        }
       } else {
         return { status: 400, body: { error: "contextCapTokens must be null or a positive finite number" } };
       }
@@ -3464,6 +3472,7 @@ async function handleSettings(method, _rest, body, ctx) {
       if (modelPendingLive) ctx.applyModelLive?.(modelPendingLive);
       if (proNextPending !== null) ctx.setProNextLive?.(proNextPending);
       if (budgetPending !== void 0) ctx.setBudgetUsdLive?.(budgetPending);
+      if (changed.includes("contextCapTokens")) ctx.refreshContextCap?.();
       ctx.audit?.({ ts: Date.now(), action: "set-settings", payload: { fields: changed } });
     }
     return { status: 200, body: { changed } };
