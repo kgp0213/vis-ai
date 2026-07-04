@@ -220,6 +220,32 @@ cp "$SRC\visionox-pkg\dashboard\app.css"  "$APP\visionox-pkg\dashboard\app.css"
 
 所有对 `visionox-pkg/dist/` 和 `visionox-pkg/dashboard/` 的修改都是直接在打包文件上进行的。如需同步到上游，应将改动迁移到 `tep/src/` 中重新构建。
 
+### 打包安装包（NSIS）
+
+生成可分发的 Windows 安装程序：
+
+```bash
+# 确保没有进程占用
+taskkill /F /IM visionox-desktop.exe 2>nul
+taskkill /F /IM node.exe 2>nul
+
+# 完整构建 + 打包 NSIS 安装器
+npx tauri build
+```
+
+产物在 `src-tauri\target\release\bundle\nsis\`：
+- `Visionox_1.12.0_x64-setup.exe` — 安装程序
+- `Visionox_1.12.0_x64_en-US.msi` — MSI 安装包（如启用）
+
+**安装包配置**（`tauri.conf.json` → `bundle`）：
+
+| 配置项 | 值 | 说明 |
+|---|---|---|
+| `targets` | `["nsis"]` | 安装器类型 |
+| `installMode` | `currentUser` | 当前用户安装（无需管理员权限） |
+| `resources` | 列表见配置文件 | 打包进安装包的资源文件 |
+| 注意 | `--no-bundle` 跳过此步骤 | 开发测试时使用 |
+
 ---
 
 ## 📄 License

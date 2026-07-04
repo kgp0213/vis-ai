@@ -16,9 +16,16 @@
     <script>
       (function() {
         try {
-          var m = document.cookie.match(/(?:^|;\s*)visionox-theme=([^;]*)/);
-          var t = m ? decodeURIComponent(m[1]) : 'dark';
-          if (!/^(light|dark|warm-sand|cool-ash|soft-sage)$/.test(t)) t = 'dark';
+          // Priority: URL param (set by Tauri / restoreDashboard) → cookie → localStorage → dark
+          var t = '';
+          var um = window.location.search.match(/[?&]theme=([^&]+)/);
+          if (um) t = decodeURIComponent(um[1]);
+          if (!t) {
+            var cm = document.cookie.match(/(?:^|;\s*)visionox-theme=([^;]*)/);
+            if (cm) t = decodeURIComponent(cm[1]);
+          }
+          if (!t) t = localStorage.getItem('visionox-theme') || '';
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) t = 'dark';
           document.documentElement.setAttribute('data-theme', t);
         } catch(e) {}
       })();
