@@ -18,7 +18,7 @@ Tauri Shell (Rust)
 
 Node.js Launcher
   ├─ DeepSeekClient + CacheFirstLoop
-  ├─ 注册 33+ 工具 (文件/Shell/Web/Memory/MCP)
+  ├─ 注册 40+ 工具 (文件/Shell/Web/Memory/MCP/Skill)
   ├─ 启动 Dashboard HTTP Server (127.0.0.1)
   └─ 全局诊断日志 → launcher-diag.log / launcher-stderr.log
 
