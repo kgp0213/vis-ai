@@ -7,7 +7,10 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "restore:pkg": "node scripts/restore-visionox-pkg.js"
+    "restore:pkg": "node scripts/restore-visionox-pkg.js",
+    "fetch:binaries": "node scripts/fetch-binaries.js",
+    "test": "node --test \"src-tauri/resources/server/**/*.test.mjs\"",
+    "test:coverage": "node --test --experimental-test-coverage \"src-tauri/resources/server/**/*.test.mjs\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

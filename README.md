@@ -143,6 +143,20 @@ Node.js Agent
 - **Node.js** 22+
 - **Windows 10/11** + WebView2，或 **Ubuntu 22.04+**（需安装系统依赖，见下文）
 
+### 首次克隆后获取运行时二进制
+
+`node.exe`（88MB）和 `officecli.exe`（32MB）因体积过大被 `.gitignore` 排除，未纳入仓库。克隆后需运行一次下载脚本：
+
+```bash
+npm run fetch:binaries          # 自动检测平台，下载对应 Node.js 运行时
+npm run fetch:binaries -- --force  # 强制重新下载
+```
+
+- **Windows**：脚本从 [nodejs.org](https://nodejs.org/dist/) 下载 Node.js v25.2.1 并提取 `node.exe` 到 `src-tauri/resources/server/`；`officecli.exe` 无公开下载源，需从已有安装复制（`%LOCALAPPDATA%\Visionox\resources\server\officecli.exe`），缺失时 Office 文档功能自动禁用。
+- **Ubuntu**：脚本跳过下载，依赖系统 `nodejs`（≥ 22）；`officecli.exe` 不需要。
+
+> **提示**：如果不运行此脚本，Windows 上 `npx tauri dev` 会因找不到 `node.exe` 而失败（除非系统 PATH 中有 `node`）；Ubuntu 上不受影响（`lib.rs` 自动 fallback 到系统 `node`）。
+
 ### 项目结构
 
 ```
@@ -156,8 +170,8 @@ visionox-desktop/
 │   │   ├── learn.mjs              # /learn 学习模块
 │   │   ├── learn-track.mjs        # SM-2 追踪模块
 │   │   ├── learn-sandbox-impl.mjs # 沙箱检查
-│   │   ├── node.exe               # 嵌入的 Node.js（仅 Windows 打包）
-│   │   ├── officecli.exe          # Office MCP 工具（仅 Windows 打包）
+│   │   ├── node.exe               # 嵌入的 Node.js（gitignore 排除，需 npm run fetch:binaries）
+│   │   ├── officecli.exe          # Office MCP 工具（仅 Windows，gitignore 排除，需手动复制）
 │   │   └── visionox-pkg/          # ★ 核心包（reasonix npm 包）
 │   │       ├── dist/cli/          # 打包后的 JS chunk 文件
 │   │       ├── dist/index.js      # 主入口
