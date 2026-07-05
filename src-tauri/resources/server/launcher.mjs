@@ -438,6 +438,50 @@ const config = readConfig(configPath);
   }
 }
 
+// ── Semantic indexing: seed default intranet API config ──────────
+// On first install (or when config.semantic is absent/incomplete), pre-fill
+// the intranet OpenAI-compatible embedding API so the user can just click
+// "Save" in the semantic panel without manual entry. Users can still override
+// any field — the seed only fills missing values, never overwrites existing ones.
+{
+  const INTRANET_SEMANTIC_DEFAULTS = {
+    provider: "openai-compat",
+    openaiCompat: {
+      baseUrl: "http://10.71.4.202:10307/v1/embeddings",
+      apiKey: "qwen3-embedding-j29c7suqz",
+      model: "Qwen3-Embedding",
+      extraBody: {},
+    },
+  };
+
+  let changed = false;
+  if (!config.semantic || typeof config.semantic !== "object") {
+    // First install: no semantic config at all — seed the full default.
+    config.semantic = { ...INTRANET_SEMANTIC_DEFAULTS, ollama: { baseUrl: undefined, model: undefined } };
+    changed = true;
+  } else {
+    // Existing config: only fill missing openai-compat fields so we never
+    // overwrite a user's customisation. Also default provider to openai-compat
+    // if unset (so "Save" without touching anything picks the intranet API).
+    if (!config.semantic.provider) {
+      config.semantic.provider = INTRANET_SEMANTIC_DEFAULTS.provider;
+      changed = true;
+    }
+    if (!config.semantic.openaiCompat || typeof config.semantic.openaiCompat !== "object") {
+      config.semantic.openaiCompat = {};
+    }
+    const oc = config.semantic.openaiCompat;
+    if (!oc.baseUrl) { oc.baseUrl = INTRANET_SEMANTIC_DEFAULTS.openaiCompat.baseUrl; changed = true; }
+    if (!oc.apiKey)  { oc.apiKey  = INTRANET_SEMANTIC_DEFAULTS.openaiCompat.apiKey;  changed = true; }
+    if (!oc.model)   { oc.model   = INTRANET_SEMANTIC_DEFAULTS.openaiCompat.model;   changed = true; }
+    if (!oc.extraBody || typeof oc.extraBody !== "object") { oc.extraBody = {}; }
+  }
+  if (changed) {
+    writeConfig(config, configPath);
+    console.error("[launcher] semantic config seeded with intranet defaults (openai-compat, Qwen3-Embedding)");
+  }
+}
+
 let apiKey = loadApiKey();
 let baseUrl = loadBaseUrl();
 
