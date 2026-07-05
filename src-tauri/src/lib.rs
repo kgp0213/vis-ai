@@ -1,6 +1,5 @@
 use std::io::{BufRead, Write};
 use std::net::TcpStream;
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -14,31 +13,48 @@ use tauri::{
     window::Color,
     Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
+
+// ── Platform-specific imports ────────────────────────────────────
+// Windows: JobObject process groups, clipboard HDROP, WaitForSingleObject.
+// Unix:    setsid + PR_SET_PDEATHSIG for child lifecycle (equivalent to
+//          JobObject's KILL_ON_JOB_CLOSE — child dies when parent exits).
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::HANDLE;
+#[cfg(windows)]
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardFormatNameW, OpenClipboard,
     RegisterClipboardFormatW,
 };
+#[cfg(windows)]
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
+#[cfg(windows)]
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
     OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
     PROCESS_TERMINATE,
 };
+#[cfg(windows)]
 use windows_sys::Win32::UI::Shell::DragQueryFileW;
-const CF_HDROP: u32 = 15;
 
+#[cfg(windows)]
+const CF_HDROP: u32 = 15;
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 // INFINITE wait timeout for WaitForSingleObject. windows-sys 0.59 does not
 // export this constant under the currently enabled features.
+#[cfg(windows)]
 const INFINITE_WAIT: u32 = 0xFFFFFFFF;
 // PROCESS_SYNCHRONIZE access right (0x00100000) — not exported by the
 // currently enabled windows-sys features, so define locally. Required by
 // OpenProcess to obtain a waitable handle for WaitForSingleObject.
+#[cfg(windows)]
 const PROCESS_SYNCHRONIZE: u32 = 0x00100000;
 
 static DIAG_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -85,10 +101,18 @@ fn log_diag(msg: &str) {
     }
 }
 
+// ── Child process group management ───────────────────────────────
+// Windows: JobObject with KILL_ON_JOB_CLOSE guarantees all child processes
+//          are terminated when the parent (Tauri) exits.
+// Unix:    setsid() creates a new session; PR_SET_PDEATHSIG(SIGKILL) asks
+//          the kernel to SIGKILL the child if the parent dies. Together
+//          they provide equivalent cleanup without a job object.
+#[cfg(windows)]
 struct JobObject {
     handle: HANDLE,
 }
 
+#[cfg(windows)]
 impl JobObject {
     fn new() -> anyhow::Result<Self> {
         // SAFETY: null name creates an unnamed job object; null attributes
@@ -148,15 +172,105 @@ impl JobObject {
 }
 
 // SAFETY: Windows HANDLE values are process-wide and thread-safe by design.
+#[cfg(windows)]
 unsafe impl Send for JobObject {}
+#[cfg(windows)]
 unsafe impl Sync for JobObject {}
 
+#[cfg(windows)]
 impl Drop for JobObject {
     fn drop(&mut self) {
         // SAFETY: self.handle is a valid job object handle created in new().
         // Closing the handle causes KILL_ON_JOB_CLOSE to terminate all
         // assigned processes if this is the last handle.
         unsafe { windows_sys::Win32::Foundation::CloseHandle(self.handle) };
+    }
+}
+
+// Unix: no-op stub. Child cleanup is handled at spawn time via setsid +
+// PR_SET_PDEATHSIG (see spawn_server_blocking). This struct exists only so
+// ServerState.job has a consistent type across platforms.
+#[cfg(unix)]
+struct JobObject;
+
+#[cfg(unix)]
+impl JobObject {
+    fn new() -> anyhow::Result<Self> {
+        Ok(Self)
+    }
+
+    fn assign(&self, _pid: u32) -> anyhow::Result<()> {
+        // No-op: Unix child processes are already in their own session via
+        // setsid() in spawn_server_blocking, and PR_SET_PDEATHSIG ensures
+        // they die when the parent exits.
+        Ok(())
+    }
+}
+
+/// Configure a Command for platform-appropriate child-process isolation.
+/// Windows: creation_flags(CREATE_NO_WINDOW) hides the console window.
+/// Unix: pre_exec sets setsid() + PR_SET_PDEATHSIG(SIGKILL) so the child
+///       is killed if the parent dies (equivalent to JobObject's
+///       KILL_ON_JOB_CLOSE, without needing a job object).
+fn configure_child_command(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                // Create a new session so the child is not tied to the
+                // parent's controlling terminal.
+                let _ = nix::unistd::setsid();
+                // Ask the kernel to SIGKILL us if the parent dies.
+                let _ = nix::sys::prctl::set_pdeathsig(nix::sys::signal::Signal::SIGKILL);
+                Ok(())
+            });
+        }
+    }
+}
+
+/// Block until the child process with the given PID exits.
+/// Windows: OpenProcess + WaitForSingleObject (blocking).
+/// Unix: waitpid in a loop (handles EINTR). The child is in its own session
+///       (setsid), so we can wait on it by pid without holding a Child handle.
+fn wait_for_child_exit(pid: u32) {
+    #[cfg(windows)]
+    {
+        let wait_handle = unsafe {
+            OpenProcess(
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            )
+        };
+        if wait_handle.is_null() {
+            log_diag("[rust] monitor: OpenProcess failed — assuming child exited");
+        } else {
+            unsafe {
+                WaitForSingleObject(wait_handle, INFINITE_WAIT);
+                windows_sys::Win32::Foundation::CloseHandle(wait_handle);
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        use nix::sys::wait::{waitpid, WaitStatus};
+        let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
+        loop {
+            match waitpid(nix_pid, None) {
+                Ok(WaitStatus::Exited(_, _)) | Ok(WaitStatus::Signaled(_, _, _)) => break,
+                Ok(_) => continue,
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(e) => {
+                    log_diag(&format!("[rust] monitor: waitpid failed: {e} — assuming child exited"));
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -246,14 +360,15 @@ fn spawn_server_blocking(
         node_path, launcher
     ));
 
-    let mut child = Command::new(&node_path)
+    let mut child = Command::new(&node_path);
+    child
         .arg(&launcher)
         .arg("--port")
         .arg("0")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()?;
+        .stderr(Stdio::piped());
+    configure_child_command(&mut child);
+    let mut child = child.spawn()?;
 
     // P1-2: assign to job object immediately to prevent orphan processes
     if let Err(e) = job.assign(child.id()) {
@@ -691,28 +806,13 @@ pub fn run() -> anyhow::Result<()> {
                                         let mut child_pid = child_pid;
                                         let mut restart_attempt = 0u32;
                                         loop {
-                                            // P1-5b: block on the child handle with WaitForSingleObject
-                                            // instead of polling GetExitCodeProcess. The old polling loop
+                                            // Block until the child process exits. Windows uses
+                                            // WaitForSingleObject on a process handle; Unix uses
+                                            // waitpid (the child is in its own session via setsid,
+                                            // so we wait by pid). The old Windows polling loop
                                             // misclassified exit code 259 (STILL_ACTIVE) as "running"
-                                            // forever, since 259 is both the sentinel and a legal exit code.
-                                            let wait_handle = unsafe {
-                                                OpenProcess(
-                                                    PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                                                    0,
-                                                    child_pid,
-                                                )
-                                            };
-                                            if wait_handle.is_null() {
-                                                log_diag("[rust] monitor: OpenProcess failed — assuming child exited");
-                                            } else {
-                                                unsafe {
-                                                    WaitForSingleObject(
-                                                        wait_handle,
-                                                        INFINITE_WAIT,
-                                                    );
-                                                    windows_sys::Win32::Foundation::CloseHandle(wait_handle);
-                                                }
-                                            }
+                                            // forever — the blocking wait fixes that on both platforms.
+                                            wait_for_child_exit(child_pid);
 
                                             log_diag("[rust] child process exited unexpectedly after navigation");
                                             if restart_attempt >= CHILD_MAX_RESTART_ATTEMPTS {
@@ -989,124 +1089,142 @@ async fn get_clipboard_files() -> Result<ClipboardFilesResult, String> {
 
 fn get_clipboard_files_blocking() -> ClipboardFilesResult {
     log_diag("[rust] get_clipboard_files invoked");
-    let mut paths = Vec::new();
 
-    // Retry OpenClipboard a few times — another application may briefly hold the lock.
-    let mut opened = 0;
-    for attempt in 0..4 {
-        if attempt > 0 {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        opened = unsafe { OpenClipboard(std::ptr::null_mut()) };
-        if opened != 0 {
-            break;
-        }
-    }
-    if opened == 0 {
-        let msg = "OpenClipboard failed after retries".to_string();
-        log_diag(&format!("[rust] {msg}"));
+    // Windows: read file paths from the clipboard (CF_HDROP / FileNameW).
+    // Unix: file-copy clipboard access requires platform-specific tooling
+    // (xclip/wl-clipboard) that is not available in all environments.
+    // Return an empty result with a hint so the JS layer can fall back to
+    // its native paste handler.
+    #[cfg(unix)]
+    {
+        log_diag("[rust] get_clipboard_files: not implemented on Unix — use JS paste fallback");
         return ClipboardFilesResult {
-            paths,
-            error: Some(msg),
+            paths: Vec::new(),
+            error: Some("clipboard file reading is not supported on this platform".to_string()),
         };
     }
-    log_diag("[rust] OpenClipboard succeeded");
 
-    // Enumerate available formats for diagnostics.
-    unsafe {
-        let mut format = 0u32;
-        let mut formats = Vec::new();
-        loop {
-            format = EnumClipboardFormats(format);
-            if format == 0 {
+    #[cfg(windows)]
+    {
+        let mut paths = Vec::new();
+
+        // Retry OpenClipboard a few times — another application may briefly hold the lock.
+        let mut opened = 0;
+        for attempt in 0..4 {
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            opened = unsafe { OpenClipboard(std::ptr::null_mut()) };
+            if opened != 0 {
                 break;
             }
-            let mut name_buf = [0u16; CLIPBOARD_FORMAT_NAME_BUF_LEN];
-            let name_len =
-                GetClipboardFormatNameW(format, name_buf.as_mut_ptr(), name_buf.len() as i32);
-            let name = if name_len > 0 {
-                String::from_utf16_lossy(&name_buf[..name_len as usize])
-            } else {
-                format!("#{}", format)
+        }
+        if opened == 0 {
+            let msg = "OpenClipboard failed after retries".to_string();
+            log_diag(&format!("[rust] {msg}"));
+            return ClipboardFilesResult {
+                paths,
+                error: Some(msg),
             };
-            formats.push(name);
         }
-        log_diag(&format!("[rust] clipboard formats: {:?}", formats));
-    }
+        log_diag("[rust] OpenClipboard succeeded");
 
-    // Try CF_HDROP first.
-    // SAFETY: GetClipboardData returns a handle to the clipboard data in
-    // the requested format. CF_HDROP contains file paths.
-    let hdrop = unsafe { GetClipboardData(CF_HDROP) };
-    if hdrop.is_null() {
-        log_diag("[rust] GetClipboardData(CF_HDROP) returned null");
-    } else {
-        // SAFETY: DragQueryFileW queries the HDROP handle for file count
-        // and file paths. The HDROP handle is valid at this point.
-        let count = unsafe { DragQueryFileW(hdrop, 0xFFFFFFFF, std::ptr::null_mut(), 0) };
-        log_diag(&format!("[rust] DragQueryFileW count={count}"));
-        for i in 0..count {
-            // First call to get required buffer size
-            let len = unsafe { DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0) };
-            if len == 0 {
-                continue;
-            }
-            let mut buf: Vec<u16> = vec![0; len as usize + 1];
-            let copied = unsafe { DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as u32) };
-            if copied > 0 {
-                buf.truncate(copied as usize);
-                if let Ok(s) = String::from_utf16(&buf) {
-                    log_diag(&format!("[rust] clipboard file {i}: {s}"));
-                    if std::path::Path::new(&s).exists() {
-                        paths.push(s);
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback: try "FileNameW" registered clipboard format.
-    if paths.is_empty() {
+        // Enumerate available formats for diagnostics.
         unsafe {
-            let name: Vec<u16> = "FileNameW"
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
-            let fmt = RegisterClipboardFormatW(name.as_ptr());
-            if fmt != 0 {
-                let h = GetClipboardData(fmt);
-                if !h.is_null() {
-                    // SAFETY: GetClipboardData returns an HGLOBAL that must be
-                    // locked with GlobalLock before reading. Treating the
-                    // handle itself as a pointer (the previous implementation)
-                    // dereferences an arbitrary address — undefined behavior.
-                    let ptr = GlobalLock(h);
-                    if !ptr.is_null() {
-                        let ptr_u16 = ptr as *const u16;
-                        let mut len = 0usize;
-                        while *ptr_u16.add(len) != 0 {
-                            len += 1;
-                        }
-                        let slice = std::slice::from_raw_parts(ptr_u16, len);
-                        let s = String::from_utf16_lossy(slice);
-                        log_diag(&format!("[rust] FileNameW fallback: {s}"));
+            let mut format = 0u32;
+            let mut formats = Vec::new();
+            loop {
+                format = EnumClipboardFormats(format);
+                if format == 0 {
+                    break;
+                }
+                let mut name_buf = [0u16; CLIPBOARD_FORMAT_NAME_BUF_LEN];
+                let name_len =
+                    GetClipboardFormatNameW(format, name_buf.as_mut_ptr(), name_buf.len() as i32);
+                let name = if name_len > 0 {
+                    String::from_utf16_lossy(&name_buf[..name_len as usize])
+                } else {
+                    format!("#{}", format)
+                };
+                formats.push(name);
+            }
+            log_diag(&format!("[rust] clipboard formats: {:?}", formats));
+        }
+
+        // Try CF_HDROP first.
+        // SAFETY: GetClipboardData returns a handle to the clipboard data in
+        // the requested format. CF_HDROP contains file paths.
+        let hdrop = unsafe { GetClipboardData(CF_HDROP) };
+        if hdrop.is_null() {
+            log_diag("[rust] GetClipboardData(CF_HDROP) returned null");
+        } else {
+            // SAFETY: DragQueryFileW queries the HDROP handle for file count
+            // and file paths. The HDROP handle is valid at this point.
+            let count = unsafe { DragQueryFileW(hdrop, 0xFFFFFFFF, std::ptr::null_mut(), 0) };
+            log_diag(&format!("[rust] DragQueryFileW count={count}"));
+            for i in 0..count {
+                // First call to get required buffer size
+                let len = unsafe { DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0) };
+                if len == 0 {
+                    continue;
+                }
+                let mut buf: Vec<u16> = vec![0; len as usize + 1];
+                let copied = unsafe { DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as u32) };
+                if copied > 0 {
+                    buf.truncate(copied as usize);
+                    if let Ok(s) = String::from_utf16(&buf) {
+                        log_diag(&format!("[rust] clipboard file {i}: {s}"));
                         if std::path::Path::new(&s).exists() {
                             paths.push(s);
                         }
-                        GlobalUnlock(h);
                     }
                 }
             }
         }
-    }
 
-    // SAFETY: CloseClipboard closes the clipboard opened by OpenClipboard.
-    unsafe { CloseClipboard() };
-    log_diag(&format!(
-        "[rust] get_clipboard_files returning {} paths",
-        paths.len()
-    ));
-    ClipboardFilesResult { paths, error: None }
+        // Fallback: try "FileNameW" registered clipboard format.
+        if paths.is_empty() {
+            unsafe {
+                let name: Vec<u16> = "FileNameW"
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let fmt = RegisterClipboardFormatW(name.as_ptr());
+                if fmt != 0 {
+                    let h = GetClipboardData(fmt);
+                    if !h.is_null() {
+                        // SAFETY: GetClipboardData returns an HGLOBAL that must be
+                        // locked with GlobalLock before reading. Treating the
+                        // handle itself as a pointer (the previous implementation)
+                        // dereferences an arbitrary address — undefined behavior.
+                        let ptr = GlobalLock(h);
+                        if !ptr.is_null() {
+                            let ptr_u16 = ptr as *const u16;
+                            let mut len = 0usize;
+                            while *ptr_u16.add(len) != 0 {
+                                len += 1;
+                            }
+                            let slice = std::slice::from_raw_parts(ptr_u16, len);
+                            let s = String::from_utf16_lossy(slice);
+                            log_diag(&format!("[rust] FileNameW fallback: {s}"));
+                            if std::path::Path::new(&s).exists() {
+                                paths.push(s);
+                            }
+                            GlobalUnlock(h);
+                        }
+                    }
+                }
+            }
+        }
+
+        // SAFETY: CloseClipboard closes the clipboard opened by OpenClipboard.
+        unsafe { CloseClipboard() };
+        log_diag(&format!(
+            "[rust] get_clipboard_files returning {} paths",
+            paths.len()
+        ));
+        ClipboardFilesResult { paths, error: None }
+    }
 }
 
 #[cfg(test)]
@@ -1125,12 +1243,19 @@ mod tests {
     #[test]
     fn job_object_assign_child_process() {
         let job = JobObject::new().expect("create job object");
-        // Spawn a short-lived child to test assignment
-        let child = Command::new("cmd.exe")
-            .args(["/c", "exit", "0"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .expect("spawn child");
+        // Spawn a short-lived child to test assignment. Use platform-appropriate
+        // shell: cmd.exe on Windows, sh on Unix.
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd.exe");
+            c.args(["/c", "exit", "0"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", "exit 0"]);
+            c
+        };
+        configure_child_command(&mut cmd);
+        let child = cmd.spawn().expect("spawn child");
         let pid = child.id();
         let result = job.assign(pid);
         assert!(result.is_ok(), "assign child pid should succeed");
@@ -1256,5 +1381,23 @@ mod tests {
         // paths may be empty or populated depending on clipboard contents
         let _ = result.paths.len();
         assert!(result.error.is_none() || result.error.as_ref().is_some());
+    }
+
+    #[test]
+    fn needed_resources_exist_in_source_tree() {
+        // Verifies that every file in the NEEDED array actually exists in
+        // resources/server/. Prevents a repeat of the learn-sandbox-impl.mjs
+        // missing-file incident.
+        let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("server");
+        for name in &["learn.mjs", "learn-track.mjs", "learn-sandbox-impl.mjs"] {
+            let path = src_dir.join(name);
+            assert!(
+                path.exists(),
+                "NEEDED resource missing from source tree: {}",
+                path.display()
+            );
+        }
     }
 }

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "resources/server/launcher.mjs",
+      "resources/server/lib/provider.mjs",
+      "resources/server/lib/context-cap.mjs",
+      "resources/server/lib/pause-gate-modal.mjs",
+      "resources/server/lib/system-prompt.mjs",
+      "resources/server/learn.mjs",
+      "resources/server/learn-track.mjs",
+      "resources/server/learn-sandbox-impl.mjs",
+      "resources/server/visionox-pkg/**/*",
+      "resources/default-soul.md",
+      "resources/ecc-rules/**/*",
+      "resources/skill-creation-guide.md",
+      "resources/bootstrap-skills/**/*"
+    ]
+  }
+}

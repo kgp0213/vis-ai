@@ -8,8 +8,12 @@ on:
 
 jobs:
   smoke:
-    name: smoke checks
-    runs-on: windows-latest
+    name: smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,21 +26,46 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       - name: Validate Tauri config
-        shell: pwsh
+        shell: bash
         run: node -e "const fs=require('fs'); JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8')); console.log('tauri config ok')"
 
-      - name: Check launcher and bundled dashboard syntax
-        shell: pwsh
+      - name: Check launcher syntax
+        shell: bash
+        run: node --check src-tauri/resources/server/launcher.mjs
+
+      - name: Check bundled dashboard syntax
+        shell: bash
         run: |
-          node --check src-tauri/resources/server/launcher.mjs
-          node --check src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js
-          node --check src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js
+          # Check every JS file under visionox-pkg rather than hardcoding a
+          # chunk name that changes on each rebuild.
+          for f in src-tauri/resources/server/visionox-pkg/dist/cli/server-*.js \
+                   src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js; do
+            if [ -f "$f" ]; then node --check "$f"; fi
+          done
+
+      - name: Run JS tests
+        shell: bash
+        run: node --test "src-tauri/resources/server/**/*.test.mjs"
 
       - name: Check Rust crate
         working-directory: src-tauri
         run: cargo check --locked
 
+      - name: Run Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
       - name: Verify whitespace
-        shell: pwsh
+        shell: bash
         run: git diff --check

@@ -17,16 +17,21 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
     "resources": [
-      "resources/server/node.exe",
       "resources/server/launcher.mjs",
+      "resources/server/lib/provider.mjs",
+      "resources/server/lib/context-cap.mjs",
+      "resources/server/lib/pause-gate-modal.mjs",
+      "resources/server/lib/system-prompt.mjs",
       "resources/server/learn.mjs",
       "resources/server/learn-track.mjs",
       "resources/server/learn-sandbox-impl.mjs",
       "resources/server/visionox-pkg/**/*",
+      "resources/server/node.exe",
       "resources/server/officecli.exe",
       "resources/default-soul.md",
+      "resources/ecc-rules/**/*",
       "resources/skill-creation-guide.md",
       "resources/bootstrap-skills/**/*"
     ],
@@ -34,6 +39,16 @@
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "nodejs (>= 22)",
+          "unzip",
+          "libwebkit2gtk-4.1-0",
+          "libayatana-appindicator3-1"
+        ]
       }
     },
     "icon": [
