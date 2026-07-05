@@ -59,7 +59,20 @@ tep/
 # ECC reference (external harness operator system)
 ECC/
 
-# Build artifacts (not source)
-package-lock.json
+# Archived / deprecated code (old React frontend, replaced by launcher.mjs + dashboard)
+archive/
+
+# Empty tool-created placeholder
+.reasonix/
+
+# Planning notes / scratch (design reports kept locally, not source)
+plan/
+
+# Offline skill distribution package (283MB Python wheels + installers, not source)
+skills/
+
+# Sourcemaps
 *.map
+
+# NSIS toolchain (vendored locally, not source)
 tools/
