@@ -17,6 +17,18 @@ import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat a
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
+import {
+  getActiveProvider,
+  resolvePresetForProvider,
+  resolveEffortForProvider,
+  effectiveModelConfig,
+  pickSummaryModel,
+  buildLegacyProvider,
+} from "./lib/provider.mjs";
+import { resolveContextCap } from "./lib/context-cap.mjs";
+import { requestToModal } from "./lib/pause-gate-modal.mjs";
+import { buildSystemPrompt, PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
+
 // NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
 // resource file cannot brick the whole launcher startup.
 
@@ -149,8 +161,8 @@ const CONSTANTS = {
   RULES_MAX_CHARS: 12000,
 
   // Mode versions
-  DEFAULT_MODE_VERSION: 2,
-  OFFICE_MODE_VERSION: 3,
+  DEFAULT_MODE_VERSION: 5,
+  OFFICE_MODE_VERSION: 6,
 };
 const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
 
@@ -267,6 +279,74 @@ function deployDefaultSoul() {
 
 deployDefaultSoul();
 
+// ── Deploy ECC rules ───────────────────────────────────────────
+// Copies bundled ECC rule packs from resources/ecc-rules/ to
+// ~/.claude/rules/ecc/ on first run or when resource packs are updated.
+// Uses a version marker (.ecc-version) to detect resource changes; when the
+// marker changes, all shipped packs are replaced wholesale. The user's custom
+// directory (~/.visionox/rules) is never touched by this function.
+const ECC_RULES_RESOURCE = resolve(__dirname, "..", "ecc-rules");
+const ECC_RULES_HOME = resolve(home, ".claude", "rules", "ecc");
+const ECC_VERSION_FILE = resolve(ECC_RULES_HOME, ".ecc-version");
+
+function deployEccRules() {
+  try {
+    if (!existsSync(ECC_RULES_RESOURCE)) return;
+    if (!existsSync(ECC_RULES_HOME)) mkdirSync(ECC_RULES_HOME, { recursive: true });
+
+    // Version marker: content hash of all .md files in resource packs.
+    // Stable across rebuilds (unlike mtime) — only changes when content changes.
+    const resourceEntries = readdirSync(ECC_RULES_RESOURCE).filter(
+      (e) => statSync(resolve(ECC_RULES_RESOURCE, e)).isDirectory()
+    );
+    const fingerprint = resourceEntries.map((e) => {
+      const dir = resolve(ECC_RULES_RESOURCE, e);
+      const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
+      const hashes = files.map(f => {
+        try {
+          return createHash("md5").update(readFileSync(resolve(dir, f))).digest("hex").slice(0, 8);
+        } catch { return "?"; }
+      }).join(",");
+      return `${e}:${hashes}`;
+    }).join("|");
+    const lastVersion = existsSync(ECC_VERSION_FILE)
+      ? readFileSync(ECC_VERSION_FILE, "utf8").trim()
+      : "";
+    const needsFullSync = lastVersion !== fingerprint;
+
+    let deployed = 0;
+    for (const entry of resourceEntries) {
+      const srcDir = resolve(ECC_RULES_RESOURCE, entry);
+      const dstDir = resolve(ECC_RULES_HOME, entry);
+      if (needsFullSync || !existsSync(dstDir)) {
+        // Full replace: remove old pack, copy fresh from resources
+        if (existsSync(dstDir)) rmSync(dstDir, { recursive: true, force: true });
+        cpSync(srcDir, dstDir, { recursive: true });
+        deployed++;
+      } else {
+        // Same version — only copy any new files, preserve user edits
+        for (const file of readdirSync(srcDir)) {
+          const srcFile = resolve(srcDir, file);
+          const dstFile = resolve(dstDir, file);
+          if (!existsSync(dstFile) && statSync(srcFile).isFile()) {
+            copyFileSync(srcFile, dstFile);
+            deployed++;
+          }
+        }
+      }
+    }
+
+    if (needsFullSync || deployed > 0) {
+      writeFileSync(ECC_VERSION_FILE, fingerprint, "utf8");
+      console.error(`[launcher] ECC rules: ${needsFullSync ? "full sync" : `${deployed} file(s)`} deployed to ${ECC_RULES_HOME}`);
+    }
+  } catch (err) {
+    console.error(`[launcher] failed to deploy ECC rules: ${err.message}`);
+  }
+}
+
+deployEccRules();
+
 // ── Import server module ────────────────────────────────────────
 const serverModUrl = distPath("server-XGDBRWMB.js");
 console.error(`[launcher] importing ${serverModUrl}`);
@@ -348,114 +428,20 @@ const config = readConfig(configPath);
 
 // ── Provider migration & helpers ───────────────────────────────
 // Migrate legacy single-provider config (apiKey/baseUrl) to providers[] on first run.
-function migrateProviders(cfg) {
-  if (cfg.providers) return;
-  if (!cfg.apiKey && !cfg.baseUrl) return;
-  cfg.providers = [{
-    id: "legacy",
-    name: "默认",
-    baseUrl: cfg.baseUrl ?? "https://api.deepseek.com",
-    apiKey: cfg.apiKey ?? "",
-    models: [
-      { id: "deepseek-v4-flash", name: "Flash", presets: ["auto", "flash"], efforts: ["high", "max"], thinkingMode: "enabled" },
-      { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled" },
-    ],
-    defaultPreset: cfg.preset ?? "auto",
-    defaultEffort: cfg.reasoningEffort ?? "max",
-    autoEscalate: cfg.autoEscalate !== false,
-    escalationModel: "deepseek-v4-pro",
-  }];
-  cfg.activeProviderId = "legacy";
-  writeConfig(cfg, configPath);
-  console.error("[launcher] migrated legacy apiKey/baseUrl to providers[0] (id=legacy)");
+{
+  const legacy = buildLegacyProvider(config);
+  if (legacy) {
+    config.providers = legacy.providers;
+    config.activeProviderId = legacy.activeProviderId;
+    writeConfig(config, configPath);
+    console.error("[launcher] migrated legacy apiKey/baseUrl to providers[0] (id=legacy)");
+  }
 }
-
-migrateProviders(config);
 
 let apiKey = loadApiKey();
 let baseUrl = loadBaseUrl();
 
-const PRESET_MODELS = {
-  flash: "deepseek-v4-flash",
-  pro: "deepseek-v4-pro",
-};
-const LEGACY_PRESET_ALIASES = {
-  fast: "flash",
-  smart: "auto",
-  max: "pro",
-};
-
-// ── Provider management functions ──────────────────────────────
-function getActiveProvider(cfg = config) {
-  const providers = cfg.providers ?? [];
-  return providers.find((p) => p.id === cfg.activeProviderId) ?? providers[0] ?? null;
-}
-
-function getProviderCapabilities(provider) {
-  const allPresets = new Set();
-  const allEfforts = new Set();
-  const modelIds = [];
-  for (const m of provider?.models ?? []) {
-    for (const p of m.presets ?? []) allPresets.add(p);
-    for (const e of m.efforts ?? []) allEfforts.add(e);
-    modelIds.push(m.id);
-  }
-  return { presets: [...allPresets], efforts: [...allEfforts], modelIds };
-}
-
-function resolvePresetForProvider(preset, provider) {
-  const caps = getProviderCapabilities(provider);
-  if (caps.presets.includes(preset)) return preset;
-  return provider?.defaultPreset ?? "flash";
-}
-
-function resolveEffortForProvider(effort, provider) {
-  const caps = getProviderCapabilities(provider);
-  if (caps.efforts.includes(effort)) return effort;
-  return provider?.defaultEffort ?? "high";
-}
-
-function resolveModelForProvider(preset, provider) {
-  const model = provider?.models?.find((m) => m.presets?.includes(preset));
-  return model?.id ?? provider?.models?.[0]?.id ?? "deepseek-v4-flash";
-}
-
-// Keep preset and model semantics centralized. `preset` is the user's model
-// commitment; `model` is only the baseline model used when preset=auto.
-// New loops, live updates, and dashboard APIs must use this effective model
-// instead of reading config.model directly, otherwise pro/flash labels drift.
-// Legacy names mirror resolvePreset(): fast→flash, smart→auto, max→pro.
-function effectiveModelConfig(source = config) {
-  const rawPreset = source.preset ?? "auto";
-  const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
-  const provider = getActiveProvider(source);
-
-  if (provider) {
-    // Provider mode: resolve from provider config
-    const resolvedPreset = resolvePresetForProvider(preset, provider);
-    const model = resolveModelForProvider(resolvedPreset, provider);
-    return {
-      rawPreset,
-      preset: resolvedPreset,
-      configuredModel: model,
-      model,
-      locked: true,
-      autoEscalate: provider.autoEscalate === true && resolvedPreset === "auto",
-    };
-  }
-
-  // Fallback: no provider, use legacy hardcoded logic
-  const configuredModel = source.model ?? CONSTANTS.DEFAULT_MODEL;
-  const lockedModel = PRESET_MODELS[preset];
-  return {
-    rawPreset,
-    preset,
-    configuredModel,
-    model: lockedModel ?? configuredModel,
-    locked: Boolean(lockedModel),
-    autoEscalate: preset === "auto" ? source.autoEscalate !== false : false,
-  };
-}
+// ── Provider management functions — imported from ./lib/provider.mjs ──
 
 // ── Balance ──────────────────────────────────────────────────────
 let balanceData = null;
@@ -701,22 +687,16 @@ async function deploySkillGuide(rootDir) {
 await deployBootstrapSkills();
 await deploySkillGuide(workspaceDir);
 
-const startupModelConfig = effectiveModelConfig();
+const startupModelConfig = effectiveModelConfig(config);
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, preset=${startupModelConfig.preset}, model=${startupModelConfig.model}`);
 
 // Apply context cap: manual override > provider maxContextLength > hardcoded map.
 // Mutating DEEPSEEK_CONTEXT_TOKENS directly is intentional — ESM live bindings
 // mean ContextManager.fold() and getStats() both read from the same object.
 function applyContextCap(model) {
-  if (config.contextCapTokens && typeof config.contextCapTokens === "number") {
-    DEEPSEEK_CONTEXT_TOKENS[model] = config.contextCapTokens;
-    return;
-  }
-  const provider = getActiveProvider(config);
-  const modelObj = provider?.models?.find((m) => m.id === model);
-  if (modelObj?.maxContextLength && typeof modelObj.maxContextLength === "number") {
-    DEEPSEEK_CONTEXT_TOKENS[model] = modelObj.maxContextLength;
-    return;
+  const cap = resolveContextCap(model, config, getActiveProvider(config));
+  if (cap !== null) {
+    DEEPSEEK_CONTEXT_TOKENS[model] = cap;
   }
   // No override — DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS falls back naturally
 }
@@ -800,9 +780,17 @@ const DEFAULT_MODES = {
     label: "通用",
     description: "日常问答、资料梳理、轻量排查和跨领域任务。",
     hint: "平衡准确性和简洁度，必要时再切换到专业模式。",
-    eccRules: ["common", "rust"],
-    skills: ["coding-standards", "verification-loop"],
-    prompt: "你处于通用模式。先判断用户目标属于问答、代码、办公还是设计；若任务明显属于专业场景，按该场景的工作习惯组织答案，但不要擅自切换模式。保持回答直接、可执行，必要时指出下一步。",
+    eccRules: ["common"],
+    skills: [
+      "coding-standards", "verification-loop", "andrej-karpathy-guidelines",
+      "brainstorming", "writing-plans", "executing-plans", "search-first",
+      "context-budget", "verification-before-completion", "using-superpowers",
+      "dispatching-parallel-agents", "subagent-driven-development",
+      "requesting-code-review", "receiving-code-review",
+      "finishing-a-development-branch", "using-git-worktrees",
+      "production-audit", "basic-skill-example", "skill-creation-guide", "writing-skills",
+    ],
+    prompt: "你处于通用模式。先判断用户目标属于问答、代码、办公还是设计；若任务明显属于专业场景，按该场景的工作习惯组织答案，但不要擅自切换模式。保持回答直接、可执行，必要时指出下一步。系统内置 22 种语言的 ECC 编码规范（angular/cpp/go/java/swift/vue 等），可在工作模式配置中按需启用。",
   },
   coding: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -810,7 +798,14 @@ const DEFAULT_MODES = {
     description: "代码阅读、修复、重构、测试、构建和工程审查。",
     hint: "优先读上下文，改动小而准，完成后运行针对性验证。",
     eccRules: ["common", "rust", "typescript", "python"],
-    skills: ["coding-standards", "tdd-workflow", "rust-patterns", "python-patterns", "api-design", "verification-loop", "error-handling"],
+    skills: [
+      "coding-standards", "andrej-karpathy-guidelines", "tdd-workflow",
+      "rust-patterns", "python-patterns", "api-design", "verification-loop",
+      "error-handling", "git-workflow", "systematic-debugging", "security-review",
+      "database-migrations", "test-driven-development", "codebase-onboarding",
+      "docker-patterns", "fastapi-patterns", "postgres-patterns",
+      "requesting-code-review", "receiving-code-review", "production-audit",
+    ],
     prompt: "你处于编程模式。修改前先阅读相关上下文，优先沿用项目既有模式；代码注释优先英文且只解释非显然逻辑。实现后运行与风险匹配的验证，清楚报告改动、验证结果和残余风险。",
   },
   office: {
@@ -819,16 +814,16 @@ const DEFAULT_MODES = {
     description: "文档、表格、PDF、PPT、报告、数据整理和格式转换。",
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
-    skills: ["officecli", "pdf", "pdf-extract", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。优先明确输入文件、目标格式、输出位置和质量要求；OfficeCLI（Word/Excel/PPT）通过 MCP 工具注入时，优先使用 create/view/get/query/set/add/remove/move/validate/batch/merge/watch 等工具处理 Office 文档。交付前先 validate 检查质量，并通过 view issues 定位问题和自修复；PDF 仍使用 pdf、pdf-extract、md-to-pdf-cjk 等专项技能。",
+    skills: ["officecli", "pdf", "md-to-pdf-cjk"],
+    prompt: "你处于办公模式。优先明确输入文件、目标格式、输出位置和质量要求；OfficeCLI（Word/Excel/PPT）通过 MCP 工具注入时，优先使用 create/view/get/query/set/add/remove/move/validate/batch/merge/watch 等工具处理 Office 文档。交付前先 validate 检查质量，并通过 view issues 定位问题和自修复；PDF 使用 pdf、md-to-pdf-cjk 等专项技能。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
     label: "设计",
     description: "界面体验、前端布局、视觉风格、交互状态和可用性优化。",
     hint: "先服务真实工作流，再处理视觉细节和状态反馈。",
-    eccRules: ["common"],
-    skills: ["frontend-patterns", "e2e-testing"],
+    eccRules: ["common", "web"],
+    skills: ["frontend-patterns", "e2e-testing", "react-patterns", "context-budget"],
     prompt: "你处于设计模式。先理解用户场景、目标用户和主要任务流；界面应清晰、克制、可扫描，控件行为符合用户直觉。涉及前端实现时同时考虑响应式布局、空/错/加载状态和可验证的交互结果。",
   },
 };
@@ -1820,12 +1815,19 @@ function formatPersistentMemoryForPrompt(rootDir) {
 }
 
 // ── Build session ───────────────────────────────────────────────
+// Dynamically register all available ECC rule packs from ~/.claude/rules/ecc/
 const ALL_ECC_RULES = Object.create(null);
-ALL_ECC_RULES["common"]     = resolve(home, ".claude", "rules", "ecc", "common");
-ALL_ECC_RULES["rust"]       = resolve(home, ".claude", "rules", "ecc", "rust");
-ALL_ECC_RULES["typescript"] = resolve(home, ".claude", "rules", "ecc", "typescript");
-ALL_ECC_RULES["python"]     = resolve(home, ".claude", "rules", "ecc", "python");
-ALL_ECC_RULES["custom"]     = resolve(home, ".visionox", "rules");
+{
+  const eccRoot = resolve(home, ".claude", "rules", "ecc");
+  if (existsSync(eccRoot)) {
+    for (const entry of readdirSync(eccRoot)) {
+      const dir = resolve(eccRoot, entry);
+      if (statSync(dir).isDirectory()) ALL_ECC_RULES[entry] = dir;
+    }
+  }
+}
+// Custom rules always available (user-defined, ~/.visionox/rules)
+ALL_ECC_RULES["custom"] = resolve(visionoxDataDir, "rules");
 
 function getEnabledRuleSets() {
   return getModeConfig().eccRules || ["common", "rust"];
@@ -1912,65 +1914,10 @@ function runHooks(event, ctx) {
     }
   }
 }
-function buildSystemPrompt(rootDir, hasSemantic) {
-  const routing = hasSemantic ? `
+// buildSystemPrompt — imported from ./lib/system-prompt.mjs
 
-# Search routing
-
-You have BOTH \`semantic_search\` (vector index) and \`search_content\` (literal grep).
-
-- **Descriptive queries** ("where do we handle X", "which file owns Y", "how does Z work") → call \`semantic_search\` FIRST.
-- **Exact-token queries** (specific identifier, regex, "find every call to foo") → call \`search_content\`.
-
-If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.` : "";
-
-  const toolList = tools.specs()
-    .map(s => s.function)
-    .filter(f => f?.name)
-    .map(f => {
-      const firstSentence = (f.description || "").split(".")[0].trim();
-      return `- **${f.name}**: ${firstSentence}`;
-    })
-    .join("\n");
-
-  return `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
-
-## Tools
-
-${toolList}
-
-## Tool selection strategy
-
-- To find code by **meaning or intent** ("where is auth handled?") → use semantic_search (if available) or search_files with keywords
-- To find **exact symbols or strings** ("every call to login()") → use search_files with literal patterns
-- To **read or edit files** → use read_file / write_file directly by path
-- To **run commands** → use run_command; prefer single commands over chained scripts
-- To **search the internet** → use web_search for broad queries, web_fetch for reading a specific URL
-- When the user asks you to **remember** identity, name, or facts/preferences that should apply across all work modes → use remember with global scope unless it is clearly project-specific
-- When the user asks to remember something for the current/active work mode, a named scenario (coding/office/design/general), or phrases it as "在当前场景/编程场景/办公场景/设计场景下记住" → use remember_mode_preference so it stays isolated to that work mode. This includes scenario-specific knowledge, terminology, workflows, keyword associations, and answering preferences.
-- If the user says only "remember" while the content is obviously tied to the current work scenario rather than global identity or cross-mode preference, prefer remember_mode_preference and mention that it is scoped to the current work mode.
-- Use remember_session only for temporary context that should disappear after /new
-- 当用户要求**查找、回顾、总结历史对话记录**时，先调用 \`list_sessions\` 获取会话列表，再按名称调用 \`read_session\` 读取具体内容
-- For **multi-step tasks** (3+ steps): call \`todo_write\` at the start with all steps, then update status after each step — mark in_progress when starting, completed when done
-- For **complex tasks needing approval**: call \`submit_plan\` first, wait for approval, then use \`todo_write\` to track implementation
-- When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
-
-## Safety boundaries
-
-- All file operations are sandboxed to the workspace: ${rootDir}
-- Shell commands execute inside the workspace by default; do NOT attempt to escape the sandbox
-- In admin mode, the sandbox restriction is lifted — but always confirm destructive operations with the user
-- Never expose or transmit API keys, tokens, or credentials shown in conversation
-
-## Error handling
-
-When a tool call fails:
-1. Check whether the path, command, or argument is correct
-2. Verify file/command permissions (read-only files, missing executables)
-3. Try an alternative approach — e.g., if run_command fails, read the relevant files directly
-4. Report the failure clearly to the user with enough context for them to decide next steps
-
-Respond in the same language as the user's message.${routing}`;
+function buildSystemPromptForLoop(rootDir, hasSemantic) {
+  return buildSystemPrompt(tools.specs(), rootDir, hasSemantic);
 }
 
 // ── System-prompt assembly cache ─────────────────────────────────
@@ -2026,7 +1973,7 @@ function computePrefixFingerprint(rootDir) {
 const _pmPathCache = new Map();
 function findProjectMemoryPathCached(rootDir) {
   if (_pmPathCache.has(rootDir)) return _pmPathCache.get(rootDir);
-  const candidates = ["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
+  const candidates = PROJECT_MEMORY_CANDIDATES;
   let found = null;
   for (const name of candidates) {
     const p = resolve(rootDir, name);
@@ -2037,7 +1984,7 @@ function findProjectMemoryPathCached(rootDir) {
 }
 
 function buildLoop(client, rootDir) {
-  const modelConfig = effectiveModelConfig();
+  const modelConfig = effectiveModelConfig(config);
   const fingerprint = computePrefixFingerprint(rootDir);
   let system, mc;
   if (_prefixCache.fingerprint === fingerprint && _prefixCache.upToPersistent !== null) {
@@ -2047,7 +1994,7 @@ function buildLoop(client, rootDir) {
   } else {
     mc = getModeConfig();
     const soul = loadSoul();
-    const baseSystem = buildSystemPrompt(rootDir, hasSemanticSearch);
+    const baseSystem = buildSystemPromptForLoop(rootDir, hasSemanticSearch);
     const systemWithSoul = soul ? `# Identity\n\n${soul}\n\n---\n\n${baseSystem}` : baseSystem;
     // L1 Project memory — injected right after Soul, before work mode.
     const systemWithProject = applyProjectMemory(systemWithSoul, rootDir);
@@ -2056,7 +2003,7 @@ function buildLoop(client, rootDir) {
       mc.description ? `Scenario: ${mc.description}` : "",
       mc.hint ? `User-facing behavior: ${mc.hint}` : "",
       mc.skills?.length ? `Relevant skills: ${mc.skills.join(", ")}` : "",
-      `Mode changes made in the dashboard apply after /new; do not claim a prompt changed mid-turn unless this prefix was rebuilt.`,
+      `Mode changes made in the dashboard apply immediately (the loop is rebuilt on switch); do not claim a prompt changed mid-turn unless this prefix was rebuilt.`,
       mc.prompt || "",
     ].filter(Boolean);
     const systemWithMode = systemWithProject + `\n\n# Work mode\n\nThis block only defines the working habits for the current scenario. If it conflicts with the identity/environment assumptions in # Identity (soul) above, soul wins.\n${modeLines.join("\n")}${formatModeMemoryForPrompt(config.mode)}`;
@@ -2097,13 +2044,7 @@ function buildLoop(client, rootDir) {
     const tmMap = {};
     for (const m of provider.models ?? []) tmMap[m.id] = m.thinkingMode;
     globalThis.__visionoxThinkingModeMap = tmMap;
-    // Prefer a lightweight model (flash/lite/mini) for context summarization to
-    // avoid invoking an expensive pro model on every history fold. Fall back to
-    // the model with the smallest maxContextLength, then the first model listed.
-    const models = provider.models ?? [];
-    const flash = models.find((m) => /flash|lite|mini/i.test(m.id));
-    const smallest = models.slice().sort((a, b) => (a.maxContextLength ?? Infinity) - (b.maxContextLength ?? Infinity))[0];
-    globalThis.__visionoxSummaryModel = flash?.id ?? smallest?.id ?? models[0]?.id;
+    globalThis.__visionoxSummaryModel = pickSummaryModel(provider.models);
   }
 
   applyContextCap(modelConfig.model);
@@ -2127,7 +2068,7 @@ if (apiKey) {
   try {
     client = new DeepSeekClient({ apiKey, baseUrl });
     loop = buildLoop(client, workspaceDir);
-    console.error(`[launcher] CacheFirstLoop created (model=${effectiveModelConfig().model}, effort=${config.reasoningEffort ?? "max"})`);
+    console.error(`[launcher] CacheFirstLoop created (model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
   } catch (err) {
     console.error(`[launcher] failed to create loop: ${err.message}`);
   }
@@ -2650,7 +2591,7 @@ async function migrateReportPromptAddendum() {
   let addendum = "";
   if (client) {
     try {
-      const modelConfig = effectiveModelConfig();
+      const modelConfig = effectiveModelConfig(config);
       const migrationMessages = [
         {
           role: "system",
@@ -2733,7 +2674,7 @@ async function generateReport(period, anchorDate, customRange = null) {
   const conversationText = buildConversationText(conversations);
   const date = formatDateKey(start);
   const messages = buildReportPrompt(periodLabel, date, conversationText, stats);
-  const cfg = effectiveModelConfig();
+  const cfg = effectiveModelConfig(config);
   const model = cfg.model;
 
   console.error(`[report] generating ${period} report: ${conversations.length} sessions, ${totalMessages} messages, model=${model}`);
@@ -2795,60 +2736,15 @@ pauseGate.on((request) => {
   }
 
   // 3. Map pauseGate kind to dashboard modal
-  let modal = null;
-  switch (kind) {
-    case "run_command":
-    case "run_background":
-      modal = {
-        kind: "shell", _gateId: id,
-        command: payload.command,
-        allowPrefix: payload.command?.split(/\s+/)[0] ?? "",
-        shellKind: kind === "run_background" ? "background" : "foreground",
-      };
-      break;
-    case "choice":
-      modal = {
-        kind: "choice", _gateId: id,
-        question: payload.question,
-        options: payload.options,
-        allowCustom: payload.allowCustom,
-      };
-      break;
-    case "plan_proposed":
-      modal = {
-        kind: "plan", _gateId: id,
-        plan: payload.plan,
-        steps: payload.steps,
-        summary: payload.summary,
-      };
-      break;
-    case "plan_checkpoint":
-      modal = {
-        kind: "checkpoint", _gateId: id,
-        stepId: payload.stepId,
-        title: payload.title,
-        result: payload.result,
-        notes: payload.notes,
-        completed: payload.completed,
-        total: payload.total,
-      };
-      break;
-    case "plan_revision":
-      modal = {
-        kind: "revision", _gateId: id,
-        reason: payload.reason,
-        remainingSteps: payload.remainingSteps,
-        summary: payload.summary,
-      };
-      break;
-    default:
-      broadcastDashboardEvent({
-        turn: 0, role: "warning", kind: "warning",
-        id: `warn-${Date.now()}`,
-        text: `未知的确认请求类型: ${kind}，已自动取消。`
-      });
-      pauseGate.cancel(id);
-      return;
+  const modal = requestToModal(request);
+  if (!modal) {
+    broadcastDashboardEvent({
+      turn: 0, role: "warning", kind: "warning",
+      id: `warn-${Date.now()}`,
+      text: `未知的确认请求类型: ${kind}，已自动取消。`
+    });
+    pauseGate.cancel(id);
+    return;
   }
 
   setActiveModal(modal);
@@ -2861,6 +2757,67 @@ pauseGate.setAuditListener((event) => {
       JSON.stringify({ ts: Date.now(), action: "tool-confirm", payload: event }) + "\n");
   } catch { /* swallow */ }
 });
+
+// ── Slash command registry ──────────────────────────────────────
+// Static metadata for the commands handled inside submitPrompt(). The
+// runtime handlers live in submitPrompt (they close over loop/client/messages
+// etc.), but this table is the single source of truth for command names,
+// descriptions, and usage strings — exposed to the dashboard via
+// ctx.getSlashCommands() so the UI can render a dynamic command menu instead
+// of hardcoding the list.
+//
+// matchType:
+//   "exact"   — matches only "/name" with no args
+//   "prefix"  — matches "/name ..." (requires a space after the name, so
+//               "/reportfoo" is NOT mistaken for "/report"; this fixes the
+//               pre-refactor bug where /report used startsWith("/report"))
+//   "prefix-or-exact" — matches both "/name" and "/name ..." (e.g. /cost)
+//
+// Note: /help, /?, /learn, and /retry are NOT listed here because they have
+// special routing (help runs before busy; learn needs lazy module load;
+// retry falls through into the AI loop). They are documented separately.
+const SLASH_COMMAND_META = [
+  { name: "/help",  aliases: ["/?"], desc: "显示能力概览", usage: "/help", group: "system" },
+  { name: "/new",   aliases: ["/clear"], desc: "新建会话（清空当前对话）", usage: "/new", group: "session" },
+  { name: "/status", desc: "查看模型、上下文、费用、余额", usage: "/status", group: "system" },
+  { name: "/compact", desc: "手动压缩上下文（LLM 摘要旧消息）", usage: "/compact", group: "session" },
+  { name: "/retry", desc: "截断并重发上一条用户消息", usage: "/retry", group: "session" },
+  { name: "/cost",  desc: "查看费用或估算发送文本的成本", usage: "/cost [文本]", group: "system", matchType: "prefix-or-exact" },
+  { name: "/context", desc: "上下文窗口占用分解", usage: "/context", group: "system" },
+  { name: "/btw",  desc: "旁路提问（不污染主上下文）", usage: "/btw <问题>", group: "session", matchType: "prefix" },
+  { name: "/report", desc: "生成日报/周报/年报", usage: "/report daily|weekly|yearly [日期]", group: "session", matchType: "prefix-or-exact" },
+  { name: "/learn", desc: "技能萃取、语义索引、导师模式", usage: "/learn help", group: "system" },
+];
+
+/**
+ * Resolve a raw input line to a registered command name (without the leading
+ * slash) plus its raw args string, or null if the input is not a slash
+ * command. Uses a strict `^\/([a-zA-Z0-9_-]+)` name match so "/btwabc" is NOT
+ * parsed as "/btw" (fixes the pre-refactor /btw and /report word-boundary
+ * bugs in one place).
+ */
+function parseSlashInput(text) {
+  const m = (text || "").trim().match(/^\/([a-zA-Z0-9_-]+)(?:\s+([\s\S]*))?$/);
+  if (!m) return null;
+  return { name: m[1].toLowerCase(), args: (m[2] ?? "").trim() };
+}
+
+/**
+ * Test whether a parsed {name, args} matches a command entry's matchType.
+ * "exact"          → name matches and args must be empty
+ * "prefix"         → name matches and args must be non-empty (requires args)
+ * "prefix-or-exact"→ name matches regardless of args
+ * (entries without matchType default to "exact")
+ */
+function matchSlashCommand(entry, name) {
+  const matchType = entry.matchType ?? "exact";
+  // Check primary name or alias (without leading slash)
+  const names = [entry.name.replace(/^\//, ""), ...(entry.aliases ?? []).map(a => a.replace(/^\//, ""))];
+  if (!names.includes(name)) return false;
+  if (matchType === "exact") return true;            // arg presence checked by caller
+  if (matchType === "prefix") return true;            // arg presence checked by caller
+  return true; // prefix-or-exact
+}
 
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
@@ -3002,7 +2959,7 @@ const ctx = {
     syncRuntimeConfig({ ...config, preset: name });
     // Re-resolve through effectiveModelConfig so locked presets override
     // stale config.model values when switching live or rebuilding after /new.
-    const modelConfig = effectiveModelConfig();
+    const modelConfig = effectiveModelConfig(config);
     applyContextCap(modelConfig.model);
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
     broadcastDashboardEvent({ kind: "config-changed" });
@@ -3016,7 +2973,7 @@ const ctx = {
     syncRuntimeConfig({ ...config, model: m });
     // A manual model pick updates the auto baseline only; pro/flash presets stay
     // locked to their preset model to keep every UI surface consistent.
-    const modelConfig = effectiveModelConfig();
+    const modelConfig = effectiveModelConfig(config);
     applyContextCap(modelConfig.model);
     loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
     console.error(`[launcher] model: ${modelConfig.model}`);
@@ -3028,7 +2985,7 @@ const ctx = {
   refreshContextCap: () => {
     const cfg = readConfig(configPath);
     syncRuntimeConfig(cfg);
-    const modelConfig = effectiveModelConfig();
+    const modelConfig = effectiveModelConfig(config);
     // If manual cap was cleared, delete the stale entry so applyContextCap
     // can fall through to maxContextLength or hardcoded defaults.
     if (!cfg.contextCapTokens) {
@@ -3038,10 +2995,7 @@ const ctx = {
     // Re-select summary model in case provider models were updated by import.
     const provider = getActiveProvider(cfg);
     if (provider) {
-      const models = provider.models ?? [];
-      const flash = models.find((m) => /flash|lite|mini/i.test(m.id));
-      const smallest = models.slice().sort((a, b) => (a.maxContextLength ?? Infinity) - (b.maxContextLength ?? Infinity))[0];
-      globalThis.__visionoxSummaryModel = flash?.id ?? smallest?.id ?? models[0]?.id;
+      globalThis.__visionoxSummaryModel = pickSummaryModel(provider.models);
     }
     loop?.configure({ model: modelConfig.model });
     console.error(`[launcher] context cap refreshed: model=${modelConfig.model}, cap=${DEEPSEEK_CONTEXT_TOKENS[modelConfig.model] ?? DEFAULT_CONTEXT_TOKENS}`);
@@ -3185,12 +3139,75 @@ const ctx = {
     };
   },
 
+  // Expose the slash-command registry to the dashboard so the UI can render
+  // a dynamic command menu (autocomplete, /help list) instead of hardcoding
+  // the command set. Returns {name, aliases, desc, usage, group}[].
+  getSlashCommands: () => SLASH_COMMAND_META.map(({ name, aliases, desc, usage, group }) => ({
+    name, aliases: aliases ?? [], desc, usage, group: group ?? "system",
+  })),
+
   // P0-1: busy guard must be checked and set BEFORE any await to prevent
   // race conditions where two rapid calls both pass the busy check.
   submitPrompt: async (text, sessionName, images) => {
     if (busy) {
       return { accepted: false, reason: "loop is busy with a turn" };
     }
+
+    // ── Intercept /help — show user-facing capability overview ──
+    const trimmed = (text || "").trim();
+    if (trimmed === "/help" || trimmed === "/?") {
+      const mc = getModeConfig();
+      const modeList = Object.entries(config.modes ?? DEFAULT_MODES)
+        .filter(([id]) => DEFAULT_MODES[id])
+        .map(([id, m]) => `  • **${m.label}**（${id}）— ${m.description}`)
+        .join("\n");
+      let skillCount = 0;
+      try { skillCount = (await readdir(bootstrapSkillsRoot)).filter(e => statSync(resolve(bootstrapSkillsRoot, e)).isDirectory()).length; } catch {}
+      const helpText = `## Visionox 能力概览
+
+### 🎯 四种工作模式
+
+${modeList}
+
+当前模式：**${mc.label}**。切换模式后即时生效，每种模式有专属的提示词、编码规范和推荐技能。
+
+### 🧩 内置技能（${skillCount} 个）
+
+技能是可调用的专业工作流，模型会根据任务自动选用，也可通过 \`/skill <名称>\` 手动调用。常用技能：
+
+| 类别 | 技能 | 用途 |
+|------|------|------|
+| 编码规范 | coding-standards、tdd-workflow | 编码风格、测试驱动开发 |
+| 代码模式 | rust-patterns、python-patterns、api-design | 语言最佳实践 |
+| 工程流程 | git-workflow、systematic-debugging、security-review | Git 操作、系统调试、安全审查 |
+| 前端设计 | frontend-patterns、react-patterns、e2e-testing | 前端开发、React、端到端测试 |
+| 办公文档 | officecli、pdf、md-to-pdf-cjk | Word/Excel/PPT/PDF 操作 |
+| 规划执行 | brainstorming、writing-plans、executing-plans | 方案构思、计划编写、任务执行 |
+| 代码审查 | requesting-code-review、receiving-code-review | 发起审查、处理审查反馈 |
+
+### 📋 其他能力
+
+- **记忆系统**：记住你的偏好和项目知识（跨会话生效）
+- **/learn**：技能萃取、语义索引、导师模式（输入 \`/learn help\` 了解更多）
+- **斜杠命令**：输入 \`/\` 可查看所有可用命令
+- **22 种语言编码规范**：可在工作模式配置中按需启用（angular/cpp/go/java/swift/vue 等）
+
+### 💡 快速开始
+
+直接输入你的问题或任务即可。例如：
+- "帮我写一个 Python 脚本处理 CSV"
+- "审查这段代码的安全问题"
+- "生成一份项目周报 Word 文档"`;
+
+      const userId = `user-${Date.now()}-${nextMsgId++}`;
+      const assistantId = `assistant-${Date.now()}-${nextMsgId++}`;
+      pushMessage({ id: userId, role: "user", text: trimmed });
+      pushMessage({ id: assistantId, role: "assistant", text: helpText });
+      broadcastDashboardEvent({ kind: "user", id: userId, text: trimmed });
+      broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text: helpText });
+      return { accepted: true, loaded: false };
+    }
+
     busy = true;
 
     // committed: set to true when the fire-and-forget IIFE takes ownership
@@ -3268,7 +3285,7 @@ const ctx = {
           broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text: errMsg });
           return { accepted: true };
         }
-        const modelConfig = effectiveModelConfig();
+        const modelConfig = effectiveModelConfig(config);
         const learnOpts = {
           client,
           model: modelConfig.model,
@@ -3308,7 +3325,7 @@ const ctx = {
 
       // /status — show model, context, cost, balance (no AI loop, instant)
       if (text === "/status") {
-        const mc = effectiveModelConfig();
+        const mc = effectiveModelConfig(config);
         const s = loop ? loop.stats.summary() : null;
         const ctxCap = loop ? (DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS) : 0;
         const ctxPct = s && ctxCap > 0 ? (s.lastPromptTokens / ctxCap * 100) : 0;
@@ -3357,7 +3374,7 @@ const ctx = {
         if (client) {
           loop = buildLoop(client, workspaceDir);
           ctx.loop = loop;
-          console.error(`[launcher] loop rebuilt (mode: ${config.mode}, model=${effectiveModelConfig().model}, effort=${config.reasoningEffort ?? "max"})`);
+          console.error(`[launcher] loop rebuilt (mode: ${config.mode}, model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
         }
         // Reset eventizer for new session
         if (eventizer) {
@@ -3541,7 +3558,9 @@ const ctx = {
       }
 
       // /report daily|weekly [date] — generate summary report from session history
-      if (text.startsWith("/report")) {
+      // Fixed: was startsWith("/report") which matched "/reportfoo" too;
+      // now requires either exact "/report" or "/report " + args.
+      if (text === "/report" || text.startsWith("/report ")) {
         const parts = text.split(/\s+/);
         const period = parts[1] ?? "daily";
         if (!["daily", "weekly", "yearly"].includes(period)) {
@@ -3575,6 +3594,21 @@ const ctx = {
         return { accepted: true };
       }
 
+      // Unknown slash command — surface a hint instead of leaking the raw
+      // "/typo" text to the AI loop as a user message. /retry's fallthrough
+      // rewrites `text` to the retried user content (never starts with "/"),
+      // so it won't trip this guard.
+      if (text.startsWith("/")) {
+        const parsed = parseSlashInput(text);
+        if (parsed) {
+          const id = `assistant-${Date.now()}`;
+          const hint = `ℹ️ 未知命令: ${parsed.name ? `/${parsed.name}` : text.split(/\s/)[0]}\n\n输入 /help 查看可用命令。`;
+          pushMessage({ id, role: "assistant", text: hint });
+          broadcastDashboardEvent({ kind: "assistant_final", id, text: hint });
+          return { accepted: true };
+        }
+      }
+
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
 
       if (loop && images && images.length > 0) {
@@ -3599,7 +3633,7 @@ const ctx = {
             // Write event to .events.jsonl for cockpit tool activity
             if (eventSink && eventizer) {
               try {
-                const ectx = { model: ev.stats?.model ?? loop.model ?? effectiveModelConfig().model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
+                const ectx = { model: ev.stats?.model ?? loop.model ?? effectiveModelConfig(config).model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
                 for (const out of eventizer.consume(ev, ectx)) eventSink.append(out);
               } catch {}
             }
