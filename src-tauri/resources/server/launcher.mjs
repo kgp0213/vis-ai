@@ -383,6 +383,7 @@ try {
     import(distPath("chunk-6PBZN4VI.js")),
     import(distPath("chunk-YQ6NTIIE.js")),
     import(distPath("chunk-PV55UMTO.js")),
+    import(distPath("chunk-3BXRZFWS.js")),
   ]);
 } catch (err) {
   console.error(`[launcher] chunk import failed: ${err.message}`);
@@ -420,6 +421,7 @@ const [
   { listSessions, loadSessionMessages, sessionPath },
   { DEEPSEEK_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEEPSEEK_PRICING },
   { countTokens, estimateRequestTokens },
+  { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives },
 ] = modules;
 
 // ── Load config ─────────────────────────────────────────────────
@@ -883,7 +885,55 @@ if (searchEnabled(configPath)) {
 }
 
 // Utility tools (not workspace-dependent)
-registerPlanTool(tools);
+registerPlanTool(tools, {
+  onPlanSubmitted: (plan, steps) => {
+    // Stash the plan in memory; it will be persisted on the first
+    // mark_step_complete call (i.e., after the user approves and AI
+    // starts executing). If the user cancels, onStepCompleted is never
+    // called so nothing hits disk — matching TUI behaviour.
+    pendingPlan = {
+      steps: Array.isArray(steps) ? steps : [],
+      summary: undefined,
+      body: plan,
+    };
+  },
+  onStepCompleted: (update) => {
+    // First step completion after a submit_plan: promote pendingPlan to
+    // active and persist to disk.
+    if (pendingPlan && !activePlanSteps) {
+      activePlanSteps = pendingPlan.steps;
+      activeCompletedIds = new Set();
+      activePlanBody = pendingPlan.body;
+      activePlanSummary = pendingPlan.summary;
+      pendingPlan = null;
+      persistActivePlan();
+      console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
+    }
+    if (update?.stepId && activeCompletedIds) {
+      markStepDone(update.stepId);
+    }
+    // Notify dashboard that a step was completed (for live UI updates).
+    if (update?.stepId) {
+      broadcastDashboardEvent({
+        kind: "plan-step-complete",
+        stepId: update.stepId,
+        result: update.result,
+        title: update.title,
+        completed: activeCompletedIds?.size ?? 0,
+        total: activePlanSteps?.length ?? 0,
+      });
+    }
+  },
+  onPlanRevisionProposed: (_reason, remainingSteps, summary) => {
+    // Replace remaining steps (keep completed ones). Mirrors TUI's
+    // revise_plan handler.
+    if (activePlanSteps && activeCompletedIds) {
+      activePlanSteps = [...activePlanSteps.filter(s => activeCompletedIds.has(s.id)), ...remainingSteps];
+      if (summary) activePlanSummary = summary;
+      persistActivePlan();
+    }
+  },
+});
 registerChoiceTool(tools);
 registerTodoTool(tools, {
   onTodosUpdated: (todos) => broadcastDashboardEvent({ kind: "todo-update", todos })
@@ -2123,6 +2173,63 @@ setInterval(() => { if (client) refreshBalance(); }, CONSTANTS.BALANCE_REFRESH_M
 // ── Event sink (writes .events.jsonl for cockpit tool activity) ──
 let eventSink = null;
 let eventizer = null;
+
+// ── Plan state (mirrors TUI's planStepsRef/completedStepIdsRef) ──
+// Holds the in-memory plan between submit_plan approval and step completion.
+// Persisted to ~/.visionox/sessions/<session>.plan.json on first step_complete,
+// archived to <session>.plan.<ts>.done.json when all steps are done.
+let pendingPlan = null;       // { steps, summary, body } — set by onPlanSubmitted, cleared on persist
+let activePlanSteps = null;   // [{id,title,action,risk?}] — persisted plan steps
+let activeCompletedIds = null;// Set<string> of completed step ids
+let activePlanSummary = null; // string
+let activePlanBody = null;    // string (markdown)
+
+/** Get the current session name for plan file paths. */
+function currentSessionName() {
+  return state.currentSession || "desktop-default";
+}
+
+/** Reset in-memory plan refs (called on /new, session switch, or cancel). */
+function resetPlanRefs() {
+  pendingPlan = null;
+  activePlanSteps = null;
+  activeCompletedIds = null;
+  activePlanSummary = null;
+  activePlanBody = null;
+}
+
+/** Persist the active plan to disk. Called on first mark_step_complete. */
+function persistActivePlan() {
+  if (!activePlanSteps) return;
+  const session = currentSessionName();
+  try {
+    savePlanState(session, activePlanSteps, [...activeCompletedIds], {
+      body: activePlanBody,
+      summary: activePlanSummary,
+    });
+  } catch (err) {
+    console.error(`[launcher] persistActivePlan failed: ${err.message}`);
+  }
+}
+
+/** Mark a step complete; archive the plan if all steps are done. */
+function markStepDone(stepId) {
+  if (!activePlanSteps || !activeCompletedIds) return;
+  activeCompletedIds.add(stepId);
+  persistActivePlan();
+  if (activeCompletedIds.size >= activePlanSteps.length) {
+    const session = currentSessionName();
+    try {
+      archivePlanState(session);
+      console.error(`[launcher] plan archived (${activeCompletedIds.size}/${activePlanSteps.length} steps) for session ${session}`);
+      broadcastDashboardEvent({ kind: "plan-archived", session });
+    } catch (err) {
+      console.error(`[launcher] archivePlanState failed: ${err.message}`);
+    }
+    resetPlanRefs();
+  }
+}
+
 try {
   eventSink = openEventSink(eventLogPath("desktop"));
   eventizer = new Eventizer();
@@ -3414,6 +3521,9 @@ ${modeList}
         clearSessionMemories();
         clearTutorMode();
         clearLearningMode();
+        // Clear any active plan state (in-memory + on-disk)
+        resetPlanRefs();
+        try { clearPlanState(currentSessionName()); } catch {}
         // Rebuild loop to pick up mode/rules changes
         if (client) {
           loop = buildLoop(client, workspaceDir);
