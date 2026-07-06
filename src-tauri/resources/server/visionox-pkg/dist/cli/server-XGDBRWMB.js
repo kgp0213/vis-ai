@@ -556,9 +556,18 @@ async function handleFileRead(method, rest, _body, ctx) {
   if (BINARY_EXTS.has(ext)) {
     return { status: 400, body: { error: "binary file not supported" } };
   }
+  let readPath = resolved;
+  try {
+    if (ctx.resolveDlpReadablePath) {
+      const dlpResolved = await ctx.resolveDlpReadablePath(resolved);
+      if (dlpResolved?.path) readPath = dlpResolved.path;
+    }
+  } catch (err) {
+    return { status: 500, body: { error: err.message || "文件暂时无法读取" } };
+  }
   let fd;
   try {
-    fd = openSync2(resolved, "r");
+    fd = openSync2(readPath, "r");
   } catch (err) {
     const code = err.code;
     if (code === "ENOENT") {
@@ -1148,7 +1157,7 @@ async function handleLoop(method, rest, body, ctx) {
     if (!ctx.getLoopRunStatus) {
       return { status: 503, body: { error: "auto-loop not available \u2014 attach to a chat session" } };
     }
-    return { status: 200, body: { status: ctx.getLoopRunStatus() } };
+    return { status: 200, body: { deprecated: true, replacement: "/api/schedules", status: ctx.getLoopRunStatus() } };
   }
   if (method === "POST" && rest[0] === "start") {
     if (!ctx.startAutoLoop) {
@@ -1168,7 +1177,7 @@ async function handleLoop(method, rest, body, ctx) {
     }
     ctx.startAutoLoop(intervalMs, prompt.trim());
     ctx.audit?.({ ts: Date.now(), action: "auto-loop-start", payload: { intervalMs } });
-    return { status: 200, body: { started: true } };
+    return { status: 200, body: { deprecated: true, replacement: "/api/schedules", started: true } };
   }
   if (method === "POST" && rest[0] === "stop") {
     if (!ctx.stopAutoLoop) {
@@ -1176,11 +1185,84 @@ async function handleLoop(method, rest, body, ctx) {
     }
     ctx.stopAutoLoop();
     ctx.audit?.({ ts: Date.now(), action: "auto-loop-stop" });
-    return { status: 200, body: { stopped: true } };
+    return { status: 200, body: { deprecated: true, replacement: "/api/schedules", stopped: true } };
   }
   return {
     status: 405,
     body: { error: `method ${method} not supported on /api/loop/${rest[0] ?? ""}` }
+  };
+}
+
+// src/server/api/schedules.ts
+function parseBodySchedules(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+async function handleSchedules(method, rest, body, ctx) {
+  if (method === "GET" && rest.length === 0) {
+    if (!ctx.listSchedules) {
+      return { status: 503, body: { error: "scheduled tasks are not available in this session" } };
+    }
+    return { status: 200, body: { schedules: ctx.listSchedules() } };
+  }
+  if (method === "POST" && rest.length === 0) {
+    if (!ctx.createSchedule) {
+      return { status: 503, body: { error: "scheduled task creation is not wired" } };
+    }
+    const result = ctx.createSchedule(parseBodySchedules(body));
+    if (!result.ok) return { status: 400, body: { error: result.error || "failed to create schedule" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-create", payload: { id: result.schedule?.id } });
+    return { status: 201, body: { schedule: result.schedule } };
+  }
+  const id = rest[0] || "";
+  if (!id) {
+    return { status: 405, body: { error: "GET/POST only" } };
+  }
+  if (method === "POST" && rest.length === 1) {
+    if (!ctx.updateSchedule) {
+      return { status: 503, body: { error: "scheduled task update is not wired" } };
+    }
+    const result = ctx.updateSchedule(id, parseBodySchedules(body));
+    if (!result.ok) return { status: 400, body: { error: result.error || "failed to update schedule" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-update", payload: { id } });
+    return { status: 200, body: { schedule: result.schedule } };
+  }
+  if (method === "POST" && rest[1] === "toggle") {
+    if (!ctx.setScheduleEnabled) {
+      return { status: 503, body: { error: "scheduled task toggle is not wired" } };
+    }
+    const parsed = parseBodySchedules(body);
+    const result = ctx.setScheduleEnabled(id, parsed.enabled !== false);
+    if (!result.ok) return { status: 400, body: { error: result.error || "failed to toggle schedule" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-toggle", payload: { id, enabled: result.schedule?.enabled } });
+    return { status: 200, body: { schedule: result.schedule } };
+  }
+  if (method === "POST" && rest[1] === "run") {
+    if (!ctx.runScheduleNow) {
+      return { status: 503, body: { error: "scheduled task run is not wired" } };
+    }
+    const result = await ctx.runScheduleNow(id);
+    if (!result.ok) return { status: 400, body: { error: result.error || "failed to run schedule" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-run", payload: { id, accepted: result.accepted } });
+    return { status: result.accepted ? 202 : 409, body: result.accepted ? result : { ...result, error: result.reason || "scheduled task was not accepted" } };
+  }
+  if (method === "DELETE" && rest.length === 1) {
+    if (!ctx.deleteSchedule) {
+      return { status: 503, body: { error: "scheduled task deletion is not wired" } };
+    }
+    const result = ctx.deleteSchedule(id);
+    if (!result.ok) return { status: 400, body: { error: result.error || "failed to delete schedule" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-delete", payload: { id } });
+    return { status: 200, body: { deleted: true } };
+  }
+  return {
+    status: 405,
+    body: { error: `method ${method} not supported on /api/schedules/${rest.join("/")}` }
   };
 }
 
@@ -2192,6 +2274,7 @@ async function handleOverview(method, _rest, _body, ctx) {
     editMode: ctx.getEditMode?.() ?? null,
     planMode: ctx.getPlanMode?.() ?? null,
     pendingEdits: ctx.getPendingEditCount?.() ?? null,
+    dlp: ctx.getDlpStatus?.() ?? null,
     mcpServerCount: ctx.mcpServers?.length ?? null,
     toolCount: ctx.tools ? ctx.tools.size : null,
     preset: model.preset,
@@ -2321,17 +2404,58 @@ async function handlePermissions(method, rest, body, ctx) {
 }
 
 // src/server/api/plans.ts
-async function handlePlans(method, _rest, _body, _ctx) {
+async function handlePlans(method, rest, body, ctx) {
+  if (method === "POST" && rest[0] === "active" && rest[1] === "step") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    const stepId = typeof parsed.stepId === "string" ? parsed.stepId : "";
+    if (!stepId) return { status: 400, body: { error: "stepId is required" } };
+    const result = ctx.completeActivePlanStep?.(stepId);
+    if (!result) return { status: 503, body: { error: "active plan mutations require an attached dashboard session" } };
+    if (!result.ok) return { status: 400, body: { error: result.error || "step update failed" } };
+    return { status: 200, body: { ok: true, plan: result.plan ?? null } };
+  }
+  if (method === "DELETE") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    if (parsed.active === true) {
+      const result = ctx.cancelActivePlan?.();
+      if (!result) return { status: 503, body: { error: "active plan mutations require an attached dashboard session" } };
+      return result.ok ? { status: 200, body: { cancelled: true } } : { status: 400, body: { error: result.error || "cancel failed" } };
+    }
+    const targetPath = typeof parsed.path === "string" ? parsed.path : "";
+    if (!targetPath) return { status: 400, body: { error: "path is required" } };
+    // Security: only allow deleting files inside sessionsDir, matching the
+    // .plan.*.done.json pattern, to prevent path traversal.
+    const sessionsDirPath = sessionsDir();
+    const resolved = (await import("node:path")).resolve(targetPath);
+    const sessResolved = (await import("node:path")).resolve(sessionsDirPath);
+    if (!resolved.startsWith(sessResolved + (await import("node:path")).sep)) {
+      return { status: 403, body: { error: "path must be inside sessions directory" } };
+    }
+    const base = (await import("node:path")).basename(resolved);
+    if (!/^[\w.-]+\.plan\.[\w.-]+\.done\.json$/.test(base)) {
+      return { status: 400, body: { error: "invalid plan archive filename" } };
+    }
+    try {
+      (await import("node:fs")).unlinkSync(resolved);
+      return { status: 200, body: { deleted: true, path: resolved } };
+    } catch (err) {
+      return { status: 404, body: { error: `failed to delete: ${err.message}` } };
+    }
+  }
   if (method !== "GET") {
-    return { status: 405, body: { error: "GET only" } };
+    return { status: 405, body: { error: "GET/DELETE only" } };
   }
   const out = listAllPlanArchives().map((a) => {
     const total = a.steps.length;
     const done = a.completedStepIds.length;
     const row = {
       session: a.sessionName,
+      status: "done",
       path: a.path,
       completedAt: a.completedAt,
+      updatedAt: a.completedAt,
       totalSteps: total,
       completedSteps: done,
       completionRatio: total > 0 ? done / total : 0,
@@ -2339,8 +2463,11 @@ async function handlePlans(method, _rest, _body, _ctx) {
       completedStepIds: a.completedStepIds
     };
     if (a.summary) row.summary = a.summary;
+    if (a.body) row.body = a.body;
     return row;
   });
+  const active = ctx.getActivePlan?.();
+  if (active) out.unshift(active);
   return { status: 200, body: { plans: out } };
 }
 
@@ -2871,7 +2998,7 @@ function isAbortError(err) {
 }
 
 // src/server/api/sessions.ts
-import { existsSync as existsSync8, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync8, readFileSync as readFileSync5, writeFileSync as writeFileSync8 } from "fs";
 function parseTranscript(path, maxBytes = 4 * 1024 * 1024) {
   let raw;
   try {
@@ -2897,6 +3024,44 @@ function parseTranscript(path, maxBytes = 4 * 1024 * 1024) {
   }
   return out;
 }
+function summarizeTranscript(messages) {
+  const firstUser = messages.find((m) => m.role === "user" && String(m.content || "").trim());
+  const firstAssistant = messages.find((m) => m.role === "assistant" && String(m.content || "").trim());
+  const source = firstUser || firstAssistant || messages.find((m) => String(m.content || "").trim());
+  if (!source) return "";
+  const text = String(source.content || "").replace(/\s+/g, " ").trim();
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+function searchTextForTranscript(messages, meta = {}) {
+  const parts = [
+    meta.modeLabel,
+    meta.mode,
+    meta.workspace,
+    ...messages.slice(0, 20).map((m) => m.content)
+  ];
+  return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").slice(0, 4e3);
+}
+function transcriptToMarkdown(name, messages, meta = {}) {
+  const lines = [
+    `# ${name}`,
+    "",
+    `- Messages: ${messages.length}`,
+    meta.modeLabel || meta.mode ? `- Mode: ${meta.modeLabel || meta.mode}` : null,
+    meta.workspace ? `- Workspace: ${meta.workspace}` : null,
+    meta.savedAt ? `- Saved: ${meta.savedAt}` : null,
+    "",
+    "---",
+    ""
+  ].filter((line) => line !== null);
+  for (const msg of messages) {
+    const role = msg.role || "unknown";
+    lines.push(`## ${role}`);
+    lines.push("");
+    lines.push(String(msg.content || "").trim() || "(empty)");
+    lines.push("");
+  }
+  return lines.join("\n");
+}
 function sessionModeInfo(meta = {}) {
   const mode = typeof meta.mode === "string" && meta.mode ? meta.mode : null;
   return {
@@ -2906,6 +3071,25 @@ function sessionModeInfo(meta = {}) {
   };
 }
 async function handleSessions(method, rest, _body, _ctx) {
+  if (method === "POST" && rest[1] === "export") {
+    const name2 = decodeURIComponent(rest[0] || "");
+    if (!name2) return { status: 400, body: { error: "session name required" } };
+    const path = sessionPath(name2);
+    if (!existsSync8(path)) return { status: 404, body: { error: `no such session: ${name2}` } };
+    const messages = parseTranscript(path);
+    const session = listSessions().find((s) => s.name === name2);
+    const meta = session?.meta ?? {};
+    const safeName = `${String(name2).replace(/[\\/:*?"<>|]/g, "_")}.md`;
+    const dir = join4(homedir(), "Downloads");
+    const filePath = join4(dir, safeName);
+    try {
+      mkdirSync8(dir, { recursive: true });
+      writeFileSync8(filePath, transcriptToMarkdown(name2, messages, meta), "utf8");
+      return { status: 200, body: { path: filePath, filename: safeName } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+  }
   if (method === "DELETE") {
     const name2 = decodeURIComponent(rest[0] || "");
     if (!name2) return { status: 400, body: { error: "session name required" } };
@@ -2934,15 +3118,20 @@ async function handleSessions(method, rest, _body, _ctx) {
     return {
       status: 200,
       body: {
-        sessions: sessions.map((s) => ({
-          name: s.name,
-          path: s.path,
-          size: s.size,
-          messageCount: s.messageCount,
-          mtime: s.mtime.getTime(),
-          meta: s.meta ?? {},
-          ...sessionModeInfo(s.meta)
-        }))
+        sessions: sessions.map((s) => {
+          const previewMessages = parseTranscript(s.path, 128 * 1024);
+          return {
+            name: s.name,
+            path: s.path,
+            size: s.size,
+            messageCount: s.messageCount,
+            mtime: s.mtime.getTime(),
+            meta: s.meta ?? {},
+            summary: summarizeTranscript(previewMessages),
+            searchText: searchTextForTranscript(previewMessages, s.meta ?? {}),
+            ...sessionModeInfo(s.meta)
+          };
+        })
       }
     };
   }
@@ -3287,7 +3476,7 @@ async function handleSettings(method, _rest, body, ctx) {
           apiKey: "next-session",
           baseUrl: "next-session",
           preset: "live",
-          reasoningEffort: "next-turn",
+          reasoningEffort: "live",
           search: "next-session",
           webSearchEngine: "next-session",
           webSearchEndpoint: "next-session",
@@ -3295,7 +3484,7 @@ async function handleSettings(method, _rest, body, ctx) {
           model: "live",
           proNext: "next-turn",
           budgetUsd: "live",
-          mode: "next-session",
+          mode: "live",
           contextCapTokens: "live"
         }
       }
@@ -3899,6 +4088,113 @@ async function handleOpenUrl(method, _rest, body, ctx) {
     return { status: 500, body: { error: err.message } };
   }
 }
+var ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
+var ARTIFACT_SAFE_EXTS = /* @__PURE__ */ new Set([
+  ".md",
+  ".markdown",
+  ".html",
+  ".htm",
+  ".txt",
+  ".py",
+  ".js",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".css",
+  ".json",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".sql",
+  ".ps1",
+  ".bat",
+  ".cmd",
+  ".sh",
+  ".ini",
+  ".toml",
+  ".csv"
+]);
+function artifactRootDir() {
+  return join4(homedir(), "Downloads", "Visionox-Artifacts");
+}
+function artifactSafeFilename(name, fallback = "artifact.txt") {
+  const raw = String(name || fallback).trim() || fallback;
+  const cleaned = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/[\x00-\x1f]/g, "").slice(0, 120).trim();
+  const filename = cleaned || fallback;
+  const dot = filename.lastIndexOf(".");
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
+  if (!ARTIFACT_SAFE_EXTS.has(ext)) return `${filename}.txt`;
+  return filename;
+}
+function artifactUniquePath(dir, filename) {
+  const dot = filename.lastIndexOf(".");
+  const base = dot >= 0 ? filename.slice(0, dot) : filename;
+  const ext = dot >= 0 ? filename.slice(dot) : "";
+  let candidate = join4(dir, filename);
+  for (let i = 2; existsSync8(candidate) && i < 1e3; i++) {
+    candidate = join4(dir, `${base}-${i}${ext}`);
+  }
+  return candidate;
+}
+function isArtifactPathInsideRoot(path) {
+  const root = resolve2(artifactRootDir());
+  const target = resolve2(String(path || ""));
+  return target === root || target.startsWith(root + sep);
+}
+async function openArtifactFolder(dir) {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  if (process.platform === "win32") {
+    await execFileAsync("explorer.exe", [dir]);
+  } else if (process.platform === "darwin") {
+    await execFileAsync("open", [dir]);
+  } else {
+    await execFileAsync("xdg-open", [dir]);
+  }
+}
+async function handleArtifacts(method, rest, body, ctx) {
+  if (method !== "POST") {
+    return { status: 405, body: { error: "POST only" } };
+  }
+  const action = rest[0] || "";
+  const parsed = parseBody11(body);
+  if (action === "save") {
+    const content = String(parsed.content ?? "");
+    if (!content) return { status: 400, body: { error: "content is required" } };
+    const bytes = Buffer.byteLength(content, "utf8");
+    if (bytes > ARTIFACT_MAX_BYTES) {
+      return { status: 413, body: { error: `artifact too large (${bytes} bytes, max ${ARTIFACT_MAX_BYTES})` } };
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    const dir = join4(artifactRootDir(), date);
+    const filename = artifactSafeFilename(parsed.filename);
+    try {
+      mkdirSync8(dir, { recursive: true });
+      const filePath = artifactUniquePath(dir, filename);
+      writeFileSync8(filePath, content, "utf8");
+      return { status: 200, body: { saved: true, path: filePath, dir, filename } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+  }
+  if (action === "open-folder") {
+    const dir = String(parsed.dir || parsed.path || "");
+    if (!dir) return { status: 400, body: { error: "dir is required" } };
+    const target = resolve2(dir);
+    if (!isArtifactPathInsideRoot(target)) {
+      return { status: 403, body: { error: "can only open Visionox artifact folders" } };
+    }
+    try {
+      mkdirSync8(target, { recursive: true });
+      await openArtifactFolder(target);
+      return { status: 200, body: { opened: true, dir: target } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+  }
+  return { status: 404, body: { error: `no such artifact action: ${action}` } };
+}
 // src/server/api/clipboard-files.ts
 var _psScriptPath = null;
 function getPsScriptPath() {
@@ -3907,7 +4203,70 @@ function getPsScriptPath() {
   return _psScriptPath;
 }
 
-function readClipboardPaths() {
+function isExistingClipboardPath(value) {
+  if (typeof value !== "string") return false;
+  const path = value.trim();
+  if (!path) return false;
+  try {
+    return existsSync(path) && (statSync(path).isFile() || statSync(path).isDirectory());
+  } catch {
+    return false;
+  }
+}
+function pathFromClipboardLine(line) {
+  let raw = String(line || "").trim();
+  if (!raw || raw.startsWith("#")) return "";
+  raw = raw.replace(/^"(.+)"$/, "$1").trim();
+  raw = raw.replace(/^\[(?:文件夹|folder|directory)\]\s*/i, "").trim();
+  raw = raw.replace(/^\[(?:文件|file)\]\s*/i, "").trim();
+  const labelMatch = raw.match(/^(?:路径|path)\s*[:：]\s*(.+)$/i);
+  if (labelMatch) raw = labelMatch[1].trim();
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      return fileURLToPath(raw);
+    } catch {
+      try {
+        return decodeURIComponent(raw.replace(/^file:\/\//i, ""));
+      } catch {
+        return raw;
+      }
+    }
+  }
+  return raw.replace(/^"(.+)"$/, "$1");
+}
+function uniqueClipboardPaths(paths) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const p of paths) {
+    const path = pathFromClipboardLine(p);
+    if (!isExistingClipboardPath(path)) continue;
+    const key = process.platform === "win32" ? path.toLowerCase() : path;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(path);
+  }
+  return out;
+}
+function parseClipboardOutput(out) {
+  const text = String(out || "").trim();
+  if (!text) return [];
+  try {
+    const data = JSON.parse(text.split(/\r?\n/).filter(Boolean).pop() || "{}");
+    const paths = [];
+    if (Array.isArray(data.paths)) paths.push(...data.paths);
+    if (Array.isArray(data.files)) {
+      for (const f of data.files) {
+        if (typeof f === "string") paths.push(f);
+        else if (f?.full) paths.push(f.full);
+      }
+    }
+    if (Array.isArray(data.folders)) paths.push(...data.folders);
+    return uniqueClipboardPaths(paths);
+  } catch {
+    return uniqueClipboardPaths(text.split(/\r?\n/));
+  }
+}
+function readWindowsClipboardPaths() {
   var ps1 = getPsScriptPath();
   if (!existsSync(ps1)) {
     console.error('[clipboard-files] read-clipboard.ps1 not found: ' + ps1);
@@ -3926,17 +4285,13 @@ function readClipboardPaths() {
         shell.cmd + ' ' + shell.args + ' -File "' + ps1 + '"',
         { encoding: "utf8", timeout: 5000, windowsHide: true }
       );
-      var line = out.split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean).pop();
-      if (!line) {
+      var paths = parseClipboardOutput(out);
+      if (paths.length === 0) {
         lastError = shell.cmd + ' returned no output';
         continue;
       }
-      var data = JSON.parse(line);
-      if (data.ok && data.paths && data.paths.length > 0) {
-        console.error('[clipboard-files] ' + shell.cmd + ' returned ' + data.paths.length + ' path(s) via ' + data.sourceFormat);
-        return { paths: data.paths, sourceFormat: data.sourceFormat, diagnostics: data.diagnostics };
-      }
-      lastError = data.error || (shell.cmd + ' returned empty paths');
+      console.error('[clipboard-files] ' + shell.cmd + ' returned ' + paths.length + ' path(s)');
+      return { paths, sourceFormat: "windows-clipboard" };
     } catch (err) {
       lastError = err.message || String(err);
     }
@@ -3944,11 +4299,34 @@ function readClipboardPaths() {
   console.error('[clipboard-files] failed: ' + lastError);
   return { paths: [], error: lastError };
 }
+function readLinuxClipboardPaths() {
+  const commands = [
+    'wl-paste --no-newline --type text/uri-list',
+    'wl-paste --no-newline',
+    'xclip -selection clipboard -t text/uri-list -o',
+    'xclip -selection clipboard -o'
+  ];
+  const errors = [];
+  for (const cmd of commands) {
+    try {
+      const out = execSync(cmd, { encoding: "utf8", timeout: 2000, windowsHide: true });
+      const paths = parseClipboardOutput(out);
+      if (paths.length > 0) {
+        console.error('[clipboard-files] ' + cmd.split(/\s+/)[0] + ' returned ' + paths.length + ' path(s)');
+        return { paths, sourceFormat: cmd.includes("uri-list") ? "linux-uri-list" : "linux-text" };
+      }
+    } catch (err) {
+      errors.push(`${cmd}: ${err.message || String(err)}`);
+    }
+  }
+  return { paths: [], error: errors.slice(-2).join("; ") || "no clipboard path found" };
+}
 
 function handleClipboardFiles(method, _rest, _body, _ctx) {
   if (method !== "GET") return { status: 405, body: { error: "GET only" } };
-  if (process.platform !== "win32") return { status: 200, body: { paths: [] } };
-  return { status: 200, body: readClipboardPaths() };
+  if (process.platform === "win32") return { status: 200, body: readWindowsClipboardPaths() };
+  if (process.platform === "linux") return { status: 200, body: readLinuxClipboardPaths() };
+  return { status: 200, body: { paths: [], error: `clipboard file paths unsupported on ${process.platform}` } };
 }
 
 async function handleApi(pathTail, method, body, ctx, query = new URLSearchParams()) {
@@ -4026,10 +4404,14 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleFileRead(method, rest, body, ctx);
       case "loop":
         return await handleLoop(method, rest, body, ctx);
+      case "schedules":
+        return await handleSchedules(method, rest, body, ctx);
       case "models":
         return await handleModels(method, rest, body, ctx);
       case "open-url":
         return await handleOpenUrl(method, rest, body, ctx);
+      case "artifacts":
+        return await handleArtifacts(method, rest, body, ctx);
       case "clipboard-files":
         return await handleClipboardFiles(method, rest, body, ctx);
       default:

@@ -12,7 +12,7 @@
 import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } from "node:fs";
 import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat as fsStat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -27,7 +27,8 @@ import {
 } from "./lib/provider.mjs";
 import { resolveContextCap } from "./lib/context-cap.mjs";
 import { requestToModal } from "./lib/pause-gate-modal.mjs";
-import { buildSystemPrompt, PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
+import { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
+import { getDlpConfig, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } from "./lib/dlp-file.mjs";
 
 // NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
 // resource file cannot brick the whole launcher startup.
@@ -281,12 +282,12 @@ deployDefaultSoul();
 
 // ── Deploy ECC rules ───────────────────────────────────────────
 // Copies bundled ECC rule packs from resources/ecc-rules/ to
-// ~/.claude/rules/ecc/ on first run or when resource packs are updated.
+// ~/.visionox/rules/ecc/ on first run or when resource packs are updated.
 // Uses a version marker (.ecc-version) to detect resource changes; when the
 // marker changes, all shipped packs are replaced wholesale. The user's custom
 // directory (~/.visionox/rules) is never touched by this function.
 const ECC_RULES_RESOURCE = resolve(__dirname, "..", "ecc-rules");
-const ECC_RULES_HOME = resolve(home, ".claude", "rules", "ecc");
+const ECC_RULES_HOME = resolve(visionoxDataDir, "rules", "ecc");
 const ECC_VERSION_FILE = resolve(ECC_RULES_HOME, ".ecc-version");
 
 function deployEccRules() {
@@ -760,6 +761,11 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     rootDir,
     allowWriting: true,
     allowAllPaths: () => loadEditMode(configPath) === "admin",
+  });
+  wrapReadFileToolWithDlp(tools, {
+    readConfig: () => readConfig(configPath),
+    env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+    logger: console,
   });
 
   registerShellTools(tools, {
@@ -1411,9 +1417,14 @@ async function reloadMcp() {
       await client.initialize();
       const report = await inspectMcpServer(client);
       const { registeredNames } = await bridgeMcpTools(client, { registry: tools });
+      const dlpWrapped = wrapToolsPathArgsWithDlp(tools, registeredNames, {
+        readConfig: () => readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir: workspaceDir },
+        logger: console,
+      });
       // Add new tool specs to loop prefix
       for (const ts of tools.specs().filter((s) => registeredNames.includes(s.function?.name))) {
-        loop?.prefix?.addTool(ts);
+        loop?.prefix?.addTool(presentSingleToolSpec(ts));
       }
       mcpServers.push({
         label: spec.name,
@@ -1425,7 +1436,7 @@ async function reloadMcp() {
         readResource: (uri) => client.readResource(uri),
         getPrompt: (name, args) => client.getPrompt(name, args),
       });
-      console.error(`[launcher] MCP "${spec.name}": ${registeredNames.length} tools bridged`);
+      console.error(`[launcher] MCP "${spec.name}": ${registeredNames.length} tools bridged${dlpWrapped ? `, ${dlpWrapped} DLP path wrapper(s)` : ""}`);
     } catch (err) {
       console.error(`[launcher] MCP "${rawSpec}" failed: ${err.message}`);
     }
@@ -1909,10 +1920,10 @@ function formatPersistentMemoryForPrompt(rootDir) {
 }
 
 // ── Build session ───────────────────────────────────────────────
-// Dynamically register all available ECC rule packs from ~/.claude/rules/ecc/
+// Dynamically register all available ECC rule packs from ~/.visionox/rules/ecc/
 const ALL_ECC_RULES = Object.create(null);
 {
-  const eccRoot = resolve(home, ".claude", "rules", "ecc");
+  const eccRoot = ECC_RULES_HOME;
   if (existsSync(eccRoot)) {
     for (const entry of readdirSync(eccRoot)) {
       const dir = resolve(eccRoot, entry);
@@ -2010,8 +2021,20 @@ function runHooks(event, ctx) {
 }
 // buildSystemPrompt — imported from ./lib/system-prompt.mjs
 
+function currentEditMode() {
+  return loadEditMode(configPath);
+}
+
+function presentedToolSpecs() {
+  return presentToolSpecsForMode(tools.specs(), { editMode: currentEditMode() });
+}
+
+function presentSingleToolSpec(spec) {
+  return presentToolSpecsForMode([spec], { editMode: currentEditMode() })[0] ?? spec;
+}
+
 function buildSystemPromptForLoop(rootDir, hasSemantic) {
-  return buildSystemPrompt(tools.specs(), rootDir, hasSemantic);
+  return buildSystemPrompt(tools.specs(), rootDir, hasSemantic, { editMode: currentEditMode() });
 }
 
 // ── System-prompt assembly cache ─────────────────────────────────
@@ -2040,6 +2063,7 @@ function computePrefixFingerprint(rootDir) {
   const mc = getModeConfig();
   const parts = [
     `mode=${config.mode}`,
+    `edit=${currentEditMode()}`,
     `soul=${safeMtime(SOUL_HOME)}`,
     `root=${rootDir}`,
     `sem=${hasSemanticSearch ? 1 : 0}`,
@@ -2124,7 +2148,7 @@ function buildLoop(client, rootDir) {
     : systemWithTutor;
   const prefix = new ImmutablePrefix({
     system: systemWithLearning,
-    toolSpecs: tools.specs(),
+    toolSpecs: presentedToolSpecs(),
   });
   // Determine vision capability from the active provider model config.
   const provider = getActiveProvider(config);
@@ -2178,15 +2202,17 @@ let eventizer = null;
 // Holds the in-memory plan between submit_plan approval and step completion.
 // Persisted to ~/.visionox/sessions/<session>.plan.json on first step_complete,
 // archived to <session>.plan.<ts>.done.json when all steps are done.
+const DESKTOP_SESSION_NAME = "desktop";
 let pendingPlan = null;       // { steps, summary, body } — set by onPlanSubmitted, cleared on persist
 let activePlanSteps = null;   // [{id,title,action,risk?}] — persisted plan steps
 let activeCompletedIds = null;// Set<string> of completed step ids
 let activePlanSummary = null; // string
 let activePlanBody = null;    // string (markdown)
+let activePlanUpdatedAt = null;// ISO timestamp from the persisted plan file
 
 /** Get the current session name for plan file paths. */
 function currentSessionName() {
-  return state.currentSession || "desktop-default";
+  return DESKTOP_SESSION_NAME;
 }
 
 /** Reset in-memory plan refs (called on /new, session switch, or cancel). */
@@ -2196,6 +2222,58 @@ function resetPlanRefs() {
   activeCompletedIds = null;
   activePlanSummary = null;
   activePlanBody = null;
+  activePlanUpdatedAt = null;
+}
+
+/** Restore a persisted active plan after launcher restart. */
+function hydrateActivePlanFromDisk() {
+  if (activePlanSteps) return;
+  const session = currentSessionName();
+  const stored = loadPlanState(session);
+  if (!stored) return;
+  activePlanSteps = stored.steps;
+  activeCompletedIds = new Set(stored.completedStepIds);
+  activePlanBody = stored.body ?? null;
+  activePlanSummary = stored.summary ?? null;
+  activePlanUpdatedAt = stored.updatedAt ?? null;
+  console.error(`[launcher] active plan restored (${activePlanSteps.length} steps) for session ${session}`);
+}
+
+/** Snapshot used by the dashboard plans panel. */
+function getActivePlanSnapshot() {
+  if (pendingPlan && !activePlanSteps) {
+    return {
+      session: currentSessionName(),
+      status: "pending",
+      path: null,
+      completedAt: null,
+      updatedAt: null,
+      totalSteps: pendingPlan.steps.length,
+      completedSteps: 0,
+      completionRatio: 0,
+      steps: pendingPlan.steps,
+      completedStepIds: [],
+      body: pendingPlan.body,
+      summary: pendingPlan.summary,
+    };
+  }
+  hydrateActivePlanFromDisk();
+  if (!activePlanSteps || !activeCompletedIds) return null;
+  const completedStepIds = [...activeCompletedIds];
+  return {
+    session: currentSessionName(),
+    status: "active",
+    path: null,
+    completedAt: activePlanUpdatedAt,
+    updatedAt: activePlanUpdatedAt,
+    totalSteps: activePlanSteps.length,
+    completedSteps: completedStepIds.length,
+    completionRatio: activePlanSteps.length > 0 ? completedStepIds.length / activePlanSteps.length : 0,
+    steps: activePlanSteps,
+    completedStepIds,
+    body: activePlanBody,
+    summary: activePlanSummary,
+  };
 }
 
 /** Persist the active plan to disk. Called on first mark_step_complete. */
@@ -2207,6 +2285,8 @@ function persistActivePlan() {
       body: activePlanBody,
       summary: activePlanSummary,
     });
+    const stored = loadPlanState(session);
+    activePlanUpdatedAt = stored?.updatedAt ?? new Date().toISOString();
   } catch (err) {
     console.error(`[launcher] persistActivePlan failed: ${err.message}`);
   }
@@ -2214,6 +2294,7 @@ function persistActivePlan() {
 
 /** Mark a step complete; archive the plan if all steps are done. */
 function markStepDone(stepId) {
+  hydrateActivePlanFromDisk();
   if (!activePlanSteps || !activeCompletedIds) return;
   activeCompletedIds.add(stepId);
   persistActivePlan();
@@ -2229,6 +2310,820 @@ function markStepDone(stepId) {
     resetPlanRefs();
   }
 }
+
+function completeActivePlanStep(stepId) {
+  hydrateActivePlanFromDisk();
+  if (!activePlanSteps || !activeCompletedIds) {
+    return { ok: false, error: "no active plan" };
+  }
+  if (!activePlanSteps.some((step) => step.id === stepId)) {
+    return { ok: false, error: "step is not in the active plan" };
+  }
+  markStepDone(stepId);
+  broadcastDashboardEvent({ kind: "plan-step-complete", stepId, manual: true });
+  return { ok: true, plan: getActivePlanSnapshot() };
+}
+
+function cancelActivePlan() {
+  const session = currentSessionName();
+  resetPlanRefs();
+  try { clearPlanState(session); } catch {}
+  broadcastDashboardEvent({ kind: "plan-cancelled", session });
+  return { ok: true };
+}
+
+// ── Scheduled tasks ─────────────────────────────────────────────
+const schedulesFile = resolve(visionoxDataDir, "schedules.json");
+const MIN_SCHEDULE_INTERVAL_MS = 60 * 1000;
+const MAX_SCHEDULE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_SCHEDULE_DELAY_MS = 2_147_000_000;
+const SCHEDULE_HISTORY_LIMIT = 20;
+const SCHEDULE_RUN_MODES = new Set(["auto", "readonly", "confirm"]);
+const SCHEDULE_TYPES = new Set(["interval", "daily", "weekly"]);
+const SCHEDULE_KINDS = new Set(["prompt", "report"]);
+const SCHEDULE_REPORT_PERIODS = new Set(["daily", "weekly", "yearly", "custom"]);
+const SCHEDULE_REPORT_RANGE_MODES = new Set([
+  "today",
+  "yesterday",
+  "this_week",
+  "last_week",
+  "last_7_days",
+  "last_30_days",
+  "this_year",
+  "last_year",
+  "custom",
+]);
+let schedules = [];
+const scheduleTimers = new Map();
+const runningScheduleIds = new Set();
+
+function isValidDailyTime(value) {
+  return typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+function timeToMinutes(value) {
+  if (!isValidDailyTime(value)) return null;
+  const [h, m] = value.split(":").map((v) => Number.parseInt(v, 10));
+  return h * 60 + m;
+}
+
+function isValidRunWindow(start, end) {
+  const s = timeToMinutes(start);
+  const e = timeToMinutes(end);
+  return s !== null && e !== null && s < e;
+}
+
+function isWeekday(date) {
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
+}
+
+function normalizeDayOfWeek(value, fallback = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(6, Math.floor(n)));
+}
+
+function normalizeReportPeriod(value, fallback = "weekly") {
+  return SCHEDULE_REPORT_PERIODS.has(value) ? value : fallback;
+}
+
+function reportPeriodForRangeMode(mode) {
+  if (mode === "today" || mode === "yesterday") return "daily";
+  if (mode === "this_week" || mode === "last_week") return "weekly";
+  if (mode === "this_year" || mode === "last_year") return "yearly";
+  return "custom";
+}
+
+function legacyReportRangeMode(raw) {
+  const period = normalizeReportPeriod(raw?.reportPeriod);
+  if (period === "daily") return "yesterday";
+  if (period === "weekly") return "last_week";
+  if (period === "yearly") return "this_year";
+  return "custom";
+}
+
+function normalizeReportRangeMode(value, fallback = "yesterday") {
+  return SCHEDULE_REPORT_RANGE_MODES.has(value) ? value : fallback;
+}
+
+function normalizeReportDate(value) {
+  if (typeof value !== "string" || !value.trim()) return new Date().toISOString().slice(0, 10);
+  return value.trim().slice(0, 10);
+}
+
+function validateReportRange(mode, start, end) {
+  if (mode !== "custom") return { ok: true };
+  const s = new Date(start);
+  const e = new Date(end);
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+    return { ok: false, error: "report custom range requires valid start and end dates" };
+  }
+  if (e < s) return { ok: false, error: "report end date must be after start date" };
+  return { ok: true };
+}
+
+function isScheduleAllowedAt(task, atMs = Date.now()) {
+  const date = new Date(atMs);
+  if (task.weekdaysOnly && !isWeekday(date)) {
+    return { ok: false, reason: "outside run window: weekdays only" };
+  }
+  if (task.windowEnabled) {
+    const start = timeToMinutes(task.windowStart);
+    const end = timeToMinutes(task.windowEnd);
+    if (start === null || end === null || start >= end) {
+      return { ok: false, reason: "invalid run window" };
+    }
+    const current = date.getHours() * 60 + date.getMinutes();
+    if (current < start || current >= end) {
+      return { ok: false, reason: `outside run window: ${task.windowStart}-${task.windowEnd}` };
+    }
+  }
+  return { ok: true, reason: null };
+}
+
+function nextScheduleWindowStart(task, fromMs) {
+  const candidate = new Date(fromMs);
+  candidate.setSeconds(0, 0);
+  const windowStart = task.windowEnabled ? task.windowStart : "00:00";
+  const start = timeToMinutes(windowStart) ?? 0;
+  for (let i = 0; i < 14; i++) {
+    if (task.weekdaysOnly && !isWeekday(candidate)) {
+      candidate.setDate(candidate.getDate() + 1);
+      candidate.setHours(0, 0, 0, 0);
+      continue;
+    }
+    if (task.windowEnabled) {
+      const end = timeToMinutes(task.windowEnd);
+      const current = candidate.getHours() * 60 + candidate.getMinutes();
+      if (current < start) {
+        candidate.setHours(Math.floor(start / 60), start % 60, 0, 0);
+      } else if (end !== null && current >= end) {
+        candidate.setDate(candidate.getDate() + 1);
+        candidate.setHours(Math.floor(start / 60), start % 60, 0, 0);
+        continue;
+      }
+    }
+    if (isScheduleAllowedAt(task, candidate.getTime()).ok) return candidate.toISOString();
+    candidate.setDate(candidate.getDate() + 1);
+    candidate.setHours(Math.floor(start / 60), start % 60, 0, 0);
+  }
+  return null;
+}
+
+function computeNextScheduleRun(task, fromMs = Date.now()) {
+  if (!task?.enabled) return null;
+  let nextIso = null;
+  if (task.type === "daily") {
+    if (!isValidDailyTime(task.timeOfDay)) return null;
+    const [h, m] = task.timeOfDay.split(":").map((v) => Number.parseInt(v, 10));
+    const next = new Date(fromMs);
+    next.setSeconds(0, 0);
+    next.setHours(h, m, 0, 0);
+    if (next.getTime() <= fromMs) next.setDate(next.getDate() + 1);
+    nextIso = next.toISOString();
+  } else if (task.type === "weekly") {
+    if (!isValidDailyTime(task.timeOfDay)) return null;
+    const [h, m] = task.timeOfDay.split(":").map((v) => Number.parseInt(v, 10));
+    const targetDay = normalizeDayOfWeek(task.dayOfWeek, 1);
+    const next = new Date(fromMs);
+    next.setSeconds(0, 0);
+    next.setHours(h, m, 0, 0);
+    let addDays = (targetDay - next.getDay() + 7) % 7;
+    if (addDays === 0 && next.getTime() <= fromMs) addDays = 7;
+    if (addDays > 0) next.setDate(next.getDate() + addDays);
+    nextIso = next.toISOString();
+  } else {
+    const intervalMs = Number(task.intervalMs);
+    if (!Number.isFinite(intervalMs) || intervalMs < MIN_SCHEDULE_INTERVAL_MS || intervalMs > MAX_SCHEDULE_INTERVAL_MS) {
+      return null;
+    }
+    nextIso = new Date(fromMs + intervalMs).toISOString();
+  }
+  return nextScheduleWindowStart(task, Date.parse(nextIso));
+}
+
+function normalizeSchedule(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : randomUUID();
+  const kind = SCHEDULE_KINDS.has(raw.kind) ? raw.kind : "prompt";
+  const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
+  if (kind === "prompt" && !prompt) return null;
+  const type = SCHEDULE_TYPES.has(raw.type) ? raw.type : "interval";
+  const reportRangeMode = normalizeReportRangeMode(raw.reportRangeMode, legacyReportRangeMode(raw));
+  const reportPeriod = reportPeriodForRangeMode(reportRangeMode);
+  const reportStartDate = normalizeReportDate(raw.reportStartDate);
+  const reportEndDate = normalizeReportDate(raw.reportEndDate);
+  if (!validateReportRange(reportRangeMode, reportStartDate, reportEndDate).ok) return null;
+  const nowIso = new Date().toISOString();
+  const task = {
+    id,
+    kind,
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 80) : (kind === "report" ? "会话报告任务" : prompt.slice(0, 36)),
+    prompt: kind === "prompt" ? prompt : "",
+    reportRangeMode,
+    reportPeriod,
+    reportDate: normalizeReportDate(raw.reportDate),
+    reportStartDate,
+    reportEndDate,
+    reportExport: raw.reportExport !== false,
+    type,
+    runMode: SCHEDULE_RUN_MODES.has(raw.runMode) ? raw.runMode : "auto",
+    intervalMs: type === "interval" ? Number(raw.intervalMs) || 60 * 60 * 1000 : null,
+    timeOfDay: (type === "daily" || type === "weekly") && isValidDailyTime(raw.timeOfDay) ? raw.timeOfDay : "09:00",
+    dayOfWeek: type === "weekly" ? normalizeDayOfWeek(raw.dayOfWeek, 1) : null,
+    weekdaysOnly: raw.weekdaysOnly === true,
+    windowEnabled: raw.windowEnabled === true,
+    windowStart: isValidDailyTime(raw.windowStart) ? raw.windowStart : "09:00",
+    windowEnd: isValidDailyTime(raw.windowEnd) ? raw.windowEnd : "18:00",
+    enabled: raw.enabled !== false,
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : nowIso,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : nowIso,
+    workspaceDir: typeof raw.workspaceDir === "string" && raw.workspaceDir.trim() ? raw.workspaceDir : workspaceDir,
+    lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
+    lastStatus: typeof raw.lastStatus === "string" ? raw.lastStatus : null,
+    lastError: typeof raw.lastError === "string" ? raw.lastError : null,
+    runCount: Number.isFinite(raw.runCount) ? Math.max(0, Math.floor(raw.runCount)) : 0,
+    history: Array.isArray(raw.history) ? raw.history.slice(0, SCHEDULE_HISTORY_LIMIT).map(normalizeScheduleHistoryEntry).filter(Boolean) : [],
+    nextRunAt: typeof raw.nextRunAt === "string" ? raw.nextRunAt : null,
+  };
+  if (task.type === "interval") {
+    task.intervalMs = Math.max(MIN_SCHEDULE_INTERVAL_MS, Math.min(MAX_SCHEDULE_INTERVAL_MS, task.intervalMs));
+    task.timeOfDay = null;
+  } else {
+    task.intervalMs = null;
+  }
+  task.nextRunAt = computeNextScheduleRun(task);
+  return task;
+}
+
+function normalizeScheduleHistoryEntry(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const startedAt = typeof raw.startedAt === "string" ? raw.startedAt : null;
+  if (!startedAt) return null;
+  return {
+    runId: typeof raw.runId === "string" && raw.runId.trim() ? raw.runId : randomUUID(),
+    startedAt,
+    completedAt: typeof raw.completedAt === "string" ? raw.completedAt : null,
+    durationMs: Number.isFinite(raw.durationMs) ? Math.max(0, Math.floor(raw.durationMs)) : null,
+    status: typeof raw.status === "string" ? raw.status : "unknown",
+    manual: raw.manual === true,
+    accepted: raw.accepted === true,
+    reason: typeof raw.reason === "string" ? raw.reason : null,
+    summary: typeof raw.summary === "string" ? raw.summary : null,
+    assistantMessageId: typeof raw.assistantMessageId === "string" ? raw.assistantMessageId : null,
+    userMessageId: typeof raw.userMessageId === "string" ? raw.userMessageId : null,
+    lastPromptTokens: Number.isFinite(raw.lastPromptTokens) ? Math.max(0, Math.floor(raw.lastPromptTokens)) : null,
+    lastTurnCostUsd: Number.isFinite(raw.lastTurnCostUsd) ? Math.max(0, raw.lastTurnCostUsd) : null,
+    totalCostUsd: Number.isFinite(raw.totalCostUsd) ? Math.max(0, raw.totalCostUsd) : null,
+    workspaceDir: typeof raw.workspaceDir === "string" ? raw.workspaceDir : null,
+    reportRangeMode: typeof raw.reportRangeMode === "string" ? raw.reportRangeMode : null,
+    reportPeriod: typeof raw.reportPeriod === "string" ? raw.reportPeriod : null,
+    reportStart: typeof raw.reportStart === "string" ? raw.reportStart : null,
+    reportEnd: typeof raw.reportEnd === "string" ? raw.reportEnd : null,
+    reportSessions: Number.isFinite(raw.reportSessions) ? Math.max(0, Math.floor(raw.reportSessions)) : null,
+    reportMessages: Number.isFinite(raw.reportMessages) ? Math.max(0, Math.floor(raw.reportMessages)) : null,
+    reportPath: typeof raw.reportPath === "string" ? raw.reportPath : null,
+  };
+}
+
+function sameScheduleWorkspace(task) {
+  if (!task?.workspaceDir) return true;
+  try {
+    return resolve(task.workspaceDir) === resolve(workspaceDir);
+  } catch {
+    return task.workspaceDir === workspaceDir;
+  }
+}
+
+function readSchedules() {
+  try {
+    const parsed = JSON.parse(readFileSync(schedulesFile, "utf8"));
+    if (!Array.isArray(parsed?.schedules)) return [];
+    return parsed.schedules.map(normalizeSchedule).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function writeSchedules() {
+  try {
+    const tmpFile = `${schedulesFile}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify({ schedules }, null, 2));
+    renameSync(tmpFile, schedulesFile);
+  } catch (err) {
+    console.error(`[launcher] writeSchedules failed: ${err.message}`);
+  }
+}
+
+function repairInterruptedSchedules() {
+  const nowIso = new Date().toISOString();
+  let dirty = false;
+  for (const task of schedules) {
+    if (task.lastStatus !== "running") continue;
+    const runningEntry = Array.isArray(task.history) ? task.history.find((entry) => entry?.status === "running") : null;
+    const reason = "interrupted by launcher restart";
+    if (runningEntry) {
+      runningEntry.completedAt = nowIso;
+      runningEntry.durationMs = Number.isFinite(Date.parse(runningEntry.startedAt)) ? Math.max(0, Date.parse(nowIso) - Date.parse(runningEntry.startedAt)) : null;
+      runningEntry.status = "failed";
+      runningEntry.accepted = false;
+      runningEntry.reason = runningEntry.reason || reason;
+      runningEntry.summary = runningEntry.summary || reason;
+    }
+    task.updatedAt = nowIso;
+    task.lastStatus = "failed";
+    task.lastError = reason;
+    task.nextRunAt = computeNextScheduleRun(task);
+    dirty = true;
+    console.error(`[launcher] repaired interrupted schedule: ${task.id} (${task.name || "unnamed"})`);
+  }
+  if (dirty) writeSchedules();
+}
+
+function publicSchedule(task) {
+  return {
+    ...task,
+    workspaceMismatch: !sameScheduleWorkspace(task),
+    currentWorkspaceDir: workspaceDir,
+  };
+}
+
+function refreshScheduleTimer(task) {
+  const previous = scheduleTimers.get(task.id);
+  if (previous) clearTimeout(previous);
+  scheduleTimers.delete(task.id);
+  if (!task.enabled || !task.nextRunAt) return;
+  const due = Date.parse(task.nextRunAt);
+  if (!Number.isFinite(due)) return;
+  const delay = Math.max(0, Math.min(MAX_SCHEDULE_DELAY_MS, due - Date.now()));
+  const timer = setTimeout(() => {
+    void triggerSchedule(task.id, { manual: false });
+  }, delay);
+  scheduleTimers.set(task.id, timer);
+}
+
+function refreshAllScheduleTimers() {
+  for (const timer of scheduleTimers.values()) clearTimeout(timer);
+  scheduleTimers.clear();
+  for (const task of schedules) refreshScheduleTimer(task);
+}
+
+function scheduleFromInput(input, previous = null) {
+  const patch = input && typeof input === "object" ? input : {};
+  const kind = SCHEDULE_KINDS.has(patch.kind) ? patch.kind : previous?.kind ?? "prompt";
+  const type = SCHEDULE_TYPES.has(patch.type) ? patch.type : previous?.type ?? "interval";
+  const name = typeof patch.name === "string" ? patch.name.trim() : previous?.name ?? "";
+  const prompt = typeof patch.prompt === "string" ? patch.prompt.trim() : previous?.prompt ?? "";
+  const enabled = typeof patch.enabled === "boolean" ? patch.enabled : previous?.enabled ?? true;
+  const runMode = SCHEDULE_RUN_MODES.has(patch.runMode) ? patch.runMode : previous?.runMode ?? "auto";
+  const weekdaysOnly = typeof patch.weekdaysOnly === "boolean" ? patch.weekdaysOnly : previous?.weekdaysOnly ?? false;
+  const windowEnabled = typeof patch.windowEnabled === "boolean" ? patch.windowEnabled : previous?.windowEnabled ?? false;
+  const windowStart = typeof patch.windowStart === "string" ? patch.windowStart : previous?.windowStart ?? "09:00";
+  const windowEnd = typeof patch.windowEnd === "string" ? patch.windowEnd : previous?.windowEnd ?? "18:00";
+  const reportRangeMode = normalizeReportRangeMode(
+    patch.reportRangeMode ?? previous?.reportRangeMode,
+    legacyReportRangeMode({ reportPeriod: patch.reportPeriod ?? previous?.reportPeriod })
+  );
+  const reportPeriod = reportPeriodForRangeMode(reportRangeMode);
+  const reportDate = normalizeReportDate(patch.reportDate ?? previous?.reportDate);
+  const reportStartDate = normalizeReportDate(patch.reportStartDate ?? previous?.reportStartDate);
+  const reportEndDate = normalizeReportDate(patch.reportEndDate ?? previous?.reportEndDate);
+  const reportExport = typeof patch.reportExport === "boolean" ? patch.reportExport : previous?.reportExport ?? true;
+  if (kind === "prompt" && !prompt) return { ok: false, error: "prompt must be a non-empty string" };
+  const reportRangeCheck = validateReportRange(reportRangeMode, reportStartDate, reportEndDate);
+  if (kind === "report" && !reportRangeCheck.ok) return { ok: false, error: reportRangeCheck.error };
+  if (name.length > 80) return { ok: false, error: "name must be 80 characters or fewer" };
+  if (windowEnabled && !isValidRunWindow(windowStart, windowEnd)) {
+    return { ok: false, error: "run window must use HH:mm and start before end" };
+  }
+  const nowIso = new Date().toISOString();
+  const task = {
+    id: previous?.id ?? randomUUID(),
+    kind,
+    name: name || (kind === "report" ? "会话报告任务" : prompt.slice(0, 36)),
+    prompt: kind === "prompt" ? prompt : "",
+    reportRangeMode,
+    reportPeriod,
+    reportDate,
+    reportStartDate,
+    reportEndDate,
+    reportExport,
+    type,
+    runMode: kind === "report" && runMode === "readonly" ? "auto" : runMode,
+    intervalMs: null,
+    timeOfDay: null,
+    dayOfWeek: null,
+    weekdaysOnly,
+    windowEnabled,
+    windowStart,
+    windowEnd,
+    enabled,
+    createdAt: previous?.createdAt ?? nowIso,
+    updatedAt: nowIso,
+    workspaceDir: previous?.workspaceDir ?? workspaceDir,
+    lastRunAt: previous?.lastRunAt ?? null,
+    lastStatus: previous?.lastStatus ?? null,
+    lastError: previous?.lastError ?? null,
+    runCount: previous?.runCount ?? 0,
+    history: previous?.history ?? [],
+    nextRunAt: null,
+  };
+  if (type === "daily" || type === "weekly") {
+    const timeOfDay = typeof patch.timeOfDay === "string" ? patch.timeOfDay : previous?.timeOfDay ?? "09:00";
+    if (!isValidDailyTime(timeOfDay)) return { ok: false, error: "timeOfDay must use HH:mm in 24-hour local time" };
+    task.timeOfDay = timeOfDay;
+    if (type === "weekly") {
+      task.dayOfWeek = normalizeDayOfWeek(patch.dayOfWeek ?? previous?.dayOfWeek, 1);
+    }
+  } else {
+    const intervalMs = Number(patch.intervalMs ?? previous?.intervalMs ?? 60 * 60 * 1000);
+    if (!Number.isFinite(intervalMs) || intervalMs < MIN_SCHEDULE_INTERVAL_MS || intervalMs > MAX_SCHEDULE_INTERVAL_MS) {
+      return { ok: false, error: `intervalMs must be between ${MIN_SCHEDULE_INTERVAL_MS} and ${MAX_SCHEDULE_INTERVAL_MS}` };
+    }
+    task.intervalMs = Math.floor(intervalMs);
+  }
+  task.nextRunAt = computeNextScheduleRun(task);
+  return { ok: true, task };
+}
+
+function recordScheduleRun(task, entry) {
+  task.history = [entry, ...(Array.isArray(task.history) ? task.history : [])].slice(0, SCHEDULE_HISTORY_LIMIT);
+}
+
+function updateScheduleRun(task, runId, patch) {
+  if (!task || !runId || !Array.isArray(task.history)) return null;
+  const idx = task.history.findIndex((entry) => entry?.runId === runId);
+  if (idx < 0) return null;
+  const updated = normalizeScheduleHistoryEntry({ ...task.history[idx], ...patch });
+  if (!updated) return null;
+  task.history[idx] = updated;
+  return updated;
+}
+
+function summarizeScheduleResult(text) {
+  if (typeof text !== "string") return null;
+  const summary = text
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" ");
+  if (!summary) return null;
+  return summary.length > 260 ? `${summary.slice(0, 257)}...` : summary;
+}
+
+function scheduleRunStats(stats) {
+  if (!stats || typeof stats !== "object") return {};
+  return {
+    lastPromptTokens: Number.isFinite(stats.lastPromptTokens) ? stats.lastPromptTokens : null,
+    lastTurnCostUsd: Number.isFinite(stats.lastTurnCostUsd) ? stats.lastTurnCostUsd : null,
+    totalCostUsd: Number.isFinite(stats.totalCostUsd) ? stats.totalCostUsd : null,
+  };
+}
+
+function shiftLocalDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function reportRangeFromTask(task, baseDate = new Date()) {
+  const rangeMode = normalizeReportRangeMode(task.reportRangeMode, legacyReportRangeMode(task));
+  if (rangeMode === "custom") {
+    return {
+      rangeMode,
+      period: "custom",
+      anchorDate: new Date(task.reportEndDate || Date.now()),
+      customRange: {
+        start: new Date(task.reportStartDate || Date.now()),
+        end: new Date(task.reportEndDate || Date.now()),
+      },
+    };
+  }
+  if (rangeMode === "last_7_days" || rangeMode === "last_30_days") {
+    const days = rangeMode === "last_7_days" ? 7 : 30;
+    return {
+      rangeMode,
+      period: "custom",
+      anchorDate: baseDate,
+      customRange: {
+        start: shiftLocalDays(baseDate, -(days - 1)),
+        end: baseDate,
+      },
+    };
+  }
+  let anchorDate = baseDate;
+  if (rangeMode === "yesterday") anchorDate = shiftLocalDays(baseDate, -1);
+  if (rangeMode === "last_week") anchorDate = shiftLocalDays(baseDate, -7);
+  if (rangeMode === "last_year") anchorDate = new Date(baseDate.getFullYear() - 1, baseDate.getMonth(), baseDate.getDate());
+  if (Number.isNaN(anchorDate.getTime())) anchorDate = new Date();
+  return {
+    rangeMode,
+    period: reportPeriodForRangeMode(rangeMode),
+    anchorDate,
+    customRange: null,
+  };
+}
+
+function writeScheduledReport(markdown, stats, task) {
+  const dir = join(homedir(), "Downloads");
+  mkdirSync(dir, { recursive: true });
+  const period = stats?.period || task.reportPeriod || "report";
+  const date = stats?.start instanceof Date ? formatDateKey(stats.start) : new Date().toISOString().slice(0, 10);
+  const safeTaskName = String(task.name || "scheduled-report").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
+  const fileName = `Visionox_${safeTaskName}_${period}_${date}.md`.replace(/[\\/:*?"<>|]/g, "_");
+  const filePath = join(dir, fileName);
+  writeFileSync(filePath, markdown, "utf8");
+  return filePath;
+}
+
+async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISOString()) {
+  const task = schedules.find((item) => item.id === taskId);
+  if (!task) return;
+  try {
+    const baseDate = new Date(startedAt);
+    const { rangeMode, period, anchorDate, customRange } = reportRangeFromTask(task, Number.isNaN(baseDate.getTime()) ? new Date() : baseDate);
+    const { markdown, stats } = await generateReport(period, anchorDate, customRange);
+    const reportPath = task.reportExport ? writeScheduledReport(markdown, stats, task) : null;
+    completeScheduleRun(task.id, runId, {
+      status: "completed",
+      reason: null,
+      summary: summarizeScheduleResult(markdown),
+      reportRangeMode: rangeMode,
+      reportPeriod: stats.period,
+      reportStart: stats.start?.toISOString?.() ?? null,
+      reportEnd: stats.end?.toISOString?.() ?? null,
+      reportSessions: stats.sessions,
+      reportMessages: stats.messages,
+      reportPath,
+    });
+  } catch (err) {
+    completeScheduleRun(task.id, runId, {
+      status: "failed",
+      reason: err.message || "scheduled report failed",
+      summary: err.message || "scheduled report failed",
+    });
+  }
+}
+
+function completeScheduleRun(taskId, runId, patch) {
+  const task = schedules.find((item) => item.id === taskId);
+  if (!task) {
+    runningScheduleIds.delete(taskId);
+    return;
+  }
+  const completedAt = patch.completedAt || new Date().toISOString();
+  const startedAt = task.history?.find((entry) => entry?.runId === runId)?.startedAt;
+  const durationMs = Number.isFinite(patch.durationMs)
+    ? patch.durationMs
+    : Math.max(0, Date.parse(completedAt) - (Number.isFinite(Date.parse(startedAt)) ? Date.parse(startedAt) : Date.now()));
+  const status = patch.status || (patch.reason ? "failed" : "completed");
+  task.updatedAt = completedAt;
+  task.lastStatus = status;
+  task.lastError = patch.reason || null;
+  updateScheduleRun(task, runId, {
+    ...patch,
+    completedAt,
+    durationMs,
+    status,
+    accepted: status === "completed",
+    reason: patch.reason || null,
+  });
+  writeSchedules();
+  broadcastDashboardEvent({
+    kind: "schedule-run",
+    id: task.id,
+    runId,
+    name: task.name,
+    accepted: status === "completed",
+    status: task.lastStatus,
+    reason: task.lastError,
+  });
+  runningScheduleIds.delete(taskId);
+}
+
+function renderSchedulePrompt(task, startedAt, previousLastRunAt) {
+  const now = new Date(startedAt);
+  const vars = {
+    date: formatDateKey(now),
+    time: now.toTimeString().slice(0, 8),
+    workspace: task.workspaceDir || workspaceDir,
+    lastRunAt: previousLastRunAt || "",
+    taskName: task.name || "",
+  };
+  let body = task.prompt;
+  for (const [key, value] of Object.entries(vars)) {
+    body = body.replaceAll(`{${key}}`, value);
+  }
+  const label = task.name || "scheduled task";
+  const modeLine = task.runMode === "readonly"
+    ? "请以只读方式执行：可以分析、总结、检查和提出建议，但不要修改文件、删除内容或执行有副作用的命令。"
+    : "按用户配置的定时任务执行。";
+  return [
+    `[定时任务: ${label}]`,
+    `绑定工作区: ${task.workspaceDir || workspaceDir}`,
+    `触发时间: ${startedAt}`,
+    modeLine,
+    "",
+    body,
+  ].join("\n");
+}
+
+function createScheduleConfirmationMessage(task, startedAt) {
+  const assistantId = `assistant-${Date.now()}-${nextMsgId++}`;
+  const text = [
+    `定时任务“${task.name || "未命名任务"}”已到触发时间，但该任务设置为“需要确认”。`,
+    "",
+    `绑定工作区：${task.workspaceDir || workspaceDir}`,
+    `触发时间：${startedAt}`,
+    "",
+    "请在“任务”页点击“立即运行”后再执行。"
+  ].join("\n");
+  pushMessage({ id: assistantId, role: "assistant", text });
+  appendActiveMessage({ role: "assistant", text });
+  broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text });
+}
+
+async function triggerSchedule(id, { manual = false } = {}) {
+  const task = schedules.find((item) => item.id === id);
+  if (!task) return { ok: false, error: "schedule not found" };
+  if (runningScheduleIds.has(id)) {
+    return { ok: true, accepted: false, reason: "task is already running", runId: null, schedule: publicSchedule(task) };
+  }
+  const runId = randomUUID();
+  const startedAt = new Date().toISOString();
+  const startedMs = Date.parse(startedAt);
+  const previousLastRunAt = task.lastRunAt;
+  task.lastRunAt = startedAt;
+  if (!sameScheduleWorkspace(task)) {
+    const reason = `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`;
+    const completedAt = new Date().toISOString();
+    task.updatedAt = new Date().toISOString();
+    task.runCount += 1;
+    task.lastStatus = "skipped";
+    task.lastError = reason;
+    task.nextRunAt = computeNextScheduleRun(task);
+    recordScheduleRun(task, {
+      runId,
+      startedAt,
+      completedAt,
+      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
+      status: "skipped",
+      manual,
+      accepted: false,
+      reason,
+      summary: reason,
+      workspaceDir,
+    });
+    writeSchedules();
+    refreshScheduleTimer(task);
+    broadcastDashboardEvent({
+      kind: "schedule-run",
+      id: task.id,
+      runId,
+      name: task.name,
+      accepted: false,
+      status: task.lastStatus,
+      reason: task.lastError,
+    });
+    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
+  }
+  const windowCheck = manual ? { ok: true, reason: null } : isScheduleAllowedAt(task, Date.parse(startedAt));
+  if (!windowCheck.ok) {
+    const reason = windowCheck.reason || "outside run window";
+    const completedAt = new Date().toISOString();
+    task.updatedAt = new Date().toISOString();
+    task.runCount += 1;
+    task.lastStatus = "skipped";
+    task.lastError = reason;
+    task.nextRunAt = computeNextScheduleRun(task, Date.parse(startedAt));
+    recordScheduleRun(task, {
+      runId,
+      startedAt,
+      completedAt,
+      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
+      status: "skipped",
+      manual,
+      accepted: false,
+      reason,
+      summary: reason,
+      workspaceDir,
+    });
+    writeSchedules();
+    refreshScheduleTimer(task);
+    broadcastDashboardEvent({
+      kind: "schedule-run",
+      id: task.id,
+      runId,
+      name: task.name,
+      accepted: false,
+      status: task.lastStatus,
+      reason: task.lastError,
+    });
+    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
+  }
+  if (task.runMode === "confirm" && !manual) {
+    const reason = "waiting for manual confirmation";
+    const completedAt = new Date().toISOString();
+    if (task.lastStatus !== "pending_confirmation") {
+      createScheduleConfirmationMessage(task, startedAt);
+    }
+    task.updatedAt = new Date().toISOString();
+    task.runCount += 1;
+    task.lastStatus = "pending_confirmation";
+    task.lastError = reason;
+    task.nextRunAt = computeNextScheduleRun(task);
+    recordScheduleRun(task, {
+      runId,
+      startedAt,
+      completedAt,
+      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
+      status: "pending_confirmation",
+      manual,
+      accepted: false,
+      reason,
+      summary: reason,
+      workspaceDir,
+    });
+    writeSchedules();
+    refreshScheduleTimer(task);
+    broadcastDashboardEvent({
+      kind: "schedule-run",
+      id: task.id,
+      runId,
+      name: task.name,
+      accepted: false,
+      status: task.lastStatus,
+      reason: task.lastError,
+    });
+    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
+  }
+  task.updatedAt = startedAt;
+  task.runCount += 1;
+  task.lastStatus = "running";
+  task.lastError = null;
+  task.nextRunAt = computeNextScheduleRun(task);
+  runningScheduleIds.add(task.id);
+  recordScheduleRun(task, {
+    runId,
+    startedAt,
+    status: "running",
+    manual,
+    accepted: true,
+    reason: null,
+    workspaceDir,
+  });
+  writeSchedules();
+  refreshScheduleTimer(task);
+  broadcastDashboardEvent({
+    kind: "schedule-run",
+    id: task.id,
+    runId,
+    name: task.name,
+    accepted: true,
+    status: task.lastStatus,
+    reason: task.lastError,
+  });
+  if (task.kind === "report") {
+    void runScheduleReportTask(task.id, runId, startedAt);
+    return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
+  }
+  const prompt = renderSchedulePrompt(task, startedAt, previousLastRunAt);
+  let result;
+  try {
+    result = await ctx.submitPrompt(prompt, null, null, {
+      readonly: task.runMode === "readonly",
+      newConversation: true,
+      onComplete: (done) => {
+        completeScheduleRun(task.id, runId, {
+          status: done.ok ? "completed" : "failed",
+          reason: done.ok ? null : done.error || "scheduled task failed",
+          summary: done.ok ? summarizeScheduleResult(done.assistantText) : done.error || "scheduled task failed",
+          assistantMessageId: done.assistantMessageId,
+          userMessageId: done.userMessageId,
+          ...scheduleRunStats(done.stats),
+        });
+      },
+    });
+  } catch (err) {
+    result = { accepted: false, reason: err.message };
+  }
+  if (!result.accepted) {
+    const reason = result.reason ?? "loop is busy";
+    completeScheduleRun(task.id, runId, {
+      status: manual ? "rejected" : "skipped",
+      reason,
+      summary: reason,
+    });
+    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
+  }
+  return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
+}
+
+schedules = readSchedules();
+repairInterruptedSchedules();
 
 try {
   eventSink = openEventSink(eventLogPath("desktop"));
@@ -2449,6 +3344,35 @@ async function loadActiveSession() {
     console.error(`[launcher] failed to load active session: ${err.message}`);
     await clearActiveSession();
     return false;
+  }
+}
+
+async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
+  await finalizeActiveSession();
+  if (loop) loop.clearLog();
+  clearSessionMemories();
+  clearTutorMode();
+  clearLearningMode();
+  resetPlanRefs();
+  try { clearPlanState(currentSessionName()); } catch {}
+  if (client) {
+    loop = buildLoop(client, workspaceDir);
+    ctx.loop = loop;
+    console.error(`[launcher] loop rebuilt for ${reason} (mode: ${config.mode}, model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
+  }
+  if (eventizer) {
+    eventizer = new Eventizer();
+    try { eventSink?.append(eventizer.emitSessionOpened(0, "desktop", 0)); } catch {}
+  }
+  messages.length = 0;
+  nextMsgId = 1;
+  if (withWelcome) {
+    const welcomeId = `assistant-${Date.now()}`;
+    const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
+    pushMessage(welcomeMsg);
+    broadcastDashboardEvent({ kind: "messages-reset", messages: [welcomeMsg] });
+  } else {
+    broadcastDashboardEvent({ kind: "messages-reset", messages: [] });
   }
 }
 
@@ -2990,6 +3914,7 @@ const ctx = {
   getModels: () => null,
   getLoopRunStatus: () => null,
   getActiveModal: () => activeModal,
+  getActivePlan: () => getActivePlanSnapshot(),
   hasApiKey: () => !!apiKey,
   getLogs: () => logBuffer.slice(),
   getEccRules: () => ({
@@ -3003,11 +3928,81 @@ const ctx = {
     list: Object.keys(config.modes || DEFAULT_MODES).map((id) => modeSummary(id)),
   }),
   getSkillEnvironmentStatus,
+  getDlpStatus: () => {
+    const dlp = getDlpConfig(readConfig(configPath), {
+      homeDir: home,
+      projectRoot: resolve(__dirname, "..", "..", ".."),
+      serverDir: __dirname,
+    });
+    return {
+      mode: dlp.mode,
+      enabled: process.platform === "win32" && dlp.mode !== "off",
+      scriptPath: dlp.scriptPath,
+      scriptFound: Boolean(dlp.scriptPath),
+      timeoutMs: dlp.timeoutMs,
+      pythonPath: dlp.pythonPath,
+    };
+  },
+  resolveDlpReadablePath: (path) => resolveReadablePathForDlp(path, {
+    cfg: readConfig(configPath),
+    env: {
+      homeDir: home,
+      projectRoot: resolve(__dirname, "..", "..", ".."),
+      serverDir: __dirname,
+      rootDir: workspaceDir,
+    },
+    logger: console,
+  }),
   getModeMemory: (modeId) => listModeMemory(modeId || config.mode || "general"),
   getAllModeMemory: () => listAllModeMemory(),
   addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
   updateModeMemory: (id, patch, modeId) => updateModeMemory(modeId || config.mode || "general", id, patch),
   deleteModeMemory: (id, modeId) => deleteModeMemory(modeId || config.mode || "general", id),
+  listSchedules: () => schedules.map(publicSchedule),
+  createSchedule: (input) => {
+    const result = scheduleFromInput(input);
+    if (!result.ok) return result;
+    schedules.push(result.task);
+    writeSchedules();
+    refreshScheduleTimer(result.task);
+    broadcastDashboardEvent({ kind: "schedule-changed", action: "create", id: result.task.id });
+    return { ok: true, schedule: publicSchedule(result.task) };
+  },
+  updateSchedule: (id, patch) => {
+    const idx = schedules.findIndex((item) => item.id === id);
+    if (idx < 0) return { ok: false, error: "schedule not found" };
+    const result = scheduleFromInput(patch, schedules[idx]);
+    if (!result.ok) return result;
+    schedules[idx] = result.task;
+    writeSchedules();
+    refreshScheduleTimer(result.task);
+    broadcastDashboardEvent({ kind: "schedule-changed", action: "update", id });
+    return { ok: true, schedule: publicSchedule(result.task) };
+  },
+  setScheduleEnabled: (id, enabled) => {
+    const task = schedules.find((item) => item.id === id);
+    if (!task) return { ok: false, error: "schedule not found" };
+    task.enabled = !!enabled;
+    task.updatedAt = new Date().toISOString();
+    task.nextRunAt = computeNextScheduleRun(task);
+    writeSchedules();
+    refreshScheduleTimer(task);
+    broadcastDashboardEvent({ kind: "schedule-changed", action: "toggle", id });
+    return { ok: true, schedule: publicSchedule(task) };
+  },
+  deleteSchedule: (id) => {
+    const idx = schedules.findIndex((item) => item.id === id);
+    if (idx < 0) return { ok: false, error: "schedule not found" };
+    if (runningScheduleIds.has(id)) return { ok: false, error: "task is currently running" };
+    const timer = scheduleTimers.get(id);
+    if (timer) clearTimeout(timer);
+    scheduleTimers.delete(id);
+    schedules.splice(idx, 1);
+    writeSchedules();
+    broadcastDashboardEvent({ kind: "schedule-changed", action: "delete", id });
+    return { ok: true };
+  },
+  runScheduleNow: (id) => triggerSchedule(id, { manual: true }),
 
   // ── Reports ────────────────────────────────────────────────
   generateReport,
@@ -3153,6 +4148,8 @@ const ctx = {
     broadcastDashboardEvent({ kind: "config-changed" });
   },
   setBudgetUsdLive: (usd) => { loop?.setBudget(usd); },
+  completeActivePlanStep,
+  cancelActivePlan,
 
   reloadMcp,
   invokeMcpTool,
@@ -3299,7 +4296,7 @@ const ctx = {
 
   // P0-1: busy guard must be checked and set BEFORE any await to prevent
   // race conditions where two rapid calls both pass the busy check.
-  submitPrompt: async (text, sessionName, images) => {
+  submitPrompt: async (text, sessionName, images, opts = {}) => {
     if (busy) {
       return { accepted: false, reason: "loop is busy with a turn" };
     }
@@ -3514,37 +4511,9 @@ ${modeList}
 
       // Handle /new and /clear: finalize active session and reset
       if (text === "/new" || text === "/clear") {
-        await finalizeActiveSession();
-        // Reset the AI's internal context (CacheFirstLoop log)
-        if (loop) loop.clearLog();
-        // Clear session memories, tutor mode, and learning mode
-        clearSessionMemories();
-        clearTutorMode();
-        clearLearningMode();
-        // Clear any active plan state (in-memory + on-disk)
-        resetPlanRefs();
-        try { clearPlanState(currentSessionName()); } catch {}
-        // Rebuild loop to pick up mode/rules changes
-        if (client) {
-          loop = buildLoop(client, workspaceDir);
-          ctx.loop = loop;
-          console.error(`[launcher] loop rebuilt (mode: ${config.mode}, model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
-        }
-        // Reset eventizer for new session
-        if (eventizer) {
-          eventizer = new Eventizer();
-          try { eventSink?.append(eventizer.emitSessionOpened(0, "desktop", 0)); } catch {}
-        }
-        // Clear dashboard messages
-        messages.length = 0;
-        nextMsgId = 1;
-        // Add welcome message
-        const welcomeId = `assistant-${Date.now()}`;
-        const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
-        pushMessage(welcomeMsg);
+        await resetActiveConversation({ withWelcome: true, reason: "manual new conversation" });
         // busy is already true from the outer guard; just broadcast events
         broadcastDashboardEvent({ kind: "busy-change", busy: true });
-        broadcastDashboardEvent({ kind: "assistant_final", id: welcomeId, text: welcomeMsg.text });
         return { accepted: true };
       }
 
@@ -3553,6 +4522,10 @@ ${modeList}
           accepted: false,
           reason: "API key not configured. Open Settings tab to add your DeepSeek API key, then restart the app."
         };
+      }
+
+      if (opts.newConversation === true) {
+        await resetActiveConversation({ withWelcome: false, reason: "scheduled task" });
       }
 
       // /compact — manually trigger context compression (async LLM summarization)
@@ -3775,13 +4748,19 @@ ${modeList}
       broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: images?.length ? images : undefined });
 
       const assistantId = `assistant-${Date.now()}`;
+      const completeTurn = typeof opts.onComplete === "function" ? opts.onComplete : null;
 
       // Fire-and-forget: process the turn asynchronously
       // When committed=true, the outer finally skips busy-reset because
       // the fire-and-forget's own finally handles it.
       committed = true;
+      const previousPlanMode = tools.planMode;
+      if (opts.readonly === true) {
+        tools.setPlanMode(true);
+      }
       (async () => {
         let assistantText = "";
+        let turnError = null;
         try {
           for await (const ev of loop.step(text)) {
             // Write event to .events.jsonl for cockpit tool activity
@@ -3817,12 +4796,30 @@ ${modeList}
             appendActiveMessage({ role: "assistant", text: assistantText });
           }
         } catch (err) {
+          turnError = err;
           broadcastDashboardEvent({
             kind: "error",
             id: `${assistantId}-error-${Date.now()}`,
             text: err.message,
           });
         } finally {
+          if (opts.readonly === true) {
+            tools.setPlanMode(previousPlanMode);
+          }
+          if (completeTurn) {
+            try {
+              completeTurn({
+                ok: !turnError,
+                error: turnError?.message ?? null,
+                assistantText,
+                assistantMessageId: assistantId,
+                userMessageId: userMsgId,
+                stats: loop?.stats?.summary?.() ?? null,
+              });
+            } catch (err) {
+              console.error(`[launcher] submitPrompt completion callback failed: ${err.message}`);
+            }
+          }
           busy = false;
           broadcastDashboardEvent({ kind: "busy-change", busy: false });
         }
@@ -3879,6 +4876,7 @@ if (config.preset && config.preset !== "auto") {
   ctx.applyPresetLive(config.preset);
 }
 ctx.applyEffortLive(config.reasoningEffort ?? "max");
+refreshAllScheduleTimers();
 
 // ── Restore active session (crash recovery) ─────────────────────
 const restoredActiveSession = await loadActiveSession();
@@ -3919,6 +4917,8 @@ try {
   const cleanup = () => {
     console.error("[launcher] shutting down...");
     try { eventSink?.close(); } catch {}
+    for (const timer of scheduleTimers.values()) clearTimeout(timer);
+    scheduleTimers.clear();
     // Flush the active-session append stream before exiting so buffered
     // messages are not lost. closeActiveSessionStream resolves immediately
     // when no stream was opened.

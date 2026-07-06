@@ -18924,6 +18924,37 @@ async function api(path, opts = {}) {
   }
   return parsed;
 }
+async function writeClipboardText(text) {
+  const value = String(text ?? "");
+  let primaryError = null;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (err) {
+      primaryError = err;
+    }
+  }
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  ta.style.top = "0";
+  ta.style.width = "1px";
+  ta.style.height = "1px";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  try {
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, value.length);
+    if (document.execCommand("copy")) return;
+    throw primaryError || new Error("copy command failed");
+  } finally {
+    ta.remove();
+  }
+}
 
 // dashboard/src/lib/bus-filter.ts
 var THIRD_PARTY_ORIGIN_PREFIXES = [
@@ -18945,6 +18976,17 @@ var appBus = new EventTarget();
 var toastBus = new EventTarget();
 function showToast(text, kind = "info", ttl = 3e3) {
   toastBus.dispatchEvent(new CustomEvent("toast", { detail: { text, kind, ttl } }));
+}
+function requestChatMessageJump(messageId) {
+  if (!messageId) return;
+  try {
+    window.__visionoxPendingChatJump = { messageId, ts: Date.now() };
+  } catch {
+  }
+  appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "chat", messageId } }));
+  setTimeout(() => {
+    appBus.dispatchEvent(new CustomEvent("chat-jump-message", { detail: { messageId } }));
+  }, 80);
 }
 function reportAppError(error, source, info) {
   console.error(`[visionox dashboard] ${source}:`, error, info);
@@ -19035,7 +19077,7 @@ function ErrorOverlay() {
   const issueUrl = `${REPO_URL}/issues/new?title=${encodeURIComponent(`[dashboard] ${errMsg.slice(0, 80)}`)}&body=${encodeURIComponent(buildIssueBody(err))}`;
   const copyDetails = async () => {
     try {
-      await navigator.clipboard.writeText(buildIssueBody(err));
+      await writeClipboardText(buildIssueBody(err));
       setCopied(true);
       setTimeout(() => setCopied(false), 2e3);
     } catch {
@@ -19209,6 +19251,7 @@ var en = {
     sectionConfigure: "advanced",
     tabChat: "Chat",
     tabPlans: "Plans",
+    tabTasks: "Tasks",
     tabSessions: "Sessions",
     tabOverview: "Overview",
     tabUsage: "Usage",
@@ -19397,6 +19440,18 @@ var en = {
     clearToast: "scrollback cleared",
     newFailed: "/new failed: {error}",
     clearFailed: "/clear failed: {error}",
+    searchPlaceholder: "Search current conversation",
+    searchIdle: "current conversation",
+    searchCount: "{current} / {total}",
+    searchPrev: "Previous match",
+    searchNext: "Next match",
+    searchClear: "Clear search",
+    copyMessage: "Copy",
+    copiedMessage: "copied",
+    copyFailed: "copy failed: {error}",
+    fillInput: "Fill input",
+    filledInput: "filled into input",
+    toolOutputCollapsed: "Long output collapsed · {lines} lines · {chars} chars",
     eventStreamError: "event stream interrupted \u2014 reconnecting\u2026",
     semanticBanner: "Semantic search isn't enabled for this project.",
     semanticBannerDesc: 'Build the index once and the model can find code by meaning ("where do we handle auth failures?") instead of grep on exact strings.',
@@ -19524,7 +19579,15 @@ var en = {
     messages: "{count} message{s}",
     rename: "Rename",
     renamePlaceholder: "new session name",
-    renameFailed: "Rename failed: {error}"
+    renameFailed: "Rename failed: {error}",
+    exportMarkdown: "Export Markdown",
+    exported: "exported: {path}",
+    exportFailed: "Export failed: {error}",
+    noSummary: "No preview available.",
+    resumeConfirm: "Loading this session will replace the current chat context. Current chat: {messages} message(s), busy: {busy}, drafts: {drafts}. Continue?",
+    transcriptSearchPlaceholder: "Search this session",
+    transcriptSearchIdle: "session transcript",
+    transcriptSearchCount: "{current} / {total}"
   },
   tools: {
     loading: "loading tools\u2026",
@@ -19734,16 +19797,123 @@ var en = {
   plans: {
     loading: "loading plans\u2026",
     failed: "plans failed: {error}",
-    noPlans: "No archived plans yet \u2014 run a turn that calls submit_plan and mark_step_complete.",
+    noPlans: "No active or archived plans yet \u2014 plans appear here after submit_plan.",
     filterPlaceholder: "filter plans",
     active: "active",
+    pending: "pending",
     done: "done",
     idle: "idle",
     steps: "steps",
     pickHint: "Pick a plan on the left.",
     noTitle: "(no title)",
     stepTimeline: "Step timeline \xB7 {done} / {total}",
-    step: "step {n}"
+    step: "step {n}",
+    planBody: "Plan body",
+    markDone: "Mark done",
+    cancelActive: "Cancel plan",
+    confirmCancel: "Cancel the active plan?",
+    confirmDelete: "Delete this plan archive?"
+  },
+  tasks: {
+    loading: "loading tasks\u2026",
+    noTasks: "No scheduled tasks yet.",
+    title: "Scheduled tasks",
+    create: "New task",
+    save: "Save task",
+    update: "Update task",
+    taskKind: "Task type",
+    kindPrompt: "Prompt task",
+    kindReport: "Session report task",
+    name: "Name",
+    prompt: "Prompt",
+    promptPlaceholder: "What should Visionox do when this task runs?",
+    type: "Schedule",
+    interval: "Interval",
+    customInterval: "Custom interval",
+    daily: "Daily",
+    weekly: "Weekly",
+    dayOfWeek: "Day",
+    weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    every: "Every",
+    at: "At",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    runNow: "Run now",
+    testRun: "Test run",
+    deleteConfirm: "Delete this scheduled task?",
+    nextRun: "next",
+    lastRun: "last",
+    never: "never",
+    accepted: "accepted",
+    skipped: "skipped",
+    rejected: "rejected",
+    running: "running",
+    completed: "completed",
+    failed: "failed",
+    saved: "task saved",
+    deleted: "task deleted",
+    runAccepted: "task started",
+    runCompleted: "task completed",
+    runFailed: "task failed",
+    runSkipped: "task skipped",
+    runRejected: "task was not accepted",
+    runPending: "task is waiting for confirmation",
+    selectHint: "Select a task to edit it, or create a new one.",
+    minInterval: "Interval must be 1 minute to 30 days.",
+    busyHint: "If the chat loop is busy at the scheduled time, the run is skipped and recorded.",
+    workspace: "Workspace",
+    currentWorkspace: "current",
+    workspaceMismatch: "workspace changed",
+    workspaceMismatchHint: "This task is bound to a different workspace. Runs are skipped until that workspace is active.",
+    history: "Recent runs",
+    latestResult: "Latest result",
+    manual: "manual",
+    scheduled: "scheduled",
+    noHistory: "No runs recorded yet.",
+    summary: "Summary",
+    noSummary: "No summary captured.",
+    duration: "Duration",
+    tokens: "Tokens",
+    cost: "Cost",
+    source: "Source",
+    runMode: "Run mode",
+    runModeAuto: "Auto execute",
+    runModeReadonly: "Read-only",
+    runModeConfirm: "Confirm first",
+    pendingConfirmation: "needs confirmation",
+    templateVars: "Variables: {date}, {time}, {workspace}, {lastRunAt}, {taskName}.",
+    runWindow: "Run window",
+    weekdaysOnly: "Weekdays only",
+    enableWindow: "Limit time range",
+    from: "From",
+    to: "to",
+    pendingTitle: "Pending confirmation",
+    pendingHint: "These tasks reached their trigger time and are waiting for manual run.",
+    reportPeriod: "Report period",
+    reportScope: "Report scope",
+    reportDaily: "Daily report",
+    reportWeekly: "Weekly report",
+    reportYearly: "Yearly report",
+    reportCustom: "Custom range",
+    reportToday: "Today",
+    reportYesterday: "Yesterday",
+    reportThisWeek: "This week",
+    reportLastWeek: "Last week",
+    reportLast7Days: "Last 7 days",
+    reportLast30Days: "Last 30 days",
+    reportThisYear: "This year",
+    reportLastYear: "Last year",
+    reportFixedRange: "Fixed range",
+    reportDate: "Date",
+    reportStart: "Start",
+    reportEnd: "End",
+    reportExport: "Export to Downloads",
+    reportExportPath: "Export path",
+    reportRange: "Range",
+    reportSessions: "Sessions",
+    reportMessages: "Messages",
+    reportTaskHint: "The run schedule decides when this task starts. The report range is calculated relative to that run time, so recurring tasks do not repeat a fixed date.",
+    viewConversation: "View conversation"
   },
   semantic: {
     codeRequired: "Semantic \u2014 code-mode required",
@@ -19913,6 +20083,7 @@ var zhCN = {
     sectionConfigure: "\u9AD8\u7EA7",
     tabChat: "\u5BF9\u8BDD",
     tabPlans: "\u8BA1\u5212",
+    tabTasks: "\u4EFB\u52A1",
     tabSessions: "\u4F1A\u8BDD",
     tabOverview: "\u6982\u89C8",
     tabUsage: "\u7528\u91CF",
@@ -20093,6 +20264,18 @@ var zhCN = {
     clearToast: "\u6EDA\u52A8\u56DE\u653E\u5DF2\u6E05\u9664",
     newFailed: "/new \u5931\u8D25\uFF1A{error}",
     clearFailed: "/clear \u5931\u8D25\uFF1A{error}",
+    searchPlaceholder: "\u641C\u7D22\u5F53\u524D\u5BF9\u8BDD",
+    searchIdle: "\u5F53\u524D\u5BF9\u8BDD",
+    searchCount: "{current} / {total}",
+    searchPrev: "\u4E0A\u4E00\u4E2A\u5339\u914D",
+    searchNext: "\u4E0B\u4E00\u4E2A\u5339\u914D",
+    searchClear: "\u6E05\u9664\u641C\u7D22",
+    copyMessage: "\u590D\u5236",
+    copiedMessage: "\u5DF2\u590D\u5236",
+    copyFailed: "\u590D\u5236\u5931\u8D25\uFF1A{error}",
+    fillInput: "\u586B\u5165\u8F93\u5165\u6846",
+    filledInput: "\u5DF2\u586B\u5165\u8F93\u5165\u6846",
+    toolOutputCollapsed: "\u957F\u8F93\u51FA\u5DF2\u6298\u53E0 \xB7 {lines} \u884C \xB7 {chars} \u5B57\u7B26",
     eventStreamError: "\u4E8B\u4EF6\u6D41\u4E2D\u65AD \u2014 \u6B63\u5728\u91CD\u8FDE\u2026",
     semanticBanner: "\u6B64\u9879\u76EE\u672A\u542F\u7528\u8BED\u4E49\u641C\u7D22\u3002",
     semanticBannerDesc: "\u6784\u5EFA\u4E00\u6B21\u7D22\u5F15\uFF0C\u6A21\u578B\u5373\u53EF\u6309\u542B\u4E49\u67E5\u627E\u4EE3\u7801\uFF08\u201C\u54EA\u91CC\u5904\u7406\u8BA4\u8BC1\u5931\u8D25\uFF1F\u201D\uFF09\uFF0C\u800C\u4E0D\u4EC5\u4F9D\u8D56\u7CBE\u786E\u5B57\u7B26\u4E32\u7684 grep\u3002",
@@ -20258,7 +20441,15 @@ var zhCN = {
     messages: "{count} \u6761\u6D88\u606F",
     rename: "\u91CD\u547D\u540D",
     renamePlaceholder: "\u65B0\u4F1A\u8BDD\u540D\u79F0",
-    renameFailed: "\u91CD\u547D\u540D\u5931\u8D25\uFF1A{error}"
+    renameFailed: "\u91CD\u547D\u540D\u5931\u8D25\uFF1A{error}",
+    exportMarkdown: "\u5BFC\u51FA Markdown",
+    exported: "\u5DF2\u5BFC\u51FA\uFF1A{path}",
+    exportFailed: "\u5BFC\u51FA\u5931\u8D25\uFF1A{error}",
+    noSummary: "\u6682\u65E0\u9884\u89C8\u3002",
+    resumeConfirm: "\u52A0\u8F7D\u8BE5\u4F1A\u8BDD\u4F1A\u66FF\u6362\u5F53\u524D\u5BF9\u8BDD\u4E0A\u4E0B\u6587\u3002\u5F53\u524D\u5BF9\u8BDD\uFF1A{messages} \u6761\u6D88\u606F\uFF0C\u5FD9\u788C\uFF1A{busy}\uFF0C\u8349\u7A3F\uFF1A{drafts}\u3002\u7EE7\u7EED\uFF1F",
+    transcriptSearchPlaceholder: "\u641C\u7D22\u6B64\u4F1A\u8BDD",
+    transcriptSearchIdle: "\u4F1A\u8BDD\u8BB0\u5F55",
+    transcriptSearchCount: "{current} / {total}"
   },
   tools: {
     loading: "\u52A0\u8F7D\u5DE5\u5177\u2026",
@@ -20468,16 +20659,123 @@ var zhCN = {
   plans: {
     loading: "\u52A0\u8F7D\u8BA1\u5212\u2026",
     failed: "\u8BA1\u5212\u5931\u8D25\uFF1A{error}",
-    noPlans: "\u6682\u65E0\u5F52\u6863\u8BA1\u5212 \u2014 \u8FD0\u884C\u8C03\u7528 submit_plan \u548C mark_step_complete \u7684\u8F6E\u6B21\u3002",
+    noPlans: "\u6682\u65E0\u5F53\u524D\u6216\u5F52\u6863\u8BA1\u5212 \u2014 \u8C03\u7528 submit_plan \u540E\u4F1A\u5728\u6B64\u663E\u793A\u3002",
     filterPlaceholder: "\u7B5B\u9009\u8BA1\u5212",
     active: "\u8FDB\u884C\u4E2D",
+    pending: "\u5F85\u5BA1\u6279",
     done: "\u5DF2\u5B8C\u6210",
     idle: "\u672A\u5F00\u59CB",
     steps: "\u6B65\u9AA4",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684\u8BA1\u5212\u3002",
     noTitle: "\uFF08\u65E0\u6807\u9898\uFF09",
     stepTimeline: "\u6B65\u9AA4\u65F6\u95F4\u7EBF \xB7 {done} / {total}",
-    step: "\u6B65\u9AA4 {n}"
+    step: "\u6B65\u9AA4 {n}",
+    planBody: "\u8BA1\u5212\u6B63\u6587",
+    markDone: "\u6807\u8BB0\u5B8C\u6210",
+    cancelActive: "\u53D6\u6D88\u8BA1\u5212",
+    confirmCancel: "\u786E\u5B9A\u53D6\u6D88\u5F53\u524D\u8BA1\u5212\uFF1F",
+    confirmDelete: "\u786E\u5B9A\u5220\u9664\u8BE5\u8BA1\u5212\u5F52\u6863\uFF1F"
+  },
+  tasks: {
+    loading: "\u52A0\u8F7D\u4EFB\u52A1\u2026",
+    noTasks: "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1\u3002",
+    title: "\u5B9A\u65F6\u4EFB\u52A1",
+    create: "\u65B0\u5EFA\u4EFB\u52A1",
+    save: "\u4FDD\u5B58\u4EFB\u52A1",
+    update: "\u66F4\u65B0\u4EFB\u52A1",
+    taskKind: "\u4EFB\u52A1\u7C7B\u578B",
+    kindPrompt: "\u666E\u901A\u63D0\u793A\u8BCD\u4EFB\u52A1",
+    kindReport: "\u4F1A\u8BDD\u62A5\u544A\u4EFB\u52A1",
+    name: "\u540D\u79F0",
+    prompt: "\u63D0\u793A\u8BCD",
+    promptPlaceholder: "\u4EFB\u52A1\u89E6\u53D1\u65F6\uFF0C\u5E0C\u671B Visionox \u505A\u4EC0\u4E48\uFF1F",
+    type: "\u65F6\u95F4\u89C4\u5219",
+    interval: "\u95F4\u9694",
+    customInterval: "\u81EA\u5B9A\u4E49\u65F6\u95F4\u6BB5",
+    daily: "\u6BCF\u65E5",
+    weekly: "\u6BCF\u5468",
+    dayOfWeek: "\u661F\u671F",
+    weekdays: ["\u5468\u65E5", "\u5468\u4E00", "\u5468\u4E8C", "\u5468\u4E09", "\u5468\u56DB", "\u5468\u4E94", "\u5468\u516D"],
+    every: "\u6BCF",
+    at: "\u5728",
+    enabled: "\u542F\u7528",
+    disabled: "\u505C\u7528",
+    runNow: "\u7ACB\u5373\u8FD0\u884C",
+    testRun: "\u6D4B\u8BD5\u8FD0\u884C",
+    deleteConfirm: "\u786E\u5B9A\u5220\u9664\u8BE5\u5B9A\u65F6\u4EFB\u52A1\uFF1F",
+    nextRun: "\u4E0B\u6B21",
+    lastRun: "\u4E0A\u6B21",
+    never: "\u4ECE\u672A",
+    accepted: "\u5DF2\u63A5\u6536",
+    skipped: "\u5DF2\u8DF3\u8FC7",
+    rejected: "\u672A\u63A5\u6536",
+    running: "\u8FD0\u884C\u4E2D",
+    completed: "\u5DF2\u5B8C\u6210",
+    failed: "\u5931\u8D25",
+    saved: "\u4EFB\u52A1\u5DF2\u4FDD\u5B58",
+    deleted: "\u4EFB\u52A1\u5DF2\u5220\u9664",
+    runAccepted: "\u4EFB\u52A1\u5DF2\u5F00\u59CB\u8FD0\u884C",
+    runCompleted: "\u4EFB\u52A1\u5DF2\u5B8C\u6210",
+    runFailed: "\u4EFB\u52A1\u8FD0\u884C\u5931\u8D25",
+    runSkipped: "\u4EFB\u52A1\u5DF2\u8DF3\u8FC7",
+    runRejected: "\u4EFB\u52A1\u672A\u88AB\u63A5\u6536",
+    runPending: "\u4EFB\u52A1\u6B63\u5728\u7B49\u5F85\u786E\u8BA4",
+    selectHint: "\u9009\u62E9\u4E00\u4E2A\u4EFB\u52A1\u8FDB\u884C\u7F16\u8F91\uFF0C\u6216\u65B0\u5EFA\u4EFB\u52A1\u3002",
+    minInterval: "\u95F4\u9694\u5FC5\u987B\u5728 1 \u5206\u949F\u5230 30 \u5929\u4E4B\u95F4\u3002",
+    busyHint: "\u5982\u679C\u5230\u70B9\u65F6\u5BF9\u8BDD\u6B63\u5FD9\uFF0C\u8BE5\u6B21\u4F1A\u8BB0\u5F55\u4E3A\u8DF3\u8FC7\u3002",
+    workspace: "\u5DE5\u4F5C\u533A",
+    currentWorkspace: "\u5F53\u524D",
+    workspaceMismatch: "\u5DE5\u4F5C\u533A\u5DF2\u53D8\u66F4",
+    workspaceMismatchHint: "\u8BE5\u4EFB\u52A1\u7ED1\u5B9A\u5230\u5176\u4ED6\u5DE5\u4F5C\u533A\u3002\u5728\u5207\u56DE\u5BF9\u5E94\u5DE5\u4F5C\u533A\u524D\uFF0C\u8FD0\u884C\u4F1A\u88AB\u8DF3\u8FC7\u3002",
+    history: "\u6700\u8FD1\u8FD0\u884C",
+    latestResult: "\u6700\u8FD1\u7ED3\u679C",
+    manual: "\u624B\u52A8",
+    scheduled: "\u5B9A\u65F6",
+    noHistory: "\u6682\u65E0\u8FD0\u884C\u8BB0\u5F55\u3002",
+    summary: "\u7ED3\u679C\u6458\u8981",
+    noSummary: "\u6682\u65E0\u6458\u8981",
+    duration: "\u8017\u65F6",
+    tokens: "\u63D0\u793A tokens",
+    cost: "\u8D39\u7528",
+    source: "\u89E6\u53D1",
+    runMode: "\u8FD0\u884C\u6A21\u5F0F",
+    runModeAuto: "\u81EA\u52A8\u6267\u884C",
+    runModeReadonly: "\u53EA\u8BFB\u6267\u884C",
+    runModeConfirm: "\u5148\u786E\u8BA4",
+    pendingConfirmation: "\u5F85\u786E\u8BA4",
+    templateVars: "\u53EF\u7528\u53D8\u91CF\uFF1A{date}\u3001{time}\u3001{workspace}\u3001{lastRunAt}\u3001{taskName}\u3002",
+    runWindow: "\u8FD0\u884C\u7A97\u53E3",
+    weekdaysOnly: "\u4EC5\u5DE5\u4F5C\u65E5",
+    enableWindow: "\u9650\u5236\u65F6\u95F4\u6BB5",
+    from: "\u4ECE",
+    to: "\u5230",
+    pendingTitle: "\u5F85\u786E\u8BA4\u4EFB\u52A1",
+    pendingHint: "\u8FD9\u4E9B\u4EFB\u52A1\u5DF2\u5230\u89E6\u53D1\u65F6\u95F4\uFF0C\u6B63\u7B49\u5F85\u624B\u52A8\u8FD0\u884C\u3002",
+    reportPeriod: "\u62A5\u544A\u5468\u671F",
+    reportScope: "\u62A5\u544A\u8303\u56F4\u7C7B\u578B",
+    reportDaily: "\u65E5\u62A5",
+    reportWeekly: "\u5468\u62A5",
+    reportYearly: "\u5E74\u62A5",
+    reportCustom: "\u81EA\u5B9A\u4E49\u8303\u56F4",
+    reportToday: "\u4ECA\u65E5",
+    reportYesterday: "\u6628\u65E5",
+    reportThisWeek: "\u672C\u5468",
+    reportLastWeek: "\u4E0A\u5468",
+    reportLast7Days: "\u6700\u8FD1 7 \u5929",
+    reportLast30Days: "\u6700\u8FD1 30 \u5929",
+    reportThisYear: "\u672C\u5E74",
+    reportLastYear: "\u4E0A\u4E00\u5E74",
+    reportFixedRange: "\u56FA\u5B9A\u65E5\u671F\u8303\u56F4",
+    reportDate: "\u65E5\u671F",
+    reportStart: "\u5F00\u59CB",
+    reportEnd: "\u7ED3\u675F",
+    reportExport: "\u5BFC\u51FA\u5230\u4E0B\u8F7D\u76EE\u5F55",
+    reportExportPath: "\u5BFC\u51FA\u8DEF\u5F84",
+    reportRange: "\u8303\u56F4",
+    reportSessions: "\u4F1A\u8BDD\u6570",
+    reportMessages: "\u6D88\u606F\u6570",
+    reportTaskHint: "\u65F6\u95F4\u89C4\u5219\u51B3\u5B9A\u4EFB\u52A1\u4F55\u65F6\u5F00\u59CB\uFF1B\u62A5\u544A\u8303\u56F4\u4F1A\u76F8\u5BF9\u8FD0\u884C\u65F6\u95F4\u52A8\u6001\u8BA1\u7B97\uFF0C\u5B9A\u65F6\u4EFB\u52A1\u4E0D\u4F1A\u91CD\u590D\u751F\u6210\u56FA\u5B9A\u65E5\u671F\u7684\u62A5\u544A\u3002",
+    viewConversation: "\u67E5\u770B\u672C\u6B21\u5BF9\u8BDD"
   },
   semantic: {
     codeRequired: "\u8BED\u4E49 \u2014 \u9700\u8981\u4EE3\u7801\u6A21\u5F0F",
@@ -22996,6 +23294,87 @@ function renderUnifiedDiff(text) {
   return `<pre class="diff-block">${lines}</pre>`;
 }
 var renderer = new marked.Renderer();
+var ARTIFACT_EXT_BY_LANG = {
+  markdown: "md",
+  md: "md",
+  html: "html",
+  htm: "html",
+  python: "py",
+  py: "py",
+  javascript: "js",
+  js: "js",
+  typescript: "ts",
+  ts: "ts",
+  tsx: "tsx",
+  jsx: "jsx",
+  css: "css",
+  json: "json",
+  xml: "xml",
+  yaml: "yaml",
+  yml: "yml",
+  sql: "sql",
+  powershell: "ps1",
+  ps1: "ps1",
+  bat: "bat",
+  batch: "bat",
+  cmd: "cmd",
+  bash: "sh",
+  sh: "sh",
+  shell: "sh",
+  ini: "ini",
+  toml: "toml",
+  csv: "csv",
+  text: "txt",
+  txt: "txt"
+};
+var ARTIFACT_PREVIEW_LANGS = /* @__PURE__ */ new Set(["markdown", "md", "html", "htm"]);
+function normalizeArtifactLang(raw) {
+  return String(raw || "").trim().split(/\s+/)[0].replace(/^language-/, "").toLowerCase();
+}
+function registerChatArtifact(content, rawLang) {
+  const lang = normalizeArtifactLang(rawLang);
+  const ext = ARTIFACT_EXT_BY_LANG[lang];
+  if (!ext || !content) return null;
+  try {
+    window.__visionoxArtifactSeq = (window.__visionoxArtifactSeq || 0) + 1;
+    window.__visionoxArtifacts = window.__visionoxArtifacts || {};
+    const seq = window.__visionoxArtifactSeq;
+    const id = `artifact-${Date.now().toString(36)}-${seq}`;
+    const label = ext.toUpperCase();
+    const filename = `visionox-artifact-${seq}.${ext}`;
+    window.__visionoxArtifacts[id] = {
+      id,
+      lang,
+      ext,
+      label,
+      filename,
+      content,
+      previewable: ARTIFACT_PREVIEW_LANGS.has(lang)
+    };
+    return window.__visionoxArtifacts[id];
+  } catch {
+    return null;
+  }
+}
+function renderArtifactFrame(artifact, codeHtml) {
+  if (!artifact) return codeHtml;
+  const previewBtn = artifact.previewable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="preview">预览</button>` : "";
+  return `<div class="chat-artifact" data-artifact-id="${escapeHtml(artifact.id)}">
+    <div class="chat-artifact-head">
+      <div class="chat-artifact-title">
+        <span class="chat-artifact-type">${escapeHtml(artifact.label)}</span>
+        <span class="chat-artifact-name">${escapeHtml(artifact.filename)}</span>
+      </div>
+      <div class="chat-artifact-actions">
+        ${previewBtn}
+        <button type="button" class="chat-artifact-btn" data-artifact-action="copy">复制</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="save">另存</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="open-folder" disabled>打开目录</button>
+      </div>
+    </div>
+    ${codeHtml}
+  </div>`;
+}
 renderer.code = function reasonixCode(arg1, arg2) {
   let text;
   let lang;
@@ -23015,12 +23394,24 @@ renderer.code = function reasonixCode(arg1, arg2) {
     return renderSearchReplace(search, replace, file);
   }
   if (lang === "diff") return renderUnifiedDiff(codeText);
+  const artifact = registerChatArtifact(codeText, lang);
   if (lang && typeof lang === "string" && common_default.getLanguage(lang)) {
     try {
       const h3 = common_default.highlight(codeText, { language: lang, ignoreIllegals: true }).value;
-      return `<pre><code class="hljs language-${lang}">${h3}</code></pre>`;
+      return renderArtifactFrame(artifact, `<pre><code class="hljs language-${lang}">${h3}</code></pre>`);
     } catch {
     }
+  }
+  if (artifact) {
+    const hlLang = artifact.lang === "html" || artifact.lang === "htm" ? "xml" : artifact.lang;
+    if (common_default.getLanguage(hlLang)) {
+      try {
+        const h3 = common_default.highlight(codeText, { language: hlLang, ignoreIllegals: true }).value;
+        return renderArtifactFrame(artifact, `<pre><code class="hljs language-${hlLang}">${h3}</code></pre>`);
+      } catch {
+      }
+    }
+    return renderArtifactFrame(artifact, `<pre><code>${escapeHtml(codeText)}</code></pre>`);
   }
   try {
     const auto = common_default.highlightAuto(codeText);
@@ -23033,6 +23424,85 @@ marked.use({ renderer, gfm: true, breaks: false, pedantic: false });
 function renderMarkdownToString(text) {
   return marked.parse(text);
 }
+function closeArtifactPreview() {
+  document.querySelector(".artifact-preview-backdrop")?.remove();
+  document.body.classList.remove("artifact-preview-open");
+}
+function showArtifactPreview(artifact) {
+  closeArtifactPreview();
+  const backdrop = document.createElement("div");
+  backdrop.className = "artifact-preview-backdrop";
+  const dialog = document.createElement("div");
+  dialog.className = "artifact-preview-dialog";
+  const title = document.createElement("div");
+  title.className = "artifact-preview-head";
+  title.innerHTML = `<span>${escapeHtml(artifact.filename)}</span><button type="button" class="artifact-preview-close">关闭</button>`;
+  const body = document.createElement("div");
+  body.className = "artifact-preview-body";
+  if (artifact.lang === "html" || artifact.lang === "htm") {
+    const iframe = document.createElement("iframe");
+    iframe.className = "artifact-preview-frame";
+    iframe.setAttribute("sandbox", "");
+    iframe.srcdoc = artifact.content;
+    body.appendChild(iframe);
+  } else {
+    const md = document.createElement("div");
+    md.className = "md artifact-preview-md";
+    md.innerHTML = renderMarkdownToString(artifact.content);
+    body.appendChild(md);
+  }
+  dialog.appendChild(title);
+  dialog.appendChild(body);
+  backdrop.appendChild(dialog);
+  document.body.appendChild(backdrop);
+  document.body.classList.add("artifact-preview-open");
+}
+async function handleArtifactAction(ev) {
+  const btn = ev.target?.closest?.("[data-artifact-action]");
+  if (!btn) return;
+  const wrap = btn.closest(".chat-artifact");
+  const id = wrap?.dataset?.artifactId;
+  const artifact = id ? window.__visionoxArtifacts?.[id] : null;
+  if (!artifact) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const action = btn.dataset.artifactAction;
+  try {
+    if (action === "copy") {
+      await writeClipboardText(artifact.content);
+      showToast("产物内容已复制", "info");
+    } else if (action === "preview") {
+      showArtifactPreview(artifact);
+    } else if (action === "save") {
+      btn.disabled = true;
+      const res = await api("/artifacts/save", {
+        method: "POST",
+        body: { filename: artifact.filename, content: artifact.content, lang: artifact.lang }
+      });
+      artifact.path = res.path;
+      artifact.dir = res.dir;
+      const openBtn = wrap.querySelector('[data-artifact-action="open-folder"]');
+      if (openBtn) openBtn.disabled = false;
+      showToast(`已保存到 ${res.filename || artifact.filename}`, "info");
+    } else if (action === "open-folder") {
+      if (!artifact.dir) return;
+      await api("/artifacts/open-folder", { method: "POST", body: { dir: artifact.dir } });
+    }
+  } catch (err) {
+    showToast(err.message || "产物操作失败", "error", 5e3);
+  } finally {
+    if (action === "save") btn.disabled = false;
+  }
+}
+document.addEventListener("click", handleArtifactAction);
+document.addEventListener("click", (ev) => {
+  if (ev.target?.classList?.contains("artifact-preview-backdrop") || ev.target?.classList?.contains("artifact-preview-close")) {
+    closeArtifactPreview();
+  }
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeArtifactPreview();
+});
 var LANG_BY_EXT = {
   ts: "typescript",
   tsx: "typescript",
@@ -23126,6 +23596,45 @@ function parseToolArgs(raw) {
     return null;
   }
 }
+function toolTextStats(text) {
+  const value = text ?? "";
+  return {
+    chars: value.length,
+    lines: value ? value.split(/\r?\n/).length : 0
+  };
+}
+function isLongToolText(text) {
+  const stats = toolTextStats(text);
+  return stats.chars > 1600 || stats.lines > 30;
+}
+function renderToolOutput(text, kind = "pre", lang = "") {
+  const value = text ?? "";
+  const stats = toolTextStats(value);
+  const body = kind === "highlight" ? html4`<div dangerouslySetInnerHTML=${{ __html: renderHighlightedBlock(value, lang) }}></div>` : html4`<pre class="tool-card-output">${value}</pre>`;
+  if (!isLongToolText(value)) return body;
+  return html4`
+    <details class="tool-card-collapse">
+      <summary>${t4("chat.toolOutputCollapsed", { lines: stats.lines.toLocaleString(), chars: stats.chars.toLocaleString() })}</summary>
+      ${body}
+    </details>
+  `;
+}
+function chatSearchText(msg) {
+  if (!msg) return "";
+  const parts = [msg.role, msg.toolName, msg.text, msg.reasoning, msg.toolArgs];
+  return parts.filter(Boolean).join("\n");
+}
+function computeChatSearchMatches(messages, query) {
+  const needle = (query ?? "").trim().toLowerCase();
+  if (!needle) return [];
+  const matches = [];
+  messages.forEach((msg, index) => {
+    if (chatSearchText(msg).toLowerCase().includes(needle)) {
+      matches.push({ id: msg.id, index });
+    }
+  });
+  return matches;
+}
 function ToolCard({ msg }) {
   useLang();
   const args = parseToolArgs(msg.toolArgs);
@@ -23159,7 +23668,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
-        <div dangerouslySetInnerHTML=${{ __html: renderHighlightedBlock(args.content, lang) }}></div>
+        ${renderToolOutput(args.content, "highlight", lang)}
         ${msg.text ? html4`<div class="tool-card-result">${msg.text}</div>` : null}
       </div>
     `;
@@ -23174,7 +23683,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
-        <div dangerouslySetInnerHTML=${{ __html: renderHighlightedBlock(msg.text ?? "", lang) }}></div>
+        ${renderToolOutput(msg.text ?? "", "highlight", lang)}
       </div>
     `;
   }
@@ -23187,7 +23696,7 @@ function ToolCard({ msg }) {
           <span class="tool-card-name">${name === "run_background" ? "run_background" : "run_command"}</span>
         </div>
         ${cmd ? html4`<pre class="tool-card-cmd"><span class="tool-card-prompt">$</span> <code>${cmd}</code></pre>` : null}
-        ${msg.text ? html4`<pre class="tool-card-output">${msg.text}</pre>` : null}
+        ${msg.text ? renderToolOutput(msg.text) : null}
       </div>
     `;
   }
@@ -23199,7 +23708,7 @@ function ToolCard({ msg }) {
           <span class="tool-card-name">${name}</span>
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
-        <pre class="tool-card-output">${msg.text}</pre>
+        ${renderToolOutput(msg.text)}
       </div>
     `;
   }
@@ -23210,23 +23719,37 @@ function ToolCard({ msg }) {
         <span class="tool-card-name">${name}</span>
       </div>
       ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
-      <pre class="tool-card-output">${msg.text}</pre>
+      ${renderToolOutput(msg.text)}
     </div>
   `;
 }
-var ChatMessage = N2(function ChatMessage2({ msg, streaming }) {
+var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput }) {
+  useLang();
   const role = msg.role;
   const avatar = ROLE_AVATAR[role];
+  const canCopy = Boolean((msg.text || msg.reasoning || "").trim());
+  const showCopy = role !== "user" && onCopy && canCopy;
+  const showFillInput = role === "user" && onFillInput && canCopy;
+  const showActions = !streaming && (showCopy || showFillInput);
+  const actions = showActions ? html4`
+    <div class="chat-msg-actions">
+      ${showCopy ? html4`<button type="button" onClick=${() => onCopy(msg)}>${t4("chat.copyMessage")}</button>` : null}
+      ${showFillInput ? html4`<button type="button" onClick=${() => onFillInput(msg)}>${t4("chat.fillInput")}</button>` : null}
+    </div>
+  ` : null;
   if (role === "tool") {
     return html4`
-      <div class="chat-msg tool">
+      <div class=${`chat-msg tool ${searchMatch ? "search-hit" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
         <div class="glyph">▣</div>
-        <${ToolCard} msg=${msg} />
+        <div class="chat-tool-wrap">
+          ${actions}
+          <${ToolCard} msg=${msg} />
+        </div>
       </div>
     `;
   }
   return html4`
-    <div class="chat-msg ${role}">
+    <div class=${`chat-msg ${role} ${searchMatch ? "search-hit" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
       ${avatar ? html4`<img class="avatar" src=${avatar} width="28" height="28" alt="" />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
@@ -23234,6 +23757,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming }) {
         ${renderMessageBody(msg.text)}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
+        ${actions}
       </div>
     </div>
   `;
@@ -23783,13 +24307,37 @@ function fmtRelativeTime(iso) {
 }
 
 // dashboard/src/panels/chat.ts
+var CHAT_DRAFT_KEY = "visionox.chatDraft.v1";
+function chatDraftKey(workspaceDir, mode) {
+  const ws = encodeURIComponent(workspaceDir || "default");
+  const m3 = encodeURIComponent(mode || "general");
+  return `visionox.chatDraft.v2:${ws}:${m3}`;
+}
+function removeChatDraft(key) {
+  try {
+    localStorage.removeItem(key);
+    localStorage.removeItem(CHAT_DRAFT_KEY);
+  } catch {
+  }
+}
 function ChatPanel() {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
   const [activeTool, setActiveTool] = d2(null);
   const [busy, setBusy] = d2(false);
-  const [input, setInput] = d2("");
+  const [input, setInput] = d2(() => {
+    try {
+      return localStorage.getItem(CHAT_DRAFT_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [chatSearch, setChatSearch] = d2("");
+  const [searchIndex, setSearchIndex] = d2(0);
+  const [jumpMessageId, setJumpMessageId] = d2(null);
+  const [highlightMessageId, setHighlightMessageId] = d2(null);
+  const [draftReady, setDraftReady] = d2(false);
   const [error, setError] = d2(null);
   const [bootError, setBootError] = d2(null);
   const [statusLine, setStatusLine] = d2(null);
@@ -23838,6 +24386,34 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [skillList, setSkillList] = d2([]);
   const [pendingImages, setPendingImages] = d2([]);
   var fileInputRef = A2(null);
+  var inputRef = A2(null);
+  const draftKey = T2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
+  y2(() => {
+    try {
+      const scopedDraft = localStorage.getItem(draftKey) || "";
+      const legacyDraft = localStorage.getItem(CHAT_DRAFT_KEY) || "";
+      const nextDraft = scopedDraft || legacyDraft;
+      setInput((cur) => cur.trim() ? cur : nextDraft);
+      if (legacyDraft && !scopedDraft) {
+        localStorage.setItem(draftKey, legacyDraft);
+      }
+      localStorage.removeItem(CHAT_DRAFT_KEY);
+    } catch {
+    }
+    setDraftReady(true);
+  }, []);
+  y2(() => {
+    if (!draftReady) return;
+    try {
+      const value = input.trim() ? input : "";
+      if (value) {
+        localStorage.setItem(draftKey, value);
+      } else {
+        localStorage.removeItem(draftKey);
+      }
+    } catch {
+    }
+  }, [input, draftKey, draftReady]);
   y2(() => {
     if (!busy) return;
     const id = setInterval(() => setNowTick((n3) => n3 + 1), 500);
@@ -23852,6 +24428,63 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [busy, turnStartedAt]);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
+  const allVisibleMessages = streaming ? [
+    ...messages,
+    {
+      id: streaming.id,
+      role: "assistant",
+      text: streaming.text,
+      reasoning: streaming.reasoning
+    }
+  ] : messages;
+  const searchMatches = T2(() => computeChatSearchMatches(allVisibleMessages, chatSearch), [messages, streaming, chatSearch]);
+  y2(() => {
+    const pending = window.__visionoxPendingChatJump;
+    if (pending?.messageId) setJumpMessageId(pending.messageId);
+    const onJump = (ev) => {
+      const id = ev.detail?.messageId;
+      if (id) setJumpMessageId(id);
+    };
+    appBus.addEventListener("chat-jump-message", onJump);
+    return () => appBus.removeEventListener("chat-jump-message", onJump);
+  }, []);
+  y2(() => {
+    if (!jumpMessageId) return;
+    const selector = `[data-msg-id="${String(jumpMessageId).replace(/"/g, '\\"')}"]`;
+    const el = feedRef.current?.querySelector(selector);
+    if (!el) return;
+    shouldAutoScroll.current = false;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightMessageId(jumpMessageId);
+    setJumpMessageId(null);
+    try {
+      if (window.__visionoxPendingChatJump?.messageId === jumpMessageId) {
+        window.__visionoxPendingChatJump = null;
+      }
+    } catch {
+    }
+    const id = setTimeout(() => {
+      setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
+    }, 5e3);
+    return () => clearTimeout(id);
+  }, [jumpMessageId, messages, streaming]);
+  y2(() => {
+    setSearchIndex((cur) => searchMatches.length ? Math.min(Math.max(cur, 0), searchMatches.length - 1) : 0);
+  }, [chatSearch, searchMatches.length]);
+  y2(() => {
+    if (!chatSearch.trim() || searchMatches.length === 0) return;
+    const match = searchMatches[Math.min(searchIndex, searchMatches.length - 1)];
+    const el = feedRef.current?.querySelector(`[data-msg-index="${match.index}"]`);
+    if (el) {
+      shouldAutoScroll.current = false;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [chatSearch, searchIndex, searchMatches.length]);
+  y2(() => {
+    if (!chatSearch.trim()) {
+      shouldAutoScroll.current = true;
+    }
+  }, [chatSearch]);
   y2(() => {
     let cancelled = false;
     (async () => {
@@ -24014,6 +24647,12 @@ const [providerCaps, setProviderCaps] = d2(null);
         setTodos(dash.todos ?? []);
         return;
       }
+      if (dash.kind === "plan-step-complete" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled") {
+        api("/plans").then((r3) => {
+          setActivePlan((r3.plans ?? []).find((p3) => ["active", "pending"].includes(planStatus(p3))) ?? null);
+        }).catch(() => {});
+        return;
+      }
       if (dash.kind === "modal-up") {
         setModal(dash.modal);
         return;
@@ -24102,10 +24741,12 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       setInput("");
       setPendingImages([]);
+      shouldAutoScroll.current = true;
+      removeChatDraft(draftKey);
     } catch (err) {
       setError(err.message);
     }
-  }, [input, busy, pendingImages]);
+  }, [input, busy, pendingImages, draftKey]);
   const abort = q2(async () => {
     try {
       await api("/abort", { method: "POST" });
@@ -24114,16 +24755,26 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, []);
   const newConversation = q2(async () => {
+    const wasBusy = busy;
     if (busy) {
       if (!confirm(t4("chat.newConfirmBusy"))) return;
     } else if (messages.length > 0 && !confirm(t4("chat.newConfirm"))) {
       return;
     }
     try {
+      if (wasBusy) {
+        await api("/abort", { method: "POST" });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
       setMessages([]);
       setStreaming(null);
       setActiveTool(null);
+      setInput("");
+      setPendingImages([]);
+      setChatSearch("");
+      shouldAutoScroll.current = true;
+      removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
       setTimeout(async () => {
         try {
@@ -24135,13 +24786,18 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length]);
+  }, [busy, messages.length, draftKey]);
   const clearScrollback = q2(async () => {
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
       setMessages([]);
       setStreaming(null);
       setActiveTool(null);
+      setInput("");
+      setPendingImages([]);
+      setChatSearch("");
+      shouldAutoScroll.current = true;
+      removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
       setTimeout(async () => {
         try {
@@ -24153,7 +24809,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, []);
+  }, [draftKey]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -24255,6 +24911,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     var fileNames = [];
     var fullPaths = [];
     var gotFullPaths = false;
+    var plainText = "";
     if (items) {
       for (var i = 0; i < items.length; i++) {
         var item = items[i];
@@ -24270,7 +24927,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (uriList) {
         var uris = uriList.split(/\r?\n/).filter(function(s) { return s.trim() && !s.startsWith("#"); });
         fullPaths = uris.map(function(u) {
-          try { return decodeURI(u.replace(/^file:\/\/\//, "").replace(/\//g, "\\")); }
+          try {
+            var decoded = decodeURI(u);
+            if (/^file:\/\//i.test(decoded)) {
+              if (/^file:\/\/\/[A-Za-z]:/i.test(decoded)) return decoded.replace(/^file:\/\/\//i, "").replace(/\//g, "\\");
+              return decoded.replace(/^file:\/\//i, "");
+            }
+            return decoded;
+          }
           catch (_) { return u; }
         });
         gotFullPaths = fullPaths.length > 0;
@@ -24278,10 +24942,10 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (_) {}
     if (!gotFullPaths) {
       try {
-        var plainText = e.clipboardData.getData("text/plain");
+        plainText = e.clipboardData.getData("text/plain") || "";
         if (plainText) {
           var lines = plainText.split(/\r?\n/).filter(function(s) { return s.trim(); });
-          if (lines.length > 0 && lines[0].indexOf("\\") >= 0) {
+          if (lines.length > 0 && (/^[A-Za-z]:\\/.test(lines[0].trim()) || lines[0].trim().startsWith("\\\\") || lines[0].trim().startsWith("/") || /^file:\/\//i.test(lines[0].trim()))) {
             fullPaths = lines;
             gotFullPaths = true;
           }
@@ -24325,12 +24989,29 @@ const [providerCaps, setProviderCaps] = d2(null);
       setError(msg);
       setTimeout(function() { setError(null); }, 3000);
     }
-    if (imageFiles.length > 0 && !gotFullPaths) {
-      addPendingImages(imageFiles);
+    function looksLikeClipboardScreenshot() {
+      if (imageFiles.length === 0 || gotFullPaths) return false;
+      if (plainText.trim()) return false;
+      if (fileNames.length === 0) return true;
+      if (fileNames.length !== imageFiles.length) return false;
+      return fileNames.every(function(name) {
+        return /^(?:image|clipboard|screenshot|截图)(?:[-_\s]?\d+)?\.(?:png|jpe?g|gif|webp|bmp)$/i.test(String(name || "").trim());
+      });
     }
-    if (gotFullPaths && fullPaths.length > 0) {
+    function shouldQueryClipboardPaths() {
+      if (gotFullPaths) return false;
+      if (fileNames.length > 0) return true;
+      if (imageFiles.length > 0) return false;
+      if (!plainText.trim()) return true;
+      var first = plainText.split(/\r?\n/).find(function(s) { return s.trim(); }) || "";
+      first = first.trim();
+      return /^[A-Za-z]:\\/.test(first) || first.startsWith("\\\\") || first.startsWith("/") || /^file:\/\//i.test(first);
+    }
+    if (looksLikeClipboardScreenshot()) {
+      addPendingImages(imageFiles);
+    } else if (gotFullPaths && fullPaths.length > 0) {
       insertAtCursor(fullPaths.join("\n"));
-    } else if (fileNames.length > 0 && imageFiles.length === 0) {
+    } else if (shouldQueryClipboardPaths()) {
       var capBefore = before, capAfter = after, capStart = start;
       function insertPaths(paths) {
         if (inserted) return;
@@ -24341,9 +25022,19 @@ const [providerCaps, setProviderCaps] = d2(null);
           ta.selectionStart = ta.selectionEnd = capStart + text.length;
         }, 0);
       }
+      function fallbackPaste() {
+        if (inserted) return;
+        if (imageFiles.length > 0) {
+          addPendingImages(imageFiles);
+        } else if (plainText) {
+          insertAtCursor(plainText);
+        } else if (fileNames.length > 0) {
+          showClipboardNotice("无法读取剪贴板中的文件路径，请重新复制文件或文件夹。");
+        }
+      }
       function tryRustBridge() {
         if (!inIframe) {
-          showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
+          fallbackPaste();
           return;
         }
         try {
@@ -24356,7 +25047,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               if (e2.data.paths && e2.data.paths.length > 0) {
                 insertPaths(e2.data.paths.slice());
               } else {
-                showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
+                fallbackPaste();
               }
             }
           };
@@ -24365,11 +25056,11 @@ const [providerCaps, setProviderCaps] = d2(null);
           var timer = setTimeout(function() {
             if (!handled) {
               window.removeEventListener('message', listener);
-              showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
+              fallbackPaste();
             }
           }, 2000);
         } catch (_) {
-          showClipboardNotice("无法读取剪贴板中的文件路径，请从文件资源管理器重新复制。");
+          fallbackPaste();
         }
       }
       var clipboardUrl = "/api/clipboard-files" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
@@ -24450,8 +25141,12 @@ const [providerCaps, setProviderCaps] = d2(null);
             if (!cancelled) setProviders(pr.providers ?? []);
           } catch {}
         }
-        const recent = o3.cockpit?.recentPlans ?? [];
-        setActivePlan(recent.find((p3) => p3.status === "active") ?? null);
+        try {
+          const plans = await api("/plans");
+          if (!cancelled) setActivePlan((plans.plans ?? []).find((p3) => ["active", "pending"].includes(planStatus(p3))) ?? null);
+        } catch {
+          if (!cancelled) setActivePlan(null);
+        }
         setSemanticIndex(o3.semanticIndexExists ?? null);
       } catch {
       }
@@ -24541,6 +25236,30 @@ const [providerCaps, setProviderCaps] = d2(null);
       setError(err.message);
     }
   }, [recentWss]);
+  const copyMessage = q2(async (msg) => {
+    const text = [msg.reasoning, msg.text].filter(Boolean).join("\n\n").trim();
+    if (!text) return;
+    try {
+      await writeClipboardText(text);
+      showToast(t4("chat.copiedMessage"), "info");
+    } catch (err) {
+      setError(t4("chat.copyFailed", { error: err.message }));
+    }
+  }, [draftKey]);
+  const fillInputFromMessage = q2((msg) => {
+    const text = msg.text ?? "";
+    if (!text.trim() || busy) return;
+    setInput(text);
+    setPopoverKind(null);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      try {
+        inputRef.current.selectionStart = inputRef.current.selectionEnd = text.length;
+      } catch {
+      }
+    }, 0);
+    showToast(t4("chat.filledInput"), "info");
+  }, [busy]);
   return html4`
     <div class="chat-shell">
       <div class="chat-toolbar">
@@ -24599,9 +25318,41 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>` : null}
       ${error ? html4`<div class="notice err">${error}</div>` : null}
 
-      <div class="chat-body">
+      <div class=${`chat-body ${activePlan ? "with-rail" : ""}`}>
         <div class="chat-main">
-          <${ChatFeed} messages=${messages} streaming=${streaming} innerRef=${feedRef} />
+          <div class="chat-searchbar">
+            <span class="chat-search-icon">⌕</span>
+            <input
+              type="search"
+              value=${chatSearch}
+              placeholder=${t4("chat.searchPlaceholder")}
+              onInput=${(e3) => {
+                setChatSearch(e3.target.value);
+                setSearchIndex(0);
+              }}
+              onKeyDown=${(e3) => {
+                if (e3.key === "Enter" && searchMatches.length > 0) {
+                  e3.preventDefault();
+                  setSearchIndex((i3) => e3.shiftKey ? (i3 - 1 + searchMatches.length) % searchMatches.length : (i3 + 1) % searchMatches.length);
+                }
+              }}
+            />
+            <span class="chat-search-count">
+              ${chatSearch.trim() ? t4("chat.searchCount", { current: searchMatches.length ? searchIndex + 1 : 0, total: searchMatches.length }) : t4("chat.searchIdle")}
+            </span>
+            <button type="button" disabled=${searchMatches.length === 0} onClick=${() => setSearchIndex((i3) => (i3 - 1 + searchMatches.length) % searchMatches.length)} title=${t4("chat.searchPrev")}>↑</button>
+            <button type="button" disabled=${searchMatches.length === 0} onClick=${() => setSearchIndex((i3) => (i3 + 1) % searchMatches.length)} title=${t4("chat.searchNext")}>↓</button>
+            ${chatSearch ? html4`<button type="button" onClick=${() => setChatSearch("")} title=${t4("chat.searchClear")}>×</button>` : null}
+          </div>
+          <${ChatFeed}
+            messages=${messages}
+            streaming=${streaming}
+            innerRef=${feedRef}
+            searchMatchIndex=${searchMatches.length ? searchMatches[Math.min(searchIndex, searchMatches.length - 1)]?.index : -1}
+            highlightMessageId=${highlightMessageId}
+            onCopyMessage=${copyMessage}
+            onFillInput=${fillInputFromMessage}
+          />
 
           ${modal ? modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null : null}
 
@@ -24635,6 +25386,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             ${html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />`}
             ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`; })}</div>` : null}
             <textarea
+              ref=${inputRef}
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
               value=${input}
               onInput=${onInput}
@@ -24739,11 +25491,12 @@ const [providerCaps, setProviderCaps] = d2(null);
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} />
         </div>
+        ${activePlan ? html4`<${SideRail} activePlan=${activePlan} />` : null}
       </div>
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef }) {
+var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -24757,60 +25510,38 @@ var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef }) {
   return html4`
     <div class="chat-feed" ref=${innerRef}>
       ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : allMessages.map(
-    (m3) => html4`
+    (m3, i3) => html4`
                 <${ChatMessage}
                   key=${m3.id}
                   msg=${m3}
+                  index=${i3}
+                  searchMatch=${i3 === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
                   streaming=${Boolean(streaming && streaming.id === m3.id)}
+                  onCopy=${onCopyMessage}
+                  onFillInput=${onFillInput}
                 />
               `
   )}
     </div>
   `;
 });
-var SideRail = N2(function SideRail2({ stats, budgetUsd, activePlan }) {
+var SideRail = N2(function SideRail2({ activePlan }) {
   useLang();
-  if (!stats && !activePlan) return html4`<aside class="chat-rail"></aside>`;
-  const cachePct = stats ? stats.cacheHitRatio * 100 : 0;
-  const cacheTone = cachePct >= 80 ? "ok" : cachePct >= 50 ? "" : "warn";
-  const showBudget = stats != null && typeof budgetUsd === "number" && budgetUsd > 0;
-  const budgetPct = showBudget ? Math.min(120, stats.totalCostUsd / budgetUsd * 100) : 0;
-  const budgetTone2 = budgetPct >= 100 ? "err" : budgetPct >= 80 ? "warn" : "";
-  const walletCurrency = primaryBalance(stats)?.currency;
+  if (!activePlan) return null;
   return html4`
     <aside class="chat-rail">
       ${activePlan ? html4`<${ActivePlanCard} plan=${activePlan} />` : null}
-      ${stats ? html4`
-            <div class="rail-card">
-              <div class="rh">${t4("chat.railSession")}</div>
-              <div class="rail-kv"><span class="k">${t4("chat.railTurns")}</span><span class="v">${stats.turns.toLocaleString()}</span></div>
-              <div class="rail-kv"><span class="k">${t4("chat.railPromptTok")}</span><span class="v">${stats.lastPromptTokens.toLocaleString()}</span></div>
-              <div class="rail-kv"><span class="k">${t4("chat.railCost")}</span><span class="v">${fmtCost(stats.totalCostUsd, walletCurrency)}</span></div>
-              <div class="progress-row" style="margin-top:8px">
-                <span class="lbl">${t4("chat.railCacheHit")}</span>
-                <div class=${`progress ${cacheTone}`}><div class="progress-fill" style=${`width:${cachePct}%`}></div></div>
-                <span class="v">${cachePct.toFixed(1)}%</span>
-              </div>
-            </div>
-          ` : null}
-      ${showBudget ? html4`
-            <div class="rail-card">
-              <div class="rh">${t4("chat.railToolBudget")}</div>
-              <div class="progress-row">
-                <span class="lbl">${t4("chat.railSpend")}</span>
-                <div class=${`progress ${budgetTone2}`}><div class="progress-fill" style=${`width:${Math.min(100, budgetPct)}%`}></div></div>
-                <span class="v" style=${budgetTone2 === "err" ? "color:var(--c-err)" : budgetTone2 === "warn" ? "color:var(--c-warn)" : ""}>${fmtCost(stats.totalCostUsd, walletCurrency)} / ${fmtCost(budgetUsd, walletCurrency)}</span>
-              </div>
-            </div>
-          ` : null}
     </aside>
   `;
 });
 function ActivePlanCard({ plan }) {
   useLang();
+  const steps = plan.steps ?? [];
+  const completedIds = new Set(plan.completedStepIds ?? []);
+  const title = plan.summary ?? plan.title ?? steps[0]?.title ?? t4("plans.noTitle");
   const dots = [];
   for (let i3 = 0; i3 < plan.totalSteps; i3++) {
-    const done = i3 < plan.completedSteps;
+    const done = steps[i3]?.id ? completedIds.has(steps[i3].id) : i3 < plan.completedSteps;
     const active = i3 === plan.completedSteps;
     dots.push(
       html4`<div class=${`step-dot ${done ? "done" : active ? "active" : ""}`}>${i3 + 1}</div>`
@@ -24821,10 +25552,22 @@ function ActivePlanCard({ plan }) {
   }
   return html4`
     <div class="rail-card">
-      <div class="rh">${t4("chat.railActivePlan")}</div>
+      <div class="rh">${t4("chat.railActivePlan")} ${statusPill(plan)}</div>
       <div class="steps" style="margin-bottom:8px">${dots}</div>
-      <div class="rail-kv"><span class="k" style="font-family:var(--font-sans);color:var(--fg-1);font-size:12.5px">${plan.title}</span></div>
+      <div class="rail-kv"><span class="k" style="font-family:var(--font-sans);color:var(--fg-1);font-size:12.5px">${title}</span></div>
       <div class="rail-kv"><span class="k">${t4("chat.railProgress")}</span><span class="v">${plan.completedSteps} / ${plan.totalSteps}</span></div>
+      ${steps.length > 0 ? html4`
+        <div class="active-plan-steps">
+          ${steps.slice(0, 6).map((step, i3) => {
+    const done = completedIds.has(step.id);
+    const active = !done && i3 === plan.completedSteps;
+    return html4`<div class=${`active-plan-step ${done ? "done" : active ? "active" : ""}`}>
+              <span class="idx">${i3 + 1}</span>
+              <span class="txt">${step.title}</span>
+            </div>`;
+  })}
+        </div>
+      ` : null}
     </div>
   `;
 }
@@ -26433,17 +27176,55 @@ function PermissionsPanel() {
 }
 
 // dashboard/src/panels/plans.ts
+function planStatus(p3) {
+  if (p3.status) return p3.status;
+  if (p3.completionRatio >= 1) return "done";
+  if (p3.completionRatio > 0) return "active";
+  return "idle";
+}
 function statusPill(p3) {
-  if (p3.completionRatio >= 1) return html4`<span class="pill ok">${t4("plans.done")}</span>`;
-  if (p3.completionRatio > 0) return html4`<span class="pill info">${t4("plans.active")}</span>`;
+  const status = planStatus(p3);
+  if (status === "done") return html4`<span class="pill ok">${t4("plans.done")}</span>`;
+  if (status === "active") return html4`<span class="pill info">${t4("plans.active")}</span>`;
+  if (status === "pending") return html4`<span class="pill warn">${t4("plans.pending")}</span>`;
   return html4`<span class="pill">${t4("plans.idle")}</span>`;
 }
 function PlansPanel() {
   useLang();
-  const { data, error, loading } = usePoll("/plans", 8e3);
+  const { data, error, loading, reload } = usePoll("/plans", 8e3);
   const [openIdx, setOpenIdx] = d2(null);
   const [filter, setFilter] = d2("");
   const [statusFilter, setStatusFilter] = d2("all");
+  const [deleting, setDeleting] = d2(false);
+  const deletePlan = q2(async (path) => {
+    setDeleting(true);
+    try {
+      await api("/plans", { method: "DELETE", body: { path } });
+      setOpenIdx(null);
+      await reload();
+    } catch (err) {
+      alert(err.message);
+    } finally { setDeleting(false); }
+  }, [reload]);
+  const completeStep = q2(async (stepId) => {
+    setDeleting(true);
+    try {
+      await api("/plans/active/step", { method: "POST", body: { stepId } });
+      await reload();
+    } catch (err) {
+      alert(err.message);
+    } finally { setDeleting(false); }
+  }, [reload]);
+  const cancelActivePlan = q2(async () => {
+    setDeleting(true);
+    try {
+      await api("/plans", { method: "DELETE", body: { active: true } });
+      setOpenIdx(null);
+      await reload();
+    } catch (err) {
+      alert(err.message);
+    } finally { setDeleting(false); }
+  }, [reload]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("plans.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "plans", error: error.message })}</div>`;
@@ -26452,7 +27233,9 @@ function PlansPanel() {
     return html4`<div class="card" style="color:var(--fg-3)">
       ${t4("plans.noPlans")}
     </div>`;
-  const statusFiltered = statusFilter === "all" ? plans : statusFilter === "active" ? plans.filter((p3) => p3.completionRatio > 0 && p3.completionRatio < 1) : plans.filter((p3) => p3.completionRatio >= 1);
+  const activePlans = plans.filter((p3) => ["active", "pending", "idle"].includes(planStatus(p3)));
+  const donePlans = plans.filter((p3) => planStatus(p3) === "done");
+  const statusFiltered = statusFilter === "all" ? plans : statusFilter === "active" ? activePlans : donePlans;
   const filtered = filter.trim() ? statusFiltered.filter(
     (p3) => p3.session.toLowerCase().includes(filter.toLowerCase()) || (p3.summary ?? "").toLowerCase().includes(filter.toLowerCase())
   ) : statusFiltered;
@@ -26479,13 +27262,13 @@ function PlansPanel() {
             onClick=${() => setStatusFilter("active")}
           >
             ${t4("plans.active")}
-            <span class="ct">${plans.filter((p3) => p3.completionRatio > 0 && p3.completionRatio < 1).length}</span>
+            <span class="ct">${activePlans.length}</span>
           </span>
           <span
             class=${`chip-f ${statusFilter === "done" ? "active" : ""}`}
             onClick=${() => setStatusFilter("done")}
           >
-            ${t4("plans.done")} <span class="ct">${plans.filter((p3) => p3.completionRatio >= 1).length}</span>
+            ${t4("plans.done")} <span class="ct">${donePlans.length}</span>
           </span>
         </div>
         <div class="ssl-rows">
@@ -26499,7 +27282,7 @@ function PlansPanel() {
                 <span class="meta">
                   <span><span class="v">${p3.totalSteps}</span> ${t4("plans.steps")}</span>
                   <span><span class="v">${p3.completedSteps} / ${p3.totalSteps}</span> · ${fmtPct(p3.completionRatio)}</span>
-                  <span>${fmtRelativeTime(p3.completedAt)}</span>
+                  <span>${fmtRelativeTime(p3.completedAt ?? p3.updatedAt)}</span>
                 </span>
               </div>
             `;
@@ -26513,11 +27296,19 @@ function PlansPanel() {
               </div>` : html4`
                 <div class="sessions-detail-h">
                   <span class="name">${open.summary ?? t4("plans.noTitle")}</span>
-                  <span class="ws">${open.session} · ${fmtRelativeTime(open.completedAt)}</span>
+                  <span class="ws">${open.session} · ${fmtRelativeTime(open.completedAt ?? open.updatedAt)}</span>
                   <span class="actions">
                     <button class="btn ghost" onClick=${() => setOpenIdx(null)}>${t4("common.back")}</button>
+                    ${planStatus(open) === "done" ? html4`<button class="btn danger" disabled=${deleting || !open.path} onClick=${() => { if (confirm(t4("plans.confirmDelete"))) deletePlan(open.path); }}>${t4("common.delete")}</button>` : html4`<button class="btn danger" disabled=${deleting} onClick=${() => { if (confirm(t4("plans.confirmCancel"))) cancelActivePlan(); }}>${t4("plans.cancelActive")}</button>`}
                   </span>
                 </div>
+
+                ${open.body ? html4`
+                  <h3 style="margin:0 0 6px;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">
+                    ${t4("plans.planBody")}
+                  </h3>
+                  <div class="md modal-plan-body" style="margin-bottom:14px" dangerouslySetInnerHTML=${{ __html: marked.parse(open.body) }}></div>
+                ` : null}
 
                 <h3 style="margin:0 0 6px;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">
                   ${t4("plans.stepTimeline", { done: open.completedSteps, total: open.totalSteps })}
@@ -26535,11 +27326,533 @@ function PlansPanel() {
                                 class=${`pill ${step.risk === "high" ? "err" : step.risk === "medium" ? "warn" : ""}`}
                                 style="align-self:flex-start;margin-top:4px"
                               >${step.risk}</span>` : null}
+                        ${planStatus(open) === "active" && !done ? html4`<button class="btn ghost" disabled=${deleting} style="align-self:flex-start;margin-top:6px" onClick=${(ev) => { ev.stopPropagation(); completeStep(step.id); }}>${t4("plans.markDone")}</button>` : null}
                       </div>
                     `;
   })}
                 </div>
               `}
+      </div>
+    </div>
+  `;
+}
+
+// dashboard/src/panels/tasks.ts
+function emptyTaskDraft() {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
+  return {
+    id: null,
+    kind: "prompt",
+    name: "",
+    prompt: "",
+    reportRangeMode: "yesterday",
+    reportPeriod: "daily",
+    reportStartDate: weekAgo,
+    reportEndDate: today,
+    reportExport: true,
+    type: "interval",
+    intervalMinutes: 60,
+    timeOfDay: "09:00",
+    dayOfWeek: 1,
+    runMode: "auto",
+    weekdaysOnly: false,
+    windowEnabled: false,
+    windowStart: "09:00",
+    windowEnd: "18:00",
+    enabled: true
+  };
+}
+function taskDraftFromSchedule(task) {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
+  return {
+    id: task.id,
+    kind: task.kind === "report" ? "report" : "prompt",
+    name: task.name ?? "",
+    prompt: task.prompt ?? "",
+    reportRangeMode: task.reportRangeMode ?? (task.reportPeriod === "daily" ? "yesterday" : task.reportPeriod === "yearly" ? "this_year" : task.reportPeriod === "custom" ? "custom" : "last_week"),
+    reportPeriod: task.reportPeriod ?? "daily",
+    reportStartDate: task.reportStartDate ?? weekAgo,
+    reportEndDate: task.reportEndDate ?? today,
+    reportExport: task.reportExport !== false,
+    type: task.type === "daily" || task.type === "weekly" ? task.type : "interval",
+    intervalMinutes: Math.max(1, Math.round((task.intervalMs ?? 60 * 60 * 1e3) / 6e4)),
+    timeOfDay: task.timeOfDay ?? "09:00",
+    dayOfWeek: Number.isFinite(task.dayOfWeek) ? task.dayOfWeek : 1,
+    runMode: task.runMode ?? "auto",
+    weekdaysOnly: task.weekdaysOnly === true,
+    windowEnabled: task.windowEnabled === true,
+    windowStart: task.windowStart ?? "09:00",
+    windowEnd: task.windowEnd ?? "18:00",
+    enabled: task.enabled !== false
+  };
+}
+function fmtScheduleDate(iso) {
+  if (!iso) return t4("tasks.never");
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "\u2014";
+  return new Date(ms).toLocaleString();
+}
+function fmtScheduleRule(task) {
+  if (task.type === "daily") return `${t4("tasks.daily")} ${task.timeOfDay ?? "09:00"}`;
+  if (task.type === "weekly") {
+    const labels = scheduleWeekdayLabels();
+    const day = labels[Number.isFinite(task.dayOfWeek) ? task.dayOfWeek : 1] ?? labels[1];
+    return `${t4("tasks.weekly")} ${day} ${task.timeOfDay ?? "09:00"}`;
+  }
+  const mins = Math.max(1, Math.round((task.intervalMs ?? 0) / 6e4));
+  if (mins < 60) return `${t4("tasks.every")} ${mins}m`;
+  if (mins % 1440 === 0) return `${t4("tasks.every")} ${mins / 1440}d`;
+  if (mins % 60 === 0) return `${t4("tasks.every")} ${mins / 60}h`;
+  return `${t4("tasks.every")} ${mins}m`;
+}
+function scheduleWeekdayLabels() {
+  return getLang() === "zh-CN"
+    ? ["\u5468\u65E5", "\u5468\u4E00", "\u5468\u4E8C", "\u5468\u4E09", "\u5468\u56DB", "\u5468\u4E94", "\u5468\u516D"]
+    : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+}
+function fmtScheduleDuration(ms) {
+  if (!Number.isFinite(ms)) return "\u2014";
+  const seconds = Math.max(0, Math.round(ms / 1e3));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const minRest = minutes % 60;
+  return minRest ? `${hours}h ${minRest}m` : `${hours}h`;
+}
+function fmtScheduleTokens(value) {
+  return Number.isFinite(value) ? Math.round(value).toLocaleString() : "\u2014";
+}
+function fmtScheduleCost(value) {
+  return Number.isFinite(value) ? `$${value.toFixed(6)}` : "\u2014";
+}
+function fmtTaskKind(task) {
+  return task?.kind === "report" ? t4("tasks.kindReport") : t4("tasks.kindPrompt");
+}
+function fmtReportPeriod(period) {
+  if (period === "daily") return t4("tasks.reportDaily");
+  if (period === "weekly") return t4("tasks.reportWeekly");
+  if (period === "yearly") return t4("tasks.reportYearly");
+  if (period === "custom") return t4("tasks.reportCustom");
+  return period || "\u2014";
+}
+function fmtReportRangeMode(mode, period) {
+  if (mode === "today") return t4("tasks.reportToday");
+  if (mode === "yesterday") return t4("tasks.reportYesterday");
+  if (mode === "this_week") return t4("tasks.reportThisWeek");
+  if (mode === "last_week") return t4("tasks.reportLastWeek");
+  if (mode === "last_7_days") return t4("tasks.reportLast7Days");
+  if (mode === "last_30_days") return t4("tasks.reportLast30Days");
+  if (mode === "this_year") return t4("tasks.reportThisYear");
+  if (mode === "last_year") return t4("tasks.reportLastYear");
+  if (mode === "custom") return t4("tasks.reportFixedRange");
+  return fmtReportPeriod(period);
+}
+function fmtReportRange(item) {
+  if (!item?.reportStart && !item?.reportEnd) return "\u2014";
+  const start = item.reportStart ? fmtScheduleDate(item.reportStart) : "\u2014";
+  const end = item.reportEnd ? fmtScheduleDate(item.reportEnd) : "\u2014";
+  return `${start} - ${end}`;
+}
+function taskStatusPill(task) {
+  if (task.workspaceMismatch) return html4`<span class="pill warn">${t4("tasks.workspaceMismatch")}</span>`;
+  if (!task.enabled) return html4`<span class="pill">${t4("tasks.disabled")}</span>`;
+  if (task.lastStatus === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
+  if (task.lastStatus === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
+  if (task.lastStatus === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
+  if (task.lastStatus === "accepted") return html4`<span class="pill ok">${t4("tasks.accepted")}</span>`;
+  if (task.lastStatus === "skipped") return html4`<span class="pill warn">${t4("tasks.skipped")}</span>`;
+  if (task.lastStatus === "pending_confirmation") return html4`<span class="pill warn">${t4("tasks.pendingConfirmation")}</span>`;
+  if (task.lastStatus === "rejected") return html4`<span class="pill err">${t4("tasks.rejected")}</span>`;
+  return html4`<span class="pill info">${t4("tasks.enabled")}</span>`;
+}
+function scheduleRunPill(status) {
+  if (status === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
+  if (status === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
+  if (status === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
+  if (status === "accepted") return html4`<span class="pill ok">${t4("tasks.accepted")}</span>`;
+  if (status === "skipped") return html4`<span class="pill warn">${t4("tasks.skipped")}</span>`;
+  if (status === "pending_confirmation") return html4`<span class="pill warn">${t4("tasks.pendingConfirmation")}</span>`;
+  if (status === "rejected") return html4`<span class="pill err">${t4("tasks.rejected")}</span>`;
+  return html4`<span class="pill">${status || "\u2014"}</span>`;
+}
+function ScheduledTasksPanel() {
+  useLang();
+  const { data, error, loading, refresh } = usePoll("/schedules", 3e4);
+  const [selectedId, setSelectedId] = d2(null);
+  const [draft, setDraft] = d2(() => emptyTaskDraft());
+  const [busy, setBusy] = d2(false);
+  const [notice, setNotice] = d2(null);
+  const [pendingRunNotice, setPendingRunNotice] = d2(null);
+  y2(() => {
+    const unsubChanged = subscribeSse("schedule-changed", () => refresh());
+    const unsubRun = subscribeSse("schedule-run", () => refresh());
+    return () => {
+      unsubChanged();
+      unsubRun();
+    };
+  }, [refresh]);
+  const schedules = data?.schedules ?? [];
+  const pendingSchedules = schedules.filter((task) => task.lastStatus === "pending_confirmation");
+  const selected = schedules.find((task) => task.id === selectedId) ?? null;
+  const latestRun = selected?.history?.[0] ?? null;
+  y2(() => {
+    if (!pendingRunNotice) return;
+    const task = schedules.find((item) => item.id === pendingRunNotice.taskId);
+    const run = task?.history?.find((item) => !pendingRunNotice.runId || item.runId === pendingRunNotice.runId);
+    if (!run || run.status === "running") return;
+    if (run.status === "completed") setNotice(t4("tasks.runCompleted"));
+    else if (run.status === "failed") setNotice(t4("tasks.runFailed"));
+    else if (run.status === "skipped") setNotice(t4("tasks.runSkipped"));
+    else if (run.status === "rejected") setNotice(t4("tasks.runRejected"));
+    else if (run.status === "pending_confirmation") setNotice(t4("tasks.runPending"));
+    else setNotice(run.reason || run.summary || t4("tasks.noSummary"));
+    setPendingRunNotice(null);
+  }, [pendingRunNotice, schedules]);
+  const selectTask = q2((task) => {
+    setSelectedId(task.id);
+    setDraft(taskDraftFromSchedule(task));
+    setNotice(null);
+    setPendingRunNotice(null);
+  }, []);
+  const createNew = q2(() => {
+    setSelectedId(null);
+    setDraft(emptyTaskDraft());
+    setNotice(null);
+    setPendingRunNotice(null);
+  }, []);
+  const saveTask = q2(async () => {
+    const body = {
+      kind: draft.kind,
+      name: draft.name,
+      prompt: draft.prompt,
+      reportRangeMode: draft.reportRangeMode,
+      reportPeriod: draft.reportPeriod,
+      reportStartDate: draft.reportStartDate,
+      reportEndDate: draft.reportEndDate,
+      reportExport: draft.reportExport,
+      type: draft.type,
+      runMode: draft.runMode,
+      weekdaysOnly: draft.weekdaysOnly,
+      windowEnabled: draft.windowEnabled,
+      windowStart: draft.windowStart,
+      windowEnd: draft.windowEnd,
+      enabled: draft.enabled
+    };
+    if (draft.type === "daily" || draft.type === "weekly") {
+      body.timeOfDay = draft.timeOfDay;
+      if (draft.type === "weekly") body.dayOfWeek = Number(draft.dayOfWeek);
+    }
+    else body.intervalMs = Math.max(1, Number(draft.intervalMinutes) || 1) * 6e4;
+    setBusy(true);
+    setNotice(null);
+    setPendingRunNotice(null);
+    try {
+      const res = draft.id ? await api(`/schedules/${encodeURIComponent(draft.id)}`, { method: "POST", body }) : await api("/schedules", { method: "POST", body });
+      setSelectedId(res.schedule.id);
+      setDraft(taskDraftFromSchedule(res.schedule));
+      setNotice(t4("tasks.saved"));
+      await refresh();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [draft, refresh]);
+  const toggleTask = q2(async (task) => {
+    setBusy(true);
+    setNotice(null);
+    setPendingRunNotice(null);
+    try {
+      const res = await api(`/schedules/${encodeURIComponent(task.id)}/toggle`, { method: "POST", body: { enabled: !task.enabled } });
+      if (selectedId === task.id) setDraft(taskDraftFromSchedule(res.schedule));
+      await refresh();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh, selectedId]);
+  const runTask = q2(async (task) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await api(`/schedules/${encodeURIComponent(task.id)}/run`, { method: "POST", body: {} });
+      setPendingRunNotice({ taskId: task.id, runId: res.runId || null });
+      setNotice(t4("tasks.runAccepted"));
+      await refresh();
+    } catch (err) {
+      setPendingRunNotice(null);
+      setNotice(err.message);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+  const viewRunConversation = q2((run) => {
+    const id = run?.assistantMessageId || run?.userMessageId;
+    if (id) requestChatMessageJump(id);
+  }, []);
+  const deleteTask = q2(async (task) => {
+    if (!confirm(t4("tasks.deleteConfirm"))) return;
+    setBusy(true);
+    setNotice(null);
+    setPendingRunNotice(null);
+    try {
+      await api(`/schedules/${encodeURIComponent(task.id)}`, { method: "DELETE", body: {} });
+      if (selectedId === task.id) createNew();
+      setNotice(t4("tasks.deleted"));
+      await refresh();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [createNew, refresh, selectedId]);
+  if (loading && !data) return html4`<div class="card" style="color:var(--fg-3)">${t4("tasks.loading")}</div>`;
+  if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "tasks", error: error.message })}</div>`;
+  const validWindow = !draft.windowEnabled || /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.windowStart) && /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.windowEnd) && draft.windowStart < draft.windowEnd;
+  const intervalMinutes = Number(draft.intervalMinutes);
+  const validInterval = Number.isFinite(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 30 * 24 * 60;
+  const validSchedule = draft.type === "daily" || draft.type === "weekly" ? /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) : validInterval;
+  const validReport = draft.reportRangeMode === "custom" ? !!draft.reportStartDate && !!draft.reportEndDate && draft.reportEndDate >= draft.reportStartDate : true;
+  const canSave = validWindow && validSchedule && (draft.kind === "report" ? validReport : draft.prompt.trim().length > 0);
+  const weekdayLabels = scheduleWeekdayLabels();
+  return html4`
+    <div class="sessions-grid">
+      <div class="sessions-list">
+        <div class="ssl-h">
+          <strong>${t4("tasks.title")}</strong>
+          <button class="btn ghost" style="margin-left:auto" onClick=${createNew}>${t4("tasks.create")}</button>
+        </div>
+        ${pendingSchedules.length > 0 ? html4`
+          <div class="card accent-warn" style="margin:0 12px 10px">
+            <div class="card-h"><span class="title">${t4("tasks.pendingTitle")}</span></div>
+            <div class="card-b" style="padding-bottom:8px">${t4("tasks.pendingHint")}</div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              ${pendingSchedules.map((task) => html4`
+                <div style="display:flex;gap:8px;align-items:center;min-width:0">
+                  <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${task.name || t4("tasks.title")}</span>
+                  <button class="btn" disabled=${busy} onClick=${(ev) => { ev.stopPropagation(); selectTask(task); runTask(task); }}>${t4("tasks.runNow")}</button>
+                </div>
+              `)}
+            </div>
+          </div>
+        ` : null}
+        <div class="ssl-rows">
+          ${schedules.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">${t4("tasks.noTasks")}</div>` : schedules.map((task) => html4`
+            <div class=${`ssl-row ${task.id === selectedId ? "sel" : ""}`} onClick=${() => selectTask(task)}>
+              <span class="name">${task.name || t4("tasks.title")} ${taskStatusPill(task)}</span>
+              <span class="preview">${fmtTaskKind(task)} · ${fmtScheduleRule(task)}</span>
+              <span class="meta">
+                <span>${t4("tasks.nextRun")}: <span class="v">${fmtScheduleDate(task.nextRunAt)}</span></span>
+                <span>${t4("tasks.lastRun")}: ${task.lastRunAt ? fmtScheduleDate(task.lastRunAt) : t4("tasks.never")}</span>
+                <button class="btn btn-sm" disabled=${busy} style="margin-left:auto" onClick=${(ev) => { ev.stopPropagation(); selectTask(task); runTask(task); }}>${t4("tasks.testRun")}</button>
+              </span>
+            </div>
+          `)}
+        </div>
+      </div>
+
+      <div class="sessions-detail">
+        <div class="sessions-detail-h">
+          <span class="name">${draft.id ? draft.name || t4("tasks.title") : t4("tasks.create")}</span>
+          <span class="ws">${selected ? `${fmtScheduleRule(selected)} · ${t4("tasks.nextRun")}: ${fmtScheduleDate(selected.nextRunAt)}` : t4("tasks.selectHint")}</span>
+          ${selected ? html4`<span class="actions"><button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button></span>` : null}
+        </div>
+        ${selected?.workspaceMismatch ? html4`<div class="card accent-warn" style="margin-bottom:10px">${t4("tasks.workspaceMismatchHint")}</div>` : null}
+        ${notice ? html4`<div class=${`card ${notice === t4("tasks.saved") || notice === t4("tasks.deleted") || notice === t4("tasks.runAccepted") || notice === t4("tasks.runCompleted") || notice === t4("tasks.runPending") ? "accent-brand" : "accent-err"}`} style="margin-bottom:10px">${notice}</div>` : null}
+        ${selected ? html4`
+          <div class="card" style="margin-bottom:10px">
+            <div class="card-h">
+              <span class="title">${t4("tasks.latestResult")}</span>
+              ${latestRun ? html4`<span>${scheduleRunPill(latestRun.status)}</span>` : null}
+            </div>
+            ${latestRun ? html4`
+              <div class="card-b" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;border-bottom:1px solid var(--bd)">
+                <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.lastRun")}</div><div class="mono" style="font-size:12px">${fmtScheduleDate(latestRun.startedAt)}</div></div>
+                <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.duration")}</div><div class="mono" style="font-size:12px">${fmtScheduleDuration(latestRun.durationMs)}</div></div>
+                <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.tokens")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.lastPromptTokens)}</div></div>
+                <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cost")}</div><div class="mono" style="font-size:12px">${fmtScheduleCost(latestRun.lastTurnCostUsd)}</div></div>
+              </div>
+              ${latestRun.reportPeriod ? html4`
+                <div class="card-b" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;border-bottom:1px solid var(--bd)">
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.reportScope")}</div><div style="font-size:12px">${fmtReportRangeMode(latestRun.reportRangeMode, latestRun.reportPeriod)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.reportRange")}</div><div class="mono" style="font-size:12px">${fmtReportRange(latestRun)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.reportSessions")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.reportSessions)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.reportMessages")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.reportMessages)}</div></div>
+                </div>
+              ` : null}
+              <div class="card-b" style="display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;gap:8px;align-items:center;color:var(--fg-3);font-size:12px">
+                  <span>${t4("tasks.source")}: ${latestRun.manual ? t4("tasks.manual") : t4("tasks.scheduled")}</span>
+                  ${latestRun.runId ? html4`<code class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${latestRun.runId}</code>` : null}
+                  ${latestRun.assistantMessageId || latestRun.userMessageId ? html4`<button class="btn btn-sm" style="margin-left:auto" onClick=${() => viewRunConversation(latestRun)}>${t4("tasks.viewConversation")}</button>` : null}
+                </div>
+                <div style="color:var(--fg-2);overflow-wrap:anywhere">${latestRun.summary || latestRun.reason || t4("tasks.noSummary")}</div>
+                ${latestRun.reportPath ? html4`<div style="color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportPath}</code></div>` : null}
+              </div>
+            ` : html4`<div class="card-b">${t4("tasks.noHistory")}</div>`}
+          </div>
+        ` : null}
+        <div class="card">
+          <div class="form-row">
+            <span class="lbl">${t4("tasks.taskKind")}</span>
+            <select class="input mono" value=${draft.kind} onChange=${(e3) => setDraft({ ...draft, kind: e3.target.value, runMode: e3.target.value === "report" ? "auto" : draft.runMode })}>
+              <option value="prompt">${t4("tasks.kindPrompt")}</option>
+              <option value="report">${t4("tasks.kindReport")}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <span class="lbl">${t4("tasks.name")}</span>
+            <input class="input" type="text" value=${draft.name} onInput=${(e3) => setDraft({ ...draft, name: e3.target.value })} />
+          </div>
+          ${draft.kind === "report" ? html4`
+            <div class="form-row">
+              <span class="lbl">${t4("tasks.reportRange")}</span>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <select class="input mono" value=${draft.reportRangeMode} onChange=${(e3) => setDraft({ ...draft, reportRangeMode: e3.target.value })}>
+                  <option value="yesterday">${t4("tasks.reportYesterday")}</option>
+                  <option value="today">${t4("tasks.reportToday")}</option>
+                  <option value="last_week">${t4("tasks.reportLastWeek")}</option>
+                  <option value="this_week">${t4("tasks.reportThisWeek")}</option>
+                  <option value="last_7_days">${t4("tasks.reportLast7Days")}</option>
+                  <option value="last_30_days">${t4("tasks.reportLast30Days")}</option>
+                  <option value="this_year">${t4("tasks.reportThisYear")}</option>
+                  <option value="last_year">${t4("tasks.reportLastYear")}</option>
+                  <option value="custom">${t4("tasks.reportFixedRange")}</option>
+                </select>
+                ${draft.reportRangeMode === "custom" ? html4`
+                  <span style="color:var(--fg-3);font-size:12px">${t4("tasks.reportStart")}</span>
+                  <input class="input mono" type="date" value=${draft.reportStartDate} onInput=${(e3) => setDraft({ ...draft, reportStartDate: e3.target.value })} />
+                  <span style="color:var(--fg-3);font-size:12px">${t4("tasks.reportEnd")}</span>
+                  <input class="input mono" type="date" value=${draft.reportEndDate} onInput=${(e3) => setDraft({ ...draft, reportEndDate: e3.target.value })} />
+                ` : null}
+                <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
+                  <input type="checkbox" checked=${draft.reportExport} onChange=${(e3) => setDraft({ ...draft, reportExport: e3.target.checked })} />
+                  ${t4("tasks.reportExport")}
+                </label>
+              </div>
+            </div>
+            <div class="form-row" style="align-items:flex-start">
+              <span class="lbl">${t4("tasks.summary")}</span>
+              <div style="flex:1;min-width:0;color:var(--fg-3);font-size:12px;line-height:1.5">${t4("tasks.reportTaskHint")}</div>
+            </div>
+          ` : html4`
+            <div class="form-row" style="align-items:flex-start">
+              <span class="lbl">${t4("tasks.prompt")}</span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+                <textarea class="input mono" rows="8" placeholder=${t4("tasks.promptPlaceholder")} value=${draft.prompt} onInput=${(e3) => setDraft({ ...draft, prompt: e3.target.value })}></textarea>
+                <span style="color:var(--fg-3);font-size:11px">${t4("tasks.templateVars")}</span>
+              </div>
+            </div>
+            <div class="form-row">
+              <span class="lbl">${t4("tasks.runMode")}</span>
+              <select class="input mono" value=${draft.runMode} onChange=${(e3) => setDraft({ ...draft, runMode: e3.target.value })}>
+                <option value="auto">${t4("tasks.runModeAuto")}</option>
+                <option value="readonly">${t4("tasks.runModeReadonly")}</option>
+                <option value="confirm">${t4("tasks.runModeConfirm")}</option>
+              </select>
+            </div>
+          `}
+          <div class="form-row">
+            <span class="lbl">${t4("tasks.type")}</span>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select class="input mono" value=${draft.type} onChange=${(e3) => setDraft({ ...draft, type: e3.target.value })}>
+                <option value="daily">${t4("tasks.daily")}</option>
+                <option value="weekly">${t4("tasks.weekly")}</option>
+                <option value="interval">${t4("tasks.customInterval")}</option>
+              </select>
+              ${draft.type === "daily" || draft.type === "weekly" ? html4`
+                ${draft.type === "weekly" ? html4`
+                  <span style="color:var(--fg-3);font-size:12px">${t4("tasks.dayOfWeek")}</span>
+                  <select class="input mono" value=${String(draft.dayOfWeek)} onChange=${(e3) => setDraft({ ...draft, dayOfWeek: Number(e3.target.value) })}>
+                    ${weekdayLabels.map((label, idx) => html4`<option value=${String(idx)}>${label}</option>`)}
+                  </select>
+                ` : null}
+                <span style="color:var(--fg-3);font-size:12px">${t4("tasks.at")}</span>
+                <input class="input mono" type="time" value=${draft.timeOfDay} onInput=${(e3) => setDraft({ ...draft, timeOfDay: e3.target.value })} />
+              ` : html4`
+                <span style="color:var(--fg-3);font-size:12px">${t4("tasks.every")}</span>
+                <input class="input mono" type="number" min="1" max=${String(30 * 24 * 60)} step="1" style="width:90px" value=${draft.intervalMinutes} onInput=${(e3) => setDraft({ ...draft, intervalMinutes: e3.target.value })} />
+                <span style="color:var(--fg-3);font-size:12px">min</span>
+              `}
+              <label style="display:flex;align-items:center;gap:6px;margin-left:auto;color:var(--fg-2);font-size:12px">
+                <input type="checkbox" checked=${draft.enabled} onChange=${(e3) => setDraft({ ...draft, enabled: e3.target.checked })} />
+                ${t4("tasks.enabled")}
+              </label>
+            </div>
+          </div>
+          <div class="form-row">
+            <span class="lbl">${t4("tasks.runWindow")}</span>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
+                <input type="checkbox" checked=${draft.weekdaysOnly} onChange=${(e3) => setDraft({ ...draft, weekdaysOnly: e3.target.checked })} />
+                ${t4("tasks.weekdaysOnly")}
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
+                <input type="checkbox" checked=${draft.windowEnabled} onChange=${(e3) => setDraft({ ...draft, windowEnabled: e3.target.checked })} />
+                ${t4("tasks.enableWindow")}
+              </label>
+              ${draft.windowEnabled ? html4`
+                <span style="color:var(--fg-3);font-size:12px">${t4("tasks.from")}</span>
+                <input class="input mono" type="time" value=${draft.windowStart} onInput=${(e3) => setDraft({ ...draft, windowStart: e3.target.value })} />
+                <span style="color:var(--fg-3);font-size:12px">${t4("tasks.to")}</span>
+                <input class="input mono" type="time" value=${draft.windowEnd} onInput=${(e3) => setDraft({ ...draft, windowEnd: e3.target.value })} />
+              ` : null}
+            </div>
+          </div>
+          ${selected ? html4`
+            <div class="form-row">
+              <span class="lbl">${t4("tasks.workspace")}</span>
+              <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
+                <code class="mono" style="font-size:11px;color:var(--fg-2);overflow-wrap:anywhere">${selected.workspaceDir || "\u2014"}</code>
+                <span style="color:var(--fg-3);font-size:11px">${t4("tasks.currentWorkspace")}: ${selected.currentWorkspaceDir || "\u2014"}</span>
+              </div>
+            </div>
+          ` : null}
+          <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">
+            <button class="primary" disabled=${busy || !canSave} onClick=${() => saveTask()}>${draft.id ? t4("tasks.update") : t4("tasks.save")}</button>
+            ${selected ? html4`
+              <button disabled=${busy} onClick=${() => toggleTask(selected)}>${selected.enabled ? t4("tasks.disabled") : t4("tasks.enabled")}</button>
+              <button class="danger" disabled=${busy} onClick=${() => deleteTask(selected)}>${t4("common.delete")}</button>
+            ` : null}
+          </div>
+          <div style="margin-top:10px;color:var(--fg-3);font-size:12px">${t4("tasks.busyHint")} ${t4("tasks.minInterval")}</div>
+        </div>
+        ${selected ? html4`
+          <div class="card" style="margin-top:10px">
+            <div class="card-h"><span class="title">${t4("tasks.history")}</span></div>
+            ${(selected.history ?? []).length === 0 ? html4`<div class="card-b">${t4("tasks.noHistory")}</div>` : html4`
+              <div style="display:flex;flex-direction:column;gap:8px">
+                ${(selected.history ?? []).map((item) => html4`
+                  <div style="display:grid;grid-template-columns:130px 100px minmax(0,1fr);gap:8px;align-items:start;font-size:12px;border-bottom:1px solid var(--bd);padding-bottom:8px">
+                    <span class="mono" style="color:var(--fg-3)">${fmtScheduleDate(item.startedAt)}</span>
+                    <span>${scheduleRunPill(item.status)}</span>
+                    <span style="min-width:0;color:var(--fg-2);overflow-wrap:anywhere;display:flex;flex-direction:column;gap:4px">
+                      <span style="display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap">
+                        <span>
+                          ${item.manual ? t4("tasks.manual") : t4("tasks.scheduled")}
+                          <span style="color:var(--fg-3)"> · ${t4("tasks.duration")}: ${fmtScheduleDuration(item.durationMs)} · ${t4("tasks.tokens")}: ${fmtScheduleTokens(item.lastPromptTokens)} · ${t4("tasks.cost")}: ${fmtScheduleCost(item.lastTurnCostUsd)}</span>
+                        </span>
+                        ${item.assistantMessageId || item.userMessageId ? html4`<button class="btn btn-sm" onClick=${() => viewRunConversation(item)}>${t4("tasks.viewConversation")}</button>` : null}
+                      </span>
+                      <span>${item.summary || item.reason || t4("tasks.noSummary")}</span>
+                      ${item.reportPeriod ? html4`<span style="color:var(--fg-3)">
+                        ${fmtReportRangeMode(item.reportRangeMode, item.reportPeriod)} · ${t4("tasks.reportRange")}: ${fmtReportRange(item)} · ${t4("tasks.reportSessions")}: ${fmtScheduleTokens(item.reportSessions)} · ${t4("tasks.reportMessages")}: ${fmtScheduleTokens(item.reportMessages)}
+                      </span>` : null}
+                      ${item.reportPath ? html4`<span style="color:var(--fg-3);overflow-wrap:anywhere">${t4("tasks.reportExportPath")}: <code class="mono">${item.reportPath}</code></span>` : null}
+                      ${item.reason && item.summary && item.reason !== item.summary ? html4`<span style="color:var(--fg-3)">${item.reason}</span>` : null}
+                    </span>
+                  </div>
+                `)}
+              </div>
+            `}
+          </div>
+        ` : null}
       </div>
     </div>
   `;
@@ -27398,7 +28711,14 @@ function SessionsPanel() {
   const [filter, setFilter] = d2("");
   const [deleting, setDeleting] = d2(false);
   const [resuming, setResuming] = d2(false);
+  const [info, setInfo] = d2(null);
+  const [transcriptSearch, setTranscriptSearch] = d2("");
+  const [transcriptSearchIndex, setTranscriptSearchIndex] = d2(0);
+  const transcriptFeedRef = A2(null);
   const view = q2(async (name) => {
+    setInfo(null);
+    setTranscriptSearch("");
+    setTranscriptSearchIndex(0);
     setOpen({ name, messages: null });
     setOpenLoading(true);
     try {
@@ -27429,9 +28749,43 @@ function SessionsPanel() {
       setDeleting(false);
     }
   }, [open]);
+  const exportSession = q2(async (name) => {
+    setInfo(null);
+    try {
+      const res = await api(`/sessions/${encodeURIComponent(name)}/export`, { method: "POST", body: {} });
+      setInfo(t4("sessions.exported", { path: res.path || res.filename || name }));
+    } catch (err) {
+      setInfo(t4("sessions.exportFailed", { error: err.message }));
+    }
+  }, []);
   const doResume = q2(async (name) => {
     setResuming(true);
     try {
+      let currentMessages = 0;
+      let currentBusy = false;
+      try {
+        const cur = await api("/messages");
+        currentMessages = cur.messages?.length ?? 0;
+        currentBusy = Boolean(cur.busy);
+      } catch {
+      }
+      let draftCount = 0;
+      try {
+        for (let i3 = 0; i3 < localStorage.length; i3++) {
+          const key = localStorage.key(i3) || "";
+          if ((key === CHAT_DRAFT_KEY || key.startsWith("visionox.chatDraft.v2:")) && (localStorage.getItem(key) || "").trim()) {
+            draftCount++;
+          }
+        }
+      } catch {
+      }
+      if ((currentMessages > 0 || currentBusy || draftCount > 0) && !confirm(t4("sessions.resumeConfirm", {
+        messages: currentMessages,
+        busy: String(currentBusy),
+        drafts: draftCount
+      }))) {
+        return;
+      }
       await api("/submit", { method: "POST", body: { prompt: "", session: name } });
       appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "chat" } }));
       setOpen(null);
@@ -27476,13 +28830,37 @@ function SessionsPanel() {
       setRenameBusy(false);
     }
   }, [open, renameText]);
+  const detailChatMessages = T2(() => (open?.messages ?? []).map((m3, i3) => ({
+    id: `r-${i3}`,
+    role: m3.role === "tool" ? "tool" : m3.role === "assistant" ? "assistant" : m3.role === "user" ? "user" : "info",
+    text: m3.content ?? "",
+    toolName: m3.toolName
+  })), [open?.messages]);
+  const transcriptMatches = T2(() => computeChatSearchMatches(detailChatMessages, transcriptSearch), [detailChatMessages, transcriptSearch]);
+  y2(() => {
+    setTranscriptSearchIndex((cur) => transcriptMatches.length ? Math.min(Math.max(cur, 0), transcriptMatches.length - 1) : 0);
+  }, [transcriptSearch, transcriptMatches.length]);
+  y2(() => {
+    if (!transcriptSearch.trim() || transcriptMatches.length === 0) return;
+    const match = transcriptMatches[Math.min(transcriptSearchIndex, transcriptMatches.length - 1)];
+    const el = transcriptFeedRef.current?.querySelector(`[data-msg-index="${match.index}"]`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [transcriptSearch, transcriptSearchIndex, transcriptMatches.length]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("sessions.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "sessions", error: error.message })}</div>`;
   const sessions = data?.sessions ?? [];
   if (sessions.length === 0)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("sessions.noSessions")}</div>`;
-  const filtered = filter.trim() ? sessions.filter((s3) => s3.name.toLowerCase().includes(filter.toLowerCase())) : sessions;
+  const query = filter.trim().toLowerCase();
+  const filtered = query ? sessions.filter((s3) => [
+    s3.name,
+    s3.summary,
+    s3.searchText,
+    s3.modeLabel,
+    s3.mode,
+    s3.meta?.workspace
+  ].filter(Boolean).join(" ").toLowerCase().includes(query)) : sessions;
   return html4`
     <div class="sessions-grid">
       <div class="sessions-list">
@@ -27506,6 +28884,7 @@ function SessionsPanel() {
                 onClick=${() => view(s3.name)}
               >
                 <span class="name">${s3.name}</span>
+                <span class="preview">${s3.summary || t4("sessions.noSummary")}</span>
                 <span class="meta">
                   <span><span class="v">${fmtNum(s3.messageCount)}</span> ${t4("sessions.msgs")}</span>
                   ${s3.modeLabel ? html4`<span>${s3.modeLabel}</span>` : null}
@@ -27522,6 +28901,7 @@ function SessionsPanel() {
         ${open == null ? html4`<div style="color:var(--fg-3);font-size:13px;text-align:center;padding:60px 20px">
                 ${t4("sessions.pickHint")}
               </div>` : html4`
+                ${info ? html4`<div class="card accent-brand" style="margin-bottom:10px">${info}</div>` : null}
                 <div class="sessions-detail-h">
                   ${renaming ? html4`
                     <div class="sessions-rename-row">
@@ -27544,6 +28924,7 @@ function SessionsPanel() {
                     </span>
                     <span class="actions">
                       <button class="btn ghost" onClick=${startRename} disabled=${renameBusy}>${t4("sessions.rename")}</button>
+                      <button class="btn ghost" onClick=${() => exportSession(open.name)}>${t4("sessions.exportMarkdown")}</button>
                       <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
                       <button class="btn ghost danger" disabled=${deleting} onClick=${() => remove(open.name)}>${deleting ? "..." : t4("common.delete")}</button>
                     </span>
@@ -27560,17 +28941,39 @@ function SessionsPanel() {
                     </button>
                   </div>
                 </div>
-                ${openLoading ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : open.messages && open.messages.length > 0 ? html4`<div class="chat-feed" style="max-height:calc(100vh - 220px);overflow-y:auto">
-                            ${open.messages.map(
+                ${openLoading ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`
+                          <div class="chat-searchbar session-transcript-search">
+                            <span class="chat-search-icon">⌕</span>
+                            <input
+                              type="search"
+                              value=${transcriptSearch}
+                              placeholder=${t4("sessions.transcriptSearchPlaceholder")}
+                              onInput=${(e3) => {
+      setTranscriptSearch(e3.target.value);
+      setTranscriptSearchIndex(0);
+    }}
+                              onKeyDown=${(e3) => {
+      if (e3.key === "Enter" && transcriptMatches.length > 0) {
+        e3.preventDefault();
+        setTranscriptSearchIndex((i3) => e3.shiftKey ? (i3 - 1 + transcriptMatches.length) % transcriptMatches.length : (i3 + 1) % transcriptMatches.length);
+      }
+    }}
+                            />
+                            <span class="chat-search-count">
+                              ${transcriptSearch.trim() ? t4("sessions.transcriptSearchCount", { current: transcriptMatches.length ? transcriptSearchIndex + 1 : 0, total: transcriptMatches.length }) : t4("sessions.transcriptSearchIdle")}
+                            </span>
+                            <button type="button" disabled=${transcriptMatches.length === 0} onClick=${() => setTranscriptSearchIndex((i3) => (i3 - 1 + transcriptMatches.length) % transcriptMatches.length)} title=${t4("chat.searchPrev")}>↑</button>
+                            <button type="button" disabled=${transcriptMatches.length === 0} onClick=${() => setTranscriptSearchIndex((i3) => (i3 + 1) % transcriptMatches.length)} title=${t4("chat.searchNext")}>↓</button>
+                            ${transcriptSearch ? html4`<button type="button" onClick=${() => setTranscriptSearch("")} title=${t4("chat.searchClear")}>×</button>` : null}
+                          </div>
+                          <div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 260px);overflow-y:auto">
+                            ${detailChatMessages.map(
     (m3, i3) => html4`
                                 <${ChatMessage}
                                   key=${i3}
-                                  msg=${{
-      id: `r-${i3}`,
-      role: m3.role === "tool" ? "tool" : m3.role === "assistant" ? "assistant" : m3.role === "user" ? "user" : "info",
-      text: m3.content ?? "",
-      toolName: m3.toolName
-    }}
+                                  msg=${m3}
+                                  index=${i3}
+                                  searchMatch=${transcriptMatches.length ? i3 === transcriptMatches[Math.min(transcriptSearchIndex, transcriptMatches.length - 1)]?.index : false}
                                   streaming=${false}
                                 />
                               `
@@ -28337,16 +29740,6 @@ function SettingsPanel() {
         saving=${saving}
         onSetCap=${(usd) => save({ budgetUsd: usd })}
         onClear=${() => save({ budgetUsd: null })}
-      />
-
-      ${sectionH3(t4("settings.sectionLoop"))}
-      <${LoopSection}
-        status=${loopStatus}
-        remainingMs=${remainingMs}
-        avgIterCostUsd=${loopAvgCost}
-        busy=${loopBusy}
-        onStart=${startLoop}
-        onStop=${stopLoop}
       />
 
       ${sectionH3(t4("settings.sectionRuntime"))}
@@ -30990,9 +32383,8 @@ function tabSections() {
       label: t4("app.sectionWorkspace"),
       tabs: [
         { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
-        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
-        { id: "reports", name: t4("app.tabReports"), glyph: "R", panel: () => html7`<${ReportsPanel} />` },
-        { id: "plans", name: t4("app.tabPlans"), glyph: "\u229E", panel: () => html7`<${PlansPanel} />` }
+        { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` },
+        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` }
       ]
     },
     {

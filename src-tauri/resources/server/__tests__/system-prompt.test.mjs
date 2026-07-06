@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { buildSystemPrompt, PROJECT_MEMORY_CANDIDATES } from "../lib/system-prompt.mjs";
+import { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "../lib/system-prompt.mjs";
 
 describe("buildSystemPrompt", () => {
   const mockSpecs = [
@@ -48,16 +48,43 @@ describe("buildSystemPrompt", () => {
     // 安全边界段
     assert.ok(prompt.includes("## Safety boundaries"));
     assert.ok(prompt.includes("/workspace"));
-    assert.ok(prompt.includes("sandboxed to the workspace"));
+    assert.ok(prompt.includes("Current edit mode: review"));
     // 错误处理段
     assert.ok(prompt.includes("## Error handling"));
     assert.ok(prompt.includes("Check whether the path, command, or argument is correct"));
+    // 文件读取内部机制不应主动暴露给用户
+    assert.ok(prompt.includes("## File Access Presentation"));
+    assert.ok(prompt.includes("Treat internal file access compatibility"));
+    assert.ok(prompt.includes("do not mention these internal mechanisms"));
     // 搜索路由段（hasSemantic=true）
     assert.ok(prompt.includes("# Search routing"));
     // 身份声明
     assert.ok(prompt.startsWith("You are Visionox, a helpful DeepSeek-powered AI assistant."));
     // 语言跟随
     assert.ok(prompt.includes("Respond in the same language as the user's message."));
+  });
+
+  test("admin 模式提示本地绝对路径可用，不再宣称所有文件操作被 sandbox 限制", () => {
+    const prompt = buildSystemPrompt(mockSpecs, "C:\\Users\\Lenovo\\visionox-workspace", false, { editMode: "admin" });
+    assert.ok(prompt.includes("Current edit mode: admin"));
+    assert.ok(prompt.includes("absolute system paths"));
+    assert.ok(prompt.includes("D:\\path\\file"));
+    assert.ok(prompt.includes("checking D: drive space usage"));
+    assert.ok(!prompt.includes("All file operations are sandboxed"));
+    assert.ok(!prompt.includes("do NOT attempt to escape the sandbox"));
+  });
+
+  test("admin 模式清洗工具描述，避免 sandbox root 误导模型", () => {
+    const specs = [
+      { type: "function", function: { name: "read_file", description: "Read a file under sandbox root.", parameters: { type: "object", properties: { path: { type: "string", description: "Root of the tree (default: sandbox root)." } } } } },
+      { type: "function", function: { name: "run_command", description: "Run a shell command in the project root.", parameters: { type: "object", properties: {} } } },
+    ];
+    const presented = presentToolSpecsForMode(specs, { editMode: "admin" });
+    const text = JSON.stringify(presented);
+    assert.ok(text.includes("current workspace"));
+    assert.ok(text.includes("absolute system paths"));
+    assert.ok(text.includes("Windows drive paths"));
+    assert.ok(!/sandbox root/i.test(text));
   });
 });
 

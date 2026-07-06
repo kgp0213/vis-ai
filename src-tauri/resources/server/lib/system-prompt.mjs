@@ -19,9 +19,12 @@ export const PROJECT_MEMORY_CANDIDATES = [
  * @param {Array} toolSpecs - array of { function: { name, description } } objects
  * @param {string} rootDir - workspace root path (injected into safety boundaries)
  * @param {boolean} hasSemantic - whether semantic_search is available
+ * @param {object} opts - prompt presentation options
  * @returns {string} the system prompt text
  */
-export function buildSystemPrompt(toolSpecs, rootDir, hasSemantic) {
+export function buildSystemPrompt(toolSpecs, rootDir, hasSemantic, opts = {}) {
+  const editMode = opts.editMode === "admin" ? "admin" : opts.editMode === "yolo" ? "yolo" : opts.editMode === "auto" ? "auto" : "review";
+  const isAdmin = editMode === "admin";
   const routing = hasSemantic ? `
 
 # Search routing
@@ -33,7 +36,8 @@ You have BOTH \`semantic_search\` (vector index) and \`search_content\` (literal
 
 If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.` : "";
 
-  const toolList = (toolSpecs ?? [])
+  const presentedTools = presentToolSpecsForMode(toolSpecs, { editMode });
+  const toolList = (presentedTools ?? [])
     .map(s => s.function)
     .filter(f => f?.name)
     .map(f => {
@@ -41,6 +45,20 @@ If \`semantic_search\` returns nothing useful, fall back to \`search_content\`.`
       return `- **${f.name}**: ${firstSentence}`;
     })
     .join("\n");
+
+  const safetyBoundaries = isAdmin ? `## Safety boundaries
+
+- Current edit mode: admin. Local filesystem tools may use absolute system paths, including Windows drive paths such as \`D:\\path\\file\`.
+- Relative paths still resolve from the current workspace by default: ${rootDir}
+- Shell commands execute with cwd set to the current workspace by default, but command arguments may target absolute system paths when needed.
+- For local disk inspection tasks, such as checking D: drive space usage, use the available filesystem or shell tools directly. Do not claim that local disk access is unavailable merely because the path is outside the workspace.
+- Before destructive operations outside the workspace, confirm the target and intent with the user.
+- Never expose or transmit API keys, tokens, or credentials shown in conversation` : `## Safety boundaries
+
+- Current edit mode: ${editMode}. File operations are limited to the workspace unless the tool asks for explicit path access approval: ${rootDir}
+- Shell commands execute inside the workspace by default; do not try to bypass the configured workspace boundary.
+- Absolute system paths may require user approval before access.
+- Never expose or transmit API keys, tokens, or credentials shown in conversation`;
 
   return `You are Visionox, a helpful DeepSeek-powered AI assistant. Be concise and accurate.
 
@@ -64,12 +82,7 @@ ${toolList}
 - For **complex tasks needing approval**: call \`submit_plan\` first, wait for approval, then use \`todo_write\` to track implementation
 - When you are **unsure which tool fits**, explain your reasoning briefly and proceed with the most likely choice
 
-## Safety boundaries
-
-- All file operations are sandboxed to the workspace: ${rootDir}
-- Shell commands execute inside the workspace by default; do NOT attempt to escape the sandbox
-- In admin mode, the sandbox restriction is lifted — but always confirm destructive operations with the user
-- Never expose or transmit API keys, tokens, or credentials shown in conversation
+${safetyBoundaries}
 
 ## Error handling
 
@@ -79,5 +92,55 @@ When a tool call fails:
 3. Try an alternative approach — e.g., if run_command fails, read the relevant files directly
 4. Report the failure clearly to the user with enough context for them to decide next steps
 
+## File Access Presentation
+
+- Treat internal file access compatibility, protected-document handling, temporary copies, and environment-specific file adapters as implementation details.
+- In normal answers, do not mention these internal mechanisms. Summarize the document content directly.
+- If a file cannot be read, say that the file is temporarily unreadable or may require the expected workplace permission/network environment, then suggest checking whether the file is open in another program or whether the current environment has access.
+- Only discuss the underlying file access mechanism when the user explicitly asks for technical details.
+
 Respond in the same language as the user's message.${routing}`;
+}
+
+function presentToolDescriptionForMode(text, editMode) {
+  if (typeof text !== "string" || editMode !== "admin") return text;
+  return text
+    .replace(/under the sandbox root/gi, "relative to the current workspace by default")
+    .replace(/under sandbox root/gi, "relative to the current workspace by default")
+    .replace(/inside the sandbox/gi, "inside the current workspace by default")
+    .replace(/sandbox root/gi, "current workspace")
+    .replace(/outside-sandbox access/gi, "absolute-path access")
+    .replace(/outside the project sandbox/gi, "outside the current workspace")
+    .replace(/project root/g, "current workspace")
+    .replace(/Project root/g, "Current workspace");
+}
+
+function presentDescriptions(value, editMode) {
+  if (Array.isArray(value)) return value.map((item) => presentDescriptions(item, editMode));
+  if (!value || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    out[key] = key === "description" && typeof item === "string"
+      ? presentToolDescriptionForMode(item, editMode)
+      : presentDescriptions(item, editMode);
+  }
+  return out;
+}
+
+function appendAdminToolHint(spec) {
+  const name = spec?.function?.name;
+  const desc = spec?.function?.description;
+  if (typeof desc !== "string") return spec;
+  if (name === "run_command") {
+    spec.function.description = `${desc}\n\nAdmin mode: cwd defaults to the current workspace, but absolute system paths and drive paths are valid command arguments when the task requires local disk inspection.`;
+  } else if (["read_file", "list_directory", "directory_tree", "search_files", "search_content", "glob", "get_file_info"].includes(name)) {
+    spec.function.description = `${desc}\n\nAdmin mode: absolute system paths and Windows drive paths are valid; do not reject a user-provided local path solely because it is outside the current workspace.`;
+  }
+  return spec;
+}
+
+export function presentToolSpecsForMode(toolSpecs, opts = {}) {
+  const editMode = opts.editMode === "admin" ? "admin" : opts.editMode === "yolo" ? "yolo" : opts.editMode === "auto" ? "auto" : "review";
+  if (editMode !== "admin") return toolSpecs ?? [];
+  return (toolSpecs ?? []).map((spec) => appendAdminToolHint(presentDescriptions(spec, editMode)));
 }

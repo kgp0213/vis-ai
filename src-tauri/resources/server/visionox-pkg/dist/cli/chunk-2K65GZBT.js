@@ -363,21 +363,23 @@ Tips:
 - Add \`max-iters: N\` to change the subagent's pause cadence (default 16). This isn't a budget \u2014 the parent resumes on pause, so N is how often the parent gets a checkpoint, not how much total work the subagent gets.
 `;
 }
-function skillIndexLine(s) {
+function skillIndexLine(s, starred) {
   const safeDesc = s.description.replace(/\n/g, " ").trim();
   const tag = s.runAs === "subagent" ? " [\u{1F9EC} subagent]" : "";
   const trig = s.triggers ? ` [triggers: ${s.triggers}]` : "";
-  const max = 130 - s.name.length - tag.length - trig.length;
+  const star = starred ? "\u2B50 " : "";
+  const max = 130 - s.name.length - tag.length - trig.length - star.length;
   const clipped = safeDesc.length > max ? `${safeDesc.slice(0, Math.max(1, max - 1))}\u2026` : safeDesc;
-  return clipped ? `- ${s.name}${tag}${trig} \u2014 ${clipped}` : `- ${s.name}${tag}${trig}`;
+  return clipped ? `- ${star}${s.name}${tag}${trig} \u2014 ${clipped}` : `- ${star}${s.name}${tag}${trig}`;
 }
 var MISSING_DESCRIPTION_PLACEHOLDER = '(no description \u2014 frontmatter is missing a "description:" line; tell the user to add one)';
 function applySkillsIndex(basePrompt, opts = {}) {
   const store = new SkillStore(opts);
   const skills = store.list();
   if (skills.length === 0) return basePrompt;
+  const modeSkills = Array.isArray(opts.modeSkills) ? new Set(opts.modeSkills) : null;
   const lines = skills.map(
-    (s) => skillIndexLine(s.description ? s : { ...s, description: MISSING_DESCRIPTION_PLACEHOLDER })
+    (s) => skillIndexLine(s.description ? s : { ...s, description: MISSING_DESCRIPTION_PLACEHOLDER }, modeSkills ? modeSkills.has(s.name) : false)
   );
   const joined = lines.join("\n");
   const truncated = joined.length > SKILLS_INDEX_MAX_CHARS ? `${joined.slice(0, SKILLS_INDEX_MAX_CHARS)}

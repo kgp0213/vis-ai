@@ -1,33 +1,91 @@
 Add-Type -AssemblyName System.Windows.Forms
 
-# Method 1: FileNameW — full paths as String[], usually pre-rendered by Explorer
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+$result = [ordered]@{
+  text = $null
+  files = @()
+  folders = @()
+  paths = @()
+}
+
+function Add-ClipboardPath {
+  param([string]$Path)
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return
+  }
+
+  $fullPath = $Path.Trim()
+  if ($result.paths -notcontains $fullPath) {
+    $result.paths += $fullPath
+  }
+
+  $item = Get-Item -LiteralPath $fullPath -ErrorAction SilentlyContinue
+  if (-not $item) {
+    return
+  }
+
+  if ($item.PSIsContainer) {
+    if ($result.folders -notcontains $item.FullName) {
+      $result.folders += $item.FullName
+    }
+    return
+  }
+
+  $alreadyAdded = $false
+  foreach ($file in $result.files) {
+    if ($file.full -eq $item.FullName) {
+      $alreadyAdded = $true
+      break
+    }
+  }
+
+  if (-not $alreadyAdded) {
+    $result.files += [ordered]@{
+      path = $item.DirectoryName
+      name = $item.Name
+      full = $item.FullName
+    }
+  }
+}
+
 try {
-  $d = [System.Windows.Forms.Clipboard]::GetDataObject()
-  if ($d -and $d.GetDataPresent('FileNameW')) {
-    $r = $d.GetData('FileNameW')
-    if ($r -and $r.Length -gt 0) {
-      $r -join [char]10
-      exit 0
+  if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+    $result.text = [System.Windows.Forms.Clipboard]::GetText()
+  }
+} catch {}
+
+# Explorer Ctrl+C / context-menu copy stores files and folders in CF_HDROP.
+try {
+  if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) {
+    $dropList = [System.Windows.Forms.Clipboard]::GetFileDropList()
+    foreach ($path in $dropList) {
+      Add-ClipboardPath -Path $path
     }
   }
 } catch {}
 
-# Method 2: GetFileDropList — reads CF_HDROP directly
+# Some applications expose the same list through FileNameW.
 try {
-  $f = [System.Windows.Forms.Clipboard]::GetFileDropList()
-  if ($f -and $f.Count -gt 0) {
-    $f -join [char]10
-    exit 0
-  }
-} catch {}
-
-# Method 3: GetDataObject → FileDrop format
-try {
-  $d = [System.Windows.Forms.Clipboard]::GetDataObject()
-  if ($d -and $d.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
-    $r = $d.GetData([System.Windows.Forms.DataFormats]::FileDrop)
-    if ($r -and $r.Length -gt 0) {
-      $r -join [char]10
+  $dataObject = [System.Windows.Forms.Clipboard]::GetDataObject()
+  if ($dataObject -and $dataObject.GetDataPresent('FileNameW')) {
+    $fileNameList = $dataObject.GetData('FileNameW')
+    foreach ($path in $fileNameList) {
+      Add-ClipboardPath -Path $path
     }
   }
 } catch {}
+
+# Keep a final FileDrop fallback for shell variants and older clipboard producers.
+try {
+  $dataObject = [System.Windows.Forms.Clipboard]::GetDataObject()
+  if ($dataObject -and $dataObject.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) {
+    $fileDropList = $dataObject.GetData([System.Windows.Forms.DataFormats]::FileDrop)
+    foreach ($path in $fileDropList) {
+      Add-ClipboardPath -Path $path
+    }
+  }
+} catch {}
+
+$result | ConvertTo-Json -Depth 4 -Compress
