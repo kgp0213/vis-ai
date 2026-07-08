@@ -1,6 +1,6 @@
 # Visionox 功能详解
 
-> 应用版本：1.10.0
+> 应用版本：1.20.0
 
 ---
 
@@ -11,16 +11,16 @@
 | 层 | 来源 | 用途 |
 |----|------|------|
 | L0 Soul | `~/.visionox/soul.md` | AI 身份与行为准则 |
-| L1 Project | `workspace/{REASONIX,visionox,CLAUDE,AGENTS}.md` | 项目专属信息（自动注入） |
+| L1 Project | `workspace/{REASONIX,visionox,CLAUDE,AGENTS}.md` | 工作区说明文件（自动注入） |
 | L2 Mode | `config.json` → `modes[mode].prompt` | 场景行为指令 |
 | L3 Mode Memory | `~/.visionox/mode-memory/{mode}.json` | 当前工作场景的长期记忆、偏好与知识点摘要 |
-| L4 ECC Rules | `~/.claude/rules/ecc/{lang}/` | 编码规范（mode 控制） |
+| L4 ECC Rules | `~/.visionox/rules/ecc/{lang}/` | 编码规范（mode 控制） |
 | L5 Custom Rules | `~/.visionox/rules/*.md` | 用户自定义规则 |
 | L6 Skills | `~/.visionox/skills/*/SKILL.md` | 领域技术能力索引（按模式 ⭐ 标注推荐） |
-| L7 Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆 |
+| L7 Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆索引；高优先级记忆会额外注入全文 |
 | L8 Session | `remember_session` 工具（内存） | 当前对话临时上下文（每条≤2000字符，总量≤6000字符） |
 
-> 注：L1 项目记忆会自动扫描 `REASONIX.md`、`visionox.md`、`.claude/CLAUDE.md`、`CLAUDE.md`、`AGENTS.md`、`AGENT.md` 并注入。工作模式切换后立即重建 loop 生效，无需 `/new`。
+> 注：L1 工作区说明会自动扫描 `REASONIX.md`、`visionox.md`、`CLAUDE.md`、`AGENTS.md`、`AGENT.md` 并注入。工作模式切换后立即重建 loop 生效，无需 `/new`。
 
 ### 记忆触发话术
 
@@ -83,7 +83,7 @@ Mode Memory 按工作模式隔离存储，注入时最多选取 8 条高优先�
 | 组件 | 数量 | 位置 |
 |------|------|------|
 | Skills | 34+ 个编码类 | `~/.visionox/skills/` |
-| Rules | 26 个文件 | `~/.claude/rules/ecc/{common,rust,ts,python}/` |
+| Rules | 26 个文件 | `~/.visionox/rules/ecc/{common,rust,ts,python}/` |
 | Hooks | preTool/postTool | `launcher.mjs` 内置 |
 
 ---
@@ -111,9 +111,9 @@ Mode Memory 按工作模式隔离存储，注入时最多选取 8 条高优先�
 
 ---
 
-## 七、对话报告生成
+## 七、会话报告任务
 
-导航栏「报告」面板可基于历史会话记录生成日报/周报/年度报告：
+报告能力已融合到导航栏「任务」页面，可创建“会话报告任务”，基于历史会话记录按每日、每周或自定义时间规则生成报告：
 
 - **标题格式**：「{日期} Visionox {日报/周报}」（如 `2026-07-03 Visionox 日报`）
 - **数据来源**：仅基于历史会话记录，不主动读取工作区文件；信息缺失时如实说明而非编造

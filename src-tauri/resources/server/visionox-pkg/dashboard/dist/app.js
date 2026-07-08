@@ -19824,6 +19824,7 @@ var en = {
     taskKind: "Task type",
     kindPrompt: "Prompt task",
     kindReport: "Session report task",
+    kindSessionCleanup: "Session cleanup task",
     name: "Name",
     prompt: "Prompt",
     promptPlaceholder: "What should Visionox do when this task runs?",
@@ -19913,6 +19914,26 @@ var en = {
     reportSessions: "Sessions",
     reportMessages: "Messages",
     reportTaskHint: "The run schedule decides when this task starts. The report range is calculated relative to that run time, so recurring tasks do not repeat a fixed date.",
+    sessionCleanupAction: "Cleanup action",
+    sessionCleanupPreview: "Preview only",
+    sessionCleanupDelete: "Move high-confidence delete items to trash",
+    sessionCleanupStrength: "Cleanup strength",
+    sessionCleanupConservative: "Conservative",
+    sessionCleanupStandard: "Standard",
+    sessionCleanupAggressive: "Aggressive",
+    sessionCleanupSemanticMode: "Smart review",
+    sessionCleanupSemanticOff: "Off",
+    sessionCleanupSemanticUncertain: "Review uncertain items",
+    sessionCleanupSemanticDeep: "Deep review",
+    sessionCleanupHint: "Runs as a background maintenance task and does not create a chat session. Destructive actions move sessions to the local trash first.",
+    cleanupCandidates: "Suggestions",
+    cleanupDeleted: "Moved to trash",
+    cleanupArchive: "Archive",
+    cleanupKeep: "Keep",
+    cleanupExtract: "Extract",
+    cleanupSemanticReviewed: "AI reviewed",
+    cleanupTrashRoot: "Trash folder",
+    cleanupFailed: "Failed",
     viewConversation: "View conversation"
   },
   semantic: {
@@ -20686,6 +20707,7 @@ var zhCN = {
     taskKind: "\u4EFB\u52A1\u7C7B\u578B",
     kindPrompt: "\u666E\u901A\u63D0\u793A\u8BCD\u4EFB\u52A1",
     kindReport: "\u4F1A\u8BDD\u62A5\u544A\u4EFB\u52A1",
+    kindSessionCleanup: "\u4F1A\u8BDD\u6574\u7406\u4EFB\u52A1",
     name: "\u540D\u79F0",
     prompt: "\u63D0\u793A\u8BCD",
     promptPlaceholder: "\u4EFB\u52A1\u89E6\u53D1\u65F6\uFF0C\u5E0C\u671B Visionox \u505A\u4EC0\u4E48\uFF1F",
@@ -20775,6 +20797,26 @@ var zhCN = {
     reportSessions: "\u4F1A\u8BDD\u6570",
     reportMessages: "\u6D88\u606F\u6570",
     reportTaskHint: "\u65F6\u95F4\u89C4\u5219\u51B3\u5B9A\u4EFB\u52A1\u4F55\u65F6\u5F00\u59CB\uFF1B\u62A5\u544A\u8303\u56F4\u4F1A\u76F8\u5BF9\u8FD0\u884C\u65F6\u95F4\u52A8\u6001\u8BA1\u7B97\uFF0C\u5B9A\u65F6\u4EFB\u52A1\u4E0D\u4F1A\u91CD\u590D\u751F\u6210\u56FA\u5B9A\u65E5\u671F\u7684\u62A5\u544A\u3002",
+    sessionCleanupAction: "\u6574\u7406\u52A8\u4F5C",
+    sessionCleanupPreview: "\u4EC5\u751F\u6210\u9884\u89C8",
+    sessionCleanupDelete: "\u5C06\u9AD8\u7F6E\u4FE1\u5220\u9664\u9879\u79FB\u5165\u56DE\u6536\u7AD9",
+    sessionCleanupStrength: "\u6574\u7406\u5F3A\u5EA6",
+    sessionCleanupConservative: "\u4FDD\u5B88",
+    sessionCleanupStandard: "\u6807\u51C6",
+    sessionCleanupAggressive: "\u79EF\u6781",
+    sessionCleanupSemanticMode: "\u667A\u80FD\u590D\u6838",
+    sessionCleanupSemanticOff: "\u5173\u95ED",
+    sessionCleanupSemanticUncertain: "\u4EC5\u590D\u6838\u4E0D\u786E\u5B9A\u9879",
+    sessionCleanupSemanticDeep: "\u6DF1\u5EA6\u590D\u6838",
+    sessionCleanupHint: "\u4EE5\u540E\u53F0\u7EF4\u62A4\u4EFB\u52A1\u8FD0\u884C\uFF0C\u4E0D\u4F1A\u65B0\u589E\u666E\u901A\u5BF9\u8BDD\u8BB0\u5F55\uFF1B\u7834\u574F\u6027\u64CD\u4F5C\u4F1A\u5148\u79FB\u5165\u672C\u5730\u56DE\u6536\u7AD9\u3002",
+    cleanupCandidates: "\u6574\u7406\u5EFA\u8BAE",
+    cleanupDeleted: "\u79FB\u5165\u56DE\u6536\u7AD9",
+    cleanupArchive: "\u5EFA\u8BAE\u5F52\u6863",
+    cleanupKeep: "\u5EFA\u8BAE\u4FDD\u7559",
+    cleanupExtract: "\u5EFA\u8BAE\u63D0\u70BC",
+    cleanupSemanticReviewed: "AI \u590D\u6838",
+    cleanupTrashRoot: "\u56DE\u6536\u7AD9",
+    cleanupFailed: "\u5931\u8D25",
     viewConversation: "\u67E5\u770B\u672C\u6B21\u5BF9\u8BDD"
   },
   semantic: {
@@ -23328,8 +23370,31 @@ var ARTIFACT_EXT_BY_LANG = {
   txt: "txt"
 };
 var ARTIFACT_PREVIEW_LANGS = /* @__PURE__ */ new Set(["markdown", "md", "html", "htm"]);
+var ARTIFACT_OPEN_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "json", "xml", "yaml", "yml", "csv", "css", "sql", "ini", "toml"]);
 function normalizeArtifactLang(raw) {
   return String(raw || "").trim().split(/\s+/)[0].replace(/^language-/, "").toLowerCase();
+}
+function artifactDisplayName(content, lang, ext, seq) {
+  const text = String(content || "");
+  if (lang === "html" || lang === "htm") {
+    const title = /<title[^>]*>([^<]{1,80})<\/title>/i.exec(text)?.[1]?.trim();
+    if (title) return `${artifactSlug(title)}.${ext}`;
+    return `page-${seq}.${ext}`;
+  }
+  if (lang === "markdown" || lang === "md") {
+    const heading = /^#\s+(.{1,80})\s*$/m.exec(text)?.[1]?.trim();
+    if (heading) return `${artifactSlug(heading)}.${ext}`;
+    return `document-${seq}.${ext}`;
+  }
+  if (lang === "python" || lang === "py") return `script-${seq}.${ext}`;
+  if (lang === "javascript" || lang === "js" || lang === "typescript" || lang === "ts") return `code-${seq}.${ext}`;
+  if (lang === "json") return `data-${seq}.${ext}`;
+  if (lang === "csv") return `table-${seq}.${ext}`;
+  return `artifact-${seq}.${ext}`;
+}
+function artifactSlug(value) {
+  const cleaned = String(value || "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "-").replace(/[\x00-\x1f]/g, "").slice(0, 48).replace(/^-+|-+$/g, "");
+  return cleaned || "artifact";
 }
 function registerChatArtifact(content, rawLang) {
   const lang = normalizeArtifactLang(rawLang);
@@ -23341,7 +23406,7 @@ function registerChatArtifact(content, rawLang) {
     const seq = window.__visionoxArtifactSeq;
     const id = `artifact-${Date.now().toString(36)}-${seq}`;
     const label = ext.toUpperCase();
-    const filename = `visionox-artifact-${seq}.${ext}`;
+    const filename = artifactDisplayName(content, lang, ext, seq);
     window.__visionoxArtifacts[id] = {
       id,
       lang,
@@ -23349,7 +23414,8 @@ function registerChatArtifact(content, rawLang) {
       label,
       filename,
       content,
-      previewable: ARTIFACT_PREVIEW_LANGS.has(lang)
+      previewable: ARTIFACT_PREVIEW_LANGS.has(lang),
+      openable: ARTIFACT_OPEN_EXTS.has(ext)
     };
     return window.__visionoxArtifacts[id];
   } catch {
@@ -23359,14 +23425,17 @@ function registerChatArtifact(content, rawLang) {
 function renderArtifactFrame(artifact, codeHtml) {
   if (!artifact) return codeHtml;
   const previewBtn = artifact.previewable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="preview">预览</button>` : "";
+  const openBtn = artifact.openable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="open-file">打开</button>` : "";
   return `<div class="chat-artifact" data-artifact-id="${escapeHtml(artifact.id)}">
     <div class="chat-artifact-head">
       <div class="chat-artifact-title">
         <span class="chat-artifact-type">${escapeHtml(artifact.label)}</span>
-        <span class="chat-artifact-name">${escapeHtml(artifact.filename)}</span>
+        <span class="chat-artifact-name" title="${escapeHtml(artifact.filename)}">${escapeHtml(artifact.filename)}</span>
+        <span class="chat-artifact-status" data-artifact-status>可保存的对话产物</span>
       </div>
       <div class="chat-artifact-actions">
         ${previewBtn}
+        ${openBtn}
         <button type="button" class="chat-artifact-btn" data-artifact-action="copy">复制</button>
         <button type="button" class="chat-artifact-btn" data-artifact-action="save">另存</button>
         <button type="button" class="chat-artifact-btn" data-artifact-action="open-folder" disabled>打开目录</button>
@@ -23424,6 +23493,25 @@ marked.use({ renderer, gfm: true, breaks: false, pedantic: false });
 function renderMarkdownToString(text) {
   return marked.parse(text);
 }
+function artifactPreviewDoc(artifact) {
+  if (artifact.lang === "html" || artifact.lang === "htm") {
+    return String(artifact.content || "");
+  }
+  const rendered = renderMarkdownToString(artifact.content);
+  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
+body{margin:0;padding:22px 26px 34px;background:#fff;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65;font-size:14px}
+h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;color:#111827}
+h1{font-size:26px}h2{font-size:21px}h3{font-size:17px}
+p,ul,ol,blockquote,pre,table{margin:.8em 0}
+code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+code{background:#f3f4f6;border-radius:4px;padding:.12em .32em}
+pre{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;overflow:auto}
+pre code{background:transparent;padding:0}
+blockquote{border-left:4px solid #d1d5db;padding-left:12px;color:#4b5563}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:6px 8px}th{background:#f9fafb}
+a{color:#2563eb}
+</style></head><body>${rendered}</body></html>`;
+}
 function closeArtifactPreview() {
   document.querySelector(".artifact-preview-backdrop")?.remove();
   document.body.classList.remove("artifact-preview-open");
@@ -23436,26 +23524,85 @@ function showArtifactPreview(artifact) {
   dialog.className = "artifact-preview-dialog";
   const title = document.createElement("div");
   title.className = "artifact-preview-head";
-  title.innerHTML = `<span>${escapeHtml(artifact.filename)}</span><button type="button" class="artifact-preview-close">关闭</button>`;
+  const canShowSource = artifact.lang !== "html" && artifact.lang !== "htm";
+  title.innerHTML = `<span class="artifact-preview-name" title="${escapeHtml(artifact.path || artifact.filename)}">${escapeHtml(artifact.filename)}</span>
+    <span class="artifact-preview-actions">
+      ${canShowSource ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="source">源码</button>` : ""}
+      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="copy-path">复制路径</button>` : ""}
+      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="folder">所在文件夹</button>` : ""}
+      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close">关闭</button>
+    </span>`;
   const body = document.createElement("div");
   body.className = "artifact-preview-body";
-  if (artifact.lang === "html" || artifact.lang === "htm") {
+  let showingSource = false;
+  const renderPreview = () => {
+    body.replaceChildren();
     const iframe = document.createElement("iframe");
     iframe.className = "artifact-preview-frame";
     iframe.setAttribute("sandbox", "");
-    iframe.srcdoc = artifact.content;
+    iframe.srcdoc = artifactPreviewDoc(artifact);
     body.appendChild(iframe);
-  } else {
-    const md = document.createElement("div");
-    md.className = "md artifact-preview-md";
-    md.innerHTML = renderMarkdownToString(artifact.content);
-    body.appendChild(md);
-  }
+  };
+  const renderSource = () => {
+    body.replaceChildren();
+    const pre = document.createElement("pre");
+    pre.className = "artifact-preview-source";
+    pre.textContent = artifact.content || "";
+    body.appendChild(pre);
+  };
+  renderPreview();
   dialog.appendChild(title);
   dialog.appendChild(body);
   backdrop.appendChild(dialog);
   document.body.appendChild(backdrop);
   document.body.classList.add("artifact-preview-open");
+  title.addEventListener("click", async (ev) => {
+    const btn = ev.target?.closest?.("[data-artifact-preview-action]");
+    if (!btn) return;
+    const action = btn.dataset.artifactPreviewAction;
+    if (action === "close") {
+      closeArtifactPreview();
+      return;
+    }
+    if (action === "source") {
+      showingSource = !showingSource;
+      btn.textContent = showingSource ? "预览" : "源码";
+      if (showingSource) renderSource();
+      else renderPreview();
+      return;
+    }
+    try {
+      if (action === "copy-path") {
+        await writeClipboardText(artifact.path || "");
+        showToast("路径已复制", "info");
+      } else if (action === "folder") {
+        await api("/artifacts/open-folder", { method: "POST", body: { path: artifact.path } });
+        showToast("已打开所在文件夹", "info");
+      }
+    } catch (err) {
+      showToast(err.message || "文件操作失败", "error", 5e3);
+    }
+  });
+}
+async function saveArtifact(artifact, wrap) {
+  if (artifact.path && artifact.dir) return artifact;
+  const res = await api("/artifacts/save", {
+    method: "POST",
+    body: { filename: artifact.filename, content: artifact.content, lang: artifact.lang }
+  });
+  artifact.path = res.path;
+  artifact.dir = res.dir;
+  artifact.filename = res.filename || artifact.filename;
+  const openFolderBtn = wrap?.querySelector?.('[data-artifact-action="open-folder"]');
+  if (openFolderBtn) openFolderBtn.disabled = false;
+  const nameEl = wrap?.querySelector?.(".chat-artifact-name");
+  if (nameEl) {
+    nameEl.textContent = artifact.filename;
+    nameEl.setAttribute("title", artifact.path || artifact.filename);
+  }
+  const statusEl = wrap?.querySelector?.("[data-artifact-status]");
+  if (statusEl) statusEl.textContent = "已保存";
+  return artifact;
 }
 async function handleArtifactAction(ev) {
   const btn = ev.target?.closest?.("[data-artifact-action]");
@@ -23475,28 +23622,25 @@ async function handleArtifactAction(ev) {
       showArtifactPreview(artifact);
     } else if (action === "save") {
       btn.disabled = true;
-      const res = await api("/artifacts/save", {
-        method: "POST",
-        body: { filename: artifact.filename, content: artifact.content, lang: artifact.lang }
-      });
-      artifact.path = res.path;
-      artifact.dir = res.dir;
-      const openBtn = wrap.querySelector('[data-artifact-action="open-folder"]');
-      if (openBtn) openBtn.disabled = false;
-      showToast(`已保存到 ${res.filename || artifact.filename}`, "info");
+      await saveArtifact(artifact, wrap);
+      showToast(`已保存到 ${artifact.filename}`, "info");
+    } else if (action === "open-file") {
+      btn.disabled = true;
+      await saveArtifact(artifact, wrap);
+      await api("/artifacts/open-file", { method: "POST", body: { path: artifact.path } });
     } else if (action === "open-folder") {
-      if (!artifact.dir) return;
+      if (!artifact.dir) await saveArtifact(artifact, wrap);
       await api("/artifacts/open-folder", { method: "POST", body: { dir: artifact.dir } });
     }
   } catch (err) {
     showToast(err.message || "产物操作失败", "error", 5e3);
   } finally {
-    if (action === "save") btn.disabled = false;
+    if (action === "save" || action === "open-file") btn.disabled = false;
   }
 }
 document.addEventListener("click", handleArtifactAction);
 document.addEventListener("click", (ev) => {
-  if (ev.target?.classList?.contains("artifact-preview-backdrop") || ev.target?.classList?.contains("artifact-preview-close")) {
+  if (ev.target?.classList?.contains("artifact-preview-close")) {
     closeArtifactPreview();
   }
 });
@@ -23590,6 +23734,7 @@ function renderMessageBody(text) {
 }
 function parseToolArgs(raw) {
   if (!raw) return null;
+  if (typeof raw === "object") return raw;
   try {
     return JSON.parse(raw);
   } catch {
@@ -23609,15 +23754,8 @@ function isLongToolText(text) {
 }
 function renderToolOutput(text, kind = "pre", lang = "") {
   const value = text ?? "";
-  const stats = toolTextStats(value);
   const body = kind === "highlight" ? html4`<div dangerouslySetInnerHTML=${{ __html: renderHighlightedBlock(value, lang) }}></div>` : html4`<pre class="tool-card-output">${value}</pre>`;
-  if (!isLongToolText(value)) return body;
-  return html4`
-    <details class="tool-card-collapse">
-      <summary>${t4("chat.toolOutputCollapsed", { lines: stats.lines.toLocaleString(), chars: stats.chars.toLocaleString() })}</summary>
-      ${body}
-    </details>
-  `;
+  return body;
 }
 function chatSearchText(msg) {
   if (!msg) return "";
@@ -23723,11 +23861,11 @@ function ToolCard({ msg }) {
     </div>
   `;
 }
-var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput }) {
+var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, selectedForArtifacts = false, onSelectForArtifacts }) {
   useLang();
   const role = msg.role;
   const avatar = ROLE_AVATAR[role];
-  const canCopy = Boolean((msg.text || msg.reasoning || "").trim());
+  const canCopy = Boolean((msg.text || "").trim());
   const showCopy = role !== "user" && onCopy && canCopy;
   const showFillInput = role === "user" && onFillInput && canCopy;
   const showActions = !streaming && (showCopy || showFillInput);
@@ -23737,19 +23875,40 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       ${showFillInput ? html4`<button type="button" onClick=${() => onFillInput(msg)}>${t4("chat.fillInput")}</button>` : null}
     </div>
   ` : null;
+  const selectableForArtifacts = role === "assistant" && typeof onSelectForArtifacts === "function";
+  const selectArtifacts = (ev) => {
+    if (!selectableForArtifacts) return;
+    if (ev?.target?.closest?.("button,a,[data-artifact-action],.chat-artifact-actions")) return;
+    onSelectForArtifacts(msg);
+  };
+  const selectArtifactsKey = (ev) => {
+    if (!selectableForArtifacts) return;
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      onSelectForArtifacts(msg);
+    }
+  };
   if (role === "tool") {
     return html4`
-      <div class=${`chat-msg tool ${searchMatch ? "search-hit" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
+      <div class=${`chat-msg tool ${searchMatch ? "search-hit" : ""} ${showActions ? "has-actions" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
         <div class="glyph">▣</div>
         <div class="chat-tool-wrap">
-          ${actions}
           <${ToolCard} msg=${msg} />
+          ${actions}
         </div>
       </div>
     `;
   }
   return html4`
-    <div class=${`chat-msg ${role} ${searchMatch ? "search-hit" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
+    <div
+      class=${`chat-msg ${role} ${searchMatch ? "search-hit" : ""} ${selectedForArtifacts ? "artifact-selected" : ""} ${selectableForArtifacts ? "artifact-selectable" : ""} ${showActions ? "has-actions" : ""}`}
+      data-msg-index=${index}
+      data-msg-id=${msg.id ?? ""}
+      onClick=${selectArtifacts}
+      onKeyDown=${selectArtifactsKey}
+      tabIndex=${selectableForArtifacts ? 0 : void 0}
+      title=${selectableForArtifacts ? "点击查看这条回复相关文件" : void 0}
+    >
       ${avatar ? html4`<img class="avatar" src=${avatar} width="28" height="28" alt="" />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
@@ -24308,6 +24467,9 @@ function fmtRelativeTime(iso) {
 
 // dashboard/src/panels/chat.ts
 var CHAT_DRAFT_KEY = "visionox.chatDraft.v1";
+var FILE_ARTIFACT_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
+var FILE_ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
+var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "sh"]);
 function chatDraftKey(workspaceDir, mode) {
   const ws = encodeURIComponent(workspaceDir || "default");
   const m3 = encodeURIComponent(mode || "general");
@@ -24319,6 +24481,341 @@ function removeChatDraft(key) {
     localStorage.removeItem(CHAT_DRAFT_KEY);
   } catch {
   }
+}
+function fileArtifactKind(ext) {
+  const e3 = String(ext || "").replace(/^\./, "").toLowerCase();
+  if (e3 === "md" || e3 === "markdown") return "Markdown 文档";
+  if (e3 === "html" || e3 === "htm") return "HTML 页面";
+  if (e3 === "pdf") return "PDF 文档";
+  if (["doc", "docx"].includes(e3)) return "Word 文档";
+  if (["ppt", "pptx"].includes(e3)) return "演示文稿";
+  if (["xls", "xlsx"].includes(e3)) return "表格文档";
+  if (e3 === "csv") return "CSV 表格";
+  if (["json", "xml", "yaml", "yml"].includes(e3)) return "数据文件";
+  if (FILE_ARTIFACT_SCRIPT_EXTS.has(e3)) return "脚本文件";
+  if (["css", "sql", "ini", "toml", "txt"].includes(e3)) return "文本文件";
+  return e3 ? `${e3.toUpperCase()} 文件` : "文件";
+}
+function fileArtifactExtOf(value) {
+  const m3 = /\.([A-Za-z0-9]{1,12})(?:$|[?#\s，。；;、)）（\]`*_~])/.exec(String(value || ""));
+  return m3 ? m3[1].toLowerCase() : "";
+}
+function pushFileArtifactCandidate(out, value) {
+  const raw = String(value || "").trim().replace(/^["'“”‘’`*_~]+|["'“”‘’`*_~]+$/g, "");
+  if (!raw || raw.length > 260) return;
+  const ext = fileArtifactExtOf(raw);
+  if (!FILE_ARTIFACT_EXTS.has(ext)) return;
+  out.add(raw.replace(/[`*_~]+$/g, ""));
+}
+function extractFileArtifactCandidatesFromText(text, out) {
+  const s3 = String(text || "");
+  if (!s3) return;
+  const extGroup = Array.from(FILE_ARTIFACT_EXTS).join("|");
+  const quoted = new RegExp("[\"'“”‘’`]([^\"'“”‘’`\\r\\n]{1,220}\\.(" + extGroup + "))(?:[\"'“”‘’`]|$)", "gi");
+  let m3;
+  while ((m3 = quoted.exec(s3))) pushFileArtifactCandidate(out, m3[1]);
+  const pathLike = new RegExp("((?:[A-Za-z]:\\\\|\\\\\\\\|/)[^\\r\\n\"'“”‘’`<>|]{1,220}\\.(" + extGroup + "))", "gi");
+  while ((m3 = pathLike.exec(s3))) pushFileArtifactCandidate(out, m3[1].trim());
+  const markdownWrapped = new RegExp("(?:^|[\\s：:,，。；;、])(?:\\*\\*|__|`|\\*)?([\\w\\u4e00-\\u9fff][\\w\\u4e00-\\u9fff ._()（）\\-]{0,120}\\.(" + extGroup + "))(?:\\*\\*|__|`|\\*)?(?=$|[\\s，。；;、)）（\\]])", "gi");
+  while ((m3 = markdownWrapped.exec(s3))) pushFileArtifactCandidate(out, m3[1].trim());
+  const bare = new RegExp("(?:^|[\\s：:,，。；;、])([\\w\\u4e00-\\u9fff][\\w\\u4e00-\\u9fff ._()（）\\-]{0,120}\\.(" + extGroup + "))(?=$|[\\s，。；;、)）（\\]`*_~])", "gi");
+  while ((m3 = bare.exec(s3))) pushFileArtifactCandidate(out, m3[1].trim());
+}
+function latestTurnFileArtifactCandidates(messages) {
+  return fileArtifactCandidatesForAssistant(messages, latestAssistantMessageId(messages));
+}
+function fileArtifactCandidatesForAssistant(messages, assistantId) {
+  let assistantIndex = -1;
+  if (assistantId) {
+    assistantIndex = messages.findIndex((m3) => m3.role === "assistant" && String(m3.id || "") === String(assistantId));
+  }
+  if (assistantIndex < 0) {
+    assistantIndex = messages.map((m3, i3) => [m3, i3]).reverse().find(([m3]) => m3.role === "assistant")?.[1] ?? -1;
+  }
+  if (assistantIndex < 0) return [];
+  let start = 0;
+  for (let i3 = assistantIndex - 1; i3 >= 0; i3--) {
+    if (messages[i3]?.role === "user") {
+      start = i3 + 1;
+      break;
+    }
+  }
+  const out = /* @__PURE__ */ new Set();
+  const turn = messages.slice(start, assistantIndex + 1);
+  for (const msg of turn) {
+    extractFileArtifactCandidatesFromText(msg.text, out);
+    if (msg.role === "tool") {
+      const args = parseToolArgs(msg.toolArgs);
+      for (const key of ["path", "filePath", "file_path", "filepath", "filename", "output", "outputPath", "reportPath"]) {
+        if (typeof args?.[key] === "string") pushFileArtifactCandidate(out, args[key]);
+      }
+    }
+  }
+  return Array.from(out).slice(0, 20);
+}
+function latestAssistantMessageId(messages) {
+  for (let i3 = messages.length - 1; i3 >= 0; i3--) {
+    if (messages[i3]?.role === "assistant") return String(messages[i3].id || i3);
+  }
+  return "";
+}
+function fileArtifactGroupKey(files) {
+  return files.map((f3) => f3.path).sort().join("|");
+}
+function mergeFileArtifacts(existing, incoming) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const file of [...(existing || []), ...(incoming || [])]) {
+    if (!file?.path) continue;
+    const key = String(file.path).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(file);
+  }
+  return out;
+}
+async function showFileArtifactPreview(file) {
+  const res = await api("/artifacts/preview", { method: "POST", body: { path: file.path } });
+  const ext = String(res.ext || file.ext || "").replace(/^\./, "").toLowerCase();
+  showArtifactPreview({
+    id: `file-${Date.now()}`,
+    filename: res.filename || file.filename,
+    path: res.path || file.path,
+    dir: res.dir || file.dir,
+    lang: ext === "md" ? "markdown" : ext,
+    content: res.content || ""
+  });
+}
+async function registerAndPreviewMarkdownDocument(path, cwd = "") {
+  const file = await api("/artifacts/register-opened-document", {
+    method: "POST",
+    body: { path, cwd }
+  });
+  await showFileArtifactPreview(file);
+  showToast(`已打开 ${file.filename || "Markdown 文档"}`, "info");
+}
+function cleanOpenedDocumentArg(value) {
+  let raw = String(value || "").trim();
+  raw = raw.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      raw = decodeURIComponent(raw.replace(/^file:\/\/\/?/i, navigator.platform?.toLowerCase?.().includes("win") ? "" : "/"));
+    } catch {
+    }
+  }
+  return raw;
+}
+function markdownDocumentArgs(args) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const value of Array.isArray(args) ? args : []) {
+    const path = cleanOpenedDocumentArg(value);
+    if (!path || path.startsWith("--")) continue;
+    if (!/\.(md|markdown)(?:$|[?#])/i.test(path)) continue;
+    const key = path.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(path);
+  }
+  return out;
+}
+async function openMarkdownDocumentFromArgs(args, cwd) {
+  const docs = markdownDocumentArgs(args);
+  if (docs.length === 0) return;
+  const key = `${cwd || ""}\n${docs.join("\n")}`;
+  const now = Date.now();
+  const last = window.__visionoxLastOpenedDocumentArgs;
+  if (last?.key === key && now - last.ts < 3e3) return;
+  window.__visionoxLastOpenedDocumentArgs = { key, ts: now };
+  try {
+    await registerAndPreviewMarkdownDocument(docs[0], cwd || "");
+  } catch (err) {
+    showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
+  }
+}
+var MARKDOWN_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
+function selectMarkdownDocumentFile() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,.markdown,text/markdown,text/plain";
+    input.style.position = "fixed";
+    input.style.left = "-10000px";
+    input.style.top = "0";
+    input.style.width = "1px";
+    input.style.height = "1px";
+    input.style.opacity = "0";
+    const cleanup = () => {
+      input.remove();
+    };
+    input.addEventListener("change", () => {
+      const file = input.files?.[0] || null;
+      cleanup();
+      resolve(file);
+    }, { once: true });
+    input.addEventListener("cancel", () => {
+      cleanup();
+      resolve(null);
+    }, { once: true });
+    try {
+      document.body.appendChild(input);
+      input.click();
+    } catch (err) {
+      cleanup();
+      reject(err);
+    }
+  });
+}
+async function previewSelectedMarkdownDocument(file) {
+  if (!file) return;
+  const filename = file.name || "Markdown 文档.md";
+  if (!/\.(md|markdown)$/i.test(filename)) {
+    throw new Error("请选择 Markdown 文档");
+  }
+  if (file.size > MARKDOWN_DOCUMENT_MAX_BYTES) {
+    throw new Error(`文件过大，最大支持 ${Math.round(MARKDOWN_DOCUMENT_MAX_BYTES / 1024 / 1024)}MB`);
+  }
+  const content = await file.text();
+  showArtifactPreview({
+    id: `opened-markdown-${Date.now().toString(36)}`,
+    lang: "markdown",
+    ext: filename.toLowerCase().endsWith(".markdown") ? "markdown" : "md",
+    label: "MD",
+    filename,
+    content,
+    previewable: true,
+    openable: false
+  });
+  showToast(`已打开 ${filename}`, "info");
+}
+function pickMarkdownFileFromBridge() {
+  return api("/artifacts/pick-markdown-file", { method: "POST", body: {} }).then((result) => result?.path || "").catch((apiErr) => {
+  if (window.__TAURI__?.invoke) {
+    return window.__TAURI__.invoke("pick_markdown_file").then((result) => {
+      if (result?.error) throw new Error(result.error);
+      return result?.path || "";
+    });
+  }
+  return new Promise((resolve, reject) => {
+    if (!window.parent || window.parent === window) {
+      reject(new Error("本地文件选择器仅在桌面端可用"));
+      return;
+    }
+    const requestId = `md-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("文件选择器响应超时"));
+    }, 5 * 60 * 1e3);
+    function onMessage(event) {
+      const data = event.data;
+      if (!data || data.type !== "vis_pick_markdown_file_result") return;
+      if (data.requestId && data.requestId !== requestId) return;
+      clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      if (data.error) {
+        reject(new Error(data.error));
+        return;
+      }
+      resolve(data.path || "");
+    }
+    window.addEventListener("message", onMessage);
+    try {
+      window.parent.postMessage({ type: "vis_pick_markdown_file", requestId }, "*");
+    } catch (err) {
+      clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      reject(err);
+    }
+  });
+  });
+}
+async function openMarkdownDocumentByPicker() {
+  try {
+    showToast("请选择 Markdown 文档...", "info", 1500);
+    if (typeof document !== "undefined") {
+      const file = await selectMarkdownDocumentFile();
+      if (!file) return;
+      await previewSelectedMarkdownDocument(file);
+      return;
+    }
+    const path = await pickMarkdownFileFromBridge();
+    if (!path) return;
+    await registerAndPreviewMarkdownDocument(path);
+  } catch (err) {
+    showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
+  }
+}
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || data.type !== "vis_open_args") return;
+  openMarkdownDocumentFromArgs(data.args, data.cwd);
+});
+function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
+  useLang();
+  if (!files || files.length === 0) return null;
+  const visible = files.slice(0, 12);
+  const more = files.length - visible.length;
+  const groups = [];
+  for (const file of visible) {
+    const dir = file.dir || "";
+    let group = groups.find((item) => item.dir === dir);
+    if (!group) {
+      group = { dir, files: [] };
+      groups.push(group);
+    }
+    group.files.push(file);
+  }
+  const action = async (kind, file) => {
+    try {
+      if (kind === "preview") {
+        await showFileArtifactPreview(file);
+      } else if (kind === "open") {
+        await api("/artifacts/open-file", { method: "POST", body: { path: file.path } });
+      } else if (kind === "folder") {
+        await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
+      } else if (kind === "copy") {
+        await writeClipboardText(file.path);
+        showToast("路径已复制", "info");
+      }
+    } catch (err) {
+      showToast(err.message || "文件操作失败", "error", 5e3);
+    }
+  };
+  return html4`
+    <div class="rail-card file-artifact-card">
+      <div class="rh">
+        <span>${selected ? "当前回复文件" : "最新生成文件"}</span>
+        ${selected ? html4`<button type="button" class="rail-card-link" onClick=${onFollowLatest}>回到最新</button>` : null}
+        <button type="button" class="rail-card-close" onClick=${onDismiss} title="隐藏">×</button>
+      </div>
+      <div class="file-artifact-summary">检测到 ${files.length} 个可操作文件${groups.length > 1 ? ` · ${groups.length} 个文件夹` : ""}</div>
+      <div class="file-artifact-list">
+        ${groups.map((group) => html4`
+          <div class="file-artifact-group" key=${group.dir || "root"}>
+            ${groups.length > 1 ? html4`<div class="file-artifact-dir" title=${group.dir}>${group.dir || "当前目录"}</div>` : null}
+            ${group.files.map((file) => {
+    const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
+    const canPreview = file.previewable || FILE_ARTIFACT_PREVIEW_EXTS.has(ext);
+    const canOpen = file.openable !== false && !FILE_ARTIFACT_SCRIPT_EXTS.has(ext);
+    return html4`
+            <div class="file-artifact-item" key=${file.path}>
+              <div class="file-artifact-name" title=${file.path}>${file.filename}</div>
+              <div class="file-artifact-meta">${fileArtifactKind(ext)}${file.size ? ` · ${fmtBytes(file.size)}` : ""}</div>
+              <div class="file-artifact-actions">
+                ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>查看</button>` : null}
+                ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>打开</button>` : null}
+                <button type="button" onClick=${() => action("folder", file)}>所在文件夹</button>
+                <button type="button" onClick=${() => action("copy", file)}>复制路径</button>
+              </div>
+            </div>
+          `;
+  })}
+          </div>
+        `)}
+      </div>
+      ${more > 0 ? html4`<div class="file-artifact-more">还有 ${more} 个文件，已自动去重</div>` : null}
+    </div>
+  `;
 }
 function ChatPanel() {
   useLang();
@@ -24333,8 +24830,6 @@ function ChatPanel() {
       return "";
     }
   });
-  const [chatSearch, setChatSearch] = d2("");
-  const [searchIndex, setSearchIndex] = d2(0);
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
   const [draftReady, setDraftReady] = d2(false);
@@ -24356,6 +24851,13 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
+  const [fileArtifacts, setFileArtifacts] = d2([]);
+  const [fileArtifactsKey, setFileArtifactsKey] = d2("");
+  const [fileArtifactsDismissed, setFileArtifactsDismissed] = d2(false);
+  const [fileArtifactsSelectedMessageId, setFileArtifactsSelectedMessageId] = d2(null);
+  const [fileArtifactsByMessageId, setFileArtifactsByMessageId] = d2({});
+  const [fileArtifactsRetryTick, setFileArtifactsRetryTick] = d2(0);
+  const fileArtifactsRetryRef = A2({ key: "", count: 0 });
   const [todos, setTodos] = d2([]);
   const [todoExpanded, setTodoExpanded] = d2(false);
   const [semanticIndex, setSemanticIndex] = d2(null);
@@ -24437,7 +24939,6 @@ const [providerCaps, setProviderCaps] = d2(null);
       reasoning: streaming.reasoning
     }
   ] : messages;
-  const searchMatches = T2(() => computeChatSearchMatches(allVisibleMessages, chatSearch), [messages, streaming, chatSearch]);
   y2(() => {
     const pending = window.__visionoxPendingChatJump;
     if (pending?.messageId) setJumpMessageId(pending.messageId);
@@ -24469,22 +24970,82 @@ const [providerCaps, setProviderCaps] = d2(null);
     return () => clearTimeout(id);
   }, [jumpMessageId, messages, streaming]);
   y2(() => {
-    setSearchIndex((cur) => searchMatches.length ? Math.min(Math.max(cur, 0), searchMatches.length - 1) : 0);
-  }, [chatSearch, searchMatches.length]);
-  y2(() => {
-    if (!chatSearch.trim() || searchMatches.length === 0) return;
-    const match = searchMatches[Math.min(searchIndex, searchMatches.length - 1)];
-    const el = feedRef.current?.querySelector(`[data-msg-index="${match.index}"]`);
-    if (el) {
-      shouldAutoScroll.current = false;
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    let cancelled = false;
+    const sourceMessages = allVisibleMessages;
+    const selectedExists = fileArtifactsSelectedMessageId && sourceMessages.some((m3) => m3.role === "assistant" && String(m3.id || "") === String(fileArtifactsSelectedMessageId));
+    const turnKey = selectedExists ? String(fileArtifactsSelectedMessageId) : latestAssistantMessageId(sourceMessages);
+    const candidates = fileArtifactCandidatesForAssistant(sourceMessages, turnKey);
+    const eventFiles = fileArtifactsByMessageId[turnKey] || [];
+    if (fileArtifactsSelectedMessageId && !selectedExists) {
+      setFileArtifactsSelectedMessageId(null);
     }
-  }, [chatSearch, searchIndex, searchMatches.length]);
-  y2(() => {
-    if (!chatSearch.trim()) {
-      shouldAutoScroll.current = true;
+    if (candidates.length === 0) {
+      if (eventFiles.length > 0) {
+        const nextKey = `${turnKey}|${fileArtifactGroupKey(eventFiles)}`;
+        if (nextKey !== fileArtifactsKey) {
+          setFileArtifacts(eventFiles);
+          setFileArtifactsKey(nextKey);
+          setFileArtifactsDismissed(false);
+        }
+        return () => {
+          cancelled = true;
+        };
+      }
+      if (!busy) {
+        setFileArtifacts([]);
+        setFileArtifactsKey("");
+        setFileArtifactsDismissed(false);
+        fileArtifactsRetryRef.current = { key: "", count: 0 };
+      }
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [chatSearch]);
+    const candidateKey = `${turnKey}|${candidates.join("|")}`;
+    if (fileArtifactsRetryRef.current.key !== candidateKey) {
+      fileArtifactsRetryRef.current = { key: candidateKey, count: 0 };
+    }
+    (async () => {
+      try {
+        const res = await api("/artifacts/resolve", { method: "POST", body: { candidates } });
+        if (cancelled) return;
+        const files = res.files ?? [];
+        if (files.length === 0) {
+          if (eventFiles.length > 0) {
+            const nextKey = `${turnKey}|${fileArtifactGroupKey(eventFiles)}`;
+            if (nextKey !== fileArtifactsKey) {
+              setFileArtifacts(eventFiles);
+              setFileArtifactsKey(nextKey);
+              setFileArtifactsDismissed(false);
+            }
+            return;
+          }
+          const retry = fileArtifactsRetryRef.current;
+          if (retry.key === candidateKey && retry.count < 4) {
+            const delays = [250, 750, 1500, 3000];
+            const delay = delays[retry.count] ?? 3000;
+            retry.count += 1;
+            setTimeout(() => {
+              if (!cancelled) setFileArtifactsRetryTick((v) => v + 1);
+            }, delay);
+          }
+          return;
+        }
+        fileArtifactsRetryRef.current = { key: candidateKey, count: 0 };
+        const mergedFiles = mergeFileArtifacts(eventFiles, files);
+        const nextKey = `${turnKey}|${fileArtifactGroupKey(mergedFiles)}`;
+        if (nextKey !== fileArtifactsKey) {
+          setFileArtifacts(mergedFiles);
+          setFileArtifactsKey(nextKey);
+          setFileArtifactsDismissed(false);
+        }
+      } catch {
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [messages, streaming, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
   y2(() => {
     let cancelled = false;
     (async () => {
@@ -24611,6 +25172,19 @@ const [providerCaps, setProviderCaps] = d2(null);
         ]);
         return;
       }
+      if (dash.kind === "artifact-created") {
+        const assistantId = String(dash.assistantId || "");
+        const files = Array.isArray(dash.files) ? dash.files.filter((file) => file?.path) : [];
+        if (!assistantId || files.length === 0) return;
+        setFileArtifactsByMessageId((prev) => {
+          const merged = mergeFileArtifacts(prev[assistantId] || [], files);
+          return { ...prev, [assistantId]: merged };
+        });
+        setFileArtifacts((prev) => mergeFileArtifacts(prev, files));
+        setFileArtifactsKey(`${assistantId}|event:${Date.now()}`);
+        setFileArtifactsDismissed(false);
+        return;
+      }
       if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info") {
         if (dash.kind === "error") {
           setActiveTool(null);
@@ -24629,6 +25203,11 @@ const [providerCaps, setProviderCaps] = d2(null);
           role: m.role,
           text: m.text || ""
         })));
+        setFileArtifacts([]);
+        setFileArtifactsKey("");
+        setFileArtifactsDismissed(false);
+        setFileArtifactsSelectedMessageId(null);
+        setFileArtifactsByMessageId({});
         return;
       }
       if (dash.kind === "config-changed") {
@@ -24770,9 +25349,13 @@ const [providerCaps, setProviderCaps] = d2(null);
       setMessages([]);
       setStreaming(null);
       setActiveTool(null);
+      setFileArtifacts([]);
+      setFileArtifactsKey("");
+      setFileArtifactsDismissed(false);
+      setFileArtifactsSelectedMessageId(null);
+      setFileArtifactsByMessageId({});
       setInput("");
       setPendingImages([]);
-      setChatSearch("");
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
@@ -24793,9 +25376,13 @@ const [providerCaps, setProviderCaps] = d2(null);
       setMessages([]);
       setStreaming(null);
       setActiveTool(null);
+      setFileArtifacts([]);
+      setFileArtifactsKey("");
+      setFileArtifactsDismissed(false);
+      setFileArtifactsSelectedMessageId(null);
+      setFileArtifactsByMessageId({});
       setInput("");
       setPendingImages([]);
-      setChatSearch("");
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
@@ -25237,7 +25824,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, [recentWss]);
   const copyMessage = q2(async (msg) => {
-    const text = [msg.reasoning, msg.text].filter(Boolean).join("\n\n").trim();
+    const text = (msg.text ?? "").trim();
     if (!text) return;
     try {
       await writeClipboardText(text);
@@ -25318,40 +25905,20 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>` : null}
       ${error ? html4`<div class="notice err">${error}</div>` : null}
 
-      <div class=${`chat-body ${activePlan ? "with-rail" : ""}`}>
+      <div class=${`chat-body ${activePlan || fileArtifacts.length && !fileArtifactsDismissed ? "with-rail" : ""}`}>
         <div class="chat-main">
-          <div class="chat-searchbar">
-            <span class="chat-search-icon">⌕</span>
-            <input
-              type="search"
-              value=${chatSearch}
-              placeholder=${t4("chat.searchPlaceholder")}
-              onInput=${(e3) => {
-                setChatSearch(e3.target.value);
-                setSearchIndex(0);
-              }}
-              onKeyDown=${(e3) => {
-                if (e3.key === "Enter" && searchMatches.length > 0) {
-                  e3.preventDefault();
-                  setSearchIndex((i3) => e3.shiftKey ? (i3 - 1 + searchMatches.length) % searchMatches.length : (i3 + 1) % searchMatches.length);
-                }
-              }}
-            />
-            <span class="chat-search-count">
-              ${chatSearch.trim() ? t4("chat.searchCount", { current: searchMatches.length ? searchIndex + 1 : 0, total: searchMatches.length }) : t4("chat.searchIdle")}
-            </span>
-            <button type="button" disabled=${searchMatches.length === 0} onClick=${() => setSearchIndex((i3) => (i3 - 1 + searchMatches.length) % searchMatches.length)} title=${t4("chat.searchPrev")}>↑</button>
-            <button type="button" disabled=${searchMatches.length === 0} onClick=${() => setSearchIndex((i3) => (i3 + 1) % searchMatches.length)} title=${t4("chat.searchNext")}>↓</button>
-            ${chatSearch ? html4`<button type="button" onClick=${() => setChatSearch("")} title=${t4("chat.searchClear")}>×</button>` : null}
-          </div>
           <${ChatFeed}
             messages=${messages}
             streaming=${streaming}
             innerRef=${feedRef}
-            searchMatchIndex=${searchMatches.length ? searchMatches[Math.min(searchIndex, searchMatches.length - 1)]?.index : -1}
             highlightMessageId=${highlightMessageId}
             onCopyMessage=${copyMessage}
             onFillInput=${fillInputFromMessage}
+            selectedArtifactMessageId=${fileArtifactsSelectedMessageId}
+            onSelectArtifactMessage=${(msg) => {
+              setFileArtifactsSelectedMessageId(String(msg.id || ""));
+              setFileArtifactsDismissed(false);
+            }}
           />
 
           ${modal ? modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null : null}
@@ -25491,12 +26058,15 @@ const [providerCaps, setProviderCaps] = d2(null);
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} />
         </div>
-        ${activePlan ? html4`<${SideRail} activePlan=${activePlan} />` : null}
+        ${activePlan || fileArtifacts.length && !fileArtifactsDismissed ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${() => {
+            setFileArtifactsSelectedMessageId(null);
+            setFileArtifactsDismissed(false);
+          }} onDismissArtifacts=${() => setFileArtifactsDismissed(true)} />` : null}
       </div>
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput }) {
+var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -25519,17 +26089,20 @@ var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef, searchMatc
                   streaming=${Boolean(streaming && streaming.id === m3.id)}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
+                  selectedForArtifacts=${Boolean(selectedArtifactMessageId && String(m3.id || "") === String(selectedArtifactMessageId))}
+                  onSelectForArtifacts=${onSelectArtifactMessage}
                 />
               `
   )}
     </div>
   `;
 });
-var SideRail = N2(function SideRail2({ activePlan }) {
+var SideRail = N2(function SideRail2({ activePlan, fileArtifacts, artifactsSelected, onFollowLatestArtifacts, onDismissArtifacts }) {
   useLang();
-  if (!activePlan) return null;
+  if (!activePlan && (!fileArtifacts || fileArtifacts.length === 0)) return null;
   return html4`
     <aside class="chat-rail">
+      ${fileArtifacts && fileArtifacts.length > 0 ? html4`<${FileArtifactsCard} files=${fileArtifacts} selected=${artifactsSelected} onFollowLatest=${onFollowLatestArtifacts} onDismiss=${onDismissArtifacts} />` : null}
       ${activePlan ? html4`<${ActivePlanCard} plan=${activePlan} />` : null}
     </aside>
   `;
@@ -27346,6 +27919,9 @@ function emptyTaskDraft() {
     kind: "prompt",
     name: "",
     prompt: "",
+    sessionCleanupAction: "preview",
+    sessionCleanupStrength: "standard",
+    sessionCleanupSemanticMode: "uncertain",
     reportRangeMode: "yesterday",
     reportPeriod: "daily",
     reportStartDate: weekAgo,
@@ -27368,9 +27944,12 @@ function taskDraftFromSchedule(task) {
   const weekAgo = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return {
     id: task.id,
-    kind: task.kind === "report" ? "report" : "prompt",
+    kind: task.kind === "report" ? "report" : task.kind === "session_cleanup" ? "session_cleanup" : "prompt",
     name: task.name ?? "",
     prompt: task.prompt ?? "",
+    sessionCleanupAction: task.sessionCleanupAction === "delete" ? "delete" : "preview",
+    sessionCleanupStrength: ["conservative", "standard", "aggressive"].includes(task.sessionCleanupStrength) ? task.sessionCleanupStrength : "standard",
+    sessionCleanupSemanticMode: ["off", "uncertain", "deep"].includes(task.sessionCleanupSemanticMode) ? task.sessionCleanupSemanticMode : "uncertain",
     reportRangeMode: task.reportRangeMode ?? (task.reportPeriod === "daily" ? "yesterday" : task.reportPeriod === "yearly" ? "this_year" : task.reportPeriod === "custom" ? "custom" : "last_week"),
     reportPeriod: task.reportPeriod ?? "daily",
     reportStartDate: task.reportStartDate ?? weekAgo,
@@ -27430,6 +28009,7 @@ function fmtScheduleCost(value) {
   return Number.isFinite(value) ? `$${value.toFixed(6)}` : "\u2014";
 }
 function fmtTaskKind(task) {
+  if (task?.kind === "session_cleanup") return t4("tasks.kindSessionCleanup");
   return task?.kind === "report" ? t4("tasks.kindReport") : t4("tasks.kindPrompt");
 }
 function fmtReportPeriod(period) {
@@ -27529,6 +28109,9 @@ function ScheduledTasksPanel() {
       kind: draft.kind,
       name: draft.name,
       prompt: draft.prompt,
+      sessionCleanupAction: draft.sessionCleanupAction,
+      sessionCleanupStrength: draft.sessionCleanupStrength,
+      sessionCleanupSemanticMode: draft.sessionCleanupSemanticMode,
       reportRangeMode: draft.reportRangeMode,
       reportPeriod: draft.reportPeriod,
       reportStartDate: draft.reportStartDate,
@@ -27596,6 +28179,22 @@ function ScheduledTasksPanel() {
     const id = run?.assistantMessageId || run?.userMessageId;
     if (id) requestChatMessageJump(id);
   }, []);
+  const taskResultFileAction = q2(async (kind, path) => {
+    if (!path) return;
+    try {
+      if (kind === "preview") {
+        await showFileArtifactPreview({ path });
+      } else if (kind === "folder") {
+        await api("/artifacts/open-folder", { method: "POST", body: { path } });
+        showToast("已打开所在文件夹", "info");
+      } else if (kind === "copy") {
+        await writeClipboardText(path);
+        showToast("路径已复制", "info");
+      }
+    } catch (err) {
+      showToast(err.message || "文件操作失败", "error", 5e3);
+    }
+  }, []);
   const deleteTask = q2(async (task) => {
     if (!confirm(t4("tasks.deleteConfirm"))) return;
     setBusy(true);
@@ -27619,7 +28218,7 @@ function ScheduledTasksPanel() {
   const validInterval = Number.isFinite(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 30 * 24 * 60;
   const validSchedule = draft.type === "daily" || draft.type === "weekly" ? /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) : validInterval;
   const validReport = draft.reportRangeMode === "custom" ? !!draft.reportStartDate && !!draft.reportEndDate && draft.reportEndDate >= draft.reportStartDate : true;
-  const canSave = validWindow && validSchedule && (draft.kind === "report" ? validReport : draft.prompt.trim().length > 0);
+  const canSave = validWindow && validSchedule && (draft.kind === "report" ? validReport : draft.kind === "session_cleanup" ? true : draft.prompt.trim().length > 0);
   const weekdayLabels = scheduleWeekdayLabels();
   return html4`
     <div class="sessions-grid">
@@ -27686,6 +28285,18 @@ function ScheduledTasksPanel() {
                   <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.reportMessages")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.reportMessages)}</div></div>
                 </div>
               ` : null}
+              ${latestRun.cleanupCandidates !== null && latestRun.cleanupCandidates !== void 0 ? html4`
+                <div class="card-b" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;border-bottom:1px solid var(--bd)">
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.sessionCleanupAction")}</div><div style="font-size:12px">${latestRun.cleanupAction === "delete" ? t4("tasks.sessionCleanupDelete") : t4("tasks.sessionCleanupPreview")}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupCandidates")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupCandidates)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupDeleted")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupDeleted)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupArchive")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupArchive)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupKeep")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupKeep)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupExtract")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupExtract)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupSemanticReviewed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupSemanticReviewed)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupFailed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupFailed)}</div></div>
+                </div>
+              ` : null}
               <div class="card-b" style="display:flex;flex-direction:column;gap:6px">
                 <div style="display:flex;gap:8px;align-items:center;color:var(--fg-3);font-size:12px">
                   <span>${t4("tasks.source")}: ${latestRun.manual ? t4("tasks.manual") : t4("tasks.scheduled")}</span>
@@ -27693,7 +28304,17 @@ function ScheduledTasksPanel() {
                   ${latestRun.assistantMessageId || latestRun.userMessageId ? html4`<button class="btn btn-sm" style="margin-left:auto" onClick=${() => viewRunConversation(latestRun)}>${t4("tasks.viewConversation")}</button>` : null}
                 </div>
                 <div style="color:var(--fg-2);overflow-wrap:anywhere">${latestRun.summary || latestRun.reason || t4("tasks.noSummary")}</div>
-                ${latestRun.reportPath ? html4`<div style="color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportPath}</code></div>` : null}
+                ${latestRun.reportPath ? html4`
+                  <div style="display:flex;flex-direction:column;gap:6px;color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">
+                    <div>${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportPath}</code></div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>预览报告</button>
+                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportPath)}>所在文件夹</button>
+                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportPath)}>复制路径</button>
+                    </div>
+                  </div>
+                ` : null}
+                ${latestRun.cleanupTrashRoot ? html4`<div style="color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">${t4("tasks.cleanupTrashRoot")}: <code class="mono">${latestRun.cleanupTrashRoot}</code></div>` : null}
               </div>
             ` : html4`<div class="card-b">${t4("tasks.noHistory")}</div>`}
           </div>
@@ -27701,16 +28322,48 @@ function ScheduledTasksPanel() {
         <div class="card">
           <div class="form-row">
             <span class="lbl">${t4("tasks.taskKind")}</span>
-            <select class="input mono" value=${draft.kind} onChange=${(e3) => setDraft({ ...draft, kind: e3.target.value, runMode: e3.target.value === "report" ? "auto" : draft.runMode })}>
+            <select class="input mono" value=${draft.kind} onChange=${(e3) => {
+    const kind = e3.target.value;
+    setDraft({ ...draft, kind, runMode: kind === "prompt" ? draft.runMode : "auto" });
+  }}>
               <option value="prompt">${t4("tasks.kindPrompt")}</option>
               <option value="report">${t4("tasks.kindReport")}</option>
+              <option value="session_cleanup">${t4("tasks.kindSessionCleanup")}</option>
             </select>
           </div>
           <div class="form-row">
             <span class="lbl">${t4("tasks.name")}</span>
             <input class="input" type="text" value=${draft.name} onInput=${(e3) => setDraft({ ...draft, name: e3.target.value })} />
           </div>
-          ${draft.kind === "report" ? html4`
+          ${draft.kind === "session_cleanup" ? html4`
+            <div class="form-row">
+              <span class="lbl">${t4("tasks.sessionCleanupAction")}</span>
+              <select class="input mono" value=${draft.sessionCleanupAction} onChange=${(e3) => setDraft({ ...draft, sessionCleanupAction: e3.target.value })}>
+                <option value="preview">${t4("tasks.sessionCleanupPreview")}</option>
+                <option value="delete">${t4("tasks.sessionCleanupDelete")}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <span class="lbl">${t4("tasks.sessionCleanupStrength")}</span>
+              <select class="input mono" value=${draft.sessionCleanupStrength} onChange=${(e3) => setDraft({ ...draft, sessionCleanupStrength: e3.target.value })}>
+                <option value="conservative">${t4("tasks.sessionCleanupConservative")}</option>
+                <option value="standard">${t4("tasks.sessionCleanupStandard")}</option>
+                <option value="aggressive">${t4("tasks.sessionCleanupAggressive")}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <span class="lbl">${t4("tasks.sessionCleanupSemanticMode")}</span>
+              <select class="input mono" value=${draft.sessionCleanupSemanticMode} onChange=${(e3) => setDraft({ ...draft, sessionCleanupSemanticMode: e3.target.value })}>
+                <option value="off">${t4("tasks.sessionCleanupSemanticOff")}</option>
+                <option value="uncertain">${t4("tasks.sessionCleanupSemanticUncertain")}</option>
+                <option value="deep">${t4("tasks.sessionCleanupSemanticDeep")}</option>
+              </select>
+            </div>
+            <div class="form-row" style="align-items:flex-start">
+              <span class="lbl">${t4("tasks.summary")}</span>
+              <div style="flex:1;min-width:0;color:var(--fg-3);font-size:12px;line-height:1.5">${t4("tasks.sessionCleanupHint")}</div>
+            </div>
+          ` : draft.kind === "report" ? html4`
             <div class="form-row">
               <span class="lbl">${t4("tasks.reportRange")}</span>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -27843,6 +28496,9 @@ function ScheduledTasksPanel() {
                       <span>${item.summary || item.reason || t4("tasks.noSummary")}</span>
                       ${item.reportPeriod ? html4`<span style="color:var(--fg-3)">
                         ${fmtReportRangeMode(item.reportRangeMode, item.reportPeriod)} · ${t4("tasks.reportRange")}: ${fmtReportRange(item)} · ${t4("tasks.reportSessions")}: ${fmtScheduleTokens(item.reportSessions)} · ${t4("tasks.reportMessages")}: ${fmtScheduleTokens(item.reportMessages)}
+                      </span>` : null}
+                      ${item.cleanupCandidates !== null && item.cleanupCandidates !== void 0 ? html4`<span style="color:var(--fg-3)">
+                        ${item.cleanupAction === "delete" ? t4("tasks.sessionCleanupDelete") : t4("tasks.sessionCleanupPreview")} · ${t4("tasks.cleanupCandidates")}: ${fmtScheduleTokens(item.cleanupCandidates)} · ${t4("tasks.cleanupDeleted")}: ${fmtScheduleTokens(item.cleanupDeleted)} · ${t4("tasks.cleanupArchive")}: ${fmtScheduleTokens(item.cleanupArchive)} · ${t4("tasks.cleanupKeep")}: ${fmtScheduleTokens(item.cleanupKeep)} · ${t4("tasks.cleanupExtract")}: ${fmtScheduleTokens(item.cleanupExtract)} · ${t4("tasks.cleanupSemanticReviewed")}: ${fmtScheduleTokens(item.cleanupSemanticReviewed)} · ${t4("tasks.cleanupFailed")}: ${fmtScheduleTokens(item.cleanupFailed)}
                       </span>` : null}
                       ${item.reportPath ? html4`<span style="color:var(--fg-3);overflow-wrap:anywhere">${t4("tasks.reportExportPath")}: <code class="mono">${item.reportPath}</code></span>` : null}
                       ${item.reason && item.summary && item.reason !== item.summary ? html4`<span style="color:var(--fg-3)">${item.reason}</span>` : null}
@@ -32383,8 +33039,8 @@ function tabSections() {
       label: t4("app.sectionWorkspace"),
       tabs: [
         { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
-        { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` },
-        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` }
+        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
+        { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` }
       ]
     },
     {
@@ -32471,6 +33127,9 @@ function App() {
     return () => appBus.removeEventListener("navigate-tab", onNav);
   }, []);
   const pickTab = q2((id) => setActiveId(id), []);
+  const openMarkdown = q2(() => {
+    openMarkdownDocumentByPicker();
+  }, []);
   return html7`
     <div class=${`app ${sidebarCollapsed ? "collapsed" : ""}`}>
       <aside class="app-side">
@@ -32540,11 +33199,15 @@ function App() {
           <span class="session" style="color:#1a3a5c;font-family:'Microsoft YaHei','微软雅黑',var(--font-sans);font-size:15px">维信诺协同办公平台</span>
         </span>
         <span class="grow"></span>
+        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title="用 Visionox 打开 Markdown 文档">
+          <span class="top-action-g">MD</span>
+          <span class="top-action-label">打开 MD</span>
+        </button>
         <span class="meter">
           ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
           <span class="sep">·</span>
           <span class="lbl">@${(new Date).getFullYear()}</span>
-          ${version2 && buildDate2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}-${buildDate2}</span>` : version2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}</span>` : null}
+          ${version2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}</span>` : null}
         </span>
       </header>
       <div class="app-body">

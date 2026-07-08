@@ -9,7 +9,7 @@
  * Usage: node launcher.mjs [--port <n>] [--token <hex>]
  */
 
-import { resolve, dirname, join, basename } from "node:path";
+import { resolve, dirname, join, basename, sep, extname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } from "node:fs";
@@ -155,6 +155,7 @@ const CONSTANTS = {
   // so cap per-entry body and the collective block to bound the system prompt.
   SESSION_MEMORY_BODY_MAX_CHARS: 2000,
   SESSION_MEMORY_BLOCK_MAX_CHARS: 6000,
+  HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS: 6000,
 
   // Rules sub-budget — coding mode can load ~100KB of rule files; cap the
   // collective rules block. Tail-drop (custom rules first to go) keeps each
@@ -414,12 +415,12 @@ const [
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
   { applySkillsIndex, applyProjectMemory },
-  { MemoryStore },
+  { MemoryStore, effectivePriority },
   { registerSkillTools, Eventizer, autoResolveVerdict, shouldAutoResolveCheckpoint },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
   { buildIndex, querySemantic, indexExists },
-  { listSessions, loadSessionMessages, sessionPath },
+  { listSessions, loadSessionMessages, sessionPath, deleteSession },
   { DEEPSEEK_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEEPSEEK_PRICING },
   { countTokens, estimateRequestTokens },
   { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives },
@@ -1226,6 +1227,362 @@ tools.register({
 });
 console.error(`[launcher] remember_session tool registered`);
 
+// ── Session history service ─────────────────────────────────────
+const SESSION_SEARCH_MAX_LIMIT = 200;
+const SESSION_CLEANUP_PREVIEW_TTL_MS = 30 * 60 * 1000;
+const SESSION_TRASH_DIR = resolve(visionoxDataDir, "session-trash");
+const sessionCleanupPreviews = new Map();
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function parseDateFilter(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function safeSessionMessages(name) {
+  try {
+    return loadSessionMessages(name);
+  } catch {
+    return [];
+  }
+}
+
+function compactMessageText(message, max = 180) {
+  const content = typeof message?.content === "string" ? message.content : JSON.stringify(message?.content ?? "");
+  const text = content.replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function summarizeSessionMessages(messages, meta = {}) {
+  if (typeof meta.summary === "string" && meta.summary.trim()) return meta.summary.trim();
+  const firstUser = messages.find((m) => m?.role === "user" && compactMessageText(m));
+  const firstAssistant = messages.find((m) => m?.role === "assistant" && compactMessageText(m));
+  const source = firstUser || firstAssistant || messages.find((m) => compactMessageText(m));
+  return source ? compactMessageText(source) : "";
+}
+
+function buildSessionSearchText(session, messages = []) {
+  const meta = session.meta || {};
+  const sampled = [
+    ...messages.slice(0, 8),
+    ...messages.slice(Math.max(0, messages.length - 8)),
+  ].map((m) => compactMessageText(m, 320));
+  return [
+    session.name,
+    meta.summary,
+    meta.workspace,
+    meta.mode,
+    meta.modeLabel,
+    ...sampled,
+  ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function describeSession(session, messages = null, { includePreview = true } = {}) {
+  const loaded = Array.isArray(messages) ? messages : [];
+  const meta = session.meta || {};
+  const out = {
+    name: session.name,
+    messageCount: session.messageCount,
+    lastActive: session.mtime instanceof Date ? session.mtime.toISOString() : new Date(session.mtime).toISOString(),
+    workspace: meta.workspace || null,
+    mode: meta.mode || null,
+    modeLabel: meta.modeLabel || null,
+    summary: Array.isArray(messages) ? summarizeSessionMessages(loaded, meta) : (meta.summary || null),
+  };
+  if (includePreview && Array.isArray(messages)) {
+    out.preview = loaded.slice(-5).map((m) => ({
+      role: m?.role || "unknown",
+      content: compactMessageText(m, 220),
+    }));
+  }
+  return out;
+}
+
+function searchSessions(args = {}) {
+  const limit = clampNumber(args.limit, 1, SESSION_SEARCH_MAX_LIMIT, 50);
+  const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+  const terms = query.split(/\s+/).filter(Boolean);
+  const since = parseDateFilter(args.since);
+  const until = parseDateFilter(args.until);
+  const minMessages = Number.isFinite(args.minMessages) ? Math.max(0, Math.floor(args.minMessages)) : null;
+  const maxMessages = Number.isFinite(args.maxMessages) ? Math.max(0, Math.floor(args.maxMessages)) : null;
+  const workspace = typeof args.workspace === "string" && args.workspace.trim() ? args.workspace.trim().toLowerCase() : "";
+  const mode = typeof args.mode === "string" && args.mode.trim() ? args.mode.trim().toLowerCase() : "";
+  const includePreview = args.includePreview !== false;
+  const results = [];
+  let scanned = 0;
+
+  for (const session of listSessions()) {
+    scanned++;
+    if (since && session.mtime < since) continue;
+    if (until && session.mtime > until) continue;
+    if (minMessages !== null && session.messageCount < minMessages) continue;
+    if (maxMessages !== null && session.messageCount > maxMessages) continue;
+    const meta = session.meta || {};
+    if (workspace && !String(meta.workspace || "").toLowerCase().includes(workspace)) continue;
+    if (mode && String(meta.mode || meta.modeLabel || "").toLowerCase() !== mode) continue;
+
+    let messages = null;
+    if (terms.length > 0 || includePreview) messages = safeSessionMessages(session.name);
+    if (terms.length > 0) {
+      const haystack = buildSessionSearchText(session, messages).toLowerCase();
+      if (!terms.every((term) => haystack.includes(term))) continue;
+    }
+    results.push(describeSession(session, messages, { includePreview }));
+    if (results.length >= limit) break;
+  }
+  return { scanned, count: results.length, sessions: results };
+}
+
+function classifyCleanupCandidate(session, messages) {
+  const messageCount = messages.length || session.messageCount || 0;
+  const meta = session.meta || {};
+  const text = buildSessionSearchText(session, messages);
+  const lower = text.toLowerCase();
+  const short = messageCount <= 4;
+  const veryShort = messageCount <= 2;
+  const valuable = /(客户|需求|项目|代码|脚本|文件|ppt|word|excel|pdf|readme|方案|认证|测试计划|debug|构建|打包|优化|源码)/i.test(text);
+
+  if (valuable && messageCount >= 2) {
+    return { category: "valuable", action: "keep", confidence: 0.82, reason: "包含项目、文件、代码或需求相关信息，建议保留" };
+  }
+
+  if (messageCount === 0 || !text.trim()) {
+    return { category: "empty", action: "delete", confidence: 0.98, reason: "空会话或无法读取有效消息" };
+  }
+  if (short && /整理聊天记录|聊天记录整理|清理聊天|清理检查报告|delete_session|session cleanup|session_cleanup/.test(lower)) {
+    return { category: "cleanup_task", action: "delete", confidence: 0.95, reason: "历史会话整理任务自产的短记录" };
+  }
+  if (veryShort && /(天气|weather|气温|预报)/i.test(text) && !valuable) {
+    return { category: "light_query", action: "archive", confidence: 0.88, reason: "轻量查询类短会话，建议归档而不是直接删除" };
+  }
+  if (short && /(test-summary\.md|hello\.py|创建.*测试|测试运行|通信测试|授权卡片测试)/i.test(text)) {
+    return { category: "test_run", action: "archive", confidence: 0.86, reason: "重复功能测试或临时测试会话，建议归档" };
+  }
+  if (messageCount >= 5 && /(总结|方案|建议|计划|修复|实现|落地|复盘|报告)/i.test(text)) {
+    return { category: "knowledge", action: "extract", confidence: 0.78, reason: "可能包含可沉淀的项目知识，建议提炼" };
+  }
+  if (veryShort && !meta.summary && text.length < 120) {
+    return { category: "tiny_no_summary", action: "archive", confidence: 0.68, reason: "内容极短且无摘要，建议人工复核后归档" };
+  }
+  return null;
+}
+
+function cleanupRecommendationCounts(items) {
+  const counts = { delete: 0, archive: 0, keep: 0, extract: 0, review: 0 };
+  for (const item of items || []) {
+    const action = item?.action || "review";
+    counts[action] = (counts[action] || 0) + 1;
+  }
+  return counts;
+}
+
+function normalizeSemanticCleanupMode(value) {
+  return ["off", "uncertain", "deep"].includes(value) ? value : "off";
+}
+
+async function semanticReviewCleanupItems(items, semanticMode = "off") {
+  const mode = normalizeSemanticCleanupMode(semanticMode);
+  if (mode === "off" || !client || !items.length) return { items, reviewed: 0, error: null };
+  const reviewable = mode === "deep"
+    ? items.slice(0, 60)
+    : items.filter((item) => item.confidence < 0.86 || item.action === "archive" || item.action === "extract").slice(0, 24);
+  if (reviewable.length === 0) return { items, reviewed: 0, error: null };
+
+  const payload = reviewable.map((item) => ({
+    name: item.name,
+    messageCount: item.messageCount,
+    currentAction: item.action,
+    category: item.category,
+    confidence: item.confidence,
+    reason: item.reason,
+    preview: item.preview,
+  }));
+  const prompt = [
+    "你是 Visionox 的历史会话整理器。请只基于给定预览判断每个会话的整理建议。",
+    "可选 action 只有 delete、archive、keep、extract：",
+    "- delete：空会话、系统自产清理记录、明显无价值且可放入回收站的记录。",
+    "- archive：低价值但不应直接删除的临时查询或测试记录。",
+    "- keep：包含项目、客户、需求、文件、代码、决策、问题排查等用户可能回看的信息。",
+    "- extract：包含可沉淀为长期记忆或知识的内容。",
+    "宁可 keep，也不要误删。返回严格 JSON 数组，不要 Markdown，不要解释。",
+    JSON.stringify(payload),
+  ].join("\n\n");
+  try {
+    const modelConfig = effectiveModelConfig(config);
+    const resp = await client.chat({
+      model: modelConfig.model,
+      messages: [
+        { role: "system", content: "你只返回 JSON 数组，每项包含 name, action, confidence, reason。" },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.1,
+      maxTokens: 4000,
+    });
+    const raw = String(resp?.content || "").trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("semantic review did not return an array");
+    const byName = new Map(parsed.map((item) => [String(item.name || ""), item]));
+    const next = items.map((item) => {
+      const update = byName.get(item.name);
+      if (!update || !["delete", "archive", "keep", "extract"].includes(update.action)) return item;
+      return {
+        ...item,
+        action: update.action,
+        confidence: Number.isFinite(update.confidence) ? Math.max(0, Math.min(1, Number(update.confidence))) : item.confidence,
+        reason: typeof update.reason === "string" && update.reason.trim() ? update.reason.trim().slice(0, 240) : item.reason,
+        semanticReviewed: true,
+      };
+    });
+    return { items: next, reviewed: reviewable.length, error: null };
+  } catch (err) {
+    console.error(`[launcher] session cleanup semantic review failed: ${err.message}`);
+    return { items, reviewed: 0, error: err.message };
+  }
+}
+
+function softDeleteSession(name, runId = "") {
+  if (!isValidSessionName(name)) return { ok: false, error: "invalid session name" };
+  const jsonl = sessionPath(name);
+  if (!existsSync(jsonl)) return { ok: false, error: "not found" };
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const trashDir = resolve(SESSION_TRASH_DIR, `${stamp}-${runId || randomUUID()}`);
+  mkdirSync(trashDir, { recursive: true });
+  const moved = [];
+  const sidecars = [".jsonl", ".events.jsonl", ".pending.json", ".meta.json", ".plan.json"];
+  try {
+    for (const ext of sidecars) {
+      const source = ext === ".jsonl" ? jsonl : jsonl.replace(/\.jsonl$/, ext);
+      if (!existsSync(source)) continue;
+      const target = resolve(trashDir, basename(source));
+      renameSync(source, target);
+      moved.push(target);
+    }
+    writeFileSync(resolve(trashDir, "trash-meta.json"), `${JSON.stringify({ name, movedAt: new Date().toISOString(), files: moved.map((p) => basename(p)) }, null, 2)}\n`, "utf8");
+    return { ok: true, trashDir, moved };
+  } catch (err) {
+    return { ok: false, error: err.message, trashDir, moved };
+  }
+}
+
+function pruneExpiredCleanupPreviews() {
+  const now = Date.now();
+  for (const [id, preview] of sessionCleanupPreviews) {
+    if (now - preview.createdMs > SESSION_CLEANUP_PREVIEW_TTL_MS) {
+      sessionCleanupPreviews.delete(id);
+    }
+  }
+}
+
+async function buildSessionCleanupPreview(args = {}) {
+  pruneExpiredCleanupPreviews();
+  const scanLimit = clampNumber(args.scanLimit ?? args.limit, 1, 1000, 200);
+  const returnLimit = clampNumber(args.returnLimit, 1, 200, Math.min(80, scanLimit));
+  const minConfidence = Number.isFinite(args.minConfidence) ? Math.max(0, Math.min(1, Number(args.minConfidence))) : 0.8;
+  const includeReview = args.includeReview === true;
+  const semanticMode = normalizeSemanticCleanupMode(args.semanticMode);
+  const categories = Array.isArray(args.categories) && args.categories.length > 0
+    ? new Set(args.categories.map((c) => String(c)))
+    : null;
+  const recommendations = [];
+  const review = [];
+  let scanned = 0;
+
+  for (const session of listSessions()) {
+    if (scanned >= scanLimit) break;
+    scanned++;
+    const messages = safeSessionMessages(session.name);
+    const hit = classifyCleanupCandidate(session, messages);
+    if (!hit || (categories && !categories.has(hit.category))) continue;
+    const item = {
+      ...describeSession(session, messages, { includePreview: true }),
+      category: hit.category,
+      action: hit.action,
+      confidence: hit.confidence,
+      reason: hit.reason,
+      semanticReviewed: false,
+    };
+    if (hit.confidence >= minConfidence || hit.action === "keep" || hit.action === "extract") recommendations.push(item);
+    else if (includeReview) review.push(item);
+  }
+
+  const semantic = await semanticReviewCleanupItems(recommendations, semanticMode);
+  const reviewedRecommendations = semantic.items;
+  const returnedCandidates = reviewedRecommendations.slice(0, returnLimit);
+  const counts = cleanupRecommendationCounts(returnedCandidates);
+  const cleanupId = randomUUID();
+  const preview = {
+    cleanupId,
+    createdAt: new Date().toISOString(),
+    createdMs: Date.now(),
+    scanned,
+    candidateCount: reviewedRecommendations.length,
+    returnedCandidateCount: returnedCandidates.length,
+    minConfidence,
+    semanticMode,
+    semanticReviewed: semantic.reviewed,
+    semanticError: semantic.error,
+    recommendationCounts: counts,
+    categories: [...new Set(reviewedRecommendations.map((c) => c.category))],
+    candidates: returnedCandidates,
+    review: includeReview ? review.slice(0, Math.max(0, returnLimit - returnedCandidates.length)) : [],
+  };
+  sessionCleanupPreviews.set(cleanupId, {
+    createdMs: preview.createdMs,
+    candidates: returnedCandidates,
+  });
+  return preview;
+}
+
+function applySessionCleanup({ cleanupId, names, confirm = false } = {}) {
+  pruneExpiredCleanupPreviews();
+  if (confirm !== true) {
+    return { ok: false, error: "confirm must be true. 只有在用户明确确认后才能删除会话。" };
+  }
+  let requested = [];
+  if (cleanupId) {
+    const preview = sessionCleanupPreviews.get(String(cleanupId));
+    if (!preview) return { ok: false, error: "cleanup preview expired or not found" };
+    requested = preview.candidates.filter((c) => c.action === "delete").map((c) => c.name);
+  } else if (Array.isArray(names)) {
+    requested = names.map((n) => String(n).trim()).filter(Boolean);
+  }
+  requested = [...new Set(requested)].filter(isValidSessionName);
+  if (requested.length === 0) return { ok: false, error: "no valid session names to delete" };
+
+  const existing = new Set(listSessions().map((s) => s.name));
+  const deleted = [];
+  const failed = [];
+  for (const name of requested) {
+    if (!existing.has(name)) {
+      failed.push({ name, error: "not found" });
+      continue;
+    }
+    const moved = softDeleteSession(name, String(cleanupId || "manual").slice(0, 8));
+    if (moved.ok) deleted.push({ name, trashDir: moved.trashDir });
+    else failed.push({ name, error: moved.error || "move to trash failed" });
+  }
+  console.error(`[launcher] session cleanup moved_to_trash=${deleted.length} failed=${failed.length}`);
+  return { ok: failed.length === 0, deleted, failed, deletedCount: deleted.length, failedCount: failed.length, trashRoot: SESSION_TRASH_DIR };
+}
+
+function summarizeSessionCleanup(preview, result = null) {
+  const candidateCount = preview?.candidateCount ?? 0;
+  const scanned = preview?.scanned ?? 0;
+  const counts = preview?.recommendationCounts || {};
+  const detail = `删除 ${counts.delete || 0} / 归档 ${counts.archive || 0} / 保留 ${counts.keep || 0} / 提炼 ${counts.extract || 0}`;
+  if (result) {
+    return `扫描 ${scanned} 个会话，生成 ${candidateCount} 条整理建议（${detail}），已移入回收站 ${result.deletedCount || 0} 个，失败 ${result.failedCount || 0} 个。`;
+  }
+  return `扫描 ${scanned} 个会话，生成 ${candidateCount} 条整理建议（${detail}），尚未移动任何会话。`;
+}
+
 // ── Session history tools ───────────────────────────────────────
 tools.register({
   name: "list_sessions",
@@ -1285,6 +1642,65 @@ tools.register({
       transcript: text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) + "\n\n...[内容已截断]" : text,
     });
   },
+});
+
+tools.register({
+  name: "search_sessions",
+  description: "搜索历史对话会话。当用户要求查找、整理、回顾、总结、提炼历史对话时，优先使用此工具；不要猜测会话文件路径，也不要用 shell 到磁盘乱找。支持关键词、时间范围、消息数、工作区和模式过滤。",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "关键词，可包含多个词；全部词都需命中" },
+      since: { type: "string", description: "起始时间或日期，例如 2026-07-01" },
+      until: { type: "string", description: "结束时间或日期，例如 2026-07-07" },
+      minMessages: { type: "number", description: "最少消息数" },
+      maxMessages: { type: "number", description: "最多消息数" },
+      workspace: { type: "string", description: "工作区路径关键词" },
+      mode: { type: "string", description: "工作模式 id" },
+      limit: { type: "number", description: "返回数量，默认 50，最大 200" },
+      includePreview: { type: "boolean", description: "是否返回每个会话的末尾预览，默认 true" },
+    },
+  },
+  fn: async (args) => JSON.stringify(searchSessions(args || {})),
+});
+
+tools.register({
+  name: "preview_session_cleanup",
+  description: "预览可整理的历史会话候选，只分析不删除。用于用户说“整理历史对话/清理无意义记录/找出可删除会话”时。返回 cleanupId，后续只有在用户明确确认删除后才可交给 apply_session_cleanup。",
+  parameters: {
+    type: "object",
+    properties: {
+      scanLimit: { type: "number", description: "最多扫描多少个最近会话，默认 200" },
+      returnLimit: { type: "number", description: "最多返回多少个候选，默认 80" },
+      minConfidence: { type: "number", description: "最低置信度，默认 0.8" },
+      includeReview: { type: "boolean", description: "是否返回低置信度人工复核候选，默认 false" },
+      semanticMode: { type: "string", description: "语义复核模式：off, uncertain, deep。默认 off" },
+      categories: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选类别过滤：empty, cleanup_task, weather_query, test_run, tiny_no_summary",
+      },
+    },
+  },
+  fn: async (args) => JSON.stringify(await buildSessionCleanupPreview(args || {})),
+});
+
+tools.register({
+  name: "apply_session_cleanup",
+  description: "删除历史会话。高风险工具：只有用户在最新回复中明确确认删除时才能调用。优先传入 preview_session_cleanup 返回的 cleanupId；也可传 names。该工具会删除对应归档会话及其元数据。",
+  parameters: {
+    type: "object",
+    properties: {
+      cleanupId: { type: "string", description: "preview_session_cleanup 返回的 cleanupId" },
+      names: {
+        type: "array",
+        items: { type: "string" },
+        description: "显式要删除的会话名列表；与 cleanupId 二选一",
+      },
+      confirm: { type: "boolean", description: "必须为 true，表示用户已经明确确认删除" },
+    },
+  },
+  fn: async (args) => JSON.stringify(applySessionCleanup(args || {})),
 });
 console.error(`[launcher] session history tools registered`);
 
@@ -1883,6 +2299,32 @@ function getSessionMemoryBlock() {
   return `\n# Session memory (this conversation only)\n\n${entries.join("\n\n")}${suffix}`;
 }
 
+function formatHighPriorityMemoryForPrompt(store) {
+  let entries = [];
+  try {
+    entries = store.list().filter((entry) => effectivePriority(entry, config) === "high");
+  } catch (err) {
+    console.error(`[launcher] high priority memory skipped: ${err.message}`);
+    return "";
+  }
+  if (entries.length === 0) return "";
+
+  const parts = [
+    "# HIGH PRIORITY constraints (must observe)",
+    "",
+    "These user-approved memories were marked high priority. Treat them as hard rules unless the current user message explicitly updates or contradicts them.",
+    "",
+  ];
+  for (const entry of entries) {
+    parts.push(`!!! [${entry.scope}/${entry.type}/${entry.name}] ${entry.description || "(no description)"}`);
+    if (entry.body) parts.push("", entry.body);
+    parts.push("");
+  }
+  const block = parts.join("\n").trimEnd();
+  if (block.length <= CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS) return block;
+  return `${block.slice(0, CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS)}\n\n... (high priority memory truncated to ${CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS} chars)`;
+}
+
 function formatPersistentMemoryForPrompt(rootDir) {
   let store;
   try {
@@ -1892,6 +2334,8 @@ function formatPersistentMemoryForPrompt(rootDir) {
     return "";
   }
   const blocks = [];
+  const highPriority = formatHighPriorityMemoryForPrompt(store);
+  if (highPriority) blocks.push(highPriority);
   const global = store.loadIndex("global");
   if (global) {
     blocks.push([
@@ -2019,6 +2463,98 @@ function runHooks(event, ctx) {
     }
   }
 }
+
+const GENERATED_ARTIFACT_EXT_RE = /\.(md|markdown|html|htm|txt|pdf|doc|docx|ppt|pptx|xls|xlsx|csv|json|xml|yaml|yml|py|js|ts|tsx|jsx|css|sql|ps1|bat|cmd|sh|ini|toml)(?:$|[?#\s，。；;、)）（\]`*_~])/i;
+const GENERATED_ARTIFACT_PREVIEW_EXTS = new Set([
+  ".md", ".markdown", ".html", ".htm", ".txt", ".py", ".js", ".ts", ".tsx",
+  ".jsx", ".css", ".json", ".xml", ".yaml", ".yml", ".sql", ".ps1", ".bat",
+  ".cmd", ".sh", ".ini", ".toml", ".csv",
+]);
+const GENERATED_ARTIFACT_SCRIPT_EXTS = new Set([".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"]);
+const GENERATED_ARTIFACT_PREVIEW_MAX_BYTES = 512 * 1024;
+const generatedArtifactPaths = new Map();
+
+function rememberGeneratedArtifactPath(value) {
+  let raw = String(value || "").trim();
+  raw = raw.replace(/^["'“”‘’`*_~]+|["'“”‘’`*_~]+$/g, "").trim();
+  if (!raw || raw.length > 500 || !GENERATED_ARTIFACT_EXT_RE.test(raw)) return null;
+  let abs;
+  try {
+    abs = resolve(workspaceDir, raw);
+  } catch {
+    return null;
+  }
+  const key = process.platform === "win32" ? abs.toLowerCase() : abs;
+  generatedArtifactPaths.set(key, abs);
+  while (generatedArtifactPaths.size > 200) {
+    const first = generatedArtifactPaths.keys().next().value;
+    generatedArtifactPaths.delete(first);
+  }
+  return abs;
+}
+
+function collectGeneratedArtifactPaths() {
+  const paths = new Map(generatedArtifactPaths);
+  if (Array.isArray(schedules)) {
+    for (const schedule of schedules) {
+      for (const run of schedule?.history || []) {
+        if (typeof run?.reportPath !== "string" || !run.reportPath.trim()) continue;
+        try {
+          const abs = resolve(workspaceDir, run.reportPath);
+          const key = process.platform === "win32" ? abs.toLowerCase() : abs;
+          paths.set(key, abs);
+        } catch {
+        }
+      }
+    }
+  }
+  return Array.from(paths.values());
+}
+
+function generatedArtifactFileInfo(abs) {
+  try {
+    const st = statSync(abs);
+    if (!st.isFile()) return null;
+    const ext = extname(abs).toLowerCase();
+    return {
+      path: abs,
+      dir: dirname(abs),
+      filename: basename(abs),
+      ext,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      previewable: GENERATED_ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= GENERATED_ARTIFACT_PREVIEW_MAX_BYTES,
+      openable: !GENERATED_ARTIFACT_SCRIPT_EXTS.has(ext),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseMaybeJsonObject(value) {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberToolGeneratedArtifacts(toolName, toolArgs) {
+  if (!/^(write_file|edit|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
+  const args = parseMaybeJsonObject(toolArgs);
+  if (!args) return [];
+  const paths = [];
+  for (const key of ["path", "filePath", "file_path", "filename", "output", "outputPath", "reportPath"]) {
+    if (typeof args[key] === "string") {
+      const remembered = rememberGeneratedArtifactPath(args[key]);
+      if (remembered) paths.push(remembered);
+    }
+  }
+  return Array.from(new Set(paths));
+}
 // buildSystemPrompt — imported from ./lib/system-prompt.mjs
 
 function currentEditMode() {
@@ -2059,6 +2595,30 @@ function dirMtime(p) {
   try { return statSync(p).mtimeMs; } catch { return 0; }
 }
 
+function flatMdMtimeFingerprint(dir) {
+  if (!existsSync(dir)) return "0";
+  try {
+    const files = readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
+    return files.map((name) => `${name}:${safeMtime(resolve(dir, name))}`).join(",");
+  } catch {
+    return "err";
+  }
+}
+
+function projectMemoryDirForRoot(rootDir) {
+  const abs = resolve(rootDir);
+  const hash = createHash("sha1").update(abs).digest("hex").slice(0, 16);
+  return resolve(visionoxDataDir, "memory", hash);
+}
+
+function findProjectMemoryPathForPrompt(rootDir) {
+  for (const name of PROJECT_MEMORY_CANDIDATES) {
+    const p = resolve(rootDir, name);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 function computePrefixFingerprint(rootDir) {
   const mc = getModeConfig();
   const parts = [
@@ -2078,27 +2638,14 @@ function computePrefixFingerprint(rootDir) {
   // Mode memory file
   parts.push(`mmode=${safeMtime(resolve(modeMemoryDir, `${safeModeId(config.mode)}.json`))}`);
   // Project memory candidates (REASONIX.md / CLAUDE.md / AGENTS.md ...)
-  const pmPath = findProjectMemoryPathCached(rootDir);
+  const pmPath = findProjectMemoryPathForPrompt(rootDir);
   parts.push(`pmem=${pmPath ? safeMtime(pmPath) : 0}`);
-  // Persistent memory: global + project-scoped index files. MemoryStore derives
-  // the project path internally via hash; include rootDir (already above) plus
-  // the global memory dir mtime as a proxy for global edits.
-  parts.push(`memg=${dirMtime(resolve(visionoxDataDir, "memory"))}`);
+  // Persistent memory: MemoryStore stores flat .md files under global and the
+  // current project hash. Include file mtimes so edits inside existing files
+  // invalidate the prefix cache without requiring an app restart.
+  parts.push(`memg=${flatMdMtimeFingerprint(resolve(visionoxDataDir, "memory", "global"))}`);
+  parts.push(`memp=${flatMdMtimeFingerprint(projectMemoryDirForRoot(rootDir))}`);
   return parts.join("|");
-}
-
-// Small memo of project-memory path lookups (avoids 6x existsSync per buildLoop).
-const _pmPathCache = new Map();
-function findProjectMemoryPathCached(rootDir) {
-  if (_pmPathCache.has(rootDir)) return _pmPathCache.get(rootDir);
-  const candidates = PROJECT_MEMORY_CANDIDATES;
-  let found = null;
-  for (const name of candidates) {
-    const p = resolve(rootDir, name);
-    if (existsSync(p)) { found = p; break; }
-  }
-  _pmPathCache.set(rootDir, found);
-  return found;
 }
 
 function buildLoop(client, rootDir) {
@@ -2340,7 +2887,10 @@ const MAX_SCHEDULE_DELAY_MS = 2_147_000_000;
 const SCHEDULE_HISTORY_LIMIT = 20;
 const SCHEDULE_RUN_MODES = new Set(["auto", "readonly", "confirm"]);
 const SCHEDULE_TYPES = new Set(["interval", "daily", "weekly"]);
-const SCHEDULE_KINDS = new Set(["prompt", "report"]);
+const SCHEDULE_KINDS = new Set(["prompt", "report", "session_cleanup"]);
+const SCHEDULE_SESSION_CLEANUP_ACTIONS = new Set(["preview", "delete"]);
+const SCHEDULE_SESSION_CLEANUP_STRENGTHS = new Set(["conservative", "standard", "aggressive"]);
+const SCHEDULE_SESSION_CLEANUP_SEMANTIC_MODES = new Set(["off", "uncertain", "deep"]);
 const SCHEDULE_REPORT_PERIODS = new Set(["daily", "weekly", "yearly", "custom"]);
 const SCHEDULE_REPORT_RANGE_MODES = new Set([
   "today",
@@ -2503,24 +3053,45 @@ function computeNextScheduleRun(task, fromMs = Date.now()) {
   return nextScheduleWindowStart(task, Date.parse(nextIso));
 }
 
+function isLegacySessionCleanupSchedule(raw, prompt) {
+  const name = typeof raw?.name === "string" ? raw.name : "";
+  const text = `${name}\n${prompt || ""}`;
+  return /整理聊天记录|聊天记录整理|清理聊天记录/.test(text) && /(删除|清理|整理|无意义|天气|会话|聊天记录)/.test(text);
+}
+
+function cleanupMinConfidenceForStrength(strength) {
+  if (strength === "conservative") return 0.9;
+  if (strength === "aggressive") return 0.65;
+  return 0.8;
+}
+
 function normalizeSchedule(raw) {
   if (!raw || typeof raw !== "object") return null;
   const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim() : randomUUID();
-  const kind = SCHEDULE_KINDS.has(raw.kind) ? raw.kind : "prompt";
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
+  let kind = SCHEDULE_KINDS.has(raw.kind) ? raw.kind : "prompt";
+  if (isLegacySessionCleanupSchedule(raw, prompt)) {
+    kind = "session_cleanup";
+  }
   if (kind === "prompt" && !prompt) return null;
   const type = SCHEDULE_TYPES.has(raw.type) ? raw.type : "interval";
+  const sessionCleanupAction = SCHEDULE_SESSION_CLEANUP_ACTIONS.has(raw.sessionCleanupAction) ? raw.sessionCleanupAction : "preview";
+  const sessionCleanupStrength = SCHEDULE_SESSION_CLEANUP_STRENGTHS.has(raw.sessionCleanupStrength) ? raw.sessionCleanupStrength : "standard";
+  const sessionCleanupSemanticMode = SCHEDULE_SESSION_CLEANUP_SEMANTIC_MODES.has(raw.sessionCleanupSemanticMode) ? raw.sessionCleanupSemanticMode : "uncertain";
   const reportRangeMode = normalizeReportRangeMode(raw.reportRangeMode, legacyReportRangeMode(raw));
   const reportPeriod = reportPeriodForRangeMode(reportRangeMode);
   const reportStartDate = normalizeReportDate(raw.reportStartDate);
   const reportEndDate = normalizeReportDate(raw.reportEndDate);
-  if (!validateReportRange(reportRangeMode, reportStartDate, reportEndDate).ok) return null;
+  if (kind === "report" && !validateReportRange(reportRangeMode, reportStartDate, reportEndDate).ok) return null;
   const nowIso = new Date().toISOString();
   const task = {
     id,
     kind,
-    name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 80) : (kind === "report" ? "会话报告任务" : prompt.slice(0, 36)),
+    name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 80) : (kind === "report" ? "会话报告任务" : kind === "session_cleanup" ? "会话整理任务" : prompt.slice(0, 36)),
     prompt: kind === "prompt" ? prompt : "",
+    sessionCleanupAction: kind === "session_cleanup" ? sessionCleanupAction : "preview",
+    sessionCleanupStrength: kind === "session_cleanup" ? sessionCleanupStrength : "standard",
+    sessionCleanupSemanticMode: kind === "session_cleanup" ? sessionCleanupSemanticMode : "off",
     reportRangeMode,
     reportPeriod,
     reportDate: normalizeReportDate(raw.reportDate),
@@ -2528,7 +3099,7 @@ function normalizeSchedule(raw) {
     reportEndDate,
     reportExport: raw.reportExport !== false,
     type,
-    runMode: SCHEDULE_RUN_MODES.has(raw.runMode) ? raw.runMode : "auto",
+    runMode: kind === "prompt" && SCHEDULE_RUN_MODES.has(raw.runMode) ? raw.runMode : "auto",
     intervalMs: type === "interval" ? Number(raw.intervalMs) || 60 * 60 * 1000 : null,
     timeOfDay: (type === "daily" || type === "weekly") && isValidDailyTime(raw.timeOfDay) ? raw.timeOfDay : "09:00",
     dayOfWeek: type === "weekly" ? normalizeDayOfWeek(raw.dayOfWeek, 1) : null,
@@ -2584,6 +3155,16 @@ function normalizeScheduleHistoryEntry(raw) {
     reportSessions: Number.isFinite(raw.reportSessions) ? Math.max(0, Math.floor(raw.reportSessions)) : null,
     reportMessages: Number.isFinite(raw.reportMessages) ? Math.max(0, Math.floor(raw.reportMessages)) : null,
     reportPath: typeof raw.reportPath === "string" ? raw.reportPath : null,
+    cleanupAction: typeof raw.cleanupAction === "string" ? raw.cleanupAction : null,
+    cleanupPreviewId: typeof raw.cleanupPreviewId === "string" ? raw.cleanupPreviewId : null,
+    cleanupCandidates: Number.isFinite(raw.cleanupCandidates) ? Math.max(0, Math.floor(raw.cleanupCandidates)) : null,
+    cleanupDeleted: Number.isFinite(raw.cleanupDeleted) ? Math.max(0, Math.floor(raw.cleanupDeleted)) : null,
+    cleanupFailed: Number.isFinite(raw.cleanupFailed) ? Math.max(0, Math.floor(raw.cleanupFailed)) : null,
+    cleanupArchive: Number.isFinite(raw.cleanupArchive) ? Math.max(0, Math.floor(raw.cleanupArchive)) : null,
+    cleanupKeep: Number.isFinite(raw.cleanupKeep) ? Math.max(0, Math.floor(raw.cleanupKeep)) : null,
+    cleanupExtract: Number.isFinite(raw.cleanupExtract) ? Math.max(0, Math.floor(raw.cleanupExtract)) : null,
+    cleanupSemanticReviewed: Number.isFinite(raw.cleanupSemanticReviewed) ? Math.max(0, Math.floor(raw.cleanupSemanticReviewed)) : null,
+    cleanupTrashRoot: typeof raw.cleanupTrashRoot === "string" ? raw.cleanupTrashRoot : null,
   };
 }
 
@@ -2690,6 +3271,18 @@ function scheduleFromInput(input, previous = null) {
   const reportStartDate = normalizeReportDate(patch.reportStartDate ?? previous?.reportStartDate);
   const reportEndDate = normalizeReportDate(patch.reportEndDate ?? previous?.reportEndDate);
   const reportExport = typeof patch.reportExport === "boolean" ? patch.reportExport : previous?.reportExport ?? true;
+  const previousCleanupAction = SCHEDULE_SESSION_CLEANUP_ACTIONS.has(previous?.sessionCleanupAction) ? previous.sessionCleanupAction : "preview";
+  const sessionCleanupAction = SCHEDULE_SESSION_CLEANUP_ACTIONS.has(patch.sessionCleanupAction)
+    ? patch.sessionCleanupAction
+    : previousCleanupAction;
+  const previousCleanupStrength = SCHEDULE_SESSION_CLEANUP_STRENGTHS.has(previous?.sessionCleanupStrength) ? previous.sessionCleanupStrength : "standard";
+  const sessionCleanupStrength = SCHEDULE_SESSION_CLEANUP_STRENGTHS.has(patch.sessionCleanupStrength)
+    ? patch.sessionCleanupStrength
+    : previousCleanupStrength;
+  const previousCleanupSemanticMode = SCHEDULE_SESSION_CLEANUP_SEMANTIC_MODES.has(previous?.sessionCleanupSemanticMode) ? previous.sessionCleanupSemanticMode : "uncertain";
+  const sessionCleanupSemanticMode = SCHEDULE_SESSION_CLEANUP_SEMANTIC_MODES.has(patch.sessionCleanupSemanticMode)
+    ? patch.sessionCleanupSemanticMode
+    : previousCleanupSemanticMode;
   if (kind === "prompt" && !prompt) return { ok: false, error: "prompt must be a non-empty string" };
   const reportRangeCheck = validateReportRange(reportRangeMode, reportStartDate, reportEndDate);
   if (kind === "report" && !reportRangeCheck.ok) return { ok: false, error: reportRangeCheck.error };
@@ -2701,8 +3294,11 @@ function scheduleFromInput(input, previous = null) {
   const task = {
     id: previous?.id ?? randomUUID(),
     kind,
-    name: name || (kind === "report" ? "会话报告任务" : prompt.slice(0, 36)),
+    name: name || (kind === "report" ? "会话报告任务" : kind === "session_cleanup" ? "会话整理任务" : prompt.slice(0, 36)),
     prompt: kind === "prompt" ? prompt : "",
+    sessionCleanupAction: kind === "session_cleanup" ? sessionCleanupAction : "preview",
+    sessionCleanupStrength: kind === "session_cleanup" ? sessionCleanupStrength : "standard",
+    sessionCleanupSemanticMode: kind === "session_cleanup" ? sessionCleanupSemanticMode : "off",
     reportRangeMode,
     reportPeriod,
     reportDate,
@@ -2710,7 +3306,7 @@ function scheduleFromInput(input, previous = null) {
     reportEndDate,
     reportExport,
     type,
-    runMode: kind === "report" && runMode === "readonly" ? "auto" : runMode,
+    runMode: kind === "prompt" ? runMode : "auto",
     intervalMs: null,
     timeOfDay: null,
     dayOfWeek: null,
@@ -2836,6 +3432,7 @@ function writeScheduledReport(markdown, stats, task) {
   const fileName = `Visionox_${safeTaskName}_${period}_${date}.md`.replace(/[\\/:*?"<>|]/g, "_");
   const filePath = join(dir, fileName);
   writeFileSync(filePath, markdown, "utf8");
+  rememberGeneratedArtifactPath(filePath);
   return filePath;
 }
 
@@ -2864,6 +3461,46 @@ async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISO
       status: "failed",
       reason: err.message || "scheduled report failed",
       summary: err.message || "scheduled report failed",
+    });
+  }
+}
+
+async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date().toISOString()) {
+  const task = schedules.find((item) => item.id === taskId);
+  if (!task) return;
+  try {
+    const preview = await buildSessionCleanupPreview({
+      scanLimit: 500,
+      returnLimit: 200,
+      minConfidence: cleanupMinConfidenceForStrength(task.sessionCleanupStrength),
+      semanticMode: task.sessionCleanupSemanticMode,
+      includeReview: false,
+    });
+    const shouldDelete = task.sessionCleanupAction === "delete";
+    const result = shouldDelete && preview.returnedCandidateCount > 0
+      ? applySessionCleanup({ cleanupId: preview.cleanupId, confirm: true })
+      : null;
+    completeScheduleRun(task.id, runId, {
+      status: "completed",
+      reason: result && result.failedCount > 0 ? `${result.failedCount} session(s) failed to delete` : null,
+      summary: summarizeSessionCleanup(preview, result),
+      cleanupAction: shouldDelete ? "delete" : "preview",
+      cleanupPreviewId: preview.cleanupId,
+      cleanupCandidates: preview.candidateCount,
+      cleanupDeleted: result?.deletedCount ?? 0,
+      cleanupFailed: result?.failedCount ?? 0,
+      cleanupArchive: preview.recommendationCounts?.archive ?? 0,
+      cleanupKeep: preview.recommendationCounts?.keep ?? 0,
+      cleanupExtract: preview.recommendationCounts?.extract ?? 0,
+      cleanupSemanticReviewed: preview.semanticReviewed ?? 0,
+      cleanupTrashRoot: result?.trashRoot ?? null,
+    });
+  } catch (err) {
+    completeScheduleRun(task.id, runId, {
+      status: "failed",
+      reason: err.message || "session cleanup failed",
+      summary: err.message || "session cleanup failed",
+      cleanupAction: task.sessionCleanupAction === "delete" ? "delete" : "preview",
     });
   }
 }
@@ -3088,6 +3725,10 @@ async function triggerSchedule(id, { manual = false } = {}) {
   });
   if (task.kind === "report") {
     void runScheduleReportTask(task.id, runId, startedAt);
+    return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
+  }
+  if (task.kind === "session_cleanup") {
+    void runScheduleSessionCleanupTask(task.id, runId, startedAt);
     return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
   }
   const prompt = renderSchedulePrompt(task, startedAt, previousLastRunAt);
@@ -3354,6 +3995,7 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   clearTutorMode();
   clearLearningMode();
   resetPlanRefs();
+  generatedArtifactPaths.clear();
   try { clearPlanState(currentSessionName()); } catch {}
   if (client) {
     loop = buildLoop(client, workspaceDir);
@@ -3377,12 +4019,24 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
 }
 
 function isValidSessionName(name) {
-  return /^[\w.-]+$/.test(String(name || ""));
+  const value = String(name || "");
+  return value.length > 0 && value.length <= 64 && /^[\w.\-\u4e00-\u9fa5]+$/u.test(value);
+}
+
+function sessionArtifactPath(name, suffix) {
+  if (!isValidSessionName(name)) throw new Error(`Invalid session name: ${name}`);
+  const p = resolve(sessionsDir, `${name}${suffix}`);
+  const root = resolve(sessionsDir);
+  if (p !== root && !p.startsWith(root + sep)) throw new Error(`Invalid session path: ${name}`);
+  return p;
+}
+
+function sessionJsonlPath(name) {
+  return sessionArtifactPath(name, ".jsonl");
 }
 
 function sessionMetaPath(name) {
-  if (!isValidSessionName(name)) throw new Error(`Invalid session name: ${name}`);
-  return resolve(sessionsDir, `${name}.meta.json`);
+  return sessionArtifactPath(name, ".meta.json");
 }
 
 function readSessionMeta(name) {
@@ -3906,6 +4560,7 @@ const ctx = {
 
   // ── Getters ────────────────────────────────────────────────
   getCurrentCwd: () => workspaceDir,
+  getGeneratedArtifactPaths: collectGeneratedArtifactPaths,
   getEditMode: () => loadEditMode(configPath),
   getPlanMode: () => false,
   getPendingEditCount: () => 0,
@@ -4375,10 +5030,10 @@ ${modeList}
       if (sessionName && loop) {
         // P2-7: validate sessionName to prevent path traversal
         if (!isValidSessionName(sessionName)) {
-          return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only alphanumeric, underscore, dot, or hyphen.` };
+          return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only letters, numbers, Chinese characters, underscore, dot, or hyphen.` };
         }
         try {
-          const sessionFile = resolve(sessionsDir, sessionName + ".jsonl");
+          const sessionFile = sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
           const modeRestore = applyModeForSessionMeta(sessionMeta);
           const raw = readFileSync(sessionFile, "utf8");
@@ -4401,7 +5056,7 @@ ${modeList}
           try {
             await writeFile(activeSessionFile, raw, "utf8");
             try {
-              const metaRaw = readFileSync(resolve(sessionsDir, sessionName + ".meta.json"), "utf8");
+              const metaRaw = readFileSync(sessionMetaPath(sessionName), "utf8");
               await writeFile(activeSessionMetaFile, metaRaw, "utf8");
             } catch {
               await writeActiveSessionMeta();
@@ -4761,8 +5416,27 @@ ${modeList}
       (async () => {
         let assistantText = "";
         let turnError = null;
+        const turnArtifactPaths = new Set();
         try {
           for await (const ev of loop.step(text)) {
+            if (ev.role === "tool") {
+              const artifactPaths = rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs);
+              const newFiles = [];
+              for (const artifactPath of artifactPaths) {
+                const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
+                if (turnArtifactPaths.has(key)) continue;
+                turnArtifactPaths.add(key);
+                const info = generatedArtifactFileInfo(artifactPath);
+                if (info) newFiles.push(info);
+              }
+              if (newFiles.length > 0) {
+                broadcastDashboardEvent({
+                  kind: "artifact-created",
+                  assistantId,
+                  files: newFiles,
+                });
+              }
+            }
             // Write event to .events.jsonl for cockpit tool activity
             if (eventSink && eventizer) {
               try {

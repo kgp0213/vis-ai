@@ -16,6 +16,7 @@ AI 编程代理桌面应用 — 基于 DeepSeek 的 Tauri v2 跨平台桌面 AI 
 | 📎 **OfficeCLI 办公集成** | 内置 OfficeCLI MCP，原生操作 Word/Excel/PPT，替代 6 个旧 Office 技能 |
 | 🔍 **多引擎搜索** | 4 个搜索引擎热切换（Bing 国内版 / Mojeek / SearXNG / Bing API），默认 Bing 免费可用 |
 | 📋 **剪贴板增强** | `Ctrl+V` 直接粘贴截图为附件、粘贴文件/文件夹为完整路径，支持 Windows 与 Linux 常见剪贴板环境 |
+| 📖 **Markdown 阅读器** | 内置 Markdown 打开与预览，支持顶部按钮手动选择、双击文件关联、源码/预览切换与可调整大小的阅读窗口 |
 | 🎨 **8 套配色方案** | 深色 / 浅色 / 暖沙 / 冷灰 / 柔绿 / 深炭灰 / 午夜墨蓝 / 浓缩咖啡，下拉框实时切换 |
 | 🧩 **Superpowers 技能包** | 内置 30+ 工作流技能（需求梳理、方案规划、代码评审、系统调试、TDD 等），安装即用 |
 | 💬 **会话管理** | 历史会话搜索/预览/导出/继续，跨会话记忆持久化，工作场景自动恢复 |
@@ -50,6 +51,7 @@ AI 编程代理桌面应用 — 基于 DeepSeek 的 Tauri v2 跨平台桌面 AI 
 | 管理任务 | 左侧「任务」页面新建定时任务、测试运行、查看执行结果 |
 | 粘贴图片/文件夹 | `Ctrl+V` 粘贴剪贴板中的截图、文件路径或文件夹路径 |
 | 保存对话产物 | 助手输出代码/Markdown/HTML 等内容时，可直接复制或另存 |
+| 阅读 Markdown | 顶部「打开 MD」选择文档，或在系统中双击 `.md/.markdown` 文件用 Visionox 打开 |
 | 导入模型配置 | 底部「🤖 模型」面板 → 选择 JSON 文件批量导入 Provider |
 | 管理记忆 | 设置页「记忆」面板，或对话中说「记住…」 |
 | 学习命令 | 输入 `/learn help` 查看所有学习功能 |
@@ -59,9 +61,11 @@ AI 编程代理桌面应用 — 基于 DeepSeek 的 Tauri v2 跨平台桌面 AI 
 
 ## 🆕 v1.20 更新亮点
 
-- **任务计划升级**：报告能力融合进任务模块，支持保存后测试运行、周期执行和结果回看，减少页面跳转。
-- **对话体验增强**：代码、Markdown、HTML、脚本等输出更容易复制和另存，历史会话支持搜索、预览和导出。
-- **剪贴板更顺手**：截图粘贴更快，复制文件夹后可直接把路径贴入对话框，跨平台路径识别更稳。
+- **任务与报告合一**：报告能力融合进任务模块，支持一次性、每日、每周和自定义间隔任务，可测试运行并集中查看最近结果。
+- **对话产物更好用**：代码、Markdown、HTML、脚本等输出可直接复制、另存、预览和打开目录，生成文件会在对话侧边卡片中持续跟踪。
+- **内置 Markdown 阅读器**：新增「打开 MD」入口和系统文件关联，预览窗口支持源码/预览切换、手动缩放，适合在没有 Markdown 阅读器的电脑上直接查看文档。
+- **会话与记忆整理增强**：历史会话支持搜索、预览、导出、继续和整理建议，高优先级记忆注入更稳定，模型更容易找到需要的历史上下文。
+- **剪贴板与本地文件体验优化**：截图粘贴更快，复制文件或文件夹后可直接把路径贴入对话框，Windows 与 Linux 常见剪贴板环境均可使用。
 
 ---
 
@@ -192,9 +196,9 @@ visionox-desktop/
 │   └── Cargo.toml                 # Rust 依赖（windows-sys / nix 平台条件）
 ├── docs/                          # 项目文档
 ├── scripts/
-│   ├── restore-visionox-pkg.js    # 从 npm 下载最新 reasonix 包
+│   ├── check-bundle-patches.js    # 发布前校验本地 bundle 补丁是否仍存在
+│   ├── restore-visionox-pkg.js    # 维护时恢复指定 reasonix 包
 │   └── cherry-claude.cjs          # CLAUDE.md 记忆逻辑补丁脚本
-└── .github/workflows/             # CI（Windows + Ubuntu matrix）
 ```
 
 ### 快速构建（开发测试）
@@ -252,9 +256,9 @@ cp "$SRC\visionox-pkg\dashboard\app.css"  "$APP\visionox-pkg\dashboard\app.css"
 
 ### ⚠️ 重要提醒
 
-**不要运行 `scripts/restore-visionox-pkg.js`**（或 `npm install`），这会将 `visionox-pkg` 更新为最新 npm 版本，导致打包后的 chunk 文件名改变，`launcher.mjs` 中的 `import(distPath("server-XGDBRWMB.js"))` 等引用将失效。
+**常规开发和构建不要运行 `scripts/restore-visionox-pkg.js`。** 源码中该脚本会从 npm 拉取 `reasonix` 包，并在目标缺失或使用 `--force` 时删除并重建 `src-tauri/resources/server/visionox-pkg`，这会覆盖本项目对 `visionox-pkg/dist/`、`visionox-pkg/dashboard/dist/app.js` 和 `visionox-pkg/dashboard/app.css` 的本地补丁。
 
-所有对 `visionox-pkg/dist/` 和 `visionox-pkg/dashboard/` 的修改都是直接在打包文件上进行的。如需同步到上游，应将改动迁移到 `tep/src/` 中重新构建。
+`package.json` 中的 `restore:pkg` 已改为保护入口，会直接拒绝执行。确实需要更新上游包时，先备份并重新迁移本地补丁，再运行 `npm run restore:pkg:danger -- --force`，最后执行 `npm run check:bundle-patches` 验证 chunk 文件名、`launcher.mjs` 导入路径和 Dashboard 功能补丁点。
 
 ### 打包安装包（NSIS）
 
@@ -266,12 +270,11 @@ taskkill /F /IM visionox-desktop.exe 2>nul
 taskkill /F /IM node.exe 2>nul
 
 # 完整构建 + 打包 NSIS 安装器
-npx tauri build
+npm run tauri:build -- --bundles nsis
 ```
 
 产物在 `src-tauri\target\release\bundle\nsis\`：
-- `Visionox_1.12.0_x64-setup.exe` — 安装程序
-- `Visionox_1.12.0_x64_en-US.msi` — MSI 安装包（如启用）
+- `Visionox_1.20.0_x64-setup.exe` — NSIS 安装程序
 
 **安装包配置**（`tauri.conf.json` → `bundle`）：
 
@@ -314,8 +317,8 @@ npx tauri build
 ```
 
 产物在 `src-tauri/target/release/bundle/`：
-- `deb/visionox_1.12.0_amd64.deb` — Debian 安装包
-- `appimage/visionox_1.12.0_amd64.AppImage` — 免安装可执行文件
+- `deb/visionox_1.20.0_amd64.deb` — Debian 安装包
+- `appimage/visionox_1.20.0_amd64.AppImage` — 免安装可执行文件
 
 > **功能差异**：Ubuntu 上 OfficeCLI（Word/Excel/PPT 操作）不可用，`launcher.mjs` 会自动跳过 MCP 注入并打日志，其余功能完整。剪贴板文件/文件夹路径粘贴依赖系统 `xclip` 或 `wl-clipboard`。
 

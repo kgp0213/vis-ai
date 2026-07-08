@@ -25,9 +25,12 @@ server/launcher.mjs
 
 # Temp files
 tmp_*
+tmp-*.log
+build-*.log
 record.txt
 launcher_*.log
 launcher_url*.txt
+src-tauri/resources/server/*.exe.old
 
 # OS files
 .DS_Store

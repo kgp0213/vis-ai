@@ -7304,7 +7304,7 @@ var defaultFs = {
 import { existsSync as existsSync5, readFileSync as readFileSync7, statSync as statSync3 } from "fs";
 import { basename, join as join6 } from "path";
 var PROJECT_MEMORY_FILE = "REASONIX.md";
-var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", ".claude/CLAUDE.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
+var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
 var PROJECT_MEMORY_MAX_CHARS = 8e3;
 function findProjectMemoryPath(rootDir) {
   for (const name of PROJECT_MEMORY_FILES) {

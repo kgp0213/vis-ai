@@ -1,6 +1,6 @@
 use std::io::{BufRead, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -1011,7 +1011,7 @@ pub fn run() -> anyhow::Result<()> {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ping, get_startup_args, get_dashboard_url, get_clipboard_files])
+        .invoke_handler(tauri::generate_handler![ping, get_startup_args, get_dashboard_url, get_clipboard_files, pick_markdown_file])
         .build(tauri::generate_context!())
         ?
         .run(|app_handle, event| {
@@ -1080,11 +1080,140 @@ struct ClipboardFilesResult {
     error: Option<String>,
 }
 
+#[derive(serde::Serialize)]
+struct PickMarkdownFileResult {
+    path: Option<String>,
+    error: Option<String>,
+}
+
 #[tauri::command]
 async fn get_clipboard_files() -> Result<ClipboardFilesResult, String> {
     tauri::async_runtime::spawn_blocking(get_clipboard_files_blocking)
         .await
         .map_err(|e| format!("clipboard task failed: {e}"))
+}
+
+#[tauri::command]
+async fn pick_markdown_file() -> Result<PickMarkdownFileResult, String> {
+    tauri::async_runtime::spawn_blocking(pick_markdown_file_blocking)
+        .await
+        .map_err(|e| format!("markdown picker task failed: {e}"))
+}
+
+fn is_markdown_file_path(path: &str) -> bool {
+    let Some(ext) = Path::new(path).extension().and_then(|v| v.to_str()) else {
+        return false;
+    };
+    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+}
+
+fn pick_markdown_file_blocking() -> PickMarkdownFileResult {
+    log_diag("[rust] pick_markdown_file invoked");
+
+    #[cfg(windows)]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '打开 Markdown 文档'
+$dialog.Filter = 'Markdown 文档 (*.md;*.markdown)|*.md;*.markdown'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.StartPosition = 'CenterScreen'
+$owner.Width = 1
+$owner.Height = 1
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.Show()
+$owner.Activate()
+$result = $dialog.ShowDialog($owner)
+$owner.Close()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.FileName
+}
+"#;
+        match Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                if !output.status.success() {
+                    let msg = if stderr.is_empty() {
+                        format!("file picker exited with {}", output.status)
+                    } else {
+                        stderr
+                    };
+                    log_diag(&format!("[rust] pick_markdown_file failed: {msg}"));
+                    return PickMarkdownFileResult {
+                        path: None,
+                        error: Some(msg),
+                    };
+                }
+                if stdout.is_empty() {
+                    return PickMarkdownFileResult { path: None, error: None };
+                }
+                if !is_markdown_file_path(&stdout) {
+                    return PickMarkdownFileResult {
+                        path: None,
+                        error: Some("selected file is not a Markdown document".to_string()),
+                    };
+                }
+                return PickMarkdownFileResult {
+                    path: Some(stdout),
+                    error: None,
+                };
+            }
+            Err(e) => {
+                let msg = format!("failed to launch file picker: {e}");
+                log_diag(&format!("[rust] {msg}"));
+                return PickMarkdownFileResult {
+                    path: None,
+                    error: Some(msg),
+                };
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let candidates: &[(&str, &[&str])] = &[
+            ("zenity", &["--file-selection", "--title=打开 Markdown 文档", "--file-filter=Markdown 文档 | *.md *.markdown"]),
+            ("kdialog", &["--getopenfilename", ".", "*.md *.markdown|Markdown 文档"]),
+        ];
+        for &(program, args) in candidates {
+            let Ok(output) = Command::new(program).args(args).output() else {
+                continue;
+            };
+            if !output.status.success() {
+                continue;
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if stdout.is_empty() {
+                return PickMarkdownFileResult { path: None, error: None };
+            }
+            if !is_markdown_file_path(&stdout) {
+                return PickMarkdownFileResult {
+                    path: None,
+                    error: Some("selected file is not a Markdown document".to_string()),
+                };
+            }
+            return PickMarkdownFileResult {
+                path: Some(stdout),
+                error: None,
+            };
+        }
+        PickMarkdownFileResult {
+            path: None,
+            error: Some("no supported file picker found".to_string()),
+        }
+    }
 }
 
 fn get_clipboard_files_blocking() -> ClipboardFilesResult {
@@ -1381,6 +1510,15 @@ mod tests {
         // paths may be empty or populated depending on clipboard contents
         let _ = result.paths.len();
         assert!(result.error.is_none() || result.error.as_ref().is_some());
+    }
+
+    #[test]
+    fn markdown_file_picker_accepts_only_markdown_extensions() {
+        assert!(is_markdown_file_path(r"C:\docs\report.md"));
+        assert!(is_markdown_file_path(r"C:\docs\REPORT.MARKDOWN"));
+        assert!(!is_markdown_file_path(r"C:\docs\report.txt"));
+        assert!(!is_markdown_file_path(r"C:\docs\report.md.bak"));
+        assert!(!is_markdown_file_path(r"C:\docs\report"));
     }
 
     #[test]

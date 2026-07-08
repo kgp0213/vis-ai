@@ -20,28 +20,26 @@ git clone git@gitee.com:hufz_admin/vis-ai.git
 cd vis-ai
 npm install
 
-# 恢复 visionox-pkg
-node scripts/restore-visionox-pkg.js
-
 # 放置 node.exe 和 officecli.exe 到 src-tauri/resources/server/
 # （这两个二进制文件被 gitignore，需单独获取）
 
-# 编译 Windows NSIS 安装器
-npm run tauri:build
-# → src-tauri/target/release/bundle/nsis/Visionox_x.x.x_x64-setup.exe
-
-# 仅编译调试可执行文件
-cd src-tauri
-cargo build --release
+# 开发测试：只构建 exe，不生成安装包
+npx tauri build --no-bundle
 # → src-tauri/target/release/visionox-desktop.exe
+
+# 需要安装包时再显式指定 NSIS
+npm run tauri:build -- --bundles nsis
+# → src-tauri/target/release/bundle/nsis/Visionox_x.x.x_x64-setup.exe
 ```
 
 ### 构建注意事项
 
-- `tauri.conf.json` 当前固定 `bundle.targets = ["nsis"]`
+- `tauri.conf.json` 当前 `bundle.targets = "all"`；开发验证优先使用 `npx tauri build --no-bundle`，避免生成安装包。
+- `npm run tauri:build` 会先执行 `npm run check:bundle-patches`，防止上游包恢复后丢失本地 Dashboard/API 补丁。
 - `Cargo.toml` 中 `tauri` 须声明 `custom-protocol` feature
 - 修改 `lib.rs` 或 `src/index.html` 后建议 `cargo clean` 再编译
 - 修改 `launcher.mjs` 或 chunk 文件后需手动同步到 `target/release/` 再打包
+- `scripts/restore-visionox-pkg.js` 是维护/重拉上游 reasonix 包的工具，不是常规构建步骤。普通 `npm run restore:pkg` 已禁用；必须在备份并准备重新迁移补丁后，才使用 `npm run restore:pkg:danger -- --force`。
 
 ---
 
@@ -73,7 +71,7 @@ type launcher-stderr.log  # Node.js 侧
 | `src-tauri/resources/server/launcher.mjs` | 系统提示词、工具注册 |
 | `src-tauri/resources/server/visionox-pkg/dashboard/` | Dashboard UI |
 | `src-tauri/Cargo.toml` + `src-tauri/tauri.conf.json` | 构建配置 |
-| `scripts/restore-visionox-pkg.js` | 服务端包恢复 |
+| `scripts/restore-visionox-pkg.js` | 上游 reasonix 包恢复工具，仅维护/升级时使用 |
 
 ---
 
@@ -127,4 +125,16 @@ type launcher-stderr.log  # Node.js 侧
 
 ---
 
-*最后更新：2026-07-03 | 适用：Visionox Desktop*
+## 七、visionox-pkg 维护边界
+
+当前实际运行的 Dashboard 和 API 分发代码位于：
+
+- `src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js`
+- `src-tauri/resources/server/visionox-pkg/dashboard/app.css`
+- `src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js`
+
+这些文件包含本项目的本地补丁。普通 `restore:pkg` 已禁用；若确实要更新上游 reasonix 包，应先备份并重新迁移本地补丁，再运行 `npm run check:bundle-patches` 验证 chunk 文件名、`launcher.mjs` 导入路径和 Dashboard 功能。
+
+---
+
+*最后更新：2026-07-06 | 适用：Visionox Desktop 1.20.0*

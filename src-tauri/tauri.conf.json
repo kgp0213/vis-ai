@@ -18,6 +18,19 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown Document",
+        "description": "Markdown 文档",
+        "role": "Viewer",
+        "mimeType": "text/markdown",
+        "rank": "Default"
+      }
+    ],
     "resources": [
       "resources/server/launcher.mjs",
       "resources/server/lib/provider.mjs",

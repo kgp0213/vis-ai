@@ -69,7 +69,7 @@
           if (window.__visionoxBridgeInstalled) return;
           window.__visionoxBridgeInstalled = true;
           window.addEventListener("message", function (event) {
-            if (!event.data || event.data.type !== "vis_get_clipboard") return;
+            if (!event.data || (event.data.type !== "vis_get_clipboard" && event.data.type !== "vis_pick_markdown_file")) return;
             var frame = document.getElementById("vis-app-frame");
             var dashboardUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
             var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
@@ -79,6 +79,25 @@
             var origin = event.origin;
             function reply(payload) {
               if (source) source.postMessage(payload, origin);
+            }
+            function doMarkdownPickerInvoke() {
+              window.__TAURI__.invoke("pick_markdown_file")
+                .then(function (result) {
+                  reply({
+                    type: "vis_pick_markdown_file_result",
+                    requestId: event.data.requestId || "",
+                    path: result && result.path ? String(result.path) : "",
+                    error: result && result.error ? String(result.error) : undefined
+                  });
+                })
+                .catch(function (error) {
+                  reply({
+                    type: "vis_pick_markdown_file_result",
+                    requestId: event.data.requestId || "",
+                    error: String(error),
+                    path: ""
+                  });
+                });
             }
             function doClipboardInvoke() {
               window.__TAURI__.invoke("ping")
@@ -98,16 +117,22 @@
                 });
             }
             if (window.__TAURI__ && window.__TAURI__.invoke) {
-              doClipboardInvoke();
+              if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
+              else doClipboardInvoke();
             } else {
               var attempts = 30;
               var timer = setInterval(function () {
                 if (window.__TAURI__ && window.__TAURI__.invoke) {
                   clearInterval(timer);
-                  doClipboardInvoke();
+                  if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
+                  else doClipboardInvoke();
                 } else if (--attempts <= 0) {
                   clearInterval(timer);
-                  reply({ type: "vis_clipboard_result", error: "本地桥接未就绪", paths: [] });
+                  if (event.data.type === "vis_pick_markdown_file") {
+                    reply({ type: "vis_pick_markdown_file_result", requestId: event.data.requestId || "", error: "本地桥接未就绪", path: "" });
+                  } else {
+                    reply({ type: "vis_clipboard_result", error: "本地桥接未就绪", paths: [] });
+                  }
                 }
               }, 100);
             }
@@ -130,6 +155,27 @@
           return url;
         }
 
+        var pendingOpenArgs = null;
+        function attachOpenArgsForwarding(frame) {
+          if (!frame || frame.__visionoxOpenArgsForwarding) return;
+          frame.__visionoxOpenArgsForwarding = true;
+          frame.addEventListener("load", function () {
+            resendPendingOpenArgs();
+          });
+        }
+
+        function rememberOpenArgs(args, cwd) {
+          pendingOpenArgs = { args: Array.isArray(args) ? args : [], cwd: cwd || "" };
+          forwardArgsToDashboard(pendingOpenArgs.args, pendingOpenArgs.cwd);
+        }
+
+        function resendPendingOpenArgs() {
+          if (!pendingOpenArgs) return;
+          setTimeout(function () {
+            forwardArgsToDashboard(pendingOpenArgs.args, pendingOpenArgs.cwd);
+          }, 50);
+        }
+
         function restoreDashboard() {
           var url = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
           if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) return;
@@ -149,6 +195,7 @@
             document.body.appendChild(frame);
             isFreshFrame = true;
           }
+          attachOpenArgsForwarding(frame);
           if (frame.src !== url) frame.src = url;
           if (isFreshFrame) {
             frame.addEventListener("error", function () { fallbackToRust(); });
@@ -212,13 +259,13 @@
         if (window.__TAURI__ && window.__TAURI__.invoke && window.__TAURI__.event && window.__TAURI__.event.listen) {
           window.__TAURI__.event.listen("visionox-startup-args", function (event) {
             if (event && event.payload) {
-              forwardArgsToDashboard(event.payload.args || [], event.payload.cwd || "");
+              rememberOpenArgs(event.payload.args || [], event.payload.cwd || "");
             }
           });
           window.__TAURI__.invoke("get_startup_args")
             .then(function (res) {
               if (res && res.args && res.args.length > 1) {
-                forwardArgsToDashboard(res.args, res.cwd || "");
+                rememberOpenArgs(res.args, res.cwd || "");
               }
             })
             .catch(function () {});

@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, statSync, readdirSync, readFileSync, writeFileSy
 import { readdir, readFile, stat, writeFile, cp, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { getConceptManager } from "./learn-track.mjs";
+import { PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
 
 // ── Constants ───────────────────────────────────────────────────
 const LEARN_COMMANDS = ["skill", "project", "index", "ask", "tutor", "track", "status", "help"];
@@ -192,7 +193,7 @@ export async function getLearnStatus(opts = {}) {
   // Workspace / project memory
   if (workspaceDir) {
     lines.push(`- 当前 Workspace: ${workspaceDir}`);
-    const projectFiles = ["REASONIX.md", "AGENTS.md", "AGENT.md", "visionox.md"];
+    const projectFiles = PROJECT_MEMORY_CANDIDATES;
     const found = projectFiles.find((f) => existsSync(join(workspaceDir, f)));
     lines.push(`- 项目记忆文件: ${found ?? "未创建"}`);
   } else {
@@ -506,8 +507,7 @@ async function runLearnSkill(args, opts) {
 
 // ── Project onboarding ──────────────────────────────────────────
 function findProjectMemoryPath(rootDir) {
-  const candidates = ["REASONIX.md", "AGENTS.md", "AGENT.md", "visionox.md"];
-  for (const name of candidates) {
+  for (const name of PROJECT_MEMORY_CANDIDATES) {
     const path = join(rootDir, name);
     if (existsSync(path)) return path;
   }
@@ -1008,4 +1008,3 @@ export async function executeLearnCommand(parsed, opts) {
       return { ok: false, message: formatHelp() };
   }
 }
-

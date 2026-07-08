@@ -544,6 +544,39 @@ code, .mono {
   flex: 1;
 }
 
+.top-action {
+  flex: 0 0 auto;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.top-action:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.top-action-g {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.top-action-label {
+  white-space: nowrap;
+}
+
 .app-top .meter {
   display: flex;
   align-items: center;
@@ -1783,6 +1816,137 @@ textarea {
   margin-bottom: var(--space-2);
 }
 
+.rail-card-close {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rail-card-close:hover {
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+
+.rail-card-link {
+  margin-left: auto;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--accent-primary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.rail-card-link + .rail-card-close {
+  margin-left: 4px;
+}
+
+.file-artifact-card {
+  border-left: 3px solid var(--accent-primary);
+}
+
+.file-artifact-summary,
+.file-artifact-more {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-2);
+}
+
+.file-artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.file-artifact-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-artifact-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 0;
+}
+
+.file-artifact-item {
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+}
+
+.file-artifact-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  margin-bottom: 2px;
+}
+
+.file-artifact-meta {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  margin-bottom: var(--space-2);
+}
+
+.file-artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.file-artifact-actions button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.file-artifact-actions button:hover {
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+
+.file-artifact-more {
+  margin: var(--space-2) 0 0;
+}
+
 .rail-kv {
   display: flex;
   justify-content: space-between;
@@ -1944,6 +2108,24 @@ textarea {
   animation: message-enter 0.3s var(--ease-out-quart);
 }
 
+.chat-msg.artifact-selectable {
+  cursor: pointer;
+  outline: none;
+}
+
+.chat-msg.artifact-selectable .body {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-msg.artifact-selectable:hover .body {
+  border-color: var(--border-default);
+}
+
+.chat-msg.artifact-selected .body {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.24);
+}
+
 @keyframes message-enter {
   from {
     opacity: 0;
@@ -2008,6 +2190,7 @@ textarea {
 .chat-msg .body {
   flex: 1;
   min-width: 0;
+  position: relative;
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -2031,23 +2214,36 @@ textarea {
 }
 
 .chat-msg-actions {
+  position: static;
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
-  margin-top: var(--space-2);
+  margin: 0;
+  height: 0;
+  overflow: hidden;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, margin-top 0.15s ease;
+  pointer-events: none;
 }
 
 .chat-msg:hover .chat-msg-actions,
 .chat-msg:focus-within .chat-msg-actions {
+  height: 22px;
+  margin-top: 6px;
+  overflow: visible;
   opacity: 1;
+  pointer-events: auto;
 }
 
 .chat-msg-actions button {
-  padding: 2px 8px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
+  line-height: 1;
   color: var(--text-tertiary);
   background: var(--surface-overlay);
 }
@@ -2060,6 +2256,7 @@ textarea {
 .chat-tool-wrap {
   flex: 1;
   min-width: 0;
+  position: relative;
 }
 
 /* Tool card */
@@ -2174,6 +2371,14 @@ textarea {
   white-space: pre-wrap;
   word-break: break-word;
   border-radius: var(--radius-sm);
+}
+
+.chat-msg .reasoning .chat-artifact-actions {
+  display: none;
+}
+
+.chat-msg .reasoning .chat-artifact-head {
+  justify-content: flex-start;
 }
 
 /* Streaming cursor */
@@ -3777,6 +3982,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .chat-artifact-type {
@@ -3794,6 +4000,12 @@ textarea {
   white-space: nowrap;
   color: var(--text-secondary);
   font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.chat-artifact-status {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
   font-size: 11px;
 }
 
@@ -3853,11 +4065,16 @@ textarea {
 }
 
 .artifact-preview-dialog {
-  width: min(980px, 96vw);
-  height: min(760px, 88vh);
+  width: min(1120px, 94vw);
+  height: min(840px, 90vh);
+  min-width: min(560px, calc(100vw - 24px));
+  min-height: min(360px, calc(100vh - 24px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  resize: both;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--surface-base);
@@ -3877,13 +4094,33 @@ textarea {
   font-weight: 600;
 }
 
+.artifact-preview-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-preview-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.artifact-preview-btn,
 .artifact-preview-close {
+  box-sizing: border-box;
   height: 28px;
   padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--surface-input);
   color: var(--text-secondary);
+  line-height: 1;
   cursor: pointer;
 }
 
@@ -3891,7 +4128,7 @@ textarea {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  background: var(--surface-base);
+  background: #fff;
 }
 
 .artifact-preview-frame {
@@ -3901,8 +4138,17 @@ textarea {
   background: #fff;
 }
 
-.artifact-preview-md {
-  padding: 18px 22px 28px;
+.artifact-preview-source {
+  box-sizing: border-box;
+  min-height: 100%;
+  margin: 0;
+  padding: 22px 26px 34px;
+  overflow: auto;
+  background: #fff;
+  color: #1f2937;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 720px) {
@@ -3917,6 +4163,25 @@ textarea {
 
   .artifact-preview-backdrop {
     padding: 10px;
+  }
+
+  .artifact-preview-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+    min-width: 0;
+    min-height: 0;
+    max-width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    resize: none;
+  }
+
+  .artifact-preview-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .artifact-preview-actions {
+    flex-wrap: wrap;
   }
 }
 
@@ -4253,6 +4518,10 @@ textarea {
 
   .app-body {
     padding: var(--space-4);
+  }
+
+  .top-action-label {
+    display: none;
   }
 
   .chat-msg {

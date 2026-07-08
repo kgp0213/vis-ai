@@ -8,7 +8,6 @@
 export const PROJECT_MEMORY_CANDIDATES = [
   "REASONIX.md",
   "visionox.md",
-  ".claude/CLAUDE.md",
   "CLAUDE.md",
   "AGENTS.md",
   "AGENT.md",

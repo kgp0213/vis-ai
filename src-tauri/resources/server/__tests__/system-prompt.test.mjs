@@ -89,11 +89,10 @@ describe("buildSystemPrompt", () => {
 });
 
 describe("PROJECT_MEMORY_CANDIDATES", () => {
-  test("包含 6 个候选文件，优先级正确", () => {
+  test("候选文件优先级正确，默认不读取 .claude 配置", () => {
     assert.deepEqual(PROJECT_MEMORY_CANDIDATES, [
       "REASONIX.md",
       "visionox.md",
-      ".claude/CLAUDE.md",
       "CLAUDE.md",
       "AGENTS.md",
       "AGENT.md",

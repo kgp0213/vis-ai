@@ -277,39 +277,6 @@ function applyGlobalVisionoxMemory(basePrompt, homeDir) {
     "```"
   ].join("\n");
 }
-function readGlobalClaudeMemory(homeDir = join(homedir(), ".claude")) {
-  const path = join(homeDir, "CLAUDE.md");
-  if (!existsSync(path)) return null;
-  let raw;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const originalChars = trimmed.length;
-  const truncated = originalChars > 8e3;
-  const content = truncated ? `${trimmed.slice(0, 8e3)}
-\u2026 (truncated ${originalChars - 8e3} chars)` : trimmed;
-  return { path, content, originalChars, truncated };
-}
-function applyGlobalClaudeMemory(basePrompt2) {
-  if (!memoryEnabled()) return basePrompt2;
-  const mem = readGlobalClaudeMemory();
-  if (!mem) return basePrompt2;
-  return [
-    basePrompt2,
-    "",
-    "# Global memory (~/.claude/CLAUDE.md)",
-    "",
-    "Cross-project notes from your Claude Code configuration. Treat as authoritative \u2014 same level of trust as project memory.",
-    "",
-    "```",
-    mem.content,
-    "```"
-  ].join("\n");
-}
 function effectivePriority(entry, cfg) {
   if (entry.priority) return entry.priority;
   return memoryTypeDefaults(entry.type, cfg).priority;
@@ -369,8 +336,7 @@ function applyUserMemory(basePrompt, opts = {}) {
 function applyMemoryStack(basePrompt, rootDir) {
   const withProject = applyProjectMemory(basePrompt, rootDir);
   const withGlobal = applyGlobalVisionoxMemory(withProject);
-  const withGlobalClaude = applyGlobalClaudeMemory(withGlobal);
-  const withMemory = applyUserMemory(withGlobalClaude, { projectRoot: rootDir });
+  const withMemory = applyUserMemory(withGlobal, { projectRoot: rootDir });
   return applySkillsIndex(withMemory, { projectRoot: rootDir });
 }
 

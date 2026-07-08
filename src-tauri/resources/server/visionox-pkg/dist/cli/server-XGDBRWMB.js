@@ -4141,6 +4141,65 @@ function isArtifactPathInsideRoot(path) {
   const target = resolve2(String(path || ""));
   return target === root || target.startsWith(root + sep);
 }
+function isPathInside(parent, target) {
+  const p = resolve2(String(parent || ""));
+  const t = resolve2(String(target || ""));
+  const pp = process.platform === "win32" ? p.toLowerCase() : p;
+  const tt = process.platform === "win32" ? t.toLowerCase() : t;
+  return tt === pp || tt.startsWith(pp + sep);
+}
+function collectScheduleArtifactPaths(ctx) {
+  const schedules = Array.isArray(ctx.listSchedules?.()) ? ctx.listSchedules() : [];
+  const out = [];
+  for (const schedule of schedules) {
+    for (const run of schedule?.history || []) {
+      if (typeof run?.reportPath === "string" && run.reportPath.trim()) {
+        out.push(run.reportPath);
+      }
+    }
+  }
+  return out;
+}
+function isArtifactAllowedPath(path, ctx) {
+  const target = resolve2(String(path || ""));
+  if (isArtifactPathInsideRoot(target)) return true;
+  if (isOpenedDocumentPath(target)) return true;
+  const cwd = ctx.getCurrentCwd?.();
+  if (cwd && isPathInside(cwd, target)) return true;
+  const generated = [
+    ...(Array.isArray(ctx.getGeneratedArtifactPaths?.()) ? ctx.getGeneratedArtifactPaths() : []),
+    ...collectScheduleArtifactPaths(ctx)
+  ];
+  const targetKey = process.platform === "win32" ? target.toLowerCase() : target;
+  return generated.some((item) => {
+    const generatedPath = resolve2(String(item || ""));
+    const generatedKey = process.platform === "win32" ? generatedPath.toLowerCase() : generatedPath;
+    return generatedKey === targetKey;
+  });
+}
+function cleanArtifactPath(value) {
+  let raw = String(value || "").trim();
+  raw = raw.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      raw = decodeURIComponent(raw.replace(/^file:\/\/\/?/i, process.platform === "win32" ? "" : "/"));
+    } catch {
+    }
+  }
+  return raw;
+}
+function resolveArtifactPath(value, ctx) {
+  const raw = cleanArtifactPath(value);
+  if (!raw) return "";
+  const cwd = ctx.getCurrentCwd?.() || process.cwd();
+  return resolve2(cwd, raw);
+}
+function resolveOpenedDocumentPath(value, cwd, ctx) {
+  const raw = cleanArtifactPath(value);
+  if (!raw) return "";
+  const base = String(cwd || "").trim() || ctx.getCurrentCwd?.() || process.cwd();
+  return resolve2(base, raw);
+}
 async function openArtifactFolder(dir) {
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
@@ -4153,12 +4212,237 @@ async function openArtifactFolder(dir) {
     await execFileAsync("xdg-open", [dir]);
   }
 }
+async function openArtifactLocation(target) {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  let isFile = false;
+  try {
+    isFile = statSync(target).isFile();
+  } catch {
+  }
+  if (process.platform === "win32") {
+    await execFileAsync("explorer.exe", isFile ? ["/select,", target] : [target]);
+  } else if (process.platform === "darwin") {
+    await execFileAsync("open", isFile ? ["-R", target] : [target]);
+  } else {
+    await execFileAsync("xdg-open", [isFile ? dirname3(target) : target]);
+  }
+}
+async function openArtifactFile(filePath) {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  if (process.platform === "win32") {
+    await execFileAsync("rundll32.exe", ["url.dll,FileProtocolHandler", filePath]);
+  } else if (process.platform === "darwin") {
+    await execFileAsync("open", [filePath]);
+  } else {
+    await execFileAsync("xdg-open", [filePath]);
+  }
+}
+var ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set([
+  ".md",
+  ".markdown",
+  ".html",
+  ".htm",
+  ".txt",
+  ".py",
+  ".js",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".css",
+  ".json",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".sql",
+  ".ps1",
+  ".bat",
+  ".cmd",
+  ".sh",
+  ".ini",
+  ".toml",
+  ".csv"
+]);
+var OPENED_DOCUMENT_EXTS = /* @__PURE__ */ new Set([".md", ".markdown"]);
+var OPENED_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
+var openedDocumentPaths = /* @__PURE__ */ new Map();
+function openedDocumentKey(path) {
+  const target = resolve2(String(path || ""));
+  return process.platform === "win32" ? target.toLowerCase() : target;
+}
+function isOpenedDocumentPath(path) {
+  return openedDocumentPaths.has(openedDocumentKey(path));
+}
+function rememberOpenedDocumentPath(path) {
+  const key = openedDocumentKey(path);
+  openedDocumentPaths.set(key, resolve2(String(path || "")));
+  while (openedDocumentPaths.size > 100) {
+    const first = openedDocumentPaths.keys().next().value;
+    openedDocumentPaths.delete(first);
+  }
+}
+async function pickMarkdownDocumentPath() {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  if (process.platform === "win32") {
+    const script = `
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = '打开 Markdown 文档'
+$dialog.Filter = 'Markdown 文档 (*.md;*.markdown)|*.md;*.markdown'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.CheckPathExists = $true
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.StartPosition = 'CenterScreen'
+$owner.Width = 1
+$owner.Height = 1
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.Show()
+$owner.Activate()
+$result = $dialog.ShowDialog($owner)
+$owner.Close()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.FileName
+}
+`;
+    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-STA", "-Command", script], { windowsHide: true });
+    return String(stdout || "").trim();
+  }
+  const candidates = [
+    ["zenity", ["--file-selection", "--title=打开 Markdown 文档", "--file-filter=Markdown 文档 | *.md *.markdown"]],
+    ["kdialog", ["--getopenfilename", ".", "*.md *.markdown|Markdown 文档"]]
+  ];
+  for (const [program, args] of candidates) {
+    try {
+      const { stdout } = await execFileAsync(program, args);
+      const selected = String(stdout || "").trim();
+      if (selected) return selected;
+      return "";
+    } catch {
+    }
+  }
+  throw new Error("no supported file picker found");
+}
 async function handleArtifacts(method, rest, body, ctx) {
   if (method !== "POST") {
     return { status: 405, body: { error: "POST only" } };
   }
   const action = rest[0] || "";
   const parsed = parseBody11(body);
+  if (action === "pick-markdown-file") {
+    try {
+      const selected = await pickMarkdownDocumentPath();
+      if (!selected) return { status: 200, body: { path: "" } };
+      const target = resolve2(selected);
+      const ext = extname(target).toLowerCase();
+      if (!OPENED_DOCUMENT_EXTS.has(ext)) {
+        return { status: 400, body: { error: "only Markdown documents are supported" } };
+      }
+      if (!existsSync8(target)) return { status: 404, body: { error: "file does not exist" } };
+      return { status: 200, body: { path: target } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message || "file picker failed" } };
+    }
+  }
+  if (action === "register-opened-document") {
+    const target = resolveOpenedDocumentPath(parsed.path, parsed.cwd, ctx);
+    if (!target) return { status: 400, body: { error: "path is required" } };
+    const ext = extname(target).toLowerCase();
+    if (!OPENED_DOCUMENT_EXTS.has(ext)) {
+      return { status: 400, body: { error: "only Markdown documents are supported" } };
+    }
+    if (!existsSync8(target)) return { status: 404, body: { error: "file does not exist" } };
+    let st;
+    try {
+      st = statSync(target);
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+    if (!st.isFile()) return { status: 400, body: { error: "not a file" } };
+    if (st.size > OPENED_DOCUMENT_MAX_BYTES) {
+      return { status: 413, body: { error: `file too large (${st.size} bytes, max ${OPENED_DOCUMENT_MAX_BYTES})` } };
+    }
+    rememberOpenedDocumentPath(target);
+    return {
+      status: 200,
+      body: {
+        path: target,
+        dir: dirname3(target),
+        filename: basename(target),
+        ext,
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+        previewable: true,
+        openable: true
+      }
+    };
+  }
+  if (action === "resolve") {
+    const candidates = Array.isArray(parsed.candidates) ? parsed.candidates : [];
+    const seen = /* @__PURE__ */ new Set();
+    const files = [];
+    for (const candidate of candidates.slice(0, 30)) {
+      const target = resolveArtifactPath(candidate, ctx);
+      if (!target || !isArtifactAllowedPath(target, ctx)) continue;
+      const key = process.platform === "win32" ? target.toLowerCase() : target;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        if (!existsSync8(target)) continue;
+        const st = statSync(target);
+        if (!st.isFile()) continue;
+        const ext = extname(target).toLowerCase();
+        files.push({
+          path: target,
+          dir: dirname3(target),
+          filename: basename(target),
+          ext,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          previewable: ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= MAX_FILE_SIZE,
+          openable: ![".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"].includes(ext)
+        });
+      } catch {
+      }
+    }
+    return { status: 200, body: { files } };
+  }
+  if (action === "preview") {
+    const target = resolveArtifactPath(parsed.path, ctx);
+    if (!target) return { status: 400, body: { error: "path is required" } };
+    if (!isArtifactAllowedPath(target, ctx)) return { status: 403, body: { error: "path is not available" } };
+    if (!existsSync8(target)) return { status: 404, body: { error: "file does not exist" } };
+    let st;
+    try {
+      st = statSync(target);
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+    if (!st.isFile()) return { status: 400, body: { error: "not a file" } };
+    const ext = extname(target).toLowerCase();
+    if (!ARTIFACT_PREVIEW_EXTS.has(ext)) return { status: 400, body: { error: "preview is not supported for this file type" } };
+    const maxPreviewBytes = isOpenedDocumentPath(target) ? OPENED_DOCUMENT_MAX_BYTES : MAX_FILE_SIZE;
+    if (st.size > maxPreviewBytes) return { status: 413, body: { error: `file too large (${st.size} bytes, max ${maxPreviewBytes})` } };
+    let readPath = target;
+    try {
+      if (ctx.resolveDlpReadablePath) {
+        const readable = await ctx.resolveDlpReadablePath(target);
+        if (readable?.path) readPath = readable.path;
+      }
+      const content = readFileSync5(readPath, "utf8");
+      return { status: 200, body: { path: target, filename: basename(target), ext, content, size: st.size } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message || "file preview failed" } };
+    }
+  }
   if (action === "save") {
     const content = String(parsed.content ?? "");
     if (!content) return { status: 400, body: { error: "content is required" } };
@@ -4173,22 +4457,38 @@ async function handleArtifacts(method, rest, body, ctx) {
       mkdirSync8(dir, { recursive: true });
       const filePath = artifactUniquePath(dir, filename);
       writeFileSync8(filePath, content, "utf8");
-      return { status: 200, body: { saved: true, path: filePath, dir, filename } };
+      return { status: 200, body: { saved: true, path: filePath, dir, filename: basename(filePath) } };
     } catch (err) {
       return { status: 500, body: { error: err.message } };
     }
   }
   if (action === "open-folder") {
-    const dir = String(parsed.dir || parsed.path || "");
-    if (!dir) return { status: 400, body: { error: "dir is required" } };
-    const target = resolve2(dir);
-    if (!isArtifactPathInsideRoot(target)) {
-      return { status: 403, body: { error: "can only open Visionox artifact folders" } };
+    const raw = parsed.path || parsed.dir || "";
+    if (!raw) return { status: 400, body: { error: "path is required" } };
+    const target = resolveArtifactPath(raw, ctx);
+    if (!isArtifactAllowedPath(target, ctx)) {
+      return { status: 403, body: { error: "path is not available" } };
     }
     try {
-      mkdirSync8(target, { recursive: true });
-      await openArtifactFolder(target);
+      if (!existsSync8(target)) mkdirSync8(target, { recursive: true });
+      await openArtifactLocation(target);
       return { status: 200, body: { opened: true, dir: target } };
+    } catch (err) {
+      return { status: 500, body: { error: err.message } };
+    }
+  }
+  if (action === "open-file") {
+    const target = resolveArtifactPath(parsed.path, ctx);
+    if (!target) return { status: 400, body: { error: "path is required" } };
+    if (!isArtifactAllowedPath(target, ctx)) {
+      return { status: 403, body: { error: "path is not available" } };
+    }
+    if (!existsSync8(target)) {
+      return { status: 404, body: { error: "artifact file does not exist" } };
+    }
+    try {
+      await openArtifactFile(target);
+      return { status: 200, body: { opened: true, path: target } };
     } catch (err) {
       return { status: 500, body: { error: err.message } };
     }

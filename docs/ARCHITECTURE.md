@@ -1,6 +1,6 @@
 # Visionox 架构说明
 
-> 应用版本：1.10.0 | 上游版本：v0.47.1
+> 应用版本：1.20.0
 
 ---
 
@@ -36,7 +36,7 @@ Dashboard SPA (WebView2)
 | AI 运行时 | Node.js v22+ | Agent loop、工具注册、MCP 管理 |
 | 前端界面 | Preact + WebView2 | Dashboard SPA |
 | 通信 | HTTP API + SSE | Launcher 与 Dashboard 之间 |
-| 打包 | NSIS | Windows 安装器 |
+| 打包 | Tauri Bundle | 开发可只构建 exe；分发时按平台生成 NSIS / deb / AppImage |
 
 ---
 
@@ -57,8 +57,9 @@ vis-ai/
 │   └── tauri.conf.json               Tauri 配置
 ├── docs/                             项目文档
 ├── archive/                          归档旧实现
-├── cherry-claude.cjs                 CLAUDE.md 记忆注入
-└── scripts/restore-visionox-pkg.js   服务端包恢复
+└── scripts/
+    ├── cherry-claude.cjs             CLAUDE.md 兼容迁移脚本
+    └── restore-visionox-pkg.js       上游 reasonix 包恢复工具（维护/升级时使用）
 ```
 
 ---
@@ -72,7 +73,9 @@ vis-ai/
 | `src-tauri/resources/server/launcher.mjs` | AI Agent 启动器、工具注册、MCP 管理、会话管理、Skill 安装、系统提示词 |
 | `src-tauri/resources/server/visionox-pkg/` | Vendored 上游服务端代码（Dashboard + CLI chunks） |
 | `src-tauri/Cargo.toml` | Rust 依赖与 features |
-| `src-tauri/tauri.conf.json` | 窗口配置、资源打包、NSIS 配置 |
+| `src-tauri/tauri.conf.json` | 窗口配置、资源打包、跨平台 bundle 配置 |
+
+> 维护边界：当前 `visionox-pkg` 下的 Dashboard bundle 与 API bundle 含本项目本地补丁。普通 `restore:pkg` 已禁用；更新上游包前需要先迁移本地补丁，更新后运行 `npm run check:bundle-patches`。
 
 ---
 

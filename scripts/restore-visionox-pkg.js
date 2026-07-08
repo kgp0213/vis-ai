@@ -2,7 +2,7 @@
 // Downloads the reasonix npm package and extracts it to the bundled resources
 // directory. Run this when setting up a fresh clone or updating the reasonix version.
 //
-// Usage: node scripts/restore-visionox-pkg.js [version]
+// Usage: node scripts/restore-visionox-pkg.js [version] [--force] --i-understand-overwrite-local-patches
 //   version — reasonix version (default: "260603")
 
 import { execSync } from "node:child_process";
@@ -13,11 +13,20 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 const target = join(root, "src-tauri", "resources", "server", "visionox-pkg");
-const version = process.argv[2] || "260603";
+const args = process.argv.slice(2);
+const force = args.includes("--force");
+const confirmed = args.includes("--i-understand-overwrite-local-patches");
+const version = args.find((arg) => !arg.startsWith("--")) || "260603";
 const pkgName = "reasonix";
 
+if (force && !confirmed) {
+  console.error("[restore] Refusing to overwrite local bundle patches without --i-understand-overwrite-local-patches.");
+  console.error("[restore] This script deletes and restores src-tauri/resources/server/visionox-pkg.");
+  process.exit(1);
+}
+
 // Check if dist/ already exists — if so, skip unless --force
-if (existsSync(join(target, "dist")) && !process.argv.includes("--force")) {
+if (existsSync(join(target, "dist")) && !force) {
   console.log(`[restore] visionox-pkg/dist already exists. Use --force to overwrite.`);
   process.exit(0);
 }
