@@ -295,42 +295,94 @@ npm run tauri:build -- --bundles nsis
 | `resources` | 列表见配置文件 | Windows 打包含 `node.exe`/`officecli.exe`；Ubuntu 用 `tauri.linux.conf.json` 覆盖排除 |
 | 注意 | `--no-bundle` 跳过此步骤 | 开发测试时使用 |
 
-### Ubuntu 构建
+### Ubuntu / Linux 桌面版构建
 
-#### 安装系统依赖
+推荐在 Ubuntu 22.04/24.04 原生环境、虚拟机或 CI runner 中构建 Linux 桌面版。不要优先在 Windows 上交叉编译 Linux 版本；本项目使用 Tauri 2 + WebKitGTK，Linux 原生构建成功率最高。
+
+#### 1. 安装系统依赖
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
+  build-essential curl wget file pkg-config libssl-dev \
   libwebkit2gtk-4.1-dev \
   libayatana-appindicator3-dev \
   librsvg2-dev \
   patchelf \
-  nodejs unzip
+  unzip \
+  xclip wl-clipboard
 ```
 
-> Ubuntu 不内嵌 `node.exe`，依赖系统 `nodejs`（≥ 22）。如系统 Node 版本过低，可用 [NodeSource](https://github.com/nodesource/distributions) 安装新版。
+`xclip` / `wl-clipboard` 用于 Linux 下剪贴板路径读取，缺失时主程序仍可运行，但文件/文件夹路径粘贴体验会降级。
 
-#### 开发构建
+#### 2. 安装 Node.js 22+
+
+建议使用 `nvm` 安装，避免 Ubuntu 默认源里的 Node.js 版本过低：
 
 ```bash
-cd /path/to/vis-ai
-npx tauri build --no-bundle
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+source ~/.bashrc
+nvm install 22
+nvm use 22
+node -v
 ```
 
-构建产物在 `src-tauri/target/release/visionox-desktop`。
-
-#### 打包 deb / AppImage
+#### 3. 安装 Rust
 
 ```bash
-npx tauri build
+curl https://sh.rustup.rs -sSf | sh
+source ~/.cargo/env
+rustup update stable
+rustc --version
 ```
 
-产物在 `src-tauri/target/release/bundle/`：
-- `deb/visionox_1.20.0_amd64.deb` — Debian 安装包
-- `appimage/visionox_1.20.0_amd64.AppImage` — 免安装可执行文件
+#### 4. 拉取项目并安装依赖
 
-> **功能差异**：Ubuntu 上 OfficeCLI（Word/Excel/PPT 操作）不可用，`launcher.mjs` 会自动跳过 MCP 注入并打日志，其余功能完整。剪贴板文件/文件夹路径粘贴依赖系统 `xclip` 或 `wl-clipboard`。
+```bash
+git clone git@gitee.com:hufz_admin/vis-ai.git
+cd vis-ai
+npm ci
+npm run fetch:binaries
+```
+
+Linux 版不内嵌 `node.exe`，运行时会使用系统 `node`。`npm run fetch:binaries` 在 Linux 上主要用于确认系统 Node 可用；Windows 专用的 `officecli.exe` 不需要。
+
+#### 5. 先构建可执行文件测试
+
+```bash
+npm run check:bundle-patches
+npm test
+npm run tauri:build -- --no-bundle
+```
+
+构建产物在：
+
+```bash
+src-tauri/target/release/visionox-desktop
+```
+
+可以直接运行测试：
+
+```bash
+./src-tauri/target/release/visionox-desktop
+```
+
+#### 6. 打包 deb / AppImage
+
+确认可执行文件可以正常启动后，再打包安装包：
+
+```bash
+npm run tauri:build
+```
+
+产物在 `src-tauri/target/release/bundle/`，常见输出：
+
+- `deb/visionox_1.20.0_amd64.deb` — Ubuntu / Debian 安装包，推荐分发给普通用户
+- `appimage/visionox_1.20.0_amd64.AppImage` — 免安装可执行文件，适合临时测试或无安装权限环境
+
+#### 7. Linux 版功能差异
+
+Ubuntu 上 OfficeCLI 相关的 Word/Excel/PPT 原生操作不可用，`launcher.mjs` 会自动跳过 MCP 注入并打日志。对话、任务、文件中心、Markdown 阅读、报告等核心功能可正常使用。
 
 ---
 
