@@ -19253,6 +19253,7 @@ var en = {
     tabPlans: "Plans",
     tabTasks: "Tasks",
     tabSessions: "Sessions",
+    tabFiles: "Files",
     tabOverview: "Overview",
     tabUsage: "Usage",
     tabSystem: "System",
@@ -20106,6 +20107,7 @@ var zhCN = {
     tabPlans: "\u8BA1\u5212",
     tabTasks: "\u4EFB\u52A1",
     tabSessions: "\u4F1A\u8BDD",
+    tabFiles: "\u6587\u4EF6",
     tabOverview: "\u6982\u89C8",
     tabUsage: "\u7528\u91CF",
     tabSystem: "\u7CFB\u7EDF",
@@ -23444,6 +23446,31 @@ function renderArtifactFrame(artifact, codeHtml) {
     ${codeHtml}
   </div>`;
 }
+function renderPreviewCodeBlock(content, rawLang) {
+  const lang = normalizeArtifactLang(rawLang);
+  const hlLang = lang === "html" || lang === "htm" ? "xml" : lang;
+  let codeHtml = escapeHtml(content);
+  if (hlLang && common_default.getLanguage(hlLang)) {
+    try {
+      codeHtml = common_default.highlight(content, { language: hlLang, ignoreIllegals: true }).value;
+    } catch {
+    }
+  } else {
+    try {
+      codeHtml = common_default.highlightAuto(content).value;
+    } catch {
+    }
+  }
+  const langLabel = lang ? escapeHtml(lang) : "代码";
+  const codeClass = hlLang ? ` class="hljs language-${escapeHtml(hlLang)}"` : ' class="hljs"';
+  return `<div class="artifact-preview-code">
+    <div class="artifact-preview-code-head">
+      <span>${langLabel}</span>
+      <button type="button" data-preview-code-copy>复制</button>
+    </div>
+    <pre><code${codeClass}>${codeHtml}</code></pre>
+  </div>`;
+}
 renderer.code = function reasonixCode(arg1, arg2) {
   let text;
   let lang;
@@ -23456,6 +23483,7 @@ renderer.code = function reasonixCode(arg1, arg2) {
   }
   if (text == null) text = "";
   const codeText = typeof text === "string" ? text : String(text);
+  if (globalThis.__visionoxMarkdownPreviewMode) return renderPreviewCodeBlock(codeText, lang);
   const sr = SEARCH_REPLACE_RE.exec(codeText);
   if (sr) {
     const [, search = "", replace = ""] = sr;
@@ -23493,11 +23521,21 @@ marked.use({ renderer, gfm: true, breaks: false, pedantic: false });
 function renderMarkdownToString(text) {
   return marked.parse(text);
 }
+function renderMarkdownPreviewToString(text) {
+  const previous = globalThis.__visionoxMarkdownPreviewMode;
+  globalThis.__visionoxMarkdownPreviewMode = true;
+  try {
+    return marked.parse(text);
+  } finally {
+    if (previous === void 0) delete globalThis.__visionoxMarkdownPreviewMode;
+    else globalThis.__visionoxMarkdownPreviewMode = previous;
+  }
+}
 function artifactPreviewDoc(artifact) {
   if (artifact.lang === "html" || artifact.lang === "htm") {
     return String(artifact.content || "");
   }
-  const rendered = renderMarkdownToString(artifact.content);
+  const rendered = renderMarkdownPreviewToString(artifact.content);
   return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
 body{margin:0;padding:22px 26px 34px;background:#fff;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65;font-size:14px}
 h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;color:#111827}
@@ -23507,6 +23545,10 @@ code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",mono
 code{background:#f3f4f6;border-radius:4px;padding:.12em .32em}
 pre{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;overflow:auto}
 pre code{background:transparent;padding:0}
+.artifact-preview-code{margin:.9em 0;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#f8fafc}
+.artifact-preview-code-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;border-bottom:1px solid #e5e7eb;background:#f9fafb;color:#64748b;font-size:12px}
+.artifact-preview-code-head button{height:24px;display:inline-flex;align-items:center;justify-content:center;padding:0 9px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#334155;font-size:12px;line-height:1;cursor:pointer}
+.artifact-preview-code pre{margin:0;border:0;border-radius:0;background:#f8fafc}
 blockquote{border-left:4px solid #d1d5db;padding-left:12px;color:#4b5563}
 table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:6px 8px}th{background:#f9fafb}
 a{color:#2563eb}
@@ -23539,7 +23581,11 @@ function showArtifactPreview(artifact) {
     body.replaceChildren();
     const iframe = document.createElement("iframe");
     iframe.className = "artifact-preview-frame";
-    iframe.setAttribute("sandbox", "");
+    const isRawHtml = artifact.lang === "html" || artifact.lang === "htm";
+    iframe.setAttribute("sandbox", isRawHtml ? "" : "allow-same-origin");
+    if (!isRawHtml) {
+      iframe.addEventListener("load", () => wireArtifactPreviewCodeCopy(iframe));
+    }
     iframe.srcdoc = artifactPreviewDoc(artifact);
     body.appendChild(iframe);
   };
@@ -23581,6 +23627,37 @@ function showArtifactPreview(artifact) {
       }
     } catch (err) {
       showToast(err.message || "文件操作失败", "error", 5e3);
+    }
+  });
+}
+function wireArtifactPreviewCodeCopy(iframe) {
+  let doc;
+  try {
+    doc = iframe.contentDocument;
+  } catch {
+    return;
+  }
+  if (!doc || doc.__visionoxPreviewCodeCopyBound) return;
+  doc.__visionoxPreviewCodeCopyBound = true;
+  doc.addEventListener("click", async (ev) => {
+    const btn = ev.target?.closest?.("[data-preview-code-copy]");
+    if (!btn) return;
+    ev.preventDefault();
+    const wrap = btn.closest(".artifact-preview-code");
+    const text = wrap?.querySelector?.("pre code")?.textContent || "";
+    const original = btn.textContent || "复制";
+    try {
+      await writeClipboardText(text);
+      btn.textContent = "已复制";
+      setTimeout(() => {
+        btn.textContent = original;
+      }, 1200);
+    } catch (err) {
+      btn.textContent = "复制失败";
+      showToast(err.message || "复制失败", "error", 4e3);
+      setTimeout(() => {
+        btn.textContent = original;
+      }, 1500);
     }
   });
 }
@@ -24732,15 +24809,18 @@ function pickMarkdownFileFromBridge() {
 async function openMarkdownDocumentByPicker() {
   try {
     showToast("请选择 Markdown 文档...", "info", 1500);
-    if (typeof document !== "undefined") {
+    try {
+      const path = await pickMarkdownFileFromBridge();
+      if (!path) return;
+      await registerAndPreviewMarkdownDocument(path);
+      return;
+    } catch (pickerErr) {
+      if (typeof document === "undefined") throw pickerErr;
       const file = await selectMarkdownDocumentFile();
       if (!file) return;
       await previewSelectedMarkdownDocument(file);
       return;
     }
-    const path = await pickMarkdownFileFromBridge();
-    if (!path) return;
-    await registerAndPreviewMarkdownDocument(path);
   } catch (err) {
     showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
   }
@@ -24796,7 +24876,7 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
             ${group.files.map((file) => {
     const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
     const canPreview = file.previewable || FILE_ARTIFACT_PREVIEW_EXTS.has(ext);
-    const canOpen = file.openable !== false && !FILE_ARTIFACT_SCRIPT_EXTS.has(ext);
+    const canOpen = !canPreview && file.openable !== false && !FILE_ARTIFACT_SCRIPT_EXTS.has(ext);
     return html4`
             <div class="file-artifact-item" key=${file.path}>
               <div class="file-artifact-name" title=${file.path}>${file.filename}</div>
@@ -24814,6 +24894,116 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
         `)}
       </div>
       ${more > 0 ? html4`<div class="file-artifact-more">还有 ${more} 个文件，已自动去重</div>` : null}
+    </div>
+  `;
+}
+function recentFileSourceLabel(source) {
+  if (source === "report") return "任务报告";
+  if (source === "opened") return "打开过";
+  if (source === "saved") return "另存产物";
+  if (source === "generated") return "生成文件";
+  return "文件";
+}
+function fmtRecentFileTime(ms) {
+  if (!Number.isFinite(Number(ms))) return "时间未知";
+  try {
+    return new Date(Number(ms)).toLocaleString();
+  } catch {
+    return "时间未知";
+  }
+}
+function FilesPanel() {
+  useLang();
+  const [files, setFiles] = d2([]);
+  const [loading, setLoading] = d2(true);
+  const [error, setError] = d2(null);
+  const [query, setQuery] = d2("");
+  const load = q2(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api("/artifacts/recent", { method: "POST", body: { limit: 120 } });
+      setFiles(Array.isArray(res.files) ? res.files : []);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  y2(() => {
+    load();
+  }, [load]);
+  const needle = query.trim().toLowerCase();
+  const visible = needle ? files.filter((file) => {
+    const text = [file.filename, file.path, file.dir, recentFileSourceLabel(file.source)].filter(Boolean).join(" ").toLowerCase();
+    return text.includes(needle);
+  }) : files;
+  const action = async (kind, file) => {
+    try {
+      if (kind === "preview") {
+        await showFileArtifactPreview(file);
+      } else if (kind === "open") {
+        await api("/artifacts/open-file", { method: "POST", body: { path: file.path } });
+      } else if (kind === "folder") {
+        await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
+      } else if (kind === "copy") {
+        await writeClipboardText(file.path);
+        showToast("路径已复制", "info");
+      }
+    } catch (err) {
+      showToast(err.message || "文件操作失败", "error", 5e3);
+    }
+  };
+  return html4`
+    <div class="files-panel">
+      <div class="files-toolbar">
+        <div class="files-heading">
+          <div class="files-title">文件中心</div>
+          <div class="files-subtitle">集中查看最近生成、打开和任务输出的文件</div>
+        </div>
+        <input
+          class="input files-search"
+          value=${query}
+          onInput=${(e3) => setQuery(e3.target.value)}
+          placeholder="搜索文件名或路径"
+        />
+        <button class="btn" onClick=${load} disabled=${loading}>${loading ? "刷新中..." : "刷新"}</button>
+      </div>
+      ${error ? html4`<div class="files-notice err">文件列表加载失败：${error.message}</div>` : null}
+      ${loading && files.length === 0 ? html4`<div class="files-empty">正在加载最近文件...</div>` : null}
+      ${!loading && visible.length === 0 ? html4`<div class="files-empty">${query.trim() ? "没有匹配的文件。" : "暂无最近文件。对话生成文件、任务报告或打开 Markdown 后会出现在这里。"}</div>` : null}
+      ${visible.length > 0 ? html4`
+        <div class="files-summary">共 ${files.length} 个最近文件${query.trim() ? ` · 当前显示 ${visible.length} 个` : ""}</div>
+        <div class="files-list">
+          ${visible.map((file) => {
+    const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
+    const canPreview = file.previewable || FILE_ARTIFACT_PREVIEW_EXTS.has(ext);
+    const canOpen = !canPreview && file.openable !== false && !FILE_ARTIFACT_SCRIPT_EXTS.has(ext);
+    return html4`
+            <div class="files-row" key=${file.path}>
+              <div class="files-main">
+                <div class="files-name" title=${file.path}>${file.filename || file.path}</div>
+                <div class="files-path" title=${file.path}>${file.path}</div>
+                <div class="files-meta">
+                  <span>${fileArtifactKind(ext)}</span>
+                  <span>${fmtBytes(file.size)}</span>
+                  <span>${fmtRecentFileTime(file.mtimeMs)}</span>
+                </div>
+              </div>
+              <div class="files-side">
+                <span class="files-source">${recentFileSourceLabel(file.source)}</span>
+                <div class="files-actions">
+                  ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>查看</button>` : null}
+                  ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>打开</button>` : null}
+                  <button type="button" onClick=${() => action("folder", file)}>所在文件夹</button>
+                  <button type="button" onClick=${() => action("copy", file)}>复制路径</button>
+                </div>
+              </div>
+            </div>
+          `;
+  })}
+        </div>
+      ` : null}
     </div>
   `;
 }
@@ -33040,6 +33230,7 @@ function tabSections() {
       tabs: [
         { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
         { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
+        { id: "files", name: t4("app.tabFiles"), glyph: "F", panel: () => html7`<${FilesPanel} />` },
         { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` }
       ]
     },

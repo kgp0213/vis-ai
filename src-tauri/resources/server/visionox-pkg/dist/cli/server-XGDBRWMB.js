@@ -4269,6 +4269,7 @@ var ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set([
 var OPENED_DOCUMENT_EXTS = /* @__PURE__ */ new Set([".md", ".markdown"]);
 var OPENED_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
 var openedDocumentPaths = /* @__PURE__ */ new Map();
+var RECENT_ARTIFACT_LIMIT = 120;
 function openedDocumentKey(path) {
   const target = resolve2(String(path || ""));
   return process.platform === "win32" ? target.toLowerCase() : target;
@@ -4283,6 +4284,76 @@ function rememberOpenedDocumentPath(path) {
     const first = openedDocumentPaths.keys().next().value;
     openedDocumentPaths.delete(first);
   }
+}
+function recentArtifactKey(path) {
+  const target = resolve2(String(path || ""));
+  return process.platform === "win32" ? target.toLowerCase() : target;
+}
+function recentArtifactInfo(path, source = "generated") {
+  try {
+    const target = resolve2(String(path || ""));
+    if (!target || !existsSync8(target)) return null;
+    const st = statSync(target);
+    if (!st.isFile()) return null;
+    const ext = extname(target).toLowerCase();
+    return {
+      path: target,
+      dir: dirname3(target),
+      filename: basename(target),
+      ext,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      previewable: ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= MAX_FILE_SIZE,
+      openable: ![".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"].includes(ext),
+      source
+    };
+  } catch {
+    return null;
+  }
+}
+function collectSavedArtifactPaths(limit = RECENT_ARTIFACT_LIMIT) {
+  const root = artifactRootDir();
+  const out = [];
+  if (!existsSync8(root)) return out;
+  const stack = [{ dir: root, depth: 0 }];
+  while (stack.length > 0 && out.length < limit * 4) {
+    const current = stack.shift();
+    let entries = [];
+    try {
+      entries = readdirSync(current.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    entries.sort((a, b) => b.name.localeCompare(a.name));
+    for (const entry of entries) {
+      const full = join4(current.dir, entry.name);
+      if (entry.isDirectory() && current.depth < 2) {
+        stack.push({ dir: full, depth: current.depth + 1 });
+      } else if (entry.isFile()) {
+        out.push(full);
+        if (out.length >= limit * 4) break;
+      }
+    }
+  }
+  return out;
+}
+function collectRecentArtifacts(ctx, limit = RECENT_ARTIFACT_LIMIT) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (path, source) => {
+    const info = recentArtifactInfo(path, source);
+    if (!info) return;
+    const key = recentArtifactKey(info.path);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(info);
+  };
+  for (const path of collectScheduleArtifactPaths(ctx)) push(path, "report");
+  for (const path of Array.isArray(ctx.getGeneratedArtifactPaths?.()) ? ctx.getGeneratedArtifactPaths() : []) push(path, "generated");
+  for (const path of openedDocumentPaths.values()) push(path, "opened");
+  for (const path of collectSavedArtifactPaths(limit)) push(path, "saved");
+  out.sort((a, b) => Number(b.mtimeMs || 0) - Number(a.mtimeMs || 0));
+  return out.slice(0, limit);
 }
 async function pickMarkdownDocumentPath() {
   const { execFile } = await import("node:child_process");
@@ -4337,6 +4408,10 @@ async function handleArtifacts(method, rest, body, ctx) {
   }
   const action = rest[0] || "";
   const parsed = parseBody11(body);
+  if (action === "recent") {
+    const limit = Math.max(1, Math.min(200, Number.parseInt(String(parsed.limit ?? RECENT_ARTIFACT_LIMIT), 10) || RECENT_ARTIFACT_LIMIT));
+    return { status: 200, body: { files: collectRecentArtifacts(ctx, limit) } };
+  }
   if (action === "pick-markdown-file") {
     try {
       const selected = await pickMarkdownDocumentPath();

@@ -219,6 +219,16 @@ npx tauri build --no-bundle
 
 构建产物在 `src-tauri\target\release\visionox-desktop.exe`。
 
+### 发布前检查
+
+给用户测试前建议先运行统一检查脚本：
+
+```bash
+npm run release:check
+```
+
+该脚本会依次检查 Dashboard/API bundle 语法、本地 bundle 补丁、Node 测试、Rust 测试、右上角 `VerYYMMDD` 日期，并执行 `tauri build --no-bundle`。如果需要安装包，再执行下面的 NSIS 打包命令。
+
 如需生成 NSIS 安装包：
 
 ```bash

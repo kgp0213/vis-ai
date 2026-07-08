@@ -9,6 +9,7 @@
     "pretauri:build": "node scripts/check-bundle-patches.js",
     "tauri:build": "tauri build",
     "check:bundle-patches": "node scripts/check-bundle-patches.js",
+    "release:check": "node scripts/release-check.js",
     "restore:pkg": "node -e \"console.error('restore:pkg is disabled because it can overwrite local bundle patches. Use npm run restore:pkg:danger -- --force after backing up and reapplying patches.'); process.exit(1)\"",
     "restore:pkg:danger": "node scripts/restore-visionox-pkg.js --i-understand-overwrite-local-patches",
     "fetch:binaries": "node scripts/fetch-binaries.js",

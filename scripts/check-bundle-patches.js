@@ -50,6 +50,8 @@ const required = [
     markers: [
       "function handleArtifacts",
       "ctx.getGeneratedArtifactPaths",
+      "collectRecentArtifacts",
+      "action === \"recent\"",
       "pick-markdown-file",
       "register-opened-document",
       "function handleClipboardFiles",
@@ -62,6 +64,10 @@ const required = [
       "artifact-created",
       "fileArtifactCandidatesForAssistant",
       "selectedForArtifacts",
+      "function FilesPanel",
+      "app.tabFiles",
+      "data-preview-code-copy",
+      "const canOpen = !canPreview",
       "openMarkdownDocumentFromArgs",
       "openMarkdownDocumentByPicker",
       "top-action-md",
@@ -71,6 +77,7 @@ const required = [
     file: "src-tauri/resources/server/visionox-pkg/dashboard/app.css",
     markers: [
       ".file-artifact-card",
+      ".files-panel",
       ".chat-msg-actions",
       "position: static",
       ".top-action",

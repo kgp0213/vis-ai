@@ -226,6 +226,12 @@ describe("Dashboard 回归护栏", () => {
     assert.equal(saved.status, 200);
     assert.equal(existsSync(saved.json.path), true);
     assert.match(readFileSync(saved.json.path, "utf8"), /Artifact body/);
+
+    const recent = await api("POST", "/api/artifacts/recent", { limit: 20 }, artifactCtx);
+    assert.equal(recent.status, 200);
+    const recentPaths = recent.json.files.map((file) => file.path);
+    assert.ok(recentPaths.includes(generatedFile));
+    assert.ok(recentPaths.includes(saved.json.path));
   });
 
   test("用户主动打开的 Markdown 文档登记后才允许预览", async () => {
@@ -252,6 +258,11 @@ describe("Dashboard 回归护栏", () => {
     assert.equal(preview.status, 200);
     assert.equal(preview.json.filename, "阅读 测试.md");
     assert.match(preview.json.content, /外部文档/);
+
+    const recent = await api("POST", "/api/artifacts/recent", { limit: 20 });
+    assert.equal(recent.status, 200);
+    const opened = recent.json.files.find((file) => file.path === docPath);
+    assert.equal(opened?.source, "opened");
 
     const unsupported = await api("POST", "/api/artifacts/register-opened-document", {
       path: txtPath,
