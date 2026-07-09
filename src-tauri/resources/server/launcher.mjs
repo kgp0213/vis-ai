@@ -28,7 +28,7 @@ import {
 import { resolveContextCap } from "./lib/context-cap.mjs";
 import { requestToModal } from "./lib/pause-gate-modal.mjs";
 import { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
-import { getDlpConfig, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } from "./lib/dlp-file.mjs";
+import { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } from "./lib/dlp-file.mjs";
 
 // NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
 // resource file cannot brick the whole launcher startup.
@@ -164,7 +164,7 @@ const CONSTANTS = {
 
   // Mode versions
   DEFAULT_MODE_VERSION: 5,
-  OFFICE_MODE_VERSION: 6,
+  OFFICE_MODE_VERSION: 7,
 };
 const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
 
@@ -769,11 +769,41 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     logger: console,
   });
 
+  tools.register({
+    name: "prepare_local_document",
+    description: "Prepare a user-provided local document path before reading/parsing it. Use this FIRST for local PDF/Word/Excel/PPT/XML/DSN/text/image files, odd Chinese filenames, wildcard paths, or when another document reader fails. It fixes common Windows path typos such as D:_folder, resolves one matching local file, and returns readablePath for the next parser. Do not explain internal path preparation details to the user.",
+    parameters: {
+      type: "object",
+      properties: {
+        input: {
+          type: "string",
+          description: "The raw user path, wildcard, or full user sentence containing a local document path.",
+        },
+        allowMultiple: {
+          type: "boolean",
+          description: "Return candidate list instead of error when multiple files match. Default false.",
+        },
+      },
+      required: ["input"],
+    },
+    fn: async (args) => JSON.stringify(await prepareLocalDocument(args?.input ?? args, {
+      cfg: readConfig(configPath),
+      env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+      logger: console,
+      allowMultiple: Boolean(args?.allowMultiple),
+    })),
+  });
+
   registerShellTools(tools, {
     rootDir,
     extraAllowed: () => loadProjectShellAllowed(rootDir, configPath),
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
+  });
+  wrapToolsPathArgsWithDlp(tools, ["run_command", "run_background"], {
+    readConfig: () => readConfig(configPath),
+    env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+    logger: console,
   });
 
   registerMemoryTools(tools, { projectRoot: rootDir });
@@ -841,7 +871,7 @@ const DEFAULT_MODES = {
       "dispatching-parallel-agents", "subagent-driven-development",
       "requesting-code-review", "receiving-code-review",
       "finishing-a-development-branch", "using-git-worktrees",
-      "production-audit", "basic-skill-example", "skill-creation-guide", "writing-skills",
+      "production-audit", "file-access-rescue", "basic-skill-example", "skill-creation-guide", "writing-skills",
     ],
     prompt: "你处于通用模式。先判断用户目标属于问答、代码、办公还是设计；若任务明显属于专业场景，按该场景的工作习惯组织答案，但不要擅自切换模式。保持回答直接、可执行，必要时指出下一步。系统内置 22 种语言的 ECC 编码规范（angular/cpp/go/java/swift/vue 等），可在工作模式配置中按需启用。",
   },
@@ -867,8 +897,8 @@ const DEFAULT_MODES = {
     description: "文档、表格、PDF、PPT、报告、数据整理和格式转换。",
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
-    skills: ["officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。优先明确输入文件、目标格式、输出位置和质量要求；OfficeCLI（Word/Excel/PPT）通过 MCP 工具注入时，优先使用 create/view/get/query/set/add/remove/move/validate/batch/merge/watch 等工具处理 Office 文档。交付前先 validate 检查质量，并通过 view issues 定位问题和自修复；PDF 使用 pdf、md-to-pdf-cjk 等专项技能。",
+    skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
+    prompt: "你处于办公模式。处理任何本地文档路径（PDF/Word/Excel/PPT/XML/DSN/文本/图片等）时，先调用 prepare_local_document，把用户原始路径或完整句子交给它，后续只使用返回的 readablePath 交给 officecli、pdf 或 read_file 等工具。不要先安装依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。OfficeCLI（Word/Excel/PPT）通过 MCP 工具注入时，优先使用 create/view/get/query/set/add/remove/move/validate/batch/merge/watch 等工具处理 Office 文档。PDF 也先准备本地文档，再使用 pdf/officecli 等专项工具。交付前先 validate 检查质量，并通过 view issues 定位问题和自修复。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -4984,7 +5014,7 @@ ${modeList}
 | 代码模式 | rust-patterns、python-patterns、api-design | 语言最佳实践 |
 | 工程流程 | git-workflow、systematic-debugging、security-review | Git 操作、系统调试、安全审查 |
 | 前端设计 | frontend-patterns、react-patterns、e2e-testing | 前端开发、React、端到端测试 |
-| 办公文档 | officecli、pdf、md-to-pdf-cjk | Word/Excel/PPT/PDF 操作 |
+| 办公文档 | file-access-rescue、officecli、pdf、md-to-pdf-cjk | 本地文档准备、Word/Excel/PPT/PDF 操作 |
 | 规划执行 | brainstorming、writing-plans、executing-plans | 方案构思、计划编写、任务执行 |
 | 代码审查 | requesting-code-review、receiving-code-review | 发起审查、处理审查反馈 |
 

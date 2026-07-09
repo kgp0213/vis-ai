@@ -23,6 +23,8 @@ process.env.USERPROFILE = tmpHome;
 
 const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url);
 const sessionUrl = new URL("../visionox-pkg/dist/cli/chunk-6PBZN4VI.js", import.meta.url);
+const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
+const fileAccessRescueSkillUrl = new URL("../../bootstrap-skills/file-access-rescue/SKILL.md", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
 const { sessionPath } = await import(sessionUrl.href);
 
@@ -268,5 +270,26 @@ describe("Dashboard 回归护栏", () => {
       path: txtPath,
     });
     assert.equal(unsupported.status, 400);
+  });
+
+  test("聊天粘贴文件路径优先走本地剪贴板桥，并保护用户消息中的 Windows 路径显示", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(app, /function normalizeClipboardPathText/);
+    assert.match(app, /function pathLikeClipboardText/);
+    assert.match(app, /function decodeClipboardUri/);
+    assert.match(app, /if \(fileNames\.length > 0\) return true;/);
+    assert.match(app, /else if \(gotFullPaths && fullPaths\.length > 0\)/);
+    assert.match(app, /function protectWindowsPathBackslashesForMarkdown/);
+    assert.match(app, /renderMessageBody\(msg\.text, role\)/);
+  });
+
+  test("file-access-rescue 兜底技能保持可索引，并要求先准备本地文档", () => {
+    const skill = readFileSync(fileAccessRescueSkillUrl, "utf8");
+    const frontmatter = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(skill)?.[1] ?? "";
+    assert.match(frontmatter, /^name:\s*file-access-rescue$/m);
+    assert.match(frontmatter, /^description:\s*\S.+$/m);
+    assert.doesNotMatch(frontmatter, /^triggers:/m);
+    assert.match(skill, /prepare_local_document/);
+    assert.match(skill, /readablePath/);
   });
 });

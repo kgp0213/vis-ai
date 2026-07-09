@@ -1,6 +1,6 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { open, access } from "node:fs/promises";
-import { basename, extname, isAbsolute, resolve } from "node:path";
+import { basename, extname, isAbsolute, join, parse, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 
@@ -20,6 +20,15 @@ const OFFICE_READABLE_EXTENSIONS = [
   ".xls", ".xlsx", ".xlsm",
   ".ppt", ".pptx", ".pptm",
   ".pdf",
+];
+
+const DOCUMENT_PATH_EXTENSIONS = [
+  ...OFFICE_READABLE_EXTENSIONS,
+  ".txt", ".md", ".markdown", ".csv", ".tsv",
+  ".xml", ".dsn", ".json", ".jsonl", ".yaml", ".yml",
+  ".html", ".htm", ".rtf",
+  ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff",
+  ".log", ".dat", ".ini", ".cfg", ".conf",
 ];
 
 const decryptCache = new Map();
@@ -123,6 +132,11 @@ function runDecryptProcess(command, args, timeoutMs) {
   return new Promise((resolveProcess) => {
     const child = spawn(command, args, {
       windowsHide: false,
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUTF8: "1",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -151,10 +165,16 @@ function runDecryptProcess(command, args, timeoutMs) {
   });
 }
 
+function looksLikeMissingPython(run) {
+  const text = `${run?.stdout ?? ""}\n${run?.stderr ?? ""}`;
+  return run?.error?.code === "ENOENT" ||
+    /Python was not found|Microsoft Store|App execution aliases/i.test(text);
+}
+
 async function runVisionoxFile({ pythonPath, scriptPath, sourcePath, timeoutMs }) {
   const first = await runDecryptProcess(pythonPath, [scriptPath, sourcePath], timeoutMs);
   if (first.ok) return first;
-  if (pythonPath === "python" && first.error?.code === "ENOENT") {
+  if (pythonPath === "python" && looksLikeMissingPython(first)) {
     return await runDecryptProcess("py", ["-3", scriptPath, sourcePath], timeoutMs);
   }
   return first;
@@ -203,8 +223,169 @@ function formatDecryptFailure(reason, details = {}) {
   return new DlpDecryptError(hint, details);
 }
 
+function normalizeDrivePathInput(value) {
+  const s = String(value ?? "").trim();
+  if (!s) return s;
+  return s.replace(/^([A-Za-z]):(?![\\/])/, "$1:\\");
+}
+
+function inputPathVariants(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [];
+  const normalized = normalizeDrivePathInput(raw);
+  return Array.from(new Set([raw, normalized].filter(Boolean)));
+}
+
+function resolveInputPath(value, rootDir) {
+  const raw = String(value ?? "").trim();
+  const normalized = normalizeDrivePathInput(raw);
+  const base = isAbsolute(normalized) || /^[A-Za-z]:[\\/]/.test(normalized)
+    ? normalized
+    : resolve(rootDir ?? process.cwd(), normalized);
+  return resolve(base);
+}
+
+function publicDocumentKind(path) {
+  const ext = extname(path).toLowerCase();
+  if ([".doc", ".docx", ".docm", ".rtf"].includes(ext)) return "word";
+  if ([".xls", ".xlsx", ".xlsm", ".csv", ".tsv"].includes(ext)) return "spreadsheet";
+  if ([".ppt", ".pptx", ".pptm"].includes(ext)) return "presentation";
+  if (ext === ".pdf") return "pdf";
+  if ([".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"].includes(ext)) return "image";
+  if ([".xml", ".dsn", ".json", ".jsonl", ".yaml", ".yml", ".txt", ".md", ".markdown", ".log", ".ini", ".cfg", ".conf"].includes(ext)) return "text";
+  return "file";
+}
+
+function suggestedToolsForPath(path) {
+  const kind = publicDocumentKind(path);
+  if (kind === "pdf") return ["pdf tools", "officecli", "read_file fallback"];
+  if (kind === "word" || kind === "spreadsheet" || kind === "presentation") return ["officecli"];
+  if (kind === "image") return ["image-capable document tools", "read_file metadata fallback"];
+  if (kind === "text") return ["read_file"];
+  return ["read_file", "domain-specific tool if available"];
+}
+
+function buildPreparedDocumentResult({ input, sourcePath, readable, candidates = [] }) {
+  const changed = Boolean(readable?.path && resolve(readable.path) !== resolve(sourcePath));
+  return {
+    ok: true,
+    input,
+    sourcePath,
+    readablePath: readable?.path ?? sourcePath,
+    pathChanged: changed,
+    usedCompatibilityAdapter: Boolean(readable?.encrypted || readable?.decrypted),
+    cached: Boolean(readable?.cached),
+    documentKind: publicDocumentKind(sourcePath),
+    suggestedTools: suggestedToolsForPath(sourcePath),
+    candidateCount: candidates.length || 1,
+    note: "Use readablePath for the next document parsing tool. Do not describe path preparation internals to the user.",
+  };
+}
+
+function buildCandidateError(input, candidates) {
+  if (!candidates || candidates.length === 0) {
+    return {
+      ok: false,
+      input,
+      error: "未找到匹配的本地文件",
+      hint: "请确认盘符、目录、文件名或通配符是否正确。",
+    };
+  }
+  return {
+    ok: false,
+    input,
+    error: "匹配到多个文件，请让用户确认具体文件",
+    candidates: candidates.slice(0, 20).map((c) => c.abs ?? c),
+    candidateCount: candidates.length,
+  };
+}
+
+function trimCandidatePath(raw) {
+  return String(raw ?? "")
+    .trim()
+    .replace(/^["'“”‘’`<（(]+/, "")
+    .replace(/["'“”‘’`>，。；;、)）\]\}]+$/g, "")
+    .trim();
+}
+
+function findDocumentPathCandidate(text, start, rootDir, extensions = DOCUMENT_PATH_EXTENSIONS) {
+  const tail = String(text).slice(start);
+  const hardStop = tail.search(/[<>\r\n|]/);
+  const searchable = hardStop >= 0 ? tail.slice(0, hardStop) : tail;
+  let best = null;
+  const lower = searchable.toLowerCase();
+  for (const ext of extensions) {
+    let idx = lower.indexOf(ext);
+    while (idx >= 0) {
+      const end = idx + ext.length;
+      const next = searchable[end] || "";
+      if (!next || /[\s"'“”‘’`),;，。；、\]}）]/.test(next)) {
+        const candidate = trimCandidatePath(searchable.slice(0, end));
+        const matches = pathCandidatesFromString(candidate, rootDir) ?? [];
+        if (matches.length === 1 && (!best || candidate.length > best.raw.length)) {
+          best = { raw: candidate, abs: matches[0].abs, fromPattern: matches[0].fromPattern };
+        } else if (matches.length > 1 && (!best || candidate.length > best.raw.length)) {
+          best = { raw: candidate, multiple: matches };
+        }
+      }
+      idx = lower.indexOf(ext, idx + 1);
+    }
+  }
+  return best;
+}
+
+function extractDocumentPathCandidates(text, rootDir) {
+  const input = String(text ?? "");
+  const out = [];
+  const drivePath = /[A-Za-z]:(?:[\\/])?/g;
+  let match;
+  while ((match = drivePath.exec(input)) !== null) {
+    const candidate = findDocumentPathCandidate(input, match.index, rootDir);
+    if (!candidate) continue;
+    if (candidate.multiple) out.push(...candidate.multiple);
+    else out.push({ abs: candidate.abs, fromPattern: candidate.fromPattern, raw: candidate.raw });
+    drivePath.lastIndex = match.index + Math.max(candidate.raw?.length ?? 2, 2);
+  }
+  const seen = new Set();
+  return out.filter((item) => {
+    const key = resolve(item.abs).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function candidatesFromInput(input, rootDir) {
+  const direct = pathCandidatesFromString(input, rootDir) ?? [];
+  if (direct.length > 0) return direct.map((item) => ({ ...item, raw: String(input ?? "").trim() }));
+  return extractDocumentPathCandidates(input, rootDir);
+}
+
+export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger = console, allowMultiple = false } = {}) {
+  const raw = typeof input === "string"
+    ? input
+    : String(input?.path ?? input?.file ?? input?.input ?? input?.text ?? input?.prompt ?? "").trim();
+  const candidates = candidatesFromInput(raw, env.rootDir);
+  if (candidates.length !== 1) {
+    if (allowMultiple && candidates.length > 1) {
+      return {
+        ok: true,
+        input: raw,
+        multiple: true,
+        candidateCount: candidates.length,
+        candidates: candidates.slice(0, 50).map((c) => c.abs),
+        note: "Ask the user to choose one candidate before parsing document content.",
+      };
+    }
+    return buildCandidateError(raw, candidates);
+  }
+  const sourcePath = candidates[0].abs;
+  const readable = await resolveReadablePathForDlp(sourcePath, { cfg, env, logger });
+  return buildPreparedDocumentResult({ input: raw, sourcePath, readable, candidates });
+}
+
 export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console } = {}) {
-  const abs = isAbsolute(path) ? resolve(path) : resolve(env.rootDir ?? process.cwd(), path);
+  const abs = resolveInputPath(path, env.rootDir);
   const dlp = getDlpConfig(cfg, env);
   if (process.platform !== "win32") return { path: abs, encrypted: false, skipped: "non-windows" };
   if (dlp.mode === "off") return { path: abs, encrypted: false, skipped: "disabled" };
@@ -315,17 +496,115 @@ function looksLikePathString(value) {
   if (typeof value !== "string") return false;
   const s = value.trim();
   if (!s || s.length > 1024 || /[\r\n]/.test(s)) return false;
-  return isAbsolute(s) || /^[A-Za-z]:[\\/]/.test(s) || s.includes("\\") || s.includes("/");
+  return isAbsolute(s) || /^[A-Za-z]:(?:[\\/])?/.test(s) || s.includes("\\") || s.includes("/");
+}
+
+function hasPathWildcard(value) {
+  return /[*?]/.test(String(value ?? ""));
+}
+
+function wildcardSegmentToRegExp(segment) {
+  let pattern = "^";
+  for (const ch of String(segment)) {
+    if (ch === "*") pattern += ".*";
+    else if (ch === "?") pattern += ".";
+    else pattern += ch.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+  }
+  pattern += "$";
+  return new RegExp(pattern, process.platform === "win32" ? "i" : "");
+}
+
+function safeStat(path) {
+  try {
+    return statSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function safeReadDir(path) {
+  try {
+    return readdirSync(path, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+function expandWildcardPath(value, rootDir) {
+  const raw = normalizeDrivePathInput(value);
+  if (!hasPathWildcard(raw) || /[\r\n]/.test(raw)) return [];
+  const absPattern = isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)
+    ? resolve(raw)
+    : resolve(rootDir ?? process.cwd(), raw);
+  const parsed = parse(absPattern);
+  const parts = absPattern
+    .slice(parsed.root.length)
+    .split(/[\\/]+/)
+    .filter(Boolean);
+  if (parts.length === 0) return [];
+
+  const out = [];
+  const walk = (dir, idx) => {
+    const segment = parts[idx];
+    const re = wildcardSegmentToRegExp(segment);
+    const last = idx === parts.length - 1;
+    for (const entry of safeReadDir(dir)) {
+      if (!re.test(entry.name)) continue;
+      const full = join(dir, entry.name);
+      if (last) {
+        if (entry.isFile()) out.push(full);
+      } else if (entry.isDirectory()) {
+        walk(full, idx + 1);
+      }
+    }
+  };
+
+  const root = parsed.root || ".";
+  if (!safeStat(root)?.isDirectory()) return [];
+  walk(root, 0);
+  return Array.from(new Set(out.map((p) => resolve(p))));
+}
+
+function pathCandidatesFromString(value, rootDir) {
+  if (!looksLikePathString(value)) return null;
+  const out = [];
+  for (const s of inputPathVariants(value)) {
+    if (hasPathWildcard(s)) {
+      out.push(...expandWildcardPath(s, rootDir).map((abs) => ({ abs, fromPattern: true })));
+      continue;
+    }
+    const abs = resolveInputPath(s, rootDir);
+    if (existsSync(abs)) out.push({ abs, fromPattern: false });
+  }
+  const seen = new Set();
+  return out.filter((item) => {
+    const key = resolve(item.abs).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function singlePathCandidateFromString(value, rootDir) {
+  const candidates = pathCandidatesFromString(value, rootDir);
+  return candidates?.length === 1 ? candidates[0] : null;
 }
 
 function existingPathFromString(value, rootDir) {
-  if (!looksLikePathString(value)) return null;
-  const abs = isAbsolute(value) ? resolve(value) : resolve(rootDir ?? process.cwd(), value);
-  return existsSync(abs) ? abs : null;
+  return singlePathCandidateFromString(value, rootDir)?.abs ?? null;
 }
 
 function isOfficecliCommandArg(meta) {
   return String(meta?.toolName ?? "").toLowerCase() === "officecli" && meta?.key === "command";
+}
+
+function isShellCommandArg(meta) {
+  const name = String(meta?.toolName ?? "").toLowerCase();
+  return (name === "run_command" || name === "run_background") && meta?.key === "command";
+}
+
+function looksDestructiveCommand(command) {
+  return /^\s*(del|erase|rm|remove-item|move|mv|ren|rename|set-content|out-file|write-output|copy|cp|xcopy|robocopy)\b/i.test(String(command ?? ""));
 }
 
 function splitCommandLine(command) {
@@ -355,27 +634,7 @@ function splitCommandLine(command) {
 }
 
 function findOfficePathCandidate(text, start, rootDir) {
-  const tail = String(text).slice(start);
-  const hardStop = tail.search(/["'<>|]/);
-  const searchable = hardStop >= 0 ? tail.slice(0, hardStop) : tail;
-  let best = null;
-  const lower = searchable.toLowerCase();
-  for (const ext of OFFICE_READABLE_EXTENSIONS) {
-    let idx = lower.indexOf(ext);
-    while (idx >= 0) {
-      const end = idx + ext.length;
-      const next = searchable[end] || "";
-      if (!next || /[\s),;，。]/.test(next)) {
-        const candidate = searchable.slice(0, end).trim().replace(/[),;，。]+$/g, "");
-        const abs = existingPathFromString(candidate, rootDir);
-        if (abs && (!best || candidate.length > best.raw.length)) {
-          best = { raw: candidate, abs };
-        }
-      }
-      idx = lower.indexOf(ext, idx + 1);
-    }
-  }
-  return best;
+  return findDocumentPathCandidate(text, start, rootDir, OFFICE_READABLE_EXTENSIONS);
 }
 
 function quotedPathBounds(text, start, rawLength) {
@@ -389,7 +648,7 @@ function quotedPathBounds(text, start, rawLength) {
 
 async function resolveEmbeddedOfficePaths(command, options) {
   const text = String(command ?? "");
-  const drivePath = /[A-Za-z]:[\\/]/g;
+  const drivePath = /[A-Za-z]:(?:[\\/])?/g;
   let match;
   let changed = false;
   let cursor = 0;
@@ -398,8 +657,34 @@ async function resolveEmbeddedOfficePaths(command, options) {
     const start = match.index;
     if (start < cursor) continue;
     const candidate = findOfficePathCandidate(text, start, options.env?.rootDir);
-    if (!candidate) continue;
-    const result = await resolveDlpPathToken(candidate.abs, options);
+    if (!candidate || candidate.multiple) continue;
+    const result = await resolveDlpPathToken(candidate.fromPattern ? candidate.raw : candidate.abs, options);
+    if (!result.changed) continue;
+    const bounds = quotedPathBounds(text, start, candidate.raw.length);
+    changed = true;
+    out += text.slice(cursor, bounds.start);
+    out += `"${String(result.value).replace(/"/g, '\\"')}"`;
+    cursor = bounds.end;
+    drivePath.lastIndex = cursor;
+  }
+  if (!changed) return { command, changed: false };
+  out += text.slice(cursor);
+  return { command: out, changed: true };
+}
+
+async function resolveEmbeddedDocumentPaths(command, options) {
+  const text = String(command ?? "");
+  const drivePath = /[A-Za-z]:(?:[\\/])?/g;
+  let match;
+  let changed = false;
+  let cursor = 0;
+  let out = "";
+  while ((match = drivePath.exec(text)) !== null) {
+    const start = match.index;
+    if (start < cursor) continue;
+    const candidate = findDocumentPathCandidate(text, start, options.env?.rootDir);
+    if (!candidate || candidate.multiple) continue;
+    const result = await resolveDlpPathToken(candidate.fromPattern ? candidate.raw : candidate.abs, options);
     if (!result.changed) continue;
     const bounds = quotedPathBounds(text, start, candidate.raw.length);
     changed = true;
@@ -414,16 +699,16 @@ async function resolveEmbeddedOfficePaths(command, options) {
 }
 
 async function resolveDlpPathToken(value, options) {
-  const candidate = existingPathFromString(value, options.env?.rootDir);
+  const candidate = singlePathCandidateFromString(value, options.env?.rootDir);
   if (!candidate) return { value, changed: false };
-  const resolved = await resolveReadablePathForDlp(candidate, {
+  const resolved = await resolveReadablePathForDlp(candidate.abs, {
     cfg: typeof options.readConfig === "function" ? options.readConfig() : {},
     env: options.env,
     logger: options.logger,
   });
-  return resolved.encrypted
-    ? { value: resolved.path, changed: true }
-    : { value, changed: false };
+  if (resolved.encrypted) return { value: resolved.path, changed: true };
+  if (candidate.fromPattern) return { value: candidate.abs, changed: true };
+  return { value, changed: false };
 }
 
 async function resolveOfficecliCommandString(command, options) {
@@ -460,6 +745,10 @@ async function resolveDlpPathsInArgs(value, options, meta = {}) {
       }
       return out;
     }
+  }
+  if (isShellCommandArg(meta) && typeof value === "string" && !looksDestructiveCommand(value)) {
+    const embedded = await resolveEmbeddedDocumentPaths(value, options);
+    return embedded.command;
   }
   if (typeof value === "string") {
     const result = await resolveDlpPathToken(value, options);

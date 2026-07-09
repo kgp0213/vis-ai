@@ -18,9 +18,8 @@ Visionox File — DLP 加密文件搬运工 + 加密检测
   JSON → {"ok": true, ...}
 """
 
-import sys, json, shutil, tempfile, time, threading
+import sys, json, shutil, tempfile, glob, os, hashlib
 from datetime import datetime
-from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 
@@ -30,7 +29,8 @@ try:
 except Exception:
     pass
 
-TEMP_ROOT = Path(tempfile.gettempdir()) / 'visionox_decrypted'
+TEMP_ROOT = os.path.join(tempfile.gettempdir(), 'visionox_decrypted')
+LONG_PREFIX = '\\\\?\\'
 
 # ── DLP 加密特征 ──
 # 本机 DLP 加密文件的头 4 字节为全零 (正常文件绝不会以此开头)
@@ -53,10 +53,56 @@ PLAINTEXT_SIGNATURES = [
 RESULT = {}
 
 
+def _win_long(path):
+    r"""为超长 Windows 路径添加 \\?\ 前缀。"""
+    p = os.fspath(path)
+    if os.name != 'nt':
+        return p
+    if p.startswith(LONG_PREFIX) or p.startswith('\\\\?\\UNC\\'):
+        return p
+    abs_path = os.path.abspath(p)
+    if len(abs_path) <= 240:
+        return abs_path
+    if abs_path.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + abs_path.lstrip('\\')
+    return LONG_PREFIX + abs_path
+
+
+def _strip_long_prefix(path):
+    p = os.fspath(path)
+    if p.startswith('\\\\?\\UNC\\'):
+        return '\\\\' + p[8:]
+    if p.startswith(LONG_PREFIX):
+        return p[4:]
+    return p
+
+
+def _path_key(path):
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+def _has_glob_magic(path):
+    return any(ch in os.fspath(path) for ch in '*?[')
+
+
+def _is_file(path):
+    try:
+        return os.path.isfile(_win_long(path))
+    except (OSError, ValueError):
+        return False
+
+
+def _is_dir(path):
+    try:
+        return os.path.isdir(_win_long(path))
+    except (OSError, ValueError):
+        return False
+
+
 def _read_header(path, n=4):
     """读取文件头部 n 字节，返回 (header, error)"""
     try:
-        with open(path, 'rb') as f:
+        with open(_win_long(path), 'rb') as f:
             return f.read(n), None
     except Exception as e:
         return None, str(e)
@@ -96,31 +142,59 @@ def check_file(path):
 def check_dir(path):
     """检测目录中所有文件，返回加密文件列表"""
     results = []
-    for f in sorted(Path(path).rglob('*')):
-        if f.is_file():
-            encrypted, header, reason, status, ok = is_encrypted(str(f))
-            if encrypted:
-                results.append({
-                    'path': str(f),
-                    'status': status,
-                    'header': header,
-                    'reason': reason,
-                })
+    for f in collect_files([path]):
+        encrypted, header, reason, status, ok = is_encrypted(f)
+        if encrypted:
+            results.append({
+                'path': f,
+                'status': status,
+                'header': header,
+                'reason': reason,
+            })
     return results
+
+
+def _collect_dir_files(root):
+    files = []
+    try:
+        for dirpath, _dirnames, filenames in os.walk(_win_long(root)):
+            for name in sorted(filenames):
+                files.append(_strip_long_prefix(os.path.join(dirpath, name)))
+    except (OSError, ValueError):
+        pass
+    return files
+
+
+def _fix_encoding(s):
+    """修复少数命令行代码页不一致导致的路径编码异常。"""
+    try:
+        encoded = os.fsencode(s)
+        decoded = os.fsdecode(encoded)
+        return decoded if decoded else s
+    except (UnicodeEncodeError, UnicodeDecodeError, TypeError):
+        return s
 
 
 def collect_files(sources):
     files = []
     for s in sources:
-        sp = Path(s)
-        if not sp.exists():
+        raw = _fix_encoding(os.fspath(s))
+        matches = glob.glob(raw, recursive=True) if _has_glob_magic(raw) else [raw]
+        for m in matches:
+            if _is_file(m):
+                files.append(os.path.abspath(m))
+            elif _is_dir(m):
+                files.extend(_collect_dir_files(m))
+
+    seen = set()
+    unique = []
+    for f in files:
+        key = _path_key(f)
+        if key in seen:
             continue
-        if sp.is_file():
-            files.append(sp)
-        elif sp.is_dir():
-            for entry in sorted(sp.rglob('*')):
-                if entry.is_file():
-                    files.append(entry)
+        seen.add(key)
+        unique.append(f)
+    return unique
     return files
 
 
@@ -130,35 +204,59 @@ def _is_zip_content(path):
     return h is not None and h == b'PK\x03\x04'
 
 
-def _xls_to_xlsx_aliases(files, dst_dir):
+def _xls_to_xlsx_aliases(copied_files):
     """对文件头为 PK 但扩展名不是 .xlsx 的文件, 额外复制一份 .xlsx 别名"""
     extra = []
-    for fp in files:
-        dst = dst_dir / fp.name
-        if not dst.exists():
+    for item in copied_files:
+        dst = item.get('dst')
+        if not dst or not _is_file(dst):
             continue
-        ext = dst.suffix.lower()
+        ext = os.path.splitext(dst)[1].lower()
         if ext == '.xls' and _is_zip_content(dst):
-            alias = dst.with_suffix('.xlsx')
-            if not alias.exists():
-                shutil.copy2(str(dst), str(alias))
-                extra.append({'name': alias.name, 'src': str(dst), 'alias_of': fp.name})
+            alias = os.path.splitext(dst)[0] + '.xlsx'
+            if not _is_file(alias):
+                shutil.copy2(_win_long(dst), _win_long(alias))
+                extra.append({'name': os.path.basename(alias), 'src': dst, 'dst': alias, 'alias_of': item.get('name')})
     return extra
+
+
+def _unique_destination(dst_dir, name, source_path, used):
+    candidate = os.path.join(dst_dir, name)
+    key = _path_key(candidate)
+    if key not in used and not _is_file(candidate):
+        used.add(key)
+        return candidate
+
+    stem, ext = os.path.splitext(name)
+    digest = hashlib.sha1(os.path.abspath(source_path).encode('utf-8', 'ignore')).hexdigest()[:8]
+    candidate = os.path.join(dst_dir, f'{stem}__{digest}{ext}')
+    key = _path_key(candidate)
+    counter = 2
+    while key in used or _is_file(candidate):
+        candidate = os.path.join(dst_dir, f'{stem}__{digest}_{counter}{ext}')
+        key = _path_key(candidate)
+        counter += 1
+    used.add(key)
+    return candidate
 
 
 def process_files(files, dst_dir, status_cb):
     results = []
+    copied = []
+    used_destinations = set()
     ok = fail = 0
     total = len(files)
     for i, fp in enumerate(files):
-        status_cb(f'处理中 ({i+1}/{total}): {fp.name}')
-        r = {'name': fp.name, 'src': str(fp)}
+        name = os.path.basename(fp)
+        status_cb(f'处理中 ({i+1}/{total}): {name}')
+        r = {'name': name, 'src': fp}
         try:
-            dst = dst_dir / fp.name
-            shutil.copy2(str(fp), str(dst))
+            dst = _unique_destination(dst_dir, name, fp, used_destinations)
+            shutil.copy2(_win_long(fp), _win_long(dst))
             r['status'] = 'ok'
-            r['dst'] = str(dst)
-            r['size'] = dst.stat().st_size
+            r['dst'] = dst
+            r['size'] = os.path.getsize(_win_long(dst))
+            copied.append(r)
             ok += 1
         except Exception as e:
             r['status'] = 'error'
@@ -167,9 +265,9 @@ def process_files(files, dst_dir, status_cb):
         results.append(r)
 
     # 自动补 .xlsx 别名
-    aliases = _xls_to_xlsx_aliases(files, dst_dir)
+    aliases = _xls_to_xlsx_aliases(copied)
     for a in aliases:
-        results.append({'name': a['name'], 'src': a['src'], 'status': 'ok',
+        results.append({'name': a['name'], 'src': a['src'], 'dst': a['dst'], 'status': 'ok',
                         'alias_of': a['alias_of'], 'note': 'auto .xlsx alias for .xls with PK header'})
         ok += 1
 
@@ -178,8 +276,8 @@ def process_files(files, dst_dir, status_cb):
 
 def main(sources):
     global RESULT
-    source_list = sources or [r'D:\_归档\测试文档']
-    session_dir = TEMP_ROOT / datetime.now().strftime('%Y%m%d_%H%M%S')
+    source_list = sources or []
+    session_dir = os.path.join(TEMP_ROOT, datetime.now().strftime('%Y%m%d_%H%M%S'))
 
     files = collect_files(source_list)
     if not files:
@@ -187,7 +285,7 @@ def main(sources):
         print(json.dumps(RESULT, ensure_ascii=False, indent=2))
         return
 
-    session_dir.mkdir(parents=True, exist_ok=True)
+    os.makedirs(_win_long(session_dir), exist_ok=True)
 
     # ~ GUI 窗口 ~
     root = tk.Tk()
@@ -221,8 +319,8 @@ def main(sources):
 
 
 def clean():
-    if TEMP_ROOT.exists():
-        shutil.rmtree(str(TEMP_ROOT), ignore_errors=True)
+    if _is_dir(TEMP_ROOT):
+        shutil.rmtree(_win_long(TEMP_ROOT), ignore_errors=True)
     print(json.dumps({'ok': True, 'action': 'cleaned'}, ensure_ascii=False))
 
 

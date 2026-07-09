@@ -19428,8 +19428,23 @@ var en = {
     modeMirror: "mirror",
     modeView: "chat",
     placeholder: "Type a prompt \u2014 Enter sends, Shift+Enter for a newline \xB7 / @ for pickers",
-    placeholderBusy: "wait for the current turn to finish\u2026",
+    placeholderBusy: "Keep typing; sending will queue the next prompt",
     send: "Send",
+    queueSend: "Queue",
+    queueTitle: "Queued {count}/{max}",
+    queueImageMeta: "{count} image(s)",
+    queueImagesOnly: "{count} image(s)",
+    queueSending: "sending next...",
+    queueFailedStatus: "failed",
+    queueRetry: "Retry",
+    queueCancel: "Cancel",
+    queueClear: "Clear queue",
+    queueClearConfirm: "Clear {count} queued prompt(s)?",
+    queueResetConfirm: "There are {count} queued prompt(s). Clear them and continue?",
+    queueAdded: "queued ({count})",
+    queueLimit: "Up to {count} prompts can be queued. Please wait for one to send.",
+    queueFailed: "Queued prompt failed: {error}",
+    queueCommandBlocked: "This command changes the conversation. Please run it after the current turn finishes.",
     new: "New",
     clear: "Clear",
     newTitle: "/new \u2014 wipe conversation context (loop log + scrollback)",
@@ -19463,6 +19478,10 @@ var en = {
       help: "show available slash commands"
     },
     projectFiles: "project files",
+    mentionTargets: "skills / project files",
+    skillMentionMeta: "skill",
+    skillInvokeTaskFallback: "Follow this skill's workflow for the user's request.",
+    skillInvokePrompt: "Use the \"{name}\" skill for this request: {task}",
     effortTitle: "reasoning_effort \u2014 applies next turn",
     effortMaxTitle: "max (default \u2014 best quality)",
     effortHighTitle: "high (cheaper / faster)",
@@ -20274,8 +20293,23 @@ var zhCN = {
     modeMirror: "\u955C\u50CF",
     modeView: "\u5BF9\u8BDD",
     placeholder: "\u8F93\u5165\u63D0\u793A\u8BCD \u2014 Enter \u53D1\u9001\uFF0CShift+Enter \u6362\u884C \xB7 / @ \u6253\u5F00\u9009\u62E9\u5668",
-    placeholderBusy: "\u8BF7\u7B49\u5F85\u5F53\u524D\u8F6E\u6B21\u5B8C\u6210\u2026",
+    placeholderBusy: "\u53EF\u7EE7\u7EED\u8F93\u5165\uFF0C\u53D1\u9001\u540E\u5C06\u6392\u961F\u5904\u7406",
     send: "\u53D1\u9001",
+    queueSend: "\u6392\u961F",
+    queueTitle: "\u6392\u961F\u4E2D {count}/{max} \u6761",
+    queueImageMeta: "\u542B {count} \u5F20\u56FE\u7247",
+    queueImagesOnly: "{count} \u5F20\u56FE\u7247",
+    queueSending: "\u5373\u5C06\u53D1\u9001...",
+    queueFailedStatus: "\u53D1\u9001\u5931\u8D25",
+    queueRetry: "\u91CD\u8BD5",
+    queueCancel: "\u53D6\u6D88",
+    queueClear: "\u6E05\u7A7A",
+    queueClearConfirm: "\u6E05\u7A7A {count} \u6761\u6392\u961F\u5185\u5BB9\uFF1F",
+    queueResetConfirm: "\u5F53\u524D\u6709 {count} \u6761\u5185\u5BB9\u6B63\u5728\u6392\u961F\uFF0C\u662F\u5426\u6E05\u7A7A\u5E76\u7EE7\u7EED\uFF1F",
+    queueAdded: "\u5DF2\u52A0\u5165\u6392\u961F\uFF08{count} \u6761\uFF09",
+    queueLimit: "\u6700\u591A\u6392\u961F {count} \u6761\uFF0C\u8BF7\u7B49\u5F85\u524D\u9762\u7684\u5185\u5BB9\u53D1\u9001\u540E\u518D\u8BD5",
+    queueFailed: "\u6392\u961F\u5185\u5BB9\u53D1\u9001\u5931\u8D25\uFF1A{error}",
+    queueCommandBlocked: "\u8FD9\u4E2A\u547D\u4EE4\u4F1A\u6539\u53D8\u5BF9\u8BDD\u4E0A\u4E0B\u6587\uFF0C\u8BF7\u5728\u5F53\u524D\u8F6E\u6B21\u7ED3\u675F\u540E\u518D\u6267\u884C",
     new: "\u65B0\u5EFA",
     clear: "\u6E05\u9664",
     newTitle: "/new \u2014 \u6E05\u9664\u5BF9\u8BDD\u4E0A\u4E0B\u6587\uFF08\u5FAA\u73AF\u65E5\u5FD7 + \u6EDA\u52A8\u56DE\u653E\uFF09",
@@ -20347,6 +20381,10 @@ var zhCN = {
       learn: "\u5B66\u4E60\u7CFB\u7EDF\uFF08\u6280\u80FD\u63D0\u53D6/\u9879\u76EE\u8BB0\u5FC6/\u8BED\u4E49\u7D22\u5F15/\u95EE\u7B54/\u5BFC\u5E08\u6A21\u5F0F\uFF09"
     },
     projectFiles: "\u9879\u76EE\u6587\u4EF6",
+    mentionTargets: "\u6280\u80FD / \u9879\u76EE\u6587\u4EF6",
+    skillMentionMeta: "\u6280\u80FD",
+    skillInvokeTaskFallback: "\u6309\u8FD9\u4E2A\u6280\u80FD\u7684\u6D41\u7A0B\u5904\u7406\u7528\u6237\u8BF7\u6C42\u3002",
+    skillInvokePrompt: "\u8BF7\u8C03\u7528\u201C{name}\u201D\u6280\u80FD\u5904\u7406\u4EE5\u4E0B\u8BF7\u6C42\uFF1A{task}",
     effortTitle: "reasoning_effort \u2014 \u4E0B\u4E00\u8F6E\u751F\u6548",
     effortMaxTitle: "max\uFF08\u9ED8\u8BA4 \u2014 \u6700\u4F73\u8D28\u91CF\uFF09",
     effortHighTitle: "high\uFF08\u66F4\u4FBF\u5B9C / \u66F4\u5FEB\uFF09",
@@ -23521,6 +23559,25 @@ marked.use({ renderer, gfm: true, breaks: false, pedantic: false });
 function renderMarkdownToString(text) {
   return marked.parse(text);
 }
+function protectWindowsPathBackslashesForMarkdown(text) {
+  const src = String(text ?? "");
+  const pathStart = /[A-Za-z]:\\/g;
+  let out = "";
+  let cursor = 0;
+  let match;
+  while ((match = pathStart.exec(src)) !== null) {
+    const start = match.index;
+    if (start < cursor) continue;
+    let end = src.indexOf("\n", start);
+    if (end < 0) end = src.length;
+    out += src.slice(cursor, start);
+    out += src.slice(start, end).replace(/\\(?=[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "\\\\");
+    cursor = end;
+    pathStart.lastIndex = end;
+  }
+  out += src.slice(cursor);
+  return out;
+}
 function renderMarkdownPreviewToString(text) {
   const previous = globalThis.__visionoxMarkdownPreviewMode;
   globalThis.__visionoxMarkdownPreviewMode = true;
@@ -23805,9 +23862,10 @@ var ROLE_AVATAR = {
   user: "/assets/128x128.png",
   assistant: "/assets/ai-avatar.png"
 };
-function renderMessageBody(text) {
+function renderMessageBody(text, role) {
   if (!text) return null;
-  return html4`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdownToString(text) }}></div>`;
+  const source = role === "user" ? protectWindowsPathBackslashesForMarkdown(text) : text;
+  return html4`<div class="md" dangerouslySetInnerHTML=${{ __html: renderMarkdownToString(source) }}></div>`;
 }
 function parseToolArgs(raw) {
   if (!raw) return null;
@@ -23990,7 +24048,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
-        ${renderMessageBody(msg.text)}
+        ${renderMessageBody(msg.text, role)}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
         ${actions}
@@ -25077,9 +25135,68 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [showModelPicker, setShowModelPicker] = d2(false);
   const [skillList, setSkillList] = d2([]);
   const [pendingImages, setPendingImages] = d2([]);
+  const [queuedPrompts, setQueuedPrompts] = d2([]);
+  const [queuePumpTick, setQueuePumpTick] = d2(0);
+  const [queueReady, setQueueReady] = d2(false);
+  const [queueSendingId, setQueueSendingId] = d2(null);
   var fileInputRef = A2(null);
   var inputRef = A2(null);
+  const queuedPromptsRef = A2([]);
+  const queueSubmittingRef = A2(false);
+  const CHAT_QUEUE_LIMIT = 5;
+  const CHAT_QUEUE_TTL_MS = 30 * 60 * 1e3;
   const draftKey = T2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
+  const queueStorageKey = T2(() => workspaceDir ? `${draftKey}:queue` : null, [draftKey, workspaceDir]);
+  y2(() => {
+    queuedPromptsRef.current = queuedPrompts;
+  }, [queuedPrompts]);
+  y2(() => {
+    if (!draftReady || !queueStorageKey) return;
+    setQueueReady(false);
+    try {
+      const raw = localStorage.getItem(queueStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const savedAt = Number(parsed?.savedAt ?? 0);
+        const fresh = Date.now() - savedAt < CHAT_QUEUE_TTL_MS;
+        const items = Array.isArray(parsed?.items) ? parsed.items : [];
+        if (fresh && queuedPromptsRef.current.length === 0 && items.length > 0) {
+          const restored = items.slice(0, CHAT_QUEUE_LIMIT).map((item) => ({
+            id: item.id || `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            text: String(item.text ?? "").trim(),
+            images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
+            status: item.status === "failed" ? "failed" : "queued",
+            error: item.status === "failed" ? String(item.error ?? "") : null,
+            createdAt: Number(item.createdAt ?? Date.now())
+          })).filter((item) => item.text || item.images.length > 0);
+          if (restored.length > 0) setQueuedPrompts(restored);
+        } else if (!fresh) {
+          localStorage.removeItem(queueStorageKey);
+        }
+      }
+    } catch {
+    }
+    setQueueReady(true);
+  }, [draftReady, queueStorageKey]);
+  y2(() => {
+    if (!draftReady || !queueReady || !queueStorageKey) return;
+    try {
+      if (queuedPrompts.length === 0) {
+        localStorage.removeItem(queueStorageKey);
+        return;
+      }
+      const items = queuedPrompts.slice(0, CHAT_QUEUE_LIMIT).map((item) => ({
+        id: item.id,
+        text: item.text,
+        images: Array.isArray(item.images) ? item.images : [],
+        status: item.status === "failed" ? "failed" : "queued",
+        error: item.status === "failed" ? item.error ?? "" : null,
+        createdAt: item.createdAt ?? Date.now()
+      }));
+      localStorage.setItem(queueStorageKey, JSON.stringify({ savedAt: Date.now(), items }));
+    } catch {
+    }
+  }, [queuedPrompts, queueStorageKey, draftReady, queueReady]);
   y2(() => {
     try {
       const scopedDraft = localStorage.getItem(draftKey) || "";
@@ -25398,6 +25515,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         setFileArtifactsDismissed(false);
         setFileArtifactsSelectedMessageId(null);
         setFileArtifactsByMessageId({});
+        setQueuedPrompts([]);
+        setQueueSendingId(null);
         return;
       }
       if (dash.kind === "config-changed") {
@@ -25496,26 +25615,178 @@ const [providerCaps, setProviderCaps] = d2(null);
       img.src = url;
     });
   };
-  const send = q2(async () => {
-    const text = input.trim();
-    if ((!text && pendingImages.length === 0) || busy) return;
-    setError(null);
+  const loadChatSkills = q2(async () => {
+    if (skillList.length > 0) return skillList;
+    const r3 = await api("/skills");
+    const rows = [...(r3.project ?? []), ...(r3.global ?? []), ...(r3.builtin ?? [])];
+    setSkillList(rows);
+    return rows;
+  }, [skillList]);
+  const appendSkillMention = q2((name) => {
+    const skillName = String(name ?? "").trim();
+    if (!skillName) return;
+    setInput((prev) => {
+      const base = String(prev ?? "");
+      const spacer = base && !/\s$/.test(base) ? " " : "";
+      return `${base}${spacer}@${skillName} `;
+    });
+    setShowSkillPicker(false);
+    setPopoverKind(null);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, []);
+  const resolveSkillMentionText = q2(async (rawText) => {
+    const text = String(rawText ?? "").trim();
+    if (!text) return text;
+    try {
+      const skills = await loadChatSkills();
+      const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      let selected = null;
+      for (const s2 of skills) {
+        const name = String(s2.name ?? "").trim();
+        if (!name) continue;
+        const re = new RegExp(`(^|[^A-Za-z0-9._-])@${escapeRegExp(name)}(?=$|[^A-Za-z0-9._-])`, "gi");
+        let match;
+        while ((match = re.exec(text))) {
+          const start = match.index + (match[1] ? match[1].length : 0);
+          const end = start + 1 + name.length;
+          if (!selected || start >= selected.start) selected = { skill: s2, start, end };
+          if (re.lastIndex === match.index) re.lastIndex++;
+        }
+      }
+      if (!selected) return text;
+      const task = `${text.slice(0, selected.start)}${text.slice(selected.end)}`.replace(/\s+/g, " ").trim() || t4("chat.skillInvokeTaskFallback");
+      return t4("chat.skillInvokePrompt", { name: selected.skill.name, task });
+    } catch {
+      return text;
+    }
+  }, [loadChatSkills]);
+  const submitPromptPayload = q2(async (payload) => {
+    const text = await resolveSkillMentionText(payload?.text ?? "");
+    const images = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
+    if (!text && images.length === 0) return { ok: false, reason: "empty" };
     try {
       var body = { prompt: text };
-      if (pendingImages.length > 0) { body.images = pendingImages; }
-      const res = await api("/submit", { method: "POST", body: body });
+      if (images.length > 0) body.images = images;
+      const res = await api("/submit", { method: "POST", body });
       if (!res.accepted) {
-        setError(res.reason ?? "rejected");
-        return;
+        return { ok: false, reason: res.reason ?? "rejected" };
       }
+      shouldAutoScroll.current = true;
+      return { ok: true };
+    } catch (err) {
+      if (err?.status === 409) {
+        return { ok: false, busy: true, reason: err.body?.reason ?? err.message };
+      }
+      return { ok: false, reason: err.message };
+    }
+  }, [resolveSkillMentionText]);
+  const enqueuePrompt = q2((text, images = []) => {
+    const trimmed = String(text ?? "").trim();
+    const imageList = Array.isArray(images) ? images.slice() : [];
+    if (!trimmed && imageList.length === 0) return false;
+    const command = trimmed.split(/\s+/, 1)[0]?.toLowerCase();
+    if (command === "/new" || command === "/clear" || command === "/retry") {
+      setError(t4("chat.queueCommandBlocked"));
+      return false;
+    }
+    const current = queuedPromptsRef.current ?? [];
+    if (current.length >= CHAT_QUEUE_LIMIT) {
+      setError(t4("chat.queueLimit", { count: CHAT_QUEUE_LIMIT }));
+      return false;
+    }
+    const item = {
+      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      text: trimmed,
+      images: imageList,
+      status: "queued",
+      error: null,
+      createdAt: Date.now()
+    };
+    setQueuedPrompts((prev) => [...prev, item]);
+    showToast(t4("chat.queueAdded", { count: current.length + 1 }), "info");
+    setQueuePumpTick((v) => v + 1);
+    return true;
+  }, []);
+  const removeQueuedPrompt = q2((id) => {
+    setQueuedPrompts((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+  const clearQueuedPrompts = q2(() => {
+    const count = queuedPromptsRef.current.length;
+    if (count > 0 && !confirm(t4("chat.queueClearConfirm", { count }))) return;
+    setQueuedPrompts([]);
+    setQueueSendingId(null);
+  }, []);
+  const retryQueuedPrompt = q2((id) => {
+    setQueuedPrompts((prev) => prev.map((item) => item.id === id ? { ...item, status: "queued", error: null } : item));
+    setQueuePumpTick((v) => v + 1);
+  }, []);
+  const confirmQueuedReset = q2(() => {
+    const count = queuedPromptsRef.current.length;
+    if (count === 0) return true;
+    if (!confirm(t4("chat.queueResetConfirm", { count }))) return false;
+    setQueuedPrompts([]);
+    setQueueSendingId(null);
+    return true;
+  }, []);
+  y2(() => {
+    if (!queueReady || busy || queueSubmittingRef.current || queuedPrompts.length === 0) return;
+    const item = queuedPrompts.find((q) => q.status !== "failed");
+    if (!item) return;
+    queueSubmittingRef.current = true;
+    (async () => {
+      try {
+        setQueueSendingId(item.id);
+        setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "sending", error: null } : q));
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const result = await submitPromptPayload(item);
+        if (result.ok) {
+          setQueuedPrompts((prev) => prev.filter((q) => q.id !== item.id));
+          setTimeout(() => setQueuePumpTick((v) => v + 1), 700);
+        } else if (result.busy) {
+          setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "queued", error: null } : q));
+          setTimeout(() => setQueuePumpTick((v) => v + 1), 900);
+        } else {
+          setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "failed", error: result.reason ?? "failed" } : q));
+          setError(t4("chat.queueFailed", { error: result.reason ?? "failed" }));
+          setTimeout(() => setQueuePumpTick((v) => v + 1), 700);
+        }
+      } finally {
+        setQueueSendingId(null);
+        queueSubmittingRef.current = false;
+      }
+    })();
+  }, [busy, queuedPrompts, queuePumpTick, submitPromptPayload]);
+  const send = q2(async () => {
+    const text = input.trim();
+    const images = pendingImages.slice();
+    if (!text && images.length === 0) return;
+    setError(null);
+    if (busy) {
+      if (enqueuePrompt(text, images)) {
+        setInput("");
+        setPendingImages([]);
+        setPopoverKind(null);
+        removeChatDraft(draftKey);
+      }
+      return;
+    }
+    const result = await submitPromptPayload({ text, images });
+    if (result.ok) {
       setInput("");
       setPendingImages([]);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
-    } catch (err) {
-      setError(err.message);
+    } else if (result.busy) {
+      if (enqueuePrompt(text, images)) {
+        setInput("");
+        setPendingImages([]);
+        setPopoverKind(null);
+        removeChatDraft(draftKey);
+      }
+    } else {
+      setError(result.reason ?? "rejected");
     }
-  }, [input, busy, pendingImages, draftKey]);
+  }, [input, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload]);
   const abort = q2(async () => {
     try {
       await api("/abort", { method: "POST" });
@@ -25530,6 +25801,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } else if (messages.length > 0 && !confirm(t4("chat.newConfirm"))) {
       return;
     }
+    if (!confirmQueuedReset()) return;
     try {
       if (wasBusy) {
         await api("/abort", { method: "POST" });
@@ -25546,6 +25818,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setFileArtifactsByMessageId({});
       setInput("");
       setPendingImages([]);
+      setQueuedPrompts([]);
+      setQueueSendingId(null);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
@@ -25559,8 +25833,9 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length, draftKey]);
+  }, [busy, messages.length, draftKey, confirmQueuedReset]);
   const clearScrollback = q2(async () => {
+    if (!confirmQueuedReset()) return;
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
       setMessages([]);
@@ -25573,6 +25848,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setFileArtifactsByMessageId({});
       setInput("");
       setPendingImages([]);
+      setQueuedPrompts([]);
+      setQueueSendingId(null);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
@@ -25586,7 +25863,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [draftKey]);
+  }, [draftKey, confirmQueuedReset]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -25602,18 +25879,39 @@ const [providerCaps, setProviderCaps] = d2(null);
         setPopoverSel(0);
         return;
       }
-      const mentionMatch = /(?:^|\s)@([^\s@]*)$/.exec(text);
-      if (mentionMatch && MODE === "attached") {
+      const mentionMatch = /@([^\s@]*)$/.exec(text);
+      if (mentionMatch) {
         const prefix = mentionMatch[1] ?? "";
+        const prefixLower = prefix.toLowerCase();
         try {
-          const r3 = await api("/files", {
-            method: "POST",
-            body: { prefix }
-          });
-          const items = r3.files.slice(0, 12).map((f3) => ({
-            label: f3,
-            insert: `@${f3} `
+          const [skills, filesRes] = await Promise.all([
+            loadChatSkills().catch(() => []),
+            MODE === "attached" ? api("/files", { method: "POST", body: { prefix } }).catch(() => ({ files: [] })) : Promise.resolve({ files: [] })
+          ]);
+          const seenSkills = /* @__PURE__ */ new Set();
+          const skillItems = skills.filter((s2) => {
+            const name = String(s2.name ?? "");
+            if (!name || seenSkills.has(name.toLowerCase())) return false;
+            if (prefixLower && !name.toLowerCase().startsWith(prefixLower)) return false;
+            seenSkills.add(name.toLowerCase());
+            return true;
+          }).map((s2) => ({
+            label: s2.name,
+            meta: `${t4("chat.skillMentionMeta")}${s2.description ? ` · ${s2.description}` : ""}`,
+            insert: `@${s2.name} `,
+            kind: "skill"
           }));
+          const fileItems = (filesRes.files ?? []).slice(0, Math.max(0, 12 - skillItems.length)).map((f3) => ({
+            label: f3,
+            meta: t4("chat.projectFiles"),
+            insert: `@${f3} `,
+            kind: "file"
+          }));
+          const items = [...skillItems, ...fileItems];
+          if (items.length === 0) {
+            setPopoverKind(null);
+            return;
+          }
           setPopoverKind("mention");
           setPopoverItems(items);
           setPopoverSel(0);
@@ -25624,7 +25922,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       setPopoverKind(null);
     },
-    [slashCommands]
+    [slashCommands, loadChatSkills]
   );
   const applyPopover = q2((idx) => {
     const item = popoverItems[idx ?? popoverSel];
@@ -25632,9 +25930,9 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (popoverKind === "slash") {
       setInput(item.insert);
     } else if (popoverKind === "mention") {
-      const m3 = /(?:^|\s)@([^\s@]*)$/.exec(input);
+      const m3 = /@([^\s@]*)$/.exec(input);
       if (!m3) return false;
-      const start = input.length - m3[0].length + (m3[0].startsWith(" ") ? 1 : 0);
+      const start = input.length - m3[0].length;
       setInput(`${input.slice(0, start)}${item.insert}`);
     }
     setPopoverKind(null);
@@ -25689,6 +25987,29 @@ const [providerCaps, setProviderCaps] = d2(null);
     var fullPaths = [];
     var gotFullPaths = false;
     var plainText = "";
+    function normalizeClipboardPathText(value) {
+      return String(value || "").trim().replace(/^([A-Za-z]):(?![\\/])(?=\S)/, "$1:\\");
+    }
+    function pathLikeClipboardText(value) {
+      var s = normalizeClipboardPathText(value);
+      return /^[A-Za-z]:\\/.test(s) || s.startsWith("\\\\") || s.startsWith("/") || /^file:\/\//i.test(s);
+    }
+    function decodeClipboardUri(value) {
+      var raw = String(value || "").trim();
+      if (!raw) return "";
+      try {
+        raw = decodeURIComponent(raw);
+      } catch (_) {
+        try { raw = decodeURI(raw); } catch (_) {}
+      }
+      if (/^file:\/\//i.test(raw)) {
+        if (/^file:\/\/\/[A-Za-z]:/i.test(raw)) {
+          return normalizeClipboardPathText(raw.replace(/^file:\/\/\//i, "").replace(/\//g, "\\"));
+        }
+        return normalizeClipboardPathText(raw.replace(/^file:\/\//i, ""));
+      }
+      return normalizeClipboardPathText(raw);
+    }
     if (items) {
       for (var i = 0; i < items.length; i++) {
         var item = items[i];
@@ -25703,17 +26024,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       var uriList = e.clipboardData.getData("text/uri-list");
       if (uriList) {
         var uris = uriList.split(/\r?\n/).filter(function(s) { return s.trim() && !s.startsWith("#"); });
-        fullPaths = uris.map(function(u) {
-          try {
-            var decoded = decodeURI(u);
-            if (/^file:\/\//i.test(decoded)) {
-              if (/^file:\/\/\/[A-Za-z]:/i.test(decoded)) return decoded.replace(/^file:\/\/\//i, "").replace(/\//g, "\\");
-              return decoded.replace(/^file:\/\//i, "");
-            }
-            return decoded;
-          }
-          catch (_) { return u; }
-        });
+        fullPaths = uris.map(decodeClipboardUri).filter(Boolean);
         gotFullPaths = fullPaths.length > 0;
       }
     } catch (_) {}
@@ -25722,8 +26033,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         plainText = e.clipboardData.getData("text/plain") || "";
         if (plainText) {
           var lines = plainText.split(/\r?\n/).filter(function(s) { return s.trim(); });
-          if (lines.length > 0 && (/^[A-Za-z]:\\/.test(lines[0].trim()) || lines[0].trim().startsWith("\\\\") || lines[0].trim().startsWith("/") || /^file:\/\//i.test(lines[0].trim()))) {
-            fullPaths = lines;
+          if (lines.length > 0 && pathLikeClipboardText(lines[0])) {
+            fullPaths = lines.map(function(line) {
+              return /^file:\/\//i.test(String(line || "").trim()) ? decodeClipboardUri(line) : normalizeClipboardPathText(line);
+            }).filter(Boolean);
             gotFullPaths = true;
           }
         }
@@ -25776,24 +26089,22 @@ const [providerCaps, setProviderCaps] = d2(null);
       });
     }
     function shouldQueryClipboardPaths() {
-      if (gotFullPaths) return false;
       if (fileNames.length > 0) return true;
       if (imageFiles.length > 0) return false;
+      if (gotFullPaths && fullPaths.length > 0) return fullPaths.some(pathLikeClipboardText);
       if (!plainText.trim()) return true;
       var first = plainText.split(/\r?\n/).find(function(s) { return s.trim(); }) || "";
       first = first.trim();
-      return /^[A-Za-z]:\\/.test(first) || first.startsWith("\\\\") || first.startsWith("/") || /^file:\/\//i.test(first);
+      return pathLikeClipboardText(first);
     }
     if (looksLikeClipboardScreenshot()) {
       addPendingImages(imageFiles);
-    } else if (gotFullPaths && fullPaths.length > 0) {
-      insertAtCursor(fullPaths.join("\n"));
     } else if (shouldQueryClipboardPaths()) {
       var capBefore = before, capAfter = after, capStart = start;
       function insertPaths(paths) {
         if (inserted) return;
         inserted = true;
-        var text = paths.join("\n");
+        var text = paths.map(normalizeClipboardPathText).join("\n");
         setInput(capBefore + text + capAfter);
         setTimeout(function() {
           ta.selectionStart = ta.selectionEnd = capStart + text.length;
@@ -25803,6 +26114,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (inserted) return;
         if (imageFiles.length > 0) {
           addPendingImages(imageFiles);
+        } else if (gotFullPaths && fullPaths.length > 0) {
+          insertPaths(fullPaths);
         } else if (plainText) {
           insertAtCursor(plainText);
         } else if (fileNames.length > 0) {
@@ -25851,6 +26164,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       }).catch(function() {
         tryRustBridge();
       });
+    } else if (gotFullPaths && fullPaths.length > 0) {
+      insertAtCursor(fullPaths.map(normalizeClipboardPathText).join("\n"));
     } else {
       try {
         var text = e.clipboardData.getData("text/plain");
@@ -26025,7 +26340,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [draftKey]);
   const fillInputFromMessage = q2((msg) => {
     const text = msg.text ?? "";
-    if (!text.trim() || busy) return;
+    if (!text.trim()) return;
     setInput(text);
     setPopoverKind(null);
     setTimeout(() => {
@@ -26036,7 +26351,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     }, 0);
     showToast(t4("chat.filledInput"), "info");
-  }, [busy]);
+  }, []);
   return html4`
     <div class="chat-shell">
       <div class="chat-toolbar">
@@ -26118,7 +26433,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           <div class="chat-input-area" style="position:relative;flex-direction:column;gap:2px;padding-top:6px">
             ${popoverKind && popoverItems.length > 0 ? html4`
                   <div class="popover" style="position:absolute;bottom:calc(100% + 6px);left:0;width:380px;max-height:280px;overflow-y:auto;z-index:10">
-                    <div class="popover-h">${popoverKind === "slash" ? t4("chat.slashCommands") : t4("chat.projectFiles")}</div>
+                    <div class="popover-h">${popoverKind === "slash" ? t4("chat.slashCommands") : t4("chat.mentionTargets")}</div>
                     ${popoverItems.map(
     (it, i3) => html4`
                         <div
@@ -26129,7 +26444,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       applyPopover(i3);
     }}
                         >
-                          <span class="g">${popoverKind === "slash" ? "/" : "@"}</span>
+                          <span class="g">${popoverKind === "slash" ? "/" : it.kind === "skill" ? "S" : "@"}</span>
                           <span class="name">${it.label}</span>
                           ${it.meta ? html4`<span class="meta">${it.meta}</span>` : null}
                         </div>
@@ -26142,6 +26457,33 @@ const [providerCaps, setProviderCaps] = d2(null);
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
             ${html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />`}
             ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`; })}</div>` : null}
+            ${queuedPrompts.length > 0 ? html4`
+              <div class="chat-queue">
+                <div class="chat-queue-head">
+                  <span>${t4("chat.queueTitle", { count: queuedPrompts.length, max: CHAT_QUEUE_LIMIT })}</span>
+                  ${queuedPrompts.length > 1 ? html4`<button type="button" onClick=${clearQueuedPrompts}>${t4("chat.queueClear")}</button>` : null}
+                </div>
+                <div class="chat-queue-list">
+                  ${queuedPrompts.map((item, idx) => {
+                    const imageCount = item.images?.length ?? 0;
+                    const text = item.text || t4("chat.queueImagesOnly", { count: imageCount });
+                    const isSending = item.status === "sending" || queueSendingId === item.id;
+                    const isFailed = item.status === "failed";
+                    return html4`
+                      <div class=${`chat-queue-item ${isSending ? "sending" : ""} ${isFailed ? "failed" : ""}`} key=${item.id}>
+                        <span class="chat-queue-index">${idx + 1}</span>
+                        <span class="chat-queue-text" title=${text}>${text}</span>
+                        ${imageCount > 0 ? html4`<span class="chat-queue-meta">${t4("chat.queueImageMeta", { count: imageCount })}</span>` : null}
+                        ${isSending ? html4`<span class="chat-queue-state">${t4("chat.queueSending")}</span>` : null}
+                        ${isFailed ? html4`<span class="chat-queue-state error" title=${item.error || ""}>${t4("chat.queueFailedStatus")}</span>` : null}
+                        ${isFailed ? html4`<button type="button" onClick=${() => retryQueuedPrompt(item.id)}>${t4("chat.queueRetry")}</button>` : null}
+                        ${!isSending ? html4`<button type="button" onClick=${() => removeQueuedPrompt(item.id)}>${t4("chat.queueCancel")}</button>` : null}
+                      </div>
+                    `;
+                  })}
+                </div>
+              </div>
+            ` : null}
             <textarea
               ref=${inputRef}
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
@@ -26150,17 +26492,16 @@ const [providerCaps, setProviderCaps] = d2(null);
               onKeyDown=${onKeyDown}
               onPaste=${onPaste}
               onBlur=${() => setTimeout(() => setPopoverKind(null), 150)}
-              disabled=${busy}
               style="flex:1"
               rows="4"
             ></textarea>
             <div style="display:flex;align-items:center;position:relative;flex-shrink:0;margin:0;gap:12px">
-              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { api("/skills").then((r2) => setSkillList([...r2.global, ...r2.builtin])).catch(() => {}); } }}>🔧 技能</span>
+              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { loadChatSkills().catch(() => {}); } }}>🔧 技能</span>
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择技能</div>
                   ${skillList.map((s2) => html4`
-                    <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setInput((prev) => prev + '/' + s2.name + ' '); setShowSkillPicker(false); }}>
+                    <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); appendSkillMention(s2.name); }}>
                       <span class="name">${s2.name}</span>
                       <span class="meta">${(s2.description || '').slice(0,40)}</span>
                     </div>
@@ -26220,7 +26561,6 @@ const [providerCaps, setProviderCaps] = d2(null);
               <button
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
                 title="Attach images"
-                disabled=${busy}
                 style="padding:4px 8px;border-radius:4px;background:var(--surface-input, #1e2029);border:1px solid var(--border-default, #2a2e38);color:var(--text-primary, #f0f0f2);cursor:pointer;font-size:16px;flex-shrink:0"
               >📎</button>
             </div>
@@ -26229,8 +26569,8 @@ const [providerCaps, setProviderCaps] = d2(null);
               <button
                 class="primary"
                 onClick=${send}
-                disabled=${busy || (!input.trim() && pendingImages.length === 0)}
-              >${t4("chat.send")}</button>
+                disabled=${!input.trim() && pendingImages.length === 0}
+              >${busy ? t4("chat.queueSend") : t4("chat.send")}</button>
               <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
               <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
             </div>

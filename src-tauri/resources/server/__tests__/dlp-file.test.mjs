@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import {
   DlpDecryptError,
   getDlpConfig,
+  prepareLocalDocument,
   resolveDlpScriptPath,
   resolveReadablePathForDlp,
   wrapToolsPathArgsWithDlp,
@@ -106,6 +107,33 @@ test("resolveReadablePathForDlp resolves relative paths from workspace root", as
     });
     assert.equal(resolve(result.path), resolve(file));
     assert.equal(result.encrypted, false);
+  });
+});
+
+test("prepareLocalDocument extracts a malformed Windows drive path from a full prompt", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const folder = join(dir, "tets");
+    mkdirSync(folder, { recursive: true });
+    const encrypted = join(folder, "（20260703）OP Manual规范模板_A5.3_量产_M673_SV3-4_拐点45nit.pdf");
+    const decrypted = join(dir, "op-manual.decrypted.pdf");
+    await writeFile(encrypted, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    await writeFile(decrypted, Buffer.from("%PDF-1.7"));
+    const scriptPath = await createFakeDlpScript(dir, decrypted);
+
+    const brokenPath = encrypted.replace(/^([A-Za-z]):\\/, "$1:");
+    const prompt = `尝试读取${brokenPath} 测试能否读取其片段内容`;
+    const result = await prepareLocalDocument(prompt, {
+      cfg: { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(resolve(result.sourcePath), resolve(encrypted));
+    assert.equal(resolve(result.readablePath), resolve(decrypted));
+    assert.equal(result.documentKind, "pdf");
+    assert.equal(result.usedCompatibilityAdapter, true);
   });
 });
 
@@ -240,6 +268,72 @@ test("wrapToolsPathArgsWithDlp rewrites unquoted officecli command paths contain
 
     assert.equal(await defs.get("officecli").fn({ command: `view ${encrypted} text` }), "ok");
     assert.deepEqual(receivedArgs, { command: ["view", decrypted, "text"] });
+  });
+});
+
+test("wrapToolsPathArgsWithDlp rewrites single-match wildcard officecli command paths", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const folder = join(dir, "archive folder");
+    mkdirSync(folder, { recursive: true });
+    const encrypted = join(folder, "NT71880技术认证计划(1).pptx");
+    const decrypted = join(dir, "technical plan.decrypted.pptx");
+    await writeFile(encrypted, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    await writeFile(decrypted, Buffer.from("PK\x03\x04"));
+    const scriptPath = await createFakeDlpScript(dir, decrypted);
+
+    let receivedArgs = null;
+    const { defs, tools } = createToolRegistry([
+      ["officecli", {
+        name: "officecli",
+        fn: async (args) => {
+          receivedArgs = args;
+          return "ok";
+        },
+      }],
+    ]);
+    wrapToolsPathArgsWithDlp(tools, ["officecli"], {
+      readConfig: () => ({ dlp: { mode: "on", pythonPath: process.execPath, scriptPath } }),
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+    });
+
+    const wildcard = join(folder, "*技术认证计划*.pptx");
+    assert.equal(await defs.get("officecli").fn({ command: `view ${wildcard} text` }), "ok");
+    assert.deepEqual(receivedArgs, { command: ["view", decrypted, "text"] });
+  });
+});
+
+test("wrapToolsPathArgsWithDlp rewrites document paths inside shell read commands", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const folder = join(dir, "archive folder");
+    mkdirSync(folder, { recursive: true });
+    const encrypted = join(folder, "manual 拐点45nit.pdf");
+    const decrypted = join(dir, "manual.decrypted.pdf");
+    await writeFile(encrypted, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    await writeFile(decrypted, Buffer.from("%PDF-1.7"));
+    const scriptPath = await createFakeDlpScript(dir, decrypted);
+
+    let receivedArgs = null;
+    const { defs, tools } = createToolRegistry([
+      ["run_command", {
+        name: "run_command",
+        fn: async (args) => {
+          receivedArgs = args;
+          return "ok";
+        },
+      }],
+    ]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => ({ dlp: { mode: "on", pythonPath: process.execPath, scriptPath } }),
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+    });
+
+    const brokenPath = encrypted.replace(/^([A-Za-z]):\\/, "$1:");
+    assert.equal(await defs.get("run_command").fn({ command: `py extract_pdf.py "${brokenPath}"` }), "ok");
+    assert.equal(receivedArgs.command, `py extract_pdf.py "${decrypted}"`);
   });
 });
 
