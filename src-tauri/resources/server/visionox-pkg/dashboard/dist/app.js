@@ -25994,6 +25994,11 @@ const [providerCaps, setProviderCaps] = d2(null);
       var s = normalizeClipboardPathText(value);
       return /^[A-Za-z]:\\/.test(s) || s.startsWith("\\\\") || s.startsWith("/") || /^file:\/\//i.test(s);
     }
+    function isImagePathName(value) {
+      var s = String(value || "").trim().replace(/^file:\/\//i, "");
+      s = s.split(/[?#]/, 1)[0];
+      return /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif)$/i.test(s);
+    }
     function decodeClipboardUri(value) {
       var raw = String(value || "").trim();
       if (!raw) return "";
@@ -26088,6 +26093,21 @@ const [providerCaps, setProviderCaps] = d2(null);
         return /^(?:image|clipboard|screenshot|截图)(?:[-_\s]?\d+)?\.(?:png|jpe?g|gif|webp|bmp)$/i.test(String(name || "").trim());
       });
     }
+    function shouldPasteImagesAsAttachments() {
+      if (imageFiles.length === 0) return false;
+      if (looksLikeClipboardScreenshot()) return true;
+      if (fileNames.length > 0 && fileNames.length === imageFiles.length && fileNames.every(isImagePathName)) return true;
+      if (gotFullPaths && fullPaths.length > 0 && fullPaths.every(isImagePathName)) return true;
+      if (fileNames.length === 0 && !pathLikeClipboardText(plainText.split(/\r?\n/).find(function(s) { return s.trim(); }) || "")) return true;
+      return false;
+    }
+    function insertPlainTextIfUsefulWithImages() {
+      var text = plainText || "";
+      if (!text.trim()) return;
+      var first = text.split(/\r?\n/).find(function(s) { return s.trim(); }) || "";
+      if (pathLikeClipboardText(first) || /^https?:\/\//i.test(first.trim())) return;
+      insertAtCursor(text);
+    }
     function shouldQueryClipboardPaths() {
       if (fileNames.length > 0) return true;
       if (imageFiles.length > 0) return false;
@@ -26097,8 +26117,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       first = first.trim();
       return pathLikeClipboardText(first);
     }
-    if (looksLikeClipboardScreenshot()) {
+    if (shouldPasteImagesAsAttachments()) {
       addPendingImages(imageFiles);
+      insertPlainTextIfUsefulWithImages();
     } else if (shouldQueryClipboardPaths()) {
       var capBefore = before, capAfter = after, capStart = start;
       function insertPaths(paths) {

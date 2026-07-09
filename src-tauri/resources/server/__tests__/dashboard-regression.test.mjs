@@ -277,6 +277,9 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /function normalizeClipboardPathText/);
     assert.match(app, /function pathLikeClipboardText/);
     assert.match(app, /function decodeClipboardUri/);
+    assert.match(app, /function isImagePathName/);
+    assert.match(app, /function shouldPasteImagesAsAttachments/);
+    assert.match(app, /if \(shouldPasteImagesAsAttachments\(\)\)/);
     assert.match(app, /if \(fileNames\.length > 0\) return true;/);
     assert.match(app, /else if \(gotFullPaths && fullPaths\.length > 0\)/);
     assert.match(app, /function protectWindowsPathBackslashesForMarkdown/);
