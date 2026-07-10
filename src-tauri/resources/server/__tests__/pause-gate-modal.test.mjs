@@ -11,13 +11,13 @@ describe("requestToModal — pauseGate 请求到弹窗映射", () => {
     assert.equal(modal._gateId, id);
     assert.equal(modal.command, "npm test");
     assert.equal(modal.allowPrefix, "npm");
-    assert.equal(modal.shellKind, "foreground");
+    assert.equal(modal.shellKind, "run_command");
   });
 
   test("run_background → shell 弹窗（后台）", () => {
     const modal = requestToModal({ id, kind: "run_background", payload: { command: "node server.js" } });
     assert.equal(modal.kind, "shell");
-    assert.equal(modal.shellKind, "background");
+    assert.equal(modal.shellKind, "run_background");
     assert.equal(modal.allowPrefix, "node");
   });
 
@@ -48,10 +48,11 @@ describe("requestToModal — pauseGate 请求到弹窗映射", () => {
   });
 
   test("plan_revision → revision 弹窗", () => {
-    const modal = requestToModal({ id, kind: "plan_revision", payload: { reason: "too complex", remainingSteps: 2, summary: "redo" } });
+    const remainingSteps = [{ id: "s2", title: "Step 2", action: "redo" }];
+    const modal = requestToModal({ id, kind: "plan_revision", payload: { reason: "too complex", remainingSteps, summary: "redo" } });
     assert.equal(modal.kind, "revision");
     assert.equal(modal.reason, "too complex");
-    assert.equal(modal.remainingSteps, 2);
+    assert.deepEqual(modal.remainingSteps, remainingSteps);
   });
 
   test("未知 kind → null（调用方处理警告+取消）", () => {

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Visionox",
-  "version": "1.20.0",
+  "productName": "Visionox-Whale",
+  "version": "1.28.0",
   "identifier": "com.visionox.desktop",
   "build": {
     "beforeDevCommand": "",
@@ -31,25 +31,21 @@
         "rank": "Default"
       }
     ],
-    "resources": [
-      "resources/server/launcher.mjs",
-      "resources/server/lib/provider.mjs",
-      "resources/server/lib/context-cap.mjs",
-      "resources/server/lib/pause-gate-modal.mjs",
-      "resources/server/lib/system-prompt.mjs",
-      "resources/server/lib/dlp-file.mjs",
-      "resources/server/learn.mjs",
-      "resources/server/learn-track.mjs",
-      "resources/server/learn-sandbox-impl.mjs",
-      "resources/server/visionox-file/**/*",
-      "resources/server/visionox-pkg/**/*",
-      "resources/server/node.exe",
-      "resources/server/officecli.exe",
-      "resources/default-soul.md",
-      "resources/ecc-rules/**/*",
-      "resources/skill-creation-guide.md",
-      "resources/bootstrap-skills/**/*"
-    ],
+    "resources": {
+      "runtime/visionox-pkg/": "resources/server/visionox-pkg/",
+      "resources/server/launcher.mjs": "resources/server/launcher.mjs",
+      "resources/server/lib/": "resources/server/lib/",
+      "resources/server/learn.mjs": "resources/server/learn.mjs",
+      "resources/server/learn-track.mjs": "resources/server/learn-track.mjs",
+      "resources/server/learn-sandbox-impl.mjs": "resources/server/learn-sandbox-impl.mjs",
+      "resources/server/visionox-file/": "resources/server/visionox-file/",
+      "resources/server/node.exe": "resources/server/node.exe",
+      "resources/server/officecli.exe": "resources/server/officecli.exe",
+      "resources/default-soul.md": "resources/default-soul.md",
+      "resources/ecc-rules/": "resources/ecc-rules/",
+      "resources/skill-creation-guide.md": "resources/skill-creation-guide.md",
+      "resources/bootstrap-skills/": "resources/bootstrap-skills/"
+    },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",

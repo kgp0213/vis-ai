@@ -636,6 +636,35 @@ code, .mono {
   flex: 1;
 }
 
+.chat-history-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 0 12px;
+}
+
+.chat-history-loader span {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.chat-history-loader button {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chat-history-loader button:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
 /* ============================================================================
    Buttons
    ============================================================================ */
@@ -2263,7 +2292,6 @@ textarea {
   gap: var(--space-3);
   align-items: flex-start;
   line-height: 1.6;
-  animation: message-enter 0.3s var(--ease-out-quart);
 }
 
 .chat-msg.artifact-selectable {
@@ -2609,6 +2637,23 @@ textarea {
   font-size: 12px;
   font-weight: 600;
   color: var(--accent-primary);
+}
+
+.chat-queue-paused {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.chat-queue-paused button {
+  flex: 0 0 auto;
+  padding: 3px 8px;
 }
 
 .chat-queue-head button,
@@ -5320,6 +5365,15 @@ textarea {
   flex-shrink: 0;
   box-shadow: var(--shadow-md);
 }
+.modal-resolving {
+  pointer-events: none;
+  opacity: 0.68;
+}
+.modal-resolving .modal-card::after {
+  content: "处理中...";
+  color: var(--text-secondary);
+  font-size: 12px;
+}
 .modal-card-head {
   display: flex;
   gap: 12px;
@@ -5369,7 +5423,7 @@ textarea {
 }
 .modal-choice-row {
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: minmax(28px, max-content) minmax(0, 1fr);
   grid-template-rows: auto auto;
   gap: 2px 12px;
   background: transparent;
@@ -5391,21 +5445,29 @@ textarea {
 .modal-choice-id {
   grid-row: 1 / 3;
   align-self: center;
+  min-width: 28px;
+  max-width: 96px;
   font-family: var(--font-mono);
   font-size: 14px;
+  line-height: 1.25;
   color: var(--accent-primary);
   font-weight: 600;
   text-align: center;
+  overflow-wrap: anywhere;
 }
 .modal-choice-title {
+  min-width: 0;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .modal-choice-summary {
+  min-width: 0;
   color: var(--text-secondary);
   font-size: 12px;
   grid-column: 2;
+  overflow-wrap: anywhere;
 }
 .modal-custom textarea {
   width: 100%;
@@ -5497,6 +5559,50 @@ textarea {
   gap: 8px;
   flex-shrink: 0;
   box-shadow: var(--shadow-md);
+}
+.plan-continuation-bar {
+  margin: 0 0 6px 0;
+  min-height: 48px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--color-warning, #fbbf24);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+.plan-continuation-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--color-warning, #fbbf24);
+  color: #111827;
+  font-weight: 700;
+}
+.plan-continuation-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.plan-continuation-text small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.plan-continuation-dismiss {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 .todo-bar-header {
   display: flex;
@@ -5613,6 +5719,7 @@ textarea {
   flex-shrink: 0;
 }
 .modal-step-risk-high { background: #f87171; }
+.modal-step-risk-med,
 .modal-step-risk-medium { background: #fbbf24; }
 .modal-step-risk-low { background: #4ade80; }
 .modal-step-id {

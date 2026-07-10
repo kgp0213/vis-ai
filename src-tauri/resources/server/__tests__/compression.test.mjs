@@ -1,5 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const runtimeChunkUrl = new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url);
+const { contextThresholdsForCapacity } = await import(runtimeChunkUrl.href);
 
 // ── Threshold constants (mirrored from chunk-2R4QCDOZ.js:6589-6601) ─────
 // These are golden-value tests: if the constants in the chunk change,
@@ -76,6 +80,17 @@ function decideAfterUsage(promptTokens, ctxMax, alreadyFoldedThisTurn = false) {
 // ── Tests: effective threshold calculation ─────────────────────
 
 describe("有效阈值计算 min(ratio, absoluteCap/ctxMax)", () => {
+  test("运行时导出的阈值与模型容量同步计算", () => {
+    assert.deepEqual(contextThresholdsForCapacity(CTX.K1M), {
+      ctxMax: CTX.K1M,
+      foldTokens: 200000,
+      aggressiveTokens: 280000,
+      forceSummaryTokens: 320000,
+      emergencyTokens: 380000,
+      normalTailTokens: 40000,
+      aggressiveTailTokens: 20000,
+    });
+  });
   test("128K ctxMax: ratio 主导，与纯比例一致", () => {
     // min(0.5, 200000/131072) = min(0.5, 1.526) = 0.5
     assert.equal(effectiveThreshold(RATIO.fold, ABSOLUTE_CAP.fold, CTX.K128), 0.5);
@@ -112,6 +127,30 @@ describe("有效阈值计算 min(ratio, absoluteCap/ctxMax)", () => {
 // ── Tests: decideAfterUsage decision logic ─────────────────────
 
 describe("decideAfterUsage 决策逻辑", () => {
+  test("普通最终回答也会先执行上下文决策，再结束当前轮次", () => {
+    const source = readFileSync(runtimeChunkUrl, "utf8");
+    const noToolReturn = source.indexOf("if (repairedCalls.length === 0)");
+    const contextDecision = source.indexOf("const decision = this.context.decideAfterUsage", noToolReturn - 3000);
+    assert.ok(contextDecision >= 0, "context decision should exist in the turn loop");
+    assert.ok(contextDecision < noToolReturn, "context decision must run before the no-tool return");
+  });
+
+  test("强制总结前真正压缩历史，普通最终回答不会重复生成第二份总结", () => {
+    const source = readFileSync(runtimeChunkUrl, "utf8");
+    const forceBranch = source.indexOf('decision.kind === "exit-with-summary"');
+    const compact = source.indexOf("await this.compactHistory({ keepRecentTokens: decision.tailBudget })", forceBranch);
+    const noTool = source.indexOf("if (repairedCalls.length === 0)", compact);
+    const forceSummary = source.indexOf("yield* forceSummaryAfterIterLimit", noTool);
+    assert.ok(forceBranch >= 0 && compact > forceBranch);
+    assert.ok(noTool > compact && forceSummary > noTool);
+  });
+
+  test("切换模型后下一次请求按普通压缩阈值预检", () => {
+    const source = readFileSync(runtimeChunkUrl, "utf8");
+    assert.match(source, /this\._contextRecheckRequired = true/);
+    assert.match(source, /this\._contextRecheckRequired \? "fold" : "emergency"/);
+  });
+
   test("ratio=0.3, 128K → kind=none", () => {
     const d = decideAfterUsage(Math.floor(CTX.K128 * 0.3), CTX.K128);
     assert.equal(d.kind, "none");

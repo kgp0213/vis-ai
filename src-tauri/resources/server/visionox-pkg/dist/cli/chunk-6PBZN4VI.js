@@ -126,14 +126,26 @@ function listSessions() {
       const path = join(dir, file);
       const stat = statSync(path);
       const name = file.replace(/\.jsonl$/, "");
-      const messageCount = countLines(path);
+      let meta = loadSessionMeta(name);
+      const hasFreshMessageCount = Number.isFinite(meta.messageCount) && meta.messageCountFileSize === stat.size && Number.isFinite(meta.messageCountFileMtimeMs) && meta.messageCountFileMtimeMs === stat.mtimeMs;
+      const messageCount = hasFreshMessageCount ? Math.max(0, Math.floor(meta.messageCount)) : countLines(path);
+      if (!hasFreshMessageCount) {
+        try {
+          meta = patchSessionMeta(name, {
+            messageCount,
+            messageCountFileSize: stat.size,
+            messageCountFileMtimeMs: stat.mtimeMs
+          });
+        } catch {
+        }
+      }
       return {
         name,
         path,
         size: stat.size,
         messageCount,
         mtime: stat.mtime,
-        meta: loadSessionMeta(name)
+        meta
       };
     }).sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
   } catch {

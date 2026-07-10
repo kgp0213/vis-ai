@@ -6,7 +6,7 @@ import {
 } from "./chunk-6PBZN4VI.js";
 
 // src/adapters/event-sink-jsonl.ts
-import { chmodSync, createWriteStream, mkdirSync } from "fs";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 function eventLogPath(sessionName) {
   return join(sessionsDir(), `${sanitizeName(sessionName)}.events.jsonl`);
@@ -39,6 +39,17 @@ var JsonlEventSink = class {
 };
 function openEventSink(path) {
   mkdirSync(dirname(path), { recursive: true });
+  try {
+    if (existsSync(path) && statSync(path).size >= 10 * 1024 * 1024) {
+      const backup = `${path}.1`;
+      try {
+        unlinkSync(backup);
+      } catch {
+      }
+      renameSync(path, backup);
+    }
+  } catch {
+  }
   const stream = createWriteStream(path, { flags: "a" });
   try {
     chmodSync(path, 384);

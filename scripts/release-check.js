@@ -6,7 +6,8 @@
  * hand before giving an exe or installer to users.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -36,6 +37,20 @@ function run(label, command, args, cwd = root) {
   }
 }
 
+function runRustTestsIsolated() {
+  const targetDir = mkdtempSync(join(tmpdir(), "visionox-rust-tests-"));
+  console.log(`\n[release-check] rust tests (isolated target: ${targetDir})`);
+  const result = spawnSync("cargo", ["test"], {
+    cwd: join(root, "src-tauri"),
+    stdio: "inherit",
+    windowsHide: true,
+    env: { ...process.env, CARGO_TARGET_DIR: targetDir, CARGO_NET_OFFLINE: "true" },
+  });
+  rmSync(targetDir, { recursive: true, force: true });
+  if (result.error) console.error(`[release-check] ${result.error.message}`);
+  if (result.status !== 0) process.exit(result.status || 1);
+}
+
 function yyMMdd(date = new Date()) {
   const yy = String(date.getFullYear() % 100).padStart(2, "0");
   const mm = String(date.getMonth() + 1).padStart(2, "0");
@@ -57,8 +72,10 @@ function checkVersionDate() {
 }
 
 function printArtifacts() {
-  const exe = join(root, "src-tauri", "target", "release", "visionox-desktop.exe");
-  const nsis = join(root, "src-tauri", "target", "release", "bundle", "nsis", "Visionox_1.20.0_x64-setup.exe");
+  const exe = join(root, "src-tauri", "target", "release", "visionox-whale.exe");
+  const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+  const tauriConfig = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+  const nsis = join(root, "src-tauri", "target", "release", "bundle", "nsis", `${tauriConfig.productName}_${version}_x64-setup.exe`);
   console.log("\n[release-check] artifacts");
   console.log(`exe: ${existsSync(exe) ? exe : "(not found)"}`);
   console.log(`nsis: ${existsSync(nsis) ? nsis : "(not built in this check)"}`);
@@ -66,9 +83,10 @@ function printArtifacts() {
 
 run("dashboard syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js"]);
 run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js"]);
+run("bundled runtime Unicode path", npmCmd, ["run", "check:runtime-paths"]);
 run("bundle patch guard", npmCmd, ["run", "check:bundle-patches"]);
 run("node tests", npmCmd, ["test"]);
-run("rust tests", "cargo", ["test"], join(root, "src-tauri"));
+runRustTestsIsolated();
 checkVersionDate();
 run("tauri no-bundle build", npmCmd, ["run", "tauri:build", "--", "--no-bundle"]);
 printArtifacts();

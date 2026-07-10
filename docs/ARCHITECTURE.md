@@ -1,6 +1,6 @@
-# Visionox 架构说明
+# Visionox-Whale 架构说明
 
-> 应用版本：1.20.0
+> 应用版本：1.28.0
 
 ---
 
@@ -20,7 +20,7 @@ Node.js Launcher
   ├─ DeepSeekClient + CacheFirstLoop
   ├─ 注册 40+ 工具 (文件/Shell/Web/Memory/MCP/Skill)
   ├─ 启动 Dashboard HTTP Server (127.0.0.1)
-  └─ 全局诊断日志 → launcher-diag.log / launcher-stderr.log
+  └─ 全局诊断日志 → ~/.visionox/logs/visionox-whale.log / visionox-server-stderr.log
 
 Dashboard SPA (WebView2)
   └─ Chat / Sessions / Tools / Memory / Settings / MCP ...
@@ -106,7 +106,7 @@ iframe 方案下按 F5 刷新壳页面时，依赖三层恢复：
 | 方面 | 上游 | Visionox |
 |------|------|----------|
 | 进程管理 | 无 | JobObject + 崩溃监控 + 启动超时 |
-| 诊断 | stdout/stderr | 全局 launcher-diag.log + 开发模式日志面板 |
+| 诊断 | stdout/stderr | 全局 `.visionox/logs/` 诊断日志 + 日志面板 |
 | 编辑模式 | review/auto/yolo | + admin |
 | 配色 | dark/light | 8 套 |
 | 搜索 | Mojeek only | 4 引擎热切换 |

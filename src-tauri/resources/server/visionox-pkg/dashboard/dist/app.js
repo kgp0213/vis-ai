@@ -18903,12 +18903,32 @@ async function api(path, opts = {}) {
   const headers = { ...opts.headers ?? {} };
   headers["X-Reasonix-Token"] = TOKEN;
   if (opts.body !== void 0) headers["Content-Type"] = "application/json";
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: opts.body !== void 0 ? JSON.stringify(opts.body) : void 0
-  });
-  const text = await res.text();
+  const timeoutMs = opts.timeoutMs === 0 ? 0 : Math.max(1e3, Number(opts.timeoutMs ?? (method === "GET" ? 15e3 : 12e4)));
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
+  const timeout = timeoutMs > 0 ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs) : null;
+  let res;
+  let text;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      body: opts.body !== void 0 ? JSON.stringify(opts.body) : void 0,
+      signal: controller.signal
+    });
+    text = await res.text();
+  } catch (err) {
+    if (timedOut) throw new Error(`请求超时（${Math.round(timeoutMs / 1e3)} 秒）：${path}`);
+    throw err;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    opts.signal?.removeEventListener?.("abort", abortFromCaller);
+  }
   let parsed = null;
   try {
     parsed = text ? JSON.parse(text) : null;
@@ -18990,6 +19010,11 @@ function requestChatMessageJump(messageId) {
 }
 function reportAppError(error, source, info) {
   console.error(`[visionox dashboard] ${source}:`, error, info);
+  try {
+    const message = `${source}: ${error?.message ?? String(error)}\n${error?.stack ?? ""}\n${info ?? ""}`.slice(0, 12000);
+    if (window.parent && window.parent !== window) window.parent.postMessage({ type: "vis_client_log", message }, "*");
+  } catch {
+  }
   appBus.dispatchEvent(
     new CustomEvent("error", { detail: { error, source, info, ts: Date.now() } })
   );
@@ -19026,7 +19051,6 @@ function ToastStack() {
 
 // dashboard/src/lib/error-boundary.ts
 var html2 = htm_module_default.bind(k);
-var REPO_URL = "https://github.com/esengine/reasonix";
 function buildIssueBody({ error, source, info }) {
   const ua = typeof navigator === "object" ? navigator.userAgent : "(unknown)";
   const errMsg = error?.message ?? String(error);
@@ -19044,7 +19068,7 @@ function buildIssueBody({ error, source, info }) {
     "```",
     "",
     "**Environment**",
-    `- Visionox: ${MODE}`,
+    `- Visionox-Whale: ${MODE}`,
     `- Browser: ${ua}`,
     `- URL: ${location.pathname} (token redacted)`,
     "",
@@ -19074,7 +19098,6 @@ function ErrorOverlay() {
   const error = err.error;
   const errMsg = error?.message ?? String(error);
   const stack = error?.stack ?? "(no stack)";
-  const issueUrl = `${REPO_URL}/issues/new?title=${encodeURIComponent(`[dashboard] ${errMsg.slice(0, 80)}`)}&body=${encodeURIComponent(buildIssueBody(err))}`;
   const copyDetails = async () => {
     try {
       await writeClipboardText(buildIssueBody(err));
@@ -19089,8 +19112,8 @@ function ErrorOverlay() {
         <div class="error-overlay-head">
           <span class="error-overlay-icon">✦</span>
           <div>
-            <div class="error-overlay-title">Something broke in the dashboard</div>
-            <div class="error-overlay-subtitle">${err.source} error · ${errMsg}</div>
+            <div class="error-overlay-title">当前页面遇到错误</div>
+            <div class="error-overlay-subtitle">${err.source} · ${errMsg}</div>
           </div>
         </div>
 
@@ -19099,19 +19122,15 @@ function ErrorOverlay() {
         ${err.info ? html2`<div class="error-overlay-info"><strong>info:</strong> ${err.info}</div>` : null}
 
         <div class="error-overlay-help">
-          The TUI is unaffected — only this browser tab tripped. You can
-          dismiss and keep working, or report it so we can fix the
-          underlying cause.
+          错误详情已写入本地运行日志。你可以关闭提示后继续操作；如果页面无法恢复，请打开日志目录并重新启动应用。
         </div>
 
         <div class="error-overlay-actions">
           <button class="primary" onClick=${copyDetails}>
-            ${copied ? "Copied \u2713" : "Copy details"}
+            ${copied ? "已复制" : "复制详情"}
           </button>
-          <a class="button" href=${issueUrl} target="_blank" rel="noopener noreferrer">
-            Report on GitHub
-          </a>
-          <button onClick=${() => setErr(null)} style="margin-left: auto;">Dismiss (Esc)</button>
+          <button onClick=${openLogs}>打开日志目录</button>
+          <button onClick=${() => setErr(null)} style="margin-left: auto;">关闭 (Esc)</button>
         </div>
       </div>
     </div>
@@ -19139,14 +19158,14 @@ var ErrorBoundary = class extends C {
       if ((this.state.attempts ?? 0) >= 3) {
         return html2`
           <div class="boot" style="flex-direction: column; gap: 12px;">
-            <div>this panel keeps crashing — the error overlay has the trace.</div>
+            <div>当前页面连续恢复失败，请查看运行日志。</div>
             <button onClick=${() => this.setState({ caught: false, attempts: 0 })}>
-              Try again
+              重新尝试
             </button>
           </div>
         `;
       }
-      return html2`<div class="boot">recovering…</div>`;
+      return html2`<div class="boot">正在恢复...</div>`;
     }
     return this.props.children;
   }
@@ -19439,12 +19458,16 @@ var en = {
     queueRetry: "Retry",
     queueCancel: "Cancel",
     queueClear: "Clear queue",
+    queuePaused: "Queue paused after stopping the previous answer",
+    queueResume: "Resume queue",
     queueClearConfirm: "Clear {count} queued prompt(s)?",
     queueResetConfirm: "There are {count} queued prompt(s). Clear them and continue?",
     queueAdded: "queued ({count})",
     queueLimit: "Up to {count} prompts can be queued. Please wait for one to send.",
     queueFailed: "Queued prompt failed: {error}",
     queueCommandBlocked: "This command changes the conversation. Please run it after the current turn finishes.",
+    loadEarlierMessages: "Load {count} earlier messages",
+    reconnecting: "Reconnecting to the local service. Queued prompts are preserved.",
     new: "New",
     clear: "Clear",
     newTitle: "/new \u2014 wipe conversation context (loop log + scrollback)",
@@ -19518,6 +19541,14 @@ var en = {
     inflightReasoning: "reasoning {count} ch",
     inflightOut: "out {count} ch",
     abortBtn: "Abort (Esc)",
+    stoppingBtn: "Stopping...",
+    stopComplete: "Current answer stopped",
+    stopTimeout: "The current task is still stopping. Try creating a new conversation again shortly.",
+    backgroundJobs: "Background {count}",
+    backgroundEmpty: "No background jobs",
+    backgroundStop: "Stop",
+    backgroundTask: "task",
+    backgroundService: "service",
     confirmBtn: "Apply (y)",
     rejectBtn: "Reject (n)",
     applyRestBtn: "Apply rest (a)",
@@ -19549,7 +19580,7 @@ var en = {
     toolsLoaded: "tools loaded",
     mcpServers: "mcp servers",
     editMode: "edit mode",
-    version: "Visionox",
+    version: "Visionox-Whale",
     workingDir: "Working directory",
     projectRoot: "project root",
     noPriorData: "no prior data",
@@ -19776,7 +19807,7 @@ var en = {
     runs7d: "runs \xB7 7d",
     pickHint: "Pick a skill on the left, or create a new one above.",
     readOnlyBuiltin: "read-only \xB7 builtin",
-    builtinDesc: "Built-in skills ship with Visionox; the model picks them up automatically. To customize, create a project- or global-scoped skill with the same name.",
+    builtinDesc: "Built-in skills ship with Visionox-Whale; the model picks them up automatically. To customize, create a project- or global-scoped skill with the same name.",
     saved: "saved {scope}/{name}",
     deleteConfirm: "Delete skill {scope}/{name}?",
     reloadHint: "re-loaded on next /new or session restart",
@@ -19847,7 +19878,7 @@ var en = {
     kindSessionCleanup: "Session cleanup task",
     name: "Name",
     prompt: "Prompt",
-    promptPlaceholder: "What should Visionox do when this task runs?",
+    promptPlaceholder: "What should Visionox-Whale do when this task runs?",
     type: "Schedule",
     interval: "Interval",
     customInterval: "Custom interval",
@@ -19868,20 +19899,23 @@ var en = {
     accepted: "accepted",
     skipped: "skipped",
     rejected: "rejected",
+    deferred: "waiting",
     running: "running",
     completed: "completed",
+    cancelled: "cancelled",
     failed: "failed",
     saved: "task saved",
     deleted: "task deleted",
     runAccepted: "task started",
     runCompleted: "task completed",
+    runCancelled: "task cancelled",
     runFailed: "task failed",
     runSkipped: "task skipped",
     runRejected: "task was not accepted",
     runPending: "task is waiting for confirmation",
     selectHint: "Select a task to edit it, or create a new one.",
     minInterval: "Interval must be 1 minute to 30 days.",
-    busyHint: "If the chat loop is busy at the scheduled time, the run is skipped and recorded.",
+    busyHint: "The app must stay open for scheduled runs. If chat is busy, the task waits and retries automatically.",
     workspace: "Workspace",
     currentWorkspace: "current",
     workspaceMismatch: "workspace changed",
@@ -19963,7 +19997,7 @@ var en = {
     ready: "ready",
     setupNeeded: "setup needed",
     installOllama: "Install Ollama",
-    installOllamaDesc: "Visionox doesn't run package managers for you. Install Ollama first, then come back:",
+    installOllamaDesc: "Visionox-Whale doesn't run package managers for you. Install Ollama first, then come back:",
     macWindows: "macOS / Windows:",
     download: "download from ollama.com/download",
     linux: "Linux:",
@@ -20006,7 +20040,7 @@ var en = {
     extraBody: "extra body",
     keepExistingKey: "leave blank to keep existing key",
     remoteProvider: "Remote embedding provider",
-    remoteProviderDesc: "Configure the full OpenAI-compatible embeddings URL here. Visionox will send requests exactly to the URL you provide.",
+    remoteProviderDesc: "Configure the full OpenAI-compatible embeddings URL here. Visionox-Whale will send requests exactly to the URL you provide.",
     ollama: "ollama",
     binary: "binary",
     found: "found",
@@ -20304,12 +20338,16 @@ var zhCN = {
     queueRetry: "\u91CD\u8BD5",
     queueCancel: "\u53D6\u6D88",
     queueClear: "\u6E05\u7A7A",
+    queuePaused: "\u4E0A\u4E00\u6761\u56DE\u7B54\u5DF2\u505C\u6B62\uFF0C\u961F\u5217\u5DF2\u6682\u505C",
+    queueResume: "\u7EE7\u7EED\u961F\u5217",
     queueClearConfirm: "\u6E05\u7A7A {count} \u6761\u6392\u961F\u5185\u5BB9\uFF1F",
     queueResetConfirm: "\u5F53\u524D\u6709 {count} \u6761\u5185\u5BB9\u6B63\u5728\u6392\u961F\uFF0C\u662F\u5426\u6E05\u7A7A\u5E76\u7EE7\u7EED\uFF1F",
     queueAdded: "\u5DF2\u52A0\u5165\u6392\u961F\uFF08{count} \u6761\uFF09",
     queueLimit: "\u6700\u591A\u6392\u961F {count} \u6761\uFF0C\u8BF7\u7B49\u5F85\u524D\u9762\u7684\u5185\u5BB9\u53D1\u9001\u540E\u518D\u8BD5",
     queueFailed: "\u6392\u961F\u5185\u5BB9\u53D1\u9001\u5931\u8D25\uFF1A{error}",
     queueCommandBlocked: "\u8FD9\u4E2A\u547D\u4EE4\u4F1A\u6539\u53D8\u5BF9\u8BDD\u4E0A\u4E0B\u6587\uFF0C\u8BF7\u5728\u5F53\u524D\u8F6E\u6B21\u7ED3\u675F\u540E\u518D\u6267\u884C",
+    loadEarlierMessages: "\u52A0\u8F7D\u66F4\u65E9\u7684 {count} \u6761\u6D88\u606F",
+    reconnecting: "\u6B63\u5728\u91CD\u65B0\u8FDE\u63A5\u672C\u5730\u670D\u52A1\uFF0C\u6392\u961F\u5185\u5BB9\u5DF2\u4FDD\u7559\u3002",
     new: "\u65B0\u5EFA",
     clear: "\u6E05\u9664",
     newTitle: "/new \u2014 \u6E05\u9664\u5BF9\u8BDD\u4E0A\u4E0B\u6587\uFF08\u5FAA\u73AF\u65E5\u5FD7 + \u6EDA\u52A8\u56DE\u653E\uFF09",
@@ -20421,6 +20459,14 @@ var zhCN = {
     inflightReasoning: "\u63A8\u7406 {count} \u5B57\u7B26",
     inflightOut: "\u8F93\u51FA {count} \u5B57\u7B26",
     abortBtn: "\u4E2D\u6B62 (Esc)",
+    stoppingBtn: "\u6B63\u5728\u505C\u6B62...",
+    stopComplete: "\u5F53\u524D\u56DE\u7B54\u5DF2\u505C\u6B62",
+    stopTimeout: "\u5F53\u524D\u4EFB\u52A1\u4ECD\u5728\u505C\u6B62\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u65B0\u5EFA\u5BF9\u8BDD",
+    backgroundJobs: "\u540E\u53F0 {count}",
+    backgroundEmpty: "\u6682\u65E0\u540E\u53F0\u4EFB\u52A1",
+    backgroundStop: "\u505C\u6B62",
+    backgroundTask: "\u4E34\u65F6\u4EFB\u52A1",
+    backgroundService: "\u957F\u671F\u670D\u52A1",
     confirmBtn: "\u5E94\u7528 (y)",
     rejectBtn: "\u62D2\u7EDD (n)",
     applyRestBtn: "\u5E94\u7528\u5269\u4F59 (a)",
@@ -20452,7 +20498,7 @@ var zhCN = {
     toolsLoaded: "\u5DF2\u52A0\u8F7D\u5DE5\u5177",
     mcpServers: "MCP \u670D\u52A1\u5668",
     editMode: "\u7F16\u8F91\u6A21\u5F0F",
-    version: "Visionox",
+    version: "Visionox-Whale",
     workingDir: "\u5DE5\u4F5C\u76EE\u5F55",
     projectRoot: "\u9879\u76EE\u6839\u76EE\u5F55",
     noPriorData: "\u65E0\u5386\u53F2\u6570\u636E",
@@ -20679,7 +20725,7 @@ var zhCN = {
     runs7d: "\u6B21\u8FD0\u884C \xB7 7 \u5929",
     pickHint: "\u9009\u62E9\u5DE6\u4FA7\u7684\u6280\u80FD\uFF0C\u6216\u5728\u4E0A\u65B9\u521B\u5EFA\u65B0\u6280\u80FD\u3002",
     readOnlyBuiltin: "\u53EA\u8BFB \xB7 \u5185\u7F6E",
-    builtinDesc: "\u5185\u7F6E\u6280\u80FD\u968F Visionox \u4E00\u8D77\u53D1\u5E03\uFF1B\u6A21\u578B\u4F1A\u81EA\u52A8\u8BC6\u522B\u3002\u5982\u9700\u81EA\u5B9A\u4E49\uFF0C\u8BF7\u521B\u5EFA\u540C\u540D\u7684\u9879\u76EE\u6216\u5168\u5C40\u6280\u80FD\u3002",
+    builtinDesc: "\u5185\u7F6E\u6280\u80FD\u968F Visionox-Whale \u4E00\u8D77\u53D1\u5E03\uFF1B\u6A21\u578B\u4F1A\u81EA\u52A8\u8BC6\u522B\u3002\u5982\u9700\u81EA\u5B9A\u4E49\uFF0C\u8BF7\u521B\u5EFA\u540C\u540D\u7684\u9879\u76EE\u6216\u5168\u5C40\u6280\u80FD\u3002",
     saved: "\u5DF2\u4FDD\u5B58 {scope}/{name}",
     deleteConfirm: "\u5220\u9664\u6280\u80FD {scope}/{name}\uFF1F",
     reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D",
@@ -20750,7 +20796,7 @@ var zhCN = {
     kindSessionCleanup: "\u4F1A\u8BDD\u6574\u7406\u4EFB\u52A1",
     name: "\u540D\u79F0",
     prompt: "\u63D0\u793A\u8BCD",
-    promptPlaceholder: "\u4EFB\u52A1\u89E6\u53D1\u65F6\uFF0C\u5E0C\u671B Visionox \u505A\u4EC0\u4E48\uFF1F",
+    promptPlaceholder: "\u4EFB\u52A1\u89E6\u53D1\u65F6\uFF0C\u5E0C\u671B Visionox-Whale \u505A\u4EC0\u4E48\uFF1F",
     type: "\u65F6\u95F4\u89C4\u5219",
     interval: "\u95F4\u9694",
     customInterval: "\u81EA\u5B9A\u4E49\u65F6\u95F4\u6BB5",
@@ -20771,20 +20817,23 @@ var zhCN = {
     accepted: "\u5DF2\u63A5\u6536",
     skipped: "\u5DF2\u8DF3\u8FC7",
     rejected: "\u672A\u63A5\u6536",
+    deferred: "\u7B49\u5F85\u4E2D",
     running: "\u8FD0\u884C\u4E2D",
     completed: "\u5DF2\u5B8C\u6210",
+    cancelled: "\u5DF2\u53D6\u6D88",
     failed: "\u5931\u8D25",
     saved: "\u4EFB\u52A1\u5DF2\u4FDD\u5B58",
     deleted: "\u4EFB\u52A1\u5DF2\u5220\u9664",
     runAccepted: "\u4EFB\u52A1\u5DF2\u5F00\u59CB\u8FD0\u884C",
     runCompleted: "\u4EFB\u52A1\u5DF2\u5B8C\u6210",
+    runCancelled: "\u4EFB\u52A1\u5DF2\u53D6\u6D88",
     runFailed: "\u4EFB\u52A1\u8FD0\u884C\u5931\u8D25",
     runSkipped: "\u4EFB\u52A1\u5DF2\u8DF3\u8FC7",
     runRejected: "\u4EFB\u52A1\u672A\u88AB\u63A5\u6536",
     runPending: "\u4EFB\u52A1\u6B63\u5728\u7B49\u5F85\u786E\u8BA4",
     selectHint: "\u9009\u62E9\u4E00\u4E2A\u4EFB\u52A1\u8FDB\u884C\u7F16\u8F91\uFF0C\u6216\u65B0\u5EFA\u4EFB\u52A1\u3002",
     minInterval: "\u95F4\u9694\u5FC5\u987B\u5728 1 \u5206\u949F\u5230 30 \u5929\u4E4B\u95F4\u3002",
-    busyHint: "\u5982\u679C\u5230\u70B9\u65F6\u5BF9\u8BDD\u6B63\u5FD9\uFF0C\u8BE5\u6B21\u4F1A\u8BB0\u5F55\u4E3A\u8DF3\u8FC7\u3002",
+    busyHint: "\u5B9A\u65F6\u4EFB\u52A1\u9700\u8981\u4FDD\u6301\u8F6F\u4EF6\u8FD0\u884C\uFF1B\u5982\u679C\u5BF9\u8BDD\u6B63\u5FD9\uFF0C\u4EFB\u52A1\u4F1A\u7B49\u5F85\u5E76\u81EA\u52A8\u91CD\u8BD5\u3002",
     workspace: "\u5DE5\u4F5C\u533A",
     currentWorkspace: "\u5F53\u524D",
     workspaceMismatch: "\u5DE5\u4F5C\u533A\u5DF2\u53D8\u66F4",
@@ -20866,7 +20915,7 @@ var zhCN = {
     ready: "\u5C31\u7EEA",
     setupNeeded: "\u9700\u8981\u8BBE\u7F6E",
     installOllama: "\u5B89\u88C5 Ollama",
-    installOllamaDesc: "Visionox \u4E0D\u4F1A\u4E3A\u60A8\u8FD0\u884C\u5305\u7BA1\u7406\u5668\u3002\u8BF7\u5148\u5B89\u88C5 Ollama\uFF0C\u7136\u540E\u8FD4\u56DE\uFF1A",
+    installOllamaDesc: "Visionox-Whale \u4E0D\u4F1A\u4E3A\u60A8\u8FD0\u884C\u5305\u7BA1\u7406\u5668\u3002\u8BF7\u5148\u5B89\u88C5 Ollama\uFF0C\u7136\u540E\u8FD4\u56DE\uFF1A",
     macWindows: "macOS / Windows\uFF1A",
     download: "\u4ECE ollama.com/download \u4E0B\u8F7D",
     linux: "Linux\uFF1A",
@@ -20909,7 +20958,7 @@ var zhCN = {
     extraBody: "\u6269\u5C55\u8BF7\u6C42\u4F53",
     keepExistingKey: "\u7559\u7A7A\u5219\u4FDD\u7559\u73B0\u6709 Key",
     remoteProvider: "\u8FDC\u7A0B\u5411\u91CF\u670D\u52A1",
-    remoteProviderDesc: "\u5728\u8FD9\u91CC\u914D\u7F6E OpenAI-Compatible embeddings \u7684\u5B8C\u6574 URL\u3002Visionox \u4F1A\u4E25\u683C\u4F7F\u7528\u4F60\u63D0\u4F9B\u7684 URL \u53D1\u8D77\u8BF7\u6C42\u3002",
+    remoteProviderDesc: "\u5728\u8FD9\u91CC\u914D\u7F6E OpenAI-Compatible embeddings \u7684\u5B8C\u6574 URL\u3002Visionox-Whale \u4F1A\u4E25\u683C\u4F7F\u7528\u4F60\u63D0\u4F9B\u7684 URL \u53D1\u8D77\u8BF7\u6C42\u3002",
     ollama: "Ollama",
     binary: "\u4E8C\u8FDB\u5236",
     found: "\u5DF2\u627E\u5230",
@@ -23376,6 +23425,7 @@ function renderUnifiedDiff(text) {
   return `<pre class="diff-block">${lines}</pre>`;
 }
 var renderer = new marked.Renderer();
+renderer.html = ({ text }) => escapeHtml(text);
 var ARTIFACT_EXT_BY_LANG = {
   markdown: "md",
   md: "md",
@@ -23645,6 +23695,12 @@ function showArtifactPreview(artifact) {
     }
     iframe.srcdoc = artifactPreviewDoc(artifact);
     body.appendChild(iframe);
+  };
+  const openLogs = () => {
+    try {
+      if (window.parent && window.parent !== window) window.parent.postMessage({ type: "vis_open_log_dir" }, "*");
+    } catch {
+    }
   };
   const renderSource = () => {
     body.replaceChildren();
@@ -24142,8 +24198,7 @@ function ChoiceModal({ modal, onResolve }) {
 function PlanModal({ modal, onResolve }) {
   useLang();
   const [feedback, setFeedback] = d2("");
-  const [stage, setStage] = d2(null);
-  const send = () => onResolve("plan", stage, feedback);
+  const [refining, setRefining] = d2(false);
   return html4`
     <${ModalCard} accent="#67e8f9" icon="◆" title=${t4("modal.planTitle")} subtitle=${modal.summary || t4("modal.planSubtitle")}>
       <div class="md modal-plan-body" dangerouslySetInnerHTML=${{ __html: marked.parse(modal.plan || "") }}></div>
@@ -24158,24 +24213,24 @@ function PlanModal({ modal, onResolve }) {
           `)}
         </div>
       ` : null}
-      ${stage ? html4`
+      ${refining ? html4`
           <textarea
-            placeholder=${stage === "approve" ? t4("modal.approveInstructions") : t4("modal.refinePlaceholder")}
+            placeholder=${t4("modal.refinePlaceholder")}
             rows="3"
             value=${feedback}
             onInput=${(e3) => setFeedback(e3.target.value)}
           ></textarea>
           <div class="modal-actions">
-            <button class="primary" onClick=${send}>${stage === "approve" ? t4("modal.approve") : t4("modal.sendRefinement")}</button>
+            <button class="primary" disabled=${!feedback.trim()} onClick=${() => onResolve("plan", "refine", feedback)}>${t4("modal.sendRefinement")}</button>
             <button onClick=${() => {
-    setStage(null);
+    setRefining(false);
     setFeedback("");
   }}>${t4("common.back")}</button>
           </div>
         ` : html4`
           <div class="modal-actions">
-            <button class="primary" onClick=${() => setStage("approve")}>${t4("modal.approve")}</button>
-            <button onClick=${() => setStage("refine")}>${t4("modal.refine")}</button>
+            <button class="primary" onClick=${() => onResolve("plan", "approve")}>${t4("modal.approve")}</button>
+            <button onClick=${() => setRefining(true)}>${t4("modal.refine")}</button>
             <button class="danger" onClick=${() => onResolve("plan", "cancel")}>${t4("modal.cancel")}</button>
           </div>
         `}
@@ -24336,7 +24391,7 @@ function CheckpointModal({ modal, onResolve }) {
             onInput=${(e3) => setReviseText(e3.target.value)}
           ></textarea>
           <div class="modal-actions">
-            <button class="primary" onClick=${() => onResolve("checkpoint", "revise", reviseText)}>${t4("modal.sendRevision")}</button>
+            <button class="primary" disabled=${!reviseText.trim()} onClick=${() => onResolve("checkpoint", "revise", reviseText)}>${t4("modal.sendRevision")}</button>
             <button onClick=${() => {
     setStaged(false);
     setReviseText("");
@@ -24602,9 +24657,45 @@ function fmtRelativeTime(iso) {
 
 // dashboard/src/panels/chat.ts
 var CHAT_DRAFT_KEY = "visionox.chatDraft.v1";
+var CHAT_INITIAL_RENDER_COUNT = 30;
+var CHAT_RENDER_STEP = 30;
+var CHAT_MESSAGE_PAGE_SIZE = 60;
+var CHAT_TOP_LOAD_THRESHOLD = 96;
 var FILE_ARTIFACT_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "sh"]);
+function captureChatScrollAnchor(feed) {
+  if (!feed) return null;
+  const feedTop = feed.getBoundingClientRect().top;
+  const nodes = feed.querySelectorAll(".chat-msg[data-msg-id]");
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom >= feedTop) {
+      return { id: node.dataset.msgId, offset: rect.top - feedTop };
+    }
+  }
+  return { id: null, scrollHeight: feed.scrollHeight, scrollTop: feed.scrollTop };
+}
+function restoreChatScrollAnchor(feed, anchor, done) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try {
+      if (!feed || !anchor) return;
+      if (anchor.id) {
+        const node = Array.from(feed.querySelectorAll(".chat-msg[data-msg-id]")).find((item) => item.dataset.msgId === anchor.id);
+        if (node) {
+          const feedTop = feed.getBoundingClientRect().top;
+          feed.scrollTop += node.getBoundingClientRect().top - feedTop - anchor.offset;
+          return;
+        }
+      }
+      if (Number.isFinite(anchor.scrollHeight)) {
+        feed.scrollTop = anchor.scrollTop + Math.max(0, feed.scrollHeight - anchor.scrollHeight);
+      }
+    } finally {
+      done?.();
+    }
+  }));
+}
 function chatDraftKey(workspaceDir, mode) {
   const ws = encodeURIComponent(workspaceDir || "default");
   const m3 = encodeURIComponent(mode || "general");
@@ -24824,7 +24915,7 @@ async function previewSelectedMarkdownDocument(file) {
   showToast(`已打开 ${filename}`, "info");
 }
 function pickMarkdownFileFromBridge() {
-  return api("/artifacts/pick-markdown-file", { method: "POST", body: {} }).then((result) => result?.path || "").catch((apiErr) => {
+  return api("/artifacts/pick-markdown-file", { method: "POST", body: {}, timeoutMs: 0 }).then((result) => result?.path || "").catch((apiErr) => {
   if (window.__TAURI__?.invoke) {
     return window.__TAURI__.invoke("pick_markdown_file").then((result) => {
       if (result?.error) throw new Error(result.error);
@@ -25071,20 +25162,28 @@ function ChatPanel() {
   const [streaming, setStreaming] = d2(null);
   const [activeTool, setActiveTool] = d2(null);
   const [busy, setBusy] = d2(false);
-  const [input, setInput] = d2(() => {
+  const initialInputRef = A2(null);
+  if (initialInputRef.current === null) {
     try {
-      return localStorage.getItem(CHAT_DRAFT_KEY) || "";
+      initialInputRef.current = localStorage.getItem(CHAT_DRAFT_KEY) || "";
     } catch {
-      return "";
+      initialInputRef.current = "";
     }
-  });
+  }
+  const inputValueRef = A2(initialInputRef.current);
+  const inputRef = A2(null);
+  const draftSaveTimerRef = A2(null);
+  const [inputHasContent, setInputHasContent] = d2(Boolean(initialInputRef.current.trim()));
+  const inputHasContentRef = A2(inputHasContent);
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
   const [draftReady, setDraftReady] = d2(false);
   const [error, setError] = d2(null);
   const [bootError, setBootError] = d2(null);
+  const [eventStreamConnected, setEventStreamConnected] = d2(true);
   const [statusLine, setStatusLine] = d2(null);
   const [modal, setModal] = d2(null);
+  const [modalResolving, setModalResolving] = d2(false);
   const [editMode, setEditModeLocal] = d2(null);
   const [preset, setPresetLocal] = d2(null);
   const [effort, setEffortLocal] = d2(null);
@@ -25108,6 +25207,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const fileArtifactsRetryRef = A2({ key: "", count: 0 });
   const [todos, setTodos] = d2([]);
   const [todoExpanded, setTodoExpanded] = d2(false);
+  const [planContinuation, setPlanContinuation] = d2(null);
   const [semanticIndex, setSemanticIndex] = d2(null);
   const [slashCommands, setSlashCommands] = d2([]);
   const [popoverKind, setPopoverKind] = d2(null);
@@ -25130,79 +25230,111 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
   const [recentWss, setRecentWss] = d2(() => { try { return JSON.parse(localStorage.getItem("visionox-workspaces") || "[]"); } catch { return []; } });
+  y2(() => {
+    if (todos.length === 0 || !todos.every((todo) => todo.status === "completed")) return;
+    setTodoExpanded(false);
+    const timer = setTimeout(() => {
+      setTodos((current) => current.length > 0 && current.every((todo) => todo.status === "completed") ? [] : current);
+    }, 5e3);
+    return () => clearTimeout(timer);
+  }, [todos]);
   const [showWsPicker, setShowWsPicker] = d2(false);
   const [showSkillPicker, setShowSkillPicker] = d2(false);
   const [showModelPicker, setShowModelPicker] = d2(false);
   const [skillList, setSkillList] = d2([]);
   const [pendingImages, setPendingImages] = d2([]);
+  const [visibleMessageCount, setVisibleMessageCount] = d2(CHAT_INITIAL_RENDER_COUNT);
+  const [totalMessages, setTotalMessages] = d2(0);
+  const [loadingEarlierMessages, setLoadingEarlierMessages] = d2(false);
   const [queuedPrompts, setQueuedPrompts] = d2([]);
   const [queuePumpTick, setQueuePumpTick] = d2(0);
   const [queueReady, setQueueReady] = d2(false);
   const [queueSendingId, setQueueSendingId] = d2(null);
+  const [queuePaused, setQueuePaused] = d2(false);
+  const [operation, setOperation] = d2(null);
+  const [backgroundJobs, setBackgroundJobs] = d2([]);
+  const [showBackgroundJobs, setShowBackgroundJobs] = d2(false);
   var fileInputRef = A2(null);
-  var inputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
   const CHAT_QUEUE_LIMIT = 5;
-  const CHAT_QUEUE_TTL_MS = 30 * 60 * 1e3;
   const draftKey = T2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
   const queueStorageKey = T2(() => workspaceDir ? `${draftKey}:queue` : null, [draftKey, workspaceDir]);
+  const persistDraftSoon = q2((value) => {
+    if (draftSaveTimerRef.current !== null) clearTimeout(draftSaveTimerRef.current);
+    draftSaveTimerRef.current = setTimeout(() => {
+      draftSaveTimerRef.current = null;
+      try {
+        const text = String(value || "");
+        if (text.trim()) localStorage.setItem(draftKey, text);
+        else localStorage.removeItem(draftKey);
+      } catch {
+      }
+    }, 250);
+  }, [draftKey]);
+  const setChatInput = q2((value, options = {}) => {
+    const text = String(value ?? "");
+    inputValueRef.current = text;
+    if (inputRef.current && inputRef.current.value !== text) inputRef.current.value = text;
+    const hasContent = Boolean(text.trim());
+    if (inputHasContentRef.current !== hasContent) {
+      inputHasContentRef.current = hasContent;
+      setInputHasContent(hasContent);
+    }
+    if (options.persist !== false) persistDraftSoon(text);
+  }, [persistDraftSoon]);
   y2(() => {
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
+  const refreshBackgroundJobs = q2(async () => {
+    try {
+      const result = await api("/background-jobs");
+      setBackgroundJobs(Array.isArray(result.jobs) ? result.jobs : []);
+    } catch {
+    }
+  }, []);
+  const stopBackgroundJob = q2(async (id) => {
+    try {
+      await api(`/background-jobs/${id}`, { method: "DELETE" });
+      await refreshBackgroundJobs();
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [refreshBackgroundJobs]);
+  y2(() => {
+    void refreshBackgroundJobs();
+    if (!showBackgroundJobs && !backgroundJobs.some((job) => job.running)) return;
+    const id = setInterval(refreshBackgroundJobs, 5e3);
+    return () => clearInterval(id);
+  }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
   y2(() => {
     if (!draftReady || !queueStorageKey) return;
+    let cancelled = false;
     setQueueReady(false);
-    try {
-      const raw = localStorage.getItem(queueStorageKey);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const savedAt = Number(parsed?.savedAt ?? 0);
-        const fresh = Date.now() - savedAt < CHAT_QUEUE_TTL_MS;
-        const items = Array.isArray(parsed?.items) ? parsed.items : [];
-        if (fresh && queuedPromptsRef.current.length === 0 && items.length > 0) {
-          const restored = items.slice(0, CHAT_QUEUE_LIMIT).map((item) => ({
-            id: item.id || `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            text: String(item.text ?? "").trim(),
-            images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
-            status: item.status === "failed" ? "failed" : "queued",
-            error: item.status === "failed" ? String(item.error ?? "") : null,
-            createdAt: Number(item.createdAt ?? Date.now())
-          })).filter((item) => item.text || item.images.length > 0);
-          if (restored.length > 0) setQueuedPrompts(restored);
-        } else if (!fresh) {
-          localStorage.removeItem(queueStorageKey);
-        }
-      }
-    } catch {
-    }
-    setQueueReady(true);
-  }, [draftReady, queueStorageKey]);
-  y2(() => {
-    if (!draftReady || !queueReady || !queueStorageKey) return;
-    try {
-      if (queuedPrompts.length === 0) {
-        localStorage.removeItem(queueStorageKey);
-        return;
-      }
-      const items = queuedPrompts.slice(0, CHAT_QUEUE_LIMIT).map((item) => ({
-        id: item.id,
-        text: item.text,
-        images: Array.isArray(item.images) ? item.images : [],
+    api(`/prompt-queue?scope=${encodeURIComponent(queueStorageKey)}`).then((res) => {
+      if (cancelled) return;
+      const restored = (Array.isArray(res?.items) ? res.items : []).slice(0, CHAT_QUEUE_LIMIT).map((item) => ({
+        id: item.id || `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        text: String(item.text ?? "").trim(),
+        images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
         status: item.status === "failed" ? "failed" : "queued",
-        error: item.status === "failed" ? item.error ?? "" : null,
-        createdAt: item.createdAt ?? Date.now()
-      }));
-      localStorage.setItem(queueStorageKey, JSON.stringify({ savedAt: Date.now(), items }));
-    } catch {
-    }
-  }, [queuedPrompts, queueStorageKey, draftReady, queueReady]);
+        error: item.status === "failed" ? String(item.error ?? "") : null,
+        createdAt: Number(item.createdAt ?? Date.now())
+      })).filter((item) => item.text || item.images.length > 0);
+      setQueuedPrompts(restored);
+    }).catch((err) => {
+      if (!cancelled) setError(t4("chat.queueFailed", { error: err.message }));
+    }).finally(() => {
+      if (!cancelled) setQueueReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [draftReady, queueStorageKey]);
   y2(() => {
     try {
       const scopedDraft = localStorage.getItem(draftKey) || "";
       const legacyDraft = localStorage.getItem(CHAT_DRAFT_KEY) || "";
       const nextDraft = scopedDraft || legacyDraft;
-      setInput((cur) => cur.trim() ? cur : nextDraft);
+      if (!inputValueRef.current.trim() && nextDraft) setChatInput(nextDraft, { persist: false });
       if (legacyDraft && !scopedDraft) {
         localStorage.setItem(draftKey, legacyDraft);
       }
@@ -25210,19 +25342,12 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch {
     }
     setDraftReady(true);
-  }, []);
+  }, [draftKey, setChatInput]);
   y2(() => {
-    if (!draftReady) return;
-    try {
-      const value = input.trim() ? input : "";
-      if (value) {
-        localStorage.setItem(draftKey, value);
-      } else {
-        localStorage.removeItem(draftKey);
-      }
-    } catch {
-    }
-  }, [input, draftKey, draftReady]);
+    return () => {
+      if (draftSaveTimerRef.current !== null) clearTimeout(draftSaveTimerRef.current);
+    };
+  }, []);
   y2(() => {
     if (!busy) return;
     const id = setInterval(() => setNowTick((n3) => n3 + 1), 500);
@@ -25237,6 +25362,14 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [busy, turnStartedAt]);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
+  const autoScrollInFlight = A2(false);
+  const loadingEarlierRef = A2(false);
+  const scrollbarDraggingRef = A2(false);
+  const topLoadArmedRef = A2(true);
+  const loadEarlierMessagesRef = A2(null);
+  const preserveVisibleHistoryOnAppend = q2(() => {
+    if (!shouldAutoScroll.current) setVisibleMessageCount((count) => count + 1);
+  }, []);
   const allVisibleMessages = streaming ? [
     ...messages,
     {
@@ -25260,7 +25393,11 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (!jumpMessageId) return;
     const selector = `[data-msg-id="${String(jumpMessageId).replace(/"/g, '\\"')}"]`;
     const el = feedRef.current?.querySelector(selector);
-    if (!el) return;
+    if (!el) {
+      const index = messages.findIndex((message) => String(message?.id || "") === String(jumpMessageId));
+      if (index >= 0) setVisibleMessageCount((count) => Math.max(count, messages.length - index));
+      return;
+    }
     shouldAutoScroll.current = false;
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
@@ -25275,9 +25412,12 @@ const [providerCaps, setProviderCaps] = d2(null);
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
     return () => clearTimeout(id);
-  }, [jumpMessageId, messages, streaming]);
+  }, [jumpMessageId, messages, streaming, visibleMessageCount]);
   y2(() => {
     let cancelled = false;
+    if (streaming) return () => {
+      cancelled = true;
+    };
     const sourceMessages = allVisibleMessages;
     const selectedExists = fileArtifactsSelectedMessageId && sourceMessages.some((m3) => m3.role === "assistant" && String(m3.id || "") === String(fileArtifactsSelectedMessageId));
     const turnKey = selectedExists ? String(fileArtifactsSelectedMessageId) : latestAssistantMessageId(sourceMessages);
@@ -25357,10 +25497,12 @@ const [providerCaps, setProviderCaps] = d2(null);
     let cancelled = false;
     (async () => {
       try {
-        const data = await api("/messages");
+        const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
         if (cancelled) return;
         setMessages(data.messages ?? []);
+        setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
         setBusy(Boolean(data.busy));
+        setOperation(data.operation ?? null);
       } catch (err) {
         if (!cancelled) setBootError(err.message);
       }
@@ -25387,16 +25529,18 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   const cancelStreamingRaf = q2(() => {
     if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
+      clearTimeout(streamRafRef.current);
       streamRafRef.current = null;
     }
     streamBufRef.current = null;
   }, []);
   const refetchCanonicalState = q2(async () => {
     try {
-      const data = await api("/messages");
+      const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
       setMessages(data.messages ?? []);
+      setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
       setBusy(Boolean(data.busy));
+      setOperation(data.operation ?? null);
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTool(null);
@@ -25409,33 +25553,33 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, [cancelStreamingRaf]);
   y2(() => {
-    const es = new EventSource(`/api/events?token=${TOKEN}`);
-    let firstOpen = true;
-    es.onopen = () => {
-      if (firstOpen) {
-        firstOpen = false;
-        return;
-      }
-      void refetchCanonicalState();
-    };
-    es.onmessage = (ev) => {
-      let dash;
-      try {
-        dash = JSON.parse(ev.data);
-      } catch {
-        return;
-      }
+    const onDash = (dash) => {
       if (dash.kind === "ping") return;
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
         return;
       }
+      if (dash.kind === "operation-change") {
+        setOperation(dash.operation ?? null);
+        if (dash.operation?.state === "cancelled") showToast(t4("chat.stopComplete"), "info");
+        void refreshBackgroundJobs();
+        return;
+      }
+      if (dash.kind === "background-job-change") {
+        void refreshBackgroundJobs();
+        return;
+      }
       if (dash.kind === "user") {
+        setTodos((current) => current.length > 0 && current.every((todo) => todo.status === "completed") ? [] : current);
+        setPlanContinuation(null);
+        preserveVisibleHistoryOnAppend();
         setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
+        setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "assistant_delta") {
         const cur = streamBufRef.current;
+        if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
         streamBufRef.current = {
           id: dash.id,
@@ -25443,13 +25587,15 @@ const [providerCaps, setProviderCaps] = d2(null);
           reasoning: (baseId?.reasoning ?? "") + (dash.reasoningDelta ?? "")
         };
         if (streamRafRef.current === null) {
-          streamRafRef.current = requestAnimationFrame(flushStreaming);
+          streamRafRef.current = setTimeout(flushStreaming, 75);
         }
         return;
       }
       if (dash.kind === "assistant_final") {
+        const replacedStreaming = Boolean(streamBufRef.current);
         cancelStreamingRaf();
         setStreaming(null);
+        if (!replacedStreaming) preserveVisibleHistoryOnAppend();
         setMessages((prev) => [
           ...prev,
           {
@@ -25459,6 +25605,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             reasoning: dash.reasoning
           }
         ]);
+        setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
@@ -25467,6 +25614,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       if (dash.kind === "tool") {
         setActiveTool((cur) => cur && cur.id === dash.id ? null : cur);
+        preserveVisibleHistoryOnAppend();
         setMessages((prev) => [
           ...prev,
           {
@@ -25477,6 +25625,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             toolArgs: dash.args
           }
         ]);
+        setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "artifact-created") {
@@ -25496,7 +25645,9 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (dash.kind === "error") {
           setActiveTool(null);
         }
+        preserveVisibleHistoryOnAppend();
         setMessages((prev) => [...prev, { id: dash.id, role: dash.kind, text: dash.text }]);
+        setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "status") {
@@ -25510,6 +25661,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           role: m.role,
           text: m.text || ""
         })));
+        setTotalMessages(dash.totalMessages ?? dash.messages.length);
         setFileArtifacts([]);
         setFileArtifactsKey("");
         setFileArtifactsDismissed(false);
@@ -25517,6 +25669,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         setFileArtifactsByMessageId({});
         setQueuedPrompts([]);
         setQueueSendingId(null);
+        setTodos([]);
+        setPlanContinuation(null);
+        setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
+        topLoadArmedRef.current = true;
         return;
       }
       if (dash.kind === "config-changed") {
@@ -25535,30 +25691,47 @@ const [providerCaps, setProviderCaps] = d2(null);
         setTodos(dash.todos ?? []);
         return;
       }
-      if (dash.kind === "plan-step-complete" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled") {
+      if (dash.kind === "plan-continuation-needed") {
+        setPlanContinuation({
+          attempts: dash.attempts ?? 0,
+          maxAttempts: dash.maxAttempts ?? 0,
+          completedSteps: dash.plan?.completedSteps ?? 0,
+          totalSteps: dash.plan?.totalSteps ?? 0
+        });
+        return;
+      }
+      if (dash.kind === "plan-activated" || dash.kind === "plan-step-complete" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled") {
         api("/plans").then((r3) => {
           setActivePlan((r3.plans ?? []).find((p3) => ["active", "pending"].includes(planStatus(p3))) ?? null);
         }).catch(() => {});
         return;
       }
       if (dash.kind === "modal-up") {
+        setModalResolving(false);
         setModal(dash.modal);
         return;
       }
       if (dash.kind === "modal-down") {
-        setModal((cur) => cur && cur.kind === dash.modalKind ? null : cur);
+        setModal((cur) => cur && (dash.gateId === void 0 ? cur.kind === dash.modalKind : cur._gateId === dash.gateId) ? null : cur);
+        setModalResolving(false);
         return;
       }
     };
-    es.onerror = () => {
-      setError(t4("chat.eventStreamError"));
-      setTimeout(() => setError(null), 3e3);
-    };
+    const unsubscribe = subscribeSse("*", onDash);
+    const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
+      setEventStreamConnected(connected);
+      if (connected && reconnected) void refetchCanonicalState();
+      if (!connected) {
+        setError(t4("chat.eventStreamError"));
+        setTimeout(() => setError(null), 3e3);
+      }
+    });
     return () => {
-      es.close();
+      unsubscribe();
+      unsubscribeStatus();
       cancelStreamingRaf();
     };
-  }, [refetchCanonicalState, cancelStreamingRaf]);
+  }, [refetchCanonicalState, cancelStreamingRaf, preserveVisibleHistoryOnAppend]);
   var handleFileChange = q2(async function(e) {
     var files = e.target.files;
     if (!files || files.length === 0) return;
@@ -25625,15 +25798,13 @@ const [providerCaps, setProviderCaps] = d2(null);
   const appendSkillMention = q2((name) => {
     const skillName = String(name ?? "").trim();
     if (!skillName) return;
-    setInput((prev) => {
-      const base = String(prev ?? "");
-      const spacer = base && !/\s$/.test(base) ? " " : "";
-      return `${base}${spacer}@${skillName} `;
-    });
+    const base = inputValueRef.current;
+    const spacer = base && !/\s$/.test(base) ? " " : "";
+    setChatInput(`${base}${spacer}@${skillName} `);
     setShowSkillPicker(false);
     setPopoverKind(null);
     setTimeout(() => inputRef.current?.focus(), 0);
-  }, []);
+  }, [setChatInput]);
   const resolveSkillMentionText = q2(async (rawText) => {
     const text = String(rawText ?? "").trim();
     if (!text) return text;
@@ -25665,7 +25836,8 @@ const [providerCaps, setProviderCaps] = d2(null);
     const images = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
     if (!text && images.length === 0) return { ok: false, reason: "empty" };
     try {
-      var body = { prompt: text };
+      const requestId = String(payload?.requestId || payload?.id || `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      var body = { prompt: text, requestId };
       if (images.length > 0) body.images = images;
       const res = await api("/submit", { method: "POST", body });
       if (!res.accepted) {
@@ -25680,6 +25852,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       return { ok: false, reason: err.message };
     }
   }, [resolveSkillMentionText]);
+  const persistQueuedPrompt = q2((item) => {
+    if (!queueStorageKey || !item) return Promise.resolve();
+    return api("/prompt-queue", { method: "POST", body: { scope: queueStorageKey, item } });
+  }, [queueStorageKey]);
+  const deletePersistedQueuedPrompt = q2((id = null) => {
+    if (!queueStorageKey) return Promise.resolve();
+    return api("/prompt-queue", { method: "DELETE", body: { scope: queueStorageKey, id } });
+  }, [queueStorageKey]);
   const enqueuePrompt = q2((text, images = []) => {
     const trimmed = String(text ?? "").trim();
     const imageList = Array.isArray(images) ? images.slice() : [];
@@ -25703,33 +25883,42 @@ const [providerCaps, setProviderCaps] = d2(null);
       createdAt: Date.now()
     };
     setQueuedPrompts((prev) => [...prev, item]);
+    persistQueuedPrompt(item).catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
     showToast(t4("chat.queueAdded", { count: current.length + 1 }), "info");
     setQueuePumpTick((v) => v + 1);
     return true;
-  }, []);
+  }, [persistQueuedPrompt]);
   const removeQueuedPrompt = q2((id) => {
     setQueuedPrompts((prev) => prev.filter((item) => item.id !== id));
-  }, []);
+    deletePersistedQueuedPrompt(id).catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
+  }, [deletePersistedQueuedPrompt]);
   const clearQueuedPrompts = q2(() => {
     const count = queuedPromptsRef.current.length;
     if (count > 0 && !confirm(t4("chat.queueClearConfirm", { count }))) return;
     setQueuedPrompts([]);
     setQueueSendingId(null);
-  }, []);
+    deletePersistedQueuedPrompt().catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
+  }, [deletePersistedQueuedPrompt]);
   const retryQueuedPrompt = q2((id) => {
-    setQueuedPrompts((prev) => prev.map((item) => item.id === id ? { ...item, status: "queued", error: null } : item));
+    setQueuedPrompts((prev) => prev.map((item) => {
+      if (item.id !== id) return item;
+      const next = { ...item, status: "queued", error: null };
+      persistQueuedPrompt(next).catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
+      return next;
+    }));
     setQueuePumpTick((v) => v + 1);
-  }, []);
+  }, [persistQueuedPrompt]);
   const confirmQueuedReset = q2(() => {
     const count = queuedPromptsRef.current.length;
     if (count === 0) return true;
     if (!confirm(t4("chat.queueResetConfirm", { count }))) return false;
     setQueuedPrompts([]);
     setQueueSendingId(null);
+    deletePersistedQueuedPrompt().catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
     return true;
-  }, []);
+  }, [deletePersistedQueuedPrompt]);
   y2(() => {
-    if (!queueReady || busy || queueSubmittingRef.current || queuedPrompts.length === 0) return;
+    if (!queueReady || queuePaused || busy || queueSubmittingRef.current || queuedPrompts.length === 0) return;
     const item = queuedPrompts.find((q) => q.status !== "failed");
     if (!item) return;
     queueSubmittingRef.current = true;
@@ -25741,12 +25930,15 @@ const [providerCaps, setProviderCaps] = d2(null);
         const result = await submitPromptPayload(item);
         if (result.ok) {
           setQueuedPrompts((prev) => prev.filter((q) => q.id !== item.id));
+          await deletePersistedQueuedPrompt(item.id);
           setTimeout(() => setQueuePumpTick((v) => v + 1), 700);
         } else if (result.busy) {
           setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "queued", error: null } : q));
           setTimeout(() => setQueuePumpTick((v) => v + 1), 900);
         } else {
-          setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "failed", error: result.reason ?? "failed" } : q));
+          const failedItem = { ...item, status: "failed", error: result.reason ?? "failed" };
+          setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? failedItem : q));
+          await persistQueuedPrompt(failedItem);
           setError(t4("chat.queueFailed", { error: result.reason ?? "failed" }));
           setTimeout(() => setQueuePumpTick((v) => v + 1), 700);
         }
@@ -25755,15 +25947,15 @@ const [providerCaps, setProviderCaps] = d2(null);
         queueSubmittingRef.current = false;
       }
     })();
-  }, [busy, queuedPrompts, queuePumpTick, submitPromptPayload]);
+  }, [busy, queuePaused, queuedPrompts, queuePumpTick, submitPromptPayload, persistQueuedPrompt, deletePersistedQueuedPrompt]);
   const send = q2(async () => {
-    const text = input.trim();
+    const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
     setError(null);
     if (busy) {
       if (enqueuePrompt(text, images)) {
-        setInput("");
+        setChatInput("");
         setPendingImages([]);
         setPopoverKind(null);
         removeChatDraft(draftKey);
@@ -25772,13 +25964,13 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
     const result = await submitPromptPayload({ text, images });
     if (result.ok) {
-      setInput("");
+      setChatInput("");
       setPendingImages([]);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
     } else if (result.busy) {
       if (enqueuePrompt(text, images)) {
-        setInput("");
+        setChatInput("");
         setPendingImages([]);
         setPopoverKind(null);
         removeChatDraft(draftKey);
@@ -25786,13 +25978,37 @@ const [providerCaps, setProviderCaps] = d2(null);
     } else {
       setError(result.reason ?? "rejected");
     }
-  }, [input, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload]);
+  }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput]);
+  const resumeIncompletePlan = q2(async () => {
+    if (busy || !planContinuation) return;
+    const paused = planContinuation;
+    setPlanContinuation(null);
+    const result = await submitPromptPayload({
+      text: "继续执行当前未完成计划。不要重新制定计划，从中断处继续，完成实际产物并验证后再结束。"
+    });
+    if (!result.ok) {
+      setPlanContinuation(paused);
+      setError(result.reason ?? "继续执行失败");
+    }
+  }, [busy, planContinuation, submitPromptPayload]);
   const abort = q2(async () => {
     try {
-      await api("/abort", { method: "POST" });
+      if (queuedPromptsRef.current.length > 0) setQueuePaused(true);
+      setOperation((current) => current ? { ...current, state: "stopping", stopRequestedAt: new Date().toISOString() } : current);
+      const result = await api("/abort", { method: "POST" });
+      if (result.operation) setOperation(result.operation);
     } catch (err) {
       setError(err.message);
     }
+  }, []);
+  const waitForIdle = q2(async (timeoutMs = 5e3) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const state = await api("/messages?limit=1");
+      if (!state.busy) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
   }, []);
   const newConversation = q2(async () => {
     const wasBusy = busy;
@@ -25805,10 +26021,14 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       if (wasBusy) {
         await api("/abort", { method: "POST" });
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        const idle = await waitForIdle();
+        if (!idle) throw new Error(t4("chat.stopTimeout"));
       }
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
       setMessages([]);
+      setTotalMessages(0);
+      setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
+      topLoadArmedRef.current = true;
       setStreaming(null);
       setActiveTool(null);
       setFileArtifacts([]);
@@ -25816,29 +26036,34 @@ const [providerCaps, setProviderCaps] = d2(null);
       setFileArtifactsDismissed(false);
       setFileArtifactsSelectedMessageId(null);
       setFileArtifactsByMessageId({});
-      setInput("");
+      setChatInput("");
       setPendingImages([]);
       setQueuedPrompts([]);
       setQueueSendingId(null);
+      setQueuePaused(false);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
       setTimeout(async () => {
         try {
-          const r3 = await api("/messages");
+          const r3 = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
           setMessages(r3.messages ?? []);
+          setTotalMessages(r3.totalMessages ?? r3.messages?.length ?? 0);
         } catch {
         }
       }, 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length, draftKey, confirmQueuedReset]);
+  }, [busy, messages.length, draftKey, confirmQueuedReset, waitForIdle, setChatInput]);
   const clearScrollback = q2(async () => {
     if (!confirmQueuedReset()) return;
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
       setMessages([]);
+      setTotalMessages(0);
+      setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
+      topLoadArmedRef.current = true;
       setStreaming(null);
       setActiveTool(null);
       setFileArtifacts([]);
@@ -25846,24 +26071,26 @@ const [providerCaps, setProviderCaps] = d2(null);
       setFileArtifactsDismissed(false);
       setFileArtifactsSelectedMessageId(null);
       setFileArtifactsByMessageId({});
-      setInput("");
+      setChatInput("");
       setPendingImages([]);
       setQueuedPrompts([]);
       setQueueSendingId(null);
+      setQueuePaused(false);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
       setTimeout(async () => {
         try {
-          const r3 = await api("/messages");
+          const r3 = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
           setMessages(r3.messages ?? []);
+          setTotalMessages(r3.totalMessages ?? r3.messages?.length ?? 0);
         } catch {
         }
       }, 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [draftKey, confirmQueuedReset]);
+  }, [draftKey, confirmQueuedReset, setChatInput]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -25928,23 +26155,30 @@ const [providerCaps, setProviderCaps] = d2(null);
     const item = popoverItems[idx ?? popoverSel];
     if (!item) return false;
     if (popoverKind === "slash") {
-      setInput(item.insert);
+      setChatInput(item.insert);
     } else if (popoverKind === "mention") {
+      const input = inputValueRef.current;
       const m3 = /@([^\s@]*)$/.exec(input);
       if (!m3) return false;
       const start = input.length - m3[0].length;
-      setInput(`${input.slice(0, start)}${item.insert}`);
+      setChatInput(`${input.slice(0, start)}${item.insert}`);
     }
     setPopoverKind(null);
     return true;
-  }, [popoverItems, popoverSel, popoverKind, input]);
+  }, [popoverItems, popoverSel, popoverKind, setChatInput]);
   const onInput = q2(
     (e3) => {
       const v3 = e3.target.value;
-      setInput(v3);
+      inputValueRef.current = v3;
+      const hasContent = Boolean(v3.trim());
+      if (inputHasContentRef.current !== hasContent) {
+        inputHasContentRef.current = hasContent;
+        setInputHasContent(hasContent);
+      }
+      persistDraftSoon(v3);
       updatePopover(v3);
     },
-    [updatePopover]
+    [updatePopover, persistDraftSoon]
   );
   const onKeyDown = q2(
     (e3) => {
@@ -26056,13 +26290,14 @@ const [providerCaps, setProviderCaps] = d2(null);
     var ta = e.target;
     var start = ta.selectionStart;
     var end = ta.selectionEnd;
+    var input = inputValueRef.current;
     var before = input.slice(0, start);
     var after = input.slice(end);
     var inserted = false;
     function insertAtCursor(txt) {
       if (inserted) return;
       inserted = true;
-      setInput(before + txt + after);
+      setChatInput(before + txt + after);
       setTimeout(function() {
         ta.selectionStart = ta.selectionEnd = start + txt.length;
       }, 0);
@@ -26126,7 +26361,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (inserted) return;
         inserted = true;
         var text = paths.map(normalizeClipboardPathText).join("\n");
-        setInput(capBefore + text + capAfter);
+        setChatInput(capBefore + text + capAfter);
         setTimeout(function() {
           ta.selectionStart = ta.selectionEnd = capStart + text.length;
         }, 0);
@@ -26193,22 +26428,46 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (text) insertAtCursor(text);
       } catch (_) {}
     }
-  }, [pendingImages, input]);
-  if (bootError) {
-    return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
-  }
-  const autoScrollInFlight = A2(false);
+  }, [pendingImages, setChatInput]);
   y2(() => {
+    if (bootError) return;
     const el = feedRef.current;
     if (!el) return;
+    const maybeLoadEarlier = () => {
+      if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
+      topLoadArmedRef.current = false;
+      void loadEarlierMessagesRef.current?.();
+    };
     const onScroll = () => {
       if (autoScrollInFlight.current) return;
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       shouldAutoScroll.current = distFromBottom < 80;
+      if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD * 2) topLoadArmedRef.current = true;
+      maybeLoadEarlier();
+    };
+    const onPointerDown = (event) => {
+      const rect = el.getBoundingClientRect();
+      const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
+      if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
+        scrollbarDraggingRef.current = true;
+      }
+    };
+    const onPointerUp = () => {
+      if (!scrollbarDraggingRef.current) return;
+      scrollbarDraggingRef.current = false;
+      maybeLoadEarlier();
     };
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
+    el.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointerup", onPointerUp, { passive: true });
+    window.addEventListener("pointercancel", onPointerUp, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [bootError]);
   y2(() => {
     if (!shouldAutoScroll.current) return;
     const el = feedRef.current;
@@ -26220,15 +26479,33 @@ const [providerCaps, setProviderCaps] = d2(null);
     }, 0);
   }, [messages, streaming]);
   const resolveModal = q2(async (kind, choice, text) => {
+    if (modalResolving || !modal) return;
+    const gateModal = kind === "shell" || kind === "choice" || kind === "plan" || kind === "checkpoint" || kind === "revision";
+    if (gateModal && !Number.isInteger(modal._gateId)) return;
+    const submittedModal = modal;
+    const gateId = modal._gateId;
+    setModalResolving(true);
     try {
       await api("/modal/resolve", {
         method: "POST",
-        body: text !== void 0 ? { kind, choice, text } : { kind, choice }
+        body: text !== void 0
+          ? { kind, choice, text, ...(gateModal ? { gateId } : {}) }
+          : { kind, choice, ...(gateModal ? { gateId } : {}) }
       });
+      setModal((cur) => gateModal ? cur?._gateId === gateId ? null : cur : cur === submittedModal ? null : cur);
     } catch (err) {
       setError(`modal resolve failed: ${err.message}`);
+    } finally {
+      setModalResolving(false);
     }
-  }, []);
+  }, [modal, modalResolving]);
+  y2(() => {
+    if (!modal) return;
+    const frame = requestAnimationFrame(() => {
+      document.querySelector(".modal-card .modal-actions .primary, .modal-card .modal-choice-row")?.focus?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [modal?._gateId]);
   y2(() => {
     let cancelled = false;
     const tick = async () => {
@@ -26265,10 +26542,26 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     };
     tick();
-    const t5 = setInterval(tick, 5e3);
+    const unsubscribe = subscribeSse("overview", (o3) => {
+      if (cancelled) return;
+      setEditModeLocal(o3.editMode ?? null);
+      setPresetLocal(o3.preset ?? null);
+      setEffortLocal(o3.reasoningEffort ?? null);
+      setModeLocal(o3.workMode ?? "general");
+      setModesLocal(o3.modes ?? null);
+      setActiveModeLocal(o3.activeMode ?? null);
+      setEccRulesLocal(o3.eccRules ?? null);
+      setWorkspaceDirLocal(o3.cwd ?? null);
+      setStats(o3.stats ?? null);
+      setOverviewModel(o3.model ?? null);
+      setBudgetUsd(o3.budgetUsd ?? null);
+      setActiveProviderId(o3.activeProviderId ?? null);
+      setProviderCaps(o3.providerCapabilities ?? null);
+      setSemanticIndex(o3.semanticIndexExists ?? null);
+    });
     return () => {
       cancelled = true;
-      clearInterval(t5);
+      unsubscribe();
     };
   }, []);
   const setEditMode = q2(async (next) => {
@@ -26293,10 +26586,18 @@ const [providerCaps, setProviderCaps] = d2(null);
   const setSetting = q2(async (key, value) => {
     if (key === "preset") setPresetLocal(value);
     if (key === "reasoningEffort") setEffortLocal(value);
-      if (key === "mode") setModeLocal(value);
+    if (key === "mode") setModeLocal(value);
     try {
-      await api("/settings", { method: "POST", body: { [key]: value } });
+      const updated = await api("/settings", { method: "POST", body: { [key]: value } });
       if (key === "mode") showToast("工作场景已切换，下次新对话生效", "info");
+      if ((key === "preset" || key === "model") && updated?.modelSwitch) {
+        const switched = updated.modelSwitch;
+        const count = Number.isFinite(switched.messageCount) ? switched.messageCount : 0;
+        const adaptation = switched.contextStatus?.needsCompaction ? "，发送下一条消息前将自动整理历史" : "";
+        showToast(switched.deferred
+          ? `已选择 ${switched.model}，将在当前回答结束后切换，保留 ${count} 条上下文${adaptation}`
+          : `已切换到 ${switched.model}，保留 ${count} 条上下文${adaptation}`, "info");
+      }
       try {
         const o3 = await api("/overview");
         setStats(o3.stats ?? null);
@@ -26320,7 +26621,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   const switchProvider = q2(async (id) => {
     try {
-      await api("/providers/active", { method: "POST", body: { id } });
+      const switched = await api("/providers/active", { method: "POST", body: { id } });
       const o3 = await api("/overview");
       setPresetLocal(o3.preset ?? null);
       setEffortLocal(o3.reasoningEffort ?? null);
@@ -26331,7 +26632,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         setProviders(pr.providers ?? []);
       } catch {}
       const pn = (providers ?? []).find((p) => p.id === id)?.name ?? id;
-      showToast("已切换到 " + pn, "info");
+      const count = switched?.modelSwitch?.messageCount;
+      showToast(Number.isFinite(count)
+        ? `已切换到 ${pn}，保留 ${count} 条上下文`
+        : "已切换到 " + pn, "info");
     } catch (err) {
       setError("provider switch failed: " + err.message);
     }
@@ -26362,7 +26666,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const fillInputFromMessage = q2((msg) => {
     const text = msg.text ?? "";
     if (!text.trim()) return;
-    setInput(text);
+    setChatInput(text);
     setPopoverKind(null);
     setTimeout(() => {
       inputRef.current?.focus();
@@ -26372,7 +26676,54 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     }, 0);
     showToast(t4("chat.filledInput"), "info");
+  }, [setChatInput]);
+  const selectArtifactMessage = q2((msg) => {
+    setFileArtifactsSelectedMessageId(String(msg.id || ""));
+    setFileArtifactsDismissed(false);
   }, []);
+  const followLatestArtifacts = q2(() => {
+    setFileArtifactsSelectedMessageId(null);
+    setFileArtifactsDismissed(false);
+  }, []);
+  const dismissArtifacts = q2(() => setFileArtifactsDismissed(true), []);
+  const loadEarlierMessages = q2(async () => {
+    if (loadingEarlierRef.current) return;
+    const feed = feedRef.current;
+    const anchor = captureChatScrollAnchor(feed);
+    const finishLoading = () => {
+      loadingEarlierRef.current = false;
+      setLoadingEarlierMessages(false);
+    };
+    if (visibleMessageCount < messages.length) {
+      loadingEarlierRef.current = true;
+      setLoadingEarlierMessages(true);
+      setVisibleMessageCount((count) => Math.min(messages.length, count + CHAT_RENDER_STEP));
+      restoreChatScrollAnchor(feed, anchor, finishLoading);
+      return;
+    }
+    if (messages.length >= totalMessages) return;
+    loadingEarlierRef.current = true;
+    setLoadingEarlierMessages(true);
+    try {
+      const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}&offset=${messages.length}`);
+      const earlier = Array.isArray(data.messages) ? data.messages : [];
+      if (earlier.length > 0) {
+        setMessages((current) => [...earlier, ...current]);
+        setVisibleMessageCount((count) => count + Math.min(CHAT_RENDER_STEP, earlier.length));
+      }
+      setTotalMessages(data.totalMessages ?? totalMessages);
+      restoreChatScrollAnchor(feed, anchor, finishLoading);
+    } catch (err) {
+      setError(err.message);
+      finishLoading();
+    }
+  }, [visibleMessageCount, messages, totalMessages]);
+  y2(() => {
+    loadEarlierMessagesRef.current = loadEarlierMessages;
+  }, [loadEarlierMessages]);
+  if (bootError) {
+    return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
+  }
   return html4`
     <div class="chat-shell">
       <div class="chat-toolbar">
@@ -26411,6 +26762,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       </div>
 
       ${!busy && statusLine ? html4`<div class="chat-status"><span class="muted">${statusLine}</span></div>` : null}
+      ${!eventStreamConnected ? html4`<div class="chat-banner"><span class="chat-banner-icon">!</span><span class="chat-banner-text">${t4("chat.reconnecting")}</span></div>` : null}
       ${semanticIndex === false && !semanticBannerDismissed ? html4`<div class="chat-banner">
               <span class="chat-banner-icon">≈</span>
               <span class="chat-banner-text">
@@ -26435,19 +26787,32 @@ const [providerCaps, setProviderCaps] = d2(null);
         <div class="chat-main">
           <${ChatFeed}
             messages=${messages}
+            totalMessages=${totalMessages}
             streaming=${streaming}
             innerRef=${feedRef}
+            visibleCount=${visibleMessageCount}
+            onLoadEarlier=${loadEarlierMessages}
+            loadingEarlier=${loadingEarlierMessages}
             highlightMessageId=${highlightMessageId}
             onCopyMessage=${copyMessage}
             onFillInput=${fillInputFromMessage}
             selectedArtifactMessageId=${fileArtifactsSelectedMessageId}
-            onSelectArtifactMessage=${(msg) => {
-              setFileArtifactsSelectedMessageId(String(msg.id || ""));
-              setFileArtifactsDismissed(false);
-            }}
+            onSelectArtifactMessage=${selectArtifactMessage}
           />
 
-          ${modal ? modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null : null}
+          ${modal ? html4`<div class=${modalResolving ? "modal-resolving" : ""}>${modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null}</div>` : null}
+
+          ${planContinuation ? html4`
+            <div class="plan-continuation-bar" role="status">
+              <span class="plan-continuation-icon">!</span>
+              <span class="plan-continuation-text">
+                计划尚未完成 · ${planContinuation.completedSteps}/${planContinuation.totalSteps} 步
+                <small>已自动续跑 ${planContinuation.attempts} 次</small>
+              </span>
+              <button type="button" class="primary" onClick=${resumeIncompletePlan} disabled=${busy}>继续执行</button>
+              <button type="button" class="plan-continuation-dismiss" onClick=${() => setPlanContinuation(null)} title="暂时关闭">×</button>
+            </div>
+          ` : null}
 
           ${todos.length > 0 ? html4`<${TodoBar} todos=${todos} expanded=${todoExpanded} onToggle=${() => setTodoExpanded(!todoExpanded)} />` : null}
 
@@ -26480,6 +26845,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`; })}</div>` : null}
             ${queuedPrompts.length > 0 ? html4`
               <div class="chat-queue">
+                ${queuePaused ? html4`<div class="chat-queue-paused"><span>${t4("chat.queuePaused")}</span><button type="button" onClick=${() => { setQueuePaused(false); setQueuePumpTick((v) => v + 1); }}>${t4("chat.queueResume")}</button></div>` : null}
                 <div class="chat-queue-head">
                   <span>${t4("chat.queueTitle", { count: queuedPrompts.length, max: CHAT_QUEUE_LIMIT })}</span>
                   ${queuedPrompts.length > 1 ? html4`<button type="button" onClick=${clearQueuedPrompts}>${t4("chat.queueClear")}</button>` : null}
@@ -26508,7 +26874,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             <textarea
               ref=${inputRef}
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
-              value=${input}
+              defaultValue=${inputValueRef.current}
               onInput=${onInput}
               onKeyDown=${onKeyDown}
               onPaste=${onPaste}
@@ -26577,7 +26943,20 @@ const [providerCaps, setProviderCaps] = d2(null);
                   </div>
                 </div>
               ` : null}
-              ${(showSkillPicker || showWsPicker || showModelPicker) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); }}></div>` : null}
+              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowBackgroundJobs(!showBackgroundJobs); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); void refreshBackgroundJobs(); }}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</span>
+              ${showBackgroundJobs ? html4`
+                <div class="popover" style="position:absolute;bottom:100%;right:0;width:420px;max-height:280px;overflow-y:auto;z-index:10">
+                  <div class="popover-h">${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</div>
+                  ${backgroundJobs.length === 0 ? html4`<div class="popover-row"><span class="meta">${t4("chat.backgroundEmpty")}</span></div>` : backgroundJobs.map((job) => html4`
+                    <div class="popover-row" style="align-items:flex-start;gap:8px">
+                      <span class=${`pill ${job.running ? "info" : ""}`}>${job.lifecycle === "service" ? t4("chat.backgroundService") : t4("chat.backgroundTask")}</span>
+                      <span class="name" style="white-space:normal;overflow-wrap:anywhere;flex:1" title=${job.command}>#${job.id} ${job.command}</span>
+                      ${job.running ? html4`<button type="button" onClick=${() => stopBackgroundJob(job.id)}>${t4("chat.backgroundStop")}</button>` : html4`<span class="meta">exit ${job.exitCode ?? "?"}</span>`}
+                    </div>
+                  `)}
+                </div>
+              ` : null}
+              ${(showSkillPicker || showWsPicker || showModelPicker || showBackgroundJobs) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowBackgroundJobs(false); }}></div>` : null}
               <div style="flex:1"></div>
               <button
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
@@ -26590,7 +26969,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               <button
                 class="primary"
                 onClick=${send}
-                disabled=${!input.trim() && pendingImages.length === 0}
+                disabled=${!inputHasContent && pendingImages.length === 0}
               >${busy ? t4("chat.queueSend") : t4("chat.send")}</button>
               <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
               <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
@@ -26605,19 +26984,17 @@ const [providerCaps, setProviderCaps] = d2(null);
                   startedAt=${turnStartedAt}
                   statusLine=${statusLine}
                   onAbort=${abort}
+                  stopping=${operation?.state === "stopping"}
                   tick=${nowTick}
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} />
         </div>
-        ${activePlan || fileArtifacts.length && !fileArtifactsDismissed ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${() => {
-            setFileArtifactsSelectedMessageId(null);
-            setFileArtifactsDismissed(false);
-          }} onDismissArtifacts=${() => setFileArtifactsDismissed(true)} />` : null}
+        ${activePlan || fileArtifacts.length && !fileArtifactsDismissed ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
       </div>
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -26628,15 +27005,26 @@ var ChatFeed = N2(function ChatFeed2({ messages, streaming, innerRef, searchMatc
       reasoning: streaming.reasoning
     }
   ] : messages;
+  const hiddenCount = Math.max(0, allMessages.length - visibleCount);
+  const remoteHiddenCount = Math.max(0, totalMessages - messages.length);
+  const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
+  const displayTotal = Math.max(totalMessages, allMessages.length);
   return html4`
     <div class="chat-feed" ref=${innerRef}>
-      ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : allMessages.map(
+      ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : null}
+      ${hiddenCount > 0 || remoteHiddenCount > 0 ? html4`
+        <div class="chat-history-loader">
+          <span>已显示 ${renderedMessages.length} / 共 ${displayTotal} 条</span>
+          <button type="button" onClick=${onLoadEarlier} disabled=${loadingEarlier}>${loadingEarlier ? "加载中..." : t4("chat.loadEarlierMessages", { count: Math.min(hiddenCount || remoteHiddenCount, hiddenCount ? CHAT_RENDER_STEP : CHAT_MESSAGE_PAGE_SIZE) })}</button>
+        </div>
+      ` : null}
+      ${renderedMessages.map(
     (m3, i3) => html4`
                 <${ChatMessage}
                   key=${m3.id}
                   msg=${m3}
-                  index=${i3}
-                  searchMatch=${i3 === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
+                  index=${i3 + hiddenCount}
+                  searchMatch=${i3 + hiddenCount === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
                   streaming=${Boolean(streaming && streaming.id === m3.id)}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
@@ -26723,6 +27111,7 @@ function InFlightRow({
   startedAt,
   statusLine,
   onAbort,
+  stopping,
   tick: _tick
 }) {
   useLang();
@@ -26754,7 +27143,7 @@ function InFlightRow({
             <span class="chat-inflight-sep">·</span>
             <span class="muted">${statusLine}</span>
           ` : null}
-      <button class="chat-inflight-abort" onClick=${onAbort}>${t4("chat.abortBtn")}</button>
+      <button class="chat-inflight-abort" onClick=${onAbort} disabled=${stopping}>${stopping ? t4("chat.stoppingBtn") : t4("chat.abortBtn")}</button>
     </div>
   `;
 }
@@ -26799,7 +27188,14 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
       </div>
     `;
   }
-  const ctxPct = stats.contextCapTokens > 0 ? stats.lastPromptTokens / stats.contextCapTokens * 100 : 0;
+  const currentContextTokens = stats.estimatedContextTokens ?? stats.lastPromptTokens;
+  const ctxPct = stats.contextCapTokens > 0 ? currentContextTokens / stats.contextCapTokens * 100 : 0;
+  const contextMarks = [
+    { tokens: stats.contextFoldTokens, label: "普通压缩" },
+    { tokens: stats.contextAggressiveTokens, label: "激进压缩" },
+    { tokens: stats.contextForceSummaryTokens, label: "强制总结" },
+  ].filter((mark) => Number.isFinite(mark.tokens) && mark.tokens > 0 && stats.contextCapTokens > 0)
+    .map((mark) => ({ ...mark, pct: Math.min(100, mark.tokens / stats.contextCapTokens * 100) }));
   const balance = primaryBalance(stats);
   return html4`
     <div class="chat-statusbar">
@@ -26811,11 +27207,9 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
         <span class="status-label">${t4("chat.statusCtx")}</span>
         <span class="status-bar-mini">
           <span class="status-bar-mini-fill" style=${`width: ${Math.min(100, ctxPct).toFixed(1)}%;`}></span>
-          <span class="fold-mark" style="left:50%" title="\u666E\u901A\u6298\u53E0 50%"></span>
-          <span class="fold-mark" style="left:70%" title="\u6FC0\u8FDB\u6298\u53E0 70%"></span>
-          <span class="fold-mark" style="left:80%" title="\u5F3A\u5236\u6458\u8981 80%"></span>
+          ${contextMarks.map((mark) => html4`<span class="fold-mark" style=${`left:${mark.pct.toFixed(2)}%`} title=${`${mark.label} ${(mark.tokens / 1e3).toFixed(0)}K`}></span>`)}
         </span>
-        <span class="muted">${stats.lastPromptTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
+        <span class="muted">${currentContextTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
       </span>
       <span class="status-item">
         <span class="status-label">${t4("chat.statusCache")}</span>
@@ -27746,7 +28140,7 @@ function MemoryPanel() {
                     <div class="memory-create-grid">
                       <input
                         type="text"
-                        placeholder="例如：Visionox"
+                        placeholder="例如：Visionox-Whale"
                         value=${aiName}
                         onInput=${(e3) => setAiName(e3.target.value)}
                         disabled=${busy}
@@ -27849,32 +28243,68 @@ function usePoll(path, intervalMs = 2e3, sseKind = null) {
 
 var __sseSource = null;
 var __sseListeners = /* @__PURE__ */ new Map();
-function subscribeSse(kind, handler) {
-  if (!__sseSource) {
-    const url = new URL("/api/events", window.location.origin);
-    url.searchParams.set("token", TOKEN);
-    __sseSource = new EventSource(url.toString());
-    __sseSource.onmessage = (e3) => {
-      try {
-        const ev = JSON.parse(e3.data);
-        const handlers = __sseListeners.get(ev.kind) || [];
-        for (let i3 = 0; i3 < handlers.length; i3++) handlers[i3](ev);
-      } catch {
-      }
-    };
+var __sseStatusListeners = [];
+var __sseChannelsKey = "";
+var __sseOpened = false;
+function activeSseChannels() {
+  const channels = /* @__PURE__ */ new Set();
+  for (const [kind, listeners] of __sseListeners) {
+    if (!listeners.length) continue;
+    if (kind === "overview" || kind === "health" || kind === "logs") channels.add(kind);
+    else channels.add("events");
   }
+  return [...channels].sort();
+}
+function rebuildSharedSse() {
+  const channels = activeSseChannels();
+  const key = channels.join(",");
+  if (key === __sseChannelsKey && __sseSource) return;
+  if (__sseSource) __sseSource.close();
+  __sseSource = null;
+  __sseChannelsKey = key;
+  if (!key) return;
+  const url = new URL("/api/events", window.location.origin);
+  url.searchParams.set("token", TOKEN);
+  url.searchParams.set("channels", key);
+  const source = new EventSource(url.toString());
+  __sseSource = source;
+  source.onopen = () => {
+    const reconnected = __sseOpened;
+    __sseOpened = true;
+    for (const handler of [...__sseStatusListeners]) handler({ connected: true, reconnected });
+  };
+  source.onerror = () => {
+    for (const handler of [...__sseStatusListeners]) handler({ connected: false, reconnected: false });
+  };
+  source.onmessage = (e3) => {
+    try {
+      const ev = JSON.parse(e3.data);
+      const handlers = [
+        ...(__sseListeners.get(ev.kind) || []),
+        ...(__sseListeners.get("*") || [])
+      ];
+      for (const handler of handlers) handler(ev);
+    } catch {
+    }
+  };
+}
+function subscribeSse(kind, handler) {
   if (!__sseListeners.has(kind)) __sseListeners.set(kind, []);
   __sseListeners.get(kind).push(handler);
+  rebuildSharedSse();
   return () => {
     const arr = __sseListeners.get(kind) || [];
     const idx = arr.indexOf(handler);
     if (idx >= 0) arr.splice(idx, 1);
-    const hasListeners = Array.from(__sseListeners.values()).some((a) => a.length > 0);
-    if (!hasListeners && __sseSource) {
-      __sseSource.close();
-      __sseSource = null;
-      __sseListeners.clear();
-    }
+    if (arr.length === 0) __sseListeners.delete(kind);
+    rebuildSharedSse();
+  };
+}
+function subscribeSseStatus(handler) {
+  __sseStatusListeners.push(handler);
+  return () => {
+    const index = __sseStatusListeners.indexOf(handler);
+    if (index >= 0) __sseStatusListeners.splice(index, 1);
   };
 }
 
@@ -28592,20 +29022,26 @@ function taskStatusPill(task) {
   if (task.workspaceMismatch) return html4`<span class="pill warn">${t4("tasks.workspaceMismatch")}</span>`;
   if (!task.enabled) return html4`<span class="pill">${t4("tasks.disabled")}</span>`;
   if (task.lastStatus === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
+  if (task.lastStatus === "stopping") return html4`<span class="pill warn">停止中</span>`;
   if (task.lastStatus === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
+  if (task.lastStatus === "cancelled") return html4`<span class="pill warn">${t4("tasks.cancelled")}</span>`;
   if (task.lastStatus === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
   if (task.lastStatus === "accepted") return html4`<span class="pill ok">${t4("tasks.accepted")}</span>`;
   if (task.lastStatus === "skipped") return html4`<span class="pill warn">${t4("tasks.skipped")}</span>`;
+  if (task.lastStatus === "deferred") return html4`<span class="pill warn">${t4("tasks.deferred")}</span>`;
   if (task.lastStatus === "pending_confirmation") return html4`<span class="pill warn">${t4("tasks.pendingConfirmation")}</span>`;
   if (task.lastStatus === "rejected") return html4`<span class="pill err">${t4("tasks.rejected")}</span>`;
   return html4`<span class="pill info">${t4("tasks.enabled")}</span>`;
 }
 function scheduleRunPill(status) {
   if (status === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
+  if (status === "stopping") return html4`<span class="pill warn">停止中</span>`;
   if (status === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
+  if (status === "cancelled") return html4`<span class="pill warn">${t4("tasks.cancelled")}</span>`;
   if (status === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
   if (status === "accepted") return html4`<span class="pill ok">${t4("tasks.accepted")}</span>`;
   if (status === "skipped") return html4`<span class="pill warn">${t4("tasks.skipped")}</span>`;
+  if (status === "deferred") return html4`<span class="pill warn">${t4("tasks.deferred")}</span>`;
   if (status === "pending_confirmation") return html4`<span class="pill warn">${t4("tasks.pendingConfirmation")}</span>`;
   if (status === "rejected") return html4`<span class="pill err">${t4("tasks.rejected")}</span>`;
   return html4`<span class="pill">${status || "\u2014"}</span>`;
@@ -28636,6 +29072,7 @@ function ScheduledTasksPanel() {
     const run = task?.history?.find((item) => !pendingRunNotice.runId || item.runId === pendingRunNotice.runId);
     if (!run || run.status === "running") return;
     if (run.status === "completed") setNotice(t4("tasks.runCompleted"));
+    else if (run.status === "cancelled") setNotice(t4("tasks.runCancelled"));
     else if (run.status === "failed") setNotice(t4("tasks.runFailed"));
     else if (run.status === "skipped") setNotice(t4("tasks.runSkipped"));
     else if (run.status === "rejected") setNotice(t4("tasks.runRejected"));
@@ -28726,6 +29163,19 @@ function ScheduledTasksPanel() {
       setBusy(false);
     }
   }, [refresh]);
+  const cancelTask = q2(async (task) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      await api(`/schedules/${encodeURIComponent(task.id)}/cancel`, { method: "POST", body: {} });
+      setNotice("已请求停止任务");
+      await refresh();
+    } catch (err) {
+      setNotice(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
   const viewRunConversation = q2((run) => {
     const id = run?.assistantMessageId || run?.userMessageId;
     if (id) requestChatMessageJump(id);
@@ -28811,7 +29261,7 @@ function ScheduledTasksPanel() {
         <div class="sessions-detail-h">
           <span class="name">${draft.id ? draft.name || t4("tasks.title") : t4("tasks.create")}</span>
           <span class="ws">${selected ? `${fmtScheduleRule(selected)} · ${t4("tasks.nextRun")}: ${fmtScheduleDate(selected.nextRunAt)}` : t4("tasks.selectHint")}</span>
-          ${selected ? html4`<span class="actions"><button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button></span>` : null}
+          ${selected ? html4`<span class="actions">${selected.lastStatus === "running" || selected.lastStatus === "stopping" ? html4`<button class="btn danger" disabled=${busy || selected.lastStatus === "stopping"} onClick=${() => cancelTask(selected)}>${selected.lastStatus === "stopping" ? "停止中..." : "停止任务"}</button>` : html4`<button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button>`}</span>` : null}
         </div>
         ${selected?.workspaceMismatch ? html4`<div class="card accent-warn" style="margin-bottom:10px">${t4("tasks.workspaceMismatchHint")}</div>` : null}
         ${notice ? html4`<div class=${`card ${notice === t4("tasks.saved") || notice === t4("tasks.deleted") || notice === t4("tasks.runAccepted") || notice === t4("tasks.runCompleted") || notice === t4("tasks.runPending") ? "accent-brand" : "accent-err"}`} style="margin-bottom:10px">${notice}</div>` : null}
@@ -29912,7 +30362,7 @@ function isPlainObject(value) {
 // dashboard/src/panels/sessions.ts
 function SessionsPanel() {
   useLang();
-  const { data, error, loading } = usePoll("/sessions", 5e3);
+  const { data, error, loading, refresh } = usePoll("/sessions", 3e4);
   const [open, setOpen] = d2(null);
   const [openLoading, setOpenLoading] = d2(false);
   const [filter, setFilter] = d2("");
@@ -29922,6 +30372,7 @@ function SessionsPanel() {
   const [transcriptSearch, setTranscriptSearch] = d2("");
   const [transcriptSearchIndex, setTranscriptSearchIndex] = d2(0);
   const transcriptFeedRef = A2(null);
+  y2(() => subscribeSse("sessions-changed", refresh), [refresh]);
   const view = q2(async (name) => {
     setInfo(null);
     setTranscriptSearch("");
@@ -29929,10 +30380,12 @@ function SessionsPanel() {
     setOpen({ name, messages: null });
     setOpenLoading(true);
     try {
-      const detail = await api(`/sessions/${encodeURIComponent(name)}`);
+      const detail = await api(`/sessions/${encodeURIComponent(name)}?limit=200`);
       setOpen({
         name,
         messages: detail.messages,
+        totalMessages: detail.totalMessages ?? detail.messageCount ?? detail.messages?.length ?? 0,
+        hasMore: Boolean(detail.hasMore),
         mode: detail.mode ?? null,
         modeLabel: detail.modeLabel ?? null,
         modeDescription: detail.modeDescription ?? "",
@@ -29965,6 +30418,25 @@ function SessionsPanel() {
       setInfo(t4("sessions.exportFailed", { error: err.message }));
     }
   }, []);
+  const loadEarlierTranscript = q2(async () => {
+    if (!open?.name || !open?.hasMore || openLoading) return;
+    setOpenLoading(true);
+    try {
+      const offset = open.messages?.length ?? 0;
+      const detail = await api(`/sessions/${encodeURIComponent(open.name)}?limit=200&offset=${offset}`);
+      setOpen((current) => current?.name === open.name ? {
+        ...current,
+        messages: [...(detail.messages ?? []), ...(current.messages ?? [])],
+        totalMessages: detail.totalMessages ?? current.totalMessages,
+        hasMore: Boolean(detail.hasMore),
+        error: null
+      } : current);
+    } catch (err) {
+      setOpen((current) => current ? { ...current, error: err.message } : current);
+    } finally {
+      setOpenLoading(false);
+    }
+  }, [open, openLoading]);
   const doResume = q2(async (name) => {
     setResuming(true);
     try {
@@ -29972,7 +30444,7 @@ function SessionsPanel() {
       let currentBusy = false;
       try {
         const cur = await api("/messages");
-        currentMessages = cur.messages?.length ?? 0;
+        currentMessages = cur.totalMessages ?? cur.messages?.length ?? 0;
         currentBusy = Boolean(cur.busy);
       } catch {
       }
@@ -30126,7 +30598,7 @@ function SessionsPanel() {
                   ` : html4`
                     <span class="name">${open.name}</span>
                     <span class="ws">
-                      ${open.messages ? t4("sessions.messages", { count: open.messages.length, s: open.messages.length === 1 ? "" : "s" }) : t4("common.loading")}
+                      ${open.messages ? t4("sessions.messages", { count: open.totalMessages ?? open.messages.length, s: (open.totalMessages ?? open.messages.length) === 1 ? "" : "s" }) : t4("common.loading")}
                       ${open.modeLabel ? html4` · ${open.modeLabel}` : null}
                     </span>
                     <span class="actions">
@@ -30148,7 +30620,7 @@ function SessionsPanel() {
                     </button>
                   </div>
                 </div>
-                ${openLoading ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`
+                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`
                           <div class="chat-searchbar session-transcript-search">
                             <span class="chat-search-icon">⌕</span>
                             <input
@@ -30174,6 +30646,7 @@ function SessionsPanel() {
                             ${transcriptSearch ? html4`<button type="button" onClick=${() => setTranscriptSearch("")} title=${t4("chat.searchClear")}>×</button>` : null}
                           </div>
                           <div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 260px);overflow-y:auto">
+                            ${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}
                             ${detailChatMessages.map(
     (m3, i3) => html4`
                                 <${ChatMessage}
@@ -30817,12 +31290,12 @@ function SettingsPanel() {
               disabled=${saving}
             >
               <option value="auto">${v3.providerContextCap ? `\u6A21\u578B\u9ED8\u8BA4 (${Math.round(v3.providerContextCap / 1024)}K)` : "\u6A21\u578B\u9ED8\u8BA4"}</option>
-              <option value="32768">32K</option>
-              <option value="65536">64K</option>
-              <option value="131072">128K</option>
-              <option value="262144">256K</option>
-              <option value="1048576">1M</option>
-              ${v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? html4`<option value="${v3.contextCapTokens}">${Math.round(v3.contextCapTokens / 1024)}K</option>` : null}
+              <option value="32768" disabled=${Boolean(v3.providerContextCap && 32768 > v3.providerContextCap)}>32K</option>
+              <option value="65536" disabled=${Boolean(v3.providerContextCap && 65536 > v3.providerContextCap)}>64K</option>
+              <option value="131072" disabled=${Boolean(v3.providerContextCap && 131072 > v3.providerContextCap)}>128K</option>
+              <option value="262144" disabled=${Boolean(v3.providerContextCap && 262144 > v3.providerContextCap)}>256K</option>
+              <option value="1048576" disabled=${Boolean(v3.providerContextCap && 1048576 > v3.providerContextCap)}>1M</option>
+              ${v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? html4`<option value="${v3.contextCapTokens}" disabled=${Boolean(v3.providerContextCap && v3.contextCapTokens > v3.providerContextCap)}>${Math.round(v3.contextCapTokens / 1024)}K</option>` : null}
             </select>
           `,
     "\u5373\u65F6\u751F\u6548"
@@ -31313,7 +31786,7 @@ function ReportsPanel() {
     setError(null);
     try {
       const suffix = isCustom ? `${startDate}_${endDate}` : date;
-      const filename = `Visionox_Report_${suffix}.md`;
+      const filename = `Visionox-Whale_Report_${suffix}.md`;
       const res = await api("/report/export", {
         method: "POST",
         body: { markdown, filename }
@@ -31466,7 +31939,7 @@ function ReportsPanel() {
 // dashboard/src/panels/system.ts
 function SystemPanel() {
   useLang();
-  const { data, error, loading } = usePoll("/health", 5e3);
+  const { data, error, loading } = usePoll("/health", 5e3, "health");
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("system.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "health", error: error.message })}</div>`;
@@ -32618,7 +33091,14 @@ function ChatStatusBar3({ stats, model }) {
       </div>
     `;
   }
-  const ctxPct = stats.contextCapTokens > 0 ? stats.lastPromptTokens / stats.contextCapTokens * 100 : 0;
+  const currentContextTokens = stats.estimatedContextTokens ?? stats.lastPromptTokens;
+  const ctxPct = stats.contextCapTokens > 0 ? currentContextTokens / stats.contextCapTokens * 100 : 0;
+  const contextMarks = [
+    { tokens: stats.contextFoldTokens, label: "普通压缩" },
+    { tokens: stats.contextAggressiveTokens, label: "激进压缩" },
+    { tokens: stats.contextForceSummaryTokens, label: "强制总结" },
+  ].filter((mark) => Number.isFinite(mark.tokens) && mark.tokens > 0 && stats.contextCapTokens > 0)
+    .map((mark) => ({ ...mark, pct: Math.min(100, mark.tokens / stats.contextCapTokens * 100) }));
   const balance = primaryBalance(stats);
   return html6`
     <div class="chat-statusbar">
@@ -32630,11 +33110,9 @@ function ChatStatusBar3({ stats, model }) {
         <span class="status-label">${t4("chat.statusCtx")}</span>
         <span class="status-bar-mini">
           <span class="status-bar-mini-fill" style=${`width: ${Math.min(100, ctxPct).toFixed(1)}%;`}></span>
-          <span class="fold-mark" style="left:50%" title="\u666E\u901A\u6298\u53E0 50%"></span>
-          <span class="fold-mark" style="left:70%" title="\u6FC0\u8FDB\u6298\u53E0 70%"></span>
-          <span class="fold-mark" style="left:80%" title="\u5F3A\u5236\u6458\u8981 80%"></span>
+          ${contextMarks.map((mark) => html6`<span class="fold-mark" style=${`left:${mark.pct.toFixed(2)}%`} title=${`${mark.label} ${(mark.tokens / 1e3).toFixed(0)}K`}></span>`)}
         </span>
-        <span class="muted">${stats.lastPromptTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
+        <span class="muted">${currentContextTokens.toLocaleString()} / ${(stats.contextCapTokens / 1e3).toFixed(0)}K</span>
       </span>
       <span class="status-item">
         <span class="status-label">${t4("chat.statusCache")}</span>
@@ -33212,10 +33690,14 @@ function ChatPane(props) {
       }
     };
     tick();
-    const t5 = setInterval(tick, 5e3);
+    const unsubscribe = subscribeSse("overview", (data) => {
+      if (cancelled) return;
+      setStats(data.stats ?? null);
+      setModel(data.model ?? null);
+    });
     return () => {
       cancelled = true;
-      clearInterval(t5);
+      unsubscribe();
     };
   }, []);
   const flushStreaming = q2(() => {
@@ -33224,7 +33706,7 @@ function ChatPane(props) {
   }, []);
   const cancelStreamingRaf = q2(() => {
     if (streamRafRef.current !== null) {
-      cancelAnimationFrame(streamRafRef.current);
+      clearTimeout(streamRafRef.current);
       streamRafRef.current = null;
     }
     streamBufRef.current = null;
@@ -33241,22 +33723,7 @@ function ChatPane(props) {
     }
   }, [cancelStreamingRaf]);
   y2(() => {
-    const es = new EventSource(`/api/events?token=${TOKEN}`);
-    let firstOpen = true;
-    es.onopen = () => {
-      if (firstOpen) {
-        firstOpen = false;
-        return;
-      }
-      void refetchCanonicalState();
-    };
-    es.onmessage = (ev) => {
-      let dash;
-      try {
-        dash = JSON.parse(ev.data);
-      } catch {
-        return;
-      }
+    const onDash = (dash) => {
       if (dash.kind === "ping") return;
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
@@ -33275,7 +33742,7 @@ function ChatPane(props) {
           reasoning: (baseId?.reasoning ?? "") + (dash.reasoningDelta ?? "")
         };
         if (streamRafRef.current === null) {
-          streamRafRef.current = requestAnimationFrame(flushStreaming);
+          streamRafRef.current = setTimeout(flushStreaming, 75);
         }
         return;
       }
@@ -33322,12 +33789,17 @@ function ChatPane(props) {
         return;
       }
     };
-    es.onerror = () => {
-      setError(t4("chat.eventStreamError"));
-      setTimeout(() => setError(null), 3e3);
-    };
+    const unsubscribe = subscribeSse("*", onDash);
+    const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
+      if (connected && reconnected) void refetchCanonicalState();
+      if (!connected) {
+        setError(t4("chat.eventStreamError"));
+        setTimeout(() => setError(null), 3e3);
+      }
+    });
     return () => {
-      es.close();
+      unsubscribe();
+      unsubscribeStatus();
       cancelStreamingRaf();
     };
   }, [refetchCanonicalState, cancelStreamingRaf]);
@@ -33746,12 +34218,12 @@ function App() {
       </aside>
       <header class="app-top">
         <span class="ws">
-          <span class="path">Visionox</span>
+          <span class="path">Visionox-Whale</span>
           <span class="sep">·</span>
           <span class="session" style="color:#1a3a5c;font-family:'Microsoft YaHei','微软雅黑',var(--font-sans);font-size:15px">维信诺协同办公平台</span>
         </span>
         <span class="grow"></span>
-        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title="用 Visionox 打开 Markdown 文档">
+        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title="用 Visionox-Whale 打开 Markdown 文档">
           <span class="top-action-g">MD</span>
           <span class="top-action-label">打开 MD</span>
         </button>

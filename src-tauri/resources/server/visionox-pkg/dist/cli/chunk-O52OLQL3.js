@@ -136,7 +136,7 @@ import * as pathMod4 from "path";
 import * as pathMod3 from "path";
 
 // src/tools/shell/exec.ts
-import { spawn as spawn2, spawnSync } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { existsSync, statSync } from "fs";
 import * as pathMod2 from "path";
 
@@ -513,6 +513,9 @@ function openRedirects(redirects, cwd, projectRoot) {
   return { stdinFd, stdoutFd, stderrFd, mergeStderrToStdout, toClose };
 }
 async function runPipeGroup(segments, opts) {
+  if (opts.signal?.aborted) {
+    throw new DOMException("command cancelled", "AbortError");
+  }
   const env = { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
   const children = [];
   const allFds = [];
@@ -532,6 +535,9 @@ async function runPipeGroup(segments, opts) {
   }
   try {
     for (let i = 0; i < segments.length; i++) {
+      if (opts.signal?.aborted) {
+        throw new DOMException("command cancelled", "AbortError");
+      }
       const isFirst = i === 0;
       const isLast = i === segments.length - 1;
       const seg = segments[i];
@@ -862,9 +868,11 @@ function killProcessTree(child) {
   if (!child.pid || child.killed) return;
   if (process.platform === "win32") {
     try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+      const killer = spawn2("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true
+      });
+      killer.on("error", () => {
       });
       return;
     } catch {
@@ -1131,6 +1139,7 @@ function registerShellTools(registry, opts) {
   const timeoutSec = opts.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
   const maxOutputChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
   const jobs = opts.jobs ?? new JobRegistry();
+  const getOperationId = typeof opts.getOperationId === "function" ? opts.getOperationId : () => null;
   const getExtraAllowed = typeof opts.extraAllowed === "function" ? opts.extraAllowed : (() => {
     const snapshot2 = opts.extraAllowed ?? [];
     return () => snapshot2;
@@ -1204,6 +1213,11 @@ function registerShellTools(registry, opts) {
         waitSec: {
           type: "integer",
           description: "Max seconds to wait for startup before returning. 0..30, default 3. A ready-signal match short-circuits this."
+        },
+        lifecycle: {
+          type: "string",
+          enum: ["task", "service"],
+          description: "Use 'task' (default) for builds/downloads owned by this answer; they stop when the answer is cancelled. Use 'service' only for dev servers/watchers that should keep running until explicitly stopped."
         }
       },
       required: ["command"]
@@ -1229,7 +1243,9 @@ function registerShellTools(registry, opts) {
       const result = await jobs.start(cmd, {
         cwd: rootDir,
         waitSec: args.waitSec,
-        signal: ctx?.signal
+        signal: args.lifecycle === "service" ? void 0 : ctx?.signal,
+        ownerId: getOperationId(),
+        lifecycle: args.lifecycle === "service" ? "service" : "task"
       });
       return formatJobStart(result);
     }
@@ -1286,10 +1302,11 @@ function registerShellTools(registry, opts) {
       },
       required: ["jobId"]
     },
-    fn: async (args) => {
+    fn: async (args, ctx) => {
       const out = await jobs.waitForJob(args.jobId, {
         timeoutMs: args.timeoutMs,
-        waitFor: args.waitFor
+        waitFor: args.waitFor,
+        signal: ctx?.signal
       });
       if (!out) return `job ${args.jobId}: not found (use list_jobs)`;
       return {
@@ -1398,6 +1415,12 @@ function killProcessTree2(pid, signal) {
   }
 }
 var DEFAULT_OUTPUT_CAP_BYTES = 64 * 1024;
+function unrefDelay(ms) {
+  return new Promise((resolve4) => {
+    const timer = setTimeout(resolve4, ms);
+    timer.unref?.();
+  });
+}
 var READY_SIGNALS = [
   // HTTP server banners
   /\blistening on\b/i,
@@ -1415,6 +1438,27 @@ var READY_SIGNALS = [
 var JobRegistry = class {
   jobs = /* @__PURE__ */ new Map();
   nextId = 1;
+  changeListener = null;
+  completedRetention = 50;
+  setChangeListener(listener) {
+    this.changeListener = typeof listener === "function" ? listener : null;
+  }
+  notifyChange(job, action) {
+    try {
+      this.changeListener?.({ action, job: job ? snapshotMetadata(job) : null });
+    } catch {
+    }
+  }
+  pruneCompleted() {
+    const completed = [...this.jobs.values()].filter((job) => !job.running).sort((a, b) => a.startedAt - b.startedAt);
+    while (completed.length > this.completedRetention) {
+      const old = completed.shift();
+      if (!old) break;
+      old.outputWaiters?.clear?.();
+      old.child = null;
+      this.jobs.delete(old.id);
+    }
+  }
   /** Resolves on (a) ready signal, (b) early exit, or (c) waitSec deadline — child keeps running regardless. */
   async start(command, opts) {
     const trimmed = command.trim();
@@ -1459,6 +1503,8 @@ var JobRegistry = class {
         totalBytesWritten: 0,
         running: false,
         spawnError: err.message,
+        ownerId: opts.ownerId ?? null,
+        lifecycle: opts.lifecycle === "service" ? "service" : "task",
         child: null,
         readyPromise: Promise.resolve(),
         signalReady: () => {
@@ -1469,6 +1515,8 @@ var JobRegistry = class {
         outputWaiters: /* @__PURE__ */ new Set()
       };
       this.jobs.set(id2, job2);
+      this.pruneCompleted();
+      this.notifyChange(job2, "failed");
       return {
         jobId: id2,
         pid: null,
@@ -1498,6 +1546,8 @@ var JobRegistry = class {
       output: "",
       totalBytesWritten: 0,
       running: true,
+      ownerId: opts.ownerId ?? null,
+      lifecycle: opts.lifecycle === "service" ? "service" : "task",
       child,
       readyPromise,
       signalReady: readyResolve,
@@ -1506,6 +1556,7 @@ var JobRegistry = class {
       outputWaiters: /* @__PURE__ */ new Set()
     };
     this.jobs.set(id, job);
+    this.notifyChange(job, "started");
     let readyMatched = false;
     let recentForReady = "";
     const READY_WINDOW = 1024;
@@ -1544,16 +1595,21 @@ ${job.output.slice(start)}`;
       job.signalReady();
       job.signalClosed();
     });
+    let onAbort = null;
     const settleClosed = (code) => {
       if (!job.running && job.exitCode !== null) return;
       job.running = false;
       job.exitCode = code;
       job.signalReady();
       job.signalClosed();
+      if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
+      job.child = null;
+      this.pruneCompleted();
+      this.notifyChange(job, "finished");
     };
     child.on("exit", settleClosed);
     child.on("close", settleClosed);
-    const onAbort = () => this.stop(id, { graceMs: 100 });
+    onAbort = () => void this.stop(id, { graceMs: 100 });
     if (opts.signal?.aborted) {
       onAbort();
     } else {
@@ -1609,6 +1665,9 @@ ${job.output.slice(start)}`;
         latestOutput: job.output
       };
     }
+    if (opts.signal?.aborted) {
+      throw new DOMException("background job wait cancelled", "AbortError");
+    }
     const timeoutMs = Math.max(0, Math.min(3e5, opts.timeoutMs ?? 5e3));
     const waitFor = opts.waitFor ?? "exit";
     const startOutput = job.output;
@@ -1628,9 +1687,20 @@ ${job.output.slice(start)}`;
         timer = setTimeout(resolve4, timeoutMs);
       })
     );
-    await Promise.race(racers);
-    if (timer) clearTimeout(timer);
-    if (wakeOutput) job.outputWaiters.delete(wakeOutput);
+    let abortWaiter = null;
+    if (opts.signal) {
+      racers.push(new Promise((_, reject) => {
+        abortWaiter = () => reject(new DOMException("background job wait cancelled", "AbortError"));
+        opts.signal.addEventListener("abort", abortWaiter, { once: true });
+      }));
+    }
+    try {
+      await Promise.race(racers);
+    } finally {
+      if (abortWaiter) opts.signal?.removeEventListener("abort", abortWaiter);
+      if (timer) clearTimeout(timer);
+      if (wakeOutput) job.outputWaiters.delete(wakeOutput);
+    }
     return {
       exited: !job.running,
       exitCode: job.exitCode,
@@ -1651,7 +1721,7 @@ ${job.output.slice(start)}`;
       } catch {
       }
     }
-    await Promise.race([job.closedPromise, new Promise((res) => setTimeout(res, graceMs))]);
+    await Promise.race([job.closedPromise, unrefDelay(graceMs)]);
     if (job.running) {
       if (job.pid !== null) {
         killProcessTree2(job.pid, "SIGKILL");
@@ -1661,16 +1731,30 @@ ${job.output.slice(start)}`;
         } catch {
         }
       }
-      await Promise.race([job.closedPromise, new Promise((res) => setTimeout(res, 5e3))]);
+      await Promise.race([job.closedPromise, unrefDelay(5e3)]);
       if (job.running) {
         job.running = false;
         job.signalClosed();
+        job.child = null;
+        this.pruneCompleted();
+        this.notifyChange(job, "finished");
       }
     }
     return snapshot(job);
   }
   list() {
     return [...this.jobs.values()].map(snapshot);
+  }
+  listMetadata() {
+    return [...this.jobs.values()].map(snapshotMetadata);
+  }
+  async stopOwned(ownerId, opts = {}) {
+    if (!ownerId) return [];
+    const includeServices = opts.includeServices === true;
+    const owned = [...this.jobs.values()].filter((job) =>
+      job.running && job.ownerId === ownerId && (includeServices || job.lifecycle !== "service")
+    );
+    return await Promise.all(owned.map((job) => this.stop(job.id, { graceMs: opts.graceMs ?? 100 })));
   }
   async shutdown(deadlineMs = 5e3) {
     const start = Date.now();
@@ -1684,10 +1768,10 @@ ${job.output.slice(start)}`;
         } catch {
         }
     }
-    const allClose = Promise.all(runningJobs.map((j) => j.readyPromise));
+    const allClose = Promise.all(runningJobs.map((j) => j.closedPromise));
     const elapsed = () => Date.now() - start;
     const graceMs = Math.min(1500, Math.max(0, deadlineMs / 2));
-    await Promise.race([allClose, new Promise((res) => setTimeout(res, graceMs))]);
+    await Promise.race([allClose, unrefDelay(graceMs)]);
     for (const job of runningJobs) {
       if (!job.running) continue;
       if (job.pid !== null) killProcessTree2(job.pid, "SIGKILL");
@@ -1698,13 +1782,15 @@ ${job.output.slice(start)}`;
         }
     }
     const remaining = Math.max(800, deadlineMs - elapsed());
-    await Promise.race([allClose, new Promise((res) => setTimeout(res, remaining))]);
+    await Promise.race([allClose, unrefDelay(remaining)]);
     for (const job of runningJobs) {
       if (job.running) {
         job.running = false;
         job.signalClosed();
+        job.child = null;
       }
     }
+    this.pruneCompleted();
   }
   /** Count of still-running jobs — drives the TUI status-bar indicator. */
   runningCount() {
@@ -1723,8 +1809,14 @@ function snapshot(job) {
     output: job.output,
     totalBytesWritten: job.totalBytesWritten,
     running: job.running,
-    spawnError: job.spawnError
+    spawnError: job.spawnError,
+    ownerId: job.ownerId ?? null,
+    lifecycle: job.lifecycle === "service" ? "service" : "task"
   };
+}
+function snapshotMetadata(job) {
+  const { output, ...metadata } = snapshot(job);
+  return metadata;
 }
 function latestOutputSince(before, after) {
   if (!before) return after;

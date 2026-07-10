@@ -6602,6 +6602,22 @@ var PREFLIGHT_EMERGENCY_ABSOLUTE_CAP = 380000;
 var HISTORY_FOLD_MARKER = "[CONVERSATION HISTORY SUMMARY \u2014 earlier turns folded for context efficiency]\n\n";
 var SKILL_PIN_MEMO_HEADER = "[Active skill memos \u2014 preserved verbatim across the fold:]";
 var SKILL_PIN_REGEX = /<skill-pin name="([^"]+)">\n[\s\S]*?\n<\/skill-pin>/g;
+function contextThresholdsForCapacity(ctxMax) {
+  const cap = Number.isFinite(ctxMax) && ctxMax > 0 ? Math.floor(ctxMax) : DEFAULT_CONTEXT_TOKENS;
+  const tokenThreshold = (ratio, absoluteCap) => Math.floor(cap * Math.min(ratio, absoluteCap / cap));
+  return {
+    ctxMax: cap,
+    foldTokens: tokenThreshold(HISTORY_FOLD_THRESHOLD, HISTORY_FOLD_ABSOLUTE_CAP),
+    aggressiveTokens: tokenThreshold(HISTORY_FOLD_AGGRESSIVE_THRESHOLD, HISTORY_FOLD_AGGRESSIVE_ABSOLUTE_CAP),
+    forceSummaryTokens: tokenThreshold(FORCE_SUMMARY_THRESHOLD, FORCE_SUMMARY_ABSOLUTE_CAP),
+    emergencyTokens: tokenThreshold(PREFLIGHT_EMERGENCY_THRESHOLD, PREFLIGHT_EMERGENCY_ABSOLUTE_CAP),
+    normalTailTokens: Math.min(Math.floor(cap * HISTORY_FOLD_TAIL_FRACTION), HISTORY_FOLD_TAIL_ABSOLUTE_CAP),
+    aggressiveTailTokens: Math.min(Math.floor(cap * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION), HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP)
+  };
+}
+function contextThresholdsForModel(model) {
+  return contextThresholdsForCapacity(DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS);
+}
 function extractPinnedSkills(head) {
   const pinned = /* @__PURE__ */ new Map();
   const stubbedHead = head.map((msg) => {
@@ -6622,52 +6638,56 @@ var ContextManager = class {
     this.deps = deps;
   }
   deps;
+  thresholds(model) {
+    return contextThresholdsForModel(model);
+  }
   /** Decision after a turn's response — fold, exit with summary, or carry on. */
   decideAfterUsage(usage, model, alreadyFoldedThisTurn) {
-    const ctxMax = DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS;
+    const thresholds = this.thresholds(model);
+    const ctxMax = thresholds.ctxMax;
     if (!usage) return { kind: "none", promptTokens: 0, ctxMax, ratio: 0 };
     const ratio = usage.promptTokens / ctxMax;
     const base = { promptTokens: usage.promptTokens, ctxMax, ratio };
-    const forceSummaryThr = Math.min(FORCE_SUMMARY_THRESHOLD, FORCE_SUMMARY_ABSOLUTE_CAP / ctxMax);
-    const aggressiveThr = Math.min(HISTORY_FOLD_AGGRESSIVE_THRESHOLD, HISTORY_FOLD_AGGRESSIVE_ABSOLUTE_CAP / ctxMax);
-    const foldThr = Math.min(HISTORY_FOLD_THRESHOLD, HISTORY_FOLD_ABSOLUTE_CAP / ctxMax);
-    if (ratio > forceSummaryThr) {
-      return { kind: "exit-with-summary", ...base };
+    if (usage.promptTokens > thresholds.forceSummaryTokens) {
+      return { kind: "exit-with-summary", ...base, tailBudget: thresholds.aggressiveTailTokens };
     }
     if (alreadyFoldedThisTurn) return { kind: "none", ...base };
-    if (ratio > aggressiveThr) {
+    if (usage.promptTokens > thresholds.aggressiveTokens) {
       return {
         kind: "fold",
         ...base,
-        tailBudget: Math.min(Math.floor(ctxMax * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION), HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP),
+        tailBudget: thresholds.aggressiveTailTokens,
         aggressive: true
       };
     }
-    if (ratio > foldThr) {
+    if (usage.promptTokens > thresholds.foldTokens) {
       return {
         kind: "fold",
         ...base,
-        tailBudget: Math.min(Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION), HISTORY_FOLD_TAIL_ABSOLUTE_CAP),
+        tailBudget: thresholds.normalTailTokens,
         aggressive: false
       };
     }
     return { kind: "none", ...base };
   }
   /** Local-side preflight before sending a request — catches oversized payloads early. */
-  decidePreflight(messages, toolSpecs, model) {
-    const ctxMax = DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS;
+  decidePreflight(messages, toolSpecs, model, thresholdKind = "emergency") {
+    const thresholds = this.thresholds(model);
+    const ctxMax = thresholds.ctxMax;
     const estimate = estimateRequestTokens(messages, toolSpecs ?? null);
-    const emergencyThr = Math.min(PREFLIGHT_EMERGENCY_THRESHOLD, PREFLIGHT_EMERGENCY_ABSOLUTE_CAP / ctxMax);
+    const thresholdTokens = thresholdKind === "fold" ? thresholds.foldTokens : thresholds.emergencyTokens;
     return {
-      needsAction: estimate / ctxMax > emergencyThr,
+      needsAction: estimate > thresholdTokens,
       estimateTokens: estimate,
-      ctxMax
+      ctxMax,
+      thresholdTokens,
+      thresholdKind
     };
   }
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
   async fold(model, opts) {
-    const ctxMax = DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS;
-    const tailBudget = opts?.keepRecentTokens ?? Math.min(Math.floor(ctxMax * HISTORY_FOLD_TAIL_FRACTION), HISTORY_FOLD_TAIL_ABSOLUTE_CAP);
+    const thresholds = this.thresholds(model);
+    const tailBudget = opts?.keepRecentTokens ?? thresholds.normalTailTokens;
     const all = this.deps.log.toMessages();
     const noop = {
       folded: false,
@@ -6691,17 +6711,14 @@ var ContextManager = class {
     const headTokens = totalTokens - cumTokens;
     if (headTokens < totalTokens * HISTORY_FOLD_MIN_SAVINGS_FRACTION) return noop;
     const { stubbedHead, pinnedBodies } = extractPinnedSkills(head);
-    const summary = await this.summarizeForFold(stubbedHead);
+    const summary = await this.summarizeForFold(stubbedHead, model);
     if (!summary) return noop;
     const memoTail = pinnedBodies.length > 0 ? `
 
 ${SKILL_PIN_MEMO_HEADER}
 
 ${pinnedBodies.join("\n\n")}` : "";
-    const summaryMsg = {
-      role: "assistant",
-      content: HISTORY_FOLD_MARKER + summary + memoTail
-    };
+    const summaryMsg = buildSyntheticAssistantMessage(HISTORY_FOLD_MARKER + summary + memoTail, model);
     const replacement = [summaryMsg, ...tail];
     this.deps.log.compactInPlace(replacement);
     this.persistRewrite(replacement);
@@ -6723,31 +6740,59 @@ ${pinnedBodies.join("\n\n")}` : "";
     this.persistRewrite([...kept]);
     return true;
   }
-  async summarizeForFold(messagesToSummarize) {
-    const summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";
+  fallbackSummaryForFold(messagesToSummarize) {
+    const lines = [];
+    let chars = 0;
+    for (const message of messagesToSummarize.slice(-30)) {
+      const role = message?.role ?? "unknown";
+      const raw = typeof message?.content === "string" ? message.content : JSON.stringify(message?.content ?? "");
+      const compact = raw.replace(/\s+/g, " ").trim().slice(0, 600);
+      if (!compact) continue;
+      const line = `${role}: ${compact}`;
+      if (chars + line.length > 12e3) break;
+      lines.push(line);
+      chars += line.length + 1;
+    }
+    return lines.length > 0 ? `[Local recovery summary after remote summarization failed]\n${lines.join("\n")}` : "";
+  }
+  async summarizeForFold(messagesToSummarize, producingModel) {
+    let summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";
     const systemPrompt = "You compress conversation history for a coding agent. Output one prose recap that preserves: the user's overall goal, decisions and conclusions reached, files inspected or modified, important tool results still relevant to ongoing work, and any open todos. Skip turn-by-turn play-by-play. No tool calls, no markdown headings, no SEARCH/REPLACE blocks \u2014 plain prose only.";
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
+    const rawEstimate = estimateRequestTokens([{ role: "system", content: systemPrompt }, ...healed], null);
+    const summaryCap = contextThresholdsForModel(summaryModel).ctxMax;
+    const producingCap = contextThresholdsForModel(producingModel).ctxMax;
+    if (rawEstimate > summaryCap * 0.9 && producingCap > summaryCap) {
+      process.stderr.write(`\u25B8 fold summary model ${summaryModel} capacity ${summaryCap} is too small for ~${rawEstimate} tokens; using ${producingModel}.\n`);
+      summaryModel = producingModel;
+    }
+    const normalized = normalizeHistoryForModel(healed, summaryModel).messages;
     const messages = [
       { role: "system", content: systemPrompt },
-      ...healed,
+      ...normalized,
       {
         role: "user",
         content: "Summarize the conversation above as plain prose. This summary replaces the original turns to free context \u2014 make it self-contained."
       }
     ];
-    try {
-      const resp = await this.deps.client.chat({
-        model: summaryModel,
-        messages,
-        signal: this.deps.getAbortSignal(),
-        thinking: thinkingModeForModel(summaryModel),
-        reasoningEffort: "high"
-      });
-      this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
-      return stripHallucinatedToolMarkup((resp.content ?? "").trim());
-    } catch {
-      return "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const resp = await this.deps.client.chat({
+          model: summaryModel,
+          messages,
+          signal: this.deps.getAbortSignal(),
+          thinking: thinkingModeForModel(summaryModel),
+          reasoningEffort: "high"
+        });
+        this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
+        const summary = stripHallucinatedToolMarkup((resp.content ?? "").trim());
+        if (summary) return summary;
+      } catch {
+        if (this.deps.getAbortSignal()?.aborted) return "";
+      }
     }
+    process.stderr.write(`\u25B8 remote history summary failed for ${summaryModel}; using local recovery summary.\n`);
+    return this.fallbackSummaryForFold(healed);
   }
   persistRewrite(messages) {
     if (!this.deps.sessionName) return;
@@ -6963,7 +7008,8 @@ ${summary}`;
       role: "assistant_final",
       content: annotated,
       stats: summaryStats,
-      forcedSummary: true
+      forcedSummary: true,
+      forcedSummaryReason: opts.reason
     };
     yield { turn: ctx.turn, role: "done", content: summary };
   } catch (err) {
@@ -7108,6 +7154,34 @@ function stampMissingReasoningForThinkingMode(messages, model) {
     return { ...msg, reasoning_content: "" };
   });
   return { messages: out, stampedCount };
+}
+function normalizeHistoryForModel(messages, model) {
+  const healed = healLoadedMessagesByTokens(messages, DEFAULT_MAX_RESULT_TOKENS);
+  if (isThinkingModeModel(model)) {
+    const stamped = stampMissingReasoningForThinkingMode(healed.messages, model);
+    return {
+      messages: stamped.messages,
+      changedCount: healed.healedCount + stamped.stampedCount,
+      tokensSaved: healed.tokensSaved,
+      reasoningAdded: stamped.stampedCount,
+      reasoningRemoved: 0
+    };
+  }
+  let reasoningRemoved = 0;
+  const normalized = healed.messages.map((message) => {
+    if (message?.role !== "assistant" || !Object.hasOwn(message, "reasoning_content")) return message;
+    const next = { ...message };
+    delete next.reasoning_content;
+    reasoningRemoved += 1;
+    return next;
+  });
+  return {
+    messages: normalized,
+    changedCount: healed.healedCount + reasoningRemoved,
+    tokensSaved: healed.tokensSaved,
+    reasoningAdded: 0,
+    reasoningRemoved
+  };
 }
 function healLoadedMessagesByTokens(messages, maxTokens) {
   const shrunk = shrinkOversizedToolResultsByTokens(messages, maxTokens);
@@ -7529,7 +7603,10 @@ var CacheFirstLoop = class {
   _turnFailures;
   _turnSelfCorrected = false;
   _foldedThisTurn = false;
+  _contextRecheckRequired = false;
+  _contextStatusCache = /* @__PURE__ */ new Map();
   _toolDispatchesThisStep = 0;
+  _officeCliElementCallsThisStep = 0;
   context;
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
   get inflight() {
@@ -7577,6 +7654,13 @@ var CacheFirstLoop = class {
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
+        const officeCommand = String(_name).toLowerCase() === "officecli" ? String(_args?.command ?? "").trim() : "";
+        if (/^(?:add|set|remove|move|swap)(?:\s|$)/i.test(officeCommand)) {
+          this._officeCliElementCallsThisStep++;
+          if (this._officeCliElementCallsThisStep === 8 || this._officeCliElementCallsThisStep === 16) {
+            result = `${result}\n\n[OfficeCLI efficiency guard: ${this._officeCliElementCallsThisStep} element-level edits were sent individually this turn. Stop using one call per shape/cell/paragraph. Use one batch per slide or logical section with --commands JSON; each item uses {"command":"add",...}. Do not join CLI commands with newlines. Inspect existing content before retrying successful edits.]`;
+          }
+        }
         const remaining = this.maxToolIters - this._toolDispatchesThisStep;
         if (remaining <= 0) {
           return `${result}
@@ -7594,11 +7678,10 @@ var CacheFirstLoop = class {
     this.sessionName = opts.session ?? null;
     if (this.sessionName) {
       const prior = loadSessionMessages(this.sessionName);
-      const shrunk = healLoadedMessagesByTokens(prior, DEFAULT_MAX_RESULT_TOKENS);
-      const stamped = stampMissingReasoningForThinkingMode(shrunk.messages, this.model);
-      const messages = stamped.messages;
-      const healedCount = shrunk.healedCount + stamped.stampedCount;
-      const tokensSaved = shrunk.tokensSaved;
+      const normalized = normalizeHistoryForModel(prior, this.model);
+      const messages = normalized.messages;
+      const healedCount = normalized.changedCount;
+      const tokensSaved = normalized.tokensSaved;
       for (const msg of messages) this.log.append(msg);
       this.resumedMessageCount = messages.length;
       this._turn = messages.reduce((n, m) => m.role === "assistant" ? n + 1 : n, 0);
@@ -7636,10 +7719,47 @@ var CacheFirstLoop = class {
   }
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
   async compactHistory(opts) {
-    return this.context.fold(this.model, opts);
+    const result = await this.context.fold(this.model, opts);
+    if (result.folded) this._contextStatusCache.clear();
+    return result;
+  }
+  contextStatus(model = this.model) {
+    const thresholds = this.context.thresholds(model);
+    const cached = this._contextStatusCache.get(model);
+    if (cached?.ctxMax === thresholds.ctxMax) return cached;
+    const messages = this.buildMessages(null);
+    const estimatedTokens = estimateRequestTokens(messages, this.prefix.toolSpecs ?? null);
+    const status = {
+      ...thresholds,
+      estimatedTokens,
+      ratio: thresholds.ctxMax > 0 ? estimatedTokens / thresholds.ctxMax : 0,
+      needsCompaction: estimatedTokens > thresholds.foldTokens
+    };
+    this._contextStatusCache.set(model, status);
+    return status;
+  }
+  adoptHistory(messages, model = this.model) {
+    const normalized = normalizeHistoryForModel(messages, model);
+    this.log.compactInPlace(normalized.messages);
+    this._contextStatusCache.clear();
+    if (normalized.messages.length > 0) this._contextRecheckRequired = true;
+    if (this.sessionName) {
+      try {
+        rewriteSession(this.sessionName, normalized.messages);
+      } catch {
+      }
+    }
+    return {
+      messageCount: normalized.messages.length,
+      changedCount: normalized.changedCount,
+      reasoningAdded: normalized.reasoningAdded,
+      reasoningRemoved: normalized.reasoningRemoved,
+      tokensSaved: normalized.tokensSaved
+    };
   }
   appendAndPersist(message) {
     this.log.append(message);
+    this._contextStatusCache.clear();
     if (this.sessionName) {
       try {
         appendSessionMessage(this.sessionName, message);
@@ -7655,6 +7775,7 @@ var CacheFirstLoop = class {
     const kept = entries.slice(0, -1);
     kept.push(message);
     this.log.compactInPlace(kept);
+    this._contextStatusCache.clear();
     if (this.sessionName) {
       try {
         rewriteSession(this.sessionName, kept);
@@ -7666,6 +7787,7 @@ var CacheFirstLoop = class {
   clearLog() {
     const dropped = this.log.length;
     this.log.compactInPlace([]);
+    this._contextStatusCache.clear();
     let archived = null;
     if (this.sessionName) {
       try {
@@ -7686,7 +7808,14 @@ var CacheFirstLoop = class {
     return { dropped, archived, systemRebuilt };
   }
   configure(opts) {
-    if (opts.model !== void 0) this.model = opts.model;
+    let modelSwitch = null;
+    if (opts.model !== void 0 && opts.model !== this.model) {
+      const previousModel = this.model;
+      const context = this.adoptHistory(this.log.toMessages(), opts.model);
+      this.model = opts.model;
+      this._contextRecheckRequired = true;
+      modelSwitch = { previousModel, model: this.model, ...context, contextStatus: this.contextStatus() };
+    }
     if (opts.stream !== void 0) {
       this._streamPreference = opts.stream;
       this.stream = opts.stream;
@@ -7695,6 +7824,7 @@ var CacheFirstLoop = class {
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
     if (opts.vision !== void 0) this.vision = opts.vision;
     if (opts.visionDetail !== void 0) this.visionDetail = opts.visionDetail;
+    return { modelSwitch };
   }
   /** `null` disables the cap; any change re-arms the 80% warning. */
   setBudget(usd) {
@@ -7760,6 +7890,7 @@ var CacheFirstLoop = class {
     try {
       const preReport = await runHooks({
         hooks: this.hooks,
+        signal,
         payload: {
           event: "PreToolUse",
           cwd: this.hookCwd,
@@ -7785,6 +7916,7 @@ ${reason}`
       });
       const postReport = await runHooks({
         hooks: this.hooks,
+        signal,
         payload: {
           event: "PostToolUse",
           cwd: this.hookCwd,
@@ -7864,6 +7996,7 @@ ${reason}`
     const userText = typeof raw === "string" ? raw : "";
     const preserved = entries.slice(0, lastUserIdx).map((m) => ({ ...m }));
     this.log.compactInPlace(preserved);
+    this._contextStatusCache.clear();
     if (this.sessionName) {
       try {
         rewriteSession(this.sessionName, preserved);
@@ -7907,6 +8040,7 @@ ${reason}`
     this._escalateThisTurn = false;
     this._foldedThisTurn = false;
     this._toolDispatchesThisStep = 0;
+    this._officeCliElementCallsThisStep = 0;
     let armedConsumed = false;
     if (this._proArmedForNextTurn) {
       this._escalateThisTurn = true;
@@ -7941,7 +8075,8 @@ ${reason}`
           turn: this._turn,
           role: "assistant_final",
           content: stoppedMsg,
-          forcedSummary: true
+          forcedSummary: true,
+          forcedSummaryReason: "aborted"
         };
         yield { turn: this._turn, role: "done", content: stoppedMsg };
         this._turnAbort = new AbortController();
@@ -7965,7 +8100,9 @@ ${reason}`
       let messages = this.buildMessages(pendingUser);
       this._pendingImages = null;
       {
-        const decision2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
+        const thresholdKind = this._contextRecheckRequired ? "fold" : "emergency";
+        this._contextRecheckRequired = false;
+        const decision2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model, thresholdKind);
         if (decision2.needsAction) {
           const { estimateTokens: estimate, ctxMax } = decision2;
           yield {
@@ -8242,12 +8379,8 @@ ${reason}`
           content: `${phrase}${noteTail}`
         };
       }
-      if (repairedCalls.length === 0) {
-        if (allSuppressed) {
-          yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "stuck" });
-          return;
-        }
-        yield { turn: this._turn, role: "done", content: assistantContent };
+      if (allSuppressed && repairedCalls.length === 0) {
+        yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "stuck" });
         return;
       }
       const decision = this.context.decideAfterUsage(usage, this.model, this._foldedThisTurn);
@@ -8291,8 +8424,18 @@ ${reason}`
             pct: Math.round(before / ctxMax * 100)
           })
         };
+        this._foldedThisTurn = true;
+        await this.compactHistory({ keepRecentTokens: decision.tailBudget });
+        if (repairedCalls.length === 0) {
+          yield { turn: this._turn, role: "done", content: assistantContent };
+          return;
+        }
         this.context.trimTrailingToolCalls();
         yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "context-guard" });
+        return;
+      }
+      if (repairedCalls.length === 0) {
+        yield { turn: this._turn, role: "done", content: assistantContent };
         return;
       }
       const dispatchSerial = (process.env.visionox_TOOL_DISPATCH ?? "auto").toLowerCase() === "serial";
@@ -9152,7 +9295,7 @@ function sanitizeOptions(raw) {
 function registerChoiceTool(registry, opts = {}) {
   registry.register({
     name: "ask_choice",
-    description: "Render an arrow-key picker with 2\u20136 alternatives. Use when the user is supposed to pick \u2014 never enumerate choices as prose. Skip when one option is clearly best (just do it) or a free-form text answer fits. Max 6 options; set `allowCustom:true` when their real answer might not fit.",
+    description: "Render an arrow-key picker with 2\u20136 alternatives. Use when the user is supposed to pick \u2014 never enumerate choices as prose. Use the current conversation language for the question, titles, and summaries. A summary must add useful detail; never repeat or translate the title. Skip when one option is clearly best (just do it) or a free-form text answer fits. Max 6 options; set `allowCustom:true` when their real answer might not fit.",
     readOnly: true,
     parameters: {
       type: "object",
@@ -10897,7 +11040,7 @@ function registerSubmitPlan(registry, opts) {
       }
       const steps = sanitizeSteps(args?.steps);
       const summary = typeof args?.summary === "string" ? args.summary.trim() || void 0 : void 0;
-      opts.onPlanSubmitted?.(plan, steps);
+      opts.onPlanSubmitted?.(plan, steps, summary);
       const verdict = await (ctx?.confirmationGate ?? pauseGate).ask({
         kind: "plan_proposed",
         payload: { plan, steps, summary }
@@ -10956,10 +11099,17 @@ function registerMarkStepComplete(registry, opts) {
       const update = { kind: "step_completed", stepId, result };
       if (title) update.title = title;
       if (notes) update.notes = notes;
-      opts.onStepCompleted?.(update);
+      const checkpoint = opts.onStepCompleted?.(update);
       const verdict = await (ctx?.confirmationGate ?? pauseGate).ask({
         kind: "plan_checkpoint",
-        payload: { stepId, title, result, notes }
+        payload: {
+          stepId,
+          title,
+          result,
+          notes,
+          completed: checkpoint?.completed,
+          total: checkpoint?.total
+        }
       });
       if (verdict.type === "continue") return JSON.stringify(update);
       if (verdict.type === "revise") {
@@ -11677,7 +11827,9 @@ export {
   applyEditBlocks,
   toWholeFileEditBlock,
   snapshotBeforeEdits,
-  restoreSnapshots
+  restoreSnapshots,
+  contextThresholdsForCapacity,
+  normalizeHistoryForModel
 };
 /*! Bundled license information:
 

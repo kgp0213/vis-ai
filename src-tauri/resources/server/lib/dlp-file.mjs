@@ -128,8 +128,12 @@ function parseJsonFromStdout(stdout) {
   return JSON.parse(stdout.slice(start, end + 1));
 }
 
-function runDecryptProcess(command, args, timeoutMs) {
+function runDecryptProcess(command, args, timeoutMs, signal) {
   return new Promise((resolveProcess) => {
+    if (signal?.aborted) {
+      resolveProcess({ ok: false, aborted: true, stdout: "", stderr: "" });
+      return;
+    }
     const child = spawn(command, args, {
       windowsHide: false,
       env: {
@@ -142,25 +146,29 @@ function runDecryptProcess(command, args, timeoutMs) {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timer = setTimeout(() => {
+    const finish = (result) => {
       if (settled) return;
       settled = true;
-      child.kill();
-      resolveProcess({ ok: false, timedOut: true, stdout, stderr });
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolveProcess(result);
+    };
+    const onAbort = () => {
+      try { child.kill(); } catch {}
+      finish({ ok: false, aborted: true, stdout, stderr });
+    };
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish({ ok: false, timedOut: true, stdout, stderr });
     }, timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveProcess({ ok: false, error: err, stdout, stderr });
+      finish({ ok: false, error: err, stdout, stderr });
     });
     child.on("close", (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveProcess({ ok: code === 0, code, signal, stdout, stderr });
+      finish({ ok: code === 0, code, signal, stdout, stderr });
     });
   });
 }
@@ -171,11 +179,12 @@ function looksLikeMissingPython(run) {
     /Python was not found|Microsoft Store|App execution aliases/i.test(text);
 }
 
-async function runVisionoxFile({ pythonPath, scriptPath, sourcePath, timeoutMs }) {
-  const first = await runDecryptProcess(pythonPath, [scriptPath, sourcePath], timeoutMs);
+async function runVisionoxFile({ pythonPath, scriptPath, sourcePath, timeoutMs, signal }) {
+  const first = await runDecryptProcess(pythonPath, [scriptPath, sourcePath], timeoutMs, signal);
   if (first.ok) return first;
+  if (first.aborted) return first;
   if (pythonPath === "python" && looksLikeMissingPython(first)) {
-    return await runDecryptProcess("py", ["-3", scriptPath, sourcePath], timeoutMs);
+    return await runDecryptProcess("py", ["-3", scriptPath, sourcePath], timeoutMs, signal);
   }
   return first;
 }
@@ -361,7 +370,7 @@ function candidatesFromInput(input, rootDir) {
   return extractDocumentPathCandidates(input, rootDir);
 }
 
-export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger = console, allowMultiple = false } = {}) {
+export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger = console, allowMultiple = false, signal } = {}) {
   const raw = typeof input === "string"
     ? input
     : String(input?.path ?? input?.file ?? input?.input ?? input?.text ?? input?.prompt ?? "").trim();
@@ -380,11 +389,12 @@ export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger =
     return buildCandidateError(raw, candidates);
   }
   const sourcePath = candidates[0].abs;
-  const readable = await resolveReadablePathForDlp(sourcePath, { cfg, env, logger });
+  const readable = await resolveReadablePathForDlp(sourcePath, { cfg, env, logger, signal });
   return buildPreparedDocumentResult({ input: raw, sourcePath, readable, candidates });
 }
 
-export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console } = {}) {
+export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console, signal } = {}) {
+  if (signal?.aborted) throw new DOMException("document preparation cancelled", "AbortError");
   const abs = resolveInputPath(path, env.rootDir);
   const dlp = getDlpConfig(cfg, env);
   if (process.platform !== "win32") return { path: abs, encrypted: false, skipped: "non-windows" };
@@ -428,7 +438,9 @@ export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logg
     scriptPath: dlp.scriptPath,
     sourcePath: abs,
     timeoutMs: dlp.timeoutMs,
+    signal,
   });
+  if (run.aborted) throw new DOMException("document preparation cancelled", "AbortError");
   if (!run.ok) {
     const reason = run.timedOut
       ? `读取超时 (${dlp.timeoutMs}ms)`
@@ -485,6 +497,7 @@ export function wrapReadFileToolWithDlp(tools, options = {}) {
         cfg,
         env: options.env,
         logger: options.logger,
+        signal: ctx?.signal,
       });
       return await original.fn({ ...args, path: resolved.path }, ctx);
     },
@@ -705,6 +718,7 @@ async function resolveDlpPathToken(value, options) {
     cfg: typeof options.readConfig === "function" ? options.readConfig() : {},
     env: options.env,
     logger: options.logger,
+    signal: options.signal,
   });
   if (resolved.encrypted) return { value: resolved.path, changed: true };
   if (candidate.fromPattern) return { value: candidate.abs, changed: true };
@@ -780,7 +794,7 @@ export function wrapToolsPathArgsWithDlp(tools, toolNames, options = {}) {
       ...original,
       __visionoxDlpPathArgsWrapped: true,
       fn: async (args, ctx) => {
-        const rewritten = await resolveDlpPathsInArgs(args, options, { toolName: name });
+        const rewritten = await resolveDlpPathsInArgs(args, { ...options, signal: ctx?.signal }, { toolName: name });
         try {
           return await original.fn(rewritten, ctx);
         } catch (err) {

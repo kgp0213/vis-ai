@@ -93,7 +93,7 @@ const LEARN_LIMITS = {
 };
 
 // ── Concept extraction helpers ──────────────────────────────────
-async function extractConceptsFromText(client, model, text, source) {
+async function extractConceptsFromText(client, model, text, source, signal) {
   if (!client || !text?.trim()) return [];
   const system = `You are a learning-track assistant. Extract the key concepts a developer would need to learn to understand the content below.
 
@@ -111,6 +111,7 @@ Do not wrap in markdown code fences. Keep names concise and avoid duplicates.`;
       { role: "system", content: system },
       { role: "user", content: text.slice(0, 12000) },
     ],
+    signal,
     temperature: 0.2,
     maxTokens: 1024,
   });
@@ -337,7 +338,7 @@ function validateSkillMarkdown(contents) {
   return { ok: true, name: nameMatch[1], frontmatter };
 }
 
-async function callLlmForSkill(client, model, files, skillName) {
+async function callLlmForSkill(client, model, files, skillName, signal) {
   const fileBlocks = files
     .map((f) => `### File: ${f.path}\n\n\`\`\`\n${f.content}\n\`\`\``)
     .join("\n\n");
@@ -360,6 +361,7 @@ Output rules:
       { role: "system", content: system },
       { role: "user", content: user },
     ],
+    signal,
     temperature: 0.2,
     maxTokens: 4096,
   });
@@ -454,7 +456,7 @@ async function runLearnSkill(args, opts) {
 
   let generated;
   try {
-    generated = await callLlmForSkill(client, model, files, skillName);
+    generated = await callLlmForSkill(client, model, files, skillName, opts.signal);
   } catch (err) {
     return { ok: false, message: `调用 LLM 生成 SKILL.md 失败: ${err.message}` };
   }
@@ -487,7 +489,7 @@ async function runLearnSkill(args, opts) {
 
     let conceptNote = "";
     try {
-      const concepts = await extractConceptsFromText(client, model, generated, `skill:${skillName}`);
+      const concepts = await extractConceptsFromText(client, model, generated, `skill:${skillName}`, opts.signal);
       if (concepts.length > 0) {
         const { added, existed } = recordExtractedConcepts(concepts, "skill");
         conceptNote = `\n\n同时已提取 ${concepts.length} 个核心概念到学习追踪库（新增 ${added}，已存在 ${existed}）。`;
@@ -565,7 +567,7 @@ async function collectProjectFiles(rootDir) {
   return { files, totalBytes };
 }
 
-async function callLlmForProjectMemory(client, model, files, projectName) {
+async function callLlmForProjectMemory(client, model, files, projectName, signal) {
   const fileBlocks = files
     .map((f) => `### ${f.path}\n\n\`\`\`\n${f.content}\n\`\`\``)
     .join("\n\n");
@@ -588,6 +590,7 @@ Output rules:
       { role: "system", content: system },
       { role: "user", content: user },
     ],
+    signal,
     temperature: 0.2,
     maxTokens: 3072,
   });
@@ -613,7 +616,7 @@ async function runLearnProject(args, opts) {
 
   let generated;
   try {
-    generated = await callLlmForProjectMemory(client, model, files, projectName);
+    generated = await callLlmForProjectMemory(client, model, files, projectName, opts.signal);
   } catch (err) {
     return { ok: false, message: `调用 LLM 生成项目记忆失败: ${err.message}` };
   }
@@ -626,7 +629,7 @@ async function runLearnProject(args, opts) {
 
     let conceptNote = "";
     try {
-      const concepts = await extractConceptsFromText(client, model, generated, `project:${projectName}`);
+      const concepts = await extractConceptsFromText(client, model, generated, `project:${projectName}`, opts.signal);
       if (concepts.length > 0) {
         const { added, existed } = recordExtractedConcepts(concepts, "project");
         conceptNote = `\n\n同时已提取 ${concepts.length} 个核心概念到学习追踪库（新增 ${added}，已存在 ${existed}）。`;
@@ -709,6 +712,7 @@ async function runLearnIndex(args, opts) {
     const result = await buildIndex(dirPath, {
       configPath,
       rebuild: false,
+      signal: opts.signal,
       onProgress: (p) => {
         lastPhase = p.phase;
         if (p.filesScanned !== undefined) {
@@ -759,7 +763,7 @@ async function runLearnAsk(args, opts) {
 
   let hits;
   try {
-    hits = await querySemantic(root, question, { configPath, topK: 8, minScore: 0.3 });
+    hits = await querySemantic(root, question, { configPath, topK: 8, minScore: 0.3, signal: opts.signal });
   } catch (err) {
     return { ok: false, message: `语义搜索失败: ${err.message}` };
   }
@@ -798,6 +802,7 @@ Rules:
         { role: "system", content: system },
         { role: "user", content: user },
       ],
+      signal: opts.signal,
       temperature: 0.2,
       maxTokens: 2048,
     });

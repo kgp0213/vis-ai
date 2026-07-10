@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,9 +25,10 @@ process.env.USERPROFILE = tmpHome;
 const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url);
 const sessionUrl = new URL("../visionox-pkg/dist/cli/chunk-6PBZN4VI.js", import.meta.url);
 const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
+const launcherUrl = new URL("../launcher.mjs", import.meta.url);
 const fileAccessRescueSkillUrl = new URL("../../bootstrap-skills/file-access-rescue/SKILL.md", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
-const { sessionPath } = await import(sessionUrl.href);
+const { listSessions, sessionPath } = await import(sessionUrl.href);
 
 const TOKEN = "dashboard-regression-token";
 
@@ -129,6 +131,67 @@ describe("Dashboard 回归护栏", () => {
     assert.deepEqual(submitted, { prompt: "", session: newName, images: null });
   });
 
+  test("会话列表发现旧计数元数据后按 JSONL 重新计数并修复文件签名", () => {
+    const name = "stale-message-count";
+    const path = sessionPath(name);
+    const metaPath = path.replace(/\.jsonl$/, ".meta.json");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, Array.from({ length: 1094 }, (_, index) => JSON.stringify({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `message-${index}`,
+    })).join("\n") + "\n", "utf8");
+    writeFileSync(metaPath, JSON.stringify({ messageCount: 167 }), "utf8");
+
+    const first = listSessions().find((session) => session.name === name);
+    assert.equal(first?.messageCount, 1094);
+
+    const repaired = JSON.parse(readFileSync(metaPath, "utf8"));
+    const stat = statSync(path);
+    assert.equal(repaired.messageCount, 1094);
+    assert.equal(repaired.messageCountFileSize, stat.size);
+    assert.equal(repaired.messageCountFileMtimeMs, stat.mtimeMs);
+
+    const second = listSessions().find((session) => session.name === name);
+    assert.equal(second?.messageCount, 1094);
+
+    writeFileSync(path, `${readFileSync(path, "utf8")}${JSON.stringify({ role: "user", content: "new-message" })}\n`, "utf8");
+    const afterAppend = listSessions().find((session) => session.name === name);
+    assert.equal(afterAppend?.messageCount, 1095);
+    assert.equal(afterAppend?.meta.messageCountFileSize, statSync(path).size);
+  });
+
+  test("大会话按页查看且 Markdown 导出保留完整首尾内容", async () => {
+    const name = "large-session";
+    const path = sessionPath(name);
+    mkdirSync(dirname(path), { recursive: true });
+    const records = [];
+    for (let i = 0; i < 620; i++) {
+      records.push(JSON.stringify({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `${i === 0 ? "FIRST-MARKER " : ""}${i === 619 ? "LAST-MARKER " : ""}${"x".repeat(7200)}`,
+      }));
+    }
+    writeFileSync(path, `${records.join("\n")}\n`, "utf8");
+
+    const latest = await api("GET", `/api/sessions/${encodeURIComponent(name)}?limit=200`);
+    assert.equal(latest.status, 200);
+    assert.equal(latest.json.messages.length, 200);
+    assert.equal(latest.json.totalMessages, 620);
+    assert.equal(latest.json.hasMore, true);
+    assert.match(latest.json.messages.at(-1).content, /LAST-MARKER/);
+
+    const earlier = await api("GET", `/api/sessions/${encodeURIComponent(name)}?limit=200&offset=600`);
+    assert.equal(earlier.status, 200);
+    assert.equal(earlier.json.messages.length, 20);
+    assert.match(earlier.json.messages[0].content, /FIRST-MARKER/);
+
+    const exported = await api("POST", `/api/sessions/${encodeURIComponent(name)}/export`, {});
+    assert.equal(exported.status, 200);
+    const markdown = readFileSync(exported.json.path, "utf8");
+    assert.match(markdown, /FIRST-MARKER/);
+    assert.match(markdown, /LAST-MARKER/);
+  });
+
   test("任务运行接口返回最新运行结果，供任务详情刷新展示", async () => {
     const reportPath = join(tmpRoot, "Downloads", "weekly-report.md");
     mkdirSync(dirname(reportPath), { recursive: true });
@@ -192,6 +255,44 @@ describe("Dashboard 回归护栏", () => {
     assert.equal(previewReport.status, 200);
     assert.equal(previewReport.json.filename, "weekly-report.md");
     assert.match(previewReport.json.content, /# Weekly/);
+  });
+
+  test("排队内容由服务端持久化接口管理，并透传稳定请求编号", async () => {
+    const queues = new Map();
+    let submitted = null;
+    const queueCtx = {
+      listPromptQueue: (scope) => queues.get(scope) ?? [],
+      upsertPromptQueueItem: (scope, item) => {
+        const current = queues.get(scope) ?? [];
+        const next = [...current.filter((entry) => entry.id !== item.id), item];
+        queues.set(scope, next);
+        return { ok: true, item, items: next };
+      },
+      removePromptQueueItem: (scope, id) => {
+        const next = id ? (queues.get(scope) ?? []).filter((entry) => entry.id !== id) : [];
+        queues.set(scope, next);
+        return { ok: true, items: next };
+      },
+      submitPrompt: async (prompt, session, images, opts) => {
+        submitted = { prompt, session, images, opts };
+        return { accepted: true, requestId: opts.requestId, turnId: "turn-queue-1" };
+      },
+    };
+
+    const item = { id: "queued-stable-1", text: "queued prompt", images: [], status: "queued", createdAt: 1 };
+    const stored = await api("POST", "/api/prompt-queue", { scope: "workspace-a", item }, queueCtx);
+    assert.equal(stored.status, 200);
+    const listed = await api("GET", "/api/prompt-queue?scope=workspace-a", null, queueCtx);
+    assert.equal(listed.status, 200);
+    assert.equal(listed.json.items[0].id, item.id);
+
+    const sent = await api("POST", "/api/submit", { prompt: item.text, requestId: item.id }, queueCtx);
+    assert.equal(sent.status, 202);
+    assert.equal(submitted.opts.requestId, item.id);
+
+    const removed = await api("DELETE", "/api/prompt-queue", { scope: "workspace-a", id: item.id }, queueCtx);
+    assert.equal(removed.status, 200);
+    assert.equal(removed.json.items.length, 0);
   });
 
   test("产物 API 只解析工作区或已登记的生成文件，并支持预览与另存", async () => {
@@ -284,6 +385,194 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /else if \(gotFullPaths && fullPaths\.length > 0\)/);
     assert.match(app, /function protectWindowsPathBackslashesForMarkdown/);
     assert.match(app, /renderMessageBody\(msg\.text, role\)/);
+  });
+
+  test("聊天输入不会因内联产物选择回调触发历史消息列表重渲染", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(app, /const selectArtifactMessage = q2\(\(msg\) => \{/);
+    assert.match(app, /onSelectArtifactMessage=\$\{selectArtifactMessage\}/);
+    assert.doesNotMatch(app, /onSelectArtifactMessage=\$\{\(msg\) => \{/);
+  });
+
+  test("长会话默认只渲染最近消息，并可继续加载和跳转历史", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(app, /CHAT_INITIAL_RENDER_COUNT = 30/);
+    assert.match(app, /const hiddenCount = Math\.max\(0, allMessages\.length - visibleCount\)/);
+    assert.match(app, /allMessages\.slice\(hiddenCount\)/);
+    assert.match(app, /setVisibleMessageCount\(\(count\) => Math\.max\(count, messages\.length - index\)\)/);
+    assert.match(app, /const loadEarlierMessages = q2\((?:async )?\(\) => \{/);
+    assert.match(app, /onLoadEarlier=\$\{loadEarlierMessages\}/);
+    assert.doesNotMatch(app, /onLoadEarlier=\$\{\(\) =>/);
+  });
+
+  test("千条会话恢复使用 UI 窗口分页，普通输入不触发顶层逐字渲染", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const inputHandler = /const onInput = q2\([\s\S]*?\n  \);/.exec(app)?.[0] ?? "";
+
+    assert.match(app, /CHAT_MESSAGE_PAGE_SIZE = 60/);
+    assert.match(app, /CHAT_TOP_LOAD_THRESHOLD = 96/);
+    assert.match(app, /totalMessages/);
+    assert.match(app, /api\(`\/messages\?limit=\$\{CHAT_MESSAGE_PAGE_SIZE\}&offset=\$\{messages\.length\}`\)/);
+    assert.match(app, /captureChatScrollAnchor/);
+    assert.match(app, /restoreChatScrollAnchor/);
+    assert.match(app, /scrollbarDraggingRef/);
+    assert.match(app, /loadEarlierMessagesRef/);
+    assert.match(app, /topLoadArmedRef/);
+    assert.match(app, /已显示 \$\{renderedMessages\.length\} \/ 共 \$\{displayTotal\} 条/);
+    assert.match(app, /const inputValueRef = A2/);
+    assert.match(inputHandler, /inputValueRef\.current = v3/);
+    assert.doesNotMatch(inputHandler, /setInput\(v3\)/);
+    assert.match(launcher, /DASHBOARD_MESSAGE_WINDOW = 60/);
+    assert.match(launcher, /messages\.slice\(-DASHBOARD_MESSAGE_WINDOW\)/);
+    assert.match(launcher, /await readFile\(sessionFile, "utf8"\)/);
+    assert.doesNotMatch(launcher, /const raw = readFileSync\(sessionFile, "utf8"\)/);
+    assert.doesNotMatch(css, /\.chat-msg\s*\{[\s\S]*?content-visibility:\s*auto/);
+    assert.doesNotMatch(css, /contain-intrinsic-size:\s*auto 120px/);
+    assert.doesNotMatch(css, /\.chat-msg\s*\{[\s\S]*?animation:\s*message-enter/);
+  });
+
+  test("长会话阅读历史时实时消息不会挤掉当前窗口，启动错误不会改变 Hook 数量", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const bootErrorReturn = app.indexOf("if (bootError) {");
+    const finalChatHook = app.indexOf("loadEarlierMessagesRef.current = loadEarlierMessages;");
+
+    assert.ok(bootErrorReturn > finalChatHook);
+    assert.match(app, /const preserveVisibleHistoryOnAppend = q2\(\(\) => \{/);
+    assert.match(app, /if \(!shouldAutoScroll\.current\) setVisibleMessageCount\(\(count\) => count \+ 1\)/);
+    assert.match(app, /if \(!cur\) preserveVisibleHistoryOnAppend\(\)/);
+    assert.match(app, /if \(!replacedStreaming\) preserveVisibleHistoryOnAppend\(\)/);
+  });
+
+  test("排队提交使用服务端存储和稳定请求编号", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(app, /api\(`\/prompt-queue\?scope=\$\{encodeURIComponent\(queueStorageKey\)\}`\)/);
+    assert.match(app, /var body = \{ prompt: text, requestId \}/);
+    assert.match(app, /persistQueuedPrompt\(item\)/);
+    assert.doesNotMatch(app, /localStorage\.setItem\(queueStorageKey/);
+    assert.match(app, /queuePaused \|\| busy/);
+    assert.match(app, /setQueuePaused\(true\)/);
+    assert.match(app, /chat\.queueResume/);
+    assert.match(app, /operation\?\.state === "stopping"/);
+    assert.match(app, /dash\.operation\?\.state === "cancelled"/);
+  });
+
+  test("五类交互卡片校验 gate、避免重复提交并保持计划事务一致", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const server = readFileSync(serverUrl, "utf8");
+    const planTools = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
+
+    assert.match(app, /\.\.\.\(gateModal \? \{ gateId \} : \{\}\)/);
+    assert.match(app, /const \[modalResolving, setModalResolving\]/);
+    assert.match(app, /disabled=\$\{!feedback\.trim\(\)\}/);
+    assert.match(app, /disabled=\$\{!reviseText\.trim\(\)\}/);
+    assert.match(app, /renderer\.html = \(\{ text \}\) => escapeHtml\(text\)/);
+    assert.match(css, /\.modal-resolving/);
+    assert.match(css, /\.modal-step-risk-med/);
+
+    assert.match(server, /modal gateId must be a non-negative integer/);
+    assert.match(server, /status: 409, body: \{ error: "modal is no longer active" \}/);
+    assert.match(launcher, /const queuedModals = \[\]/);
+    assert.match(launcher, /activeGateId !== gateId/);
+    assert.match(launcher, /pendingPlanRevision = \{ reason, remainingSteps, summary \}/);
+    assert.match(launcher, /if \(resolved && choice === "approve"\) activatePendingPlan\(\)/);
+    assert.match(launcher, /if \(resolved && choice !== "approve"\) pendingPlan = null/);
+    assert.match(launcher, /stepId .* is not in the active plan/);
+    assert.match(app, /dash\.kind === "plan-activated"/);
+    assert.match(planTools, /onPlanSubmitted\?\.\(plan, steps, summary\)/);
+    assert.match(planTools, /completed: checkpoint\?\.completed/);
+    assert.match(planTools, /never repeat or translate the title/);
+  });
+
+  test("选择卡片为可变长度 ID 保留列间距并安全换行", () => {
+    const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
+
+    assert.match(css, /grid-template-columns:\s*minmax\(28px, max-content\) minmax\(0, 1fr\)/);
+    assert.doesNotMatch(css, /grid-template-columns:\s*28px 1fr/);
+    assert.match(css, /\.modal-choice-id\s*\{[\s\S]*?min-width:\s*28px;[\s\S]*?max-width:\s*96px;[\s\S]*?overflow-wrap:\s*anywhere;/);
+    assert.match(css, /\.modal-choice-title\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?overflow-wrap:\s*anywhere;/);
+    assert.match(css, /\.modal-choice-summary\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?grid-column:\s*2;[\s\S]*?overflow-wrap:\s*anywhere;/);
+  });
+
+  test("完成任务条会自动退场，配额耗尽的未完成计划会续跑并保留人工入口", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const loop = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
+
+    assert.match(app, /todos\.every\(\(todo\) => todo\.status === "completed"\)/);
+    assert.match(app, /setTimeout\(\(\) => \{\s*setTodos[\s\S]*?\}, 5e3\)/);
+    assert.match(app, /dash\.kind === "plan-continuation-needed"/);
+    assert.match(app, /继续执行当前未完成计划/);
+    assert.match(app, /class="plan-continuation-bar"/);
+    assert.match(css, /\.plan-continuation-bar/);
+
+    assert.match(loop, /forcedSummaryReason: opts\.reason/);
+    assert.match(launcher, /decidePlanContinuation\(/);
+    assert.match(launcher, /MAX_PLAN_AUTO_CONTINUATIONS = 2/);
+    assert.match(launcher, /kind: "plan-continuation-needed"/);
+    assert.match(launcher, /incompleteFinal: !budgetForcedSummary && sawToolActivity/);
+    assert.match(launcher, /kind: "assistant_final",\s*id: assistantId,\s*text: assistantText/);
+  });
+
+  test("OfficeCLI 批处理保护在所有模式生效并保留运行时纠偏", () => {
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const loop = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
+    const systemPrompt = readFileSync(new URL("../lib/system-prompt.mjs", import.meta.url), "utf8");
+    const officeSkill = readFileSync(new URL("../../bootstrap-skills/officecli/SKILL.md", import.meta.url), "utf8");
+
+    assert.match(launcher, /validateOfficecliInvocation/);
+    assert.match(launcher, /wrapMcpToolsWithRecovery/);
+    assert.match(systemPrompt, /in any work mode/);
+    assert.match(systemPrompt, /never join multiple add\/set commands with newlines/);
+    assert.match(loop, /OfficeCLI efficiency guard/);
+    assert.match(officeSkill, /"command":"add"/);
+    assert.doesNotMatch(officeSkill, /"op":"add"/);
+  });
+
+  test("活动会话和配置性重建都会保留模型上下文", () => {
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(launcher, /const modelEntries = activeEntriesForModel\(entries\)/);
+    assert.match(launcher, /loop\.log\.compactInPlace\(modelEntries\)/);
+    assert.match(launcher, /function rebuildLoopPreservingContext/);
+    assert.match(launcher, /rebuilt\.log\.compactInPlace\(priorEntries\)/);
+    assert.match(launcher, /busy && loop\?\.model !== modelConfig\.model/);
+    assert.match(launcher, /const appliedSwitch = commitPendingModelSwitch\(\)/);
+    assert.match(launcher, /for \(const model of runtimeContextCapModels\) delete DEEPSEEK_CONTEXT_TOKENS\[model\]/);
+    assert.match(launcher, /for \(const model of provider\?\.models \?\? \[\]\) applyContextCap\(model\.id, cfg\)/);
+    assert.match(app, /将在当前回答结束后切换，保留/);
+    assert.match(app, /已切换到 \$\{switched\.model\}，保留/);
+    assert.match(app, /stats\.estimatedContextTokens \?\? stats\.lastPromptTokens/);
+    assert.match(app, /stats\.contextFoldTokens/);
+    assert.doesNotMatch(app, /class="fold-mark" style="left:50%"/);
+  });
+
+  test("刷新和加载历史会话只恢复稳定对话，模型仍保留完整工具上下文", () => {
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const activeSession = readFileSync(new URL("../lib/active-session.mjs", import.meta.url), "utf8");
+
+    assert.match(activeSession, /entry\.role === "tool"\) continue/);
+    assert.match(activeSession, /entry\.tool_calls/);
+    assert.match(activeSession, /系统自动续跑/);
+    assert.doesNotMatch(activeSession, /reasoning:\s*entry\.reasoning/);
+    assert.match(launcher, /const dashboardEntries = activeEntriesForDashboard\(entries\)/);
+    assert.match(launcher, /loop\.adoptHistory\?\.\(modelEntries, loop\.model\)/);
+    assert.match(launcher, /for \(const entry of dashboardEntries\)/);
+  });
+
+  test("错过的定时任务会在启动后补跑，对话忙时进入延迟重试", () => {
+    const launcher = readFileSync(launcherUrl, "utf8");
+    assert.match(launcher, /task\.enabled && task\.missedRunAt/);
+    assert.match(launcher, /triggerSchedule\(task\.id, \{ manual: false, catchUp: true \}\)/);
+    assert.match(launcher, /status: manual \? "rejected" : shouldDefer \? "deferred" : "skipped"/);
+    assert.match(launcher, /SCHEDULE_BUSY_RETRY_MS/);
+    assert.match(launcher, /refreshScheduleTimer\(task\)/);
+    assert.match(launcher, /scheduleRunControllers/);
+    assert.match(launcher, /MAX_CONCURRENT_SCHEDULE_RUNS/);
   });
 
   test("file-access-rescue 兜底技能保持可索引，并要求先准备本地文档", () => {

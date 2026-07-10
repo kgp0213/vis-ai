@@ -2226,17 +2226,18 @@ function defaultConfigPath() {
 // tool invocation's permission checks (loadEditMode, loadProjectShellAllowed,
 // ...); statSync is 1-2 orders of magnitude cheaper than readFileSync+JSON.parse.
 // writeConfig updates mtime on disk, so the next read naturally invalidates.
-var _configCache = { path: null, mtimeMs: -1, parsed: {} };
+var _configCache = { path: null, mtimeMs: -1, ctimeMs: -1, size: -1, parsed: {} };
 function readConfig(path = defaultConfigPath()) {
   try {
-    const mtimeMs = statSync(path).mtimeMs;
-    if (_configCache.path === path && _configCache.mtimeMs === mtimeMs) {
+    const fileStat = statSync(path);
+    const mtimeMs = fileStat.mtimeMs;
+    if (_configCache.path === path && _configCache.mtimeMs === mtimeMs && _configCache.ctimeMs === fileStat.ctimeMs && _configCache.size === fileStat.size) {
       return _configCache.parsed;
     }
     const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
-      _configCache = { path, mtimeMs, parsed };
+      _configCache = { path, mtimeMs, ctimeMs: fileStat.ctimeMs, size: fileStat.size, parsed };
       return parsed;
     }
   } catch {
@@ -2276,6 +2277,8 @@ function writeConfig(cfg, path = defaultConfigPath()) {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
   atomicWriteSync(path, JSON.stringify(cfg, null, 2), tmp);
+  const fileStat = statSync(path);
+  _configCache = { path, mtimeMs: fileStat.mtimeMs, ctimeMs: fileStat.ctimeMs, size: fileStat.size, parsed: cfg };
 }
 function loadLanguage(path = defaultConfigPath()) {
   return readConfig(path).lang;

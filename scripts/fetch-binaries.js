@@ -11,7 +11,7 @@
  *   node scripts/fetch-binaries.js --force   # re-download even if present
  *
  * After cloning the repo on a fresh machine, run this once before
- * `npx tauri dev` / `npx tauri build` so the bundled server can start.
+ * This is an explicitly authorized maintenance tool, never a build step.
  *
  * On Linux, node is expected from the system (apt/pacman/nvm); this script
  * only fetches officecli.exe on Windows. See README "Ubuntu 构建" section.
@@ -155,15 +155,9 @@ async function fetchOfficecli() {
     return;
   }
 
-  // officecli.exe is a vendored binary with no public download URL.
-  // If you have it from a previous install, copy it manually:
-  //   copy "%LOCALAPPDATA%\Visionox\resources\server\officecli.exe" src-tauri\resources\server\
   console.error("⚠ officecli.exe is a vendored binary with no public download source.");
-  console.error("  To obtain it, either:");
-  console.error("  1. Copy from an existing Visionox install:");
-  console.error('     copy "%LOCALAPPDATA%\\Visionox\\resources\\server\\officecli.exe" src-tauri\\resources\\server\\');
-  console.error("  2. Download from your internal release artifacts.");
-  console.error("  The app will run without it — Office document features will be disabled.");
+  console.error("  Supply the approved local source artifact before building.");
+  console.error("  Normal builds never copy it from an installed application or download it.");
 }
 
 // ── Main ─────────────────────────────────────────────────────────
@@ -171,7 +165,7 @@ console.log(`fetch-binaries: platform=${platform()}/${arch()}, force=${FORCE}\n`
 try {
   await fetchNode();
   await fetchOfficecli();
-  console.log("\n✓ All binaries ready. You can now run `npx tauri dev` or `npx tauri build`.");
+  console.log("\n✓ Runtime binaries are present. Use the repository's guarded release build command.");
 } catch (err) {
   console.error(`\n✗ ${err.message}`);
   process.exit(1);

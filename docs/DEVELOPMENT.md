@@ -1,4 +1,4 @@
-# Visionox 开发指南
+# Visionox-Whale 开发指南
 
 > 面向二次开发者：环境搭建、构建、调试与编码规范。
 
@@ -24,21 +24,24 @@ npm install
 # （这两个二进制文件被 gitignore，需单独获取）
 
 # 开发测试：只构建 exe，不生成安装包
-npx tauri build --no-bundle
-# → src-tauri/target/release/visionox-desktop.exe
+npm run tauri:build -- --no-bundle
+# → src-tauri/target/release/visionox-whale.exe
 
 # 需要安装包时再显式指定 NSIS
-npm run tauri:build -- --bundles nsis
-# → src-tauri/target/release/bundle/nsis/Visionox_x.x.x_x64-setup.exe
+npm run bundle:nsis
+# → src-tauri/target/release/bundle/nsis/Visionox-Whale_x.x.x_x64-setup.exe
 ```
 
 ### 构建注意事项
 
-- `tauri.conf.json` 当前 `bundle.targets = "all"`；开发验证优先使用 `npx tauri build --no-bundle`，避免生成安装包。
-- `npm run tauri:build` 会先执行 `npm run check:bundle-patches`，防止上游包恢复后丢失本地 Dashboard/API 补丁。
+- `tauri.conf.json` 当前 `bundle.targets = "all"`；开发验证优先使用 `npm run tauri:build -- --no-bundle`，避免生成安装包。
+- `npm run tauri:build` 会临时生成裁剪后的运行时暂存目录并执行 `npm run check:bundle-patches`；Tauri 随后直接生成唯一的 `target/release/resources/` 运行时资源树。暂存目录无论构建成功或失败都会自动删除。
+- 构建包装器设置 npm 与 Cargo 离线模式；本地缓存、依赖或运行时资源缺失时直接失败，不允许构建期间下载。
 - `Cargo.toml` 中 `tauri` 须声明 `custom-protocol` feature
-- 修改 `lib.rs` 或 `src/index.html` 后建议 `cargo clean` 再编译
-- 修改 `launcher.mjs` 或 chunk 文件后需手动同步到 `target/release/` 再打包
+- 修改 `lib.rs` 或 `src/index.html` 后使用规范命令重新构建；只有确认 Cargo 缓存损坏时才清理 release 缓存。
+- 修改 `launcher.mjs`、Dashboard 或 chunk 文件后必须通过 `npm run tauri:build` 构建，确保构建前暂存和 Tauri 资源复制都执行。不要用原始 `cargo build` 验证交付产物，它不会准备运行时资源。
+- 非测试 Rust 代码不得读取 `CARGO_MANIFEST_DIR` 或任何绝对项目路径来补拷运行时资源。运行实例只读取自身同级的 `resources/`，缺失即视为构建失败。
+- `npm run release:check` 的 Rust 测试产物写入系统临时目录并自动删除，不会生成或使用项目内的 `target/debug`。
 - `scripts/restore-visionox-pkg.js` 是维护/重拉上游 reasonix 包的工具，不是常规构建步骤。普通 `npm run restore:pkg` 已禁用；必须在备份并准备重新迁移补丁后，才使用 `npm run restore:pkg:danger -- --force`。
 
 ---
@@ -50,8 +53,8 @@ npm run tauri:build -- --bundles nsis
 node src-tauri/resources/server/launcher.mjs --port 28980
 
 # 查看诊断日志
-type launcher-diag.log    # Rust 侧
-type launcher-stderr.log  # Node.js 侧
+type %USERPROFILE%\.visionox\logs\visionox-whale.log
+type %USERPROFILE%\.visionox\logs\visionox-server-stderr.log
 ```
 
 ### 常见错误
@@ -86,9 +89,9 @@ type launcher-stderr.log  # Node.js 侧
 
 ### 编译检查
 
-- 修改 `.rs` 后执行 `cargo check`
-- 提交前执行 `cargo fmt && cargo clippy -- -D warnings`
-- 手动编译和 `npx tauri build` 必须使用相同的 tauri features（当前：`["tray-icon", "custom-protocol"]`）
+- 修改 `.rs` 后执行 `npm run tauri:build -- --no-bundle`，只验证 release 目标
+- 提交前执行 `cargo fmt --check`；需要 Clippy 时显式使用 `cargo clippy --release -- -D warnings`
+- 交付验证只使用 `npm run tauri:build -- --no-bundle`，不要绕过构建包装器
 
 ### 安全
 
@@ -137,4 +140,4 @@ type launcher-stderr.log  # Node.js 侧
 
 ---
 
-*最后更新：2026-07-06 | 适用：Visionox Desktop 1.20.0*
+*最后更新：2026-07-11 | 适用：Visionox-Whale 1.28.0*

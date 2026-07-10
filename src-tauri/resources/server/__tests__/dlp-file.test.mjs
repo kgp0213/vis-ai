@@ -185,6 +185,27 @@ test("resolveReadablePathForDlp reports encrypted-file failure when script is mi
   });
 });
 
+test("resolveReadablePathForDlp aborts a running compatibility process promptly", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const file = join(dir, "slow-report.pdf");
+    const scriptPath = join(dir, "slow-visionox-file.mjs");
+    await writeFile(file, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    await writeFile(scriptPath, "setTimeout(() => {}, 30000);", "utf8");
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = resolveReadablePathForDlp(file, {
+      cfg: { dlp: { mode: "on", pythonPath: process.execPath, scriptPath, timeoutMs: 30000 } },
+      env: { homeDir: dir, projectRoot: dir },
+      logger: null,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(pending, (err) => err?.name === "AbortError");
+    assert.ok(Date.now() - started < 1500);
+  });
+});
+
 test("wrapToolsPathArgsWithDlp keeps plaintext MCP path arguments unchanged", async () => {
   await withTempDir(async (dir) => {
     await writeFile(join(dir, "plain.txt"), "hello\n", "utf8");

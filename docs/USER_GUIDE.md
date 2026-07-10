@@ -1,6 +1,6 @@
-# Visionox 用户使用指南
+# Visionox-Whale 用户使用指南
 
-> 适用版本：Visionox Desktop ≥ 1.10.0
+> 适用版本：Visionox-Whale 1.28.0
 
 ---
 

@@ -1,8 +1,15 @@
 # Visionox 更新日志
 
-> 本文档记录 Visionox Desktop 各版本面向用户的功能变更。
+> 本文档记录 Visionox-Whale 及此前 Visionox Desktop 各版本面向用户的功能变更。
 
 ---
+
+## v1.28.0
+
+- 产品名称统一为 Visionox-Whale，可执行文件更名为 `visionox-whale.exe`。
+- 保留 `com.visionox.desktop` 与 `%USERPROFILE%\.visionox\`，兼容已有会话、设置、记忆和任务数据。
+- release 与 NSIS 构建改为离线、单一资源源和逐文件 SHA256 完整性校验。
+- NSIS 安装包名称调整为 `Visionox-Whale_1.28.0_x64-setup.exe`。
 
 ## v1.11.0（开发中）
 

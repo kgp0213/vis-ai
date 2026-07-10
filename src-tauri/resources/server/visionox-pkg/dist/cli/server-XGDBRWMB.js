@@ -114,7 +114,9 @@ import { createServer } from "http";
 
 // src/server/api/events.ts
 var PING_INTERVAL_MS = 25e3;
-function handleEvents(req, res, ctx) {
+function handleEvents(req, res, ctx, query = new URLSearchParams()) {
+  const channels = new Set(String(query.get("channels") || "events,overview,health").split(",").map((value) => value.trim()).filter(Boolean));
+  const wants = (channel) => channels.has(channel);
   if (!ctx.subscribeEvents) {
     res.writeHead(503, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "event stream requires an attached dashboard session." }));
@@ -157,24 +159,24 @@ function handleEvents(req, res, ctx) {
     } catch {
     }
   };
-  pushOverview();
-  pushHealth();
-  pushLogs();
-  const overviewInterval = setInterval(pushOverview, 5e3);
-  const healthInterval = setInterval(pushHealth, 5e3);
-  const logsInterval = setInterval(pushLogs, 2e3);
-  overviewInterval.unref?.();
-  healthInterval.unref?.();
-  logsInterval.unref?.();
-  if (ctx.isBusy) writeEvent({ kind: "busy-change", busy: ctx.isBusy() });
-  const unsubscribe = ctx.subscribeEvents(writeEvent);
+  if (wants("overview")) pushOverview();
+  if (wants("health")) pushHealth();
+  if (wants("logs")) pushLogs();
+  const overviewInterval = wants("overview") ? setInterval(pushOverview, 5e3) : null;
+  const healthInterval = wants("health") ? setInterval(pushHealth, 5e3) : null;
+  const logsInterval = wants("logs") ? setInterval(pushLogs, 2e3) : null;
+  overviewInterval?.unref?.();
+  healthInterval?.unref?.();
+  logsInterval?.unref?.();
+  if (wants("events") && ctx.isBusy) writeEvent({ kind: "busy-change", busy: ctx.isBusy() });
+  const unsubscribe = wants("events") ? ctx.subscribeEvents(writeEvent) : () => {};
   const ping = setInterval(() => writeEvent({ kind: "ping" }), PING_INTERVAL_MS);
   ping.unref?.();
   const cleanup = () => {
     clearInterval(ping);
-    clearInterval(overviewInterval);
-    clearInterval(healthInterval);
-    clearInterval(logsInterval);
+    if (overviewInterval) clearInterval(overviewInterval);
+    if (healthInterval) clearInterval(healthInterval);
+    if (logsInterval) clearInterval(logsInterval);
     try {
       unsubscribe();
     } catch {
@@ -287,9 +289,34 @@ async function handleAbort(method, _rest, _body, ctx) {
       body: { error: "abort requires an attached dashboard session." }
     };
   }
-  ctx.abortTurn();
+  const result = await ctx.abortTurn();
   ctx.audit?.({ ts: Date.now(), action: "abort-turn" });
-  return { status: 202, body: { aborted: true } };
+  return { status: result?.accepted === false ? 200 : 202, body: { aborted: result?.accepted !== false, ...result } };
+}
+
+async function handleBackgroundJobs(method, rest, _body, ctx) {
+  if (method === "GET" && rest.length === 0) {
+    const jobs = ctx.listBackgroundJobs ? ctx.listBackgroundJobs() : [];
+    return { status: 200, body: { jobs } };
+  }
+  if (method === "GET" && rest.length === 1) {
+    if (!ctx.getBackgroundJob) return { status: 503, body: { error: "background job output is not available" } };
+    const id = Number.parseInt(rest[0], 10);
+    if (!Number.isInteger(id) || id < 1) return { status: 400, body: { error: "invalid background job id" } };
+    const job = ctx.getBackgroundJob(id);
+    if (!job) return { status: 404, body: { error: "background job not found" } };
+    return { status: 200, body: { job } };
+  }
+  if (method === "DELETE" && rest.length === 1) {
+    if (!ctx.stopBackgroundJob) return { status: 503, body: { error: "background job control is not available" } };
+    const id = Number.parseInt(rest[0], 10);
+    if (!Number.isInteger(id) || id < 1) return { status: 400, body: { error: "invalid background job id" } };
+    const job = await ctx.stopBackgroundJob(id);
+    if (!job) return { status: 404, body: { error: "background job not found" } };
+    ctx.audit?.({ ts: Date.now(), action: "background-job-stop", payload: { id } });
+    return { status: 200, body: { stopped: true, job } };
+  }
+  return { status: 405, body: { error: "GET list or DELETE /:id only" } };
 }
 
 // src/server/api/checkpoint-create.ts
@@ -796,15 +823,27 @@ function dirSize(path) {
   }
   return { path, exists: true, fileCount, totalBytes };
 }
+var HEALTH_FS_CACHE_TTL_MS = 15e3;
+var healthFsCache = { ts: 0, value: null };
+function healthFilesystemSnapshot() {
+  const now = Date.now();
+  if (healthFsCache.value && now - healthFsCache.ts < HEALTH_FS_CACHE_TTL_MS) return healthFsCache.value;
+  const home = homedir();
+  const visionoxHome = join4(home, ".visionox");
+  const value = {
+    visionoxHome,
+    sessionsStat: dirSize(join4(visionoxHome, "sessions")),
+    memoryStat: dirSize(join4(visionoxHome, "memory")),
+    semanticStat: dirSize(INDEX_DIR_NAME)
+  };
+  healthFsCache = { ts: now, value };
+  return value;
+}
 async function handleHealth(method, _rest, _body, ctx) {
   if (method !== "GET") {
     return { status: 405, body: { error: "GET only" } };
   }
-  const home = homedir();
-  const visionoxHome = join4(home, ".visionox");
-  const sessionsStat = dirSize(join4(visionoxHome, "sessions"));
-  const memoryStat = dirSize(join4(visionoxHome, "memory"));
-  const semanticStat = dirSize(INDEX_DIR_NAME);
+  const { visionoxHome, sessionsStat, memoryStat, semanticStat } = healthFilesystemSnapshot();
   let usageBytes = 0;
   if (existsSync2(ctx.usageLogPath)) {
     try {
@@ -812,7 +851,6 @@ async function handleHealth(method, _rest, _body, ctx) {
     } catch {
     }
   }
-  const sessions = listSessions();
   return {
     status: 200,
     body: {
@@ -839,7 +877,7 @@ async function handleHealth(method, _rest, _body, ctx) {
         path: ctx.usageLogPath,
         bytes: usageBytes
       },
-      jobs: ctx.jobs ? ctx.jobs.list().length : null,
+      jobs: ctx.jobs ? ctx.jobs.listMetadata?.().length ?? ctx.jobs.runningCount?.() ?? null : null,
       cwd: ctx.getCurrentCwd?.() ?? null,
       buildDate: new Date().getHours().toString().padStart(2, "0")
     }
@@ -1250,6 +1288,15 @@ async function handleSchedules(method, rest, body, ctx) {
     if (!result.ok) return { status: 400, body: { error: result.error || "failed to run schedule" } };
     ctx.audit?.({ ts: Date.now(), action: "schedule-run", payload: { id, accepted: result.accepted } });
     return { status: result.accepted ? 202 : 409, body: result.accepted ? result : { ...result, error: result.reason || "scheduled task was not accepted" } };
+  }
+  if (method === "POST" && rest[1] === "cancel") {
+    if (!ctx.cancelScheduleRun) {
+      return { status: 503, body: { error: "scheduled task cancellation is not wired" } };
+    }
+    const result = await ctx.cancelScheduleRun(id);
+    if (!result.ok) return { status: 409, body: { ...result, error: result.error || "failed to cancel schedule" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-cancel", payload: { id, runId: result.runId } });
+    return { status: 202, body: result };
   }
   if (method === "DELETE" && rest.length === 1) {
     if (!ctx.deleteSchedule) {
@@ -1812,16 +1859,27 @@ async function handleModeMemory(method, rest, body, ctx, query = new URLSearchPa
 }
 
 // src/server/api/messages.ts
-async function handleMessages(method, _rest, _body, ctx) {
+async function handleMessages(method, _rest, _body, ctx, query = new URLSearchParams()) {
   if (method !== "GET") {
     return { status: 405, body: { error: "GET only" } };
   }
   const messages = ctx.getMessages ? ctx.getMessages() : [];
+  const parsedLimit = Number.parseInt(query.get("limit") || "200", 10);
+  const parsedOffset = Number.parseInt(query.get("offset") || "0", 10);
+  const limit = Math.min(500, Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 200));
+  const offset = Math.max(0, Number.isFinite(parsedOffset) ? parsedOffset : 0);
+  const end = Math.max(0, messages.length - offset);
+  const start = Math.max(0, end - limit);
+  const page = messages.slice(start, end);
   return {
     status: 200,
     body: {
-      messages,
-      busy: ctx.isBusy ? ctx.isBusy() : false
+      messages: page,
+      totalMessages: messages.length,
+      startIndex: start,
+      hasMore: start > 0,
+      busy: ctx.isBusy ? ctx.isBusy() : false,
+      operation: ctx.getActiveOperation ? ctx.getActiveOperation() : null
     }
   };
 }
@@ -1872,7 +1930,11 @@ async function handleModal(method, rest, body, ctx) {
   }
   if (method === "POST" && rest[0] === "resolve") {
     const parsed = parseBody7(body);
-    const { kind, choice, text } = parsed;
+    const { kind, choice, text, gateId } = parsed;
+    const gateModal = kind === "shell" || kind === "choice" || kind === "plan" || kind === "checkpoint" || kind === "revision";
+    if (gateModal && (!Number.isInteger(gateId) || gateId < 0)) {
+      return { status: 400, body: { error: "modal gateId must be a non-negative integer" } };
+    }
     if (kind === "shell") {
       if (!ctx.resolveShellConfirm) {
         return { status: 503, body: { error: "shell modal resolution not wired" } };
@@ -1883,7 +1945,9 @@ async function handleModal(method, rest, body, ctx) {
           body: { error: "shell choice must be run_once / always_allow / deny" }
         };
       }
-      ctx.resolveShellConfirm(choice);
+      if (ctx.resolveShellConfirm(choice, gateId) === false) {
+        return { status: 409, body: { error: "modal is no longer active" } };
+      }
       return { status: 200, body: { resolved: true } };
     }
     if (kind === "choice") {
@@ -1895,15 +1959,21 @@ async function handleModal(method, rest, body, ctx) {
         return { status: 400, body: { error: "choice must be an object with a kind field" } };
       }
       if (c.kind === "pick" && typeof c.optionId === "string") {
-        ctx.resolveChoiceConfirm({ kind: "pick", optionId: c.optionId });
+        if (ctx.resolveChoiceConfirm({ kind: "pick", optionId: c.optionId }, gateId) === false) {
+          return { status: 409, body: { error: "modal is no longer active" } };
+        }
         return { status: 200, body: { resolved: true } };
       }
       if (c.kind === "custom" && typeof c.text === "string") {
-        ctx.resolveChoiceConfirm({ kind: "custom", text: c.text });
+        if (ctx.resolveChoiceConfirm({ kind: "custom", text: c.text }, gateId) === false) {
+          return { status: 409, body: { error: "modal is no longer active" } };
+        }
         return { status: 200, body: { resolved: true } };
       }
       if (c.kind === "cancel") {
-        ctx.resolveChoiceConfirm({ kind: "cancel" });
+        if (ctx.resolveChoiceConfirm({ kind: "cancel" }, gateId) === false) {
+          return { status: 409, body: { error: "modal is no longer active" } };
+        }
         return { status: 200, body: { resolved: true } };
       }
       return { status: 400, body: { error: "unknown choice resolution shape" } };
@@ -1915,8 +1985,10 @@ async function handleModal(method, rest, body, ctx) {
       if (choice !== "approve" && choice !== "refine" && choice !== "cancel") {
         return { status: 400, body: { error: "plan choice must be approve / refine / cancel" } };
       }
+      if (ctx.resolvePlanConfirm(choice, typeof text === "string" && text.trim() ? text : void 0, gateId) === false) {
+        return { status: 409, body: { error: "modal is no longer active" } };
+      }
       if (choice === "cancel") ctx.abortTurn?.();
-      ctx.resolvePlanConfirm(choice, typeof text === "string" && text.trim() ? text : void 0);
       return { status: 200, body: { resolved: true } };
     }
     if (kind === "edit-review") {
@@ -1939,10 +2011,14 @@ async function handleModal(method, rest, body, ctx) {
           body: { error: "checkpoint choice must be continue / revise / stop" }
         };
       }
-      ctx.resolveCheckpointConfirm(
+      if (ctx.resolveCheckpointConfirm(
         choice,
-        typeof text === "string" && text.trim() ? text : void 0
-      );
+        typeof text === "string" && text.trim() ? text : void 0,
+        gateId
+      ) === false) {
+        return { status: 409, body: { error: "modal is no longer active" } };
+      }
+      if (choice === "stop") ctx.abortTurn?.();
       return { status: 200, body: { resolved: true } };
     }
     if (kind === "revision") {
@@ -1952,7 +2028,9 @@ async function handleModal(method, rest, body, ctx) {
       if (choice !== "accept" && choice !== "reject") {
         return { status: 400, body: { error: "revision choice must be accept / reject" } };
       }
-      ctx.resolveReviseConfirm(choice);
+      if (ctx.resolveReviseConfirm(choice, gateId) === false) {
+        return { status: 409, body: { error: "modal is no longer active" } };
+      }
       return { status: 200, body: { resolved: true } };
     }
     if (kind === "picker") {
@@ -2998,31 +3076,117 @@ function isAbortError(err) {
 }
 
 // src/server/api/sessions.ts
-import { existsSync as existsSync8, mkdirSync as mkdirSync8, readFileSync as readFileSync5, writeFileSync as writeFileSync8 } from "fs";
-function parseTranscript(path, maxBytes = 4 * 1024 * 1024) {
-  let raw;
+import { closeSync as closeSync5, createReadStream as createReadStream2, createWriteStream as createWriteStream2, existsSync as existsSync8, fstatSync as fstatSync5, mkdirSync as mkdirSync8, openSync as openSync5, readFileSync as readFileSync5, readSync as readSync5, writeFileSync as writeFileSync8 } from "fs";
+import { createInterface as createInterface2 } from "readline";
+import { once as once2 } from "events";
+function parseTranscriptRecord(line) {
+  if (!line.trim()) return null;
   try {
-    raw = readFileSync5(path, "utf8");
+    const rec = JSON.parse(line);
+    const role = typeof rec.role === "string" ? rec.role : "unknown";
+    const msg = { role };
+    if (typeof rec.content === "string") msg.content = rec.content;
+    else if (rec.content !== void 0) msg.content = JSON.stringify(rec.content);
+    if (typeof rec.tool_name === "string") msg.toolName = rec.tool_name;
+    if (typeof rec.toolName === "string") msg.toolName = rec.toolName;
+    return msg;
+  } catch {
+    return null;
+  }
+}
+function parseTranscript(path, maxBytes = 4 * 1024 * 1024) {
+  let fd;
+  try {
+    fd = openSync5(path, "r");
+    const size = Math.min(fstatSync5(fd).size, Math.max(0, maxBytes));
+    const buffer = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const count = readSync5(fd, buffer, read, size - read, read);
+      if (count <= 0) break;
+      read += count;
+    }
+    let raw = buffer.toString("utf8", 0, read);
+    if (read === size && size < fstatSync5(fd).size) {
+      const lastNewline = raw.lastIndexOf("\n");
+      if (lastNewline >= 0) raw = raw.slice(0, lastNewline + 1);
+    }
+    const out = [];
+    for (const line of raw.split(/\r?\n/)) {
+      const msg = parseTranscriptRecord(line);
+      if (msg) out.push(msg);
+    }
+    return out;
   } catch {
     return [];
-  }
-  if (raw.length > maxBytes) raw = raw.slice(0, maxBytes);
-  const out = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const rec = JSON.parse(line);
-      const role = typeof rec.role === "string" ? rec.role : "unknown";
-      const msg = { role };
-      if (typeof rec.content === "string") msg.content = rec.content;
-      else if (rec.content !== void 0) msg.content = JSON.stringify(rec.content);
-      if (typeof rec.tool_name === "string") msg.toolName = rec.tool_name;
-      if (typeof rec.toolName === "string") msg.toolName = rec.toolName;
-      out.push(msg);
-    } catch {
+  } finally {
+    if (fd !== void 0) {
+      try {
+        closeSync5(fd);
+      } catch {
+      }
     }
   }
-  return out;
+}
+async function readTranscriptPage(path, { limit = 200, offset = 0 } = {}) {
+  const pageLimit = Math.max(1, Math.min(500, Number.parseInt(String(limit), 10) || 200));
+  const pageOffset = Math.max(0, Math.min(100000, Number.parseInt(String(offset), 10) || 0));
+  const capacity = pageLimit + pageOffset;
+  const ring = [];
+  let totalMessages = 0;
+  const input = createReadStream2(path, { encoding: "utf8" });
+  const lines = createInterface2({ input, crlfDelay: Infinity });
+  for await (const line of lines) {
+    const msg = parseTranscriptRecord(line);
+    if (!msg) continue;
+    totalMessages++;
+    ring.push(msg);
+    if (ring.length > capacity) ring.shift();
+  }
+  const end = Math.max(0, ring.length - pageOffset);
+  const start = Math.max(0, end - pageLimit);
+  const messages = ring.slice(start, end);
+  return {
+    messages,
+    totalMessages,
+    offset: pageOffset,
+    limit: pageLimit,
+    startIndex: Math.max(0, totalMessages - pageOffset - messages.length),
+    hasMore: totalMessages > pageOffset + messages.length
+  };
+}
+
+async function writeTranscriptMarkdown(path, filePath, name, meta = {}, messageCount = null) {
+  const output = createWriteStream2(filePath, { encoding: "utf8" });
+  const writeChunk = async (chunk) => {
+    if (!output.write(chunk)) await once2(output, "drain");
+  };
+  const header = [
+    `# ${name}`,
+    "",
+    `- Messages: ${Number.isFinite(messageCount) ? messageCount : "unknown"}`,
+    meta.modeLabel || meta.mode ? `- Mode: ${meta.modeLabel || meta.mode}` : null,
+    meta.workspace ? `- Workspace: ${meta.workspace}` : null,
+    meta.savedAt ? `- Saved: ${meta.savedAt}` : null,
+    "",
+    "---",
+    ""
+  ].filter((line) => line !== null).join("\n");
+  try {
+    await writeChunk(`${header}\n`);
+    const input = createReadStream2(path, { encoding: "utf8" });
+    const lines = createInterface2({ input, crlfDelay: Infinity });
+    for await (const line of lines) {
+      const msg = parseTranscriptRecord(line);
+      if (!msg) continue;
+      await writeChunk(`## ${msg.role || "unknown"}\n\n${String(msg.content || "").trim() || "(empty)"}\n\n`);
+    }
+    output.end();
+    await once2(output, "finish");
+  } catch (err) {
+    output.destroy();
+    throw err;
+  }
 }
 function summarizeTranscript(messages) {
   const firstUser = messages.find((m) => m.role === "user" && String(m.content || "").trim());
@@ -3070,13 +3234,12 @@ function sessionModeInfo(meta = {}) {
     modeDescription: typeof meta.modeDescription === "string" ? meta.modeDescription : ""
   };
 }
-async function handleSessions(method, rest, _body, _ctx) {
+async function handleSessions(method, rest, _body, _ctx, query = new URLSearchParams()) {
   if (method === "POST" && rest[1] === "export") {
     const name2 = decodeURIComponent(rest[0] || "");
     if (!name2) return { status: 400, body: { error: "session name required" } };
     const path = sessionPath(name2);
     if (!existsSync8(path)) return { status: 404, body: { error: `no such session: ${name2}` } };
-    const messages = parseTranscript(path);
     const session = listSessions().find((s) => s.name === name2);
     const meta = session?.meta ?? {};
     const safeName = `${String(name2).replace(/[\\/:*?"<>|]/g, "_")}.md`;
@@ -3084,7 +3247,7 @@ async function handleSessions(method, rest, _body, _ctx) {
     const filePath = join4(dir, safeName);
     try {
       mkdirSync8(dir, { recursive: true });
-      writeFileSync8(filePath, transcriptToMarkdown(name2, messages, meta), "utf8");
+      await writeTranscriptMarkdown(path, filePath, name2, meta, session?.messageCount ?? null);
       return { status: 200, body: { path: filePath, filename: safeName } };
     } catch (err) {
       return { status: 500, body: { error: err.message } };
@@ -3094,6 +3257,7 @@ async function handleSessions(method, rest, _body, _ctx) {
     const name2 = decodeURIComponent(rest[0] || "");
     if (!name2) return { status: 400, body: { error: "session name required" } };
     const ok = deleteSession(name2);
+    if (ok) _ctx.notifySessionsChanged?.("delete", name2);
     return { status: ok ? 200 : 404, body: { deleted: ok } };
   }
   if (method === "POST" && rest[1] === "rename") {
@@ -3108,6 +3272,7 @@ async function handleSessions(method, rest, _body, _ctx) {
     }
     const ok = renameSession(name2, safeNew);
     if (!ok) return { status: 409, body: { error: "rename failed: name conflict, invalid name, or source not found" } };
+    _ctx.notifySessionsChanged?.("rename", safeNew);
     return { status: 200, body: { renamed: true, oldName: name2, newName: safeNew } };
   }
   if (method !== "GET") {
@@ -3140,7 +3305,10 @@ async function handleSessions(method, rest, _body, _ctx) {
   if (!existsSync8(path)) {
     return { status: 404, body: { error: `no such session: ${name}` } };
   }
-  const messages = parseTranscript(path);
+  const page = await readTranscriptPage(path, {
+    limit: query.get("limit") ?? 200,
+    offset: query.get("offset") ?? 0
+  });
   const session = listSessions().find((s) => s.name === name);
   const meta = session?.meta ?? {};
   return {
@@ -3148,8 +3316,13 @@ async function handleSessions(method, rest, _body, _ctx) {
     body: {
       name,
       path,
-      messages,
-      messageCount: messages.length,
+      messages: page.messages,
+      messageCount: page.totalMessages,
+      totalMessages: page.totalMessages,
+      offset: page.offset,
+      limit: page.limit,
+      startIndex: page.startIndex,
+      hasMore: page.hasMore,
       meta,
       ...sessionModeInfo(meta)
     }
@@ -3388,8 +3561,13 @@ async function handleProviders(method, rest, body, ctx) {
     if (!cfg.providers?.find((p) => p.id === parsed.id)) {
       return { status: 404, body: { error: `provider "${parsed.id}" not found` } };
     }
-    await ctx.syncProvider?.(parsed.id);
-    return { status: 200, body: { ok: true } };
+    if (ctx.isBusy?.() && cfg.activeProviderId !== parsed.id) {
+      return { status: 409, body: { error: "请等待当前回答结束后再切换模型服务" } };
+    }
+    const modelSwitch = cfg.activeProviderId === parsed.id
+      ? null
+      : await ctx.syncProvider?.(parsed.id);
+    return { status: 200, body: { ok: true, modelSwitch } };
   }
   if (method === "POST" && rest[0] === "import") {
     let parsed;
@@ -3400,6 +3578,24 @@ async function handleProviders(method, rest, body, ctx) {
     }
     const cfg = readConfig(ctx.configPath);
     const existing = cfg.providers ?? [];
+    for (const provider of incoming) {
+      if (!provider || typeof provider !== "object" || typeof provider.id !== "string" || !provider.id.trim()) {
+        return { status: 400, body: { error: "each provider must have a non-empty id" } };
+      }
+      const prior = existing.find((entry) => entry.id === provider.id);
+      if (provider.models === void 0 && prior) continue;
+      if (!Array.isArray(provider.models) || provider.models.length === 0) {
+        return { status: 400, body: { error: `provider "${provider.id}" must include a non-empty models array` } };
+      }
+      for (const model of provider.models) {
+        if (!model || typeof model.id !== "string" || !model.id.trim()) {
+          return { status: 400, body: { error: `provider "${provider.id}" contains a model without an id` } };
+        }
+        if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) {
+          return { status: 400, body: { error: `model "${model.id}" must declare a positive integer maxContextLength` } };
+        }
+      }
+    }
     for (const p of incoming) {
       if (!p.id || typeof p.id !== "string") continue;
       const idx = existing.findIndex((e) => e.id === p.id);
@@ -3410,10 +3606,9 @@ async function handleProviders(method, rest, body, ctx) {
       }
     }
     cfg.providers = existing;
-    cfg.contextCapTokens = void 0;
     writeConfig(cfg, ctx.configPath);
-    ctx.refreshContextCap?.();
-    return { status: 200, body: { ok: true, count: existing.length } };
+    const refreshed = ctx.refreshContextCap?.() ?? null;
+    return { status: 200, body: { ok: true, count: existing.length, contextPolicy: refreshed?.contextPolicy ?? null } };
   }
   return { status: 404, body: { error: "not found" } };
 }
@@ -3652,19 +3847,20 @@ async function handleSettings(method, _rest, body, ctx) {
       ctx.setWorkspaceDir?.(cfg.workspaceDir);
       changed.push("workspaceDir");
     }
+    let modelSwitch = null;
     if (changed.length > 0) {
       writeConfig(cfg, ctx.configPath);
       if (changed.includes("mode")) ctx.setMode?.(cfg.mode);
       if (langPending) setLanguage(langPending);
-      if (presetPendingLive) ctx.applyPresetLive?.(presetPendingLive);
+      if (presetPendingLive) modelSwitch = ctx.applyPresetLive?.(presetPendingLive) ?? modelSwitch;
       if (effortPendingLive) ctx.applyEffortLive?.(effortPendingLive);
-      if (modelPendingLive) ctx.applyModelLive?.(modelPendingLive);
+      if (modelPendingLive) modelSwitch = ctx.applyModelLive?.(modelPendingLive) ?? modelSwitch;
       if (proNextPending !== null) ctx.setProNextLive?.(proNextPending);
       if (budgetPending !== void 0) ctx.setBudgetUsdLive?.(budgetPending);
       if (changed.includes("contextCapTokens")) ctx.refreshContextCap?.();
       ctx.audit?.({ ts: Date.now(), action: "set-settings", payload: { fields: changed } });
     }
-    return { status: 200, body: { changed } };
+    return { status: 200, body: { changed, modelSwitch } };
   }
   return { status: 405, body: { error: "GET or POST only" } };
 }
@@ -3941,7 +4137,7 @@ async function handleSubmit(method, _rest, body, ctx) {
       }
     };
   }
-  const { prompt, session, images } = parseBody11(body);
+  const { prompt, session, images, requestId } = parseBody11(body);
   let parsedImages = null;
   if (Array.isArray(images) && images.length > 0) {
     parsedImages = images.filter(function(i) { return typeof i === "string" && i.startsWith("data:image/"); });
@@ -3950,7 +4146,9 @@ async function handleSubmit(method, _rest, body, ctx) {
   if (typeof prompt !== "string" || (!prompt.trim() && !parsedImages && !session)) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
-  const result = await ctx.submitPrompt(prompt, session || null, parsedImages);
+  const result = await ctx.submitPrompt(prompt, session || null, parsedImages, {
+    requestId: typeof requestId === "string" ? requestId : null
+  });
   if (!result.accepted) {
     return {
       status: 409,
@@ -4087,6 +4285,26 @@ async function handleOpenUrl(method, _rest, body, ctx) {
   } catch (err) {
     return { status: 500, body: { error: err.message } };
   }
+}
+
+async function handlePromptQueue(method, _rest, body, ctx, query = new URLSearchParams()) {
+  const parsed = parseBody11(body);
+  const scope = String(query.get("scope") || parsed.scope || "default");
+  if (method === "GET") {
+    if (!ctx.listPromptQueue) return { status: 503, body: { error: "prompt queue is not available" } };
+    return { status: 200, body: { items: ctx.listPromptQueue(scope) } };
+  }
+  if (method === "POST") {
+    if (!ctx.upsertPromptQueueItem) return { status: 503, body: { error: "prompt queue is not available" } };
+    const result = ctx.upsertPromptQueueItem(scope, parsed.item);
+    return result.ok ? { status: 200, body: result } : { status: 400, body: { error: result.error || "invalid queued prompt" } };
+  }
+  if (method === "DELETE") {
+    if (!ctx.removePromptQueueItem) return { status: 503, body: { error: "prompt queue is not available" } };
+    const result = ctx.removePromptQueueItem(scope, typeof parsed.id === "string" ? parsed.id : null);
+    return { status: 200, body: result };
+  }
+  return { status: 405, body: { error: "GET/POST/DELETE only" } };
 }
 var ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
 var ARTIFACT_SAFE_EXTS = /* @__PURE__ */ new Set([
@@ -4718,17 +4936,21 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
       case "permissions":
         return await handlePermissions(method, rest, body, ctx);
       case "messages":
-        return await handleMessages(method, rest, body, ctx);
+        return await handleMessages(method, rest, body, ctx, query);
       case "submit":
         return await handleSubmit(method, rest, body, ctx);
+      case "prompt-queue":
+        return await handlePromptQueue(method, rest, body, ctx, query);
       case "abort":
         return await handleAbort(method, rest, body, ctx);
+      case "background-jobs":
+        return await handleBackgroundJobs(method, rest, body, ctx);
       case "health":
         return await handleHealth(method, rest, body, ctx);
       case "logs":
         return await handleLogs(method, rest, body, ctx);
       case "sessions":
-        return await handleSessions(method, rest, body, ctx);
+        return await handleSessions(method, rest, body, ctx, query);
       case "report":
         return await handleReport(method, rest, body, ctx, query);
       case "plans":
@@ -4908,7 +5130,7 @@ async function dispatch(req, res, ctx, expectedToken) {
       res.end(fail.body);
       return;
     }
-    handleEvents(req, res, ctx);
+    handleEvents(req, res, ctx, url.searchParams);
     return;
   }
   if (path.startsWith("/api/")) {

@@ -17,7 +17,7 @@ export function requestToModal(request) {
         kind: "shell", _gateId: id,
         command: payload.command,
         allowPrefix: payload.command?.split(/\s+/)[0] ?? "",
-        shellKind: kind === "run_background" ? "background" : "foreground",
+        shellKind: kind,
       };
 
     case "choice":

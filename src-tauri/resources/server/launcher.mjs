@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Visionox Desktop — Server Launcher (v4)
+ * Visionox-Whale — Server Launcher (v4)
  *
  * Full session context with all agent tools: filesystem, shell, web search,
  * memory, plan, choice, and todo.  The dashboard can chat, run tools, and
@@ -9,26 +9,47 @@
  * Usage: node launcher.mjs [--port <n>] [--token <hex>]
  */
 
-import { resolve, dirname, join, basename, sep, extname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { homedir } from "node:os";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } from "node:fs";
-import { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat as fsStat, writeFile } from "node:fs/promises";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
+try {
+  process.stderr.write("[launcher] entered launcher.mjs\n");
+} catch {}
 
-import {
+async function importEarly(spec) {
+  try {
+    return await import(spec);
+  } catch (err) {
+    try {
+      process.stderr.write(`[launcher] early import failed: ${spec}: ${err?.stack || err?.message || err}\n`);
+    } catch {}
+    throw err;
+  }
+}
+
+const { resolve, dirname, join, basename, sep, extname } = await importEarly("node:path");
+const { fileURLToPath, pathToFileURL } = await importEarly("node:url");
+const { homedir } = await importEarly("node:os");
+const { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
+const { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
+const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
+const { spawnSync } = await importEarly("node:child_process");
+const { createInterface } = await importEarly("node:readline");
+
+const {
   getActiveProvider,
   resolvePresetForProvider,
   resolveEffortForProvider,
   effectiveModelConfig,
   pickSummaryModel,
   buildLegacyProvider,
-} from "./lib/provider.mjs";
-import { resolveContextCap } from "./lib/context-cap.mjs";
-import { requestToModal } from "./lib/pause-gate-modal.mjs";
-import { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
-import { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } from "./lib/dlp-file.mjs";
+} = await importEarly("./lib/provider.mjs");
+const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
+const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
+const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
+const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession } = await importEarly("./lib/active-session.mjs");
+const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
+const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
+const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
+const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
+const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 
 // NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
 // resource file cannot brick the whole launcher startup.
@@ -166,10 +187,10 @@ const CONSTANTS = {
   DEFAULT_MODE_VERSION: 5,
   OFFICE_MODE_VERSION: 7,
 };
-const DEFAULT_SOUL_FALLBACK = `# Visionox Core Identity
+const DEFAULT_SOUL_FALLBACK = `# Visionox-Whale Core Identity
 
 ## 我是谁
-我是 Visionox，一个运行在 Windows 桌面环境中的 AI 助手。
+我是 Visionox-Whale，一个运行在 Windows 桌面环境中的 AI 助手。
 我可以通过文件系统、Shell、Web 搜索和项目工具帮助用户完成软件工程、文档整理、信息分析和自动化任务。
 
 ## 协作方式
@@ -738,16 +759,35 @@ await deploySkillGuide(workspaceDir);
 const startupModelConfig = effectiveModelConfig(config);
 console.error(`[launcher] apiKey ${apiKey ? "found" : "NOT FOUND — chat will be disabled"}, preset=${startupModelConfig.preset}, model=${startupModelConfig.model}`);
 
-// Apply context cap: manual override > provider maxContextLength > hardcoded map.
-// Mutating DEEPSEEK_CONTEXT_TOKENS directly is intentional — ESM live bindings
-// mean ContextManager.fold() and getStats() both read from the same object.
-function applyContextCap(model) {
-  const cap = resolveContextCap(model, config, getActiveProvider(config));
-  if (cap !== null) {
-    DEEPSEEK_CONTEXT_TOKENS[model] = cap;
-  }
-  // No override — DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS falls back naturally
+// ESM live bindings let ContextManager and dashboard stats share this runtime
+// map. Rebuild it from the active provider snapshot so reused model IDs cannot
+// retain a capacity from an older JSON import or another provider.
+const runtimeContextCapModels = new Set();
+let activeContextPolicy = null;
+
+function contextPolicyFor(model, cfg = config) {
+  return resolveContextPolicy(model, cfg, getActiveProvider(cfg), DEFAULT_CONTEXT_TOKENS);
 }
+
+function applyContextCap(model, cfg = config) {
+  const policy = contextPolicyFor(model, cfg);
+  DEEPSEEK_CONTEXT_TOKENS[model] = policy.effectiveCap;
+  runtimeContextCapModels.add(model);
+  return policy;
+}
+
+function rebuildProviderContextCaps(cfg = config) {
+  for (const model of runtimeContextCapModels) delete DEEPSEEK_CONTEXT_TOKENS[model];
+  runtimeContextCapModels.clear();
+  const provider = getActiveProvider(cfg);
+  for (const model of provider?.models ?? []) applyContextCap(model.id, cfg);
+  const effective = effectiveModelConfig(cfg);
+  const policy = applyContextCap(effective.model, cfg);
+  activeContextPolicy = policy;
+  console.error(`[launcher] context capacity refreshed: provider=${policy.providerId ?? "none"}, model=${policy.model}, cap=${policy.effectiveCap}, source=${policy.source}, declaredSource=${policy.capacitySource}${policy.clamped ? ", userLimitClamped=true" : ""}`);
+  return policy;
+}
+rebuildProviderContextCaps(config);
 console.error(`[launcher] workspace: ${workspaceDir}`);
 
 // Workspace-dependent tool names — populated by registerWorkspaceTools() return value
@@ -786,11 +826,12 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       },
       required: ["input"],
     },
-    fn: async (args) => JSON.stringify(await prepareLocalDocument(args?.input ?? args, {
+    fn: async (args, toolCtx) => JSON.stringify(await prepareLocalDocument(args?.input ?? args, {
       cfg: readConfig(configPath),
       env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
       logger: console,
       allowMultiple: Boolean(args?.allowMultiple),
+      signal: toolCtx?.signal,
     })),
   });
 
@@ -799,6 +840,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     extraAllowed: () => loadProjectShellAllowed(rootDir, configPath),
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
+    getOperationId: opts.getOperationId,
   });
   wrapToolsPathArgsWithDlp(tools, ["run_command", "run_background"], {
     readConfig: () => readConfig(configPath),
@@ -844,8 +886,13 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 const tools = new ToolRegistry();
 const jobs = new JobRegistry();
 
+tools.setToolInterceptor((name, args) => {
+  const issue = validateOfficecliInvocation(name, args);
+  return issue ? JSON.stringify(issue) : undefined;
+});
+
 // Workspace-dependent tools — registered via shared function
-const wsResult = await registerWorkspaceTools(tools, workspaceDir, { jobs });
+const wsResult = await registerWorkspaceTools(tools, workspaceDir, { jobs, getOperationId: () => activeOperation?.id ?? null });
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
 
@@ -923,29 +970,29 @@ if (searchEnabled(configPath)) {
 
 // Utility tools (not workspace-dependent)
 registerPlanTool(tools, {
-  onPlanSubmitted: (plan, steps) => {
+  onPlanSubmitted: (plan, steps, summary) => {
     // Stash the plan in memory; it will be persisted on the first
     // mark_step_complete call (i.e., after the user approves and AI
     // starts executing). If the user cancels, onStepCompleted is never
     // called so nothing hits disk — matching TUI behaviour.
     pendingPlan = {
       steps: Array.isArray(steps) ? steps : [],
-      summary: undefined,
+      summary,
       body: plan,
     };
   },
   onStepCompleted: (update) => {
-    // First step completion after a submit_plan: promote pendingPlan to
-    // active and persist to disk.
-    if (pendingPlan && !activePlanSteps) {
-      activePlanSteps = pendingPlan.steps;
-      activeCompletedIds = new Set();
-      activePlanBody = pendingPlan.body;
-      activePlanSummary = pendingPlan.summary;
-      pendingPlan = null;
-      persistActivePlan();
-      console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
+    // Non-dashboard confirmation gates can approve plans without passing
+    // through resolvePlanConfirm, so keep this activation fallback.
+    if (pendingPlan) activatePendingPlan();
+    if (!isKnownPlanStep(activePlanSteps, update?.stepId)) {
+      throw new Error(`mark_step_complete: stepId "${update?.stepId ?? ""}" is not in the active plan.`);
     }
+    const checkpointTotal = activePlanSteps?.length ?? 0;
+    const completedIds = normalizeCompletedStepIds(activePlanSteps, [...(activeCompletedIds ?? [])]);
+    const checkpointCompleted = completedIds.includes(update.stepId)
+      ? completedIds.length
+      : completedIds.length + 1;
     if (update?.stepId && activeCompletedIds) {
       markStepDone(update.stepId);
     }
@@ -956,19 +1003,14 @@ registerPlanTool(tools, {
         stepId: update.stepId,
         result: update.result,
         title: update.title,
-        completed: activeCompletedIds?.size ?? 0,
-        total: activePlanSteps?.length ?? 0,
+        completed: checkpointCompleted,
+        total: checkpointTotal,
       });
     }
+    return { completed: checkpointCompleted, total: checkpointTotal };
   },
-  onPlanRevisionProposed: (_reason, remainingSteps, summary) => {
-    // Replace remaining steps (keep completed ones). Mirrors TUI's
-    // revise_plan handler.
-    if (activePlanSteps && activeCompletedIds) {
-      activePlanSteps = [...activePlanSteps.filter(s => activeCompletedIds.has(s.id)), ...remainingSteps];
-      if (summary) activePlanSummary = summary;
-      persistActivePlan();
-    }
+  onPlanRevisionProposed: (reason, remainingSteps, summary) => {
+    pendingPlanRevision = { reason, remainingSteps, summary };
   },
 });
 registerChoiceTool(tools);
@@ -1417,7 +1459,7 @@ function normalizeSemanticCleanupMode(value) {
   return ["off", "uncertain", "deep"].includes(value) ? value : "off";
 }
 
-async function semanticReviewCleanupItems(items, semanticMode = "off") {
+async function semanticReviewCleanupItems(items, semanticMode = "off", signal) {
   const mode = normalizeSemanticCleanupMode(semanticMode);
   if (mode === "off" || !client || !items.length) return { items, reviewed: 0, error: null };
   const reviewable = mode === "deep"
@@ -1435,7 +1477,7 @@ async function semanticReviewCleanupItems(items, semanticMode = "off") {
     preview: item.preview,
   }));
   const prompt = [
-    "你是 Visionox 的历史会话整理器。请只基于给定预览判断每个会话的整理建议。",
+    "你是 Visionox-Whale 的历史会话整理器。请只基于给定预览判断每个会话的整理建议。",
     "可选 action 只有 delete、archive、keep、extract：",
     "- delete：空会话、系统自产清理记录、明显无价值且可放入回收站的记录。",
     "- archive：低价值但不应直接删除的临时查询或测试记录。",
@@ -1454,6 +1496,7 @@ async function semanticReviewCleanupItems(items, semanticMode = "off") {
       ],
       temperature: 0.1,
       maxTokens: 4000,
+      signal,
     });
     const raw = String(resp?.content || "").trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
     const parsed = JSON.parse(raw);
@@ -1510,7 +1553,7 @@ function pruneExpiredCleanupPreviews() {
   }
 }
 
-async function buildSessionCleanupPreview(args = {}) {
+async function buildSessionCleanupPreview(args = {}, options = {}) {
   pruneExpiredCleanupPreviews();
   const scanLimit = clampNumber(args.scanLimit ?? args.limit, 1, 1000, 200);
   const returnLimit = clampNumber(args.returnLimit, 1, 200, Math.min(80, scanLimit));
@@ -1525,6 +1568,7 @@ async function buildSessionCleanupPreview(args = {}) {
   let scanned = 0;
 
   for (const session of listSessions()) {
+    throwIfScheduleAborted(options.signal);
     if (scanned >= scanLimit) break;
     scanned++;
     const messages = safeSessionMessages(session.name);
@@ -1542,7 +1586,8 @@ async function buildSessionCleanupPreview(args = {}) {
     else if (includeReview) review.push(item);
   }
 
-  const semantic = await semanticReviewCleanupItems(recommendations, semanticMode);
+  const semantic = await semanticReviewCleanupItems(recommendations, semanticMode, options.signal);
+  throwIfScheduleAborted(options.signal);
   const reviewedRecommendations = semantic.items;
   const returnedCandidates = reviewedRecommendations.slice(0, returnLimit);
   const counts = cleanupRecommendationCounts(returnedCandidates);
@@ -1599,6 +1644,7 @@ function applySessionCleanup({ cleanupId, names, confirm = false } = {}) {
     else failed.push({ name, error: moved.error || "move to trash failed" });
   }
   console.error(`[launcher] session cleanup moved_to_trash=${deleted.length} failed=${failed.length}`);
+  if (deleted.length > 0) broadcastDashboardEvent({ kind: "sessions-changed", action: "cleanup", count: deleted.length });
   return { ok: failed.length === 0, deleted, failed, deletedCount: deleted.length, failedCount: failed.length, trashRoot: SESSION_TRASH_DIR };
 }
 
@@ -1712,7 +1758,7 @@ tools.register({
       },
     },
   },
-  fn: async (args) => JSON.stringify(await buildSessionCleanupPreview(args || {})),
+  fn: async (args, toolCtx) => JSON.stringify(await buildSessionCleanupPreview(args || {}, { signal: toolCtx?.signal })),
 });
 
 tools.register({
@@ -1821,6 +1867,50 @@ function effectiveMcpSpecs(cfg) {
 
 const mcpServers = [];
 let mcpStartupPromise = null;
+const mcpRestartPromises = new Map();
+
+async function restartMcpServer(serverName) {
+  if (mcpRestartPromises.has(serverName)) return mcpRestartPromises.get(serverName);
+  const restart = (async () => {
+    const index = mcpServers.findIndex((server) => server.label === serverName);
+    if (index < 0) return false;
+    const server = mcpServers[index];
+    for (const name of server.toolNames) {
+      tools.unregister(name);
+      loop?.prefix?.removeTool(name);
+    }
+    try { await server.host?.client?.close?.(); } catch {}
+    mcpServers.splice(index, 1);
+    console.error(`[launcher] MCP "${serverName}" restarting after tools/call timeout`);
+    await reloadMcp();
+    const recovered = mcpServers.some((item) => item.label === serverName);
+    console.error(`[launcher] MCP "${serverName}" restart ${recovered ? "completed" : "failed"}`);
+    return recovered;
+  })().finally(() => mcpRestartPromises.delete(serverName));
+  mcpRestartPromises.set(serverName, restart);
+  return restart;
+}
+
+function wrapMcpToolsWithRecovery(serverName, registeredNames) {
+  if (serverName !== "officecli") return;
+  for (const name of registeredNames) {
+    const tool = tools.get(name);
+    if (!tool?.fn) continue;
+    const original = tool.fn;
+    tool.fn = async (args, toolCtx) => {
+      try {
+        return await original(args, toolCtx);
+      } catch (err) {
+        if (!isMcpToolTimeout(err)) throw err;
+        const recovered = await restartMcpServer(serverName);
+        const message = recovered
+          ? mcpRecoveryError(serverName)
+          : `${serverName} MCP request timed out and automatic restart failed. Stop issuing OfficeCLI commands and report the blocker.`;
+        throw new Error(message);
+      }
+    };
+  }
+}
 
 function startMcpInBackground() {
   if (mcpStartupPromise) return mcpStartupPromise;
@@ -1863,6 +1953,7 @@ async function reloadMcp() {
       await client.initialize();
       const report = await inspectMcpServer(client);
       const { registeredNames } = await bridgeMcpTools(client, { registry: tools });
+      wrapMcpToolsWithRecovery(spec.name, registeredNames);
       const dlpWrapped = wrapToolsPathArgsWithDlp(tools, registeredNames, {
         readConfig: () => readConfig(configPath),
         env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir: workspaceDir },
@@ -2742,7 +2833,7 @@ function buildLoop(client, rootDir) {
     globalThis.__visionoxSummaryModel = pickSummaryModel(provider.models);
   }
 
-  applyContextCap(modelConfig.model);
+  activeContextPolicy = applyContextCap(modelConfig.model);
 
   return new CacheFirstLoop({
     client,
@@ -2758,6 +2849,20 @@ function buildLoop(client, rootDir) {
 
 let client = null;
 let loop = null;
+
+function rebuildLoopPreservingContext(nextClient = client, rootDir = workspaceDir) {
+  const priorEntries = loop?.log?.toMessages ? loop.log.toMessages() : [];
+  const previousModel = loop?.model ?? null;
+  const rebuilt = buildLoop(nextClient, rootDir);
+  const context = priorEntries.length > 0
+    ? (rebuilt.adoptHistory?.(priorEntries, rebuilt.model) ?? (rebuilt.log.compactInPlace(priorEntries), { messageCount: priorEntries.length }))
+    : { messageCount: 0, changedCount: 0, reasoningAdded: 0, reasoningRemoved: 0, tokensSaved: 0 };
+  loop = rebuilt;
+  ctx.loop = loop;
+  console.error(`[launcher] loop rebuilt with ${context.messageCount} context messages preserved`);
+  activeContextPolicy = applyContextCap(loop.model);
+  return { previousModel, model: loop.model, ...context, contextStatus: loop.contextStatus?.() ?? null };
+}
 
 if (apiKey) {
   try {
@@ -2786,6 +2891,7 @@ let activeCompletedIds = null;// Set<string> of completed step ids
 let activePlanSummary = null; // string
 let activePlanBody = null;    // string (markdown)
 let activePlanUpdatedAt = null;// ISO timestamp from the persisted plan file
+let pendingPlanRevision = null;// committed only after the user accepts the revision card
 
 /** Get the current session name for plan file paths. */
 function currentSessionName() {
@@ -2800,6 +2906,7 @@ function resetPlanRefs() {
   activePlanSummary = null;
   activePlanBody = null;
   activePlanUpdatedAt = null;
+  pendingPlanRevision = null;
 }
 
 /** Restore a persisted active plan after launcher restart. */
@@ -2809,7 +2916,7 @@ function hydrateActivePlanFromDisk() {
   const stored = loadPlanState(session);
   if (!stored) return;
   activePlanSteps = stored.steps;
-  activeCompletedIds = new Set(stored.completedStepIds);
+  activeCompletedIds = new Set(normalizeCompletedStepIds(stored.steps, stored.completedStepIds));
   activePlanBody = stored.body ?? null;
   activePlanSummary = stored.summary ?? null;
   activePlanUpdatedAt = stored.updatedAt ?? null;
@@ -2836,7 +2943,7 @@ function getActivePlanSnapshot() {
   }
   hydrateActivePlanFromDisk();
   if (!activePlanSteps || !activeCompletedIds) return null;
-  const completedStepIds = [...activeCompletedIds];
+  const completedStepIds = normalizeCompletedStepIds(activePlanSteps, [...activeCompletedIds]);
   return {
     session: currentSessionName(),
     status: "active",
@@ -2853,12 +2960,34 @@ function getActivePlanSnapshot() {
   };
 }
 
+const MAX_PLAN_AUTO_CONTINUATIONS = 2;
+
+function incompleteActivePlanSnapshot() {
+  const plan = getActivePlanSnapshot();
+  if (!plan || plan.totalSteps <= 0 || plan.completedSteps >= plan.totalSteps) return null;
+  return plan;
+}
+
+function planAutoContinuationPrompt(plan, attempt, reason = "budget") {
+  const remaining = Math.max(0, plan.totalSteps - plan.completedSteps);
+  return [
+    `[系统自动续跑 ${attempt}/${MAX_PLAN_AUTO_CONTINUATIONS}]`,
+    `当前已批准计划仍有 ${remaining} 个步骤未完成。`,
+    reason === "budget" ? "上一执行窗口的工具额度已刷新。" : "上一响应只汇报了进度，没有完成计划。",
+    "继续执行当前计划，不要重新制定计划，不要只报告进度。",
+    "从上一次中断处继续，完成后验证实际产物，并为每个完成步骤调用 mark_step_complete。",
+    "若正在生成 Office 文件，先检查现有内容，再按页或逻辑区块使用 batch 补齐，避免重复写入。",
+  ].join("\n");
+}
+
 /** Persist the active plan to disk. Called on first mark_step_complete. */
 function persistActivePlan() {
   if (!activePlanSteps) return;
   const session = currentSessionName();
   try {
-    savePlanState(session, activePlanSteps, [...activeCompletedIds], {
+    const completedStepIds = normalizeCompletedStepIds(activePlanSteps, [...(activeCompletedIds ?? [])]);
+    activeCompletedIds = new Set(completedStepIds);
+    savePlanState(session, activePlanSteps, completedStepIds, {
       body: activePlanBody,
       summary: activePlanSummary,
     });
@@ -2869,13 +2998,30 @@ function persistActivePlan() {
   }
 }
 
+/** Promote an approved pending plan, replacing any older unfinished plan. */
+function activatePendingPlan() {
+  if (!pendingPlan) return false;
+  const nextPlan = pendingPlan;
+  pendingPlan = null;
+  activePlanSteps = nextPlan.steps;
+  activeCompletedIds = new Set();
+  activePlanBody = nextPlan.body;
+  activePlanSummary = nextPlan.summary;
+  activePlanUpdatedAt = null;
+  pendingPlanRevision = null;
+  persistActivePlan();
+  console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
+  broadcastDashboardEvent({ kind: "plan-activated", session: currentSessionName() });
+  return true;
+}
+
 /** Mark a step complete; archive the plan if all steps are done. */
 function markStepDone(stepId) {
   hydrateActivePlanFromDisk();
-  if (!activePlanSteps || !activeCompletedIds) return;
+  if (!activePlanSteps || !activeCompletedIds || !isKnownPlanStep(activePlanSteps, stepId)) return false;
   activeCompletedIds.add(stepId);
   persistActivePlan();
-  if (activeCompletedIds.size >= activePlanSteps.length) {
+  if (isPlanComplete(activePlanSteps, [...activeCompletedIds])) {
     const session = currentSessionName();
     try {
       archivePlanState(session);
@@ -2886,6 +3032,7 @@ function markStepDone(stepId) {
     }
     resetPlanRefs();
   }
+  return true;
 }
 
 function completeActivePlanStep(stepId) {
@@ -2910,11 +3057,133 @@ function cancelActivePlan() {
 }
 
 // ── Scheduled tasks ─────────────────────────────────────────────
+const promptQueueFile = resolve(visionoxDataDir, "prompt-queue.json");
+const PROMPT_QUEUE_LIMIT = 5;
+const ACCEPTED_PROMPT_LIMIT = 200;
+const ACCEPTED_PROMPT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function normalizePromptQueueScope(value) {
+  const scope = typeof value === "string" ? value.trim() : "";
+  return scope && scope.length <= 800 ? scope : "default";
+}
+
+function normalizePromptQueueItem(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = typeof raw.id === "string" && raw.id.trim() ? raw.id.trim().slice(0, 160) : null;
+  const text = typeof raw.text === "string" ? raw.text.trim() : "";
+  const images = Array.isArray(raw.images)
+    ? raw.images.filter((image) => typeof image === "string" && image.startsWith("data:image/")).slice(0, 5)
+    : [];
+  if (!id || (!text && images.length === 0)) return null;
+  return {
+    id,
+    text,
+    images,
+    status: raw.status === "failed" ? "failed" : "queued",
+    error: raw.status === "failed" && typeof raw.error === "string" ? raw.error.slice(0, 500) : null,
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+  };
+}
+
+function readPromptQueueState() {
+  try {
+    const parsed = JSON.parse(readFileSync(promptQueueFile, "utf8"));
+    const queues = new Map();
+    for (const [scope, rawItems] of Object.entries(parsed?.queues ?? {})) {
+      const items = Array.isArray(rawItems) ? rawItems.map(normalizePromptQueueItem).filter(Boolean).slice(0, PROMPT_QUEUE_LIMIT) : [];
+      if (items.length > 0) queues.set(normalizePromptQueueScope(scope), items);
+    }
+    const now = Date.now();
+    const accepted = new Map(
+      (Array.isArray(parsed?.accepted) ? parsed.accepted : [])
+        .filter((entry) => entry && typeof entry.id === "string" && Number.isFinite(entry.acceptedAt) && now - entry.acceptedAt < ACCEPTED_PROMPT_TTL_MS)
+        .slice(-ACCEPTED_PROMPT_LIMIT)
+        .map((entry) => [entry.id, entry])
+    );
+    return { queues, accepted };
+  } catch {
+    return { queues: new Map(), accepted: new Map() };
+  }
+}
+
+const promptQueueState = readPromptQueueState();
+
+function writePromptQueueState() {
+  try {
+    const queues = Object.fromEntries([...promptQueueState.queues.entries()].filter(([, items]) => items.length > 0));
+    const accepted = [...promptQueueState.accepted.values()].slice(-ACCEPTED_PROMPT_LIMIT);
+    const tmpFile = `${promptQueueFile}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify({ version: 1, queues, accepted }, null, 2), "utf8");
+    renameSync(tmpFile, promptQueueFile);
+  } catch (err) {
+    console.error(`[launcher] prompt queue write failed: ${err.message}`);
+  }
+}
+
+function listPromptQueue(scope) {
+  return [...(promptQueueState.queues.get(normalizePromptQueueScope(scope)) ?? [])];
+}
+
+function upsertPromptQueueItem(scope, rawItem) {
+  const key = normalizePromptQueueScope(scope);
+  const item = normalizePromptQueueItem(rawItem);
+  if (!item) return { ok: false, error: "invalid queued prompt" };
+  const current = listPromptQueue(key);
+  const index = current.findIndex((entry) => entry.id === item.id);
+  if (index >= 0) current[index] = item;
+  else if (current.length < PROMPT_QUEUE_LIMIT) current.push(item);
+  else return { ok: false, error: `queue limit is ${PROMPT_QUEUE_LIMIT}` };
+  promptQueueState.queues.set(key, current);
+  writePromptQueueState();
+  return { ok: true, item, items: current };
+}
+
+function removePromptQueueItem(scope, id = null) {
+  const key = normalizePromptQueueScope(scope);
+  if (!id) {
+    promptQueueState.queues.delete(key);
+    writePromptQueueState();
+    return { ok: true, items: [] };
+  }
+  const current = listPromptQueue(key).filter((entry) => entry.id !== id);
+  if (current.length > 0) promptQueueState.queues.set(key, current);
+  else promptQueueState.queues.delete(key);
+  writePromptQueueState();
+  return { ok: true, items: current };
+}
+
+function acceptedPromptRequest(id) {
+  if (!id) return null;
+  const entry = promptQueueState.accepted.get(id);
+  if (!entry) return null;
+  if (Date.now() - entry.acceptedAt >= ACCEPTED_PROMPT_TTL_MS) {
+    promptQueueState.accepted.delete(id);
+    return null;
+  }
+  return entry;
+}
+
+function rememberAcceptedPromptRequest(id, result = {}) {
+  if (!id) return;
+  promptQueueState.accepted.delete(id);
+  promptQueueState.accepted.set(id, {
+    id,
+    acceptedAt: Date.now(),
+    turnId: result.turnId ?? null,
+  });
+  while (promptQueueState.accepted.size > ACCEPTED_PROMPT_LIMIT) {
+    promptQueueState.accepted.delete(promptQueueState.accepted.keys().next().value);
+  }
+  writePromptQueueState();
+}
+
 const schedulesFile = resolve(visionoxDataDir, "schedules.json");
 const MIN_SCHEDULE_INTERVAL_MS = 60 * 1000;
 const MAX_SCHEDULE_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_SCHEDULE_DELAY_MS = 2_147_000_000;
+const SCHEDULE_BUSY_RETRY_MS = 30 * 1000;
 const SCHEDULE_HISTORY_LIMIT = 20;
+const MAX_CONCURRENT_SCHEDULE_RUNS = 2;
 const SCHEDULE_RUN_MODES = new Set(["auto", "readonly", "confirm"]);
 const SCHEDULE_TYPES = new Set(["interval", "daily", "weekly"]);
 const SCHEDULE_KINDS = new Set(["prompt", "report", "session_cleanup"]);
@@ -2936,6 +3205,15 @@ const SCHEDULE_REPORT_RANGE_MODES = new Set([
 let schedules = [];
 const scheduleTimers = new Map();
 const runningScheduleIds = new Set();
+const scheduleRunControllers = new Map();
+
+function scheduleAbortError() {
+  return new DOMException("scheduled task cancelled", "AbortError");
+}
+
+function throwIfScheduleAborted(signal) {
+  if (signal?.aborted) throw scheduleAbortError();
+}
 
 function isValidDailyTime(value) {
   return typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
@@ -3114,6 +3392,11 @@ function normalizeSchedule(raw) {
   const reportEndDate = normalizeReportDate(raw.reportEndDate);
   if (kind === "report" && !validateReportRange(reportRangeMode, reportStartDate, reportEndDate).ok) return null;
   const nowIso = new Date().toISOString();
+  const persistedNextRunAt = typeof raw.nextRunAt === "string" && Number.isFinite(Date.parse(raw.nextRunAt)) ? raw.nextRunAt : null;
+  const persistedMissedRunAt = typeof raw.missedRunAt === "string" && Number.isFinite(Date.parse(raw.missedRunAt)) ? raw.missedRunAt : null;
+  const missedRunAt = raw.enabled !== false && persistedNextRunAt && Date.parse(persistedNextRunAt) <= Date.now()
+    ? persistedNextRunAt
+    : persistedMissedRunAt;
   const task = {
     id,
     kind,
@@ -3147,6 +3430,7 @@ function normalizeSchedule(raw) {
     runCount: Number.isFinite(raw.runCount) ? Math.max(0, Math.floor(raw.runCount)) : 0,
     history: Array.isArray(raw.history) ? raw.history.slice(0, SCHEDULE_HISTORY_LIMIT).map(normalizeScheduleHistoryEntry).filter(Boolean) : [],
     nextRunAt: typeof raw.nextRunAt === "string" ? raw.nextRunAt : null,
+    missedRunAt,
   };
   if (task.type === "interval") {
     task.intervalMs = Math.max(MIN_SCHEDULE_INTERVAL_MS, Math.min(MAX_SCHEDULE_INTERVAL_MS, task.intervalMs));
@@ -3169,6 +3453,7 @@ function normalizeScheduleHistoryEntry(raw) {
     durationMs: Number.isFinite(raw.durationMs) ? Math.max(0, Math.floor(raw.durationMs)) : null,
     status: typeof raw.status === "string" ? raw.status : "unknown",
     manual: raw.manual === true,
+    catchUp: raw.catchUp === true,
     accepted: raw.accepted === true,
     reason: typeof raw.reason === "string" ? raw.reason : null,
     summary: typeof raw.summary === "string" ? raw.summary : null,
@@ -3278,6 +3563,14 @@ function refreshAllScheduleTimers() {
   for (const timer of scheduleTimers.values()) clearTimeout(timer);
   scheduleTimers.clear();
   for (const task of schedules) refreshScheduleTimer(task);
+  const missed = schedules.filter((task) => task.enabled && task.missedRunAt);
+  if (missed.length > 0) {
+    missed.forEach((task, index) => {
+      setTimeout(() => {
+        void triggerSchedule(task.id, { manual: false, catchUp: true });
+      }, 1000 + index * 500);
+    });
+  }
 }
 
 function scheduleFromInput(input, previous = null) {
@@ -3354,6 +3647,7 @@ function scheduleFromInput(input, previous = null) {
     runCount: previous?.runCount ?? 0,
     history: previous?.history ?? [],
     nextRunAt: null,
+    missedRunAt: previous?.missedRunAt ?? null,
   };
   if (type === "daily" || type === "weekly") {
     const timeOfDay = typeof patch.timeOfDay === "string" ? patch.timeOfDay : previous?.timeOfDay ?? "09:00";
@@ -3459,20 +3753,22 @@ function writeScheduledReport(markdown, stats, task) {
   const period = stats?.period || task.reportPeriod || "report";
   const date = stats?.start instanceof Date ? formatDateKey(stats.start) : new Date().toISOString().slice(0, 10);
   const safeTaskName = String(task.name || "scheduled-report").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
-  const fileName = `Visionox_${safeTaskName}_${period}_${date}.md`.replace(/[\\/:*?"<>|]/g, "_");
+  const fileName = `Visionox-Whale_${safeTaskName}_${period}_${date}.md`.replace(/[\\/:*?"<>|]/g, "_");
   const filePath = join(dir, fileName);
   writeFileSync(filePath, markdown, "utf8");
   rememberGeneratedArtifactPath(filePath);
   return filePath;
 }
 
-async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISOString()) {
+async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISOString(), signal) {
   const task = schedules.find((item) => item.id === taskId);
   if (!task) return;
   try {
+    throwIfScheduleAborted(signal);
     const baseDate = new Date(startedAt);
     const { rangeMode, period, anchorDate, customRange } = reportRangeFromTask(task, Number.isNaN(baseDate.getTime()) ? new Date() : baseDate);
-    const { markdown, stats } = await generateReport(period, anchorDate, customRange);
+    const { markdown, stats } = await generateReport(period, anchorDate, customRange, { signal });
+    throwIfScheduleAborted(signal);
     const reportPath = task.reportExport ? writeScheduledReport(markdown, stats, task) : null;
     completeScheduleRun(task.id, runId, {
       status: "completed",
@@ -3487,25 +3783,28 @@ async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISO
       reportPath,
     });
   } catch (err) {
+    const cancelled = signal?.aborted || err?.name === "AbortError";
     completeScheduleRun(task.id, runId, {
-      status: "failed",
-      reason: err.message || "scheduled report failed",
-      summary: err.message || "scheduled report failed",
+      status: cancelled ? "cancelled" : "failed",
+      reason: cancelled ? "cancelled by user" : err.message || "scheduled report failed",
+      summary: cancelled ? "cancelled by user" : err.message || "scheduled report failed",
     });
   }
 }
 
-async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date().toISOString()) {
+async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date().toISOString(), signal) {
   const task = schedules.find((item) => item.id === taskId);
   if (!task) return;
   try {
+    throwIfScheduleAborted(signal);
     const preview = await buildSessionCleanupPreview({
       scanLimit: 500,
       returnLimit: 200,
       minConfidence: cleanupMinConfidenceForStrength(task.sessionCleanupStrength),
       semanticMode: task.sessionCleanupSemanticMode,
       includeReview: false,
-    });
+    }, { signal });
+    throwIfScheduleAborted(signal);
     const shouldDelete = task.sessionCleanupAction === "delete";
     const result = shouldDelete && preview.returnedCandidateCount > 0
       ? applySessionCleanup({ cleanupId: preview.cleanupId, confirm: true })
@@ -3526,10 +3825,11 @@ async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date
       cleanupTrashRoot: result?.trashRoot ?? null,
     });
   } catch (err) {
+    const cancelled = signal?.aborted || err?.name === "AbortError";
     completeScheduleRun(task.id, runId, {
-      status: "failed",
-      reason: err.message || "session cleanup failed",
-      summary: err.message || "session cleanup failed",
+      status: cancelled ? "cancelled" : "failed",
+      reason: cancelled ? "cancelled by user" : err.message || "session cleanup failed",
+      summary: cancelled ? "cancelled by user" : err.message || "session cleanup failed",
       cleanupAction: task.sessionCleanupAction === "delete" ? "delete" : "preview",
     });
   }
@@ -3539,6 +3839,7 @@ function completeScheduleRun(taskId, runId, patch) {
   const task = schedules.find((item) => item.id === taskId);
   if (!task) {
     runningScheduleIds.delete(taskId);
+    scheduleRunControllers.delete(taskId);
     return;
   }
   const completedAt = patch.completedAt || new Date().toISOString();
@@ -3558,6 +3859,15 @@ function completeScheduleRun(taskId, runId, patch) {
     accepted: status === "completed",
     reason: patch.reason || null,
   });
+  runningScheduleIds.delete(taskId);
+  scheduleRunControllers.delete(taskId);
+  if (task.enabled) {
+    const next = Date.parse(task.nextRunAt);
+    if (!Number.isFinite(next) || next <= Date.now()) {
+      task.nextRunAt = computeNextScheduleRun(task, Date.now());
+    }
+    refreshScheduleTimer(task);
+  }
   writeSchedules();
   broadcastDashboardEvent({
     kind: "schedule-run",
@@ -3568,7 +3878,6 @@ function completeScheduleRun(taskId, runId, patch) {
     status: task.lastStatus,
     reason: task.lastError,
   });
-  runningScheduleIds.delete(taskId);
 }
 
 function renderSchedulePrompt(task, startedAt, previousLastRunAt) {
@@ -3613,17 +3922,36 @@ function createScheduleConfirmationMessage(task, startedAt) {
   broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text });
 }
 
-async function triggerSchedule(id, { manual = false } = {}) {
+async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
   const task = schedules.find((item) => item.id === id);
   if (!task) return { ok: false, error: "schedule not found" };
   if (runningScheduleIds.has(id)) {
+    if (!manual) {
+      task.nextRunAt = computeNextScheduleRun(task, Date.now());
+      writeSchedules();
+      refreshScheduleTimer(task);
+    }
     return { ok: true, accepted: false, reason: "task is already running", runId: null, schedule: publicSchedule(task) };
+  }
+  if (runningScheduleIds.size >= MAX_CONCURRENT_SCHEDULE_RUNS) {
+    const reason = `scheduled task concurrency limit reached (${MAX_CONCURRENT_SCHEDULE_RUNS})`;
+    if (!manual) {
+      task.missedRunAt = new Date().toISOString();
+      task.lastStatus = "deferred";
+      task.lastError = reason;
+      task.nextRunAt = computeNextScheduleRun(task, Date.now());
+      writeSchedules();
+      refreshScheduleTimer(task);
+      setTimeout(() => void triggerSchedule(task.id, { manual: false, catchUp: true }), SCHEDULE_BUSY_RETRY_MS);
+    }
+    return { ok: true, accepted: false, reason, runId: null, schedule: publicSchedule(task) };
   }
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const startedMs = Date.parse(startedAt);
   const previousLastRunAt = task.lastRunAt;
   task.lastRunAt = startedAt;
+  task.missedRunAt = null;
   if (!sameScheduleWorkspace(task)) {
     const reason = `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`;
     const completedAt = new Date().toISOString();
@@ -3639,6 +3967,7 @@ async function triggerSchedule(id, { manual = false } = {}) {
       durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
       status: "skipped",
       manual,
+      catchUp,
       accepted: false,
       reason,
       summary: reason,
@@ -3657,7 +3986,7 @@ async function triggerSchedule(id, { manual = false } = {}) {
     });
     return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
   }
-  const windowCheck = manual ? { ok: true, reason: null } : isScheduleAllowedAt(task, Date.parse(startedAt));
+  const windowCheck = manual || catchUp ? { ok: true, reason: null } : isScheduleAllowedAt(task, Date.parse(startedAt));
   if (!windowCheck.ok) {
     const reason = windowCheck.reason || "outside run window";
     const completedAt = new Date().toISOString();
@@ -3673,6 +4002,7 @@ async function triggerSchedule(id, { manual = false } = {}) {
       durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
       status: "skipped",
       manual,
+      catchUp,
       accepted: false,
       reason,
       summary: reason,
@@ -3709,6 +4039,7 @@ async function triggerSchedule(id, { manual = false } = {}) {
       durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
       status: "pending_confirmation",
       manual,
+      catchUp,
       accepted: false,
       reason,
       summary: reason,
@@ -3733,11 +4064,14 @@ async function triggerSchedule(id, { manual = false } = {}) {
   task.lastError = null;
   task.nextRunAt = computeNextScheduleRun(task);
   runningScheduleIds.add(task.id);
+  const runController = new AbortController();
+  scheduleRunControllers.set(task.id, { runId, controller: runController });
   recordScheduleRun(task, {
     runId,
     startedAt,
     status: "running",
     manual,
+    catchUp,
     accepted: true,
     reason: null,
     workspaceDir,
@@ -3754,11 +4088,11 @@ async function triggerSchedule(id, { manual = false } = {}) {
     reason: task.lastError,
   });
   if (task.kind === "report") {
-    void runScheduleReportTask(task.id, runId, startedAt);
+    void runScheduleReportTask(task.id, runId, startedAt, runController.signal);
     return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
   }
   if (task.kind === "session_cleanup") {
-    void runScheduleSessionCleanupTask(task.id, runId, startedAt);
+    void runScheduleSessionCleanupTask(task.id, runId, startedAt, runController.signal);
     return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
   }
   const prompt = renderSchedulePrompt(task, startedAt, previousLastRunAt);
@@ -3767,11 +4101,12 @@ async function triggerSchedule(id, { manual = false } = {}) {
     result = await ctx.submitPrompt(prompt, null, null, {
       readonly: task.runMode === "readonly",
       newConversation: true,
+      signal: runController.signal,
       onComplete: (done) => {
         completeScheduleRun(task.id, runId, {
-          status: done.ok ? "completed" : "failed",
-          reason: done.ok ? null : done.error || "scheduled task failed",
-          summary: done.ok ? summarizeScheduleResult(done.assistantText) : done.error || "scheduled task failed",
+          status: done.cancelled ? "cancelled" : done.ok ? "completed" : "failed",
+          reason: done.cancelled ? "cancelled by user" : done.ok ? null : done.error || "scheduled task failed",
+          summary: done.cancelled ? "cancelled by user" : done.ok ? summarizeScheduleResult(done.assistantText) : done.error || "scheduled task failed",
           assistantMessageId: done.assistantMessageId,
           userMessageId: done.userMessageId,
           ...scheduleRunStats(done.stats),
@@ -3783,14 +4118,38 @@ async function triggerSchedule(id, { manual = false } = {}) {
   }
   if (!result.accepted) {
     const reason = result.reason ?? "loop is busy";
+    const shouldDefer = !manual && /busy/i.test(reason);
     completeScheduleRun(task.id, runId, {
-      status: manual ? "rejected" : "skipped",
+      status: manual ? "rejected" : shouldDefer ? "deferred" : "skipped",
       reason,
       summary: reason,
     });
+    if (shouldDefer) {
+      task.missedRunAt = startedAt;
+      writeSchedules();
+      setTimeout(() => {
+        void triggerSchedule(task.id, { manual: false, catchUp: true });
+      }, SCHEDULE_BUSY_RETRY_MS);
+    }
     return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
   }
   return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
+}
+
+function cancelScheduleRun(id) {
+  const task = schedules.find((item) => item.id === id);
+  if (!task) return { ok: false, error: "schedule not found" };
+  const active = scheduleRunControllers.get(id);
+  if (!active || !runningScheduleIds.has(id)) {
+    return { ok: false, error: "task is not running" };
+  }
+  active.controller.abort();
+  task.lastStatus = "stopping";
+  task.lastError = "cancellation requested";
+  task.updatedAt = new Date().toISOString();
+  writeSchedules();
+  broadcastDashboardEvent({ kind: "schedule-run", id, runId: active.runId, name: task.name, status: "stopping", reason: task.lastError });
+  return { ok: true, cancelled: true, runId: active.runId, schedule: publicSchedule(task) };
 }
 
 schedules = readSchedules();
@@ -3861,6 +4220,110 @@ function loopEventToDashboard(ev, assistantId) {
 
 // ── Busy state ──────────────────────────────────────────────────
 let busy = false;
+let activeOperation = null;
+let pendingModelSwitch = null;
+
+function publicActiveOperation(operation = activeOperation) {
+  if (!operation) return null;
+  return {
+    id: operation.id,
+    kind: operation.kind,
+    state: operation.state,
+    startedAt: operation.startedAt,
+    stopRequestedAt: operation.stopRequestedAt ?? null,
+  };
+}
+
+jobs.setChangeListener?.((change) => {
+  broadcastDashboardEvent({ kind: "background-job-change", ...change });
+});
+
+function beginActiveOperation(kind) {
+  const operation = {
+    id: randomUUID(),
+    kind,
+    state: "running",
+    startedAt: new Date().toISOString(),
+    stopRequestedAt: null,
+    controller: new AbortController(),
+  };
+  activeOperation = operation;
+  broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation(operation) });
+  return operation;
+}
+
+function finishActiveOperation(operation) {
+  if (!operation || activeOperation?.id !== operation.id) return;
+  broadcastDashboardEvent({
+    kind: "operation-change",
+    operation: { ...publicActiveOperation(operation), state: operation.controller.signal.aborted ? "cancelled" : "completed" },
+  });
+  activeOperation = null;
+}
+
+function operationKindForPrompt(text, opts = {}) {
+  if (opts.newConversation === true) return "scheduled-prompt";
+  if (text === "/compact") return "compact";
+  if (text?.startsWith?.("/btw ")) return "side-question";
+  if (text === "/report" || text?.startsWith?.("/report ")) return "report";
+  if (text?.startsWith?.("/learn")) return "learn";
+  return "chat";
+}
+
+function modelRuntimeOptions(modelConfig) {
+  const provider = getActiveProvider(config);
+  const activeModel = provider?.models?.find((model) => model.id === modelConfig.model);
+  const legacyVision = { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
+  return {
+    model: modelConfig.model,
+    autoEscalate: modelConfig.autoEscalate,
+    vision: activeModel?.multimodal === true || legacyVision.vision === true,
+    visionDetail: activeModel?.multimodal === true ? "high" : legacyVision.visionDetail ?? "",
+  };
+}
+
+function commitModelSwitch(modelConfig, source = "model") {
+  const previousModel = loop?.model ?? null;
+  activeContextPolicy = applyContextCap(modelConfig.model);
+  const result = loop?.configure(modelRuntimeOptions(modelConfig));
+  const contextMessages = loop?.log?.toMessages?.().length ?? 0;
+  const modelSwitch = result?.modelSwitch ?? {
+    previousModel,
+    model: loop?.model ?? modelConfig.model,
+    messageCount: contextMessages,
+    changedCount: 0,
+    reasoningAdded: 0,
+    reasoningRemoved: 0,
+    tokensSaved: 0,
+    contextStatus: loop?.contextStatus?.() ?? null,
+  };
+  void syncActiveSessionFromLoop();
+  console.error(`[launcher] ${source} switch: ${modelSwitch.previousModel ?? "none"} -> ${modelSwitch.model}; context=${modelSwitch.messageCount}`);
+  return { ...modelSwitch, deferred: false };
+}
+
+function requestModelSwitch(modelConfig, source = "model") {
+  if (busy && loop?.model !== modelConfig.model) {
+    pendingModelSwitch = { modelConfig, source };
+    return {
+      previousModel: loop?.model ?? null,
+      model: modelConfig.model,
+      messageCount: loop?.log?.toMessages?.().length ?? 0,
+      contextStatus: loop?.contextStatus?.(modelConfig.model) ?? null,
+      deferred: true,
+    };
+  }
+  // A later selection of the current model cancels an earlier deferred switch.
+  pendingModelSwitch = null;
+  return commitModelSwitch(modelConfig, source);
+}
+
+function commitPendingModelSwitch() {
+  if (!pendingModelSwitch) return null;
+  const pending = pendingModelSwitch;
+  pendingModelSwitch = null;
+  return commitModelSwitch(pending.modelConfig, pending.source);
+}
 
 // P2-3: install_skill rate limiter
 const skillInstallTimes = [];
@@ -3869,6 +4332,7 @@ let installingSkill = false;
 // ── Messages store ──────────────────────────────────────────────
 let nextMsgId = 1;
 const messages = [];
+const DASHBOARD_MESSAGE_WINDOW = 60;
 function pushMessage(msg) {
   messages.push(msg);
   while (messages.length > CONSTANTS.MESSAGES_CAP) messages.shift();
@@ -3892,8 +4356,10 @@ let activeSessionStream = null;
 
 function getActiveSessionStream() {
   if (!activeSessionStream) {
-    activeSessionStream = createWriteStream(activeSessionFile, { flags: "a" });
-    activeSessionStream.on("error", (err) => {
+    const stream = createWriteStream(activeSessionFile, { flags: "a" });
+    activeSessionStream = stream;
+    stream.on("error", (err) => {
+      if (activeSessionStream === stream) activeSessionStream = null;
       console.error(`[launcher] active-session stream error: ${err.message}`);
     });
   }
@@ -3913,11 +4379,49 @@ function closeActiveSessionStream() {
 
 function appendActiveMessage(msg) {
   try {
-    const record = { role: msg.role, content: msg.text ?? "" };
+    const record = {
+      role: msg.role,
+      content: msg.content !== undefined ? msg.content : msg.text ?? "",
+      ...(Array.isArray(msg.images) && msg.images.length > 0 ? { images: msg.images } : {}),
+      ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
+      ...(msg.toolName ? { toolName: msg.toolName } : {}),
+      ...(msg.toolArgs !== undefined ? { toolArgs: msg.toolArgs } : {}),
+    };
     const stream = getActiveSessionStream();
     stream.write(`${JSON.stringify(record)}\n`);
   } catch (err) {
     console.error(`[launcher] active-session append failed: ${err.message}`);
+  }
+}
+
+async function writeActiveSessionEntries(entries) {
+  await closeActiveSessionStream();
+  const serialized = serializeActiveSession(entries);
+  const tmpFile = `${activeSessionFile}.tmp`;
+  await writeFile(tmpFile, serialized, "utf8");
+  await rename(tmpFile, activeSessionFile);
+}
+
+async function syncActiveSessionFromLoop(pendingUser = null) {
+  if (!loop?.log?.toMessages) return;
+  try {
+    const entries = loop.log.toMessages();
+    const pendingText = typeof pendingUser?.text === "string" ? pendingUser.text : "";
+    if (pendingText) {
+      const lastUser = [...entries].reverse().find((entry) => entry?.role === "user");
+      const lastUserText = typeof lastUser?.content === "string" ? lastUser.content : "";
+      if (lastUserText !== pendingText) {
+        entries.push({
+          role: "user",
+          content: pendingText,
+          ...(Array.isArray(pendingUser.images) && pendingUser.images.length > 0 ? { images: pendingUser.images } : {}),
+        });
+      }
+    }
+    await writeActiveSessionEntries(entries);
+    await writeActiveSessionMeta({ messageCount: entries.length });
+  } catch (err) {
+    console.error(`[launcher] active-session model sync failed: ${err.message}`);
   }
 }
 
@@ -3942,9 +4446,12 @@ async function finalizeActiveSession() {
     try {
       await rename(activeSessionMetaFile, destMeta);
     } catch {
-      writeSessionMeta(ts, { messageCount: messages.length });
+      const raw = await readFile(destFile, "utf8");
+      const messageCount = raw.split(/\r?\n/).filter((line) => line.trim()).length;
+      writeSessionMeta(ts, { messageCount });
     }
     console.error(`[launcher] active session finalized: ${destFile}`);
+    broadcastDashboardEvent({ kind: "sessions-changed", action: "finalize", name: ts });
     return ts;
   } catch (err) {
     console.error(`[launcher] failed to finalize active session: ${err.message}`);
@@ -3962,18 +4469,30 @@ async function clearActiveSession() {
   }
 }
 
-async function writeActiveSessionMeta() {
+async function writeActiveSessionMeta(patch = {}) {
   try {
+    let current = {};
+    try {
+      current = JSON.parse(await readFile(activeSessionMetaFile, "utf8"));
+    } catch {
+    }
+    const sessionStat = await fsStat(activeSessionFile);
     const mode = config.mode || "general";
     const modeInfo = modeSummary(mode);
+    const now = new Date().toISOString();
     const meta = {
       version: 1,
+      ...current,
+      ...patch,
       mode,
       modeLabel: modeInfo.label,
       modeDescription: modeInfo.description,
       workspace: workspaceDir,
-      messageCount: messages.length,
-      updatedAt: new Date().toISOString(),
+      messageCount: Number.isFinite(patch.messageCount) ? Math.max(0, Math.floor(patch.messageCount)) : messages.length,
+      messageCountFileSize: sessionStat.size,
+      messageCountFileMtimeMs: sessionStat.mtimeMs,
+      savedAt: patch.savedAt || current.savedAt || now,
+      updatedAt: now,
     };
     await writeFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
   } catch (err) {
@@ -3989,17 +4508,29 @@ async function loadActiveSession() {
   }
   try {
     const raw = await readFile(activeSessionFile, "utf8");
-    const entries = raw.split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+    const parsed = parseActiveSessionJsonl(raw);
+    const entries = parsed.entries;
     if (entries.length === 0) {
       await clearActiveSession();
       return false;
     }
+    if (parsed.errors.length > 0) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const backup = `${activeSessionFile}.corrupt-${stamp}`;
+      try {
+        await writeFile(backup, raw, "utf8");
+        await writeActiveSessionEntries(entries);
+        console.error(`[launcher] active session repaired: kept ${entries.length} records, skipped ${parsed.errors.length}; backup=${backup}`);
+      } catch (err) {
+        console.error(`[launcher] failed to repair active session: ${err.message}`);
+      }
+    }
+    const modelEntries = activeEntriesForModel(entries);
+    if (loop && modelEntries.length > 0) loop.adoptHistory?.(modelEntries, loop.model) ?? loop.log.compactInPlace(modelEntries);
     messages.length = 0;
     nextMsgId = 1;
-    for (const entry of entries) {
-      const role = entry.role === "tool" ? "tool" : entry.role;
-      const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
-      pushMessage({ id, role, text: entry.content || "" });
+    for (const entry of activeEntriesForDashboard(entries)) {
+      pushMessage(entry);
       nextMsgId++;
     }
     try {
@@ -4009,11 +4540,11 @@ async function loadActiveSession() {
     } catch {
       // ignore missing/broken meta
     }
-    console.error(`[launcher] active session restored: ${entries.length} messages`);
+    await writeActiveSessionMeta({ messageCount: entries.length });
+    console.error(`[launcher] active session restored: ui=${messages.length}, model=${modelEntries.length}`);
     return true;
   } catch (err) {
     console.error(`[launcher] failed to load active session: ${err.message}`);
-    await clearActiveSession();
     return false;
   }
 }
@@ -4042,9 +4573,9 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
     const welcomeId = `assistant-${Date.now()}`;
     const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
     pushMessage(welcomeMsg);
-    broadcastDashboardEvent({ kind: "messages-reset", messages: [welcomeMsg] });
+    broadcastDashboardEvent({ kind: "messages-reset", messages: [welcomeMsg], totalMessages: 1 });
   } else {
-    broadcastDashboardEvent({ kind: "messages-reset", messages: [] });
+    broadcastDashboardEvent({ kind: "messages-reset", messages: [], totalMessages: 0 });
   }
 }
 
@@ -4083,12 +4614,24 @@ function readSessionMeta(name) {
 function writeSessionMeta(name, patch = {}) {
   const path = sessionMetaPath(name);
   const current = readSessionMeta(name);
+  let messageCountSignature = {};
+  if (Number.isFinite(patch.messageCount)) {
+    try {
+      const sessionStat = statSync(sessionJsonlPath(name));
+      messageCountSignature = {
+        messageCountFileSize: sessionStat.size,
+        messageCountFileMtimeMs: sessionStat.mtimeMs,
+      };
+    } catch {
+    }
+  }
   const mode = config.mode || "general";
   const modeInfo = modeSummary(mode);
   const next = {
     version: 1,
     ...current,
     ...patch,
+    ...messageCountSignature,
     mode,
     modeLabel: modeInfo.label,
     modeDescription: modeInfo.description,
@@ -4108,10 +4651,6 @@ function applyModeForSessionMeta(meta) {
   const previous = config.mode || "general";
   if (previous !== modeId) {
     ctx.setMode(modeId);
-  }
-  if (client) {
-    loop = buildLoop(client, workspaceDir);
-    ctx.loop = loop;
   }
   return { changed: previous !== modeId, mode: modeId, previous };
 }
@@ -4151,23 +4690,45 @@ function formatDateKey(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-async function loadJsonlMessages(filePath) {
+const REPORT_COLLECTION_MAX_CHARS = 120_000;
+async function scanJsonlMessages(filePath, retainChars = 0) {
+  const messages = [];
+  let retainedChars = 0;
+  let totalMessages = 0;
   try {
-    const raw = await readFile(filePath, "utf8");
-    return raw
-      .split(/\r?\n/)
-      .filter((l) => l.trim())
-      .map((l) => {
-        try {
-          return JSON.parse(l);
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
+    const input = createReadStream(filePath, { encoding: "utf8" });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object") continue;
+      totalMessages++;
+      if (retainChars <= 0) continue;
+      const content = String(parsed.content ?? "");
+      const message = {
+        role: typeof parsed.role === "string" ? parsed.role : "unknown",
+        content: content.length > REPORT_MAX_PER_MESSAGE_CHARS ? content.slice(0, REPORT_MAX_PER_MESSAGE_CHARS) : content,
+      };
+      const chars = message.content.length + message.role.length + 16;
+      while (messages.length > 0 && retainedChars + chars > retainChars) {
+        const removed = messages.shift();
+        retainedChars -= removed.__chars;
+      }
+      if (chars <= retainChars) {
+        Object.defineProperty(message, "__chars", { value: chars, enumerable: false });
+        messages.push(message);
+        retainedChars += chars;
+      }
+    }
   } catch {
-    return [];
+    return { messages: [], totalMessages: 0, retainedChars: 0 };
   }
+  return { messages, totalMessages, retainedChars };
 }
 
 // Short-TTL cache for collectConversations: the dashboard's "Generate" click
@@ -4184,6 +4745,7 @@ async function collectConversations(start, end) {
   }
   const conversations = [];
   let totalMessages = 0;
+  const candidates = [];
 
   // Archived sessions
   try {
@@ -4198,10 +4760,7 @@ async function collectConversations(start, end) {
         continue;
       }
       if (mtime < start || mtime >= end) continue;
-      const messages = await loadJsonlMessages(filePath);
-      if (messages.length === 0) continue;
-      conversations.push({ source: name.replace(/\.jsonl$/, ""), mtime, messages });
-      totalMessages += messages.length;
+      candidates.push({ source: name.replace(/\.jsonl$/, ""), mtime, filePath });
     }
   } catch (err) {
     console.error(`[report] failed to list sessions: ${err.message}`);
@@ -4209,17 +4768,20 @@ async function collectConversations(start, end) {
 
   // Active session (if current moment falls inside the requested range)
   const now = new Date();
-  if (now >= start && now < end && hasUserMessage()) {
-    const messages = await loadJsonlMessages(activeSessionFile);
-    if (messages.length > 0) {
-      conversations.push({ source: "active", mtime: now, messages });
-      totalMessages += messages.length;
+  if (now >= start && now < end && hasUserMessage()) candidates.push({ source: "active", mtime: now, filePath: activeSessionFile });
+
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  let remainingChars = REPORT_COLLECTION_MAX_CHARS;
+  for (const candidate of candidates) {
+    const scanned = await scanJsonlMessages(candidate.filePath, remainingChars);
+    totalMessages += scanned.totalMessages;
+    if (scanned.messages.length > 0) {
+      conversations.push({ source: candidate.source, mtime: candidate.mtime, messages: scanned.messages });
+      remainingChars = Math.max(0, remainingChars - scanned.retainedChars);
     }
   }
-
-  // Sort oldest first
   conversations.sort((a, b) => a.mtime - b.mtime);
-  const result = { conversations, totalMessages };
+  const result = { conversations, totalMessages, totalSessions: candidates.length };
   _reportConvCache = { key: cacheKey, ts: Date.now(), value: result };
   return result;
 }
@@ -4238,7 +4800,7 @@ async function previewReportSources(period, anchorDate, customRange = null) {
   } else {
     ({ start, end } = getLocalDateRange(period, anchorDate));
   }
-  const { conversations, totalMessages } = await collectConversations(start, end);
+  const { conversations, totalMessages, totalSessions } = await collectConversations(start, end);
   const MAX_PREVIEW_CHARS = 8_000;
   const sources = [];
   let chars = 0;
@@ -4263,7 +4825,7 @@ async function previewReportSources(period, anchorDate, customRange = null) {
     period,
     start: start.toISOString(),
     end: end.toISOString(),
-    totalSessions: conversations.length,
+    totalSessions,
     totalMessages,
     sources
   };
@@ -4298,9 +4860,9 @@ function buildConversationText(conversations) {
   return combined;
 }
 
-const DEFAULT_REPORT_PROMPT_TEMPLATE = `你是一位高效的对话记录整理助手。请仅根据下方提供的 Visionox Desktop 历史会话记录生成一份结构化的 {periodLabel}。
+const DEFAULT_REPORT_PROMPT_TEMPLATE = `你是一位高效的对话记录整理助手。请仅根据下方提供的 Visionox-Whale 历史会话记录生成一份结构化的 {periodLabel}。
 要求：
-1. 使用 Markdown 格式，标题为「{date} Visionox {periodLabel}」。
+1. 使用 Markdown 格式，标题为「{date} Visionox-Whale {periodLabel}」。
 2. 你只能基于提供的对话记录进行总结；不要主动读取或引用工作区文件、代码库、网络内容。
 3. 如果某些信息在对话记录中不清楚或缺失，请在报告中直接说明，不要编造。
 4. 只有在用户明确要求、或对话记录本身明确提到工作区文件时，才可以补充引用工作区内容。
@@ -4333,7 +4895,7 @@ function buildReportPrompt(periodLabel, date, conversationText, stats) {
   ];
 }
 
-async function migrateReportPromptAddendum() {
+async function migrateReportPromptAddendum(signal) {
   const cfg = readConfig(configPath);
   const oldTemplate = cfg.reportPromptTemplate;
   if (typeof oldTemplate !== "string" || oldTemplate.trim() === "") {
@@ -4374,6 +4936,7 @@ async function migrateReportPromptAddendum() {
         messages: migrationMessages,
         temperature: 0.2,
         maxTokens: 600,
+        signal,
       });
       addendum = (result.content || "").trim();
       if (addendum.startsWith("```")) {
@@ -4381,6 +4944,7 @@ async function migrateReportPromptAddendum() {
       }
       console.error(`[launcher] report prompt migration: LLM summarized addendum (${addendum.length} chars)`);
     } catch (err) {
+      if (signal?.aborted) throw err;
       console.error(`[launcher] report prompt migration: LLM summarize failed (${err.message}), fallback to raw legacy template`);
       addendum = `（从旧版本迁移的用户自定义提示词，建议清理后重新编辑）\n\n${oldTemplate}`;
     }
@@ -4399,11 +4963,11 @@ async function migrateReportPromptAddendum() {
   return { migrated: true, reason: "summarized", addendum };
 }
 
-async function generateReport(period, anchorDate, customRange = null) {
+async function generateReport(period, anchorDate, customRange = null, options = {}) {
   if (!client) {
     throw new Error("当前未配置可用的 LLM provider，无法生成报告");
   }
-  await migrateReportPromptAddendum();
+  await migrateReportPromptAddendum(options.signal);
   let start;
   let end;
   if (customRange && customRange.start && customRange.end) {
@@ -4417,14 +4981,14 @@ async function generateReport(period, anchorDate, customRange = null) {
   } else {
     ({ start, end } = getLocalDateRange(period, anchorDate));
   }
-  const { conversations, totalMessages } = await collectConversations(start, end);
-  const stats = { period, start, end, sessions: conversations.length, messages: totalMessages };
+  const { conversations, totalMessages, totalSessions } = await collectConversations(start, end);
+  const stats = { period, start, end, sessions: totalSessions, messages: totalMessages };
 
   const periodLabel = period === "daily" ? "日报" : period === "weekly" ? "周报" : period === "yearly" ? "年度报告" : "自定义报告";
 
-  if (conversations.length === 0) {
+  if (totalSessions === 0) {
     return {
-      markdown: `## Visionox ${periodLabel}\n\n` +
+      markdown: `## Visionox-Whale ${periodLabel}\n\n` +
         `时间范围：**${formatDateKey(start)}** 至 **${formatDateKey(end)}**\n\n本期暂无有效对话记录。`,
       stats,
     };
@@ -4436,12 +5000,13 @@ async function generateReport(period, anchorDate, customRange = null) {
   const cfg = effectiveModelConfig(config);
   const model = cfg.model;
 
-  console.error(`[report] generating ${period} report: ${conversations.length} sessions, ${totalMessages} messages, model=${model}`);
+  console.error(`[report] generating ${period} report: ${totalSessions} sessions, ${totalMessages} messages, model=${model}`);
   const result = await client.chat({
     model,
     messages,
     temperature: 0.3,
     maxTokens: 4096,
+    signal: options.signal,
   });
   const markdown = result.content?.trim() || "生成失败：模型返回空内容";
   return { markdown, stats };
@@ -4452,22 +5017,44 @@ async function generateReport(period, anchorDate, customRange = null) {
 // Without this listener, gate.ask() throws "no confirmation listener registered".
 let activeModal = null;
 let activeGateId = null;
+const queuedModals = [];
 
 function setActiveModal(modal) {
-  if (activeModal) {
-    broadcastDashboardEvent({ kind: "modal-down", modalKind: activeModal.kind });
-  }
-  activeModal = modal;
-  activeGateId = modal?._gateId ?? null;
   if (modal) {
+    if (activeModal) {
+      queuedModals.push(modal);
+      return;
+    }
+    activeModal = modal;
+    activeGateId = modal._gateId;
     broadcastDashboardEvent({ kind: "modal-up", modal });
+    return;
   }
+
+  if (activeModal) {
+    broadcastDashboardEvent({
+      kind: "modal-down",
+      modalKind: activeModal.kind,
+      gateId: activeGateId,
+    });
+  }
+  activeModal = null;
+  activeGateId = null;
+
+  const next = queuedModals.shift();
+  if (next) setActiveModal(next);
 }
 
-function resolveActiveGate(verdict) {
-  if (activeGateId !== null) {
-    pauseGate.resolve(activeGateId, verdict);
-  }
+function clearActiveModals() {
+  queuedModals.length = 0;
+  setActiveModal(null);
+}
+
+function resolveActiveGate(expectedKind, gateId, verdict) {
+  if (!activeModal || activeModal.kind !== expectedKind || activeGateId !== gateId) return false;
+  pauseGate.resolve(activeGateId, verdict);
+  setActiveModal(null);
+  return true;
 }
 
 // Register pauseGate listener — maps tool confirmation requests to dashboard modals.
@@ -4509,12 +5096,22 @@ pauseGate.on((request) => {
   setActiveModal(modal);
 });
 
+const auditLogPath = resolve(visionoxDataDir, "audit.jsonl");
+function appendAuditEntry(entry) {
+  try {
+    if (existsSync(auditLogPath) && statSync(auditLogPath).size >= 10 * 1024 * 1024) {
+      const backup = `${auditLogPath}.1`;
+      rmSync(backup, { force: true });
+      renameSync(auditLogPath, backup);
+    }
+    appendFileSync(auditLogPath, `${JSON.stringify(entry)}\n`);
+  } catch {
+  }
+}
+
 // Wire audit listener for tool confirmations (allow/deny/always_allow)
 pauseGate.setAuditListener((event) => {
-  try {
-    appendFileSync(resolve(visionoxDataDir, "audit.jsonl"),
-      JSON.stringify({ ts: Date.now(), action: "tool-confirm", payload: event }) + "\n");
-  } catch { /* swallow */ }
+  appendAuditEntry({ ts: Date.now(), action: "tool-confirm", payload: event });
 });
 
 // ── Slash command registry ──────────────────────────────────────
@@ -4643,6 +5240,9 @@ const ctx = {
   addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
   updateModeMemory: (id, patch, modeId) => updateModeMemory(modeId || config.mode || "general", id, patch),
   deleteModeMemory: (id, modeId) => deleteModeMemory(modeId || config.mode || "general", id),
+  listPromptQueue,
+  upsertPromptQueueItem,
+  removePromptQueueItem,
   listSchedules: () => schedules.map(publicSchedule),
   createSchedule: (input) => {
     const result = scheduleFromInput(input);
@@ -4688,6 +5288,7 @@ const ctx = {
     return { ok: true };
   },
   runScheduleNow: (id) => triggerSchedule(id, { manual: true }),
+  cancelScheduleRun,
 
   // ── Reports ────────────────────────────────────────────────
   generateReport,
@@ -4711,45 +5312,52 @@ const ctx = {
 
   // ── Setters / actions ──────────────────────────────────────
   audit: (entry) => {
-    try {
-      appendFileSync(resolve(visionoxDataDir, "audit.jsonl"), JSON.stringify(entry) + "\n");
-    } catch { /* swallow — audit must never break the caller */ }
+    appendAuditEntry(entry);
   },
   // ── Modal resolution callbacks (called by POST /modal/resolve) ──
-  resolveShellConfirm: (choice) => {
+  resolveShellConfirm: (choice, gateId) => {
     const prefix = activeModal?.allowPrefix ?? "";
     const verdict = choice === "deny" ? { type: "deny", denyContext: "user denied" }
       : choice === "always_allow" ? { type: "always_allow", prefix }
       : { type: "run_once" };
-    resolveActiveGate(verdict);
-    setActiveModal(null);
+    return resolveActiveGate("shell", gateId, verdict);
   },
-  resolveChoiceConfirm: (resolution) => {
+  resolveChoiceConfirm: (resolution, gateId) => {
     const verdict = resolution?.kind === "pick" ? { type: "pick", optionId: resolution.optionId }
       : resolution?.kind === "custom" ? { type: "text", text: resolution.text }
       : { type: "cancel" };
-    resolveActiveGate(verdict);
-    setActiveModal(null);
+    return resolveActiveGate("choice", gateId, verdict);
   },
-  resolvePlanConfirm: (choice, text) => {
+  resolvePlanConfirm: (choice, text, gateId) => {
     const feedback = text || "";
     const verdict = choice === "approve" ? { type: "approve", feedback }
       : choice === "refine" ? { type: "refine", feedback }
       : { type: "cancel", feedback };
-    resolveActiveGate(verdict);
-    setActiveModal(null);
+    const resolved = resolveActiveGate("plan", gateId, verdict);
+    if (resolved && choice === "approve") activatePendingPlan();
+    if (resolved && choice !== "approve") pendingPlan = null;
+    return resolved;
   },
-  resolveCheckpointConfirm: (choice, text) => {
+  resolveCheckpointConfirm: (choice, text, gateId) => {
     const verdict = choice === "continue" ? { type: "continue" }
       : choice === "revise" ? { type: "revise", feedback: text || "" }
       : { type: "stop" };
-    resolveActiveGate(verdict);
-    setActiveModal(null);
+    return resolveActiveGate("checkpoint", gateId, verdict);
   },
-  resolveReviseConfirm: (choice) => {
+  resolveReviseConfirm: (choice, gateId) => {
     const verdict = choice === "accept" ? { type: "accepted" } : { type: "rejected" };
-    resolveActiveGate(verdict);
-    setActiveModal(null);
+    const resolved = resolveActiveGate("revision", gateId, verdict);
+    if (!resolved) return false;
+    if (choice === "accept" && pendingPlanRevision && activePlanSteps && activeCompletedIds) {
+      activePlanSteps = [
+        ...activePlanSteps.filter((step) => activeCompletedIds.has(step.id)),
+        ...pendingPlanRevision.remainingSteps,
+      ];
+      if (pendingPlanRevision.summary) activePlanSummary = pendingPlanRevision.summary;
+      persistActivePlan();
+    }
+    pendingPlanRevision = null;
+    return true;
   },
   setEditMode: (m) => {
     // "review" is a legacy alias for "auto" after the merge
@@ -4780,8 +5388,7 @@ const ctx = {
     // until /new. Without this, /status would report the new mode while the
     // cached system prefix still carried the old mode's content.
     if (client) {
-      loop = buildLoop(client, workspaceDir);
-      ctx.loop = loop;
+      rebuildLoopPreservingContext(client, workspaceDir);
     }
     return true;
   },
@@ -4791,9 +5398,10 @@ const ctx = {
     // Re-resolve through effectiveModelConfig so locked presets override
     // stale config.model values when switching live or rebuilding after /new.
     const modelConfig = effectiveModelConfig(config);
-    applyContextCap(modelConfig.model);
-    loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
+    activeContextPolicy = applyContextCap(modelConfig.model);
+    const modelSwitch = requestModelSwitch(modelConfig, "preset");
     broadcastDashboardEvent({ kind: "config-changed" });
+    return modelSwitch;
   },
   applyEffortLive: (effort) => {
     syncRuntimeConfig({ ...config, reasoningEffort: effort });
@@ -4805,10 +5413,11 @@ const ctx = {
     // A manual model pick updates the auto baseline only; pro/flash presets stay
     // locked to their preset model to keep every UI surface consistent.
     const modelConfig = effectiveModelConfig(config);
-    applyContextCap(modelConfig.model);
-    loop?.configure({ model: modelConfig.model, autoEscalate: modelConfig.autoEscalate });
+    activeContextPolicy = applyContextCap(modelConfig.model);
+    const modelSwitch = requestModelSwitch(modelConfig, "model");
     console.error(`[launcher] model: ${modelConfig.model}`);
     broadcastDashboardEvent({ kind: "config-changed" });
+    return modelSwitch;
   },
   // Refresh context cap after provider/model config changes (e.g. JSON import).
   // Re-reads config, clears stale DEEPSEEK_CONTEXT_TOKENS[model] if manual cap
@@ -4817,20 +5426,19 @@ const ctx = {
     const cfg = readConfig(configPath);
     syncRuntimeConfig(cfg);
     const modelConfig = effectiveModelConfig(config);
-    // If manual cap was cleared, delete the stale entry so applyContextCap
-    // can fall through to maxContextLength or hardcoded defaults.
-    if (!cfg.contextCapTokens) {
-      delete DEEPSEEK_CONTEXT_TOKENS[modelConfig.model];
-    }
-    applyContextCap(modelConfig.model);
+    activeContextPolicy = rebuildProviderContextCaps(config);
     // Re-select summary model in case provider models were updated by import.
     const provider = getActiveProvider(cfg);
     if (provider) {
+      globalThis.__visionoxThinkingModeMap = Object.fromEntries(
+        (provider.models ?? []).map((model) => [model.id, model.thinkingMode])
+      );
       globalThis.__visionoxSummaryModel = pickSummaryModel(provider.models);
     }
-    loop?.configure({ model: modelConfig.model });
+    const modelSwitch = requestModelSwitch(modelConfig, "context-cap");
     console.error(`[launcher] context cap refreshed: model=${modelConfig.model}, cap=${DEEPSEEK_CONTEXT_TOKENS[modelConfig.model] ?? DEFAULT_CONTEXT_TOKENS}`);
     broadcastDashboardEvent({ kind: "config-changed" });
+    return { modelSwitch, contextPolicy: activeContextPolicy };
   },
   setBudgetUsdLive: (usd) => { loop?.setBudget(usd); },
   completeActivePlanStep,
@@ -4873,16 +5481,17 @@ const ctx = {
     if (newEffort !== cfg.reasoningEffort) cfg.reasoningEffort = newEffort;
     writeConfig(cfg, configPath);
     syncRuntimeConfig(cfg);
+    activeContextPolicy = rebuildProviderContextCaps(config);
 
     // Rebuild client + loop immediately (no /new needed)
     apiKey = provider.apiKey;
     baseUrl = provider.baseUrl;
     if (apiKey) {
       client = new DeepSeekClient({ apiKey, baseUrl });
-      loop = buildLoop(client, workspaceDir);
-      ctx.loop = loop;
+      const modelSwitch = rebuildLoopPreservingContext(client, workspaceDir);
       refreshBalance();
       console.error(`[launcher] provider switched: ${providerId} (preset=${newPreset}, effort=${newEffort})`);
+      return { providerId, ...modelSwitch };
     } else {
       client = null;
       loop = null;
@@ -4907,8 +5516,7 @@ const ctx = {
       baseUrl = newBaseUrl;
       if (apiKey) {
         client = new DeepSeekClient({ apiKey, baseUrl });
-        loop = buildLoop(client, workspaceDir);
-        ctx.loop = loop;
+        rebuildLoopPreservingContext(client, workspaceDir);
         refreshBalance();
         console.error(`[launcher] client & loop recreated with new credentials`);
       } else {
@@ -4941,15 +5549,14 @@ const ctx = {
 
     // Re-register with new root
     if (!existsSync(configuredDir)) mkdirSync(configuredDir, { recursive: true });
-    const result = await registerWorkspaceTools(tools, configuredDir, { jobs });
+    const result = await registerWorkspaceTools(tools, configuredDir, { jobs, getOperationId: () => activeOperation?.id ?? null });
     hasSemanticSearch = result.hasSemantic;
     wsToolNames = result.toolNames;
     workspaceDir = configuredDir;
 
     // Rebuild loop with new system prompt & prefix
     if (loop && client) {
-      loop = buildLoop(client, workspaceDir);
-      ctx.loop = loop;
+      rebuildLoopPreservingContext(client, workspaceDir);
       console.error(`[launcher] loop rebuilt for new workspace: ${workspaceDir}`);
     }
 
@@ -4964,6 +5571,10 @@ const ctx = {
 
   // ── Chat bridge ────────────────────────────────────────────
   getMessages: () => messages,
+  getActiveOperation: () => publicActiveOperation(),
+  listBackgroundJobs: () => jobs.listMetadata(),
+  getBackgroundJob: (id) => jobs.read(id),
+  stopBackgroundJob: (id) => jobs.stop(id),
 
   subscribeEvents: (handler) => {
     eventSubscribers.add(handler);
@@ -4971,6 +5582,7 @@ const ctx = {
       eventSubscribers.delete(handler);
     };
   },
+  notifySessionsChanged: (action, name) => broadcastDashboardEvent({ kind: "sessions-changed", action, name }),
 
   // Expose the slash-command registry to the dashboard so the UI can render
   // a dynamic command menu (autocomplete, /help list) instead of hardcoding
@@ -4982,6 +5594,11 @@ const ctx = {
   // P0-1: busy guard must be checked and set BEFORE any await to prevent
   // race conditions where two rapid calls both pass the busy check.
   submitPrompt: async (text, sessionName, images, opts = {}) => {
+    const requestId = typeof opts.requestId === "string" ? opts.requestId.trim().slice(0, 160) : "";
+    const duplicate = acceptedPromptRequest(requestId);
+    if (duplicate) {
+      return { accepted: true, duplicate: true, requestId, turnId: duplicate.turnId };
+    }
     if (busy) {
       return { accepted: false, reason: "loop is busy with a turn" };
     }
@@ -4996,7 +5613,7 @@ const ctx = {
         .join("\n");
       let skillCount = 0;
       try { skillCount = (await readdir(bootstrapSkillsRoot)).filter(e => statSync(resolve(bootstrapSkillsRoot, e)).isDirectory()).length; } catch {}
-      const helpText = `## Visionox 能力概览
+      const helpText = `## Visionox-Whale 能力概览
 
 ### 🎯 四种工作模式
 
@@ -5042,6 +5659,19 @@ ${modeList}
     }
 
     busy = true;
+    const operation = beginActiveOperation(operationKindForPrompt(text, opts));
+    const stopFromExternalSignal = () => {
+      if (operation.controller.signal.aborted) return;
+      operation.state = "stopping";
+      operation.stopRequestedAt = new Date().toISOString();
+      operation.controller.abort();
+      broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation(operation) });
+      void jobs.stopOwned(operation.id, { graceMs: 100 });
+      loop?.abort();
+    };
+    if (opts.signal?.aborted) stopFromExternalSignal();
+    else opts.signal?.addEventListener("abort", stopFromExternalSignal, { once: true });
+    const detachExternalSignal = () => opts.signal?.removeEventListener("abort", stopFromExternalSignal);
 
     // committed: set to true when the fire-and-forget IIFE takes ownership
     // of busy-reset. Early-return paths leave it false so the outer finally
@@ -5066,36 +5696,36 @@ ${modeList}
           const sessionFile = sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
           const modeRestore = applyModeForSessionMeta(sessionMeta);
-          const raw = readFileSync(sessionFile, "utf8");
-          const entries = raw.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
+          const raw = await readFile(sessionFile, "utf8");
+          const parsed = parseActiveSessionJsonl(raw);
+          const entries = parsed.entries;
+          const modelEntries = activeEntriesForModel(entries);
+          const dashboardEntries = activeEntriesForDashboard(entries);
           // Load into AI context
-          loop.log.compactInPlace(entries);
+          loop.adoptHistory?.(modelEntries, loop.model) ?? loop.log.compactInPlace(modelEntries);
           // Populate dashboard messages
           messages.length = 0;
           nextMsgId = 1;
-          const loaded = [];
-          for (const entry of entries) {
-            const role = entry.role === "tool" ? "tool" : entry.role;
-            const id = role === "assistant" ? `assistant-${Date.now()}-${nextMsgId}` : `${role}-${nextMsgId}`;
-            pushMessage({ id, role, text: entry.content || "" });
-            loaded.push({ id, role, text: entry.content || "" });
+          for (const entry of dashboardEntries) {
+            pushMessage(entry);
             nextMsgId++;
           }
           // Seed active-session file with the resumed session so continued
           // conversation survives a crash/restart with full context.
           try {
             await writeFile(activeSessionFile, raw, "utf8");
-            try {
-              const metaRaw = readFileSync(sessionMetaPath(sessionName), "utf8");
-              await writeFile(activeSessionMetaFile, metaRaw, "utf8");
-            } catch {
-              await writeActiveSessionMeta();
-            }
+            await writeActiveSessionMeta({ ...sessionMeta, messageCount: entries.length });
           } catch (err) {
             console.error(`[launcher] failed to seed active session from ${sessionName}: ${err.message}`);
           }
-          broadcastDashboardEvent({ kind: "messages-reset", messages: loaded, mode: modeRestore.mode, modeChanged: modeRestore.changed });
-          console.error(`[launcher] session loaded: ${sessionName} (${entries.length} messages, mode: ${modeRestore.mode}${modeRestore.changed ? `, restored from ${modeRestore.previous}` : ""})`);
+          broadcastDashboardEvent({
+            kind: "messages-reset",
+            messages: messages.slice(-DASHBOARD_MESSAGE_WINDOW),
+            totalMessages: messages.length,
+            mode: modeRestore.mode,
+            modeChanged: modeRestore.changed,
+          });
+          console.error(`[launcher] session loaded: ${sessionName} (ui=${dashboardEntries.length}, model=${modelEntries.length}, mode: ${modeRestore.mode}${modeRestore.changed ? `, restored from ${modeRestore.previous}` : ""})`);
           if (!text || !text.trim()) {
             return { accepted: true, loaded: true, session: sessionName, mode: modeRestore.mode, modeChanged: modeRestore.changed };
           }
@@ -5105,7 +5735,7 @@ ${modeList}
         }
       }
 
-      // Handle /learn: Visionox learning command (does not enter AI loop)
+      // Handle /learn: Visionox-Whale learning command (does not enter AI loop)
       // Lazy-load learn modules so a missing resource file cannot break startup.
       const [learn, learnTrack] = await Promise.all([loadLearnModule(), loadLearnTrackModule()]);
       const learnCmd = learn?.parseLearnCommand(text) ?? null;
@@ -5136,17 +5766,18 @@ ${modeList}
           getTutorMode,
           setLearningMode,
           getLearningMode,
+          signal: operation.controller.signal,
           rebuildLoop: () => {
             pauseGate.cancelAll();
-            setActiveModal(null);
+            clearActiveModals();
             broadcastDashboardEvent({ kind: "todo-update", todos: [] });
             if (client) {
-              loop = buildLoop(client, workspaceDir);
-              ctx.loop = loop;
+              rebuildLoopPreservingContext(client, workspaceDir);
             }
           },
         };
         const result = await learn.executeLearnCommand(learnCmd, learnOpts);
+        if (operation.controller.signal.aborted) return { accepted: true, cancelled: true };
         const assistantId = `assistant-${Date.now()}`;
         const assistantMsg = { id: assistantId, role: "assistant", text: result.message };
         pushMessage(assistantMsg);
@@ -5236,6 +5867,7 @@ ${modeList}
           pushMessage({ id: errId, role: "assistant", text: errText });
           broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: errText });
         } finally {
+          await syncActiveSessionFromLoop();
           busy = false;
           broadcastDashboardEvent({ kind: "busy-change", busy: false });
         }
@@ -5253,10 +5885,15 @@ ${modeList}
           return { accepted: true };
         }
         const lastUserText = messages[lastUserIdx].text;
+        const modelRetryText = loop?.retryLastUser?.();
         messages.splice(lastUserIdx);
         // Broadcast truncated message list
-        broadcastDashboardEvent({ kind: "messages-reset", messages: [...messages] });
-        text = lastUserText;
+        broadcastDashboardEvent({
+          kind: "messages-reset",
+          messages: messages.slice(-DASHBOARD_MESSAGE_WINDOW),
+          totalMessages: messages.length,
+        });
+        text = modelRetryText || lastUserText;
         // Fall through to AI loop with the retried text
       }
 
@@ -5349,16 +5986,21 @@ ${modeList}
         broadcastDashboardEvent({ kind: "assistant_final", id: btwId, text: "\u{1F4AC} \u65C1\u8DEF\u63D0\u95EE\u4E2D..." });
         try {
           const tmpLoop = buildLoop(client, workspaceDir);
+          const stopTmpLoop = () => tmpLoop.abort();
+          operation.controller.signal.addEventListener("abort", stopTmpLoop, { once: true });
           tmpLoop.clearLog();
           let answer = "";
           for await (const ev of tmpLoop.step(question)) {
             if (ev.role === "assistant_delta") answer += ev.content ?? "";
             if (ev.role === "assistant_final" && ev.content && ev.content.length > answer.length) answer = ev.content;
           }
+          operation.controller.signal.removeEventListener("abort", stopTmpLoop);
+          if (operation.controller.signal.aborted) return { accepted: true, cancelled: true };
           const doneId = `assistant-${Date.now()}`;
           pushMessage({ id: doneId, role: "assistant", text: `\u{1F4AC} \u65C1\u8DEF\u56DE\u7B54\n\n${answer}` });
           broadcastDashboardEvent({ kind: "assistant_final", id: doneId, text: `\u{1F4AC} \u65C1\u8DEF\u56DE\u7B54\n\n${answer}` });
         } catch (err) {
+          if (operation.controller.signal.aborted) return { accepted: true, cancelled: true };
           const errId = `assistant-${Date.now()}`;
           pushMessage({ id: errId, role: "assistant", text: `\u274C \u65C1\u8DEF\u63D0\u95EE\u5931\u8D25: ${err.message}` });
           broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: `\u274C \u65C1\u8DEF\u63D0\u95EE\u5931\u8D25: ${err.message}` });
@@ -5391,11 +6033,12 @@ ${modeList}
           // blocked the event loop and used the stale `entry.text` field.
           const dateArg = parts[2];
           const anchorDate = dateArg ? new Date(dateArg) : new Date();
-          const { markdown, stats } = await generateReport(period, Number.isNaN(anchorDate.getTime()) ? new Date() : anchorDate);
+          const { markdown, stats } = await generateReport(period, Number.isNaN(anchorDate.getTime()) ? new Date() : anchorDate, null, { signal: operation.controller.signal });
           const doneId = `assistant-${Date.now()}`;
           pushMessage({ id: doneId, role: "assistant", text: `${markdown}\n\n---\n\u4F1A\u8BDD\u6570\uFF1A${stats.sessions} \u6D88\u606F\u6570\uFF1A${stats.messages}` });
           broadcastDashboardEvent({ kind: "assistant_final", id: doneId, text: `${markdown}\n\n---\n\u4F1A\u8BDD\u6570\uFF1A${stats.sessions} \u6D88\u606F\u6570\uFF1A${stats.messages}` });
         } catch (err) {
+          if (operation.controller.signal.aborted) return { accepted: true, cancelled: true };
           const errId = `assistant-${Date.now()}`;
           pushMessage({ id: errId, role: "assistant", text: `\u274C \u62A5\u544A\u751F\u6210\u5931\u8D25: ${err.message}` });
           broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: `\u274C \u62A5\u544A\u751F\u6210\u5931\u8D25: ${err.message}` });
@@ -5429,7 +6072,7 @@ ${modeList}
 
       const userMsgId = String(nextMsgId++);
       pushMessage({ id: userMsgId, role: "user", text, images: images?.length ? images : undefined });
-      appendActiveMessage({ role: "user", text });
+      appendActiveMessage({ role: "user", text, images: images?.length ? images : undefined });
       broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: images?.length ? images : undefined });
 
       const assistantId = `assistant-${Date.now()}`;
@@ -5446,48 +6089,93 @@ ${modeList}
       (async () => {
         let assistantText = "";
         let turnError = null;
+        let continuationAttempts = 0;
+        let continuationNeeded = false;
+        let loopInput = text;
         const turnArtifactPaths = new Set();
         try {
-          for await (const ev of loop.step(text)) {
-            if (ev.role === "tool") {
-              const artifactPaths = rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs);
-              const newFiles = [];
-              for (const artifactPath of artifactPaths) {
-                const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
-                if (turnArtifactPaths.has(key)) continue;
-                turnArtifactPaths.add(key);
-                const info = generatedArtifactFileInfo(artifactPath);
-                if (info) newFiles.push(info);
+          while (true) {
+            let budgetForcedSummary = false;
+            let sawToolActivity = false;
+            for await (const ev of loop.step(loopInput)) {
+              if (ev.role === "tool") {
+                sawToolActivity = true;
+                const artifactPaths = rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs);
+                const newFiles = [];
+                for (const artifactPath of artifactPaths) {
+                  const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
+                  if (turnArtifactPaths.has(key)) continue;
+                  turnArtifactPaths.add(key);
+                  const info = generatedArtifactFileInfo(artifactPath);
+                  if (info) newFiles.push(info);
+                }
+                if (newFiles.length > 0) {
+                  broadcastDashboardEvent({
+                    kind: "artifact-created",
+                    assistantId,
+                    files: newFiles,
+                  });
+                }
               }
-              if (newFiles.length > 0) {
-                broadcastDashboardEvent({
-                  kind: "artifact-created",
-                  assistantId,
-                  files: newFiles,
-                });
+              // Write event to .events.jsonl for cockpit tool activity
+              if (eventSink && eventizer) {
+                try {
+                  const ectx = { model: ev.stats?.model ?? loop.model ?? effectiveModelConfig(config).model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
+                  for (const out of eventizer.consume(ev, ectx)) eventSink.append(out);
+                } catch {}
               }
-            }
-            // Write event to .events.jsonl for cockpit tool activity
-            if (eventSink && eventizer) {
-              try {
-                const ectx = { model: ev.stats?.model ?? loop.model ?? effectiveModelConfig(config).model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
-                for (const out of eventizer.consume(ev, ectx)) eventSink.append(out);
-              } catch {}
+
+              const dashev = loopEventToDashboard(ev, assistantId);
+              broadcastDashboardEvent(dashev);
+
+              if (ev.role === "assistant_delta") {
+                assistantText += ev.content ?? "";
+              }
+              if (ev.role === "assistant_final") {
+                if (ev.forcedSummaryReason === "budget") {
+                  budgetForcedSummary = true;
+                  assistantText = ev.content || assistantText;
+                } else if (ev.content && ev.content.length > assistantText.length) {
+                  // Keep the longest content — the last real answer wins over
+                  // shorter intermediate reasoning/tool-use summaries.
+                  assistantText = ev.content;
+                }
+              }
             }
 
-            const dashev = loopEventToDashboard(ev, assistantId);
-            broadcastDashboardEvent(dashev);
-
-            if (ev.role === "assistant_delta") {
-              assistantText += ev.content ?? "";
+            const continuation = decidePlanContinuation({
+              forcedSummaryReason: budgetForcedSummary ? "budget" : null,
+              plan: incompleteActivePlanSnapshot(),
+              attempts: continuationAttempts,
+              maxAttempts: MAX_PLAN_AUTO_CONTINUATIONS,
+              aborted: operation.controller.signal.aborted,
+              incompleteFinal: !budgetForcedSummary && sawToolActivity,
+            });
+            if (continuation.action === "continue") {
+              const incompletePlan = continuation.plan;
+              const continuationReason = budgetForcedSummary ? "budget" : "incomplete-final";
+              continuationAttempts++;
+              broadcastDashboardEvent({
+                kind: "status",
+                text: continuationReason === "budget"
+                  ? `本轮工具额度已用完，计划仍有 ${incompletePlan.totalSteps - incompletePlan.completedSteps} 步未完成，正在自动继续（${continuationAttempts}/${MAX_PLAN_AUTO_CONTINUATIONS}）`
+                  : `计划仍有 ${incompletePlan.totalSteps - incompletePlan.completedSteps} 步未完成，正在继续执行（${continuationAttempts}/${MAX_PLAN_AUTO_CONTINUATIONS}）`,
+              });
+              assistantText = "";
+              loopInput = planAutoContinuationPrompt(incompletePlan, continuationAttempts, continuationReason);
+              continue;
             }
-            if (ev.role === "assistant_final") {
-              // Keep the longest content — the last real answer wins over
-              // shorter intermediate reasoning/tool-use summaries
-              if (ev.content && ev.content.length > assistantText.length) {
-                assistantText = ev.content;
-              }
+            if (continuation.action === "pause") {
+              const incompletePlan = continuation.plan;
+              continuationNeeded = true;
+              broadcastDashboardEvent({
+                kind: "plan-continuation-needed",
+                attempts: continuationAttempts,
+                maxAttempts: MAX_PLAN_AUTO_CONTINUATIONS,
+                plan: incompletePlan,
+              });
             }
+            break;
           }
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
@@ -5498,6 +6186,13 @@ ${modeList}
               text: assistantText,
             });
             appendActiveMessage({ role: "assistant", text: assistantText });
+            broadcastDashboardEvent({
+              kind: "assistant_final",
+              id: assistantId,
+              text: assistantText,
+              forcedSummary: continuationNeeded,
+              planIncomplete: continuationNeeded,
+            });
           }
         } catch (err) {
           turnError = err;
@@ -5507,13 +6202,15 @@ ${modeList}
             text: err.message,
           });
         } finally {
+          await syncActiveSessionFromLoop({ text, images });
           if (opts.readonly === true) {
             tools.setPlanMode(previousPlanMode);
           }
           if (completeTurn) {
             try {
               completeTurn({
-                ok: !turnError,
+                ok: !turnError && !operation.controller.signal.aborted,
+                cancelled: operation.controller.signal.aborted,
                 error: turnError?.message ?? null,
                 assistantText,
                 assistantMessageId: assistantId,
@@ -5524,28 +6221,50 @@ ${modeList}
               console.error(`[launcher] submitPrompt completion callback failed: ${err.message}`);
             }
           }
+          const appliedSwitch = commitPendingModelSwitch();
+          if (appliedSwitch) {
+            broadcastDashboardEvent({
+              kind: "status",
+              text: `\u5DF2\u5207\u6362\u5230 ${appliedSwitch.model}\uFF0C\u4FDD\u7559 ${appliedSwitch.messageCount} \u6761\u4E0A\u4E0B\u6587`,
+            });
+            broadcastDashboardEvent({ kind: "config-changed" });
+          }
           busy = false;
           broadcastDashboardEvent({ kind: "busy-change", busy: false });
+          detachExternalSignal();
+          finishActiveOperation(operation);
         }
       })();
 
-      return { accepted: true };
+      const acceptedResult = { accepted: true, requestId: requestId || null, turnId: assistantId };
+      rememberAcceptedPromptRequest(requestId, acceptedResult);
+      return acceptedResult;
     } finally {
       // Reset busy on any early-return path (session load, /new, no-loop, etc.)
       if (!committed) {
+        detachExternalSignal();
         busy = false;
         broadcastDashboardEvent({ kind: "busy-change", busy: false });
+        finishActiveOperation(operation);
       }
     }
   },
 
   abortTurn: () => {
     pauseGate.cancelAll();
-    setActiveModal(null);
+    clearActiveModals();
     broadcastDashboardEvent({ kind: "todo-update", todos: [] });
     if (busy) {
+      if (activeOperation) {
+        activeOperation.state = "stopping";
+        activeOperation.stopRequestedAt = new Date().toISOString();
+        activeOperation.controller.abort();
+        broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation() });
+        void jobs.stopOwned(activeOperation.id, { graceMs: 100 });
+      }
       loop?.abort();
     }
+    return { accepted: busy, operation: publicActiveOperation() };
   },
 
   isBusy: () => busy,
@@ -5553,6 +6272,8 @@ ${modeList}
   getStats: () => {
     if (!loop) return null;
     const s = loop.stats.summary();
+    const contextStatus = loop.contextStatus?.() ?? null;
+    const contextPolicy = contextPolicyFor(loop.model);
     const balance = normalizedBalanceInfos();
     const balanceSupported = isDeepSeekApi(baseUrl);
     return {
@@ -5563,7 +6284,14 @@ ${modeList}
       totalOutputCostUsd: s.totalOutputCostUsd,
       cacheHitRatio: s.cacheHitRatio,
       lastPromptTokens: s.lastPromptTokens,
-      contextCapTokens: DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS,
+      contextCapTokens: contextStatus?.ctxMax ?? DEEPSEEK_CONTEXT_TOKENS[loop.model] ?? DEFAULT_CONTEXT_TOKENS,
+      estimatedContextTokens: contextStatus?.estimatedTokens ?? s.lastPromptTokens,
+      contextFoldTokens: contextStatus?.foldTokens ?? null,
+      contextAggressiveTokens: contextStatus?.aggressiveTokens ?? null,
+      contextForceSummaryTokens: contextStatus?.forceSummaryTokens ?? null,
+      contextNeedsCompaction: contextStatus?.needsCompaction ?? false,
+      contextCapacitySource: contextPolicy.capacitySource,
+      contextEffectiveSource: contextPolicy.source,
       balanceSupported,
       balance,
       primaryBalance: primaryBalanceSummary(),

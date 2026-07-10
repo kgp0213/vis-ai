@@ -70,7 +70,7 @@ PDF 相关技能在办公模式中继续保留：
 **Q：MCP 面板没有显示 officecli？**
 
 1. 检查 `resources/server/officecli.exe` 是否存在
-2. 检查 `launcher-stderr.log` 查看启动日志
+2. 检查 `%USERPROFILE%\.visionox\logs\visionox-server-stderr.log` 查看启动日志
 3. 如手动配置了路径，检查路径是否正确、是否含空格（需引号包裹）
 
 **Q：OfficeCLI 操作报错？**

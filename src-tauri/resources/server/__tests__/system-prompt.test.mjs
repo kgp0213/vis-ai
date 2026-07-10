@@ -15,6 +15,13 @@ describe("buildSystemPrompt", () => {
     assert.ok(prompt.includes("- **write_file**: Write content to a file"));
   });
 
+  test("Office 文件批处理规则不依赖办公模式", () => {
+    const prompt = buildSystemPrompt([], "/root", false);
+    assert.match(prompt, /in any work mode/);
+    assert.match(prompt, /one batch per slide/);
+    assert.match(prompt, /"command":"add"/);
+  });
+
   test("rootDir 注入到安全边界", () => {
     const prompt = buildSystemPrompt([], "/my/workspace", false);
     assert.ok(prompt.includes("/my/workspace"));

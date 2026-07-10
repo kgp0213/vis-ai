@@ -67,8 +67,10 @@ const HEALTH_RETRY_INTERVAL_MS: u64 = 200;
 const CHILD_MAX_RESTART_ATTEMPTS: u32 = 5;
 const CHILD_RESTART_BASE_DELAY_SECS: u64 = 1;
 const CHILD_RESTART_MAX_DELAY_SECS: u64 = 30;
+const CHILD_RESTART_STABLE_RESET_SECS: u64 = 300;
 const SHUTDOWN_GRACE_PERIOD_SECS: u64 = 5;
 const SHUTDOWN_POLL_INTERVAL_MS: u64 = 100;
+const LOG_ROTATE_BYTES: u64 = 10 * 1024 * 1024;
 const WINDOW_WIDTH: f64 = 1280.0;
 const WINDOW_HEIGHT: f64 = 800.0;
 const WINDOW_MIN_WIDTH: f64 = 800.0;
@@ -77,28 +79,147 @@ const LOCALHOST_ORIGIN_PREFIX: &str = "http://127.0.0.1:";
 const CLIPBOARD_FORMAT_NAME_BUF_LEN: usize = 256;
 
 fn log_diag(msg: &str) {
-    use std::io::Write;
     let path = match DIAG_PATH.get() {
         Some(p) => p,
         None => return,
     };
     // Rotate when the file exceeds 10 MB. Renames overwrite the existing
     // `.1` backup so we keep at most ~20 MB on disk (current + backup).
-    const ROTATE_AT: u64 = 10 * 1024 * 1024;
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > ROTATE_AT {
-            let backup: PathBuf = format!("{}.1", path.display()).into();
-            let _ = std::fs::rename(path, &backup);
-        }
-    }
+    rotate_log_if_needed(path, LOG_ROTATE_BYTES);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
     {
         let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
-        let _ = writeln!(f, "[{ts}] {msg}");
+        let safe_msg = redact_log_line(msg);
+        let _ = writeln!(f, "[{ts}] {safe_msg}");
     }
+}
+
+fn rotate_log_if_needed(path: &Path, max_bytes: u64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() < max_bytes {
+        return;
+    }
+    let backup: PathBuf = format!("{}.1", path.display()).into();
+    let _ = std::fs::remove_file(&backup);
+    let _ = std::fs::rename(path, backup);
+}
+
+fn visionox_home_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("VISIONOX_HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    home.join(".visionox")
+}
+
+fn visionox_log_dir() -> PathBuf {
+    visionox_home_dir().join("logs")
+}
+
+fn diagnostics_log_path() -> PathBuf {
+    visionox_log_dir().join("visionox-whale.log")
+}
+
+fn server_stderr_log_path() -> PathBuf {
+    visionox_log_dir().join("visionox-server-stderr.log")
+}
+
+fn init_diagnostics_log() -> PathBuf {
+    let path = diagnostics_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    path
+}
+
+fn redact_log_line(msg: &str) -> String {
+    let mut out = redact_query_param(msg, "token");
+    out = redact_json_string_field(&out, "token");
+    out = redact_json_string_field(&out, "apiKey");
+    out = redact_json_string_field(&out, "api_key");
+    out
+}
+
+fn redact_query_param(input: &str, key: &str) -> String {
+    let needle = format!("{key}=");
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find(&needle) {
+        let (head, tail) = rest.split_at(pos);
+        out.push_str(head);
+        out.push_str(&needle);
+        out.push_str("<redacted>");
+        let value_start = needle.len();
+        let value_tail = &tail[value_start..];
+        let end = value_tail
+            .find(|c: char| c == '&' || c == '"' || c == '\'' || c.is_whitespace())
+            .unwrap_or(value_tail.len());
+        rest = &value_tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn redact_json_string_field(input: &str, field: &str) -> String {
+    let quoted_field = format!("\"{field}\"");
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find(&quoted_field) {
+        let (head, tail) = rest.split_at(pos);
+        out.push_str(head);
+        out.push_str(&quoted_field);
+        let after_field = &tail[quoted_field.len()..];
+        let Some(colon_pos) = after_field.find(':') else {
+            out.push_str(after_field);
+            return out;
+        };
+        let (before_colon, after_colon) = after_field.split_at(colon_pos + 1);
+        out.push_str(before_colon);
+        let spaces = after_colon
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .map(char::len_utf8)
+            .sum::<usize>();
+        out.push_str(&after_colon[..spaces]);
+        let value = &after_colon[spaces..];
+        if !value.starts_with('"') {
+            rest = value;
+            continue;
+        }
+        out.push('"');
+        out.push_str("<redacted>");
+        out.push('"');
+        let mut escaped = false;
+        let mut end = 1usize;
+        for (idx, ch) in value[1..].char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == '"' {
+                end = idx + 2;
+                break;
+            }
+        }
+        rest = &value[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 // ── Child process group management ───────────────────────────────
@@ -266,7 +387,9 @@ fn wait_for_child_exit(pid: u32) {
                 Ok(_) => continue,
                 Err(nix::errno::Errno::EINTR) => continue,
                 Err(e) => {
-                    log_diag(&format!("[rust] monitor: waitpid failed: {e} — assuming child exited"));
+                    log_diag(&format!(
+                        "[rust] monitor: waitpid failed: {e} — assuming child exited"
+                    ));
                     break;
                 }
             }
@@ -290,42 +413,49 @@ struct StartupArgs {
     cwd: String,
 }
 
-/// Restore missing resource files (e.g. learn.mjs) into the runtime server dir.
-/// Source: the compile-time `src-tauri/resources/server/` tree. In an NSIS
-/// install that source is unreachable, so the function logs and skips — the
-/// installer is the authoritative source there. In dev/test builds the source
-/// tree is present and the copy repairs drift caused by partial rebuilds.
-fn ensure_server_resources(server_dir: &std::path::Path) {
-    const NEEDED: &[&str] = &["learn.mjs", "learn-track.mjs", "learn-sandbox-impl.mjs"];
-    let src_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources")
-        .join("server");
+fn log_runtime_file(label: &str, path: &Path) {
+    match std::fs::metadata(path) {
+        Ok(meta) => log_diag(&format!(
+            "[tauri] runtime file {label}: exists=true file={} len={} readonly={} path={}",
+            meta.is_file(),
+            meta.len(),
+            meta.permissions().readonly(),
+            path.display()
+        )),
+        Err(e) => log_diag(&format!(
+            "[tauri] runtime file {label}: exists=false error={} path={}",
+            e,
+            path.display()
+        )),
+    }
+}
 
-    for name in NEEDED {
-        let dst = server_dir.join(name);
-        if dst.exists() {
-            continue;
-        }
-        let src = src_dir.join(name);
-        if !src.exists() {
+fn log_child_status(child: &mut Child, reason: &str) {
+    match child.try_wait() {
+        Ok(Some(status)) => log_diag(&format!(
+            "[rust] launcher exited before dashboard URL ({reason}): {status}"
+        )),
+        Ok(None) => {
             log_diag(&format!(
-                "[rust] resource missing and no source available: {}",
-                dst.display()
+                "[rust] launcher still running without dashboard URL ({reason}); killing child"
             ));
-            continue;
+            if let Err(e) = child.kill() {
+                log_diag(&format!(
+                    "[rust] failed to kill launcher after {reason}: {e}"
+                ));
+            }
+            match child.wait() {
+                Ok(status) => log_diag(&format!(
+                    "[rust] launcher status after kill ({reason}): {status}"
+                )),
+                Err(e) => log_diag(&format!(
+                    "[rust] failed to wait for launcher after kill ({reason}): {e}"
+                )),
+            }
         }
-        match std::fs::copy(&src, &dst) {
-            Ok(_) => log_diag(&format!(
-                "[rust] restored resource: {} -> {}",
-                src.display(),
-                dst.display()
-            )),
-            Err(e) => log_diag(&format!(
-                "[rust] failed to restore {}: {}",
-                dst.display(),
-                e
-            )),
-        }
+        Err(e) => log_diag(&format!(
+            "[rust] failed to query launcher exit status ({reason}): {e}"
+        )),
     }
 }
 
@@ -341,7 +471,6 @@ fn spawn_server_blocking(
         .unwrap_or_default();
 
     let server_dir = exe_dir.join("resources").join("server");
-    ensure_server_resources(&server_dir);
 
     let launcher = exe_dir
         .join("resources")
@@ -356,6 +485,19 @@ fn spawn_server_blocking(
     };
 
     log_diag(&format!(
+        "[tauri] exe_dir={} non_ascii={}",
+        exe_dir.display(),
+        !exe_dir.to_string_lossy().is_ascii()
+    ));
+    log_diag(&format!(
+        "[tauri] server_dir={} non_ascii={}",
+        server_dir.display(),
+        !server_dir.to_string_lossy().is_ascii()
+    ));
+    log_runtime_file("node.exe", &node_path);
+    log_runtime_file("launcher.mjs", &launcher);
+
+    log_diag(&format!(
         "[tauri] launching: {:?} {:?}",
         node_path, launcher
     ));
@@ -368,7 +510,17 @@ fn spawn_server_blocking(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_child_command(&mut child);
-    let mut child = child.spawn()?;
+    let mut child = match child.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            log_diag(&format!("[rust] failed to spawn launcher process: {e}"));
+            return Err(e.into());
+        }
+    };
+    log_diag(&format!(
+        "[rust] launcher process spawned pid={}",
+        child.id()
+    ));
 
     // P1-2: assign to job object immediately to prevent orphan processes
     if let Err(e) = job.assign(child.id()) {
@@ -388,10 +540,13 @@ fn spawn_server_blocking(
         .stderr
         .take()
         .context("failed to capture server stderr")?;
-    let exe_dir_clone = exe_dir.clone();
     let _handle = std::thread::spawn(move || {
         use std::io::Write;
-        let log_path = exe_dir_clone.join("launcher-stderr.log");
+        let log_path = server_stderr_log_path();
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        rotate_log_if_needed(&log_path, LOG_ROTATE_BYTES);
         let file = match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -401,6 +556,9 @@ fn spawn_server_blocking(
             Err(_) => return,
         };
         let mut writer = std::io::BufWriter::new(file);
+        let mut current_bytes = std::fs::metadata(&log_path)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
         let r = std::io::BufReader::new(stderr);
         for lr in r.lines() {
             let line = match lr {
@@ -410,7 +568,25 @@ fn spawn_server_blocking(
                     continue;
                 }
             };
-            let _ = writeln!(writer, "{}", line);
+            let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+            let rendered = format!("[{ts}] {}", redact_log_line(&line));
+            if current_bytes + rendered.len() as u64 + 1 >= LOG_ROTATE_BYTES {
+                let _ = writer.flush();
+                drop(writer);
+                rotate_log_if_needed(&log_path, LOG_ROTATE_BYTES);
+                let replacement = match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                {
+                    Ok(file) => file,
+                    Err(_) => return,
+                };
+                writer = std::io::BufWriter::new(replacement);
+                current_bytes = 0;
+            }
+            let _ = writeln!(writer, "{rendered}");
+            current_bytes += rendered.len() as u64 + 1;
         }
         let _ = writer.flush();
     });
@@ -433,9 +609,8 @@ fn spawn_server_blocking(
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            let _ = child.kill();
-            let _ = child.wait();
             log_diag("[rust] readline timeout — child did not produce URL in time");
+            log_child_status(&mut child, "readline timeout");
             return Err("launcher timed out waiting for dashboard URL".into());
         }
         match line_rx.recv_timeout(remaining) {
@@ -462,14 +637,12 @@ fn spawn_server_blocking(
                 }
             }
             Ok(Err(e)) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                log_child_status(&mut child, "stdout read error");
                 return Err(e.into());
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                let _ = child.kill();
-                let _ = child.wait();
                 log_diag("[rust] readline timeout — child did not produce URL in time");
+                log_child_status(&mut child, "readline timeout");
                 return Err("launcher timed out waiting for dashboard URL".into());
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -477,8 +650,7 @@ fn spawn_server_blocking(
     }
 
     if url.is_empty() {
-        let _ = child.kill();
-        let _ = child.wait();
+        log_child_status(&mut child, "stdout disconnected");
         return Err("failed to discover dashboard URL".into());
     }
 
@@ -498,6 +670,14 @@ fn restart_delay_with_jitter(restart_attempt: u32) -> u64 {
     base.saturating_sub(nanos % jitter)
 }
 
+fn restart_attempt_after_uptime(restart_attempt: u32, uptime: Duration) -> u32 {
+    if uptime >= Duration::from_secs(CHILD_RESTART_STABLE_RESET_SECS) {
+        0
+    } else {
+        restart_attempt
+    }
+}
+
 fn validate_dashboard_url(url: &str, port: u16) -> bool {
     url.starts_with(&format!("{LOCALHOST_ORIGIN_PREFIX}{port}/"))
 }
@@ -509,6 +689,14 @@ fn dashboard_origin(url: &str) -> Option<String> {
         return None;
     }
     Some(format!("{LOCALHOST_ORIGIN_PREFIX}{port}"))
+}
+
+fn startup_failure_js(message: &str) -> String {
+    let msg_json =
+        serde_json::to_string(message).unwrap_or_else(|_| "\"Service failed\"".to_string());
+    format!(
+        "(function(){{var msg={msg_json};if(window.__visionoxShowStartupFailure){{window.__visionoxShowStartupFailure(msg);}}else{{var s=document.getElementById('status');if(s){{s.textContent=msg;s.style.color='#ef4444';}}}}}})();"
+    )
 }
 
 fn read_http_body(
@@ -578,14 +766,22 @@ fn check_health(port: u16, token: &str) -> bool {
     let addr = format!("{host}:{connect_port}");
     let sockaddr: std::net::SocketAddr = match addr.parse() {
         Ok(a) => a,
-        Err(_) => return false,
+        Err(e) => {
+            log_diag(&format!(
+                "[rust] health check address parse failed: {addr}; {e}"
+            ));
+            return false;
+        }
     };
     let mut stream = match TcpStream::connect_timeout(
         &sockaddr,
         Duration::from_secs(HEALTH_CONNECT_TIMEOUT_SECS),
     ) {
         Ok(s) => s,
-        Err(_) => return false,
+        Err(e) => {
+            log_diag(&format!("[rust] health check connect failed: {addr}; {e}"));
+            return false;
+        }
     };
 
     let request_target = match health_url.query() {
@@ -595,7 +791,8 @@ fn check_health(port: u16, token: &str) -> bool {
     let request = format!(
         "GET {request_target} HTTP/1.1\r\nHost: {host}:{connect_port}\r\nConnection: close\r\n\r\n",
     );
-    if stream.write_all(request.as_bytes()).is_err() {
+    if let Err(e) = stream.write_all(request.as_bytes()) {
+        log_diag(&format!("[rust] health check request write failed: {e}"));
         return false;
     }
 
@@ -603,10 +800,15 @@ fn check_health(port: u16, token: &str) -> bool {
 
     // Read and validate the HTTP status line.
     let mut status_line = String::new();
-    if reader.read_line(&mut status_line).is_err() {
+    if let Err(e) = reader.read_line(&mut status_line) {
+        log_diag(&format!("[rust] health check status read failed: {e}"));
         return false;
     }
     if !(status_line.starts_with("HTTP/1.1 200") || status_line.starts_with("HTTP/1.0 200")) {
+        log_diag(&format!(
+            "[rust] health check returned non-200 status: {}",
+            status_line.trim()
+        ));
         return false;
     }
 
@@ -615,7 +817,8 @@ fn check_health(port: u16, token: &str) -> bool {
     let mut chunked = false;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).is_err() {
+        if let Err(e) = reader.read_line(&mut line) {
+            log_diag(&format!("[rust] health check header read failed: {e}"));
             return false;
         }
         if line == "\r\n" || line.is_empty() {
@@ -661,15 +864,70 @@ fn check_health(port: u16, token: &str) -> bool {
     }
 }
 
+fn spawn_server_with_health(
+    job: &JobObject,
+) -> Result<(Child, String, u16, String), Box<dyn std::error::Error>> {
+    let (mut child, url, port, token) = spawn_server_blocking(job)?;
+    if !validate_dashboard_url(&url, port) {
+        log_diag(&format!(
+            "[rust] launcher returned invalid dashboard URL: {url}"
+        ));
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("launcher returned invalid dashboard URL".into());
+    }
+    for attempt in 0..HEALTH_MAX_ATTEMPTS {
+        log_diag(&format!(
+            "[rust] health check attempt {}/{HEALTH_MAX_ATTEMPTS}",
+            attempt + 1
+        ));
+        if check_health(port, &token) {
+            return Ok((child, url, port, token));
+        }
+        std::thread::sleep(Duration::from_millis(HEALTH_RETRY_INTERVAL_MS));
+    }
+    log_diag("[rust] spawned launcher failed health checks; terminating child");
+    let _ = child.kill();
+    let _ = child.wait();
+    Err("launcher started but failed health checks".into())
+}
+
+fn spawn_initial_server(
+    job: &JobObject,
+) -> Result<(Child, String, u16, String), Box<dyn std::error::Error>> {
+    let mut last_error = "launcher startup failed".to_string();
+    for attempt in 0..CHILD_MAX_RESTART_ATTEMPTS {
+        match spawn_server_with_health(job) {
+            Ok(result) => return Ok(result),
+            Err(err) => {
+                last_error = err.to_string();
+                log_diag(&format!(
+                    "[rust] initial startup attempt {}/{} failed: {}",
+                    attempt + 1,
+                    CHILD_MAX_RESTART_ATTEMPTS,
+                    last_error
+                ));
+                if attempt + 1 < CHILD_MAX_RESTART_ATTEMPTS {
+                    let delay = restart_delay_with_jitter(attempt + 1);
+                    std::thread::sleep(Duration::from_secs(delay));
+                }
+            }
+        }
+    }
+    Err(last_error.into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
     // P3: initialize diagnostics log path early so background threads
     // spawned in setup() can write diag entries regardless of ordering.
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_default();
-    let _ = DIAG_PATH.set(exe_dir.join("launcher-diag.log"));
+    let diag_path = init_diagnostics_log();
+    let _ = DIAG_PATH.set(diag_path.clone());
+    log_diag(&format!("[tauri] diagnostics log: {}", diag_path.display()));
+    log_diag(&format!(
+        "[tauri] server stderr log: {}",
+        server_stderr_log_path().display()
+    ));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
@@ -720,7 +978,7 @@ pub fn run() -> anyhow::Result<()> {
                 "main",
                 WebviewUrl::App("index.html".into()),
             )
-            .title("Visionox")
+            .title("Visionox-Whale")
             .background_color(Color::from((243u8, 244u8, 246u8)))
             .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .min_inner_size(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
@@ -742,32 +1000,14 @@ pub fn run() -> anyhow::Result<()> {
                 let result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         log_diag("[rust] background thread started");
-                        match spawn_server_blocking(&job_for_thread) {
-                            Ok((child, url, port, token)) => {
+                        match spawn_initial_server(&job_for_thread) {
+                            Ok((child, url, port, _token)) => {
                                 log_diag(&format!(
                                     "[rust] server spawned — url={url}, port={port}"
                                 ));
                                 let child_pid = child.id();
-                                let mut healthy = false;
+                                let healthy = true;
                                 let health_start = std::time::Instant::now();
-                                for attempt in 0..HEALTH_MAX_ATTEMPTS {
-                                    log_diag(&format!(
-                                        "[rust] health check attempt {}/{HEALTH_MAX_ATTEMPTS}",
-                                        attempt + 1
-                                    ));
-                                    if check_health(port, &token) {
-                                        healthy = true;
-                                        break;
-                                    }
-                                    std::thread::sleep(Duration::from_millis(HEALTH_RETRY_INTERVAL_MS));
-                                }
-                                if !validate_dashboard_url(&url, port) {
-                                    log_diag(&format!("invalid dashboard URL: {url}"));
-                                    let _ = win_for_url.eval(
-                                        "document.getElementById('status').textContent='Server failed: invalid dashboard URL';",
-                                    );
-                                    return;
-                                }
 
                                 let job_for_monitor = job_for_thread.clone();
                                 let state = app_handle.state::<Mutex<ServerState>>();
@@ -805,6 +1045,7 @@ pub fn run() -> anyhow::Result<()> {
                                     let _handle = std::thread::spawn(move || {
                                         let mut child_pid = child_pid;
                                         let mut restart_attempt = 0u32;
+                                        let mut child_started_at = Instant::now();
                                         loop {
                                             // Block until the child process exits. Windows uses
                                             // WaitForSingleObject on a process handle; Unix uses
@@ -815,11 +1056,19 @@ pub fn run() -> anyhow::Result<()> {
                                             wait_for_child_exit(child_pid);
 
                                             log_diag("[rust] child process exited unexpectedly after navigation");
+                                            let prior_attempt = restart_attempt;
+                                            restart_attempt = restart_attempt_after_uptime(
+                                                restart_attempt,
+                                                child_started_at.elapsed(),
+                                            );
+                                            if prior_attempt > 0 && restart_attempt == 0 {
+                                                log_diag("[rust] restart counter reset after stable uptime");
+                                            }
                                             if restart_attempt >= CHILD_MAX_RESTART_ATTEMPTS {
                                                 log_diag("[rust] child restart attempts exhausted");
-                                                let _ = win_for_monitor.eval(
-                                                    "document.body.innerHTML='<div style=\"display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#ef4444;font-size:18px\">Server process has stopped unexpectedly.<br>Please restart the application.</div>';"
-                                                );
+                                                let _ = win_for_monitor.eval(startup_failure_js(
+                                                    "本地服务已停止且自动重启失败，请查看运行日志。",
+                                                ));
                                                 break;
                                             }
 
@@ -854,7 +1103,7 @@ pub fn run() -> anyhow::Result<()> {
                                                             s.url = Some(url.clone());
                                                         }
                                                         child_pid = new_pid;
-                                                        restart_attempt = 0;
+                                                        child_started_at = Instant::now();
 
                                                         let url_json = serde_json::to_string(&url)
                                                             .unwrap_or_else(|_| "\"\"".to_string());
@@ -890,19 +1139,18 @@ pub fn run() -> anyhow::Result<()> {
                                         health_start.elapsed()
                                     ));
                                     // P1-5: log failures
-                                    if let Err(e) = win_for_url.eval(
-                                        "document.getElementById('status').textContent='Server did not respond \\u2014 please restart';document.getElementById('status').style.color='#ef4444';",
-                                    ) {
+                                    if let Err(e) = win_for_url.eval(startup_failure_js(
+                                        "本地服务启动后无响应，请查看运行日志。",
+                                    )) {
                                         log_diag(&format!("eval(timeout) failed: {e}"));
                                     }
                                 }
                             }
                             Err(e) => {
                                 log_diag(&format!("[rust] server FAILED: {e}"));
-                                if let Err(ev_err) = win_for_url.eval(format!(
-                                    "document.getElementById('status').textContent='Server failed: {}';document.getElementById('status').style.color='#ef4444';",
-                                    e.to_string().replace('\'', "\\'")
-                                )) {
+                                if let Err(ev_err) = win_for_url.eval(startup_failure_js(&format!(
+                                    "本地服务启动失败：{e}"
+                                ))) {
                                     log_diag(&format!("eval(server-fail) failed: {ev_err}"));
                                 }
                             }
@@ -931,15 +1179,15 @@ pub fn run() -> anyhow::Result<()> {
                         let _ = orphan.kill();
                         let _ = orphan.wait();
                     }
-                    let _ = win_for_url.eval(format!(
-                        "document.getElementById('status').textContent='Internal error: {}';document.getElementById('status').style.color='#ef4444';",
-                        msg.replace('\'', "\\'").replace('\n', " ")
-                    ));
+                    let _ = win_for_url.eval(startup_failure_js(&format!(
+                        "内部错误：{}",
+                        msg.replace('\n', " ")
+                    )));
                 }
             });
 
             // ── System tray ───────────────────────────────────────
-            let quit_i = MenuItemBuilder::new("Quit Visionox")
+            let quit_i = MenuItemBuilder::new("Quit Visionox-Whale")
                 .id("quit")
                 .build(app)?;
             let show_i = MenuItemBuilder::new("Show Window")
@@ -954,7 +1202,7 @@ pub fn run() -> anyhow::Result<()> {
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().context("default window icon not found")?.clone())
                 .menu(&tray_menu)
-                .tooltip("Visionox")
+                .tooltip("Visionox-Whale")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
                     "show" => {
@@ -1003,7 +1251,7 @@ pub fn run() -> anyhow::Result<()> {
                     }
                     if let Some(tray) = app_handle_for_tray.tray_by_id("main") {
                         let _ = tray.set_tooltip(Some(
-                            "Visionox — 仍在运行中\n点击托盘图标恢复窗口，右键退出",
+                            "Visionox-Whale — 仍在运行中\n点击托盘图标恢复窗口，右键退出",
                         ));
                     }
                 }
@@ -1011,7 +1259,16 @@ pub fn run() -> anyhow::Result<()> {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ping, get_startup_args, get_dashboard_url, get_clipboard_files, pick_markdown_file])
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            get_startup_args,
+            get_dashboard_url,
+            get_log_info,
+            open_log_dir,
+            write_client_log,
+            get_clipboard_files,
+            pick_markdown_file
+        ])
         .build(tauri::generate_context!())
         ?
         .run(|app_handle, event| {
@@ -1072,6 +1329,71 @@ fn get_startup_args(state: tauri::State<'_, Mutex<StartupArgs>>) -> StartupArgs 
 #[tauri::command]
 fn get_dashboard_url(state: tauri::State<'_, Mutex<ServerState>>) -> Option<String> {
     state.lock().unwrap_or_else(|e| e.into_inner()).url.clone()
+}
+
+#[derive(serde::Serialize)]
+struct LogInfo {
+    log_dir: String,
+    diagnostics_log: String,
+    server_stderr_log: String,
+}
+
+#[tauri::command]
+fn get_log_info() -> LogInfo {
+    let log_dir = visionox_log_dir();
+    let diagnostics_log = DIAG_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(diagnostics_log_path);
+    LogInfo {
+        log_dir: log_dir.to_string_lossy().to_string(),
+        diagnostics_log: diagnostics_log.to_string_lossy().to_string(),
+        server_stderr_log: server_stderr_log_path().to_string_lossy().to_string(),
+    }
+}
+
+#[tauri::command]
+fn open_log_dir() -> Result<(), String> {
+    let dir = visionox_log_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create log dir failed: {e}"))?;
+    open_path(&dir)
+}
+
+#[tauri::command]
+fn write_client_log(message: String) {
+    let msg = message.trim();
+    if !msg.is_empty() {
+        log_diag(&format!("[webview] {msg}"));
+    }
+}
+
+fn open_path(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("explorer");
+        cmd.arg(path);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open log dir failed: {e}"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return Command::new("open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open log dir failed: {e}"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        return Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open log dir failed: {e}"));
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -1157,7 +1479,10 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                     };
                 }
                 if stdout.is_empty() {
-                    return PickMarkdownFileResult { path: None, error: None };
+                    return PickMarkdownFileResult {
+                        path: None,
+                        error: None,
+                    };
                 }
                 if !is_markdown_file_path(&stdout) {
                     return PickMarkdownFileResult {
@@ -1184,8 +1509,18 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     #[cfg(unix)]
     {
         let candidates: &[(&str, &[&str])] = &[
-            ("zenity", &["--file-selection", "--title=打开 Markdown 文档", "--file-filter=Markdown 文档 | *.md *.markdown"]),
-            ("kdialog", &["--getopenfilename", ".", "*.md *.markdown|Markdown 文档"]),
+            (
+                "zenity",
+                &[
+                    "--file-selection",
+                    "--title=打开 Markdown 文档",
+                    "--file-filter=Markdown 文档 | *.md *.markdown",
+                ],
+            ),
+            (
+                "kdialog",
+                &["--getopenfilename", ".", "*.md *.markdown|Markdown 文档"],
+            ),
         ];
         for &(program, args) in candidates {
             let Ok(output) = Command::new(program).args(args).output() else {
@@ -1196,7 +1531,10 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
             }
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if stdout.is_empty() {
-                return PickMarkdownFileResult { path: None, error: None };
+                return PickMarkdownFileResult {
+                    path: None,
+                    error: None,
+                };
             }
             if !is_markdown_file_path(&stdout) {
                 return PickMarkdownFileResult {
@@ -1298,7 +1636,8 @@ fn get_clipboard_files_blocking() -> ClipboardFilesResult {
                     continue;
                 }
                 let mut buf: Vec<u16> = vec![0; len as usize + 1];
-                let copied = unsafe { DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as u32) };
+                let copied =
+                    unsafe { DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as u32) };
                 if copied > 0 {
                     buf.truncate(copied as usize);
                     if let Ok(s) = String::from_utf16(&buf) {
@@ -1446,41 +1785,6 @@ mod tests {
     }
 
     #[test]
-    fn ensure_server_resources_copies_missing_file() {
-        let temp = std::env::temp_dir().join(format!(
-            "vis-ai-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
-        ));
-        std::fs::create_dir_all(&temp).unwrap();
-        // Pre-condition: temp dir does not contain learn.mjs
-        assert!(!temp.join("learn.mjs").exists());
-
-        ensure_server_resources(&temp);
-
-        // Source file exists in the project tree (CARGO_MANIFEST_DIR/resources/server/learn.mjs)
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("resources")
-            .join("server")
-            .join("learn.mjs");
-        if src.exists() {
-            assert!(
-                temp.join("learn.mjs").exists(),
-                "learn.mjs should be copied"
-            );
-            assert!(
-                temp.join("learn-track.mjs").exists(),
-                "learn-track.mjs should be copied"
-            );
-        }
-        // Clean up
-        let _ = std::fs::remove_dir_all(&temp);
-    }
-
-    #[test]
     fn restart_delay_with_jitter_in_range() {
         for attempt in 0..5u32 {
             let base = (CHILD_RESTART_BASE_DELAY_SECS * 2u64.saturating_pow(attempt))
@@ -1499,6 +1803,15 @@ mod tests {
                 assert!(delay <= base, "delay {} must be <= base ({})", delay, base);
             }
         }
+    }
+
+    #[test]
+    fn restart_attempt_resets_only_after_stable_uptime() {
+        assert_eq!(restart_attempt_after_uptime(4, Duration::from_secs(30)), 4);
+        assert_eq!(
+            restart_attempt_after_uptime(4, Duration::from_secs(CHILD_RESTART_STABLE_RESET_SECS)),
+            0
+        );
     }
 
     #[test]

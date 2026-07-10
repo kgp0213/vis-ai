@@ -24,6 +24,22 @@ var DEFAULT_TIMEOUTS_MS = {
 };
 var HOOK_SETTINGS_FILENAME = "settings.json";
 var HOOK_SETTINGS_DIRNAME = ".visionox";
+function stopHookProcess(child) {
+  if (process.platform === "win32" && child.pid) {
+    try {
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true
+      });
+      killer.on("error", () => {
+      });
+      return;
+    } catch {
+    }
+  }
+  try { child.kill("SIGTERM"); } catch {
+  }
+}
 function globalSettingsPath(homeDirOverride) {
   return join(homeDirOverride ?? homedir(), HOOK_SETTINGS_DIRNAME, HOOK_SETTINGS_FILENAME);
 }
@@ -77,6 +93,10 @@ function matchesTool(hook, toolName) {
 var HOOK_OUTPUT_CAP_BYTES = 256 * 1024;
 function defaultSpawner(input) {
   return new Promise((resolve) => {
+    if (input.signal?.aborted) {
+      resolve({ exitCode: null, stdout: "", stderr: "hook cancelled", timedOut: false, aborted: true });
+      return;
+    }
     const child = spawn(input.command, {
       cwd: input.cwd,
       shell: true,
@@ -88,9 +108,28 @@ function defaultSpawner(input) {
     let stderrBytes = 0;
     let truncated = false;
     let timedOut = false;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      input.signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const onAbort = () => {
+      stopHookProcess(child);
+      finish({
+        exitCode: null,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8").trim(),
+        stderr: "hook cancelled",
+        timedOut: false,
+        aborted: true,
+        truncated: truncated || void 0
+      });
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      stopHookProcess(child);
       setTimeout(() => {
         try {
           child.kill("SIGKILL");
@@ -98,6 +137,7 @@ function defaultSpawner(input) {
         }
       }, 500);
     }, input.timeoutMs);
+    input.signal?.addEventListener("abort", onAbort, { once: true });
     const onChunk = (kind, chunk) => {
       const target = kind === "stdout" ? stdoutChunks : stderrChunks;
       const seen = kind === "stdout" ? stdoutBytes : stderrBytes;
@@ -120,8 +160,7 @@ function defaultSpawner(input) {
     child.stdout.on("data", (chunk) => onChunk("stdout", chunk));
     child.stderr.on("data", (chunk) => onChunk("stderr", chunk));
     child.once("error", (err) => {
-      clearTimeout(timer);
-      resolve({
+      finish({
         exitCode: null,
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
@@ -131,8 +170,7 @@ function defaultSpawner(input) {
       });
     });
     child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve({
+      finish({
         exitCode: code,
         stdout: Buffer.concat(stdoutChunks).toString("utf8").trim(),
         stderr: Buffer.concat(stderrChunks).toString("utf8").trim(),
@@ -176,10 +214,12 @@ async function runHooks(opts) {
   const stdin = `${JSON.stringify(opts.payload)}
 `;
   for (const hook of matching) {
+    if (opts.signal?.aborted) break;
     const start = Date.now();
     const timeoutMs = hook.timeout ?? DEFAULT_TIMEOUTS_MS[event];
     const cwd = hook.cwd ?? opts.payload.cwd;
-    const raw = await spawner({ command: hook.command, cwd, stdin, timeoutMs });
+    const raw = await spawner({ command: hook.command, cwd, stdin, timeoutMs, signal: opts.signal });
+    if (raw.aborted || opts.signal?.aborted) break;
     const decision = decideOutcome(event, raw);
     outcomes.push({
       hook,

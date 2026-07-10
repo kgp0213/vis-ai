@@ -17,12 +17,55 @@ const root = join(__dirname, "..");
 
 const required = [
   {
+    file: "scripts/prepare-runtime-package.js",
+    markers: [
+      "function pruneRuntimeFiles(path)",
+      "npm prune --offline",
+      'for (const dir of ["dist", "data", "node_modules"])',
+      "forbiddenRuntimeFile",
+    ],
+  },
+  {
+    file: "scripts/run-tauri-build.js",
+    markers: ["CARGO_NET_OFFLINE", "npm_config_offline", "verify-release-resources.js"],
+  },
+  {
+    file: "scripts/verify-release-resources.js",
+    markers: ["visionox-whale.exe", "unexpected legacy executable", "content mismatch", "unexpected:", "verified ${expected.size} files"],
+  },
+  {
+    file: "scripts/verify-nsis-bundle.js",
+    markers: ["collectFiles", "unexpected resource", "expectedFiles.size", "replaceBundleMarker"],
+  },
+  {
     file: "src-tauri/resources/server/launcher.mjs",
     markers: [
       "HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS",
       "rememberGeneratedArtifactPath",
       "artifact-created",
       "getGeneratedArtifactPaths",
+      "parseActiveSessionJsonl",
+      "rebuildLoopPreservingContext",
+      "promptQueueFile",
+      "acceptedPromptRequest",
+      "pendingModelSwitch",
+      "requestModelSwitch",
+      "rebuildProviderContextCaps",
+      "contextCapacitySource",
+      "beginActiveOperation",
+      "jobs.stopOwned",
+      "scheduleRunControllers",
+      "REPORT_COLLECTION_MAX_CHARS",
+      "appendAuditEntry",
+      "pendingPlanRevision",
+      "const queuedModals = []",
+      "activeGateId !== gateId",
+      "decidePlanContinuation",
+      "MAX_PLAN_AUTO_CONTINUATIONS = 2",
+      'kind: "plan-continuation-needed"',
+      "activatePendingPlan",
+      "validateOfficecliInvocation",
+      "wrapMcpToolsWithRecovery",
     ],
   },
   {
@@ -31,6 +74,7 @@ const required = [
       "PROJECT_MEMORY_CANDIDATES",
       "\"visionox.md\"",
       "\"CLAUDE.md\"",
+      "in any work mode",
     ],
     forbidden: [
       "\".claude/CLAUDE.md\"",
@@ -46,6 +90,13 @@ const required = [
     ],
   },
   {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-XPDVG52A.js",
+    markers: [
+      "_configCache.ctimeMs === fileStat.ctimeMs",
+      "size: fileStat.size, parsed: cfg",
+    ],
+  },
+  {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js",
     markers: [
       "function handleArtifacts",
@@ -55,6 +106,17 @@ const required = [
       "pick-markdown-file",
       "register-opened-document",
       "function handleClipboardFiles",
+      "function handlePromptQueue",
+      "requestId: typeof requestId",
+      "modelSwitch",
+      "must declare a positive integer maxContextLength",
+      "function handleBackgroundJobs",
+      "readTranscriptPage",
+      "writeTranscriptMarkdown",
+      "healthFilesystemSnapshot",
+      "query.get(\"channels\")",
+      "modal gateId must be a non-negative integer",
+      "modal is no longer active",
     ],
   },
   {
@@ -71,6 +133,39 @@ const required = [
       "openMarkdownDocumentFromArgs",
       "openMarkdownDocumentByPicker",
       "top-action-md",
+      "CHAT_INITIAL_RENDER_COUNT",
+      "inputValueRef",
+      "setChatInput",
+      "defaultValue=${inputValueRef.current}",
+      "persistQueuedPrompt",
+      "requestId",
+      "将在当前回答结束后切换",
+      "queuePaused || busy",
+      "background-jobs",
+      "stoppingBtn",
+      "subscribeSseStatus",
+      "setTimeout(flushStreaming, 75)",
+      "请求超时",
+      "modalResolving",
+      "renderer.html = ({ text }) => escapeHtml(text)",
+      "planContinuation",
+      "plan-continuation-bar",
+      'dash.kind === "plan-activated"',
+    ],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
+    markers: [
+      "fallbackSummaryForFold",
+      "const decision = this.context.decideAfterUsage",
+      "if (repairedCalls.length === 0)",
+      "normalizeHistoryForModel",
+      "contextThresholdsForCapacity",
+      "_contextRecheckRequired",
+      "onPlanSubmitted?.(plan, steps, summary)",
+      "never repeat or translate the title",
+      "forcedSummaryReason: opts.reason",
+      "OfficeCLI efficiency guard",
     ],
   },
   {
@@ -81,6 +176,67 @@ const required = [
       ".chat-msg-actions",
       "position: static",
       ".top-action",
+      ".chat-queue-paused",
+      ".modal-resolving",
+      "minmax(28px, max-content) minmax(0, 1fr)",
+      "overflow-wrap: anywhere",
+      ".modal-step-risk-med",
+      ".plan-continuation-bar",
+    ],
+  },
+  {
+    file: "src-tauri/resources/server/lib/plan-continuation.mjs",
+    markers: [
+      "decidePlanContinuation",
+      "const resumable",
+      'action: "pause"',
+      "incompleteFinal",
+    ],
+  },
+  {
+    file: "src-tauri/resources/server/lib/plan-state-policy.mjs",
+    markers: ["normalizeCompletedStepIds", "isKnownPlanStep", "isPlanComplete"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/active-session.mjs",
+    markers: ["activeEntriesForDashboard", 'entry.role === "tool") continue', "系统自动续跑"],
+    forbidden: ["reasoning: entry.reasoning ?? entry.reasoning_content"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/officecli-policy.mjs",
+    markers: ["officecli-multiple-commands", "officecli-batch-input-required"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/mcp-recovery.mjs",
+    markers: ["isMcpToolTimeout", "mcpRecoveryError"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/officecli/SKILL.md",
+    markers: ["## Efficient generation", '"command":"add"'],
+    forbidden: ['"op":"add"'],
+  },
+  {
+    file: "src-tauri/resources/server/lib/dlp-file.mjs",
+    markers: [
+      "document preparation cancelled",
+      "signal: ctx?.signal",
+    ],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-O52OLQL3.js",
+    markers: [
+      "background job wait cancelled",
+      "async stopOwned",
+      "lifecycle: opts.lifecycle",
+      "listMetadata()",
+      "completedRetention = 50",
+    ],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-7O5ALB4C.js",
+    markers: [
+      "hook cancelled",
+      "signal: opts.signal",
     ],
   },
 ];
@@ -101,6 +257,25 @@ for (const check of required) {
     if (text.includes(marker)) failures.push(`${check.file}: forbidden marker ${JSON.stringify(marker)}`);
   }
 }
+
+const rustSource = readFileSync(join(root, "src-tauri", "src", "lib.rs"), "utf8");
+const rustRuntimeSource = rustSource.split("#[cfg(test)]", 1)[0];
+for (const marker of ["CARGO_MANIFEST_DIR", "ensure_server_resources"]) {
+  if (rustRuntimeSource.includes(marker)) {
+    failures.push(`src-tauri/src/lib.rs: runtime source must not reference ${JSON.stringify(marker)}`);
+  }
+}
+
+const desktopPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const tauriConfig = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
+const cargoManifest = readFileSync(join(root, "src-tauri", "Cargo.toml"), "utf8");
+const rustMain = readFileSync(join(root, "src-tauri", "src", "main.rs"), "utf8");
+const agentRules = readFileSync(join(root, "AGENTS.md"), "utf8");
+if (desktopPackage.name !== "visionox-whale") failures.push("package.json: expected name visionox-whale");
+if (tauriConfig.productName !== "Visionox-Whale") failures.push("tauri.conf.json: expected productName Visionox-Whale");
+if (!/^name = "visionox-whale"$/m.test(cargoManifest)) failures.push("Cargo.toml: expected package name visionox-whale");
+if (!rustMain.includes("visionox_whale::run()")) failures.push("main.rs: expected visionox_whale crate entry");
+if (!agentRules.includes("src-tauri/target/release/visionox-whale.exe")) failures.push("AGENTS.md: canonical executable is not visionox-whale.exe");
 
 if (failures.length > 0) {
   console.error("[bundle-patches] local bundle patch check failed:");

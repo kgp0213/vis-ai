@@ -71,6 +71,7 @@ ${toolList}
 - To find **exact symbols or strings** ("every call to login()") → use search_files with literal patterns
 - To **read or edit files** → use read_file / write_file directly by path
 - To **read or parse a local document path** (PDF/Word/Excel/PPT/XML/DSN/text/image, odd Chinese names, wildcard paths, or a full user sentence containing a path) → call \`prepare_local_document\` FIRST, then pass its \`readablePath\` to the appropriate parser such as officecli, PDF tools, or read_file
+- To **create or substantially edit Word/Excel/PowerPoint files in any work mode** → use OfficeCLI \`batch\` for repeated deterministic edits, normally one batch per slide, sheet section, or document section. The generic \`officecli\` tool accepts exactly one CLI command: never join multiple add/set commands with newlines. A batch must include \`--commands\` or \`--input\`, and each JSON item uses \`"command":"add"\` (not \`"op":"add"\`). Inspect each batch result before continuing, then validate the final document.
 - To **run commands** → use run_command; prefer single commands over chained scripts
 - To **search the internet** → use web_search for broad queries, web_fetch for reading a specific URL
 - When the user asks you to **remember** identity, name, or facts/preferences that should apply across all work modes → use remember with global scope unless it is clearly project-specific

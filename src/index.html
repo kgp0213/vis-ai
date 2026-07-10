@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Visionox</title>
+    <title>Visionox-Whale</title>
     <style>
       html,
       body {
@@ -55,21 +55,153 @@
         color: #9ca3af;
         margin: 10px 0 0;
       }
+
+      .diag-actions {
+        display: none;
+        gap: 8px;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-top: 16px;
+      }
+
+      .diag-actions button {
+        height: 30px;
+        padding: 0 12px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        background: #fff;
+        color: #374151;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .diag-actions button:hover {
+        background: #f9fafb;
+      }
+
+      #log-path {
+        width: min(560px, calc(100vw - 48px));
+        margin: 10px auto 0;
+        color: #6b7280;
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.45;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="spin"></div>
-      <h1>Visionox</h1>
+      <h1>Visionox-Whale</h1>
       <p id="status">Starting server...</p>
+      <div class="diag-actions" id="diag-actions">
+        <button id="open-log-dir" type="button">打开日志目录</button>
+        <button id="copy-log-path" type="button">复制日志路径</button>
+      </div>
+      <div id="log-path"></div>
     </div>
     <script>
       (function () {
+        var latestLogInfo = null;
+
+        function invokeTauriCommand(name, args, attemptsLeft) {
+          attemptsLeft = attemptsLeft == null ? 50 : attemptsLeft;
+          return new Promise(function (resolve, reject) {
+            function tick(left) {
+              if (window.__TAURI__ && window.__TAURI__.invoke) {
+                window.__TAURI__.invoke(name, args || {}).then(resolve).catch(reject);
+                return;
+              }
+              if (left <= 0) {
+                reject(new Error("本地桥接未就绪"));
+                return;
+              }
+              setTimeout(function () { tick(left - 1); }, 100);
+            }
+            tick(attemptsLeft);
+          });
+        }
+
+        function startupLog(message) {
+          if (!message) return;
+          invokeTauriCommand("write_client_log", { message: String(message) }, 5).catch(function () {});
+        }
+
+        function copyText(text) {
+          text = String(text || "");
+          if (!text) return Promise.reject(new Error("没有可复制的日志路径"));
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).catch(function () {
+              var ta = document.createElement("textarea");
+              ta.value = text;
+              ta.style.position = "fixed";
+              ta.style.left = "-9999px";
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              document.body.removeChild(ta);
+            });
+          }
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          return Promise.resolve();
+        }
+
+        function showDiagnostics(message) {
+          var status = document.getElementById("status");
+          if (status && message) {
+            status.textContent = message;
+            status.style.color = "#ef4444";
+          }
+          var actions = document.getElementById("diag-actions");
+          if (actions) actions.style.display = "flex";
+          invokeTauriCommand("get_log_info", {}, 20)
+            .then(function (info) {
+              latestLogInfo = info || null;
+              var pathEl = document.getElementById("log-path");
+              if (pathEl && latestLogInfo) {
+                pathEl.textContent = latestLogInfo.log_dir || latestLogInfo.diagnostics_log || "";
+              }
+            })
+            .catch(function (err) {
+              startupLog("get_log_info failed: " + String(err && err.message || err));
+            });
+          startupLog("startup diagnostics shown: " + (message || ""));
+        }
+
+        window.__visionoxShowStartupFailure = function (message) {
+          showDiagnostics(message || "无法连接本地服务，请查看运行日志。");
+        };
+
+        document.getElementById("open-log-dir").addEventListener("click", function () {
+          invokeTauriCommand("open_log_dir", {}, 20).catch(function (err) {
+            showDiagnostics("打开日志目录失败：" + String(err && err.message || err));
+          });
+        });
+
+        document.getElementById("copy-log-path").addEventListener("click", function () {
+          var path = latestLogInfo && (latestLogInfo.log_dir || latestLogInfo.diagnostics_log);
+          copyText(path).then(function () {
+            var status = document.getElementById("status");
+            if (status) status.textContent = "日志路径已复制";
+          }).catch(function (err) {
+            showDiagnostics("复制日志路径失败：" + String(err && err.message || err));
+          });
+        });
+
         function installTauriBridge() {
           if (window.__visionoxBridgeInstalled) return;
           window.__visionoxBridgeInstalled = true;
           window.addEventListener("message", function (event) {
-            if (!event.data || (event.data.type !== "vis_get_clipboard" && event.data.type !== "vis_pick_markdown_file")) return;
+            if (!event.data || !["vis_get_clipboard", "vis_pick_markdown_file", "vis_client_log", "vis_open_log_dir"].includes(event.data.type)) return;
             var frame = document.getElementById("vis-app-frame");
             var dashboardUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
             var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
@@ -79,6 +211,12 @@
             var origin = event.origin;
             function reply(payload) {
               if (source) source.postMessage(payload, origin);
+            }
+            function doSimpleInvoke() {
+              if (event.data.type === "vis_client_log") {
+                return window.__TAURI__.invoke("write_client_log", { message: String(event.data.message || "") });
+              }
+              return window.__TAURI__.invoke("open_log_dir");
             }
             function doMarkdownPickerInvoke() {
               window.__TAURI__.invoke("pick_markdown_file")
@@ -118,14 +256,16 @@
             }
             if (window.__TAURI__ && window.__TAURI__.invoke) {
               if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
-              else doClipboardInvoke();
+              else if (event.data.type === "vis_get_clipboard") doClipboardInvoke();
+              else doSimpleInvoke().catch(function () {});
             } else {
               var attempts = 30;
               var timer = setInterval(function () {
                 if (window.__TAURI__ && window.__TAURI__.invoke) {
                   clearInterval(timer);
                   if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
-                  else doClipboardInvoke();
+                  else if (event.data.type === "vis_get_clipboard") doClipboardInvoke();
+                  else doSimpleInvoke().catch(function () {});
                 } else if (--attempts <= 0) {
                   clearInterval(timer);
                   if (event.data.type === "vis_pick_markdown_file") {
@@ -178,7 +318,11 @@
 
         function restoreDashboard() {
           var url = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
-          if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) return;
+          if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
+            startupLog("restoreDashboard skipped: no stored dashboard url");
+            return;
+          }
+          startupLog("restoreDashboard using stored dashboard url");
           url = applyThemeToUrl(url, getStoredTheme());
           var frame = document.getElementById("vis-app-frame");
           var spinner = document.querySelector(".wrap");
@@ -200,11 +344,15 @@
           if (isFreshFrame) {
             frame.addEventListener("error", function () { fallbackToRust(); });
             var guardTimer = setTimeout(function () {
-              if (frame.dataset.loaded !== "1") fallbackToRust();
+              if (frame.dataset.loaded !== "1") {
+                startupLog("stored dashboard iframe did not load in time");
+                fallbackToRust();
+              }
             }, 6000);
             frame.addEventListener("load", function () {
               frame.dataset.loaded = "1";
               clearTimeout(guardTimer);
+              startupLog("dashboard iframe loaded");
               if (spinner) spinner.style.display = "none";
             });
           } else {
@@ -215,6 +363,7 @@
         function fallbackToRust() {
           if (window.__visionoxRustFallbackDone) return;
           window.__visionoxRustFallbackDone = true;
+          startupLog("fallbackToRust invoked");
           try {
             sessionStorage.removeItem("visionox.dashboardUrl");
             sessionStorage.removeItem("visionox.dashboardOrigin");
@@ -289,6 +438,7 @@
             window.__TAURI__.invoke("get_dashboard_url")
               .then(function (url) {
                 if (url && /^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
+                  startupLog("get_dashboard_url returned valid url");
                   try { sessionStorage.setItem("visionox.dashboardUrl", url); } catch (e) {}
                   try { localStorage.setItem("visionox.dashboardUrl", url); } catch (e) {}
                   var originMatch = url.match(/^http:\/\/127\.0\.0\.1:\d+/);
@@ -296,10 +446,13 @@
                     try { sessionStorage.setItem("visionox.dashboardOrigin", originMatch[0]); } catch (e) {}
                     try { localStorage.setItem("visionox.dashboardOrigin", originMatch[0]); } catch (e) {}
                   }
+                } else {
+                  startupLog("get_dashboard_url returned empty or invalid url");
                 }
                 restoreDashboard();
               })
-              .catch(function () {
+              .catch(function (err) {
+                startupLog("get_dashboard_url failed: " + String(err && err.message || err));
                 restoreDashboard();
               });
           });

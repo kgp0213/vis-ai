@@ -21,7 +21,7 @@ OfficeCLI is a single binary that gives AI agents full control over Word, Excel,
 | Validate document | `officecli validate report.docx` |
 | Check issues | `officecli view report.docx issues --json` |
 | Template merge | `officecli merge template.docx out.docx '{"key":"value"}'` |
-| Batch operations | `officecli batch deck.pptx --commands '[{"op":"add",...}]' --json` |
+| Batch operations | `officecli batch deck.pptx --commands '[{"command":"add",...}]' --json` |
 | Live preview | `officecli watch deck.pptx` |
 | Resident mode | `officecli open report.docx` → multiple edits → `officecli close report.docx` |
 | View rendered HTML | `officecli view deck.pptx html` |
@@ -51,6 +51,14 @@ Every command supports `--json`. Errors return structured objects with `code` an
 ```
 Always check errors and self-correct based on suggestions.
 
+## Efficient generation
+
+- For repeated deterministic edits, use `batch` rather than one tool call per shape, cell, or paragraph. Keep batches reviewable: normally one slide, sheet section, or document section per batch.
+- The generic MCP `officecli` tool accepts exactly one CLI command in its `command` argument. Never concatenate multiple CLI commands with newlines.
+- Every `batch` call must provide `--commands` or `--input`; otherwise the process waits for stdin and blocks the MCP request.
+- Batch items use the `command` field, for example `{"command":"add","parent":"/slide[1]","type":"shape","props":{"text":"Hello"}}`.
+- Check per-item batch results. Before retrying after a timeout, inspect the document because a write may have completed even if its response was lost.
+
 ## Built-in Help
 
 When unsure about property names or formats:
@@ -62,12 +70,7 @@ officecli docx query            # Selector reference
 
 ## MCP Mode (Preferred)
 
-When OfficeCLI MCP server is connected, all operations are available as direct MCP tools (no shell overhead):
-- `create`, `view`, `get`, `query`, `set`, `add`, `remove`, `move`, `swap`
-- `validate`, `batch`, `dump`, `merge`, `watch`
-- `raw`, `raw-set`, `open`, `close`
-
-MCP tools accept the same arguments as CLI commands and return structured JSON.
+When the OfficeCLI MCP server is connected in Visionox, use the generic `officecli` tool and pass one CLI command through its `command` argument. Commands return structured output without shell startup overhead.
 
 ## Shell Fallback
 
