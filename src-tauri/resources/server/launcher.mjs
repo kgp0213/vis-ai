@@ -48,7 +48,7 @@ const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJson
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
-const { buildBudgetedBlocks, buildMemoryIndex } = await importEarly("./lib/memory-prompt.mjs");
+const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = await importEarly("./lib/memory-prompt.mjs");
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 
@@ -2530,33 +2530,34 @@ ${activeList}`;
   return fragments[style] ?? on;
 }
 
-function selectSessionMemoriesForPrompt() {
+function selectSessionMemoriesForPrompt(maxTokens = Infinity) {
   let selected = sessionMemories.map((m) => ({ memory: m, text: (() => {
     const title = String(m.name).replace(/[\r\n]/g, " ").trim();
     return `## ${title}\n\n${m.body}`;
   })() }));
   const dropped = [];
-  while (selected.length > 1) {
+  while (selected.length > 0) {
     const joined = selected.map((entry) => entry.text).join("\n\n");
-    if (joined.length <= CONSTANTS.SESSION_MEMORY_BLOCK_MAX_CHARS) break;
+    if (joined.length <= CONSTANTS.SESSION_MEMORY_BLOCK_MAX_CHARS && countTokens(joined) <= maxTokens) break;
     dropped.push(selected.shift().memory);
   }
   return { selected, dropped };
 }
-function getSessionMemoryBlock() {
+function getSessionMemoryBlock(maxTokens = Infinity) {
   if (sessionMemories.length === 0) return "";
-  const { selected, dropped } = selectSessionMemoriesForPrompt();
+  const { selected, dropped } = selectSessionMemoriesForPrompt(maxTokens);
+  if (selected.length === 0) return "";
   const suffix = dropped.length > 0 ? `\n\n… dropped ${dropped.length} older session memories` : "";
   return `\n# Session memory (this conversation only)\n\n${selected.map((entry) => entry.text).join("\n\n")}${suffix}`;
 }
 
-function collectPersistentMemoryPrompt(rootDir) {
+function collectPersistentMemoryPrompt(rootDir, maxTokens = Infinity) {
   let store;
   try {
     store = new MemoryStore({ projectRoot: rootDir });
   } catch (err) {
     console.error(`[launcher] persistent memory skipped: ${err.message}`);
-    return { text: "", status: { entries: {}, totalChars: 0 } };
+    return { text: "", status: { entries: {}, totalChars: 0, totalTokens: 0, budgetTokens: Number.isFinite(maxTokens) ? maxTokens : null } };
   }
   let entries = [];
   try {
@@ -2571,13 +2572,17 @@ function collectPersistentMemoryPrompt(rootDir) {
     "",
     "These user-approved memories were marked high priority. Treat them as hard rules unless the current user message explicitly updates or contradicts them."
   ].join("\n");
+  const finiteTokenBudget = Number.isFinite(maxTokens);
+  const highTokenBudget = finiteTokenBudget ? Math.floor(maxTokens * 0.6) : Infinity;
+  const projectIndexTokenBudget = finiteTokenBudget ? Math.floor(maxTokens * 0.2) : Infinity;
+  const globalIndexTokenBudget = finiteTokenBudget ? Math.floor(maxTokens * 0.1) : Infinity;
   const high = buildBudgetedBlocks(highEntries.map((entry) => ({
     key: keyFor(entry),
     text: [`!!! [${entry.scope}/${entry.type}/${entry.name}] ${entry.description || "(no description)"}`, entry.body].filter(Boolean).join("\n\n"),
-  })), { header: highHeader, maxChars: CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS });
+  })), { header: highHeader, maxChars: CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS, maxTokens: highTokenBudget, countTokens });
   const excludedKeys = new Set(high.selectedKeys);
-  const global = buildMemoryIndex(entries.filter((entry) => entry.scope === "global").map((entry) => ({ ...entry, key: keyFor(entry) })), { maxChars: CONSTANTS.PERSISTENT_MEMORY_INDEX_MAX_CHARS, excludedKeys });
-  const project = buildMemoryIndex(entries.filter((entry) => entry.scope === "project").map((entry) => ({ ...entry, key: keyFor(entry) })), { maxChars: CONSTANTS.PERSISTENT_MEMORY_INDEX_MAX_CHARS, excludedKeys });
+  const global = buildMemoryIndex(entries.filter((entry) => entry.scope === "global").map((entry) => ({ ...entry, key: keyFor(entry) })), { maxChars: CONSTANTS.PERSISTENT_MEMORY_INDEX_MAX_CHARS, maxTokens: globalIndexTokenBudget, countTokens, excludedKeys });
+  const project = buildMemoryIndex(entries.filter((entry) => entry.scope === "project").map((entry) => ({ ...entry, key: keyFor(entry) })), { maxChars: CONSTANTS.PERSISTENT_MEMORY_INDEX_MAX_CHARS, maxTokens: projectIndexTokenBudget, countTokens, excludedKeys });
   const blocks = [];
   if (high.selectedKeys.length > 0 || high.omittedKeys.length > 0) blocks.push(high.text);
   if (global.text) {
@@ -2607,28 +2612,51 @@ function collectPersistentMemoryPrompt(rootDir) {
   for (const key of high.selectedKeys) statuses[key] = "high-full";
   for (const key of [...global.selectedKeys, ...project.selectedKeys]) statuses[key] = "index";
   for (const key of [...high.omittedKeys, ...global.omittedKeys, ...project.omittedKeys]) if (!statuses[key]) statuses[key] = "omitted";
-  return { text, status: { entries: statuses, totalChars: text.length } };
+  return { text, status: { entries: statuses, totalChars: text.length, totalTokens: countTokens(text), budgetTokens: finiteTokenBudget ? maxTokens : null } };
 }
 
-function formatPersistentMemoryForPrompt(rootDir) {
-  return collectPersistentMemoryPrompt(rootDir).text;
+function formatPersistentMemoryForPrompt(rootDir, maxTokens = Infinity) {
+  return collectPersistentMemoryPrompt(rootDir, maxTokens).text;
 }
 
-function getMemoryInjectionStatus(rootDir = workspaceDir) {
+function memoryPromptBudget(model) {
+  const contextTokens = DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS;
+  const totalTokens = memoryTokenBudgetForCapacity(contextTokens);
+  const sessionTokens = Math.floor(totalTokens * 0.25);
+  const modeText = formatModeMemoryForPrompt(config.mode);
+  const modeTokens = countTokens(modeText);
+  return {
+    contextTokens,
+    totalTokens,
+    sessionTokens,
+    persistentTokens: Math.max(0, totalTokens - sessionTokens - modeTokens),
+    modeText,
+    modeTokens,
+  };
+}
+
+function getMemoryInjectionStatus(rootDir = workspaceDir, model = effectiveModelConfig(config).model) {
+  const budget = memoryPromptBudget(model);
   const modeMemory = readModeMemory(config.mode || "general");
   const modeEnabled = modeMemory.items.filter((item) => item.enabled).sort((a, b) => b.priority - a.priority || String(b.updatedAt).localeCompare(String(a.updatedAt)));
   const modeSelected = modeEnabled.slice(0, CONSTANTS.MODE_MEMORY_PROMPT_LIMIT);
-  const session = selectSessionMemoriesForPrompt();
-  const persistent = collectPersistentMemoryPrompt(rootDir);
+  const session = selectSessionMemoriesForPrompt(budget.sessionTokens);
+  const sessionText = getSessionMemoryBlock(budget.sessionTokens);
+  const persistent = collectPersistentMemoryPrompt(rootDir, budget.persistentTokens);
   const project = getProjectMemoryStatus(rootDir);
-  const soulChars = loadSoul().length;
+  const soul = loadSoul();
+  const soulChars = soul.length;
+  const projectTokens = countTokens(readProjectMemories(rootDir).map((item) => item.content).join("\n\n"));
+  const recallableTokens = persistent.status.totalTokens + budget.modeTokens + countTokens(sessionText);
   return {
     persistent: persistent.status,
     mode: { selectedIds: modeSelected.map((item) => item.id), omittedIds: modeEnabled.slice(CONSTANTS.MODE_MEMORY_PROMPT_LIMIT).map((item) => item.id) },
     session: { selectedNames: session.selected.map((entry) => entry.memory.name), omittedNames: session.dropped.map((entry) => entry.name) },
     project,
-    soul: { chars: soulChars },
-    totalChars: persistent.status.totalChars + formatModeMemoryForPrompt(config.mode).length + getSessionMemoryBlock().length + project.totalChars + soulChars,
+    soul: { chars: soulChars, tokens: countTokens(soul) },
+    budget: { model, contextTokens: budget.contextTokens, recallableTokens, maxRecallableTokens: budget.totalTokens, pinnedTokens: countTokens(soul) + projectTokens },
+    totalTokens: recallableTokens + countTokens(soul) + projectTokens,
+    totalChars: persistent.status.totalChars + budget.modeText.length + sessionText.length + project.totalChars + soulChars,
   };
 }
 
@@ -2916,6 +2944,7 @@ function computePrefixFingerprint(rootDir) {
   const mc = getModeConfig();
   const parts = [
     `mode=${config.mode}`,
+    `model=${effectiveModelConfig(config).model}`,
     `edit=${currentEditMode()}`,
     `soul=${safeMtime(SOUL_HOME)}`,
     `root=${rootDir}`,
@@ -2956,6 +2985,7 @@ function getMemoryRuntimeStatus(rootDir = workspaceDir) {
 
 function buildLoop(client, rootDir) {
   const modelConfig = effectiveModelConfig(config);
+  const memoryBudget = memoryPromptBudget(modelConfig.model);
   const fingerprint = computePrefixFingerprint(rootDir);
   let system, mc;
   if (_prefixCache.fingerprint === fingerprint && _prefixCache.upToPersistent !== null) {
@@ -2977,7 +3007,7 @@ function buildLoop(client, rootDir) {
       `Mode changes made in the dashboard apply immediately (the loop is rebuilt on switch); do not claim a prompt changed mid-turn unless this prefix was rebuilt.`,
       mc.prompt || "",
     ].filter(Boolean);
-    const systemWithMode = systemWithProject + `\n\n# Work mode\n\nThis block only defines the working habits for the current scenario. If it conflicts with the identity/environment assumptions in # Identity (soul) above, soul wins.\n${modeLines.join("\n")}${formatModeMemoryForPrompt(config.mode)}`;
+    const systemWithMode = systemWithProject + `\n\n# Work mode\n\nThis block only defines the working habits for the current scenario. If it conflicts with the identity/environment assumptions in # Identity (soul) above, soul wins.\n${modeLines.join("\n")}${memoryBudget.modeText}`;
     const loadedRules = loadRules();
     const systemWithRules = loadedRules.length > 0
       ? systemWithMode + "\n\n# Coding Rules\n\n" + loadedRules.join("\n\n")
@@ -2987,13 +3017,13 @@ function buildLoop(client, rootDir) {
     // modeSkills marks the current mode's recommended skills with ★ so the
     // catalogue and the "Relevant skills" hint above no longer contradict.
     const systemWithSkills = applySkillsIndex(systemWithRules, { projectRoot: rootDir, modeSkills: mc.skills });
-    system = systemWithSkills + formatPersistentMemoryForPrompt(rootDir);
+    system = systemWithSkills + formatPersistentMemoryForPrompt(rootDir, memoryBudget.persistentTokens);
     _prefixCache = { fingerprint, upToPersistent: system, mc };
     console.error(`[launcher] system prefix rebuilt (fingerprint changed)`);
   }
   // Session-scoped layers stay dynamic — never cached.
-  const systemWithSession = system + getSessionMemoryBlock();
-  activeMemoryRuntime = { fingerprint: memoryRuntimeFingerprint(rootDir), appliedAt: new Date().toISOString(), injection: getMemoryInjectionStatus(rootDir) };
+  const systemWithSession = system + getSessionMemoryBlock(memoryBudget.sessionTokens);
+  activeMemoryRuntime = { fingerprint: memoryRuntimeFingerprint(rootDir), appliedAt: new Date().toISOString(), injection: getMemoryInjectionStatus(rootDir, modelConfig.model) };
   const systemWithTutor = sessionTutorMode?.enabled
     ? systemWithSession + "\n\n" + formatTutorPrompt(sessionTutorMode.style)
     : systemWithSession;

@@ -127,6 +127,14 @@ describe("有效阈值计算 min(ratio, absoluteCap/ctxMax)", () => {
 // ── Tests: decideAfterUsage decision logic ─────────────────────
 
 describe("decideAfterUsage 决策逻辑", () => {
+  test("折叠摘要不复述不可折叠前缀中的记忆和规则", () => {
+    const source = readFileSync(runtimeChunkUrl, "utf8");
+    assert.match(source, /immutable system prefix already preserves identity/i);
+    assert.match(source, /Do not restate or summarize (?:Soul|identity)/i);
+    assert.match(source, /memory references/i);
+    assert.doesNotMatch(source, /This summary replaces the original turns to free context . make it self-contained/);
+  });
+
   test("普通最终回答也会先执行上下文决策，再结束当前轮次", () => {
     const source = readFileSync(runtimeChunkUrl, "utf8");
     const noToolReturn = source.indexOf("if (repairedCalls.length === 0)");

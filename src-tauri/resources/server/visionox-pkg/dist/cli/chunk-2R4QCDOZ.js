@@ -6757,7 +6757,7 @@ ${pinnedBodies.join("\n\n")}` : "";
   }
   async summarizeForFold(messagesToSummarize, producingModel) {
     let summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";
-    const systemPrompt = "You compress conversation history for a coding agent. Output one prose recap that preserves: the user's overall goal, decisions and conclusions reached, files inspected or modified, important tool results still relevant to ongoing work, and any open todos. Skip turn-by-turn play-by-play. No tool calls, no markdown headings, no SEARCH/REPLACE blocks \u2014 plain prose only.";
+    const systemPrompt = "You compress conversation history for a coding agent. The immutable system prefix already preserves identity, Soul, project instructions, skills, and durable or session memory. Do not restate or summarize Soul, identity, project rules, skill instructions, or memory bodies. Preserve only conversation-specific delta: the user's current goal, decisions and conclusions reached in this conversation, files inspected or modified, important tool results still relevant to ongoing work, and open todos. Keep existing memory references or identifiers when useful instead of copying their content. Skip turn-by-turn play-by-play, repeated explanations, completed transient steps, and superseded details. No tool calls, no markdown headings, no SEARCH/REPLACE blocks \u2014 plain prose only.";
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
     const rawEstimate = estimateRequestTokens([{ role: "system", content: systemPrompt }, ...healed], null);
     const summaryCap = contextThresholdsForModel(summaryModel).ctxMax;
@@ -6772,7 +6772,7 @@ ${pinnedBodies.join("\n\n")}` : "";
       ...normalized,
       {
         role: "user",
-        content: "Summarize the conversation above as plain prose. This summary replaces the original turns to free context \u2014 make it self-contained."
+        content: "Summarize the conversation above as a compact conversation delta. It will follow the immutable system prefix, so do not repeat identity, project rules, skills, or stored memory."
       }
     ];
     for (let attempt = 0; attempt < 2; attempt++) {

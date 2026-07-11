@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { analyzeMemoryEntries, buildBudgetedBlocks, buildMemoryIndex } from "../lib/memory-prompt.mjs";
+import { analyzeMemoryEntries, buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } from "../lib/memory-prompt.mjs";
 
 describe("memory prompt budgeting", () => {
   test("high-priority blocks are kept whole", () => {
@@ -15,6 +15,24 @@ describe("memory prompt budgeting", () => {
     assert.match(result.text, /A{30}/);
     assert.doesNotMatch(result.text, /B{10}/);
     assert.match(result.text, /omitted 1 complete entry/);
+  });
+
+  test("token budget keeps complete blocks even when character count is misleading", () => {
+    const tokenCost = (text) => String(text).includes("expensive") ? 20 : 1;
+    const result = buildBudgetedBlocks([
+      { key: "global:a", text: "cheap" },
+      { key: "global:b", text: "expensive" },
+    ], { maxChars: 100, maxTokens: 2, countTokens: tokenCost });
+
+    assert.deepEqual(result.selectedKeys, ["global:a"]);
+    assert.deepEqual(result.omittedKeys, ["global:b"]);
+    assert.doesNotMatch(result.text, /expensive/);
+  });
+
+  test("recallable memory budget follows model capacity with an absolute ceiling", () => {
+    assert.equal(memoryTokenBudgetForCapacity(81920), 8192);
+    assert.equal(memoryTokenBudgetForCapacity(131072), 12000);
+    assert.equal(memoryTokenBudgetForCapacity(1048576), 12000);
   });
 
   test("full-body high-priority entries are excluded from the summary index", () => {

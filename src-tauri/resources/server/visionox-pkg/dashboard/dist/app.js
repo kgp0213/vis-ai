@@ -28295,7 +28295,7 @@ function MemoryPanel() {
         ${(tree.modeMemory?.modes ?? []).map((mode) => html4`<button class=${modeFilter === mode.id ? "active" : ""} onClick=${() => setModeFilter(mode.id)}>${mode.label ?? mode.id} ${mode.enabledCount ?? 0}/${mode.count ?? 0}</button>`)}
       </div>` : null}
       ${tree.runtime?.pending ? html4`<div class="memory-runtime-pending"><div><strong>当前上下文仍在使用旧记忆</strong><span>磁盘修改已保存，执行应用后当前对话才会使用新版本。</span></div><button class="btn primary" disabled=${busy} onClick=${applyMemoryNow}>立即应用到当前对话</button></div>` : null}
-      ${activeInjection ? html4`<div class="memory-budget-summary"><span>当前记忆上下文</span><strong>${Number(activeInjection.totalChars ?? 0).toLocaleString()} 字符</strong><span>高优先级全文与普通摘要已去重</span></div>` : null}
+      ${activeInjection ? html4`<div class="memory-budget-summary"><span>当前记忆上下文</span><strong>${Number(activeInjection.totalTokens ?? 0).toLocaleString()} tokens</strong><span>固定 ${Number(activeInjection.budget?.pinnedTokens ?? 0).toLocaleString()} · 可召回 ${Number(activeInjection.budget?.recallableTokens ?? 0).toLocaleString()} / ${Number(activeInjection.budget?.maxRecallableTokens ?? 0).toLocaleString()} · 高优先级全文与普通摘要已去重</span></div>` : null}
       ${info ? html4`<div class="memory-notice ok">${info}</div>` : null}
       ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
       <div class="memory-layout">
