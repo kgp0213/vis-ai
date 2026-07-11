@@ -25,6 +25,8 @@ process.env.USERPROFILE = tmpHome;
 const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url);
 const sessionUrl = new URL("../visionox-pkg/dist/cli/chunk-6PBZN4VI.js", import.meta.url);
 const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
+const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import.meta.url);
+const katexSupportUrl = new URL("../visionox-pkg/dashboard/katex-support.js", import.meta.url);
 const launcherUrl = new URL("../launcher.mjs", import.meta.url);
 const fileAccessRescueSkillUrl = new URL("../../bootstrap-skills/file-access-rescue/SKILL.md", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
@@ -392,6 +394,28 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /const selectArtifactMessage = q2\(\(msg\) => \{/);
     assert.match(app, /onSelectArtifactMessage=\$\{selectArtifactMessage\}/);
     assert.doesNotMatch(app, /onSelectArtifactMessage=\$\{\(msg\) => \{/);
+  });
+
+  test("六个 Markdown 入口共享 KaTeX 扩展，文件预览加载同一份样式", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const index = readFileSync(dashboardIndexUrl, "utf8");
+    const support = readFileSync(katexSupportUrl, "utf8");
+
+    assert.match(app, /VisionoxKatex\.markedExtensions\(\)/);
+    assert.match(app, /marked\.use\(\{ renderer, extensions: mathExtensions/);
+    assert.match(app, /function renderMarkdownToString\(text\) \{\s*return marked\.parse\(text\)/);
+    assert.match(app, /function renderMarkdownPreviewToString[\s\S]*?return marked\.parse\(text\)/);
+    assert.match(app, /marked\.parse\(modal\.plan \|\| ""\)/);
+    assert.match(app, /marked\.parse\(modal\.body\)/);
+    assert.match(app, /marked\.parse\(open\.body\)/);
+    assert.match(app, /marked\(markdown, \{ breaks: true, gfm: true \}\)/);
+    assert.match(app, /vendor\/katex\/katex\.min\.css\?token=/);
+    assert.match(index, /vendor\/katex\/katex\.min\.css\?token=__VISIONOX_TOKEN__/);
+    assert.match(index, /vendor\/katex\/katex\.min\.js\?token=__VISIONOX_TOKEN__/);
+    assert.match(index, /katex-support\.js\?token=__VISIONOX_TOKEN__/);
+    assert.match(support, /name: "visionoxBlockMath"/);
+    assert.match(support, /name: "visionoxInlineMath"/);
+    assert.doesNotMatch(support, /mermaid/i);
   });
 
   test("长会话默认只渲染最近消息，并可继续加载和跳转历史", () => {

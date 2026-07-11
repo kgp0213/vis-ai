@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = join(root, "src-tauri", "resources", "server", "visionox-pkg");
-const target = join(root, "src-tauri", "runtime", "visionox-pkg");
+const target = resolve(process.env.VISIONOX_RUNTIME_PACKAGE || "");
+const tempRelative = relative(resolve(tmpdir()), target);
+if (!process.env.VISIONOX_RUNTIME_PACKAGE || !tempRelative || tempRelative.startsWith("..") || isAbsolute(tempRelative)) {
+  throw new Error("VISIONOX_RUNTIME_PACKAGE must point to a child of the system temporary directory");
+}
 
 function copyFile(relative) {
   const from = join(source, relative);
@@ -24,10 +29,11 @@ function copyDirectory(relative) {
 
 rmSync(target, { recursive: true, force: true });
 mkdirSync(target, { recursive: true });
-for (const file of ["package.json", "package-lock.json", "dashboard/index.html", "dashboard/app.css"]) copyFile(file);
+for (const file of ["package.json", "package-lock.json", "dashboard/index.html", "dashboard/app.css", "dashboard/katex-support.js"]) copyFile(file);
 for (const file of ["app.js", "vendor-uplot.css", "vendor-hljs.css", "128x128.png", "ai-avatar.png", "v1.png", "v3.png"]) {
   copyFile(join("dashboard", "dist", file));
 }
+copyDirectory(join("dashboard", "vendor", "katex"));
 for (const dir of ["dist", "data", "node_modules"]) copyDirectory(dir);
 
 const pruneCommand = process.platform === "win32"

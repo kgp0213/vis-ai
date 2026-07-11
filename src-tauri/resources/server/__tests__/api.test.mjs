@@ -68,6 +68,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
       end(data) { body = data; },
       get status() { return status; },
       get body() { return body; },
+      get headers() { return headers; },
       get json() {
         try { return body ? JSON.parse(body) : null; } catch { return null; }
       },
@@ -133,6 +134,27 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(res.status, 200);
     assert.ok(res.json);
     assert.ok(res.json.model !== undefined);
+  });
+
+  test("KaTeX 脚本和样式受保护，字体可由 CSS 直接加载", async () => {
+    const deniedReq = { url: "/assets/vendor/katex/katex.min.js", method: "GET", headers: {} };
+    const deniedRes = mockRes();
+    await dispatch(deniedReq, deniedRes, mockCtx(), TOKEN);
+    assert.equal(deniedRes.status, 401);
+
+    const script = await apiGet("/assets/vendor/katex/katex.min.js");
+    assert.equal(script.status, 200);
+    assert.match(script.headers["content-type"], /javascript/);
+
+    const css = await apiGet("/assets/vendor/katex/katex.min.css");
+    assert.equal(css.status, 200);
+    assert.equal(css.headers["content-type"], "text/css; charset=utf-8");
+
+    const fontReq = { url: "/assets/vendor/katex/fonts/KaTeX_Main-Regular.woff2", method: "GET", headers: {} };
+    const fontRes = mockRes();
+    await dispatch(fontReq, fontRes, mockCtx(), TOKEN);
+    assert.equal(fontRes.status, 200);
+    assert.equal(fontRes.headers["content-type"], "font/woff2");
   });
 
   test("GET /api/events 只推送请求的共享 SSE 频道", async () => {

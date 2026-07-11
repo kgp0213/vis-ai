@@ -2,7 +2,8 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -10,7 +11,11 @@ const tauri = join(root, "src-tauri");
 const releaseDir = join(tauri, "target", "release");
 const sourceResources = join(tauri, "resources");
 const releaseResources = join(releaseDir, "resources");
-const runtimePackage = join(tauri, "runtime", "visionox-pkg");
+const runtimePackage = resolve(process.env.VISIONOX_RUNTIME_PACKAGE || "");
+const tempRelative = relative(resolve(tmpdir()), runtimePackage);
+if (!process.env.VISIONOX_RUNTIME_PACKAGE || !tempRelative || tempRelative.startsWith("..") || isAbsolute(tempRelative)) {
+  throw new Error("VISIONOX_RUNTIME_PACKAGE must point to a child of the system temporary directory");
+}
 const expected = new Map();
 
 function normalize(path) {

@@ -23605,7 +23605,8 @@ renderer.code = function reasonixCode(arg1, arg2) {
     return `<pre><code>${escapeHtml(codeText)}</code></pre>`;
   }
 };
-marked.use({ renderer, gfm: true, breaks: false, pedantic: false });
+var mathExtensions = globalThis.VisionoxKatex ? globalThis.VisionoxKatex.markedExtensions() : [];
+marked.use({ renderer, extensions: mathExtensions, gfm: true, breaks: false, pedantic: false });
 function renderMarkdownToString(text) {
   return marked.parse(text);
 }
@@ -23643,7 +23644,7 @@ function artifactPreviewDoc(artifact) {
     return String(artifact.content || "");
   }
   const rendered = renderMarkdownPreviewToString(artifact.content);
-  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><link rel="stylesheet" href="/assets/vendor/katex/katex.min.css?token=${encodeURIComponent(TOKEN)}"><style>
 body{margin:0;padding:22px 26px 34px;background:#fff;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65;font-size:14px}
 h1,h2,h3{line-height:1.25;margin:1.2em 0 .55em;color:#111827}
 h1{font-size:26px}h2{font-size:21px}h3{font-size:17px}
@@ -23659,6 +23660,8 @@ pre code{background:transparent;padding:0}
 blockquote{border-left:4px solid #d1d5db;padding-left:12px;color:#4b5563}
 table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:6px 8px}th{background:#f9fafb}
 a{color:#2563eb}
+.visionox-math-block{margin:.9em 0;overflow-x:auto;overflow-y:hidden;text-align:center}
+.visionox-math-inline{white-space:nowrap}
 </style></head><body>${rendered}</body></html>`;
 }
 function closeArtifactPreview() {

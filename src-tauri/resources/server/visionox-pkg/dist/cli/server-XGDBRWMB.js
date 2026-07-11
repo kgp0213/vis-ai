@@ -248,6 +248,8 @@ async function renderIndexHtml(token, mode) {
   return tpl.replaceAll("__VISIONOX_TOKEN__", safeToken).replaceAll("__VISIONOX_MODE__", mode);
 }
 var VENDOR_CSS_NAMES = /* @__PURE__ */ new Set(["vendor-hljs.css", "vendor-uplot.css"]);
+var KATEX_ASSET_RE = /^vendor\/katex\/(?:katex\.min\.(?:js|css)|LICENSE|fonts\/KaTeX_[A-Za-z0-9-]+\.(?:ttf|woff2?))$/;
+var KATEX_FONT_ASSET_RE = /^vendor\/katex\/fonts\/KaTeX_[A-Za-z0-9-]+\.(?:ttf|woff2?)$/;
 async function loadVendorCss(name) {
   return loadCachedFile(join(ASSET_DIR, "dist", name));
 }
@@ -264,6 +266,21 @@ async function serveAsset(name) {
   if (name === "app.css") {
     const { body, mtimeMs } = await loadCss();
     return { body, mtimeMs, contentType: "text/css; charset=utf-8" };
+  }
+  if (name === "katex-support.js") {
+    const { body, mtimeMs } = await loadCachedFile(join(ASSET_DIR, "katex-support.js"));
+    return { body, mtimeMs, contentType: "application/javascript; charset=utf-8" };
+  }
+  if (KATEX_ASSET_RE.test(name)) {
+    const binary = KATEX_FONT_ASSET_RE.test(name);
+    const { body, mtimeMs } = await loadCachedFile(join(ASSET_DIR, name), binary ? null : "utf8");
+    const contentType = name.endsWith(".js") ? "application/javascript; charset=utf-8"
+      : name.endsWith(".css") ? "text/css; charset=utf-8"
+      : name.endsWith(".woff2") ? "font/woff2"
+      : name.endsWith(".woff") ? "font/woff"
+      : name.endsWith(".ttf") ? "font/ttf"
+      : "text/plain; charset=utf-8";
+    return { body, mtimeMs, contentType };
   }
   if (VENDOR_CSS_NAMES.has(name)) {
     const { body, mtimeMs } = await loadVendorCss(name);
@@ -5094,7 +5111,7 @@ async function dispatch(req, res, ctx, expectedToken) {
   }
   if (path.startsWith("/assets/")) {
     const assetName = path.slice("/assets/".length);
-    if (!assetName.endsWith(".png")) {
+    if (!assetName.endsWith(".png") && !KATEX_FONT_ASSET_RE.test(assetName)) {
       const fail = checkAuth(req, expectedToken, false);
       if (fail) {
         res.writeHead(fail.status);

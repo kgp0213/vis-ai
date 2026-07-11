@@ -4223,6 +4223,15 @@ textarea {
 .md em { color: var(--text-primary); font-style: italic; }
 .md del { color: var(--color-error); text-decoration: line-through; }
 
+.visionox-math-block {
+  margin: 0.9em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
+.visionox-math-inline { white-space: nowrap; }
+
 .md a {
   color: var(--accent-primary);
   text-decoration: none;

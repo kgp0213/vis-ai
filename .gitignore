@@ -13,7 +13,6 @@ target/
 
 # Tauri generated files
 src-tauri/gen/
-src-tauri/runtime/
 
 # Node.js
 node_modules/

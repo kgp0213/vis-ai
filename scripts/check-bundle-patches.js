@@ -21,13 +21,17 @@ const required = [
     markers: [
       "function pruneRuntimeFiles(path)",
       "npm prune --offline",
+      "VISIONOX_RUNTIME_PACKAGE",
+      "system temporary directory",
       'for (const dir of ["dist", "data", "node_modules"])',
       "forbiddenRuntimeFile",
+      '"dashboard/katex-support.js"',
+      'copyDirectory(join("dashboard", "vendor", "katex"))',
     ],
   },
   {
     file: "scripts/run-tauri-build.js",
-    markers: ["CARGO_NET_OFFLINE", "npm_config_offline", "verify-release-resources.js"],
+    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "resourceOverride", "verify-release-resources.js"],
   },
   {
     file: "scripts/verify-release-resources.js",
@@ -117,6 +121,8 @@ const required = [
       "query.get(\"channels\")",
       "modal gateId must be a non-negative integer",
       "modal is no longer active",
+      "KATEX_ASSET_RE",
+      "KATEX_FONT_ASSET_RE",
     ],
   },
   {
@@ -151,6 +157,9 @@ const required = [
       "planContinuation",
       "plan-continuation-bar",
       'dash.kind === "plan-activated"',
+      "VisionoxKatex.markedExtensions()",
+      "extensions: mathExtensions",
+      "vendor/katex/katex.min.css?token=",
     ],
   },
   {
@@ -182,7 +191,17 @@ const required = [
       "overflow-wrap: anywhere",
       ".modal-step-risk-med",
       ".plan-continuation-bar",
+      ".visionox-math-block",
     ],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/katex-support.js",
+    markers: ["visionoxBlockMath", "visionoxInlineMath", "renderToString", 'trust: false'],
+    forbidden: ["mermaid"],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/index.html",
+    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-continuation.mjs",
@@ -271,6 +290,7 @@ const tauriConfig = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.
 const cargoManifest = readFileSync(join(root, "src-tauri", "Cargo.toml"), "utf8");
 const rustMain = readFileSync(join(root, "src-tauri", "src", "main.rs"), "utf8");
 const agentRules = readFileSync(join(root, "AGENTS.md"), "utf8");
+if (existsSync(join(root, "src-tauri", "runtime"))) failures.push("src-tauri/runtime: repository-local runtime staging is forbidden");
 if (desktopPackage.name !== "visionox-whale") failures.push("package.json: expected name visionox-whale");
 if (tauriConfig.productName !== "Visionox-Whale") failures.push("tauri.conf.json: expected productName Visionox-Whale");
 if (!/^name = "visionox-whale"$/m.test(cargoManifest)) failures.push("Cargo.toml: expected package name visionox-whale");

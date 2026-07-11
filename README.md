@@ -11,7 +11,7 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 - 对话中连续输入与持久队列
 - 本地记忆、工作区语义索引和 `/learn` 学习功能
 - 内置 Node.js、OfficeCLI、bootstrap skills 和 ECC 规则
-- Markdown 打开、预览、文件关联和对话产物管理
+- Markdown 打开、预览、文件关联和对话产物管理，六个渲染入口统一支持 KaTeX 行内与块级公式
 - 定时任务、执行记录和报告生成
 
 ## 名称与数据兼容
@@ -71,12 +71,12 @@ npm run tauri:build -- --no-bundle
 
 `npm run tauri:build` 执行以下步骤：
 
-1. 从 `src-tauri/resources/` 准备裁剪后的临时运行时包。
+1. 从 `src-tauri/resources/` 在系统 `%TEMP%` 中准备裁剪后的临时运行时包。
 2. 删除 source map、备份和临时文件等非运行资源。
 3. 执行 bundle 补丁与构建身份守卫。
 4. 使用 Tauri 编译 release exe，并直接生成规范的 `resources/`。
 5. 对 release 资源树与源码/暂存树逐文件校验 SHA256。
-6. 无论成功或失败都删除 `src-tauri/runtime/`。
+6. 无论成功或失败都立即删除系统临时运行时包；仓库内不创建 `src-tauri/runtime/`。
 
 不得手工复制资源到 release，也不得使用裸 `cargo build` 或 `npx tauri build` 生成交付测试产物。
 
@@ -164,7 +164,7 @@ docs/                        使用、架构与开发文档
 | 脚本 | 用途 |
 |---|---|
 | `scripts/run-tauri-build.js` | 唯一 release 构建入口 |
-| `scripts/prepare-runtime-package.js` | 准备裁剪后的生产运行时 |
+| `scripts/prepare-runtime-package.js` | 在系统临时目录准备裁剪后的生产运行时 |
 | `scripts/check-bundle-patches.js` | 检查本地补丁、品牌和构建身份 |
 | `scripts/verify-release-resources.js` | 校验 exe 名和完整 release 资源树 |
 | `scripts/verify-nsis-bundle.js` | 解包并校验 NSIS 安装包 |
