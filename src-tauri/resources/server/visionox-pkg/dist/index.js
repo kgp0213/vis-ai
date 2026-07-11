@@ -7301,37 +7301,57 @@ var defaultFs = {
 };
 
 // src/memory/project.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, statSync as statSync3 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
 import { basename, join as join6 } from "path";
-var PROJECT_MEMORY_FILE = "REASONIX.md";
-var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
+var PROJECT_MEMORY_FILE = "visionox.md";
+var PROJECT_MEMORY_FILES = ["AGENTS.md", "AGENT.md", "agent.md", "CLAUDE.md", "claude.md", "visionox.md"];
 var PROJECT_MEMORY_MAX_CHARS = 8e3;
-function findProjectMemoryPath(rootDir) {
+var PROJECT_MEMORY_TOTAL_MAX_CHARS = 12e3;
+function listProjectMemoryPaths(rootDir) {
+  const paths = [];
+  const seen = /* @__PURE__ */ new Set();
   for (const name of PROJECT_MEMORY_FILES) {
     const path2 = join6(rootDir, name);
-    if (existsSync5(path2)) return path2;
+    if (!existsSync5(path2)) continue;
+    let real = path2;
+    try {
+      real = realpathSync2.native(path2);
+    } catch {
+    }
+    const key = process.platform === "win32" ? real.toLowerCase() : real;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push(real);
   }
-  return null;
+  return paths;
+}
+function findProjectMemoryPath(rootDir) {
+  return listProjectMemoryPaths(rootDir)[0] ?? null;
 }
 function resolveProjectMemoryWritePath(rootDir) {
-  return findProjectMemoryPath(rootDir) ?? join6(rootDir, PROJECT_MEMORY_FILE);
+  return join6(rootDir, PROJECT_MEMORY_FILE);
+}
+function readProjectMemories(rootDir) {
+  const result = [];
+  let remaining = PROJECT_MEMORY_TOTAL_MAX_CHARS;
+  for (const path2 of listProjectMemoryPaths(rootDir)) {
+    if (remaining <= 0) break;
+    let raw;
+    try {
+      raw = readFileSync7(path2, "utf8").trim();
+    } catch {
+      continue;
+    }
+    if (!raw) continue;
+    const limit = Math.min(PROJECT_MEMORY_MAX_CHARS, remaining);
+    const content = raw.length <= limit ? raw : `${raw.slice(0, limit).replace(/\n[^\n]*$/, "")}\n\u2026 (truncated at a complete line)`;
+    result.push({ path: path2, content, originalChars: raw.length, truncated: raw.length > limit });
+    remaining -= content.length;
+  }
+  return result;
 }
 function readProjectMemory(rootDir) {
-  const path2 = findProjectMemoryPath(rootDir);
-  if (!path2) return null;
-  let raw;
-  try {
-    raw = readFileSync7(path2, "utf8");
-  } catch {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const originalChars = trimmed.length;
-  const truncated = originalChars > PROJECT_MEMORY_MAX_CHARS;
-  const content = truncated ? `${trimmed.slice(0, PROJECT_MEMORY_MAX_CHARS)}
-\u2026 (truncated ${originalChars - PROJECT_MEMORY_MAX_CHARS} chars)` : trimmed;
-  return { path: path2, content, originalChars, truncated };
+  return readProjectMemories(rootDir)[0] ?? null;
 }
 function memoryEnabled() {
   const env = process.env.REASONIX_MEMORY;
@@ -7340,18 +7360,16 @@ function memoryEnabled() {
 }
 function applyProjectMemory(basePrompt, rootDir) {
   if (!memoryEnabled()) return basePrompt;
-  const mem = readProjectMemory(rootDir);
-  if (!mem) return basePrompt;
-  const filename = basename(mem.path);
+  const memories = readProjectMemories(rootDir);
+  if (memories.length === 0) return basePrompt;
+  const blocks = memories.map((mem) => `## ${basename(mem.path)}\n\n\`\`\`\n${mem.content}\n\`\`\``);
   return `${basePrompt}
 
-# Project memory (${filename})
+# Project memory
 
-The user pinned these notes about this project \u2014 treat them as authoritative context for every turn:
+All existing project instruction files below are active. Current user instructions win; when project files conflict, earlier files in this block have higher precedence.
 
-\`\`\`
-${mem.content}
-\`\`\`
+${blocks.join("\n\n")}
 `;
 }
 
@@ -14372,6 +14390,7 @@ export {
   isJsonRpcError,
   isNpxInstall,
   isPlausibleKey,
+  listProjectMemoryPaths,
   listDirectory,
   listFilesSync,
   listFilesWithStatsAsync,
@@ -14399,6 +14418,7 @@ export {
   quoteForCmdExe,
   rankPickerCandidates,
   readConfig,
+  readProjectMemories,
   readProjectMemory,
   readTranscript,
   readUsageLog,

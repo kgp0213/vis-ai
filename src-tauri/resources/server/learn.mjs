@@ -18,7 +18,6 @@ import { existsSync, mkdirSync, statSync, readdirSync, readFileSync, writeFileSy
 import { readdir, readFile, stat, writeFile, cp, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { getConceptManager } from "./learn-track.mjs";
-import { PROJECT_MEMORY_CANDIDATES } from "./lib/system-prompt.mjs";
 
 // ── Constants ───────────────────────────────────────────────────
 const LEARN_COMMANDS = ["skill", "project", "index", "ask", "tutor", "track", "status", "help"];
@@ -508,16 +507,8 @@ async function runLearnSkill(args, opts) {
 }
 
 // ── Project onboarding ──────────────────────────────────────────
-function findProjectMemoryPath(rootDir) {
-  for (const name of PROJECT_MEMORY_CANDIDATES) {
-    const path = join(rootDir, name);
-    if (existsSync(path)) return path;
-  }
-  return null;
-}
-
 function resolveProjectMemoryWritePath(rootDir) {
-  return findProjectMemoryPath(rootDir) ?? join(rootDir, "REASONIX.md");
+  return join(rootDir, "visionox.md");
 }
 
 async function collectProjectFiles(rootDir) {

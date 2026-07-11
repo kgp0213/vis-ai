@@ -76,21 +76,32 @@ const required = [
     file: "src-tauri/resources/server/lib/system-prompt.mjs",
     markers: [
       "PROJECT_MEMORY_CANDIDATES",
+      '"AGENTS.md"',
       "\"visionox.md\"",
       "\"CLAUDE.md\"",
       "in any work mode",
     ],
     forbidden: [
       "\".claude/CLAUDE.md\"",
+      "\"REASONIX.md\"",
     ],
+  },
+  {
+    file: "src-tauri/resources/server/learn.mjs",
+    markers: ['return join(rootDir, "visionox.md")'],
+    forbidden: ['join(rootDir, "REASONIX.md")'],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2K65GZBT.js",
     markers: [
-      "\"REASONIX.md\", \"visionox.md\", \"CLAUDE.md\", \"AGENTS.md\", \"AGENT.md\"",
+      '"AGENTS.md", "AGENT.md", "agent.md", "CLAUDE.md", "claude.md", "visionox.md"',
+      "function listProjectMemoryPaths",
+      "function readProjectMemories",
+      "PROJECT_MEMORY_TOTAL_MAX_CHARS",
     ],
     forbidden: [
       "\".claude/CLAUDE.md\"",
+      "\"REASONIX.md\"",
     ],
   },
   {
@@ -123,6 +134,9 @@ const required = [
       "modal is no longer active",
       "KATEX_ASSET_RE",
       "KATEX_FONT_ASSET_RE",
+      "atomicWriteMemoryFile",
+      "listProjectMemoryPaths",
+      "SOUL_MAX_CHARS",
     ],
   },
   {
@@ -160,6 +174,9 @@ const required = [
       "VisionoxKatex.markedExtensions()",
       "extensions: mathExtensions",
       "vendor/katex/katex.min.css?token=",
+      "copyModeMemory",
+      "batchModeMemories",
+      "Soul 不提供删除",
     ],
   },
   {
@@ -192,6 +209,9 @@ const required = [
       ".modal-step-risk-med",
       ".plan-continuation-bar",
       ".visionox-math-block",
+      ".memory-mode-tabs",
+      ".memory-batch-bar",
+      ".memory-soul-note",
     ],
   },
   {

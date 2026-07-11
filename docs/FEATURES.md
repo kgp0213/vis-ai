@@ -11,7 +11,7 @@
 | 层 | 来源 | 用途 |
 |----|------|------|
 | L0 Soul | `~/.visionox/soul.md` | AI 身份与行为准则 |
-| L1 Project | `workspace/{REASONIX,visionox,CLAUDE,AGENTS}.md` | 工作区说明文件（自动注入） |
+| L1 Project | 项目根目录的 `AGENTS.md`、`AGENT.md`、`agent.md`、`CLAUDE.md`、`claude.md`、`visionox.md` | 工作区说明文件（自动注入） |
 | L2 Mode | `config.json` → `modes[mode].prompt` | 场景行为指令 |
 | L3 Mode Memory | `~/.visionox/mode-memory/{mode}.json` | 当前工作场景的长期记忆、偏好与知识点摘要 |
 | L4 ECC Rules | `~/.visionox/rules/ecc/{lang}/` | 编码规范（mode 控制） |
@@ -20,7 +20,7 @@
 | L7 Persistent | `~/.visionox/memory/*/MEMORY.md` | 跨会话持久记忆索引；高优先级记忆会额外注入全文 |
 | L8 Session | `remember_session` 工具（内存） | 当前对话临时上下文（每条≤2000字符，总量≤6000字符） |
 
-> 注：L1 工作区说明按 `REASONIX.md`、`visionox.md`、`CLAUDE.md`、`AGENTS.md`、`AGENT.md` 的优先顺序选择第一个存在的文件注入，并不会同时合并多个文件。工作模式切换后立即重建 loop 生效，无需 `/new`。
+> 注：L1 会按表中顺序读取所有存在的文件，Windows 下按真实路径去重，并保留独立的文件名分区。单个文件最多读取 8000 字符，合计最多注入 12000 字符；`REASONIX.md` 不参与项目记忆读取。工作模式切换后立即重建 loop 生效，无需 `/new`。
 
 ### 记忆触发话术
 
@@ -33,7 +33,7 @@
 
 Mode Memory 按工作模式隔离存储，注入时最多选取 8 条高优先级条目并压缩为摘要，避免提示词臃肿。
 
-记忆管理位于左侧「高级 → 记忆」。页面统一管理全局、当前项目、工作场景和当前会话记忆，并显示全文注入、摘要注入、未注入、重复、可能冲突和敏感信息提示。诊断只提供确定性提示，不会自动合并或删除用户内容。
+记忆管理位于左侧「高级 → 记忆」。页面统一管理全局、当前项目、工作场景、当前会话记忆和 Soul。工作场景记忆支持按场景筛选、新增、移动、复制以及批量启用、停用和删除；Soul 支持直接编辑名称与完整 Markdown，但不提供删除。页面同时显示全文注入、摘要注入、未注入、重复、可能冲突和敏感信息提示。诊断只提供确定性提示，不会自动合并或删除用户内容。
 
 ### 记忆初始化策略
 

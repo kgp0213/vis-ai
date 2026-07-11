@@ -27921,6 +27921,9 @@ function MemoryPanel() {
   const [scopeFilter, setScopeFilter] = d2("all");
   const [query, setQuery] = d2("");
   const [newScope, setNewScope] = d2("global");
+  const [newMode, setNewMode] = d2("general");
+  const [modeFilter, setModeFilter] = d2("all");
+  const [selectedModeKeys, setSelectedModeKeys] = d2([]);
   const [newDesc, setNewDesc] = d2("");
   const [newBody, setNewBody] = d2("");
   const [newPriority, setNewPriority] = d2("medium");
@@ -27951,7 +27954,10 @@ function MemoryPanel() {
         const result = await api(`/memory/${item.apiScope}/${encodeURIComponent(item.name)}`);
         next = { ...item, ...result.entry, content: result.entry?.body ?? "" };
       } else if (item.kind === "mode") {
-        next = { ...item, content: item.text, keywordsText: (item.keywords ?? []).join(", ") };
+        next = { ...item, content: item.text, keywordsText: (item.keywords ?? []).join(", "), targetMode: item.modeId };
+      } else if (item.kind === "soul") {
+        const result = await api("/memory/soul");
+        next = { ...item, content: result.body ?? "", aiName: result.name ?? "", path: result.path };
       } else {
         next = { ...item, content: item.body ?? "" };
       }
@@ -27970,7 +27976,14 @@ function MemoryPanel() {
     setBusy(true);
     setError(null);
     try {
-      if (open.kind === "persistent") {
+      let savedDraft = draft;
+      let moved = false;
+      if (open.kind === "soul") {
+        await api("/memory/soul", { method: "POST", body: { body: draft.content, aiName: draft.aiName } });
+        const result = await api("/memory/soul");
+        savedDraft = { ...draft, content: result.body ?? "", aiName: result.name ?? "", path: result.path };
+        setDraft(savedDraft);
+      } else if (open.kind === "persistent") {
         const body = [
           "---",
           `name: ${open.name}`,
@@ -27987,13 +28000,20 @@ function MemoryPanel() {
         await api(`/memory/${open.apiScope}/${encodeURIComponent(open.name)}`, { method: "POST", body: { body, overwrite: true } });
       } else {
         const keywords = String(draft.keywordsText ?? "").split(/[,\s，]+/).map((value) => value.trim()).filter(Boolean).slice(0, 8);
-        await api(`/mode-memory/${encodeURIComponent(open.name)}`, {
-          method: "PATCH",
-          body: { mode: open.modeId, text: draft.content, keywords, priority: Number(draft.priority), enabled: draft.enabled !== false },
-        });
+        const payload = { text: draft.content, keywords, priority: Number(draft.priority), enabled: draft.enabled !== false };
+        if (draft.targetMode && draft.targetMode !== open.modeId) {
+          await api("/mode-memory", { method: "POST", body: { ...payload, mode: draft.targetMode } });
+          await api(`/mode-memory/${encodeURIComponent(open.name)}`, { method: "DELETE", body: { mode: open.modeId } });
+          moved = true;
+          setOpen(null);
+          setDraft(null);
+          setBaseline("");
+        } else {
+          await api(`/mode-memory/${encodeURIComponent(open.name)}`, { method: "PATCH", body: { ...payload, mode: open.modeId } });
+        }
       }
-      setBaseline(JSON.stringify(draft));
-      showInfo("记忆已保存");
+      if (!moved) setBaseline(JSON.stringify(savedDraft));
+      showInfo(moved ? "场景记忆已移动" : "记忆已保存");
       await load();
     } catch (err) {
       setError(err.message);
@@ -28004,6 +28024,24 @@ function MemoryPanel() {
   const createMemory = q2(async () => {
     const desc = newDesc.trim();
     const content = newBody.trim();
+    if (newScope === "mode") {
+      if (!content) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const priority = newPriority === "high" ? 90 : newPriority === "low" ? 10 : 50;
+        await api("/mode-memory", { method: "POST", body: { mode: newMode, text: content, priority, keywords: [] } });
+        setNewBody("");
+        setNewPriority("medium");
+        showInfo("工作场景记忆已新增");
+        await load();
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (!desc || !content) return;
     const name = `memory-${Date.now().toString(36)}`;
     const scope = newScope === "project-mem" ? "project-mem" : "global";
@@ -28034,7 +28072,7 @@ function MemoryPanel() {
     } finally {
       setBusy(false);
     }
-  }, [newScope, newDesc, newBody, newPriority, load]);
+  }, [newScope, newMode, newDesc, newBody, newPriority, load]);
   const remove = q2(async () => {
     if (!open || !draft) return;
     const label = draft.description || draft.text || draft.name;
@@ -28057,6 +28095,45 @@ function MemoryPanel() {
       setBusy(false);
     }
   }, [open, draft, load]);
+  const copyModeMemory = q2(async () => {
+    if (!open || open.kind !== "mode" || !draft?.targetMode) return;
+    if (draft.targetMode === open.modeId) {
+      setError("请选择其他工作场景后再复制");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const keywords = String(draft.keywordsText ?? "").split(/[,\s，]+/).map((value) => value.trim()).filter(Boolean).slice(0, 8);
+      await api("/mode-memory", { method: "POST", body: { mode: draft.targetMode, text: draft.content, keywords, priority: Number(draft.priority) } });
+      showInfo("场景记忆已复制");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [open, draft, load]);
+  const batchModeMemories = q2(async (action) => {
+    if (!tree || selectedModeKeys.length === 0) return;
+    if (action === "delete" && !globalThis.confirm(`确定删除选中的 ${selectedModeKeys.length} 条场景记忆吗？`)) return;
+    const selected = new Set(selectedModeKeys);
+    const items = (tree.modeMemory?.modes ?? []).flatMap((mode) => (mode.items ?? []).map((item) => ({ ...item, modeId: mode.id }))).filter((item) => selected.has(`${item.modeId}:${item.id}`));
+    setBusy(true);
+    setError(null);
+    try {
+      await Promise.all(items.map((item) => action === "delete"
+        ? api(`/mode-memory/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { mode: item.modeId } })
+        : api(`/mode-memory/${encodeURIComponent(item.id)}`, { method: "PATCH", body: { mode: item.modeId, enabled: action === "enable" } })));
+      setSelectedModeKeys([]);
+      showInfo(action === "delete" ? "已批量删除" : action === "enable" ? "已批量启用" : "已批量停用");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [tree, selectedModeKeys, load]);
   if (!tree && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("memory.loading")}</div>`;
   if (error && !tree) return html4`<div class="card accent-err">${error}</div>`;
@@ -28069,24 +28146,28 @@ function MemoryPanel() {
     ...item, kind: "mode", name: item.id, modeId: mode.id, modeLabel: mode.label ?? mode.id, description: item.text, scopeKey: "mode",
   })));
   const sessionItems = (tree.session?.items ?? []).map((item) => ({ ...item, kind: "session", scopeKey: "session", description: item.description || item.body }));
-  const allItems = [...persistentItems, ...modeItems, ...sessionItems];
+  const soulItems = scopeFilter === "soul" ? [{ kind: "soul", name: "soul", scopeKey: "soul", description: tree.soul?.name ? `AI 身份：${tree.soul.name}` : "AI 身份与行为准则" }] : [];
+  const allItems = [...persistentItems, ...modeItems, ...sessionItems, ...soulItems];
   const needle = query.trim().toLowerCase();
   const visibleItems = allItems.filter((item) => {
     if (scopeFilter !== "all" && item.scopeKey !== scopeFilter) return false;
+    if (item.kind === "mode" && modeFilter !== "all" && item.modeId !== modeFilter) return false;
     if (!needle) return true;
     return [item.description, item.body, item.text, item.type, item.modeLabel, ...(item.keywords ?? [])].some((value) => String(value ?? "").toLowerCase().includes(needle));
   });
-  const scopeLabel = (item) => item.scopeKey === "global" ? "全局" : item.scopeKey === "project" ? "当前项目" : item.scopeKey === "mode" ? item.modeLabel : "当前会话";
+  const scopeLabel = (item) => item.scopeKey === "global" ? "全局" : item.scopeKey === "project" ? "当前项目" : item.scopeKey === "mode" ? item.modeLabel : item.scopeKey === "soul" ? "AI 身份" : "当前会话";
   const injectionState = (item) => {
     if (item.kind === "persistent") return tree.injection?.persistent?.entries?.[`${item.scopeKey}:${item.name}`] ?? "omitted";
     if (item.kind === "mode") return tree.injection?.mode?.selectedIds?.includes(item.name) ? "index" : "omitted";
-    return tree.injection?.session?.selectedNames?.includes(item.name) ? "index" : "omitted";
+    if (item.kind === "session") return tree.injection?.session?.selectedNames?.includes(item.name) ? "index" : "omitted";
+    return "manual";
   };
   const injectionLabel = (item) => {
     if (item.enabled === false) return "已停用";
     const state = injectionState(item);
     if (state === "high-full") return "全文注入";
     if (state === "index") return item.kind === "persistent" ? "摘要注入" : "将注入";
+    if (state === "manual") return "身份配置";
     return "未注入";
   };
   const diagnosticLabel = (item) => {
@@ -28107,49 +28188,58 @@ function MemoryPanel() {
         <input class="memory-search" type="search" placeholder="搜索摘要、内容或关键词" value=${query} onInput=${(event) => setQuery(event.target.value)} />
       </div>
       <div class="memory-scope-tabs">
-        ${[["all", "全部"], ["global", "全局"], ["project", "当前项目"], ["mode", "工作场景"], ["session", "当前会话"]].map(([value, label]) => html4`
+        ${[["all", "全部"], ["global", "全局"], ["project", "当前项目"], ["mode", "工作场景"], ["session", "当前会话"], ["soul", "AI 身份"]].map(([value, label]) => html4`
           <button class=${scopeFilter === value ? "active" : ""} onClick=${() => setScopeFilter(value)}>${label}</button>
         `)}
       </div>
+      ${scopeFilter === "mode" ? html4`<div class="memory-mode-tabs">
+        <button class=${modeFilter === "all" ? "active" : ""} onClick=${() => setModeFilter("all")}>全部场景</button>
+        ${(tree.modeMemory?.modes ?? []).map((mode) => html4`<button class=${modeFilter === mode.id ? "active" : ""} onClick=${() => setModeFilter(mode.id)}>${mode.label ?? mode.id} ${mode.enabledCount ?? 0}/${mode.count ?? 0}</button>`)}
+      </div>` : null}
       ${tree.injection ? html4`<div class="memory-budget-summary"><span>当前记忆上下文</span><strong>${Number(tree.injection.totalChars ?? 0).toLocaleString()} 字符</strong><span>高优先级全文与普通摘要已去重</span></div>` : null}
       ${info ? html4`<div class="memory-notice ok">${info}</div>` : null}
       ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
       <div class="memory-layout">
         <div class="memory-list-pane">
-          <div class="memory-create-panel">
-            <div class="memory-section-title">新增长期记忆</div>
+          ${scopeFilter !== "session" && scopeFilter !== "soul" ? html4`<div class="memory-create-panel">
+            <div class="memory-section-title">${newScope === "mode" ? "新增场景记忆" : "新增长期记忆"}</div>
             <div class="memory-create-row">
               <select value=${newScope} onChange=${(event) => setNewScope(event.target.value)} disabled=${busy}>
                 <option value="global">全局</option>
                 <option value="project-mem">当前项目</option>
+                <option value="mode">工作场景</option>
               </select>
               <select value=${newPriority} onChange=${(event) => setNewPriority(event.target.value)} disabled=${busy}>
                 <option value="low">低优先级</option><option value="medium">普通</option><option value="high">高优先级</option>
               </select>
             </div>
-            <input type="text" placeholder="一句话摘要" value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />
-            <textarea rows="3" placeholder="记忆内容" value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
-            <button class="btn primary" disabled=${busy || !newDesc.trim() || !newBody.trim()} onClick=${createMemory}>新增记忆</button>
-          </div>
+            ${newScope === "mode" ? html4`<select value=${newMode} onChange=${(event) => setNewMode(event.target.value)} disabled=${busy}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id} · ${mode.enabledCount ?? 0}/${mode.count ?? 0} 启用</option>`)}</select>` : html4`<input type="text" placeholder="一句话摘要" value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />`}
+            <textarea rows="3" maxlength=${newScope === "mode" ? 180 : null} placeholder=${newScope === "mode" ? "场景记忆内容，最多 180 字符" : "记忆内容"} value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
+            <button class="btn primary" disabled=${busy || !newBody.trim() || (newScope !== "mode" && !newDesc.trim())} onClick=${createMemory}>新增记忆</button>
+          </div>` : null}
           <div class="memory-list-head"><span>${visibleItems.length} 条</span><button class="btn ghost" disabled=${busy} onClick=${load}>刷新</button></div>
+          ${scopeFilter === "mode" && selectedModeKeys.length > 0 ? html4`<div class="memory-batch-bar"><span>已选 ${selectedModeKeys.length} 条</span><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("enable")}>启用</button><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("disable")}>停用</button><button class="btn danger" disabled=${busy} onClick=${() => batchModeMemories("delete")}>删除</button></div>` : null}
           <div class="memory-rows">
             ${visibleItems.map((item) => html4`
-              <button class=${`memory-row ${open?.kind === item.kind && open?.name === item.name && open?.modeId === item.modeId ? "selected" : ""}`} onClick=${() => selectItem(item)}>
-                <span class="memory-row-main">${item.description || item.text || item.name}</span>
-                <span class="memory-row-meta">
-                  <span>${scopeLabel(item)}</span>
-                  <span>${item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
-                  <span class=${injectionState(item) === "omitted" || item.enabled === false ? "memory-disabled" : "memory-injected"}>${injectionLabel(item)}</span>
-                  ${diagnosticLabel(item) ? html4`<span class="memory-diagnostic">${diagnosticLabel(item)}</span>` : null}
-                </span>
-              </button>
+              <div class=${`memory-row ${open?.kind === item.kind && open?.name === item.name && open?.modeId === item.modeId ? "selected" : ""}`}>
+                ${scopeFilter === "mode" && item.kind === "mode" ? html4`<input class="memory-row-check" type="checkbox" checked=${selectedModeKeys.includes(`${item.modeId}:${item.name}`)} onChange=${(event) => { const key = `${item.modeId}:${item.name}`; setSelectedModeKeys(event.target.checked ? [...selectedModeKeys, key] : selectedModeKeys.filter((value) => value !== key)); }} />` : null}
+                <button class="memory-row-open" onClick=${() => selectItem(item)}>
+                  <span class="memory-row-main">${item.description || item.text || item.name}</span>
+                  <span class="memory-row-meta">
+                    <span>${scopeLabel(item)}</span>
+                    <span>${item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.kind === "soul" ? "手动维护" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
+                    <span class=${injectionState(item) === "omitted" || item.enabled === false ? "memory-disabled" : "memory-injected"}>${injectionLabel(item)}</span>
+                    ${diagnosticLabel(item) ? html4`<span class="memory-diagnostic">${diagnosticLabel(item)}</span>` : null}
+                  </span>
+                </button>
+              </div>
             `)}
             ${visibleItems.length === 0 ? html4`<div class="memory-empty">没有符合条件的记忆</div>` : null}
           </div>
           <div class="memory-rule-status">
             <span>当前项目规则</span>
-            <strong>${tree.project?.exists ? tree.project.file : "未配置"}</strong>
-            <span>${tree.project?.exists ? "在项目文件中管理" : ""}</span>
+            ${(tree.project?.files ?? []).length > 0 ? tree.project.files.map((file) => html4`<strong>${file.name} · ${fmtBytes(file.size)}</strong>`) : html4`<strong>未配置</strong>`}
+            <span>${tree.project?.exists ? "以上文件均作为项目记忆读取" : ""}</span>
           </div>
         </div>
         <div class="memory-detail-pane">
@@ -28158,7 +28248,7 @@ function MemoryPanel() {
               <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? "有未保存修改" : "已同步"}</div></div>
               <div class="memory-detail-actions">
                 ${open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>保存</button>` : null}
-                <button class="btn danger" disabled=${busy} onClick=${remove}>删除</button>
+                ${open.kind !== "soul" ? html4`<button class="btn danger" disabled=${busy} onClick=${remove}>删除</button>` : null}
               </div>
             </div>
             ${diagnosticLabel(draft) ? html4`<div class="memory-detail-warning">${diagnosticLabel(draft)}。请核对后自行决定保留、修改或删除，系统不会自动合并。</div>` : null}
@@ -28170,14 +28260,18 @@ function MemoryPanel() {
               </div>
             ` : open.kind === "mode" ? html4`
               <div class="memory-field-row">
-                <label class="memory-field"><span>场景</span><input value=${draft.modeLabel} disabled /></label>
+                <label class="memory-field"><span>目标场景</span><select value=${draft.targetMode ?? open.modeId} onChange=${(event) => setDraft({ ...draft, targetMode: event.target.value })}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id}</option>`)}</select></label>
                 <label class="memory-field"><span>优先级</span><input type="number" min="0" max="100" value=${draft.priority ?? 50} onInput=${(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
               </div>
+              <div class="memory-mode-actions"><span>${draft.targetMode !== open.modeId ? "保存后将移动到目标场景" : "选择其他场景可移动或复制"}</span><button class="btn" disabled=${busy || !draft.targetMode || draft.targetMode === open.modeId} onClick=${copyModeMemory}>复制到场景</button></div>
               <label class="memory-field"><span>关键词</span><input value=${draft.keywordsText ?? ""} onInput=${(event) => setDraft({ ...draft, keywordsText: event.target.value })} /></label>
               <label class="memory-toggle"><input type="checkbox" checked=${draft.enabled !== false} onChange=${(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用此场景记忆</span></label>
+            ` : open.kind === "soul" ? html4`
+              <label class="memory-field"><span>AI 名称</span><input maxlength="80" value=${draft.aiName ?? ""} onInput=${(event) => setDraft({ ...draft, aiName: event.target.value })} /></label>
+              <div class="memory-soul-note"><strong>Soul 不提供删除</strong><span>保存后在下一次 /new 或上下文重建时生效。</span></div>
             ` : html4`<div class="memory-session-note">仅在当前对话中生效，恢复该对话时会一并恢复。</div>`}
-            <label class="memory-field memory-content-field"><span>内容</span><textarea rows="16" value=${draft.content ?? ""} disabled=${open.kind === "session"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>
-            <div class="memory-detail-foot">${open.kind === "session" ? "当前会话" : `创建 ${draft.createdAt || "未知"} · 更新 ${draft.updatedAt || "未知"} · 来源 ${draft.source === "model" ? "AI" : draft.source === "ui" ? "界面" : "历史数据"}`}</div>
+            <label class="memory-field memory-content-field"><span>${open.kind === "soul" ? `Soul Markdown · ${String(draft.content ?? "").length}/16000` : "内容"}</span><textarea rows="16" maxlength=${open.kind === "soul" ? 16000 : null} value=${draft.content ?? ""} disabled=${open.kind === "session"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>
+            <div class="memory-detail-foot">${open.kind === "session" ? "当前会话" : open.kind === "soul" ? draft.path ?? "~/.visionox/soul.md" : `创建 ${draft.createdAt || "未知"} · 更新 ${draft.updatedAt || "未知"} · 来源 ${draft.source === "model" ? "AI" : draft.source === "ui" ? "界面" : "历史数据"}`}</div>
           `}
         </div>
       </div>

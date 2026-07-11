@@ -2,11 +2,12 @@
 import { createRequire as __cr } from 'node:module'; if (typeof globalThis.require === 'undefined') { globalThis.require = __cr(import.meta.url); }
 
 // src/memory/project.ts
-import { existsSync, readFileSync, statSync } from "fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "fs";
 import { basename, join } from "path";
-var PROJECT_MEMORY_FILE = "REASONIX.md";
-var PROJECT_MEMORY_FILES = ["REASONIX.md", "visionox.md", "CLAUDE.md", "AGENTS.md", "AGENT.md"];
+var PROJECT_MEMORY_FILE = "visionox.md";
+var PROJECT_MEMORY_FILES = ["AGENTS.md", "AGENT.md", "agent.md", "CLAUDE.md", "claude.md", "visionox.md"];
 var PROJECT_MEMORY_MAX_CHARS = 8e3;
+var PROJECT_MEMORY_TOTAL_MAX_CHARS = 12e3;
 var FOREIGN_PLATFORM_FILE_MARKERS = ["SOUL.md", "PERSONA.md"];
 function detectForeignAgentPlatform(rootDir) {
   const hits = [];
@@ -25,32 +26,64 @@ function isDir(path) {
     return false;
   }
 }
-function findProjectMemoryPath(rootDir) {
+function listProjectMemoryPaths(rootDir) {
+  const paths = [];
+  const seen = /* @__PURE__ */ new Set();
   for (const name of PROJECT_MEMORY_FILES) {
     const path = join(rootDir, name);
-    if (existsSync(path)) return path;
+    if (!existsSync(path)) continue;
+    let real = path;
+    try {
+      real = realpathSync.native(path);
+    } catch {
+    }
+    const key = process.platform === "win32" ? real.toLowerCase() : real;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push(real);
   }
-  return null;
+  return paths;
+}
+function findProjectMemoryPath(rootDir) {
+  return listProjectMemoryPaths(rootDir)[0] ?? null;
 }
 function resolveProjectMemoryWritePath(rootDir) {
-  return findProjectMemoryPath(rootDir) ?? join(rootDir, PROJECT_MEMORY_FILE);
+  return join(rootDir, PROJECT_MEMORY_FILE);
+}
+function truncateProjectMemory(raw, maxChars) {
+  const trimmed = raw.trim();
+  if (trimmed.length <= maxChars) return { content: trimmed, truncated: false };
+  const lines = trimmed.split(/\r?\n/);
+  const kept = [];
+  for (const line of lines) {
+    const suffix = "\n\u2026 (truncated at a complete line)";
+    if ([...kept, line].join("\n").length + suffix.length > maxChars) break;
+    kept.push(line);
+  }
+  return { content: `${kept.join("\n")}\n\u2026 (truncated at a complete line)`, truncated: true };
+}
+function readProjectMemories(rootDir) {
+  const result = [];
+  let remaining = PROJECT_MEMORY_TOTAL_MAX_CHARS;
+  for (const path of listProjectMemoryPaths(rootDir)) {
+    if (remaining <= 0) break;
+    let raw;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const limit = Math.min(PROJECT_MEMORY_MAX_CHARS, remaining);
+    const selected = truncateProjectMemory(trimmed, limit);
+    result.push({ path, content: selected.content, originalChars: trimmed.length, truncated: selected.truncated });
+    remaining -= selected.content.length;
+  }
+  return result;
 }
 function readProjectMemory(rootDir) {
-  const path = findProjectMemoryPath(rootDir);
-  if (!path) return null;
-  let raw;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const originalChars = trimmed.length;
-  const truncated = originalChars > PROJECT_MEMORY_MAX_CHARS;
-  const content = truncated ? `${trimmed.slice(0, PROJECT_MEMORY_MAX_CHARS)}
-\u2026 (truncated ${originalChars - PROJECT_MEMORY_MAX_CHARS} chars)` : trimmed;
-  return { path, content, originalChars, truncated };
+  return readProjectMemories(rootDir)[0] ?? null;
 }
 function memoryEnabled() {
   const env = process.env.visionox_MEMORY;
@@ -59,18 +92,16 @@ function memoryEnabled() {
 }
 function applyProjectMemory(basePrompt, rootDir) {
   if (!memoryEnabled()) return basePrompt;
-  const mem = readProjectMemory(rootDir);
-  if (!mem) return basePrompt;
-  const filename = basename(mem.path);
+  const memories = readProjectMemories(rootDir);
+  if (memories.length === 0) return basePrompt;
+  const blocks = memories.map((mem) => `## ${basename(mem.path)}\n\n\`\`\`\n${mem.content}\n\`\`\``);
   return `${basePrompt}
 
-# Project memory (${filename})
+# Project memory
 
-The user pinned these notes about this project \u2014 treat them as authoritative context for every turn:
+All existing project instruction files below are active. Current user instructions win; when project files conflict, earlier files in this block have higher precedence.
 
-\`\`\`
-${mem.content}
-\`\`\`
+${blocks.join("\n\n")}
 `;
 }
 
@@ -586,9 +617,11 @@ var BUILTIN_SKILLS = Object.freeze([
 export {
   PROJECT_MEMORY_FILE,
   detectForeignAgentPlatform,
+  listProjectMemoryPaths,
   findProjectMemoryPath,
   resolveProjectMemoryWritePath,
   readProjectMemory,
+  readProjectMemories,
   memoryEnabled,
   applyProjectMemory,
   parseFrontmatter,

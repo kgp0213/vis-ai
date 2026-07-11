@@ -34,6 +34,7 @@ import {
   SKILLS_DIRNAME,
   SKILL_FILE,
   findProjectMemoryPath,
+  listProjectMemoryPaths,
   parseFrontmatter,
   resolveProjectMemoryWritePath,
   validateSkillFrontmatter
@@ -1602,13 +1603,14 @@ import {
   mkdirSync as mkdirSync2,
   readFileSync as readFileSync4,
   readdirSync as readdirSync3,
+  renameSync as renameSync2,
   statSync as statSync3,
   unlinkSync,
   writeFileSync as writeFileSync2
 } from "fs";
 import { homedir as homedir2 } from "os";
 import { basename, dirname as dirname3, join as join5, resolve as resolvePath } from "path";
-var SOUL_FILE = join5(homedir2(), ".visionox", "soul.md");
+var SOUL_MAX_CHARS = 16e3;
 var SOUL_NAME_START = "<!-- visionox:soul:name:start -->";
 var SOUL_NAME_END = "<!-- visionox:soul:name:end -->";
 function projectHash(rootDir) {
@@ -1616,6 +1618,15 @@ function projectHash(rootDir) {
 }
 function globalMemoryDir(homeDir = join5(homedir2(), ".visionox")) {
   return join5(homeDir, "memory", "global");
+}
+function atomicWriteMemoryFile(path, contents) {
+  const temp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync2(temp, contents, "utf8");
+    renameSync2(temp, path);
+  } finally {
+    if (existsSync5(temp)) unlinkSync(temp);
+  }
 }
 function projectMemoryDir(rootDir, homeDir = join5(homedir2(), ".visionox")) {
   return join5(homeDir, "memory", projectHash(rootDir));
@@ -1718,11 +1729,13 @@ function setSoulNameBlock(raw, name) {
 async function handleMemory(method, rest, body, ctx) {
   const cwd = ctx.getCurrentCwd?.();
   const memoryHomeDir = typeof ctx.memoryHomeDir === "string" && ctx.memoryHomeDir ? ctx.memoryHomeDir : join5(homedir2(), ".visionox");
+  const soulPath = join5(memoryHomeDir, "soul.md");
   const globalDir = globalMemoryDir(memoryHomeDir);
   const projectMemDir = cwd ? projectMemoryDir(cwd, memoryHomeDir) : "";
   const store = new MemoryStore({ homeDir: memoryHomeDir, projectRoot: cwd || void 0 });
   if (method === "GET" && rest.length === 0) {
-    const existingProjectMemory = cwd ? findProjectMemoryPath(cwd) : null;
+    const projectMemoryPaths = cwd ? listProjectMemoryPaths(cwd) : [];
+    const existingProjectMemory = projectMemoryPaths[0] ?? null;
     const projectMemoryPath = existingProjectMemory ?? (cwd ? join5(cwd, PROJECT_MEMORY_FILE) : null);
     const projectMemoryExists = existingProjectMemory !== null;
     let diagnostics = { duplicates: [], conflicts: [], sensitiveKeys: [] };
@@ -1737,7 +1750,8 @@ async function handleMemory(method, rest, body, ctx) {
           path: projectMemoryPath,
           exists: projectMemoryExists,
           file: projectMemoryPath ? basename(projectMemoryPath) : PROJECT_MEMORY_FILE,
-          id: cwd ? projectHash(cwd) : null
+          id: cwd ? projectHash(cwd) : null,
+          files: projectMemoryPaths.map((path) => ({ ...fileMeta(path), path, name: basename(path) }))
         },
         global: {
           path: globalDir,
@@ -1748,8 +1762,8 @@ async function handleMemory(method, rest, body, ctx) {
           files: projectMemDir ? listMemoryFiles(projectMemDir, "project") : []
         },
         soul: {
-          ...fileMeta(SOUL_FILE),
-          name: existsSync5(SOUL_FILE) ? readSoulName(readFileSync4(SOUL_FILE, "utf8")) : ""
+          ...fileMeta(soulPath),
+          name: existsSync5(soulPath) ? readSoulName(readFileSync4(soulPath, "utf8")) : ""
         },
         modeMemory: ctx.getAllModeMemory?.() ?? null,
         session: { items: ctx.getSessionMemories?.() ?? [] },
@@ -1763,8 +1777,8 @@ async function handleMemory(method, rest, body, ctx) {
   const name = nameParts.join("/");
   if (method === "GET") {
     if (scope === "soul") {
-      const body2 = existsSync5(SOUL_FILE) ? readFileSync4(SOUL_FILE, "utf8") : "";
-      return { status: 200, body: { path: SOUL_FILE, body: body2, name: readSoulName(body2) } };
+      const body2 = existsSync5(soulPath) ? readFileSync4(soulPath, "utf8") : "";
+      return { status: 200, body: { path: soulPath, body: body2, name: readSoulName(body2), atomic: true } };
     }
     if (scope === "project") {
       if (!cwd) return { status: 503, body: { error: "no active project" } };
@@ -1790,13 +1804,14 @@ async function handleMemory(method, rest, body, ctx) {
     const parsed = parseBody6(body);
     const { body: contents } = parsed;
     if (scope === "soul") {
-      const current = existsSync5(SOUL_FILE) ? readFileSync4(SOUL_FILE, "utf8") : "";
+      const current = existsSync5(soulPath) ? readFileSync4(soulPath, "utf8") : "";
       const next = typeof contents === "string" ? contents : setSoulNameBlock(current, parsed.aiName ?? "");
       const finalBody = parsed.aiName !== void 0 && typeof contents === "string" ? setSoulNameBlock(next, parsed.aiName) : next;
-      mkdirSync2(dirname3(SOUL_FILE), { recursive: true });
-      writeFileSync2(SOUL_FILE, finalBody, "utf8");
-      ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope: "soul", path: SOUL_FILE } });
-      return { status: 200, body: { saved: true, path: SOUL_FILE, name: readSoulName(finalBody) } };
+      if (finalBody.length > SOUL_MAX_CHARS) return { status: 400, body: { error: `soul.md exceeds ${SOUL_MAX_CHARS} characters` } };
+      mkdirSync2(dirname3(soulPath), { recursive: true });
+      atomicWriteMemoryFile(soulPath, finalBody);
+      ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope: "soul", path: soulPath } });
+      return { status: 200, body: { saved: true, path: soulPath, name: readSoulName(finalBody), atomic: true } };
     }
     if (typeof contents !== "string") {
       return { status: 400, body: { error: "body (string) required" } };

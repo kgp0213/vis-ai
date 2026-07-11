@@ -27,7 +27,7 @@ async function importEarly(spec) {
 const { resolve, dirname, join, basename, sep, extname } = await importEarly("node:path");
 const { fileURLToPath, pathToFileURL } = await importEarly("node:url");
 const { homedir } = await importEarly("node:os");
-const { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
+const { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
 const { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
 const { spawnSync } = await importEarly("node:child_process");
@@ -2780,12 +2780,20 @@ function projectMemoryDirForRoot(rootDir) {
   return resolve(visionoxDataDir, "memory", hash);
 }
 
-function findProjectMemoryPathForPrompt(rootDir) {
+function listProjectMemoryPathsForPrompt(rootDir) {
+  const paths = [];
+  const seen = new Set();
   for (const name of PROJECT_MEMORY_CANDIDATES) {
     const p = resolve(rootDir, name);
-    if (existsSync(p)) return p;
+    if (!existsSync(p)) continue;
+    let real = p;
+    try { real = realpathSync.native(p); } catch {}
+    const key = process.platform === "win32" ? real.toLowerCase() : real;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push(real);
   }
-  return null;
+  return paths;
 }
 
 function computePrefixFingerprint(rootDir) {
@@ -2806,9 +2814,9 @@ function computePrefixFingerprint(rootDir) {
   parts.push(`skills:home=${dirMtime(skillsRoot)}`);
   // Mode memory file
   parts.push(`mmode=${safeMtime(resolve(modeMemoryDir, `${safeModeId(config.mode)}.json`))}`);
-  // Project memory candidates (REASONIX.md / CLAUDE.md / AGENTS.md ...)
-  const pmPath = findProjectMemoryPathForPrompt(rootDir);
-  parts.push(`pmem=${pmPath ? safeMtime(pmPath) : 0}`);
+  // Every active project instruction file participates in cache invalidation.
+  const projectMemoryPaths = listProjectMemoryPathsForPrompt(rootDir);
+  parts.push(`pmem=${projectMemoryPaths.map((path) => `${path}:${safeMtime(path)}`).join(",") || "0"}`);
   // Persistent memory: MemoryStore stores flat .md files under global and the
   // current project hash. Include file mtimes so edits inside existing files
   // invalidate the prefix cache without requiring an app restart.

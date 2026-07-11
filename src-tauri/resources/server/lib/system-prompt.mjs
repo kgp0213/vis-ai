@@ -2,15 +2,15 @@
 // Pure function: takes toolSpecs array + rootDir + hasSemantic flag, returns prompt string.
 
 /**
- * Project memory file candidates, in priority order.
- * The first file found in the workspace root is injected into the system prompt.
+ * Project memory files, in precedence order. All existing files are injected.
  */
 export const PROJECT_MEMORY_CANDIDATES = [
-  "REASONIX.md",
-  "visionox.md",
-  "CLAUDE.md",
   "AGENTS.md",
   "AGENT.md",
+  "agent.md",
+  "CLAUDE.md",
+  "claude.md",
+  "visionox.md",
 ];
 
 /**

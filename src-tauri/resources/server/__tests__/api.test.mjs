@@ -210,6 +210,18 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(diagnosed.json.project.id.length, 16);
   });
 
+  test("Soul API 在用户数据目录中完整读取和保存", async () => {
+    const memoryHomeDir = join(tmpDir, "soul-home");
+    const soulBody = "# Identity\n\nAlways answer clearly.\n";
+    const saved = await apiPost("/api/memory/soul", { body: soulBody, aiName: "Whale" }, { memoryHomeDir });
+    assert.equal(saved.status, 200);
+    const read = await apiGet("/api/memory/soul", { memoryHomeDir });
+    assert.equal(read.status, 200);
+    assert.equal(read.json.name, "Whale");
+    assert.match(read.json.body, /Always answer clearly/);
+    assert.equal(read.json.atomic, true);
+  });
+
   test("GET /api/events 只推送请求的共享 SSE 频道", async () => {
     const req = new EventEmitter();
     req.url = "/api/events?channels=events";

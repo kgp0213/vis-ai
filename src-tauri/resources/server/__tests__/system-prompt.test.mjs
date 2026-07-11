@@ -98,11 +98,12 @@ describe("buildSystemPrompt", () => {
 describe("PROJECT_MEMORY_CANDIDATES", () => {
   test("候选文件优先级正确，默认不读取 .claude 配置", () => {
     assert.deepEqual(PROJECT_MEMORY_CANDIDATES, [
-      "REASONIX.md",
-      "visionox.md",
-      "CLAUDE.md",
       "AGENTS.md",
       "AGENT.md",
+      "agent.md",
+      "CLAUDE.md",
+      "claude.md",
+      "visionox.md",
     ]);
   });
 });

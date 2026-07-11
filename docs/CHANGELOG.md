@@ -25,7 +25,7 @@
 
 ### 8 层记忆系统修复
 
-- **L1 项目记忆注入修复**：`buildLoop` 现在正确调用 `applyProjectMemory`，`REASONIX.md`/`visionox.md`/`CLAUDE.md`/`AGENTS.md` 等项目记忆文件在新对话中自动注入（此前因未导入该函数而缺失）
+- **L1 项目记忆注入修复**：`buildLoop` 现在正确调用 `applyProjectMemory`，项目根目录中的 Agent、Claude 和 `visionox.md` 规则文件会在新对话中自动注入（此前因未导入该函数而缺失）
 - **L6/L7 注入顺序统一**：技能索引（L6）现在在持久记忆（L7）之前注入，与文档描述一致
 - README 8 层描述补充 L8 会话记忆
 

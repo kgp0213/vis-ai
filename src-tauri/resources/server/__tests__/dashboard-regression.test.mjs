@@ -436,6 +436,13 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /来源 \$\{draft\.source/);
     assert.doesNotMatch(app, /工作场景记忆请在 Settings/);
     assert.doesNotMatch(app, /placeholder="文件名，可留空自动生成"/);
+    assert.match(app, /<option value="mode">工作场景<\/option>/);
+    assert.match(app, /newMode/);
+    assert.match(app, /copyModeMemory/);
+    assert.match(app, /batchModeMemories/);
+    assert.match(app, /\["soul", "AI 身份"\]/);
+    assert.match(app, /\/memory\/soul/);
+    assert.match(app, /Soul 不提供删除/);
   });
 
   test("长会话默认只渲染最近消息，并可继续加载和跳转历史", () => {
