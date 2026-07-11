@@ -70,6 +70,10 @@ const required = [
       "activatePendingPlan",
       "validateOfficecliInvocation",
       "wrapMcpToolsWithRecovery",
+      "getMemoryRuntimeStatus",
+      "moveModeMemory",
+      "batchModeMemory",
+      "restoreModeMemoryTrash",
     ],
   },
   {
@@ -137,6 +141,10 @@ const required = [
       "atomicWriteMemoryFile",
       "listProjectMemoryPaths",
       "SOUL_MAX_CHARS",
+      "stripSoulNameBlocks",
+      "listSoulHistory",
+      "writeMemoryTrash",
+      "expectedRevision",
     ],
   },
   {
@@ -177,6 +185,9 @@ const required = [
       "copyModeMemory",
       "batchModeMemories",
       "Soul 不提供删除",
+      "当前上下文仍在使用旧记忆",
+      "预览最终注入",
+      'api("/mode-memory/batch"',
     ],
   },
   {
@@ -192,6 +203,7 @@ const required = [
       "never repeat or translate the title",
       "forcedSummaryReason: opts.reason",
       "OfficeCLI efficiency guard",
+      "overwrite: args.replace === true",
     ],
   },
   {
@@ -212,6 +224,8 @@ const required = [
       ".memory-mode-tabs",
       ".memory-batch-bar",
       ".memory-soul-note",
+      ".memory-runtime-pending",
+      ".memory-soul-history",
     ],
   },
   {

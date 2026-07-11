@@ -274,6 +274,7 @@ if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
 }
 const modeMemoryDir = resolve(visionoxDataDir, "mode-memory");
+const memoryTrashDir = resolve(visionoxDataDir, "memory-trash");
 if (!existsSync(modeMemoryDir)) {
   mkdirSync(modeMemoryDir, { recursive: true });
 }
@@ -437,7 +438,7 @@ const [
   { McpClient, parseMcpSpec, inspectMcpServer },
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
-  { applySkillsIndex, applyProjectMemory },
+  { applySkillsIndex, applyProjectMemory, listProjectMemoryPaths, readProjectMemories },
   { MemoryStore, effectivePriority },
   { registerSkillTools, Eventizer, autoResolveVerdict, shouldAutoResolveCheckpoint },
   { openEventSink, eventLogPath },
@@ -1805,8 +1806,9 @@ tools.register({
     required: ["text"],
   },
   fn: async (args) => {
-    const text = compactText(args.text, CONSTANTS.MODE_MEMORY_TEXT_LIMIT);
+    const text = String(args.text ?? "").replace(/\s+/g, " ").trim();
     if (!text) return JSON.stringify({ error: "text is required" });
+    if (text.length > CONSTANTS.MODE_MEMORY_TEXT_LIMIT) return JSON.stringify({ error: `text exceeds ${CONSTANTS.MODE_MEMORY_TEXT_LIMIT} characters; summarize it before saving` });
     const mode = config.mode || "general";
     const { item, memory } = addModeMemory(mode, {
       text,
@@ -2194,6 +2196,27 @@ function writeModeMemory(modeId, payload) {
   }
   return { ...data, path };
 }
+function writeModeMemoryTrash(mode, item) {
+  mkdirSync(memoryTrashDir, { recursive: true });
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const path = resolve(memoryTrashDir, `${id}.json`);
+  const temp = `${path}.tmp-${process.pid}`;
+  const entry = { id, kind: "mode", mode, item, name: item.text, deletedAt: new Date().toISOString() };
+  try {
+    writeFileSync(temp, `${JSON.stringify(entry, null, 2)}\n`, "utf8");
+    renameSync(temp, path);
+  } finally {
+    if (existsSync(temp)) rmSync(temp, { force: true });
+  }
+  return { id, path };
+}
+function restoreModeMemoryTrash(entry) {
+  const current = readModeMemory(entry?.mode);
+  const item = normalizeModeMemoryItem(entry?.item);
+  if (!item || current.items.some((old) => old.id === item.id || old.text === item.text)) return null;
+  if (current.items.length >= CONSTANTS.MODE_MEMORY_ITEM_LIMIT) return null;
+  return writeModeMemory(current.mode, { items: [item, ...current.items] });
+}
 
 function listModeMemory(modeId = config.mode || "general") {
   return readModeMemory(modeId);
@@ -2218,6 +2241,8 @@ function listAllModeMemory() {
 }
 
 function addModeMemory(modeId, input = {}) {
+  const rawText = String(input.text ?? "").replace(/\s+/g, " ").trim();
+  if (rawText.length > CONSTANTS.MODE_MEMORY_TEXT_LIMIT) throw new Error(`mode memory text exceeds ${CONSTANTS.MODE_MEMORY_TEXT_LIMIT} characters`);
   const current = readModeMemory(modeId);
   const item = normalizeModeMemoryItem({
     ...input,
@@ -2237,6 +2262,10 @@ function addModeMemory(modeId, input = {}) {
 }
 
 function updateModeMemory(modeId, id, patch = {}) {
+  if (patch.text !== void 0) {
+    const rawText = String(patch.text ?? "").replace(/\s+/g, " ").trim();
+    if (!rawText || rawText.length > CONSTANTS.MODE_MEMORY_TEXT_LIMIT) throw new Error(`mode memory text must contain 1-${CONSTANTS.MODE_MEMORY_TEXT_LIMIT} characters`);
+  }
   const current = readModeMemory(modeId);
   const now = new Date().toISOString();
   let updated = null;
@@ -2257,9 +2286,16 @@ function updateModeMemory(modeId, id, patch = {}) {
 
 function deleteModeMemory(modeId, id) {
   const current = readModeMemory(modeId);
+  const removed = current.items.find((item) => item.id === id);
   const items = current.items.filter((item) => item.id !== id);
   if (items.length === current.items.length) return false;
-  writeModeMemory(current.mode, { items });
+  const trash = writeModeMemoryTrash(current.mode, removed);
+  try {
+    writeModeMemory(current.mode, { items });
+  } catch (err) {
+    try { rmSync(trash.path, { force: true }); } catch {}
+    throw err;
+  }
   return true;
 }
 
@@ -2294,6 +2330,66 @@ function addSessionMemory(name, description, body, { persist = true } = {}) {
   sessionMemories.push({ name, description, body: cappedBody, ts: Date.now() });
   if (sessionMemories.length > 50) sessionMemories.shift();
   if (persist) void writeActiveSessionMeta({ sessionMemories: sessionMemories.map((memory) => ({ ...memory })) });
+}
+function moveModeMemory(id, { sourceMode, targetMode, copy = false } = {}) {
+  const source = readModeMemory(sourceMode);
+  const target = readModeMemory(targetMode);
+  const item = source.items.find((entry) => entry.id === id);
+  if (!item) return null;
+  if (target.items.some((entry) => entry.text === item.text)) throw new Error("target mode already contains the same memory");
+  if (target.items.length >= CONSTANTS.MODE_MEMORY_ITEM_LIMIT) throw new Error(`target mode memory capacity reached (${CONSTANTS.MODE_MEMORY_ITEM_LIMIT})`);
+  const now = new Date().toISOString();
+  const targetItem = { ...item, id: copy ? randomUUID() : item.id, createdAt: copy ? now : item.createdAt, updatedAt: now };
+  try {
+    writeModeMemory(target.mode, { items: [targetItem, ...target.items] });
+    if (!copy) writeModeMemory(source.mode, { items: source.items.filter((entry) => entry.id !== id) });
+  } catch (err) {
+    try { writeModeMemory(target.mode, { items: target.items }); } catch {}
+    try { writeModeMemory(source.mode, { items: source.items }); } catch {}
+    throw err;
+  }
+  return { moved: !copy, copied: copy, sourceMode: source.mode, targetMode: target.mode, item: targetItem };
+}
+function batchModeMemory({ action, items } = {}) {
+  const grouped = new Map();
+  for (const ref of Array.isArray(items) ? items : []) {
+    const mode = safeModeId(ref?.mode);
+    if (!grouped.has(mode)) grouped.set(mode, { before: readModeMemory(mode), ids: new Set() });
+    grouped.get(mode).ids.add(String(ref?.id ?? ""));
+  }
+  const updates = [];
+  let changed = 0;
+  for (const [mode, group] of grouped) {
+    const next = [];
+    for (const item of group.before.items) {
+      if (!group.ids.has(item.id)) {
+        next.push(item);
+        continue;
+      }
+      changed++;
+      if (action !== "delete") next.push({ ...item, enabled: action === "enable", updatedAt: new Date().toISOString() });
+    }
+    updates.push({ mode, before: group.before.items, next });
+  }
+  const written = [];
+  const trash = [];
+  try {
+    if (action === "delete") {
+      for (const update of updates) {
+        const deleted = update.before.filter((item) => !update.next.some((next) => next.id === item.id));
+        for (const item of deleted) trash.push(writeModeMemoryTrash(update.mode, item));
+      }
+    }
+    for (const update of updates) {
+      writeModeMemory(update.mode, { items: update.next });
+      written.push(update);
+    }
+  } catch (err) {
+    for (const update of written.reverse()) try { writeModeMemory(update.mode, { items: update.before }); } catch {}
+    for (const item of trash) try { rmSync(item.path, { force: true }); } catch {}
+    throw err;
+  }
+  return { action, changed };
 }
 function clearSessionMemories() { sessionMemories.length = 0; }
 function listSessionMemories() { return sessionMemories.map((memory) => ({ ...memory })); }
@@ -2524,11 +2620,15 @@ function getMemoryInjectionStatus(rootDir = workspaceDir) {
   const modeSelected = modeEnabled.slice(0, CONSTANTS.MODE_MEMORY_PROMPT_LIMIT);
   const session = selectSessionMemoriesForPrompt();
   const persistent = collectPersistentMemoryPrompt(rootDir);
+  const project = getProjectMemoryStatus(rootDir);
+  const soulChars = loadSoul().length;
   return {
     persistent: persistent.status,
     mode: { selectedIds: modeSelected.map((item) => item.id), omittedIds: modeEnabled.slice(CONSTANTS.MODE_MEMORY_PROMPT_LIMIT).map((item) => item.id) },
     session: { selectedNames: session.selected.map((entry) => entry.memory.name), omittedNames: session.dropped.map((entry) => entry.name) },
-    totalChars: persistent.status.totalChars + formatModeMemoryForPrompt(config.mode).length + getSessionMemoryBlock().length,
+    project,
+    soul: { chars: soulChars },
+    totalChars: persistent.status.totalChars + formatModeMemoryForPrompt(config.mode).length + getSessionMemoryBlock().length + project.totalChars + soulChars,
   };
 }
 
@@ -2751,6 +2851,7 @@ function buildSystemPromptForLoop(rootDir, hasSemantic) {
 // blocks stay dynamic (per-turn). writeConfig/edit-skill/edit-rule update
 // mtimes on disk, so the cache self-invalidates.
 let _prefixCache = { fingerprint: null, upToPersistent: null, mc: null };
+let activeMemoryRuntime = null;
 
 function safeMtime(p) {
   try { return statSync(p).mtimeMs; } catch { return 0; }
@@ -2795,6 +2896,21 @@ function listProjectMemoryPathsForPrompt(rootDir) {
   }
   return paths;
 }
+function getProjectMemoryStatus(rootDir = workspaceDir) {
+  const paths = listProjectMemoryPaths(rootDir);
+  const included = readProjectMemories(rootDir);
+  const byPath = new Map(included.map((item) => [item.path, item]));
+  const files = paths.map((path) => {
+    const memory = byPath.get(path);
+    return {
+      path,
+      state: memory ? memory.truncated ? "truncated" : "full" : "omitted",
+      originalChars: memory?.originalChars ?? 0,
+      injectedChars: memory?.content?.length ?? 0,
+    };
+  });
+  return { files, totalChars: included.reduce((sum, item) => sum + item.content.length, 0), maxChars: 12e3 };
+}
 
 function computePrefixFingerprint(rootDir) {
   const mc = getModeConfig();
@@ -2823,6 +2939,19 @@ function computePrefixFingerprint(rootDir) {
   parts.push(`memg=${flatMdMtimeFingerprint(resolve(visionoxDataDir, "memory", "global"))}`);
   parts.push(`memp=${flatMdMtimeFingerprint(projectMemoryDirForRoot(rootDir))}`);
   return parts.join("|");
+}
+function memoryRuntimeFingerprint(rootDir) {
+  const session = sessionMemories.map((item) => `${item.name}:${item.ts}:${item.body.length}`).join(",");
+  return `${computePrefixFingerprint(rootDir)}|session=${session}`;
+}
+function getMemoryRuntimeStatus(rootDir = workspaceDir) {
+  const currentFingerprint = memoryRuntimeFingerprint(rootDir);
+  return {
+    pending: !activeMemoryRuntime || activeMemoryRuntime.fingerprint !== currentFingerprint,
+    appliedAt: activeMemoryRuntime?.appliedAt ?? null,
+    active: activeMemoryRuntime?.injection ?? null,
+    next: getMemoryInjectionStatus(rootDir),
+  };
 }
 
 function buildLoop(client, rootDir) {
@@ -2864,6 +2993,7 @@ function buildLoop(client, rootDir) {
   }
   // Session-scoped layers stay dynamic — never cached.
   const systemWithSession = system + getSessionMemoryBlock();
+  activeMemoryRuntime = { fingerprint: memoryRuntimeFingerprint(rootDir), appliedAt: new Date().toISOString(), injection: getMemoryInjectionStatus(rootDir) };
   const systemWithTutor = sessionTutorMode?.enabled
     ? systemWithSession + "\n\n" + formatTutorPrompt(sessionTutorMode.style)
     : systemWithSession;
@@ -4593,8 +4723,9 @@ async function loadActiveSession() {
     try {
       const metaRaw = await readFile(activeSessionMetaFile, "utf8");
       const meta = JSON.parse(metaRaw);
-      applyModeForSessionMeta(meta);
       restoreSessionMemories(meta.sessionMemories);
+      const modeRestore = applyModeForSessionMeta(meta);
+      if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
     } catch {
       // ignore missing/broken meta
     }
@@ -5298,9 +5429,16 @@ const ctx = {
   getSessionMemories: () => listSessionMemories(),
   deleteSessionMemory,
   getMemoryInjectionStatus: () => getMemoryInjectionStatus(workspaceDir),
+  getMemoryRuntimeStatus: () => getMemoryRuntimeStatus(workspaceDir),
+  getProjectMemoryStatus: () => getProjectMemoryStatus(workspaceDir),
+  getDefaultSoul: () => readDefaultSoul(),
+  applyMemoryChanges: () => client ? ({ applied: true, ...rebuildLoopPreservingContext(client, workspaceDir) }) : ({ applied: false, error: "model client is not configured" }),
   addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
   updateModeMemory: (id, patch, modeId) => updateModeMemory(modeId || config.mode || "general", id, patch),
   deleteModeMemory: (id, modeId) => deleteModeMemory(modeId || config.mode || "general", id),
+  moveModeMemory,
+  batchModeMemory,
+  restoreModeMemoryTrash,
   listPromptQueue,
   upsertPromptQueueItem,
   removePromptQueueItem,
@@ -5759,6 +5897,7 @@ ${modeList}
           const sessionMeta = readSessionMeta(sessionName);
           restoreSessionMemories(sessionMeta.sessionMemories);
           const modeRestore = applyModeForSessionMeta(sessionMeta);
+          if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
           const raw = await readFile(sessionFile, "utf8");
           const parsed = parseActiveSessionJsonl(raw);
           const entries = parsed.entries;

@@ -222,7 +222,7 @@ var MemoryStore = class {
       description: desc,
       body,
       createdAt: existing?.createdAt || todayIso(),
-      updatedAt: todayIso(),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       source: input.source ?? existing?.source ?? "unknown"
     };
     if (input.priority) entry.priority = input.priority;

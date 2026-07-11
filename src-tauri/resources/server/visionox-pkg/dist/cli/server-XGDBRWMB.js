@@ -1648,9 +1648,12 @@ function listMemoryFiles(dir, scope) {
       const path = join5(dir, f);
       const stat = statSync3(path);
       let data = {};
+      let searchText = "";
       let malformed = false;
       try {
-        data = parseFrontmatter(readFileSync4(path, "utf8")).data ?? {};
+        const parsed = parseFrontmatter(readFileSync4(path, "utf8"));
+        data = parsed.data ?? {};
+        searchText = String(parsed.body ?? "").slice(0, 2e4);
       } catch {
         malformed = true;
       }
@@ -1665,7 +1668,9 @@ function listMemoryFiles(dir, scope) {
         source: data.source ?? "unknown",
         malformed,
         size: stat.size,
-        mtime: stat.mtime.getTime()
+        mtime: stat.mtime.getTime(),
+        revision: `${stat.mtimeMs}:${stat.size}`,
+        searchText
       };
     }).sort((a, b) => b.mtime - a.mtime);
   } catch {
@@ -1710,21 +1715,78 @@ function fileMeta(path) {
     return { path, exists: false, size: 0, mtime: null };
   }
 }
+function fileRevision(path) {
+  if (!path || !existsSync5(path)) return null;
+  const stat = statSync3(path);
+  return `${stat.mtimeMs}:${stat.size}`;
+}
 function readSoulName(raw) {
-  const match = String(raw ?? "").match(new RegExp(`${SOUL_NAME_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n([\\s\\S]*?)\\n${SOUL_NAME_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  const match = String(raw ?? "").match(new RegExp(`${SOUL_NAME_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\r?\\n([\\s\\S]*?)\\r?\\n${SOUL_NAME_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   if (!match) return "";
   const line = match[1].trim();
   return line.replace(/^你的名字是\s*/, "").replace(/[。.\s]+$/, "").trim();
 }
+function soulNamePattern() {
+  return new RegExp(`${SOUL_NAME_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\r?\\n[\\s\\S]*?\\r?\\n${SOUL_NAME_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\r?\\n*`, "g");
+}
+function stripSoulNameBlocks(raw) {
+  return String(raw ?? "").replace(soulNamePattern(), "").trim();
+}
+function normalizeSoulName(name) {
+  const value = String(name ?? "").trim();
+  if (/\r|\n/.test(value)) throw new Error("AI name must be a single line");
+  if (value.length > 80) throw new Error("AI name exceeds 80 characters");
+  return value;
+}
 function setSoulNameBlock(raw, name) {
-  const trimmedName = String(name ?? "").trim();
-  const current = String(raw ?? "").trim();
+  const trimmedName = normalizeSoulName(name);
+  const current = stripSoulNameBlocks(raw);
   const block = trimmedName ? `${SOUL_NAME_START}\n你的名字是 ${trimmedName}。\n${SOUL_NAME_END}` : "";
-  const re = new RegExp(`${SOUL_NAME_START.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?\\n${SOUL_NAME_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n*`);
-  if (re.test(current)) {
-    return current.replace(re, block ? `${block}\n\n` : "").trim() + "\n";
-  }
   return block ? `${block}\n\n${current}`.trim() + "\n" : `${current}\n`;
+}
+function soulHistoryDir(memoryHomeDir) {
+  return join5(memoryHomeDir, "soul-history");
+}
+function listSoulHistory(memoryHomeDir) {
+  const dir = soulHistoryDir(memoryHomeDir);
+  if (!existsSync5(dir)) return [];
+  return readdirSync3(dir).filter((name) => /^[a-zA-Z0-9_-]+\.md$/.test(name)).map((name) => {
+    const path = join5(dir, name);
+    const stat = statSync3(path);
+    const raw = readFileSync4(path, "utf8");
+    return { id: name.slice(0, -3), savedAt: stat.mtime.toISOString(), name: readSoulName(raw), size: stat.size };
+  }).sort((a, b) => b.savedAt.localeCompare(a.savedAt)).slice(0, 20);
+}
+function snapshotSoul(memoryHomeDir, soulPath) {
+  if (!existsSync5(soulPath)) return null;
+  const dir = soulHistoryDir(memoryHomeDir);
+  mkdirSync2(dir, { recursive: true });
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  atomicWriteMemoryFile(join5(dir, `${id}.md`), readFileSync4(soulPath, "utf8"));
+  const files = readdirSync3(dir).filter((name) => /^[a-zA-Z0-9_-]+\.md$/.test(name)).sort().reverse();
+  for (const old of files.slice(20)) unlinkSync(join5(dir, old));
+  return id;
+}
+function memoryTrashDir(memoryHomeDir) {
+  return join5(memoryHomeDir, "memory-trash");
+}
+function writeMemoryTrash(memoryHomeDir, entry) {
+  const dir = memoryTrashDir(memoryHomeDir);
+  mkdirSync2(dir, { recursive: true });
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  atomicWriteMemoryFile(join5(dir, `${id}.json`), `${JSON.stringify({ ...entry, id, deletedAt: new Date().toISOString() }, null, 2)}\n`);
+  return id;
+}
+function readMemoryTrash(memoryHomeDir, id) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return null;
+  const path = join5(memoryTrashDir(memoryHomeDir), `${id}.json`);
+  if (!existsSync5(path)) return null;
+  try { return JSON.parse(readFileSync4(path, "utf8")); } catch { return null; }
+}
+function listMemoryTrash(memoryHomeDir) {
+  const dir = memoryTrashDir(memoryHomeDir);
+  if (!existsSync5(dir)) return [];
+  return readdirSync3(dir).filter((name) => /^[a-zA-Z0-9_-]+\.json$/.test(name)).map((name) => readMemoryTrash(memoryHomeDir, name.slice(0, -5))).filter(Boolean).sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt))).slice(0, 100);
 }
 async function handleMemory(method, rest, body, ctx) {
   const cwd = ctx.getCurrentCwd?.();
@@ -1735,9 +1797,13 @@ async function handleMemory(method, rest, body, ctx) {
   const store = new MemoryStore({ homeDir: memoryHomeDir, projectRoot: cwd || void 0 });
   if (method === "GET" && rest.length === 0) {
     const projectMemoryPaths = cwd ? listProjectMemoryPaths(cwd) : [];
+    const projectStatus = ctx.getProjectMemoryStatus?.() ?? null;
     const existingProjectMemory = projectMemoryPaths[0] ?? null;
     const projectMemoryPath = existingProjectMemory ?? (cwd ? join5(cwd, PROJECT_MEMORY_FILE) : null);
     const projectMemoryExists = existingProjectMemory !== null;
+    const globalFiles = listMemoryFiles(globalDir, "global");
+    const projectFiles = projectMemDir ? listMemoryFiles(projectMemDir, "project") : [];
+    const memoryRuntime = ctx.getMemoryRuntimeStatus?.() ?? null;
     let diagnostics = { duplicates: [], conflicts: [], sensitiveKeys: [] };
     try {
       diagnostics = analyzeMemoryEntries(store.list().map((entry) => ({ ...entry, key: `${entry.scope}:${entry.name}` })));
@@ -1751,15 +1817,17 @@ async function handleMemory(method, rest, body, ctx) {
           exists: projectMemoryExists,
           file: projectMemoryPath ? basename(projectMemoryPath) : PROJECT_MEMORY_FILE,
           id: cwd ? projectHash(cwd) : null,
-          files: projectMemoryPaths.map((path) => ({ ...fileMeta(path), path, name: basename(path) }))
+          files: projectMemoryPaths.map((path) => ({ ...fileMeta(path), path, name: basename(path), ...(projectStatus?.files?.find((item) => item.path === path) ?? {}) })),
+          totalChars: projectStatus?.totalChars ?? 0,
+          maxChars: projectStatus?.maxChars ?? null
         },
         global: {
           path: globalDir,
-          files: listMemoryFiles(globalDir, "global")
+          files: globalFiles
         },
         projectMem: {
           path: projectMemDir,
-          files: projectMemDir ? listMemoryFiles(projectMemDir, "project") : []
+          files: projectFiles
         },
         soul: {
           ...fileMeta(soulPath),
@@ -1767,8 +1835,10 @@ async function handleMemory(method, rest, body, ctx) {
         },
         modeMemory: ctx.getAllModeMemory?.() ?? null,
         session: { items: ctx.getSessionMemories?.() ?? [] },
+        trash: { items: listMemoryTrash(memoryHomeDir) },
         workspace: cwd ? { path: cwd, name: basename(cwd) } : null,
-        injection: ctx.getMemoryInjectionStatus?.() ?? null,
+        injection: memoryRuntime?.next ?? ctx.getMemoryInjectionStatus?.() ?? null,
+        runtime: memoryRuntime,
         diagnostics
       }
     };
@@ -1776,9 +1846,11 @@ async function handleMemory(method, rest, body, ctx) {
   const [scope, ...nameParts] = rest;
   const name = nameParts.join("/");
   if (method === "GET") {
+    if (scope === "trash") return { status: 200, body: { items: listMemoryTrash(memoryHomeDir) } };
     if (scope === "soul") {
+      if (name === "history") return { status: 200, body: { items: listSoulHistory(memoryHomeDir) } };
       const body2 = existsSync5(soulPath) ? readFileSync4(soulPath, "utf8") : "";
-      return { status: 200, body: { path: soulPath, body: body2, name: readSoulName(body2), atomic: true } };
+      return { status: 200, body: { path: soulPath, body: stripSoulNameBlocks(body2), name: readSoulName(body2), revision: fileRevision(soulPath), chars: body2.length, maxChars: SOUL_MAX_CHARS, history: listSoulHistory(memoryHomeDir), atomic: true } };
     }
     if (scope === "project") {
       if (!cwd) return { status: 503, body: { error: "no active project" } };
@@ -1796,22 +1868,75 @@ async function handleMemory(method, rest, body, ctx) {
       const path = join5(dir, `${name}.md`);
       if (!existsSync5(path)) return { status: 404, body: { error: "not found" } };
       const memoryScope = scope === "global" ? "global" : "project";
-      return { status: 200, body: { path, body: readFileSync4(path, "utf8"), entry: store.read(memoryScope, name) } };
+      return { status: 200, body: { path, body: readFileSync4(path, "utf8"), entry: store.read(memoryScope, name), revision: fileRevision(path) } };
     }
     return { status: 400, body: { error: "bad scope or name" } };
   }
   if (method === "POST") {
     const parsed = parseBody6(body);
     const { body: contents } = parsed;
+    if (scope === "apply") {
+      if (ctx.isBusy?.()) return { status: 409, body: { error: "memory cannot be applied while an answer is running" } };
+      const result = ctx.applyMemoryChanges?.();
+      return result ? { status: 200, body: result } : { status: 501, body: { error: "memory apply is not available" } };
+    }
+    if (scope === "trash" && rest[1] && rest[2] === "restore") {
+      const item = readMemoryTrash(memoryHomeDir, rest[1]);
+      if (!item) return { status: 404, body: { error: "trash item not found" } };
+      if (item.kind === "mode") {
+        const result = ctx.restoreModeMemoryTrash?.(item);
+        if (!result) return { status: 409, body: { error: "mode memory could not be restored" } };
+      } else {
+        const targetDir = item.scope === "global" ? globalDir : projectMemDir;
+        if (!targetDir) return { status: 503, body: { error: "project is not active" } };
+        const target = join5(targetDir, `${item.name}.md`);
+        if (existsSync5(target)) return { status: 409, body: { error: "a memory with the same name already exists" } };
+        mkdirSync2(targetDir, { recursive: true });
+        atomicWriteMemoryFile(target, String(item.raw ?? ""));
+        store.regenerateIndex(item.scope === "global" ? "global" : "project");
+      }
+      unlinkSync(join5(memoryTrashDir(memoryHomeDir), `${item.id}.json`));
+      return { status: 200, body: { restored: true, item } };
+    }
     if (scope === "soul") {
+      if (rest[1] === "preview") {
+        try {
+          const finalBody = setSoulNameBlock(typeof contents === "string" ? contents : "", parsed.aiName ?? "");
+          return { status: 200, body: { valid: finalBody.length <= SOUL_MAX_CHARS, finalBody, body: stripSoulNameBlocks(finalBody), name: readSoulName(finalBody), chars: finalBody.length, maxChars: SOUL_MAX_CHARS } };
+        } catch (err) {
+          return { status: 400, body: { error: err.message } };
+        }
+      }
+      if (rest[1] === "reset") {
+        const defaultSoul = ctx.getDefaultSoul?.();
+        if (typeof defaultSoul !== "string" || !defaultSoul.trim()) return { status: 501, body: { error: "default soul is not available" } };
+        snapshotSoul(memoryHomeDir, soulPath);
+        atomicWriteMemoryFile(soulPath, `${defaultSoul.trim()}\n`);
+        return { status: 200, body: { saved: true, reset: true, revision: fileRevision(soulPath) } };
+      }
+      if (rest[1] === "history" && rest[2] && rest[3] === "restore") {
+        const id = rest[2];
+        if (!/^[a-zA-Z0-9_-]+$/.test(id)) return { status: 400, body: { error: "bad history id" } };
+        const source = join5(soulHistoryDir(memoryHomeDir), `${id}.md`);
+        if (!existsSync5(source)) return { status: 404, body: { error: "history version not found" } };
+        snapshotSoul(memoryHomeDir, soulPath);
+        atomicWriteMemoryFile(soulPath, readFileSync4(source, "utf8"));
+        return { status: 200, body: { restored: true, revision: fileRevision(soulPath) } };
+      }
       const current = existsSync5(soulPath) ? readFileSync4(soulPath, "utf8") : "";
-      const next = typeof contents === "string" ? contents : setSoulNameBlock(current, parsed.aiName ?? "");
-      const finalBody = parsed.aiName !== void 0 && typeof contents === "string" ? setSoulNameBlock(next, parsed.aiName) : next;
+      if (parsed.expectedRevision && parsed.expectedRevision !== fileRevision(soulPath)) return { status: 409, body: { error: "soul.md changed since it was opened" } };
+      let finalBody;
+      try {
+        finalBody = setSoulNameBlock(typeof contents === "string" ? contents : stripSoulNameBlocks(current), parsed.aiName ?? readSoulName(current));
+      } catch (err) {
+        return { status: 400, body: { error: err.message } };
+      }
       if (finalBody.length > SOUL_MAX_CHARS) return { status: 400, body: { error: `soul.md exceeds ${SOUL_MAX_CHARS} characters` } };
       mkdirSync2(dirname3(soulPath), { recursive: true });
+      snapshotSoul(memoryHomeDir, soulPath);
       atomicWriteMemoryFile(soulPath, finalBody);
       ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope: "soul", path: soulPath } });
-      return { status: 200, body: { saved: true, path: soulPath, name: readSoulName(finalBody), atomic: true } };
+      return { status: 200, body: { saved: true, path: soulPath, name: readSoulName(finalBody), revision: fileRevision(soulPath), chars: finalBody.length, atomic: true } };
     }
     if (typeof contents !== "string") {
       return { status: 400, body: { error: "body (string) required" } };
@@ -1829,6 +1954,10 @@ async function handleMemory(method, rest, body, ctx) {
       if (memoryScope === "project" && !cwd) return { status: 503, body: { error: "no project root for project-mem" } };
       const overwrite = parsed.overwrite === true;
       try {
+        const currentPath = join5(memoryScope === "global" ? globalDir : projectMemDir, `${name}.md`);
+        if (overwrite && parsed.expectedRevision && parsed.expectedRevision !== fileRevision(currentPath)) {
+          return { status: 409, body: { error: "memory changed since it was opened" } };
+        }
         const parsedMemory = parseFrontmatter(contents);
         const existing = overwrite ? (() => {
           try {
@@ -1850,7 +1979,7 @@ async function handleMemory(method, rest, body, ctx) {
           source: parsedMemory.data?.source ?? existing?.source ?? "ui"
         }, { overwrite });
         ctx.audit?.({ ts: Date.now(), action: overwrite ? "update-memory" : "create-memory", payload: { scope, name, path } });
-        return { status: 200, body: { saved: true, created: !overwrite, updated: overwrite, path } };
+        return { status: 200, body: { saved: true, created: !overwrite, updated: overwrite, path, revision: fileRevision(path), appliesAt: "next-context-rebuild" } };
       } catch (err) {
         const status = /already exists/i.test(err.message) ? 409 : 400;
         return { status, body: { error: err.message } };
@@ -1867,10 +1996,19 @@ async function handleMemory(method, rest, body, ctx) {
       const memoryScope = scope === "global" ? "global" : "project";
       if (memoryScope === "project" && !cwd) return { status: 503, body: { error: "no project root for project-mem" } };
       try {
-        const deleted = store.delete(memoryScope, name);
-        if (!deleted) return { status: 404, body: { error: "not found" } };
+        const sourceDir = memoryScope === "global" ? globalDir : projectMemDir;
+        const sourcePath = join5(sourceDir, `${name}.md`);
+        const raw = existsSync5(sourcePath) ? readFileSync4(sourcePath, "utf8") : null;
+        if (raw === null) return { status: 404, body: { error: "not found" } };
+        const trashId = writeMemoryTrash(memoryHomeDir, { kind: "persistent", scope: memoryScope, name, raw });
+        try {
+          if (!store.delete(memoryScope, name)) throw new Error("memory disappeared before deletion");
+        } catch (err) {
+          try { unlinkSync(join5(memoryTrashDir(memoryHomeDir), `${trashId}.json`)); } catch {}
+          throw err;
+        }
         ctx.audit?.({ ts: Date.now(), action: "delete-memory", payload: { scope, name } });
-        return { status: 200, body: { deleted: true } };
+        return { status: 200, body: { deleted: true, trashId } };
       } catch (err) {
         return { status: 400, body: { error: err.message } };
       }
@@ -1924,10 +2062,12 @@ async function handleModeMemory(method, rest, body, ctx, query = new URLSearchPa
     if (typeof bodyObj.text !== "string" || !bodyObj.text.trim()) {
       return { status: 400, body: { error: "text (string) required" } };
     }
+    if (bodyObj.text.trim().length > 180) return { status: 400, body: { error: "mode memory text exceeds 180 characters" } };
     const result = ctx.addModeMemory?.({
       text: bodyObj.text,
       keywords: Array.isArray(bodyObj.keywords) ? bodyObj.keywords : [],
-      priority: bodyObj.priority
+      priority: bodyObj.priority,
+      enabled: bodyObj.enabled !== false
     }, mode);
     if (!result) return { status: 501, body: { error: "mode memory is not available" } };
     ctx.audit?.({ ts: Date.now(), action: "add-mode-memory", payload: { mode, id: result.item?.id } });
@@ -1935,9 +2075,24 @@ async function handleModeMemory(method, rest, body, ctx, query = new URLSearchPa
   }
   const id = decodeURIComponent(rest[0] || "");
   if (!id) return { status: 400, body: { error: "id required" } };
+  if (method === "POST" && rest[1] === "move") {
+    if (typeof bodyObj.targetMode !== "string" || !bodyObj.targetMode || bodyObj.targetMode === mode) return { status: 400, body: { error: "different targetMode required" } };
+    if (modeIds.length > 0 && !modeIds.includes(bodyObj.targetMode)) return { status: 400, body: { error: "unknown target mode" } };
+    const result = ctx.moveModeMemory?.(id, { sourceMode: mode, targetMode: bodyObj.targetMode, copy: bodyObj.copy === true });
+    return result ? { status: 200, body: result } : { status: 404, body: { error: "not found" } };
+  }
+  if (method === "POST" && id === "batch") {
+    const items = Array.isArray(bodyObj.items) ? bodyObj.items : [];
+    if (!new Set(["enable", "disable", "delete"]).has(bodyObj.action) || items.length === 0) return { status: 400, body: { error: "valid action and items required" } };
+    const result = ctx.batchModeMemory?.({ action: bodyObj.action, items });
+    return result ? { status: 200, body: result } : { status: 501, body: { error: "batch mode memory is not available" } };
+  }
   if (method === "PATCH") {
     const patch = {};
-    if (bodyObj.text !== void 0) patch.text = bodyObj.text;
+    if (bodyObj.text !== void 0) {
+      if (typeof bodyObj.text !== "string" || !bodyObj.text.trim() || bodyObj.text.trim().length > 180) return { status: 400, body: { error: "mode memory text must contain 1-180 characters" } };
+      patch.text = bodyObj.text;
+    }
     if (bodyObj.keywords !== void 0) patch.keywords = Array.isArray(bodyObj.keywords) ? bodyObj.keywords : [];
     if (bodyObj.priority !== void 0) patch.priority = bodyObj.priority;
     if (bodyObj.enabled !== void 0) patch.enabled = Boolean(bodyObj.enabled);

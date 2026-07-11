@@ -1,6 +1,6 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
@@ -120,6 +120,17 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     return res;
   }
 
+  async function apiPatch(path, body, ctxOverrides = {}) {
+    const json = JSON.stringify(body);
+    const req = Readable.from([Buffer.from(json)]);
+    req.url = path;
+    req.method = "PATCH";
+    req.headers = { "x-reasonix-token": TOKEN, "content-type": "application/json" };
+    const res = mockRes();
+    await dispatch(req, res, mockCtx(ctxOverrides), TOKEN);
+    return res;
+  }
+
   // ── Auth tests ────────────────────────────────────────────
 
   test("GET /api/overview 无 token → 401/403", async () => {
@@ -192,6 +203,14 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(read.status, 200);
     assert.match(read.json.body, /Use brief sections/);
     assert.equal(read.json.entry.description, "Preferred report style");
+    assert.ok(read.json.revision);
+
+    const stale = await apiPost("/api/memory/global/report-style", {
+      body: body.replace("short", "stale"),
+      overwrite: true,
+      expectedRevision: "stale-revision",
+    }, overrides);
+    assert.equal(stale.status, 409);
 
     const tree = await apiGet("/api/memory", {
       ...overrides,
@@ -200,6 +219,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(tree.status, 200);
     assert.equal(tree.json.global.files[0].description, "Preferred report style");
     assert.equal(tree.json.global.files[0].priority, "medium");
+    assert.match(tree.json.global.files[0].searchText, /Use brief sections/);
     assert.equal(tree.json.session.items[0].name, "temporary-choice");
 
     const duplicateBody = body.replace("name: report-style", "name: report-copy").replace("short", "brief");
@@ -208,6 +228,15 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     const diagnosed = await apiGet("/api/memory", overrides);
     assert.deepEqual(diagnosed.json.diagnostics.duplicates, [["global:report-copy", "global:report-style"]]);
     assert.equal(diagnosed.json.project.id.length, 16);
+
+    const removed = await apiDelete("/api/memory/global/report-copy", {}, overrides);
+    assert.equal(removed.status, 200);
+    assert.ok(removed.json.trashId);
+    const trash = await apiGet("/api/memory/trash", overrides);
+    assert.equal(trash.json.items.length, 1);
+    const restored = await apiPost(`/api/memory/trash/${removed.json.trashId}/restore`, {}, overrides);
+    assert.equal(restored.status, 200);
+    assert.equal((await apiGet("/api/memory/global/report-copy", overrides)).status, 200);
   });
 
   test("Soul API 在用户数据目录中完整读取和保存", async () => {
@@ -220,6 +249,48 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(read.json.name, "Whale");
     assert.match(read.json.body, /Always answer clearly/);
     assert.equal(read.json.atomic, true);
+    assert.doesNotMatch(read.json.body, /visionox:soul:name/);
+    assert.ok(read.json.revision);
+
+    const preview = await apiPost("/api/memory/soul/preview", { body: "# Identity\r\n\r\nBe direct.\r\n", aiName: "Whale" }, { memoryHomeDir });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.json.valid, true);
+    assert.equal((preview.json.finalBody.match(/visionox:soul:name:start/g) ?? []).length, 1);
+
+    const updated = await apiPost("/api/memory/soul", { body: "# Identity\n\nBe precise.\n", aiName: "Blue", expectedRevision: read.json.revision }, { memoryHomeDir });
+    assert.equal(updated.status, 200);
+    const history = await apiGet("/api/memory/soul/history", { memoryHomeDir });
+    assert.equal(history.status, 200);
+    assert.equal(history.json.items.length, 1);
+
+    const restored = await apiPost(`/api/memory/soul/history/${history.json.items[0].id}/restore`, {}, { memoryHomeDir });
+    assert.equal(restored.status, 200);
+    assert.match(readFileSync(join(memoryHomeDir, "soul.md"), "utf8"), /Always answer clearly/);
+  });
+
+  test("记忆应用接口区分忙碌状态，场景接口拒绝截断并保留 enabled", async () => {
+    const busy = await apiPost("/api/memory/apply", {}, { isBusy: () => true, applyMemoryChanges: () => ({ applied: true }) });
+    assert.equal(busy.status, 409);
+    const applied = await apiPost("/api/memory/apply", {}, { isBusy: () => false, applyMemoryChanges: () => ({ applied: true, messageCount: 3 }) });
+    assert.equal(applied.status, 200);
+    assert.equal(applied.json.applied, true);
+
+    let added;
+    const ctx = {
+      getModes: () => ({ current: "general", list: [{ id: "general" }, { id: "coding" }] }),
+      addModeMemory: (input, mode) => { added = { input, mode }; return { item: { id: "one" }, memory: { items: [] } }; },
+      moveModeMemory: (id, input) => ({ id, ...input }),
+      batchModeMemory: (input) => ({ changed: input.items.length }),
+    };
+    const tooLong = await apiPost("/api/mode-memory", { mode: "general", text: "x".repeat(181) }, ctx);
+    assert.equal(tooLong.status, 400);
+    const add = await apiPost("/api/mode-memory", { mode: "general", text: "keep disabled", enabled: false }, ctx);
+    assert.equal(add.status, 200);
+    assert.equal(added.input.enabled, false);
+    const moved = await apiPost("/api/mode-memory/one/move", { mode: "general", targetMode: "coding", copy: false }, ctx);
+    assert.equal(moved.status, 200);
+    const batch = await apiPost("/api/mode-memory/batch", { action: "disable", items: [{ mode: "general", id: "one" }] }, ctx);
+    assert.equal(batch.status, 200);
   });
 
   test("GET /api/events 只推送请求的共享 SSE 频道", async () => {

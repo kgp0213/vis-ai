@@ -9394,10 +9394,9 @@ function registerMemoryTools(registry, opts = {}) {
           enum: ["low", "medium", "high"],
           description: "Optional per-memory priority. `high` injects the entry into a `# HIGH PRIORITY constraints` block at the top of the system prompt \u2014 use sparingly, only for hard rules the model must never violate."
         },
-        expires: {
-          type: "string",
-          enum: ["project_end"],
-          description: "Optional lifecycle hint. `project_end` causes `/memory clear project` to also remove this entry even when it's stored at global scope."
+        replace: {
+          type: "boolean",
+          description: "Set true only when the user explicitly asked to replace an existing memory with the same name."
         }
       },
       required: ["type", "scope", "name", "description", "content"]
@@ -9415,9 +9414,8 @@ function registerMemoryTools(registry, opts = {}) {
           scope: args.scope,
           description: args.description,
           body: args.content,
-          ...args.priority ? { priority: args.priority } : {},
-          ...args.expires ? { expires: args.expires } : {}
-        });
+          ...args.priority ? { priority: args.priority } : {}
+        }, { overwrite: args.replace === true });
         const key = sanitizeMemoryName(args.name);
         return [
           `\u2713 REMEMBERED (${args.scope}/${key}): ${args.description}`,

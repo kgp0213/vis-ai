@@ -443,6 +443,16 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /\["soul", "AI 身份"\]/);
     assert.match(app, /\/memory\/soul/);
     assert.match(app, /Soul 不提供删除/);
+    assert.match(app, /基础编辑/);
+    assert.match(app, /高级原文/);
+    assert.match(app, /预览最终注入/);
+    assert.match(app, /立即应用到当前对话/);
+    assert.match(app, /恢复此版本/);
+    assert.match(app, /恢复此记忆/);
+    assert.match(app, /\["trash", "回收站"\]/);
+    assert.match(app, /当前上下文仍在使用旧记忆/);
+    assert.match(app, /\/mode-memory\/batch/);
+    assert.match(app, /\/move/);
   });
 
   test("长会话默认只渲染最近消息，并可继续加载和跳转历史", () => {

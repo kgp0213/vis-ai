@@ -33,6 +33,8 @@ describe("memory correctness", () => {
       /already exists/i,
     );
     assert.equal(store.read("global", input.name).body, input.body);
+    store.write({ ...input, body: "Updated explicitly." }, { overwrite: true });
+    assert.match(store.read("global", input.name).updatedAt, /T/);
   });
 
   test("memory indexes are truncated only between complete entries", () => {
@@ -94,5 +96,13 @@ describe("memory correctness", () => {
     assert.match(launcher, /excludedKeys = new Set\(high\.selectedKeys\)/);
     assert.match(launcher, /getMemoryInjectionStatus/);
     assert.doesNotMatch(launcher, /block\.slice\(0, CONSTANTS\.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS\)/);
+  });
+
+  test("remember replace reaches MemoryStore overwrite and session restores rebuild the prefix", () => {
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const memoryTools = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
+    assert.match(memoryTools, /store\.write\([\s\S]*?\}, \{ overwrite: args\.replace === true \}\)/);
+    assert.match(launcher, /restoreSessionMemories\(sessionMeta\.sessionMemories\)[\s\S]*?rebuildLoopPreservingContext/);
+    assert.match(launcher, /getMemoryRuntimeStatus/);
   });
 });
