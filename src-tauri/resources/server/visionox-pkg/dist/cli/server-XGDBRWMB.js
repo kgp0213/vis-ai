@@ -38,6 +38,12 @@ import {
   resolveProjectMemoryWritePath,
   validateSkillFrontmatter
 } from "./chunk-2K65GZBT.js";
+import {
+  MemoryStore
+} from "./chunk-5JJRUIPA.js";
+import {
+  analyzeMemoryEntries
+} from "../../../lib/memory-prompt.mjs";
 import "./chunk-PLHAZOLZ.js";
 import {
   checkOllamaStatus,
@@ -1608,11 +1614,11 @@ var SOUL_NAME_END = "<!-- visionox:soul:name:end -->";
 function projectHash(rootDir) {
   return createHash("sha1").update(resolvePath(rootDir)).digest("hex").slice(0, 16);
 }
-function globalMemoryDir() {
-  return join5(homedir2(), ".visionox", "memory", "global");
+function globalMemoryDir(homeDir = join5(homedir2(), ".visionox")) {
+  return join5(homeDir, "memory", "global");
 }
-function projectMemoryDir(rootDir) {
-  return join5(homedir2(), ".visionox", "memory", projectHash(rootDir));
+function projectMemoryDir(rootDir, homeDir = join5(homedir2(), ".visionox")) {
+  return join5(homeDir, "memory", projectHash(rootDir));
 }
 function parseBody6(raw) {
   if (!raw) return {};
@@ -1624,13 +1630,29 @@ function parseBody6(raw) {
   }
 }
 var SAFE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
-function listMemoryFiles(dir) {
+function listMemoryFiles(dir, scope) {
   if (!existsSync5(dir)) return [];
   try {
     return readdirSync3(dir).filter((f) => f.endsWith(".md") && f !== "MEMORY.md").map((f) => {
-      const stat = statSync3(join5(dir, f));
+      const path = join5(dir, f);
+      const stat = statSync3(path);
+      let data = {};
+      let malformed = false;
+      try {
+        data = parseFrontmatter(readFileSync4(path, "utf8")).data ?? {};
+      } catch {
+        malformed = true;
+      }
       return {
         name: f.replace(/\.md$/, ""),
+        description: String(data.description ?? f.replace(/\.md$/, "")),
+        type: String(data.type ?? "user"),
+        scope,
+        priority: ["low", "medium", "high"].includes(data.priority) ? data.priority : "medium",
+        createdAt: data.created ?? null,
+        updatedAt: data.updated ?? stat.mtime.toISOString(),
+        source: data.source ?? "unknown",
+        malformed,
         size: stat.size,
         mtime: stat.mtime.getTime()
       };
@@ -1695,33 +1717,45 @@ function setSoulNameBlock(raw, name) {
 }
 async function handleMemory(method, rest, body, ctx) {
   const cwd = ctx.getCurrentCwd?.();
-  const globalDir = globalMemoryDir();
-  const projectMemDir = cwd ? projectMemoryDir(cwd) : "";
+  const memoryHomeDir = typeof ctx.memoryHomeDir === "string" && ctx.memoryHomeDir ? ctx.memoryHomeDir : join5(homedir2(), ".visionox");
+  const globalDir = globalMemoryDir(memoryHomeDir);
+  const projectMemDir = cwd ? projectMemoryDir(cwd, memoryHomeDir) : "";
+  const store = new MemoryStore({ homeDir: memoryHomeDir, projectRoot: cwd || void 0 });
   if (method === "GET" && rest.length === 0) {
     const existingProjectMemory = cwd ? findProjectMemoryPath(cwd) : null;
     const projectMemoryPath = existingProjectMemory ?? (cwd ? join5(cwd, PROJECT_MEMORY_FILE) : null);
     const projectMemoryExists = existingProjectMemory !== null;
+    let diagnostics = { duplicates: [], conflicts: [], sensitiveKeys: [] };
+    try {
+      diagnostics = analyzeMemoryEntries(store.list().map((entry) => ({ ...entry, key: `${entry.scope}:${entry.name}` })));
+    } catch {
+    }
     return {
       status: 200,
       body: {
         project: {
           path: projectMemoryPath,
           exists: projectMemoryExists,
-          file: projectMemoryPath ? basename(projectMemoryPath) : PROJECT_MEMORY_FILE
+          file: projectMemoryPath ? basename(projectMemoryPath) : PROJECT_MEMORY_FILE,
+          id: cwd ? projectHash(cwd) : null
         },
         global: {
           path: globalDir,
-          files: listMemoryFiles(globalDir)
+          files: listMemoryFiles(globalDir, "global")
         },
         projectMem: {
           path: projectMemDir,
-          files: projectMemDir ? listMemoryFiles(projectMemDir) : []
+          files: projectMemDir ? listMemoryFiles(projectMemDir, "project") : []
         },
         soul: {
           ...fileMeta(SOUL_FILE),
           name: existsSync5(SOUL_FILE) ? readSoulName(readFileSync4(SOUL_FILE, "utf8")) : ""
         },
-        modeMemory: ctx.getAllModeMemory?.() ?? null
+        modeMemory: ctx.getAllModeMemory?.() ?? null,
+        session: { items: ctx.getSessionMemories?.() ?? [] },
+        workspace: cwd ? { path: cwd, name: basename(cwd) } : null,
+        injection: ctx.getMemoryInjectionStatus?.() ?? null,
+        diagnostics
       }
     };
   }
@@ -1738,12 +1772,17 @@ async function handleMemory(method, rest, body, ctx) {
       if (!path) return { status: 404, body: { error: "project memory file not found" } };
       return { status: 200, body: { path, body: readFileSync4(path, "utf8") } };
     }
+    if (scope === "session" && name) {
+      const item = (ctx.getSessionMemories?.() ?? []).find((entry) => entry.name === name);
+      return item ? { status: 200, body: { entry: item } } : { status: 404, body: { error: "not found" } };
+    }
     if ((scope === "global" || scope === "project-mem") && name && SAFE_NAME.test(name)) {
       const dir = scope === "global" ? globalDir : projectMemDir;
       if (!dir) return { status: 503, body: { error: "no project root for project-mem" } };
       const path = join5(dir, `${name}.md`);
       if (!existsSync5(path)) return { status: 404, body: { error: "not found" } };
-      return { status: 200, body: { path, body: readFileSync4(path, "utf8") } };
+      const memoryScope = scope === "global" ? "global" : "project";
+      return { status: 200, body: { path, body: readFileSync4(path, "utf8"), entry: store.read(memoryScope, name) } };
     }
     return { status: 400, body: { error: "bad scope or name" } };
   }
@@ -1771,29 +1810,55 @@ async function handleMemory(method, rest, body, ctx) {
       return { status: 200, body: { saved: true, path } };
     }
     if ((scope === "global" || scope === "project-mem") && name && SAFE_NAME.test(name)) {
-      const dir = scope === "global" ? globalDir : projectMemDir;
-      if (!dir) return { status: 503, body: { error: "no project root for project-mem" } };
-      mkdirSync2(dir, { recursive: true });
-      const path = join5(dir, `${name}.md`);
-      writeFileSync2(path, contents, "utf8");
-      rebuildMemoryIndex(dir);
-      ctx.audit?.({ ts: Date.now(), action: "save-memory", payload: { scope, name, path } });
-      return { status: 200, body: { saved: true, path } };
+      const memoryScope = scope === "global" ? "global" : "project";
+      if (memoryScope === "project" && !cwd) return { status: 503, body: { error: "no project root for project-mem" } };
+      const overwrite = parsed.overwrite === true;
+      try {
+        const parsedMemory = parseFrontmatter(contents);
+        const existing = overwrite ? (() => {
+          try {
+            return store.read(memoryScope, name);
+          } catch {
+            return null;
+          }
+        })() : null;
+        const description = String(parsedMemory.data?.description ?? existing?.description ?? "").trim();
+        const memoryBody = String(parsedMemory.body ?? contents).trim();
+        const path = store.write({
+          name,
+          description,
+          type: parsedMemory.data?.type ?? existing?.type ?? "user",
+          scope: memoryScope,
+          body: memoryBody,
+          priority: parsedMemory.data?.priority ?? existing?.priority,
+          expires: parsedMemory.data?.expires ?? existing?.expires,
+          source: parsedMemory.data?.source ?? existing?.source ?? "ui"
+        }, { overwrite });
+        ctx.audit?.({ ts: Date.now(), action: overwrite ? "update-memory" : "create-memory", payload: { scope, name, path } });
+        return { status: 200, body: { saved: true, created: !overwrite, updated: overwrite, path } };
+      } catch (err) {
+        const status = /already exists/i.test(err.message) ? 409 : 400;
+        return { status, body: { error: err.message } };
+      }
     }
     return { status: 400, body: { error: "bad scope or name" } };
   }
   if (method === "DELETE") {
+    if (scope === "session" && name) {
+      const deleted = ctx.deleteSessionMemory?.(name) ?? false;
+      return deleted ? { status: 200, body: { deleted: true } } : { status: 404, body: { error: "not found" } };
+    }
     if ((scope === "global" || scope === "project-mem") && name && SAFE_NAME.test(name)) {
-      const dir = scope === "global" ? globalDir : projectMemDir;
-      if (!dir) return { status: 503, body: { error: "no project root for project-mem" } };
-      const path = join5(dir, `${name}.md`);
-      if (existsSync5(path)) {
-        unlinkSync(path);
-        rebuildMemoryIndex(dir);
-        ctx.audit?.({ ts: Date.now(), action: "delete-memory", payload: { scope, name, path } });
+      const memoryScope = scope === "global" ? "global" : "project";
+      if (memoryScope === "project" && !cwd) return { status: 503, body: { error: "no project root for project-mem" } };
+      try {
+        const deleted = store.delete(memoryScope, name);
+        if (!deleted) return { status: 404, body: { error: "not found" } };
+        ctx.audit?.({ ts: Date.now(), action: "delete-memory", payload: { scope, name } });
         return { status: 200, body: { deleted: true } };
+      } catch (err) {
+        return { status: 400, body: { error: err.message } };
       }
-      return { status: 404, body: { error: "not found" } };
     }
     if (scope === "project") {
       if (!cwd) return { status: 503, body: { error: "no active project" } };

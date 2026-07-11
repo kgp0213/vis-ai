@@ -157,6 +157,59 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(fontRes.headers["content-type"], "font/woff2");
   });
 
+  test("长期记忆 API 拒绝静默覆盖，并允许显式更新", async () => {
+    const memoryHomeDir = join(tmpDir, "memory-home");
+    const body = [
+      "---",
+      "name: report-style",
+      "description: Preferred report style",
+      "type: user",
+      "scope: global",
+      "created: 2026-07-11",
+      "---",
+      "",
+      "Use short sections.",
+      "",
+    ].join("\n");
+    const overrides = { memoryHomeDir };
+
+    const created = await apiPost("/api/memory/global/report-style", { body }, overrides);
+    assert.equal(created.status, 200);
+    assert.equal(created.json.created, true);
+
+    const duplicate = await apiPost("/api/memory/global/report-style", { body: body.replace("short", "brief") }, overrides);
+    assert.equal(duplicate.status, 409);
+    assert.match(duplicate.json.error, /already exists/i);
+
+    const updated = await apiPost("/api/memory/global/report-style", {
+      body: body.replace("short", "brief"),
+      overwrite: true,
+    }, overrides);
+    assert.equal(updated.status, 200);
+    assert.equal(updated.json.updated, true);
+
+    const read = await apiGet("/api/memory/global/report-style", overrides);
+    assert.equal(read.status, 200);
+    assert.match(read.json.body, /Use brief sections/);
+    assert.equal(read.json.entry.description, "Preferred report style");
+
+    const tree = await apiGet("/api/memory", {
+      ...overrides,
+      getSessionMemories: () => [{ name: "temporary-choice", description: "Use option B", body: "Use option B", ts: 1 }],
+    });
+    assert.equal(tree.status, 200);
+    assert.equal(tree.json.global.files[0].description, "Preferred report style");
+    assert.equal(tree.json.global.files[0].priority, "medium");
+    assert.equal(tree.json.session.items[0].name, "temporary-choice");
+
+    const duplicateBody = body.replace("name: report-style", "name: report-copy").replace("short", "brief");
+    const copy = await apiPost("/api/memory/global/report-copy", { body: duplicateBody }, overrides);
+    assert.equal(copy.status, 200);
+    const diagnosed = await apiGet("/api/memory", overrides);
+    assert.deepEqual(diagnosed.json.diagnostics.duplicates, [["global:report-copy", "global:report-style"]]);
+    assert.equal(diagnosed.json.project.id.length, 16);
+  });
+
   test("GET /api/events 只推送请求的共享 SSE 频道", async () => {
     const req = new EventEmitter();
     req.url = "/api/events?channels=events";

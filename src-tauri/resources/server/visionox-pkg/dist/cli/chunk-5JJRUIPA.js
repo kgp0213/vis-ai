@@ -23,6 +23,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   unlinkSync,
   writeFileSync
 } from "fs";
@@ -57,6 +58,15 @@ function scopeDir(opts) {
 function ensureDir(p) {
   if (!existsSync(p)) mkdirSync(p, { recursive: true });
 }
+function atomicWriteFile(file, content) {
+  const temp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync(temp, content, "utf8");
+    renameSync(temp, file);
+  } finally {
+    if (existsSync(temp)) unlinkSync(temp);
+  }
+}
 function formatFrontmatter(e) {
   const lines = [
     "---",
@@ -64,10 +74,12 @@ function formatFrontmatter(e) {
     `description: ${e.description.replace(/\n/g, " ")}`,
     `type: ${e.type}`,
     `scope: ${e.scope}`,
-    `created: ${e.createdAt}`
+    `created: ${e.createdAt}`,
+    `updated: ${e.updatedAt}`
   ];
   if (e.priority) lines.push(`priority: ${e.priority}`);
   if (e.expires) lines.push(`expires: ${e.expires}`);
+  if (e.source) lines.push(`source: ${e.source}`);
   lines.push("---", "");
   return lines.join("\n");
 }
@@ -125,8 +137,19 @@ var MemoryStore = class {
     if (!trimmed) return null;
     const originalChars = trimmed.length;
     const truncated = originalChars > MEMORY_INDEX_MAX_CHARS;
-    const content = truncated ? `${trimmed.slice(0, MEMORY_INDEX_MAX_CHARS)}
-\u2026 (truncated ${originalChars - MEMORY_INDEX_MAX_CHARS} chars)` : trimmed;
+    let content = trimmed;
+    if (truncated) {
+      const lines = trimmed.split(/\r?\n/).filter(Boolean);
+      const kept = [];
+      while (kept.length < lines.length) {
+        const omitted = lines.length - kept.length;
+        const suffix = `\u2026 (omitted ${omitted} complete ${omitted === 1 ? "entry" : "entries"} to fit ${MEMORY_INDEX_MAX_CHARS} chars)`;
+        if ([...kept, lines[kept.length], suffix].join("\n").length > MEMORY_INDEX_MAX_CHARS) break;
+        kept.push(lines[kept.length]);
+      }
+      const omitted = lines.length - kept.length;
+      content = [...kept, `\u2026 (omitted ${omitted} complete ${omitted === 1 ? "entry" : "entries"} to fit ${MEMORY_INDEX_MAX_CHARS} chars)`].join("\n");
+    }
     return { content, originalChars, truncated };
   }
   /** Read one memory file's body (frontmatter stripped). Throws if missing. */
@@ -143,7 +166,9 @@ var MemoryStore = class {
       scope: data.scope ?? scope,
       description: data.description ?? "",
       body: body.trim(),
-      createdAt: data.created ?? ""
+      createdAt: data.created ?? "",
+      updatedAt: data.updated ?? data.created ?? "",
+      source: data.source ?? "unknown"
     };
     const priority = coercePriority(data.priority);
     if (priority) entry.priority = priority;
@@ -176,7 +201,7 @@ var MemoryStore = class {
     }
     return out;
   }
-  write(input) {
+  write(input, options = {}) {
     if (input.scope === "project" && !this.projectRoot) {
       throw new Error("cannot write project-scoped memory: no projectRoot configured");
     }
@@ -185,20 +210,26 @@ var MemoryStore = class {
     if (!desc) throw new Error("memory description cannot be empty");
     const body = String(input.body ?? "").trim();
     if (!body) throw new Error("memory body cannot be empty");
+    const dir = this.dir(input.scope);
+    const file = join(dir, `${name}.md`);
+    const existing = existsSync(file) ? this.read(input.scope, name) : null;
+    if (existing && options.overwrite !== true) {
+      throw new Error(`memory already exists: scope=${input.scope} name=${name}`);
+    }
     const entry = {
       ...input,
       name,
       description: desc,
       body,
-      createdAt: todayIso()
+      createdAt: existing?.createdAt || todayIso(),
+      updatedAt: todayIso(),
+      source: input.source ?? existing?.source ?? "unknown"
     };
     if (input.priority) entry.priority = input.priority;
     if (input.expires) entry.expires = input.expires;
-    const dir = this.dir(input.scope);
-    const file = join(dir, `${name}.md`);
     const content = `${formatFrontmatter(entry)}${body}
 `;
-    writeFileSync(file, content, "utf8");
+    atomicWriteFile(file, content);
     this.regenerateIndex(input.scope);
     return file;
   }
@@ -239,8 +270,8 @@ var MemoryStore = class {
         lines.push(`- [${name}](${name}.md) \u2014 (malformed, check frontmatter)`);
       }
     }
-    writeFileSync(indexPath, `${lines.join("\n")}
-`, "utf8");
+    atomicWriteFile(indexPath, `${lines.join("\n")}
+`);
   }
 };
 function readGlobalVisionoxMemory(homeDir = join(homedir(), ".visionox")) {

@@ -27914,17 +27914,20 @@ function MemoryPanel() {
   const [tree, setTree] = d2(null);
   const [error, setError] = d2(null);
   const [open, setOpen] = d2(null);
-  const [body, setBody] = d2("");
+  const [draft, setDraft] = d2(null);
+  const [baseline, setBaseline] = d2("");
   const [busy, setBusy] = d2(false);
   const [info, setInfo] = d2(null);
+  const [scopeFilter, setScopeFilter] = d2("all");
+  const [query, setQuery] = d2("");
   const [newScope, setNewScope] = d2("global");
-  const [newName, setNewName] = d2("");
   const [newDesc, setNewDesc] = d2("");
   const [newBody, setNewBody] = d2("");
-  const [aiName, setAiName] = d2("");
+  const [newPriority, setNewPriority] = d2("medium");
   const load = q2(async () => {
     try {
       setTree(await api("/memory"));
+      setError(null);
     } catch (err) {
       setError(err.message);
     }
@@ -27932,54 +27935,77 @@ function MemoryPanel() {
   y2(() => {
     load();
   }, [load]);
-  const openFile = q2(async (scope, name) => {
-    setOpen({ scope, name });
+  const dirty = draft != null && JSON.stringify(draft) !== baseline;
+  const acceptNavigation = () => !dirty || globalThis.confirm("当前修改尚未保存，确定放弃吗？");
+  const showInfo = (message) => {
+    setInfo(message);
+    setTimeout(() => setInfo(null), 3e3);
+  };
+  const selectItem = q2(async (item) => {
+    if (!acceptNavigation()) return;
     setBusy(true);
+    setError(null);
     try {
-      if (scope === "mode-memory") {
-        const r4 = await api(`/mode-memory?mode=${encodeURIComponent(name ?? "")}`);
-        setBody(JSON.stringify(r4, null, 2));
-        return;
+      let next;
+      if (item.kind === "persistent") {
+        const result = await api(`/memory/${item.apiScope}/${encodeURIComponent(item.name)}`);
+        next = { ...item, ...result.entry, content: result.entry?.body ?? "" };
+      } else if (item.kind === "mode") {
+        next = { ...item, content: item.text, keywordsText: (item.keywords ?? []).join(", ") };
+      } else {
+        next = { ...item, content: item.body ?? "" };
       }
-      const path = scope === "project" ? "/memory/project" : scope === "soul" ? "/memory/soul" : `/memory/${scope}/${encodeURIComponent(name ?? "")}`;
-      const r3 = await api(path);
-      setBody(r3.body);
-      if (scope === "soul") setAiName(r3.name ?? "");
+      const serialized = JSON.stringify(next);
+      setOpen(item);
+      setDraft(next);
+      setBaseline(serialized);
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [dirty, baseline]);
   const save = q2(async () => {
-    if (!open) return;
-    if (open.scope === "mode-memory") {
-      setError("工作场景记忆请在 Settings 的“当前工作场景记忆”区域编辑。");
-      return;
-    }
+    if (!open || !draft || open.kind === "session") return;
     setBusy(true);
     setError(null);
     try {
-      const path = open.scope === "project" ? "/memory/project" : open.scope === "soul" ? "/memory/soul" : `/memory/${open.scope}/${encodeURIComponent(open.name ?? "")}`;
-      await api(path, { method: "POST", body: open.scope === "soul" ? { body, aiName } : { body } });
-      setInfo(t4("memory.saved", { scope: open.scope + (open.name ? `/${open.name}` : "") }));
-      setTimeout(() => setInfo(null), 3e3);
+      if (open.kind === "persistent") {
+        const body = [
+          "---",
+          `name: ${open.name}`,
+          `description: ${String(draft.description ?? "").replace(/\r?\n/g, " ")}`,
+          `type: ${draft.type ?? "user"}`,
+          `scope: ${open.apiScope === "global" ? "global" : "project"}`,
+          `created: ${draft.createdAt || new Date().toISOString().slice(0, 10)}`,
+          `priority: ${draft.priority ?? "medium"}`,
+          "---",
+          "",
+          String(draft.content ?? "").trim(),
+          "",
+        ].join("\n");
+        await api(`/memory/${open.apiScope}/${encodeURIComponent(open.name)}`, { method: "POST", body: { body, overwrite: true } });
+      } else {
+        const keywords = String(draft.keywordsText ?? "").split(/[,\s，]+/).map((value) => value.trim()).filter(Boolean).slice(0, 8);
+        await api(`/mode-memory/${encodeURIComponent(open.name)}`, {
+          method: "PATCH",
+          body: { mode: open.modeId, text: draft.content, keywords, priority: Number(draft.priority), enabled: draft.enabled !== false },
+        });
+      }
+      setBaseline(JSON.stringify(draft));
+      showInfo("记忆已保存");
       await load();
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
-  }, [open, body, aiName, load]);
-  const safeMemoryName = q2((raw) => {
-    const base = String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
-    return /^[a-z0-9][a-z0-9._-]*$/.test(base) ? base : `memory-${Date.now().toString(36)}`;
-  }, []);
+  }, [open, draft, load]);
   const createMemory = q2(async () => {
     const desc = newDesc.trim();
     const content = newBody.trim();
     if (!desc || !content) return;
-    const name = safeMemoryName(newName || desc);
+    const name = `memory-${Date.now().toString(36)}`;
     const scope = newScope === "project-mem" ? "project-mem" : "global";
     const memoryBody = [
       "---",
@@ -27988,6 +28014,7 @@ function MemoryPanel() {
       "type: user",
       `scope: ${scope === "project-mem" ? "project" : "global"}`,
       `created: ${new Date().toISOString().slice(0, 10)}`,
+      `priority: ${newPriority}`,
       "---",
       "",
       content,
@@ -27997,176 +28024,162 @@ function MemoryPanel() {
     setError(null);
     try {
       await api(`/memory/${scope}/${encodeURIComponent(name)}`, { method: "POST", body: { body: memoryBody } });
-      setNewName("");
       setNewDesc("");
       setNewBody("");
-      setInfo(`已新增记忆：${scope}/${name}`);
-      setTimeout(() => setInfo(null), 3e3);
+      setNewPriority("medium");
+      showInfo("长期记忆已新增");
       await load();
-      setOpen({ scope, name });
-      setBody(memoryBody);
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
-  }, [newScope, newName, newDesc, newBody, safeMemoryName, load]);
+  }, [newScope, newDesc, newBody, newPriority, load]);
+  const remove = q2(async () => {
+    if (!open || !draft) return;
+    const label = draft.description || draft.text || draft.name;
+    if (!globalThis.confirm(`确定删除“${label}”吗？此操作不可撤销。`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const path = open.kind === "persistent" ? `/memory/${open.apiScope}/${encodeURIComponent(open.name)}`
+        : open.kind === "mode" ? `/mode-memory/${encodeURIComponent(open.name)}`
+        : `/memory/session/${encodeURIComponent(open.name)}`;
+      await api(path, { method: "DELETE", body: open.kind === "mode" ? { mode: open.modeId } : void 0 });
+      setOpen(null);
+      setDraft(null);
+      setBaseline("");
+      showInfo("记忆已删除");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [open, draft, load]);
   if (!tree && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("memory.loading")}</div>`;
   if (error && !tree) return html4`<div class="card accent-err">${error}</div>`;
   if (!tree) return null;
-  const fileRow = (scope, f3) => {
-    const sel = open && open.scope === scope && open.name === f3.name;
-    return html4`
-      <div
-        class=${`ssl-row ${sel ? "sel" : ""}`}
-        onClick=${() => openFile(scope, f3.name)}
-      >
-        <span class="name">${f3.name}</span>
-        <span class="meta">
-          <span class="dim">${scope}</span>
-          <span><span class="v">${fmtBytes(f3.size)}</span></span>
-          <span>${fmtRelativeTime(f3.mtime)}</span>
-        </span>
-      </div>
-    `;
+  const persistentItems = [
+    ...tree.global.files.map((item) => ({ ...item, kind: "persistent", apiScope: "global", scopeKey: "global" })),
+    ...tree.projectMem.files.map((item) => ({ ...item, kind: "persistent", apiScope: "project-mem", scopeKey: "project" })),
+  ];
+  const modeItems = (tree.modeMemory?.modes ?? []).flatMap((mode) => (mode.items ?? []).map((item) => ({
+    ...item, kind: "mode", name: item.id, modeId: mode.id, modeLabel: mode.label ?? mode.id, description: item.text, scopeKey: "mode",
+  })));
+  const sessionItems = (tree.session?.items ?? []).map((item) => ({ ...item, kind: "session", scopeKey: "session", description: item.description || item.body }));
+  const allItems = [...persistentItems, ...modeItems, ...sessionItems];
+  const needle = query.trim().toLowerCase();
+  const visibleItems = allItems.filter((item) => {
+    if (scopeFilter !== "all" && item.scopeKey !== scopeFilter) return false;
+    if (!needle) return true;
+    return [item.description, item.body, item.text, item.type, item.modeLabel, ...(item.keywords ?? [])].some((value) => String(value ?? "").toLowerCase().includes(needle));
+  });
+  const scopeLabel = (item) => item.scopeKey === "global" ? "全局" : item.scopeKey === "project" ? "当前项目" : item.scopeKey === "mode" ? item.modeLabel : "当前会话";
+  const injectionState = (item) => {
+    if (item.kind === "persistent") return tree.injection?.persistent?.entries?.[`${item.scopeKey}:${item.name}`] ?? "omitted";
+    if (item.kind === "mode") return tree.injection?.mode?.selectedIds?.includes(item.name) ? "index" : "omitted";
+    return tree.injection?.session?.selectedNames?.includes(item.name) ? "index" : "omitted";
   };
-  const totalFiles = (tree.soul?.path ? 1 : 0) + (tree.project.path ? 1 : 0) + tree.global.files.length + tree.projectMem.files.length + (tree.modeMemory?.modes?.length ?? 0);
+  const injectionLabel = (item) => {
+    if (item.enabled === false) return "已停用";
+    const state = injectionState(item);
+    if (state === "high-full") return "全文注入";
+    if (state === "index") return item.kind === "persistent" ? "摘要注入" : "将注入";
+    return "未注入";
+  };
+  const diagnosticLabel = (item) => {
+    if (item.kind !== "persistent") return "";
+    const key = `${item.scopeKey}:${item.name}`;
+    if (tree.diagnostics?.sensitiveKeys?.includes(key)) return "可能包含敏感信息";
+    if (tree.diagnostics?.conflicts?.some((group) => group.includes(key))) return "可能冲突";
+    if (tree.diagnostics?.duplicates?.some((group) => group.includes(key))) return "内容重复";
+    return "";
+  };
   return html4`
-    <div class="sessions-grid">
-      <div class="sessions-list">
-        <div class="card memory-create-card">
-          <div class="card-h"><span class="title">新增长期记忆</span></div>
-          <div class="memory-create-grid">
-            <select value=${newScope} onChange=${(e3) => setNewScope(e3.target.value)} disabled=${busy}>
-              <option value="global">全局长期记忆</option>
-              <option value="project-mem">当前项目记忆</option>
-            </select>
-            <input
-              type="text"
-              placeholder="文件名，可留空自动生成"
-              value=${newName}
-              onInput=${(e3) => setNewName(e3.target.value)}
-              disabled=${busy}
-            />
-            <input
-              class="memory-create-content"
-              type="text"
-              placeholder="一句话摘要，例如：常用称呼、报告结构、项目发布流程"
-              value=${newDesc}
-              onInput=${(e3) => setNewDesc(e3.target.value)}
-              disabled=${busy}
-            />
-            <textarea
-              rows="4"
-              placeholder="完整记忆内容。新对话会先看到摘要，需要细节时可 recall_memory。"
-              value=${newBody}
-              onInput=${(e3) => setNewBody(e3.target.value)}
-              disabled=${busy}
-            ></textarea>
-            <div class="memory-create-actions">
-              <span>${newScope === "global" ? "跨项目生效" : "仅当前工作区生效"}</span>
-              <button class="btn primary" disabled=${busy || !newDesc.trim() || !newBody.trim()} onClick=${createMemory}>新增记忆</button>
+    <div class="memory-manager">
+      <div class="memory-toolbar">
+        <div>
+          <div class="memory-page-title">记忆管理</div>
+          <div class="memory-workspace">${tree.workspace ? `${tree.workspace.name} · ${tree.workspace.path}` : "未选择工作区"}</div>
+        </div>
+        <input class="memory-search" type="search" placeholder="搜索摘要、内容或关键词" value=${query} onInput=${(event) => setQuery(event.target.value)} />
+      </div>
+      <div class="memory-scope-tabs">
+        ${[["all", "全部"], ["global", "全局"], ["project", "当前项目"], ["mode", "工作场景"], ["session", "当前会话"]].map(([value, label]) => html4`
+          <button class=${scopeFilter === value ? "active" : ""} onClick=${() => setScopeFilter(value)}>${label}</button>
+        `)}
+      </div>
+      ${tree.injection ? html4`<div class="memory-budget-summary"><span>当前记忆上下文</span><strong>${Number(tree.injection.totalChars ?? 0).toLocaleString()} 字符</strong><span>高优先级全文与普通摘要已去重</span></div>` : null}
+      ${info ? html4`<div class="memory-notice ok">${info}</div>` : null}
+      ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
+      <div class="memory-layout">
+        <div class="memory-list-pane">
+          <div class="memory-create-panel">
+            <div class="memory-section-title">新增长期记忆</div>
+            <div class="memory-create-row">
+              <select value=${newScope} onChange=${(event) => setNewScope(event.target.value)} disabled=${busy}>
+                <option value="global">全局</option>
+                <option value="project-mem">当前项目</option>
+              </select>
+              <select value=${newPriority} onChange=${(event) => setNewPriority(event.target.value)} disabled=${busy}>
+                <option value="low">低优先级</option><option value="medium">普通</option><option value="high">高优先级</option>
+              </select>
             </div>
+            <input type="text" placeholder="一句话摘要" value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />
+            <textarea rows="3" placeholder="记忆内容" value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
+            <button class="btn primary" disabled=${busy || !newDesc.trim() || !newBody.trim()} onClick=${createMemory}>新增记忆</button>
+          </div>
+          <div class="memory-list-head"><span>${visibleItems.length} 条</span><button class="btn ghost" disabled=${busy} onClick=${load}>刷新</button></div>
+          <div class="memory-rows">
+            ${visibleItems.map((item) => html4`
+              <button class=${`memory-row ${open?.kind === item.kind && open?.name === item.name && open?.modeId === item.modeId ? "selected" : ""}`} onClick=${() => selectItem(item)}>
+                <span class="memory-row-main">${item.description || item.text || item.name}</span>
+                <span class="memory-row-meta">
+                  <span>${scopeLabel(item)}</span>
+                  <span>${item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
+                  <span class=${injectionState(item) === "omitted" || item.enabled === false ? "memory-disabled" : "memory-injected"}>${injectionLabel(item)}</span>
+                  ${diagnosticLabel(item) ? html4`<span class="memory-diagnostic">${diagnosticLabel(item)}</span>` : null}
+                </span>
+              </button>
+            `)}
+            ${visibleItems.length === 0 ? html4`<div class="memory-empty">没有符合条件的记忆</div>` : null}
+          </div>
+          <div class="memory-rule-status">
+            <span>当前项目规则</span>
+            <strong>${tree.project?.exists ? tree.project.file : "未配置"}</strong>
+            <span>${tree.project?.exists ? "在项目文件中管理" : ""}</span>
           </div>
         </div>
-        <div class="ssl-h" style="font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">
-          ${t4("memory.files", { count: totalFiles })}
-        </div>
-        <div class="ssl-rows">
-          ${tree.soul?.path ? html4`
-                <div
-                  class=${`ssl-row ${open?.scope === "soul" ? "sel" : ""}`}
-                  onClick=${() => openFile("soul")}
-                >
-                  <span class="name">
-                    soul.md
-                    ${tree.soul.exists ? html4`<span class="pill ok">AI 身份</span>` : html4`<span class="pill">创建</span>`}
-                  </span>
-                  <span class="preview dim">${tree.soul.name ? `AI 名称：${tree.soul.name}` : "~/.visionox/soul.md"}</span>
-                  <span class="meta"><span class="dim">soul</span></span>
-                </div>
-              ` : null}
-          ${tree.project.path ? html4`
-                <div
-                  class=${`ssl-row ${open?.scope === "project" ? "sel" : ""}`}
-                  onClick=${() => openFile("project")}
-                >
-                  <span class="name">
-                    ${tree.project.file ?? "project.md"}
-                    ${tree.project.exists ? html4`<span class="pill ok">${t4("memory.exists")}</span>` : html4`<span class="pill">${t4("memory.create")}</span>`}
-                  </span>
-                  <span class="preview dim">~/${(()=>{const p=tree.project.path??"";const i=p.lastIndexOf("\\");return i>0?p.slice(i+1):p})()}</span>
-                  <span class="meta"><span class="dim">project</span></span>
-                </div>
-              ` : null}
-          ${tree.global.files.map((f3) => fileRow("global", f3))}
-          ${tree.projectMem.files.map((f3) => fileRow("project-mem", f3))}
-          ${(tree.modeMemory?.modes ?? []).map((m3) => html4`
-            <div
-              class=${`ssl-row ${open?.scope === "mode-memory" && open?.name === m3.id ? "sel" : ""}`}
-              onClick=${() => openFile("mode-memory", m3.id)}
-            >
-              <span class="name">${m3.label ?? m3.id}<span class="pill">场景记忆</span></span>
-              <span class="preview dim">${m3.enabledCount ?? 0}/${m3.count ?? 0} 启用</span>
-              <span class="meta"><span class="dim">${m3.id}</span></span>
+        <div class="memory-detail-pane">
+          ${!draft ? html4`<div class="memory-empty-detail">选择一条记忆查看详情</div>` : html4`
+            <div class="memory-detail-head">
+              <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? "有未保存修改" : "已同步"}</div></div>
+              <div class="memory-detail-actions">
+                ${open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>保存</button>` : null}
+                <button class="btn danger" disabled=${busy} onClick=${remove}>删除</button>
+              </div>
             </div>
-          `)}
-          ${tree.global.files.length === 0 && tree.projectMem.files.length === 0 && !tree.project.path ? html4`<div style="color:var(--fg-3);padding:14px;font-size:12px">
-                  ${t4("memory.noFiles")}
-                </div>` : null}
+            ${diagnosticLabel(draft) ? html4`<div class="memory-detail-warning">${diagnosticLabel(draft)}。请核对后自行决定保留、修改或删除，系统不会自动合并。</div>` : null}
+            ${open.kind === "persistent" ? html4`
+              <label class="memory-field"><span>摘要</span><input value=${draft.description ?? ""} onInput=${(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+              <div class="memory-field-row">
+                <label class="memory-field"><span>类型</span><select value=${draft.type ?? "user"} onChange=${(event) => setDraft({ ...draft, type: event.target.value })}><option value="user">用户偏好</option><option value="feedback">纠正反馈</option><option value="project">项目事实</option><option value="reference">参考信息</option></select></label>
+                <label class="memory-field"><span>优先级</span><select value=${draft.priority ?? "medium"} onChange=${(event) => setDraft({ ...draft, priority: event.target.value })}><option value="low">低</option><option value="medium">普通</option><option value="high">高</option></select></label>
+              </div>
+            ` : open.kind === "mode" ? html4`
+              <div class="memory-field-row">
+                <label class="memory-field"><span>场景</span><input value=${draft.modeLabel} disabled /></label>
+                <label class="memory-field"><span>优先级</span><input type="number" min="0" max="100" value=${draft.priority ?? 50} onInput=${(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
+              </div>
+              <label class="memory-field"><span>关键词</span><input value=${draft.keywordsText ?? ""} onInput=${(event) => setDraft({ ...draft, keywordsText: event.target.value })} /></label>
+              <label class="memory-toggle"><input type="checkbox" checked=${draft.enabled !== false} onChange=${(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用此场景记忆</span></label>
+            ` : html4`<div class="memory-session-note">仅在当前对话中生效，恢复该对话时会一并恢复。</div>`}
+            <label class="memory-field memory-content-field"><span>内容</span><textarea rows="16" value=${draft.content ?? ""} disabled=${open.kind === "session"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>
+            <div class="memory-detail-foot">${open.kind === "session" ? "当前会话" : `创建 ${draft.createdAt || "未知"} · 更新 ${draft.updatedAt || "未知"} · 来源 ${draft.source === "model" ? "AI" : draft.source === "ui" ? "界面" : "历史数据"}`}</div>
+          `}
         </div>
-      </div>
-
-      <div class="sessions-detail">
-        ${open == null ? html4`<div style="color:var(--fg-3);font-size:13px;text-align:center;padding:60px 20px">
-                ${t4("memory.pickHint")}
-                <div style="margin-top:12px;font-size:11.5px">
-                  ${t4("memory.pickDesc")}
-                </div>
-              </div>` : html4`
-                <div class="sessions-detail-h">
-                  <span class="name">
-                    ${open.scope}${open.name ? `/${open.name}` : ""}
-                  </span>
-                  <span class="ws">${t4("memory.chars", { count: body.length.toLocaleString() })}</span>
-                  <span class="actions">
-                    <button class="btn primary" disabled=${busy || open.scope === "mode-memory"} onClick=${save}>${t4("common.save")}</button>
-                    <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
-                  </span>
-                </div>
-                ${info ? html4`<div style="margin-bottom:8px"><span class="pill ok">${info}</span></div>` : null}
-                ${error ? html4`<div class="card accent-err" style="margin-bottom:8px">${error}</div>` : null}
-                ${open.scope === "soul" ? html4`
-                  <div class="card" style="margin-bottom:8px">
-                    <div class="card-h"><span class="title">AI 名称</span></div>
-                    <div class="memory-create-grid">
-                      <input
-                        type="text"
-                        placeholder="例如：Visionox-Whale"
-                        value=${aiName}
-                        onInput=${(e3) => setAiName(e3.target.value)}
-                        disabled=${busy}
-                      />
-                      <span style="color:var(--fg-3);font-size:11.5px;align-self:center">保存后写入 soul.md，/new 后生效。</span>
-                    </div>
-                  </div>
-                ` : null}
-                ${open.scope === "mode-memory" ? html4`
-                  <div class="card accent-brand" style="margin-bottom:8px">
-                    <div class="card-b">工作场景记忆在 Settings 的“当前工作场景记忆”区域编辑；这里提供统一预览。</div>
-                  </div>
-                ` : null}
-                <textarea
-                  style="width:100%;min-height:480px;background:var(--bg-input);color:var(--fg-0);border:1px solid var(--bd);border-radius:var(--r);padding:12px;font-family:var(--font-mono);font-size:13px;line-height:1.55;resize:vertical"
-                  value=${body}
-                  onInput=${(e3) => setBody(e3.target.value)}
-                  disabled=${busy || open.scope === "mode-memory"}
-                ></textarea>
-                <div style="margin-top:8px;color:var(--fg-3);font-size:11.5px">
-                  ${t4("memory.reloadHint")}
-                </div>
-              `}
       </div>
     </div>
   `;
@@ -30992,27 +31005,15 @@ function SettingsPanel() {
   const [now, setNow] = d2(() => Date.now());
   const [showDevLog, setShowDevLog] = d2(false);
   const [devLogs, setDevLogs] = d2([]);
-  const [modeMemory, setModeMemory] = d2(null);
-  const [modeMemoryDraft, setModeMemoryDraft] = d2("");
-  const [modeMemoryKeywords, setModeMemoryKeywords] = d2("");
-  const loadModeMemory = q2(async (mode) => {
-    try {
-      const suffix = mode ? `?mode=${encodeURIComponent(mode)}` : "";
-      setModeMemory(await api(`/mode-memory${suffix}`));
-    } catch (err) {
-      setError(err.message);
-    }
-  }, []);
   const load = q2(async () => {
     try {
       const r3 = await api("/settings");
       setData(r3);
       setDraft({});
-      await loadModeMemory(r3.mode ?? r3.activeMode?.id ?? "general");
     } catch (err) {
       setError(err.message);
     }
-  }, [loadModeMemory]);
+  }, []);
   y2(() => {
     load();
   }, [load]);
@@ -31110,50 +31111,6 @@ function SettingsPanel() {
     },
     [load]
   );
-  const activeMemoryMode = data?.mode ?? data?.activeMode?.id ?? "general";
-  const addModePreference = q2(async () => {
-    const text = modeMemoryDraft.trim();
-    if (!text) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const keywords = modeMemoryKeywords.split(/[,\s，]+/).map((v4) => v4.trim()).filter(Boolean).slice(0, 8);
-      await api("/mode-memory", { method: "POST", body: { mode: activeMemoryMode, text, keywords } });
-      setModeMemoryDraft("");
-      setModeMemoryKeywords("");
-      await loadModeMemory(activeMemoryMode);
-      setSaved("工作场景记忆已保存");
-      setTimeout(() => setSaved(null), 3e3);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }, [activeMemoryMode, loadModeMemory, modeMemoryDraft, modeMemoryKeywords]);
-  const toggleModePreference = q2(async (item) => {
-    setSaving(true);
-    setError(null);
-    try {
-      await api(`/mode-memory/${encodeURIComponent(item.id)}`, { method: "PATCH", body: { mode: activeMemoryMode, enabled: !item.enabled } });
-      await loadModeMemory(activeMemoryMode);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }, [activeMemoryMode, loadModeMemory]);
-  const deleteModePreference = q2(async (item) => {
-    setSaving(true);
-    setError(null);
-    try {
-      await api(`/mode-memory/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { mode: activeMemoryMode } });
-      await loadModeMemory(activeMemoryMode);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }, [activeMemoryMode, loadModeMemory]);
   if (!data && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("settings.loading")}</div>`;
   if (error && !data) return html4`<div class="card accent-err">${error}</div>`;
@@ -31359,47 +31316,6 @@ function SettingsPanel() {
             "\u4ECE https://portal.azure.com \u514D\u8D39\u83B7\u53D6 (Bing Search v7, 1000\u6B21/\u6708)"
           ) : null}
         ` : null}
-      </div>
-
-      ${sectionH3("当前工作场景记忆")}
-      <div class="card mode-memory-card">
-        <div class="mode-memory-head">
-          <div>
-            <div class="mode-memory-title">${v3.activeMode?.label ?? v3.mode ?? "通用"}</div>
-            <div class="mode-memory-note">仅影响当前工作场景的新对话提示词，可保存该场景的偏好、术语、流程和常用知识点。</div>
-          </div>
-          <button class="btn" disabled=${saving} onClick=${() => loadModeMemory(activeMemoryMode)}>刷新</button>
-        </div>
-        <div class="mode-memory-list">
-          ${(modeMemory?.items ?? []).length === 0 ? html4`<div class="mode-memory-empty">暂无场景记忆</div>` : (modeMemory?.items ?? []).map((item) => html4`
-            <div class=${`mode-memory-item ${item.enabled ? "" : "disabled"}`}>
-              <div class="mode-memory-text">${item.text}</div>
-              <div class="mode-memory-tags">
-                ${(item.keywords ?? []).map((kw) => html4`<span>${kw}</span>`)}
-                <span>优先级 ${item.priority ?? 50}</span>
-              </div>
-              <div class="mode-memory-actions">
-                <button class="btn" disabled=${saving} onClick=${() => toggleModePreference(item)}>${item.enabled ? "停用" : "启用"}</button>
-                <button class="btn danger" disabled=${saving} onClick=${() => deleteModePreference(item)}>删除</button>
-              </div>
-            </div>
-          `)}
-        </div>
-        <div class="mode-memory-new">
-          <textarea
-            rows="3"
-            placeholder="新增场景记忆，例如：8K点屏指通过 USB ADB 连接 RK3588 平台并参考 vismm 脚本点亮屏幕"
-            value=${modeMemoryDraft}
-            onInput=${(e3) => setModeMemoryDraft(e3.target.value)}
-          ></textarea>
-          <input
-            type="text"
-            placeholder="关键词，可用空格或逗号分隔"
-            value=${modeMemoryKeywords}
-            onInput=${(e3) => setModeMemoryKeywords(e3.target.value)}
-          />
-          <button class="btn primary" disabled=${saving || !modeMemoryDraft.trim()} onClick=${addModePreference}>新增记忆</button>
-        </div>
       </div>
 
       ${sectionH3(t4("settings.sectionCompute"))}

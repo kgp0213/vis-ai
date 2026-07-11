@@ -418,6 +418,26 @@ describe("Dashboard 回归护栏", () => {
     assert.doesNotMatch(support, /mermaid/i);
   });
 
+  test("记忆管理统一长期、场景和会话记忆，不再暴露原始文件编辑器", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+
+    assert.match(app, /class="memory-manager"/);
+    assert.match(app, /搜索摘要、内容或关键词/);
+    assert.match(app, /\["session", "当前会话"\]/);
+    assert.match(app, /\/mode-memory\/\$\{encodeURIComponent\(open\.name\)\}/);
+    assert.match(app, /\/memory\/session\/\$\{encodeURIComponent\(open\.name\)\}/);
+    assert.match(app, /overwrite: true/);
+    assert.match(app, /当前修改尚未保存/);
+    assert.match(app, /当前记忆上下文/);
+    assert.match(app, /高优先级全文与普通摘要已去重/);
+    assert.match(app, /全文注入/);
+    assert.match(app, /可能包含敏感信息/);
+    assert.match(app, /系统不会自动合并/);
+    assert.match(app, /来源 \$\{draft\.source/);
+    assert.doesNotMatch(app, /工作场景记忆请在 Settings/);
+    assert.doesNotMatch(app, /placeholder="文件名，可留空自动生成"/);
+  });
+
   test("长会话默认只渲染最近消息，并可继续加载和跳转历史", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     assert.match(app, /CHAT_INITIAL_RENDER_COUNT = 30/);

@@ -48,6 +48,7 @@ const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJson
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
+const { buildBudgetedBlocks, buildMemoryIndex } = await importEarly("./lib/memory-prompt.mjs");
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 
@@ -177,6 +178,7 @@ const CONSTANTS = {
   SESSION_MEMORY_BODY_MAX_CHARS: 2000,
   SESSION_MEMORY_BLOCK_MAX_CHARS: 6000,
   HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS: 6000,
+  PERSISTENT_MEMORY_INDEX_MAX_CHARS: 4000,
 
   // Rules sub-budget — coding mode can load ~100KB of rule files; cap the
   // collective rules block. Tail-drop (custom rules first to go) keeps each
@@ -2183,7 +2185,13 @@ function writeModeMemory(modeId, payload) {
   const data = { version: CONSTANTS.MODE_MEMORY_VERSION, mode, updatedAt: new Date().toISOString(), items };
   const path = modeMemoryPath(mode);
   mkdirSync(modeMemoryDir, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  const temp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    renameSync(temp, path);
+  } finally {
+    if (existsSync(temp)) rmSync(temp, { force: true });
+  }
   return { ...data, path };
 }
 
@@ -2203,6 +2211,7 @@ function listAllModeMemory() {
         count: memory.items.length,
         enabledCount: memory.items.filter((item) => item.enabled).length,
         updatedAt: memory.updatedAt || null,
+        items: memory.items,
       };
     }),
   };
@@ -2218,6 +2227,9 @@ function addModeMemory(modeId, input = {}) {
   });
   if (!item) throw new Error("text is required");
   const exists = current.items.find((old) => old.text === item.text);
+  if (!exists && current.items.length >= CONSTANTS.MODE_MEMORY_ITEM_LIMIT) {
+    throw new Error(`mode memory capacity reached (${CONSTANTS.MODE_MEMORY_ITEM_LIMIT}); delete an existing item before adding another`);
+  }
   const items = exists
     ? current.items.map((old) => old.id === exists.id ? { ...old, ...item, id: old.id, createdAt: old.createdAt } : old)
     : [item, ...current.items];
@@ -2271,15 +2283,38 @@ function formatModeMemoryForPrompt(modeId = config.mode || "general") {
 // ── Session memory (volatile) ──────────────────────────────────
 const sessionMemories = [];
 
-function addSessionMemory(name, description, body) {
+function addSessionMemory(name, description, body, { persist = true } = {}) {
   const trimmedBody = String(body ?? "");
   const cappedBody = trimmedBody.length > CONSTANTS.SESSION_MEMORY_BODY_MAX_CHARS
     ? `${trimmedBody.slice(0, CONSTANTS.SESSION_MEMORY_BODY_MAX_CHARS)}\n\n… (truncated ${trimmedBody.length - CONSTANTS.SESSION_MEMORY_BODY_MAX_CHARS} chars)`
     : trimmedBody;
+  const normalizedName = String(name ?? "").trim().toLowerCase();
+  const existing = sessionMemories.findIndex((memory) => String(memory.name ?? "").trim().toLowerCase() === normalizedName);
+  if (existing >= 0) sessionMemories.splice(existing, 1);
   sessionMemories.push({ name, description, body: cappedBody, ts: Date.now() });
   if (sessionMemories.length > 50) sessionMemories.shift();
+  if (persist) void writeActiveSessionMeta({ sessionMemories: sessionMemories.map((memory) => ({ ...memory })) });
 }
 function clearSessionMemories() { sessionMemories.length = 0; }
+function listSessionMemories() { return sessionMemories.map((memory) => ({ ...memory })); }
+function deleteSessionMemory(name) {
+  const normalizedName = String(name ?? "").trim().toLowerCase();
+  const index = sessionMemories.findIndex((memory) => String(memory.name ?? "").trim().toLowerCase() === normalizedName);
+  if (index < 0) return false;
+  sessionMemories.splice(index, 1);
+  void writeActiveSessionMeta({ sessionMemories: listSessionMemories() });
+  return true;
+}
+function restoreSessionMemories(entries) {
+  clearSessionMemories();
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries.slice(-50)) {
+    const name = String(entry?.name ?? "").trim();
+    const body = String(entry?.body ?? "").trim();
+    if (!name || !body) continue;
+    addSessionMemory(name, String(entry?.description ?? ""), body, { persist: false });
+  }
+}
 
 // ── Tutor mode (session-level) ──────────────────────────────────
 let sessionTutorMode = null; // { enabled: true, style: "socratic" | "hint" | "pair" }
@@ -2399,89 +2434,102 @@ ${activeList}`;
   return fragments[style] ?? on;
 }
 
-function getSessionMemoryBlock() {
-  if (sessionMemories.length === 0) return "";
-  // Build entries newest-last (insertion order); if the collective block
-  // exceeds the budget, drop oldest entries (front of the array) whole —
-  // never truncate a single memory mid-body, to avoid corrupting conclusions.
-  let entries = sessionMemories.map((m) => {
+function selectSessionMemoriesForPrompt() {
+  let selected = sessionMemories.map((m) => ({ memory: m, text: (() => {
     const title = String(m.name).replace(/[\r\n]/g, " ").trim();
     return `## ${title}\n\n${m.body}`;
-  });
-  let dropped = 0;
-  while (entries.length > 1) {
-    const joined = entries.join("\n\n");
+  })() }));
+  const dropped = [];
+  while (selected.length > 1) {
+    const joined = selected.map((entry) => entry.text).join("\n\n");
     if (joined.length <= CONSTANTS.SESSION_MEMORY_BLOCK_MAX_CHARS) break;
-    // Drop the oldest (front).
-    entries.shift();
-    dropped++;
+    dropped.push(selected.shift().memory);
   }
-  const suffix = dropped > 0 ? `\n\n… (dropped ${dropped} older session memories to fit budget)` : "";
-  return `\n# Session memory (this conversation only)\n\n${entries.join("\n\n")}${suffix}`;
+  return { selected, dropped };
+}
+function getSessionMemoryBlock() {
+  if (sessionMemories.length === 0) return "";
+  const { selected, dropped } = selectSessionMemoriesForPrompt();
+  const suffix = dropped.length > 0 ? `\n\n… dropped ${dropped.length} older session memories` : "";
+  return `\n# Session memory (this conversation only)\n\n${selected.map((entry) => entry.text).join("\n\n")}${suffix}`;
 }
 
-function formatHighPriorityMemoryForPrompt(store) {
-  let entries = [];
-  try {
-    entries = store.list().filter((entry) => effectivePriority(entry, config) === "high");
-  } catch (err) {
-    console.error(`[launcher] high priority memory skipped: ${err.message}`);
-    return "";
-  }
-  if (entries.length === 0) return "";
-
-  const parts = [
-    "# HIGH PRIORITY constraints (must observe)",
-    "",
-    "These user-approved memories were marked high priority. Treat them as hard rules unless the current user message explicitly updates or contradicts them.",
-    "",
-  ];
-  for (const entry of entries) {
-    parts.push(`!!! [${entry.scope}/${entry.type}/${entry.name}] ${entry.description || "(no description)"}`);
-    if (entry.body) parts.push("", entry.body);
-    parts.push("");
-  }
-  const block = parts.join("\n").trimEnd();
-  if (block.length <= CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS) return block;
-  return `${block.slice(0, CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS)}\n\n... (high priority memory truncated to ${CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS} chars)`;
-}
-
-function formatPersistentMemoryForPrompt(rootDir) {
+function collectPersistentMemoryPrompt(rootDir) {
   let store;
   try {
     store = new MemoryStore({ projectRoot: rootDir });
   } catch (err) {
     console.error(`[launcher] persistent memory skipped: ${err.message}`);
-    return "";
+    return { text: "", status: { entries: {}, totalChars: 0 } };
   }
+  let entries = [];
+  try {
+    entries = store.list();
+  } catch (err) {
+    console.error(`[launcher] persistent memory list skipped: ${err.message}`);
+  }
+  const keyFor = (entry) => `${entry.scope}:${entry.name}`;
+  const highEntries = entries.filter((entry) => effectivePriority(entry, config) === "high").sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")) || keyFor(a).localeCompare(keyFor(b)));
+  const highHeader = [
+    "# HIGH PRIORITY constraints (must observe)",
+    "",
+    "These user-approved memories were marked high priority. Treat them as hard rules unless the current user message explicitly updates or contradicts them."
+  ].join("\n");
+  const high = buildBudgetedBlocks(highEntries.map((entry) => ({
+    key: keyFor(entry),
+    text: [`!!! [${entry.scope}/${entry.type}/${entry.name}] ${entry.description || "(no description)"}`, entry.body].filter(Boolean).join("\n\n"),
+  })), { header: highHeader, maxChars: CONSTANTS.HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS });
+  const excludedKeys = new Set(high.selectedKeys);
+  const global = buildMemoryIndex(entries.filter((entry) => entry.scope === "global").map((entry) => ({ ...entry, key: keyFor(entry) })), { maxChars: CONSTANTS.PERSISTENT_MEMORY_INDEX_MAX_CHARS, excludedKeys });
+  const project = buildMemoryIndex(entries.filter((entry) => entry.scope === "project").map((entry) => ({ ...entry, key: keyFor(entry) })), { maxChars: CONSTANTS.PERSISTENT_MEMORY_INDEX_MAX_CHARS, excludedKeys });
   const blocks = [];
-  const highPriority = formatHighPriorityMemoryForPrompt(store);
-  if (highPriority) blocks.push(highPriority);
-  const global = store.loadIndex("global");
-  if (global) {
+  if (high.selectedKeys.length > 0 || high.omittedKeys.length > 0) blocks.push(high.text);
+  if (global.text) {
     blocks.push([
       "# User memory - global",
       "",
       "Cross-project facts and preferences the user explicitly asked to remember. Treat these as authoritative unless the current user message updates or contradicts them. Use `recall_memory` only when the one-line index is not enough.",
       "",
       "```",
-      global.content,
+      global.text,
       "```",
     ].join("\n"));
   }
-  const project = store.hasProjectScope() ? store.loadIndex("project") : null;
-  if (project) {
+  if (project.text) {
     blocks.push([
       "# User memory - this project",
       "",
       "Per-project facts and decisions the user established in prior sessions. Treat these as authoritative for this workspace unless the current user message updates or contradicts them.",
       "",
       "```",
-      project.content,
+      project.text,
       "```",
     ].join("\n"));
   }
-  return blocks.length ? `\n\n${blocks.join("\n\n")}` : "";
+  const text = blocks.length ? `\n\n${blocks.join("\n\n")}` : "";
+  const statuses = {};
+  for (const key of high.selectedKeys) statuses[key] = "high-full";
+  for (const key of [...global.selectedKeys, ...project.selectedKeys]) statuses[key] = "index";
+  for (const key of [...high.omittedKeys, ...global.omittedKeys, ...project.omittedKeys]) if (!statuses[key]) statuses[key] = "omitted";
+  return { text, status: { entries: statuses, totalChars: text.length } };
+}
+
+function formatPersistentMemoryForPrompt(rootDir) {
+  return collectPersistentMemoryPrompt(rootDir).text;
+}
+
+function getMemoryInjectionStatus(rootDir = workspaceDir) {
+  const modeMemory = readModeMemory(config.mode || "general");
+  const modeEnabled = modeMemory.items.filter((item) => item.enabled).sort((a, b) => b.priority - a.priority || String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const modeSelected = modeEnabled.slice(0, CONSTANTS.MODE_MEMORY_PROMPT_LIMIT);
+  const session = selectSessionMemoriesForPrompt();
+  const persistent = collectPersistentMemoryPrompt(rootDir);
+  return {
+    persistent: persistent.status,
+    mode: { selectedIds: modeSelected.map((item) => item.id), omittedIds: modeEnabled.slice(CONSTANTS.MODE_MEMORY_PROMPT_LIMIT).map((item) => item.id) },
+    session: { selectedNames: session.selected.map((entry) => entry.memory.name), omittedNames: session.dropped.map((entry) => entry.name) },
+    totalChars: persistent.status.totalChars + formatModeMemoryForPrompt(config.mode).length + getSessionMemoryBlock().length,
+  };
 }
 
 // ── Build session ───────────────────────────────────────────────
@@ -4493,6 +4541,7 @@ async function writeActiveSessionMeta(patch = {}) {
       messageCountFileMtimeMs: sessionStat.mtimeMs,
       savedAt: patch.savedAt || current.savedAt || now,
       updatedAt: now,
+      sessionMemories: sessionMemories.map((memory) => ({ ...memory })),
     };
     await writeFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
   } catch (err) {
@@ -4537,6 +4586,7 @@ async function loadActiveSession() {
       const metaRaw = await readFile(activeSessionMetaFile, "utf8");
       const meta = JSON.parse(metaRaw);
       applyModeForSessionMeta(meta);
+      restoreSessionMemories(meta.sessionMemories);
     } catch {
       // ignore missing/broken meta
     }
@@ -5237,6 +5287,9 @@ const ctx = {
   }),
   getModeMemory: (modeId) => listModeMemory(modeId || config.mode || "general"),
   getAllModeMemory: () => listAllModeMemory(),
+  getSessionMemories: () => listSessionMemories(),
+  deleteSessionMemory,
+  getMemoryInjectionStatus: () => getMemoryInjectionStatus(workspaceDir),
   addModeMemory: (input, modeId) => addModeMemory(modeId || config.mode || "general", input),
   updateModeMemory: (id, patch, modeId) => updateModeMemory(modeId || config.mode || "general", id, patch),
   deleteModeMemory: (id, modeId) => deleteModeMemory(modeId || config.mode || "general", id),
@@ -5692,9 +5745,11 @@ ${modeList}
         if (!isValidSessionName(sessionName)) {
           return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only letters, numbers, Chinese characters, underscore, dot, or hyphen.` };
         }
+        clearSessionMemories();
         try {
           const sessionFile = sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
+          restoreSessionMemories(sessionMeta.sessionMemories);
           const modeRestore = applyModeForSessionMeta(sessionMeta);
           const raw = await readFile(sessionFile, "utf8");
           const parsed = parseActiveSessionJsonl(raw);

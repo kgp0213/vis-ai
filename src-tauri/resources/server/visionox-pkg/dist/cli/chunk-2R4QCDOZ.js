@@ -9179,6 +9179,10 @@ function registerMemoryTools(registry, opts = {}) {
           type: "string",
           enum: ["project_end"],
           description: "Optional lifecycle hint. `project_end` causes `/memory clear project` to also remove this entry even when it's stored at global scope."
+        },
+        replace: {
+          type: "boolean",
+          description: "Set true only when the user explicitly asked to replace an existing memory with the same name. Default false prevents silent overwrites."
         }
       },
       required: ["type", "scope", "name", "description", "content"]
@@ -9187,7 +9191,7 @@ function registerMemoryTools(registry, opts = {}) {
       if (args.scope === "project" && !hasProject) {
         return JSON.stringify({
           error: "scope='project' is unavailable in this session (no sandbox root). Retry with scope='global', or ask the user to switch to `visionox code` for project-scoped memory."
-        });
+        }, { overwrite: args.replace === true });
       }
       try {
         const path = store.write({
@@ -9196,6 +9200,7 @@ function registerMemoryTools(registry, opts = {}) {
           scope: args.scope,
           description: args.description,
           body: args.content,
+          source: "model",
           ...args.priority ? { priority: args.priority } : {},
           ...args.expires ? { expires: args.expires } : {}
         });
