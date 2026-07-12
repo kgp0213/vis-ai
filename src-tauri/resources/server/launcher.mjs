@@ -489,6 +489,9 @@ if (configMigration.status === "migrated") {
   process.stdout.write(`${JSON.stringify({ error: message })}\n`);
   process.exit(1);
 }
+if (configMigration.backupSanitization?.sanitized || configMigration.backupSanitization?.skipped) {
+  console.error(`[launcher] config backups sanitized=${configMigration.backupSanitization.sanitized}, skipped=${configMigration.backupSanitization.skipped}`);
+}
 const config = readConfig(configPath);
 
 // ── Provider migration & helpers ───────────────────────────────

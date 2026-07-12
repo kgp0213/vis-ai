@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { CURRENT_CONFIG_SCHEMA_VERSION, migrateConfigFile } from "../lib/config-migrations.mjs";
+import { CURRENT_CONFIG_SCHEMA_VERSION, migrateConfigFile, redactSensitiveConfig, sanitizeConfigBackups } from "../lib/config-migrations.mjs";
 
 describe("config schema migrations", () => {
   let tempDir;
@@ -43,6 +43,23 @@ describe("config schema migrations", () => {
     assert.equal(writes[0].configSchemaVersion, CURRENT_CONFIG_SCHEMA_VERSION);
     assert.equal(writes[0].configSchemaMigratedAt, "2026-07-12T01:02:03.000Z");
     assert.equal(JSON.parse(readFileSync(result.backupPath, "utf8")).configSchemaVersion, undefined);
+  });
+
+  test("redacts nested credentials without removing ordinary token settings", () => {
+    const redacted = redactSensitiveConfig({
+      providers: [{ apiKey: "external-secret", baseUrl: "https://example.test" }],
+      semantic: { openaiCompat: { api_key: "embedding-key", model: "embed" } },
+      mcpEnv: { github: { GITHUB_TOKEN: "token", ENDPOINT: "local" } },
+      contextCapTokens: 131072,
+      promptTokens: 42,
+    });
+    assert.equal(redacted.providers[0].apiKey, "[REDACTED]");
+    assert.equal(redacted.providers[0].baseUrl, "https://example.test");
+    assert.equal(redacted.semantic.openaiCompat.api_key, "[REDACTED]");
+    assert.equal(redacted.mcpEnv.github.GITHUB_TOKEN, "[REDACTED]");
+    assert.equal(redacted.mcpEnv.github.ENDPOINT, "local");
+    assert.equal(redacted.contextCapTokens, 131072);
+    assert.equal(redacted.promptTokens, 42);
   });
 
   test("normalizes an invalid persisted index retrieval mode during migration", () => {
@@ -99,6 +116,34 @@ describe("config schema migrations", () => {
     writeFileSync(path, JSON.stringify({ second: true }), "utf8");
     migrateConfigFile(path, { writeConfig: () => {} });
     assert.deepEqual(JSON.parse(readFileSync(first.backupPath, "utf8")), { first: true });
+  });
+
+  test("migration backups preserve settings but redact credentials", () => {
+    const path = configPath();
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ apiKey: "secret", providers: [{ apiKey: "provider", model: "chat" }], mode: "general" }), "utf8");
+    const result = migrateConfigFile(path, { writeConfig: () => {} });
+    const backup = JSON.parse(readFileSync(result.backupPath, "utf8"));
+    assert.equal(backup.apiKey, "[REDACTED]");
+    assert.equal(backup.providers[0].apiKey, "[REDACTED]");
+    assert.equal(backup.providers[0].model, "chat");
+    assert.equal(backup.mode, "general");
+  });
+
+  test("sanitizes existing migration backups and leaves malformed files untouched", () => {
+    const path = configPath();
+    const backupDir = join(dirname(path), "backups");
+    mkdirSync(backupDir, { recursive: true });
+    const valid = join(backupDir, "config-v0-before-v1.json");
+    const malformed = join(backupDir, "config-v1-before-v2.json");
+    writeFileSync(valid, JSON.stringify({ providers: [{ apiKey: "secret", name: "keep" }] }), "utf8");
+    writeFileSync(malformed, '{"apiKey":', "utf8");
+
+    const result = sanitizeConfigBackups(path);
+
+    assert.deepEqual(result, { sanitized: 1, skipped: 1 });
+    assert.equal(JSON.parse(readFileSync(valid, "utf8")).providers[0].apiKey, "[REDACTED]");
+    assert.equal(readFileSync(malformed, "utf8"), '{"apiKey":');
   });
 
   test("does not write the migrated config when its recovery backup fails", () => {
