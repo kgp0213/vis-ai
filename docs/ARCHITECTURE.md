@@ -54,9 +54,12 @@ vis-ai/
 │   │   ├── launcher.mjs              启动脚本
 │   │   ├── lib/                      本项目维护的运行时模块
 │   │   ├── __tests__/                Node/API/运行时测试
-│   │   └── visionox-pkg/             Visionox 服务端
+│   │   └── visionox-pkg/             Visionox 服务端与 Dashboard
 │   ├── resources/bootstrap-skills/   内置 bootstrap skills
+│   ├── resources/third-party-resources.json  第三方运行资源来源、版本与哈希
+│   ├── resources/THIRD_PARTY_NOTICES.md      随程序分发的第三方说明
 │   └── tauri.conf.json               Tauri 配置
+├── contracts/api-responses.schema.json       核心 HTTP 响应契约
 ├── docs/                             项目文档
 └── scripts/
     ├── quality-check.js              本地和 CI 共用质量门禁
@@ -108,8 +111,9 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 
 `launcher.mjs` 仍承担启动装配和运行时协调，但可独立验证的逻辑正在逐步迁入
 `resources/server/lib/`。当前已拆分配置迁移、Provider、上下文容量、活动会话、系统提示词、
-记忆预算、语义召回、会话知识、会话回收站、用户数据备份、原子文件持久化、DLP、活动计划存储、
-定时任务存储/时间策略和 OfficeCLI 策略等模块。
+记忆预算、语义召回、会话知识、会话回收站、用户数据备份、原子/版本化文件持久化、提示队列、DLP、
+活动计划存储、定时任务存储/时间策略和 OfficeCLI 策略等模块。提示队列由
+`lib/prompt-queue-store.mjs` 独立管理 TTL、容量、幂等和事务回滚，不再把存储细节留在 Launcher 中。
 
 后续按以下顺序拆分，每次只移动一个边界并保持 API 行为不变：
 
@@ -134,14 +138,34 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 `lib/user-data-backup.mjs` 只遍历明确白名单：配置、Soul、定时任务、会话及回收站、长期/场景记忆、
 记忆回收站/历史，以及当前工作区 `knowledge/`。语义向量、日志、缓存和快照目录本身不在白名单中。
 
+模式记忆、提示队列、知识清单和会话元数据统一使用 `lib/versioned-json-file.mjs` 校验 JSON 与 schema
+版本。损坏文件或高于当前程序支持版本的文件会进入只读保护，不会被默认值静默覆盖；问题同时暴露在
+`/api/health` 的 `storageIssues` 和概览页中。审计日志与活动计划清理失败也必须向调用方返回失败。
+
 每个快照是独立目录，包含 schema 版本、应用版本、时间、文件数量、字节数和逐文件 SHA-256 清单。
 预览恢复时同时校验归档路径、目标路径和内容哈希，并将文件分类为缺失、相同、冲突、损坏或无效。
 默认恢复只补齐缺失文件；覆盖冲突需要 UI 二次确认。概览健康统计使用 15 秒缓存，创建或恢复后立即失效，
 避免 5 秒界面轮询反复遍历所有会话。
 
+概览页会在创建快照前显示预计大小、文件数量和磁盘可用空间，允许显式删除快照。保留数量范围为
+1–100，默认 10；自动裁剪只在快照成功创建或用户保存保留策略后执行，不在只读列表操作中删除数据。
+备份保留数归一化和恢复按钮安全判定已抽取到 `dashboard/backup-support.js`，作为 Dashboard 可读源码迁移
+的首个独立策略模块，并由单元测试、API 静态资源测试和 Edge 备份流程共同保护。
+
+## 接口与运行资源契约
+
+`contracts/api-responses.schema.json` 定义概览、健康、备份、定时任务和 Provider 等核心响应的最低结构。
+质量门禁同时检查真实 API 响应和 schema，防止 Dashboard 与服务端在字段变更时静默失配。
+
+`resources/third-party-resources.json` 是打包运行资源的机器可读清单，记录 Node、OfficeCLI、Reasonix 和
+KaTeX 的版本、来源分类、许可证与可用哈希；`THIRD_PARTY_NOTICES.md` 随资源一起分发。清单只记录本机
+可验证的来源事实，不通过执行二进制或联网查询版本。
+
 ## 质量边界
 
-提交前统一运行 `npm run quality:check`。该命令不会构建 Rust，也不会创建 `target/debug`；
+提交前统一运行 `npm run quality:check`。Rust 工具链由根目录 `rust-toolchain.toml` 固定为 1.94.0。
+普通 `tauri` 与 `tauri:dev` 脚本已显式禁用，质量门禁会检查所有构建入口只能进入规范 release wrapper。
+该命令不会构建 Rust，也不会创建 `target/debug`；
 浏览器检查使用系统 Edge 和 `%TEMP%` 下的隔离用户目录，结束后按测试进程 PID 清理子进程与
 临时数据。release 可执行文件仍只通过 `npm run tauri:build -- --no-bundle` 生成和验证。
 

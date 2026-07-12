@@ -10,9 +10,11 @@ Run before committing source changes:
 npm run quality:check
 ```
 
-This checks launcher, Dashboard and API bundle syntax, required local bundle patches,
-repository hygiene, all Node tests, a real Edge Dashboard render, Rust formatting, and
-diff whitespace. Project-owned runtime modules under `resources/server/lib/` must retain
+This checks launcher, Dashboard and API bundle syntax, product version consistency,
+disabled debug entrypoints, core API response schemas, test-file growth limits,
+third-party runtime provenance, required local bundle patches, repository hygiene,
+all Node tests, a real Edge Dashboard render, Rust formatting, and diff whitespace.
+Project-owned runtime modules under `resources/server/lib/` must retain
 at least 90% line coverage, 60% branch coverage and 90% function coverage; vendored
 Dashboard and API bundles are excluded from this metric. The hygiene check rejects `.map`, `.bak`, `.old` and redundant `.zip`
 files outside package-manager dependencies; the explicitly documented offline Poppler
@@ -26,6 +28,8 @@ Windows WebView application. Set `VISIONOX_EDGE_PATH` only when Edge is installe
 non-standard location.
 
 The repository CI runs the same command on Windows for pushes and pull requests.
+CI and local formatting use Rust 1.94.0 from `rust-toolchain.toml`; toolchain drift is not
+accepted as an implicit source change.
 
 ## Definition Of Done
 
@@ -36,6 +40,7 @@ A source change is complete only when all applicable items below are true:
 3. Dashboard behavior passes the relevant checks in [Dashboard parity](DASHBOARD_PARITY.md); high-frequency interaction changes also pass the real Edge smoke test.
 4. User-facing behavior, build instructions and resource requirements are reflected in the maintained documentation without duplicating stale guidance.
 5. `npm run quality:check` passes from a clean process state and leaves no repository or `%TEMP%` residue.
+6. Packaged third-party resources agree with `src-tauri/resources/third-party-resources.json` and their notices are present.
 
 Building an executable is not part of the normal commit gate. Build only when the requested deliverable requires it, using the release gate below.
 
