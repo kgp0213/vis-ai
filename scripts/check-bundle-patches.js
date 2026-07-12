@@ -107,7 +107,7 @@ const required = [
       "createUserDataBackupStore",
       "unsupported backup manifest",
       "backup integrity check failed",
-      "backupDir inside dataDir must be the backups directory",
+      "backupDir inside dataDir must be the backups/snapshots directory",
       "healthCache",
     ],
   },

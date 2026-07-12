@@ -75,7 +75,7 @@ describe("user data backups", () => {
   test("rejects traversal ids and refuses corrupt backups", () => {
     assert.throws(() => store.inspect("../outside"), /invalid backup id/);
     const backup = store.create();
-    const archivedSoul = join(dataDir, "backups", backup.id, "data", "home", "soul.md");
+    const archivedSoul = join(dataDir, "backups", "snapshots", backup.id, "data", "home", "soul.md");
     writeFileSync(archivedSoul, "tampered\n");
     const preview = store.inspect(backup.id);
     assert.equal(preview.counts.corrupt, 1);
@@ -83,8 +83,8 @@ describe("user data backups", () => {
   });
 
   test("marks invalid manifests corrupt and ignores symbolic links", () => {
-    mkdirSync(join(dataDir, "backups", "bad"), { recursive: true });
-    writeFileSync(join(dataDir, "backups", "bad", "manifest.json"), '{"schemaVersion":99}\n');
+    mkdirSync(join(dataDir, "backups", "snapshots", "bad"), { recursive: true });
+    writeFileSync(join(dataDir, "backups", "snapshots", "bad", "manifest.json"), '{"schemaVersion":99}\n');
     try { symlinkSync(join(dataDir, "soul.md"), join(dataDir, "memory", "linked.md")); } catch {}
     const backup = store.create();
     assert.equal(backup.files.some((file) => file.path === "linked.md"), false);
@@ -94,8 +94,8 @@ describe("user data backups", () => {
 
   test("validates construction and supports an empty source set", () => {
     assert.throws(() => createUserDataBackupStore(), /dataDir and backupDir/);
-    assert.throws(() => createUserDataBackupStore({ dataDir, backupDir: dataDir }), /must be the backups directory/);
-    assert.throws(() => createUserDataBackupStore({ dataDir, backupDir: join(dataDir, "other", "backups") }), /must be the backups directory/);
+    assert.throws(() => createUserDataBackupStore({ dataDir, backupDir: dataDir }), /must be the backups\/snapshots directory/);
+    assert.throws(() => createUserDataBackupStore({ dataDir, backupDir: join(dataDir, "backups") }), /must be the backups\/snapshots directory/);
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
     const empty = createUserDataBackupStore({ dataDir, getWorkspaceDir: () => null, now: () => new Date("2026-01-01T00:00:00Z"), uuid: () => "empty" });

@@ -88,11 +88,11 @@ export function createUserDataBackupStore({
   uuid = randomUUID,
 } = {}) {
   if (!dataDir) throw new TypeError("dataDir and backupDir are required");
-  backupDir ??= join(dataDir, "backups");
+  backupDir ??= join(dataDir, "backups", "snapshots");
   const home = resolve(dataDir);
   const backups = resolve(backupDir);
-  if ((backups === home || isInside(home, backups)) && backups !== resolve(home, "backups")) {
-    throw new Error("backupDir inside dataDir must be the backups directory");
+  if ((backups === home || isInside(home, backups)) && backups !== resolve(home, "backups", "snapshots")) {
+    throw new Error("backupDir inside dataDir must be the backups/snapshots directory");
   }
   let healthCache = null;
   let healthCacheAt = 0;
