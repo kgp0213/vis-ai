@@ -1,81 +1,55 @@
-# Upstream reference (for development only)
-esengine-DeepSeek-Reasonix-*/
-upstream-*.tar.gz
-*.bak
+# Local upstream references and private working material (repository root only)
+/esengine-DeepSeek-Reasonix-*/
+/upstream-*.tar.gz
+/ECC/
+/archive/
+/plan/
+/skills/
+/tep/
+/tools/
+/.claude/
+/.reasonix/
+/.workbuddy/
 
-# Backup / pre-pathfix snapshots
-visionox-pkg-*-backup/
-visionox-pkg-*-pre-pathfix/
+# Rust and Tauri generated output
+/src-tauri/target/
+/target/
+/src-tauri/gen/
 
-# Rust build artifacts
-src-tauri/target/
-target/
-
-# Tauri generated files
-src-tauri/gen/
-
-# Node.js
+# Node dependencies and locally supplied runtime binaries
 node_modules/
-src-tauri/resources/server/node.exe
-src-tauri/resources/server/officecli.exe
-src-tauri/resources/server/visionox-pkg/dist/
-src-tauri/resources/server/visionox-pkg/node_modules/
-server/visionox-pkg/
-server/launcher.mjs
+/src-tauri/resources/server/node.exe
+/src-tauri/resources/server/officecli.exe
 
-# Temp files
-tmp_*
-tmp-*.log
-build-*.log
-record.txt
-launcher_*.log
-launcher_url*.txt
-src-tauri/resources/server/*.exe.old
+# Non-runtime metadata from the vendored upstream package. The JavaScript
+# bundles themselves are maintained and tracked by this repository.
+/src-tauri/resources/server/visionox-pkg/**/*.map
+/src-tauri/resources/server/visionox-pkg/dist/**/*.d.ts
+/src-tauri/resources/server/visionox-pkg/dist/cli/package.json
 
-# OS files
+# Root-level temporary command output
+/tmp_*
+/tmp-*.log
+/build-*.log
+/record.txt
+/launcher_*.log
+/launcher_url*.txt
+
+# Portable distribution and temporary icon work
+/portable/
+/portable.zip
+/icons/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Operating system and editor state
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
-
-# IDE
-.vscode/
-.idea/
-.claude/
-
-# Portable distribution output (not source)
-portable/
-portable.zip
-*.zip
-
-# Temp icon work
-icons/
-
-# Env/secrets
-.env
-.env.local
-.workbuddy/
-
-# Upstream source reference (temp, for diff comparison)
-tep/
-
-# ECC reference (external harness operator system)
-ECC/
-
-# Archived / deprecated code (old React frontend, replaced by launcher.mjs + dashboard)
-archive/
-
-# Empty tool-created placeholder
-.reasonix/
-
-# Planning notes / scratch (design reports kept locally, not source)
-plan/
-
-# Offline skill distribution package (283MB Python wheels + installers, not source)
-skills/
-
-# Sourcemaps
-*.map
-
-# NSIS toolchain (vendored locally, not source)
-tools/
+/.vscode/
+/.idea/
