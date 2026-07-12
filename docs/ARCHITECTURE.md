@@ -58,7 +58,6 @@ vis-ai/
 │   ├── resources/bootstrap-skills/   内置 bootstrap skills
 │   └── tauri.conf.json               Tauri 配置
 ├── docs/                             项目文档
-├── archive/                          归档旧实现
 └── scripts/
     ├── quality-check.js              本地和 CI 共用质量门禁
     ├── ui-smoke.js                   隔离用户数据的 Edge 渲染检查
@@ -101,20 +100,21 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 3. 生成物通过 bundle marker、全部 Node 测试和真实 Edge 渲染检查。
 4. 对比规范 release 资源树，确认构建不下载依赖、不生成 `target/debug` 或第二套资源。
 
+当前功能领域、对应回归证据和切换验收条件见 [Dashboard 功能基线](DASHBOARD_PARITY.md)。
+
 在这些条件满足前，不执行批量反编译、source map 覆盖或上游 bundle 恢复。
 
 ## Launcher 模块边界
 
 `launcher.mjs` 仍承担启动装配和运行时协调，但可独立验证的逻辑正在逐步迁入
 `resources/server/lib/`。当前已拆分配置迁移、Provider、上下文容量、活动会话、系统提示词、
-记忆预算、语义召回、会话知识、DLP、计划状态和 OfficeCLI 策略等模块。
+记忆预算、语义召回、会话知识、会话回收站、原子文件持久化、DLP、计划状态和 OfficeCLI 策略等模块。
 
 后续按以下顺序拆分，每次只移动一个边界并保持 API 行为不变：
 
-1. 会话回收站：文件移动、恢复、过期清理和保留期计算。
-2. 定时任务存储与调度：任务定义、运行记录、取消和重试状态。
-3. 活动会话持久化：消息分页、自动保存和恢复编排。
-4. 最后才处理模型循环和 Dashboard context 装配，避免一次重构核心运行路径。
+1. 定时任务存储与调度：任务定义、运行记录、取消和重试状态。
+2. 活动会话持久化：消息分页、自动保存和恢复编排。
+3. 最后才处理模型循环和 Dashboard context 装配，避免一次重构核心运行路径。
 
 模块化的验收标准不是减少行数，而是模块具有明确输入、无隐藏全局状态、具备独立测试，
 并且完整质量门禁保持通过。

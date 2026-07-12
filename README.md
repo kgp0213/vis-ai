@@ -225,6 +225,7 @@ docs/                        使用、架构与开发文档
 - [架构说明](docs/ARCHITECTURE.md)
 - [开发指南](docs/DEVELOPMENT.md)
 - [质量门禁](docs/QUALITY.md)
+- [Dashboard 功能基线与迁移验收](docs/DASHBOARD_PARITY.md)
 - [OfficeCLI 指南](docs/OFFICECLI_GUIDE.md)
 - [更新日志](docs/CHANGELOG.md)
 

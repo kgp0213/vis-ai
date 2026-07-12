@@ -25,6 +25,18 @@ non-standard location.
 
 The repository CI runs the same command on Windows for pushes and pull requests.
 
+## Definition Of Done
+
+A source change is complete only when all applicable items below are true:
+
+1. The requested behavior has a focused regression test, or the reason automation is impractical is recorded.
+2. User-data format changes preserve existing files, use a schema version when the structure can evolve, and replace critical files atomically.
+3. Dashboard behavior passes the relevant checks in [Dashboard parity](DASHBOARD_PARITY.md); high-frequency interaction changes also pass the real Edge smoke test.
+4. User-facing behavior, build instructions and resource requirements are reflected in the maintained documentation without duplicating stale guidance.
+5. `npm run quality:check` passes from a clean process state and leaves no repository or `%TEMP%` residue.
+
+Building an executable is not part of the normal commit gate. Build only when the requested deliverable requires it, using the release gate below.
+
 ## Release Gate
 
 Run before delivering an executable or installer:
