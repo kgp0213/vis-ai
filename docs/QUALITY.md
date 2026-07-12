@@ -12,7 +12,9 @@ npm run quality:check
 
 This checks launcher, Dashboard and API bundle syntax, required local bundle patches,
 repository hygiene, all Node tests, a real Edge Dashboard render, Rust formatting, and
-diff whitespace. The hygiene check rejects `.map`, `.bak`, `.old` and redundant `.zip`
+diff whitespace. Project-owned runtime modules under `resources/server/lib/` must retain
+at least 90% line coverage, 60% branch coverage and 90% function coverage; vendored
+Dashboard and API bundles are excluded from this metric. The hygiene check rejects `.map`, `.bak`, `.old` and redundant `.zip`
 files outside package-manager dependencies; the explicitly documented offline Poppler
 archive is the only exception. The
 browser smoke test uses an isolated directory under `%TEMP%` and removes it afterward;

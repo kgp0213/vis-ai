@@ -22,6 +22,7 @@
     "fetch:binaries:danger": "node scripts/fetch-binaries.js",
     "test": "node --test \"src-tauri/resources/server/**/*.test.mjs\"",
     "test:coverage": "node --test --experimental-test-coverage \"src-tauri/resources/server/**/*.test.mjs\"",
+    "test:coverage:core": "node --test --experimental-test-coverage --test-coverage-include=\"src-tauri/resources/server/lib/*.mjs\" --test-coverage-lines=90 --test-coverage-branches=60 --test-coverage-functions=90 \"src-tauri/resources/server/**/*.test.mjs\"",
     "test:ui:smoke": "node scripts/ui-smoke.js",
     "quality:check": "node scripts/quality-check.js"
   },
