@@ -20,6 +20,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.94.0
           components: rustfmt
       - name: Install root dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund

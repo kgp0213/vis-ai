@@ -46,6 +46,10 @@ const required = [
     markers: ["assertApiContract", "validateSchema", "unknown API contract"],
   },
   {
+    file: "scripts/check-test-structure.js",
+    markers: ["move new coverage to a domain test file", "requiredDomainTests", "dashboard-regression.test.mjs"],
+  },
+  {
     file: "scripts/verify-runtime-manifest.js",
     markers: ["runtime-manifest.json", "SHA-256 mismatch", "size mismatch", "verified ${manifest.artifacts.length} artifacts"],
   },

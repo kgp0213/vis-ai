@@ -14,6 +14,7 @@
     "check:runtime-manifest": "node scripts/verify-runtime-manifest.js",
     "check:versions": "node scripts/check-version-consistency.js",
     "check:entrypoints": "node scripts/check-build-entrypoints.js",
+    "check:test-structure": "node scripts/check-test-structure.js",
     "verify:nsis": "node scripts/verify-nsis-bundle.js",
     "release:check": "node scripts/release-check.js",
     "restore:pkg": "node -e \"console.error('restore:pkg is disabled because it can overwrite local bundle patches. Use npm run restore:pkg:danger -- --force after backing up and reapplying patches.'); process.exit(1)\"",

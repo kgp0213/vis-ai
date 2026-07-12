@@ -24,6 +24,7 @@ run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visi
 run("product version consistency", "node", ["scripts/check-version-consistency.js"]);
 run("build entrypoint policy", "node", ["scripts/check-build-entrypoints.js"]);
 run("API response contracts", "node", ["scripts/check-api-contracts.js"]);
+run("test structure", "node", ["scripts/check-test-structure.js"]);
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
 run("repository hygiene", "node", ["scripts/check-repository-hygiene.js"]);
 run("node tests and core coverage", "node", [
@@ -38,5 +39,6 @@ run("node tests and core coverage", "node", [
 run("browser UI smoke", "node", ["scripts/ui-smoke.js"]);
 run("Rust formatting", "cargo", ["fmt", "--manifest-path", "src-tauri/Cargo.toml", "--", "--check"]);
 run("diff whitespace", "git", ["diff", "--check"]);
+run("staged diff whitespace", "git", ["diff", "--cached", "--check"]);
 
 console.log("\n[quality] ok");

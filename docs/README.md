@@ -20,6 +20,7 @@
 | [**架构说明**](ARCHITECTURE.md) | 系统架构、项目结构、技术栈与关键文件 |
 | [**开发指南**](DEVELOPMENT.md) | 环境搭建、构建步骤、调试方法和编码规范 |
 | [**质量门禁**](QUALITY.md) | 提交前检查、真实浏览器冒烟测试、CI 与发布验证的职责边界 |
+| [**测试结构**](TESTING.md) | 领域测试归属、遗留聚合测试增长限制和临时数据约束 |
 | [**Dashboard 功能基线**](DASHBOARD_PARITY.md) | 当前本地功能清单、源码迁移顺序与无回归验收条件 |
 | [**发布验收清单**](RELEASE_CHECKLIST.md) | release/NSIS 交付前检查、功能抽查和 SHA-256 记录模板 |
 | [**Skill 创建指南**](skill-creation-guide.md) | 自定义 Skill 的完整开发流程、打包分发 |
