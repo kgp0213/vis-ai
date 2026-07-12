@@ -71,6 +71,7 @@ src-tauri\target\release\resources\
 - 已安装项目根目录的 npm 依赖
 - `src-tauri/resources/server/node.exe`
 - `src-tauri/resources/server/officecli.exe`
+- `src-tauri/resources/runtime-manifest.json` 中的版本、大小和 SHA-256 与上述二进制一致
 
 规范构建强制 npm 与 Cargo 离线。缺少依赖或运行时资源时会直接失败，不会在构建过程中下载或从旧安装恢复。
 
@@ -201,6 +202,7 @@ docs/                        使用、架构与开发文档
 | `scripts/prepare-runtime-package.js` | 在系统临时目录准备裁剪后的生产运行时 |
 | `scripts/check-bundle-patches.js` | 检查本地补丁、品牌和构建身份 |
 | `scripts/verify-release-resources.js` | 校验 exe 名和完整 release 资源树 |
+| `scripts/verify-runtime-manifest.js` | 构建前校验本地 Node.js 与 OfficeCLI 的版本清单、大小和 SHA-256 |
 | `scripts/verify-nsis-bundle.js` | 解包并校验 NSIS 安装包 |
 | `scripts/release-check.js` | 完整发布前检查 |
 

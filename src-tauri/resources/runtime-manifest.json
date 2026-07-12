@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "path": "server/node.exe",
+      "version": "v25.2.1",
+      "bytes": 91673600,
+      "sha256": "91ec09dda8f20556f366110859f106ab189d45f8f6a2bd092e6785174ad4a0fa"
+    },
+    {
+      "path": "server/officecli.exe",
+      "version": "1.0.129",
+      "bytes": 32943992,
+      "sha256": "e4c84a4a32f4d22f3880575d16b1499856d1c48e86d293274919906f95d81057"
+    }
+  ]
+}

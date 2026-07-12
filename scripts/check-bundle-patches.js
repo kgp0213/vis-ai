@@ -31,11 +31,15 @@ const required = [
   },
   {
     file: "scripts/run-tauri-build.js",
-    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "resourceOverride", "verify-release-resources.js"],
+    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "resourceOverride", "verify-runtime-manifest.js", "verify-release-resources.js"],
   },
   {
     file: "scripts/verify-release-resources.js",
-    markers: ["visionox-whale.exe", "unexpected legacy executable", "content mismatch", "unexpected:", "verified ${expected.size} files"],
+    markers: ["visionox-whale.exe", "runtime-manifest.json", "unexpected legacy executable", "content mismatch", "unexpected:", "verified ${expected.size} files"],
+  },
+  {
+    file: "scripts/verify-runtime-manifest.js",
+    markers: ["runtime-manifest.json", "SHA-256 mismatch", "size mismatch", "verified ${manifest.artifacts.length} artifacts"],
   },
   {
     file: "scripts/verify-nsis-bundle.js",

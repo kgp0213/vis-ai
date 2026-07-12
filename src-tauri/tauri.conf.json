@@ -41,6 +41,7 @@
       "resources/server/visionox-file/": "resources/server/visionox-file/",
       "resources/server/node.exe": "resources/server/node.exe",
       "resources/server/officecli.exe": "resources/server/officecli.exe",
+      "resources/runtime-manifest.json": "resources/runtime-manifest.json",
       "resources/default-soul.md": "resources/default-soul.md",
       "resources/ecc-rules/": "resources/ecc-rules/",
       "resources/skill-creation-guide.md": "resources/skill-creation-guide.md",

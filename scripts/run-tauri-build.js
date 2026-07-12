@@ -46,6 +46,7 @@ process.on("exit", cleanupStaging);
 
 let exitCode = 0;
 try {
+  run("verify runtime manifest", join(root, "scripts", "verify-runtime-manifest.js"));
   run("prepare runtime package", join(root, "scripts", "prepare-runtime-package.js"));
   run("check bundle patches", join(root, "scripts", "check-bundle-patches.js"));
   if (!existsSync(tauriCli)) throw new Error(`Tauri CLI not found: ${tauriCli}`);
