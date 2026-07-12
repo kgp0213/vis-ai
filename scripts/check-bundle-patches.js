@@ -38,6 +38,10 @@ const required = [
     markers: ["visionox-whale.exe", "runtime-manifest.json", "unexpected legacy executable", "content mismatch", "unexpected:", "verified ${expected.size} files"],
   },
   {
+    file: "scripts/check-build-entrypoints.js",
+    markers: ["validateBuildEntrypoints", "generic tauri entrypoint must be disabled", "bypasses the canonical release wrapper"],
+  },
+  {
     file: "scripts/verify-runtime-manifest.js",
     markers: ["runtime-manifest.json", "SHA-256 mismatch", "size mismatch", "verified ${manifest.artifacts.length} artifacts"],
   },

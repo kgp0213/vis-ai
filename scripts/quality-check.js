@@ -22,6 +22,7 @@ run("launcher syntax", "node", ["--check", "src-tauri/resources/server/launcher.
 run("dashboard syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js"]);
 run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js"]);
 run("product version consistency", "node", ["scripts/check-version-consistency.js"]);
+run("build entrypoint policy", "node", ["scripts/check-build-entrypoints.js"]);
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
 run("repository hygiene", "node", ["scripts/check-repository-hygiene.js"]);
 run("node tests and core coverage", "node", [
