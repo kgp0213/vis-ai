@@ -71,6 +71,7 @@ const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFi
 const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
+const { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule } = await importEarly("./lib/schedule-execution.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -3643,8 +3644,7 @@ const SCHEDULE_REPORT_RANGE_MODES = new Set([
 let schedules = [];
 let scheduleStoreError = null;
 const scheduleTimers = new Map();
-const runningScheduleIds = new Set();
-const scheduleRunControllers = new Map();
+const scheduleRunRegistry = createScheduleRunRegistry();
 
 function scheduleAbortError() {
   return new DOMException("scheduled task cancelled", "AbortError");
@@ -3853,6 +3853,19 @@ function sameScheduleWorkspace(task) {
 function writeSchedules(next = schedules) {
   writeScheduleStore(schedulesFile, next);
   scheduleStoreError = null;
+  trackPersistentStorageIssue("schedules", schedulesFile, null);
+}
+
+function writeScheduleRuntimeState(context) {
+  try {
+    writeSchedules();
+    return { ok: true };
+  } catch (error) {
+    const message = `${context}: ${error.message}`;
+    trackPersistentStorageIssue("schedules", schedulesFile, message);
+    console.error(`[launcher] ${message}`);
+    return { ok: false, error: message };
+  }
 }
 
 function commitSchedules(mutate) {
@@ -3872,21 +3885,7 @@ function repairInterruptedSchedules() {
   const nowIso = new Date().toISOString();
   let dirty = false;
   for (const task of schedules) {
-    if (task.lastStatus !== "running") continue;
-    const runningEntry = Array.isArray(task.history) ? task.history.find((entry) => entry?.status === "running") : null;
-    const reason = "interrupted by launcher restart";
-    if (runningEntry) {
-      runningEntry.completedAt = nowIso;
-      runningEntry.durationMs = Number.isFinite(Date.parse(runningEntry.startedAt)) ? Math.max(0, Date.parse(nowIso) - Date.parse(runningEntry.startedAt)) : null;
-      runningEntry.status = "failed";
-      runningEntry.accepted = false;
-      runningEntry.reason = runningEntry.reason || reason;
-      runningEntry.summary = runningEntry.summary || reason;
-    }
-    task.updatedAt = nowIso;
-    task.lastStatus = "failed";
-    task.lastError = reason;
-    task.nextRunAt = computeNextScheduleRun(task);
+    if (!repairInterruptedSchedule(task, { nowIso, nextRunAt: computeNextScheduleRun(task) })) continue;
     dirty = true;
     console.error(`[launcher] repaired interrupted schedule: ${task.id} (${task.name || "unnamed"})`);
   }
@@ -4779,8 +4778,7 @@ async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date
 function completeScheduleRun(taskId, runId, patch) {
   const task = schedules.find((item) => item.id === taskId);
   if (!task) {
-    runningScheduleIds.delete(taskId);
-    scheduleRunControllers.delete(taskId);
+    scheduleRunRegistry.finish(taskId);
     return;
   }
   const completedAt = patch.completedAt || new Date().toISOString();
@@ -4800,16 +4798,15 @@ function completeScheduleRun(taskId, runId, patch) {
     accepted: status === "completed",
     reason: patch.reason || null,
   });
-  runningScheduleIds.delete(taskId);
-  scheduleRunControllers.delete(taskId);
+  scheduleRunRegistry.finish(taskId);
   if (task.enabled) {
     const next = Date.parse(task.nextRunAt);
     if (!Number.isFinite(next) || next <= Date.now()) {
       task.nextRunAt = computeNextScheduleRun(task, Date.now());
     }
-    refreshScheduleTimer(task);
   }
-  writeSchedules();
+  const persisted = writeScheduleRuntimeState(`scheduled run ${runId} completion was not saved`);
+  if (persisted.ok && task.enabled) refreshScheduleTimer(task);
   broadcastDashboardEvent({
     kind: "schedule-run",
     id: task.id,
@@ -4863,140 +4860,101 @@ function createScheduleConfirmationMessage(task, startedAt) {
   broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text });
 }
 
+function recordScheduleAdmission(task, { runId, startedAt, manual, catchUp, status, reason, nextFromMs = Date.now() }) {
+  const completedAt = new Date().toISOString();
+  task.updatedAt = completedAt;
+  task.runCount += 1;
+  task.lastStatus = status;
+  task.lastError = reason;
+  task.nextRunAt = computeNextScheduleRun(task, nextFromMs);
+  recordScheduleRun(task, {
+    runId,
+    startedAt,
+    completedAt,
+    durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
+    status,
+    manual,
+    catchUp,
+    accepted: false,
+    reason,
+    summary: reason,
+    workspaceDir,
+  });
+  const persisted = writeScheduleRuntimeState(`scheduled run ${runId} admission was not saved`);
+  if (!persisted.ok) return persisted;
+  refreshScheduleTimer(task);
+  broadcastDashboardEvent({
+    kind: "schedule-run",
+    id: task.id,
+    runId,
+    name: task.name,
+    accepted: false,
+    status,
+    reason,
+  });
+  return persisted;
+}
+
 async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
   const task = schedules.find((item) => item.id === id);
   if (!task) return { ok: false, error: "schedule not found" };
-  if (runningScheduleIds.has(id)) {
-    if (!manual) {
-      task.nextRunAt = computeNextScheduleRun(task, Date.now());
-      writeSchedules();
-      refreshScheduleTimer(task);
-    }
-    return { ok: true, accepted: false, reason: "task is already running", runId: null, schedule: publicSchedule(task) };
-  }
-  if (runningScheduleIds.size >= MAX_CONCURRENT_SCHEDULE_RUNS) {
-    const reason = `scheduled task concurrency limit reached (${MAX_CONCURRENT_SCHEDULE_RUNS})`;
-    if (!manual) {
-      task.missedRunAt = new Date().toISOString();
-      task.lastStatus = "deferred";
-      task.lastError = reason;
-      task.nextRunAt = computeNextScheduleRun(task, Date.now());
-      writeSchedules();
-      refreshScheduleTimer(task);
-      setTimeout(() => void triggerSchedule(task.id, { manual: false, catchUp: true }), SCHEDULE_BUSY_RETRY_MS);
-    }
-    return { ok: true, accepted: false, reason, runId: null, schedule: publicSchedule(task) };
-  }
-  const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const startedMs = Date.parse(startedAt);
+  const workspaceMatches = sameScheduleWorkspace(task);
+  const windowCheck = manual || catchUp ? { ok: true, reason: null } : isScheduleAllowedAt(task, startedMs);
+  const admission = decideScheduleAdmission({
+    task,
+    manual,
+    catchUp,
+    isRunning: scheduleRunRegistry.isRunning(id),
+    runningCount: scheduleRunRegistry.size(),
+    maxConcurrent: MAX_CONCURRENT_SCHEDULE_RUNS,
+    workspaceMatches,
+    windowCheck,
+  });
+  if (admission.kind === "already_running") {
+    if (admission.persist) {
+      task.nextRunAt = computeNextScheduleRun(task, Date.now());
+      const persisted = writeScheduleRuntimeState(`scheduled task ${task.id} next run was not saved`);
+      if (!persisted.ok) return { ok: false, error: persisted.error, schedule: publicSchedule(task) };
+      refreshScheduleTimer(task);
+    }
+    return { ok: true, accepted: false, reason: admission.reason, runId: null, schedule: publicSchedule(task) };
+  }
+  if (admission.kind === "deferred") {
+    if (admission.persist) {
+      task.missedRunAt = startedAt;
+      task.lastStatus = "deferred";
+      task.lastError = admission.reason;
+      task.nextRunAt = computeNextScheduleRun(task, Date.now());
+      const persisted = writeScheduleRuntimeState(`scheduled task ${task.id} deferral was not saved`);
+      if (!persisted.ok) return { ok: false, error: persisted.error, schedule: publicSchedule(task) };
+      refreshScheduleTimer(task);
+      if (admission.retry) setTimeout(() => void triggerSchedule(task.id, { manual: false, catchUp: true }), SCHEDULE_BUSY_RETRY_MS);
+    }
+    return { ok: true, accepted: false, reason: admission.reason, runId: null, schedule: publicSchedule(task) };
+  }
+  const runId = randomUUID();
   const previousLastRunAt = task.lastRunAt;
   task.lastRunAt = startedAt;
   task.missedRunAt = null;
-  if (!sameScheduleWorkspace(task) && task.kind !== "session_cleanup") {
-    const reason = `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`;
-    const completedAt = new Date().toISOString();
-    task.updatedAt = new Date().toISOString();
-    task.runCount += 1;
-    task.lastStatus = "skipped";
-    task.lastError = reason;
-    task.nextRunAt = computeNextScheduleRun(task);
-    recordScheduleRun(task, {
-      runId,
-      startedAt,
-      completedAt,
-      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
-      status: "skipped",
-      manual,
-      catchUp,
-      accepted: false,
-      reason,
-      summary: reason,
-      workspaceDir,
-    });
-    writeSchedules();
-    refreshScheduleTimer(task);
-    broadcastDashboardEvent({
-      kind: "schedule-run",
-      id: task.id,
-      runId,
-      name: task.name,
-      accepted: false,
-      status: task.lastStatus,
-      reason: task.lastError,
-    });
-    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
-  }
-  const windowCheck = manual || catchUp ? { ok: true, reason: null } : isScheduleAllowedAt(task, Date.parse(startedAt));
-  if (!windowCheck.ok) {
-    const reason = windowCheck.reason || "outside run window";
-    const completedAt = new Date().toISOString();
-    task.updatedAt = new Date().toISOString();
-    task.runCount += 1;
-    task.lastStatus = "skipped";
-    task.lastError = reason;
-    task.nextRunAt = computeNextScheduleRun(task, Date.parse(startedAt));
-    recordScheduleRun(task, {
-      runId,
-      startedAt,
-      completedAt,
-      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
-      status: "skipped",
-      manual,
-      catchUp,
-      accepted: false,
-      reason,
-      summary: reason,
-      workspaceDir,
-    });
-    writeSchedules();
-    refreshScheduleTimer(task);
-    broadcastDashboardEvent({
-      kind: "schedule-run",
-      id: task.id,
-      runId,
-      name: task.name,
-      accepted: false,
-      status: task.lastStatus,
-      reason: task.lastError,
-    });
-    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
-  }
-  if (task.runMode === "confirm" && !manual) {
-    const reason = "waiting for manual confirmation";
-    const completedAt = new Date().toISOString();
+  if (!admission.accepted) {
+    const reason = admission.kind === "skipped" && !workspaceMatches && task.kind !== "session_cleanup"
+      ? `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`
+      : admission.reason;
     if (task.lastStatus !== "pending_confirmation") {
-      createScheduleConfirmationMessage(task, startedAt);
+      if (admission.kind === "pending_confirmation") createScheduleConfirmationMessage(task, startedAt);
     }
-    task.updatedAt = new Date().toISOString();
-    task.runCount += 1;
-    task.lastStatus = "pending_confirmation";
-    task.lastError = reason;
-    task.nextRunAt = computeNextScheduleRun(task);
-    recordScheduleRun(task, {
+    const persisted = recordScheduleAdmission(task, {
       runId,
       startedAt,
-      completedAt,
-      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
-      status: "pending_confirmation",
       manual,
       catchUp,
-      accepted: false,
+      status: admission.kind,
       reason,
-      summary: reason,
-      workspaceDir,
+      nextFromMs: admission.kind === "skipped" && windowCheck.ok === false ? startedMs : Date.now(),
     });
-    writeSchedules();
-    refreshScheduleTimer(task);
-    broadcastDashboardEvent({
-      kind: "schedule-run",
-      id: task.id,
-      runId,
-      name: task.name,
-      accepted: false,
-      status: task.lastStatus,
-      reason: task.lastError,
-    });
+    if (!persisted.ok) return { ok: false, error: persisted.error, runId, schedule: publicSchedule(task) };
     return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
   }
   task.updatedAt = startedAt;
@@ -5004,9 +4962,9 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
   task.lastStatus = "running";
   task.lastError = null;
   task.nextRunAt = computeNextScheduleRun(task);
-  runningScheduleIds.add(task.id);
-  const runController = new AbortController();
-  scheduleRunControllers.set(task.id, { runId, controller: runController });
+  const activeRun = scheduleRunRegistry.start(task.id, runId);
+  if (!activeRun) return { ok: true, accepted: false, reason: "task is already running", runId: null, schedule: publicSchedule(task) };
+  const runController = activeRun.controller;
   recordScheduleRun(task, {
     runId,
     startedAt,
@@ -5017,7 +4975,22 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
     reason: null,
     workspaceDir,
   });
-  writeSchedules();
+  const persistedStart = writeScheduleRuntimeState(`scheduled run ${runId} start was not saved`);
+  if (!persistedStart.ok) {
+    scheduleRunRegistry.finish(task.id);
+    const completedAt = new Date().toISOString();
+    task.lastStatus = "failed";
+    task.lastError = persistedStart.error;
+    updateScheduleRun(task, runId, {
+      completedAt,
+      durationMs: Math.max(0, Date.parse(completedAt) - startedMs),
+      status: "failed",
+      accepted: false,
+      reason: persistedStart.error,
+      summary: persistedStart.error,
+    });
+    return { ok: false, error: persistedStart.error, runId, schedule: publicSchedule(task) };
+  }
   refreshScheduleTimer(task);
   broadcastDashboardEvent({
     kind: "schedule-run",
@@ -5058,21 +5031,21 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
     result = { accepted: false, reason: err.message };
   }
   if (!result.accepted) {
-    const reason = result.reason ?? "loop is busy";
-    const shouldDefer = !manual && /busy/i.test(reason);
+    const rejected = decideRejectedScheduleSubmission({ manual, reason: result.reason ?? "loop is busy" });
     completeScheduleRun(task.id, runId, {
-      status: manual ? "rejected" : shouldDefer ? "deferred" : "skipped",
-      reason,
-      summary: reason,
+      status: rejected.status,
+      reason: rejected.reason,
+      summary: rejected.reason,
     });
-    if (shouldDefer) {
+    if (rejected.retry) {
       task.missedRunAt = startedAt;
-      writeSchedules();
+      const persistedRetry = writeScheduleRuntimeState(`scheduled run ${runId} retry was not saved`);
+      if (!persistedRetry.ok) return { ok: false, error: persistedRetry.error, runId, schedule: publicSchedule(task) };
       setTimeout(() => {
         void triggerSchedule(task.id, { manual: false, catchUp: true });
       }, SCHEDULE_BUSY_RETRY_MS);
     }
-    return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
+    return { ok: true, accepted: false, reason: rejected.reason, runId, schedule: publicSchedule(task) };
   }
   return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
 }
@@ -5080,15 +5053,14 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
 function cancelScheduleRun(id) {
   const task = schedules.find((item) => item.id === id);
   if (!task) return { ok: false, error: "schedule not found" };
-  const active = scheduleRunControllers.get(id);
-  if (!active || !runningScheduleIds.has(id)) {
+  const active = scheduleRunRegistry.get(id);
+  if (!active) {
     return { ok: false, error: "task is not running" };
   }
-  active.controller.abort();
-  task.lastStatus = "stopping";
-  task.lastError = "cancellation requested";
-  task.updatedAt = new Date().toISOString();
-  writeSchedules();
+  scheduleRunRegistry.requestCancel(id);
+  markScheduleCancellationRequested(task);
+  const persisted = writeScheduleRuntimeState(`scheduled run ${active.runId} cancellation was not saved`);
+  if (!persisted.ok) return { ok: false, error: persisted.error, cancelled: true, runId: active.runId, schedule: publicSchedule(task) };
   broadcastDashboardEvent({ kind: "schedule-run", id, runId: active.runId, name: task.name, status: "stopping", reason: task.lastError });
   return { ok: true, cancelled: true, runId: active.runId, schedule: publicSchedule(task) };
 }
@@ -6291,7 +6263,7 @@ const ctx = {
   deleteSchedule: (id) => {
     const idx = schedules.findIndex((item) => item.id === id);
     if (idx < 0) return { ok: false, error: "schedule not found" };
-    if (runningScheduleIds.has(id)) return { ok: false, error: "task is currently running" };
+    if (scheduleRunRegistry.isRunning(id)) return { ok: false, error: "task is currently running" };
     const committed = commitSchedules((next) => {
       next.splice(idx, 1);
       return { ok: true };

@@ -48,6 +48,10 @@ or repository history establish both attribution and license; `partial` is an ex
 documentation gap and must never be presented as verified. New unregistered skill directories
 fail the quality gate.
 
+Scheduled execution changes must preserve the three existing task kinds and API status names.
+Admission and cancellation policy require domain tests; restart recovery additionally requires
+a round trip through the real versioned schedule store under `%TEMP%`.
+
 Building an executable is not part of the normal commit gate. Build only when the requested deliverable requires it, using the release gate below.
 
 ## Release Gate

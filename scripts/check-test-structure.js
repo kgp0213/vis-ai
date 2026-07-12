@@ -16,6 +16,7 @@ const requiredDomainTests = [
   "launcher-storage-policy.test.mjs",
   "prompt-queue-store.test.mjs",
   "runtime-issues.test.mjs",
+  "schedule-execution.test.mjs",
   "user-data-backup.test.mjs",
   "session-trash.test.mjs",
   "session-knowledge.test.mjs",

@@ -927,10 +927,10 @@ describe("Dashboard 回归护栏", () => {
     const launcher = readFileSync(launcherUrl, "utf8");
     assert.match(launcher, /task\.enabled && task\.missedRunAt/);
     assert.match(launcher, /triggerSchedule\(task\.id, \{ manual: false, catchUp: true \}\)/);
-    assert.match(launcher, /status: manual \? "rejected" : shouldDefer \? "deferred" : "skipped"/);
+    assert.match(launcher, /decideRejectedScheduleSubmission/);
     assert.match(launcher, /SCHEDULE_BUSY_RETRY_MS/);
     assert.match(launcher, /refreshScheduleTimer\(task\)/);
-    assert.match(launcher, /scheduleRunControllers/);
+    assert.match(launcher, /scheduleRunRegistry/);
     assert.match(launcher, /MAX_CONCURRENT_SCHEDULE_RUNS/);
   });
 

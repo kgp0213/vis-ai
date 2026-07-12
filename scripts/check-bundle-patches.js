@@ -80,7 +80,7 @@ const required = [
       "contextCapacitySource",
       "beginActiveOperation",
       "jobs.stopOwned",
-      "scheduleRunControllers",
+      "scheduleRunRegistry",
       "REPORT_COLLECTION_MAX_CHARS",
       "appendAuditEntry",
       "pendingPlanRevision",
@@ -146,6 +146,10 @@ const required = [
   {
     file: "src-tauri/resources/server/lib/active-session-meta.mjs",
     markers: ["createActiveSessionMetaStore", "assertVersionedJsonWritable", "metadata update requires a builder"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/schedule-execution.mjs",
+    markers: ["createScheduleRunRegistry", "decideScheduleAdmission", "decideRejectedScheduleSubmission", "repairInterruptedSchedule", "markScheduleCancellationRequested"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-store.mjs",

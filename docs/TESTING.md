@@ -23,4 +23,8 @@ Dashboard 中可独立表达的策略应逐步迁入可读脚本并单测。例�
 关键边界，不对所有清理型 catch 做数量断言。Dashboard 索引模式的合法值与提示由
 `index-mode-support.test.mjs` 独立验证，真实 Edge 冒烟继续负责状态保持和选择交互。
 
+定时任务执行编排由 `schedule-execution.test.mjs` 验证：同一任务只允许一个活动 run、取消信号只发送给
+对应 AbortController、并发/工作区/时间窗/确认模式按原协议决策、对话忙碌时才自动延迟重试。重启遗留的
+`running` 记录还必须经过真实 `schedule-store` 写入和重新读取，确认被持久化为 `failed`，不能只测内存对象。
+
 测试数据必须位于系统临时目录并在成功、失败时清理。浏览器交互统一通过 `scripts/ui-smoke.js` 使用隔离的 HOME/USERPROFILE，不能读取真实 `~/.visionox`。
