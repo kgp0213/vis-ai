@@ -92,6 +92,16 @@ const required = [
     ],
   },
   {
+    file: "src-tauri/resources/server/lib/session-trash.mjs",
+    markers: [
+      "createSessionTrashStore",
+      "invalid restored session path",
+      "session file already exists",
+      "expired session trash removed",
+      "retentionDays must be between 1 and 365",
+    ],
+  },
+  {
     file: "src-tauri/resources/server/lib/system-prompt.mjs",
     markers: [
       "PROJECT_MEMORY_CANDIDATES",

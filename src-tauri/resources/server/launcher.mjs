@@ -51,6 +51,7 @@ const { validateOfficecliInvocation } = await importEarly("./lib/officecli-polic
 const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = await importEarly("./lib/memory-prompt.mjs");
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
+const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -1465,6 +1466,28 @@ const SESSION_CLEANUP_PREVIEW_TTL_MS = 30 * 60 * 1000;
 const SESSION_TRASH_DIR = resolve(visionoxDataDir, "session-trash");
 const DEFAULT_SESSION_TRASH_RETENTION_DAYS = 30;
 const sessionCleanupPreviews = new Map();
+const sessionTrashStore = createSessionTrashStore({
+  sessionsDir,
+  trashDir: SESSION_TRASH_DIR,
+  sessionPath,
+  isValidSessionName,
+  readConfig: () => readConfig(configPath),
+  writeConfig: (next) => writeConfig(next, configPath),
+  onChanged: broadcastDashboardEvent,
+  defaultRetentionDays: DEFAULT_SESSION_TRASH_RETENTION_DAYS,
+  logger: console,
+});
+const {
+  delete: deleteSessionTrash,
+  getEntry: getSessionTrashEntry,
+  list: listSessionTrash,
+  pruneExpired: pruneExpiredSessionTrash,
+  restore: restoreSessionTrash,
+  retentionDays: sessionTrashRetentionDays,
+  setRetentionDays: setSessionTrashRetentionDays,
+  softDelete: softDeleteSession,
+  trash: trashSessions,
+} = sessionTrashStore;
 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value);
@@ -1683,35 +1706,6 @@ async function semanticReviewCleanupItems(items, semanticMode = "off", signal, p
   } catch (err) {
     console.error(`[launcher] session cleanup semantic review failed: ${err.message}`);
     return { items, reviewed: 0, error: err.message };
-  }
-}
-
-function softDeleteSession(name, runId = "") {
-  if (!isValidSessionName(name)) return { ok: false, error: "invalid session name" };
-  const jsonl = sessionPath(name);
-  if (!existsSync(jsonl)) return { ok: false, error: "not found" };
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const itemId = createHash("sha256").update(name).digest("hex").slice(0, 10);
-  const trashDir = resolve(SESSION_TRASH_DIR, `${stamp}-${runId || randomUUID()}-${itemId}`);
-  mkdirSync(trashDir, { recursive: true });
-  const moved = [];
-  const sidecars = [".jsonl", ".events.jsonl", ".pending.json", ".meta.json", ".plan.json"];
-  try {
-    for (const ext of sidecars) {
-      const source = ext === ".jsonl" ? jsonl : jsonl.replace(/\.jsonl$/, ext);
-      if (!existsSync(source)) continue;
-      const target = resolve(trashDir, basename(source));
-      renameSync(source, target);
-      moved.push({ source, target });
-    }
-    writeFileSync(resolve(trashDir, "trash-meta.json"), `${JSON.stringify({ name, movedAt: new Date().toISOString(), files: moved.map(({ target }) => basename(target)) }, null, 2)}\n`, "utf8");
-    return { ok: true, trashDir, moved: moved.map(({ target }) => target) };
-  } catch (err) {
-    for (const { source, target } of moved.reverse()) {
-      try { if (existsSync(target) && !existsSync(source)) renameSync(target, source); } catch {}
-    }
-    try { if (existsSync(trashDir)) rmSync(trashDir, { recursive: true, force: true }); } catch {}
-    return { ok: false, error: err.message, trashDir, moved: [] };
   }
 }
 
@@ -2363,152 +2357,6 @@ function writeModeMemory(modeId, payload) {
     if (existsSync(temp)) rmSync(temp, { force: true });
   }
   return { ...data, path };
-}
-
-function sessionTrashRetentionDays() {
-  const value = Number(readConfig(configPath).sessionTrashRetentionDays);
-  return Number.isFinite(value) ? Math.max(1, Math.min(365, Math.floor(value))) : DEFAULT_SESSION_TRASH_RETENTION_DAYS;
-}
-
-function getSessionTrashEntry(id) {
-  const safeId = String(id || "").trim();
-  const dir = resolve(SESSION_TRASH_DIR, safeId);
-  if (!safeId || !dir.startsWith(SESSION_TRASH_DIR + sep) || !existsSync(dir)) return null;
-  try {
-    const meta = JSON.parse(readFileSync(resolve(dir, "trash-meta.json"), "utf8"));
-    const files = Array.isArray(meta.files) ? meta.files.filter((file) => typeof file === "string" && basename(file) === file) : [];
-    const paths = files.map((file) => resolve(dir, file)).filter((path) => path.startsWith(dir + sep) && existsSync(path));
-    const movedAt = String(meta.movedAt || "");
-    const movedMs = Date.parse(movedAt);
-    const totalBytes = paths.reduce((sum, path) => {
-      try { return sum + statSync(path).size; } catch { return sum; }
-    }, 0);
-    return {
-      id: safeId,
-      name: String(meta.name || safeId),
-      movedAt,
-      expiresAt: Number.isFinite(movedMs) ? new Date(movedMs + sessionTrashRetentionDays() * 864e5).toISOString() : null,
-      files,
-      fileCount: paths.length,
-      totalBytes,
-      path: paths.find((path) => path.endsWith(".jsonl") && !path.endsWith(".events.jsonl")) || null,
-      dir,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function listSessionTrash({ prune = true } = {}) {
-  if (prune) pruneExpiredSessionTrash();
-  if (!existsSync(SESSION_TRASH_DIR)) return [];
-  const items = [];
-  for (const id of readdirSync(SESSION_TRASH_DIR)) {
-    const dir = resolve(SESSION_TRASH_DIR, id);
-    if (!dir.startsWith(SESSION_TRASH_DIR + sep)) continue;
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      const entry = getSessionTrashEntry(id);
-      if (entry) {
-        const { path: _path, dir: _dir, ...publicEntry } = entry;
-        items.push(publicEntry);
-      }
-    } catch {}
-  }
-  return items.sort((a, b) => Date.parse(b.movedAt) - Date.parse(a.movedAt));
-}
-
-function pruneExpiredSessionTrash(now = Date.now()) {
-  if (!existsSync(SESSION_TRASH_DIR)) return { deleted: 0 };
-  const cutoff = now - sessionTrashRetentionDays() * 864e5;
-  let deleted = 0;
-  for (const item of listSessionTrash({ prune: false })) {
-    const movedAt = Date.parse(item.movedAt);
-    if (!Number.isFinite(movedAt) || movedAt > cutoff) continue;
-    const dir = resolve(SESSION_TRASH_DIR, item.id);
-    if (!(dir.startsWith(SESSION_TRASH_DIR + sep) && existsSync(dir))) continue;
-    rmSync(dir, { recursive: true, force: true });
-    deleted++;
-  }
-  if (deleted > 0) console.error(`[launcher] expired session trash removed=${deleted}`);
-  return { deleted };
-}
-
-function trashSessions(names, runId = "manual") {
-  const requested = [...new Set((Array.isArray(names) ? names : []).map((name) => String(name).trim()).filter(isValidSessionName))];
-  const moved = [];
-  const failed = [];
-  for (const name of requested) {
-    const result = softDeleteSession(name, runId.slice(0, 12));
-    if (result.ok) moved.push({ name, trashDir: result.trashDir });
-    else failed.push({ name, error: result.error || "move to trash failed" });
-  }
-  if (moved.length > 0) broadcastDashboardEvent({ kind: "sessions-changed", action: "trash", count: moved.length });
-  return { ok: failed.length === 0, moved, failed, movedCount: moved.length, failedCount: failed.length };
-}
-
-function restoreSessionTrash(id, requestedName = null) {
-  const entry = getSessionTrashEntry(id);
-  if (!entry) return { ok: false, error: "trash item not found" };
-  const dir = entry.dir;
-  try {
-    const meta = JSON.parse(readFileSync(resolve(dir, "trash-meta.json"), "utf8"));
-    const files = Array.isArray(meta.files) ? meta.files : [];
-    const originalName = String(meta.name || entry.id);
-    const restoredName = requestedName == null || String(requestedName).trim() === "" ? originalName : String(requestedName).trim();
-    if (!isValidSessionName(restoredName)) throw new Error("invalid restored session name");
-    const destinationRoot = sessionsDir;
-    mkdirSync(destinationRoot, { recursive: true });
-    const targets = [];
-    for (const file of files) {
-      if (basename(file) !== file) throw new Error("invalid trash filename");
-      const restoredFile = file.startsWith(`${originalName}.`) ? `${restoredName}${file.slice(originalName.length)}` : file;
-      const destination = resolve(destinationRoot, restoredFile);
-      if (existsSync(destination)) throw new Error(`session file already exists: ${file}`);
-      targets.push({ source: resolve(dir, file), destination });
-    }
-    const moved = [];
-    try {
-      for (const target of targets) {
-        renameSync(target.source, target.destination);
-        moved.push(target);
-      }
-    } catch (err) {
-      for (const target of moved.reverse()) {
-        try { if (existsSync(target.destination) && !existsSync(target.source)) renameSync(target.destination, target.source); } catch {}
-      }
-      throw err;
-    }
-    rmSync(dir, { recursive: true, force: true });
-    broadcastDashboardEvent({ kind: "sessions-changed", action: "restore", name: restoredName });
-    return { ok: true, restored: true, name: restoredName };
-  } catch (err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-function deleteSessionTrash(ids) {
-  const requested = [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))];
-  const deleted = [];
-  const failed = [];
-  for (const id of requested) {
-    const entry = getSessionTrashEntry(id);
-    if (!entry) { failed.push({ id, error: "trash item not found" }); continue; }
-    try { rmSync(entry.dir, { recursive: true, force: true }); deleted.push({ id, name: entry.name }); }
-    catch (err) { failed.push({ id, error: err.message }); }
-  }
-  if (deleted.length > 0) broadcastDashboardEvent({ kind: "sessions-changed", action: "trash-delete", count: deleted.length });
-  return { ok: failed.length === 0, deleted, failed, deletedCount: deleted.length, failedCount: failed.length };
-}
-
-function setSessionTrashRetentionDays(days) {
-  const value = Number(days);
-  if (!Number.isFinite(value) || value < 1 || value > 365) return { ok: false, error: "retentionDays must be between 1 and 365" };
-  const cfg = readConfig(configPath);
-  cfg.sessionTrashRetentionDays = Math.floor(value);
-  writeConfig(cfg, configPath);
-  const pruned = pruneExpiredSessionTrash();
-  return { ok: true, retentionDays: cfg.sessionTrashRetentionDays, pruned: pruned.deleted };
 }
 
 pruneExpiredSessionTrash();
