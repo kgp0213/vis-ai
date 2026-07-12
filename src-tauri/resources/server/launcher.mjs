@@ -443,9 +443,9 @@ deployEccRules();
 const serverModUrl = distPath("server-XGDBRWMB.js");
 console.error(`[launcher] importing ${serverModUrl}`);
 
-let startDashboardServer;
+let startDashboardServer, pruneMemoryTrash;
 try {
-  ({ startDashboardServer } = await import(serverModUrl));
+  ({ startDashboardServer, pruneMemoryTrash } = await import(serverModUrl));
 } catch (err) {
   console.error(`[launcher] server module import failed: ${err.message}`);
   process.stdout.write(JSON.stringify({ error: `server module import failed: ${err.message}` }) + "\n");
@@ -528,6 +528,8 @@ if (configMigration.status === "migrated") {
   process.stdout.write(`${JSON.stringify({ error: message })}\n`);
   process.exit(1);
 }
+const prunedMemoryTrash = pruneMemoryTrash(visionoxDataDir);
+if (prunedMemoryTrash > 0) console.error(`[launcher] removed ${prunedMemoryTrash} expired memory trash item(s)`);
 if (configMigration.backupSanitization?.sanitized || configMigration.backupSanitization?.skipped) {
   console.error(`[launcher] config backups sanitized=${configMigration.backupSanitization.sanitized}, skipped=${configMigration.backupSanitization.skipped}`);
 }

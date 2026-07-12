@@ -1790,23 +1790,92 @@ function snapshotSoul(memoryHomeDir, soulPath) {
 function memoryTrashDir(memoryHomeDir) {
   return join5(memoryHomeDir, "memory-trash");
 }
+var MEMORY_TRASH_RETENTION_DAYS = 30;
+var MEMORY_TRASH_RETENTION_MS = MEMORY_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1e3;
+var MEMORY_TRASH_ID_RE = /^[a-zA-Z0-9_-]+$/;
+function memoryTrashFileNames(memoryHomeDir) {
+  const dir = memoryTrashDir(memoryHomeDir);
+  if (!existsSync5(dir)) return [];
+  return readdirSync3(dir).filter((entry) => entry.endsWith(".json") && MEMORY_TRASH_ID_RE.test(entry.slice(0, -5)));
+}
+function memoryTrashExpiresAt(deletedAt) {
+  const timestamp = Date.parse(String(deletedAt ?? ""));
+  return Number.isFinite(timestamp) ? new Date(timestamp + MEMORY_TRASH_RETENTION_MS).toISOString() : null;
+}
 function writeMemoryTrash(memoryHomeDir, entry) {
+  pruneMemoryTrash(memoryHomeDir);
   const dir = memoryTrashDir(memoryHomeDir);
   mkdirSync2(dir, { recursive: true });
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  atomicWriteMemoryFile(join5(dir, `${id}.json`), `${JSON.stringify({ ...entry, id, deletedAt: new Date().toISOString() }, null, 2)}\n`);
+  const deletedAt = new Date().toISOString();
+  atomicWriteMemoryFile(join5(dir, `${id}.json`), `${JSON.stringify({ ...entry, id, deletedAt, expiresAt: memoryTrashExpiresAt(deletedAt) }, null, 2)}\n`);
   return id;
 }
 function readMemoryTrash(memoryHomeDir, id) {
-  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return null;
+  if (!MEMORY_TRASH_ID_RE.test(id)) return null;
   const path = join5(memoryTrashDir(memoryHomeDir), `${id}.json`);
   if (!existsSync5(path)) return null;
-  try { return JSON.parse(readFileSync4(path, "utf8")); } catch { return null; }
+  try {
+    const parsed = JSON.parse(readFileSync4(path, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return { ...parsed, id, expiresAt: memoryTrashExpiresAt(parsed.deletedAt) };
+  } catch {
+    return null;
+  }
+}
+function pruneMemoryTrash(memoryHomeDir, now = Date.now()) {
+  const dir = memoryTrashDir(memoryHomeDir);
+  if (!existsSync5(dir)) return 0;
+  let removed = 0;
+  for (const name of memoryTrashFileNames(memoryHomeDir)) {
+    const item = readMemoryTrash(memoryHomeDir, name.slice(0, -5));
+    if (!item?.expiresAt || Date.parse(item.expiresAt) > now) continue;
+    try {
+      unlinkSync(join5(dir, name));
+      removed++;
+    } catch {
+    }
+  }
+  return removed;
+}
+function deleteMemoryTrash(memoryHomeDir, id) {
+  if (!MEMORY_TRASH_ID_RE.test(id)) return false;
+  const path = join5(memoryTrashDir(memoryHomeDir), `${id}.json`);
+  if (!existsSync5(path)) return false;
+  unlinkSync(path);
+  return true;
+}
+function purgeMemoryTrash(memoryHomeDir) {
+  const dir = memoryTrashDir(memoryHomeDir);
+  if (!existsSync5(dir)) return { deleted: 0, failed: [] };
+  let deleted = 0;
+  const failed = [];
+  for (const name of memoryTrashFileNames(memoryHomeDir)) {
+    try {
+      unlinkSync(join5(dir, name));
+      deleted++;
+    } catch (err) {
+      failed.push({ id: name.slice(0, -5), error: err.message });
+    }
+  }
+  return { deleted, failed };
 }
 function listMemoryTrash(memoryHomeDir) {
+  pruneMemoryTrash(memoryHomeDir);
   const dir = memoryTrashDir(memoryHomeDir);
   if (!existsSync5(dir)) return [];
-  return readdirSync3(dir).filter((name) => /^[a-zA-Z0-9_-]+\.json$/.test(name)).map((name) => readMemoryTrash(memoryHomeDir, name.slice(0, -5))).filter(Boolean).sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt))).slice(0, 100);
+  return readdirSync3(dir).filter((name) => /^[a-zA-Z0-9_-]+\.json$/.test(name)).map((name) => readMemoryTrash(memoryHomeDir, name.slice(0, -5))).filter(Boolean).sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+}
+function memoryTrashState(memoryHomeDir, cwd) {
+  const items = listMemoryTrash(memoryHomeDir).map((item) => {
+    const requiresOriginalProject = item.kind === "persistent" && item.scope === "project";
+    const hasProjectIdentity = typeof item.projectId === "string" && item.projectId.length > 0;
+    const canRestore = !requiresOriginalProject || hasProjectIdentity && Boolean(cwd) && projectHash(cwd) === item.projectId;
+    const restoreHint = canRestore ? null : hasProjectIdentity ? "open the original project before restoring this memory" : "legacy project ownership is unknown; recreate it from the preview instead";
+    return { ...item, canRestore, restoreHint };
+  });
+  const total = memoryTrashFileNames(memoryHomeDir).length;
+  return { items, total, invalidCount: Math.max(0, total - items.length), retentionDays: MEMORY_TRASH_RETENTION_DAYS };
 }
 async function handleMemory(method, rest, body, ctx) {
   const cwd = ctx.getCurrentCwd?.();
@@ -1855,7 +1924,7 @@ async function handleMemory(method, rest, body, ctx) {
         },
         modeMemory: ctx.getAllModeMemory?.() ?? null,
         session: { items: ctx.getSessionMemories?.() ?? [] },
-        trash: { items: listMemoryTrash(memoryHomeDir) },
+        trash: memoryTrashState(memoryHomeDir, cwd),
         workspace: cwd ? { path: cwd, name: basename(cwd) } : null,
         injection: memoryRuntime?.next ?? ctx.getMemoryInjectionStatus?.() ?? null,
         runtime: memoryRuntime,
@@ -1866,7 +1935,7 @@ async function handleMemory(method, rest, body, ctx) {
   const [scope, ...nameParts] = rest;
   const name = nameParts.join("/");
   if (method === "GET") {
-    if (scope === "trash") return { status: 200, body: { items: listMemoryTrash(memoryHomeDir) } };
+    if (scope === "trash") return { status: 200, body: memoryTrashState(memoryHomeDir, cwd) };
     if (scope === "soul") {
       if (name === "history") return { status: 200, body: { items: listSoulHistory(memoryHomeDir) } };
       const body2 = existsSync5(soulPath) ? readFileSync4(soulPath, "utf8") : "";
@@ -1901,12 +1970,22 @@ async function handleMemory(method, rest, body, ctx) {
       return result ? { status: 200, body: result } : { status: 501, body: { error: "memory apply is not available" } };
     }
     if (scope === "trash" && rest[1] && rest[2] === "restore") {
-      const item = readMemoryTrash(memoryHomeDir, rest[1]);
+      const trashId = rest[1];
+      const item = readMemoryTrash(memoryHomeDir, trashId);
       if (!item) return { status: 404, body: { error: "trash item not found" } };
       if (item.kind === "mode") {
         const result = ctx.restoreModeMemoryTrash?.(item);
         if (!result) return { status: 409, body: { error: "mode memory could not be restored" } };
       } else {
+        if (item.kind !== "persistent" || !SAFE_NAME.test(item.name) || item.scope !== "global" && item.scope !== "project" || typeof item.raw !== "string") {
+          return { status: 400, body: { error: "trash item is invalid" } };
+        }
+        if (item.scope === "project" && !item.projectId) {
+          return { status: 409, body: { error: "legacy project ownership is unknown; recreate it from the preview instead" } };
+        }
+        if (item.scope === "project" && (!cwd || projectHash(cwd) !== item.projectId)) {
+          return { status: 409, body: { error: "open the original project before restoring this memory" } };
+        }
         const targetDir = item.scope === "global" ? globalDir : projectMemDir;
         if (!targetDir) return { status: 503, body: { error: "project is not active" } };
         const target = join5(targetDir, `${item.name}.md`);
@@ -1915,7 +1994,8 @@ async function handleMemory(method, rest, body, ctx) {
         atomicWriteMemoryFile(target, String(item.raw ?? ""));
         store.regenerateIndex(item.scope === "global" ? "global" : "project");
       }
-      unlinkSync(join5(memoryTrashDir(memoryHomeDir), `${item.id}.json`));
+      if (!deleteMemoryTrash(memoryHomeDir, trashId)) return { status: 500, body: { error: "memory was restored but the trash entry could not be removed" } };
+      ctx.audit?.({ ts: Date.now(), action: "restore-memory-trash", payload: { id: trashId, kind: item.kind, scope: item.scope ?? item.mode } });
       return { status: 200, body: { restored: true, item } };
     }
     if (scope === "soul") {
@@ -2008,6 +2088,23 @@ async function handleMemory(method, rest, body, ctx) {
     return { status: 400, body: { error: "bad scope or name" } };
   }
   if (method === "DELETE") {
+    if (scope === "trash") {
+      if (!name) {
+        const parsed = parseBody6(body);
+        if (parsed.confirm !== true) return { status: 400, body: { error: "confirm=true is required to empty memory trash" } };
+        const result = purgeMemoryTrash(memoryHomeDir);
+        ctx.audit?.({ ts: Date.now(), action: "purge-memory-trash", payload: { deleted: result.deleted, failed: result.failed.length } });
+        return result.failed.length > 0 ? { status: 500, body: { error: "some memory trash entries could not be deleted", ...result } } : { status: 200, body: result };
+      }
+      if (!MEMORY_TRASH_ID_RE.test(name)) return { status: 400, body: { error: "bad trash id" } };
+      try {
+        if (!deleteMemoryTrash(memoryHomeDir, name)) return { status: 404, body: { error: "trash item not found" } };
+        ctx.audit?.({ ts: Date.now(), action: "delete-memory-trash", payload: { id: name } });
+        return { status: 200, body: { deleted: true, id: name } };
+      } catch (err) {
+        return { status: 500, body: { error: err.message } };
+      }
+    }
     if (scope === "session" && name) {
       const deleted = ctx.deleteSessionMemory?.(name) ?? false;
       return deleted ? { status: 200, body: { deleted: true } } : { status: 404, body: { error: "not found" } };
@@ -2020,7 +2117,7 @@ async function handleMemory(method, rest, body, ctx) {
         const sourcePath = join5(sourceDir, `${name}.md`);
         const raw = existsSync5(sourcePath) ? readFileSync4(sourcePath, "utf8") : null;
         if (raw === null) return { status: 404, body: { error: "not found" } };
-        const trashId = writeMemoryTrash(memoryHomeDir, { kind: "persistent", scope: memoryScope, name, raw });
+        const trashId = writeMemoryTrash(memoryHomeDir, { kind: "persistent", scope: memoryScope, name, raw, ...(memoryScope === "project" ? { projectId: projectHash(cwd) } : {}) });
         try {
           if (!store.delete(memoryScope, name)) throw new Error("memory disappeared before deletion");
         } catch (err) {
@@ -5816,6 +5913,7 @@ export {
   checkAuth,
   constantTimeEquals,
   dispatch,
+  pruneMemoryTrash,
   readBody,
   startDashboardServer
 };

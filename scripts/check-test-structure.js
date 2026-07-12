@@ -23,6 +23,7 @@ const requiredDomainTests = [
   "session-trash.test.mjs",
   "session-knowledge.test.mjs",
   "skill-availability.test.mjs",
+  "memory-trash.test.mjs",
 ];
 const failures = [];
 for (const [relative, maxBytes] of limits) {

@@ -28458,7 +28458,8 @@ function MemoryPanel() {
   const remove = q2(async () => {
     if (!open || !draft) return;
     const label = draft.description || draft.text || draft.name;
-    if (!globalThis.confirm(`确定删除“${label}”吗？此操作不可撤销。`)) return;
+    const prompt = open.kind === "persistent" || open.kind === "mode" ? `将“${label}”移入回收站？${tree?.trash?.retentionDays ?? 30} 天内可以恢复。` : `确定删除“${label}”吗？此操作不可撤销。`;
+    if (!globalThis.confirm(prompt)) return;
     setBusy(true);
     setError(null);
     try {
@@ -28592,6 +28593,45 @@ function MemoryPanel() {
       setBusy(false);
     }
   }, [open, load]);
+  const permanentlyDeleteMemoryTrash = q2(async () => {
+    if (!open || open.kind !== "trash") return;
+    const label = draft?.description || draft?.name || open.name;
+    if (!globalThis.confirm(`永久删除“${label}”？删除后无法恢复。`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/memory/trash/${encodeURIComponent(open.name)}`, { method: "DELETE", body: {} });
+      setOpen(null);
+      setDraft(null);
+      setBaseline("");
+      showInfo("记忆已永久删除");
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [open, draft, load]);
+  const emptyMemoryTrash = q2(async () => {
+    const count = tree?.trash?.total ?? tree?.trash?.items?.length ?? 0;
+    const invalidCount = tree?.trash?.invalidCount ?? 0;
+    const invalidHint = invalidCount > 0 ? `，其中 ${invalidCount} 条文件已损坏、无法预览` : "";
+    if (count === 0 || !globalThis.confirm(`清空回收站中的 ${count} 条记忆${invalidHint}？全部内容将永久删除且无法恢复。`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api("/memory/trash", { method: "DELETE", body: { confirm: true } });
+      setOpen(null);
+      setDraft(null);
+      setBaseline("");
+      showInfo(`已永久删除 ${result.deleted ?? count} 条记忆`);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, [tree, load]);
   if (!tree && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("memory.loading")}</div>`;
   if (error && !tree) return html4`<div class="card accent-err">${error}</div>`;
@@ -28612,7 +28652,7 @@ function MemoryPanel() {
     if (scopeFilter !== "all" && item.scopeKey !== scopeFilter) return false;
     if (item.kind === "mode" && modeFilter !== "all" && item.modeId !== modeFilter) return false;
     if (!needle) return true;
-    return [item.description, item.body, item.searchText, item.text, item.type, item.modeLabel, ...(item.keywords ?? [])].some((value) => String(value ?? "").toLowerCase().includes(needle));
+    return [item.description, item.body, item.raw, item.item?.text, item.searchText, item.text, item.type, item.modeLabel, ...(item.keywords ?? [])].some((value) => String(value ?? "").toLowerCase().includes(needle));
   });
   const activeInjection = tree.runtime?.active ?? tree.injection;
   const scopeLabel = (item) => item.scopeKey === "global" ? "全局" : item.scopeKey === "project" ? "当前项目" : item.scopeKey === "mode" ? item.modeLabel : item.scopeKey === "soul" ? "AI 身份" : item.scopeKey === "trash" ? "回收站" : "当前会话";
@@ -28664,7 +28704,7 @@ function MemoryPanel() {
       ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
       <div class="memory-layout">
         <div class="memory-list-pane">
-          <div class="memory-list-head"><span>${visibleItems.length} 条</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? "收起新增" : "新增记忆"}</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>刷新</button></div></div>
+          <div class="memory-list-head"><span>${visibleItems.length} 条${scopeFilter === "trash" ? ` · ${tree.trash?.retentionDays ?? 30} 天后自动清理${tree.trash?.invalidCount ? ` · ${tree.trash.invalidCount} 条损坏` : ""}` : ""}</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? "收起新增" : "新增记忆"}</button>` : null}${scopeFilter === "trash" && (tree.trash?.total ?? trashItems.length) > 0 ? html4`<button class="btn btn-sm danger" disabled=${busy} onClick=${emptyMemoryTrash}>清空回收站</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>刷新</button></div></div>
           ${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" && createOpen ? html4`<div class="memory-create-panel">
             <div class="memory-section-title">${newScope === "mode" ? "新增场景记忆" : "新增长期记忆"}</div>
             <div class="memory-create-row">
@@ -28690,7 +28730,7 @@ function MemoryPanel() {
                   <span class="memory-row-main">${item.description || item.text || item.name}</span>
                   <span class="memory-row-meta">
                     <span>${scopeLabel(item)}</span>
-                    <span>${item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.kind === "soul" ? "手动维护" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
+                    <span>${item.kind === "trash" ? `清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "未知"}` : item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.kind === "soul" ? "手动维护" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
                     <span class=${injectionState(item) === "omitted" || item.enabled === false ? "memory-disabled" : "memory-injected"}>${injectionLabel(item)}</span>
                     ${diagnosticLabel(item) ? html4`<span class="memory-diagnostic">${diagnosticLabel(item)}</span>` : null}
                   </span>
@@ -28710,7 +28750,7 @@ function MemoryPanel() {
             <div class="memory-detail-head">
               <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? "有未保存修改" : "已同步"}</div></div>
               <div class="memory-detail-actions">
-                ${open.kind === "trash" ? html4`<button class="btn primary" disabled=${busy} onClick=${restoreTrash}>恢复此记忆</button>` : open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>保存</button>` : null}
+                ${open.kind === "trash" ? html4`<button class="btn primary" title=${draft.restoreHint ?? "恢复到原范围"} disabled=${busy || draft.canRestore === false} onClick=${restoreTrash}>恢复此记忆</button><button class="btn danger" disabled=${busy} onClick=${permanentlyDeleteMemoryTrash}>永久删除</button>` : open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>保存</button>` : null}
                 ${open.kind !== "soul" && open.kind !== "trash" ? html4`<button class="btn danger" disabled=${busy} onClick=${remove}>删除</button>` : null}
               </div>
             </div>
@@ -28741,7 +28781,7 @@ function MemoryPanel() {
               ${soulPreview ? html4`<div class=${`memory-soul-preview ${soulPreview.valid ? "" : "invalid"}`}><div><strong>最终注入预览</strong><span>${soulPreview.chars}/${soulPreview.maxChars} 字符</span></div><pre>${soulPreview.finalBody}</pre></div>` : null}
               <div class="memory-soul-note"><strong>Soul 不提供删除</strong><span>保存后在下一次 /new 或上下文重建时生效。</span></div>
               ${(draft.history ?? []).length > 0 ? html4`<div class="memory-soul-history"><strong>版本历史</strong>${draft.history.map((item) => html4`<div><span>${new Date(item.savedAt).toLocaleString()} · ${item.name || "未命名"} · ${fmtBytes(item.size)}</span><button class="btn ghost" disabled=${busy} onClick=${() => restoreSoulVersion(item.id)}>恢复此版本</button></div>`)}</div>` : null}
-            ` : open.kind === "trash" ? html4`<div class="memory-session-note">删除于 ${new Date(draft.deletedAt).toLocaleString()}，恢复后将回到原范围。</div>` : html4`<div class="memory-session-note">仅在当前对话中生效，恢复该对话时会一并恢复。</div>`}
+            ` : open.kind === "trash" ? html4`<div class=${`memory-session-note ${draft.canRestore === false ? "memory-trash-blocked" : ""}`}>删除于 ${new Date(draft.deletedAt).toLocaleString()}，${draft.expiresAt ? `${new Date(draft.expiresAt).toLocaleString()} 后自动永久清理。` : `保留 ${tree.trash?.retentionDays ?? 30} 天。`}${draft.canRestore === false ? draft.projectId ? " 这是其他项目的记忆，请打开原项目后恢复；仍可在此预览或永久删除。" : " 旧记录未保存原项目信息，无法安全自动恢复；可预览内容后重新创建。" : " 恢复后将回到原范围。"}</div>` : html4`<div class="memory-session-note">仅在当前对话中生效，恢复该对话时会一并恢复。</div>`}
             ${open.kind !== "soul" ? html4`<label class="memory-field memory-content-field"><span>${open.kind === "mode" ? `内容 · ${String(draft.content ?? "").length}/180` : "内容"}</span><textarea rows="16" maxlength=${open.kind === "mode" ? 180 : null} value=${draft.content ?? ""} disabled=${open.kind === "session" || open.kind === "trash"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>` : null}
             <div class="memory-detail-foot">${open.kind === "session" ? "当前会话" : open.kind === "soul" ? draft.path ?? "~/.visionox/soul.md" : `创建 ${draft.createdAt || "未知"} · 更新 ${draft.updatedAt || "未知"} · 来源 ${draft.source === "model" ? "AI" : draft.source === "ui" ? "界面" : "历史数据"}`}</div>
           `}
