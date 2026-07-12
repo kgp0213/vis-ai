@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -83,7 +83,20 @@ function connectCdp(webSocketUrl) {
   function send(method, params = {}) {
     const id = nextId++;
     return new Promise((resolveResult, reject) => {
-      pending.set(id, { resolve: resolveResult, reject });
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`Edge DevTools request timed out: ${method}`));
+      }, 10_000);
+      pending.set(id, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          resolveResult(result);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
       socket.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -101,6 +114,39 @@ async function waitForDashboard(cdp, timeoutMs) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 200));
   }
   throw new Error(`Dashboard did not render within ${timeoutMs}ms${cdp.browserErrors.length ? `: ${cdp.browserErrors.join(" | ")}` : ""}`);
+}
+
+async function evaluate(cdp, expression) {
+  const evaluated = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+  if (evaluated.exceptionDetails) {
+    throw new Error(evaluated.exceptionDetails.exception?.description || evaluated.exceptionDetails.text || "browser evaluation failed");
+  }
+  return evaluated.result?.value;
+}
+
+async function waitForBrowserValue(cdp, expression, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await evaluate(cdp, expression);
+    if (predicate(value)) return value;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error(`browser condition did not become true within ${timeoutMs}ms`);
+}
+
+async function waitForApiValue(url, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        const value = await response.json();
+        if (predicate(value)) return value;
+      }
+    } catch {}
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error(`API condition did not become true within ${timeoutMs}ms`);
 }
 
 function removeTempRoot(path) {
@@ -129,10 +175,19 @@ const tempRoot = mkdtempSync(join(tmpdir(), "visionox-ui-smoke-"));
 const port = await freePort();
 const debugPort = await freePort();
 const token = "uismoketoken123";
+const homeDir = join(tempRoot, "home");
+const visionoxDir = join(homeDir, ".visionox");
+mkdirSync(visionoxDir, { recursive: true });
+const seededMessages = Array.from({ length: 1200 }, (_, index) => ({
+  id: `seed-${index + 1}`,
+  role: index % 2 === 0 ? "user" : "assistant",
+  content: `long session message ${index + 1} ${"content ".repeat(8)}`,
+}));
+writeFileSync(join(visionoxDir, "active-session.jsonl"), `${seededMessages.map((message) => JSON.stringify(message)).join("\n")}\n`, "utf8");
 const childEnv = {
   ...process.env,
-  HOME: join(tempRoot, "home"),
-  USERPROFILE: join(tempRoot, "home"),
+  HOME: homeDir,
+  USERPROFILE: homeDir,
 };
 const launcher = spawn(process.execPath, [launcherPath, "--port", String(port), "--token", token], {
   cwd: root,
@@ -169,7 +224,63 @@ try {
   const rendered = await waitForDashboard(cdp, 15_000);
   if (rendered.boot) throw new Error("Dashboard remained on its loading screen");
   if (rendered.title !== "Visionox") throw new Error(`unexpected Dashboard title: ${rendered.title}`);
-  console.log("[ui-smoke] Edge rendered the Dashboard successfully");
+
+  const messagePage = await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1200);
+  if (messagePage.totalMessages !== 1200) throw new Error(`expected 1200 restored messages, got ${messagePage.totalMessages}`);
+  const performance = await evaluate(cdp, `(() => {
+    const input = document.querySelector('.chat-input-area textarea');
+    if (!input) throw new Error('chat input not found');
+    const durations = [];
+    for (let index = 0; index < 100; index++) {
+      const started = performance.now();
+      input.value = 'latency probe ' + index;
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, data: String(index), inputType: 'insertText' }));
+      durations.push(performance.now() - started);
+    }
+    durations.sort((a, b) => a - b);
+    return {
+      renderedMessages: document.querySelectorAll('.chat-msg').length,
+      p95Ms: durations[Math.floor(durations.length * 0.95)],
+      maxMs: durations[durations.length - 1],
+    };
+  })()`);
+  if (performance.renderedMessages > 35) throw new Error(`long session rendered too many messages: ${performance.renderedMessages}`);
+  if (performance.p95Ms > 25) throw new Error(`chat input p95 exceeded 25ms: ${performance.p95Ms.toFixed(2)}ms`);
+  console.log("[ui-smoke] long-session render and input latency passed");
+
+  await evaluate(cdp, `(() => {
+    const chip = [...document.querySelectorAll('.composer-chip')].find((item) => item.textContent.includes('模型'));
+    if (!chip) throw new Error('model picker not found');
+    chip.click();
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('button')].find((item) => item.textContent.includes('检测全部模型')))`, Boolean);
+  console.log("[ui-smoke] model picker interaction passed");
+
+  await evaluate(cdp, `(() => {
+    const select = [...document.querySelectorAll('.chat-input-area select')].find((item) => [...item.options].some((option) => option.value === 'off'));
+    if (!select) throw new Error('index retrieval selector not found');
+    select.value = 'off';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  console.log("[ui-smoke] index selector change dispatched");
+  await waitForApiValue(`http://127.0.0.1:${port}/api/index-retrieval-mode?token=${token}`, (value) => value.mode === "off");
+  console.log("[ui-smoke] index mode persisted by API");
+
+  await evaluate(cdp, `document.querySelector('.work-mode-picker .mode-btn:not(.active)')?.click()`);
+  console.log("[ui-smoke] work-mode switch dispatched");
+  await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
+  console.log("[ui-smoke] index mode survived work-mode switch");
+  await evaluate(cdp, `window.confirm = () => true`);
+  await evaluate(cdp, `[...document.querySelectorAll('button')].find((item) => item.title?.startsWith('/new'))?.click()`);
+  console.log("[ui-smoke] new-session action dispatched");
+  await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1);
+  await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
+  console.log("[ui-smoke] index mode persisted across work-mode switch and new session");
+
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitForDashboard(cdp, 15_000);
+  await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
+  console.log(`[ui-smoke] Dashboard rendered; long-session input p95=${performance.p95Ms.toFixed(2)}ms, max=${performance.maxMs.toFixed(2)}ms, DOM messages=${performance.renderedMessages}`);
 } catch (error) {
   console.error(`[ui-smoke] ${error.message}`);
   if (launcherError) console.error(launcherError.slice(-2000));
