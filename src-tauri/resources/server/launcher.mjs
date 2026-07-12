@@ -33,6 +33,7 @@ const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto")
 const { spawnSync } = await importEarly("node:child_process");
 const { createInterface } = await importEarly("node:readline");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
+const { commitScheduleMutation, readScheduleStore, writeScheduleStore } = await importEarly("./lib/schedule-store.mjs");
 
 const {
   getActiveProvider,
@@ -3588,6 +3589,7 @@ const SCHEDULE_REPORT_RANGE_MODES = new Set([
   "custom",
 ]);
 let schedules = [];
+let scheduleStoreError = null;
 const scheduleTimers = new Map();
 const runningScheduleIds = new Set();
 const scheduleRunControllers = new Map();
@@ -3903,21 +3905,21 @@ function sameScheduleWorkspace(task) {
   }
 }
 
-function readSchedules() {
-  try {
-    const parsed = JSON.parse(readFileSync(schedulesFile, "utf8"));
-    if (!Array.isArray(parsed?.schedules)) return [];
-    return parsed.schedules.map(normalizeSchedule).filter(Boolean);
-  } catch {
-    return [];
-  }
+function writeSchedules(next = schedules) {
+  writeScheduleStore(schedulesFile, next);
+  scheduleStoreError = null;
 }
 
-function writeSchedules() {
+function commitSchedules(mutate) {
+  if (scheduleStoreError) return { ok: false, error: scheduleStoreError };
   try {
-    atomicWriteFileSync(schedulesFile, `${JSON.stringify({ version: 1, schedules }, null, 2)}\n`);
-  } catch (err) {
-    console.error(`[launcher] writeSchedules failed: ${err.message}`);
+    const committed = commitScheduleMutation(schedules, mutate, writeSchedules);
+    if (!committed.ok) return committed;
+    schedules = committed.schedules;
+    return committed;
+  } catch (error) {
+    console.error(`[launcher] writeSchedules failed: ${error.message}`);
+    return { ok: false, error: `scheduled task was not saved: ${error.message}` };
   }
 }
 
@@ -5115,8 +5117,21 @@ function cancelScheduleRun(id) {
   return { ok: true, cancelled: true, runId: active.runId, schedule: publicSchedule(task) };
 }
 
-schedules = readSchedules();
-repairInterruptedSchedules();
+{
+  const loaded = readScheduleStore(schedulesFile, normalizeSchedule);
+  schedules = loaded.schedules;
+  scheduleStoreError = loaded.ok ? null : loaded.error;
+  if (scheduleStoreError) {
+    console.error(`[launcher] scheduled tasks disabled: ${scheduleStoreError}; original file was not modified`);
+  } else {
+    try {
+      repairInterruptedSchedules();
+    } catch (error) {
+      scheduleStoreError = `scheduled task recovery was not saved: ${error.message}`;
+      console.error(`[launcher] ${scheduleStoreError}`);
+    }
+  }
+}
 
 try {
   eventSink = openEventSink(eventLogPath("desktop"));
@@ -6239,47 +6254,64 @@ const ctx = {
   listPromptQueue,
   upsertPromptQueueItem,
   removePromptQueueItem,
-  listSchedules: () => schedules.map(publicSchedule),
+  listSchedules: () => {
+    if (scheduleStoreError) throw new Error(scheduleStoreError);
+    return schedules.map(publicSchedule);
+  },
   createSchedule: (input) => {
     const result = scheduleFromInput(input);
     if (!result.ok) return result;
-    schedules.push(result.task);
-    writeSchedules();
-    refreshScheduleTimer(result.task);
+    const committed = commitSchedules((next) => {
+      next.push(result.task);
+      return { ok: true, taskId: result.task.id };
+    });
+    if (!committed.ok) return committed;
+    const task = schedules.find((item) => item.id === result.task.id);
+    refreshScheduleTimer(task);
     broadcastDashboardEvent({ kind: "schedule-changed", action: "create", id: result.task.id });
-    return { ok: true, schedule: publicSchedule(result.task) };
+    return { ok: true, schedule: publicSchedule(task) };
   },
   updateSchedule: (id, patch) => {
     const idx = schedules.findIndex((item) => item.id === id);
     if (idx < 0) return { ok: false, error: "schedule not found" };
     const result = scheduleFromInput(patch, schedules[idx]);
     if (!result.ok) return result;
-    schedules[idx] = result.task;
-    writeSchedules();
-    refreshScheduleTimer(result.task);
+    const committed = commitSchedules((next) => {
+      next[idx] = result.task;
+      return { ok: true };
+    });
+    if (!committed.ok) return committed;
+    refreshScheduleTimer(schedules[idx]);
     broadcastDashboardEvent({ kind: "schedule-changed", action: "update", id });
-    return { ok: true, schedule: publicSchedule(result.task) };
+    return { ok: true, schedule: publicSchedule(schedules[idx]) };
   },
   setScheduleEnabled: (id, enabled) => {
-    const task = schedules.find((item) => item.id === id);
+    const idx = schedules.findIndex((item) => item.id === id);
+    const task = schedules[idx];
     if (!task) return { ok: false, error: "schedule not found" };
-    task.enabled = !!enabled;
-    task.updatedAt = new Date().toISOString();
-    task.nextRunAt = computeNextScheduleRun(task);
-    writeSchedules();
-    refreshScheduleTimer(task);
+    const committed = commitSchedules((next) => {
+      next[idx].enabled = !!enabled;
+      next[idx].updatedAt = new Date().toISOString();
+      next[idx].nextRunAt = computeNextScheduleRun(next[idx]);
+      return { ok: true };
+    });
+    if (!committed.ok) return committed;
+    refreshScheduleTimer(schedules[idx]);
     broadcastDashboardEvent({ kind: "schedule-changed", action: "toggle", id });
-    return { ok: true, schedule: publicSchedule(task) };
+    return { ok: true, schedule: publicSchedule(schedules[idx]) };
   },
   deleteSchedule: (id) => {
     const idx = schedules.findIndex((item) => item.id === id);
     if (idx < 0) return { ok: false, error: "schedule not found" };
     if (runningScheduleIds.has(id)) return { ok: false, error: "task is currently running" };
+    const committed = commitSchedules((next) => {
+      next.splice(idx, 1);
+      return { ok: true };
+    });
+    if (!committed.ok) return committed;
     const timer = scheduleTimers.get(id);
     if (timer) clearTimeout(timer);
     scheduleTimers.delete(id);
-    schedules.splice(idx, 1);
-    writeSchedules();
     broadcastDashboardEvent({ kind: "schedule-changed", action: "delete", id });
     return { ok: true };
   },
