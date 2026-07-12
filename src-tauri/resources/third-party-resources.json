@@ -5,16 +5,16 @@
       "id": "node-runtime",
       "path": "server/node.exe",
       "version": "v25.2.1",
-      "source": "locally supplied Node.js runtime",
-      "license": "Node.js project license",
+      "source": "https://github.com/nodejs/node",
+      "license": "MIT",
       "sha256": "91ec09dda8f20556f366110859f106ab189d45f8f6a2bd092e6785174ad4a0fa"
     },
     {
       "id": "officecli",
       "path": "server/officecli.exe",
       "version": "1.0.129",
-      "source": "internally supplied binary; acquisition record is managed outside this repository",
-      "license": "internal distribution terms",
+      "source": "https://github.com/iOfficeAI/OfficeCLI",
+      "license": "Apache-2.0",
       "sha256": "e4c84a4a32f4d22f3880575d16b1499856d1c48e86d293274919906f95d81057"
     },
     {
@@ -29,9 +29,17 @@
       "id": "katex",
       "path": "server/visionox-pkg/dashboard/vendor/katex",
       "version": "bundled distribution",
-      "source": "vendored with the Dashboard runtime",
+      "source": "https://github.com/KaTeX/KaTeX",
       "license": "MIT",
       "licenseFile": "server/visionox-pkg/dashboard/vendor/katex/LICENSE"
+    },
+    {
+      "id": "bootstrap-skills",
+      "path": "bootstrap-skills",
+      "version": "Visionox-Whale 1.28.0 bundle",
+      "source": "curated in this repository; use each SKILL.md metadata and bundled license file for upstream-specific attribution",
+      "license": "mixed: per-skill metadata; bootstrap-skills/pdf/LICENSE.txt applies to the PDF skill",
+      "licenseFile": "bootstrap-skills/pdf/LICENSE.txt"
     }
   ]
 }

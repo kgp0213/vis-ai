@@ -14,4 +14,8 @@ Provider 响应时，需要同步契约并在 `api-contracts.test.mjs` 或对应
 Dashboard 中可独立表达的策略应逐步迁入可读脚本并单测。例如 `dashboard/backup-support.js` 负责备份保留数
 归一化与恢复操作启用条件；bundle 回归只负责确认 Dashboard 正确调用该策略，真实 Edge 冒烟负责验证端到端流程。
 
+运行时失败使用 `lib/runtime-issues.mjs` 的四级语义：debug 可忽略，warning 表示可继续的功能降级，error
+表示用户数据可能不完整，fatal 必须停止当前危险操作。只有带稳定问题键的 warning/error 可以进入
+`/api/health.storageIssues`；新增错误路径需要测试“原文件未被覆盖”和“概览不会收到 debug 噪声”。
+
 测试数据必须位于系统临时目录并在成功、失败时清理。浏览器交互统一通过 `scripts/ui-smoke.js` 使用隔离的 HOME/USERPROFILE，不能读取真实 `~/.visionox`。

@@ -40,7 +40,7 @@ const required = [
   },
   {
     file: "scripts/check-build-entrypoints.js",
-    markers: ["validateBuildEntrypoints", "generic tauri entrypoint must be disabled", "bypasses the canonical release wrapper"],
+    markers: ["validateBuildEntrypoints", "tauri:dev must prepare the runtime package first", "bypasses the governed build entrypoints"],
   },
   {
     file: "scripts/check-api-contracts.js",
@@ -52,7 +52,7 @@ const required = [
   },
   {
     file: "scripts/check-third-party-resources.js",
-    markers: ["third-party-resources.json", "missing third-party inventory entry", "version or SHA-256 differs"],
+    markers: ["third-party-resources.json", "required inventory entry is missing", "version or SHA-256 differs"],
   },
   {
     file: "scripts/verify-runtime-manifest.js",
@@ -137,6 +137,10 @@ const required = [
   {
     file: "src-tauri/resources/server/lib/prompt-queue-store.mjs",
     markers: ["createPromptQueueStore", "original prompt queue was not modified", "acceptedRequest", "rememberAccepted"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/runtime-issues.mjs",
+    markers: ["createRuntimeIssueRegistry", "ACTIONABLE_LEVELS", "fatal"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-store.mjs",
@@ -279,6 +283,7 @@ const required = [
       "overview.backupRetention",
       "overview.deleteBackup",
       "overview.storageIssues",
+      "user data issues need attention",
     ],
   },
   {

@@ -4,12 +4,12 @@ import { readFileSync } from "node:fs";
 
 import { validateBuildEntrypoints } from "../../../../scripts/check-build-entrypoints.js";
 
-test("repository exposes only the canonical release build entrypoint", () => {
+test("repository keeps debug development separate from the canonical release build", () => {
   const pkg = JSON.parse(readFileSync(new URL("../../../../package.json", import.meta.url), "utf8"));
   assert.deepEqual(validateBuildEntrypoints(pkg), []);
 });
 
-test("guard rejects debug and wrapper-bypassing scripts", () => {
+test("guard rejects unprepared debug and wrapper-bypassing scripts", () => {
   const failures = validateBuildEntrypoints({ scripts: {
     tauri: "tauri",
     "tauri:dev": "tauri dev",
@@ -17,6 +17,6 @@ test("guard rejects debug and wrapper-bypassing scripts", () => {
     debug: "cargo build",
   } });
   assert.ok(failures.some((failure) => failure.includes("canonical wrapper")));
-  assert.ok(failures.some((failure) => failure.includes("tauri:dev")));
+  assert.ok(failures.some((failure) => failure.includes("prepare the runtime")));
   assert.ok(failures.some((failure) => failure.includes("debug bypasses")));
 });

@@ -11,7 +11,7 @@ npm run quality:check
 ```
 
 This checks launcher, Dashboard and API bundle syntax, product version consistency,
-disabled debug entrypoints, core API response schemas, test-file growth limits,
+governed debug/release entrypoints, core API response schemas, test-file growth limits,
 third-party runtime provenance, required local bundle patches, repository hygiene,
 all Node tests, a real Edge Dashboard render, Rust formatting, and diff whitespace.
 Project-owned runtime modules under `resources/server/lib/` must retain

@@ -138,9 +138,12 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 `lib/user-data-backup.mjs` 只遍历明确白名单：配置、Soul、定时任务、会话及回收站、长期/场景记忆、
 记忆回收站/历史，以及当前工作区 `knowledge/`。语义向量、日志、缓存和快照目录本身不在白名单中。
 
-模式记忆、提示队列、知识清单和会话元数据统一使用 `lib/versioned-json-file.mjs` 校验 JSON 与 schema
+模式记忆、提示队列、知识清单和会话元数据（包括 active session metadata）统一使用
+`lib/versioned-json-file.mjs` 校验 JSON 与 schema
 版本。损坏文件或高于当前程序支持版本的文件会进入只读保护，不会被默认值静默覆盖；问题同时暴露在
-`/api/health` 的 `storageIssues` 和概览页中。审计日志与活动计划清理失败也必须向调用方返回失败。
+`/api/health` 的 `storageIssues` 和概览页中。运行时问题分为 `debug`、`warning`、`error`、`fatal`：临时
+清理等可忽略失败只进入调试诊断；功能降级和用户数据不完整分别使用 warning/error；继续操作可能破坏
+原文件时直接 fatal 中止。概览只显示需要用户处理且带稳定问题键的 warning/error，不展示技术噪声。
 
 每个快照是独立目录，包含 schema 版本、应用版本、时间、文件数量、字节数和逐文件 SHA-256 清单。
 预览恢复时同时校验归档路径、目标路径和内容哈希，并将文件分类为缺失、相同、冲突、损坏或无效。
@@ -157,15 +160,16 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 `contracts/api-responses.schema.json` 定义概览、健康、备份、定时任务和 Provider 等核心响应的最低结构。
 质量门禁同时检查真实 API 响应和 schema，防止 Dashboard 与服务端在字段变更时静默失配。
 
-`resources/third-party-resources.json` 是打包运行资源的机器可读清单，记录 Node、OfficeCLI、Reasonix 和
-KaTeX 的版本、来源分类、许可证与可用哈希；`THIRD_PARTY_NOTICES.md` 随资源一起分发。清单只记录本机
-可验证的来源事实，不通过执行二进制或联网查询版本。
+`resources/third-party-resources.json` 是打包运行资源的机器可读清单，记录 Node、OfficeCLI、Reasonix、
+KaTeX 和 bootstrap skills 的版本、来源、许可证与可用哈希；`THIRD_PARTY_NOTICES.md` 随资源一起分发。
+OfficeCLI 与 KaTeX 使用 README 记录的上游仓库。bootstrap skills 是混合来源和混合许可证集合，按每个
+`SKILL.md` 元数据及随附许可证判断，不能整体标为 MIT。版本检查不执行二进制，也不在构建时联网查询。
 
 ## 质量边界
 
 提交前统一运行 `npm run quality:check`。Rust 工具链由根目录 `rust-toolchain.toml` 固定为 1.94.0。
-普通 `tauri` 与 `tauri:dev` 脚本已显式禁用，质量门禁会检查所有构建入口只能进入规范 release wrapper。
-该命令不会构建 Rust，也不会创建 `target/debug`；
+`npm run tauri:dev` 会先准备当前运行资源，可用于快速查看 UI 调整；其 `target/debug` 产物不是交付验证
+基准。质量门禁会检查 release 构建仍只能进入规范 wrapper，且不会自行构建 Rust 或创建 `target/debug`；
 浏览器检查使用系统 Edge 和 `%TEMP%` 下的隔离用户目录，结束后按测试进程 PID 清理子进程与
 临时数据。release 可执行文件仍只通过 `npm run tauri:build -- --no-bundle` 生成和验证。
 

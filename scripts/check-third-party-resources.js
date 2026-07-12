@@ -9,9 +9,12 @@ const resourcesDir = join(root, "src-tauri", "resources");
 const manifest = JSON.parse(readFileSync(join(resourcesDir, "runtime-manifest.json"), "utf8"));
 const inventory = JSON.parse(readFileSync(join(resourcesDir, "third-party-resources.json"), "utf8"));
 const failures = [];
+const requiredIds = new Set(["node-runtime", "officecli", "reasonix", "katex", "bootstrap-skills"]);
 const binaryByPath = new Map(manifest.artifacts.map((item) => [item.path, item]));
 for (const resource of inventory.resources ?? []) {
   if (!resource.id || !resource.path || !resource.version || !resource.source || !resource.license) failures.push(`incomplete inventory entry: ${resource.id || "unknown"}`);
+  else requiredIds.delete(resource.id);
+  if (resource.path && !existsSync(join(resourcesDir, resource.path))) failures.push(`${resource.id}: resource path is missing: ${resource.path}`);
   if (resource.sha256) {
     const binary = binaryByPath.get(resource.path);
     if (!binary) failures.push(`${resource.id}: binary is missing from runtime-manifest.json`);
@@ -19,6 +22,7 @@ for (const resource of inventory.resources ?? []) {
   }
   if (resource.licenseFile && !existsSync(join(resourcesDir, resource.licenseFile))) failures.push(`${resource.id}: missing license file ${resource.licenseFile}`);
 }
+for (const id of requiredIds) failures.push(`required inventory entry is missing: ${id}`);
 for (const binary of manifest.artifacts) {
   if (!(inventory.resources ?? []).some((resource) => resource.path === binary.path && resource.sha256 === binary.sha256)) failures.push(`${binary.path}: missing third-party inventory entry`);
 }

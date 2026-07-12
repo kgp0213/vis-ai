@@ -21,7 +21,7 @@
         "sessions": { "type": "object", "required": ["path", "count", "totalBytes"] },
         "memory": { "type": "object", "required": ["path", "fileCount", "totalBytes"] },
         "semantic": { "type": "object", "required": ["path", "exists", "fileCount", "totalBytes"] },
-        "storageIssues": { "type": "array", "items": { "type": "object", "required": ["key", "error"] } }
+        "storageIssues": { "type": "array", "items": { "type": "object", "required": ["key", "level", "error"], "properties": { "level": { "enum": ["warning", "error"] } } } }
       }
     },
     "backups": {

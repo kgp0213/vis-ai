@@ -208,7 +208,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(health.json.storage.configStatus, "current");
     assert.deepEqual(health.json.storageIssues, []);
 
-    const unhealthy = await apiGet("/api/health", { ...overrides, getPersistentStorageIssues: () => [{ key: "prompt-queue", error: "invalid JSON" }] });
+    const unhealthy = await apiGet("/api/health", { ...overrides, getPersistentStorageIssues: () => [{ key: "prompt-queue", level: "error", error: "invalid JSON" }] });
     assert.equal(unhealthy.json.storageIssues[0].key, "prompt-queue");
   });
 
@@ -232,9 +232,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(script.status, 200);
     assert.match(script.headers["content-type"], /javascript/);
 
-    const backupPolicy = await apiGet("/assets/backup-support.js");
-    assert.equal(backupPolicy.status, 200);
-    assert.match(backupPolicy.body, /VisionoxBackupPolicy/);
+    assert.match((await apiGet("/assets/backup-support.js")).body, /VisionoxBackupPolicy/);
 
     const css = await apiGet("/assets/vendor/katex/katex.min.css");
     assert.equal(css.status, 200);

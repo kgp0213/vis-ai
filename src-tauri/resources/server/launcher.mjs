@@ -69,6 +69,7 @@ const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs")
 const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.mjs");
 const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFile } = await importEarly("./lib/versioned-json-file.mjs");
 const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
+const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -327,11 +328,14 @@ if (!existsSync(modeMemoryDir)) {
 
 const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
-const persistentStorageIssues = new Map();
+const runtimeIssues = createRuntimeIssueRegistry({
+  debug: process.env.VISIONOX_DEBUG_DIAGNOSTICS === "1",
+  log: ({ level, message }) => console.error(`[launcher] ${level}: ${message}`),
+});
 
-function trackPersistentStorageIssue(key, path, error) {
-  if (error) persistentStorageIssues.set(key, { key, path, error: String(error) });
-  else persistentStorageIssues.delete(key);
+function trackPersistentStorageIssue(key, path, error, level = "error") {
+  if (error) runtimeIssues.report(level, { key, path, message: String(error) });
+  else runtimeIssues.clear(key);
 }
 
 function readDefaultSoul() {
@@ -5339,6 +5343,7 @@ async function clearActiveSession() {
   try {
     await rm(activeSessionFile, { force: true });
     await rm(activeSessionMetaFile, { force: true });
+    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, null);
   } catch (err) {
     console.error(`[launcher] failed to clear active session: ${err.message}`);
   }
@@ -5346,11 +5351,10 @@ async function clearActiveSession() {
 
 async function writeActiveSessionMeta(patch = {}) {
   try {
-    let current = {};
-    try {
-      current = JSON.parse(await readFile(activeSessionMetaFile, "utf8"));
-    } catch {
-    }
+    const stored = readVersionedJsonFile(activeSessionMetaFile, { version: 1, allowUnversioned: true });
+    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, stored.error);
+    assertVersionedJsonWritable(activeSessionMetaFile, { version: 1, allowUnversioned: true });
+    const current = stored.value ?? {};
     const sessionStat = await fsStat(activeSessionFile);
     const mode = config.mode || "general";
     const modeInfo = modeSummary(mode);
@@ -5372,8 +5376,9 @@ async function writeActiveSessionMeta(patch = {}) {
       indexRetrievalMode,
     };
     await atomicWriteFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`);
+    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, null);
   } catch (err) {
-    console.error(`[launcher] failed to write active session meta: ${err.message}`);
+    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, `active session metadata was not saved: ${err.message}`);
   }
 }
 
@@ -5410,14 +5415,13 @@ async function loadActiveSession() {
       pushMessage(entry);
       nextMsgId++;
     }
-    try {
-      const metaRaw = await readFile(activeSessionMetaFile, "utf8");
-      const meta = JSON.parse(metaRaw);
+    const storedMeta = readVersionedJsonFile(activeSessionMetaFile, { version: 1, allowUnversioned: true });
+    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, storedMeta.error);
+    if (storedMeta.ok && storedMeta.value) {
+      const meta = storedMeta.value;
       restoreSessionMemories(meta.sessionMemories);
       const modeRestore = applyModeForSessionMeta(meta);
       if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
-    } catch {
-      // ignore missing/broken meta
     }
     await writeActiveSessionMeta({ messageCount: entries.length });
     console.error(`[launcher] active session restored: ui=${messages.length}, model=${modelEntries.length}`);
@@ -5984,8 +5988,7 @@ function appendAuditEntry(entry) {
     appendFileSync(auditLogPath, `${JSON.stringify(entry)}\n`);
     trackPersistentStorageIssue("audit-log", auditLogPath, null);
   } catch (error) {
-    trackPersistentStorageIssue("audit-log", auditLogPath, `audit log write failed: ${error.message}`);
-    console.error(`[launcher] audit log write failed: ${error.message}`);
+    trackPersistentStorageIssue("audit-log", auditLogPath, `audit log write failed: ${error.message}`, "warning");
   }
 }
 
@@ -6092,7 +6095,7 @@ const ctx = {
   getPendingEditCount: () => 0,
   getLatestVersion: () => latestVersion,
   getSessionName: () => "desktop",
-  getPersistentStorageIssues: () => [...persistentStorageIssues.values()],
+  getPersistentStorageIssues: () => runtimeIssues.listUserActionable(),
   getModels: () => null,
   getLoopRunStatus: () => null,
   getActiveModal: () => activeModal,

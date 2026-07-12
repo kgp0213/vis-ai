@@ -8,12 +8,13 @@ export function validateBuildEntrypoints(pkg) {
   const scripts = pkg?.scripts ?? {};
   const failures = [];
   if (scripts["tauri:build"] !== "node scripts/run-tauri-build.js") failures.push("tauri:build must use the canonical wrapper");
-  if (!String(scripts.tauri ?? "").includes("generic Tauri commands are disabled")) failures.push("generic tauri entrypoint must be disabled");
-  if (!String(scripts["tauri:dev"] ?? "").includes("tauri dev is disabled")) failures.push("tauri:dev must be disabled");
+  if (scripts.tauri !== "tauri") failures.push("generic tauri entrypoint must use the project CLI");
+  if (scripts["pretauri:dev"] !== "node scripts/prepare-runtime-package.js") failures.push("tauri:dev must prepare the runtime package first");
+  if (scripts["tauri:dev"] !== "tauri dev") failures.push("tauri:dev must use the project CLI");
   for (const [name, command] of Object.entries(scripts)) {
-    if (name === "tauri:build" || name === "bundle:nsis" || name === "release:check") continue;
+    if (["tauri", "pretauri:dev", "tauri:dev", "tauri:build", "bundle:nsis", "release:check"].includes(name)) continue;
     if (String(command).includes("process.exit(1)") && String(command).includes("disabled")) continue;
-    if (/\btauri\s+(?:dev|build)\b|\bcargo\s+(?:build|run)\b/.test(String(command))) failures.push(`${name} bypasses the canonical release wrapper`);
+    if (/\btauri\s+(?:dev|build)\b|\bcargo\s+(?:build|run)\b/.test(String(command))) failures.push(`${name} bypasses the governed build entrypoints`);
   }
   return failures;
 }

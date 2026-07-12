@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "tauri": "node -e \"console.error('generic Tauri commands are disabled; use npm run tauri:build -- --no-bundle'); process.exit(1)\"",
-    "tauri:dev": "node -e \"console.error('tauri dev is disabled because it creates target/debug'); process.exit(1)\"",
+    "tauri": "tauri",
+    "pretauri:dev": "node scripts/prepare-runtime-package.js",
+    "tauri:dev": "tauri dev",
     "tauri:build": "node scripts/run-tauri-build.js",
     "bundle:nsis": "npm run tauri:build -- --bundles nsis && npm run verify:nsis",
     "check:bundle-patches": "node scripts/check-bundle-patches.js",

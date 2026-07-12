@@ -44,10 +44,11 @@
 
 ### 开发与维护
 
-- 禁用会生成 `target/debug` 的通用 Tauri 开发入口，构建脚本必须使用规范 release wrapper。
+- 保留先准备运行资源的 `tauri:dev` 用于快速 UI 调试，同时强制 release 交付构建使用规范 wrapper。
 - 核心 API 响应增加 JSON Schema 契约检查，聚合测试文件增加体积上限，新行为按领域拆分测试。
 - Rust 工具链固定为 1.94.0，CI 同时检查暂存和未暂存差异中的空白问题。
-- Node、OfficeCLI、Reasonix 和 KaTeX 增加随包分发的机器可读来源、版本、许可证与哈希清单。
+- Node、OfficeCLI、Reasonix、KaTeX 和 bootstrap skills 增加随包分发的机器可读来源、版本、许可证与哈希清单。
+- 运行时问题按 debug/warning/error/fatal 分级；概览仅显示需要用户处理的 warning/error。
 - 提示队列存储从 Launcher 抽取为独立模块；Dashboard 备份策略成为首个可读、独立测试的迁移模块。
 
 ## v1.11.0

@@ -12,6 +12,7 @@ const limits = new Map([
 const requiredDomainTests = [
   "api-contracts.test.mjs",
   "prompt-queue-store.test.mjs",
+  "runtime-issues.test.mjs",
   "user-data-backup.test.mjs",
   "session-trash.test.mjs",
   "session-knowledge.test.mjs",
