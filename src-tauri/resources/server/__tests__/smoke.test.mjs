@@ -1,7 +1,9 @@
 import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { resolve, dirname } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -39,12 +41,18 @@ async function waitForHealth(url, timeoutMs = 15000) {
 
 describe("冒烟测试：服务器启动", { timeout: 30000 }, () => {
   let proc;
+  let tempHome;
 
   after(() => {
-    if (proc && !proc.killed) {
-      proc.kill("SIGTERM");
-      // Force kill after 2s if still alive
-      setTimeout(() => { if (proc && !proc.killed) proc.kill("SIGKILL"); }, 2000);
+    if (proc?.pid && proc.exitCode === null) {
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      } else {
+        proc.kill("SIGTERM");
+      }
+    }
+    if (tempHome && resolve(tempHome).toLowerCase().startsWith(`${resolve(tmpdir())}${sep}`.toLowerCase())) {
+      rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
@@ -52,10 +60,11 @@ describe("冒烟测试：服务器启动", { timeout: 30000 }, () => {
     const port = await findFreePort();
     const token = "smoke-test-token";
     const healthUrl = `http://127.0.0.1:${port}/api/health?token=${token}`;
+    tempHome = mkdtempSync(resolve(tmpdir(), "visionox-server-smoke-"));
 
     proc = spawn(process.execPath, [launcherPath, "--port", String(port), "--token", token], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
     });
 
     // Capture stderr for diagnostics if startup fails

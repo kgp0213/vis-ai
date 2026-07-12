@@ -11,8 +11,14 @@ npm run quality:check
 ```
 
 This checks launcher, Dashboard and API bundle syntax, required local bundle patches,
-all Node tests, Rust formatting, and diff whitespace. It does not build Rust and cannot
-create `target/debug`.
+all Node tests, a real Edge Dashboard render, Rust formatting, and diff whitespace. The
+browser smoke test uses an isolated directory under `%TEMP%` and removes it afterward;
+it never reads or changes the user's `~/.visionox` data. It does not build Rust and
+cannot create `target/debug`.
+
+The browser check requires Microsoft Edge, which is also a runtime prerequisite for the
+Windows WebView application. Set `VISIONOX_EDGE_PATH` only when Edge is installed in a
+non-standard location.
 
 The repository CI runs the same command on Windows for pushes and pull requests.
 

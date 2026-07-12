@@ -19,6 +19,7 @@
     "fetch:binaries:danger": "node scripts/fetch-binaries.js",
     "test": "node --test \"src-tauri/resources/server/**/*.test.mjs\"",
     "test:coverage": "node --test --experimental-test-coverage \"src-tauri/resources/server/**/*.test.mjs\"",
+    "test:ui:smoke": "node scripts/ui-smoke.js",
     "quality:check": "node scripts/quality-check.js"
   },
   "devDependencies": {

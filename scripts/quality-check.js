@@ -23,6 +23,7 @@ run("dashboard syntax", "node", ["--check", "src-tauri/resources/server/visionox
 run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js"]);
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
 run("node tests", "node", ["--test", "src-tauri/resources/server/**/*.test.mjs"]);
+run("browser UI smoke", "node", ["scripts/ui-smoke.js"]);
 run("Rust formatting", "cargo", ["fmt", "--manifest-path", "src-tauri/Cargo.toml", "--", "--check"]);
 run("diff whitespace", "git", ["diff", "--check"]);
 
