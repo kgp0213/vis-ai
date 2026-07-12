@@ -32,6 +32,7 @@ const { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat: f
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
 const { spawnSync } = await importEarly("node:child_process");
 const { createInterface } = await importEarly("node:readline");
+const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
 
 const {
   getActiveProvider,
@@ -3498,9 +3499,7 @@ function writePromptQueueState() {
   try {
     const queues = Object.fromEntries([...promptQueueState.queues.entries()].filter(([, items]) => items.length > 0));
     const accepted = [...promptQueueState.accepted.values()].slice(-ACCEPTED_PROMPT_LIMIT);
-    const tmpFile = `${promptQueueFile}.tmp`;
-    writeFileSync(tmpFile, JSON.stringify({ version: 1, queues, accepted }, null, 2), "utf8");
-    renameSync(tmpFile, promptQueueFile);
+    atomicWriteFileSync(promptQueueFile, `${JSON.stringify({ version: 1, queues, accepted }, null, 2)}\n`);
   } catch (err) {
     console.error(`[launcher] prompt queue write failed: ${err.message}`);
   }
@@ -3916,9 +3915,7 @@ function readSchedules() {
 
 function writeSchedules() {
   try {
-    const tmpFile = `${schedulesFile}.tmp`;
-    writeFileSync(tmpFile, JSON.stringify({ schedules }, null, 2));
-    renameSync(tmpFile, schedulesFile);
+    atomicWriteFileSync(schedulesFile, `${JSON.stringify({ version: 1, schedules }, null, 2)}\n`);
   } catch (err) {
     console.error(`[launcher] writeSchedules failed: ${err.message}`);
   }
@@ -4372,20 +4369,7 @@ function writeKnowledgeManifest(workspace, manifest) {
 }
 
 function writeKnowledgeFile(target, content) {
-  const tempDir = resolve(tmpdir(), `visionox-knowledge-${randomUUID()}`);
-  const tempFile = resolve(tempDir, basename(target));
-  mkdirSync(tempDir, { recursive: true });
-  try {
-    writeFileSync(tempFile, content, "utf8");
-    mkdirSync(dirname(target), { recursive: true });
-    try {
-      renameSync(tempFile, target);
-    } catch {
-      writeFileSync(target, content, "utf8");
-    }
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
+  atomicWriteFileSync(target, content);
 }
 
 function selectKnowledgeSessions(task, manifest) {
@@ -5376,9 +5360,7 @@ function appendActiveMessage(msg) {
 async function writeActiveSessionEntries(entries) {
   await closeActiveSessionStream();
   const serialized = serializeActiveSession(entries);
-  const tmpFile = `${activeSessionFile}.tmp`;
-  await writeFile(tmpFile, serialized, "utf8");
-  await rename(tmpFile, activeSessionFile);
+  await atomicWriteFile(activeSessionFile, serialized);
 }
 
 async function syncActiveSessionFromLoop(pendingUser = null) {
@@ -5475,7 +5457,7 @@ async function writeActiveSessionMeta(patch = {}) {
       sessionMemories: sessionMemories.map((memory) => ({ ...memory })),
       indexRetrievalMode,
     };
-    await writeFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+    await atomicWriteFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`);
   } catch (err) {
     console.error(`[launcher] failed to write active session meta: ${err.message}`);
   }
@@ -5622,7 +5604,7 @@ function writeSessionMeta(name, patch = {}) {
     savedAt: patch.savedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  atomicWriteFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
   return next;
 }
 
