@@ -15,11 +15,28 @@ license: Proprietary. LICENSE.txt has complete terms
 
 ## Quick Setup
 
+`run_skill` includes this skill's absolute `path` in its result header. Use that
+directory instead of assuming a source checkout or a fixed installation path.
+
+Windows PowerShell:
+
+```powershell
+$env:PDF_SKILL_DIR = '<path from the run_skill result header>'
+python "$env:PDF_SKILL_DIR\scripts\pdf.py" env.check
+python "$env:PDF_SKILL_DIR\scripts\pdf.py" env.fix
+```
+
+macOS/Linux:
+
 ```bash
-bash "$PDF_SKILL_DIR/scripts/setup.sh"          # Interactive environment check + install
+export PDF_SKILL_DIR='<path from the run_skill result header>'
+bash "$PDF_SKILL_DIR/scripts/setup.sh"             # Interactive environment check + install
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" env.check  # Detailed dependency status (JSON: add -j)
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" env.fix     # Auto-install missing Python packages
 ```
+
+Do not run `setup.sh` directly on Windows. Use the Python commands above so the
+same deployed scripts work without requiring Bash.
 
 ## Triage
 

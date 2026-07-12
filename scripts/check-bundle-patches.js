@@ -375,6 +375,23 @@ const required = [
     forbidden: ["Claude Code", "Skill tool", "Read tool", "TodoWrite"],
   },
   {
+    file: "src-tauri/resources/bootstrap-skills/pdf/SKILL.md",
+    markers: ["path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/subagent-driven-development/SKILL.md",
+    markers: ["## Availability Preflight", "does not guarantee that capability", "`todo_write` task checklist"],
+    forbidden: ["TodoWrite", "Task tool"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/systematic-debugging/find-polluter.ps1",
+    markers: ["PollutionCheck", "TestPattern", "Polluter found"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/bootstrap-skill-cleanup.mjs",
+    markers: ["pruneLegacyBootstrapSkillBackups", "visionox-bootstrap", "Invalid or unreadable markers"],
+  },
+  {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/katex-support.js",
     markers: ["visionoxBlockMath", "visionoxInlineMath", "renderToString", 'trust: false'],
     forbidden: ["mermaid"],

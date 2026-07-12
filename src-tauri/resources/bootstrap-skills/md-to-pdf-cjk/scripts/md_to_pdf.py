@@ -20,6 +20,12 @@ def find_cjk_font():
         '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
         '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
     ]
+    if sys.platform == 'win32':
+        fonts_dir = os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'Fonts')
+        candidates = [
+            os.path.join(fonts_dir, name)
+            for name in ('NotoSansCJK-Regular.ttc', 'msyh.ttc', 'simhei.ttf', 'Deng.ttf', 'msgothic.ttc', 'malgun.ttf')
+        ] + candidates
     # Also search broadly
     for root in ['/usr/share/fonts', '/usr/local/share/fonts']:
         if os.path.isdir(root):

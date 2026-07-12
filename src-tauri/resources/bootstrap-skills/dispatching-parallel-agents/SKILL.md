@@ -64,12 +64,16 @@ Each agent gets:
 ### 3. Dispatch in Parallel
 
 ```typescript
-// In Claude Code / AI environment
-Task("Fix agent-tool-abort.test.ts failures")
-Task("Fix batch-completion-behavior.test.ts failures")
-Task("Fix tool-approval-race-conditions.test.ts failures")
-// All three run concurrently
+// Pseudocode: use the agent/subagent dispatcher exposed by the active harness.
+dispatchAgent("Fix agent-tool-abort.test.ts failures")
+dispatchAgent("Fix batch-completion-behavior.test.ts failures")
+dispatchAgent("Fix tool-approval-race-conditions.test.ts failures")
 ```
+
+Visionox Desktop does not guarantee that a subagent dispatcher is registered.
+Check the active tool list first. If no dispatcher exists, run the independent
+tasks serially in the current session and keep the same focused scopes; do not
+invent a tool name or claim parallel execution occurred.
 
 ### 4. Review and Integrate
 

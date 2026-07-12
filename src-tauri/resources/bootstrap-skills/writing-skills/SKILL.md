@@ -9,7 +9,7 @@ description: Use when creating new skills, editing existing skills, or verifying
 
 **Writing skills IS Test-Driven Development applied to process documentation.**
 
-**Personal skills live in agent-specific directories (`~/.claude/skills` for Claude Code, `~/.codex/skills` for Codex)** 
+**Visionox personal skills live in `~/.visionox/skills`; project skills live in `<project>/.visionox/skills`.**
 
 You write test cases (pressure scenarios with subagents), watch them fail (baseline behavior), write the skill (documentation), watch tests pass (agents comply), and refactor (close loopholes).
 
@@ -21,7 +21,7 @@ You write test cases (pressure scenarios with subagents), watch them fail (basel
 
 ## What is a Skill?
 
-A **skill** is a reference guide for proven techniques, patterns, or tools. Skills help future Claude instances find and apply effective approaches.
+A **skill** is a reference guide for proven techniques, patterns, or tools. Skills help future AI-assisted sessions find and apply effective approaches.
 
 **Skills are:** Reusable techniques, patterns, tools, reference guides
 
@@ -55,7 +55,7 @@ The entire skill creation process follows RED-GREEN-REFACTOR.
 **Don't create for:**
 - One-off solutions
 - Standard practices well-documented elsewhere
-- Project-specific conventions (put in CLAUDE.md)
+- Project-specific conventions (put in the project's existing `AGENTS.md` or `CLAUDE.md`)
 - Mechanical constraints (if it's enforceable with regex/validation, automate it—save documentation for judgment calls)
 
 ## Skill Types
@@ -143,7 +143,7 @@ Concrete results
 
 ### 1. Rich Description Field
 
-**Purpose:** Claude reads description to decide which skills to load for a given task. Make it answer: "Should I read this skill right now?"
+**Purpose:** The model reads the description to decide which skills to load for a given task. Make it answer: "Should I read this skill right now?"
 
 **Format:** Start with "Use when..." to focus on triggering conditions
 
@@ -595,7 +595,7 @@ Deploying untested skills = deploying untested code. It's a violation of quality
 
 ## Skill Creation Checklist (TDD Adapted)
 
-**IMPORTANT: Use TodoWrite to create todos for EACH checklist item below.**
+**IMPORTANT: Use `todo_write` to track EACH checklist item below.**
 
 **RED Phase - Write Failing Test:**
 - [ ] Create pressure scenarios (3+ combined pressures for discipline skills)

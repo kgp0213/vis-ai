@@ -1,6 +1,6 @@
 ---
 name: md-to-pdf-cjk
-description: Convert Markdown files to professional PDF documents with full CJK (Chinese/Japanese/Korean) support. Uses reportlab for reliable rendering without external dependencies like wkhtmltopdf or LaTeX.
+description: Use when converting Markdown to PDF with Chinese, Japanese, or Korean text and a compatible local CJK font is available.
 author: zacjiang
 version: 1.0.0
 tags: markdown, pdf, chinese, japanese, korean, CJK, convert, report, document
@@ -17,8 +17,11 @@ Most Markdown-to-PDF tools break on CJK characters, require LaTeX, or need heavy
 ## Usage
 
 ```bash
-python3 {baseDir}/scripts/md_to_pdf.py input.md "Document Title" output.pdf
+python <skill-path>/scripts/md_to_pdf.py input.md output.pdf
 ```
+
+Use the absolute skill `path` shown in the `run_skill` result header for
+`<skill-path>`. On macOS/Linux, `python3` may be the executable name.
 
 ## Features
 
@@ -41,14 +44,19 @@ python3 {baseDir}/scripts/md_to_pdf.py input.md "Document Title" output.pdf
 ## Dependencies
 
 ```bash
-pip3 install reportlab
+python -m pip install reportlab
 ```
+
+ReportLab is not bundled with Visionox. Confirm with
+`python -c "import reportlab"` before conversion; install it only with the
+user's permission when it is missing.
 
 ## Font Configuration
 
 The script auto-detects CJK fonts in common locations:
 - `/usr/share/fonts/` (Linux)
 - `/System/Library/Fonts/` (macOS)
+- `C:\Windows\Fonts\` (Windows, when supported by the script/font configuration)
 
 If no CJK font is found, it falls back to Helvetica (CJK characters will not render). Install a CJK font:
 

@@ -66,6 +66,7 @@ const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = 
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
 const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs");
+const { pruneLegacyBootstrapSkillBackups } = await importEarly("./lib/bootstrap-skill-cleanup.mjs");
 const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.mjs");
 const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFile } = await importEarly("./lib/versioned-json-file.mjs");
 const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
@@ -887,6 +888,10 @@ async function deploySkillGuide(rootDir) {
   }
 }
 await deployBootstrapSkills();
+const removedLegacySkillBackups = pruneLegacyBootstrapSkillBackups(skillsRoot);
+if (removedLegacySkillBackups.length > 0) {
+  console.error(`[launcher] removed ${removedLegacySkillBackups.length} legacy managed skill backup(s)`);
+}
 await deploySkillGuide(workspaceDir);
 
 const startupModelConfig = effectiveModelConfig(config);

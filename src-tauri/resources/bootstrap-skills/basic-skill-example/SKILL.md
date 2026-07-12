@@ -1,6 +1,6 @@
 ---
 name: basic-skill-example
-description: Minimal example skill that demonstrates the Visionox skill folder layout.
+description: Use when explaining the Visionox skill folder layout or creating a minimal local skill example.
 description_zh: 展示 Visionox Skill 目录结构的最小示例。
 version: 1.0.0
 license: MIT

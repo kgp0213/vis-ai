@@ -27,17 +27,17 @@ ls -d worktrees 2>/dev/null      # Alternative
 
 **If found:** Use that directory. If both exist, `.worktrees` wins.
 
-### 2. Check CLAUDE.md
+### 2. Check Project Instructions
 
-```bash
-grep -i "worktree.*director" CLAUDE.md 2>/dev/null
-```
+Read the repository's existing `AGENTS.md` or `CLAUDE.md` and look for a
+worktree-directory preference. Use repository search tools available on the
+current platform; do not assume Bash is installed.
 
 **If preference specified:** Use it without asking.
 
 ### 3. Ask User
 
-If no directory exists and no CLAUDE.md preference:
+If no directory exists and no project-instruction preference:
 
 ```
 No worktree directory found. Where should I create worktrees?
@@ -148,7 +148,7 @@ Ready to implement <feature-name>
 | `.worktrees/` exists | Use it (verify ignored) |
 | `worktrees/` exists | Use it (verify ignored) |
 | Both exist | Use `.worktrees/` |
-| Neither exists | Check CLAUDE.md → Ask user |
+| Neither exists | Check project instructions → Ask user |
 | Directory not ignored | Add to .gitignore + commit |
 | Tests fail during baseline | Report failures + ask |
 | No package.json/Cargo.toml | Skip dependency install |
@@ -163,7 +163,7 @@ Ready to implement <feature-name>
 ### Assuming directory location
 
 - **Problem:** Creates inconsistency, violates project conventions
-- **Fix:** Follow priority: existing > CLAUDE.md > ask
+- **Fix:** Follow priority: existing > project instructions > ask
 
 ### Proceeding with failing tests
 
@@ -186,7 +186,7 @@ You: I'm using the using-git-worktrees skill to set up an isolated workspace.
 [Run npm install]
 [Run npm test - 47 passing]
 
-Worktree ready at /Users/jesse/myproject/.worktrees/auth
+Worktree ready at <repository>/.worktrees/auth
 Tests passing (47 tests, 0 failures)
 Ready to implement auth feature
 ```
@@ -198,10 +198,10 @@ Ready to implement auth feature
 - Skip baseline test verification
 - Proceed with failing tests without asking
 - Assume directory location when ambiguous
-- Skip CLAUDE.md check
+- Skip the project-instructions check
 
 **Always:**
-- Follow directory priority: existing > CLAUDE.md > ask
+- Follow directory priority: existing > project instructions > ask
 - Verify directory is ignored for project-local
 - Auto-detect and run project setup
 - Verify clean test baseline
