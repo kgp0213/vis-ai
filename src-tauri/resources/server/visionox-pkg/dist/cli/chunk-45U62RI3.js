@@ -3,6 +3,7 @@ import { createRequire as __cr } from 'node:module'; if (typeof globalThis.requi
 import {
   SkillStore
 } from "./chunk-2K65GZBT.js";
+import { dirname } from "node:path";
 
 // src/core/event-redaction.ts
 var SECRET_KEY_RE = /(secret|token|password|passphrase|api[-_]?key|authorization|cookie|credential|passwd|pwd)/i;
@@ -336,7 +337,7 @@ function registerSkillTools(registry, opts = {}) {
   const subagentRunner = opts.subagentRunner;
   registry.register({
     name: "run_skill",
-    description: "Invoke a playbook from the Skills index pinned in the system prompt. Each entry is a self-contained instruction block. Pass `name` as the BARE skill identifier (e.g. 'explore'), NOT the `[\u{1F9EC} subagent]` tag that appears after it in the index. Entries tagged `[\u{1F9EC} subagent]` spawn an isolated subagent \u2014 only the final distilled answer comes back, the model's tool calls + reasoning during the run never enter your context. Plain skills are inlined: the body becomes a tool result you read and follow. For subagent skills, supply 'arguments' describing the concrete task \u2014 they'll be the only context the subagent has.",
+    description: "Invoke a skill by its bare identifier. If the user explicitly names a skill through @skill, /skill, or ordinary text, try that exact name even when it is not listed in the detailed catalog; run_skill reads the current skill store directly. Entries tagged `[\u{1F9EC} subagent]` spawn an isolated subagent when configured. Plain skills are inlined: the body becomes a tool result you read and follow. Always supply 'arguments' describing the concrete task.",
     readOnly: true,
     parallelSafe: true,
     parameters: {
@@ -344,7 +345,7 @@ function registerSkillTools(registry, opts = {}) {
       properties: {
         name: {
           type: "string",
-          description: "Skill identifier as it appears in the pinned Skills index (e.g. 'explore', 'review', 'security-review'). Case-sensitive."
+          description: "Exact skill identifier supplied by the user or shown in the complete name directory (e.g. 'explore', 'weather'). Case-sensitive."
         },
         arguments: {
           type: "string",
@@ -392,14 +393,14 @@ function registerSkillTools(registry, opts = {}) {
       const header = [
         `# Skill: ${skill.name}`,
         skill.description ? `> ${skill.description}` : "",
-        `(scope: ${skill.scope} \xB7 ${skill.path})`
+        `(scope: ${skill.scope} \xB7 ${skill.path} \xB7 baseDir: ${dirname(skill.path)})`
       ].filter(Boolean).join("\n");
       const argsBlock = rawArgs ? `
 
 Arguments: ${rawArgs}` : "";
       const inner = `${header}
 
-${skill.body}${argsBlock}`;
+${skill.body.replaceAll("{baseDir}", dirname(skill.path))}${argsBlock}`;
       return `<skill-pin name=${JSON.stringify(skill.name)}>
 ${inner}
 </skill-pin>`;

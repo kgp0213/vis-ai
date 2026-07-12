@@ -33,7 +33,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For the implementing agent:** REQUIRED SUB-SKILL: Call `run_skill` for `executing-plans` and implement this plan task-by-task.
 
 **Goal:** [One sentence describing what this builds]
 
@@ -100,17 +100,16 @@ After saving the plan, offer execution choice:
 
 **"Plan complete and saved to `docs/plans/<filename>.md`. Two execution options:**
 
-**1. Subagent-Driven (this session)** - I dispatch fresh subagent per task, review between tasks, fast iteration
+**1. Current session** - Use `executing-plans`, implement in batches, and review at checkpoints
 
 **2. Parallel Session (separate)** - Open new session with executing-plans, batch execution with checkpoints
 
 **Which approach?"**
 
-**If Subagent-Driven chosen:**
-- **REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development
-- Stay in this session
-- Fresh subagent per task + code review
+**If Current Session chosen:**
+- **REQUIRED SUB-SKILL:** Call `run_skill` for `executing-plans`
+- Stay in this session and execute with verification checkpoints
 
 **If Parallel Session chosen:**
 - Guide them to open new session in worktree
-- **REQUIRED SUB-SKILL:** New session uses superpowers:executing-plans
+- Start a new Visionox session and invoke `/skill executing-plans <plan path>`

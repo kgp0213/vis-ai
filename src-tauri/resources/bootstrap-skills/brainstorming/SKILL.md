@@ -37,12 +37,12 @@ Start by understanding the current project context, then ask questions one at a 
 **Documentation:**
 - Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
 - Use elements-of-style:writing-clearly-and-concisely skill if available
-- Commit the design document to git
+- Commit the design document only when the user requested a commit
 
 **Implementation (if continuing):**
 - Ask: "Ready to set up for implementation?"
-- Use superpowers:using-git-worktrees to create isolated workspace
-- Use superpowers:writing-plans to create detailed implementation plan
+- Call `run_skill` for `using-git-worktrees` when an isolated workspace is appropriate
+- Call `run_skill` for `writing-plans` to create the detailed implementation plan
 
 ## Key Principles
 

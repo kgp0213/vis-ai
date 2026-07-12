@@ -1,15 +1,9 @@
 ---
 name: using-superpowers
-description: Use when starting any conversation - establishes how to find and use skills, requiring run_skill invocation before ANY response including clarifying questions
+description: Use when deciding whether an installed Visionox skill directly matches the user's task and how to invoke it
 ---
 
-<EXTREMELY-IMPORTANT>
-If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
-
-IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
-
-This is not negotiable. This is not optional. You cannot rationalize your way out of this.
-</EXTREMELY-IMPORTANT>
+Use a skill when the user explicitly names it or an installed skill directly matches the requested task. Do not load unrelated skills speculatively; each invocation consumes context and may introduce irrelevant workflow constraints.
 
 ## How to Access Skills
 
@@ -19,12 +13,12 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 
 ## The Rule
 
-**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.
+**Invoke explicitly requested or directly matching skills before taking task actions.** If no installed skill clearly matches, proceed with the normal project workflow.
 
 ```dot
 digraph skill_flow {
     "User message received" [shape=doublecircle];
-    "Might any skill apply?" [shape=diamond];
+    "Does an installed skill directly match?" [shape=diamond];
     "Call run_skill" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
     "Has checklist?" [shape=diamond];
@@ -32,9 +26,9 @@ digraph skill_flow {
     "Follow skill exactly" [shape=box];
     "Respond (including clarifications)" [shape=doublecircle];
 
-    "User message received" -> "Might any skill apply?";
-    "Might any skill apply?" -> "Call run_skill" [label="yes, even 1%"];
-    "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
+    "User message received" -> "Does an installed skill directly match?";
+    "Does an installed skill directly match?" -> "Call run_skill" [label="yes"];
+    "Does an installed skill directly match?" -> "Respond (including clarifications)" [label="no"];
     "Call run_skill" -> "Announce: 'Using [skill] to [purpose]'";
     "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
     "Has checklist?" -> "Create task checklist" [label="yes"];
@@ -45,16 +39,16 @@ digraph skill_flow {
 
 ## Red Flags
 
-These thoughts mean STOP—you're rationalizing:
+Use this checklist when a skill directly matches:
 
 | Thought | Reality |
 |---------|---------|
-| "This is just a simple question" | Questions are tasks. Check for skills. |
-| "I need more context first" | Skill check comes BEFORE clarifying questions. |
-| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first. |
-| "I can check git/files quickly" | Files lack conversation context. Check for skills. |
-| "Let me gather information first" | Skills tell you HOW to gather information. |
-| "This doesn't need a formal skill" | If a skill exists, use it. |
+| "This is just a simple question" | A named or directly matching skill still applies. |
+| "I need more context first" | Invoke a directly matching skill before task actions. |
+| "Let me explore the codebase first" | A matching process skill may define how to explore. |
+| "I can check git/files quickly" | First honor any skill explicitly requested by the user. |
+| "Let me gather information first" | Use a matching research skill when appropriate. |
+| "This doesn't need a formal skill" | Use it when the match is direct, not merely possible. |
 | "I remember this skill" | Skills evolve. Read current version. |
 | "This doesn't count as a task" | Action = task. Check for skills. |
 | "The skill is overkill" | Simple things become complex. Use it. |

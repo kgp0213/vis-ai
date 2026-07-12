@@ -48,7 +48,8 @@ export function decideScheduleAdmission({
       retry: !manual,
     };
   }
-  if (!workspaceMatches && task?.kind !== "session_cleanup") {
+  const requiresBoundWorkspace = task?.kind === "prompt" && task?.workspaceScope !== "current";
+  if (!workspaceMatches && requiresBoundWorkspace) {
     return { kind: "skipped", accepted: false, reason: "workspace mismatch", persist: true, retry: false };
   }
   if (!manual && !catchUp && windowCheck?.ok === false) {
@@ -67,6 +68,23 @@ export function decideRejectedScheduleSubmission({ manual = false, reason = "loo
     reason,
     retry,
   };
+}
+
+export function resolveScheduleRunWorkspace(task, currentWorkspace) {
+  if (task?.kind === "report") return null;
+  if (task?.kind === "prompt" && task?.workspaceScope === "current") return currentWorkspace ?? null;
+  return task?.workspaceDir || currentWorkspace || null;
+}
+
+export function resolveStoredScheduleWorkspace({
+  kind,
+  previousWorkspace = null,
+  currentWorkspace = null,
+  rebind = false,
+} = {}) {
+  if (kind === "report") return null;
+  if (rebind || !previousWorkspace) return currentWorkspace || null;
+  return previousWorkspace;
 }
 
 export function repairInterruptedSchedule(task, { nowIso = new Date().toISOString(), nextRunAt = null } = {}) {

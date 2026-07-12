@@ -43,6 +43,10 @@ import {
   MemoryStore
 } from "./chunk-5JJRUIPA.js";
 import {
+  getSkillCredentialStatus,
+  saveSkillCredential
+} from "../../../lib/skill-credentials.mjs";
+import {
   DeepSeekClient
 } from "./chunk-2KDUS647.js";
 import {
@@ -915,7 +919,7 @@ async function handleHealth(method, _rest, _body, ctx) {
       storageIssues: ctx.getPersistentStorageIssues?.() ?? [],
       jobs: ctx.jobs ? ctx.jobs.listMetadata?.().length ?? ctx.jobs.runningCount?.() ?? null : null,
       cwd: ctx.getCurrentCwd?.() ?? null,
-      buildDate: new Date().getHours().toString().padStart(2, "0")
+      buildDate: "__VISIONOX_BUILD_STAMP__"
     }
   };
 }
@@ -2750,6 +2754,42 @@ async function handleOverview(method, _rest, _body, ctx) {
   return { status: 200, body: overview };
 }
 
+// src/server/api/workspaces.ts (Visionox local patch)
+function parseWorkspaceBody(raw) {
+  try {
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return null;
+  }
+}
+async function handleWorkspaces(method, _rest, body, ctx) {
+  if (!ctx.getWorkspaceState || !ctx.selectWorkspace || !ctx.removeWorkspaceHistory) {
+    return { status: 503, body: { error: "workspace management requires an attached desktop session" } };
+  }
+  if (method === "GET") return { status: 200, body: ctx.getWorkspaceState() };
+  const fields = parseWorkspaceBody(body);
+  if (!fields) return { status: 400, body: { error: "invalid JSON body" } };
+  if (typeof fields.path !== "string" || !fields.path.trim()) {
+    return { status: 400, body: { error: "path must be a non-empty string" } };
+  }
+  try {
+    if (method === "POST") {
+      const result = ctx.selectWorkspace(fields.path);
+      ctx.audit?.({ ts: Date.now(), action: "select-workspace", payload: { path: result.configured } });
+      return { status: 200, body: result };
+    }
+    if (method === "DELETE") {
+      const result = ctx.removeWorkspaceHistory(fields.path);
+      ctx.audit?.({ ts: Date.now(), action: "remove-workspace-history", payload: { path: fields.path } });
+      return { status: 200, body: result };
+    }
+  } catch (error) {
+    return { status: 400, body: { error: error.message } };
+  }
+  return { status: 405, body: { error: "GET, POST or DELETE only" } };
+}
+
 // src/server/api/backups.ts (Visionox local patch)
 function backupSummary(manifest) {
   if (!manifest) return manifest;
@@ -4497,8 +4537,13 @@ async function handleSettings(method, _rest, body, ctx) {
       if (typeof fields.workspaceDir !== "string" || !fields.workspaceDir.trim()) {
         return { status: 400, body: { error: "workspaceDir must be a non-empty string" } };
       }
-      cfg.workspaceDir = fields.workspaceDir.trim();
-      ctx.setWorkspaceDir?.(cfg.workspaceDir);
+      try {
+        const workspace = ctx.selectWorkspace?.(fields.workspaceDir.trim());
+        cfg.workspaceDir = workspace?.configured ?? fields.workspaceDir.trim();
+        if (workspace?.recentWorkspaces) cfg.recentWorkspaces = workspace.recentWorkspaces;
+      } catch (error) {
+        return { status: 400, body: { error: error.message } };
+      }
       changed.push("workspaceDir");
     }
     let modelSwitch = null;
@@ -4669,6 +4714,23 @@ function countSubagentRuns(usageLogPath) {
   return counts;
 }
 async function handleSkills(method, rest, body, ctx) {
+  if (rest[0] === "credentials") {
+    const name = String(rest[1] ?? "").trim();
+    const options = {
+      homeDir: ctx.skillCredentialHomeDir,
+      environment: ctx.skillCredentialEnvironment ?? process.env
+    };
+    const status = getSkillCredentialStatus(name, options);
+    if (!status) return { status: 404, body: { error: "managed skill credentials are unavailable" } };
+    if (method === "GET") return { status: 200, body: status };
+    if (method !== "POST") return { status: 405, body: { error: "GET or POST only" } };
+    const fields = parseBody10(body);
+    try {
+      return { status: 200, body: saveSkillCredential(name, fields.apiKey, options) };
+    } catch (error) {
+      return { status: 400, body: { error: error.message } };
+    }
+  }
   if (method === "GET" && rest[0] === "status") {
     if (!ctx.getSkillEnvironmentStatus) {
       return { status: 503, body: { error: "skill environment status is unavailable" } };
@@ -4840,6 +4902,7 @@ function parseBody11(raw) {
     return {};
   }
 }
+var SKILL_INVOCATION_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 async function handleSubmit(method, _rest, body, ctx) {
   if (method !== "POST") {
     return { status: 405, body: { error: "POST only" } };
@@ -4852,7 +4915,7 @@ async function handleSubmit(method, _rest, body, ctx) {
       }
     };
   }
-  const { prompt, session, images, requestId } = parseBody11(body);
+  const { prompt, session, images, requestId, skillInvocation } = parseBody11(body);
   let parsedImages = null;
   if (Array.isArray(images) && images.length > 0) {
     parsedImages = images.filter(function(i) { return typeof i === "string" && i.startsWith("data:image/"); });
@@ -4861,8 +4924,18 @@ async function handleSubmit(method, _rest, body, ctx) {
   if (typeof prompt !== "string" || (!prompt.trim() && !parsedImages && !session)) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
+  let parsedSkillInvocation = null;
+  if (skillInvocation !== void 0 && skillInvocation !== null) {
+    const name = typeof skillInvocation?.name === "string" ? skillInvocation.name.trim() : "";
+    const task = typeof skillInvocation?.task === "string" ? skillInvocation.task.trim() : "";
+    if (!SKILL_INVOCATION_NAME_RE.test(name) || !task) {
+      return { status: 400, body: { error: "skillInvocation requires a valid name and non-empty task" } };
+    }
+    parsedSkillInvocation = { name, task };
+  }
   const result = await ctx.submitPrompt(prompt, session || null, parsedImages, {
-    requestId: typeof requestId === "string" ? requestId : null
+    requestId: typeof requestId === "string" ? requestId : null,
+    skillInvocation: parsedSkillInvocation
   });
   if (!result.accepted) {
     return {
@@ -4873,7 +4946,7 @@ async function handleSubmit(method, _rest, body, ctx) {
   ctx.audit?.({
     ts: Date.now(),
     action: "submit-prompt",
-    payload: { length: prompt.length }
+    payload: { length: prompt.length, skill: parsedSkillInvocation?.name ?? null }
   });
   return { status: 202, body: { accepted: true, ...result } };
 }
@@ -5647,6 +5720,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
     switch (head) {
       case "overview":
         return await handleOverview(method, rest, body, ctx);
+      case "workspaces":
+        return await handleWorkspaces(method, rest, body, ctx);
       case "backups":
         return await handleBackups(method, rest, body, ctx);
       case "usage":

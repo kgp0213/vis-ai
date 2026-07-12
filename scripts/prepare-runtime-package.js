@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,22 @@ for (const file of ["app.js", "vendor-uplot.css", "vendor-hljs.css", "128x128.pn
 }
 copyDirectory(join("dashboard", "vendor", "katex"));
 for (const dir of ["dist", "data", "node_modules"]) copyDirectory(dir);
+
+const now = new Date();
+const buildStamp = [
+  String(now.getFullYear()).slice(-2),
+  String(now.getMonth() + 1).padStart(2, "0"),
+  String(now.getDate()).padStart(2, "0"),
+].join("") + ` ${String(now.getHours()).padStart(2, "0")}`;
+const serverBundle = join(target, "dist", "cli", "server-XGDBRWMB.js");
+const serverSource = readFileSync(serverBundle, "utf8");
+const buildStampPlaceholder = "__VISIONOX_BUILD_STAMP__";
+if (!serverSource.includes(buildStampPlaceholder)) {
+  rmSync(target, { recursive: true, force: true });
+  throw new Error("runtime server build stamp placeholder is missing");
+}
+writeFileSync(serverBundle, serverSource.replaceAll(buildStampPlaceholder, buildStamp), "utf8");
+console.log(`[runtime-package] build stamp ${buildStamp}`);
 
 const pruneCommand = process.platform === "win32"
   ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm prune --offline --omit=dev --ignore-scripts --no-audit --no-fund"]]

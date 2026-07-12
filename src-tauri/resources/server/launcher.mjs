@@ -72,7 +72,10 @@ const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFi
 const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
-const { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule } = await importEarly("./lib/schedule-execution.mjs");
+const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
+const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, normalizeWorkspacePath, removeRecentWorkspace, sameWorkspacePath } = await importEarly("./lib/workspace-history.mjs");
+const { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } = await importEarly("./lib/schedule-execution.mjs");
+const { createScheduleReportStore } = await importEarly("./lib/schedule-report-store.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -646,6 +649,45 @@ function primaryBalanceSummary() {
 
 // Workspace directory — configurable via config.workspaceDir
 let workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
+function getWorkspaceState() {
+  const cfg = readConfig(configPath);
+  const configured = normalizeWorkspacePath(cfg.workspaceDir ?? "visionox-workspace", { homeDir: home });
+  const stored = Array.isArray(cfg.recentWorkspaces) ? cfg.recentWorkspaces : [];
+  const recentWorkspaces = normalizeWorkspaceHistory(
+    [configured, workspaceDir, ...stored],
+    { homeDir: home },
+  );
+  return {
+    current: workspaceDir,
+    configured,
+    pending: !sameWorkspacePath(workspaceDir, configured),
+    recentWorkspaces,
+  };
+}
+
+function selectWorkspaceDir(dir) {
+  const target = normalizeWorkspacePath(dir, { homeDir: home });
+  if (!isWorkspaceDirectory(target)) throw new Error(`workspace directory does not exist: ${target}`);
+  const cfg = readConfig(configPath);
+  const stored = Array.isArray(cfg.recentWorkspaces) ? cfg.recentWorkspaces : [];
+  cfg.workspaceDir = target;
+  cfg.recentWorkspaces = addRecentWorkspace(target, [workspaceDir, ...stored], { homeDir: home });
+  writeConfig(cfg, configPath);
+  console.error(`[launcher] workspaceDir saved to config: ${target} (takes effect next /new)`);
+  return getWorkspaceState();
+}
+
+function removeWorkspaceHistory(dir) {
+  const target = normalizeWorkspacePath(dir, { homeDir: home });
+  const state = getWorkspaceState();
+  if (sameWorkspacePath(target, state.current) || sameWorkspacePath(target, state.configured)) {
+    throw new Error("the current or pending workspace cannot be removed from history");
+  }
+  const cfg = readConfig(configPath);
+  cfg.recentWorkspaces = removeRecentWorkspace(target, cfg.recentWorkspaces, { homeDir: home });
+  writeConfig(cfg, configPath);
+  return getWorkspaceState();
+}
 const userDataBackups = createUserDataBackupStore({
   dataDir: visionoxDataDir,
   getWorkspaceDir: () => workspaceDir,
@@ -3110,12 +3152,14 @@ function collectGeneratedArtifactPaths() {
   if (Array.isArray(schedules)) {
     for (const schedule of schedules) {
       for (const run of schedule?.history || []) {
-        if (typeof run?.reportPath !== "string" || !run.reportPath.trim()) continue;
-        try {
-          const abs = resolve(workspaceDir, run.reportPath);
-          const key = process.platform === "win32" ? abs.toLowerCase() : abs;
-          paths.set(key, abs);
-        } catch {
+        for (const candidate of [run?.reportPath, run?.reportExportPath]) {
+          if (typeof candidate !== "string" || !candidate.trim()) continue;
+          try {
+            const abs = resolve(workspaceDir, candidate);
+            const key = process.platform === "win32" ? abs.toLowerCase() : abs;
+            paths.set(key, abs);
+          } catch {
+          }
         }
       }
     }
@@ -3684,6 +3728,7 @@ function rememberAcceptedPromptRequest(id, result = {}) {
 }
 
 const schedulesFile = resolve(visionoxDataDir, "schedules.json");
+const scheduleReportStore = createScheduleReportStore(resolve(visionoxDataDir, "reports"));
 const MAX_SCHEDULE_DELAY_MS = 2_147_000_000;
 const SCHEDULE_BUSY_RETRY_MS = 30 * 1000;
 const SCHEDULE_HISTORY_LIMIT = 20;
@@ -3834,7 +3879,10 @@ function normalizeSchedule(raw) {
     enabled: raw.enabled !== false,
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : nowIso,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : nowIso,
-    workspaceDir: typeof raw.workspaceDir === "string" && raw.workspaceDir.trim() ? raw.workspaceDir : workspaceDir,
+    workspaceDir: kind === "report"
+      ? null
+      : (typeof raw.workspaceDir === "string" && raw.workspaceDir.trim() ? raw.workspaceDir : workspaceDir),
+    workspaceScope: kind === "prompt" && raw.workspaceScope === "current" ? "current" : kind === "prompt" ? "bound" : "global",
     lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
     lastStatus: typeof raw.lastStatus === "string" ? raw.lastStatus : null,
     lastError: typeof raw.lastError === "string" ? raw.lastError : null,
@@ -3881,6 +3929,8 @@ function normalizeScheduleHistoryEntry(raw) {
     reportSessions: Number.isFinite(raw.reportSessions) ? Math.max(0, Math.floor(raw.reportSessions)) : null,
     reportMessages: Number.isFinite(raw.reportMessages) ? Math.max(0, Math.floor(raw.reportMessages)) : null,
     reportPath: typeof raw.reportPath === "string" ? raw.reportPath : null,
+    reportExportPath: typeof raw.reportExportPath === "string" ? raw.reportExportPath : null,
+    reportExportError: typeof raw.reportExportError === "string" ? raw.reportExportError : null,
     cleanupAction: typeof raw.cleanupAction === "string" ? raw.cleanupAction : null,
     cleanupPreviewId: typeof raw.cleanupPreviewId === "string" ? raw.cleanupPreviewId : null,
     cleanupCandidates: Number.isFinite(raw.cleanupCandidates) ? Math.max(0, Math.floor(raw.cleanupCandidates)) : null,
@@ -3907,6 +3957,7 @@ function normalizeScheduleHistoryEntry(raw) {
 }
 
 function sameScheduleWorkspace(task) {
+  if (task?.kind !== "prompt" || task?.workspaceScope === "current") return true;
   if (!task?.workspaceDir) return true;
   try {
     return resolve(task.workspaceDir) === resolve(workspaceDir);
@@ -3960,7 +4011,8 @@ function repairInterruptedSchedules() {
 function publicSchedule(task) {
   return {
     ...task,
-    workspaceMismatch: !sameScheduleWorkspace(task),
+    workspaceMismatch: task?.kind === "prompt" && task?.workspaceScope !== "current" && !sameScheduleWorkspace(task),
+    workspaceDifferent: Boolean(task?.workspaceDir) && !sameWorkspacePath(task.workspaceDir, workspaceDir),
     currentWorkspaceDir: workspaceDir,
   };
 }
@@ -4001,6 +4053,9 @@ function scheduleFromInput(input, previous = null) {
   const prompt = typeof patch.prompt === "string" ? patch.prompt.trim() : previous?.prompt ?? "";
   const enabled = typeof patch.enabled === "boolean" ? patch.enabled : previous?.enabled ?? true;
   const runMode = SCHEDULE_RUN_MODES.has(patch.runMode) ? patch.runMode : previous?.runMode ?? "auto";
+  const workspaceScope = kind === "prompt" && (patch.workspaceScope === "current" || previous?.workspaceScope === "current")
+    ? (patch.workspaceScope === "bound" ? "bound" : "current")
+    : kind === "prompt" ? "bound" : "global";
   const weekdaysOnly = typeof patch.weekdaysOnly === "boolean" ? patch.weekdaysOnly : previous?.weekdaysOnly ?? false;
   const windowEnabled = typeof patch.windowEnabled === "boolean" ? patch.windowEnabled : previous?.windowEnabled ?? false;
   const windowStart = typeof patch.windowStart === "string" ? patch.windowStart : previous?.windowStart ?? "09:00";
@@ -4068,6 +4123,7 @@ function scheduleFromInput(input, previous = null) {
     reportExport,
     type,
     runMode: kind === "prompt" ? runMode : "auto",
+    workspaceScope,
     intervalMs: null,
     timeOfDay: null,
     dayOfWeek: null,
@@ -4078,7 +4134,12 @@ function scheduleFromInput(input, previous = null) {
     enabled,
     createdAt: previous?.createdAt ?? nowIso,
     updatedAt: nowIso,
-    workspaceDir: previous?.workspaceDir ?? workspaceDir,
+    workspaceDir: resolveStoredScheduleWorkspace({
+      kind,
+      previousWorkspace: previous?.workspaceDir,
+      currentWorkspace: workspaceDir,
+      rebind: patch.rebindWorkspace === true,
+    }),
     lastRunAt: previous?.lastRunAt ?? null,
     lastStatus: previous?.lastStatus ?? null,
     lastError: previous?.lastError ?? null,
@@ -4106,7 +4167,16 @@ function scheduleFromInput(input, previous = null) {
 }
 
 function recordScheduleRun(task, entry) {
-  task.history = [entry, ...(Array.isArray(task.history) ? task.history : [])].slice(0, SCHEDULE_HISTORY_LIMIT);
+  const all = [entry, ...(Array.isArray(task.history) ? task.history : [])];
+  task.history = all.slice(0, SCHEDULE_HISTORY_LIMIT);
+  for (const dropped of all.slice(SCHEDULE_HISTORY_LIMIT)) {
+    if (!scheduleReportStore.isManagedPath(dropped?.reportPath)) continue;
+    try {
+      scheduleReportStore.removePath(dropped.reportPath);
+    } catch (error) {
+      console.error(`[launcher] old scheduled report cleanup failed: ${error.message}`);
+    }
+  }
 }
 
 function updateScheduleRun(task, runId, patch) {
@@ -4185,15 +4255,31 @@ function reportRangeFromTask(task, baseDate = new Date()) {
   };
 }
 
-function writeScheduledReport(markdown, stats, task) {
-  const dir = join(homedir(), "Downloads");
-  mkdirSync(dir, { recursive: true });
+function scheduledReportFilename(stats, task) {
   const period = stats?.period || task.reportPeriod || "report";
   const date = stats?.start instanceof Date ? formatDateKey(stats.start) : new Date().toISOString().slice(0, 10);
   const safeTaskName = String(task.name || "scheduled-report").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
-  const fileName = `Visionox-Whale_${safeTaskName}_${period}_${date}.md`.replace(/[\\/:*?"<>|]/g, "_");
+  return `Visionox-Whale_${safeTaskName}_${period}_${date}.md`.replace(/[\\/:*?"<>|]/g, "_");
+}
+
+function writeManagedScheduledReport(markdown, stats, task, runId) {
+  const filePath = scheduleReportStore.write({
+    taskId: task.id,
+    runId,
+    filename: scheduledReportFilename(stats, task),
+    markdown,
+  });
+  rememberGeneratedArtifactPath(filePath);
+  return filePath;
+}
+
+function exportScheduledReport(markdown, stats, task, runId) {
+  const dir = join(homedir(), "Downloads");
+  mkdirSync(dir, { recursive: true });
+  const baseName = scheduledReportFilename(stats, task).replace(/\.md$/i, "");
+  const fileName = `${baseName}_${String(runId).slice(0, 8)}.md`;
   const filePath = join(dir, fileName);
-  writeFileSync(filePath, markdown, "utf8");
+  atomicWriteFileSync(filePath, markdown, "utf8");
   rememberGeneratedArtifactPath(filePath);
   return filePath;
 }
@@ -4207,7 +4293,17 @@ async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISO
     const { rangeMode, period, anchorDate, customRange } = reportRangeFromTask(task, Number.isNaN(baseDate.getTime()) ? new Date() : baseDate);
     const { markdown, stats } = await generateReport(period, anchorDate, customRange, { signal });
     throwIfScheduleAborted(signal);
-    const reportPath = task.reportExport ? writeScheduledReport(markdown, stats, task) : null;
+    const reportPath = writeManagedScheduledReport(markdown, stats, task, runId);
+    let reportExportPath = null;
+    let reportExportError = null;
+    if (task.reportExport) {
+      try {
+        reportExportPath = exportScheduledReport(markdown, stats, task, runId);
+      } catch (error) {
+        reportExportError = String(error?.message || error).slice(0, 300);
+        console.error(`[launcher] scheduled report export failed: ${reportExportError}`);
+      }
+    }
     completeScheduleRun(task.id, runId, {
       status: "completed",
       reason: null,
@@ -4219,6 +4315,8 @@ async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISO
       reportSessions: stats.sessions,
       reportMessages: stats.messages,
       reportPath,
+      reportExportPath,
+      reportExportError,
     });
   } catch (err) {
     const cancelled = signal?.aborted || err?.name === "AbortError";
@@ -4885,10 +4983,11 @@ function completeScheduleRun(taskId, runId, patch) {
 
 function renderSchedulePrompt(task, startedAt, previousLastRunAt) {
   const now = new Date(startedAt);
+  const runWorkspace = resolveScheduleRunWorkspace(task, workspaceDir);
   const vars = {
     date: formatDateKey(now),
     time: now.toTimeString().slice(0, 8),
-    workspace: task.workspaceDir || workspaceDir,
+    workspace: runWorkspace,
     lastRunAt: previousLastRunAt || "",
     taskName: task.name || "",
   };
@@ -4902,7 +5001,7 @@ function renderSchedulePrompt(task, startedAt, previousLastRunAt) {
     : "按用户配置的定时任务执行。";
   return [
     `[定时任务: ${label}]`,
-    `绑定工作区: ${task.workspaceDir || workspaceDir}`,
+    `执行工作区: ${runWorkspace}`,
     `触发时间: ${startedAt}`,
     modeLine,
     "",
@@ -5004,7 +5103,7 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
   task.lastRunAt = startedAt;
   task.missedRunAt = null;
   if (!admission.accepted) {
-    const reason = admission.kind === "skipped" && !workspaceMatches && task.kind !== "session_cleanup"
+    const reason = admission.kind === "skipped" && !workspaceMatches
       ? `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`
       : admission.reason;
     if (task.lastStatus !== "pending_confirmation") {
@@ -6237,6 +6336,7 @@ const ctx = {
   }),
   getSkillEnvironmentStatus,
   skillsRoot,
+  skillCredentialHomeDir: home,
   disableBootstrapSkill,
   enableBootstrapSkill,
   getDlpStatus: () => {
@@ -6344,6 +6444,11 @@ const ctx = {
       return { ok: true };
     });
     if (!committed.ok) return committed;
+    try {
+      scheduleReportStore.removeTask(id);
+    } catch (error) {
+      console.error(`[launcher] scheduled report cleanup failed for ${id}: ${error.message}`);
+    }
     const timer = scheduleTimers.get(id);
     if (timer) clearTimeout(timer);
     scheduleTimers.delete(id);
@@ -6512,12 +6617,9 @@ const ctx = {
     return { repaired: true, bootstrap, guide, status: await getSkillEnvironmentStatus() };
   },
 
-  setWorkspaceDir: (dir) => {
-    const cfg = readConfig(configPath);
-    cfg.workspaceDir = dir;
-    writeConfig(cfg, configPath);
-    console.error(`[launcher] workspaceDir saved to config: ${dir} (takes effect next /new)`);
-  },
+  getWorkspaceState,
+  selectWorkspace: selectWorkspaceDir,
+  removeWorkspaceHistory,
 
   // Sync provider switch: immediately rebuild client + loop with new provider.
   // Falls back preset/effort if current values are not supported by the new provider.
@@ -6563,7 +6665,7 @@ const ctx = {
 
   // Sync workspace: unregister old tools, re-register with new root, rebuild loop.
   // Called at the start of submitPrompt so the new conversation uses the new workspace.
-  syncWorkspace: async () => {
+  syncWorkspace: async ({ applyPending = true } = {}) => {
     const cfg = readConfig(configPath);
 
     // Reload API key & baseUrl — may have been changed in Settings
@@ -6588,7 +6690,8 @@ const ctx = {
     }
 
     const configuredDir = resolve(home, cfg.workspaceDir ?? "visionox-workspace");
-    if (configuredDir === workspaceDir) return;
+    if (sameWorkspacePath(configuredDir, workspaceDir)) return;
+    if (!applyPending) return { pending: true, current: workspaceDir, configured: configuredDir };
 
     console.error(`[launcher] workspace switch: ${workspaceDir} → ${configuredDir}`);
 
@@ -6740,7 +6843,7 @@ ${modeList}
     let manualSkillTask = null;
     try {
       // ── Sync workspace if changed ─────────────────────────────
-      await ctx.syncWorkspace();
+      await ctx.syncWorkspace({ applyPending: text.trim().toLowerCase() === "/new" || Boolean(sessionName) });
 
       // ── Session switch: archive current active session first ───
       if (sessionName && loop) {
@@ -6851,11 +6954,14 @@ ${modeList}
         return { accepted: true };
       }
 
-      const skillCommand = parseSlashInput(text);
+      const explicitSkillInvocation = opts.skillInvocation && typeof opts.skillInvocation === "object" ? opts.skillInvocation : null;
+      const automaticSkillInvocation = explicitSkillInvocation ? null : routeAutomaticSkill(text);
+      const selectedSkillInvocation = explicitSkillInvocation ?? (automaticSkillInvocation && new SkillStore({ homeDir: home, projectRoot: workspaceDir }).read(automaticSkillInvocation.name) ? automaticSkillInvocation : null);
+      const skillCommand = selectedSkillInvocation ? { name: "skill", args: "" } : parseSlashInput(text);
       if (skillCommand?.name === "skill") {
         const store = new SkillStore({ homeDir: home, projectRoot: workspaceDir });
         const skills = store.list();
-        const parts = skillCommand.args.split(/\s+/).filter(Boolean);
+        const parts = selectedSkillInvocation ? [] : skillCommand.args.split(/\s+/).filter(Boolean);
         const emitSkillResult = (skillText) => {
           const skillId = `assistant-${Date.now()}`;
           pushMessage({ id: skillId, role: "assistant", text: skillText });
@@ -6863,18 +6969,18 @@ ${modeList}
           broadcastDashboardEvent({ kind: "assistant_final", id: skillId, text: skillText });
           return { accepted: true };
         };
-        if (parts.length === 0 || parts[0].toLowerCase() === "list") {
+        if (!selectedSkillInvocation && (parts.length === 0 || parts[0].toLowerCase() === "list")) {
           const list = skills.map((skill) => `- ${skill.name}${skill.description ? `：${skill.description}` : ""}`).join("\n");
           return emitSkillResult(`可用技能（${skills.length}）：\n${list || "暂无可用技能"}\n\n使用 /skill show <名称> 查看详情，或 /skill <名称> <任务> 调用。`);
         }
 
-        const showOnly = parts[0].toLowerCase() === "show";
-        const name = showOnly ? parts[1] : parts[0];
+        const showOnly = !selectedSkillInvocation && parts[0].toLowerCase() === "show";
+        const name = selectedSkillInvocation?.name ?? (showOnly ? parts[1] : parts[0]);
         const skill = name ? store.read(name) : null;
         if (!skill) {
           return emitSkillResult(`未找到技能：${name || "（未提供名称）"}\n使用 /skill list 查看可用技能。`);
         }
-        const task = (showOnly ? parts.slice(2) : parts.slice(1)).join(" ").trim();
+        const task = selectedSkillInvocation?.task?.trim() ?? (showOnly ? parts.slice(2) : parts.slice(1)).join(" ").trim();
         if (showOnly || !task) {
           const maxChars = 12000;
           const body = skill.body.length > maxChars ? `${skill.body.slice(0, maxChars)}\n\n…（内容过长，已截断）` : skill.body;

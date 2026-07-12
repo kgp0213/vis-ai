@@ -503,10 +503,18 @@ fn spawn_server_blocking(
     ));
 
     let mut child = Command::new(&node_path);
+    let runtime_path = std::env::join_paths(
+        std::iter::once(server_dir.clone()).chain(
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>()),
+        ),
+    )?;
     child
         .arg(&launcher)
         .arg("--port")
         .arg("0")
+        .env("PATH", runtime_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_child_command(&mut child);
@@ -1267,7 +1275,8 @@ pub fn run() -> anyhow::Result<()> {
             open_log_dir,
             write_client_log,
             get_clipboard_files,
-            pick_markdown_file
+            pick_markdown_file,
+            pick_directory
         ])
         .build(tauri::generate_context!())
         ?
@@ -1408,6 +1417,12 @@ struct PickMarkdownFileResult {
     error: Option<String>,
 }
 
+#[derive(serde::Serialize)]
+struct PickDirectoryResult {
+    path: Option<String>,
+    error: Option<String>,
+}
+
 #[tauri::command]
 async fn get_clipboard_files() -> Result<ClipboardFilesResult, String> {
     tauri::async_runtime::spawn_blocking(get_clipboard_files_blocking)
@@ -1420,6 +1435,114 @@ async fn pick_markdown_file() -> Result<PickMarkdownFileResult, String> {
     tauri::async_runtime::spawn_blocking(pick_markdown_file_blocking)
         .await
         .map_err(|e| format!("markdown picker task failed: {e}"))
+}
+
+#[tauri::command]
+async fn pick_directory() -> Result<PickDirectoryResult, String> {
+    tauri::async_runtime::spawn_blocking(pick_directory_blocking)
+        .await
+        .map_err(|e| format!("directory picker task failed: {e}"))
+}
+
+fn validated_directory_result(path: String) -> PickDirectoryResult {
+    if path.is_empty() {
+        return PickDirectoryResult {
+            path: None,
+            error: None,
+        };
+    }
+    if !Path::new(&path).is_dir() {
+        return PickDirectoryResult {
+            path: None,
+            error: Some("selected path is not an existing directory".to_string()),
+        };
+    }
+    PickDirectoryResult {
+        path: Some(path),
+        error: None,
+    }
+}
+
+fn pick_directory_blocking() -> PickDirectoryResult {
+    log_diag("[rust] pick_directory invoked");
+
+    #[cfg(windows)]
+    {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择工作空间目录'
+$dialog.ShowNewFolderButton = $true
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.StartPosition = 'CenterScreen'
+$owner.Width = 1
+$owner.Height = 1
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.Show()
+$owner.Activate()
+$result = $dialog.ShowDialog($owner)
+$owner.Close()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output $dialog.SelectedPath
+}
+"#;
+        return match Command::new("powershell.exe")
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            Ok(output) if output.status.success() => validated_directory_result(
+                String::from_utf8_lossy(&output.stdout).trim().to_string(),
+            ),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                PickDirectoryResult {
+                    path: None,
+                    error: Some(if stderr.is_empty() {
+                        format!("directory picker exited with {}", output.status)
+                    } else {
+                        stderr
+                    }),
+                }
+            }
+            Err(error) => PickDirectoryResult {
+                path: None,
+                error: Some(format!("failed to launch directory picker: {error}")),
+            },
+        };
+    }
+
+    #[cfg(unix)]
+    {
+        let candidates: &[(&str, &[&str])] = &[
+            (
+                "zenity",
+                &[
+                    "--file-selection",
+                    "--directory",
+                    "--title=选择工作空间目录",
+                ],
+            ),
+            ("kdialog", &["--getexistingdirectory", "."]),
+        ];
+        for &(program, args) in candidates {
+            let Ok(output) = Command::new(program).args(args).output() else {
+                continue;
+            };
+            if output.status.success() {
+                return validated_directory_result(
+                    String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                );
+            }
+        }
+        PickDirectoryResult {
+            path: None,
+            error: Some("no supported directory picker found".to_string()),
+        }
+    }
 }
 
 fn is_markdown_file_path(path: &str) -> bool {

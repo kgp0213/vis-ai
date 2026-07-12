@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule } from "../lib/schedule-execution.mjs";
+import { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } from "../lib/schedule-execution.mjs";
 import { readScheduleStore, writeScheduleStore } from "../lib/schedule-store.mjs";
 
 let tempRoot = null;
@@ -37,9 +37,14 @@ describe("schedule admission policy", () => {
     assert.equal(decideScheduleAdmission({ task, manual: true, runningCount: 2, maxConcurrent: 2 }).persist, false);
   });
 
-  test("preserves workspace, window and confirmation behavior", () => {
+  test("applies workspace checks only to workspace-bound prompt tasks", () => {
     assert.equal(decideScheduleAdmission({ task, workspaceMatches: false }).kind, "skipped");
     assert.equal(decideScheduleAdmission({ task: { kind: "session_cleanup" }, workspaceMatches: false }).kind, "start");
+    assert.equal(decideScheduleAdmission({ task: { kind: "report" }, workspaceMatches: false }).kind, "start");
+    assert.equal(decideScheduleAdmission({ task: { kind: "prompt", workspaceScope: "current" }, workspaceMatches: false }).kind, "start");
+  });
+
+  test("preserves window and confirmation behavior", () => {
     assert.equal(decideScheduleAdmission({ task, windowCheck: { ok: false, reason: "outside" } }).reason, "outside");
     assert.equal(decideScheduleAdmission({ task, catchUp: true, windowCheck: { ok: false } }).kind, "start");
     assert.equal(decideScheduleAdmission({ task: { ...task, runMode: "confirm" } }).kind, "pending_confirmation");
@@ -50,6 +55,25 @@ describe("schedule admission policy", () => {
     assert.deepEqual(decideRejectedScheduleSubmission({ reason: "loop is busy" }), { status: "deferred", reason: "loop is busy", retry: true });
     assert.equal(decideRejectedScheduleSubmission({ manual: true, reason: "loop is busy" }).status, "rejected");
     assert.equal(decideRejectedScheduleSubmission({ reason: "permission denied" }).status, "skipped");
+  });
+});
+
+describe("schedule workspace policy", () => {
+  const first = "C:\\workspaces\\first";
+  const second = "C:\\workspaces\\second";
+
+  test("uses the active workspace only for follow-current prompt tasks", () => {
+    assert.equal(resolveScheduleRunWorkspace({ kind: "prompt", workspaceScope: "bound", workspaceDir: first }, second), first);
+    assert.equal(resolveScheduleRunWorkspace({ kind: "prompt", workspaceScope: "current", workspaceDir: first }, second), second);
+    assert.equal(resolveScheduleRunWorkspace({ kind: "session_cleanup", workspaceDir: first }, second), first);
+    assert.equal(resolveScheduleRunWorkspace({ kind: "report", workspaceDir: first }, second), null);
+  });
+
+  test("keeps the knowledge workspace when a session cleanup task is edited elsewhere", () => {
+    assert.equal(resolveStoredScheduleWorkspace({ kind: "session_cleanup", previousWorkspace: first, currentWorkspace: second }), first);
+    assert.equal(resolveStoredScheduleWorkspace({ kind: "session_cleanup", currentWorkspace: second }), second);
+    assert.equal(resolveStoredScheduleWorkspace({ kind: "session_cleanup", previousWorkspace: first, currentWorkspace: second, rebind: true }), second);
+    assert.equal(resolveStoredScheduleWorkspace({ kind: "report", previousWorkspace: first, currentWorkspace: second }), null);
   });
 });
 

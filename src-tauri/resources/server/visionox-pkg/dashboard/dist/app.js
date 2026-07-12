@@ -19510,7 +19510,21 @@ var en = {
     mentionTargets: "skills / project files",
     skillMentionMeta: "skill",
     skillInvokeTaskFallback: "Follow this skill's workflow for the user's request.",
-    skillInvokePrompt: "Use the \"{name}\" skill for this request: {task}",
+    skillCredentialTitle: "Set up {label}",
+    skillCredentialHint: "Required only for {skill}. The key is saved locally and is never added to the conversation or sent to the model.",
+    skillCredentialPlaceholder: "Paste API key",
+    skillCredentialSave: "Save and continue",
+    skillCredentialSaving: "Saving...",
+    skillCredentialHelp: "Get an API key",
+    skillCredentialCheckFailed: "Could not check skill credentials: {error}",
+    workspacePicker: "Workspaces",
+    workspaceCurrent: "Current workspace",
+    workspacePending: "Selected · applies to the next new conversation",
+    workspaceDefault: "Default workspace",
+    workspaceBrowse: "Browse folders...",
+    workspaceManual: "Enter workspace path",
+    workspaceRemove: "Remove from recent workspaces",
+    workspaceChanged: "Workspace selected: {path}. It will apply to the next new conversation.",
     effortTitle: "reasoning_effort \u2014 applies next turn",
     effortMaxTitle: "max (default \u2014 best quality)",
     effortHighTitle: "high (cheaper / faster)",
@@ -19974,6 +19988,13 @@ var en = {
     currentWorkspace: "current",
     workspaceMismatch: "workspace changed",
     workspaceMismatchHint: "This task is bound to a different workspace. Runs are skipped until that workspace is active.",
+    workspaceScope: "Task workspace",
+    workspaceScopeBound: "Fixed workspace",
+    workspaceScopeCurrent: "Follow current workspace",
+    workspaceScopeHint: "Fixed tasks are skipped in another workspace; follow-current tasks run in whichever workspace is active.",
+    workspaceRebind: "Bind to current workspace",
+    cleanupWorkspace: "Cleanup workspace",
+    cleanupWorkspaceHint: "This task continues after switching workspaces. Session filtering and knowledge files stay with this workspace until you rebind it.",
     history: "Recent runs",
     latestResult: "Latest result",
     manual: "manual",
@@ -20016,12 +20037,14 @@ var en = {
     reportDate: "Date",
     reportStart: "Start",
     reportEnd: "End",
-    reportExport: "Export to Downloads",
+    reportExport: "Also export to Downloads",
     reportExportPath: "Export path",
+    reportStored: "The full report is retained in task history.",
+    reportExportFailed: "Downloads export failed: {error}",
     reportRange: "Range",
     reportSessions: "Sessions",
     reportMessages: "Messages",
-    reportTaskHint: "The run schedule decides when this task starts. The report range is calculated relative to that run time, so recurring tasks do not repeat a fixed date.",
+    reportTaskHint: "The run schedule decides when this task starts. The full report is always retained for preview; Downloads export is optional. The report range is calculated relative to the run time.",
     sessionCleanupAction: "Cleanup action",
     sessionCleanupPreview: "Preview only",
     sessionCleanupDelete: "Move high-confidence delete items to trash",
@@ -20491,7 +20514,21 @@ var zhCN = {
     mentionTargets: "\u6280\u80FD / \u9879\u76EE\u6587\u4EF6",
     skillMentionMeta: "\u6280\u80FD",
     skillInvokeTaskFallback: "\u6309\u8FD9\u4E2A\u6280\u80FD\u7684\u6D41\u7A0B\u5904\u7406\u7528\u6237\u8BF7\u6C42\u3002",
-    skillInvokePrompt: "\u8BF7\u8C03\u7528\u201C{name}\u201D\u6280\u80FD\u5904\u7406\u4EE5\u4E0B\u8BF7\u6C42\uFF1A{task}",
+    skillCredentialTitle: "\u914D\u7F6E {label}",
+    skillCredentialHint: "\u4EC5 {skill} \u6280\u80FD\u9700\u8981\u3002\u5BC6\u94A5\u53EA\u4FDD\u5B58\u5728\u672C\u673A\uFF0C\u4E0D\u4F1A\u5199\u5165\u5BF9\u8BDD\u6216\u53D1\u9001\u7ED9\u6A21\u578B\u3002",
+    skillCredentialPlaceholder: "\u7C98\u8D34 API Key",
+    skillCredentialSave: "\u4FDD\u5B58\u5E76\u7EE7\u7EED",
+    skillCredentialSaving: "\u6B63\u5728\u4FDD\u5B58...",
+    skillCredentialHelp: "\u83B7\u53D6 API Key",
+    skillCredentialCheckFailed: "\u65E0\u6CD5\u68C0\u67E5\u6280\u80FD\u5BC6\u94A5\uFF1A{error}",
+    workspacePicker: "\u9009\u62E9\u5DE5\u4F5C\u7A7A\u95F4",
+    workspaceCurrent: "\u5F53\u524D\u5DE5\u4F5C\u7A7A\u95F4",
+    workspacePending: "\u5DF2\u9009\u62E9\uFF0C\u4E0B\u6B21\u65B0\u5EFA\u5BF9\u8BDD\u65F6\u751F\u6548",
+    workspaceDefault: "\u9ED8\u8BA4\u5DE5\u4F5C\u7A7A\u95F4",
+    workspaceBrowse: "\u6D4F\u89C8\u5176\u4ED6\u76EE\u5F55...",
+    workspaceManual: "\u8F93\u5165\u5DE5\u4F5C\u7A7A\u95F4\u8DEF\u5F84",
+    workspaceRemove: "\u4ECE\u6700\u8FD1\u5DE5\u4F5C\u7A7A\u95F4\u4E2D\u79FB\u9664",
+    workspaceChanged: "\u5DF2\u9009\u62E9\u5DE5\u4F5C\u7A7A\u95F4\uFF1A{path}\u3002\u5C06\u5728\u4E0B\u6B21\u65B0\u5EFA\u5BF9\u8BDD\u65F6\u751F\u6548\u3002",
     effortTitle: "reasoning_effort \u2014 \u4E0B\u4E00\u8F6E\u751F\u6548",
     effortMaxTitle: "max\uFF08\u9ED8\u8BA4 \u2014 \u6700\u4F73\u8D28\u91CF\uFF09",
     effortHighTitle: "high\uFF08\u66F4\u4FBF\u5B9C / \u66F4\u5FEB\uFF09",
@@ -20955,6 +20992,13 @@ var zhCN = {
     currentWorkspace: "\u5F53\u524D",
     workspaceMismatch: "\u5DE5\u4F5C\u533A\u5DF2\u53D8\u66F4",
     workspaceMismatchHint: "\u8BE5\u4EFB\u52A1\u7ED1\u5B9A\u5230\u5176\u4ED6\u5DE5\u4F5C\u533A\u3002\u5728\u5207\u56DE\u5BF9\u5E94\u5DE5\u4F5C\u533A\u524D\uFF0C\u8FD0\u884C\u4F1A\u88AB\u8DF3\u8FC7\u3002",
+    workspaceScope: "\u4EFB\u52A1\u5DE5\u4F5C\u533A",
+    workspaceScopeBound: "\u56FA\u5B9A\u5DE5\u4F5C\u533A",
+    workspaceScopeCurrent: "\u8DDF\u968F\u5F53\u524D\u5DE5\u4F5C\u533A",
+    workspaceScopeHint: "\u56FA\u5B9A\u4EFB\u52A1\u5728\u5176\u4ED6\u5DE5\u4F5C\u533A\u4F1A\u8DF3\u8FC7\uFF1B\u8DDF\u968F\u4EFB\u52A1\u4F1A\u5728\u8FD0\u884C\u65F6\u7684\u5F53\u524D\u5DE5\u4F5C\u533A\u6267\u884C\u3002",
+    workspaceRebind: "\u91CD\u65B0\u7ED1\u5B9A\u5F53\u524D\u5DE5\u4F5C\u533A",
+    cleanupWorkspace: "\u6574\u7406\u5DE5\u4F5C\u533A",
+    cleanupWorkspaceHint: "\u5207\u6362\u5DE5\u4F5C\u533A\u540E\u4EFB\u52A1\u4ECD\u4F1A\u7EE7\u7EED\u3002\u4F1A\u8BDD\u7B5B\u9009\u548C\u77E5\u8BC6\u6587\u6863\u4ECD\u5F52\u5C5E\u6B64\u5DE5\u4F5C\u533A\uFF0C\u76F4\u5230\u4F60\u4E3B\u52A8\u91CD\u65B0\u7ED1\u5B9A\u3002",
     history: "\u6700\u8FD1\u8FD0\u884C",
     latestResult: "\u6700\u8FD1\u7ED3\u679C",
     manual: "\u624B\u52A8",
@@ -20997,12 +21041,14 @@ var zhCN = {
     reportDate: "\u65E5\u671F",
     reportStart: "\u5F00\u59CB",
     reportEnd: "\u7ED3\u675F",
-    reportExport: "\u5BFC\u51FA\u5230\u4E0B\u8F7D\u76EE\u5F55",
+    reportExport: "\u540C\u65F6\u5BFC\u51FA\u5230\u4E0B\u8F7D\u76EE\u5F55",
     reportExportPath: "\u5BFC\u51FA\u8DEF\u5F84",
+    reportStored: "\u5B8C\u6574\u62A5\u544A\u4F1A\u4FDD\u7559\u5728\u4EFB\u52A1\u8BB0\u5F55\u4E2D\u3002",
+    reportExportFailed: "\u5BFC\u51FA\u5230\u4E0B\u8F7D\u76EE\u5F55\u5931\u8D25\uFF1A{error}",
     reportRange: "\u8303\u56F4",
     reportSessions: "\u4F1A\u8BDD\u6570",
     reportMessages: "\u6D88\u606F\u6570",
-    reportTaskHint: "\u65F6\u95F4\u89C4\u5219\u51B3\u5B9A\u4EFB\u52A1\u4F55\u65F6\u5F00\u59CB\uFF1B\u62A5\u544A\u8303\u56F4\u4F1A\u76F8\u5BF9\u8FD0\u884C\u65F6\u95F4\u52A8\u6001\u8BA1\u7B97\uFF0C\u5B9A\u65F6\u4EFB\u52A1\u4E0D\u4F1A\u91CD\u590D\u751F\u6210\u56FA\u5B9A\u65E5\u671F\u7684\u62A5\u544A\u3002",
+    reportTaskHint: "\u65F6\u95F4\u89C4\u5219\u51B3\u5B9A\u4EFB\u52A1\u4F55\u65F6\u5F00\u59CB\uFF1B\u5B8C\u6574\u62A5\u544A\u59CB\u7EC8\u4FDD\u7559\u4F9B\u9884\u89C8\uFF0C\u4E0B\u8F7D\u76EE\u5F55\u5BFC\u51FA\u4E3A\u53EF\u9009\u526F\u672C\u3002\u62A5\u544A\u8303\u56F4\u6309\u5B9E\u9645\u8FD0\u884C\u65F6\u95F4\u8BA1\u7B97\u3002",
     sessionCleanupAction: "\u6574\u7406\u52A8\u4F5C",
     sessionCleanupPreview: "\u4EC5\u751F\u6210\u9884\u89C8",
     sessionCleanupDelete: "\u5C06\u9AD8\u7F6E\u4FE1\u5220\u9664\u9879\u79FB\u5165\u56DE\u6536\u7AD9",
@@ -25116,6 +25162,35 @@ function pickMarkdownFileFromBridge() {
   });
   });
 }
+function pickWorkspaceDirectoryFromBridge() {
+  if (window.__TAURI__?.invoke) {
+    return window.__TAURI__.invoke("pick_directory").then((result) => {
+      if (result?.error) throw new Error(result.error);
+      return result?.path || "";
+    });
+  }
+  return new Promise((resolve, reject) => {
+    if (!window.parent || window.parent === window) {
+      reject(new Error("本地目录选择器仅在桌面端可用"));
+      return;
+    }
+    const requestId = `workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("目录选择器响应超时"));
+    }, 5 * 60 * 1e3);
+    function onMessage(event) {
+      const data = event.data;
+      if (!data || data.type !== "vis_pick_directory_result" || data.requestId !== requestId) return;
+      clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      if (data.error) reject(new Error(data.error));
+      else resolve(data.path || "");
+    }
+    window.addEventListener("message", onMessage);
+    window.parent.postMessage({ type: "vis_pick_directory", requestId }, "*");
+  });
+}
 async function openMarkdownDocumentByPicker() {
   try {
     showToast("请选择 Markdown 文档...", "info", 1500);
@@ -25395,7 +25470,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [turnStartedAt, setTurnStartedAt] = d2(null);
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
-  const [recentWss, setRecentWss] = d2(() => { try { return JSON.parse(localStorage.getItem("visionox-workspaces") || "[]"); } catch { return []; } });
+  const [recentWss, setRecentWss] = d2([]);
+  const [workspaceSelection, setWorkspaceSelection] = d2(null);
   y2(() => {
     if (todos.length === 0 || !todos.every((todo) => todo.status === "completed")) return;
     setTodoExpanded(false);
@@ -25425,6 +25501,9 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [providerImportError, setProviderImportError] = d2(null);
   const [providerTesting, setProviderTesting] = d2(false);
   const [skillList, setSkillList] = d2([]);
+  const [skillCredentialSetup, setSkillCredentialSetup] = d2(null);
+  const [skillCredentialValue, setSkillCredentialValue] = d2("");
+  const [skillCredentialSaving, setSkillCredentialSaving] = d2(false);
   const [pendingImages, setPendingImages] = d2([]);
   const [visibleMessageCount, setVisibleMessageCount] = d2(CHAT_INITIAL_RENDER_COUNT);
   const [totalMessages, setTotalMessages] = d2(0);
@@ -26023,9 +26102,9 @@ const [providerCaps, setProviderCaps] = d2(null);
     setPopoverKind(null);
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [setChatInput]);
-  const resolveSkillMentionText = q2(async (rawText) => {
+  const resolveSkillMention = q2(async (rawText) => {
     const text = String(rawText ?? "").trim();
-    if (!text) return text;
+    if (!text) return { text, skillInvocation: null };
     try {
       const skills = await loadChatSkills();
       const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -26042,20 +26121,37 @@ const [providerCaps, setProviderCaps] = d2(null);
           if (re.lastIndex === match.index) re.lastIndex++;
         }
       }
-      if (!selected) return text;
+      if (!selected) return { text, skillInvocation: null };
       const task = `${text.slice(0, selected.start)}${text.slice(selected.end)}`.replace(/\s+/g, " ").trim() || t4("chat.skillInvokeTaskFallback");
-      return t4("chat.skillInvokePrompt", { name: selected.skill.name, task });
+      const skillInvocation = { name: selected.skill.name, task };
+      if (selected.skill.name === "tavily-search") {
+        try {
+          const credential = await api(`/skills/credentials/${encodeURIComponent(selected.skill.name)}`);
+          if (credential.required && !credential.configured) return { text, skillInvocation, credentialRequired: credential };
+        } catch (err) {
+          return { text, skillInvocation, credentialCheckError: err.message };
+        }
+      }
+      return { text, skillInvocation };
     } catch {
-      return text;
+      return { text, skillInvocation: null };
     }
   }, [loadChatSkills]);
   const submitPromptPayload = q2(async (payload) => {
-    const text = await resolveSkillMentionText(payload?.text ?? "");
+    const resolved = await resolveSkillMention(payload?.text ?? "");
+    const text = resolved.text;
     const images = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
     if (!text && images.length === 0) return { ok: false, reason: "empty" };
+    if (resolved.credentialCheckError) {
+      return { ok: false, reason: t4("chat.skillCredentialCheckFailed", { error: resolved.credentialCheckError }) };
+    }
+    if (resolved.credentialRequired) {
+      return { ok: false, credentialRequired: resolved.credentialRequired };
+    }
     try {
       const requestId = String(payload?.requestId || payload?.id || `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       var body = { prompt: text, requestId };
+      if (resolved.skillInvocation) body.skillInvocation = resolved.skillInvocation;
       if (images.length > 0) body.images = images;
       const res = await api("/submit", { method: "POST", body });
       if (!res.accepted) {
@@ -26069,7 +26165,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       return { ok: false, reason: err.message };
     }
-  }, [resolveSkillMentionText]);
+  }, [resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
     return api("/prompt-queue", { method: "POST", body: { scope: queueStorageKey, item } });
@@ -26153,6 +26249,11 @@ const [providerCaps, setProviderCaps] = d2(null);
         } else if (result.busy) {
           setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "queued", error: null } : q));
           setTimeout(() => setQueuePumpTick((v) => v + 1), 900);
+        } else if (result.credentialRequired) {
+          setQueuePaused(true);
+          setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? { ...q, status: "queued", error: null } : q));
+          setSkillCredentialValue("");
+          setSkillCredentialSetup({ ...result.credentialRequired, payload: item, queuedId: item.id });
         } else {
           const failedItem = { ...item, status: "failed", error: result.reason ?? "failed" };
           setQueuedPrompts((prev) => prev.map((q) => q.id === item.id ? failedItem : q));
@@ -26193,10 +26294,47 @@ const [providerCaps, setProviderCaps] = d2(null);
         setPopoverKind(null);
         removeChatDraft(draftKey);
       }
+    } else if (result.credentialRequired) {
+      setSkillCredentialValue("");
+      setSkillCredentialSetup({ ...result.credentialRequired, payload: { text, images } });
     } else {
       setError(result.reason ?? "rejected");
     }
   }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput]);
+  const saveSkillCredential = q2(async () => {
+    if (!skillCredentialSetup || !skillCredentialValue.trim()) return;
+    setSkillCredentialSaving(true);
+    setError(null);
+    try {
+      await api(`/skills/credentials/${encodeURIComponent(skillCredentialSetup.skill)}`, {
+        method: "POST",
+        body: { apiKey: skillCredentialValue }
+      });
+      const payload = skillCredentialSetup.payload;
+      setSkillCredentialSetup(null);
+      setSkillCredentialValue("");
+      const result = await submitPromptPayload(payload);
+      if (result.ok) {
+        if (skillCredentialSetup.queuedId) {
+          setQueuedPrompts((prev) => prev.filter((item) => item.id !== skillCredentialSetup.queuedId));
+          await deletePersistedQueuedPrompt(skillCredentialSetup.queuedId);
+          setQueuePaused(false);
+          setTimeout(() => setQueuePumpTick((value) => value + 1), 700);
+        } else {
+          setChatInput("");
+          setPendingImages([]);
+          removeChatDraft(draftKey);
+        }
+        shouldAutoScroll.current = true;
+      } else {
+        setError(result.reason ?? "rejected");
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSkillCredentialSaving(false);
+    }
+  }, [skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
   const resumeIncompletePlan = q2(async () => {
     if (busy || !planContinuation) return;
     const paused = planContinuation;
@@ -26958,16 +27096,42 @@ const [providerCaps, setProviderCaps] = d2(null);
   const pickWorkspace = q2(async (dir) => {
     setShowWsPicker(false);
     try {
-      await api("/settings", { method: "POST", body: { workspaceDir: dir } });
-      setWorkspaceDirLocal(dir);
-      const updated = [dir, ...recentWss.filter((w2) => w2 !== dir)].slice(0, 5);
-      setRecentWss(updated);
-      try { localStorage.setItem("visionox-workspaces", JSON.stringify(updated)); } catch {}
-      showToast("工作空间已设为 " + dir + "（新对话后生效）", "info");
+      const result = await api("/workspaces", { method: "POST", body: { path: dir } });
+      setWorkspaceSelection(result);
+      setRecentWss(result.recentWorkspaces ?? []);
+      showToast(t4("chat.workspaceChanged", { path: result.configured }), "info", 5e3);
     } catch (err) {
       setError(err.message);
     }
-  }, [recentWss]);
+  }, []);
+  const loadWorkspaceOptions = q2(async () => {
+    try {
+      const result = await api("/workspaces");
+      setWorkspaceSelection(result);
+      setRecentWss(result.recentWorkspaces ?? []);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, []);
+  const removeWorkspaceOption = q2(async (path) => {
+    try {
+      const result = await api("/workspaces", { method: "DELETE", body: { path } });
+      setWorkspaceSelection(result);
+      setRecentWss(result.recentWorkspaces ?? []);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, []);
+  const browseWorkspace = q2(async () => {
+    setShowWsPicker(false);
+    let path = "";
+    try {
+      path = await pickWorkspaceDirectoryFromBridge();
+    } catch {
+      path = prompt(t4("chat.workspaceManual")) || "";
+    }
+    if (path.trim()) await pickWorkspace(path.trim());
+  }, [pickWorkspace]);
   const copyMessage = q2(async (msg) => {
     const text = (msg.text ?? "").trim();
     if (!text) return;
@@ -27186,6 +27350,31 @@ const [providerCaps, setProviderCaps] = d2(null);
                 </div>
               </div>
             ` : null}
+            ${skillCredentialSetup ? html4`
+              <div class="card accent-brand" style="padding:10px 12px;margin-bottom:6px">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                  <div style="min-width:0">
+                    <div style="font-size:12px;font-weight:600;color:var(--fg-0)">${t4("chat.skillCredentialTitle", { label: skillCredentialSetup.label })}</div>
+                    <div style="font-size:11px;color:var(--fg-3);line-height:1.45;margin-top:2px">${t4("chat.skillCredentialHint", { skill: skillCredentialSetup.skill })}</div>
+                  </div>
+                  <a href=${skillCredentialSetup.helpUrl} target="_blank" rel="noreferrer" style="font-size:11px;white-space:nowrap">${t4("chat.skillCredentialHelp")}</a>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+                  <input
+                    type="password"
+                    autocomplete="off"
+                    placeholder=${t4("chat.skillCredentialPlaceholder")}
+                    value=${skillCredentialValue}
+                    onInput=${(e3) => setSkillCredentialValue(e3.target.value)}
+                    onKeyDown=${(e3) => { if (e3.key === "Enter") { e3.preventDefault(); void saveSkillCredential(); } }}
+                    disabled=${skillCredentialSaving}
+                    style="flex:1;min-width:0"
+                  />
+                  <button type="button" class="primary" disabled=${skillCredentialSaving || !skillCredentialValue.trim()} onClick=${saveSkillCredential}>${skillCredentialSaving ? t4("chat.skillCredentialSaving") : t4("chat.skillCredentialSave")}</button>
+                  <button type="button" disabled=${skillCredentialSaving} onClick=${() => { setSkillCredentialSetup(null); setSkillCredentialValue(""); }}>${t4("common.cancel")}</button>
+                </div>
+              </div>
+            ` : null}
             <textarea
               ref=${inputRef}
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
@@ -27210,15 +27399,30 @@ const [providerCaps, setProviderCaps] = d2(null);
                   `)}
                 </div>
               ` : null}
-              <button type="button" class="composer-chip" aria-expanded=${showWsPicker} onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</button>
+              <button type="button" class="composer-chip" aria-expanded=${showWsPicker} onClick=${() => { const next = !showWsPicker; setShowWsPicker(next); setShowSkillPicker(false); if (next) void loadWorkspaceOptions(); }}>💻 工作空间 ▼</button>
               ${showWsPicker ? html4`
-                <div class="popover" style="position:absolute;bottom:100%;left:0;width:280px;max-height:220px;overflow-y:auto;z-index:10">
-                  <div class="popover-h">选择工作空间</div>
-                  <div class="popover-row" onMouseDown=${(e3) => { e3.preventDefault(); pickWorkspace("visionox-workspace"); }}><span class="name">🏠 默认沙箱</span></div>
-                  ${recentWss.map((w3) => html4`
-                    <div class="popover-row" onMouseDown=${(e4) => { e4.preventDefault(); pickWorkspace(w3); }}><span class="name">📁 ${w3}</span></div>
+                <div class="popover" style="position:absolute;bottom:100%;left:0;width:360px;max-height:320px;overflow-y:auto;z-index:10">
+                  <div class="popover-h">${t4("chat.workspacePicker")}</div>
+                  ${workspaceSelection?.current ? html4`
+                    <div class="popover-row" style="cursor:default">
+                      <span class="name">✓ ${t4("chat.workspaceCurrent")}</span>
+                      <span class="meta" title=${workspaceSelection.current}>${workspaceSelection.current}</span>
+                    </div>
+                  ` : null}
+                  ${workspaceSelection?.pending ? html4`
+                    <div class="popover-row" style="cursor:default">
+                      <span class="name">○ ${t4("chat.workspacePending")}</span>
+                      <span class="meta" title=${workspaceSelection.configured}>${workspaceSelection.configured}</span>
+                    </div>
+                  ` : null}
+                  <div class="popover-row" onMouseDown=${(e3) => { e3.preventDefault(); void pickWorkspace("visionox-workspace"); }}><span class="name">⌂ ${t4("chat.workspaceDefault")}</span></div>
+                  ${recentWss.filter((path) => path !== workspaceSelection?.current && path !== workspaceSelection?.configured).map((path) => html4`
+                    <div class="popover-row" style="display:grid;grid-template-columns:minmax(0,1fr) 24px;align-items:center" onMouseDown=${(e4) => { e4.preventDefault(); void pickWorkspace(path); }}>
+                      <span style="min-width:0"><span class="name">▣ ${path.split(/[\\/]/).filter(Boolean).pop() || path}</span><span class="meta" title=${path}>${path}</span></span>
+                      <button type="button" class="ghost" title=${t4("chat.workspaceRemove")} aria-label=${t4("chat.workspaceRemove")} onMouseDown=${(event) => { event.preventDefault(); event.stopPropagation(); void removeWorkspaceOption(path); }} style="width:24px;height:24px;padding:0">×</button>
+                    </div>
                   `)}
-                  <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); const p2 = prompt('输入工作空间路径:'); if (p2 && p2.trim()) pickWorkspace(p2.trim()); }}><span class="name">📂 浏览其他目录...</span></div>
+                  <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); void browseWorkspace(); }}><span class="name">▤ ${t4("chat.workspaceBrowse")}</span></div>
                 </div>
               ` : null}
               <button type="button" class="composer-chip" aria-expanded=${showModelPicker} onClick=${() => { setShowModelPicker(!showModelPicker); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</button>
@@ -29695,6 +29899,8 @@ function emptyTaskDraft() {
     reportStartDate: weekAgo,
     reportEndDate: today,
     reportExport: true,
+    workspaceScope: "bound",
+    rebindWorkspace: false,
     type: "interval",
     intervalMinutes: 60,
     timeOfDay: "09:00",
@@ -29727,6 +29933,8 @@ function taskDraftFromSchedule(task) {
     reportStartDate: task.reportStartDate ?? weekAgo,
     reportEndDate: task.reportEndDate ?? today,
     reportExport: task.reportExport !== false,
+    workspaceScope: task.workspaceScope === "current" ? "current" : "bound",
+    rebindWorkspace: false,
     type: task.type === "daily" || task.type === "weekly" ? task.type : "interval",
     intervalMinutes: Math.max(1, Math.round((task.intervalMs ?? 60 * 60 * 1e3) / 6e4)),
     timeOfDay: task.timeOfDay ?? "09:00",
@@ -29901,6 +30109,8 @@ function ScheduledTasksPanel() {
       reportStartDate: draft.reportStartDate,
       reportEndDate: draft.reportEndDate,
       reportExport: draft.reportExport,
+      workspaceScope: draft.workspaceScope,
+      rebindWorkspace: draft.rebindWorkspace === true,
       type: draft.type,
       runMode: draft.runMode,
       weekdaysOnly: draft.weekdaysOnly,
@@ -30116,12 +30326,18 @@ function ScheduledTasksPanel() {
                 <div style="color:var(--fg-2);overflow-wrap:anywhere">${latestRun.summary || latestRun.reason || t4("tasks.noSummary")}</div>
                 ${latestRun.reportPath ? html4`
                   <div style="display:flex;flex-direction:column;gap:6px;color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">
-                    <div>${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportPath}</code></div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                       <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>预览报告</button>
-                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportPath)}>所在文件夹</button>
-                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportPath)}>复制路径</button>
                     </div>
+                    <div>${t4("tasks.reportStored")}</div>
+                    ${latestRun.reportExportPath ? html4`
+                      <div>${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportExportPath}</code></div>
+                      <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportExportPath)}>所在文件夹</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportExportPath)}>复制路径</button>
+                      </div>
+                    ` : null}
+                    ${latestRun.reportExportError ? html4`<div style="color:var(--c-warn)">${t4("tasks.reportExportFailed", { error: latestRun.reportExportError })}</div>` : null}
                   </div>
                 ` : null}
                 ${latestRun.cleanupTrashRoot ? html4`<div style="color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">${t4("tasks.cleanupTrashRoot")}: <code class="mono">${latestRun.cleanupTrashRoot}</code></div>` : null}
@@ -30255,6 +30471,16 @@ function ScheduledTasksPanel() {
                 <option value="confirm">${t4("tasks.runModeConfirm")}</option>
               </select>
             </div>
+            <div class="form-row" style="align-items:flex-start">
+              <span class="lbl">${t4("tasks.workspaceScope")}</span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+                <select class="input mono" value=${draft.workspaceScope} onChange=${(e3) => setDraft({ ...draft, workspaceScope: e3.target.value, rebindWorkspace: false })}>
+                  <option value="bound">${t4("tasks.workspaceScopeBound")}</option>
+                  <option value="current">${t4("tasks.workspaceScopeCurrent")}</option>
+                </select>
+                <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.workspaceScopeHint")}</span>
+              </div>
+            </div>
           `}
           <div class="form-row">
             <span class="lbl">${t4("tasks.type")}</span>
@@ -30303,12 +30529,23 @@ function ScheduledTasksPanel() {
               ` : null}
             </div>
           </div>
-          ${selected ? html4`
+          ${selected && draft.kind === "prompt" ? html4`
             <div class="form-row">
               <span class="lbl">${t4("tasks.workspace")}</span>
               <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
-                <code class="mono" style="font-size:11px;color:var(--fg-2);overflow-wrap:anywhere">${selected.workspaceDir || "\u2014"}</code>
+                <code class="mono" style="font-size:11px;color:var(--fg-2);overflow-wrap:anywhere">${draft.workspaceScope === "current" || draft.rebindWorkspace ? selected.currentWorkspaceDir : selected.workspaceDir || "\u2014"}</code>
                 <span style="color:var(--fg-3);font-size:11px">${t4("tasks.currentWorkspace")}: ${selected.currentWorkspaceDir || "\u2014"}</span>
+                ${draft.workspaceScope === "bound" && selected.workspaceMismatch ? html4`<button class="btn btn-sm" style="align-self:flex-start" disabled=${draft.rebindWorkspace} onClick=${() => setDraft({ ...draft, rebindWorkspace: true })}>${t4("tasks.workspaceRebind")}</button>` : null}
+              </div>
+            </div>
+          ` : null}
+          ${selected && draft.kind === "session_cleanup" ? html4`
+            <div class="form-row" style="align-items:flex-start">
+              <span class="lbl">${t4("tasks.cleanupWorkspace")}</span>
+              <div style="min-width:0;display:flex;flex-direction:column;gap:5px">
+                <code class="mono" style="font-size:11px;color:var(--fg-2);overflow-wrap:anywhere">${draft.rebindWorkspace ? selected.currentWorkspaceDir : selected.workspaceDir || "\u2014"}</code>
+                <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.cleanupWorkspaceHint")}</span>
+                ${selected.workspaceDifferent ? html4`<button class="btn btn-sm" style="align-self:flex-start" disabled=${draft.rebindWorkspace} onClick=${() => setDraft({ ...draft, rebindWorkspace: true })}>${t4("tasks.workspaceRebind")}</button>` : null}
               </div>
             </div>
           ` : null}
@@ -35240,7 +35477,7 @@ function App() {
         <span class="meter">
           ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
           <span class="sep">·</span>
-          <span class="lbl">@${(new Date).getFullYear()}</span>
+          <span class="lbl">@${buildDate2 && !buildDate2.startsWith("__") ? buildDate2 : (() => { const now = new Date(); return `${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}`; })()}</span>
           ${version2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}</span>` : null}
         </span>
       </header>

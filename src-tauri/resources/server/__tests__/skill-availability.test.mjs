@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { pruneLegacyBootstrapSkillBackups } from "../lib/bootstrap-skill-cleanup.mjs";
+import {
+  formatBrave,
+  formatMarkdown,
+  loadTavilyApiKey,
+  parseArguments,
+  searchTavily,
+} from "../../bootstrap-skills/tavily-search/scripts/tavily-search.mjs";
 
 const resourcesDir = fileURLToPath(new URL("../../", import.meta.url));
 const skillsDir = join(resourcesDir, "bootstrap-skills");
@@ -18,7 +25,7 @@ test("all bundled skill directories contain a readable SKILL.md and provenance",
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(skillNames.length, 41);
+  assert.equal(skillNames.length, 42);
   for (const name of skillNames) {
     const path = skillFile(name);
     assert.ok(existsSync(path), `${name} is missing SKILL.md`);
@@ -70,6 +77,59 @@ test("active bundled playbooks do not instruct unavailable Claude-specific tools
   const subagentWorkflow = readFileSync(skillFile("subagent-driven-development"), "utf8");
   assert.match(subagentWorkflow, /Availability Preflight/);
   assert.match(subagentWorkflow, /does not guarantee that capability/);
+});
+
+test("all Superpowers entry playbooks use Visionox skill names and available mechanisms", () => {
+  const names = [
+    "brainstorming", "dispatching-parallel-agents", "executing-plans", "finishing-a-development-branch",
+    "receiving-code-review", "requesting-code-review", "subagent-driven-development", "systematic-debugging",
+    "test-driven-development", "using-git-worktrees", "using-superpowers", "verification-before-completion",
+    "writing-plans", "writing-skills",
+  ];
+  for (const name of names) {
+    const contents = readFileSync(skillFile(name), "utf8");
+    assert.doesNotMatch(contents, /superpowers:|Claude|TodoWrite|Task tool|~\/\.claude|~\/\.config\/superpowers/, name);
+  }
+  const entry = readFileSync(skillFile("using-superpowers"), "utf8");
+  assert.doesNotMatch(entry, /1% chance|ANY response/i);
+  assert.match(entry, /directly matches/i);
+});
+
+test("bundled Tavily skill uses the packaged Node runtime and declares its project license", () => {
+  const skill = readFileSync(skillFile("tavily-search"), "utf8");
+  const script = readFileSync(skillFile("tavily-search", "scripts/tavily-search.mjs"), "utf8");
+  assert.match(skill, /license: MIT/);
+  assert.match(skill, /node "\{baseDir\}\/scripts\/tavily-search\.mjs"/);
+  assert.doesNotMatch(skill, /python\s+\{baseDir\}|\bpy\s+\{baseDir\}|\.py\b/iu);
+  assert.match(script, /TAVILY_API_KEY/);
+  assert.match(script, /https:\/\/api\.tavily\.com\/search/);
+  assert.match(script, /FORMAT_CHOICES = \["json", "brave", "md"\]/);
+});
+
+test("bundled Tavily implementation matches the supported local skill behavior", async () => {
+  const home = mkdtempSync(join(tmpdir(), "tavily-skill-"));
+  try {
+    mkdirSync(join(home, ".visionox"), { recursive: true });
+    writeFileSync(join(home, ".visionox", ".env"), "# local\nTAVILY_API_KEY='from-file'\n", "utf8");
+    assert.equal(loadTavilyApiKey({}, home), "from-file");
+    assert.equal(loadTavilyApiKey({ TAVILY_API_KEY: "from-env" }, home), "from-env");
+
+    const options = parseArguments(["--query", "Visionox", "--max-results", "3", "--include-answer", "--format", "brave"]);
+    assert.deepEqual(options, { query: "Visionox", maxResults: 3, includeAnswer: true, format: "brave" });
+    assert.throws(() => parseArguments(["--query", "x", "--max-results", "11"]), /integer from 1 to 10/);
+
+    let request = null;
+    const response = await searchTavily(options, "secret", async (url, init) => {
+      request = { url, init };
+      return { ok: true, text: async () => JSON.stringify({ query: "Visionox", answer: "A", results: [{ title: "T", url: "https://example.test", content: "S" }] }) };
+    });
+    assert.equal(request.url, "https://api.tavily.com/search");
+    assert.deepEqual(JSON.parse(request.init.body), { api_key: "secret", query: "Visionox", max_results: 3, include_answer: true });
+    assert.deepEqual(formatBrave(response), { query: "Visionox", answer: "A", results: [{ title: "T", url: "https://example.test", snippet: "S" }] });
+    assert.match(formatMarkdown(response), /### 1\. \[T\]\(https:\/\/example\.test\)/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("systematic debugging includes scripts for Windows and POSIX", () => {

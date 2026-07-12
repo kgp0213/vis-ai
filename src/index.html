@@ -201,7 +201,7 @@
           if (window.__visionoxBridgeInstalled) return;
           window.__visionoxBridgeInstalled = true;
           window.addEventListener("message", function (event) {
-            if (!event.data || !["vis_get_clipboard", "vis_pick_markdown_file", "vis_client_log", "vis_open_log_dir"].includes(event.data.type)) return;
+            if (!event.data || !["vis_get_clipboard", "vis_pick_markdown_file", "vis_pick_directory", "vis_client_log", "vis_open_log_dir"].includes(event.data.type)) return;
             var frame = document.getElementById("vis-app-frame");
             var dashboardUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
             var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
@@ -237,6 +237,20 @@
                   });
                 });
             }
+            function doDirectoryPickerInvoke() {
+              window.__TAURI__.invoke("pick_directory")
+                .then(function (result) {
+                  reply({
+                    type: "vis_pick_directory_result",
+                    requestId: event.data.requestId || "",
+                    path: result && result.path ? String(result.path) : "",
+                    error: result && result.error ? String(result.error) : undefined
+                  });
+                })
+                .catch(function (error) {
+                  reply({ type: "vis_pick_directory_result", requestId: event.data.requestId || "", error: String(error), path: "" });
+                });
+            }
             function doClipboardInvoke() {
               window.__TAURI__.invoke("ping")
                 .then(function (result) {
@@ -256,6 +270,7 @@
             }
             if (window.__TAURI__ && window.__TAURI__.invoke) {
               if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
+              else if (event.data.type === "vis_pick_directory") doDirectoryPickerInvoke();
               else if (event.data.type === "vis_get_clipboard") doClipboardInvoke();
               else doSimpleInvoke().catch(function () {});
             } else {
@@ -264,12 +279,15 @@
                 if (window.__TAURI__ && window.__TAURI__.invoke) {
                   clearInterval(timer);
                   if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
+                  else if (event.data.type === "vis_pick_directory") doDirectoryPickerInvoke();
                   else if (event.data.type === "vis_get_clipboard") doClipboardInvoke();
                   else doSimpleInvoke().catch(function () {});
                 } else if (--attempts <= 0) {
                   clearInterval(timer);
                   if (event.data.type === "vis_pick_markdown_file") {
                     reply({ type: "vis_pick_markdown_file_result", requestId: event.data.requestId || "", error: "本地桥接未就绪", path: "" });
+                  } else if (event.data.type === "vis_pick_directory") {
+                    reply({ type: "vis_pick_directory_result", requestId: event.data.requestId || "", error: "本地桥接未就绪", path: "" });
                   } else {
                     reply({ type: "vis_clipboard_result", error: "本地桥接未就绪", paths: [] });
                   }

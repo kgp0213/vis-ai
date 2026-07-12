@@ -9,6 +9,14 @@
       "status": "verified"
     },
     {
+      "id": "visionox-tavily-search",
+      "skills": ["tavily-search"],
+      "source": "Visionox Node implementation based on the local SkillHub openclaw-tavily-search v0.1.0 behavior",
+      "version": "1.0.0",
+      "license": "MIT, declared in SKILL.md",
+      "status": "verified"
+    },
+    {
       "id": "karpathy-guidelines",
       "skills": ["andrej-karpathy-guidelines"],
       "source": "https://github.com/multica-ai/andrej-karpathy-skills",
