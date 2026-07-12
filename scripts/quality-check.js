@@ -21,6 +21,7 @@ function run(label, command, args) {
 run("launcher syntax", "node", ["--check", "src-tauri/resources/server/launcher.mjs"]);
 run("dashboard syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js"]);
 run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js"]);
+run("product version consistency", "node", ["scripts/check-version-consistency.js"]);
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
 run("repository hygiene", "node", ["scripts/check-repository-hygiene.js"]);
 run("node tests", "node", ["--test", "src-tauri/resources/server/**/*.test.mjs"]);
