@@ -278,8 +278,8 @@ async function serveAsset(name) {
     const { body, mtimeMs } = await loadCss();
     return { body, mtimeMs, contentType: "text/css; charset=utf-8" };
   }
-  if (name === "katex-support.js") {
-    const { body, mtimeMs } = await loadCachedFile(join(ASSET_DIR, "katex-support.js"));
+  if (name === "katex-support.js" || name === "backup-support.js") {
+    const { body, mtimeMs } = await loadCachedFile(join(ASSET_DIR, name));
     return { body, mtimeMs, contentType: "application/javascript; charset=utf-8" };
   }
   if (KATEX_ASSET_RE.test(name)) {

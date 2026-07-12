@@ -621,7 +621,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(overview, /api\("\/backups", \{ method: "POST", body: \{\} \}\)/);
     assert.match(overview, /\/backups\/\$\{encodeURIComponent\(id\)\}\/preview/);
     assert.match(overview, /\/backups\/\$\{encodeURIComponent\(id\)\}\/restore/);
-    assert.match(overview, /backupPreview\.counts\.conflict/);
+    assert.match(overview, /VisionoxBackupPolicy\.restoreActions\(backupPreview\.counts\)/);
+    assert.match(overview, /actions\.canOverwriteConflicts/);
     assert.match(overview, /usePoll\("\/backups\/estimate", 3e4\)/);
     assert.match(overview, /api\("\/backups\/retention"/);
     assert.match(overview, /method: "DELETE"/);

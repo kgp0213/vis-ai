@@ -26,6 +26,7 @@ const required = [
       'for (const dir of ["dist", "data", "node_modules"])',
       "forbiddenRuntimeFile",
       '"dashboard/katex-support.js"',
+      '"dashboard/backup-support.js"',
       'copyDirectory(join("dashboard", "vendor", "katex"))',
     ],
   },
@@ -273,7 +274,8 @@ const required = [
       'api("/mode-memory/batch"',
       'usePoll("/backups", 15e3)',
       "overview.dataProtection",
-      "backupPreview.counts.conflict",
+      "VisionoxBackupPolicy.restoreActions(backupPreview.counts)",
+      "actions.canOverwriteConflicts",
       "overview.backupRetention",
       "overview.deleteBackup",
       "overview.storageIssues",
@@ -323,8 +325,12 @@ const required = [
     forbidden: ["mermaid"],
   },
   {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/backup-support.js",
+    markers: ["VisionoxBackupPolicy", "normalizeRetentionCount", "canOverwriteConflicts"],
+  },
+  {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/index.html",
-    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js"],
+    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-continuation.mjs",
