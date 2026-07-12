@@ -1,6 +1,6 @@
 # OfficeCLI 办公指南
 
-> OfficeCLI 已集成到 Visionox，办公模式下自动可用，开箱即用。
+> OfficeCLI 1.0.135 已集成到 Visionox，办公模式下自动可用。
 
 ---
 
@@ -13,6 +13,9 @@ OfficeCLI 是专为 AI Agent 设计的 Office 文档 CLI 工具，支持：
 - **PowerPoint (.pptx)**：创建演示文稿、编辑幻灯片
 
 办公模式下，Visionox 默认通过 MCP stdio 协议接入 OfficeCLI，直接操作 Office 文档。
+
+内置二进制来自公开上游 [iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI)，版本、大小、
+SHA-256 和许可证记录在运行时资源清单中。普通启动和构建不会联网下载 OfficeCLI。
 
 ---
 
@@ -60,12 +63,22 @@ PDF 相关技能在办公模式中继续保留：
 | 技能 | 用途 |
 |------|------|
 | `pdf` | PDF 创建与编辑 |
-| `pdf-extract` | PDF 文本/表格提取 |
 | `md-to-pdf-cjk` | Markdown 转 PDF（支持中文） |
 
 ---
 
-## 五、故障排查
+## 五、建议工作流
+
+复杂 Office 操作优先让 Agent 先检查当前文档状态，再进行小批量修改：使用 `get`/`view` 确认对象，
+用 batch 合并同一阶段操作，随后检查 issues、执行 validate，最后 save 并 close。这样能更早发现选择器、
+公式或结构问题，也能减少重复启动和往返调用。
+
+OfficeCLI MCP 会在 Dashboard 服务可用后后台初始化，不阻塞应用首屏。刚启动时 MCP 面板可能短暂显示
+初始化中。
+
+---
+
+## 六、故障排查
 
 **Q：MCP 面板没有显示 officecli？**
 

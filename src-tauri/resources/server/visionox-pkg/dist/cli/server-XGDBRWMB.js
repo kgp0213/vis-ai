@@ -4216,6 +4216,7 @@ async function handleSettings(method, _rest, body, ctx) {
           proNext: "next-turn",
           budgetUsd: "live",
           mode: "live",
+          eccRules: "live",
           contextCapTokens: "live"
         }
       }
@@ -4230,6 +4231,7 @@ async function handleSettings(method, _rest, body, ctx) {
     let langPending = null;
     let presetPendingLive = null;
     let effortPendingLive = null;
+    let eccRulesPending = null;
     if (fields.lang !== void 0) {
       const raw = String(fields.lang);
       const supported = getSupportedLanguages();
@@ -4332,6 +4334,19 @@ async function handleSettings(method, _rest, body, ctx) {
       cfg.mode = fields.mode;
       changed.push("mode");
     }
+    if (fields.eccRules !== void 0) {
+      if (!Array.isArray(fields.eccRules) || fields.eccRules.some((name) => typeof name !== "string")) {
+        return { status: 400, body: { error: "eccRules must be an array of rule pack names" } };
+      }
+      const available = ctx.getEccRules?.()?.available ?? [];
+      const normalized = [...new Set(fields.eccRules)];
+      const unknown = normalized.filter((name) => !available.includes(name));
+      if (unknown.length > 0) {
+        return { status: 400, body: { error: `unknown ECC rule pack(s): ${unknown.join(", ")}` } };
+      }
+      eccRulesPending = normalized;
+      changed.push("eccRules");
+    }
     if (fields.contextCapTokens !== void 0) {
       if (fields.contextCapTokens === null) {
         cfg.contextCapTokens = void 0;
@@ -4413,6 +4428,7 @@ async function handleSettings(method, _rest, body, ctx) {
         }
       }
       if (changed.includes("mode")) ctx.setMode?.(cfg.mode);
+      if (eccRulesPending !== null) ctx.setEccRules?.(eccRulesPending);
       if (langPending) setLanguage(langPending);
       if (presetPendingLive) modelSwitch = ctx.applyPresetLive?.(presetPendingLive) ?? modelSwitch;
       if (effortPendingLive) ctx.applyEffortLive?.(effortPendingLive);
@@ -4491,6 +4507,13 @@ function readSkillListEntry(skillPath, name, scope) {
     };
     const desc = parseFrontmatterDescription(raw);
     if (desc) item.description = desc;
+    if (scope === "global") {
+      try {
+        const marker = JSON.parse(readFileSync6(join8(dirname4(skillPath), "_visionox_builtin.json"), "utf8"));
+        if (marker?.owner === "visionox-bootstrap") item.managedBuiltin = true;
+      } catch {
+      }
+    }
     return item;
   } catch {
     return null;
@@ -4562,13 +4585,14 @@ async function handleSkills(method, rest, body, ctx) {
     return { status: 200, body: await ctx.repairSkillEnvironment() };
   }
   const cwd = ctx.getCurrentCwd?.();
+  const globalDir = ctx.skillsRoot ?? globalSkillsDir();
   if (method === "GET" && rest.length === 0) {
     const runs7d = countSubagentRuns(ctx.usageLogPath);
     const tag = (rows) => rows.map((r) => ({ ...r, runs7d: runs7d.get(r.name) ?? 0 }));
     return {
       status: 200,
       body: {
-        global: tag(listSkills(globalSkillsDir(), "global")),
+        global: tag(listSkills(globalDir, "global")),
         project: cwd ? tag(listSkills(projectSkillsDir(cwd), "project")) : [],
         builtin: [
           {
@@ -4585,7 +4609,7 @@ async function handleSkills(method, rest, body, ctx) {
           }
         ],
         paths: {
-          global: globalSkillsDir(),
+          global: globalDir,
           project: cwd ? projectSkillsDir(cwd) : null
         }
       }
@@ -4612,7 +4636,7 @@ async function handleSkills(method, rest, body, ctx) {
     }
     dir = projectSkillsDir(cwd);
   } else {
-    dir = globalSkillsDir();
+    dir = globalDir;
   }
   const resolved = resolveSkillPath(dir, name);
   if (method === "GET") {
@@ -4643,12 +4667,32 @@ async function handleSkills(method, rest, body, ctx) {
   }
   if (method === "DELETE") {
     if (!resolved) return { status: 404, body: { error: "skill not found" } };
-    rmSync(resolved.layout === "folder" ? dirname4(resolved.path) : resolved.path, {
-      recursive: true,
-      force: true
-    });
+    let disabledBuiltin = false;
+    if (scope === "global" && resolved.layout === "folder") {
+      try {
+        const marker = JSON.parse(readFileSync6(join8(dirname4(resolved.path), "_visionox_builtin.json"), "utf8"));
+        if (marker?.owner === "visionox-bootstrap") {
+          if (!ctx.disableBootstrapSkill) return { status: 503, body: { error: "bootstrap skill disable service is unavailable" } };
+          ctx.disableBootstrapSkill(name);
+          disabledBuiltin = true;
+        }
+      } catch (error) {
+        if (error?.code !== "ENOENT") {
+          return { status: 409, body: { error: "bootstrap skill marker cannot be read; repair the skill environment before deleting" } };
+        }
+      }
+    }
+    try {
+      rmSync(resolved.layout === "folder" ? dirname4(resolved.path) : resolved.path, {
+        recursive: true,
+        force: true
+      });
+    } catch (error) {
+      if (disabledBuiltin) ctx.enableBootstrapSkill?.(name);
+      throw error;
+    }
     ctx.audit?.({ ts: Date.now(), action: "delete-skill", payload: { scope, name } });
-    return { status: 200, body: { deleted: true } };
+    return { status: 200, body: { deleted: true, disabledBuiltin } };
   }
   return { status: 405, body: { error: `method ${method} not supported` } };
 }
@@ -4674,7 +4718,19 @@ async function handleSlash(method, _rest, _body, ctx) {
     contextual: null,
     aliases: []
   });
-  return { status: 200, body: { commands, codeMode } };
+  const merged = new Map(commands.map((command) => [command.cmd, command]));
+  for (const command of ctx.getSlashCommands?.() ?? []) {
+    const cmd = String(command.name ?? "").replace(/^\//, "");
+    if (!cmd) continue;
+    merged.set(cmd, {
+      cmd,
+      summary: command.desc ?? "",
+      argsHint: String(command.usage ?? "").replace(/^\/[^\s]+\s*/, "") || void 0,
+      contextual: null,
+      aliases: (command.aliases ?? []).map((alias) => String(alias).replace(/^\//, ""))
+    });
+  }
+  return { status: 200, body: { commands: [...merged.values()], codeMode } };
 }
 
 // src/server/api/submit.ts

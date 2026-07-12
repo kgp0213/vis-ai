@@ -12,7 +12,7 @@ Tauri Shell (Rust)
   ├─ spawn node.exe launcher.mjs --port 0
   ├─ 读取 stdout → {url, token, port}
   ├─ TCP 健康检查 (15×200ms) → 通过后导航到 dashboard
-  ├─ 子进程崩溃监控 (2s 轮询)
+  ├─ 子进程崩溃监控 (阻塞等待)
   ├─ JobObject KILL_ON_JOB_CLOSE 兜底
   └─ 系统托盘 (最小化/退出)
 
@@ -36,7 +36,7 @@ Dashboard SPA (WebView2)
 | AI 运行时 | Node.js v22+ | Agent loop、工具注册、MCP 管理 |
 | 前端界面 | Preact + WebView2 | Dashboard SPA |
 | 通信 | HTTP API + SSE | Launcher 与 Dashboard 之间 |
-| 打包 | Tauri Bundle | 开发可只构建 exe；分发时按平台生成 NSIS / deb / AppImage |
+| 打包 | Tauri Bundle | Windows release exe；明确交付时生成并校验 NSIS |
 
 ---
 
@@ -115,11 +115,10 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 活动计划存储、定时任务存储/时间策略和 OfficeCLI 策略等模块。提示队列由
 `lib/prompt-queue-store.mjs` 独立管理 TTL、容量、幂等和事务回滚，不再把存储细节留在 Launcher 中。
 
-后续按以下顺序拆分，每次只移动一个边界并保持 API 行为不变：
-
-1. 活动会话持久化：消息分页、自动保存和恢复编排。
-2. 定时任务执行编排：在已拆分的存储和时间策略之上，逐步缩小 Launcher 中的运行协调代码。
-3. 最后才处理模型循环和 Dashboard context 装配，避免一次重构核心运行路径。
+活动会话解析、元数据、pending fallback 和部分定时任务编排已经抽取。后续不固定按行数或旧路线图
+机械拆分，而是从仍留在 Launcher 的活动会话 I/O/归档、MCP 生命周期、计划任务运行时等边界中，
+按故障影响、变更频率和测试覆盖选择一项。模型循环和 Dashboard context 装配属于高风险核心路径，
+只有先建立充分行为基线后才处理。
 
 模块化的验收标准不是减少行数，而是模块具有明确输入、无隐藏全局状态、具备独立测试，
 并且完整质量门禁保持通过。
@@ -164,6 +163,39 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 KaTeX 和 bootstrap skills 的版本、来源、许可证与可用哈希；`THIRD_PARTY_NOTICES.md` 随资源一起分发。
 OfficeCLI 与 KaTeX 使用 README 记录的上游仓库。bootstrap skills 是混合来源和混合许可证集合，按每个
 `SKILL.md` 元数据及随附许可证判断，不能整体标为 MIT。版本检查不执行二进制，也不在构建时联网查询。
+Superpowers 工作流的运行副本只位于 `resources/bootstrap-skills/`，来源和 MIT 许可证由 provenance 与
+`SUPERPOWERS_LICENSE.txt` 固定。仓库根目录中被忽略的 `skills/superpowers/` 只可作为本地上游参考，
+不参与运行时加载、构建或打包，不能作为交付资源依赖。
+
+`runtime-manifest.json` 进一步固定 Node.js 与 OfficeCLI 的版本、大小和 SHA-256。二进制不进入 Git；普通
+构建完全离线。明确授权的危险维护入口可从公开上游获取资源，但必须下载到系统临时目录并在写入源码
+资源前完成清单校验。OfficeCLI MCP 在 Dashboard 服务可用后后台初始化，不阻塞 Tauri 首屏启动路径。
+
+## 架构决策与后续优先级
+
+长期维护以可验证的行为边界为准，不记录易过期的源码行数、提交领先数量或健康度评分。当前接受的
+重点只有三项：建立可重建的 Dashboard 源码；继续按职责与测试边界拆分 Launcher；保持二进制资源和
+Windows release 的可复现治理。Dashboard 源码迁移时再复核 CSP 中 `unsafe-inline`/`unsafe-eval` 的真实依赖。
+
+以下建议不作为当前整改目标：把 Launcher 压到任意行数、消除全部顶级 `let`、在缺少受控二进制的 CI
+中强制 release 构建、机械修改依赖版本范围、把 bundle target 固定为 NSIS，或把实验性 Unix 代码描述为
+Linux 产品支持。`cargo audit`、`npm audit` 和上游同步属于明确授权的联网维护动作，不进入默认离线门禁。
+
+项目规则只从根目录 `AGENTS.md`、`AGENT.md`、`agent.md`、`CLAUDE.md`、`claude.md` 和 `visionox.md` 读取；
+`REASONIX.md` 不参与项目记忆注入。历史编辑模式 `review` 仅作为 `auto` 的配置兼容别名。
+
+## Windows 专项集成
+
+文件剪贴板由 Rust/Tauri 层读取：优先 Win32 `CF_HDROP`，必要时使用 `FileNameW` 回退，再把路径列表交给
+Dashboard。实现位于 `src-tauri/src/lib.rs` 的 `get_clipboard_files_blocking()`。当前不保证虚拟文件的
+`FileGroupDescriptorW` 或 Unix 剪贴板行为；修改时需验证单/多文件、文件夹、Unicode、长路径、纯文本和截图。
+PowerShell 只能作为排障工具，不能加入产品启动依赖。
+
+本地文档在交给 OfficeCLI 前由 `prepare_local_document` 统一准备，默认 `dlp.mode=auto`。普通文件保持原
+路径；只有命中文件头特征时才调用 `resources/server/visionox-file/visionox_file.py`。发现、超时、取消、
+缓存和参数重写由 `lib/dlp-file.mjs` 管理，Agent 约束位于同目录 `SKILL.md`。运行时只从 exe 同级资源发现
+脚本，不读取源码目录或机器专用路径。该文件头判断只是当前环境的兼容策略，不是通用加密标准；输出不得
+覆盖原文件，新增特征必须用测试证明普通文件不会被误判。
 
 ## 质量边界
 
@@ -184,7 +216,7 @@ OfficeCLI 与 KaTeX 使用 README 记录的上游仓库。bootstrap skills 是�
 4. Rust 读取 stdout，执行 TCP 健康检查（最多 15 次 × 200ms）
 5. 健康检查通过后 eval 注入 __DASHBOARD_URL__ 到 WebView
 6. 加载页 JS 检测到 URL 后创建全屏 iframe 加载 Dashboard
-7. 子进程崩溃监控线程启动（2s 轮询，支持自动重启）
+7. 子进程崩溃监控线程启动（阻塞等待，支持自动重启）
 ```
 
 ### 刷新恢复机制
@@ -203,9 +235,11 @@ iframe 方案下按 F5 刷新壳页面时，依赖三层恢复：
 |------|------|----------|
 | 进程管理 | 无 | JobObject + 崩溃监控 + 启动超时 |
 | 诊断 | stdout/stderr | 全局 `.visionox/logs/` 诊断日志 + 日志面板 |
-| 编辑模式 | review/auto/yolo | + admin |
+| 编辑模式 | review/auto/yolo | auto/yolo/admin（review 仅作历史配置别名） |
 | 配色 | dark/light | 8 套 |
 | 搜索 | Mojeek only | 4 引擎热切换 |
-| 记忆 | 2 层 | 8 层 + 短期记忆 |
+| 记忆 | 2 层 | 9 层（含会话短期记忆） |
 | 工作模式 | 无 | 4 模式切换 |
-| 部署 | npm 包 | Windows 绿色便携版 |
+| 部署 | npm 包 | Windows release exe / NSIS |
+
+> 仓库保留的 Unix 条件代码和 Linux 配置属于实验性兼容基础；当前没有经过持续验证的 Linux 交付承诺。

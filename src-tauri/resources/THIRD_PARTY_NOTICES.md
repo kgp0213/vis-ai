@@ -43,4 +43,11 @@ The provenance catalog distinguishes verified attribution from partial records. 
 record means the current repository history identifies the import but does not contain enough
 evidence to claim an upstream URL or license; no attribution is inferred in that case.
 
+### Superpowers skill workflows
+
+- Version: 4.0.3
+- Author: Jesse Vincent
+- Source: <https://github.com/obra/superpowers>
+- License: MIT, included at `bootstrap-skills/SUPERPOWERS_LICENSE.txt`
+
 Package-level JavaScript dependency versions are locked by `server/visionox-pkg/package-lock.json`; their license files remain in the prepared runtime dependency tree.

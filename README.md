@@ -220,21 +220,27 @@ docs/                        使用、架构与开发文档
 - 上游包恢复或网络下载只能在明确授权后使用危险维护入口。
 - 不从旧安装、AppData、历史 build、source map 或备份目录覆盖当前源码。
 
+## 上游依赖
+
+本项目内置了以下第三方组件，其源码和许可证来自上游仓库：
+
+| 组件 | 上游仓库 | License | 说明 |
+|------|----------|---------|------|
+| OfficeCLI | [github.com/iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) | Apache-2.0 | C# 编写的 AI Agent Office 文档 CLI，支持 Word/Excel/PowerPoint。二进制 `officecli.exe` 打包在 `resources/server/` 下，办公模式自动通过 MCP 接入。 |
+| KaTeX | [github.com/KaTeX/KaTeX](https://github.com/KaTeX/KaTeX) | MIT | 数学公式渲染库。`katex.min.js`、`katex.min.css` 及字体文件打包在 `resources/server/visionox-pkg/dashboard/vendor/katex/` 下，Dashboard 通过 `katex-support.js` 接入 marked 扩展，支持行内与块级公式。 |
+
 ## 平台状态
 
 当前交付与本机验证锚点是 Windows release。仓库保留 Linux 配置，但 Linux 构建依赖和验证流程应以 [开发指南](docs/DEVELOPMENT.md) 为准；本 README 不声明未经当前环境验证的 Linux 产物。
 
 ## 文档
 
+- [文档总览](docs/README.md)
 - [用户指南](docs/USER_GUIDE.md)
-- [功能说明](docs/FEATURES.md)
 - [架构说明](docs/ARCHITECTURE.md)
 - [开发指南](docs/DEVELOPMENT.md)
 - [质量门禁](docs/QUALITY.md)
 - [发布验收清单](docs/RELEASE_CHECKLIST.md)
-- [Dashboard 功能基线与迁移验收](docs/DASHBOARD_PARITY.md)
-- [OfficeCLI 指南](docs/OFFICECLI_GUIDE.md)
-- [更新日志](docs/CHANGELOG.md)
 
 ## License
 

@@ -55,7 +55,9 @@ for (const name of ["learn.mjs", "learn-track.mjs", "learn-sandbox-impl.mjs", "n
   addFile(join(sourceResources, "server", name), `server/${name}`);
 }
 addDirectory(join(sourceResources, "server", "visionox-file"), "server/visionox-file");
-addFile(join(sourceResources, "runtime-manifest.json"), "runtime-manifest.json");
+for (const name of ["runtime-manifest.json", "third-party-resources.json", "bootstrap-skills-provenance.json", "THIRD_PARTY_NOTICES.md"]) {
+  addFile(join(sourceResources, name), name);
+}
 addFile(join(sourceResources, "default-soul.md"), "default-soul.md");
 addDirectory(join(sourceResources, "ecc-rules"), "ecc-rules");
 addFile(join(sourceResources, "skill-creation-guide.md"), "skill-creation-guide.md");

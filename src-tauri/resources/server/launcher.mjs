@@ -319,6 +319,7 @@ const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
 const skillsRoot = resolve(visionoxDataDir, "skills");
+const BOOTSTRAP_SKILLS_DISABLED_DIR = resolve(skillsRoot, ".disabled");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
 }
@@ -377,14 +378,17 @@ const ECC_VERSION_FILE = resolve(ECC_RULES_HOME, ".ecc-version");
 
 function deployEccRules() {
   try {
-    if (!existsSync(ECC_RULES_RESOURCE)) return;
+    const requiredRule = resolve(ECC_RULES_RESOURCE, "common", "coding-style.md");
+    if (!existsSync(ECC_RULES_RESOURCE) || !existsSync(requiredRule)) {
+      throw new Error(`ECC rules resource is missing: ${ECC_RULES_RESOURCE}`);
+    }
     if (!existsSync(ECC_RULES_HOME)) mkdirSync(ECC_RULES_HOME, { recursive: true });
 
     // Version marker: content hash of all .md files in resource packs.
     // Stable across rebuilds (unlike mtime) — only changes when content changes.
     const resourceEntries = readdirSync(ECC_RULES_RESOURCE).filter(
       (e) => statSync(resolve(ECC_RULES_RESOURCE, e)).isDirectory()
-    );
+    ).sort((a, b) => a.localeCompare(b));
     const fingerprint = resourceEntries.map((e) => {
       const dir = resolve(ECC_RULES_RESOURCE, e);
       const files = readdirSync(dir).filter(f => f.endsWith(".md")).sort();
@@ -428,6 +432,7 @@ function deployEccRules() {
     }
   } catch (err) {
     console.error(`[launcher] failed to deploy ECC rules: ${err.message}`);
+    throw err;
   }
 }
 
@@ -499,7 +504,7 @@ const [
   { McpClient, parseMcpSpec, inspectMcpServer },
   { buildTransportFromSpec },
   { registerSemanticSearchTool },
-  { applySkillsIndex, applyProjectMemory, listProjectMemoryPaths, readProjectMemories },
+  { SkillStore, applySkillsIndex, applyProjectMemory, listProjectMemoryPaths, readProjectMemories },
   { MemoryStore, effectivePriority },
   { registerSkillTools, Eventizer, autoResolveVerdict, shouldAutoResolveCheckpoint },
   { openEventSink, eventLogPath },
@@ -721,6 +726,30 @@ async function readBuiltinMarker(skillDir) {
   }
 }
 
+function bootstrapSkillDisabledMarker(name) {
+  return resolve(BOOTSTRAP_SKILLS_DISABLED_DIR, `${name}.json`);
+}
+
+function isBootstrapSkillDisabled(name) {
+  return existsSync(bootstrapSkillDisabledMarker(name));
+}
+
+function disableBootstrapSkill(name) {
+  if (!existsSync(resolve(bootstrapSkillsRoot, name, "SKILL.md"))) {
+    throw new Error(`unknown bootstrap skill: ${name}`);
+  }
+  mkdirSync(BOOTSTRAP_SKILLS_DISABLED_DIR, { recursive: true });
+  atomicWriteFileSync(bootstrapSkillDisabledMarker(name), `${JSON.stringify({
+    name,
+    disabledAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
+  return true;
+}
+
+function enableBootstrapSkill(name) {
+  rmSync(bootstrapSkillDisabledMarker(name), { force: true });
+}
+
 async function writeBuiltinMarker(skillDir, name, sourceHash, sourceMtime) {
   const marker = {
     owner: "visionox-bootstrap",
@@ -790,7 +819,7 @@ async function installBootstrapSkill(name, { force = false } = {}) {
   }
 }
 
-async function deployBootstrapSkills({ force = false } = {}) {
+async function deployBootstrapSkills({ force = false, restoreDisabled = false } = {}) {
   const result = { root: skillsRoot, source: bootstrapSkillsRoot, installed: [], skipped: [], errors: [] };
   if (!existsSync(bootstrapSkillsRoot)) {
     result.errors.push({ reason: "bootstrap-skills resource directory not found", path: bootstrapSkillsRoot });
@@ -799,7 +828,12 @@ async function deployBootstrapSkills({ force = false } = {}) {
   if (!existsSync(skillsRoot)) mkdirSync(skillsRoot, { recursive: true });
   for (const entry of await readdir(bootstrapSkillsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    if (isBootstrapSkillDisabled(entry.name) && !restoreDisabled) {
+      result.skipped.push({ name: entry.name, installed: false, skipped: true, disabled: true, reason: "disabled by user" });
+      continue;
+    }
     const item = await installBootstrapSkill(entry.name, { force });
+    if (item.installed && restoreDisabled) enableBootstrapSkill(entry.name);
     if (item.installed) result.installed.push(item);
     else if (item.skipped) result.skipped.push(item);
     else result.errors.push(item);
@@ -818,6 +852,7 @@ async function getSkillEnvironmentStatus() {
       bootstrap.push({
         name: entry.name,
         installed: existsSync(skillMd),
+        disabled: isBootstrapSkillDisabled(entry.name),
         builtin: Boolean(await readBuiltinMarker(targetDir)),
         version: await readSkillVersion(targetDir),
       });
@@ -828,7 +863,7 @@ async function getSkillEnvironmentStatus() {
     bootstrapSkillsRoot,
     skillsRootExists: existsSync(skillsRoot),
     bootstrap,
-    ok: bootstrap.length > 0 && bootstrap.every((s) => s.installed),
+    ok: bootstrap.length > 0 && bootstrap.every((s) => s.installed || s.disabled),
   };
 }
 
@@ -2915,6 +2950,10 @@ function getEnabledRuleSets() {
   return getModeConfig().eccRules || ["common", "rust"];
 }
 
+function availableEccRuleNames() {
+  return Object.keys(ALL_ECC_RULES).filter((name) => name !== "custom").sort((a, b) => a.localeCompare(b));
+}
+
 function orderedRuleSets(enabled) {
   const seen = new Set();
   const ordered = [];
@@ -2974,8 +3013,8 @@ function loadRules() {
   return rules;
 }
 
-function getRuleSetStatus(enabled = getEnabledRuleSets()) {
-  return orderedRuleSets(enabled).map((name) => {
+function getRuleSetStatus(names = getEnabledRuleSets()) {
+  return [...new Set(names)].map((name) => {
     const dir = ALL_ECC_RULES[name];
     let files = [];
     if (dir && existsSync(dir)) {
@@ -2992,6 +3031,25 @@ function getRuleSetStatus(enabled = getEnabledRuleSets()) {
       fileCount: files.length,
     };
   });
+}
+
+function setActiveModeEccRules(rules) {
+  const available = new Set(availableEccRuleNames());
+  const normalized = [...new Set(Array.isArray(rules) ? rules.filter((name) => typeof name === "string") : [])];
+  const unknown = normalized.filter((name) => !available.has(name));
+  if (unknown.length > 0) throw new Error(`unknown ECC rule pack(s): ${unknown.join(", ")}`);
+
+  const cfg = readConfig(configPath);
+  cfg.modes = mergeDefaultModes(cfg.modes);
+  cfg.mode = cfg.mode || config.mode || "general";
+  if (!cfg.modes[cfg.mode]) throw new Error(`unknown work mode: ${cfg.mode}`);
+  cfg.modes[cfg.mode].eccRules = normalized;
+  writeConfig(cfg, configPath);
+  syncRuntimeConfig(cfg);
+  console.error(`[launcher] ECC rules for ${cfg.mode}: ${normalized.join(", ") || "none"}`);
+  if (client) rebuildLoopPreservingContext(client, workspaceDir);
+  broadcastDashboardEvent({ kind: "config-changed" });
+  return true;
 }
 
 // ── Hook system ─────────────────────────────────────────────────
@@ -3218,7 +3276,7 @@ function computePrefixFingerprint(rootDir) {
   ];
   for (const name of orderedRuleSets(mc.eccRules || [])) {
     const dir = ALL_ECC_RULES[name];
-    parts.push(`rule:${name}=${dir ? dirMtime(dir) : 0}`);
+    parts.push(`rule:${name}=${dir ? flatMdMtimeFingerprint(dir) : "0"}`);
   }
   // Project + global skill roots read by SkillStore
   parts.push(`skills:proj=${dirMtime(resolve(rootDir, ".visionox", "skills"))}`);
@@ -6078,6 +6136,8 @@ const SLASH_COMMAND_META = [
   { name: "/retry", desc: "截断并重发上一条用户消息", usage: "/retry", group: "session" },
   { name: "/cost",  desc: "查看费用或估算发送文本的成本", usage: "/cost [文本]", group: "system", matchType: "prefix-or-exact" },
   { name: "/context", desc: "上下文窗口占用分解", usage: "/context", group: "system" },
+  { name: "/skill", desc: "列出、查看或调用技能", usage: "/skill [list|show <名称>|<名称> <任务>]", group: "system", matchType: "prefix-or-exact" },
+  { name: "/ecc", desc: "查看或调整当前工作场景的 ECC 规则", usage: "/ecc [list|add <规则>|remove <规则>]", group: "system", matchType: "prefix-or-exact" },
   { name: "/btw",  desc: "旁路提问（不污染主上下文）", usage: "/btw <问题>", group: "session", matchType: "prefix" },
   { name: "/report", desc: "生成日报/周报/年报", usage: "/report daily|weekly|yearly [日期]", group: "session", matchType: "prefix-or-exact" },
   { name: "/learn", desc: "技能萃取、语义索引、导师模式", usage: "/learn help", group: "system" },
@@ -6158,9 +6218,10 @@ const ctx = {
   hasApiKey: () => !!apiKey,
   getLogs: () => logBuffer.slice(),
   getEccRules: () => ({
-    available: Object.keys(ALL_ECC_RULES),
-    enabled: getEnabledRuleSets(),
-    status: getRuleSetStatus(),
+    available: availableEccRuleNames(),
+    enabled: getEnabledRuleSets().filter((name) => name !== "custom"),
+    status: getRuleSetStatus(availableEccRuleNames()),
+    customEnabled: true,
   }),
   getModes: () => ({
     current: config.mode,
@@ -6168,6 +6229,9 @@ const ctx = {
     list: Object.keys(config.modes || DEFAULT_MODES).map((id) => modeSummary(id)),
   }),
   getSkillEnvironmentStatus,
+  skillsRoot,
+  disableBootstrapSkill,
+  enableBootstrapSkill,
   getDlpStatus: () => {
     const dlp = getDlpConfig(readConfig(configPath), {
       homeDir: home,
@@ -6361,11 +6425,7 @@ const ctx = {
     return resolved;
   },
   setEccRules: (rules) => {
-    const cfg = readConfig(configPath);
-    cfg.eccRules = rules;
-    writeConfig(cfg, configPath);
-    console.error(`[launcher] eccRules: ${rules.join(", ")}`);
-    return true;
+    return setActiveModeEccRules(rules);
   },
   setMode: (modeId) => {
     const cfg = readConfig(configPath);
@@ -6439,7 +6499,7 @@ const ctx = {
   reloadMcp,
   invokeMcpTool,
   repairSkillEnvironment: async () => {
-    const bootstrap = await deployBootstrapSkills();
+    const bootstrap = await deployBootstrapSkills({ force: true, restoreDisabled: true });
     const guide = await deploySkillGuide(workspaceDir);
     console.error(`[launcher] skill environment repaired`);
     return { repaired: true, bootstrap, guide, status: await getSkillEnvironmentStatus() };
@@ -6669,6 +6729,8 @@ ${modeList}
     // of busy-reset. Early-return paths leave it false so the outer finally
     // block resets busy.
     let committed = false;
+    let manualSkillInput = null;
+    let manualSkillTask = null;
     try {
       // ── Sync workspace if changed ─────────────────────────────
       await ctx.syncWorkspace();
@@ -6782,6 +6844,82 @@ ${modeList}
         return { accepted: true };
       }
 
+      const skillCommand = parseSlashInput(text);
+      if (skillCommand?.name === "skill") {
+        const store = new SkillStore({ homeDir: home, projectRoot: workspaceDir });
+        const skills = store.list();
+        const parts = skillCommand.args.split(/\s+/).filter(Boolean);
+        const emitSkillResult = (skillText) => {
+          const skillId = `assistant-${Date.now()}`;
+          pushMessage({ id: skillId, role: "assistant", text: skillText });
+          appendActiveMessage({ role: "assistant", text: skillText });
+          broadcastDashboardEvent({ kind: "assistant_final", id: skillId, text: skillText });
+          return { accepted: true };
+        };
+        if (parts.length === 0 || parts[0].toLowerCase() === "list") {
+          const list = skills.map((skill) => `- ${skill.name}${skill.description ? `：${skill.description}` : ""}`).join("\n");
+          return emitSkillResult(`可用技能（${skills.length}）：\n${list || "暂无可用技能"}\n\n使用 /skill show <名称> 查看详情，或 /skill <名称> <任务> 调用。`);
+        }
+
+        const showOnly = parts[0].toLowerCase() === "show";
+        const name = showOnly ? parts[1] : parts[0];
+        const skill = name ? store.read(name) : null;
+        if (!skill) {
+          return emitSkillResult(`未找到技能：${name || "（未提供名称）"}\n使用 /skill list 查看可用技能。`);
+        }
+        const task = (showOnly ? parts.slice(2) : parts.slice(1)).join(" ").trim();
+        if (showOnly || !task) {
+          const maxChars = 12000;
+          const body = skill.body.length > maxChars ? `${skill.body.slice(0, maxChars)}\n\n…（内容过长，已截断）` : skill.body;
+          return emitSkillResult(`## ${skill.name}\n\n${skill.description || "无描述"}\n\n${body}`);
+        }
+
+        manualSkillTask = task;
+        manualSkillInput = await tools.dispatch("run_skill", { name: skill.name, arguments: task }, { signal: operation.controller.signal });
+        try {
+          const failure = JSON.parse(manualSkillInput);
+          if (failure?.error) return emitSkillResult(`技能调用失败：${failure.error}`);
+        } catch {
+        }
+      }
+
+      const eccCommand = parseSlashInput(text);
+      if (eccCommand?.name === "ecc") {
+        const available = availableEccRuleNames();
+        const current = getEnabledRuleSets().filter((name) => available.includes(name));
+        const [rawAction = "", rawName = ""] = eccCommand.args.split(/\s+/, 2);
+        const action = rawAction.toLowerCase();
+        const aliases = { go: "golang" };
+        const name = aliases[rawName.toLowerCase()] ?? rawName.toLowerCase();
+        let eccText;
+        if (!action) {
+          eccText = [
+            `ECC 规则：${current.join(" + ") || "未启用"}（${current.length}/${available.length}）`,
+            `当前工作场景：${config.modes?.[config.mode]?.label ?? config.mode ?? "general"}`,
+            "使用 /ecc list 查看全部规则，或用 /ecc add <规则>、/ecc remove <规则> 调整。",
+          ].join("\n");
+        } else if (action === "list") {
+          eccText = `可用 ECC 规则（${available.length}）：\n${available.map((item) => `${current.includes(item) ? "✓" : "○"} ${item}`).join("\n")}`;
+        } else if ((action === "add" || action === "remove") && name) {
+          if (!available.includes(name)) {
+            eccText = `未知 ECC 规则：${rawName}\n使用 /ecc list 查看可用规则。`;
+          } else {
+            const next = action === "add"
+              ? [...new Set([...current, name])]
+              : current.filter((item) => item !== name);
+            setActiveModeEccRules(next);
+            eccText = `已${action === "add" ? "启用" : "停用"} ${name}。\nECC 规则：${next.join(" + ") || "未启用"}`;
+          }
+        } else {
+          eccText = "用法：/ecc [list|add <规则>|remove <规则>]";
+        }
+        const eccId = `assistant-${Date.now()}`;
+        pushMessage({ id: eccId, role: "assistant", text: eccText });
+        appendActiveMessage({ role: "assistant", text: eccText });
+        broadcastDashboardEvent({ kind: "assistant_final", id: eccId, text: eccText });
+        return { accepted: true };
+      }
+
       // /status — show model, context, cost, balance (no AI loop, instant)
       if (text === "/status") {
         const mc = effectiveModelConfig(config);
@@ -6796,6 +6934,7 @@ ${modeList}
           `\u9884\u8BBE: ${mc.preset} (${mc.locked ? "\u9501\u5B9A" : "auto"})`,
           `\u63A8\u7406\u5F3A\u5EA6: ${config.reasoningEffort ?? "max"}`,
           `\u5DE5\u4F5C\u6A21\u5F0F: ${config.mode ?? "general"}`,
+          `ECC 规则：${getEnabledRuleSets().filter((name) => name !== "custom").join(" + ") || "未启用"}（${getEnabledRuleSets().filter((name) => name !== "custom").length}/${availableEccRuleNames().length}）`,
           ``,
           `\u4E0A\u4E0B\u6587: ${s ? s.lastPromptTokens.toLocaleString() : 0} / ${(ctxCap / 1e3).toFixed(0)}K (${ctxPct.toFixed(1)}%)`,
           `  \u251C \u666E\u901A\u6298\u53E0: 50% (${(ctxCap * 0.5 / 1e3).toFixed(0)}K)`,
@@ -7091,8 +7230,13 @@ ${modeList}
         let augmentedLoopInput = null;
         const turnArtifactPaths = new Set();
         try {
-          const retrieval = await retrieveSemanticContext(text, retrievalHistory, operation.controller.signal);
-          if (retrieval.sources.length > 0) {
+          const retrievalText = manualSkillTask ?? text;
+          const retrieval = await retrieveSemanticContext(retrievalText, retrievalHistory, operation.controller.signal);
+          const retrievedInput = retrieval.sources.length > 0 ? retrieval.input : retrievalText;
+          if (manualSkillInput) {
+            loopInput = `${manualSkillInput}\n\n# User task\n\n${retrievedInput}`;
+            augmentedLoopInput = loopInput;
+          } else if (retrieval.sources.length > 0) {
             loopInput = retrieval.input;
             augmentedLoopInput = retrieval.input;
           }

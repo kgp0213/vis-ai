@@ -39,9 +39,11 @@
     {
       "id": "superpowers-local-import",
       "skills": ["brainstorming", "dispatching-parallel-agents", "executing-plans", "finishing-a-development-branch", "receiving-code-review", "requesting-code-review", "subagent-driven-development", "systematic-debugging", "test-driven-development", "using-git-worktrees", "using-superpowers", "verification-before-completion", "writing-plans", "writing-skills"],
-      "source": "local plan/superpowers.7z import recorded by release commit 218e0e7d; upstream URL is not established by bundled files",
-      "license": "not established by files currently bundled in this repository",
-      "status": "partial"
+      "source": "https://github.com/obra/superpowers",
+      "version": "4.0.3",
+      "license": "MIT",
+      "licenseFile": "bootstrap-skills/SUPERPOWERS_LICENSE.txt",
+      "status": "verified"
     },
     {
       "id": "legacy-domain",

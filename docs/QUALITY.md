@@ -73,3 +73,26 @@ Windows build environment where those binaries are present.
 Use [Release acceptance checklist](RELEASE_CHECKLIST.md) for every executable or installer
 delivery. Keep the completed checklist and SHA-256 record with the release notes; do not
 tag or publish until the recorded commit, version, artifact names and hashes agree.
+
+## Test Organization
+
+New behavior belongs in the nearest domain `*.test.mjs`. The two legacy aggregate suites have narrow roles:
+
+- `api.test.mjs` keeps cross-endpoint integration and shared authentication flows.
+- `dashboard-regression.test.mjs` keeps cross-panel workflows and historical bundle-patch baselines.
+
+Storage, policy, contracts and isolated panel behavior should use focused test files. Do not raise the limits in
+`scripts/check-test-structure.js` to accommodate unrelated tests; lower a limit only after existing cases move out.
+
+When changing overview, health, backup, schedule or Provider responses, update
+`contracts/api-responses.schema.json` and verify a real response, not only a mock. Independently expressible Dashboard
+policy should live in readable support modules with unit tests; bundle regression verifies integration and Edge smoke
+verifies the user flow.
+
+Failure-path tests must match `runtime-issues.mjs`: debug is diagnostic, warning is recoverable degradation, error means
+user data may be incomplete, and fatal stops an unsafe operation. Data-write tests must prove malformed or newer files
+remain unchanged. Schedule admission, cancellation and restart recovery require domain tests; restart recovery must
+round-trip through the real versioned store.
+
+All test data belongs under the system temporary directory and must be cleaned on success and failure. Browser tests use
+the isolated HOME/USERPROFILE created by `scripts/ui-smoke.js` and must never read the real `~/.visionox` directory.

@@ -38,7 +38,7 @@ const required = [
   },
   {
     file: "scripts/verify-release-resources.js",
-    markers: ["visionox-whale.exe", "runtime-manifest.json", "unexpected legacy executable", "content mismatch", "unexpected:", "verified ${expected.size} files"],
+    markers: ["visionox-whale.exe", "runtime-manifest.json", "third-party-resources.json", "bootstrap-skills-provenance.json", "THIRD_PARTY_NOTICES.md", "unexpected legacy executable", "content mismatch", "unexpected:", "verified ${expected.size} files"],
   },
   {
     file: "scripts/check-build-entrypoints.js",
@@ -54,7 +54,7 @@ const required = [
   },
   {
     file: "scripts/check-third-party-resources.js",
-    markers: ["third-party-resources.json", "bootstrap-skills-provenance.json", "bootstrap skill is missing provenance", "version or SHA-256 differs"],
+    markers: ["third-party-resources.json", "bootstrap-skills-provenance.json", "bootstrap skill is missing provenance", "missing skill license file", "version or SHA-256 differs"],
   },
   {
     file: "scripts/fetch-binaries.js",
@@ -104,7 +104,19 @@ const required = [
       "batchModeMemory",
       "restoreModeMemoryTrash",
       "migrateConfigFile",
+      "deployEccRules",
+      "loadRules",
+      "setActiveModeEccRules",
+      "flatMdMtimeFingerprint(dir)",
+      "BOOTSTRAP_SKILLS_DISABLED_DIR",
+      "disableBootstrapSkill",
+      "enableBootstrapSkill",
+      "manualSkillInput = await tools.dispatch",
     ],
+  },
+  {
+    file: "src-tauri/resources/ecc-rules/common/coding-style.md",
+    markers: ["# Coding Style", "## Immutability (CRITICAL)", "### KISS (Keep It Simple)"],
   },
   {
     file: "src-tauri/resources/server/lib/config-migrations.mjs",
@@ -250,6 +262,11 @@ const required = [
       "getPersistentStorageIssues",
       'case "backups"',
       "overview-alerts-support.js",
+      "eccRulesPending",
+      "unknown ECC rule pack(s)",
+      "disabledBuiltin",
+      "ctx.enableBootstrapSkill?.(name)",
+      "ctx.getSlashCommands",
     ],
   },
   {
@@ -273,6 +290,9 @@ const required = [
       "persistQueuedPrompt",
       "requestId",
       "将在当前回答结束后切换",
+      "ECC 编码规范",
+      "save({ eccRules: next })",
+      "skills.disabledBuiltin",
       "queuePaused || busy",
       "background-jobs",
       "stoppingBtn",
@@ -343,6 +363,16 @@ const required = [
       ".memory-runtime-pending",
       ".memory-soul-history",
     ],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/requesting-code-review/SKILL.md",
+    markers: ["Request an independent review", "separate AI review session", "Independent reviewer returns"],
+    forbidden: ["superpowers:code-reviewer", "Use Task tool"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/using-superpowers/SKILL.md",
+    markers: ["Call `run_skill`", "Call run_skill", "Create task checklist"],
+    forbidden: ["Claude Code", "Skill tool", "Read tool", "TodoWrite"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/katex-support.js",

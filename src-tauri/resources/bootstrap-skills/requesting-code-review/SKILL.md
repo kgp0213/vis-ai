@@ -5,7 +5,7 @@ description: Use when completing tasks, implementing major features, or before m
 
 # Requesting Code Review
 
-Dispatch superpowers:code-reviewer subagent to catch issues before they cascade.
+Use an independent review pass to catch issues before they cascade.
 
 **Core principle:** Review early, review often.
 
@@ -29,9 +29,9 @@ BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
 HEAD_SHA=$(git rev-parse HEAD)
 ```
 
-**2. Dispatch code-reviewer subagent:**
+**2. Request an independent review:**
 
-Use Task tool with superpowers:code-reviewer type, fill template at `code-reviewer.md`
+Ask a colleague or a separate AI review session to inspect the change. If neither is available, perform a distinct review pass after implementation: re-read the requirements, inspect the full diff, and run the relevant tests before judging readiness. Use the fields below to keep the review grounded.
 
 **Placeholders:**
 - `{WHAT_WAS_IMPLEMENTED}` - What you just built
@@ -56,14 +56,14 @@ You: Let me request code review before proceeding.
 BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | awk '{print $1}')
 HEAD_SHA=$(git rev-parse HEAD)
 
-[Dispatch superpowers:code-reviewer subagent]
+[Request independent review]
   WHAT_WAS_IMPLEMENTED: Verification and repair functions for conversation index
   PLAN_OR_REQUIREMENTS: Task 2 from docs/plans/deployment-plan.md
   BASE_SHA: a7981ec
   HEAD_SHA: 3df7661
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types
 
-[Subagent returns]:
+[Independent reviewer returns]:
   Strengths: Clean architecture, real tests
   Issues:
     Important: Missing progress indicators
@@ -102,4 +102,4 @@ You: [Fix progress indicators]
 - Show code/tests that prove it works
 - Request clarification
 
-See template at: requesting-code-review/code-reviewer.md
+When the adjacent `code-reviewer.md` template is available, use it to structure the independent review.

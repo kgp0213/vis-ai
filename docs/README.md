@@ -1,35 +1,37 @@
-# Visionox 文档目录
+# Visionox-Whale 文档
 
-> 应用版本：1.28.0
+> 适用版本：1.28.0。这里仅保留当前仍有独立维护价值的文档，避免按单个功能重复建立说明。
 
----
+## 用户与运维
 
-## 用户文档
+| 文档 | 唯一职责 |
+|---|---|
+| [用户指南](USER_GUIDE.md) | 产品入口、记忆、模式、会话、搜索和常用操作 |
+| [OfficeCLI 指南](OFFICECLI_GUIDE.md) | 内置 OfficeCLI 的使用、工作流与排障 |
+| [更新日志](CHANGELOG.md) | 按版本记录已经交付的变更 |
+
+## 工程与交付
+
+| 文档 | 唯一职责 |
+|---|---|
+| [架构说明](ARCHITECTURE.md) | 系统边界、运行资源、数据保护、长期决策、技术债和 Windows 专项集成 |
+| [开发指南](DEVELOPMENT.md) | 环境、调试、编码、样式和规范构建入口 |
+| [质量门禁](QUALITY.md) | 完成标准、测试组织、提交门禁和 release 门禁 |
+| [发布验收清单](RELEASE_CHECKLIST.md) | exe/NSIS 每次交付时填写的操作清单与哈希记录 |
+| [Dashboard 功能基线](DASHBOARD_PARITY.md) | 当前 bundle 功能基线与迁移到可重建源码的验收条件 |
+| [Skill 创建指南](skill-creation-guide.md) | 自定义 Skill 的开发与分发流程 |
+
+## 维护规则
+
+- 功能使用说明进入 `USER_GUIDE.md`，不要新建重复的功能清单。
+- 系统边界和长期技术决定进入 `ARCHITECTURE.md`，评审报告不作为长期独立文档保留。
+- 测试规则进入 `QUALITY.md`，构建步骤进入 `DEVELOPMENT.md`，交付操作进入 `RELEASE_CHECKLIST.md`。
+- 源码、CSS 变量、提交数量、源码行号和外部价格不复制到文档；引用其规范来源。
+- 版本号以 `Cargo.toml`、`package.json` 和 `tauri.conf.json` 三处一致为准。
+- 新增文档前先确认现有文档无法承载该内容；一次性问题分析应留在提交或 Issue 中。
+
+## 待办审查
 
 | 文档 | 说明 |
 |------|------|
-| [**用户使用指南**](USER_GUIDE.md) | 记忆系统使用、工作模式切换、`/learn` 学习命令、OfficeCLI 办公操作 |
-| [**功能详解**](FEATURES.md) | 分层记忆、工作模式、ECC 规则、编辑模式、模型与搜索配置 |
-| [**OfficeCLI 指南**](OFFICECLI_GUIDE.md) | OfficeCLI 的配置、使用方法和常见问题 |
-| [**更新日志**](CHANGELOG.md) | 各版本的功能变更记录 |
-
-## 开发文档
-
-| 文档 | 说明 |
-|------|------|
-| [**架构说明**](ARCHITECTURE.md) | 系统架构、项目结构、技术栈与关键文件 |
-| [**开发指南**](DEVELOPMENT.md) | 环境搭建、构建步骤、调试方法和编码规范 |
-| [**质量门禁**](QUALITY.md) | 提交前检查、真实浏览器冒烟测试、CI 与发布验证的职责边界 |
-| [**测试结构**](TESTING.md) | 领域测试归属、遗留聚合测试增长限制和临时数据约束 |
-| [**Dashboard 功能基线**](DASHBOARD_PARITY.md) | 当前本地功能清单、源码迁移顺序与无回归验收条件 |
-| [**发布验收清单**](RELEASE_CHECKLIST.md) | release/NSIS 交付前检查、功能抽查和 SHA-256 记录模板 |
-| [**Skill 创建指南**](skill-creation-guide.md) | 自定义 Skill 的完整开发流程、打包分发 |
-| [**设计系统**](UI_DESIGN_SYSTEM.md) | Design Tokens、CSS 变量、配色方案参考 |
-
----
-
-## 文档约定
-
-- 面向用户的功能文档使用中文，技术术语保留英文
-- 开发文档中代码块标注语言，命令行示例使用 PowerShell 语法
-- 版本号格式：Visionox 应用版本（`Cargo.toml`）+ 上游版本号
+| [技能可用性审查报告](技能可用性审查报告.md) | 全部 40 个 bootstrap 技能的部署、调用、依赖和平台兼容性审查（27 WORKS / 12 PARTIAL / 1 BROKEN） |

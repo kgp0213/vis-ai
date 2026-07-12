@@ -40,6 +40,7 @@ for (const group of skillProvenance.groups ?? []) {
     failures.push(`invalid bootstrap skill provenance group: ${group.id || "unknown"}`);
     continue;
   }
+  if (group.licenseFile && !existsSync(join(resourcesDir, group.licenseFile))) failures.push(`${group.id}: missing skill license file ${group.licenseFile}`);
   for (const skill of group.skills) {
     if (declaredSkills.has(skill)) failures.push(`bootstrap skill has duplicate provenance: ${skill}`);
     declaredSkills.add(skill);

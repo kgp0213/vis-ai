@@ -20,3 +20,19 @@ test("guard rejects unprepared debug and wrapper-bypassing scripts", () => {
   assert.ok(failures.some((failure) => failure.includes("prepare the runtime")));
   assert.ok(failures.some((failure) => failure.includes("debug bypasses")));
 });
+
+test("release verifier covers every top-level governance resource bundled by Tauri", () => {
+  const tauri = JSON.parse(readFileSync(new URL("../../../../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  const verifier = readFileSync(new URL("../../../../scripts/verify-release-resources.js", import.meta.url), "utf8");
+  const names = [
+    "runtime-manifest.json",
+    "third-party-resources.json",
+    "bootstrap-skills-provenance.json",
+    "THIRD_PARTY_NOTICES.md",
+  ];
+
+  for (const name of names) {
+    assert.equal(tauri.bundle.resources[`resources/${name}`], `resources/${name}`);
+    assert.match(verifier, new RegExp(name.replaceAll(".", "\\.")));
+  }
+});

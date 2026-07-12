@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,7 +17,7 @@
     <script>
       (function() {
         try {
-          // Priority: URL param (set by Tauri / restoreDashboard) → cookie → localStorage → dark
+          // Priority: URL param (set by Tauri / restoreDashboard) → cookie → localStorage → first-run light
           var t = '';
           var um = window.location.search.match(/[?&]theme=([^&]+)/);
           if (um) t = decodeURIComponent(um[1]);
@@ -26,7 +26,7 @@
             if (cm) t = decodeURIComponent(cm[1]);
           }
           if (!t) t = localStorage.getItem('visionox-theme') || '';
-          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) t = 'dark';
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) t = 'light';
           document.documentElement.setAttribute('data-theme', t);
         } catch(e) {}
       })();

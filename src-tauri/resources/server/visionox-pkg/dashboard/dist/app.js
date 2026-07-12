@@ -19864,7 +19864,9 @@ var en = {
     deleteConfirm: "Delete skill {scope}/{name}?",
     reloadHint: "re-loaded on next /new or session restart",
     repairEnv: "repair skill env",
-    repairOk: "skill environment repaired"
+    repairOk: "skill environment repaired",
+    managedBuiltin: "bundled",
+    disabledBuiltin: "Bundled skill disabled. Use repair skill env to restore it."
   },
   system: {
     loading: "loading health\u2026",
@@ -20843,7 +20845,9 @@ var zhCN = {
     deleteConfirm: "\u5220\u9664\u6280\u80FD {scope}/{name}\uFF1F",
     reloadHint: "\u5728\u4E0B\u6B21 /new \u6216\u4F1A\u8BDD\u91CD\u542F\u65F6\u91CD\u65B0\u52A0\u8F7D",
     repairEnv: "\u4FEE\u590D Skill \u73AF\u5883",
-    repairOk: "Skill \u73AF\u5883\u5DF2\u4FEE\u590D"
+    repairOk: "Skill \u73AF\u5883\u5DF2\u4FEE\u590D",
+    managedBuiltin: "\u968F\u7A0B\u5E8F\u63D0\u4F9B",
+    disabledBuiltin: "\u5DF2\u505C\u7528\u968F\u7A0B\u5E8F\u63D0\u4F9B\u7684\u6280\u80FD\uFF1B\u53EF\u901A\u8FC7\u201C\u4FEE\u590D Skill \u73AF\u5883\u201D\u6062\u590D\u3002"
   },
   system: {
     loading: "\u52A0\u8F7D\u5065\u5EB7\u72B6\u6001\u2026",
@@ -27042,7 +27046,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
                 <span class="work-mode-label">${activeMode?.label ?? mode}</span>
                 <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
-                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || "common"}${eccRules?.status ? ` · ${eccRules.status.filter((r) => r.available).length}/${eccRules.status.length}` : ""}</span>
+                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || "未启用"}${eccRules?.available ? ` · ${(eccRules.enabled ?? []).length}/${eccRules.available.length}` : ""}</span>
               </div>
               <div class="mode-picker work-mode-picker" title="工作场景 \u2014 下次新对话生效">
                 ${modes.map((m) => html4`
@@ -27193,8 +27197,8 @@ const [providerCaps, setProviderCaps] = d2(null);
               style="flex:1"
               rows="4"
             ></textarea>
-            <div style="display:flex;align-items:center;position:relative;flex-wrap:wrap;min-width:0;margin:0;column-gap:10px;row-gap:5px">
-              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { loadChatSkills().catch(() => {}); } }}>🔧 技能</span>
+            <div class="composer-controls">
+              <button type="button" class="composer-chip" aria-expanded=${showSkillPicker} onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { loadChatSkills().catch(() => {}); } }}>🔧 技能</button>
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择技能</div>
@@ -27206,7 +27210,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                   `)}
                 </div>
               ` : null}
-              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</span>
+              <button type="button" class="composer-chip" aria-expanded=${showWsPicker} onClick=${() => { setShowWsPicker(!showWsPicker); setShowSkillPicker(false); }}>💻 工作空间 ▼</button>
               ${showWsPicker ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:280px;max-height:220px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择工作空间</div>
@@ -27217,9 +27221,9 @@ const [providerCaps, setProviderCaps] = d2(null);
                   <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); const p2 = prompt('输入工作空间路径:'); if (p2 && p2.trim()) pickWorkspace(p2.trim()); }}><span class="name">📂 浏览其他目录...</span></div>
                 </div>
               ` : null}
-              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowModelPicker(!showModelPicker); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</span>
+              <button type="button" class="composer-chip" aria-expanded=${showModelPicker} onClick=${() => { setShowModelPicker(!showModelPicker); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</button>
               ${showModelPicker ? html4`
-                <div class="popover" style="position:absolute;bottom:100%;left:0;width:360px;max-height:560px;overflow-y:auto;z-index:10">
+                <div class="popover model-popover" style="position:absolute;bottom:100%;left:0;z-index:10">
                   <div class="popover-h">选择模型</div>
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
                     <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">服务商</label>
@@ -27249,32 +27253,32 @@ const [providerCaps, setProviderCaps] = d2(null);
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
                     <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模式</label>
                     ${(providerCaps?.presets?.length ?? 0) > 1 ? html4`
-                      <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                        ${providerCaps.presets.map((p3) => html4`<button key=${p3} style="flex:1;padding:4px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:4px;background:${preset === p3 ? 'rgb(138,170,122)' : 'var(--surface-default)'};color:${preset === p3 ? 'rgb(12,13,16)' : 'var(--text-primary)'};cursor:pointer;" onClick=${() => { setSetting('preset', p3); }}>${p3}</button>`)}
+                      <div class="model-choice-row">
+                        ${providerCaps.presets.map((p3) => html4`<button type="button" key=${p3} class=${`model-choice ${preset === p3 ? "active" : ""}`} onClick=${() => { setSetting('preset', p3); }}>${p3}</button>`)}
                       </div>
                     ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}（固定）</div>`}
                   </div>
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
                     <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">强度</label>
                     ${(providerCaps?.efforts?.length ?? 0) > 1 ? html4`
-                      <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                        ${providerCaps.efforts.map((e3) => html4`<button key=${e3} style="flex:1;padding:4px 8px;font-size:12px;border:1px solid var(--border-default);border-radius:4px;background:${effort === e3 ? 'rgb(138,170,122)' : 'var(--surface-default)'};color:${effort === e3 ? 'rgb(12,13,16)' : 'var(--text-primary)'};cursor:pointer;" onClick=${() => { setSetting('reasoningEffort', e3); }}>${e3}</button>`)}
+                      <div class="model-choice-row">
+                        ${providerCaps.efforts.map((e3) => html4`<button type="button" key=${e3} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => { setSetting('reasoningEffort', e3); }}>${e3}</button>`)}
                       </div>
                     ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
                   </div>
                   <div style="padding:8px;">
                     <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none;" onChange=${loadProviderImportFile} />
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                      <button style="padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${() => { const inp = document.getElementById('provider-import-file'); inp.value = ''; inp.click(); }}>选择 JSON 文件</button>
+                      <button type="button" class="model-primary-action" onClick=${() => { const inp = document.getElementById('provider-import-file'); inp.value = ''; inp.click(); }}>选择 JSON 文件</button>
                       <span style="font-size:11px;color:var(--text-secondary);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${providerImportFileName}</span>
                     </div>
                     <textarea value=${providerImportDraft ? providerImportPreview(providerImportDraft) : ""} placeholder="已选配置摘要..." readonly style="width:100%;height:76px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
                     ${providerImportError ? html4`<div style="font-size:11px;color:var(--c-err);margin-top:5px;overflow-wrap:anywhere;">${providerImportError}</div>` : null}
-                    <button disabled=${!providerImportDraft || busy} style="margin-top:6px;padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${confirmProviderImport}>确认导入</button>
+                    <button type="button" class="model-primary-action" disabled=${!providerImportDraft || busy} style="margin-top:6px" onClick=${confirmProviderImport}>确认导入</button>
                   </div>
                 </div>
               ` : null}
-              <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowBackgroundJobs(!showBackgroundJobs); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); void refreshBackgroundJobs(); }}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</span>
+              <button type="button" class=${`composer-chip ${backgroundJobs.some((job) => job.running) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => { setShowBackgroundJobs(!showBackgroundJobs); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); void refreshBackgroundJobs(); }}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</button>
               ${showBackgroundJobs ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;right:0;width:420px;max-height:280px;overflow-y:auto;z-index:10">
                   <div class="popover-h">${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</div>
@@ -27287,19 +27291,19 @@ const [providerCaps, setProviderCaps] = d2(null);
                   `)}
                 </div>
               ` : null}
-              <label class="composer-chip" style="display:flex;align-items:center;gap:8px;font-size:12px;padding:2px 6px 2px 9px">
-                <span title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。" style="padding-right:8px;border-right:1px solid var(--border-default)">索引</span>
-                <select title=${globalThis.VisionoxIndexModePolicy.hint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode} style="min-width:88px;max-width:104px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-input);color:inherit;font-size:12px;line-height:18px;padding:2px 5px;cursor:pointer">
+              <label class="composer-chip composer-index">
+                <span class="composer-index-label" title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。">索引</span>
+                <select title=${globalThis.VisionoxIndexModePolicy.hint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode}>
                   <option value="auto" title="每次发送消息前自动搜索索引，并把相关内容加入上下文。" disabled=${semanticIndex === false}>自动召回</option>
                   <option value="tool" title="不主动搜索，仅在模型判断有必要时调用索引工具。" disabled=${semanticIndex === false}>按需搜索</option>
                   <option value="off" title="完全关闭本地索引，不自动召回，也不提供索引工具。">不使用</option>
                 </select>
               </label>
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="muted" style="font-size:11px">召回中...</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="muted" style="font-size:11px">未找到相关内容</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span style="font-size:11px;color:var(--c-warn)">召回超时</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span style="font-size:11px;color:var(--c-warn)">索引不可用</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span style="font-size:11px;color:var(--c-err)">召回失败</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="composer-retrieval-status muted">召回中...</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="composer-retrieval-status muted">未找到相关内容</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">召回超时</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">索引不可用</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span class="composer-retrieval-status" style="color:var(--c-err)">召回失败</span>` : null}
               ${semanticRetrievalSources.length > 0 ? html4`
                 <button class="btn btn-sm" style="font-size:11px;padding:2px 7px" onClick=${() => setShowRetrievalSources(!showRetrievalSources)}>参考 ${semanticRetrievalSources.length}</button>
                 ${showRetrievalSources ? html4`
@@ -27317,20 +27321,22 @@ const [providerCaps, setProviderCaps] = d2(null);
               ${(showSkillPicker || showWsPicker || showModelPicker || showBackgroundJobs || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowBackgroundJobs(false); setShowRetrievalSources(false); }}></div>` : null}
               <div style="flex:1"></div>
               <button
+                type="button"
+                class="image-upload-btn"
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
-                title="Attach images"
-                style="padding:4px 8px;border-radius:4px;background:var(--surface-input, #1e2029);border:1px solid var(--border-default, #2a2e38);color:var(--text-primary, #f0f0f2);cursor:pointer;font-size:16px;flex-shrink:0"
+                title="添加图片"
+                aria-label="添加图片"
               >📎</button>
             </div>
             </div>
-            <div style="display: flex; flex-direction: column; gap: 6px; align-self: stretch; justify-content: flex-end;">
+            <div class="chat-input-actions">
               <button
                 class="primary"
                 onClick=${send}
                 disabled=${!inputHasContent && pendingImages.length === 0}
               >${busy ? t4("chat.queueSend") : t4("chat.send")}</button>
-              <button onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
-              <button onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
+              <button class="chat-secondary-action" onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
+              <button class="chat-secondary-action" onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
             </div>
               </div>
             </div>
@@ -28286,6 +28292,7 @@ function MemoryPanel() {
   const [info, setInfo] = d2(null);
   const [scopeFilter, setScopeFilter] = d2("all");
   const [query, setQuery] = d2("");
+  const [createOpen, setCreateOpen] = d2(false);
   const [newScope, setNewScope] = d2("global");
   const [newMode, setNewMode] = d2("general");
   const [modeFilter, setModeFilter] = d2("all");
@@ -28406,6 +28413,7 @@ function MemoryPanel() {
         await api("/mode-memory", { method: "POST", body: { mode: newMode, text: content, priority, keywords: [] } });
         setNewBody("");
         setNewPriority("medium");
+        setCreateOpen(false);
         showInfo("工作场景记忆已新增");
         await load();
       } catch (err) {
@@ -28438,6 +28446,7 @@ function MemoryPanel() {
       setNewDesc("");
       setNewBody("");
       setNewPriority("medium");
+      setCreateOpen(false);
       showInfo("长期记忆已新增");
       await load();
     } catch (err) {
@@ -28655,7 +28664,8 @@ function MemoryPanel() {
       ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
       <div class="memory-layout">
         <div class="memory-list-pane">
-          ${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<div class="memory-create-panel">
+          <div class="memory-list-head"><span>${visibleItems.length} 条</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? "收起新增" : "新增记忆"}</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>刷新</button></div></div>
+          ${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" && createOpen ? html4`<div class="memory-create-panel">
             <div class="memory-section-title">${newScope === "mode" ? "新增场景记忆" : "新增长期记忆"}</div>
             <div class="memory-create-row">
               <select value=${newScope} onChange=${(event) => setNewScope(event.target.value)} disabled=${busy}>
@@ -28669,9 +28679,8 @@ function MemoryPanel() {
             </div>
             ${newScope === "mode" ? html4`<select value=${newMode} onChange=${(event) => setNewMode(event.target.value)} disabled=${busy}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id} · ${mode.enabledCount ?? 0}/${mode.count ?? 0} 启用</option>`)}</select>` : html4`<input type="text" placeholder="一句话摘要" value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />`}
             <textarea rows="3" maxlength=${newScope === "mode" ? 180 : null} placeholder=${newScope === "mode" ? "场景记忆内容，最多 180 字符" : "记忆内容"} value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
-            <button class="btn primary" disabled=${busy || !newBody.trim() || (newScope !== "mode" && !newDesc.trim())} onClick=${createMemory}>新增记忆</button>
+            <div class="memory-create-actions"><button class="btn primary" disabled=${busy || !newBody.trim() || (newScope !== "mode" && !newDesc.trim())} onClick=${createMemory}>新增记忆</button><button type="button" class="btn ghost" disabled=${busy} onClick=${() => setCreateOpen(false)}>取消</button></div>
           </div>` : null}
-          <div class="memory-list-head"><span>${visibleItems.length} 条</span><button class="btn ghost" disabled=${busy} onClick=${load}>刷新</button></div>
           ${scopeFilter === "mode" && selectedModeKeys.length > 0 ? html4`<div class="memory-batch-bar"><span>已选 ${selectedModeKeys.length} 条</span><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("enable")}>启用</button><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("disable")}>停用</button><button class="btn danger" disabled=${busy} onClick=${() => batchModeMemories("delete")}>删除</button></div>` : null}
           <div class="memory-rows">
             ${visibleItems.map((item) => html4`
@@ -31528,7 +31537,7 @@ function SessionsPanel() {
                 class=${`ssl-row ${open?.name === s3.name ? "sel" : ""}`}
                 onClick=${() => selectionMode ? toggleSelectedSession(s3.name) : view(s3.name)}
               >
-                <div class="session-row-title">${selectionMode ? html4`<span class=${`session-select-box ${selectedNames.has(s3.name) ? "on" : ""}`} aria-hidden="true">${selectedNames.has(s3.name) ? "\u2713" : ""}</span>` : null}<span class="name">${s3.name}</span></div>
+                <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${`选择会话 ${s3.name}`} checked=${selectedNames.has(s3.name)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedSession(s3.name)} />` : null}<span class="name">${s3.name}</span></div>
                 <span class="preview">${s3.summary || t4("sessions.noSummary")}</span>
                 <span class="meta">
                   <span><span class="v">${fmtNum(s3.messageCount)}</span> ${t4("sessions.msgs")}</span>
@@ -31541,7 +31550,7 @@ function SessionsPanel() {
   )}` : html4`
           ${filteredTrash.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">回收站为空</div>` : null}
           ${filteredTrash.map((item) => html4`<div class=${`ssl-row ${open?.kind === "trash" && open.id === item.id ? "sel" : ""}`} onClick=${() => selectionMode ? toggleSelectedTrash(item.id) : viewTrash(item)}>
-            <div class="session-row-title">${selectionMode ? html4`<span class=${`session-select-box ${selectedTrashIds.has(item.id) ? "on" : ""}`}>${selectedTrashIds.has(item.id) ? "\u2713" : ""}</span>` : null}<span class="name">${item.name}</span></div>
+            <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${`选择回收站会话 ${item.name}`} checked=${selectedTrashIds.has(item.id)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedTrash(item.id)} />` : null}<span class="name">${item.name}</span></div>
             <span class="preview">${item.fileCount} 个文件 · ${fmtBytes(item.totalBytes)}</span>
             <span class="meta"><span>删除于 ${fmtRelativeTime(Date.parse(item.movedAt))}</span><span>清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "\u2014"}</span></span>
           </div>`)}
@@ -32131,6 +32140,14 @@ function SettingsPanel() {
   const modelControlValue = lockedPreset ? v3.effectiveModel ?? v3.displayModel ?? v3.model ?? "\u2014" : v3.configuredModel ?? v3.effectiveModel ?? v3.model ?? "\u2014";
   const runtimeModel = v3.runtimeModel ?? v3.displayModel ?? v3.model ?? "\u2014";
   const modelNote = v3.modelDrift ? `运行模型 ${runtimeModel} 与预设期望 ${v3.effectiveModel ?? "\u2014"} 不一致，请新建对话或重启应用。` : lockedPreset ? `实际模型由 ${v3.preset} 预设锁定为 ${v3.effectiveModel ?? v3.model ?? "\u2014"}；基础配置 ${v3.configuredModel ?? "\u2014"} 仅在 auto 下使用。` : runtimeModel !== modelControlValue ? `当前运行 ${runtimeModel}；基础模型 ${modelControlValue} 将用于后续新对话。` : t4("settings.appliesNextTurn");
+  const availableEccRules = (v3.eccRules?.available ?? []).filter((name) => name !== "custom");
+  const enabledEccRules = new Set(v3.eccRules?.enabled ?? []);
+  const toggleEccRule = (name) => {
+    const next = enabledEccRules.has(name)
+      ? [...enabledEccRules].filter((item) => item !== name)
+      : [...enabledEccRules, name];
+    save({ eccRules: next });
+  };
   const sectionH3 = (text) => html4`
     <h3 style="margin:18px 0 8px;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${text}</h3>
   `;
@@ -32227,6 +32244,16 @@ function SettingsPanel() {
             </select>
           `,
     `${(v3.activeMode?.hint || "切换后下次新对话生效")} · ECC ${((v3.activeMode?.effectiveRules || v3.activeMode?.rules || [])).join("+") || "common"}`
+  ) : null}
+        ${availableEccRules.length > 0 ? fieldRow(
+    "ECC 编码规范",
+    html4`<div class="ecc-rule-grid">
+      ${availableEccRules.map((name) => html4`<label class=${`ecc-rule-option ${enabledEccRules.has(name) ? "active" : ""}`} title=${`${name} 规则将注入当前工作场景的系统提示词`}>
+        <input type="checkbox" checked=${enabledEccRules.has(name)} disabled=${saving} onChange=${() => toggleEccRule(name)} />
+        <span>${name}</span>
+      </label>`)}
+    </div>`,
+    `当前场景已启用 ${enabledEccRules.size}/${availableEccRules.length}，修改后立即生效`
   ) : null}
         ${fieldRow(
     "\u4E0A\u4E0B\u6587\u957F\u5EA6",
@@ -32442,7 +32469,11 @@ function SkillsPanel() {
     if (!confirm(t4("skills.deleteConfirm", { scope: open.scope, name: open.name }))) return;
     setBusy(true);
     try {
-      await api(`/skills/${open.scope}/${encodeURIComponent(open.name)}`, { method: "DELETE" });
+      const result = await api(`/skills/${open.scope}/${encodeURIComponent(open.name)}`, { method: "DELETE" });
+      if (result.disabledBuiltin) {
+        setInfo(t4("skills.disabledBuiltin"));
+        setTimeout(() => setInfo(null), 4e3);
+      }
       setOpen(null);
       await load();
     } catch (err) {
@@ -32554,6 +32585,7 @@ description: TODO \u2014 one-line description that helps the model match this sk
           <button class="btn" disabled=${busy} onClick=${repairEnvironment} style="flex:0 0 auto">${t4("skills.repairEnv")}</button>
         </div>
         ${repairInfo ? html4`<div style="padding:0 12px 8px"><span class="pill ok">${repairInfo}</span></div>` : null}
+        ${info ? html4`<div style="padding:0 12px 8px"><span class="pill ok">${info}</span></div>` : null}
         ${error ? html4`<div class="notice err" style="margin:0 12px 8px">${error}</div>` : null}
 
         <div class="ssl-rows">
@@ -32566,6 +32598,7 @@ description: TODO \u2014 one-line description that helps the model match this sk
               >
                 <span class="name">
                   ${s3.name}
+                  ${s3.managedBuiltin ? html4`<span class="pill">${t4("skills.managedBuiltin")}</span>` : null}
                   ${s3.scope === "builtin" ? html4`<span class="pill">${t4("skills.builtin")}</span>` : null}
                 </span>
                 <span class="preview">${s3.description ?? t4("skills.noDescription")}</span>
@@ -35029,7 +35062,29 @@ function App() {
     } catch {
     }
   }, [activeId]);
-  const [openSections, setOpenSections] = d2(() => /* @__PURE__ */ new Set([0]));
+  const TAB_SECTIONS = tabSections();
+  const [openSections, setOpenSections] = d2(() => {
+    let stored = [0];
+    try {
+      const parsed = JSON.parse(localStorage.getItem("rx.openSections") ?? "[0]");
+      if (Array.isArray(parsed)) stored = parsed.filter((index) => Number.isInteger(index) && index >= 0 && index < TAB_SECTIONS.length);
+    } catch {
+    }
+    const activeSection = TAB_SECTIONS.findIndex((section) => section.tabs.some((tab) => tab.id === activeId));
+    if (activeSection >= 0 && !stored.includes(activeSection)) stored.push(activeSection);
+    return new Set(stored);
+  });
+  y2(() => {
+    try {
+      localStorage.setItem("rx.openSections", JSON.stringify([...openSections]));
+    } catch {
+    }
+  }, [openSections]);
+  y2(() => {
+    const activeSection = tabSections().findIndex((section) => section.tabs.some((tab) => tab.id === activeId));
+    if (activeSection < 0) return;
+    setOpenSections((current) => current.has(activeSection) ? current : new Set([...current, activeSection]));
+  }, [activeId]);
   const toggleSection = q2((idx) => {
     setOpenSections((prev) => {
       const next = new Set(prev);
@@ -35049,7 +35104,6 @@ function App() {
     });
     return unsub;
   }, []);
-  const TAB_SECTIONS = tabSections();
   const ALL_TABS = TAB_SECTIONS.flatMap((s3) => s3.tabs);
   const active = ALL_TABS.find((t5) => t5.id === activeId) ?? ALL_TABS[0];
   y2(() => {
@@ -35079,30 +35133,31 @@ function App() {
     (section, i) => {
       const isOpen = openSections.has(i);
       return html7`
-              <div class="side-section side-section-toggle" onClick=${() => toggleSection(i)}>
+              <button type="button" class="side-section side-section-toggle" aria-expanded=${isOpen} onClick=${() => toggleSection(i)}>
                 <span>${section.label}</span>
                 <span class="side-section-chev">${isOpen ? "\u25BC" : "\u25B6"}</span>
-              </div>
+              </button>
               ${isOpen ? html7`
                   ${section.tabs.map(
         (tab) => html7`
                       ${tab.breakBefore ? html7`<div class="side-divider"></div>` : null}
-                      <div
+                      <button type="button"
                         class=${`side-tab ${tab.id === active.id ? "active" : ""}`}
                         onClick=${() => pickTab(tab.id)}
                         title=${tab.name}
+                        aria-current=${tab.id === active.id ? "page" : null}
                       >
                         <span class="g">${tab.glyph}</span>
                         <span class="label">${tab.name}</span>
-                      </div>
+                      </button>
                     `
       )}
                   ${i === 0 ? html7`
-                      <div class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://oa.visionox.com:8086/gvo/mainPortal/index.html" } }).catch(() => {})} title="\u529E\u516C OA"><span class="g">O</span><span class="label">OA</span></div>
+                      <button type="button" class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://oa.visionox.com:8086/gvo/mainPortal/index.html" } }).catch(() => {})} title="\u529E\u516C OA"><span class="g">O</span><span class="label">OA</span></button>
                       <div class="side-divider"></div>
                     ` : null}
                   ${section.label === t4("app.sectionConfigure") ? html7`
-                      <div class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://cloud.siliconflow.cn/i/1vfZWEo7" } }).catch(() => {})} title="SiliconFlow API"><span class="g">A</span><span class="label">API</span></div>
+                      <button type="button" class="side-tab" onClick=${() => api("/open-url", { method: "POST", body: { url: "https://cloud.siliconflow.cn/i/1vfZWEo7" } }).catch(() => {})} title="SiliconFlow API"><span class="g">A</span><span class="label">API</span></button>
                     ` : null}
                 ` : null}
             `;
@@ -35110,7 +35165,7 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { localStorage.setItem("visionox-theme", v); } catch {}; try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}; try { if (window.parent && window.parent !== window) { window.parent.postMessage({ type: 'vis_theme_changed', theme: v }, '*'); } } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "dark"}>
+          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { localStorage.setItem("visionox-theme", v); } catch {}; try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}; try { if (window.parent && window.parent !== window) { window.parent.postMessage({ type: 'vis_theme_changed', theme: v }, '*'); } } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "light"}>
             <option value="light">\u6D45\u8272</option>
             <option value="dark">\u6DF1\u8272</option>
             <option value="warm-sand">\u6696\u6C99</option>
@@ -35123,18 +35178,19 @@ function App() {
         </div>
         <div class="side-foot">
           <span class="label">127.0.0.1</span>
-          <span
+          <button type="button"
             class="toggle"
-            title=${sidebarCollapsed ? "expand" : "collapse"}
+            title=${sidebarCollapsed ? "\u5C55\u5F00\u5BFC\u822A\u680F" : "\u6536\u8D77\u5BFC\u822A\u680F"}
+            aria-label=${sidebarCollapsed ? "\u5C55\u5F00\u5BFC\u822A\u680F" : "\u6536\u8D77\u5BFC\u822A\u680F"}
             onClick=${() => setSidebarCollapsed((c3) => !c3)}
-          >${sidebarCollapsed ? "\xBB" : "\xAB"}</span>
+          >${sidebarCollapsed ? "\xBB" : "\xAB"}</button>
         </div>
       </aside>
       <header class="app-top">
         <span class="ws">
           <span class="path">Visionox-Whale</span>
           <span class="sep">·</span>
-          <span class="session" style="color:#1a3a5c;font-family:'Microsoft YaHei','微软雅黑',var(--font-sans);font-size:15px">维信诺协同办公平台</span>
+          <span class="session">维信诺协同办公平台</span>
         </span>
         <span class="grow"></span>
         <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title="用 Visionox-Whale 打开 Markdown 文档">

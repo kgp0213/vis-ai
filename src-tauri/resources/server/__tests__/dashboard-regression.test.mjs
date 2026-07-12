@@ -700,8 +700,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(chatPanel, /previewRetrievedSource/);
     const composer = chatPanel.slice(chatPanel.indexOf("<textarea"));
     assert.ok(composer.indexOf('chat.backgroundJobs') < composer.indexOf('>索引<\/span>'));
-    assert.match(composer, /<span[^>]+style="padding-right:8px;border-right:1px solid var\(--border-default\)">索引<\/span>/);
-    assert.match(composer, /<select[^>]+min-width:88px[^>]+border:1px solid var\(--border-default\)[^>]+background:var\(--bg-input\)/);
+    assert.match(composer, /<span class="composer-index-label"[^>]*>索引<\/span>/);
+    assert.match(composer, /<label class="composer-chip composer-index">[\s\S]*?<select title=\$\{globalThis\.VisionoxIndexModePolicy\.hint/);
     assert.match(chatPanel, /VisionoxIndexModePolicy\.normalize/);
     assert.match(composer, /title="索引用于从当前工作区和知识库中查找相关内容/);
     assert.match(composer, /title=\$\{globalThis\.VisionoxIndexModePolicy\.hint\(indexRetrievalMode\)\}/);
@@ -711,7 +711,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /indexRetrievalMode === "off"[\s\S]*?semantic_search/);
     assert.match(launcher, /querySemanticGroups/);
     assert.match(launcher, /SEMANTIC_RETRIEVAL_CACHE_MAX = 100/);
-    assert.match(launcher, /retrieveSemanticContext\(text, retrievalHistory/);
+    assert.match(launcher, /const retrievalText = manualSkillTask \?\? text/);
+    assert.match(launcher, /retrieveSemanticContext\(retrievalText, retrievalHistory/);
     assert.match(launcher, /restoreOriginalUserInput[\s\S]*?syncActiveSessionFromLoop/);
     assert.match(launcher, /indexRetrievalMode,/);
     assert.match(launcher, /let indexRetrievalMode = normalizeIndexRetrievalMode\(config\.indexRetrievalMode\)/);
