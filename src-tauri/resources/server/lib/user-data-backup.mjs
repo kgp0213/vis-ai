@@ -7,6 +7,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statfsSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -204,6 +205,39 @@ export function createUserDataBackupStore({
     return { id, restored, skipped, overwrite };
   }
 
+  function remove(id) {
+    const dir = safeBackupDir(id);
+    if (!existsSync(dir)) return { id, deleted: false };
+    rmSync(dir, { recursive: true, force: true });
+    healthCache = null;
+    return { id, deleted: true };
+  }
+
+  function prune(maxCount) {
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(maxCount) || 10)));
+    const valid = list().filter((item) => item.status === "ok");
+    const deletedIds = [];
+    for (const item of valid.slice(limit)) {
+      if (remove(item.id).deleted) deletedIds.push(item.id);
+    }
+    return { maxCount: limit, deletedIds };
+  }
+
+  function estimate() {
+    const sourceStats = sources().map((source) => directoryStat(source.root));
+    let freeBytes = null;
+    try {
+      const fs = statfsSync(existsSync(backups) ? backups : home);
+      freeBytes = Number(fs.bavail) * Number(fs.bsize);
+    } catch {}
+    return {
+      estimatedBytes: sourceStats.reduce((sum, item) => sum + item.totalBytes, 0),
+      fileCount: sourceStats.reduce((sum, item) => sum + item.fileCount, 0),
+      freeBytes: Number.isFinite(freeBytes) ? freeBytes : null,
+      enoughSpace: Number.isFinite(freeBytes) ? freeBytes > sourceStats.reduce((sum, item) => sum + item.totalBytes, 0) * 1.1 : null,
+    };
+  }
+
   function health() {
     const timestamp = clock();
     if (healthCache && timestamp - healthCacheAt < 15_000) return healthCache;
@@ -219,5 +253,5 @@ export function createUserDataBackupStore({
     return healthCache;
   }
 
-  return { list, create, inspect, restore, health };
+  return { list, create, inspect, restore, remove, prune, estimate, health };
 }

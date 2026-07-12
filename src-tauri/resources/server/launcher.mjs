@@ -635,6 +635,19 @@ const userDataBackups = createUserDataBackupStore({
   getWorkspaceDir: () => workspaceDir,
   appVersion: VERSION,
 });
+function getUserDataBackupRetentionCount() {
+  const value = Number(readConfig(configPath).userDataBackupRetentionCount);
+  return Number.isFinite(value) ? Math.max(1, Math.min(100, Math.floor(value))) : 10;
+}
+function setUserDataBackupRetentionCount(value) {
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 100) throw new Error("backup retention count must be between 1 and 100");
+  const next = readConfig(configPath);
+  next.userDataBackupRetentionCount = count;
+  writeConfig(next, configPath);
+  userDataBackups.prune(count);
+  return count;
+}
 if (!existsSync(workspaceDir)) {
   mkdirSync(workspaceDir, { recursive: true });
 }
@@ -6050,6 +6063,8 @@ const ctx = {
   sessionsDir,
   memoryHomeDir: visionoxDataDir,
   userDataBackups,
+  getUserDataBackupRetentionCount,
+  setUserDataBackupRetentionCount,
   configMigrationStatus: configMigration,
   loop,
   tools,

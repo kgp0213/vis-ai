@@ -622,6 +622,9 @@ describe("Dashboard 回归护栏", () => {
     assert.match(overview, /\/backups\/\$\{encodeURIComponent\(id\)\}\/preview/);
     assert.match(overview, /\/backups\/\$\{encodeURIComponent\(id\)\}\/restore/);
     assert.match(overview, /backupPreview\.counts\.conflict/);
+    assert.match(overview, /usePoll\("\/backups\/estimate", 3e4\)/);
+    assert.match(overview, /api\("\/backups\/retention"/);
+    assert.match(overview, /method: "DELETE"/);
     assert.match(overview, /const storageHealth = h3\?\.storage\?\.backups/);
     assert.match(overview, /storageHealth\.totalBytes/);
     assert.match(overview, /storageHealth\.backups\.latestAt/);

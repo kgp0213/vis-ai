@@ -125,6 +125,8 @@ const required = [
       "backup integrity check failed",
       "backupDir inside dataDir must be the backups/snapshots directory",
       "healthCache",
+      "function prune(maxCount)",
+      "function estimate()",
     ],
   },
   {
@@ -272,6 +274,8 @@ const required = [
       'usePoll("/backups", 15e3)',
       "overview.dataProtection",
       "backupPreview.counts.conflict",
+      "overview.backupRetention",
+      "overview.deleteBackup",
       "overview.storageIssues",
     ],
   },

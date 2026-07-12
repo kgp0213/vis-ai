@@ -19637,7 +19637,12 @@ var en = {
     restoreAll: "Overwrite conflicts",
     restoreConfirm: "Overwrite current files that differ from this backup?",
     restoreDone: "Restore complete: {restored} restored, {skipped} skipped.",
-    restoreFailed: "Restore failed: {error}"
+    restoreFailed: "Restore failed: {error}",
+    backupEstimate: "Estimated {size} / {count} files / free {free}",
+    backupRetention: "Keep snapshots",
+    saveRetention: "Save",
+    deleteBackup: "Delete",
+    deleteBackupConfirm: "Permanently delete this backup snapshot?"
   },
   usage: {
     loading: "loading usage\u2026",
@@ -20611,7 +20616,12 @@ var zhCN = {
     restoreAll: "\u8986\u76D6\u51B2\u7A81\u9879",
     restoreConfirm: "\u786E\u5B9A\u8986\u76D6\u4E0E\u6B64\u5907\u4EFD\u4E0D\u540C\u7684\u5F53\u524D\u6587\u4EF6\u5417\uFF1F",
     restoreDone: "\u6062\u590D\u5B8C\u6210\uFF1A\u5DF2\u6062\u590D {restored} \u9879\uFF0C\u8DF3\u8FC7 {skipped} \u9879\u3002",
-    restoreFailed: "\u6062\u590D\u5931\u8D25\uFF1A{error}"
+    restoreFailed: "\u6062\u590D\u5931\u8D25\uFF1A{error}",
+    backupEstimate: "\u9884\u8BA1 {size} / {count} \u4E2A\u6587\u4EF6 / \u53EF\u7528 {free}",
+    backupRetention: "\u4FDD\u7559\u5FEB\u7167",
+    saveRetention: "\u4FDD\u5B58",
+    deleteBackup: "\u5220\u9664",
+    deleteBackupConfirm: "\u786E\u5B9A\u6C38\u4E45\u5220\u9664\u8FD9\u4E2A\u5907\u4EFD\u5FEB\u7167\u5417\uFF1F"
   },
   usage: {
     loading: "\u52A0\u8F7D\u7528\u91CF\u2026",
@@ -29063,10 +29073,15 @@ function OverviewPanel() {
   const [actionFeedback, setActionFeedback] = d2(null);
   const [backupBusy, setBackupBusy] = d2(false);
   const [backupPreview, setBackupPreview] = d2(null);
+  const [backupRetentionDraft, setBackupRetentionDraft] = d2(10);
   const { data, error, loading, refresh } = usePoll("/overview", 5e3, "overview");
   const { data: healthData, error: healthError, refresh: refreshHealth } = usePoll("/health", 5e3, "health");
   const { data: backupsData, refresh: refreshBackups } = usePoll("/backups", 15e3);
+  const { data: backupEstimate } = usePoll("/backups/estimate", 3e4);
   const { data: retrievalData } = usePoll("/index-retrieval-mode", 5e3);
+  y2(() => {
+    if (Number.isFinite(backupsData?.retentionCount)) setBackupRetentionDraft(backupsData.retentionCount);
+  }, [backupsData?.retentionCount]);
   const runModelChecks = q2(async () => {
     if (modelChecking) return;
     setModelChecking(true);
@@ -29121,6 +29136,33 @@ function OverviewPanel() {
       setBackupBusy(false);
     }
   }, [backupBusy, refreshHealth]);
+  const saveBackupRetention = q2(async () => {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    try {
+      const result = await api("/backups/retention", { method: "POST", body: { retentionCount: Math.max(1, Math.min(100, Number(backupRetentionDraft) || 10)) } });
+      setBackupRetentionDraft(result.retentionCount);
+      setBackupPreview(null);
+      await Promise.all([refreshBackups(), refreshHealth()]);
+    } catch (err) {
+      setActionFeedback({ tone: "err", text: t4("overview.backupFailed", { error: err.message }) });
+    } finally {
+      setBackupBusy(false);
+    }
+  }, [backupBusy, backupRetentionDraft, refreshBackups, refreshHealth]);
+  const deleteBackup = q2(async (id) => {
+    if (backupBusy || !globalThis.confirm(t4("overview.deleteBackupConfirm"))) return;
+    setBackupBusy(true);
+    try {
+      await api(`/backups/${encodeURIComponent(id)}`, { method: "DELETE", body: {} });
+      if (backupPreview?.id === id) setBackupPreview(null);
+      await Promise.all([refreshBackups(), refreshHealth()]);
+    } catch (err) {
+      setActionFeedback({ tone: "err", text: t4("overview.backupFailed", { error: err.message }) });
+    } finally {
+      setBackupBusy(false);
+    }
+  }, [backupBusy, backupPreview?.id, refreshBackups, refreshHealth]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("overview.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("overview.failed", { error: error.message })}</div>`;
@@ -29203,7 +29245,9 @@ function OverviewPanel() {
           <summary style="cursor:pointer;color:var(--fg-2);font-size:12px">${t4("overview.dataProtection")}</summary>
           <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
             <div style="display:flex;align-items:center;gap:8px"><button type="button" disabled=${backupBusy} onClick=${createBackup}>${backupBusy ? t4("overview.backupCreating") : t4("overview.createBackup")}</button><span class="dim" style="min-width:0;overflow-wrap:anywhere">${storageHealth?.backups?.path ?? ""}</span></div>
-            ${(backupsData?.items ?? []).slice(0, 5).map((item) => html4`<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:8px"><span style="min-width:0"><strong>${item.status === "ok" ? new Date(item.createdAt).toLocaleString() : item.id}</strong><br><span class="dim">${item.status === "ok" ? `${fmtNum(item.fileCount)} ${t4("system.files")} / ${fmtBytes(item.totalBytes)}` : item.error}</span></span>${item.status === "ok" ? html4`<button type="button" class="btn ghost" disabled=${backupBusy} onClick=${() => previewBackup(item.id)}>${t4("overview.previewBackup")}</button>` : null}</div>`)}
+            ${backupEstimate ? html4`<span class="dim">${t4("overview.backupEstimate", { size: fmtBytes(backupEstimate.estimatedBytes), count: fmtNum(backupEstimate.fileCount), free: backupEstimate.freeBytes == null ? "\u2014" : fmtBytes(backupEstimate.freeBytes) })}</span>` : null}
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><label>${t4("overview.backupRetention")} <input type="number" min="1" max="100" value=${backupRetentionDraft} onInput=${(event) => setBackupRetentionDraft(Number(event.target.value))} style="width:72px" /></label><button type="button" class="btn ghost" disabled=${backupBusy || backupRetentionDraft === backupsData?.retentionCount} onClick=${saveBackupRetention}>${t4("overview.saveRetention")}</button></div>
+            ${(backupsData?.items ?? []).slice(0, 5).map((item) => html4`<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:8px"><span style="min-width:0"><strong>${item.status === "ok" ? new Date(item.createdAt).toLocaleString() : item.id}</strong><br><span class="dim">${item.status === "ok" ? `${fmtNum(item.fileCount)} ${t4("system.files")} / ${fmtBytes(item.totalBytes)}` : item.error}</span></span>${item.status === "ok" ? html4`<button type="button" class="btn ghost" disabled=${backupBusy} onClick=${() => previewBackup(item.id)}>${t4("overview.previewBackup")}</button>` : null}<button type="button" class="btn ghost danger" disabled=${backupBusy} onClick=${() => deleteBackup(item.id)}>${t4("overview.deleteBackup")}</button></div>`)}
             ${backupPreview ? html4`<div style="border-top:1px solid var(--line);padding-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center"><span style="flex:1;min-width:220px">${t4("overview.previewCounts", backupPreview.counts)}</span><button type="button" class="btn ghost" disabled=${backupBusy || backupPreview.counts.missing === 0} onClick=${() => restoreBackup(backupPreview.id, false)}>${t4("overview.restoreMissing")}</button><button type="button" class="btn ghost" disabled=${backupBusy || backupPreview.counts.conflict === 0} onClick=${() => restoreBackup(backupPreview.id, true)}>${t4("overview.restoreAll")}</button></div>` : null}
           </div>
         </details>

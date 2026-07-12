@@ -158,21 +158,37 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     const userDataBackups = {
       list: () => [{ id: "backup-1", status: "ok" }],
       create: () => ({ id: "backup-2", files: [{ path: "secret-detail" }], fileCount: 1 }),
+      prune: (count) => ({ maxCount: count, deletedIds: [] }),
+      estimate: () => ({ estimatedBytes: 42, fileCount: 2, freeBytes: 1000, enoughSpace: true }),
+      remove: (id) => ({ id, deleted: true }),
       inspect: (id) => ({ id, counts: { missing: 1, conflict: 1 } }),
       restore: (id, options) => { calls.push({ id, options }); return { id, restored: 1, skipped: 1, overwrite: options.overwrite }; },
       health: () => ({ totalBytes: 42, backups: { count: 1, corrupt: 0, latestAt: "2026-07-12T08:00:00.000Z" } }),
     };
-    const overrides = { userDataBackups, configMigrationStatus: { status: "current" } };
+    const overrides = {
+      userDataBackups,
+      configMigrationStatus: { status: "current" },
+      getUserDataBackupRetentionCount: () => 10,
+      setUserDataBackupRetentionCount: (value) => Number(value),
+    };
 
     const list = await apiGet("/api/backups", overrides);
     assert.equal(list.status, 200);
     assert.doesNotThrow(() => assertApiContract(apiContracts, "backups", list.json));
     assert.equal(list.json.items[0].id, "backup-1");
+    assert.equal(list.json.retentionCount, 10);
 
     const created = await apiPost("/api/backups", {}, overrides);
     assert.equal(created.status, 200);
     assert.equal(created.json.id, "backup-2");
     assert.equal(created.json.files, undefined);
+
+    const estimate = await apiGet("/api/backups/estimate", overrides);
+    assert.equal(estimate.json.enoughSpace, true);
+    const retention = await apiPost("/api/backups/retention", { retentionCount: 5 }, overrides);
+    assert.equal(retention.json.retentionCount, 5);
+    const removed = await apiDelete("/api/backups/backup-1", {}, overrides);
+    assert.equal(removed.json.deleted, true);
 
     const preview = await apiGet("/api/backups/backup-1/preview", overrides);
     assert.equal(preview.json.counts.conflict, 1);
@@ -199,7 +215,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
   test("备份 API 对无服务、未知路径和无效 JSON 返回明确错误", async () => {
     const unavailable = await apiGet("/api/backups");
     assert.equal(unavailable.status, 503);
-    const userDataBackups = { list: () => [], create: () => ({}), inspect: () => ({}), restore: () => ({}) };
+    const userDataBackups = { list: () => [], create: () => ({}), prune: () => ({ deletedIds: [] }), estimate: () => ({}), remove: () => ({ deleted: false }), inspect: () => ({}), restore: () => ({}) };
     const unknown = await apiGet("/api/backups/backup-1/unknown", { userDataBackups });
     assert.equal(unknown.status, 404);
     const invalid = await apiPost("/api/backups/backup-1/restore", "{", { userDataBackups });

@@ -126,12 +126,14 @@ async function evaluate(cdp, expression) {
 
 async function waitForBrowserValue(cdp, expression, predicate, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
+  let lastValue;
   while (Date.now() < deadline) {
     const value = await evaluate(cdp, expression);
+    lastValue = value;
     if (predicate(value)) return value;
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
   }
-  throw new Error(`browser condition did not become true within ${timeoutMs}ms`);
+  throw new Error(`browser condition did not become true within ${timeoutMs}ms; last=${JSON.stringify(lastValue)}`);
 }
 
 async function waitForApiValue(url, predicate, timeoutMs = 10_000) {
@@ -255,6 +257,7 @@ try {
   })()`);
   await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('button')].find((item) => item.textContent.includes('检测全部模型')))`, Boolean);
   console.log("[ui-smoke] model picker interaction passed");
+  await evaluate(cdp, `[...document.querySelectorAll('.composer-chip')].find((item) => item.textContent.includes('模型'))?.click()`);
 
   await evaluate(cdp, `(() => {
     const select = [...document.querySelectorAll('.chat-input-area select')].find((item) => [...item.options].some((option) => option.value === 'off'));
@@ -276,6 +279,22 @@ try {
   await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1);
   await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
   console.log("[ui-smoke] index mode persisted across work-mode switch and new session");
+
+  const backupFlow = await evaluate(cdp, `(async () => {
+    const headers = { 'x-reasonix-token': '${token}', 'content-type': 'application/json' };
+    const createdResponse = await fetch('/api/backups', { method: 'POST', headers, body: '{}' });
+    if (!createdResponse.ok) throw new Error('backup creation failed: ' + await createdResponse.text());
+    const created = await createdResponse.json();
+    const previewResponse = await fetch('/api/backups/' + encodeURIComponent(created.id) + '/preview', { headers });
+    if (!previewResponse.ok) throw new Error('backup preview failed: ' + await previewResponse.text());
+    const preview = await previewResponse.json();
+    const deletedResponse = await fetch('/api/backups/' + encodeURIComponent(created.id), { method: 'DELETE', headers, body: '{}' });
+    if (!deletedResponse.ok) throw new Error('backup deletion failed: ' + await deletedResponse.text());
+    return { id: created.id, conflicts: preview.counts.conflict, corrupt: preview.counts.corrupt };
+  })()`);
+  if (!backupFlow.id || backupFlow.conflicts !== 0 || backupFlow.corrupt !== 0) throw new Error(`unexpected backup browser flow: ${JSON.stringify(backupFlow)}`);
+  await waitForApiValue(`http://127.0.0.1:${port}/api/backups?token=${token}`, (value) => value.items?.length === 0);
+  console.log("[ui-smoke] backup create, preview and delete browser flow passed");
 
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitForDashboard(cdp, 15_000);

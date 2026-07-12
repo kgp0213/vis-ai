@@ -2662,9 +2662,25 @@ function backupSummary(manifest) {
 async function handleBackups(method, rest, body, ctx) {
   const store = ctx.userDataBackups;
   if (!store) return { status: 503, body: { error: "user data backup service is unavailable" } };
-  if (method === "GET" && rest.length === 0) return { status: 200, body: { items: store.list() } };
-  if (method === "POST" && rest.length === 0) return { status: 200, body: backupSummary(store.create()) };
+  if (method === "GET" && rest.length === 0) return { status: 200, body: { items: store.list(), retentionCount: ctx.getUserDataBackupRetentionCount?.() ?? 10 } };
+  if (method === "POST" && rest.length === 0) {
+    const created = store.create();
+    const pruned = store.prune(ctx.getUserDataBackupRetentionCount?.() ?? 10);
+    return { status: 200, body: { ...backupSummary(created), pruned: pruned.deletedIds.length } };
+  }
+  if (method === "GET" && rest[0] === "estimate" && rest.length === 1) return { status: 200, body: store.estimate() };
+  if (method === "POST" && rest[0] === "retention" && rest.length === 1) {
+    let input;
+    try { input = body ? JSON.parse(body) : {}; } catch { return { status: 400, body: { error: "invalid JSON body" } }; }
+    const retentionCount = ctx.setUserDataBackupRetentionCount?.(input.retentionCount);
+    if (!retentionCount) return { status: 503, body: { error: "backup retention settings are unavailable" } };
+    return { status: 200, body: { retentionCount, items: store.list() } };
+  }
   const id = rest[0];
+  if (method === "DELETE" && id && rest.length === 1) {
+    const result = store.remove(id);
+    return { status: result.deleted ? 200 : 404, body: result.deleted ? result : { error: "backup not found" } };
+  }
   if (method === "GET" && id && rest[1] === "preview" && rest.length === 2) {
     return { status: 200, body: store.inspect(id) };
   }

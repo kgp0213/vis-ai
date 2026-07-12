@@ -114,4 +114,17 @@ describe("user data backups", () => {
     assert.notEqual(refreshed, before);
     assert.ok(refreshed.totalBytes > before.totalBytes);
   });
+
+  test("estimates size, prunes oldest snapshots and supports explicit deletion", () => {
+    const first = store.create();
+    store = createUserDataBackupStore({ dataDir, getWorkspaceDir: () => workspaceDir, appVersion: "1.28.0", now: () => new Date("2026-07-12T09:00:00Z"), uuid: () => "second" });
+    const second = store.create();
+    const estimate = store.estimate();
+    assert.equal(estimate.fileCount, 5);
+    assert.ok(estimate.estimatedBytes > 0);
+    assert.ok(estimate.freeBytes === null || estimate.freeBytes > 0);
+    assert.deepEqual(store.prune(1).deletedIds, [first.id]);
+    assert.equal(store.remove(second.id).deleted, true);
+    assert.equal(store.remove(second.id).deleted, false);
+  });
 });
