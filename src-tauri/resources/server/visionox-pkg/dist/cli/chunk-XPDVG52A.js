@@ -2152,6 +2152,7 @@ function defaultIndexConfig() {
     excludeExts: [...DEFAULT_INDEX_EXCLUDES.exts],
     excludePatterns: [],
     respectGitignore: DEFAULT_RESPECT_GITIGNORE,
+    includeKnowledgeDocs: false,
     maxFileBytes: DEFAULT_MAX_FILE_BYTES
   };
 }
@@ -2164,6 +2165,7 @@ function resolveIndexConfig(user) {
     excludeExts: Array.isArray(user.excludeExts) ? user.excludeExts.map((e) => e.toLowerCase()) : d.excludeExts,
     excludePatterns: Array.isArray(user.excludePatterns) ? [...user.excludePatterns] : [],
     respectGitignore: typeof user.respectGitignore === "boolean" ? user.respectGitignore : d.respectGitignore,
+    includeKnowledgeDocs: user.includeKnowledgeDocs === true,
     maxFileBytes: typeof user.maxFileBytes === "number" && user.maxFileBytes > 0 ? user.maxFileBytes : d.maxFileBytes
   };
 }
@@ -2175,6 +2177,7 @@ function compileFilters(cfg) {
     extSet: new Set(cfg.excludeExts.map((e) => e.toLowerCase())),
     patternMatch: matcher,
     respectGitignore: cfg.respectGitignore,
+    includeKnowledgeDocs: cfg.includeKnowledgeDocs === true,
     maxFileBytes: cfg.maxFileBytes
   };
 }

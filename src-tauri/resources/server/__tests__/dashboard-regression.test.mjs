@@ -396,6 +396,67 @@ describe("Dashboard 回归护栏", () => {
     assert.doesNotMatch(app, /onSelectArtifactMessage=\$\{\(msg\) => \{/);
   });
 
+  test("会话页以独立批量模式管理会话和可预览回收站", async () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const plansPanel = app.slice(app.indexOf("function PlansPanel()"), app.indexOf("function SessionsPanel()"));
+    const sessionsPanel = app.slice(app.indexOf("function SessionsPanel()"), app.indexOf("function parseCustomInterval"));
+    assert.doesNotMatch(plansPanel, /selectedNames|retentionDraft/);
+    assert.match(sessionsPanel, /const \[selectedNames, setSelectedNames\] = d2/);
+    assert.match(sessionsPanel, /const \[selectedTrashIds, setSelectedTrashIds\] = d2/);
+    assert.match(sessionsPanel, /const \[listMode, setListMode\] = d2\("sessions"\)/);
+    assert.match(sessionsPanel, /const \[selectionMode, setSelectionMode\] = d2\(false\)/);
+    assert.match(sessionsPanel, /const \[retentionDraft, setRetentionDraft\] = d2\(30\)/);
+    assert.match(sessionsPanel, /\/sessions\/trash\/\$\{encodeURIComponent\(item\.id\)\}\?limit=200/);
+    assert.match(sessionsPanel, /\/sessions\/trash\/batch-restore/);
+    assert.match(sessionsPanel, /\/sessions\/trash\/batch/);
+    assert.match(sessionsPanel, /session-list-tabs/);
+    assert.match(sessionsPanel, /session-batch-bar/);
+    assert.match(sessionsPanel, /session-page-feedback/);
+    assert.match(sessionsPanel, /visionox\.sessions\.skipTrashConfirm/);
+    assert.match(sessionsPanel, /下次不再提示/);
+    assert.match(sessionsPanel, /恢复删除确认/);
+    assert.doesNotMatch(sessionsPanel, /confirm\("将此会话移入回收站/);
+    assert.doesNotMatch(sessionsPanel, /confirm\(`将选中的 \$\{names\.length\} 个会话移入回收站/);
+
+    const calls = [];
+    const trashedPath = join(tmpRoot, "trashed-session.jsonl");
+    writeFileSync(trashedPath, `${JSON.stringify({ role: "user", content: "preview me" })}\n`);
+    const ctx = {
+      trashSessions: (names) => {
+        calls.push(["trash", names]);
+        return { ok: true, movedCount: names.length, failedCount: 0, moved: names.map((name) => ({ name })) };
+      },
+      getSessionTrashEntry: (id) => ({ id, name: "old-session", path: trashedPath, movedAt: new Date().toISOString() }),
+      restoreSessionTrash: (id, newName) => {
+        calls.push(["restore", id, newName]);
+        return { ok: true, restored: true, name: newName || "restored-session" };
+      },
+      deleteSessionTrash: (ids) => {
+        calls.push(["permanent", ids]);
+        return { ok: true, deletedCount: ids.length, failedCount: 0 };
+      },
+      setSessionTrashRetentionDays: (days) => {
+        calls.push(["retention", days]);
+        return { ok: true, retentionDays: days, pruned: 0 };
+      },
+      listSessionTrash: () => [{ id: "trash-1", name: "old-session", movedAt: new Date().toISOString(), files: [] }],
+      getSessionTrashRetentionDays: () => 30,
+    };
+    const batch = await api("POST", "/api/sessions/batch-trash", { names: ["a", "b"] }, ctx);
+    assert.equal(batch.status, 200);
+    assert.equal(batch.json.movedCount, 2);
+    const preview = await api("GET", "/api/sessions/trash/trash-1?limit=200", null, ctx);
+    assert.equal(preview.status, 200);
+    assert.equal(preview.json.messages[0].content, "preview me");
+    const restore = await api("POST", "/api/sessions/trash/trash-1/restore", { newName: "restored-copy" }, ctx);
+    assert.equal(restore.status, 200);
+    const permanent = await api("DELETE", "/api/sessions/trash/batch", { ids: ["trash-1"] }, ctx);
+    assert.equal(permanent.status, 200);
+    const retention = await api("POST", "/api/sessions/trash-retention", { retentionDays: 45 }, ctx);
+    assert.equal(retention.status, 200);
+    assert.deepEqual(calls, [["trash", ["a", "b"]], ["restore", "trash-1", "restored-copy"], ["permanent", ["trash-1"]], ["retention", 45]]);
+  });
+
   test("六个 Markdown 入口共享 KaTeX 扩展，文件预览加载同一份样式", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const index = readFileSync(dashboardIndexUrl, "utf8");
@@ -453,6 +514,230 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /当前上下文仍在使用旧记忆/);
     assert.match(app, /\/mode-memory\/batch/);
     assert.match(app, /\/move/);
+  });
+
+  test("设置页密钥必须由用户明确点击保存，输入过程不会自动提交", () => {
+    const source = readFileSync(dashboardAppUrl, "utf8");
+    assert.doesNotMatch(source, /onInput=\$\{\(e3\) => \{ if\(e3\.target\.value\.trim\(\)\.length >= 16\) save\(\{ bingApiKey:/);
+    assert.match(source, /bingApiKey: draft\.bingApiKey/);
+  });
+
+  test("开发者日志只在底部时自动跟随，查看历史时保留滚动位置", () => {
+    const source = readFileSync(dashboardAppUrl, "utf8");
+    const settingsPanel = source.slice(source.indexOf("function sameDevLogSnapshot"), source.indexOf("// dashboard/src/panels/skills.ts"));
+    assert.match(settingsPanel, /function sameDevLogSnapshot/);
+    assert.match(settingsPanel, /if \(sameDevLogSnapshot\(current, next\)\) return/);
+    assert.match(settingsPanel, /devLogFollowRef\.current/);
+    assert.match(settingsPanel, /el\.scrollHeight - el\.scrollTop - el\.clientHeight <= 24/);
+    assert.match(settingsPanel, /if \(!devLogFollowing\) return/);
+    assert.match(settingsPanel, /settings\.devNewLogs/);
+    assert.match(settingsPanel, /settings\.devBackToBottom/);
+    assert.match(settingsPanel, /ref=\$\{devLogPanelRef\} onScroll=\$\{handleDevLogScroll\}/);
+    assert.doesNotMatch(settingsPanel, /document\.getElementById\("dev-log-panel"\)/);
+  });
+
+  test("模型导入与设置页凭据维护职责分离，并同步刷新检测状态", () => {
+    const source = readFileSync(dashboardAppUrl, "utf8");
+    const chatPanel = source.slice(source.indexOf("function ChatPanel()"), source.indexOf("var ChatFeed ="));
+    const settingsPanel = source.slice(source.indexOf("function SettingsPanel()"), source.indexOf("// dashboard/src/panels/skills.ts"));
+    assert.match(source, /function providerImportPreview/);
+    assert.match(source, /provider\.apiKey \? "\*\*\*\*\*\*\*\*/);
+    assert.match(source, /API Key: \$\{apiKey\}/);
+    assert.doesNotMatch(chatPanel, /JSON\.stringify\(providerImportDraft/);
+    assert.match(chatPanel, /providerImportPreview\(providerImportDraft\)/);
+    assert.match(chatPanel, /dash\.kind === "config-changed"[\s\S]*?Promise\.allSettled\(\[api\("\/overview"\), api\("\/providers"\)\]\)/);
+    assert.match(settingsPanel, /requiresModelTest/);
+    assert.match(settingsPanel, /settings\.credentialsRetest/);
+    assert.doesNotMatch(settingsPanel, /save\(\{ preset:/);
+    assert.doesNotMatch(settingsPanel, /save\(\{ reasoningEffort:/);
+  });
+
+  test("临时提示固定在视口内，不参与根页面高度计算", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
+    assert.match(app, /<div class="toast-stack">/);
+    assert.match(css, /\.toast-stack\s*\{[\s\S]*?position:\s*fixed;/);
+    assert.match(css, /\.toast-stack\s*\{[\s\S]*?width:\s*min\(400px, calc\(100vw - 2 \* var\(--space-4\)\)\);/);
+    assert.doesNotMatch(css, /@keyframes toast-enter\s*\{[\s\S]*?translateX\(100%\)/);
+  });
+
+  test("模型菜单在操作位置显示固定高度反馈，不再发送远端 Toast", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
+    const providerSwitch = chatPanel.slice(chatPanel.indexOf("const switchProvider"), chatPanel.indexOf("const loadProviderImportFile"));
+    const modelTest = chatPanel.slice(chatPanel.indexOf("const testAllProviders"), chatPanel.indexOf("const confirmProviderImport"));
+    const providerImport = chatPanel.slice(chatPanel.indexOf("const confirmProviderImport"), chatPanel.indexOf("const pickWorkspace"));
+    assert.match(chatPanel, /const \[modelNotice, setModelNotice\] = d2\(null\)/);
+    assert.match(chatPanel, /role="status" aria-live="polite" style="min-height:18px/);
+    assert.match(chatPanel, /pushModelNotice\("正在应用模型设置\.\.\."/);
+    assert.match(providerSwitch, /pushModelNotice\("正在切换模型服务\.\.\."/);
+    assert.match(modelTest, /pushModelNotice\("正在检测全部模型\.\.\."/);
+    assert.match(providerImport, /pushModelNotice\("正在导入模型配置\.\.\."/);
+    assert.doesNotMatch(providerSwitch, /showToast\(/);
+    assert.doesNotMatch(modelTest, /showToast\(/);
+    assert.doesNotMatch(providerImport, /showToast\(/);
+  });
+
+  test("概览位于任务和 OA 之间，系统能力合并后不再占用高级入口", () => {
+    const source = readFileSync(dashboardAppUrl, "utf8");
+    const workspace = source.slice(source.indexOf('label: t4("app.sectionWorkspace")'), source.indexOf('label: t4("app.sectionConfigure")'));
+    const advanced = source.slice(source.indexOf('label: t4("app.sectionConfigure")'), source.indexOf("function App()"));
+    const workspaceIds = [...workspace.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
+    const ids = [...advanced.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
+    assert.deepEqual(workspaceIds, ["chat", "sessions", "files", "tasks", "overview"]);
+    assert.match(source, /id: "tasks"[\s\S]*?id: "overview"[\s\S]*?title="\\u529E\\u516C OA"/);
+    assert.deepEqual(ids, ["memory", "skills", "tools", "mcp", "semantic", "hooks", "permissions", "settings"]);
+    assert.doesNotMatch(advanced, /\{ id: "overview"/);
+    assert.doesNotMatch(advanced, /\{ id: "health"/);
+    assert.doesNotMatch(advanced, /\{ id: "changes"/);
+    assert.match(advanced, /ChangesPanel is hidden because it duplicates the main chat/);
+    assert.match(advanced, /future replacement should be a read-only "session changes" summary/);
+    assert.match(advanced, /SystemPanel is retained for diagnostics/);
+    assert.match(source, /function ChangesPanel\(\)/);
+    assert.match(source, /function SystemPanel\(\)/);
+    assert.match(advanced, /id: "memory"[\s\S]*?breakBefore: true/);
+    assert.match(advanced, /id: "mcp"[\s\S]*?breakBefore: true/);
+    assert.match(advanced, /id: "permissions"[\s\S]*?breakBefore: true/);
+  });
+
+  test("概览合并工作状态、操作提醒、会话计划和本地系统摘要", () => {
+    const source = readFileSync(dashboardAppUrl, "utf8");
+    const overview = source.slice(source.indexOf("function OverviewPanel()"), source.indexOf("// dashboard/src/panels/permissions.ts"));
+    assert.match(overview, /usePoll\("\/overview", 5e3, "overview"\)/);
+    assert.match(overview, /usePoll\("\/health", 5e3, "health"\)/);
+    assert.match(overview, /activeProviderName/);
+    assert.match(overview, /modelVerification\?\.dirty/);
+    assert.match(overview, /modelDrift/);
+    assert.match(overview, /pendingEdits/);
+    assert.match(overview, /retrievalData\?\.mode === "auto" && retrievalData\.semanticAvailable === false/);
+    assert.match(overview, /api\("\/providers\/test", \{ method: "POST", body: \{\} \}\)/);
+    assert.match(overview, /tabId: "semantic"/);
+    assert.match(overview, /currentSessionBlock\(c3\)/);
+    assert.match(overview, /recentPlansRail\(c3\)/);
+    assert.match(overview, /h3\.sessions\.totalBytes/);
+    assert.match(overview, /h3\.memory\.totalBytes/);
+    assert.match(overview, /h3\.semantic\.totalBytes/);
+    assert.match(overview, /h3\.jobs > 0/);
+    assert.match(overview, /<details/);
+    assert.match(overview, /overview\.userDataPaths/);
+    assert.doesNotMatch(overview, /overview\.elevatedMode|editMode === "admin"|editMode === "yolo"/);
+    assert.doesNotMatch(overview, /<tr><td class="dim">\$\{t4\("overview\.projectRoot"\)\}/);
+    assert.doesNotMatch(overview, /toolActivityFeed\(c3\)/);
+    assert.doesNotMatch(overview, /h3\.usageLog\.bytes/);
+  });
+
+  test("会话整理保持原任务类型并显式控制知识提炼和自动 embedding", () => {
+    const source = readFileSync(dashboardAppUrl, "utf8");
+    const launcher = readFileSync(launcherUrl, "utf8");
+    assert.match(source, /knowledgeEnabled: draft\.knowledgeEnabled/);
+    assert.match(source, /knowledgeAutoIndex: draft\.knowledgeAutoIndex/);
+    assert.match(source, /sessionCleanupPromptAddendum: draft\.sessionCleanupPromptAddendum/);
+    assert.match(source, /maxlength="4000"/);
+    assert.match(source, /\/sessions\/batch-trash/);
+    assert.match(source, /\/sessions\/trash-retention/);
+    assert.match(source, /selectedNames\.size/);
+    assert.match(source, /semanticConfig\?\.openaiCompat\?\.apiKeySet === true/);
+    assert.match(source, /includeKnowledgeDocs/);
+    assert.doesNotMatch(source, /value="knowledge_digest"/);
+    assert.match(launcher, /new Set\(\["prompt", "report", "session_cleanup"\]\)/);
+    assert.match(launcher, /const knowledge = await generateSessionKnowledge\(task, signal, qualityState\)[\s\S]*?trashSessions\(\[\.\.\.previewDeleteNames, \.\.\.aiTrashNames\], runId\)/);
+    assert.match(launcher, /item\.action !== "trash_candidate"[\s\S]*?protectedKnowledgeNames/);
+    assert.match(launcher, /selectPendingKnowledgeSessions/);
+    assert.match(launcher, /writeKnowledgeManifest/);
+    assert.match(launcher, /workspace: task\.workspaceDir/);
+    assert.match(launcher, /realpathSync\(candidate\)[\s\S]*?resolves outside the bound workspace/);
+    assert.match(launcher, /sourceFingerprint\(candidates\).*instructionId/);
+    assert.match(launcher, /const root = resolve\(projectRoot, "knowledge"\)/);
+    assert.match(launcher, /renameSync\(legacyRoot, root\)/);
+    assert.match(launcher, /update\.action === "delete" && item\.action !== "delete" \? "keep"/);
+    assert.match(launcher, /buildSessionQualityPrompt/);
+    assert.match(launcher, /normalizeSessionQualityEvaluations/);
+    assert.match(launcher, /responseFormat: structuredOutput \? \{ type: "json_object" \} : undefined/);
+    assert.match(launcher, /offset \+= 4/);
+    assert.match(launcher, /evaluationFailures\.push/);
+    assert.match(launcher, /knowledgeAIFailed: aiFailed/);
+    assert.match(source, /AI 评估失败/);
+    assert.match(launcher, /addToolToPrefix: addToolToActivePrefix/);
+    assert.match(launcher, /await activateSemanticSearch\(task\.workspaceDir\)/);
+    assert.match(launcher, /hasSemanticSearch = true[\s\S]*?prefix\?\.addTool/);
+    assert.match(launcher, /evaluateKnowledgeDocument/);
+    assert.match(launcher, /documentQuality\.action === "revise"/);
+    assert.match(launcher, /DEFAULT_SESSION_TRASH_RETENTION_DAYS = 30/);
+    assert.match(launcher, /pruneExpiredSessionTrash\(\);/);
+  });
+
+  test("语义搜索覆盖项目知识并在结果中标注来源类型", () => {
+    const semanticTool = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-YYQAUTTN.js", import.meta.url), "utf8");
+    assert.match(semanticTool, /past decisions, prior solutions, established workflows, validation evidence/);
+    assert.match(semanticTool, /startsWith\("knowledge\/"\) \? "knowledge" : "workspace"/);
+    assert.match(semanticTool, /\[\$\{sourceType\}\] \$\{entry\.path\}:\$\{entry\.startLine\}-\$\{entry\.endLine\}/);
+  });
+
+  test("聊天输入区提供会话级索引模式并展示自动召回来源", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
+    assert.match(chatPanel, /\/index-retrieval-mode/);
+    assert.match(chatPanel, /<option value="auto"/);
+    assert.match(chatPanel, /<option value="tool"/);
+    assert.match(chatPanel, /<option value="off"/);
+    assert.match(chatPanel, /disabled=\$\{busy\} onChange=\$\{changeIndexRetrievalMode\}/);
+    assert.match(chatPanel, /dash\.kind === "semantic-retrieval"/);
+    assert.match(chatPanel, /参考 \$\{semanticRetrievalSources\.length\}/);
+    assert.match(chatPanel, /召回超时/);
+    assert.match(chatPanel, /previewRetrievedSource/);
+    const composer = chatPanel.slice(chatPanel.indexOf("<textarea"));
+    assert.ok(composer.indexOf('chat.backgroundJobs') < composer.indexOf('>索引<\/span>'));
+    assert.match(composer, /<span[^>]+style="padding-right:8px;border-right:1px solid var\(--border-default\)">索引<\/span>/);
+    assert.match(composer, /<select[^>]+min-width:88px[^>]+border:1px solid var\(--border-default\)[^>]+background:var\(--bg-input\)/);
+    assert.match(chatPanel, /function indexRetrievalModeHint/);
+    assert.match(composer, /title="索引用于从当前工作区和知识库中查找相关内容/);
+    assert.match(composer, /title=\$\{indexRetrievalModeHint\(indexRetrievalMode\)\}/);
+    assert.match(composer, /option value="auto"[\s\S]*?title="每次发送消息前自动搜索索引/);
+    assert.match(composer, /option value="tool"[\s\S]*?title="不主动搜索/);
+    assert.match(composer, /option value="off"[\s\S]*?title="完全关闭本地索引/);
+    assert.match(launcher, /indexRetrievalMode === "off"[\s\S]*?semantic_search/);
+    assert.match(launcher, /querySemanticGroups/);
+    assert.match(launcher, /SEMANTIC_RETRIEVAL_CACHE_MAX = 100/);
+    assert.match(launcher, /retrieveSemanticContext\(text, retrievalHistory/);
+    assert.match(launcher, /restoreOriginalUserInput[\s\S]*?syncActiveSessionFromLoop/);
+    assert.match(launcher, /indexRetrievalMode,/);
+    assert.match(launcher, /let indexRetrievalMode = normalizeIndexRetrievalMode\(config\.indexRetrievalMode\)/);
+    assert.match(launcher, /cfg\.indexRetrievalMode = next[\s\S]*?writeConfig\(cfg, configPath\)/);
+    const resetConversation = launcher.slice(launcher.indexOf("async function resetActiveConversation"), launcher.indexOf("const SLASH_COMMAND_META"));
+    assert.doesNotMatch(resetConversation, /indexRetrievalMode = "tool"/);
+    assert.doesNotMatch(launcher, /indexRetrievalMode = normalizeIndexRetrievalMode\(meta\.indexRetrievalMode\)/);
+    assert.doesNotMatch(launcher, /indexRetrievalMode = normalizeIndexRetrievalMode\(sessionMeta\.indexRetrievalMode\)/);
+  });
+
+  test("全量检测所有已保存模型，并保留外部多模式和内部固定模式分支", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const server = readFileSync(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url), "utf8");
+    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
+    assert.match(chatPanel, /confirmProviderImport/);
+    assert.match(chatPanel, /testAllProviders/);
+    assert.match(chatPanel, /配置已更新，请重新检测全部模型/);
+    assert.match(chatPanel, /检测全部模型/);
+    assert.match(chatPanel, /setModelVerification\(pr\.modelVerification \?\? null\)/);
+    assert.doesNotMatch(chatPanel.slice(chatPanel.indexOf("const confirmProviderImport"), chatPanel.indexOf("const pickWorkspace")), /setShowModelPicker\(false\)/);
+    assert.match(chatPanel, /model\.testStatus/);
+    assert.match(chatPanel, /const allModels = \(providers \?\? \[\]\)\.flatMap/);
+    assert.match(chatPanel, /providerOptionLabel\(p\)/);
+    assert.match(app, /return `\$\{name\} · \$\{results\.join\(" · "\)\}`/);
+    const providerLabel = app.slice(app.indexOf("function providerOptionLabel"), app.indexOf("var CHAT_RENDER_STEP"));
+    assert.match(providerLabel, /model\.testStatus === "passed" \? `\$\{modelName\} ✓` : modelName/);
+    assert.doesNotMatch(providerLabel, /未检测|×/);
+    assert.match(chatPanel, /providerCaps\?\.presets\?\.length \?\? 0\) > 1/);
+    assert.match(chatPanel, /\$\{preset\}（固定）/);
+    assert.doesNotMatch(chatPanel, /selectProviderModel/);
+    assert.match(server, /rest\[0\] === "test"/);
+    assert.match(server, /testProviderModelCommunication/);
+    assert.match(server, /Math\.min\(2, jobs\.length\)/);
+    assert.match(server, /timeoutMs: 1e4/);
+    assert.match(server, /modelVerification = \{ dirty: true, reason: "provider-import"/);
+    assert.match(server, /delete model\.verification/);
+    assert.match(server, /activationPresetForModel/);
+    assert.doesNotMatch(server, /selectedModelId/);
   });
 
   test("长会话默认只渲染最近消息，并可继续加载和跳转历史", () => {

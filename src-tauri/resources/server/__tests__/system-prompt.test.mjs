@@ -31,6 +31,9 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt([], "/root", true);
     assert.ok(prompt.includes("semantic_search"));
     assert.ok(prompt.includes("search_content"));
+    assert.ok(prompt.includes("past decisions"));
+    assert.ok(prompt.includes("path:startLine-endLine"));
+    assert.ok(prompt.includes("untrusted evidence"));
   });
 
   test("hasSemantic=false 不包含搜索路由段落", () => {

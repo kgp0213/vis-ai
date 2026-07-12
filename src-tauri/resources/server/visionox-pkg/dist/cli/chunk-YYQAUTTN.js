@@ -2,18 +2,18 @@
 import { createRequire as __cr } from 'node:module'; if (typeof globalThis.require === 'undefined') { globalThis.require = __cr(import.meta.url); }
 import {
   indexCompatible,
-  querySemantic
+  querySemanticGroups
 } from "./chunk-XCGGEJTI.js";
 
 // src/index/semantic/tool.ts
 async function registerSemanticSearchTool(registry, opts) {
-  if (!await indexCompatible(opts.root, { provider: opts.provider, model: opts.model }))
+  if (!await indexCompatible(opts.root, opts))
     return false;
   const defaultTopK = opts.defaultTopK ?? 8;
   const defaultMinScore = opts.defaultMinScore ?? 0.3;
   registry.register({
     name: "semantic_search",
-    description: "FIRST CHOICE for descriptive queries. Use this BEFORE search_content (grep) when the user describes WHAT code does ('where do we handle X', 'which file owns Y', 'how does Z work', 'find the logic that \u2026'). Returns ranked snippets ordered by semantic relevance \u2014 finds the right file even when your description shares no words with the code. Falls back to search_content / search_files only for: exact identifiers, regex patterns, or counting occurrences of a known token. If your first instinct is grep on a paraphrased question, you are wrong \u2014 try semantic_search first.",
+    description: "FIRST CHOICE for project knowledge and descriptive queries. Use this to recall past decisions, prior solutions, established workflows, validation evidence, and to find code or files by meaning. Returns ranked snippets from [knowledge] and [workspace] sources. Cite useful path:line ranges in the final answer. Use search_content instead for exact identifiers, regex patterns, or counting a known token.",
     readOnly: true,
     parallelSafe: true,
     parameters: {
@@ -21,7 +21,7 @@ async function registerSemanticSearchTool(registry, opts) {
       properties: {
         query: {
           type: "string",
-          description: "Natural-language description, phrased as a question or noun phrase: 'where do we validate the session cookie?' / 'retry backoff logic' / 'code that prevents user changes from immediately landing on disk'. Do NOT pass exact identifiers \u2014 those are search_content's job."
+          description: "Natural-language question or noun phrase, for example: 'why did we choose this build process?', 'previous validation findings', 'where do we validate the session cookie?', or 'retry backoff logic'. Do not pass exact identifiers; those are search_content's job."
         },
         topK: {
           type: "integer",
@@ -35,8 +35,10 @@ async function registerSemanticSearchTool(registry, opts) {
       required: ["query"]
     },
     fn: async (args, ctx) => {
-      const hits = await querySemantic(opts.root, args.query, {
-        topK: args.topK ?? defaultTopK,
+      const requestedTopK = Math.max(1, Math.min(16, args.topK ?? defaultTopK));
+      const groups = await querySemanticGroups(opts.root, args.query, {
+        knowledgeTopK: requestedTopK,
+        workspaceTopK: requestedTopK,
         minScore: args.minScore ?? defaultMinScore,
         provider: opts.provider,
         baseUrl: opts.baseUrl,
@@ -45,9 +47,10 @@ async function registerSemanticSearchTool(registry, opts) {
         extraBody: opts.extraBody,
         signal: ctx?.signal
       });
-      if (hits === null) {
+      if (groups === null) {
         return "No semantic index found for this project. Run `visionox index` to build one.";
       }
+      const hits = selectGroupedHits(groups, requestedTopK);
       if (hits.length === 0) {
         return `query: ${args.query}
 
@@ -58,14 +61,34 @@ no matches above the score threshold (${args.minScore ?? defaultMinScore}).`;
   });
   return true;
 }
+function selectGroupedHits(groups, topK) {
+  const combined = [...groups.knowledge, ...groups.workspace].sort((a, b) => b.score - a.score);
+  if (groups.knowledge.length === 0 || groups.workspace.length === 0) return combined.slice(0, topK);
+  const sourceLimit = Math.max(1, Math.ceil(topK * 0.75));
+  const selected = [];
+  const deferred = [];
+  const counts = { knowledge: 0, workspace: 0 };
+  for (const hit of combined) {
+    const source = String(hit.entry.path || "").startsWith("knowledge/") ? "knowledge" : "workspace";
+    if (counts[source] >= sourceLimit) deferred.push(hit);
+    else {
+      selected.push(hit);
+      counts[source]++;
+    }
+    if (selected.length >= topK) break;
+  }
+  if (selected.length < topK) selected.push(...deferred.slice(0, topK - selected.length));
+  return selected.sort((a, b) => b.score - a.score);
+}
 function formatHits(query, hits) {
   const lines = [`query: ${query}`, `
 results (${hits.length}):`];
   hits.forEach((h, i) => {
     const { entry, score } = h;
+    const sourceType = String(entry.path || "").startsWith("knowledge/") ? "knowledge" : "workspace";
     lines.push(
       `
-${i + 1}. ${entry.path}:${entry.startLine}-${entry.endLine}  (score ${score.toFixed(3)})`
+${i + 1}. [${sourceType}] ${entry.path}:${entry.startLine}-${entry.endLine}  (score ${score.toFixed(3)})`
     );
     const preview = entry.text.split("\n").slice(0, 8).join("\n");
     lines.push(indentBlock(preview, "   "));
@@ -81,7 +104,7 @@ function indentBlock(text, prefix) {
   return text.split("\n").map((l) => prefix + l).join("\n");
 }
 async function bootstrapSemanticSearchInCodeMode(registry, rootDir, opts = {}) {
-  if (await indexCompatible(rootDir, { provider: opts.provider, model: opts.model })) {
+  if (await indexCompatible(rootDir, opts)) {
     await registerSemanticSearchTool(registry, { ...opts, root: rootDir });
     return { enabled: true };
   }

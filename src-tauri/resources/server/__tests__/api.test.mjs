@@ -145,6 +145,8 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(res.status, 200);
     assert.ok(res.json);
     assert.ok(res.json.model !== undefined);
+    assert.ok(res.json.activeProviderName !== undefined);
+    assert.ok(res.json.modelVerification !== undefined);
   });
 
   test("KaTeX 脚本和样式受保护，字体可由 CSS 直接加载", async () => {
@@ -447,6 +449,83 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.ok(res.json.appliesAt !== undefined);
   });
 
+  test("设置页凭据读取和保存都以当前 Provider 为准", async () => {
+    const before = JSON.parse(readFileSync(configPath, "utf8"));
+    writeConfig({
+      ...before,
+      apiKey: "legacy-key-should-not-be-used",
+      baseUrl: "https://legacy.invalid/v1",
+      providers: [
+        ...before.providers,
+        {
+          id: "other-provider",
+          name: "Other",
+          baseUrl: "https://other.test/v1",
+          apiKey: "other-provider-key",
+          models: [{ id: "other-model", presets: ["flash"], efforts: ["high"], maxContextLength: 32768 }],
+          defaultPreset: "flash",
+          defaultEffort: "high",
+        },
+      ],
+    });
+
+    const verified = await apiPost("/api/providers/test", {}, {
+      testProviderModel: async () => {},
+      syncProvider: async () => {},
+    });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.json.passed, 2);
+
+    const rejected = await apiPost("/api/settings", { apiKey: "too-short" });
+    assert.equal(rejected.status, 400);
+    const preserved = await apiGet("/api/providers");
+    assert.equal(preserved.json.modelVerification.dirty, false);
+    assert.equal(preserved.json.providers.flatMap((provider) => provider.models).every((model) => model.testStatus === "passed"), true);
+
+    const initial = await apiGet("/api/settings");
+    assert.equal(initial.status, 200);
+    assert.equal(initial.json.baseUrl, "http://localhost:11434/v1");
+    assert.equal(initial.json.credentialTarget.id, "test-provider");
+
+    let syncedProvider = null;
+    const saved = await apiPost("/api/settings", {
+      apiKey: "sk-updated-provider-key",
+      baseUrl: "http://localhost:12434/v1",
+    }, {
+      syncProvider: async (id) => { syncedProvider = id; },
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(syncedProvider, "test-provider");
+    assert.equal(saved.json.requiresModelTest, true);
+
+    const after = JSON.parse(readFileSync(configPath, "utf8"));
+    const active = after.providers.find((provider) => provider.id === "test-provider");
+    const other = after.providers.find((provider) => provider.id === "other-provider");
+    assert.equal(active.apiKey, "sk-updated-provider-key");
+    assert.equal(active.baseUrl, "http://localhost:12434/v1");
+    assert.equal(active.models[0].verification, undefined);
+    assert.equal(other.models[0].verification.ok, true);
+    assert.equal(after.modelVerification.dirty, true);
+    assert.equal(after.modelVerification.reason, "provider-credentials");
+    assert.equal(after.modelVerification.providerId, "test-provider");
+    assert.equal(after.apiKey, "legacy-key-should-not-be-used");
+
+    const listed = await apiGet("/api/providers");
+    assert.equal(listed.json.providers.find((provider) => provider.id === "test-provider").models[0].testStatus, "untested");
+    assert.equal(listed.json.providers.find((provider) => provider.id === "other-provider").models[0].testStatus, "passed");
+
+    let busySyncCalled = false;
+    const deferred = await apiPost("/api/settings", { apiKey: "sk-deferred-provider-key" }, {
+      isBusy: () => true,
+      syncProvider: async () => { busySyncCalled = true; },
+    });
+    assert.equal(deferred.status, 200);
+    assert.equal(deferred.json.credentialSync.deferred, true);
+    assert.equal(busySyncCalled, false);
+
+    writeConfig(before);
+  });
+
   test("POST /api/settings { editMode: 'yolo' } → 200", async () => {
     const res = await apiPost("/api/settings", { editMode: "yolo" });
     assert.equal(res.status, 200);
@@ -533,6 +612,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     });
     assert.equal(res.status, 200);
     assert.ok(res.json.ok);
+    assert.equal(res.json.requiresModelTest, true);
     assert.ok(res.json.count >= 2); // defaults/existing providers + new
   });
 
@@ -863,6 +943,128 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
   test("GET /api/health → 200", async () => {
     const res = await apiGet("/api/health");
     assert.equal(res.status, 200);
+    assert.match(res.json.semantic.path, /semantic[\\/]projects[\\/][a-f0-9]{64}$/);
+  });
+
+  test("一次检测覆盖所有服务商，限制双并发且只激活当前服务商的通过模型", async () => {
+    writeConfig({
+      preset: "auto",
+      reasoningEffort: "high",
+      activeProviderId: "checked-provider",
+      providers: [{
+        id: "checked-provider",
+        name: "Checked",
+        baseUrl: "https://models.test/v1",
+        apiKey: "checked-key",
+        models: [
+          { id: "model-pass", name: "Flash", presets: ["auto", "flash"], efforts: ["high"], maxContextLength: 32768 },
+          { id: "model-fail", name: "Pro", presets: ["pro"], efforts: ["high"], maxContextLength: 32768 },
+        ],
+        defaultPreset: "auto",
+        defaultEffort: "high",
+      }, {
+        id: "other-provider",
+        name: "Other",
+        baseUrl: "https://other.test/v1",
+        apiKey: "other-key",
+        models: [{ id: "other-model", name: "Other Model", presets: ["flash"], efforts: ["high"], maxContextLength: 32768 }],
+        defaultPreset: "flash",
+        defaultEffort: "high",
+      }],
+    });
+
+    let activatedProvider = null;
+    let activeTests = 0;
+    let peakTests = 0;
+    const tested = await apiPost("/api/providers/test", {}, {
+      testProviderModel: async (_provider, model) => {
+        activeTests += 1;
+        peakTests = Math.max(peakTests, activeTests);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        activeTests -= 1;
+        if (model.id === "model-fail") throw new Error("model unavailable");
+      },
+      syncProvider: async (id) => { activatedProvider = id; return { model: "model-pass", messageCount: 3 }; },
+    });
+    assert.equal(tested.status, 200);
+    assert.equal(tested.json.passed, 2);
+    assert.equal(tested.json.total, 3);
+    assert.equal(peakTests, 2);
+    assert.deepEqual(tested.json.results.map((item) => [item.modelId, item.ok]), [["model-pass", true], ["model-fail", false], ["other-model", true]]);
+    assert.equal(activatedProvider, "checked-provider");
+    assert.deepEqual(tested.json.activated, { providerId: "checked-provider", modelId: "model-pass", preset: "flash" });
+
+    const listed = await apiGet("/api/providers");
+    assert.equal(listed.json.modelVerification.dirty, false);
+    const checked = listed.json.providers.find((provider) => provider.id === "checked-provider");
+    assert.deepEqual(checked.modelTest, { passed: 1, failed: 1, tested: 2, total: 2 });
+    assert.equal(checked.models[0].testStatus, "passed");
+    assert.equal(checked.models[1].testStatus, "failed");
+    const other = listed.json.providers.find((provider) => provider.id === "other-provider");
+    assert.equal(other.models[0].testStatus, "passed");
+    const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.equal(cfg.activeProviderId, "checked-provider");
+    assert.equal(cfg.preset, "flash");
+    assert.equal("selectedModelId" in cfg.providers.find((provider) => provider.id === "checked-provider"), false);
+
+    const reimported = await apiPost("/api/providers/import", {
+      providers: [{ id: "checked-provider", name: "Checked updated" }],
+    });
+    assert.equal(reimported.status, 200);
+    assert.equal(reimported.json.requiresModelTest, true);
+    const invalidated = await apiGet("/api/providers");
+    assert.equal(invalidated.json.modelVerification.dirty, true);
+    assert.equal(invalidated.json.providers.flatMap((provider) => provider.models).every((model) => model.testStatus === "untested"), true);
+  });
+
+  test("内部单模型服务商检测后保持唯一 preset，不生成外部 DeepSeek 模式", async () => {
+    writeConfig({
+      preset: "auto",
+      reasoningEffort: "max",
+      activeProviderId: "internal-provider",
+      providers: [{
+        id: "internal-provider",
+        name: "Internal",
+        baseUrl: "http://intranet.test/v1",
+        apiKey: "internal-key",
+        models: [{ id: "internal-model", name: "Internal Model", presets: ["flash"], efforts: ["high"], maxContextLength: 81920 }],
+        defaultPreset: "flash",
+        defaultEffort: "high",
+      }],
+    });
+    const tested = await apiPost("/api/providers/test", {}, {
+      testProviderModel: async () => {},
+      syncProvider: async () => ({ model: "internal-model", messageCount: 2 }),
+    });
+    assert.equal(tested.status, 200);
+    assert.deepEqual(tested.json.activated, { providerId: "internal-provider", modelId: "internal-model", preset: "flash" });
+    const overview = await apiGet("/api/overview");
+    assert.deepEqual(overview.json.providerCapabilities.presets, ["flash"]);
+  });
+
+  test("索引召回模式 API 读取并更新当前会话模式", async () => {
+    const get = await apiGet("/api/index-retrieval-mode", {
+      getIndexRetrievalMode: () => ({ mode: "auto", semanticAvailable: true }),
+    });
+    assert.equal(get.status, 200);
+    assert.deepEqual(get.json, { mode: "auto", semanticAvailable: true });
+
+    let applied = null;
+    const post = await apiPost("/api/index-retrieval-mode", { mode: "off" }, {
+      setIndexRetrievalMode: (mode) => {
+        applied = mode;
+        return { ok: true, mode, semanticAvailable: true };
+      },
+    });
+    assert.equal(post.status, 200);
+    assert.equal(applied, "off");
+    assert.equal(post.json.mode, "off");
+
+    const rejected = await apiPost("/api/index-retrieval-mode", { mode: "invalid" }, {
+      setIndexRetrievalMode: () => ({ ok: false, error: "mode must be auto, tool, or off" }),
+    });
+    assert.equal(rejected.status, 409);
+    assert.match(rejected.json.error, /auto, tool, or off/);
   });
 
   test("未知 API 路径 → 404", async () => {

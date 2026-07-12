@@ -19384,7 +19384,10 @@ var en = {
     title: "Settings",
     loading: "loading settings\u2026",
     saved: "saved: {fields}",
-    sectionApi: "DeepSeek API",
+    sectionApi: "Current model service credentials",
+    credentialCurrent: "Current provider: {name}",
+    credentialsScope: "Maintains credentials for the active provider only. Import and verification remain in the model menu.",
+    credentialsRetest: "Credentials updated. Re-run all model checks from the model menu.",
     apiKey: "API key",
     notSet: "(not set)",
     replace: "replace",
@@ -19441,7 +19444,10 @@ var en = {
     langZhCn: "\u7B80\u4F53\u4E2D\u6587",
     sectionDev: "Developer",
     devMode: "Developer Mode",
-    devModeNote: "Show background server startup and runtime logs"
+    devModeNote: "Show background server startup and runtime logs",
+    devFollowing: "Following latest logs",
+    devNewLogs: "{count} new logs",
+    devBackToBottom: "Back to bottom"
   },
   chat: {
     modeMirror: "mirror",
@@ -19590,7 +19596,29 @@ var en = {
     allUp: "all up",
     yoloWarning: "all prompts bypassed",
     checking: "checking",
-    latest: "latest"
+    latest: "latest",
+    workStatus: "Current work status",
+    workspace: "workspace",
+    provider: "provider",
+    runtimeModel: "runtime model",
+    presetMode: "preset / mode",
+    workScene: "work scene",
+    semanticReady: "available",
+    semanticMissing: "not built",
+    attention: "Needs attention",
+    retestModels: "Model configuration changed; run model checks again.",
+    modelDrift: "The runtime model differs from the configured model.",
+    pendingEdits: "{count} edits are waiting for confirmation.",
+    missingIndex: "No semantic index is available for this workspace.",
+    checkModels: "Check now",
+    checkingModels: "Checking...",
+    modelCheckDone: "Model check complete: {passed}/{total} available.",
+    modelCheckFailed: "Model check failed: {error}",
+    openIndex: "Open index",
+    budgetWarning: "Session budget is {pct}% used.",
+    sessionAndPlans: "Session and plan",
+    localSystem: "Local and system",
+    userDataPaths: "User data paths"
   },
   usage: {
     loading: "loading usage\u2026",
@@ -19980,6 +20008,13 @@ var en = {
     sessionCleanupSemanticUncertain: "Review uncertain items",
     sessionCleanupSemanticDeep: "Deep review",
     sessionCleanupHint: "Runs as a background maintenance task and does not create a chat session. Destructive actions move sessions to the local trash first.",
+    sessionCleanupPromptAddendum: "Additional organization requirements",
+    knowledgeEnabled: "Extract detailed project knowledge",
+    knowledgeLookbackDays: "Topic merge lookback (days)",
+    knowledgeAutoIndex: "Incrementally update embeddings after knowledge changes",
+    knowledgeAutoIndexUnavailable: "Save an embedding API key first",
+    knowledgeDocuments: "Knowledge documents",
+    knowledgeSessions: "Knowledge sessions",
     cleanupCandidates: "Suggestions",
     cleanupDeleted: "Moved to trash",
     cleanupArchive: "Archive",
@@ -20057,6 +20092,7 @@ var en = {
     excludePatterns: "exclude patterns",
     glob: "glob",
     respectGitignore: "respect .gitignore",
+    includeKnowledgeDocs: "include knowledge directory Markdown",
     maxFileBytes: "max file bytes",
     skipLarger: "skip files larger than ~{size} MiB",
     preview: "Preview",
@@ -20073,6 +20109,7 @@ var en = {
     phaseEmbed: "embedding chunks",
     phaseWrite: "writing index",
     phaseDone: "done",
+    phasePartial: "partial",
     phaseError: "error",
     phaseCancelled: "cancelled",
     setupFailed: "setup failed",
@@ -20264,7 +20301,10 @@ var zhCN = {
     title: "\u8BBE\u7F6E",
     loading: "\u52A0\u8F7D\u8BBE\u7F6E\u2026",
     saved: "\u5DF2\u4FDD\u5B58\uFF1A{fields}",
-    sectionApi: "DeepSeek API",
+    sectionApi: "\u5F53\u524D\u6A21\u578B\u670D\u52A1\u51ED\u636E",
+    credentialCurrent: "\u5F53\u524D\u670D\u52A1\uFF1A{name}",
+    credentialsScope: "\u6B64\u5904\u53EA\u7EF4\u62A4\u5F53\u524D\u670D\u52A1\u7684\u5BC6\u94A5\u548C API \u5730\u5740\uFF1B\u5BFC\u5165\u3001\u9009\u62E9\u548C\u6A21\u578B\u68C0\u6D4B\u4ECD\u5728\u6A21\u578B\u83DC\u5355\u4E2D\u5B8C\u6210\u3002",
+    credentialsRetest: "\u51ED\u636E\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5728\u6A21\u578B\u83DC\u5355\u4E2D\u91CD\u65B0\u68C0\u6D4B\u5168\u90E8\u6A21\u578B\u3002",
     apiKey: "API \u5BC6\u94A5",
     notSet: "\uFF08\u672A\u8BBE\u7F6E\uFF09",
     replace: "\u66FF\u6362",
@@ -20321,7 +20361,10 @@ var zhCN = {
     langZhCn: "\u7B80\u4F53\u4E2D\u6587",
     sectionDev: "\u5F00\u53D1\u8005",
     devMode: "\u5F00\u53D1\u8005\u6A21\u5F0F",
-    devModeNote: "\u663E\u793A\u540E\u53F0\u670D\u52A1\u5668\u542F\u52A8\u548C\u8FD0\u884C\u65F6\u65E5\u5FD7"
+    devModeNote: "\u663E\u793A\u540E\u53F0\u670D\u52A1\u5668\u542F\u52A8\u548C\u8FD0\u884C\u65F6\u65E5\u5FD7",
+    devFollowing: "\u6B63\u5728\u8DDF\u968F\u6700\u65B0\u65E5\u5FD7",
+    devNewLogs: "{count} \u6761\u65B0\u65E5\u5FD7",
+    devBackToBottom: "\u56DE\u5230\u5E95\u90E8"
   },
   chat: {
     modeMirror: "\u955C\u50CF",
@@ -20508,7 +20551,29 @@ var zhCN = {
     allUp: "\u5168\u90E8\u5728\u7EBF",
     yoloWarning: "\u6240\u6709\u63D0\u793A\u88AB\u7ED5\u8FC7",
     checking: "\u68C0\u67E5\u4E2D",
-    latest: "\u6700\u65B0"
+    latest: "\u6700\u65B0",
+    workStatus: "\u5F53\u524D\u5DE5\u4F5C\u72B6\u6001",
+    workspace: "\u5DE5\u4F5C\u533A",
+    provider: "\u6A21\u578B\u670D\u52A1",
+    runtimeModel: "\u5B9E\u9645\u6A21\u578B",
+    presetMode: "\u9884\u8BBE / \u6A21\u5F0F",
+    workScene: "\u5DE5\u4F5C\u573A\u666F",
+    semanticReady: "\u53EF\u7528",
+    semanticMissing: "\u672A\u6784\u5EFA",
+    attention: "\u9700\u8981\u5904\u7406",
+    retestModels: "\u6A21\u578B\u914D\u7F6E\u5DF2\u53D8\u66F4\uFF0C\u8BF7\u91CD\u65B0\u6267\u884C\u6A21\u578B\u68C0\u6D4B\u3002",
+    modelDrift: "\u5F53\u524D\u8FD0\u884C\u6A21\u578B\u4E0E\u914D\u7F6E\u6A21\u578B\u4E0D\u4E00\u81F4\u3002",
+    pendingEdits: "\u6709 {count} \u9879\u7F16\u8F91\u7B49\u5F85\u786E\u8BA4\u3002",
+    missingIndex: "\u5F53\u524D\u5DE5\u4F5C\u533A\u5C1A\u65E0\u53EF\u7528\u7684\u8BED\u4E49\u7D22\u5F15\u3002",
+    checkModels: "\u7ACB\u5373\u68C0\u6D4B",
+    checkingModels: "\u68C0\u6D4B\u4E2D...",
+    modelCheckDone: "\u6A21\u578B\u68C0\u6D4B\u5B8C\u6210\uFF1A{passed}/{total} \u53EF\u7528\u3002",
+    modelCheckFailed: "\u6A21\u578B\u68C0\u6D4B\u5931\u8D25\uFF1A{error}",
+    openIndex: "\u524D\u5F80\u7D22\u5F15",
+    budgetWarning: "\u5F53\u524D\u4F1A\u8BDD\u9884\u7B97\u5DF2\u4F7F\u7528 {pct}%\u3002",
+    sessionAndPlans: "\u4F1A\u8BDD\u4E0E\u8BA1\u5212",
+    localSystem: "\u672C\u5730\u4E0E\u7CFB\u7EDF",
+    userDataPaths: "\u7528\u6237\u6570\u636E\u8DEF\u5F84"
   },
   usage: {
     loading: "\u52A0\u8F7D\u7528\u91CF\u2026",
@@ -20898,6 +20963,13 @@ var zhCN = {
     sessionCleanupSemanticUncertain: "\u4EC5\u590D\u6838\u4E0D\u786E\u5B9A\u9879",
     sessionCleanupSemanticDeep: "\u6DF1\u5EA6\u590D\u6838",
     sessionCleanupHint: "\u4EE5\u540E\u53F0\u7EF4\u62A4\u4EFB\u52A1\u8FD0\u884C\uFF0C\u4E0D\u4F1A\u65B0\u589E\u666E\u901A\u5BF9\u8BDD\u8BB0\u5F55\uFF1B\u7834\u574F\u6027\u64CD\u4F5C\u4F1A\u5148\u79FB\u5165\u672C\u5730\u56DE\u6536\u7AD9\u3002",
+    sessionCleanupPromptAddendum: "\u8865\u5145\u6574\u7406\u8981\u6C42",
+    knowledgeEnabled: "\u63D0\u70BC\u8BE6\u5B9E\u7684\u9879\u76EE\u77E5\u8BC6",
+    knowledgeLookbackDays: "\u4E3B\u9898\u5408\u5E76\u56DE\u6EAF\u5929\u6570",
+    knowledgeAutoIndex: "\u77E5\u8BC6\u66F4\u65B0\u540E\u589E\u91CF\u66F4\u65B0 embedding",
+    knowledgeAutoIndexUnavailable: "\u8BF7\u5148\u4FDD\u5B58 embedding API Key",
+    knowledgeDocuments: "\u77E5\u8BC6\u6587\u6863",
+    knowledgeSessions: "\u77E5\u8BC6\u4F1A\u8BDD",
     cleanupCandidates: "\u6574\u7406\u5EFA\u8BAE",
     cleanupDeleted: "\u79FB\u5165\u56DE\u6536\u7AD9",
     cleanupArchive: "\u5EFA\u8BAE\u5F52\u6863",
@@ -20975,6 +21047,7 @@ var zhCN = {
     excludePatterns: "\u6392\u9664\u6A21\u5F0F",
     glob: "glob",
     respectGitignore: "\u9075\u5FAA .gitignore",
+    includeKnowledgeDocs: "\u5305\u542B knowledge \u76EE\u5F55\u4E2D\u7684 Markdown",
     maxFileBytes: "\u6700\u5927\u6587\u4EF6\u5B57\u8282\u6570",
     skipLarger: "\u8DF3\u8FC7\u5927\u4E8E ~{size} MiB \u7684\u6587\u4EF6",
     preview: "\u9884\u89C8",
@@ -20991,6 +21064,7 @@ var zhCN = {
     phaseEmbed: "\u5D4C\u5165\u5206\u5757",
     phaseWrite: "\u5199\u5165\u7D22\u5F15",
     phaseDone: "\u5B8C\u6210",
+    phasePartial: "\u90E8\u5206\u5B8C\u6210",
     phaseError: "\u9519\u8BEF",
     phaseCancelled: "\u5DF2\u505C\u6B62",
     setupFailed: "\u521D\u59CB\u5316\u5931\u8D25",
@@ -24661,6 +24735,38 @@ function fmtRelativeTime(iso) {
 // dashboard/src/panels/chat.ts
 var CHAT_DRAFT_KEY = "visionox.chatDraft.v1";
 var CHAT_INITIAL_RENDER_COUNT = 30;
+function parseProviderImportJson(text) {
+  const parsed = JSON.parse(String(text || ""));
+  if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) throw new Error("JSON 必须包含非空 providers 数组");
+  for (const provider of parsed.providers) {
+    if (!provider?.id || typeof provider.id !== "string") throw new Error("每个 provider 都必须包含 id");
+    if (!Array.isArray(provider.models) || provider.models.length === 0) throw new Error(`provider ${provider.id} 必须包含模型`);
+    for (const model of provider.models) {
+      if (!model?.id || typeof model.id !== "string") throw new Error(`provider ${provider.id} 中存在无 id 的模型`);
+      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) throw new Error(`模型 ${model.id} 必须声明有效的 maxContextLength`);
+    }
+  }
+  return parsed;
+}
+function providerImportPreview(config) {
+  return (config?.providers ?? []).map((provider) => {
+    const label = provider.name ? `${provider.name} (${provider.id})` : provider.id;
+    const models = (provider.models ?? []).map((model) => model.name ?? model.id).join(", ") || "\u672A\u5305\u542B";
+    const baseUrl = provider.baseUrl || "\u672A\u5305\u542B";
+    const apiKey = provider.apiKey ? "********\uFF08\u5DF2\u9690\u85CF\uFF09" : "\u672A\u5305\u542B";
+    return `${label}\n  URL: ${baseUrl}\n  API Key: ${apiKey}\n  \u6A21\u578B: ${models}`;
+  }).join("\n\n");
+}
+function providerOptionLabel(provider) {
+  const name = provider?.name ?? provider?.id ?? "Provider";
+  const models = Array.isArray(provider?.models) ? provider.models : [];
+  if (models.length === 0) return name;
+  const results = models.map((model) => {
+    const modelName = model.name ?? model.id ?? "model";
+    return model.testStatus === "passed" ? `${modelName} ✓` : modelName;
+  });
+  return `${name} · ${results.join(" · ")}`;
+}
 var CHAT_RENDER_STEP = 30;
 var CHAT_MESSAGE_PAGE_SIZE = 60;
 var CHAT_TOP_LOAD_THRESHOLD = 96;
@@ -25161,6 +25267,11 @@ function FilesPanel() {
 }
 function ChatPanel() {
   useLang();
+  function indexRetrievalModeHint(mode) {
+    if (mode === "auto") return "自动召回：每次发送消息前自动搜索本地索引，并把最相关内容加入本轮上下文。";
+    if (mode === "tool") return "按需搜索：不会主动搜索；模型判断有必要时，可以调用语义搜索工具。";
+    return "不使用：本轮对话不自动召回，也不向模型提供本地索引搜索工具。";
+  }
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
   const [activeTool, setActiveTool] = d2(null);
@@ -25195,6 +25306,7 @@ const [modes, setModesLocal] = d2(null);
 const [activeMode, setActiveModeLocal] = d2(null);
 const [eccRules, setEccRulesLocal] = d2(null);
 const [providers, setProviders] = d2(null);
+const [modelVerification, setModelVerification] = d2(null);
 const [activeProviderId, setActiveProviderId] = d2(null);
 const [providerCaps, setProviderCaps] = d2(null);
   const [stats, setStats] = d2(null);
@@ -25212,6 +25324,10 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [todoExpanded, setTodoExpanded] = d2(false);
   const [planContinuation, setPlanContinuation] = d2(null);
   const [semanticIndex, setSemanticIndex] = d2(null);
+  const [indexRetrievalMode, setIndexRetrievalMode] = d2("tool");
+  const [semanticRetrievalSources, setSemanticRetrievalSources] = d2([]);
+  const [semanticRetrievalStatus, setSemanticRetrievalStatus] = d2("idle");
+  const [showRetrievalSources, setShowRetrievalSources] = d2(false);
   const [slashCommands, setSlashCommands] = d2([]);
   const [popoverKind, setPopoverKind] = d2(null);
   const [popoverItems, setPopoverItems] = d2([]);
@@ -25244,6 +25360,23 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [showWsPicker, setShowWsPicker] = d2(false);
   const [showSkillPicker, setShowSkillPicker] = d2(false);
   const [showModelPicker, setShowModelPicker] = d2(false);
+  const [modelNotice, setModelNotice] = d2(null);
+  const modelNoticeTimerRef = A2(null);
+  const pushModelNotice = q2((text, kind = "info", ttl = 3e3) => {
+    if (modelNoticeTimerRef.current !== null) clearTimeout(modelNoticeTimerRef.current);
+    setModelNotice({ text, kind });
+    modelNoticeTimerRef.current = ttl > 0 ? setTimeout(() => {
+      modelNoticeTimerRef.current = null;
+      setModelNotice(null);
+    }, ttl) : null;
+  }, []);
+  y2(() => () => {
+    if (modelNoticeTimerRef.current !== null) clearTimeout(modelNoticeTimerRef.current);
+  }, []);
+  const [providerImportDraft, setProviderImportDraft] = d2(null);
+  const [providerImportFileName, setProviderImportFileName] = d2("");
+  const [providerImportError, setProviderImportError] = d2(null);
+  const [providerTesting, setProviderTesting] = d2(false);
   const [skillList, setSkillList] = d2([]);
   const [pendingImages, setPendingImages] = d2([]);
   const [visibleMessageCount, setVisibleMessageCount] = d2(CHAT_INITIAL_RENDER_COUNT);
@@ -25519,6 +25652,11 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (!cancelled) setSlashCommands(r3.commands);
       } catch {
       }
+      try {
+        const retrieval = await api("/index-retrieval-mode");
+        if (!cancelled) setIndexRetrievalMode(retrieval.mode ?? "tool");
+      } catch {
+      }
     })();
     return () => {
       cancelled = true;
@@ -25554,17 +25692,33 @@ const [providerCaps, setProviderCaps] = d2(null);
       setModal(m3.modal ?? null);
     } catch {
     }
+    try {
+      const retrieval = await api("/index-retrieval-mode");
+      setIndexRetrievalMode(retrieval.mode ?? "tool");
+    } catch {
+    }
   }, [cancelStreamingRaf]);
   y2(() => {
     const onDash = (dash) => {
       if (dash.kind === "ping") return;
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
+        if (!dash.busy) setSemanticRetrievalStatus((current) => current === "running" ? "idle" : current);
+        return;
+      }
+      if (dash.kind === "semantic-retrieval") {
+        setSemanticRetrievalSources(Array.isArray(dash.sources) ? dash.sources : []);
+        setSemanticRetrievalStatus(dash.status ?? (dash.sources?.length ? "completed" : "empty"));
         return;
       }
       if (dash.kind === "operation-change") {
         setOperation(dash.operation ?? null);
-        if (dash.operation?.state === "cancelled") showToast(t4("chat.stopComplete"), "info");
+        if (dash.operation?.state === "cancelled") {
+          setSemanticRetrievalSources([]);
+          setSemanticRetrievalStatus("idle");
+          setShowRetrievalSources(false);
+          showToast(t4("chat.stopComplete"), "info");
+        }
         void refreshBackgroundJobs();
         return;
       }
@@ -25573,6 +25727,9 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "user") {
+        setSemanticRetrievalSources([]);
+        setSemanticRetrievalStatus("running");
+        setShowRetrievalSources(false);
         setTodos((current) => current.length > 0 && current.every((todo) => todo.status === "completed") ? [] : current);
         setPlanContinuation(null);
         preserveVisibleHistoryOnAppend();
@@ -25659,6 +25816,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "messages-reset") {
+        setSemanticRetrievalSources([]);
+        setSemanticRetrievalStatus("idle");
+        setShowRetrievalSources(false);
+        api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(retrieval.mode ?? "tool")).catch(() => {});
         setMessages(dash.messages.map((m) => ({
           id: m.id || `hist-${Math.random()}`,
           role: m.role,
@@ -25679,15 +25840,22 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "config-changed") {
-        api("/overview").then((o3) => {
-          setStats(o3.stats ?? null);
-          setOverviewModel(o3.model ?? null);
-          setPresetLocal(o3.preset ?? null);
-          setEffortLocal(o3.reasoningEffort ?? null);
-          setEditModeLocal(o3.editMode ?? null);
-          setActiveProviderId(o3.activeProviderId ?? null);
-          setProviderCaps(o3.providerCapabilities ?? null);
-        }).catch(() => {});
+        Promise.allSettled([api("/overview"), api("/providers")]).then(([overviewResult, providersResult]) => {
+          if (overviewResult.status === "fulfilled") {
+            const o3 = overviewResult.value;
+            setStats(o3.stats ?? null);
+            setOverviewModel(o3.model ?? null);
+            setPresetLocal(o3.preset ?? null);
+            setEffortLocal(o3.reasoningEffort ?? null);
+            setEditModeLocal(o3.editMode ?? null);
+            setActiveProviderId(o3.activeProviderId ?? null);
+            setProviderCaps(o3.providerCapabilities ?? null);
+          }
+          if (providersResult.status === "fulfilled") {
+            setProviders(providersResult.value.providers ?? []);
+            setModelVerification(providersResult.value.modelVerification ?? null);
+          }
+        });
         return;
       }
       if (dash.kind === "todo-update") {
@@ -26028,6 +26196,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (!idle) throw new Error(t4("chat.stopTimeout"));
       }
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
+      const retrieval = await api("/index-retrieval-mode").catch(() => ({ mode: "tool" }));
+      setIndexRetrievalMode(retrieval.mode ?? "tool");
+      setSemanticRetrievalSources([]);
+      setSemanticRetrievalStatus("idle");
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
@@ -26059,6 +26231,27 @@ const [providerCaps, setProviderCaps] = d2(null);
       setError(t4("chat.newFailed", { error: err.message }));
     }
   }, [busy, messages.length, draftKey, confirmQueuedReset, waitForIdle, setChatInput]);
+  const changeIndexRetrievalMode = q2(async (event) => {
+    const next = event.target.value;
+    try {
+      const result = await api("/index-retrieval-mode", { method: "POST", body: { mode: next } });
+      setIndexRetrievalMode(result.mode ?? next);
+      setSemanticRetrievalSources([]);
+      setSemanticRetrievalStatus("idle");
+      setShowRetrievalSources(false);
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(null), 3e3);
+    }
+  }, []);
+  const previewRetrievedSource = q2(async (source) => {
+    if (!workspaceDir || !source?.path) return;
+    try {
+      await showFileArtifactPreview({ path: `${workspaceDir}/${source.path}` });
+    } catch (err) {
+      showToast(err.message || "索引来源预览失败", "error", 5e3);
+    }
+  }, [workspaceDir]);
   const clearScrollback = q2(async () => {
     if (!confirmQueuedReset()) return;
     try {
@@ -26531,7 +26724,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (!providers) {
           try {
             const pr = await api("/providers");
-            if (!cancelled) setProviders(pr.providers ?? []);
+            if (!cancelled) {
+              setProviders(pr.providers ?? []);
+              setModelVerification(pr.modelVerification ?? null);
+            }
           } catch {}
         }
         try {
@@ -26587,6 +26783,8 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, []);
   const setSetting = q2(async (key, value) => {
+    const modelMenuSetting = key === "preset" || key === "reasoningEffort" || key === "model";
+    if (modelMenuSetting) pushModelNotice("正在应用模型设置...", "info", 0);
     if (key === "preset") setPresetLocal(value);
     if (key === "reasoningEffort") setEffortLocal(value);
     if (key === "mode") setModeLocal(value);
@@ -26597,9 +26795,13 @@ const [providerCaps, setProviderCaps] = d2(null);
         const switched = updated.modelSwitch;
         const count = Number.isFinite(switched.messageCount) ? switched.messageCount : 0;
         const adaptation = switched.contextStatus?.needsCompaction ? "，发送下一条消息前将自动整理历史" : "";
-        showToast(switched.deferred
+        pushModelNotice(switched.deferred
           ? `已选择 ${switched.model}，将在当前回答结束后切换，保留 ${count} 条上下文${adaptation}`
-          : `已切换到 ${switched.model}，保留 ${count} 条上下文${adaptation}`, "info");
+          : `✓ 已切换到 ${switched.model}，保留 ${count} 条上下文${adaptation}`, "success");
+      } else if (key === "preset") {
+        pushModelNotice(`✓ 已选择 ${value} 模式`, "success");
+      } else if (key === "reasoningEffort") {
+        pushModelNotice(`✓ 推理强度已设为 ${value}`, "success");
       }
       try {
         const o3 = await api("/overview");
@@ -26609,7 +26811,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         setEffortLocal(o3.reasoningEffort ?? null);
       } catch {}
     } catch (err) {
-      setError(`${key} switch failed: ${err.message}`);
+      if (modelMenuSetting) pushModelNotice(`切换失败：${err.message}`, "error", 5e3);
+      else setError(`${key} switch failed: ${err.message}`);
       try {
         const o3 = await api("/overview");
         setPresetLocal(o3.preset ?? null);
@@ -26621,8 +26824,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       } catch {
       }
     }
-  }, []);
+  }, [pushModelNotice]);
   const switchProvider = q2(async (id) => {
+    pushModelNotice("正在切换模型服务...", "info", 0);
     try {
       const switched = await api("/providers/active", { method: "POST", body: { id } });
       const o3 = await api("/overview");
@@ -26633,16 +26837,77 @@ const [providerCaps, setProviderCaps] = d2(null);
       try {
         const pr = await api("/providers");
         setProviders(pr.providers ?? []);
+        setModelVerification(pr.modelVerification ?? null);
       } catch {}
       const pn = (providers ?? []).find((p) => p.id === id)?.name ?? id;
       const count = switched?.modelSwitch?.messageCount;
-      showToast(Number.isFinite(count)
-        ? `已切换到 ${pn}，保留 ${count} 条上下文`
-        : "已切换到 " + pn, "info");
+      pushModelNotice(Number.isFinite(count)
+        ? `✓ 已切换到 ${pn}，保留 ${count} 条上下文`
+        : "✓ 已切换到 " + pn, "success");
     } catch (err) {
-      setError("provider switch failed: " + err.message);
+      pushModelNotice("切换失败：" + err.message, "error", 5e3);
     }
-  }, [providers]);
+  }, [providers, pushModelNotice]);
+  const loadProviderImportFile = q2(async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const draft = parseProviderImportJson(await file.text());
+      setProviderImportDraft(draft);
+      setProviderImportFileName(file.name);
+      setProviderImportError(null);
+    } catch (err) {
+      setProviderImportDraft(null);
+      setProviderImportFileName(file.name);
+      setProviderImportError(err.message);
+    }
+  }, []);
+  const testAllProviders = q2(async () => {
+    if (!(providers ?? []).some((provider) => (provider.models ?? []).length > 0) || providerTesting) return;
+    setProviderTesting(true);
+    pushModelNotice("正在检测全部模型...", "info", 0);
+    try {
+      const tested = await api("/providers/test", { method: "POST", body: {} });
+      const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
+      setProviders(pr.providers ?? []);
+      setModelVerification(pr.modelVerification ?? null);
+      setActiveProviderId(overview.activeProviderId ?? null);
+      setProviderCaps(overview.providerCapabilities ?? null);
+      setPresetLocal(overview.preset ?? null);
+      setEffortLocal(overview.reasoningEffort ?? null);
+      setOverviewModel(overview.model ?? null);
+      pushModelNotice(tested.activated ? `✓ 检测完成：${tested.passed}/${tested.total} 可用，已切换到 ${tested.activated.modelId}` : `检测完成：${tested.passed}/${tested.total} 可用`, tested.passed > 0 ? "success" : "error", tested.passed > 0 ? 3e3 : 5e3);
+    } catch (err) {
+      pushModelNotice("模型检测失败：" + err.message, "error", 5e3);
+    } finally {
+      setProviderTesting(false);
+    }
+  }, [providers, providerTesting, pushModelNotice]);
+  const confirmProviderImport = q2(async () => {
+    if (!providerImportDraft) return;
+    pushModelNotice("正在导入模型配置...", "info", 0);
+    try {
+      const imported = await api("/providers/import", {
+        method: "POST",
+        body: providerImportDraft
+      });
+      const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
+      setProviders(pr.providers ?? []);
+      setModelVerification(pr.modelVerification ?? null);
+      setActiveProviderId(overview.activeProviderId ?? null);
+      setProviderCaps(overview.providerCapabilities ?? null);
+      setPresetLocal(overview.preset ?? null);
+      setEffortLocal(overview.reasoningEffort ?? null);
+      setOverviewModel(overview.model ?? null);
+      setProviderImportDraft(null);
+      setProviderImportFileName("");
+      setProviderImportError(null);
+      pushModelNotice("✓ 配置导入成功，请检测全部模型后使用", "success", 5e3);
+    } catch (err) {
+      setProviderImportError(err.message);
+      pushModelNotice("导入失败：" + err.message, "error", 5e3);
+    }
+  }, [providerImportDraft, pushModelNotice]);
   const pickWorkspace = q2(async (dir) => {
     setShowWsPicker(false);
     try {
@@ -26885,7 +27150,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               style="flex:1"
               rows="4"
             ></textarea>
-            <div style="display:flex;align-items:center;position:relative;flex-shrink:0;margin:0;gap:12px">
+            <div style="display:flex;align-items:center;position:relative;flex-wrap:wrap;min-width:0;margin:0;column-gap:10px;row-gap:5px">
               <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { loadChatSkills().catch(() => {}); } }}>🔧 技能</span>
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
@@ -26911,13 +27176,32 @@ const [providerCaps, setProviderCaps] = d2(null);
               ` : null}
               <span class="composer-chip" style="font-size:13px;padding:2px 10px" onClick=${() => { setShowModelPicker(!showModelPicker); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</span>
               ${showModelPicker ? html4`
-                <div class="popover" style="position:absolute;bottom:100%;left:0;width:260px;z-index:10">
+                <div class="popover" style="position:absolute;bottom:100%;left:0;width:360px;max-height:560px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择模型</div>
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
                     <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">服务商</label>
-                    <select style="width:100%;font-size:12px;padding:4px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-default);color:var(--text-primary);" onChange=${(e3) => { switchProvider(e3.target.value); }}>
-                      ${providers.map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${p.name}</option>`)}
-                    </select>
+                    <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+                      <select style="flex:1;min-width:0;font-size:12px;padding:4px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-default);color:var(--text-primary);" onChange=${(e3) => { switchProvider(e3.target.value); }}>
+                        ${(providers ?? []).map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${providerOptionLabel(p)}</option>`)}
+                      </select>
+                      <button disabled=${!(providers ?? []).some((provider) => (provider.models ?? []).length > 0) || providerTesting || busy} style="padding:4px 8px;font-size:11px;white-space:nowrap;border:1px solid var(--border-default);border-radius:4px;background:var(--surface-default);color:var(--text-primary);cursor:pointer;" onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+                    </div>
+                    <div role="status" aria-live="polite" style="min-height:18px;margin-top:5px;font-size:11px;line-height:18px;overflow-wrap:anywhere;color:${modelNotice?.kind === 'error' ? 'var(--c-err)' : modelNotice?.kind === 'success' ? 'var(--c-ok)' : 'var(--fg-3)'};">${modelNotice?.text ?? ""}</div>
+                    ${(() => {
+                      if (modelVerification?.dirty) {
+                        return html4`<div style="font-size:11px;margin-top:6px;color:var(--c-warn);">配置已更新，请重新检测全部模型</div>`;
+                      }
+                      const allModels = (providers ?? []).flatMap((provider) => (provider.models ?? []).map((model) => ({ provider, model })));
+                      const testedModels = allModels.filter(({ model }) => model.testStatus !== "untested");
+                      if (testedModels.length === 0) return null;
+                      const passed = allModels.filter(({ model }) => model.testStatus === "passed").length;
+                      const failedModels = allModels.filter(({ model }) => model.testStatus === "failed");
+                      return html4`
+                        <div title=${failedModels.map(({ provider, model }) => `${provider.name ?? provider.id} / ${model.name ?? model.id}: ${model.testError ?? "检测失败"}`).join("\n")} style="display:flex;align-items:center;gap:5px;font-size:11px;margin-top:5px;color:var(--fg-3)">
+                          <span>已通过 ${passed}/${allModels.length}</span>
+                        </div>
+                      `;
+                    })()}
                   </div>
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
                     <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模式</label>
@@ -26936,13 +27220,14 @@ const [providerCaps, setProviderCaps] = d2(null);
                     ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
                   </div>
                   <div style="padding:8px;">
-                    <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none;" onChange=${async (e3) => { const file = e3.target.files?.[0]; if (!file) return; try { const text = await file.text(); document.getElementById('provider-import-json').value = text; document.getElementById('provider-import-file-name').textContent = file.name; } catch (err) { setError('读取文件失败: ' + err.message); } }} />
+                    <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none;" onChange=${loadProviderImportFile} />
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                       <button style="padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${() => { const inp = document.getElementById('provider-import-file'); inp.value = ''; inp.click(); }}>选择 JSON 文件</button>
-                      <span id="provider-import-file-name" style="font-size:11px;color:var(--text-secondary);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                      <span style="font-size:11px;color:var(--text-secondary);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${providerImportFileName}</span>
                     </div>
-                    <textarea id="provider-import-json" placeholder="已选文件内容预览..." readonly style="width:100%;height:60px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
-                    <button style="margin-top:6px;padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${async () => { const ta = document.getElementById('provider-import-json'); try { const body = JSON.parse(ta.value || '{}'); if (!body.providers || !Array.isArray(body.providers)) throw new Error('JSON 必须包含 providers 数组'); const r = await api('/providers/import', { method: 'POST', body }); if (!r.ok) throw new Error('导入失败'); const pr = await api('/providers'); setProviders(pr.providers ?? []); ta.value = ''; document.getElementById('provider-import-file-name').textContent = ''; setShowModelPicker(false); showToast('provider 导入成功', 'info'); } catch (err) { setError('provider 导入失败: ' + err.message); } }}>确认导入</button>
+                    <textarea value=${providerImportDraft ? providerImportPreview(providerImportDraft) : ""} placeholder="已选配置摘要..." readonly style="width:100%;height:76px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
+                    ${providerImportError ? html4`<div style="font-size:11px;color:var(--c-err);margin-top:5px;overflow-wrap:anywhere;">${providerImportError}</div>` : null}
+                    <button disabled=${!providerImportDraft || busy} style="margin-top:6px;padding:4px 10px;font-size:11px;border:none;border-radius:4px;background:rgb(138,170,122);color:rgb(12,13,16);cursor:pointer;" onClick=${confirmProviderImport}>确认导入</button>
                   </div>
                 </div>
               ` : null}
@@ -26959,7 +27244,34 @@ const [providerCaps, setProviderCaps] = d2(null);
                   `)}
                 </div>
               ` : null}
-              ${(showSkillPicker || showWsPicker || showModelPicker || showBackgroundJobs) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowBackgroundJobs(false); }}></div>` : null}
+              <label class="composer-chip" style="display:flex;align-items:center;gap:8px;font-size:12px;padding:2px 6px 2px 9px">
+                <span title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。" style="padding-right:8px;border-right:1px solid var(--border-default)">索引</span>
+                <select title=${indexRetrievalModeHint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode} style="min-width:88px;max-width:104px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-input);color:inherit;font-size:12px;line-height:18px;padding:2px 5px;cursor:pointer">
+                  <option value="auto" title="每次发送消息前自动搜索索引，并把相关内容加入上下文。" disabled=${semanticIndex === false}>自动召回</option>
+                  <option value="tool" title="不主动搜索，仅在模型判断有必要时调用索引工具。" disabled=${semanticIndex === false}>按需搜索</option>
+                  <option value="off" title="完全关闭本地索引，不自动召回，也不提供索引工具。">不使用</option>
+                </select>
+              </label>
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="muted" style="font-size:11px">召回中...</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="muted" style="font-size:11px">未找到相关内容</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span style="font-size:11px;color:var(--c-warn)">召回超时</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span style="font-size:11px;color:var(--c-warn)">索引不可用</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span style="font-size:11px;color:var(--c-err)">召回失败</span>` : null}
+              ${semanticRetrievalSources.length > 0 ? html4`
+                <button class="btn btn-sm" style="font-size:11px;padding:2px 7px" onClick=${() => setShowRetrievalSources(!showRetrievalSources)}>参考 ${semanticRetrievalSources.length}</button>
+                ${showRetrievalSources ? html4`
+                  <div class="popover" style="position:absolute;bottom:100%;right:0;width:420px;max-height:260px;overflow-y:auto;z-index:10">
+                    <div class="popover-h">本轮索引来源</div>
+                    ${semanticRetrievalSources.map((source) => html4`
+                      <button class="popover-row" style="width:100%;text-align:left" onMouseDown=${(event) => { event.preventDefault(); void previewRetrievedSource(source); }}>
+                        <span class="name" style="overflow-wrap:anywhere">${source.path}</span>
+                        <span class="meta">L${source.startLine}-${source.endLine} · ${Number(source.score || 0).toFixed(3)}</span>
+                      </button>
+                    `)}
+                  </div>
+                ` : null}
+              ` : null}
+              ${(showSkillPicker || showWsPicker || showModelPicker || showBackgroundJobs || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowBackgroundJobs(false); setShowRetrievalSources(false); }}></div>` : null}
               <div style="flex:1"></div>
               <button
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
@@ -28709,12 +29021,31 @@ function toolActivityFeed(c3) {
 }
 function OverviewPanel() {
   useLang();
-  const { data, error, loading } = usePoll("/overview", 5e3, "overview");
+  const [modelChecking, setModelChecking] = d2(false);
+  const [actionFeedback, setActionFeedback] = d2(null);
+  const { data, error, loading, refresh } = usePoll("/overview", 5e3, "overview");
+  const { data: healthData, error: healthError } = usePoll("/health", 5e3, "health");
+  const { data: retrievalData } = usePoll("/index-retrieval-mode", 5e3);
+  const runModelChecks = q2(async () => {
+    if (modelChecking) return;
+    setModelChecking(true);
+    setActionFeedback(null);
+    try {
+      const tested = await api("/providers/test", { method: "POST", body: {} });
+      setActionFeedback({ tone: tested.passed > 0 ? "ok" : "warn", text: t4("overview.modelCheckDone", { passed: tested.passed, total: tested.total }) });
+      await refresh();
+    } catch (err) {
+      setActionFeedback({ tone: "err", text: t4("overview.modelCheckFailed", { error: err.message }) });
+    } finally {
+      setModelChecking(false);
+    }
+  }, [modelChecking, refresh]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("overview.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("overview.failed", { error: error.message })}</div>`;
   if (!data) return null;
   const o3 = data;
+  const h3 = healthData;
   const c3 = o3.cockpit ?? {
     balance: null,
     tokens7d: null,
@@ -28725,9 +29056,16 @@ function OverviewPanel() {
     recentPlans: null,
     toolActivity: null
   };
-  const upToDate = o3.latestVersion && o3.version ? compareVersions(o3.version, o3.latestVersion) >= 0 : null;
-  const versionDelta = upToDate === null ? t4("overview.checking") : upToDate ? t4("overview.latest") : `latest: ${o3.latestVersion}`;
-  const versionTone = upToDate === false ? "down" : "flat";
+  const workspaceName = o3.cwd?.split(/[\\/]/).filter(Boolean).at(-1) ?? "\u2014";
+  const sceneName = o3.activeMode?.label ?? o3.workMode ?? "\u2014";
+  const budgetState = deriveBudgetState(o3.budgetUsd, c3.currentSession?.totalCostUsd ?? null);
+  const alerts = [];
+  if (o3.modelVerification?.dirty) alerts.push({ tone: "warn", text: t4("overview.retestModels"), label: modelChecking ? t4("overview.checkingModels") : t4("overview.checkModels"), action: runModelChecks, disabled: modelChecking });
+  if (o3.modelDrift) alerts.push({ tone: "warn", text: t4("overview.modelDrift") });
+  if (Number(o3.pendingEdits) > 0) alerts.push({ tone: "warn", text: t4("overview.pendingEdits", { count: o3.pendingEdits }) });
+  const missingRequiredIndex = retrievalData?.mode === "auto" && retrievalData.semanticAvailable === false;
+  if (missingRequiredIndex) alerts.push({ tone: "warn", text: t4("overview.missingIndex"), label: t4("overview.openIndex"), action: () => appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "semantic" } })) });
+  if (budgetState.kind !== "off" && budgetState.pct >= 80) alerts.push({ tone: budgetState.pct >= 100 ? "err" : "warn", text: t4("overview.budgetWarning", { pct: Math.round(budgetState.pct) }) });
   return html4`
     <div style="display:flex;flex-direction:column;gap:14px">
       ${o3.mode === "standalone" ? html4`<div class="card accent-warn">
@@ -28740,19 +29078,51 @@ function OverviewPanel() {
             </div>` : null}
 
       <h3 style="margin:0;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">
-        ${t4("overview.cockpit")}
+        ${t4("overview.workStatus")}
       </h3>
-      <div class="cockpit">
-        ${balanceKpi(c3)}
-        <div class="cock-w-2" style="display:flex;flex-direction:column;gap:var(--space-4)">
-          ${recentPlansRail(c3)}
-          <div class="card">
-            <div class="card-h"><span class="title">${t4("overview.projectRoot")}</span></div>
-            <code class="mono" style="color:var(--fg-2);font-size:12px">${o3.cwd ?? "\u2014"}</code>
-          </div>
-        </div>
-        ${toolActivityFeed(c3)}
+      <div class="health-grid">
+        <div class="health-item"><div class="lbl">${t4("overview.workspace")}</div><div class="v">${workspaceName}</div><div class="meta">${o3.session ?? t4("overview.noSession")}</div></div>
+        <div class="health-item"><div class="lbl">${t4("overview.provider")}</div><div class="v">${o3.activeProviderName ?? o3.activeProviderId ?? "\u2014"}</div><div class="meta">${t4("overview.runtimeModel")}: ${o3.runtimeModel ?? o3.displayModel ?? "\u2014"}</div></div>
+        <div class="health-item"><div class="lbl">${t4("overview.presetMode")}</div><div class="v">${o3.preset ?? "auto"}</div><div class="meta">${o3.reasoningEffort ?? "\u2014"}</div></div>
+        <div class="health-item"><div class="lbl">${t4("overview.workScene")}</div><div class="v">${sceneName}</div><div class="meta">${o3.editMode ?? "\u2014"}</div></div>
+        <div class=${`health-item ${missingRequiredIndex ? "warn" : ""}`}><div class="lbl">${t4("system.semanticIndex")}</div><div class="v">${o3.semanticIndexExists ? t4("overview.semanticReady") : t4("overview.semanticMissing")}</div><div class="meta">${o3.semanticIndexExists ? t4("system.built") : t4("system.runIndex")}</div></div>
       </div>
+
+      ${alerts.length > 0 ? html4`
+        <h3 style="margin:4px 0 0;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${t4("overview.attention")}</h3>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${alerts.map((alert) => html4`<div class=${`card accent-${alert.tone}`} style="padding:10px 12px;display:flex;align-items:center;gap:12px;color:${alert.tone === "err" ? "var(--c-err)" : "var(--c-warn)"}"><span style="flex:1">${alert.text}</span>${alert.action ? html4`<button type="button" disabled=${alert.disabled} onClick=${alert.action}>${alert.label}</button>` : null}</div>`)}
+        </div>
+      ` : null}
+      ${actionFeedback ? html4`<div class=${`card accent-${actionFeedback.tone === "ok" ? "brand" : actionFeedback.tone}`} style="padding:10px 12px">${actionFeedback.text}</div>` : null}
+
+      <h3 style="margin:4px 0 0;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${t4("overview.sessionAndPlans")}</h3>
+      <div class="cockpit">
+        ${currentSessionBlock(c3)}
+        ${budgetKpi(o3)}
+        ${recentPlansRail(c3)}
+      </div>
+
+      <h3 style="margin:4px 0 0;font-family:var(--font-mono);font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:.1em">${t4("overview.localSystem")}</h3>
+      ${healthError ? html4`<div class="card accent-warn">${t4("common.loadingFailed", { name: "health", error: healthError.message })}</div>` : null}
+      ${h3 ? html4`
+        <div class="health-grid">
+          <div class=${`health-item ${h3.latestVersion && compareVersions(h3.version, h3.latestVersion) < 0 ? "warn" : ""}`}><div class="lbl">${t4("system.version")}</div><div class="v">${h3.version ?? "\u2014"}</div><div class="meta">${h3.latestVersion && compareVersions(h3.version, h3.latestVersion) < 0 ? t4("system.latestVer", { version: h3.latestVersion }) : t4("system.upToDate")}</div></div>
+          <div class="health-item"><div class="lbl">${t4("system.sessions")}</div><div class="v">${fmtBytes(h3.sessions.totalBytes)}</div><div class="meta">${fmtNum(h3.sessions.count)} ${t4("system.files")}</div></div>
+          <div class="health-item"><div class="lbl">${t4("system.memory")}</div><div class="v">${fmtBytes(h3.memory.totalBytes)}</div><div class="meta">${fmtNum(h3.memory.fileCount)} ${t4("system.files")}</div></div>
+          <div class="health-item"><div class="lbl">${t4("system.semanticIndex")}</div><div class="v">${h3.semantic.exists ? fmtBytes(h3.semantic.totalBytes) : "\u2014"}</div><div class="meta">${h3.semantic.exists ? `${fmtNum(h3.semantic.fileCount)} ${t4("system.files")}` : t4("system.runIndex")}</div></div>
+          ${h3.jobs > 0 ? html4`<div class="health-item"><div class="lbl">${t4("system.backgroundJobs")}</div><div class="v">${t4("system.running", { count: fmtNum(h3.jobs) })}</div><div class="meta">${t4("system.shellSpawn")}</div></div>` : null}
+        </div>
+        <details class="card" style="padding:10px 14px">
+          <summary style="cursor:pointer;color:var(--fg-2);font-size:12px">${t4("overview.userDataPaths")}</summary>
+          <table class="tbl" style="margin-top:8px"><tbody style="font-size:11.5px">
+            <tr><td class="dim">${t4("system.home")}</td><td class="path">${h3.visionoxHome}</td></tr>
+            <tr><td class="dim">${t4("system.sessionsPath")}</td><td class="path">${h3.sessions.path}</td></tr>
+            <tr><td class="dim">${t4("system.memoryPath")}</td><td class="path">${h3.memory.path}</td></tr>
+            <tr><td class="dim">${t4("system.semanticPath")}</td><td class="path">${h3.semantic.path}</td></tr>
+          </tbody></table>
+        </details>
+      ` : null}
     </div>
   `;
 }
@@ -29121,6 +29491,10 @@ function emptyTaskDraft() {
     sessionCleanupAction: "preview",
     sessionCleanupStrength: "standard",
     sessionCleanupSemanticMode: "uncertain",
+    sessionCleanupPromptAddendum: "",
+    knowledgeEnabled: false,
+    knowledgeLookbackDays: 30,
+    knowledgeAutoIndex: false,
     reportRangeMode: "yesterday",
     reportPeriod: "daily",
     reportStartDate: weekAgo,
@@ -29149,6 +29523,10 @@ function taskDraftFromSchedule(task) {
     sessionCleanupAction: task.sessionCleanupAction === "delete" ? "delete" : "preview",
     sessionCleanupStrength: ["conservative", "standard", "aggressive"].includes(task.sessionCleanupStrength) ? task.sessionCleanupStrength : "standard",
     sessionCleanupSemanticMode: ["off", "uncertain", "deep"].includes(task.sessionCleanupSemanticMode) ? task.sessionCleanupSemanticMode : "uncertain",
+    sessionCleanupPromptAddendum: task.sessionCleanupPromptAddendum ?? "",
+    knowledgeEnabled: task.knowledgeEnabled === true,
+    knowledgeLookbackDays: Math.max(1, Math.min(365, Number(task.knowledgeLookbackDays) || 30)),
+    knowledgeAutoIndex: task.knowledgeAutoIndex === true,
     reportRangeMode: task.reportRangeMode ?? (task.reportPeriod === "daily" ? "yesterday" : task.reportPeriod === "yearly" ? "this_year" : task.reportPeriod === "custom" ? "custom" : "last_week"),
     reportPeriod: task.reportPeriod ?? "daily",
     reportStartDate: task.reportStartDate ?? weekAgo,
@@ -29267,6 +29645,7 @@ function scheduleRunPill(status) {
 function ScheduledTasksPanel() {
   useLang();
   const { data, error, loading, refresh } = usePoll("/schedules", 3e4);
+  const { data: semanticConfig } = usePoll("/semantic/config", 3e4);
   const [selectedId, setSelectedId] = d2(null);
   const [draft, setDraft] = d2(() => emptyTaskDraft());
   const [busy, setBusy] = d2(false);
@@ -29318,6 +29697,10 @@ function ScheduledTasksPanel() {
       sessionCleanupAction: draft.sessionCleanupAction,
       sessionCleanupStrength: draft.sessionCleanupStrength,
       sessionCleanupSemanticMode: draft.sessionCleanupSemanticMode,
+      sessionCleanupPromptAddendum: draft.sessionCleanupPromptAddendum,
+      knowledgeEnabled: draft.knowledgeEnabled,
+      knowledgeLookbackDays: draft.knowledgeLookbackDays,
+      knowledgeAutoIndex: draft.knowledgeAutoIndex,
       reportRangeMode: draft.reportRangeMode,
       reportPeriod: draft.reportPeriod,
       reportStartDate: draft.reportStartDate,
@@ -29438,6 +29821,7 @@ function ScheduledTasksPanel() {
   const validSchedule = draft.type === "daily" || draft.type === "weekly" ? /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) : validInterval;
   const validReport = draft.reportRangeMode === "custom" ? !!draft.reportStartDate && !!draft.reportEndDate && draft.reportEndDate >= draft.reportStartDate : true;
   const canSave = validWindow && validSchedule && (draft.kind === "report" ? validReport : draft.kind === "session_cleanup" ? true : draft.prompt.trim().length > 0);
+  const embeddingApiReady = semanticConfig?.provider === "openai-compat" && semanticConfig?.openaiCompat?.apiKeySet === true;
   const weekdayLabels = scheduleWeekdayLabels();
   return html4`
     <div class="sessions-grid">
@@ -29516,6 +29900,18 @@ function ScheduledTasksPanel() {
                   <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.cleanupFailed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.cleanupFailed)}</div></div>
                 </div>
               ` : null}
+              ${latestRun.knowledgeSessionsProcessed !== null && latestRun.knowledgeSessionsProcessed !== void 0 ? html4`
+                <div class="card-b" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;border-bottom:1px solid var(--bd)">
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeSessions")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeSessionsProcessed)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeDocuments")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens((latestRun.knowledgeDocumentsCreated || 0) + (latestRun.knowledgeDocumentsUpdated || 0))}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">AI 评估</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIReviewed || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">AI 评估失败</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIFailed || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">低价值回收候选</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeRejectedLowValue || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">文档质量拒绝</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeDocumentsRejected || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">移除旧主题</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeTopicsRemoved || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">embedding</div><div style="font-size:12px">${latestRun.semanticIndexStatus || "-"}</div></div>
+                </div>
+              ` : null}
               <div class="card-b" style="display:flex;flex-direction:column;gap:6px">
                 <div style="display:flex;gap:8px;align-items:center;color:var(--fg-3);font-size:12px">
                   <span>${t4("tasks.source")}: ${latestRun.manual ? t4("tasks.manual") : t4("tasks.scheduled")}</span>
@@ -29534,6 +29930,16 @@ function ScheduledTasksPanel() {
                   </div>
                 ` : null}
                 ${latestRun.cleanupTrashRoot ? html4`<div style="color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">${t4("tasks.cleanupTrashRoot")}: <code class="mono">${latestRun.cleanupTrashRoot}</code></div>` : null}
+                ${latestRun.knowledgeOutputPaths?.length ? html4`
+                  <div style="display:flex;flex-direction:column;gap:5px;color:var(--fg-3);font-size:12px">
+                    ${latestRun.knowledgeOutputPaths.map((path) => html4`
+                      <div style="display:flex;gap:6px;align-items:center;min-width:0">
+                        <code class="mono" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${path}</code>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", path)}>预览</button>
+                      </div>
+                    `)}
+                  </div>
+                ` : null}
               </div>
             ` : html4`<div class="card-b">${t4("tasks.noHistory")}</div>`}
           </div>
@@ -29578,6 +29984,31 @@ function ScheduledTasksPanel() {
                 <option value="deep">${t4("tasks.sessionCleanupSemanticDeep")}</option>
               </select>
             </div>
+            <div class="form-row" style="align-items:flex-start">
+              <span class="lbl">${t4("tasks.sessionCleanupPromptAddendum")}</span>
+              <textarea
+                class="input"
+                maxlength="4000"
+                rows="5"
+                value=${draft.sessionCleanupPromptAddendum}
+                onInput=${(e3) => setDraft({ ...draft, sessionCleanupPromptAddendum: e3.target.value.slice(0, 4000) })}
+                style="resize:vertical;line-height:1.5"
+              ></textarea>
+            </div>
+            <label class="checkbox-row" style="margin-top:8px;cursor:pointer">
+              <input type="checkbox" checked=${draft.knowledgeEnabled} onChange=${(e3) => setDraft({ ...draft, knowledgeEnabled: e3.target.checked, knowledgeAutoIndex: e3.target.checked ? draft.knowledgeAutoIndex : false })} />
+              <span>${t4("tasks.knowledgeEnabled")}</span>
+            </label>
+            ${draft.knowledgeEnabled ? html4`
+              <div class="form-row">
+                <span class="lbl">${t4("tasks.knowledgeLookbackDays")}</span>
+                <input class="input mono" type="number" min="1" max="365" value=${draft.knowledgeLookbackDays} onInput=${(e3) => setDraft({ ...draft, knowledgeLookbackDays: Math.max(1, Math.min(365, Number(e3.target.value) || 30)) })} />
+              </div>
+              <label class="checkbox-row" style="margin-top:8px;cursor:${embeddingApiReady ? "pointer" : "not-allowed"};opacity:${embeddingApiReady ? 1 : 0.6}">
+                <input type="checkbox" disabled=${!embeddingApiReady} checked=${draft.knowledgeAutoIndex && embeddingApiReady} onChange=${(e3) => setDraft({ ...draft, knowledgeAutoIndex: e3.target.checked })} />
+                <span>${t4("tasks.knowledgeAutoIndex")}${embeddingApiReady ? "" : ` · ${t4("tasks.knowledgeAutoIndexUnavailable")}`}</span>
+              </label>
+            ` : null}
             <div class="form-row" style="align-items:flex-start">
               <span class="lbl">${t4("tasks.summary")}</span>
               <div style="flex:1;min-width:0;color:var(--fg-3);font-size:12px;line-height:1.5">${t4("tasks.sessionCleanupHint")}</div>
@@ -30117,6 +30548,7 @@ function SemanticPanel() {
                 <div class="rail-kv"><span class="k">${t4("semantic.provider")}</span><span class="v">${idx.builtWith?.provider ?? idx.provider ?? provider}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.chunks")}</span><span class="v">${fmtNum(idx.chunks)}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.files")}</span><span class="v">${fmtNum(idx.files)}</span></div>
+                <div class="rail-kv"><span class="k">知识文档</span><span class="v">${fmtNum(idx.knowledgeFiles || 0)} 个 · ${fmtNum(idx.knowledgeChunks || 0)} 片段</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.model")}</span><span class="v" style="font-size:11px">${idx.builtWith?.model ?? idx.model ?? modelName}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.dim")}</span><span class="v">${fmtNum(idx.dim)}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.size")}</span><span class="v">${fmtBytes(idx.sizeBytes)}</span></div>
@@ -30274,6 +30706,7 @@ function toDraft(c3) {
     excludeExts: c3.excludeExts ?? [],
     excludePatterns: c3.excludePatterns ?? [],
     respectGitignore: c3.respectGitignore !== false,
+    includeKnowledgeDocs: c3.includeKnowledgeDocs === true,
     maxFileBytes: c3.maxFileBytes ?? 262144
   };
 }
@@ -30284,6 +30717,7 @@ function fromDraft(d3) {
     excludeExts: d3.excludeExts,
     excludePatterns: d3.excludePatterns,
     respectGitignore: !!d3.respectGitignore,
+    includeKnowledgeDocs: !!d3.includeKnowledgeDocs,
     maxFileBytes: d3.maxFileBytes
   };
 }
@@ -30398,6 +30832,11 @@ function SemanticExcludesCard() {
       <div class="checkbox-row" style="margin-top:8px;cursor:pointer" onClick=${() => setDraft({ ...draft, respectGitignore: !draft.respectGitignore })}>
         <span class=${`box ${draft.respectGitignore ? "on" : ""}`}>${draft.respectGitignore ? "\u2713" : ""}</span>
         <span>${t4("semantic.respectGitignore")}</span>
+      </div>
+
+      <div class="checkbox-row" style="margin-top:8px;cursor:pointer" onClick=${() => setDraft({ ...draft, includeKnowledgeDocs: !draft.includeKnowledgeDocs })}>
+        <span class=${`box ${draft.includeKnowledgeDocs ? "on" : ""}`}>${draft.includeKnowledgeDocs ? "\u2713" : ""}</span>
+        <span>${t4("semantic.includeKnowledgeDocs")}</span>
       </div>
 
       <div class="form-row" style="margin-top:10px">
@@ -30519,6 +30958,7 @@ function SemanticJobView({ job, running }) {
     embed: t4("semantic.phaseEmbed"),
     write: t4("semantic.phaseWrite"),
     done: t4("semantic.phaseDone"),
+    partial: t4("semantic.phasePartial"),
     error: t4("semantic.phaseError"),
     cancelled: t4("semantic.phaseCancelled")
   }[job.phase] ?? job.phase;
@@ -30532,7 +30972,7 @@ function SemanticJobView({ job, running }) {
   return html4`
     <div class="kv">
       <div><span class="kv-key">phase</span>
-        <span class=${`pill ${job.phase === "error" ? "pill-err" : job.phase === "cancelled" ? "warn" : running ? "pill-active" : "pill-dim"}`}>${phaseSummary}</span>
+        <span class=${`pill ${job.phase === "error" ? "pill-err" : job.phase === "cancelled" || job.phase === "partial" ? "warn" : running ? "pill-active" : "pill-dim"}`}>${phaseSummary}</span>
         ${job.aborted && running ? html4`<span class="pill warn" style="margin-left: 6px;">${t4("semantic.stopping")}</span>` : null}
         <span style="color:var(--fg-3);margin-left:8px">${elapsed}</span>
       </div>
@@ -30584,22 +31024,48 @@ function SessionsPanel() {
   const [open, setOpen] = d2(null);
   const [openLoading, setOpenLoading] = d2(false);
   const [filter, setFilter] = d2("");
+  const [selectedNames, setSelectedNames] = d2(() => /* @__PURE__ */ new Set());
+  const [selectedTrashIds, setSelectedTrashIds] = d2(() => /* @__PURE__ */ new Set());
+  const [listMode, setListMode] = d2("sessions");
+  const [selectionMode, setSelectionMode] = d2(false);
+  const [restoreName, setRestoreName] = d2("");
+  const [skipTrashConfirm, setSkipTrashConfirm] = d2(() => { try { return localStorage.getItem("visionox.sessions.skipTrashConfirm") === "1"; } catch { return false; } });
+  const [trashConfirm, setTrashConfirm] = d2(null);
+  const [dontAskAgain, setDontAskAgain] = d2(false);
+  const [retentionDraft, setRetentionDraft] = d2(30);
   const [deleting, setDeleting] = d2(false);
   const [resuming, setResuming] = d2(false);
   const [info, setInfo] = d2(null);
   const [transcriptSearch, setTranscriptSearch] = d2("");
   const [transcriptSearchIndex, setTranscriptSearchIndex] = d2(0);
   const transcriptFeedRef = A2(null);
+  y2(() => {
+    if (!trashConfirm) return;
+    const onKeyDown = (event) => { if (event.key === "Escape" && !deleting) setTrashConfirm(null); };
+    document.addEventListener("keydown", onKeyDown);
+    const frame = requestAnimationFrame(() => document.querySelector(".session-confirm-card .modal-actions .primary")?.focus());
+    return () => { document.removeEventListener("keydown", onKeyDown); cancelAnimationFrame(frame); };
+  }, [trashConfirm, deleting]);
   y2(() => subscribeSse("sessions-changed", refresh), [refresh]);
+  y2(() => {
+    if (Number.isFinite(data?.trash?.retentionDays)) setRetentionDraft(data.trash.retentionDays);
+  }, [data?.trash?.retentionDays]);
+  y2(() => {
+    const sessionNames = new Set((data?.sessions ?? []).map((item) => item.name));
+    const trashIds = new Set((data?.trash?.items ?? []).map((item) => item.id));
+    setSelectedNames((current) => new Set([...current].filter((name) => sessionNames.has(name))));
+    setSelectedTrashIds((current) => new Set([...current].filter((id) => trashIds.has(id))));
+  }, [data]);
   const view = q2(async (name) => {
     setInfo(null);
     setTranscriptSearch("");
     setTranscriptSearchIndex(0);
-    setOpen({ name, messages: null });
+    setOpen({ kind: "session", name, messages: null });
     setOpenLoading(true);
     try {
       const detail = await api(`/sessions/${encodeURIComponent(name)}?limit=200`);
       setOpen({
+        kind: "session",
         name,
         messages: detail.messages,
         totalMessages: detail.totalMessages ?? detail.messageCount ?? detail.messages?.length ?? 0,
@@ -30610,23 +31076,149 @@ function SessionsPanel() {
         meta: detail.meta ?? {}
       });
     } catch (err) {
-      setOpen({ name, messages: null, error: err.message });
+      setOpen({ kind: "session", name, messages: null, error: err.message });
     } finally {
       setOpenLoading(false);
     }
   }, []);
-  const remove = q2(async (name) => {
-    if (!confirm("删除此会话记录？此操作不可撤销。")) return;
+  const executeTrash = q2(async (names) => {
+    if (names.length === 0) return;
     setDeleting(true);
+    setInfo(null);
     try {
-      await api(`/sessions/${encodeURIComponent(name)}`, { method: "DELETE" });
-      setOpen(null);
+      const result = { movedCount: 0, failedCount: 0 };
+      for (let offset = 0; offset < names.length; offset += 200) {
+        const part = await api("/sessions/batch-trash", { method: "POST", body: { names: names.slice(offset, offset + 200) } });
+        result.movedCount += part.movedCount || 0;
+        result.failedCount += part.failedCount || 0;
+      }
+      setSelectedNames(/* @__PURE__ */ new Set());
+      if (open && names.includes(open.name)) setOpen(null);
+      setInfo(`已移入回收站 ${result.movedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
+      await refresh();
     } catch (err) {
-      if (open) setOpen({ ...open, error: err.message });
+      setInfo(err.message);
     } finally {
       setDeleting(false);
     }
-  }, [open]);
+  }, [open, refresh]);
+  const requestTrash = q2((names) => {
+    if (names.length === 0) return;
+    if (skipTrashConfirm) { void executeTrash(names); return; }
+    setDontAskAgain(false);
+    setTrashConfirm({ names });
+  }, [skipTrashConfirm, executeTrash]);
+  const confirmTrash = q2(() => {
+    const names = trashConfirm?.names ?? [];
+    if (dontAskAgain) {
+      try { localStorage.setItem("visionox.sessions.skipTrashConfirm", "1"); } catch {}
+      setSkipTrashConfirm(true);
+    }
+    setTrashConfirm(null);
+    void executeTrash(names);
+  }, [trashConfirm, dontAskAgain, executeTrash]);
+  const restoreTrashConfirmation = q2(() => {
+    try { localStorage.removeItem("visionox.sessions.skipTrashConfirm"); } catch {}
+    setSkipTrashConfirm(false);
+    setInfo("删除确认已恢复。");
+  }, []);
+  const remove = q2((name) => requestTrash([name]), [requestTrash]);
+  const toggleSelectedSession = q2((name) => {
+    setSelectedNames((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+  const toggleSelectedTrash = q2((id) => {
+    setSelectedTrashIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const viewTrash = q2(async (item) => {
+    setInfo(null);
+    setRestoreName(item.name);
+    setOpen({ kind: "trash", id: item.id, name: item.name, messages: null });
+    setOpenLoading(true);
+    try {
+      const detail = await api(`/sessions/trash/${encodeURIComponent(item.id)}?limit=200`);
+      setOpen({ kind: "trash", ...detail, id: item.id, name: detail.name ?? item.name });
+      setRestoreName(detail.name ?? item.name);
+    } catch (err) {
+      setOpen({ kind: "trash", id: item.id, name: item.name, messages: null, error: err.message });
+    } finally {
+      setOpenLoading(false);
+    }
+  }, []);
+  const batchTrash = q2(async () => {
+    const names = [...selectedNames];
+    requestTrash(names);
+  }, [selectedNames, requestTrash]);
+  const restoreTrashSession = q2(async (id, newName = null) => {
+    setDeleting(true);
+    setInfo(null);
+    try {
+      await api(`/sessions/trash/${encodeURIComponent(id)}/restore`, { method: "POST", body: { newName } });
+      setInfo("会话已从回收站恢复。");
+      setSelectedTrashIds((current) => { const next = new Set(current); next.delete(id); return next; });
+      if (open?.kind === "trash" && open.id === id) setOpen(null);
+      await refresh();
+    } catch (err) {
+      setInfo(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  }, [open, refresh]);
+  const batchRestoreTrash = q2(async () => {
+    const ids = [...selectedTrashIds];
+    if (ids.length === 0) return;
+    setDeleting(true);
+    setInfo(null);
+    try {
+      const result = { restoredCount: 0, failedCount: 0 };
+      for (let offset = 0; offset < ids.length; offset += 200) {
+        const part = await api("/sessions/trash/batch-restore", { method: "POST", body: { items: ids.slice(offset, offset + 200).map((id) => ({ id })) } });
+        result.restoredCount += part.restoredCount || 0;
+        result.failedCount += part.failedCount || 0;
+      }
+      setSelectedTrashIds(/* @__PURE__ */ new Set());
+      if (open?.kind === "trash" && ids.includes(open.id)) setOpen(null);
+      setInfo(`已恢复 ${result.restoredCount || 0} 个，失败 ${result.failedCount || 0} 个。名称冲突的会话可打开预览后改名恢复。`);
+      await refresh();
+    } catch (err) { setInfo(err.message); }
+    finally { setDeleting(false); }
+  }, [selectedTrashIds, open, refresh]);
+  const permanentlyDeleteTrash = q2(async (ids) => {
+    if (ids.length === 0 || !confirm(`永久删除 ${ids.length} 个回收站会话？此操作无法撤销。`)) return;
+    setDeleting(true);
+    setInfo(null);
+    try {
+      const result = await api("/sessions/trash/batch", { method: "DELETE", body: { ids } });
+      setSelectedTrashIds(/* @__PURE__ */ new Set());
+      if (open?.kind === "trash" && ids.includes(open.id)) setOpen(null);
+      setInfo(`已永久删除 ${result.deletedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
+      await refresh();
+    } catch (err) { setInfo(err.message); }
+    finally { setDeleting(false); }
+  }, [open, refresh]);
+  const saveTrashRetention = q2(async () => {
+    const retentionDays = Math.max(1, Math.min(365, Number(retentionDraft) || 30));
+    setDeleting(true);
+    try {
+      const result = await api("/sessions/trash-retention", { method: "POST", body: { retentionDays } });
+      setRetentionDraft(result.retentionDays);
+      setInfo(`回收站文件将在 ${result.retentionDays} 天后自动删除。`);
+      await refresh();
+    } catch (err) {
+      setInfo(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  }, [retentionDraft, refresh]);
   const exportSession = q2(async (name) => {
     setInfo(null);
     try {
@@ -30641,8 +31233,9 @@ function SessionsPanel() {
     setOpenLoading(true);
     try {
       const offset = open.messages?.length ?? 0;
-      const detail = await api(`/sessions/${encodeURIComponent(open.name)}?limit=200&offset=${offset}`);
-      setOpen((current) => current?.name === open.name ? {
+      const path = open.kind === "trash" ? `/sessions/trash/${encodeURIComponent(open.id)}?limit=200&offset=${offset}` : `/sessions/${encodeURIComponent(open.name)}?limit=200&offset=${offset}`;
+      const detail = await api(path);
+      setOpen((current) => current?.name === open.name && current?.kind === open.kind ? {
         ...current,
         messages: [...(detail.messages ?? []), ...(current.messages ?? [])],
         totalMessages: detail.totalMessages ?? current.totalMessages,
@@ -30747,8 +31340,6 @@ function SessionsPanel() {
     return html4`<div class="card" style="color:var(--fg-3)">${t4("sessions.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("common.loadingFailed", { name: "sessions", error: error.message })}</div>`;
   const sessions = data?.sessions ?? [];
-  if (sessions.length === 0)
-    return html4`<div class="card" style="color:var(--fg-3)">${t4("sessions.noSessions")}</div>`;
   const query = filter.trim().toLowerCase();
   const filtered = query ? sessions.filter((s3) => [
     s3.name,
@@ -30758,9 +31349,19 @@ function SessionsPanel() {
     s3.mode,
     s3.meta?.workspace
   ].filter(Boolean).join(" ").toLowerCase().includes(query)) : sessions;
+  const trashItems = data?.trash?.items ?? [];
+  const filteredTrash = query ? trashItems.filter((item) => item.name.toLowerCase().includes(query)) : trashItems;
+  const allFilteredSelected = filtered.length > 0 && filtered.every((session) => selectedNames.has(session.name));
+  const allFilteredTrashSelected = filteredTrash.length > 0 && filteredTrash.every((item) => selectedTrashIds.has(item.id));
   return html4`
     <div class="sessions-grid">
+      ${trashConfirm ? html4`<div class="session-confirm-overlay" role="presentation" onClick=${() => setTrashConfirm(null)}><div class="modal-card session-confirm-card" role="dialog" aria-modal="true" aria-labelledby="session-trash-confirm-title" onClick=${(event) => event.stopPropagation()}><div class="modal-card-head"><span class="modal-card-icon" style="color:var(--c-warn)">!</span><div><div class="modal-card-title" id="session-trash-confirm-title">移入回收站</div><div class="modal-card-subtitle">${trashConfirm.names.length === 1 ? `确认将“${trashConfirm.names[0]}”移入回收站？` : `确认将选中的 ${trashConfirm.names.length} 个会话移入回收站？`} 保留期内可以恢复。</div></div></div><label class="checkbox-row"><input type="checkbox" checked=${dontAskAgain} onChange=${(event) => setDontAskAgain(event.target.checked)} /><span>下次不再提示</span></label><div class="modal-actions"><button class="primary" disabled=${deleting} onClick=${confirmTrash}>移入回收站</button><button disabled=${deleting} onClick=${() => setTrashConfirm(null)}>取消</button></div></div></div>` : null}
+      ${info ? html4`<div class="card accent-brand session-page-feedback" role="status">${info}</div>` : null}
       <div class="sessions-list">
+        <div class="session-list-tabs">
+          <button class=${listMode === "sessions" ? "active" : ""} onClick=${() => { setListMode("sessions"); setSelectionMode(false); setOpen(null); }}>会话 <span>${sessions.length}</span></button>
+          <button class=${listMode === "trash" ? "active" : ""} onClick=${() => { setListMode("trash"); setSelectionMode(false); setOpen(null); }}>回收站 <span>${trashItems.length}</span></button>
+        </div>
         <div class="ssl-h">
           <input
             type="text"
@@ -30769,18 +31370,19 @@ function SessionsPanel() {
             onInput=${(e3) => setFilter(e3.target.value)}
             style="flex:1"
           />
+          <button class=${`btn btn-sm ${selectionMode ? "primary" : ""}`} onClick=${() => { setSelectionMode((value) => !value); setSelectedNames(/* @__PURE__ */ new Set()); setSelectedTrashIds(/* @__PURE__ */ new Set()); }}>${selectionMode ? "退出批量" : "批量管理"}</button>
         </div>
-        <div class="chips" style="padding:0 12px 8px">
-          <span class="chip-f static active">${t4("common.all")} <span class="ct">${sessions.length}</span></span>
-        </div>
+        ${listMode === "trash" ? html4`<div class="session-trash-settings"><span>自动清理</span><select value=${retentionDraft} onChange=${(event) => setRetentionDraft(Number(event.target.value))}><option value="7">7 天</option><option value="15">15 天</option><option value="30">30 天</option><option value="60">60 天</option><option value="90">90 天</option><option value="365">365 天</option></select><button class="btn btn-sm" disabled=${deleting || retentionDraft === data?.trash?.retentionDays} onClick=${saveTrashRetention}>保存</button>${skipTrashConfirm ? html4`<button class="btn btn-sm" onClick=${restoreTrashConfirmation}>恢复删除确认</button>` : null}${trashItems.length > 0 ? html4`<button class="btn btn-sm danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash(trashItems.map((item) => item.id))}>清空</button>` : null}</div>` : null}
         <div class="ssl-rows">
+          ${listMode === "sessions" ? html4`
+          ${filtered.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">${t4("sessions.noSessions")}</div>` : null}
           ${filtered.map(
     (s3) => html4`
               <div
                 class=${`ssl-row ${open?.name === s3.name ? "sel" : ""}`}
-                onClick=${() => view(s3.name)}
+                onClick=${() => selectionMode ? toggleSelectedSession(s3.name) : view(s3.name)}
               >
-                <span class="name">${s3.name}</span>
+                <div class="session-row-title">${selectionMode ? html4`<span class=${`session-select-box ${selectedNames.has(s3.name) ? "on" : ""}`} aria-hidden="true">${selectedNames.has(s3.name) ? "\u2713" : ""}</span>` : null}<span class="name">${s3.name}</span></div>
                 <span class="preview">${s3.summary || t4("sessions.noSummary")}</span>
                 <span class="meta">
                   <span><span class="v">${fmtNum(s3.messageCount)}</span> ${t4("sessions.msgs")}</span>
@@ -30790,15 +31392,26 @@ function SessionsPanel() {
                 </span>
               </div>
             `
-  )}
+  )}` : html4`
+          ${filteredTrash.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">回收站为空</div>` : null}
+          ${filteredTrash.map((item) => html4`<div class=${`ssl-row ${open?.kind === "trash" && open.id === item.id ? "sel" : ""}`} onClick=${() => selectionMode ? toggleSelectedTrash(item.id) : viewTrash(item)}>
+            <div class="session-row-title">${selectionMode ? html4`<span class=${`session-select-box ${selectedTrashIds.has(item.id) ? "on" : ""}`}>${selectedTrashIds.has(item.id) ? "\u2713" : ""}</span>` : null}<span class="name">${item.name}</span></div>
+            <span class="preview">${item.fileCount} 个文件 · ${fmtBytes(item.totalBytes)}</span>
+            <span class="meta"><span>删除于 ${fmtRelativeTime(Date.parse(item.movedAt))}</span><span>清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "\u2014"}</span></span>
+          </div>`)}
+          `}
         </div>
+        ${selectionMode ? html4`<div class="session-batch-bar"><span>已选 ${listMode === "sessions" ? selectedNames.size : selectedTrashIds.size} 项</span><button class="btn btn-sm" onClick=${() => listMode === "sessions" ? setSelectedNames(allFilteredSelected ? /* @__PURE__ */ new Set() : new Set(filtered.map((session) => session.name))) : setSelectedTrashIds(allFilteredTrashSelected ? /* @__PURE__ */ new Set() : new Set(filteredTrash.map((item) => item.id)))}>${(listMode === "sessions" ? allFilteredSelected : allFilteredTrashSelected) ? "取消全选" : "全选当前"}</button>${listMode === "sessions" ? html4`<button class="btn btn-sm danger" disabled=${deleting || selectedNames.size === 0} onClick=${batchTrash}>移入回收站</button>` : html4`<button class="btn btn-sm" disabled=${deleting || selectedTrashIds.size === 0} onClick=${batchRestoreTrash}>恢复</button><button class="btn btn-sm danger" disabled=${deleting || selectedTrashIds.size === 0} onClick=${() => permanentlyDeleteTrash([...selectedTrashIds])}>永久删除</button>`}</div>` : null}
       </div>
 
       <div class="sessions-detail">
         ${open == null ? html4`<div style="color:var(--fg-3);font-size:13px;text-align:center;padding:60px 20px">
                 ${t4("sessions.pickHint")}
-              </div>` : html4`
-                ${info ? html4`<div class="card accent-brand" style="margin-bottom:10px">${info}</div>` : null}
+              </div>` : open.kind === "trash" ? html4`
+                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">回收站预览 · ${fmtNum(open.totalMessages ?? open.messages?.length ?? 0)} 条消息</span><span class="actions"><button class="btn ghost" onClick=${() => setOpen(null)}>返回</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>永久删除</button></span></div>
+                <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">确认内容后恢复</span></div><div class="card-b"><label>恢复后的会话名称</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>恢复会话</button></div><span>如果原名称已被使用，可以修改名称后恢复，不会覆盖现有会话。</span></div></div>
+                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
+              ` : html4`
                 <div class="sessions-detail-h">
                   ${renaming ? html4`
                     <div class="sessions-rename-row">
@@ -31192,6 +31805,18 @@ function LoopSection({
     </div>
   `;
 }
+function sameDevLogSnapshot(current, next) {
+  return current.length === next.length && current.every((entry, index) => entry.ts === next[index]?.ts && entry.msg === next[index]?.msg);
+}
+function countNewDevLogs(current, next) {
+  if (next.length === 0) return 0;
+  if (current.length === 0) return next.length;
+  const last = current[current.length - 1];
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    if (next[index]?.ts === last.ts && next[index]?.msg === last.msg) return next.length - index - 1;
+  }
+  return Math.max(1, next.length - current.length);
+}
 function SettingsPanel() {
   useLang();
   const [data, setData] = d2(null);
@@ -31207,6 +31832,43 @@ function SettingsPanel() {
   const [now, setNow] = d2(() => Date.now());
   const [showDevLog, setShowDevLog] = d2(false);
   const [devLogs, setDevLogs] = d2([]);
+  const devLogsRef = A2([]);
+  const devLogPanelRef = A2(null);
+  const devLogFollowRef = A2(true);
+  const [devLogFollowing, setDevLogFollowing] = d2(true);
+  const [devLogNewCount, setDevLogNewCount] = d2(0);
+  const applyDevLogs = q2((logs) => {
+    const next = Array.isArray(logs) ? logs : [];
+    const current = devLogsRef.current;
+    if (sameDevLogSnapshot(current, next)) return;
+    if (!devLogFollowRef.current) {
+      const added = countNewDevLogs(current, next);
+      if (added > 0) setDevLogNewCount((count) => count + added);
+    }
+    devLogsRef.current = next;
+    setDevLogs(next);
+  }, []);
+  const setDevLogFollow = q2((following) => {
+    devLogFollowRef.current = following;
+    setDevLogFollowing(following);
+    if (following) setDevLogNewCount(0);
+  }, []);
+  const scrollDevLogToBottom = q2(() => {
+    setDevLogFollow(true);
+    requestAnimationFrame(() => {
+      const el = devLogPanelRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [setDevLogFollow]);
+  const handleDevLogScroll = q2((event) => {
+    const el = event.currentTarget;
+    setDevLogFollow(el.scrollHeight - el.scrollTop - el.clientHeight <= 24);
+  }, [setDevLogFollow]);
+  const toggleDevLog = q2(() => {
+    const next = !showDevLog;
+    if (next) setDevLogFollow(true);
+    setShowDevLog(next);
+  }, [showDevLog, setDevLogFollow]);
   const load = q2(async () => {
     try {
       const r3 = await api("/settings");
@@ -31280,30 +31942,31 @@ function SettingsPanel() {
   const refreshLogs = q2(async () => {
     try {
       const r3 = await api("/logs");
-      setDevLogs(r3.logs ?? []);
+      applyDevLogs(r3.logs ?? []);
     } catch {
     }
-  }, []);
+  }, [applyDevLogs]);
   y2(() => {
     if (!showDevLog) return;
     refreshLogs();
     const unsub = subscribeSse("logs", (ev) => {
-      setDevLogs(ev.logs ?? []);
+      applyDevLogs(ev.logs ?? []);
     });
     return unsub;
-  }, [showDevLog, refreshLogs]);
+  }, [showDevLog, refreshLogs, applyDevLogs]);
   y2(() => {
-    const el = document.getElementById("dev-log-panel");
+    if (!devLogFollowing) return;
+    const el = devLogPanelRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [devLogs]);
+  }, [devLogs, devLogFollowing, showDevLog]);
   const save = q2(
     async (fields) => {
       setSaving(true);
       setError(null);
       try {
-        await api("/settings", { method: "POST", body: fields });
+        const result = await api("/settings", { method: "POST", body: fields });
         await load();
-        setSaved(t4("settings.saved", { fields: Object.keys(fields).join(", ") }));
+        setSaved(result.requiresModelTest ? t4("settings.credentialsRetest") : t4("settings.saved", { fields: Object.keys(fields).join(", ") }));
         setTimeout(() => setSaved(null), 3e3);
       } catch (err) {
         setError(err.message);
@@ -31359,9 +32022,14 @@ function SettingsPanel() {
 
       ${sectionH3(t4("settings.sectionApi"))}
       <div class="card">
+        <div style="padding:2px 0 8px;border-bottom:1px solid var(--bd);margin-bottom:4px">
+          <div style="font-size:12px;color:var(--fg-1);font-weight:600">${t4("settings.credentialCurrent", { name: v3.credentialTarget?.name ?? "Legacy" })}</div>
+          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">${t4("settings.credentialsScope")}</div>
+        </div>
         ${fieldRow(
     t4("settings.apiKey"),
-    html4`<code class="mono" style="color:var(--fg-2);font-size:11.5px">${v3.apiKey ?? t4("settings.notSet")}</code>`
+    html4`<code class="mono" style="color:var(--fg-2);font-size:11.5px">${v3.apiKey ?? t4("settings.notSet")}</code>`,
+    v3.credentialTarget?.kind === "provider" ? `当前服务：${v3.credentialTarget.name}` : "兼容配置"
   )}
         ${fieldRow(
     t4("settings.replace"),
@@ -31414,35 +32082,6 @@ function SettingsPanel() {
           `,
     `${(v3.activeMode?.hint || "切换后下次新对话生效")} · ECC ${((v3.activeMode?.effectiveRules || v3.activeMode?.rules || [])).join("+") || "common"}`
   ) : null}
-        ${fieldRow(
-    t4("settings.preset"),
-    html4`
-            <select
-              value=${["auto", "flash", "pro"].includes(v3.preset ?? "") ? v3.preset : "auto"}
-              onChange=${(e3) => save({ preset: e3.target.value })}
-              disabled=${saving}
-            >
-              <option value="auto">${t4("settings.presetAuto")}</option>
-              <option value="flash">${t4("settings.presetFlash")}</option>
-              <option value="pro">${t4("settings.presetPro")}</option>
-            </select>
-          `,
-    t4("settings.appliesNextTurn")
-  )}
-        ${fieldRow(
-    t4("settings.effort"),
-    html4`
-            <select
-              value=${v3.reasoningEffort}
-              onChange=${(e3) => save({ reasoningEffort: e3.target.value })}
-              disabled=${saving}
-            >
-              <option value="max">${t4("settings.effortMax")}</option>
-              <option value="high">${t4("settings.effortHigh")}</option>
-            </select>
-          `,
-    t4("settings.appliesNextTurn")
-  )}
         ${fieldRow(
     "\u4E0A\u4E0B\u6587\u957F\u5EA6",
     html4`
@@ -31509,11 +32148,12 @@ function SettingsPanel() {
             html4`
               <input
                 type="password"
-                value=""
+                value=${draft.bingApiKey ?? ""}
                 placeholder=${v3.bingApiKeySet ? "\u5DF2\u8BBE\u7F6E\uFF0C\u7559\u7A7A\u4FDD\u6301\u73B0\u6709" : "32\u4F4D API Key"}
-                onInput=${(e3) => { if(e3.target.value.trim().length >= 16) save({ bingApiKey: e3.target.value.trim() }); }}
+                onInput=${(e3) => setDraft({ ...draft, bingApiKey: e3.target.value })}
                 style="flex:1"
               />
+              <button class="btn" disabled=${saving || !(draft.bingApiKey ?? "").trim()} onClick=${() => save({ bingApiKey: draft.bingApiKey })}>${t4("common.save")}</button>
             `,
             "\u4ECE https://portal.azure.com \u514D\u8D39\u83B7\u53D6 (Bing Search v7, 1000\u6B21/\u6708)"
           ) : null}
@@ -31570,12 +32210,17 @@ function SettingsPanel() {
           t4("settings.devMode"),
           html4`<button
             class=${`btn ${showDevLog ? "primary" : ""}`}
-            onClick=${() => setShowDevLog(!showDevLog)}
+            onClick=${toggleDevLog}
           >${showDevLog ? t4("common.on") : t4("common.off")}</button>`,
           t4("settings.devModeNote")
         )}
         ${showDevLog ? html4`
-          <div style="margin-top:10px;max-height:320px;overflow-y:auto;background:var(--bg-0);border:1px solid var(--border-1);border-radius:6px;padding:8px;font-family:var(--font-mono);font-size:11px;line-height:1.6" id="dev-log-panel">
+          <div style="height:26px;margin-top:6px;display:flex;align-items:center;justify-content:flex-end;font-size:11px;color:var(--fg-3)">
+            ${devLogFollowing
+              ? html4`<span>${t4("settings.devFollowing")}</span>`
+              : html4`<button class="btn btn-sm" onClick=${scrollDevLogToBottom}>${devLogNewCount > 0 ? `${t4("settings.devNewLogs", { count: devLogNewCount })} · ` : ""}${t4("settings.devBackToBottom")}</button>`}
+          </div>
+          <div ref=${devLogPanelRef} onScroll=${handleDevLogScroll} style="max-height:320px;overflow-y:auto;background:var(--bg-0);border:1px solid var(--border-1);border-radius:6px;padding:8px;font-family:var(--font-mono);font-size:11px;line-height:1.6" id="dev-log-panel">
             ${devLogs.length === 0 ? html4`<span style="color:var(--fg-3)">...</span>` : devLogs.map((e) => html4`
               <div style="display:flex;gap:8px">
                 <span style="color:var(--fg-3);flex-shrink:0">${new Date(e.ts).toLocaleTimeString()}</span>
@@ -34185,22 +34830,23 @@ function tabSections() {
         { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
         { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
         { id: "files", name: t4("app.tabFiles"), glyph: "F", panel: () => html7`<${FilesPanel} />` },
-        { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` }
+        { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` },
+        { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` }
       ]
     },
     {
       label: t4("app.sectionConfigure"),
       tabs: [
-        { id: "tools", name: t4("app.tabTools"), glyph: "\u25A3", panel: () => html7`<${ToolsPanel} />` },
+        // ChangesPanel is hidden because it duplicates the main chat, exposes developer-only Git/checkpoint restore actions, and its session diff source is not implemented.
+        // Keep the panel and APIs for now; a future replacement should be a read-only "session changes" summary with file-level explanations and previews.
+        { id: "memory", name: t4("app.tabMemory"), glyph: "\xB7", panel: () => html7`<${MemoryPanel} />`, breakBefore: true },
         { id: "skills", name: t4("app.tabSkills"), glyph: "S", panel: () => html7`<${SkillsPanel} />` },
-        { id: "memory", name: t4("app.tabMemory"), glyph: "\xB7", panel: () => html7`<${MemoryPanel} />` },
-        { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />` },
-        { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html7`<${HooksPanel} />` },
-        { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` },
-        { id: "changes", name: t4("app.tabChanges"), glyph: "\u25A8", panel: () => html7`<${ChangesPanel} />` },
-        { id: "health", name: t4("app.tabSystem"), glyph: "+", panel: () => html7`<${SystemPanel} />` },
+        { id: "tools", name: t4("app.tabTools"), glyph: "\u25A3", panel: () => html7`<${ToolsPanel} />` },
+        { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />`, breakBefore: true },
         { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} />` },
-        { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html7`<${PermissionsPanel} />` },
+        { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html7`<${HooksPanel} />` },
+        { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html7`<${PermissionsPanel} />`, breakBefore: true },
+        // SystemPanel is retained for diagnostics, but its standalone navigation is hidden because Overview now presents the high-value health summary.
         { id: "settings", name: t4("app.tabSettings"), glyph: "\u2318", panel: () => html7`<${SettingsPanel} />` }
       ]
     }
@@ -34294,6 +34940,7 @@ function App() {
               ${isOpen ? html7`
                   ${section.tabs.map(
         (tab) => html7`
+                      ${tab.breakBefore ? html7`<div class="side-divider"></div>` : null}
                       <div
                         class=${`side-tab ${tab.id === active.id ? "active" : ""}`}
                         onClick=${() => pickTab(tab.id)}

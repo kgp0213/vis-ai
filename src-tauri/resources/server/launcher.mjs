@@ -26,7 +26,7 @@ async function importEarly(spec) {
 
 const { resolve, dirname, join, basename, sep, extname } = await importEarly("node:path");
 const { fileURLToPath, pathToFileURL } = await importEarly("node:url");
-const { homedir } = await importEarly("node:os");
+const { homedir, tmpdir } = await importEarly("node:os");
 const { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
 const { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
@@ -51,6 +51,32 @@ const { validateOfficecliInvocation } = await importEarly("./lib/officecli-polic
 const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = await importEarly("./lib/memory-prompt.mjs");
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const {
+  buildTopicDocumentPrompt,
+  buildTopicPlanPrompt,
+  buildSessionQualityPrompt,
+  normalizeSessionQualityEvaluations,
+  buildDocumentQualityPrompt,
+  normalizeDocumentQualityEvaluation,
+  instructionFingerprint,
+  normalizeTopicDocument,
+  normalizeTopicPlan,
+  reconcileKnowledgeTopics,
+  renderTopicMarkdown,
+  safeTopicId,
+  selectPendingKnowledgeSessions,
+  sessionContentFingerprint,
+  sourceFingerprint,
+  stableConversation,
+} = await importEarly("./lib/session-knowledge.mjs");
+const {
+  buildRetrievalQuery,
+  buildRetrievedModelInput,
+  normalizeIndexRetrievalMode,
+  rerankRetrievalHits,
+  restoreOriginalUserInput,
+  selectRetrievalHits,
+} = await importEarly("./lib/semantic-retrieval.mjs");
 
 // NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
 // resource file cannot brick the whole launcher startup.
@@ -430,6 +456,7 @@ const [
     readConfig, writeConfig, loadApiKey, loadBaseUrl, loadEditMode,
     searchEnabled, webSearchEngine, webSearchEndpoint,
     loadProjectShellAllowed,
+    loadIndexConfig,
     mcpEnvFor,
     loadSemanticEmbeddingUserConfig,
   },
@@ -443,8 +470,8 @@ const [
   { registerSkillTools, Eventizer, autoResolveVerdict, shouldAutoResolveCheckpoint },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
-  { buildIndex, querySemantic, indexExists },
-  { listSessions, loadSessionMessages, sessionPath, deleteSession },
+  { buildIndex, querySemanticGroups, indexExists },
+  { listSessions, listSessionsForWorkspace, loadSessionMessages, sessionPath, deleteSession },
   { DEEPSEEK_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEEPSEEK_PRICING },
   { countTokens, estimateRequestTokens },
   { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives },
@@ -796,6 +823,123 @@ console.error(`[launcher] workspace: ${workspaceDir}`);
 // Workspace-dependent tool names — populated by registerWorkspaceTools() return value
 let wsToolNames = [];
 let hasSemanticSearch = false;
+let indexRetrievalMode = normalizeIndexRetrievalMode(config.indexRetrievalMode);
+const semanticRetrievalCache = new Map();
+const SEMANTIC_RETRIEVAL_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEMANTIC_RETRIEVAL_CACHE_MAX = 100;
+
+function getCachedSemanticRetrieval(key) {
+  const cached = semanticRetrievalCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.at >= SEMANTIC_RETRIEVAL_CACHE_TTL_MS) {
+    semanticRetrievalCache.delete(key);
+    return null;
+  }
+  semanticRetrievalCache.delete(key);
+  semanticRetrievalCache.set(key, cached);
+  return cached.hits;
+}
+
+function setCachedSemanticRetrieval(key, hits) {
+  semanticRetrievalCache.set(key, { at: Date.now(), hits });
+  while (semanticRetrievalCache.size > SEMANTIC_RETRIEVAL_CACHE_MAX) {
+    semanticRetrievalCache.delete(semanticRetrievalCache.keys().next().value);
+  }
+}
+
+function addToolToActivePrefix(spec) {
+  const name = spec?.function?.name;
+  if (!name) return false;
+  if (name === "semantic_search") {
+    hasSemanticSearch = true;
+    if (!wsToolNames.includes(name)) wsToolNames.push(name);
+    if (typeof _prefixCache !== "undefined") _prefixCache.fingerprint = null;
+    if (indexRetrievalMode === "off") return false;
+  }
+  return loop?.prefix?.addTool(presentSingleToolSpec(spec)) ?? false;
+}
+
+function applyIndexRetrievalMode(value, { persist = true } = {}) {
+  const next = normalizeIndexRetrievalMode(value);
+  indexRetrievalMode = next;
+  _prefixCache.fingerprint = null;
+  if (loop && client) {
+    rebuildLoopPreservingContext(client, workspaceDir);
+  } else {
+    const spec = tools.specs().find((item) => item.function?.name === "semantic_search");
+    if (next === "off") loop?.prefix?.removeTool("semantic_search");
+    else if (spec) loop?.prefix?.addTool(presentSingleToolSpec(spec));
+  }
+  if (persist) {
+    const cfg = readConfig(configPath);
+    cfg.indexRetrievalMode = next;
+    writeConfig(cfg, configPath);
+    config.indexRetrievalMode = next;
+    void writeActiveSessionMeta({ indexRetrievalMode: next });
+  }
+  return next;
+}
+
+async function activateSemanticSearch(rootDir) {
+  const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
+  const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
+  const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
+  const providerCfg = semanticCfg[cfgKey];
+  const registered = await registerSemanticSearchTool(tools, {
+    root: rootDir,
+    provider,
+    model: providerCfg?.model,
+    baseUrl: providerCfg?.baseUrl,
+    apiKey: providerCfg?.apiKey,
+    extraBody: providerCfg?.extraBody,
+  });
+  if (!registered) return false;
+  semanticRetrievalCache.clear();
+  const spec = tools.specs().find((item) => item.function?.name === "semantic_search");
+  if (spec) addToolToActivePrefix(spec);
+  return true;
+}
+
+async function retrieveSemanticContext(text, recentMessages, signal) {
+  const startedAt = Date.now();
+  if (indexRetrievalMode !== "auto") return { input: text, sources: [], status: "disabled", elapsedMs: 0 };
+  if (!hasSemanticSearch) return { input: text, sources: [], status: "unavailable", elapsedMs: 0 };
+  const query = buildRetrievalQuery(text, recentMessages);
+  if (!query) return { input: text, sources: [], status: "empty", elapsedMs: 0 };
+  const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
+  const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
+  const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
+  const providerCfg = semanticCfg[cfgKey];
+  const cacheKey = `${workspaceDir}\n${provider}\n${providerCfg?.model || ""}\n${query}`;
+  const cached = getCachedSemanticRetrieval(cacheKey);
+  if (cached) {
+    return { ...buildRetrievedModelInput(text, cached), status: cached.length > 0 ? "completed" : "empty", cached: true, elapsedMs: Date.now() - startedAt };
+  }
+  const timeoutSignal = AbortSignal.timeout(3000);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  try {
+    const groups = await querySemanticGroups(workspaceDir, query, {
+      knowledgeTopK: 24,
+      workspaceTopK: 24,
+      minScore: 0.3,
+      provider,
+      model: providerCfg?.model,
+      baseUrl: providerCfg?.baseUrl,
+      apiKey: providerCfg?.apiKey,
+      extraBody: providerCfg?.extraBody,
+      signal: combinedSignal,
+    });
+    if (!groups) return { input: text, sources: [], status: "unavailable", elapsedMs: Date.now() - startedAt };
+    const selected = selectRetrievalHits(rerankRetrievalHits([...groups.knowledge, ...groups.workspace], query));
+    setCachedSemanticRetrieval(cacheKey, selected);
+    return { ...buildRetrievedModelInput(text, selected), status: selected.length > 0 ? "completed" : "empty", elapsedMs: Date.now() - startedAt };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.error(`[launcher] automatic semantic retrieval skipped: ${error.message}`);
+    const timedOut = timeoutSignal.aborted || /timeout|timed out/i.test(String(error?.message || ""));
+    return { input: text, sources: [], status: timedOut ? "timeout" : "error", error: String(error?.message || error).slice(0, 240), elapsedMs: Date.now() - startedAt };
+  }
+}
 
 async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   const before = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
@@ -1306,6 +1450,7 @@ console.error(`[launcher] remember_session tool registered`);
 const SESSION_SEARCH_MAX_LIMIT = 200;
 const SESSION_CLEANUP_PREVIEW_TTL_MS = 30 * 60 * 1000;
 const SESSION_TRASH_DIR = resolve(visionoxDataDir, "session-trash");
+const DEFAULT_SESSION_TRASH_RETENTION_DAYS = 30;
 const sessionCleanupPreviews = new Map();
 
 function clampNumber(value, min, max, fallback) {
@@ -1393,7 +1538,10 @@ function searchSessions(args = {}) {
   const results = [];
   let scanned = 0;
 
-  for (const session of listSessions()) {
+  const sessionsToScan = typeof args.workspace === "string" && args.workspace.trim()
+    ? listSessionsForWorkspace(args.workspace)
+    : listSessions();
+  for (const session of sessionsToScan) {
     scanned++;
     if (since && session.mtime < since) continue;
     if (until && session.mtime > until) continue;
@@ -1441,7 +1589,7 @@ function classifyCleanupCandidate(session, messages) {
     return { category: "test_run", action: "archive", confidence: 0.86, reason: "重复功能测试或临时测试会话，建议归档" };
   }
   if (messageCount >= 5 && /(总结|方案|建议|计划|修复|实现|落地|复盘|报告)/i.test(text)) {
-    return { category: "knowledge", action: "extract", confidence: 0.78, reason: "可能包含可沉淀的项目知识，建议提炼" };
+    return { category: "review", action: "keep", confidence: 0.7, reason: "内容较长但缺少完整的复用价值证据，建议保留复核" };
   }
   if (veryShort && !meta.summary && text.length < 120) {
     return { category: "tiny_no_summary", action: "archive", confidence: 0.68, reason: "内容极短且无摘要，建议人工复核后归档" };
@@ -1462,7 +1610,7 @@ function normalizeSemanticCleanupMode(value) {
   return ["off", "uncertain", "deep"].includes(value) ? value : "off";
 }
 
-async function semanticReviewCleanupItems(items, semanticMode = "off", signal) {
+async function semanticReviewCleanupItems(items, semanticMode = "off", signal, promptAddendum = "") {
   const mode = normalizeSemanticCleanupMode(semanticMode);
   if (mode === "off" || !client || !items.length) return { items, reviewed: 0, error: null };
   const reviewable = mode === "deep"
@@ -1487,6 +1635,7 @@ async function semanticReviewCleanupItems(items, semanticMode = "off", signal) {
     "- keep：包含项目、客户、需求、文件、代码、决策、问题排查等用户可能回看的信息。",
     "- extract：包含可沉淀为长期记忆或知识的内容。",
     "宁可 keep，也不要误删。返回严格 JSON 数组，不要 Markdown，不要解释。",
+    `用户补充整理要求不能覆盖删除保护：\n<requirements>\n${String(promptAddendum).trim() || "（无）"}\n</requirements>`,
     JSON.stringify(payload),
   ].join("\n\n");
   try {
@@ -1508,9 +1657,10 @@ async function semanticReviewCleanupItems(items, semanticMode = "off", signal) {
     const next = items.map((item) => {
       const update = byName.get(item.name);
       if (!update || !["delete", "archive", "keep", "extract"].includes(update.action)) return item;
+      const action = update.action === "delete" && item.action !== "delete" ? "keep" : update.action;
       return {
         ...item,
-        action: update.action,
+        action,
         confidence: Number.isFinite(update.confidence) ? Math.max(0, Math.min(1, Number(update.confidence))) : item.confidence,
         reason: typeof update.reason === "string" && update.reason.trim() ? update.reason.trim().slice(0, 240) : item.reason,
         semanticReviewed: true,
@@ -1528,7 +1678,8 @@ function softDeleteSession(name, runId = "") {
   const jsonl = sessionPath(name);
   if (!existsSync(jsonl)) return { ok: false, error: "not found" };
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const trashDir = resolve(SESSION_TRASH_DIR, `${stamp}-${runId || randomUUID()}`);
+  const itemId = createHash("sha256").update(name).digest("hex").slice(0, 10);
+  const trashDir = resolve(SESSION_TRASH_DIR, `${stamp}-${runId || randomUUID()}-${itemId}`);
   mkdirSync(trashDir, { recursive: true });
   const moved = [];
   const sidecars = [".jsonl", ".events.jsonl", ".pending.json", ".meta.json", ".plan.json"];
@@ -1538,12 +1689,16 @@ function softDeleteSession(name, runId = "") {
       if (!existsSync(source)) continue;
       const target = resolve(trashDir, basename(source));
       renameSync(source, target);
-      moved.push(target);
+      moved.push({ source, target });
     }
-    writeFileSync(resolve(trashDir, "trash-meta.json"), `${JSON.stringify({ name, movedAt: new Date().toISOString(), files: moved.map((p) => basename(p)) }, null, 2)}\n`, "utf8");
-    return { ok: true, trashDir, moved };
+    writeFileSync(resolve(trashDir, "trash-meta.json"), `${JSON.stringify({ name, movedAt: new Date().toISOString(), files: moved.map(({ target }) => basename(target)) }, null, 2)}\n`, "utf8");
+    return { ok: true, trashDir, moved: moved.map(({ target }) => target) };
   } catch (err) {
-    return { ok: false, error: err.message, trashDir, moved };
+    for (const { source, target } of moved.reverse()) {
+      try { if (existsSync(target) && !existsSync(source)) renameSync(target, source); } catch {}
+    }
+    try { if (existsSync(trashDir)) rmSync(trashDir, { recursive: true, force: true }); } catch {}
+    return { ok: false, error: err.message, trashDir, moved: [] };
   }
 }
 
@@ -1589,7 +1744,7 @@ async function buildSessionCleanupPreview(args = {}, options = {}) {
     else if (includeReview) review.push(item);
   }
 
-  const semantic = await semanticReviewCleanupItems(recommendations, semanticMode, options.signal);
+  const semantic = await semanticReviewCleanupItems(recommendations, semanticMode, options.signal, args.promptAddendum);
   throwIfScheduleAborted(options.signal);
   const reviewedRecommendations = semantic.items;
   const returnedCandidates = reviewedRecommendations.slice(0, returnLimit);
@@ -2196,6 +2351,156 @@ function writeModeMemory(modeId, payload) {
   }
   return { ...data, path };
 }
+
+function sessionTrashRetentionDays() {
+  const value = Number(readConfig(configPath).sessionTrashRetentionDays);
+  return Number.isFinite(value) ? Math.max(1, Math.min(365, Math.floor(value))) : DEFAULT_SESSION_TRASH_RETENTION_DAYS;
+}
+
+function getSessionTrashEntry(id) {
+  const safeId = String(id || "").trim();
+  const dir = resolve(SESSION_TRASH_DIR, safeId);
+  if (!safeId || !dir.startsWith(SESSION_TRASH_DIR + sep) || !existsSync(dir)) return null;
+  try {
+    const meta = JSON.parse(readFileSync(resolve(dir, "trash-meta.json"), "utf8"));
+    const files = Array.isArray(meta.files) ? meta.files.filter((file) => typeof file === "string" && basename(file) === file) : [];
+    const paths = files.map((file) => resolve(dir, file)).filter((path) => path.startsWith(dir + sep) && existsSync(path));
+    const movedAt = String(meta.movedAt || "");
+    const movedMs = Date.parse(movedAt);
+    const totalBytes = paths.reduce((sum, path) => {
+      try { return sum + statSync(path).size; } catch { return sum; }
+    }, 0);
+    return {
+      id: safeId,
+      name: String(meta.name || safeId),
+      movedAt,
+      expiresAt: Number.isFinite(movedMs) ? new Date(movedMs + sessionTrashRetentionDays() * 864e5).toISOString() : null,
+      files,
+      fileCount: paths.length,
+      totalBytes,
+      path: paths.find((path) => path.endsWith(".jsonl") && !path.endsWith(".events.jsonl")) || null,
+      dir,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listSessionTrash({ prune = true } = {}) {
+  if (prune) pruneExpiredSessionTrash();
+  if (!existsSync(SESSION_TRASH_DIR)) return [];
+  const items = [];
+  for (const id of readdirSync(SESSION_TRASH_DIR)) {
+    const dir = resolve(SESSION_TRASH_DIR, id);
+    if (!dir.startsWith(SESSION_TRASH_DIR + sep)) continue;
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      const entry = getSessionTrashEntry(id);
+      if (entry) {
+        const { path: _path, dir: _dir, ...publicEntry } = entry;
+        items.push(publicEntry);
+      }
+    } catch {}
+  }
+  return items.sort((a, b) => Date.parse(b.movedAt) - Date.parse(a.movedAt));
+}
+
+function pruneExpiredSessionTrash(now = Date.now()) {
+  if (!existsSync(SESSION_TRASH_DIR)) return { deleted: 0 };
+  const cutoff = now - sessionTrashRetentionDays() * 864e5;
+  let deleted = 0;
+  for (const item of listSessionTrash({ prune: false })) {
+    const movedAt = Date.parse(item.movedAt);
+    if (!Number.isFinite(movedAt) || movedAt > cutoff) continue;
+    const dir = resolve(SESSION_TRASH_DIR, item.id);
+    if (!(dir.startsWith(SESSION_TRASH_DIR + sep) && existsSync(dir))) continue;
+    rmSync(dir, { recursive: true, force: true });
+    deleted++;
+  }
+  if (deleted > 0) console.error(`[launcher] expired session trash removed=${deleted}`);
+  return { deleted };
+}
+
+function trashSessions(names, runId = "manual") {
+  const requested = [...new Set((Array.isArray(names) ? names : []).map((name) => String(name).trim()).filter(isValidSessionName))];
+  const moved = [];
+  const failed = [];
+  for (const name of requested) {
+    const result = softDeleteSession(name, runId.slice(0, 12));
+    if (result.ok) moved.push({ name, trashDir: result.trashDir });
+    else failed.push({ name, error: result.error || "move to trash failed" });
+  }
+  if (moved.length > 0) broadcastDashboardEvent({ kind: "sessions-changed", action: "trash", count: moved.length });
+  return { ok: failed.length === 0, moved, failed, movedCount: moved.length, failedCount: failed.length };
+}
+
+function restoreSessionTrash(id, requestedName = null) {
+  const entry = getSessionTrashEntry(id);
+  if (!entry) return { ok: false, error: "trash item not found" };
+  const dir = entry.dir;
+  try {
+    const meta = JSON.parse(readFileSync(resolve(dir, "trash-meta.json"), "utf8"));
+    const files = Array.isArray(meta.files) ? meta.files : [];
+    const originalName = String(meta.name || entry.id);
+    const restoredName = requestedName == null || String(requestedName).trim() === "" ? originalName : String(requestedName).trim();
+    if (!isValidSessionName(restoredName)) throw new Error("invalid restored session name");
+    const destinationRoot = sessionsDir;
+    mkdirSync(destinationRoot, { recursive: true });
+    const targets = [];
+    for (const file of files) {
+      if (basename(file) !== file) throw new Error("invalid trash filename");
+      const restoredFile = file.startsWith(`${originalName}.`) ? `${restoredName}${file.slice(originalName.length)}` : file;
+      const destination = resolve(destinationRoot, restoredFile);
+      if (existsSync(destination)) throw new Error(`session file already exists: ${file}`);
+      targets.push({ source: resolve(dir, file), destination });
+    }
+    const moved = [];
+    try {
+      for (const target of targets) {
+        renameSync(target.source, target.destination);
+        moved.push(target);
+      }
+    } catch (err) {
+      for (const target of moved.reverse()) {
+        try { if (existsSync(target.destination) && !existsSync(target.source)) renameSync(target.destination, target.source); } catch {}
+      }
+      throw err;
+    }
+    rmSync(dir, { recursive: true, force: true });
+    broadcastDashboardEvent({ kind: "sessions-changed", action: "restore", name: restoredName });
+    return { ok: true, restored: true, name: restoredName };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function deleteSessionTrash(ids) {
+  const requested = [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || "").trim()).filter(Boolean))];
+  const deleted = [];
+  const failed = [];
+  for (const id of requested) {
+    const entry = getSessionTrashEntry(id);
+    if (!entry) { failed.push({ id, error: "trash item not found" }); continue; }
+    try { rmSync(entry.dir, { recursive: true, force: true }); deleted.push({ id, name: entry.name }); }
+    catch (err) { failed.push({ id, error: err.message }); }
+  }
+  if (deleted.length > 0) broadcastDashboardEvent({ kind: "sessions-changed", action: "trash-delete", count: deleted.length });
+  return { ok: failed.length === 0, deleted, failed, deletedCount: deleted.length, failedCount: failed.length };
+}
+
+function setSessionTrashRetentionDays(days) {
+  const value = Number(days);
+  if (!Number.isFinite(value) || value < 1 || value > 365) return { ok: false, error: "retentionDays must be between 1 and 365" };
+  const cfg = readConfig(configPath);
+  cfg.sessionTrashRetentionDays = Math.floor(value);
+  writeConfig(cfg, configPath);
+  const pruned = pruneExpiredSessionTrash();
+  return { ok: true, retentionDays: cfg.sessionTrashRetentionDays, pruned: pruned.deleted };
+}
+
+pruneExpiredSessionTrash();
+const sessionTrashPruneTimer = setInterval(() => pruneExpiredSessionTrash(), 60 * 60 * 1000);
+sessionTrashPruneTimer.unref?.();
 function writeModeMemoryTrash(mode, item) {
   mkdirSync(memoryTrashDir, { recursive: true });
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2859,7 +3164,10 @@ function currentEditMode() {
 }
 
 function presentedToolSpecs() {
-  return presentToolSpecsForMode(tools.specs(), { editMode: currentEditMode() });
+  const specs = indexRetrievalMode === "off"
+    ? tools.specs().filter((spec) => spec.function?.name !== "semantic_search")
+    : tools.specs();
+  return presentToolSpecsForMode(specs, { editMode: currentEditMode() });
 }
 
 function presentSingleToolSpec(spec) {
@@ -2867,7 +3175,7 @@ function presentSingleToolSpec(spec) {
 }
 
 function buildSystemPromptForLoop(rootDir, hasSemantic) {
-  return buildSystemPrompt(tools.specs(), rootDir, hasSemantic, { editMode: currentEditMode() });
+  return buildSystemPrompt(presentedToolSpecs(), rootDir, hasSemantic && indexRetrievalMode !== "off", { editMode: currentEditMode() });
 }
 
 // ── System-prompt assembly cache ─────────────────────────────────
@@ -2949,6 +3257,7 @@ function computePrefixFingerprint(rootDir) {
     `soul=${safeMtime(SOUL_HOME)}`,
     `root=${rootDir}`,
     `sem=${hasSemanticSearch ? 1 : 0}`,
+    `retrieval=${indexRetrievalMode}`,
   ];
   for (const name of orderedRuleSets(mc.eccRules || [])) {
     const dir = ALL_ECC_RULES[name];
@@ -3602,6 +3911,12 @@ function normalizeSchedule(raw) {
   const sessionCleanupAction = SCHEDULE_SESSION_CLEANUP_ACTIONS.has(raw.sessionCleanupAction) ? raw.sessionCleanupAction : "preview";
   const sessionCleanupStrength = SCHEDULE_SESSION_CLEANUP_STRENGTHS.has(raw.sessionCleanupStrength) ? raw.sessionCleanupStrength : "standard";
   const sessionCleanupSemanticMode = SCHEDULE_SESSION_CLEANUP_SEMANTIC_MODES.has(raw.sessionCleanupSemanticMode) ? raw.sessionCleanupSemanticMode : "uncertain";
+  const sessionCleanupPromptAddendum = kind === "session_cleanup" && typeof raw.sessionCleanupPromptAddendum === "string"
+    ? raw.sessionCleanupPromptAddendum.trim().slice(0, 4000)
+    : "";
+  const knowledgeEnabled = kind === "session_cleanup" && raw.knowledgeEnabled === true;
+  const knowledgeAutoIndex = knowledgeEnabled && raw.knowledgeAutoIndex === true;
+  const knowledgeLookbackDays = Math.max(1, Math.min(365, Math.floor(Number(raw.knowledgeLookbackDays) || 30)));
   const reportRangeMode = normalizeReportRangeMode(raw.reportRangeMode, legacyReportRangeMode(raw));
   const reportPeriod = reportPeriodForRangeMode(reportRangeMode);
   const reportStartDate = normalizeReportDate(raw.reportStartDate);
@@ -3621,6 +3936,14 @@ function normalizeSchedule(raw) {
     sessionCleanupAction: kind === "session_cleanup" ? sessionCleanupAction : "preview",
     sessionCleanupStrength: kind === "session_cleanup" ? sessionCleanupStrength : "standard",
     sessionCleanupSemanticMode: kind === "session_cleanup" ? sessionCleanupSemanticMode : "off",
+    sessionCleanupPromptAddendum,
+    sessionCleanupPromptRevision: kind === "session_cleanup" && Number.isFinite(raw.sessionCleanupPromptRevision)
+      ? Math.max(0, Math.floor(raw.sessionCleanupPromptRevision))
+      : 0,
+    knowledgeEnabled,
+    knowledgeAutoIndex,
+    knowledgeLookbackDays,
+    knowledgeCursor: typeof raw.knowledgeCursor === "string" && Number.isFinite(Date.parse(raw.knowledgeCursor)) ? raw.knowledgeCursor : null,
     reportRangeMode,
     reportPeriod,
     reportDate: normalizeReportDate(raw.reportDate),
@@ -3696,6 +4019,18 @@ function normalizeScheduleHistoryEntry(raw) {
     cleanupExtract: Number.isFinite(raw.cleanupExtract) ? Math.max(0, Math.floor(raw.cleanupExtract)) : null,
     cleanupSemanticReviewed: Number.isFinite(raw.cleanupSemanticReviewed) ? Math.max(0, Math.floor(raw.cleanupSemanticReviewed)) : null,
     cleanupTrashRoot: typeof raw.cleanupTrashRoot === "string" ? raw.cleanupTrashRoot : null,
+    knowledgeSessionsProcessed: Number.isFinite(raw.knowledgeSessionsProcessed) ? Math.max(0, Math.floor(raw.knowledgeSessionsProcessed)) : null,
+    knowledgeDocumentsCreated: Number.isFinite(raw.knowledgeDocumentsCreated) ? Math.max(0, Math.floor(raw.knowledgeDocumentsCreated)) : null,
+    knowledgeDocumentsUpdated: Number.isFinite(raw.knowledgeDocumentsUpdated) ? Math.max(0, Math.floor(raw.knowledgeDocumentsUpdated)) : null,
+    knowledgeOutputPaths: Array.isArray(raw.knowledgeOutputPaths) ? raw.knowledgeOutputPaths.filter((item) => typeof item === "string").slice(0, 20) : [],
+    semanticIndexRequested: raw.semanticIndexRequested === true,
+    semanticIndexStatus: typeof raw.semanticIndexStatus === "string" ? raw.semanticIndexStatus : null,
+    knowledgeInstructionFingerprint: typeof raw.knowledgeInstructionFingerprint === "string" ? raw.knowledgeInstructionFingerprint : null,
+    knowledgeRejectedLowValue: Number.isFinite(raw.knowledgeRejectedLowValue) ? Math.max(0, Math.floor(raw.knowledgeRejectedLowValue)) : null,
+    knowledgeDocumentsRejected: Number.isFinite(raw.knowledgeDocumentsRejected) ? Math.max(0, Math.floor(raw.knowledgeDocumentsRejected)) : null,
+    knowledgeTopicsRemoved: Number.isFinite(raw.knowledgeTopicsRemoved) ? Math.max(0, Math.floor(raw.knowledgeTopicsRemoved)) : null,
+    knowledgeAIReviewed: Number.isFinite(raw.knowledgeAIReviewed) ? Math.max(0, Math.floor(raw.knowledgeAIReviewed)) : null,
+    knowledgeAIFailed: Number.isFinite(raw.knowledgeAIFailed) ? Math.max(0, Math.floor(raw.knowledgeAIFailed)) : null,
   };
 }
 
@@ -3822,6 +4157,18 @@ function scheduleFromInput(input, previous = null) {
   const sessionCleanupSemanticMode = SCHEDULE_SESSION_CLEANUP_SEMANTIC_MODES.has(patch.sessionCleanupSemanticMode)
     ? patch.sessionCleanupSemanticMode
     : previousCleanupSemanticMode;
+  const previousPromptAddendum = typeof previous?.sessionCleanupPromptAddendum === "string" ? previous.sessionCleanupPromptAddendum : "";
+  const sessionCleanupPromptAddendum = kind === "session_cleanup"
+    ? (typeof patch.sessionCleanupPromptAddendum === "string" ? patch.sessionCleanupPromptAddendum.trim().slice(0, 4000) : previousPromptAddendum)
+    : "";
+  const sessionCleanupPromptRevision = kind === "session_cleanup"
+    ? Math.max(0, previous?.sessionCleanupPromptRevision || 0) + (sessionCleanupPromptAddendum !== previousPromptAddendum ? 1 : 0)
+    : 0;
+  const knowledgeEnabled = kind === "session_cleanup"
+    && (typeof patch.knowledgeEnabled === "boolean" ? patch.knowledgeEnabled : previous?.knowledgeEnabled === true);
+  const knowledgeAutoIndex = knowledgeEnabled
+    && (typeof patch.knowledgeAutoIndex === "boolean" ? patch.knowledgeAutoIndex : previous?.knowledgeAutoIndex === true);
+  const knowledgeLookbackDays = Math.max(1, Math.min(365, Math.floor(Number(patch.knowledgeLookbackDays ?? previous?.knowledgeLookbackDays) || 30)));
   if (kind === "prompt" && !prompt) return { ok: false, error: "prompt must be a non-empty string" };
   const reportRangeCheck = validateReportRange(reportRangeMode, reportStartDate, reportEndDate);
   if (kind === "report" && !reportRangeCheck.ok) return { ok: false, error: reportRangeCheck.error };
@@ -3838,6 +4185,12 @@ function scheduleFromInput(input, previous = null) {
     sessionCleanupAction: kind === "session_cleanup" ? sessionCleanupAction : "preview",
     sessionCleanupStrength: kind === "session_cleanup" ? sessionCleanupStrength : "standard",
     sessionCleanupSemanticMode: kind === "session_cleanup" ? sessionCleanupSemanticMode : "off",
+    sessionCleanupPromptAddendum,
+    sessionCleanupPromptRevision,
+    knowledgeEnabled,
+    knowledgeAutoIndex,
+    knowledgeLookbackDays,
+    knowledgeCursor: previous?.knowledgeCursor ?? null,
     reportRangeMode,
     reportPeriod,
     reportDate,
@@ -4008,10 +4361,519 @@ async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISO
   }
 }
 
+function parseModelJson(content, label) {
+  const raw = String(content || "").trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`${label} returned invalid JSON: ${err.message}`);
+  }
+}
+
+function responseFormatUnsupported(error) {
+  return /response[_ ]?format|json_object/i.test(String(error?.message || error || ""));
+}
+
+async function requestModelJson({ label, messages, model, maxTokens, temperature = 0, signal }) {
+  let structuredOutput = true;
+  let parseFailures = 0;
+  let retryMessages = messages;
+  while (parseFailures < 2) {
+    throwIfScheduleAborted(signal);
+    let response;
+    try {
+      response = await client.chat({
+        model,
+        messages: retryMessages,
+        temperature,
+        maxTokens,
+        responseFormat: structuredOutput ? { type: "json_object" } : undefined,
+        signal,
+      });
+    } catch (error) {
+      if (structuredOutput && responseFormatUnsupported(error)) {
+        structuredOutput = false;
+        continue;
+      }
+      throw error;
+    }
+    try {
+      return parseModelJson(response?.content, label);
+    } catch (error) {
+      parseFailures++;
+      if (parseFailures >= 2) {
+        const finishReason = response?.raw?.choices?.[0]?.finish_reason;
+        throw new Error(`${error.message}${finishReason ? ` (finish reason: ${finishReason})` : ""}`);
+      }
+      retryMessages = [
+        ...messages,
+        { role: "system", content: "The previous response was invalid or incomplete JSON. Return the requested compact JSON object again, with all string control characters properly escaped and no Markdown." },
+      ];
+    }
+  }
+  throw new Error(`${label} did not return valid JSON`);
+}
+
+function knowledgePaths(workspace) {
+  const projectRoot = resolve(workspace);
+  const root = resolve(projectRoot, "knowledge");
+  const legacyRoot = resolve(projectRoot, ".visionox", "knowledge");
+  if (!(root === projectRoot || root.startsWith(projectRoot + sep))) {
+    throw new Error("knowledge directory escapes the bound workspace");
+  }
+  if (existsSync(projectRoot)) {
+    const projectReal = realpathSync(projectRoot);
+    if (existsSync(legacyRoot) && !existsSync(root)) {
+      const legacyReal = realpathSync(legacyRoot);
+      if (!(legacyReal === projectReal || legacyReal.startsWith(projectReal + sep))) {
+        throw new Error("legacy knowledge directory resolves outside the bound workspace");
+      }
+      renameSync(legacyRoot, root);
+    }
+    for (const candidate of [root, resolve(root, "topics")]) {
+      if (!existsSync(candidate)) continue;
+      const candidateReal = realpathSync(candidate);
+      if (!(candidateReal === projectReal || candidateReal.startsWith(projectReal + sep))) {
+        throw new Error("knowledge directory resolves outside the bound workspace");
+      }
+    }
+  }
+  return { projectRoot, root, topicsDir: resolve(root, "topics"), manifestPath: resolve(root, ".manifest.json") };
+}
+
+function readKnowledgeManifest(workspace) {
+  const paths = knowledgePaths(workspace);
+  let parsed = {};
+  try { parsed = JSON.parse(readFileSync(paths.manifestPath, "utf8")); } catch {}
+  try {
+    const diskPaths = new Set(existsSync(paths.topicsDir)
+      ? readdirSync(paths.topicsDir).filter((name) => name.toLowerCase().endsWith(".md")).map((name) => `topics/${name}`)
+      : []);
+    const reconciled = reconcileKnowledgeTopics(parsed?.topics, diskPaths);
+    const topics = reconciled.topics.map((topic) => {
+      const target = resolve(paths.root, topic.path);
+      let contentHash = null;
+      try { contentHash = createHash("sha256").update(readFileSync(target)).digest("hex").slice(0, 16); } catch {}
+      return {
+        ...topic,
+        contentHash: topic.contentHash || contentHash,
+        manualEdited: topic.manualEdited === true || Boolean(topic.contentHash && contentHash && topic.contentHash !== contentHash),
+      };
+    });
+    const trackedPaths = new Set(topics.map((topic) => topic.path));
+    const discoveredPaths = [];
+    for (const path of diskPaths) {
+      if (trackedPaths.has(path)) continue;
+      const target = resolve(paths.root, path);
+      try {
+        const markdown = readFileSync(target, "utf8");
+        const id = (/^topicId:\s*(.+)$/m.exec(markdown)?.[1] || basename(path, ".md")).trim();
+        const title = (/^#\s+(.+)$/m.exec(markdown)?.[1] || id).trim();
+        const qualityScore = Number(/^qualityScore:\s*(\d+(?:\.\d+)?)$/m.exec(markdown)?.[1] || 0);
+        const contentHash = createHash("sha256").update(markdown).digest("hex").slice(0, 16);
+        topics.push({ id, title, path, sourceSessions: [], qualityScore, contentHash, manualEdited: true, discoveredAt: new Date().toISOString() });
+        discoveredPaths.push(path);
+      } catch {}
+    }
+    return {
+      version: 2,
+      topics,
+      sources: Array.isArray(parsed?.sources) ? parsed.sources.filter((item) => item && typeof item.name === "string").slice(-5000) : [],
+      processedSourceFingerprints: Array.isArray(parsed?.processedSourceFingerprints)
+        ? parsed.processedSourceFingerprints.filter((item) => typeof item === "string").slice(-100)
+        : [],
+      indexDirty: parsed?.indexDirty === true || reconciled.removedIds.length > 0 || discoveredPaths.length > 0,
+      reconciliation: { removedTopicIds: reconciled.removedIds, discoveredPaths },
+    };
+  } catch {
+    return { version: 2, topics: [], sources: [], processedSourceFingerprints: [], indexDirty: false, reconciliation: { removedTopicIds: [], discoveredPaths: [] } };
+  }
+}
+
+function writeKnowledgeManifest(workspace, manifest) {
+  const paths = knowledgePaths(workspace);
+  const value = {
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    topics: Array.isArray(manifest.topics) ? manifest.topics : [],
+    sources: Array.isArray(manifest.sources) ? manifest.sources.slice(-5000) : [],
+    processedSourceFingerprints: Array.isArray(manifest.processedSourceFingerprints)
+      ? manifest.processedSourceFingerprints.slice(-100)
+      : [],
+    indexDirty: manifest.indexDirty === true,
+  };
+  writeKnowledgeFile(paths.manifestPath, `${JSON.stringify(value, null, 2)}\n`);
+  return value;
+}
+
+function writeKnowledgeFile(target, content) {
+  const tempDir = resolve(tmpdir(), `visionox-knowledge-${randomUUID()}`);
+  const tempFile = resolve(tempDir, basename(target));
+  mkdirSync(tempDir, { recursive: true });
+  try {
+    writeFileSync(tempFile, content, "utf8");
+    mkdirSync(dirname(target), { recursive: true });
+    try {
+      renameSync(tempFile, target);
+    } catch {
+      writeFileSync(target, content, "utf8");
+    }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function selectKnowledgeSessions(task, manifest) {
+  const now = Date.now();
+  const lookbackMs = Math.max(1, task.knowledgeLookbackDays || 30) * 864e5;
+  const ledger = new Map((manifest?.sources || []).map((item) => [item.name, item]));
+  const terminal = new Set(["accepted", "keep_raw", "trash_candidate", "review", "manual_review_required"]);
+  const metadata = listSessionsForWorkspace(task.workspaceDir)
+    .filter((session) => session.messageCount >= 2 && session.mtime.getTime() >= now - lookbackMs)
+    .filter((session) => {
+      const previous = ledger.get(session.name);
+      return !previous
+        || !terminal.has(previous.status)
+        || previous.mtime !== session.mtime.toISOString()
+        || previous.messageCount !== session.messageCount;
+    })
+    .sort((a, b) => a.mtime.getTime() - b.mtime.getTime())
+    .slice(0, 32)
+    .map((session) => ({
+      name: session.name,
+      mtime: session.mtime.toISOString(),
+      messageCount: session.messageCount,
+      transcript: stableConversation(loadSessionMessages(session.name), 16000),
+    }))
+    .filter((session) => session.transcript.length >= 160);
+  return selectPendingKnowledgeSessions(metadata, manifest?.sources, 16);
+}
+
+function updateKnowledgeSource(manifest, candidate, patch) {
+  const sources = Array.isArray(manifest.sources) ? manifest.sources : [];
+  const record = {
+    name: candidate.name,
+    mtime: candidate.mtime,
+    messageCount: candidate.messageCount,
+    contentFingerprint: sessionContentFingerprint(candidate),
+    updatedAt: new Date().toISOString(),
+    ...patch,
+  };
+  const index = sources.findIndex((item) => item.name === candidate.name);
+  if (index >= 0) sources[index] = { ...sources[index], ...record };
+  else sources.push(record);
+  manifest.sources = sources;
+  return record;
+}
+
+async function evaluateSessionKnowledge(task, signal) {
+  if (!task.knowledgeEnabled) return { candidates: [], evaluations: [], manifest: readKnowledgeManifest(task.workspaceDir) };
+  if (!client) throw new Error("model client is not configured for knowledge evaluation");
+  const manifest = readKnowledgeManifest(task.workspaceDir);
+  const candidates = selectKnowledgeSessions(task, manifest);
+  if (manifest.reconciliation?.removedTopicIds.length || manifest.reconciliation?.discoveredPaths.length) {
+    writeKnowledgeManifest(task.workspaceDir, manifest);
+  }
+  if (candidates.length === 0) return { candidates, evaluations: [], manifest };
+  const existingTopics = manifest.topics.map((topic) => ({ id: topic.id, title: topic.title }));
+  const modelConfig = effectiveModelConfig(config);
+  const evaluations = [];
+  const evaluationFailures = [];
+  let reviewedCount = 0;
+  for (let offset = 0; offset < candidates.length; offset += 4) {
+    const batch = candidates.slice(offset, offset + 4);
+    try {
+      const raw = await requestModelJson({
+        label: `session quality evaluator batch ${Math.floor(offset / 4) + 1}`,
+        model: modelConfig.model,
+        messages: [
+          { role: "system", content: "You are an evidence-driven conversation quality evaluator. Return valid JSON only." },
+          { role: "user", content: buildSessionQualityPrompt(batch, existingTopics, task.sessionCleanupPromptAddendum || "") },
+        ],
+        temperature: 0,
+        maxTokens: 5000,
+        signal,
+      });
+      const batchEvaluations = normalizeSessionQualityEvaluations(raw, batch, new Set(manifest.topics.map((topic) => topic.id)));
+      evaluations.push(...batchEvaluations);
+      for (const candidate of batch) {
+        const evaluation = batchEvaluations.find((item) => item.name === candidate.name);
+        updateKnowledgeSource(manifest, candidate, {
+          status: ["extract", "merge"].includes(evaluation?.action) ? "pending_generation" : evaluation?.action || "review",
+          action: evaluation?.action || "review",
+          valueScore: evaluation?.valueScore ?? 0,
+          confidence: evaluation?.confidence ?? 0,
+          reason: evaluation?.reason || "",
+        });
+      }
+      reviewedCount += batch.length;
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      evaluationFailures.push({ names: batch.map((item) => item.name), reason: String(error?.message || error) });
+      evaluations.push(...normalizeSessionQualityEvaluations([], batch, new Set()));
+      for (const candidate of batch) updateKnowledgeSource(manifest, candidate, { status: "evaluation_failed", reason: String(error?.message || error) });
+    }
+  }
+  writeKnowledgeManifest(task.workspaceDir, manifest);
+  return { candidates, evaluations, manifest, reviewedCount, evaluationFailures };
+}
+
+async function evaluateKnowledgeDocument(markdown, sourceSessions, existingTopics, signal, trustedBaseline = "") {
+  const modelConfig = effectiveModelConfig(config);
+  const raw = await requestModelJson({
+    label: "knowledge document evaluator",
+    model: modelConfig.model,
+    messages: [
+      { role: "system", content: "You are an independent evidence and quality reviewer. Return valid JSON only." },
+      { role: "user", content: buildDocumentQualityPrompt(markdown, sourceSessions, existingTopics, trustedBaseline) },
+    ],
+    temperature: 0,
+    maxTokens: 5000,
+    signal,
+  });
+  return normalizeDocumentQualityEvaluation(raw);
+}
+
+async function generateSessionKnowledge(task, signal, qualityState = null) {
+  if (!task.knowledgeEnabled) return { enabled: false, sessionsProcessed: 0, created: 0, updated: 0, outputPaths: [] };
+  if (!client) throw new Error("model client is not configured for knowledge extraction");
+  const state = qualityState ?? await evaluateSessionKnowledge(task, signal);
+  const evaluationByName = new Map(state.evaluations.map((item) => [item.name, item]));
+  const candidates = state.candidates
+    .filter((candidate) => ["extract", "merge"].includes(evaluationByName.get(candidate.name)?.action))
+    .map((candidate) => ({ ...candidate, quality: evaluationByName.get(candidate.name) }));
+  const rejectedLowValue = state.evaluations.filter((item) => item.action === "trash_candidate").length;
+  if (candidates.length === 0) {
+    const removedTopics = state.manifest?.reconciliation?.removedTopicIds.length ?? 0;
+    return { enabled: true, sessionsProcessed: 0, rejectedLowValue, created: 0, updated: 0, removedTopics, rejectedDocuments: 0, outputPaths: [], indexDirty: state.manifest?.indexDirty === true || removedTopics > 0, skipped: "no AI-approved knowledge candidates" };
+  }
+  const addendum = String(task.sessionCleanupPromptAddendum || "").trim();
+  const instructionId = instructionFingerprint(addendum);
+  const fingerprint = `${sourceFingerprint(candidates)}:${instructionId}`;
+  const manifest = state.manifest;
+  const paths = knowledgePaths(task.workspaceDir);
+  const trashNames = new Set(state.evaluations.filter((item) => item.action === "trash_candidate").map((item) => item.name));
+  const activeTopics = [];
+  let removedTopics = manifest.reconciliation?.removedTopicIds.length ?? 0;
+  for (const topic of manifest.topics) {
+    const sources = Array.isArray(topic.sourceSessions) ? topic.sourceSessions : [];
+    const allSourcesRejected = sources.length > 0 && sources.every((name) => trashNames.has(name));
+    const safePath = typeof topic.path === "string" && /^topics\/[A-Za-z0-9\u4e00-\u9fa5._-]+\.md$/.test(topic.path);
+    if (allSourcesRejected && safePath) {
+      const target = resolve(paths.root, topic.path);
+      if (target.startsWith(paths.topicsDir + sep) && existsSync(target)) rmSync(target, { force: true });
+      removedTopics++;
+      continue;
+    }
+    activeTopics.push(topic);
+  }
+  const existingTopics = activeTopics.map((topic) => {
+    let excerpt = "";
+    try {
+      excerpt = readFileSync(resolve(paths.root, topic.path), "utf8").slice(0, 6000);
+    } catch {}
+    return { id: topic.id, title: topic.title, excerpt };
+  });
+  const modelConfig = effectiveModelConfig(config);
+  throwIfScheduleAborted(signal);
+  const rawPlan = await requestModelJson({
+    label: "knowledge topic planner",
+    model: modelConfig.model,
+    messages: [
+      { role: "system", content: "Return valid JSON only. Group conversations conservatively by durable project topic." },
+      { role: "user", content: buildTopicPlanPrompt(candidates, existingTopics, addendum) },
+    ],
+    temperature: 0.1,
+    maxTokens: 5000,
+    signal,
+  });
+  const groups = normalizeTopicPlan(rawPlan, candidates.map((item) => item.name));
+  for (const group of groups) {
+    if (group.existingTopicId) continue;
+    const related = group.sessions.map((name) => evaluationByName.get(name)?.relatedTopicId).find(Boolean);
+    if (related) group.existingTopicId = related;
+  }
+  const byName = new Map(candidates.map((item) => [item.name, item]));
+  const existingIds = new Set(activeTopics.map((topic) => topic.id));
+  const nextTopics = [...activeTopics];
+  const outputPaths = [];
+  let created = 0;
+  let updated = 0;
+  let rejectedDocuments = 0;
+  for (const group of groups) {
+    throwIfScheduleAborted(signal);
+    const known = group.existingTopicId && existingIds.has(group.existingTopicId)
+      ? nextTopics.find((topic) => topic.id === group.existingTopicId)
+      : null;
+    const topicId = known?.id ?? safeTopicId(group.title, existingIds);
+    existingIds.add(topicId);
+    const knownPath = typeof known?.path === "string" && /^topics\/[A-Za-z0-9\u4e00-\u9fa5._-]+\.md$/.test(known.path)
+      ? known.path
+      : null;
+    const relativePath = knownPath ?? `topics/${topicId}.md`;
+    const target = resolve(paths.root, relativePath);
+    if (!(target === paths.root || target.startsWith(paths.root + sep))) throw new Error("topic path escapes knowledge directory");
+    let existingDocument = "";
+    if (known) {
+      try { existingDocument = readFileSync(target, "utf8").slice(0, 40000); } catch {}
+    }
+    const groupSessions = group.sessions.map((name) => byName.get(name)).filter(Boolean);
+    if (known?.manualEdited) {
+      rejectedDocuments++;
+      for (const candidate of groupSessions) updateKnowledgeSource(manifest, candidate, {
+        status: "manual_review_required",
+        action: candidate.quality.action,
+        reason: `existing topic ${known.id} was manually edited and was not overwritten`,
+      });
+      continue;
+    }
+    const generateDocument = async (reviewFeedback = "") => {
+      const effectiveAddendum = reviewFeedback
+        ? `${addendum}\n\nIndependent review feedback that must be corrected:\n${reviewFeedback}`
+        : addendum;
+      const rawDocument = await requestModelJson({
+        label: `knowledge topic ${topicId}`,
+        model: modelConfig.model,
+        messages: [
+          { role: "system", content: "Return valid JSON only. Preserve detailed evidence and never invent project facts." },
+          { role: "user", content: buildTopicDocumentPrompt(group, groupSessions, existingDocument, effectiveAddendum) },
+        ],
+        temperature: 0.1,
+        maxTokens: 10000,
+        signal,
+      });
+      return normalizeTopicDocument(
+        rawDocument,
+        group.title,
+        [...new Set([...(known?.sourceSessions || []), ...group.sessions])]
+      );
+    };
+    let document = await generateDocument();
+    const nowIso = new Date().toISOString();
+    const topicSources = [...new Set([...(known?.sourceSessions || []), ...group.sessions])];
+    const topicFingerprint = sourceFingerprint([
+      ...groupSessions,
+      ...(known?.sourceFingerprint ? [{ name: "previous-topic", transcript: known.sourceFingerprint }] : []),
+    ]);
+    const sessionQualityScore = Math.round(groupSessions.reduce((sum, session) => sum + session.quality.valueScore, 0) / Math.max(1, groupSessions.length));
+    const renderDocument = (qualityScore) => renderTopicMarkdown(document, {
+      topicId,
+      generatedAt: nowIso,
+      sourceFingerprint: topicFingerprint,
+      instructionFingerprint: instructionId,
+      qualityScore,
+      sourceSessions: topicSources,
+    });
+    let markdown = renderDocument(sessionQualityScore);
+    let documentQuality = await evaluateKnowledgeDocument(markdown, groupSessions, existingTopics, signal, existingDocument);
+    if (documentQuality.action === "revise") {
+      const feedback = [documentQuality.reason, ...documentQuality.unsupportedClaims, ...documentQuality.missingEvidence].filter(Boolean).join("\n");
+      document = await generateDocument(feedback);
+      markdown = renderDocument(documentQuality.qualityScore);
+      documentQuality = await evaluateKnowledgeDocument(markdown, groupSessions, existingTopics, signal, existingDocument);
+    }
+    if (documentQuality.action !== "accept") {
+      rejectedDocuments++;
+      for (const candidate of groupSessions) updateKnowledgeSource(manifest, candidate, {
+        status: "generation_rejected",
+        action: candidate.quality.action,
+        reason: documentQuality.reason,
+      });
+      continue;
+    }
+    markdown = renderDocument(documentQuality.qualityScore);
+    writeKnowledgeFile(target, markdown);
+    rememberGeneratedArtifactPath(target);
+    outputPaths.push(target);
+    const topicRecord = {
+      id: topicId,
+      title: document.title,
+      path: relativePath.replace(/\\/g, "/"),
+      sourceSessions: topicSources,
+      sourceFingerprint: topicFingerprint,
+      instructionFingerprint: instructionId,
+      qualityScore: documentQuality.qualityScore,
+      qualityConfidence: documentQuality.confidence,
+      contentHash: createHash("sha256").update(markdown).digest("hex").slice(0, 16),
+      manualEdited: false,
+      updatedAt: nowIso,
+    };
+    const topicIndex = nextTopics.findIndex((topic) => topic.id === topicId);
+    if (topicIndex >= 0) {
+      nextTopics[topicIndex] = topicRecord;
+      updated++;
+    } else {
+      nextTopics.push(topicRecord);
+      created++;
+    }
+    for (const candidate of groupSessions) updateKnowledgeSource(manifest, candidate, {
+      status: "accepted",
+      action: candidate.quality.action,
+      topicIds: [...new Set([...(manifest.sources.find((item) => item.name === candidate.name)?.topicIds || []), topicId])],
+      reason: "knowledge document accepted",
+    });
+    manifest.topics = nextTopics;
+    manifest.indexDirty = true;
+    writeKnowledgeManifest(task.workspaceDir, manifest);
+  }
+  const nextManifest = {
+    version: 2,
+    topics: nextTopics,
+    sources: manifest.sources,
+    indexDirty: manifest.indexDirty === true || outputPaths.length > 0 || removedTopics > 0,
+    processedSourceFingerprints: outputPaths.length > 0
+      ? [...manifest.processedSourceFingerprints, fingerprint].slice(-100)
+      : manifest.processedSourceFingerprints,
+  };
+  writeKnowledgeManifest(task.workspaceDir, nextManifest);
+  return { enabled: true, sessionsProcessed: candidates.length, rejectedLowValue, created, updated, removedTopics, rejectedDocuments, outputPaths, indexDirty: nextManifest.indexDirty, fingerprint, instructionFingerprint: instructionId };
+}
+
+function setKnowledgeIndexDirty(workspace, dirty) {
+  const manifest = readKnowledgeManifest(workspace);
+  manifest.indexDirty = dirty === true;
+  writeKnowledgeManifest(workspace, manifest);
+}
+
+async function updateKnowledgeSemanticIndex(task, signal) {
+  if (!task.knowledgeAutoIndex) return { requested: false, status: "disabled" };
+  const semantic = loadSemanticEmbeddingUserConfig(configPath);
+  if (semantic.provider === "openai-compat" && !semantic.openaiCompat?.apiKey?.trim()) {
+    return { requested: true, status: "skipped: embedding API key is not configured" };
+  }
+  const cfg = readConfig(configPath);
+  cfg.index = { ...(cfg.index ?? {}), includeKnowledgeDocs: true };
+  writeConfig(cfg, configPath);
+  try {
+    const result = await buildIndex(task.workspaceDir, {
+      rebuild: false,
+      configPath,
+      signal,
+      indexConfig: { ...loadIndexConfig(configPath), includeKnowledgeDocs: true },
+    });
+    await activateSemanticSearch(task.workspaceDir);
+    if (result.committed === false || result.chunksSkipped > 0 || result.skipBuckets?.readError > 0) {
+      setKnowledgeIndexDirty(task.workspaceDir, true);
+      return { requested: true, status: `pending: ${result.chunksSkipped} embedding chunk(s) failed and the previous index was preserved` };
+    }
+    setKnowledgeIndexDirty(task.workspaceDir, false);
+    return { requested: true, status: "completed" };
+  } catch (err) {
+    setKnowledgeIndexDirty(task.workspaceDir, true);
+    return { requested: true, status: `pending: ${err.message}` };
+  }
+}
+
 async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date().toISOString(), signal) {
   const task = schedules.find((item) => item.id === taskId);
   if (!task) return;
   try {
+    throwIfScheduleAborted(signal);
+    const qualityState = task.knowledgeEnabled ? await evaluateSessionKnowledge(task, signal) : null;
     throwIfScheduleAborted(signal);
     const preview = await buildSessionCleanupPreview({
       scanLimit: 500,
@@ -4019,16 +4881,44 @@ async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date
       minConfidence: cleanupMinConfidenceForStrength(task.sessionCleanupStrength),
       semanticMode: task.sessionCleanupSemanticMode,
       includeReview: false,
+      workspace: task.workspaceDir,
+      promptAddendum: task.sessionCleanupPromptAddendum,
     }, { signal });
     throwIfScheduleAborted(signal);
     const shouldDelete = task.sessionCleanupAction === "delete";
-    const result = shouldDelete && preview.returnedCandidateCount > 0
-      ? applySessionCleanup({ cleanupId: preview.cleanupId, confirm: true })
+    const protectedKnowledgeNames = new Set(qualityState?.evaluations
+      .filter((item) => item.action !== "trash_candidate")
+      .map((item) => item.name) ?? []);
+    const previewDeleteNames = preview.candidates
+      .filter((item) => item.action === "delete" && !protectedKnowledgeNames.has(item.name))
+      .map((item) => item.name);
+    const aiTrashNames = qualityState?.evaluations.filter((item) => item.action === "trash_candidate").map((item) => item.name) ?? [];
+    throwIfScheduleAborted(signal);
+    const knowledge = await generateSessionKnowledge(task, signal, qualityState);
+    const semanticIndex = knowledge.indexDirty
+      ? await updateKnowledgeSemanticIndex(task, signal)
+      : { requested: false, status: "not needed" };
+    throwIfScheduleAborted(signal);
+    const trashed = shouldDelete && (previewDeleteNames.length > 0 || aiTrashNames.length > 0)
+      ? trashSessions([...previewDeleteNames, ...aiTrashNames], runId)
       : null;
+    const result = trashed ? {
+      deletedCount: trashed.movedCount,
+      failedCount: trashed.failedCount,
+      trashRoot: SESSION_TRASH_DIR,
+    } : null;
+    if (knowledge.enabled && qualityState?.candidates.length > 0) task.knowledgeCursor = startedAt;
+    const aiFailed = qualityState?.evaluationFailures.reduce((sum, item) => sum + item.names.length, 0) ?? 0;
+    const warnings = [
+      result && result.failedCount > 0 ? `${result.failedCount} session(s) failed to move to trash` : null,
+      aiFailed > 0 ? `${aiFailed} session(s) kept for manual review because AI evaluation failed` : null,
+      knowledge.indexDirty && semanticIndex.status !== "completed" ? `knowledge index update ${semanticIndex.status}` : null,
+    ].filter(Boolean);
+    const cleanupSummary = summarizeSessionCleanup(preview, result);
     completeScheduleRun(task.id, runId, {
       status: "completed",
-      reason: result && result.failedCount > 0 ? `${result.failedCount} session(s) failed to delete` : null,
-      summary: summarizeSessionCleanup(preview, result),
+      reason: warnings.length > 0 ? warnings.join("; ") : null,
+      summary: warnings.length > 0 ? `${cleanupSummary}; warning: ${warnings.join("; ")}` : cleanupSummary,
       cleanupAction: shouldDelete ? "delete" : "preview",
       cleanupPreviewId: preview.cleanupId,
       cleanupCandidates: preview.candidateCount,
@@ -4039,6 +4929,18 @@ async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date
       cleanupExtract: preview.recommendationCounts?.extract ?? 0,
       cleanupSemanticReviewed: preview.semanticReviewed ?? 0,
       cleanupTrashRoot: result?.trashRoot ?? null,
+      knowledgeSessionsProcessed: knowledge.sessionsProcessed,
+      knowledgeDocumentsCreated: knowledge.created,
+      knowledgeDocumentsUpdated: knowledge.updated,
+      knowledgeOutputPaths: knowledge.outputPaths,
+      semanticIndexRequested: semanticIndex.requested,
+      semanticIndexStatus: semanticIndex.status,
+      knowledgeInstructionFingerprint: knowledge.instructionFingerprint ?? instructionFingerprint(task.sessionCleanupPromptAddendum || ""),
+      knowledgeRejectedLowValue: knowledge.rejectedLowValue ?? 0,
+      knowledgeDocumentsRejected: knowledge.rejectedDocuments ?? 0,
+      knowledgeTopicsRemoved: knowledge.removedTopics ?? 0,
+      knowledgeAIReviewed: qualityState?.reviewedCount ?? 0,
+      knowledgeAIFailed: aiFailed,
     });
   } catch (err) {
     const cancelled = signal?.aborted || err?.name === "AbortError";
@@ -4168,7 +5070,7 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
   const previousLastRunAt = task.lastRunAt;
   task.lastRunAt = startedAt;
   task.missedRunAt = null;
-  if (!sameScheduleWorkspace(task)) {
+  if (!sameScheduleWorkspace(task) && task.kind !== "session_cleanup") {
     const reason = `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`;
     const completedAt = new Date().toISOString();
     task.updatedAt = new Date().toISOString();
@@ -4710,6 +5612,7 @@ async function writeActiveSessionMeta(patch = {}) {
       savedAt: patch.savedAt || current.savedAt || now,
       updatedAt: now,
       sessionMemories: sessionMemories.map((memory) => ({ ...memory })),
+      indexRetrievalMode,
     };
     await writeFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
   } catch (err) {
@@ -5402,10 +6305,24 @@ const ctx = {
   sessionsDir,
   loop,
   tools,
+  addToolToPrefix: addToolToActivePrefix,
+  onSemanticIndexCommitted: async ({ root, indexConfig, complete }) => {
+    semanticRetrievalCache.clear();
+    if (resolve(root) === resolve(workspaceDir) && indexConfig?.includeKnowledgeDocs === true) {
+      setKnowledgeIndexDirty(root, !complete);
+    }
+  },
   mcpServers,
 
   // ── Getters ────────────────────────────────────────────────
   getCurrentCwd: () => workspaceDir,
+  getIndexRetrievalMode: () => ({ mode: indexRetrievalMode, semanticAvailable: hasSemanticSearch }),
+  setIndexRetrievalMode: (mode) => {
+    if (busy) return { ok: false, error: "index retrieval mode changes apply only while idle" };
+    const normalized = normalizeIndexRetrievalMode(mode, "");
+    if (!normalized) return { ok: false, error: "mode must be auto, tool, or off" };
+    return { ok: true, mode: applyIndexRetrievalMode(normalized), semanticAvailable: hasSemanticSearch };
+  },
   getGeneratedArtifactPaths: collectGeneratedArtifactPaths,
   getEditMode: () => loadEditMode(configPath),
   getPlanMode: () => false,
@@ -5458,6 +6375,13 @@ const ctx = {
   getAllModeMemory: () => listAllModeMemory(),
   getSessionMemories: () => listSessionMemories(),
   deleteSessionMemory,
+  trashSessions,
+  listSessionTrash,
+  getSessionTrashEntry,
+  restoreSessionTrash,
+  deleteSessionTrash,
+  getSessionTrashRetentionDays: sessionTrashRetentionDays,
+  setSessionTrashRetentionDays,
   getMemoryInjectionStatus: () => getMemoryInjectionStatus(workspaceDir),
   getMemoryRuntimeStatus: () => getMemoryRuntimeStatus(workspaceDir),
   getProjectMemoryStatus: () => getProjectMemoryStatus(workspaceDir),
@@ -6302,6 +7226,7 @@ ${modeList}
         loop.setPendingImages(images);
       }
 
+      const retrievalHistory = messages.slice(-12);
       const userMsgId = String(nextMsgId++);
       pushMessage({ id: userMsgId, role: "user", text, images: images?.length ? images : undefined });
       appendActiveMessage({ role: "user", text, images: images?.length ? images : undefined });
@@ -6324,8 +7249,25 @@ ${modeList}
         let continuationAttempts = 0;
         let continuationNeeded = false;
         let loopInput = text;
+        let augmentedLoopInput = null;
         const turnArtifactPaths = new Set();
         try {
+          const retrieval = await retrieveSemanticContext(text, retrievalHistory, operation.controller.signal);
+          if (retrieval.sources.length > 0) {
+            loopInput = retrieval.input;
+            augmentedLoopInput = retrieval.input;
+          }
+          if (indexRetrievalMode === "auto") {
+            broadcastDashboardEvent({
+              kind: "semantic-retrieval",
+              mode: indexRetrievalMode,
+              status: retrieval.status,
+              sources: retrieval.sources,
+              elapsedMs: retrieval.elapsedMs,
+              cached: retrieval.cached === true,
+              error: retrieval.error,
+            });
+          }
           while (true) {
             let budgetForcedSummary = false;
             let sawToolActivity = false;
@@ -6434,6 +7376,10 @@ ${modeList}
             text: err.message,
           });
         } finally {
+          if (augmentedLoopInput && loop?.log?.toMessages) {
+            const restoredHistory = restoreOriginalUserInput(loop.log.toMessages(), augmentedLoopInput, text);
+            loop.adoptHistory?.(restoredHistory, loop.model) ?? loop.log.compactInPlace(restoredHistory);
+          }
           await syncActiveSessionFromLoop({ text, images });
           if (opts.readonly === true) {
             tools.setPlanMode(previousPlanMode);

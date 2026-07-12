@@ -13,7 +13,8 @@ import {
 // src/index/semantic/builder.ts
 import { promises as fs3 } from "fs";
 import path3 from "path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
 
 // src/index/semantic/chunker.ts
 import { promises as fs } from "fs";
@@ -107,7 +108,8 @@ async function* walkChunks(root, opts = {}) {
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      opts.onTraversalError?.(toForwardRel(root, dir), error);
       continue;
     }
     for (const entry of entries) {
@@ -115,11 +117,12 @@ async function* walkChunks(root, opts = {}) {
       const abs = path.join(dir, name);
       const rel = toForwardRel(root, abs);
       if (entry.isDirectory()) {
-        if (filters.dirSet.has(name)) {
+        const enterKnowledgeRoot = dir === root && name === "knowledge" && filters.includeKnowledgeDocs;
+        if (filters.dirSet.has(name) && !enterKnowledgeRoot) {
           onSkip(rel, "defaultDir");
           continue;
         }
-        if (filters.respectGitignore && ignoredByLayers(layers, abs, true)) {
+        if (filters.respectGitignore && !enterKnowledgeRoot && !frame.knowledgeTree && ignoredByLayers(layers, abs, true)) {
           onSkip(rel, "gitignore");
           continue;
         }
@@ -128,10 +131,15 @@ async function* walkChunks(root, opts = {}) {
           continue;
         }
         const childLayers = filters.respectGitignore ? await extendLayers(layers, abs) : layers;
-        stack.push({ dir: abs, layers: childLayers });
+        stack.push({
+          dir: abs,
+          layers: childLayers,
+          knowledgeTree: frame.knowledgeTree || enterKnowledgeRoot
+        });
         continue;
       }
       if (!entry.isFile()) continue;
+      if (frame.knowledgeTree && path.extname(name).toLowerCase() !== ".md") continue;
       if (filters.fileSet.has(name)) {
         onSkip(rel, "defaultFile");
         continue;
@@ -141,7 +149,7 @@ async function* walkChunks(root, opts = {}) {
         onSkip(rel, "binaryExt");
         continue;
       }
-      if (filters.respectGitignore && ignoredByLayers(layers, abs, false)) {
+      if (filters.respectGitignore && !frame.knowledgeTree && ignoredByLayers(layers, abs, false)) {
         onSkip(rel, "gitignore");
         continue;
       }
@@ -154,6 +162,7 @@ async function* walkChunks(root, opts = {}) {
         onSkip(rel, result.reason);
         continue;
       }
+      opts.onFile?.(rel);
       const text = result.text;
       if (text.indexOf("\0") !== -1) {
         onSkip(rel, "binaryContent");
@@ -420,6 +429,17 @@ import path2 from "path";
 var STORE_VERSION = 1;
 var META_FILE = "index.meta.json";
 var DATA_FILE = "index.jsonl";
+var STORE_CACHE_MAX = 4;
+var storeCache = /* @__PURE__ */ new Map();
+function storeCacheKey(indexDir, identity) {
+  return `${indexDir}\n${identity.provider}\n${identity.model}\n${identity.configFingerprint || "legacy"}`;
+}
+function rememberStore(store, updatedAt = "") {
+  const key = storeCacheKey(store.indexDir, store.identity);
+  storeCache.delete(key);
+  storeCache.set(key, { store, updatedAt });
+  while (storeCache.size > STORE_CACHE_MAX) storeCache.delete(storeCache.keys().next().value);
+}
 async function readIndexMeta(indexDir) {
   try {
     const raw = await fs2.readFile(path2.join(indexDir, META_FILE), "utf8");
@@ -431,6 +451,7 @@ async function readIndexMeta(indexDir) {
 function compareIndexIdentity(meta, identity) {
   if (meta.provider !== identity.provider) return "provider";
   if (meta.model !== identity.model) return "model";
+  if (meta.configFingerprint && identity.configFingerprint && meta.configFingerprint !== identity.configFingerprint) return "config";
   return null;
 }
 async function wipeStoreFiles(indexDir) {
@@ -472,42 +493,108 @@ var SemanticStore = class {
   }
   async add(entries) {
     if (entries.length === 0) return;
-    if (this.dim === 0) this.dim = entries[0].embedding.length;
-    const lines = [];
+    const expectedDim = this.dim || entries[0].embedding.length;
     for (const e of entries) {
-      if (e.embedding.length !== this.dim) {
+      if (e.embedding.length !== expectedDim) {
         throw new Error(
-          `embedding dim mismatch: expected ${this.dim}, got ${e.embedding.length} for ${e.path}:${e.startLine}`
+          `embedding dim mismatch: expected ${expectedDim}, got ${e.embedding.length} for ${e.path}:${e.startLine}`
         );
       }
-      this.entries.push(e);
-      const list = this.byPath.get(e.path);
-      if (list) list.push(e);
-      else this.byPath.set(e.path, [e]);
-      lines.push(serializeEntry(e));
     }
-    await fs2.mkdir(this.indexDir, { recursive: true });
-    await fs2.appendFile(path2.join(this.indexDir, DATA_FILE), `${lines.join("\n")}
-`, "utf8");
-    await this.writeMeta();
+    const nextEntries = [...this.entries, ...entries];
+    const updatedAt = await this.commitSnapshot(nextEntries, expectedDim);
+    this.applyEntries(nextEntries, expectedDim);
+    rememberStore(this, updatedAt);
   }
   async remove(paths) {
-    if (paths.length === 0) return 0;
+    return paths.length > 0 ? this.replacePathsAtomically([], paths) : 0;
+  }
+  async replacePathsAtomically(entries, paths) {
     const drop = new Set(paths);
     const before = this.entries.length;
-    this.entries = this.entries.filter((e) => !drop.has(e.path));
-    for (const p of paths) this.byPath.delete(p);
-    const removed = before - this.entries.length;
-    if (removed > 0) await this.flush();
-    return removed;
+    const retained = this.entries.filter((entry) => !drop.has(entry.path));
+    const expectedDim = retained[0]?.embedding.length ?? entries[0]?.embedding.length ?? this.dim;
+    for (const entry of entries) {
+      if (expectedDim && entry.embedding.length !== expectedDim) {
+        throw new Error(`embedding dim mismatch: expected ${expectedDim}, got ${entry.embedding.length} for ${entry.path}:${entry.startLine}`);
+      }
+    }
+    const nextEntries = [...retained, ...entries];
+    const updatedAt = await this.commitSnapshot(nextEntries, expectedDim || 0);
+    this.applyEntries(nextEntries, expectedDim || 0);
+    rememberStore(this, updatedAt);
+    return before - retained.length;
   }
-  search(query, topK = 8, minScore = 0) {
+  applyEntries(entries, dim) {
+    this.entries = entries;
+    this.byPath.clear();
+    for (const entry of this.entries) {
+      const list = this.byPath.get(entry.path);
+      if (list) list.push(entry);
+      else this.byPath.set(entry.path, [entry]);
+    }
+    this.dim = dim;
+  }
+  async commitSnapshot(entries, dim) {
+    await fs2.mkdir(this.indexDir, { recursive: true });
+    const nonce = randomUUID();
+    const finalData = path2.join(this.indexDir, DATA_FILE);
+    const finalMeta = path2.join(this.indexDir, META_FILE);
+    const commitData = `${finalData}.commit-${nonce}`;
+    const commitMeta = `${finalMeta}.commit-${nonce}`;
+    const tempData = path2.join(tmpdir(), `visionox-index-data-${nonce}.tmp`);
+    const tempMeta = path2.join(tmpdir(), `visionox-index-meta-${nonce}.tmp`);
+    const backupData = path2.join(tmpdir(), `visionox-index-data-${nonce}.backup`);
+    const backupMeta = path2.join(tmpdir(), `visionox-index-meta-${nonce}.backup`);
+    const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const meta = {
+      version: STORE_VERSION,
+      provider: this.provider,
+      model: this.model,
+      configFingerprint: this.identity.configFingerprint || null,
+      dim,
+      updatedAt
+    };
+    const lines = entries.map(serializeEntry).join("\n");
+    let hadData = false;
+    let hadMeta = false;
+    let dataCommitted = false;
+    let metaCommitted = false;
+    try {
+      await fs2.writeFile(tempData, lines.length > 0 ? `${lines}\n` : "", "utf8");
+      await fs2.writeFile(tempMeta, `${JSON.stringify(meta, null, 2)}\n`, "utf8");
+      try { await fs2.copyFile(finalData, backupData); hadData = true; } catch {}
+      try { await fs2.copyFile(finalMeta, backupMeta); hadMeta = true; } catch {}
+      await fs2.copyFile(tempData, commitData);
+      await fs2.copyFile(tempMeta, commitMeta);
+      await fs2.rename(commitData, finalData);
+      dataCommitted = true;
+      await fs2.rename(commitMeta, finalMeta);
+      metaCommitted = true;
+      return updatedAt;
+    } catch (error) {
+      storeCache.delete(storeCacheKey(this.indexDir, this.identity));
+      if (dataCommitted) {
+        if (hadData) await fs2.copyFile(backupData, finalData).catch(() => {});
+        else await fs2.rm(finalData, { force: true }).catch(() => {});
+      }
+      if (metaCommitted) {
+        if (hadMeta) await fs2.copyFile(backupMeta, finalMeta).catch(() => {});
+        else await fs2.rm(finalMeta, { force: true }).catch(() => {});
+      }
+      throw error;
+    } finally {
+      await Promise.all([tempData, tempMeta, backupData, backupMeta, commitData, commitMeta].map((file) => fs2.rm(file, { force: true }).catch(() => {})));
+    }
+  }
+  search(query, topK = 8, minScore = 0, filter = null) {
     if (this.entries.length === 0) return [];
     if (query.length !== this.dim && this.dim !== 0) {
       throw new Error(`query dim ${query.length} \u2260 index dim ${this.dim}`);
     }
     const heap = [];
     for (const entry of this.entries) {
+      if (filter && !filter(entry)) continue;
       const score = dot(query, entry.embedding);
       if (score < minScore) continue;
       if (heap.length < topK) {
@@ -527,22 +614,18 @@ var SemanticStore = class {
     return heap.sort((a, b) => b.score - a.score);
   }
   async flush() {
-    await fs2.mkdir(this.indexDir, { recursive: true });
-    const tmp = path2.join(this.indexDir, `${DATA_FILE}.tmp`);
-    const final = path2.join(this.indexDir, DATA_FILE);
-    const lines = this.entries.map(serializeEntry).join("\n");
-    await fs2.writeFile(tmp, lines.length > 0 ? `${lines}
-` : "", "utf8");
-    await fs2.rename(tmp, final);
-    await this.writeMeta();
+    const updatedAt = await this.commitSnapshot(this.entries, this.dim);
+    rememberStore(this, updatedAt);
   }
   async writeMeta() {
+    const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     const meta = {
       version: STORE_VERSION,
       provider: this.provider,
       model: this.model,
+      configFingerprint: this.identity.configFingerprint || null,
       dim: this.dim,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      updatedAt
     };
     await fs2.writeFile(
       path2.join(this.indexDir, META_FILE),
@@ -550,6 +633,7 @@ var SemanticStore = class {
 `,
       "utf8"
     );
+    rememberStore(this, updatedAt);
   }
   async wipe() {
     this.entries = [];
@@ -559,7 +643,6 @@ var SemanticStore = class {
   }
 };
 async function openStore(indexDir, identity) {
-  const store = new SemanticStore(indexDir, identity);
   const dataPath = path2.join(indexDir, DATA_FILE);
   const meta = await readIndexMeta(indexDir);
   if (meta) {
@@ -575,10 +658,19 @@ async function openStore(indexDir, identity) {
       );
     }
   }
+  const cacheKey = storeCacheKey(indexDir, identity);
+  const cached = storeCache.get(cacheKey);
+  if (cached && cached.updatedAt === (meta?.updatedAt || "")) {
+    storeCache.delete(cacheKey);
+    storeCache.set(cacheKey, cached);
+    return cached.store;
+  }
+  const store = new SemanticStore(indexDir, identity);
   let raw;
   try {
     raw = await fs2.readFile(dataPath, "utf8");
   } catch {
+    rememberStore(store, meta?.updatedAt || "");
     return store;
   }
   for (const line of raw.split("\n")) {
@@ -594,6 +686,7 @@ async function openStore(indexDir, identity) {
     } catch {
     }
   }
+  rememberStore(store, meta?.updatedAt || "");
   return store;
 }
 function normalize(v) {
@@ -639,6 +732,7 @@ function normalizeMeta(meta) {
     version: typeof meta.version === "number" ? meta.version : STORE_VERSION,
     provider: meta.provider === "openai-compat" ? "openai-compat" : "ollama",
     model: typeof meta.model === "string" ? meta.model : "",
+    configFingerprint: typeof meta.configFingerprint === "string" ? meta.configFingerprint : null,
     dim: typeof meta.dim === "number" ? meta.dim : 0,
     updatedAt: typeof meta.updatedAt === "string" ? meta.updatedAt : (/* @__PURE__ */ new Date(0)).toISOString()
   };
@@ -646,6 +740,13 @@ function normalizeMeta(meta) {
 
 // src/index/semantic/builder.ts
 var INDEX_DIR_NAME = path3.join(homedir(), ".visionox", "semantic");
+var indexBuildLocks = /* @__PURE__ */ new Map();
+function semanticIndexDirForRoot(root) {
+  const resolved = path3.resolve(root);
+  const identity = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  const projectHash = createHash("sha256").update(identity).digest("hex");
+  return path3.join(INDEX_DIR_NAME, "projects", projectHash);
+}
 function emptyBuckets() {
   return {
     defaultDir: 0,
@@ -659,34 +760,53 @@ function emptyBuckets() {
   };
 }
 async function buildIndex(root, opts = {}) {
+  const indexDir = opts.testHooks?.indexDir ?? semanticIndexDirForRoot(root);
+  const previous = indexBuildLocks.get(indexDir) ?? Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  const tail = previous.catch(() => {}).then(() => current);
+  indexBuildLocks.set(indexDir, tail);
+  await previous.catch(() => {});
+  try {
+    throwIfAborted(opts.signal);
+    return await buildIndexUnlocked(root, opts);
+  } finally {
+    release();
+    if (indexBuildLocks.get(indexDir) === tail) indexBuildLocks.delete(indexDir);
+  }
+}
+async function buildIndexUnlocked(root, opts = {}) {
   const t0 = Date.now();
-  const indexDir = INDEX_DIR_NAME;
+  const indexDir = opts.testHooks?.indexDir ?? semanticIndexDirForRoot(root);
   const resolved = resolveBuildEmbeddingConfig(opts);
   opts.onProgress?.({ phase: "setup" });
   throwIfAborted(opts.signal);
-  await probeEmbeddingProvider(resolved, opts.signal);
+  await (opts.testHooks?.probeEmbeddingProvider ?? probeEmbeddingProvider)(resolved, opts.signal);
   throwIfAborted(opts.signal);
-  if (opts.rebuild) await wipeStoreFiles(indexDir);
-  const store = await openStore(indexDir, {
-    provider: resolved.provider,
-    model: resolved.model
-  });
+  const store = await openStore(indexDir, resolveIndexIdentity(resolved));
   const lastMtimes = store.fileMtimes();
   const seenPaths = /* @__PURE__ */ new Set();
+  const unreadablePaths = /* @__PURE__ */ new Set();
+  const unreadablePrefixes = /* @__PURE__ */ new Set();
+  const unchangedPaths = /* @__PURE__ */ new Set();
   const fileChunks = /* @__PURE__ */ new Map();
   let filesScanned = 0;
   let filesSkipped = 0;
   const skipBuckets = emptyBuckets();
-  for await (const chunk of walkChunks(root, {
+  const chunkWalker = opts.testHooks?.walkChunks ?? walkChunks;
+  for await (const chunk of chunkWalker(root, {
     windowLines: opts.windowLines,
     overlap: opts.overlap,
     config: opts.indexConfig ?? defaultIndexConfig(),
-    onSkip: (_p, reason) => {
+    onFile: (path) => seenPaths.add(path),
+    onTraversalError: (path) => unreadablePrefixes.add(path ? `${path.replace(/\/$/, "")}/` : ""),
+    onSkip: (path, reason) => {
       skipBuckets[reason]++;
+      if (reason === "readError") unreadablePaths.add(path);
     }
   })) {
     throwIfAborted(opts.signal);
-    seenPaths.add(chunk.path);
+    if (unchangedPaths.has(chunk.path)) continue;
     let bucket = fileChunks.get(chunk.path);
     if (!bucket) {
       filesScanned++;
@@ -696,11 +816,13 @@ async function buildIndex(root, opts = {}) {
         const stat = await fs3.stat(abs);
         mtimeMs = stat.mtimeMs;
       } catch {
+        unreadablePaths.add(chunk.path);
         continue;
       }
       const last = lastMtimes.get(chunk.path);
       if (last !== void 0 && last === mtimeMs && !opts.rebuild) {
         filesSkipped++;
+        unchangedPaths.add(chunk.path);
         continue;
       }
       bucket = { chunks: [], mtimeMs };
@@ -712,11 +834,14 @@ async function buildIndex(root, opts = {}) {
   throwIfAborted(opts.signal);
   const deletedPaths = [];
   for (const oldPath of lastMtimes.keys()) {
-    if (!seenPaths.has(oldPath)) deletedPaths.push(oldPath);
+    const belowUnreadableDirectory = [...unreadablePrefixes].some((prefix) => prefix === "" || oldPath.startsWith(prefix));
+    const removedOrNowEmpty = !seenPaths.has(oldPath) || !unchangedPaths.has(oldPath) && !fileChunks.has(oldPath);
+    if (removedOrNowEmpty && !unreadablePaths.has(oldPath) && !belowUnreadableDirectory) deletedPaths.push(oldPath);
   }
-  const replacePaths = [...fileChunks.keys()].filter((p) => lastMtimes.has(p));
   throwIfAborted(opts.signal);
-  const removed = await store.remove([...deletedPaths, ...replacePaths]);
+  let removed = 0;
+  const replacementEntries = [];
+  const successfulPaths = [];
   let chunksAdded = 0;
   let chunksSkipped = 0;
   const filesChanged = fileChunks.size;
@@ -727,7 +852,7 @@ async function buildIndex(root, opts = {}) {
     throwIfAborted(opts.signal);
     if (bucket.chunks.length === 0) continue;
     const texts = bucket.chunks.map((c) => c.text);
-    const vectors = await embedAll(texts, {
+    const vectors = await (opts.testHooks?.embedAll ?? embedAll)(texts, {
       ...resolved,
       signal: opts.signal,
       onProgress: (done, total) => {
@@ -768,10 +893,18 @@ async function buildIndex(root, opts = {}) {
       });
     }
     throwIfAborted(opts.signal);
-    if (entries.length > 0) await store.add(entries);
+    if (entries.length !== bucket.chunks.length) continue;
+    replacementEntries.push(...entries);
+    successfulPaths.push(bucket.chunks[0].path);
     chunksAdded += entries.length;
   }
   throwIfAborted(opts.signal);
+  const incomplete = chunksSkipped > 0 || unreadablePaths.size > 0 || unreadablePrefixes.size > 0;
+  const preservePrevious = opts.rebuild === true && incomplete;
+  if (!preservePrevious && (replacementEntries.length > 0 || deletedPaths.length > 0)) {
+    removed = await store.replacePathsAtomically(replacementEntries, [...deletedPaths, ...successfulPaths]);
+  }
+  if (preservePrevious) chunksAdded = 0;
   opts.onProgress?.({
     phase: "done",
     filesScanned,
@@ -787,24 +920,36 @@ async function buildIndex(root, opts = {}) {
     chunksAdded,
     chunksRemoved: removed,
     chunksSkipped,
+    committed: !preservePrevious,
+    preservedPrevious: preservePrevious,
     skipBuckets,
     durationMs: Date.now() - t0
   };
 }
 async function querySemantic(root, query, opts = {}) {
-  const indexDir = INDEX_DIR_NAME;
+  const indexDir = semanticIndexDirForRoot(root);
   const resolved = resolveQueryEmbeddingConfig(opts);
-  const store = await openStore(indexDir, {
-    provider: resolved.provider,
-    model: resolved.model
-  });
+  const store = await openStore(indexDir, resolveIndexIdentity(resolved));
   if (store.empty) return null;
   const qvec = await embed(query, { ...resolved, signal: opts.signal });
   normalize(qvec);
   return store.search(qvec, opts.topK ?? 8, opts.minScore ?? 0.3);
 }
+async function querySemanticGroups(root, query, opts = {}) {
+  const indexDir = semanticIndexDirForRoot(root);
+  const resolved = resolveQueryEmbeddingConfig(opts);
+  const store = await openStore(indexDir, resolveIndexIdentity(resolved));
+  if (store.empty) return null;
+  const qvec = await embed(query, { ...resolved, signal: opts.signal });
+  normalize(qvec);
+  const minScore = opts.minScore ?? 0.3;
+  return {
+    knowledge: store.search(qvec, opts.knowledgeTopK ?? 24, minScore, (entry) => entry.path.startsWith("knowledge/")),
+    workspace: store.search(qvec, opts.workspaceTopK ?? 24, minScore, (entry) => !entry.path.startsWith("knowledge/"))
+  };
+}
 async function indexExists(root) {
-  const meta = path3.join(INDEX_DIR_NAME, "index.meta.json");
+  const meta = path3.join(semanticIndexDirForRoot(root), "index.meta.json");
   try {
     await fs3.access(meta);
     return true;
@@ -813,7 +958,7 @@ async function indexExists(root) {
   }
 }
 async function indexCompatible(root, opts = {}) {
-  const meta = await readIndexMeta(INDEX_DIR_NAME);
+  const meta = await readIndexMeta(semanticIndexDirForRoot(root));
   if (!meta) return false;
   return compareIndexIdentity(meta, resolveIndexIdentity(opts)) === null;
 }
@@ -844,11 +989,24 @@ function resolveBuildEmbeddingConfig(opts) {
   return resolveSemanticEmbeddingConfig(opts.configPath);
 }
 function resolveIndexIdentity(opts) {
-  if (opts.provider && opts.model) {
-    return { provider: opts.provider, model: opts.model };
+  const resolved = opts.provider && opts.model ? opts : resolveSemanticEmbeddingConfig(opts.configPath);
+  const rawBaseUrl = String(resolved.baseUrl || "").trim().replace(/\/+$/, "");
+  let normalizedBaseUrl = rawBaseUrl;
+  try {
+    const parsed = new URL(rawBaseUrl);
+    normalizedBaseUrl = parsed.toString().replace(/\/+$/, "");
+  } catch {
   }
-  const resolved = resolveSemanticEmbeddingConfig(opts.configPath);
-  return { provider: resolved.provider, model: resolved.model };
+  const stable = (value) => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+  };
+  const configFingerprint = createHash("sha256").update(JSON.stringify({
+    baseUrl: normalizedBaseUrl,
+    extraBody: stable(resolved.extraBody ?? {})
+  })).digest("hex");
+  return { provider: resolved.provider, model: resolved.model, configFingerprint };
 }
 function resolveQueryEmbeddingConfig(opts) {
   return resolveBuildEmbeddingConfig(opts);
@@ -869,13 +1027,17 @@ function throwIfAborted(signal) {
 }
 
 export {
+  SemanticStore,
   walkChunks,
   probeOllama,
   readIndexMeta,
   compareIndexIdentity,
   INDEX_DIR_NAME,
+  semanticIndexDirForRoot,
+  resolveIndexIdentity,
   buildIndex,
   querySemantic,
+  querySemanticGroups,
   indexExists,
   indexCompatible
 };

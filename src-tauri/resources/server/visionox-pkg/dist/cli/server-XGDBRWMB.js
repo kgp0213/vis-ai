@@ -43,6 +43,9 @@ import {
   MemoryStore
 } from "./chunk-5JJRUIPA.js";
 import {
+  DeepSeekClient
+} from "./chunk-2KDUS647.js";
+import {
   analyzeMemoryEntries
 } from "../../../lib/memory-prompt.mjs";
 import "./chunk-PLHAZOLZ.js";
@@ -56,8 +59,9 @@ import {
   buildIndex,
   compareIndexIdentity,
   indexExists,
-  querySemantic,
+  querySemanticGroups,
   readIndexMeta,
+  semanticIndexDirForRoot,
   walkChunks
 } from "./chunk-XCGGEJTI.js";
 import {
@@ -848,26 +852,26 @@ function dirSize(path) {
   return { path, exists: true, fileCount, totalBytes };
 }
 var HEALTH_FS_CACHE_TTL_MS = 15e3;
-var healthFsCache = { ts: 0, value: null };
-function healthFilesystemSnapshot() {
+var healthFsCache = { ts: 0, root: null, value: null };
+function healthFilesystemSnapshot(root) {
   const now = Date.now();
-  if (healthFsCache.value && now - healthFsCache.ts < HEALTH_FS_CACHE_TTL_MS) return healthFsCache.value;
+  if (healthFsCache.value && healthFsCache.root === root && now - healthFsCache.ts < HEALTH_FS_CACHE_TTL_MS) return healthFsCache.value;
   const home = homedir();
   const visionoxHome = join4(home, ".visionox");
   const value = {
     visionoxHome,
     sessionsStat: dirSize(join4(visionoxHome, "sessions")),
     memoryStat: dirSize(join4(visionoxHome, "memory")),
-    semanticStat: dirSize(INDEX_DIR_NAME)
+    semanticStat: root ? dirSize(semanticIndexDirForRoot(root)) : { path: INDEX_DIR_NAME, exists: false, fileCount: 0, totalBytes: 0 }
   };
-  healthFsCache = { ts: now, value };
+  healthFsCache = { ts: now, root, value };
   return value;
 }
 async function handleHealth(method, _rest, _body, ctx) {
   if (method !== "GET") {
     return { status: 405, body: { error: "GET only" } };
   }
-  const { visionoxHome, sessionsStat, memoryStat, semanticStat } = healthFilesystemSnapshot();
+  const { visionoxHome, sessionsStat, memoryStat, semanticStat } = healthFilesystemSnapshot(ctx.getCurrentCwd?.() ?? null);
   let usageBytes = 0;
   if (existsSync2(ctx.usageLogPath)) {
     try {
@@ -1074,6 +1078,7 @@ async function handleIndexConfig(method, rest, body, ctx) {
           excludeExts: [...DEFAULT_INDEX_EXCLUDES.exts],
           excludePatterns: [],
           respectGitignore: DEFAULT_RESPECT_GITIGNORE,
+          includeKnowledgeDocs: false,
           maxFileBytes: DEFAULT_MAX_FILE_BYTES
         }
       }
@@ -1117,6 +1122,13 @@ async function handleIndexConfig(method, rest, body, ctx) {
       }
       next.respectGitignore = fields.respectGitignore;
       changed.push("respectGitignore");
+    }
+    if (fields.includeKnowledgeDocs !== void 0) {
+      if (typeof fields.includeKnowledgeDocs !== "boolean") {
+        return { status: 400, body: { error: "includeKnowledgeDocs must be boolean" } };
+      }
+      next.includeKnowledgeDocs = fields.includeKnowledgeDocs;
+      changed.push("includeKnowledgeDocs");
     }
     if (fields.maxFileBytes !== void 0) {
       if (typeof fields.maxFileBytes !== "number" || fields.maxFileBytes <= 0) {
@@ -2614,6 +2626,11 @@ async function handleOverview(method, _rest, _body, ctx) {
     semanticIndexExists,
     cockpit: computeCockpit(ctx),
     activeProviderId: cfg.activeProviderId ?? null,
+    activeProviderName: (() => {
+      const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+      return provider?.name ?? provider?.id ?? null;
+    })(),
+    modelVerification: cfg.modelVerification ?? { dirty: false },
     providerCapabilities: (() => {
       const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
       const allPresets = new Set();
@@ -2916,6 +2933,17 @@ async function handleSemantic(method, rest, body, ctx) {
   if (sub === "search" && method === "POST") return await runSearch(body, ctx);
   return { status: 404, body: { error: "no such semantic endpoint" } };
 }
+
+function handleIndexRetrievalMode(method, body, ctx) {
+  if (method === "GET") {
+    return { status: 200, body: ctx.getIndexRetrievalMode?.() ?? { mode: "tool", semanticAvailable: false } };
+  }
+  if (method !== "POST") return { status: 405, body: { error: "GET/POST only" } };
+  const parsed = parseBody(body);
+  const result = ctx.setIndexRetrievalMode?.(parsed.mode);
+  if (!result) return { status: 503, body: { error: "index retrieval mode is not available" } };
+  return { status: result.ok ? 200 : 409, body: result.ok ? result : { error: result.error } };
+}
 async function runSearch(rawBody, ctx) {
   const root = getRoot(ctx);
   if (!root) {
@@ -2934,14 +2962,16 @@ async function runSearch(rawBody, ctx) {
   const startedAt = Date.now();
   const embedding = resolveSemanticEmbeddingConfig(ctx.configPath);
   try {
-    const hits = await querySemantic(root, query, {
-      topK,
+    const groups = await querySemanticGroups(root, query, {
+      knowledgeTopK: topK,
+      workspaceTopK: topK,
       minScore,
       configPath: ctx.configPath
     });
-    if (hits === null) {
+    if (groups === null) {
       return { status: 404, body: { error: "no semantic index for this project" } };
     }
+    const hits = selectGroupedHits(groups, topK);
     return {
       status: 200,
       body: {
@@ -2960,6 +2990,25 @@ async function runSearch(rawBody, ctx) {
   } catch (err) {
     return { status: 500, body: { error: err.message } };
   }
+}
+function selectGroupedHits(groups, topK) {
+  const combined = [...groups.knowledge, ...groups.workspace].sort((a, b) => b.score - a.score);
+  if (groups.knowledge.length === 0 || groups.workspace.length === 0) return combined.slice(0, topK);
+  const sourceLimit = Math.max(1, Math.ceil(topK * 0.75));
+  const selected = [];
+  const deferred = [];
+  const counts = { knowledge: 0, workspace: 0 };
+  for (const hit of combined) {
+    const source = String(hit.entry.path || "").startsWith("knowledge/") ? "knowledge" : "workspace";
+    if (counts[source] >= sourceLimit) deferred.push(hit);
+    else {
+      selected.push(hit);
+      counts[source]++;
+    }
+    if (selected.length >= topK) break;
+  }
+  if (selected.length < topK) selected.push(...deferred.slice(0, topK - selected.length));
+  return selected.sort((a, b) => b.score - a.score);
 }
 async function getStatus(ctx) {
   const root = getRoot(ctx);
@@ -2998,12 +3047,14 @@ async function getStatus(ctx) {
   };
 }
 async function readIndexMeta2(root, current) {
-  const dir = INDEX_DIR_NAME;
+  const dir = semanticIndexDirForRoot(root);
   const dataPath = join7(dir, "index.jsonl");
   const diskMeta = await readIndexMeta(dir);
   if (!diskMeta) return { exists: false };
   let chunks = 0;
   const files = /* @__PURE__ */ new Set();
+  let knowledgeChunks = 0;
+  const knowledgeFiles = /* @__PURE__ */ new Set();
   let sizeBytes = 0;
   try {
     const fd = openSync3(dataPath, "r");
@@ -3027,7 +3078,13 @@ async function readIndexMeta2(root, current) {
       chunks++;
       try {
         const rec = JSON.parse(line);
-        if (typeof rec.p === "string") files.add(rec.p);
+        if (typeof rec.p === "string") {
+          files.add(rec.p);
+          if (rec.p.startsWith("knowledge/")) {
+            knowledgeChunks++;
+            knowledgeFiles.add(rec.p);
+          }
+        }
       } catch {
       }
     }
@@ -3039,6 +3096,8 @@ async function readIndexMeta2(root, current) {
     provider: diskMeta.provider,
     chunks,
     files: files.size,
+    knowledgeChunks,
+    knowledgeFiles: knowledgeFiles.size,
     dim: diskMeta.dim ?? 0,
     sizeBytes,
     lastBuiltMs: diskMeta.updatedAt ? Date.parse(diskMeta.updatedAt) || 0 : 0,
@@ -3186,11 +3245,12 @@ async function startJob(body, ctx) {
 async function runIndex(root, job, ctx) {
   try {
     const resolved = resolveSemanticEmbeddingConfig(ctx.configPath);
+    const indexConfig = loadIndexConfig(ctx.configPath);
     const result = await buildIndex(root, {
       rebuild: job.rebuild,
       configPath: ctx.configPath,
       signal: job.controller.signal,
-      indexConfig: loadIndexConfig(ctx.configPath),
+      indexConfig,
       onProgress: (p) => {
         job.phase = p.phase;
         if (p.phase !== "done") job.lastPhase = p.phase;
@@ -3201,9 +3261,11 @@ async function runIndex(root, job, ctx) {
         if (p.chunksDone !== void 0) job.chunksDone = p.chunksDone;
       }
     });
-    job.phase = "done";
+    const complete = result.committed !== false && result.chunksSkipped === 0 && result.skipBuckets?.readError === 0;
+    job.phase = complete ? "done" : "partial";
     job.finishedAt = Date.now();
     job.result = result;
+    await ctx.onSemanticIndexCommitted?.({ root, result, indexConfig, complete });
     if (ctx.tools && ctx.addToolToPrefix) {
       try {
         const added = await registerSemanticSearchTool(ctx.tools, { root, ...resolved });
@@ -3231,7 +3293,7 @@ async function stopJob(ctx) {
   const root = getRoot(ctx);
   if (!root) return { status: 400, body: { error: "no project root" } };
   const job = JOBS.get(root);
-  if (!job || job.phase === "done" || job.phase === "error" || job.phase === "cancelled") {
+  if (!job || job.phase === "done" || job.phase === "partial" || job.phase === "error" || job.phase === "cancelled") {
     return { status: 404, body: { error: "no running job" } };
   }
   job.aborted = true;
@@ -3487,6 +3549,60 @@ function sessionModeInfo(meta = {}) {
   };
 }
 async function handleSessions(method, rest, _body, _ctx, query = new URLSearchParams()) {
+  if (method === "POST" && rest[0] === "batch-trash") {
+    const body = parseBody(_body);
+    const names = Array.isArray(body.names) ? body.names : [];
+    if (names.length === 0 || names.length > 200) return { status: 400, body: { error: "names must contain 1..200 sessions" } };
+    const result = _ctx.trashSessions?.(names);
+    if (!result) return { status: 503, body: { error: "session trash is not available" } };
+    _ctx.notifySessionsChanged?.("trash", String(result.movedCount || 0));
+    return { status: result.failedCount > 0 ? 207 : 200, body: result };
+  }
+  if (method === "POST" && rest[0] === "trash-retention") {
+    const body = parseBody(_body);
+    const result = _ctx.setSessionTrashRetentionDays?.(body.retentionDays);
+    if (!result) return { status: 503, body: { error: "session trash settings are not available" } };
+    return { status: result.ok ? 200 : 400, body: result.ok ? result : { error: result.error } };
+  }
+  if (method === "GET" && rest[0] === "trash" && rest[1]) {
+    const entry = _ctx.getSessionTrashEntry?.(decodeURIComponent(rest[1]));
+    if (!entry) return { status: 404, body: { error: "trash item not found" } };
+    const page = entry.path ? await readTranscriptPage(entry.path, {
+      limit: query.get("limit") ?? 200,
+      offset: query.get("offset") ?? 0
+    }) : { messages: [], totalMessages: 0, offset: 0, limit: 200, startIndex: 0, hasMore: false };
+    const { path: _path, dir: _dir, ...item } = entry;
+    return { status: 200, body: { ...item, ...page } };
+  }
+  if (method === "POST" && rest[0] === "trash" && rest[1] === "batch-restore") {
+    const body = parseBody(_body);
+    const items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];
+    if (items.length === 0) return { status: 400, body: { error: "items must contain 1..200 trash entries" } };
+    const restored = [];
+    const failed = [];
+    for (const item of items) {
+      const id = String(item?.id || "");
+      const result = _ctx.restoreSessionTrash?.(id, item?.newName);
+      if (result?.ok) restored.push({ id, name: result.name });
+      else failed.push({ id, error: result?.error || "restore failed" });
+    }
+    return { status: failed.length > 0 ? 207 : 200, body: { ok: failed.length === 0, restored, failed, restoredCount: restored.length, failedCount: failed.length } };
+  }
+  if (method === "POST" && rest[0] === "trash" && rest[1] && rest[2] === "restore") {
+    const body = parseBody(_body);
+    const result = _ctx.restoreSessionTrash?.(decodeURIComponent(rest[1]), body.newName);
+    if (!result) return { status: 503, body: { error: "session trash restore is not available" } };
+    _ctx.notifySessionsChanged?.("restore", result.name || rest[1]);
+    return { status: result.ok ? 200 : 409, body: result.ok ? result : { error: result.error } };
+  }
+  if (method === "DELETE" && rest[0] === "trash" && (rest[1] === "batch" || rest.length === 1)) {
+    const body = parseBody(_body);
+    const ids = rest.length === 1 && body.all === true ? (_ctx.listSessionTrash?.() ?? []).map((item) => item.id) : Array.isArray(body.ids) ? body.ids : [];
+    if (ids.length === 0 || ids.length > 5e3) return { status: 400, body: { error: "ids must contain 1..5000 trash entries" } };
+    const result = _ctx.deleteSessionTrash?.(ids);
+    if (!result) return { status: 503, body: { error: "session trash deletion is not available" } };
+    return { status: result.failedCount > 0 ? 207 : 200, body: result };
+  }
   if (method === "POST" && rest[1] === "export") {
     const name2 = decodeURIComponent(rest[0] || "");
     if (!name2) return { status: 400, body: { error: "session name required" } };
@@ -3508,9 +3624,10 @@ async function handleSessions(method, rest, _body, _ctx, query = new URLSearchPa
   if (method === "DELETE") {
     const name2 = decodeURIComponent(rest[0] || "");
     if (!name2) return { status: 400, body: { error: "session name required" } };
-    const ok = deleteSession(name2);
-    if (ok) _ctx.notifySessionsChanged?.("delete", name2);
-    return { status: ok ? 200 : 404, body: { deleted: ok } };
+    const result = _ctx.trashSessions?.([name2]);
+    if (!result) return { status: 503, body: { error: "session trash is not available" } };
+    if (result.movedCount > 0) _ctx.notifySessionsChanged?.("trash", name2);
+    return { status: result.movedCount > 0 ? 200 : 404, body: { trashed: result.movedCount > 0, ...result } };
   }
   if (method === "POST" && rest[1] === "rename") {
     const name2 = decodeURIComponent(rest[0] || "");
@@ -3535,6 +3652,10 @@ async function handleSessions(method, rest, _body, _ctx, query = new URLSearchPa
     return {
       status: 200,
       body: {
+        trash: {
+          items: _ctx.listSessionTrash?.() ?? [],
+          retentionDays: _ctx.getSessionTrashRetentionDays?.() ?? 30
+        },
         sessions: sessions.map((s) => {
           const previewMessages = parseTranscript(s.path, 128 * 1024);
           return {
@@ -3782,11 +3903,28 @@ function modelState(ctx, cfg) {
 async function handleProviders(method, rest, body, ctx) {
   if (method === "GET") {
     const cfg = readConfig(ctx.configPath);
-    const providers = (cfg.providers ?? []).map((p) => ({
-      ...p,
-      apiKey: p.apiKey ? redactKey(p.apiKey) : null,
-      apiKeySet: Boolean(p.apiKey),
-    }));
+    const providers = (cfg.providers ?? []).map((p) => {
+      const models = (p.models ?? []).map((model) => {
+        const { verification, ...publicModel } = model;
+        const current = verification?.fingerprint === modelVerificationFingerprint(p, model);
+        return {
+          ...publicModel,
+          testStatus: current ? verification.ok === true ? "passed" : "failed" : "untested",
+          testedAt: current ? verification.checkedAt : null,
+          testElapsedMs: current ? verification.elapsedMs ?? null : null,
+          testError: current && verification.ok !== true ? verification.error ?? "model test failed" : null
+        };
+      });
+      const passed = models.filter((model) => model.testStatus === "passed").length;
+      const failed = models.filter((model) => model.testStatus === "failed").length;
+      return {
+        ...p,
+        apiKey: p.apiKey ? redactKey(p.apiKey) : null,
+        apiKeySet: Boolean(p.apiKey),
+        models,
+        modelTest: { passed, failed, tested: passed + failed, total: models.length }
+      };
+    });
     const activeProvider = providers.find((p) => p.id === cfg.activeProviderId) ?? providers[0] ?? null;
     const allPresets = new Set();
     const allEfforts = new Set();
@@ -3799,6 +3937,7 @@ async function handleProviders(method, rest, body, ctx) {
       body: {
         providers,
         activeProviderId: cfg.activeProviderId ?? null,
+        modelVerification: cfg.modelVerification ?? { dirty: false },
         providerCapabilities: { presets: [...allPresets], efforts: [...allEfforts] },
       },
     };
@@ -3821,33 +3960,74 @@ async function handleProviders(method, rest, body, ctx) {
       : await ctx.syncProvider?.(parsed.id);
     return { status: 200, body: { ok: true, modelSwitch } };
   }
+  if (method === "POST" && rest[0] === "test") {
+    const cfg = readConfig(ctx.configPath);
+    const providers = cfg.providers ?? [];
+    const activeProvider = providers.find((item) => item.id === cfg.activeProviderId) ?? providers[0] ?? null;
+    const jobs = providers.flatMap((provider) => (provider.models ?? []).map((model) => ({ provider, model })));
+    if (jobs.length === 0) return { status: 400, body: { error: "no configured models to test" } };
+    if (ctx.isBusy?.()) return { status: 409, body: { error: "请等待当前回答结束后再检测模型" } };
+    const results = new Array(jobs.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < jobs.length) {
+        const index = cursor++;
+        const { provider, model } = jobs[index];
+        const startedAt = Date.now();
+        const checkedAt = new Date().toISOString();
+        try {
+          if (!String(provider.baseUrl || "").trim() || !String(provider.apiKey || "").trim()) throw new Error("provider requires baseUrl and apiKey");
+          const tester = ctx.testProviderModel ?? testProviderModelCommunication;
+          await tester(provider, model);
+          model.verification = { ok: true, checkedAt, elapsedMs: Date.now() - startedAt, fingerprint: modelVerificationFingerprint(provider, model) };
+        } catch (error) {
+          model.verification = {
+            ok: false,
+            checkedAt,
+            elapsedMs: Date.now() - startedAt,
+            error: safeProviderTestError(error, provider.apiKey),
+            fingerprint: modelVerificationFingerprint(provider, model)
+          };
+        }
+        results[index] = {
+          providerId: provider.id,
+          providerName: provider.name ?? provider.id,
+          modelId: model.id,
+          modelName: model.name ?? model.id,
+          ok: model.verification.ok,
+          elapsedMs: model.verification.elapsedMs,
+          error: model.verification.error ?? null
+        };
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(2, jobs.length) }, () => worker()));
+    const firstPassed = activeProvider?.models?.find((model) => model.verification?.ok === true);
+    let activated = null;
+    if (firstPassed) {
+      const preset = activationPresetForModel(firstPassed);
+      cfg.activeProviderId = activeProvider.id;
+      cfg.preset = preset;
+      if (!firstPassed.efforts?.includes(cfg.reasoningEffort)) cfg.reasoningEffort = firstPassed.efforts?.[0] ?? activeProvider.defaultEffort ?? "high";
+      activated = { providerId: activeProvider.id, modelId: firstPassed.id, preset };
+    }
+    cfg.modelVerification = {
+      dirty: false,
+      testedAt: new Date().toISOString(),
+      passed: results.filter((item) => item.ok).length,
+      total: results.length
+    };
+    writeConfig(cfg, ctx.configPath);
+    const modelSwitch = activated ? await ctx.syncProvider?.(activeProvider.id) : null;
+    return { status: 200, body: { ok: true, results, passed: results.filter((item) => item.ok).length, total: results.length, activated, modelSwitch } };
+  }
   if (method === "POST" && rest[0] === "import") {
     let parsed;
     try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
     const incoming = parsed.providers;
-    if (!Array.isArray(incoming)) {
-      return { status: 400, body: { error: "providers must be an array" } };
-    }
     const cfg = readConfig(ctx.configPath);
     const existing = cfg.providers ?? [];
-    for (const provider of incoming) {
-      if (!provider || typeof provider !== "object" || typeof provider.id !== "string" || !provider.id.trim()) {
-        return { status: 400, body: { error: "each provider must have a non-empty id" } };
-      }
-      const prior = existing.find((entry) => entry.id === provider.id);
-      if (provider.models === void 0 && prior) continue;
-      if (!Array.isArray(provider.models) || provider.models.length === 0) {
-        return { status: 400, body: { error: `provider "${provider.id}" must include a non-empty models array` } };
-      }
-      for (const model of provider.models) {
-        if (!model || typeof model.id !== "string" || !model.id.trim()) {
-          return { status: 400, body: { error: `provider "${provider.id}" contains a model without an id` } };
-        }
-        if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) {
-          return { status: 400, body: { error: `model "${model.id}" must declare a positive integer maxContextLength` } };
-        }
-      }
-    }
+    const validationError = validateIncomingProviders(incoming, existing);
+    if (validationError) return { status: 400, body: { error: validationError } };
     for (const p of incoming) {
       if (!p.id || typeof p.id !== "string") continue;
       const idx = existing.findIndex((e) => e.id === p.id);
@@ -3857,12 +4037,63 @@ async function handleProviders(method, rest, body, ctx) {
         existing.push(p);
       }
     }
+    for (const provider of existing) {
+      for (const model of provider.models ?? []) delete model.verification;
+    }
+    cfg.modelVerification = { dirty: true, reason: "provider-import", changedAt: new Date().toISOString() };
     cfg.providers = existing;
     writeConfig(cfg, ctx.configPath);
     const refreshed = ctx.refreshContextCap?.() ?? null;
-    return { status: 200, body: { ok: true, count: existing.length, contextPolicy: refreshed?.contextPolicy ?? null } };
+    return { status: 200, body: { ok: true, count: existing.length, requiresModelTest: true, modelSwitch: refreshed?.modelSwitch ?? null, contextPolicy: refreshed?.contextPolicy ?? null } };
   }
   return { status: 404, body: { error: "not found" } };
+}
+function validateIncomingProviders(incoming, existing) {
+  if (!Array.isArray(incoming) || incoming.length === 0) return "providers must be a non-empty array";
+  for (const provider of incoming) {
+    if (!provider || typeof provider !== "object" || typeof provider.id !== "string" || !provider.id.trim()) return "each provider must have a non-empty id";
+    const prior = existing.find((entry) => entry.id === provider.id);
+    const merged = { ...prior, ...provider };
+    if (provider.models === void 0 && prior) continue;
+    if (!Array.isArray(merged.models) || merged.models.length === 0) return `provider "${provider.id}" must include a non-empty models array`;
+    for (const model of merged.models) {
+      if (!model || typeof model.id !== "string" || !model.id.trim()) return `provider "${provider.id}" contains a model without an id`;
+      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) return `model "${model.id}" must declare a positive integer maxContextLength`;
+    }
+  }
+  return null;
+}
+function activationPresetForModel(model) {
+  const presets = Array.isArray(model.presets) ? model.presets : [];
+  if (presets.includes("flash")) return "flash";
+  if (presets.includes("pro")) return "pro";
+  return presets.find((preset) => preset !== "auto") ?? presets[0] ?? "flash";
+}
+function modelVerificationFingerprint(provider, model) {
+  return createHash("sha256").update(JSON.stringify({
+    providerId: provider.id,
+    baseUrl: String(provider.baseUrl || "").trim().replace(/\/+$/, ""),
+    apiKey: String(provider.apiKey || ""),
+    modelId: model.id
+  })).digest("hex");
+}
+async function testProviderModelCommunication(provider, model) {
+  const client = new DeepSeekClient({
+    apiKey: provider.apiKey,
+    baseUrl: provider.baseUrl,
+    timeoutMs: 1e4,
+    retry: { maxAttempts: 1 }
+  });
+  await client.chat({
+    model: model.id,
+    messages: [{ role: "user", content: "Reply with OK." }],
+    maxTokens: 8
+  });
+}
+function safeProviderTestError(error, apiKey) {
+  const message = error instanceof Error ? error.message : String(error);
+  const secret = String(apiKey || "");
+  return (secret ? message.replaceAll(secret, "[redacted]") : message).slice(0, 300);
 }
 async function handleSettings(method, _rest, body, ctx) {
   if (method === "GET") {
@@ -3873,12 +4104,14 @@ async function handleSettings(method, _rest, body, ctx) {
     }
     const live = ctx.loop;
     const state = modelState(ctx, cfg);
+    const activeProvider = (cfg.providers ?? []).find((provider) => provider.id === cfg.activeProviderId) ?? cfg.providers?.[0] ?? null;
     return {
       status: 200,
       body: {
-        apiKey: cfg.apiKey ? redactKey(cfg.apiKey) : null,
-        apiKeySet: Boolean(cfg.apiKey),
-        baseUrl: cfg.baseUrl ?? null,
+        apiKey: (activeProvider?.apiKey ?? cfg.apiKey) ? redactKey(activeProvider?.apiKey ?? cfg.apiKey) : null,
+        apiKeySet: Boolean(activeProvider?.apiKey ?? cfg.apiKey),
+        baseUrl: activeProvider?.baseUrl ?? cfg.baseUrl ?? null,
+        credentialTarget: activeProvider ? { kind: "provider", id: activeProvider.id, name: activeProvider.name ?? activeProvider.id } : { kind: "legacy", id: null, name: "Legacy configuration" },
         lang: getLanguage(),
         preset: state.preset,
         reasoningEffort: ctx.loop?.reasoningEffort ?? cfg.reasoningEffort ?? "max",
@@ -3920,8 +4153,8 @@ async function handleSettings(method, _rest, body, ctx) {
         })(),
         // Hint to the SPA which fields require restart.
         appliesAt: {
-          apiKey: "next-session",
-          baseUrl: "next-session",
+          apiKey: activeProvider ? "live" : "next-turn",
+          baseUrl: activeProvider ? "live" : "next-turn",
           preset: "live",
           reasoningEffort: "live",
           search: "next-session",
@@ -3940,7 +4173,9 @@ async function handleSettings(method, _rest, body, ctx) {
   if (method === "POST") {
     const fields = parseBody9(body);
     const cfg = readConfig(ctx.configPath);
+    const activeCredentialProvider = (cfg.providers ?? []).find((provider) => provider.id === cfg.activeProviderId) ?? cfg.providers?.[0] ?? null;
     const changed = [];
+    let credentialsChanged = false;
     let langPending = null;
     let presetPendingLive = null;
     let effortPendingLive = null;
@@ -3959,14 +4194,18 @@ async function handleSettings(method, _rest, body, ctx) {
       if (typeof fields.apiKey !== "string" || !isPlausibleKey(fields.apiKey)) {
         return { status: 400, body: { error: "apiKey must be 16+ chars with no whitespace" } };
       }
-      cfg.apiKey = fields.apiKey.trim();
+      if (activeCredentialProvider) activeCredentialProvider.apiKey = fields.apiKey.trim();
+      else cfg.apiKey = fields.apiKey.trim();
+      credentialsChanged = true;
       changed.push("apiKey");
     }
     if (fields.baseUrl !== void 0) {
       if (typeof fields.baseUrl !== "string" || !fields.baseUrl.trim()) {
         return { status: 400, body: { error: "baseUrl must be a non-empty string" } };
       }
-      cfg.baseUrl = fields.baseUrl.trim();
+      if (activeCredentialProvider) activeCredentialProvider.baseUrl = fields.baseUrl.trim();
+      else cfg.baseUrl = fields.baseUrl.trim();
+      credentialsChanged = true;
       changed.push("baseUrl");
     }
     if (fields.preset !== void 0) {
@@ -4100,8 +4339,28 @@ async function handleSettings(method, _rest, body, ctx) {
       changed.push("workspaceDir");
     }
     let modelSwitch = null;
+    let credentialSync = null;
     if (changed.length > 0) {
+      if (credentialsChanged && activeCredentialProvider) {
+        for (const model of activeCredentialProvider.models ?? []) delete model.verification;
+        cfg.modelVerification = {
+          dirty: true,
+          reason: "provider-credentials",
+          providerId: activeCredentialProvider.id,
+          changedAt: new Date().toISOString()
+        };
+      }
       writeConfig(cfg, ctx.configPath);
+      if (credentialsChanged && activeCredentialProvider && ctx.syncProvider) {
+        if (ctx.isBusy?.()) credentialSync = { deferred: true, providerId: activeCredentialProvider.id };
+        else {
+          try {
+            credentialSync = await ctx.syncProvider(activeCredentialProvider.id) ?? { deferred: false, providerId: activeCredentialProvider.id };
+          } catch (err) {
+            credentialSync = { deferred: true, providerId: activeCredentialProvider.id, error: err.message };
+          }
+        }
+      }
       if (changed.includes("mode")) ctx.setMode?.(cfg.mode);
       if (langPending) setLanguage(langPending);
       if (presetPendingLive) modelSwitch = ctx.applyPresetLive?.(presetPendingLive) ?? modelSwitch;
@@ -4112,7 +4371,7 @@ async function handleSettings(method, _rest, body, ctx) {
       if (changed.includes("contextCapTokens")) ctx.refreshContextCap?.();
       ctx.audit?.({ ts: Date.now(), action: "set-settings", payload: { fields: changed } });
     }
-    return { status: 200, body: { changed, modelSwitch } };
+    return { status: 200, body: { changed, modelSwitch, credentialSync, requiresModelTest: credentialsChanged && Boolean(activeCredentialProvider) } };
   }
   return { status: 405, body: { error: "GET or POST only" } };
 }
@@ -4625,6 +4884,9 @@ function collectScheduleArtifactPaths(ctx) {
     for (const run of schedule?.history || []) {
       if (typeof run?.reportPath === "string" && run.reportPath.trim()) {
         out.push(run.reportPath);
+      }
+      for (const path of Array.isArray(run?.knowledgeOutputPaths) ? run.knowledgeOutputPaths : []) {
+        if (typeof path === "string" && path.trim()) out.push(path);
       }
     }
   }
@@ -5227,6 +5489,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleMcp(method, rest, body, ctx, query);
       case "semantic":
         return await handleSemantic(method, rest, body, ctx);
+      case "index-retrieval-mode":
+        return handleIndexRetrievalMode(method, body, ctx);
       case "index-config":
         return await handleIndexConfig(method, rest, body, ctx);
       case "slash":
