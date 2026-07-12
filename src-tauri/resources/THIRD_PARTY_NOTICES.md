@@ -35,8 +35,12 @@ the inventory and build record, not execute the binary during packaging.
 
 - Distribution: `bootstrap-skills/`
 - Source: curated in this repository from project-authored and upstream skill packs; consult
-  each `SKILL.md` frontmatter where source metadata is available
+  `bootstrap-skills-provenance.json` and each `SKILL.md` frontmatter
 - License: mixed. Per-skill metadata governs each skill. The PDF skill has separate
   non-commercial terms at `bootstrap-skills/pdf/LICENSE.txt`; it must not be treated as MIT.
+
+The provenance catalog distinguishes verified attribution from partial records. A partial
+record means the current repository history identifies the import but does not contain enough
+evidence to claim an upstream URL or license; no attribution is inferred in that case.
 
 Package-level JavaScript dependency versions are locked by `server/visionox-pkg/package-lock.json`; their license files remain in the prepared runtime dependency tree.

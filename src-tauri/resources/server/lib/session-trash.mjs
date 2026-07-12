@@ -56,7 +56,8 @@ export function createSessionTrashStore({
         path: paths.find((path) => path.endsWith(".jsonl") && !path.endsWith(".events.jsonl")) || null,
         dir,
       };
-    } catch {
+    } catch (error) {
+      logger.warn?.(`[session-trash] invalid entry ${safeId}: ${error.message}`);
       return null;
     }
   }
@@ -75,7 +76,9 @@ export function createSessionTrashStore({
           const { path: _path, dir: _dir, ...publicEntry } = entry;
           items.push(publicEntry);
         }
-      } catch {}
+      } catch (error) {
+        logger.warn?.(`[session-trash] could not inspect ${id}: ${error.message}`);
+      }
     }
     return items.sort((a, b) => Date.parse(b.movedAt) - Date.parse(a.movedAt));
   }
@@ -117,11 +120,22 @@ export function createSessionTrashStore({
       writeFileSync(resolve(destinationDir, "trash-meta.json"), `${JSON.stringify(meta, null, 2)}\n`, "utf8");
       return { ok: true, trashDir: destinationDir, moved: moved.map(({ target }) => target) };
     } catch (error) {
+      const rollbackFailures = [];
       for (const { source, target } of moved.reverse()) {
-        try { if (existsSync(target) && !existsSync(source)) renameSync(target, source); } catch {}
+        try {
+          if (existsSync(target) && !existsSync(source)) renameSync(target, source);
+        } catch (rollbackError) {
+          rollbackFailures.push(`${basename(target)}: ${rollbackError.message}`);
+        }
       }
-      try { if (existsSync(destinationDir)) rmSync(destinationDir, { recursive: true, force: true }); } catch {}
-      return { ok: false, error: error.message, trashDir: destinationDir, moved: [] };
+      try {
+        if (existsSync(destinationDir)) rmSync(destinationDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        logger.debug?.(`[session-trash] staging cleanup failed: ${cleanupError.message}`);
+      }
+      const detail = rollbackFailures.length ? `${error.message}; rollback incomplete: ${rollbackFailures.join("; ")}` : error.message;
+      if (rollbackFailures.length) logger.error?.(`[session-trash] ${detail}`);
+      return { ok: false, error: detail, trashDir: destinationDir, moved: [] };
     }
   }
 
@@ -164,8 +178,18 @@ export function createSessionTrashStore({
           moved.push(target);
         }
       } catch (error) {
+        const rollbackFailures = [];
         for (const target of moved.reverse()) {
-          try { if (existsSync(target.destination) && !existsSync(target.source)) renameSync(target.destination, target.source); } catch {}
+          try {
+            if (existsSync(target.destination) && !existsSync(target.source)) renameSync(target.destination, target.source);
+          } catch (rollbackError) {
+            rollbackFailures.push(`${basename(target.destination)}: ${rollbackError.message}`);
+          }
+        }
+        if (rollbackFailures.length) {
+          const detail = `${error.message}; rollback incomplete: ${rollbackFailures.join("; ")}`;
+          logger.error?.(`[session-trash] ${detail}`);
+          throw new Error(detail, { cause: error });
         }
         throw error;
       }

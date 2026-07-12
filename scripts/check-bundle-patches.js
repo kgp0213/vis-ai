@@ -27,6 +27,7 @@ const required = [
       "forbiddenRuntimeFile",
       '"dashboard/katex-support.js"',
       '"dashboard/backup-support.js"',
+      '"dashboard/index-mode-support.js"',
       'copyDirectory(join("dashboard", "vendor", "katex"))',
     ],
   },
@@ -52,7 +53,7 @@ const required = [
   },
   {
     file: "scripts/check-third-party-resources.js",
-    markers: ["third-party-resources.json", "required inventory entry is missing", "version or SHA-256 differs"],
+    markers: ["third-party-resources.json", "bootstrap-skills-provenance.json", "bootstrap skill is missing provenance", "version or SHA-256 differs"],
   },
   {
     file: "scripts/verify-runtime-manifest.js",
@@ -141,6 +142,10 @@ const required = [
   {
     file: "src-tauri/resources/server/lib/runtime-issues.mjs",
     markers: ["createRuntimeIssueRegistry", "ACTIONABLE_LEVELS", "fatal"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/active-session-meta.mjs",
+    markers: ["createActiveSessionMetaStore", "assertVersionedJsonWritable", "metadata update requires a builder"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-store.mjs",
@@ -280,6 +285,8 @@ const required = [
       "overview.dataProtection",
       "VisionoxBackupPolicy.restoreActions(backupPreview.counts)",
       "actions.canOverwriteConflicts",
+      "VisionoxIndexModePolicy.normalize",
+      "VisionoxIndexModePolicy.hint",
       "overview.backupRetention",
       "overview.deleteBackup",
       "overview.storageIssues",
@@ -334,8 +341,12 @@ const required = [
     markers: ["VisionoxBackupPolicy", "normalizeRetentionCount", "canOverwriteConflicts"],
   },
   {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/index-mode-support.js",
+    markers: ["VisionoxIndexModePolicy", "normalize", "每次发送消息前自动搜索"],
+  },
+  {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/index.html",
-    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js"],
+    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js", "index-mode-support.js"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-continuation.mjs",

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "groups": [
+    {
+      "id": "visionox-mit",
+      "skills": ["basic-skill-example", "coding-standards", "skill-creation-guide", "verification-loop"],
+      "source": "Visionox repository history",
+      "license": "MIT, declared in each SKILL.md",
+      "status": "verified"
+    },
+    {
+      "id": "karpathy-guidelines",
+      "skills": ["andrej-karpathy-guidelines"],
+      "source": "https://github.com/multica-ai/andrej-karpathy-skills",
+      "license": "MIT, declared in SKILL.md",
+      "status": "verified"
+    },
+    {
+      "id": "officecli",
+      "skills": ["officecli"],
+      "source": "https://github.com/iOfficeAI/OfficeCLI",
+      "license": "Apache-2.0, recorded in the project README",
+      "status": "verified"
+    },
+    {
+      "id": "pdf-zai",
+      "skills": ["pdf"],
+      "source": "Z.AI, declared in SKILL.md",
+      "license": "Proprietary non-commercial terms in pdf/LICENSE.txt",
+      "status": "verified"
+    },
+    {
+      "id": "ecc-import",
+      "skills": ["api-design", "codebase-onboarding", "context-budget", "database-migrations", "docker-patterns", "error-handling", "fastapi-patterns", "frontend-patterns", "git-workflow", "postgres-patterns", "production-audit", "react-patterns", "search-first", "security-review", "tdd-workflow"],
+      "source": "https://github.com/affaan-m/ECC, recorded by the integration commit and historical ECC_INTEGRATION.md",
+      "license": "not established by files currently bundled in this repository",
+      "status": "partial"
+    },
+    {
+      "id": "superpowers-local-import",
+      "skills": ["brainstorming", "dispatching-parallel-agents", "executing-plans", "finishing-a-development-branch", "receiving-code-review", "requesting-code-review", "subagent-driven-development", "systematic-debugging", "test-driven-development", "using-git-worktrees", "using-superpowers", "verification-before-completion", "writing-plans", "writing-skills"],
+      "source": "local plan/superpowers.7z import recorded by release commit 218e0e7d; upstream URL is not established by bundled files",
+      "license": "not established by files currently bundled in this repository",
+      "status": "partial"
+    },
+    {
+      "id": "legacy-domain",
+      "skills": ["e2e-testing", "file-access-rescue", "md-to-pdf-cjk", "python-patterns", "rust-patterns"],
+      "source": "Visionox repository history; original upstream attribution is not established by bundled files",
+      "license": "not established by files currently bundled in this repository",
+      "status": "partial"
+    }
+  ]
+}

@@ -70,6 +70,7 @@ const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.
 const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFile } = await importEarly("./lib/versioned-json-file.mjs");
 const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
+const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -344,7 +345,9 @@ function readDefaultSoul() {
       const content = readFileSync(DEFAULT_SOUL_RESOURCE, "utf8").trim();
       if (content) return content;
     }
-  } catch {}
+  } catch (error) {
+    runtimeIssues.report("warning", { message: `bundled default Soul could not be read; built-in fallback is active: ${error.message}` });
+  }
   return DEFAULT_SOUL_FALLBACK;
 }
 
@@ -2203,9 +2206,15 @@ function loadSoul() {
   try {
     if (existsSync(SOUL_HOME)) {
       const content = readFileSync(SOUL_HOME, "utf8").trim();
-      if (content) return content;
+      if (content) {
+        trackPersistentStorageIssue("soul-read", SOUL_HOME, null);
+        return content;
+      }
     }
-  } catch {}
+    trackPersistentStorageIssue("soul-read", SOUL_HOME, null);
+  } catch (error) {
+    trackPersistentStorageIssue("soul-read", SOUL_HOME, `Soul could not be read; the default identity is active: ${error.message}`, "warning");
+  }
   return readDefaultSoul();
 }
 
@@ -2395,7 +2404,20 @@ function writeModeMemory(modeId, payload) {
     version: CONSTANTS.MODE_MEMORY_VERSION,
     validate: (value) => Array.isArray(value.items) || "mode memory items must be an array",
   });
-  return { ...writeVersionedJsonFile(path, data, { version: CONSTANTS.MODE_MEMORY_VERSION }), path, readOnlyError: null };
+  const written = writeVersionedJsonFile(path, data, { version: CONSTANTS.MODE_MEMORY_VERSION });
+  trackPersistentStorageIssue(`mode-memory:${mode}`, path, null);
+  return { ...written, path, readOnlyError: null };
+}
+
+function restoreModeMemoryAfterFailure(mode, items, failures) {
+  try {
+    writeModeMemory(mode, { items });
+  } catch (error) {
+    const path = modeMemoryPath(mode);
+    const message = `mode memory rollback failed: ${error.message}`;
+    trackPersistentStorageIssue(`mode-memory:${safeModeId(mode)}`, path, message);
+    failures.push(`${safeModeId(mode)}: ${error.message}`);
+  }
 }
 
 pruneExpiredSessionTrash();
@@ -2498,7 +2520,9 @@ function deleteModeMemory(modeId, id) {
   try {
     writeModeMemory(current.mode, { items });
   } catch (err) {
-    try { rmSync(trash.path, { force: true }); } catch {}
+    try { rmSync(trash.path, { force: true }); } catch (cleanupError) {
+      runtimeIssues.report("debug", { message: `mode memory trash cleanup failed: ${cleanupError.message}` });
+    }
     throw err;
   }
   return true;
@@ -2549,8 +2573,10 @@ function moveModeMemory(id, { sourceMode, targetMode, copy = false } = {}) {
     writeModeMemory(target.mode, { items: [targetItem, ...target.items] });
     if (!copy) writeModeMemory(source.mode, { items: source.items.filter((entry) => entry.id !== id) });
   } catch (err) {
-    try { writeModeMemory(target.mode, { items: target.items }); } catch {}
-    try { writeModeMemory(source.mode, { items: source.items }); } catch {}
+    const rollbackFailures = [];
+    restoreModeMemoryAfterFailure(target.mode, target.items, rollbackFailures);
+    restoreModeMemoryAfterFailure(source.mode, source.items, rollbackFailures);
+    if (rollbackFailures.length) throw new Error(`${err.message}; rollback incomplete: ${rollbackFailures.join("; ")}`, { cause: err });
     throw err;
   }
   return { moved: !copy, copied: copy, sourceMode: source.mode, targetMode: target.mode, item: targetItem };
@@ -2590,8 +2616,12 @@ function batchModeMemory({ action, items } = {}) {
       written.push(update);
     }
   } catch (err) {
-    for (const update of written.reverse()) try { writeModeMemory(update.mode, { items: update.before }); } catch {}
-    for (const item of trash) try { rmSync(item.path, { force: true }); } catch {}
+    const rollbackFailures = [];
+    for (const update of written.reverse()) restoreModeMemoryAfterFailure(update.mode, update.before, rollbackFailures);
+    for (const item of trash) try { rmSync(item.path, { force: true }); } catch (cleanupError) {
+      runtimeIssues.report("debug", { message: `mode memory trash cleanup failed: ${cleanupError.message}` });
+    }
+    if (rollbackFailures.length) throw new Error(`${err.message}; rollback incomplete: ${rollbackFailures.join("; ")}`, { cause: err });
     throw err;
   }
   return { action, changed };
@@ -2900,16 +2930,30 @@ function loadRules() {
   const rules = [];
   for (const name of enabled) {
     const dir = ALL_ECC_RULES[name];
-    if (!existsSync(dir)) continue;
+    if (!existsSync(dir)) {
+      trackPersistentStorageIssue(`rules:${name}`, dir, null);
+      continue;
+    }
+    const failures = [];
     try {
       const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort((a, b) => a.localeCompare(b));
       for (const f of files) {
         try {
           const content = readFileSync(resolve(dir, f), "utf8").trim();
           if (content) rules.push(`<!-- rule: ${f} (${name}) -->\n${content}`);
-        } catch {}
+        } catch (error) {
+          failures.push(`${f}: ${error.message}`);
+        }
       }
-    } catch {}
+    } catch (error) {
+      failures.push(error.message);
+    }
+    trackPersistentStorageIssue(
+      `rules:${name}`,
+      dir,
+      failures.length ? `some ${name} rules were not loaded: ${failures.join("; ")}` : null,
+      "warning",
+    );
   }
   // Enforce a collective budget: drop trailing rules (custom set is loaded
   // last by orderedRuleSets, so it is dropped first) until the joined block
@@ -3120,16 +3164,28 @@ function projectMemoryDirForRoot(rootDir) {
 function listProjectMemoryPathsForPrompt(rootDir) {
   const paths = [];
   const seen = new Set();
+  const failures = [];
   for (const name of PROJECT_MEMORY_CANDIDATES) {
     const p = resolve(rootDir, name);
     if (!existsSync(p)) continue;
-    let real = p;
-    try { real = realpathSync.native(p); } catch {}
+    let real;
+    try {
+      real = realpathSync.native(p);
+    } catch (error) {
+      failures.push(`${name}: ${error.message}`);
+      continue;
+    }
     const key = process.platform === "win32" ? real.toLowerCase() : real;
     if (seen.has(key)) continue;
     seen.add(key);
     paths.push(real);
   }
+  trackPersistentStorageIssue(
+    "project-memory",
+    resolve(rootDir),
+    failures.length ? `some project memory files could not be resolved: ${failures.join("; ")}` : null,
+    "warning",
+  );
   return paths;
 }
 function getProjectMemoryStatus(rootDir = workspaceDir) {
@@ -4204,6 +4260,7 @@ function readKnowledgeManifest(workspace) {
   const parsed = stored.ok ? stored.value ?? {} : {};
   trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, stored.error);
   try {
+    const topicReadFailures = [];
     const diskPaths = new Set(existsSync(paths.topicsDir)
       ? readdirSync(paths.topicsDir).filter((name) => name.toLowerCase().endsWith(".md")).map((name) => `topics/${name}`)
       : []);
@@ -4211,11 +4268,15 @@ function readKnowledgeManifest(workspace) {
     const topics = reconciled.topics.map((topic) => {
       const target = resolve(paths.root, topic.path);
       let contentHash = null;
-      try { contentHash = createHash("sha256").update(readFileSync(target)).digest("hex").slice(0, 16); } catch {}
+      try {
+        contentHash = createHash("sha256").update(readFileSync(target)).digest("hex").slice(0, 16);
+      } catch (error) {
+        topicReadFailures.push(`${topic.path}: ${error.message}`);
+      }
       return {
         ...topic,
         contentHash: topic.contentHash || contentHash,
-        manualEdited: topic.manualEdited === true || Boolean(topic.contentHash && contentHash && topic.contentHash !== contentHash),
+        manualEdited: topic.manualEdited === true || contentHash === null || Boolean(topic.contentHash && topic.contentHash !== contentHash),
       };
     });
     const trackedPaths = new Set(topics.map((topic) => topic.path));
@@ -4231,8 +4292,16 @@ function readKnowledgeManifest(workspace) {
         const contentHash = createHash("sha256").update(markdown).digest("hex").slice(0, 16);
         topics.push({ id, title, path, sourceSessions: [], qualityScore, contentHash, manualEdited: true, discoveredAt: new Date().toISOString() });
         discoveredPaths.push(path);
-      } catch {}
+      } catch (error) {
+        topicReadFailures.push(`${path}: ${error.message}`);
+      }
     }
+    trackPersistentStorageIssue(
+      `knowledge-topics:${paths.projectRoot}`,
+      paths.topicsDir,
+      topicReadFailures.length ? `some knowledge topics could not be read: ${topicReadFailures.join("; ")}` : null,
+      "warning",
+    );
     return {
       version: 2,
       topics,
@@ -4422,11 +4491,11 @@ async function generateSessionKnowledge(task, signal, qualityState = null) {
     activeTopics.push(topic);
   }
   const existingTopics = activeTopics.map((topic) => {
-    let excerpt = "";
     try {
-      excerpt = readFileSync(resolve(paths.root, topic.path), "utf8").slice(0, 6000);
-    } catch {}
-    return { id: topic.id, title: topic.title, excerpt };
+      return { id: topic.id, title: topic.title, excerpt: readFileSync(resolve(paths.root, topic.path), "utf8").slice(0, 6000) };
+    } catch (error) {
+      throw new Error(`existing knowledge topic ${topic.path} could not be read: ${error.message}`);
+    }
   });
   const modelConfig = effectiveModelConfig(config);
   throwIfScheduleAborted(signal);
@@ -4469,7 +4538,11 @@ async function generateSessionKnowledge(task, signal, qualityState = null) {
     if (!(target === paths.root || target.startsWith(paths.root + sep))) throw new Error("topic path escapes knowledge directory");
     let existingDocument = "";
     if (known) {
-      try { existingDocument = readFileSync(target, "utf8").slice(0, 40000); } catch {}
+      try {
+        existingDocument = readFileSync(target, "utf8").slice(0, 40000);
+      } catch (error) {
+        throw new Error(`existing knowledge topic ${relativePath} could not be read: ${error.message}`);
+      }
     }
     const groupSessions = group.sessions.map((name) => byName.get(name)).filter(Boolean);
     if (known?.manualEdited) {
@@ -5225,6 +5298,14 @@ function pushMessage(msg) {
 // outside sessionsDir so it is never shown in the saved-sessions list.
 const activeSessionFile = resolve(visionoxDataDir, "active-session.jsonl");
 const activeSessionMetaFile = resolve(visionoxDataDir, "active-session.meta.json");
+const activeSessionMetaStore = createActiveSessionMetaStore({
+  path: activeSessionMetaFile,
+  onIssue: (error) => trackPersistentStorageIssue(
+    "active-session-meta",
+    activeSessionMetaFile,
+    error ? `active session metadata is protected: ${error}` : null,
+  ),
+});
 
 function hasUserMessage() {
   return messages.some((m) => m.role === "user");
@@ -5351,16 +5432,11 @@ async function clearActiveSession() {
 
 async function writeActiveSessionMeta(patch = {}) {
   try {
-    const stored = readVersionedJsonFile(activeSessionMetaFile, { version: 1, allowUnversioned: true });
-    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, stored.error);
-    assertVersionedJsonWritable(activeSessionMetaFile, { version: 1, allowUnversioned: true });
-    const current = stored.value ?? {};
     const sessionStat = await fsStat(activeSessionFile);
     const mode = config.mode || "general";
     const modeInfo = modeSummary(mode);
     const now = new Date().toISOString();
-    const meta = {
-      version: 1,
+    activeSessionMetaStore.update((current) => ({
       ...current,
       ...patch,
       mode,
@@ -5374,11 +5450,9 @@ async function writeActiveSessionMeta(patch = {}) {
       updatedAt: now,
       sessionMemories: sessionMemories.map((memory) => ({ ...memory })),
       indexRetrievalMode,
-    };
-    await atomicWriteFile(activeSessionMetaFile, `${JSON.stringify(meta, null, 2)}\n`);
-    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, null);
+    }));
   } catch (err) {
-    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, `active session metadata was not saved: ${err.message}`);
+    console.error(`[launcher] active session metadata was not saved: ${err.message}`);
   }
 }
 
@@ -5415,8 +5489,7 @@ async function loadActiveSession() {
       pushMessage(entry);
       nextMsgId++;
     }
-    const storedMeta = readVersionedJsonFile(activeSessionMetaFile, { version: 1, allowUnversioned: true });
-    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, storedMeta.error);
+    const storedMeta = activeSessionMetaStore.read();
     if (storedMeta.ok && storedMeta.value) {
       const meta = storedMeta.value;
       restoreSessionMemories(meta.sessionMemories);
@@ -5440,7 +5513,13 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   clearLearningMode();
   resetPlanRefs();
   generatedArtifactPaths.clear();
-  try { clearPlanState(currentSessionName()); } catch {}
+  const planSession = currentSessionName();
+  try {
+    clearPlanState(planSession);
+    trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), null);
+  } catch (error) {
+    trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), `active plan cleanup failed: ${error.message}`);
+  }
   if (client) {
     loop = buildLoop(client, workspaceDir);
     ctx.loop = loop;

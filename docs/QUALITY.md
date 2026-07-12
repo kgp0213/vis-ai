@@ -42,6 +42,12 @@ A source change is complete only when all applicable items below are true:
 5. `npm run quality:check` passes from a clean process state and leaves no repository or `%TEMP%` residue.
 6. Packaged third-party resources agree with `src-tauri/resources/third-party-resources.json` and their notices are present.
 
+Bootstrap skills additionally require complete directory coverage in
+`src-tauri/resources/bootstrap-skills-provenance.json`. `verified` means the bundled files
+or repository history establish both attribution and license; `partial` is an explicit
+documentation gap and must never be presented as verified. New unregistered skill directories
+fail the quality gate.
+
 Building an executable is not part of the normal commit gate. Build only when the requested deliverable requires it, using the release gate below.
 
 ## Release Gate

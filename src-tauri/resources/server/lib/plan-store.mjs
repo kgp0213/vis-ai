@@ -30,7 +30,7 @@ function normalizePlan(parsed, path = null) {
   };
 }
 
-export function createPlanStore(sessionsDir) {
+export function createPlanStore(sessionsDir, { logger = console } = {}) {
   const activePath = (session) => resolve(sessionsDir, `${safeSessionName(session)}.plan.json`);
 
   function loadPlanState(session) {
@@ -88,7 +88,9 @@ export function createPlanStore(sessionsDir) {
           ...(plan.body ? { body: plan.body } : {}),
           ...(plan.summary ? { summary: plan.summary } : {}),
         });
-      } catch {}
+      } catch (error) {
+        logger.warn?.(`[plan-store] invalid archive ${name}: ${error.message}`);
+      }
     }
     return out.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
   }

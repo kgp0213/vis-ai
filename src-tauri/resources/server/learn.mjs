@@ -187,7 +187,9 @@ export async function getLearnStatus(opts = {}) {
         .filter((e) => e.isDirectory() && existsSync(join(skillsRoot, e.name, "SKILL.md")))
         .length;
     }
-  } catch {}
+  } catch (error) {
+    console.error(`[learn status] skill inventory unavailable: ${error.message}`);
+  }
   lines.push(`- 已安装 Skill: ${skillCount}`);
 
   // Workspace / project memory
@@ -527,7 +529,9 @@ async function collectProjectFiles(rootDir) {
       if (content.includes("\0")) continue;
       totalBytes += content.length;
       files.push({ path: name, content });
-    } catch {}
+    } catch (error) {
+      console.error(`[learn project] skipped ${name}: ${error.message}`);
+    }
   }
 
   // Then a shallow tree scan for a few more text files.
@@ -551,9 +555,13 @@ async function collectProjectFiles(rootDir) {
         if (content.includes("\0")) continue;
         totalBytes += content.length;
         files.push({ path: entry.name, content });
-      } catch {}
+      } catch (error) {
+        console.error(`[learn project] skipped ${entry.name}: ${error.message}`);
+      }
     }
-  } catch {}
+  } catch (error) {
+    throw new Error(`project directory could not be scanned: ${error.message}`);
+  }
 
   return { files, totalBytes };
 }

@@ -278,7 +278,7 @@ async function serveAsset(name) {
     const { body, mtimeMs } = await loadCss();
     return { body, mtimeMs, contentType: "text/css; charset=utf-8" };
   }
-  if (name === "katex-support.js" || name === "backup-support.js") {
+  if (["katex-support.js", "backup-support.js", "index-mode-support.js"].includes(name)) {
     const { body, mtimeMs } = await loadCachedFile(join(ASSET_DIR, name));
     return { body, mtimeMs, contentType: "application/javascript; charset=utf-8" };
   }

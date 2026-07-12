@@ -25315,11 +25315,6 @@ function FilesPanel() {
 }
 function ChatPanel() {
   useLang();
-  function indexRetrievalModeHint(mode) {
-    if (mode === "auto") return "自动召回：每次发送消息前自动搜索本地索引，并把最相关内容加入本轮上下文。";
-    if (mode === "tool") return "按需搜索：不会主动搜索；模型判断有必要时，可以调用语义搜索工具。";
-    return "不使用：本轮对话不自动召回，也不向模型提供本地索引搜索工具。";
-  }
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
   const [activeTool, setActiveTool] = d2(null);
@@ -25702,7 +25697,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       try {
         const retrieval = await api("/index-retrieval-mode");
-        if (!cancelled) setIndexRetrievalMode(retrieval.mode ?? "tool");
+        if (!cancelled) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       } catch {
       }
     })();
@@ -25742,7 +25737,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
     try {
       const retrieval = await api("/index-retrieval-mode");
-      setIndexRetrievalMode(retrieval.mode ?? "tool");
+      setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
     } catch {
     }
   }, [cancelStreamingRaf]);
@@ -25867,7 +25862,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("idle");
         setShowRetrievalSources(false);
-        api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(retrieval.mode ?? "tool")).catch(() => {});
+        api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode))).catch(() => {});
         setMessages(dash.messages.map((m) => ({
           id: m.id || `hist-${Math.random()}`,
           role: m.role,
@@ -26245,7 +26240,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
       const retrieval = await api("/index-retrieval-mode").catch(() => ({ mode: "tool" }));
-      setIndexRetrievalMode(retrieval.mode ?? "tool");
+      setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       setSemanticRetrievalSources([]);
       setSemanticRetrievalStatus("idle");
       setMessages([]);
@@ -26280,10 +26275,10 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, [busy, messages.length, draftKey, confirmQueuedReset, waitForIdle, setChatInput]);
   const changeIndexRetrievalMode = q2(async (event) => {
-    const next = event.target.value;
+    const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
       const result = await api("/index-retrieval-mode", { method: "POST", body: { mode: next } });
-      setIndexRetrievalMode(result.mode ?? next);
+      setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(result.mode, next));
       setSemanticRetrievalSources([]);
       setSemanticRetrievalStatus("idle");
       setShowRetrievalSources(false);
@@ -27294,7 +27289,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               ` : null}
               <label class="composer-chip" style="display:flex;align-items:center;gap:8px;font-size:12px;padding:2px 6px 2px 9px">
                 <span title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。" style="padding-right:8px;border-right:1px solid var(--border-default)">索引</span>
-                <select title=${indexRetrievalModeHint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode} style="min-width:88px;max-width:104px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-input);color:inherit;font-size:12px;line-height:18px;padding:2px 5px;cursor:pointer">
+                <select title=${globalThis.VisionoxIndexModePolicy.hint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode} style="min-width:88px;max-width:104px;border:1px solid var(--border-default);border-radius:4px;background:var(--bg-input);color:inherit;font-size:12px;line-height:18px;padding:2px 5px;cursor:pointer">
                   <option value="auto" title="每次发送消息前自动搜索索引，并把相关内容加入上下文。" disabled=${semanticIndex === false}>自动召回</option>
                   <option value="tool" title="不主动搜索，仅在模型判断有必要时调用索引工具。" disabled=${semanticIndex === false}>按需搜索</option>
                   <option value="off" title="完全关闭本地索引，不自动召回，也不提供索引工具。">不使用</option>

@@ -703,9 +703,9 @@ describe("Dashboard 回归护栏", () => {
     assert.ok(composer.indexOf('chat.backgroundJobs') < composer.indexOf('>索引<\/span>'));
     assert.match(composer, /<span[^>]+style="padding-right:8px;border-right:1px solid var\(--border-default\)">索引<\/span>/);
     assert.match(composer, /<select[^>]+min-width:88px[^>]+border:1px solid var\(--border-default\)[^>]+background:var\(--bg-input\)/);
-    assert.match(chatPanel, /function indexRetrievalModeHint/);
+    assert.match(chatPanel, /VisionoxIndexModePolicy\.normalize/);
     assert.match(composer, /title="索引用于从当前工作区和知识库中查找相关内容/);
-    assert.match(composer, /title=\$\{indexRetrievalModeHint\(indexRetrievalMode\)\}/);
+    assert.match(composer, /title=\$\{globalThis\.VisionoxIndexModePolicy\.hint\(indexRetrievalMode\)\}/);
     assert.match(composer, /option value="auto"[\s\S]*?title="每次发送消息前自动搜索索引/);
     assert.match(composer, /option value="tool"[\s\S]*?title="不主动搜索/);
     assert.match(composer, /option value="off"[\s\S]*?title="完全关闭本地索引/);

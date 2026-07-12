@@ -10,7 +10,10 @@ const limits = new Map([
   ["src-tauri/resources/server/__tests__/dashboard-regression.test.mjs", 53_000],
 ]);
 const requiredDomainTests = [
+  "active-session-meta.test.mjs",
   "api-contracts.test.mjs",
+  "index-mode-support.test.mjs",
+  "launcher-storage-policy.test.mjs",
   "prompt-queue-store.test.mjs",
   "runtime-issues.test.mjs",
   "user-data-backup.test.mjs",

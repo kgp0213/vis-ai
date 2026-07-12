@@ -50,6 +50,10 @@
 - Node、OfficeCLI、Reasonix、KaTeX 和 bootstrap skills 增加随包分发的机器可读来源、版本、许可证与哈希清单。
 - 运行时问题按 debug/warning/error/fatal 分级；概览仅显示需要用户处理的 warning/error。
 - 提示队列存储从 Launcher 抽取为独立模块；Dashboard 备份策略成为首个可读、独立测试的迁移模块。
+- Active session metadata 抽取为版本化存储模块，损坏或高版本文件经过真实文件测试确认不会被覆盖。
+- Soul、工程规则、模式记忆回滚、知识主题读取和活动计划清理不再静默失败；知识主题不可读时禁止覆盖。
+- Dashboard 索引模式归一化与提示抽取为第二个可读策略模块，异常值安全回退到按需搜索。
+- 41 个 bootstrap skills 全部进入 provenance 清单；当前 7 项来源和许可证已核验，34 项明确标记待补证。
 
 ## v1.11.0
 

@@ -39,7 +39,8 @@
       "version": "Visionox-Whale 1.28.0 bundle",
       "source": "curated in this repository; use each SKILL.md metadata and bundled license file for upstream-specific attribution",
       "license": "mixed: per-skill metadata; bootstrap-skills/pdf/LICENSE.txt applies to the PDF skill",
-      "licenseFile": "bootstrap-skills/pdf/LICENSE.txt"
+      "licenseFile": "bootstrap-skills/pdf/LICENSE.txt",
+      "provenanceFile": "bootstrap-skills-provenance.json"
     }
   ]
 }
