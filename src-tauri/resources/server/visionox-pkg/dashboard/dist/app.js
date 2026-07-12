@@ -19618,7 +19618,25 @@ var en = {
     budgetWarning: "Session budget is {pct}% used.",
     sessionAndPlans: "Session and plan",
     localSystem: "Local and system",
-    userDataPaths: "User data paths"
+    userDataPaths: "User data paths",
+    userDataSize: "User data",
+    storageHealthy: "Storage format is current",
+    backupCount: "{count} backups / sessions {size}",
+    dataProtection: "Backup and restore",
+    latestBackup: "Latest backup",
+    noBackup: "No backup yet",
+    createBackup: "Create backup",
+    backupCreating: "Creating...",
+    backupCreated: "Backup created: {count} files, {size}",
+    backupFailed: "Backup failed: {error}",
+    backupCorrupt: "{count} backup directories failed integrity checks.",
+    previewBackup: "Preview",
+    previewCounts: "missing {missing} / conflicts {conflict} / unchanged {same}",
+    restoreMissing: "Restore missing",
+    restoreAll: "Overwrite conflicts",
+    restoreConfirm: "Overwrite current files that differ from this backup?",
+    restoreDone: "Restore complete: {restored} restored, {skipped} skipped.",
+    restoreFailed: "Restore failed: {error}"
   },
   usage: {
     loading: "loading usage\u2026",
@@ -20573,7 +20591,25 @@ var zhCN = {
     budgetWarning: "\u5F53\u524D\u4F1A\u8BDD\u9884\u7B97\u5DF2\u4F7F\u7528 {pct}%\u3002",
     sessionAndPlans: "\u4F1A\u8BDD\u4E0E\u8BA1\u5212",
     localSystem: "\u672C\u5730\u4E0E\u7CFB\u7EDF",
-    userDataPaths: "\u7528\u6237\u6570\u636E\u8DEF\u5F84"
+    userDataPaths: "\u7528\u6237\u6570\u636E\u8DEF\u5F84",
+    userDataSize: "\u7528\u6237\u6570\u636E",
+    storageHealthy: "\u5B58\u50A8\u683C\u5F0F\u5DF2\u662F\u6700\u65B0",
+    backupCount: "{count} \u4E2A\u5907\u4EFD / \u4F1A\u8BDD {size}",
+    dataProtection: "\u5907\u4EFD\u4E0E\u6062\u590D",
+    latestBackup: "\u6700\u65B0\u5907\u4EFD",
+    noBackup: "\u5C1A\u65E0\u5907\u4EFD",
+    createBackup: "\u521B\u5EFA\u5907\u4EFD",
+    backupCreating: "\u6B63\u5728\u521B\u5EFA...",
+    backupCreated: "\u5907\u4EFD\u5DF2\u521B\u5EFA\uFF1A{count} \u4E2A\u6587\u4EF6\uFF0C{size}",
+    backupFailed: "\u5907\u4EFD\u5931\u8D25\uFF1A{error}",
+    backupCorrupt: "{count} \u4E2A\u5907\u4EFD\u76EE\u5F55\u672A\u901A\u8FC7\u5B8C\u6574\u6027\u68C0\u67E5\u3002",
+    previewBackup: "\u9884\u89C8",
+    previewCounts: "\u7F3A\u5931 {missing} / \u51B2\u7A81 {conflict} / \u672A\u53D8 {same}",
+    restoreMissing: "\u6062\u590D\u7F3A\u5931\u9879",
+    restoreAll: "\u8986\u76D6\u51B2\u7A81\u9879",
+    restoreConfirm: "\u786E\u5B9A\u8986\u76D6\u4E0E\u6B64\u5907\u4EFD\u4E0D\u540C\u7684\u5F53\u524D\u6587\u4EF6\u5417\uFF1F",
+    restoreDone: "\u6062\u590D\u5B8C\u6210\uFF1A\u5DF2\u6062\u590D {restored} \u9879\uFF0C\u8DF3\u8FC7 {skipped} \u9879\u3002",
+    restoreFailed: "\u6062\u590D\u5931\u8D25\uFF1A{error}"
   },
   usage: {
     loading: "\u52A0\u8F7D\u7528\u91CF\u2026",
@@ -29023,8 +29059,11 @@ function OverviewPanel() {
   useLang();
   const [modelChecking, setModelChecking] = d2(false);
   const [actionFeedback, setActionFeedback] = d2(null);
+  const [backupBusy, setBackupBusy] = d2(false);
+  const [backupPreview, setBackupPreview] = d2(null);
   const { data, error, loading, refresh } = usePoll("/overview", 5e3, "overview");
-  const { data: healthData, error: healthError } = usePoll("/health", 5e3, "health");
+  const { data: healthData, error: healthError, refresh: refreshHealth } = usePoll("/health", 5e3, "health");
+  const { data: backupsData, refresh: refreshBackups } = usePoll("/backups", 15e3);
   const { data: retrievalData } = usePoll("/index-retrieval-mode", 5e3);
   const runModelChecks = q2(async () => {
     if (modelChecking) return;
@@ -29040,12 +29079,53 @@ function OverviewPanel() {
       setModelChecking(false);
     }
   }, [modelChecking, refresh]);
+  const createBackup = q2(async () => {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    setActionFeedback(null);
+    try {
+      const created = await api("/backups", { method: "POST", body: {} });
+      setBackupPreview(null);
+      setActionFeedback({ tone: "ok", text: t4("overview.backupCreated", { count: created.fileCount, size: fmtBytes(created.totalBytes) }) });
+      await Promise.all([refreshBackups(), refreshHealth()]);
+    } catch (err) {
+      setActionFeedback({ tone: "err", text: t4("overview.backupFailed", { error: err.message }) });
+    } finally {
+      setBackupBusy(false);
+    }
+  }, [backupBusy, refreshBackups, refreshHealth]);
+  const previewBackup = q2(async (id) => {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    try {
+      setBackupPreview(await api(`/backups/${encodeURIComponent(id)}/preview`));
+    } catch (err) {
+      setActionFeedback({ tone: "err", text: t4("overview.restoreFailed", { error: err.message }) });
+    } finally {
+      setBackupBusy(false);
+    }
+  }, [backupBusy]);
+  const restoreBackup = q2(async (id, overwrite) => {
+    if (backupBusy || overwrite && !globalThis.confirm(t4("overview.restoreConfirm"))) return;
+    setBackupBusy(true);
+    try {
+      const restored = await api(`/backups/${encodeURIComponent(id)}/restore`, { method: "POST", body: { overwrite } });
+      setActionFeedback({ tone: "ok", text: t4("overview.restoreDone", restored) });
+      setBackupPreview(await api(`/backups/${encodeURIComponent(id)}/preview`));
+      await refreshHealth();
+    } catch (err) {
+      setActionFeedback({ tone: "err", text: t4("overview.restoreFailed", { error: err.message }) });
+    } finally {
+      setBackupBusy(false);
+    }
+  }, [backupBusy, refreshHealth]);
   if (loading && !data)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("overview.loading")}</div>`;
   if (error) return html4`<div class="card accent-err">${t4("overview.failed", { error: error.message })}</div>`;
   if (!data) return null;
   const o3 = data;
   const h3 = healthData;
+  const storageHealth = h3?.storage?.backups ? h3.storage : null;
   const c3 = o3.cockpit ?? {
     balance: null,
     tokens7d: null,
@@ -29063,6 +29143,7 @@ function OverviewPanel() {
   if (o3.modelVerification?.dirty) alerts.push({ tone: "warn", text: t4("overview.retestModels"), label: modelChecking ? t4("overview.checkingModels") : t4("overview.checkModels"), action: runModelChecks, disabled: modelChecking });
   if (o3.modelDrift) alerts.push({ tone: "warn", text: t4("overview.modelDrift") });
   if (Number(o3.pendingEdits) > 0) alerts.push({ tone: "warn", text: t4("overview.pendingEdits", { count: o3.pendingEdits }) });
+  if (Number(storageHealth?.backups?.corrupt) > 0) alerts.push({ tone: "warn", text: t4("overview.backupCorrupt", { count: storageHealth.backups.corrupt }) });
   const missingRequiredIndex = retrievalData?.mode === "auto" && retrievalData.semanticAvailable === false;
   if (missingRequiredIndex) alerts.push({ tone: "warn", text: t4("overview.missingIndex"), label: t4("overview.openIndex"), action: () => appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "semantic" } })) });
   if (budgetState.kind !== "off" && budgetState.pct >= 80) alerts.push({ tone: budgetState.pct >= 100 ? "err" : "warn", text: t4("overview.budgetWarning", { pct: Math.round(budgetState.pct) }) });
@@ -29111,8 +29192,18 @@ function OverviewPanel() {
           <div class="health-item"><div class="lbl">${t4("system.sessions")}</div><div class="v">${fmtBytes(h3.sessions.totalBytes)}</div><div class="meta">${fmtNum(h3.sessions.count)} ${t4("system.files")}</div></div>
           <div class="health-item"><div class="lbl">${t4("system.memory")}</div><div class="v">${fmtBytes(h3.memory.totalBytes)}</div><div class="meta">${fmtNum(h3.memory.fileCount)} ${t4("system.files")}</div></div>
           <div class="health-item"><div class="lbl">${t4("system.semanticIndex")}</div><div class="v">${h3.semantic.exists ? fmtBytes(h3.semantic.totalBytes) : "\u2014"}</div><div class="meta">${h3.semantic.exists ? `${fmtNum(h3.semantic.fileCount)} ${t4("system.files")}` : t4("system.runIndex")}</div></div>
+          ${storageHealth ? html4`<div class="health-item"><div class="lbl">${t4("overview.userDataSize")}</div><div class="v">${fmtBytes(storageHealth.totalBytes)}</div><div class="meta">${["current", "migrated"].includes(storageHealth.configStatus) ? t4("overview.storageHealthy") : storageHealth.configStatus ?? "\u2014"}</div></div>` : null}
+          ${storageHealth ? html4`<div class=${`health-item ${storageHealth.backups.corrupt > 0 ? "warn" : ""}`}><div class="lbl">${t4("overview.latestBackup")}</div><div class="v">${storageHealth.backups.latestAt ? new Date(storageHealth.backups.latestAt).toLocaleString() : t4("overview.noBackup")}</div><div class="meta">${t4("overview.backupCount", { count: fmtNum(storageHealth.backups.count), size: fmtBytes(storageHealth.sources?.sessions?.totalBytes ?? 0) })}</div></div>` : null}
           ${h3.jobs > 0 ? html4`<div class="health-item"><div class="lbl">${t4("system.backgroundJobs")}</div><div class="v">${t4("system.running", { count: fmtNum(h3.jobs) })}</div><div class="meta">${t4("system.shellSpawn")}</div></div>` : null}
         </div>
+        <details class="card" style="padding:10px 14px">
+          <summary style="cursor:pointer;color:var(--fg-2);font-size:12px">${t4("overview.dataProtection")}</summary>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
+            <div style="display:flex;align-items:center;gap:8px"><button type="button" disabled=${backupBusy} onClick=${createBackup}>${backupBusy ? t4("overview.backupCreating") : t4("overview.createBackup")}</button><span class="dim" style="min-width:0;overflow-wrap:anywhere">${storageHealth?.backups?.path ?? ""}</span></div>
+            ${(backupsData?.items ?? []).slice(0, 5).map((item) => html4`<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:8px"><span style="min-width:0"><strong>${item.status === "ok" ? new Date(item.createdAt).toLocaleString() : item.id}</strong><br><span class="dim">${item.status === "ok" ? `${fmtNum(item.fileCount)} ${t4("system.files")} / ${fmtBytes(item.totalBytes)}` : item.error}</span></span>${item.status === "ok" ? html4`<button type="button" class="btn ghost" disabled=${backupBusy} onClick=${() => previewBackup(item.id)}>${t4("overview.previewBackup")}</button>` : null}</div>`)}
+            ${backupPreview ? html4`<div style="border-top:1px solid var(--line);padding-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center"><span style="flex:1;min-width:220px">${t4("overview.previewCounts", backupPreview.counts)}</span><button type="button" class="btn ghost" disabled=${backupBusy || backupPreview.counts.missing === 0} onClick=${() => restoreBackup(backupPreview.id, false)}>${t4("overview.restoreMissing")}</button><button type="button" class="btn ghost" disabled=${backupBusy || backupPreview.counts.conflict === 0} onClick=${() => restoreBackup(backupPreview.id, true)}>${t4("overview.restoreAll")}</button></div>` : null}
+          </div>
+        </details>
         <details class="card" style="padding:10px 14px">
           <summary style="cursor:pointer;color:var(--fg-2);font-size:12px">${t4("overview.userDataPaths")}</summary>
           <table class="tbl" style="margin-top:8px"><tbody style="font-size:11.5px">

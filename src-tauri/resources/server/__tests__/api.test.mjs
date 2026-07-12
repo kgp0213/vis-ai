@@ -149,6 +149,53 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.ok(res.json.modelVerification !== undefined);
   });
 
+  test("用户数据备份 API 支持创建、预览和冲突安全恢复", async () => {
+    const calls = [];
+    const userDataBackups = {
+      list: () => [{ id: "backup-1", status: "ok" }],
+      create: () => ({ id: "backup-2", files: [{ path: "secret-detail" }], fileCount: 1 }),
+      inspect: (id) => ({ id, counts: { missing: 1, conflict: 1 } }),
+      restore: (id, options) => { calls.push({ id, options }); return { id, restored: 1, skipped: 1, overwrite: options.overwrite }; },
+      health: () => ({ totalBytes: 42, backups: { count: 1, corrupt: 0, latestAt: "2026-07-12T08:00:00.000Z" } }),
+    };
+    const overrides = { userDataBackups, configMigrationStatus: { status: "current" } };
+
+    const list = await apiGet("/api/backups", overrides);
+    assert.equal(list.status, 200);
+    assert.equal(list.json.items[0].id, "backup-1");
+
+    const created = await apiPost("/api/backups", {}, overrides);
+    assert.equal(created.status, 200);
+    assert.equal(created.json.id, "backup-2");
+    assert.equal(created.json.files, undefined);
+
+    const preview = await apiGet("/api/backups/backup-1/preview", overrides);
+    assert.equal(preview.json.counts.conflict, 1);
+
+    const safe = await apiPost("/api/backups/backup-1/restore", {}, overrides);
+    assert.equal(safe.json.overwrite, false);
+    const overwrite = await apiPost("/api/backups/backup-1/restore", { overwrite: true }, overrides);
+    assert.equal(overwrite.json.overwrite, true);
+    assert.deepEqual(calls, [
+      { id: "backup-1", options: { overwrite: false } },
+      { id: "backup-1", options: { overwrite: true } },
+    ]);
+
+    const health = await apiGet("/api/health", overrides);
+    assert.equal(health.json.storage.totalBytes, 42);
+    assert.equal(health.json.storage.configStatus, "current");
+  });
+
+  test("备份 API 对无服务、未知路径和无效 JSON 返回明确错误", async () => {
+    const unavailable = await apiGet("/api/backups");
+    assert.equal(unavailable.status, 503);
+    const userDataBackups = { list: () => [], create: () => ({}), inspect: () => ({}), restore: () => ({}) };
+    const unknown = await apiGet("/api/backups/backup-1/unknown", { userDataBackups });
+    assert.equal(unknown.status, 404);
+    const invalid = await apiPost("/api/backups/backup-1/restore", "{", { userDataBackups });
+    assert.equal(invalid.status, 400);
+  });
+
   test("KaTeX 脚本和样式受保护，字体可由 CSS 直接加载", async () => {
     const deniedReq = { url: "/assets/vendor/katex/katex.min.js", method: "GET", headers: {} };
     const deniedRes = mockRes();

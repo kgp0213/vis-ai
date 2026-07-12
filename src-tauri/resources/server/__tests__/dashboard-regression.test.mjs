@@ -617,6 +617,14 @@ describe("Dashboard 回归护栏", () => {
     assert.match(overview, /h3\.sessions\.totalBytes/);
     assert.match(overview, /h3\.memory\.totalBytes/);
     assert.match(overview, /h3\.semantic\.totalBytes/);
+    assert.match(overview, /usePoll\("\/backups", 15e3\)/);
+    assert.match(overview, /api\("\/backups", \{ method: "POST", body: \{\} \}\)/);
+    assert.match(overview, /\/backups\/\$\{encodeURIComponent\(id\)\}\/preview/);
+    assert.match(overview, /\/backups\/\$\{encodeURIComponent\(id\)\}\/restore/);
+    assert.match(overview, /backupPreview\.counts\.conflict/);
+    assert.match(overview, /const storageHealth = h3\?\.storage\?\.backups/);
+    assert.match(overview, /storageHealth\.totalBytes/);
+    assert.match(overview, /storageHealth\.backups\.latestAt/);
     assert.match(overview, /h3\.jobs > 0/);
     assert.match(overview, /<details/);
     assert.match(overview, /overview\.userDataPaths/);

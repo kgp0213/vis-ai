@@ -102,6 +102,16 @@ const required = [
     ],
   },
   {
+    file: "src-tauri/resources/server/lib/user-data-backup.mjs",
+    markers: [
+      "createUserDataBackupStore",
+      "unsupported backup manifest",
+      "backup integrity check failed",
+      "backupDir inside dataDir must be the backups directory",
+      "healthCache",
+    ],
+  },
+  {
     file: "src-tauri/resources/server/lib/plan-store.mjs",
     markers: [
       "createPlanStore",
@@ -188,6 +198,9 @@ const required = [
       "listSoulHistory",
       "writeMemoryTrash",
       "expectedRevision",
+      "function handleBackups",
+      "ctx.userDataBackups",
+      'case "backups"',
     ],
   },
   {
@@ -231,6 +244,9 @@ const required = [
       "当前上下文仍在使用旧记忆",
       "预览最终注入",
       'api("/mode-memory/batch"',
+      'usePoll("/backups", 15e3)',
+      "overview.dataProtection",
+      "backupPreview.counts.conflict",
     ],
   },
   {

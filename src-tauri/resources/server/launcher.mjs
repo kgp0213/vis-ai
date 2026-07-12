@@ -66,6 +66,7 @@ const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = 
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
 const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs");
+const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -621,6 +622,11 @@ function primaryBalanceSummary() {
 
 // Workspace directory — configurable via config.workspaceDir
 let workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
+const userDataBackups = createUserDataBackupStore({
+  dataDir: visionoxDataDir,
+  getWorkspaceDir: () => workspaceDir,
+  appVersion: VERSION,
+});
 if (!existsSync(workspaceDir)) {
   mkdirSync(workspaceDir, { recursive: true });
 }
@@ -6079,6 +6085,9 @@ const ctx = {
   configPath,
   usageLogPath,
   sessionsDir,
+  memoryHomeDir: visionoxDataDir,
+  userDataBackups,
+  configMigrationStatus: configMigration,
   loop,
   tools,
   addToolToPrefix: addToolToActivePrefix,

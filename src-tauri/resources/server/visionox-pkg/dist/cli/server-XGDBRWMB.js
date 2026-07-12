@@ -879,6 +879,12 @@ async function handleHealth(method, _rest, _body, ctx) {
     } catch {
     }
   }
+  let storage = null;
+  try {
+    storage = ctx.userDataBackups?.health?.() ?? null;
+  } catch (error) {
+    storage = { error: error.message };
+  }
   return {
     status: 200,
     body: {
@@ -905,6 +911,7 @@ async function handleHealth(method, _rest, _body, ctx) {
         path: ctx.usageLogPath,
         bytes: usageBytes
       },
+      storage: storage ? { ...storage, configStatus: ctx.configMigrationStatus?.status ?? null } : null,
       jobs: ctx.jobs ? ctx.jobs.listMetadata?.().length ?? ctx.jobs.runningCount?.() ?? null : null,
       cwd: ctx.getCurrentCwd?.() ?? null,
       buildDate: new Date().getHours().toString().padStart(2, "0")
@@ -2643,6 +2650,33 @@ async function handleOverview(method, _rest, _body, ctx) {
     })()
   };
   return { status: 200, body: overview };
+}
+
+// src/server/api/backups.ts (Visionox local patch)
+function backupSummary(manifest) {
+  if (!manifest) return manifest;
+  const { files: _files, ...summary } = manifest;
+  return summary;
+}
+async function handleBackups(method, rest, body, ctx) {
+  const store = ctx.userDataBackups;
+  if (!store) return { status: 503, body: { error: "user data backup service is unavailable" } };
+  if (method === "GET" && rest.length === 0) return { status: 200, body: { items: store.list() } };
+  if (method === "POST" && rest.length === 0) return { status: 200, body: backupSummary(store.create()) };
+  const id = rest[0];
+  if (method === "GET" && id && rest[1] === "preview" && rest.length === 2) {
+    return { status: 200, body: store.inspect(id) };
+  }
+  if (method === "POST" && id && rest[1] === "restore" && rest.length === 2) {
+    let input = {};
+    try {
+      input = body ? JSON.parse(body) : {};
+    } catch {
+      return { status: 400, body: { error: "invalid JSON body" } };
+    }
+    return { status: 200, body: store.restore(id, { overwrite: input.overwrite === true }) };
+  }
+  return { status: 404, body: { error: "backup endpoint not found" } };
 }
 
 // src/server/api/permissions.ts
@@ -5443,6 +5477,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
     switch (head) {
       case "overview":
         return await handleOverview(method, rest, body, ctx);
+      case "backups":
+        return await handleBackups(method, rest, body, ctx);
       case "usage":
         return await handleUsage(method, rest, body, ctx);
       case "tools":
