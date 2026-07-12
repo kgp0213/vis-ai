@@ -17,6 +17,7 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 - 内置 Node.js、OfficeCLI、bootstrap skills 和 ECC 规则
 - Markdown 打开、预览、文件关联和对话产物管理，统一支持 KaTeX 行内与块级公式
 - 定时任务、执行记录和报告生成
+- 概览页用户数据健康检查，以及带 SHA-256 清单的备份、预览和冲突安全恢复
 
 ## 数据兼容与安全
 
@@ -30,8 +31,13 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 因此，新 exe 会继续读取已有会话、设置、记忆和任务数据。
 
 配置文件使用 `configSchemaVersion` 管理格式。旧配置首次迁移前会在
-`%USERPROFILE%\.visionox\backups\` 中保留一次恢复副本，然后通过原子写入更新。损坏 JSON、
+`%USERPROFILE%\.visionox\backups\` 中保留一次迁移恢复文件，然后通过原子写入更新。损坏 JSON、
 不支持的更高版本或备份失败时，程序不会静默覆盖原配置。迁移日志不输出 API Key 或配置正文。
+
+用户可在“概览 → 备份与恢复”创建完整快照。快照位于
+`%USERPROFILE%\.visionox\backups\snapshots\`，包含配置、会话、定时任务、Soul、长期/场景记忆和
+当前工作区 `knowledge/` 文档，不包含可重建的语义向量、日志或缓存。恢复前会校验 SHA-256 并预览
+缺失、未变和冲突文件；默认只恢复缺失项，覆盖冲突必须再次确认。
 
 ## 使用
 
@@ -45,7 +51,7 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 | 控制本地索引 | 聊天输入区下方、后台任务之后的“索引”选择框 |
 | 管理会话 | 左侧“会话”，支持批量移入回收站、预览和恢复 |
 | 管理任务 | 左侧“任务”，包括会话整理、报告和自定义任务 |
-| 查看运行概况 | 左侧“概览”，位于“任务”和 OA 之间 |
+| 查看运行概况或备份用户数据 | 左侧“概览”，位于“任务”和 OA 之间 |
 | 管理记忆 | 左侧“高级”中的记忆页面，可编辑和预览 Soul、恢复历史版本，并按工作场景新增、移动、复制、批量管理或从回收站恢复记忆 |
 | 管理 MCP | 左侧“高级”中的 MCP 页面 |
 | 打开 Markdown | 顶部“打开 MD”或系统文件关联 |
@@ -225,6 +231,7 @@ docs/                        使用、架构与开发文档
 - [架构说明](docs/ARCHITECTURE.md)
 - [开发指南](docs/DEVELOPMENT.md)
 - [质量门禁](docs/QUALITY.md)
+- [发布验收清单](docs/RELEASE_CHECKLIST.md)
 - [Dashboard 功能基线与迁移验收](docs/DASHBOARD_PARITY.md)
 - [OfficeCLI 指南](docs/OFFICECLI_GUIDE.md)
 - [更新日志](docs/CHANGELOG.md)

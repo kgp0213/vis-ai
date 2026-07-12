@@ -54,3 +54,7 @@ an explicit separate operation through `npm run bundle:nsis`.
 CI does not build release artifacts because the bundled Node and OfficeCLI executables
 are intentionally not stored in Git. Release validation must run in the controlled
 Windows build environment where those binaries are present.
+
+Use [Release acceptance checklist](RELEASE_CHECKLIST.md) for every executable or installer
+delivery. Keep the completed checklist and SHA-256 record with the release notes; do not
+tag or publish until the recorded commit, version, artifact names and hashes agree.

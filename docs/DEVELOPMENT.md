@@ -42,6 +42,7 @@ npm run bundle:nsis
 - 修改 `launcher.mjs`、Dashboard 或 chunk 文件后必须通过 `npm run tauri:build` 构建，确保构建前暂存和 Tauri 资源复制都执行。不要用原始 `cargo build` 验证交付产物，它不会准备运行时资源。
 - 非测试 Rust 代码不得读取 `CARGO_MANIFEST_DIR` 或任何绝对项目路径来补拷运行时资源。运行实例只读取自身同级的 `resources/`，缺失即视为构建失败。
 - `npm run release:check` 的 Rust 测试产物写入系统临时目录并自动删除，不会生成或使用项目内的 `target/debug`。
+- 实际交付 exe 或 NSIS 时填写 [发布验收清单](RELEASE_CHECKLIST.md)，记录 commit、版本、功能抽查和产物 SHA-256。
 - `scripts/restore-visionox-pkg.js` 是维护/重拉上游 reasonix 包的工具，不是常规构建步骤。普通 `npm run restore:pkg` 已禁用；必须在备份并准备重新迁移补丁后，才使用 `npm run restore:pkg:danger -- --force`。
 
 ---
