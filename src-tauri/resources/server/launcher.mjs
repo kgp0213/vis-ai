@@ -34,6 +34,7 @@ const { spawnSync } = await importEarly("node:child_process");
 const { createInterface } = await importEarly("node:readline");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
 const { commitScheduleMutation, readScheduleStore, writeScheduleStore } = await importEarly("./lib/schedule-store.mjs");
+const { replacePathTransactional } = await importEarly("./lib/transactional-path.mjs");
 
 const {
   getActiveProvider,
@@ -685,10 +686,6 @@ async function writeBuiltinMarker(skillDir, name, sourceHash, sourceMtime) {
   writeFileSync(resolve(skillDir, "_visionox_builtin.json"), `${JSON.stringify(marker, null, 2)}\n`, "utf8");
 }
 
-function backupPathFor(target) {
-  return `${target}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-}
-
 // Source skill directories are build-time artifacts — their mtime doesn't change
 // after install. Cache the hash in the marker keyed by source dir mtime so we
 // can skip reading all source files on steady-state startup.
@@ -724,17 +721,26 @@ async function installBootstrapSkill(name, { force = false } = {}) {
     if (!force && currentHash === sourceHash) {
       return { name, installed: false, skipped: true, reason: "already up to date" };
     }
-    const backupDir = backupPathFor(targetDir);
-    await cp(targetDir, backupDir, { recursive: true });
-    await rm(targetDir, { recursive: true, force: true });
-    await cp(sourceDir, targetDir, { recursive: true });
-    await writeBuiltinMarker(targetDir, name, sourceHash, srcMtime);
-    return { name, installed: true, upgraded: true, backup: backupDir, path: targetDir };
+    const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
+    try {
+      await cp(sourceDir, stagingDir, { recursive: true });
+      await writeBuiltinMarker(stagingDir, name, sourceHash, srcMtime);
+      const replaced = replacePathTransactional(targetDir, stagingDir, { retain: 3 });
+      return { name, installed: true, upgraded: true, backup: replaced.history, path: targetDir, cleanupError: replaced.cleanupError };
+    } finally {
+      await rm(stagingDir, { recursive: true, force: true });
+    }
   }
   const sourceHash = await hashDirectory(sourceDir);
-  await cp(sourceDir, targetDir, { recursive: true });
-  await writeBuiltinMarker(targetDir, name, sourceHash, srcMtime);
-  return { name, installed: true, path: targetDir };
+  const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
+  try {
+    await cp(sourceDir, stagingDir, { recursive: true });
+    await writeBuiltinMarker(stagingDir, name, sourceHash, srcMtime);
+    replacePathTransactional(targetDir, stagingDir, { retain: 3 });
+    return { name, installed: true, path: targetDir };
+  } finally {
+    await rm(stagingDir, { recursive: true, force: true });
+  }
 }
 
 async function deployBootstrapSkills({ force = false } = {}) {
@@ -785,19 +791,18 @@ async function deploySkillGuide(rootDir) {
   const guideDst = resolve(guideDir, "skill-creation-guide.md");
   if (!existsSync(guideSrc)) return { deployed: false, reason: "source guide not found" };
   if (!existsSync(guideDir)) mkdirSync(guideDir, { recursive: true });
-  if (!existsSync(guideDst)) {
-    await copyFile(guideSrc, guideDst);
-    console.error(`[launcher] skill-creation-guide.md deployed to workspace`);
-    return { deployed: true, path: guideDst };
+  if (existsSync(guideDst) && await hashFile(guideSrc) === await hashFile(guideDst)) {
+    return { deployed: false, skipped: true, reason: "already up to date", path: guideDst };
   }
-  if (await hashFile(guideSrc) !== await hashFile(guideDst)) {
-    const backup = backupPathFor(guideDst);
-    await copyFile(guideDst, backup);
-    await copyFile(guideSrc, guideDst);
-    console.error(`[launcher] skill-creation-guide.md refreshed in workspace`);
-    return { deployed: true, refreshed: true, backup, path: guideDst };
+  const staging = resolve(guideDir, `.skill-creation-guide-stage-${randomUUID()}.md`);
+  try {
+    await copyFile(guideSrc, staging);
+    const replaced = replacePathTransactional(guideDst, staging, { retain: 3 });
+    console.error(`[launcher] skill-creation-guide.md ${replaced.history ? "refreshed" : "deployed"} in workspace`);
+    return { deployed: true, refreshed: Boolean(replaced.history), backup: replaced.history, path: guideDst, cleanupError: replaced.cleanupError };
+  } finally {
+    await rm(staging, { force: true });
   }
-  return { deployed: false, skipped: true, reason: "already up to date", path: guideDst };
 }
 await deployBootstrapSkills();
 await deploySkillGuide(workspaceDir);
@@ -1238,28 +1243,23 @@ function installSkillDirectoryAtomic(name, srcDir, { overwrite = false } = {}) {
 
   if (!existsSync(skillsRoot)) mkdirSync(skillsRoot, { recursive: true });
   const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
-  let backup = null;
   try {
     cpSync(srcDir, stagingDir, { recursive: true });
     const stagedValidation = validateSkillDirForInstall(stagingDir, name);
     if (!stagedValidation.ok) return { error: stagedValidation.error };
-
-    if (existsSync(skillDir)) {
-      backup = backupPathFor(skillDir);
-      cpSync(skillDir, backup, { recursive: true });
-      rmSync(skillDir, { recursive: true, force: true });
-    }
-    renameSync(stagingDir, skillDir);
+    const replaced = replacePathTransactional(skillDir, stagingDir, { retain: 3 });
     return {
       installed: true,
       name,
       path: skillDir,
-      backup,
+      backup: replaced.history,
+      cleanupError: replaced.cleanupError,
       hint: "新对话或 /new 后即可使用此 skill。",
     };
   } catch (err) {
-    try { rmSync(stagingDir, { recursive: true, force: true }); } catch {}
     return { error: `install failed: ${err.message}` };
+  } finally {
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch {}
   }
 }
 
