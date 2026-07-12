@@ -102,6 +102,16 @@ const required = [
     ],
   },
   {
+    file: "src-tauri/resources/server/lib/plan-store.mjs",
+    markers: [
+      "createPlanStore",
+      "atomicWriteFileSync",
+      "active plan is invalid and was not modified",
+      "archivePlanState",
+      "listAllPlanArchives",
+    ],
+  },
+  {
     file: "src-tauri/resources/server/lib/system-prompt.mjs",
     markers: [
       "PROJECT_MEMORY_CANDIDATES",

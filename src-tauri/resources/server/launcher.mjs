@@ -35,6 +35,7 @@ const { createInterface } = await importEarly("node:readline");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
 const { commitScheduleMutation, readScheduleStore, writeScheduleStore } = await importEarly("./lib/schedule-store.mjs");
 const { replacePathTransactional } = await importEarly("./lib/transactional-path.mjs");
+const { createPlanStore } = await importEarly("./lib/plan-store.mjs");
 
 const {
   getActiveProvider,
@@ -300,6 +301,7 @@ if (!existsSync(visionoxDataDir)) {
 }
 const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
+const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
 const skillsRoot = resolve(visionoxDataDir, "skills");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
@@ -479,7 +481,7 @@ const [
   { listSessions, listSessionsForWorkspace, loadSessionMessages, sessionPath, deleteSession },
   { DEEPSEEK_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEEPSEEK_PRICING },
   { countTokens, estimateRequestTokens },
-  { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives },
+  {},
 ] = modules;
 
 // ── Load config ─────────────────────────────────────────────────
@@ -3370,7 +3372,7 @@ function planAutoContinuationPrompt(plan, attempt, reason = "budget") {
 
 /** Persist the active plan to disk. Called on first mark_step_complete. */
 function persistActivePlan() {
-  if (!activePlanSteps) return;
+  if (!activePlanSteps) return false;
   const session = currentSessionName();
   try {
     const completedStepIds = normalizeCompletedStepIds(activePlanSteps, [...(activeCompletedIds ?? [])]);
@@ -3381,8 +3383,10 @@ function persistActivePlan() {
     });
     const stored = loadPlanState(session);
     activePlanUpdatedAt = stored?.updatedAt ?? new Date().toISOString();
+    return true;
   } catch (err) {
     console.error(`[launcher] persistActivePlan failed: ${err.message}`);
+    return false;
   }
 }
 
@@ -3397,7 +3401,14 @@ function activatePendingPlan() {
   activePlanSummary = nextPlan.summary;
   activePlanUpdatedAt = null;
   pendingPlanRevision = null;
-  persistActivePlan();
+  if (!persistActivePlan()) {
+    pendingPlan = nextPlan;
+    activePlanSteps = null;
+    activeCompletedIds = null;
+    activePlanBody = null;
+    activePlanSummary = null;
+    return false;
+  }
   console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
   broadcastDashboardEvent({ kind: "plan-activated", session: currentSessionName() });
   return true;
@@ -3408,17 +3419,21 @@ function markStepDone(stepId) {
   hydrateActivePlanFromDisk();
   if (!activePlanSteps || !activeCompletedIds || !isKnownPlanStep(activePlanSteps, stepId)) return false;
   activeCompletedIds.add(stepId);
-  persistActivePlan();
+  if (!persistActivePlan()) {
+    activeCompletedIds.delete(stepId);
+    return false;
+  }
   if (isPlanComplete(activePlanSteps, [...activeCompletedIds])) {
     const session = currentSessionName();
     try {
       archivePlanState(session);
       console.error(`[launcher] plan archived (${activeCompletedIds.size}/${activePlanSteps.length} steps) for session ${session}`);
       broadcastDashboardEvent({ kind: "plan-archived", session });
+      resetPlanRefs();
     } catch (err) {
       console.error(`[launcher] archivePlanState failed: ${err.message}`);
+      return false;
     }
-    resetPlanRefs();
   }
   return true;
 }
@@ -3431,7 +3446,9 @@ function completeActivePlanStep(stepId) {
   if (!activePlanSteps.some((step) => step.id === stepId)) {
     return { ok: false, error: "step is not in the active plan" };
   }
-  markStepDone(stepId);
+  if (!markStepDone(stepId)) {
+    return { ok: false, error: "plan progress was not saved" };
+  }
   broadcastDashboardEvent({ kind: "plan-step-complete", stepId, manual: true });
   return { ok: true, plan: getActivePlanSnapshot() };
 }
