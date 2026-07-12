@@ -50,6 +50,7 @@ const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await imp
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
 const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = await importEarly("./lib/memory-prompt.mjs");
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
+const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -479,6 +480,15 @@ const [
 
 // ── Load config ─────────────────────────────────────────────────
 loadDotenv();
+const configMigration = migrateConfigFile(configPath, { writeConfig });
+if (configMigration.status === "migrated") {
+  console.error(`[launcher] config schema migrated: v${configMigration.fromVersion} -> v${configMigration.toVersion}`);
+} else if (configMigration.status !== "current") {
+  const message = `configuration is not safe to use (${configMigration.status}); the original file was not modified`;
+  console.error(`[launcher] ${message}`);
+  process.stdout.write(`${JSON.stringify({ error: message })}\n`);
+  process.exit(1);
+}
 const config = readConfig(configPath);
 
 // ── Provider migration & helpers ───────────────────────────────
