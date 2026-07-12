@@ -29178,15 +29178,28 @@ function OverviewPanel() {
   const workspaceName = o3.cwd?.split(/[\\/]/).filter(Boolean).at(-1) ?? "\u2014";
   const sceneName = o3.activeMode?.label ?? o3.workMode ?? "\u2014";
   const budgetState = deriveBudgetState(o3.budgetUsd, c3.currentSession?.totalCostUsd ?? null);
-  const alerts = [];
-  if (o3.modelVerification?.dirty) alerts.push({ tone: "warn", text: t4("overview.retestModels"), label: modelChecking ? t4("overview.checkingModels") : t4("overview.checkModels"), action: runModelChecks, disabled: modelChecking });
-  if (o3.modelDrift) alerts.push({ tone: "warn", text: t4("overview.modelDrift") });
-  if (Number(o3.pendingEdits) > 0) alerts.push({ tone: "warn", text: t4("overview.pendingEdits", { count: o3.pendingEdits }) });
-  if (Number(storageHealth?.backups?.corrupt) > 0) alerts.push({ tone: "warn", text: t4("overview.backupCorrupt", { count: storageHealth.backups.corrupt }) });
-  if (Number(h3?.storageIssues?.length) > 0) alerts.push({ tone: "err", text: t4("overview.storageIssues", { count: h3.storageIssues.length }) });
-  const missingRequiredIndex = retrievalData?.mode === "auto" && retrievalData.semanticAvailable === false;
-  if (missingRequiredIndex) alerts.push({ tone: "warn", text: t4("overview.missingIndex"), label: t4("overview.openIndex"), action: () => appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "semantic" } })) });
-  if (budgetState.kind !== "off" && budgetState.pct >= 80) alerts.push({ tone: budgetState.pct >= 100 ? "err" : "warn", text: t4("overview.budgetWarning", { pct: Math.round(budgetState.pct) }) });
+  const alertStates = globalThis.VisionoxOverviewAlertPolicy.evaluate({
+    modelVerificationDirty: o3.modelVerification?.dirty,
+    modelDrift: o3.modelDrift,
+    pendingEdits: o3.pendingEdits,
+    corruptBackups: storageHealth?.backups?.corrupt,
+    storageIssues: h3?.storageIssues?.length,
+    retrievalMode: retrievalData?.mode,
+    semanticAvailable: retrievalData?.semanticAvailable,
+    budgetKind: budgetState.kind,
+    budgetPct: budgetState.pct
+  });
+  const alerts = alertStates.map((alert) => {
+    if (alert.kind === "model_retest") return { tone: alert.tone, text: t4("overview.retestModels"), label: modelChecking ? t4("overview.checkingModels") : t4("overview.checkModels"), action: runModelChecks, disabled: modelChecking };
+    if (alert.kind === "model_drift") return { tone: alert.tone, text: t4("overview.modelDrift") };
+    if (alert.kind === "pending_edits") return { tone: alert.tone, text: t4("overview.pendingEdits", { count: alert.count }) };
+    if (alert.kind === "corrupt_backups") return { tone: alert.tone, text: t4("overview.backupCorrupt", { count: alert.count }) };
+    if (alert.kind === "storage_issues") return { tone: alert.tone, text: t4("overview.storageIssues", { count: alert.count }) };
+    if (alert.kind === "missing_index") return { tone: alert.tone, text: t4("overview.missingIndex"), label: t4("overview.openIndex"), action: () => appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "semantic" } })) };
+    if (alert.kind === "budget") return { tone: alert.tone, text: t4("overview.budgetWarning", { pct: Math.round(alert.pct) }) };
+    return null;
+  }).filter(Boolean);
+  const missingRequiredIndex = alertStates.some((alert) => alert.kind === "missing_index");
   return html4`
     <div style="display:flex;flex-direction:column;gap:14px">
       ${o3.mode === "standalone" ? html4`<div class="card accent-warn">

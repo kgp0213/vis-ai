@@ -28,6 +28,7 @@ const required = [
       '"dashboard/katex-support.js"',
       '"dashboard/backup-support.js"',
       '"dashboard/index-mode-support.js"',
+      '"dashboard/overview-alerts-support.js"',
       'copyDirectory(join("dashboard", "vendor", "katex"))',
     ],
   },
@@ -242,6 +243,7 @@ const required = [
       "ctx.userDataBackups",
       "getPersistentStorageIssues",
       'case "backups"',
+      "overview-alerts-support.js",
     ],
   },
   {
@@ -291,6 +293,7 @@ const required = [
       "actions.canOverwriteConflicts",
       "VisionoxIndexModePolicy.normalize",
       "VisionoxIndexModePolicy.hint",
+      "VisionoxOverviewAlertPolicy.evaluate",
       "overview.backupRetention",
       "overview.deleteBackup",
       "overview.storageIssues",
@@ -349,8 +352,12 @@ const required = [
     markers: ["VisionoxIndexModePolicy", "normalize", "每次发送消息前自动搜索"],
   },
   {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/overview-alerts-support.js",
+    markers: ["VisionoxOverviewAlertPolicy", "model_retest", "missing_index", "budgetPct"],
+  },
+  {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/index.html",
-    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js", "index-mode-support.js"],
+    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js", "index-mode-support.js", "overview-alerts-support.js"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-continuation.mjs",

@@ -29,7 +29,7 @@ function copyDirectory(relative) {
 
 rmSync(target, { recursive: true, force: true });
 mkdirSync(target, { recursive: true });
-for (const file of ["package.json", "package-lock.json", "dashboard/index.html", "dashboard/app.css", "dashboard/katex-support.js", "dashboard/backup-support.js", "dashboard/index-mode-support.js"]) copyFile(file);
+for (const file of ["package.json", "package-lock.json", "dashboard/index.html", "dashboard/app.css", "dashboard/katex-support.js", "dashboard/backup-support.js", "dashboard/index-mode-support.js", "dashboard/overview-alerts-support.js"]) copyFile(file);
 for (const file of ["app.js", "vendor-uplot.css", "vendor-hljs.css", "128x128.png", "ai-avatar.png", "v1.png", "v3.png"]) {
   copyFile(join("dashboard", "dist", file));
 }

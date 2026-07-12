@@ -2,8 +2,9 @@
 
 当前 Dashboard 运行代码位于 `src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js`，并包含大量 Visionox-Whale 本地功能。旧 source map 不对应当前代码，不能作为恢复或重建依据。本清单记录迁移到可读源码前必须保留的行为基线。
 
-当前已抽取两个可读、独立测试的纯策略模块：`backup-support.js` 负责备份保留与恢复按钮判定，
-`index-mode-support.js` 负责索引模式归一化和三种模式提示。运行入口仍只有当前 Dashboard bundle；这些脚本
+当前已抽取三个可读、独立测试的纯策略模块：`backup-support.js` 负责备份保留与恢复按钮判定，
+`index-mode-support.js` 负责索引模式归一化和三种模式提示，`overview-alerts-support.js` 负责概览告警判定、
+严重级别和稳定顺序。运行入口仍只有当前 Dashboard bundle；这些脚本
 是渐进迁移边界，不是第二套 Dashboard。
 
 ## 功能基线

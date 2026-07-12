@@ -13,6 +13,7 @@ const requiredDomainTests = [
   "active-session-meta.test.mjs",
   "api-contracts.test.mjs",
   "index-mode-support.test.mjs",
+  "overview-alerts-support.test.mjs",
   "launcher-storage-policy.test.mjs",
   "prompt-queue-store.test.mjs",
   "runtime-issues.test.mjs",

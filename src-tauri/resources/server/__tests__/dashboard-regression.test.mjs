@@ -606,10 +606,9 @@ describe("Dashboard 回归护栏", () => {
     assert.match(overview, /usePoll\("\/overview", 5e3, "overview"\)/);
     assert.match(overview, /usePoll\("\/health", 5e3, "health"\)/);
     assert.match(overview, /activeProviderName/);
-    assert.match(overview, /modelVerification\?\.dirty/);
-    assert.match(overview, /modelDrift/);
-    assert.match(overview, /pendingEdits/);
-    assert.match(overview, /retrievalData\?\.mode === "auto" && retrievalData\.semanticAvailable === false/);
+    assert.match(overview, /VisionoxOverviewAlertPolicy\.evaluate/);
+    assert.match(overview, /modelVerificationDirty: o3\.modelVerification\?\.dirty/);
+    assert.match(overview, /retrievalMode: retrievalData\?\.mode/);
     assert.match(overview, /api\("\/providers\/test", \{ method: "POST", body: \{\} \}\)/);
     assert.match(overview, /tabId: "semantic"/);
     assert.match(overview, /currentSessionBlock\(c3\)/);

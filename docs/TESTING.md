@@ -13,6 +13,8 @@ Provider 响应时，需要同步契约并在 `api-contracts.test.mjs` 或对应
 
 Dashboard 中可独立表达的策略应逐步迁入可读脚本并单测。例如 `dashboard/backup-support.js` 负责备份保留数
 归一化与恢复操作启用条件；bundle 回归只负责确认 Dashboard 正确调用该策略，真实 Edge 冒烟负责验证端到端流程。
+概览告警的触发条件、严重级别和顺序由 `overview-alerts-support.test.mjs` 独立验证；Dashboard 只负责翻译文案、
+模型检测忙碌状态和索引页跳转，避免策略测试依赖 UI 回调。
 
 运行时失败使用 `lib/runtime-issues.mjs` 的四级语义：debug 可忽略，warning 表示可继续的功能降级，error
 表示用户数据可能不完整，fatal 必须停止当前危险操作。只有带稳定问题键的 warning/error 可以进入
