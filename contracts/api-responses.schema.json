@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://visionox.local/contracts/api-responses.schema.json",
+  "type": "object",
+  "$defs": {
+    "overview": {
+      "type": "object",
+      "required": ["version", "mode", "modelVerification", "providerCapabilities"],
+      "properties": {
+        "version": { "type": "string" },
+        "mode": { "type": "string" },
+        "modelVerification": { "type": "object" },
+        "providerCapabilities": { "type": "object", "required": ["presets", "efforts"] }
+      }
+    },
+    "health": {
+      "type": "object",
+      "required": ["version", "sessions", "memory", "semantic", "storageIssues"],
+      "properties": {
+        "version": { "type": "string" },
+        "sessions": { "type": "object", "required": ["path", "count", "totalBytes"] },
+        "memory": { "type": "object", "required": ["path", "fileCount", "totalBytes"] },
+        "semantic": { "type": "object", "required": ["path", "exists", "fileCount", "totalBytes"] },
+        "storageIssues": { "type": "array", "items": { "type": "object", "required": ["key", "error"] } }
+      }
+    },
+    "backups": {
+      "type": "object",
+      "required": ["items"],
+      "properties": {
+        "items": { "type": "array", "items": { "type": "object", "required": ["id", "status"] } }
+      }
+    },
+    "schedules": {
+      "type": "object",
+      "required": ["schedules"],
+      "properties": { "schedules": { "type": "array" } }
+    },
+    "providers": {
+      "type": "object",
+      "required": ["providers"],
+      "properties": { "providers": { "type": "array" } }
+    }
+  }
+}

@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
+import { assertApiContract } from "../../../../scripts/check-api-contracts.js";
+
+const apiContracts = JSON.parse(readFileSync(new URL("../../../../contracts/api-responses.schema.json", import.meta.url), "utf8"));
 
 const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
@@ -147,6 +150,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.ok(res.json.model !== undefined);
     assert.ok(res.json.activeProviderName !== undefined);
     assert.ok(res.json.modelVerification !== undefined);
+    assert.doesNotThrow(() => assertApiContract(apiContracts, "overview", res.json));
   });
 
   test("用户数据备份 API 支持创建、预览和冲突安全恢复", async () => {
@@ -162,6 +166,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
 
     const list = await apiGet("/api/backups", overrides);
     assert.equal(list.status, 200);
+    assert.doesNotThrow(() => assertApiContract(apiContracts, "backups", list.json));
     assert.equal(list.json.items[0].id, "backup-1");
 
     const created = await apiPost("/api/backups", {}, overrides);
@@ -182,6 +187,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     ]);
 
     const health = await apiGet("/api/health", overrides);
+    assert.doesNotThrow(() => assertApiContract(apiContracts, "health", health.json));
     assert.equal(health.json.storage.totalBytes, 42);
     assert.equal(health.json.storage.configStatus, "current");
     assert.deepEqual(health.json.storageIssues, []);
@@ -601,6 +607,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
   test("GET /api/providers → 200 + apiKey 已脱敏", async () => {
     const res = await apiGet("/api/providers");
     assert.equal(res.status, 200);
+    assert.doesNotThrow(() => assertApiContract(apiContracts, "providers", res.json));
     assert.ok(res.json.providers);
     assert.ok(res.json.providers[0].apiKey !== "sk-test-key"); // not the raw key
     assert.equal(res.json.providers[0].apiKeySet, true);
@@ -904,6 +911,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
 
     const list = await apiGet("/api/schedules", ctx);
     assert.equal(list.status, 200);
+    assert.doesNotThrow(() => assertApiContract(apiContracts, "schedules", list.json));
     assert.equal(list.json.schedules.length, 1);
 
     const weekly = await apiPost("/api/schedules", {

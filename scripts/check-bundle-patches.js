@@ -42,6 +42,10 @@ const required = [
     markers: ["validateBuildEntrypoints", "generic tauri entrypoint must be disabled", "bypasses the canonical release wrapper"],
   },
   {
+    file: "scripts/check-api-contracts.js",
+    markers: ["assertApiContract", "validateSchema", "unknown API contract"],
+  },
+  {
     file: "scripts/verify-runtime-manifest.js",
     markers: ["runtime-manifest.json", "SHA-256 mismatch", "size mismatch", "verified ${manifest.artifacts.length} artifacts"],
   },
