@@ -68,6 +68,7 @@ const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
 const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs");
 const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.mjs");
 const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFile } = await importEarly("./lib/versioned-json-file.mjs");
+const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -3513,123 +3514,34 @@ function normalizePromptQueueItem(raw) {
   };
 }
 
-function readPromptQueueState() {
-  const stored = readVersionedJsonFile(promptQueueFile, {
-    version: 1,
-    validate: (value) => value.queues && typeof value.queues === "object" && !Array.isArray(value.queues)
-      && Array.isArray(value.accepted) || "prompt queue must contain queues and accepted",
-  });
-  if (stored.ok) {
-    const parsed = stored.value ?? {};
-    const queues = new Map();
-    for (const [scope, rawItems] of Object.entries(parsed?.queues ?? {})) {
-      const items = Array.isArray(rawItems) ? rawItems.map(normalizePromptQueueItem).filter(Boolean).slice(0, PROMPT_QUEUE_LIMIT) : [];
-      if (items.length > 0) queues.set(normalizePromptQueueScope(scope), items);
-    }
-    const now = Date.now();
-    const accepted = new Map(
-      (Array.isArray(parsed?.accepted) ? parsed.accepted : [])
-        .filter((entry) => entry && typeof entry.id === "string" && Number.isFinite(entry.acceptedAt) && now - entry.acceptedAt < ACCEPTED_PROMPT_TTL_MS)
-        .slice(-ACCEPTED_PROMPT_LIMIT)
-        .map((entry) => [entry.id, entry])
-    );
-    return { queues, accepted, readOnlyError: null };
-  }
-  return { queues: new Map(), accepted: new Map(), readOnlyError: stored.error };
-}
-
-const promptQueueState = readPromptQueueState();
-trackPersistentStorageIssue("prompt-queue", promptQueueFile, promptQueueState.readOnlyError);
-
-function writePromptQueueState() {
-  assertVersionedJsonWritable(promptQueueFile, {
-    version: 1,
-    validate: (value) => value.queues && typeof value.queues === "object" && !Array.isArray(value.queues)
-      && Array.isArray(value.accepted) || "prompt queue must contain queues and accepted",
-  });
-  const queues = Object.fromEntries([...promptQueueState.queues.entries()].filter(([, items]) => items.length > 0));
-  const accepted = [...promptQueueState.accepted.values()].slice(-ACCEPTED_PROMPT_LIMIT);
-  writeVersionedJsonFile(promptQueueFile, { queues, accepted }, { version: 1 });
-  promptQueueState.readOnlyError = null;
-  trackPersistentStorageIssue("prompt-queue", promptQueueFile, null);
-}
-
-function commitPromptQueueState(mutate) {
-  if (promptQueueState.readOnlyError) throw new Error(`${promptQueueState.readOnlyError}; original prompt queue was not modified`);
-  const beforeQueues = new Map([...promptQueueState.queues].map(([scope, items]) => [scope, [...items]]));
-  const beforeAccepted = new Map(promptQueueState.accepted);
-  try {
-    const result = mutate();
-    writePromptQueueState();
-    return result;
-  } catch (error) {
-    promptQueueState.queues.clear();
-    for (const [scope, items] of beforeQueues) promptQueueState.queues.set(scope, items);
-    promptQueueState.accepted.clear();
-    for (const [id, entry] of beforeAccepted) promptQueueState.accepted.set(id, entry);
-    throw error;
-  }
-}
+const promptQueueStore = createPromptQueueStore({
+  path: promptQueueFile,
+  normalizeScope: normalizePromptQueueScope,
+  normalizeItem: normalizePromptQueueItem,
+  queueLimit: PROMPT_QUEUE_LIMIT,
+  acceptedLimit: ACCEPTED_PROMPT_LIMIT,
+  acceptedTtlMs: ACCEPTED_PROMPT_TTL_MS,
+  onIssue: (error) => trackPersistentStorageIssue("prompt-queue", promptQueueFile, error),
+});
 
 function listPromptQueue(scope) {
-  return [...(promptQueueState.queues.get(normalizePromptQueueScope(scope)) ?? [])];
+  return promptQueueStore.list(scope);
 }
 
 function upsertPromptQueueItem(scope, rawItem) {
-  const key = normalizePromptQueueScope(scope);
-  const item = normalizePromptQueueItem(rawItem);
-  if (!item) return { ok: false, error: "invalid queued prompt" };
-  const current = listPromptQueue(key);
-  const index = current.findIndex((entry) => entry.id === item.id);
-  if (index >= 0) current[index] = item;
-  else if (current.length < PROMPT_QUEUE_LIMIT) current.push(item);
-  else return { ok: false, error: `queue limit is ${PROMPT_QUEUE_LIMIT}` };
-  return commitPromptQueueState(() => {
-    promptQueueState.queues.set(key, current);
-    return { ok: true, item, items: current };
-  });
+  return promptQueueStore.upsert(scope, rawItem);
 }
 
 function removePromptQueueItem(scope, id = null) {
-  const key = normalizePromptQueueScope(scope);
-  if (!id) {
-    return commitPromptQueueState(() => {
-      promptQueueState.queues.delete(key);
-      return { ok: true, items: [] };
-    });
-  }
-  const current = listPromptQueue(key).filter((entry) => entry.id !== id);
-  return commitPromptQueueState(() => {
-    if (current.length > 0) promptQueueState.queues.set(key, current);
-    else promptQueueState.queues.delete(key);
-    return { ok: true, items: current };
-  });
+  return promptQueueStore.remove(scope, id);
 }
 
 function acceptedPromptRequest(id) {
-  if (!id) return null;
-  const entry = promptQueueState.accepted.get(id);
-  if (!entry) return null;
-  if (Date.now() - entry.acceptedAt >= ACCEPTED_PROMPT_TTL_MS) {
-    promptQueueState.accepted.delete(id);
-    return null;
-  }
-  return entry;
+  return promptQueueStore.acceptedRequest(id);
 }
 
 function rememberAcceptedPromptRequest(id, result = {}) {
-  if (!id) return;
-  commitPromptQueueState(() => {
-    promptQueueState.accepted.delete(id);
-    promptQueueState.accepted.set(id, {
-      id,
-      acceptedAt: Date.now(),
-      turnId: result.turnId ?? null,
-    });
-    while (promptQueueState.accepted.size > ACCEPTED_PROMPT_LIMIT) {
-      promptQueueState.accepted.delete(promptQueueState.accepted.keys().next().value);
-    }
-  });
+  promptQueueStore.rememberAccepted(id, result);
 }
 
 const schedulesFile = resolve(visionoxDataDir, "schedules.json");

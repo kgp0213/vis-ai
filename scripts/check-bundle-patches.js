@@ -124,6 +124,10 @@ const required = [
     markers: ["readVersionedJsonFile", "assertVersionedJsonWritable", "unsupported schema version", "original file was not modified"],
   },
   {
+    file: "src-tauri/resources/server/lib/prompt-queue-store.mjs",
+    markers: ["createPromptQueueStore", "original prompt queue was not modified", "acceptedRequest", "rememberAccepted"],
+  },
+  {
     file: "src-tauri/resources/server/lib/plan-store.mjs",
     markers: [
       "createPlanStore",
