@@ -11,7 +11,10 @@ npm run quality:check
 ```
 
 This checks launcher, Dashboard and API bundle syntax, required local bundle patches,
-all Node tests, a real Edge Dashboard render, Rust formatting, and diff whitespace. The
+repository hygiene, all Node tests, a real Edge Dashboard render, Rust formatting, and
+diff whitespace. The hygiene check rejects `.map`, `.bak`, `.old` and redundant `.zip`
+files outside package-manager dependencies; the explicitly documented offline Poppler
+archive is the only exception. The
 browser smoke test uses an isolated directory under `%TEMP%` and removes it afterward;
 it never reads or changes the user's `~/.visionox` data. It does not build Rust and
 cannot create `target/debug`.

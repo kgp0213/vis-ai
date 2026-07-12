@@ -10,6 +10,7 @@
     "tauri:build": "node scripts/run-tauri-build.js",
     "bundle:nsis": "npm run tauri:build -- --bundles nsis && npm run verify:nsis",
     "check:bundle-patches": "node scripts/check-bundle-patches.js",
+    "check:hygiene": "node scripts/check-repository-hygiene.js",
     "check:runtime-paths": "node scripts/check-runtime-paths.js",
     "verify:nsis": "node scripts/verify-nsis-bundle.js",
     "release:check": "node scripts/release-check.js",

@@ -90,9 +90,9 @@ vis-ai/
 | 本项目源码 | `src-tauri/src/`、`src/`、`resources/server/launcher.mjs`、`resources/server/lib/`、`scripts/` | 直接修改，增加针对性测试，执行 `npm run quality:check` |
 | 带本地补丁的上游 bundle | `visionox-pkg/dashboard/dist/app.js`、`dashboard/app.css`、`visionox-pkg/dist/cli/*.js` | 目前按受保护源码管理，必须通过 `check:bundle-patches`，禁止被上游恢复脚本覆盖 |
 
-`dashboard/dist/app.js.map` 虽包含 36 个项目源文件的 `sourcesContent`，但它被 `.gitignore`
-排除，且只对应较早的构建快照。当前 `app.js` 在该快照之后又积累了大量本地功能修改，
-因此 source map 只能用于辅助考证，不能作为当前 Dashboard 的可重建源码。
+历史审计确认，上游包附带的 Dashboard source map 只对应较早的构建快照；当前 `app.js` 在该
+快照之后又积累了大量本地功能修改。因此仓库和 release 都不保留 source map，它不能作为
+当前 Dashboard 的可重建源码，也不能用于覆盖当前 bundle。
 
 Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle”切换到源码构建：
 
