@@ -112,6 +112,14 @@ const required = [
     ],
   },
   {
+    file: "src-tauri/resources/server/lib/schedule-store.mjs",
+    markers: ["readScheduleStore", "writeScheduleStore", "commitScheduleMutation", "unsupported schedule schema version"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/schedule-policy.mjs",
+    markers: ["computeNextScheduleRun", "isScheduleAllowedAt", "isValidRunWindow", "MAX_SCHEDULE_INTERVAL_MS"],
+  },
+  {
     file: "src-tauri/resources/server/lib/system-prompt.mjs",
     markers: [
       "PROJECT_MEMORY_CANDIDATES",
