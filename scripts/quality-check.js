@@ -25,6 +25,7 @@ run("product version consistency", "node", ["scripts/check-version-consistency.j
 run("build entrypoint policy", "node", ["scripts/check-build-entrypoints.js"]);
 run("API response contracts", "node", ["scripts/check-api-contracts.js"]);
 run("test structure", "node", ["scripts/check-test-structure.js"]);
+run("third-party resources", "node", ["scripts/check-third-party-resources.js"]);
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
 run("repository hygiene", "node", ["scripts/check-repository-hygiene.js"]);
 run("node tests and core coverage", "node", [

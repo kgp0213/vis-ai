@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "resources": [
+    {
+      "id": "node-runtime",
+      "path": "server/node.exe",
+      "version": "v25.2.1",
+      "source": "locally supplied Node.js runtime",
+      "license": "Node.js project license",
+      "sha256": "91ec09dda8f20556f366110859f106ab189d45f8f6a2bd092e6785174ad4a0fa"
+    },
+    {
+      "id": "officecli",
+      "path": "server/officecli.exe",
+      "version": "1.0.129",
+      "source": "internally supplied binary; acquisition record is managed outside this repository",
+      "license": "internal distribution terms",
+      "sha256": "e4c84a4a32f4d22f3880575d16b1499856d1c48e86d293274919906f95d81057"
+    },
+    {
+      "id": "reasonix",
+      "path": "server/visionox-pkg",
+      "version": "260710",
+      "source": "https://github.com/esengine/reasonix",
+      "license": "MIT",
+      "licenseFile": "server/visionox-pkg/LICENSE"
+    },
+    {
+      "id": "katex",
+      "path": "server/visionox-pkg/dashboard/vendor/katex",
+      "version": "bundled distribution",
+      "source": "vendored with the Dashboard runtime",
+      "license": "MIT",
+      "licenseFile": "server/visionox-pkg/dashboard/vendor/katex/LICENSE"
+    }
+  ]
+}

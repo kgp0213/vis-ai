@@ -42,6 +42,8 @@
       "resources/server/node.exe": "resources/server/node.exe",
       "resources/server/officecli.exe": "resources/server/officecli.exe",
       "resources/runtime-manifest.json": "resources/runtime-manifest.json",
+      "resources/third-party-resources.json": "resources/third-party-resources.json",
+      "resources/THIRD_PARTY_NOTICES.md": "resources/THIRD_PARTY_NOTICES.md",
       "resources/default-soul.md": "resources/default-soul.md",
       "resources/ecc-rules/": "resources/ecc-rules/",
       "resources/skill-creation-guide.md": "resources/skill-creation-guide.md",

@@ -50,6 +50,10 @@ const required = [
     markers: ["move new coverage to a domain test file", "requiredDomainTests", "dashboard-regression.test.mjs"],
   },
   {
+    file: "scripts/check-third-party-resources.js",
+    markers: ["third-party-resources.json", "missing third-party inventory entry", "version or SHA-256 differs"],
+  },
+  {
     file: "scripts/verify-runtime-manifest.js",
     markers: ["runtime-manifest.json", "SHA-256 mismatch", "size mismatch", "verified ${manifest.artifacts.length} artifacts"],
   },
