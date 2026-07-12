@@ -21,6 +21,7 @@ Dashboard 中可独立表达的策略应逐步迁入可读脚本并单测。例�
 `/api/health.storageIssues`；新增错误路径需要测试“原文件未被覆盖”和“概览不会收到 debug 噪声”。
 
 `active-session-meta.test.mjs` 使用真实临时文件验证损坏和高版本 active session metadata 不被覆盖。
+`active-session.test.mjs` 验证活动会话恢复、模型/UI 视图转换，以及同步兜底不会重复多模态用户消息并会补回图片元数据。
 `launcher-storage-policy.test.mjs` 只锁定 Soul/规则降级、模式记忆回滚、知识主题防覆盖和活动计划清理四个
 关键边界，不对所有清理型 catch 做数量断言。Dashboard 索引模式的合法值与提示由
 `index-mode-support.test.mjs` 独立验证，真实 Edge 冒烟继续负责状态保持和选择交互。

@@ -11,6 +11,7 @@ const limits = new Map([
 ]);
 const requiredDomainTests = [
   "active-session-meta.test.mjs",
+  "active-session.test.mjs",
   "api-contracts.test.mjs",
   "index-mode-support.test.mjs",
   "overview-alerts-support.test.mjs",

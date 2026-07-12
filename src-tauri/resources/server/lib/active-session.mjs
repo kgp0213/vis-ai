@@ -104,6 +104,28 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
   return visible;
 }
 
+export function withPendingUserEntry(entries, pendingUser = null) {
+  const next = Array.isArray(entries) ? [...entries] : [];
+  const text = typeof pendingUser?.text === "string" ? pendingUser.text : "";
+  if (!text) return next;
+
+  let lastUserIndex = -1;
+  for (let index = next.length - 1; index >= 0; index--) {
+    if (next[index]?.role === "user") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const images = Array.isArray(pendingUser.images) && pendingUser.images.length > 0 ? [...pendingUser.images] : null;
+  const lastUser = lastUserIndex >= 0 ? next[lastUserIndex] : null;
+  if (lastUser && contentText(lastUser.content) === text) {
+    if (images) next[lastUserIndex] = { ...lastUser, images };
+    return next;
+  }
+  next.push({ role: "user", content: text, ...(images ? { images } : {}) });
+  return next;
+}
+
 export function serializeActiveSession(entries) {
   const rows = (Array.isArray(entries) ? entries : [])
     .map(normalizeEntry)

@@ -58,7 +58,7 @@ const {
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
-const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession } = await importEarly("./lib/active-session.mjs");
+const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
@@ -5294,6 +5294,7 @@ function getActiveSessionStream() {
     activeSessionStream = stream;
     stream.on("error", (err) => {
       if (activeSessionStream === stream) activeSessionStream = null;
+      trackPersistentStorageIssue("active-session", activeSessionFile, `active session append failed: ${err.message}`);
       console.error(`[launcher] active-session stream error: ${err.message}`);
     });
   }
@@ -5324,35 +5325,31 @@ function appendActiveMessage(msg) {
     const stream = getActiveSessionStream();
     stream.write(`${JSON.stringify(record)}\n`);
   } catch (err) {
+    trackPersistentStorageIssue("active-session", activeSessionFile, `active session append failed: ${err.message}`);
     console.error(`[launcher] active-session append failed: ${err.message}`);
   }
 }
 
 async function writeActiveSessionEntries(entries) {
   await closeActiveSessionStream();
-  const serialized = serializeActiveSession(entries);
-  await atomicWriteFile(activeSessionFile, serialized);
+  try {
+    const serialized = serializeActiveSession(entries);
+    await atomicWriteFile(activeSessionFile, serialized);
+    trackPersistentStorageIssue("active-session", activeSessionFile, null);
+  } catch (err) {
+    trackPersistentStorageIssue("active-session", activeSessionFile, `active session was not saved: ${err.message}`);
+    throw err;
+  }
 }
 
 async function syncActiveSessionFromLoop(pendingUser = null) {
   if (!loop?.log?.toMessages) return;
   try {
-    const entries = loop.log.toMessages();
-    const pendingText = typeof pendingUser?.text === "string" ? pendingUser.text : "";
-    if (pendingText) {
-      const lastUser = [...entries].reverse().find((entry) => entry?.role === "user");
-      const lastUserText = typeof lastUser?.content === "string" ? lastUser.content : "";
-      if (lastUserText !== pendingText) {
-        entries.push({
-          role: "user",
-          content: pendingText,
-          ...(Array.isArray(pendingUser.images) && pendingUser.images.length > 0 ? { images: pendingUser.images } : {}),
-        });
-      }
-    }
+    const entries = withPendingUserEntry(loop.log.toMessages(), pendingUser);
     await writeActiveSessionEntries(entries);
     await writeActiveSessionMeta({ messageCount: entries.length });
   } catch (err) {
+    trackPersistentStorageIssue("active-session", activeSessionFile, `active session model sync failed: ${err.message}`);
     console.error(`[launcher] active-session model sync failed: ${err.message}`);
   }
 }
@@ -5362,6 +5359,7 @@ async function finalizeActiveSession() {
   try {
     await access(activeSessionFile);
   } catch {
+    trackPersistentStorageIssue("active-session", activeSessionFile, null);
     return null;
   }
   try {
@@ -5369,6 +5367,7 @@ async function finalizeActiveSession() {
     if (st.size === 0 || !hasUserMessage()) {
       await rm(activeSessionFile, { force: true });
       await rm(activeSessionMetaFile, { force: true });
+      trackPersistentStorageIssue("active-session", activeSessionFile, null);
       return null;
     }
     const ts = new Date().toISOString().replace(/[:.]/g, "-");
@@ -5383,9 +5382,11 @@ async function finalizeActiveSession() {
       writeSessionMeta(ts, { messageCount });
     }
     console.error(`[launcher] active session finalized: ${destFile}`);
+    trackPersistentStorageIssue("active-session", activeSessionFile, null);
     broadcastDashboardEvent({ kind: "sessions-changed", action: "finalize", name: ts });
     return ts;
   } catch (err) {
+    trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be archived: ${err.message}`);
     console.error(`[launcher] failed to finalize active session: ${err.message}`);
     return null;
   }
@@ -5396,8 +5397,10 @@ async function clearActiveSession() {
   try {
     await rm(activeSessionFile, { force: true });
     await rm(activeSessionMetaFile, { force: true });
+    trackPersistentStorageIssue("active-session", activeSessionFile, null);
     trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, null);
   } catch (err) {
+    trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be cleared: ${err.message}`);
     console.error(`[launcher] failed to clear active session: ${err.message}`);
   }
 }
@@ -5472,6 +5475,7 @@ async function loadActiveSession() {
     console.error(`[launcher] active session restored: ui=${messages.length}, model=${modelEntries.length}`);
     return true;
   } catch (err) {
+    trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be loaded: ${err.message}`);
     console.error(`[launcher] failed to load active session: ${err.message}`);
     return false;
   }

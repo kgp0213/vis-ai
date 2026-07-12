@@ -6,6 +6,7 @@ import {
   activeEntriesForModel,
   parseActiveSessionJsonl,
   serializeActiveSession,
+  withPendingUserEntry,
 } from "../lib/active-session.mjs";
 
 describe("active session recovery", () => {
@@ -124,5 +125,31 @@ describe("active session recovery", () => {
     ]);
     assert.ok(raw.endsWith("\n"));
     assert.equal(parseActiveSessionJsonl(raw).entries.length, 2);
+  });
+
+  test("pending user fallback avoids duplicates and restores image metadata", () => {
+    const entries = [{
+      role: "user",
+      content: [
+        { type: "text", text: "inspect this image" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ],
+    }];
+    const images = [{ name: "screen.png", dataUrl: "data:image/png;base64,AAAA" }];
+    const merged = withPendingUserEntry(entries, { text: "inspect this image", images });
+
+    assert.equal(merged.length, 1);
+    assert.deepEqual(merged[0].images, images);
+    assert.equal(entries[0].images, undefined);
+  });
+
+  test("pending user fallback appends a missing turn without mutating loop history", () => {
+    const entries = [{ role: "assistant", content: "ready" }];
+    const merged = withPendingUserEntry(entries, { text: "continue" });
+    assert.deepEqual(merged, [
+      { role: "assistant", content: "ready" },
+      { role: "user", content: "continue" },
+    ]);
+    assert.equal(entries.length, 1);
   });
 });

@@ -68,6 +68,8 @@ const required = [
     file: "src-tauri/resources/server/launcher.mjs",
     markers: [
       "HIGH_PRIORITY_MEMORY_BLOCK_MAX_CHARS",
+      "withPendingUserEntry",
+      'trackPersistentStorageIssue("active-session"',
       "rememberGeneratedArtifactPath",
       "artifact-created",
       "getGeneratedArtifactPaths",
