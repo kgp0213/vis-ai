@@ -1,0 +1,30 @@
+name: quality
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install runtime production dependencies
+        working-directory: src-tauri/resources/server/visionox-pkg
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - name: Run quality checks
+        run: npm run quality:check
