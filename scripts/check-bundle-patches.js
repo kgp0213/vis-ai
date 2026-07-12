@@ -57,6 +57,10 @@ const required = [
     markers: ["third-party-resources.json", "bootstrap-skills-provenance.json", "bootstrap skill is missing provenance", "version or SHA-256 differs"],
   },
   {
+    file: "scripts/fetch-binaries.js",
+    markers: ["runtime-manifest.json", "https://d.officecli.ai/releases/download/", "failed runtime manifest verification", "visionox-officecli-"],
+  },
+  {
     file: "scripts/verify-runtime-manifest.js",
     markers: ["runtime-manifest.json", "SHA-256 mismatch", "size mismatch", "verified ${manifest.artifacts.length} artifacts"],
   },

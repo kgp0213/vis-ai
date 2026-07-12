@@ -9,9 +9,9 @@
     },
     {
       "path": "server/officecli.exe",
-      "version": "1.0.129",
-      "bytes": 32943992,
-      "sha256": "e4c84a4a32f4d22f3880575d16b1499856d1c48e86d293274919906f95d81057"
+      "version": "1.0.135",
+      "bytes": 33111928,
+      "sha256": "937db176b585e874aa5bff48d536bce78037665cd862b5deefe56e79977e6588"
     }
   ]
 }

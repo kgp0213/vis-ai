@@ -16,14 +16,16 @@
  * On Linux, node is expected from the system (apt/pacman/nvm); this script
  * only fetches officecli.exe on Windows. See README "Ubuntu 构建" section.
  */
-import { createWriteStream, existsSync, statSync, renameSync } from "node:fs";
+import { copyFileSync, createWriteStream, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { arch, platform } from "node:os";
+import { arch, platform, tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = resolve(__dirname, "..", "src-tauri", "resources", "server");
+const RUNTIME_MANIFEST = JSON.parse(readFileSync(resolve(__dirname, "..", "src-tauri", "resources", "runtime-manifest.json"), "utf8"));
 const FORCE = process.argv.includes("--force");
 
 // ── Node.js ──────────────────────────────────────────────────────
@@ -148,16 +150,51 @@ async function fetchOfficecli() {
     return;
   }
 
+  if (arch() !== "x64") throw new Error(`the pinned OfficeCLI runtime is Windows x64, not ${arch()}`);
+  const pinned = RUNTIME_MANIFEST.artifacts.find((artifact) => artifact.path === "server/officecli.exe");
+  if (!pinned?.version || !pinned?.bytes || !pinned?.sha256) throw new Error("runtime manifest is missing the pinned OfficeCLI artifact");
   const destPath = join(SERVER_DIR, "officecli.exe");
   if (existsSync(destPath) && !FORCE) {
-    const size = (statSync(destPath).size / 1e6).toFixed(1);
-    console.log(`✓ officecli.exe already present (${size} MB) — use --force to re-fetch`);
+    const size = statSync(destPath).size;
+    const sha256 = createHash("sha256").update(readFileSync(destPath)).digest("hex");
+    if (size !== pinned.bytes || sha256 !== pinned.sha256) {
+      throw new Error("officecli.exe does not match runtime-manifest.json; use --force to replace it from the pinned release");
+    }
+    console.log(`✓ officecli.exe ${pinned.version} already present and verified — use --force to re-fetch`);
     return;
   }
 
-  console.error("⚠ officecli.exe is a vendored binary with no public download source.");
-  console.error("  Supply the approved local source artifact before building.");
-  console.error("  Normal builds never copy it from an installed application or download it.");
+  const asset = "officecli-win-x64.exe";
+  const urls = [
+    `https://d.officecli.ai/releases/download/v${pinned.version}/${asset}`,
+    `https://github.com/iOfficeAI/OfficeCLI/releases/download/v${pinned.version}/${asset}`,
+  ];
+  const tempDir = mkdtempSync(join(tmpdir(), "visionox-officecli-"));
+  const downloaded = join(tempDir, asset);
+  try {
+    let lastError = null;
+    for (const url of urls) {
+      try {
+        console.log(`Fetching OfficeCLI ${pinned.version}...`);
+        await downloadFile(url, downloaded);
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+        rmSync(downloaded, { force: true });
+      }
+    }
+    if (lastError) throw lastError;
+    const size = statSync(downloaded).size;
+    const sha256 = createHash("sha256").update(readFileSync(downloaded)).digest("hex");
+    if (size !== pinned.bytes || sha256 !== pinned.sha256) {
+      throw new Error(`OfficeCLI ${pinned.version} failed runtime manifest verification`);
+    }
+    copyFileSync(downloaded, destPath);
+    console.log(`✓ officecli.exe ${pinned.version} installed and SHA-256 verified`);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────

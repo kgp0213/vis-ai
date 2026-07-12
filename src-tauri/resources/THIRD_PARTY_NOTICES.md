@@ -11,7 +11,7 @@ Visionox-Whale distributes third-party runtime components. Exact binary hashes a
 
 ## OfficeCLI
 
-- Version: 1.0.129
+- Version: 1.0.135
 - Purpose: Office document automation
 - Source: <https://github.com/iOfficeAI/OfficeCLI>
 - License: Apache-2.0
