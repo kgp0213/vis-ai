@@ -52,14 +52,18 @@ vis-ai/
 │   │   ├── node.exe                  Node.js 二进制
 │   │   ├── officecli.exe             OfficeCLI 二进制
 │   │   ├── launcher.mjs              启动脚本
+│   │   ├── lib/                      本项目维护的运行时模块
+│   │   ├── __tests__/                Node/API/运行时测试
 │   │   └── visionox-pkg/             Visionox 服务端
 │   ├── resources/bootstrap-skills/   内置 bootstrap skills
 │   └── tauri.conf.json               Tauri 配置
 ├── docs/                             项目文档
 ├── archive/                          归档旧实现
 └── scripts/
-    ├── cherry-claude.cjs             CLAUDE.md 兼容迁移脚本
-    └── restore-visionox-pkg.js       上游 reasonix 包恢复工具（维护/升级时使用）
+    ├── quality-check.js              本地和 CI 共用质量门禁
+    ├── ui-smoke.js                   隔离用户数据的 Edge 渲染检查
+    ├── run-tauri-build.js            规范 release 构建入口
+    └── restore-visionox-pkg.js       高风险上游恢复工具（默认禁用）
 ```
 
 ---
@@ -76,6 +80,58 @@ vis-ai/
 | `src-tauri/tauri.conf.json` | 窗口配置、资源打包、跨平台 bundle 配置 |
 
 > 维护边界：当前 `visionox-pkg` 下的 Dashboard bundle 与 API bundle 含本项目本地补丁。普通 `restore:pkg` 已禁用；更新上游包前需要先迁移本地补丁，更新后运行 `npm run check:bundle-patches`。
+
+## 源码所有权与可复现性
+
+当前仓库存在两类不同性质的代码，维护时必须明确区分：
+
+| 类型 | 路径 | 维护方式 |
+|------|------|----------|
+| 本项目源码 | `src-tauri/src/`、`src/`、`resources/server/launcher.mjs`、`resources/server/lib/`、`scripts/` | 直接修改，增加针对性测试，执行 `npm run quality:check` |
+| 带本地补丁的上游 bundle | `visionox-pkg/dashboard/dist/app.js`、`dashboard/app.css`、`visionox-pkg/dist/cli/*.js` | 目前按受保护源码管理，必须通过 `check:bundle-patches`，禁止被上游恢复脚本覆盖 |
+
+`dashboard/dist/app.js.map` 虽包含 36 个项目源文件的 `sourcesContent`，但它被 `.gitignore`
+排除，且只对应较早的构建快照。当前 `app.js` 在该快照之后又积累了大量本地功能修改，
+因此 source map 只能用于辅助考证，不能作为当前 Dashboard 的可重建源码。
+
+Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle”切换到源码构建：
+
+1. 将可读源码放入 Git 跟踪目录，并明确依赖锁文件和离线构建命令。
+2. 按记忆、索引、会话、模型、文件中心等功能建立迁移清单，逐项移植本地差异。
+3. 生成物通过 bundle marker、全部 Node 测试和真实 Edge 渲染检查。
+4. 对比规范 release 资源树，确认构建不下载依赖、不生成 `target/debug` 或第二套资源。
+
+在这些条件满足前，不执行批量反编译、source map 覆盖或上游 bundle 恢复。
+
+## Launcher 模块边界
+
+`launcher.mjs` 仍承担启动装配和运行时协调，但可独立验证的逻辑正在逐步迁入
+`resources/server/lib/`。当前已拆分配置迁移、Provider、上下文容量、活动会话、系统提示词、
+记忆预算、语义召回、会话知识、DLP、计划状态和 OfficeCLI 策略等模块。
+
+后续按以下顺序拆分，每次只移动一个边界并保持 API 行为不变：
+
+1. 会话回收站：文件移动、恢复、过期清理和保留期计算。
+2. 定时任务存储与调度：任务定义、运行记录、取消和重试状态。
+3. 活动会话持久化：消息分页、自动保存和恢复编排。
+4. 最后才处理模型循环和 Dashboard context 装配，避免一次重构核心运行路径。
+
+模块化的验收标准不是减少行数，而是模块具有明确输入、无隐藏全局状态、具备独立测试，
+并且完整质量门禁保持通过。
+
+## 配置兼容性
+
+用户配置位于 `~/.visionox/config.json`，通过 `configSchemaVersion` 管理格式。旧配置迁移前会在
+同一用户数据根目录的 `backups/` 下创建一次权限受限的恢复副本，随后复用核心配置 I/O 的
+原子写入。损坏 JSON、未知版本或备份失败时，Launcher 拒绝覆盖原配置并明确失败。
+
+迁移日志只记录版本和状态，不输出 API Key 或配置正文。
+
+## 质量边界
+
+提交前统一运行 `npm run quality:check`。该命令不会构建 Rust，也不会创建 `target/debug`；
+浏览器检查使用系统 Edge 和 `%TEMP%` 下的隔离用户目录，结束后按测试进程 PID 清理子进程与
+临时数据。release 可执行文件仍只通过 `npm run tauri:build -- --no-bundle` 生成和验证。
 
 ---
 

@@ -74,6 +74,17 @@ const required = [
       "moveModeMemory",
       "batchModeMemory",
       "restoreModeMemoryTrash",
+      "migrateConfigFile",
+    ],
+  },
+  {
+    file: "src-tauri/resources/server/lib/config-migrations.mjs",
+    markers: [
+      "CURRENT_CONFIG_SCHEMA_VERSION",
+      "writeOnceAtomic",
+      "configSchemaMigratedAt",
+      'status: "backup-error"',
+      'status: "newer-version"',
     ],
   },
   {
