@@ -112,6 +112,10 @@ const required = [
     ],
   },
   {
+    file: "src-tauri/resources/server/lib/versioned-json-file.mjs",
+    markers: ["readVersionedJsonFile", "assertVersionedJsonWritable", "unsupported schema version", "original file was not modified"],
+  },
+  {
     file: "src-tauri/resources/server/lib/plan-store.mjs",
     markers: [
       "createPlanStore",
@@ -200,6 +204,7 @@ const required = [
       "expectedRevision",
       "function handleBackups",
       "ctx.userDataBackups",
+      "getPersistentStorageIssues",
       'case "backups"',
     ],
   },
@@ -247,6 +252,7 @@ const required = [
       'usePoll("/backups", 15e3)',
       "overview.dataProtection",
       "backupPreview.counts.conflict",
+      "overview.storageIssues",
     ],
   },
   {

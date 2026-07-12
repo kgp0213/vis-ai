@@ -912,6 +912,7 @@ async function handleHealth(method, _rest, _body, ctx) {
         bytes: usageBytes
       },
       storage: storage ? { ...storage, configStatus: ctx.configMigrationStatus?.status ?? null } : null,
+      storageIssues: ctx.getPersistentStorageIssues?.() ?? [],
       jobs: ctx.jobs ? ctx.jobs.listMetadata?.().length ?? ctx.jobs.runningCount?.() ?? null : null,
       cwd: ctx.getCurrentCwd?.() ?? null,
       buildDate: new Date().getHours().toString().padStart(2, "0")

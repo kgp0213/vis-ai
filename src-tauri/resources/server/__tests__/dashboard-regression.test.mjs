@@ -625,6 +625,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(overview, /const storageHealth = h3\?\.storage\?\.backups/);
     assert.match(overview, /storageHealth\.totalBytes/);
     assert.match(overview, /storageHealth\.backups\.latestAt/);
+    assert.match(overview, /h3\?\.storageIssues\?\.length/);
     assert.match(overview, /h3\.jobs > 0/);
     assert.match(overview, /<details/);
     assert.match(overview, /overview\.userDataPaths/);

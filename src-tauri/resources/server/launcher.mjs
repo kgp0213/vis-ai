@@ -67,6 +67,7 @@ const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-reco
 const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
 const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs");
 const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.mjs");
+const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFile } = await importEarly("./lib/versioned-json-file.mjs");
 const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -325,6 +326,12 @@ if (!existsSync(modeMemoryDir)) {
 
 const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
+const persistentStorageIssues = new Map();
+
+function trackPersistentStorageIssue(key, path, error) {
+  if (error) persistentStorageIssues.set(key, { key, path, error: String(error) });
+  else persistentStorageIssues.delete(key);
+}
 
 function readDefaultSoul() {
   try {
@@ -2342,17 +2349,15 @@ function normalizeModeMemoryItem(item, index = 0) {
 function readModeMemory(modeId = config.mode || "general") {
   const mode = safeModeId(modeId);
   const path = modeMemoryPath(mode);
-  let parsed = null;
-  if (existsSync(path)) {
-    try {
-      parsed = JSON.parse(readFileSync(path, "utf8"));
-    } catch {
-      parsed = null;
-    }
-  }
+  const stored = readVersionedJsonFile(path, {
+    version: CONSTANTS.MODE_MEMORY_VERSION,
+    validate: (value) => Array.isArray(value.items) || "mode memory items must be an array",
+  });
+  const parsed = stored.ok ? stored.value : null;
+  trackPersistentStorageIssue(`mode-memory:${mode}`, path, stored.error);
   const rawItems = Array.isArray(parsed?.items) ? parsed.items : [];
   const items = rawItems.map((item, index) => normalizeModeMemoryItem(item, index)).filter(Boolean);
-  return { version: CONSTANTS.MODE_MEMORY_VERSION, mode, path, updatedAt: parsed?.updatedAt || null, items };
+  return { version: CONSTANTS.MODE_MEMORY_VERSION, mode, path, updatedAt: parsed?.updatedAt || null, items, readOnlyError: stored.error };
 }
 
 function writeModeMemory(modeId, payload) {
@@ -2368,15 +2373,11 @@ function writeModeMemory(modeId, payload) {
     .slice(0, CONSTANTS.MODE_MEMORY_ITEM_LIMIT);
   const data = { version: CONSTANTS.MODE_MEMORY_VERSION, mode, updatedAt: new Date().toISOString(), items };
   const path = modeMemoryPath(mode);
-  mkdirSync(modeMemoryDir, { recursive: true });
-  const temp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  try {
-    writeFileSync(temp, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-    renameSync(temp, path);
-  } finally {
-    if (existsSync(temp)) rmSync(temp, { force: true });
-  }
-  return { ...data, path };
+  assertVersionedJsonWritable(path, {
+    version: CONSTANTS.MODE_MEMORY_VERSION,
+    validate: (value) => Array.isArray(value.items) || "mode memory items must be an array",
+  });
+  return { ...writeVersionedJsonFile(path, data, { version: CONSTANTS.MODE_MEMORY_VERSION }), path, readOnlyError: null };
 }
 
 pruneExpiredSessionTrash();
@@ -3471,8 +3472,14 @@ function completeActivePlanStep(stepId) {
 
 function cancelActivePlan() {
   const session = currentSessionName();
+  try {
+    clearPlanState(session);
+    trackPersistentStorageIssue(`active-plan:${session}`, resolve(sessionsDir, `${session}.plan.json`), null);
+  } catch (error) {
+    trackPersistentStorageIssue(`active-plan:${session}`, resolve(sessionsDir, `${session}.plan.json`), error.message);
+    return { ok: false, error: `active plan was not cancelled: ${error.message}` };
+  }
   resetPlanRefs();
-  try { clearPlanState(session); } catch {}
   broadcastDashboardEvent({ kind: "plan-cancelled", session });
   return { ok: true };
 }
@@ -3507,8 +3514,13 @@ function normalizePromptQueueItem(raw) {
 }
 
 function readPromptQueueState() {
-  try {
-    const parsed = JSON.parse(readFileSync(promptQueueFile, "utf8"));
+  const stored = readVersionedJsonFile(promptQueueFile, {
+    version: 1,
+    validate: (value) => value.queues && typeof value.queues === "object" && !Array.isArray(value.queues)
+      && Array.isArray(value.accepted) || "prompt queue must contain queues and accepted",
+  });
+  if (stored.ok) {
+    const parsed = stored.value ?? {};
     const queues = new Map();
     for (const [scope, rawItems] of Object.entries(parsed?.queues ?? {})) {
       const items = Array.isArray(rawItems) ? rawItems.map(normalizePromptQueueItem).filter(Boolean).slice(0, PROMPT_QUEUE_LIMIT) : [];
@@ -3521,21 +3533,41 @@ function readPromptQueueState() {
         .slice(-ACCEPTED_PROMPT_LIMIT)
         .map((entry) => [entry.id, entry])
     );
-    return { queues, accepted };
-  } catch {
-    return { queues: new Map(), accepted: new Map() };
+    return { queues, accepted, readOnlyError: null };
   }
+  return { queues: new Map(), accepted: new Map(), readOnlyError: stored.error };
 }
 
 const promptQueueState = readPromptQueueState();
+trackPersistentStorageIssue("prompt-queue", promptQueueFile, promptQueueState.readOnlyError);
 
 function writePromptQueueState() {
+  assertVersionedJsonWritable(promptQueueFile, {
+    version: 1,
+    validate: (value) => value.queues && typeof value.queues === "object" && !Array.isArray(value.queues)
+      && Array.isArray(value.accepted) || "prompt queue must contain queues and accepted",
+  });
+  const queues = Object.fromEntries([...promptQueueState.queues.entries()].filter(([, items]) => items.length > 0));
+  const accepted = [...promptQueueState.accepted.values()].slice(-ACCEPTED_PROMPT_LIMIT);
+  writeVersionedJsonFile(promptQueueFile, { queues, accepted }, { version: 1 });
+  promptQueueState.readOnlyError = null;
+  trackPersistentStorageIssue("prompt-queue", promptQueueFile, null);
+}
+
+function commitPromptQueueState(mutate) {
+  if (promptQueueState.readOnlyError) throw new Error(`${promptQueueState.readOnlyError}; original prompt queue was not modified`);
+  const beforeQueues = new Map([...promptQueueState.queues].map(([scope, items]) => [scope, [...items]]));
+  const beforeAccepted = new Map(promptQueueState.accepted);
   try {
-    const queues = Object.fromEntries([...promptQueueState.queues.entries()].filter(([, items]) => items.length > 0));
-    const accepted = [...promptQueueState.accepted.values()].slice(-ACCEPTED_PROMPT_LIMIT);
-    atomicWriteFileSync(promptQueueFile, `${JSON.stringify({ version: 1, queues, accepted }, null, 2)}\n`);
-  } catch (err) {
-    console.error(`[launcher] prompt queue write failed: ${err.message}`);
+    const result = mutate();
+    writePromptQueueState();
+    return result;
+  } catch (error) {
+    promptQueueState.queues.clear();
+    for (const [scope, items] of beforeQueues) promptQueueState.queues.set(scope, items);
+    promptQueueState.accepted.clear();
+    for (const [id, entry] of beforeAccepted) promptQueueState.accepted.set(id, entry);
+    throw error;
   }
 }
 
@@ -3552,23 +3584,26 @@ function upsertPromptQueueItem(scope, rawItem) {
   if (index >= 0) current[index] = item;
   else if (current.length < PROMPT_QUEUE_LIMIT) current.push(item);
   else return { ok: false, error: `queue limit is ${PROMPT_QUEUE_LIMIT}` };
-  promptQueueState.queues.set(key, current);
-  writePromptQueueState();
-  return { ok: true, item, items: current };
+  return commitPromptQueueState(() => {
+    promptQueueState.queues.set(key, current);
+    return { ok: true, item, items: current };
+  });
 }
 
 function removePromptQueueItem(scope, id = null) {
   const key = normalizePromptQueueScope(scope);
   if (!id) {
-    promptQueueState.queues.delete(key);
-    writePromptQueueState();
-    return { ok: true, items: [] };
+    return commitPromptQueueState(() => {
+      promptQueueState.queues.delete(key);
+      return { ok: true, items: [] };
+    });
   }
   const current = listPromptQueue(key).filter((entry) => entry.id !== id);
-  if (current.length > 0) promptQueueState.queues.set(key, current);
-  else promptQueueState.queues.delete(key);
-  writePromptQueueState();
-  return { ok: true, items: current };
+  return commitPromptQueueState(() => {
+    if (current.length > 0) promptQueueState.queues.set(key, current);
+    else promptQueueState.queues.delete(key);
+    return { ok: true, items: current };
+  });
 }
 
 function acceptedPromptRequest(id) {
@@ -3584,16 +3619,17 @@ function acceptedPromptRequest(id) {
 
 function rememberAcceptedPromptRequest(id, result = {}) {
   if (!id) return;
-  promptQueueState.accepted.delete(id);
-  promptQueueState.accepted.set(id, {
-    id,
-    acceptedAt: Date.now(),
-    turnId: result.turnId ?? null,
+  commitPromptQueueState(() => {
+    promptQueueState.accepted.delete(id);
+    promptQueueState.accepted.set(id, {
+      id,
+      acceptedAt: Date.now(),
+      turnId: result.turnId ?? null,
+    });
+    while (promptQueueState.accepted.size > ACCEPTED_PROMPT_LIMIT) {
+      promptQueueState.accepted.delete(promptQueueState.accepted.keys().next().value);
+    }
   });
-  while (promptQueueState.accepted.size > ACCEPTED_PROMPT_LIMIT) {
-    promptQueueState.accepted.delete(promptQueueState.accepted.keys().next().value);
-  }
-  writePromptQueueState();
 }
 
 const schedulesFile = resolve(visionoxDataDir, "schedules.json");
@@ -4231,8 +4267,13 @@ function knowledgePaths(workspace) {
 
 function readKnowledgeManifest(workspace) {
   const paths = knowledgePaths(workspace);
-  let parsed = {};
-  try { parsed = JSON.parse(readFileSync(paths.manifestPath, "utf8")); } catch {}
+  const stored = readVersionedJsonFile(paths.manifestPath, {
+    version: 2,
+    validate: (value) => Array.isArray(value.topics) && Array.isArray(value.sources)
+      && Array.isArray(value.processedSourceFingerprints) || "knowledge manifest arrays are invalid",
+  });
+  const parsed = stored.ok ? stored.value ?? {} : {};
+  trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, stored.error);
   try {
     const diskPaths = new Set(existsSync(paths.topicsDir)
       ? readdirSync(paths.topicsDir).filter((name) => name.toLowerCase().endsWith(".md")).map((name) => `topics/${name}`)
@@ -4272,14 +4313,22 @@ function readKnowledgeManifest(workspace) {
         : [],
       indexDirty: parsed?.indexDirty === true || reconciled.removedIds.length > 0 || discoveredPaths.length > 0,
       reconciliation: { removedTopicIds: reconciled.removedIds, discoveredPaths },
+      readOnlyError: stored.error,
     };
-  } catch {
-    return { version: 2, topics: [], sources: [], processedSourceFingerprints: [], indexDirty: false, reconciliation: { removedTopicIds: [], discoveredPaths: [] } };
+  } catch (error) {
+    const readOnlyError = stored.error ?? `knowledge manifest reconciliation failed: ${error.message}`;
+    trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, readOnlyError);
+    return { version: 2, topics: [], sources: [], processedSourceFingerprints: [], indexDirty: false, reconciliation: { removedTopicIds: [], discoveredPaths: [] }, readOnlyError };
   }
 }
 
 function writeKnowledgeManifest(workspace, manifest) {
   const paths = knowledgePaths(workspace);
+  assertVersionedJsonWritable(paths.manifestPath, {
+    version: 2,
+    validate: (value) => Array.isArray(value.topics) && Array.isArray(value.sources)
+      && Array.isArray(value.processedSourceFingerprints) || "knowledge manifest arrays are invalid",
+  });
   const value = {
     version: 2,
     updatedAt: new Date().toISOString(),
@@ -4290,7 +4339,8 @@ function writeKnowledgeManifest(workspace, manifest) {
       : [],
     indexDirty: manifest.indexDirty === true,
   };
-  writeKnowledgeFile(paths.manifestPath, `${JSON.stringify(value, null, 2)}\n`);
+  writeVersionedJsonFile(paths.manifestPath, value, { version: 2 });
+  trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, null);
   return value;
 }
 
@@ -5505,19 +5555,16 @@ function sessionMetaPath(name) {
 }
 
 function readSessionMeta(name) {
-  try {
-    const path = sessionMetaPath(name);
-    if (!existsSync(path)) return {};
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+  const path = sessionMetaPath(name);
+  const stored = readVersionedJsonFile(path, { version: 1, allowUnversioned: true });
+  trackPersistentStorageIssue(`session-meta:${name}`, path, stored.error);
+  return stored.ok ? stored.value ?? {} : { readOnlyError: stored.error };
 }
 
 function writeSessionMeta(name, patch = {}) {
   const path = sessionMetaPath(name);
   const current = readSessionMeta(name);
+  assertVersionedJsonWritable(path, { version: 1, allowUnversioned: true });
   let messageCountSignature = {};
   if (Number.isFinite(patch.messageCount)) {
     try {
@@ -5543,8 +5590,9 @@ function writeSessionMeta(name, patch = {}) {
     savedAt: patch.savedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  atomicWriteFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
-  return next;
+  const written = writeVersionedJsonFile(path, next, { version: 1 });
+  trackPersistentStorageIssue(`session-meta:${name}`, path, null);
+  return written;
 }
 
 function applyModeForSessionMeta(meta) {
@@ -6009,7 +6057,10 @@ function appendAuditEntry(entry) {
       renameSync(auditLogPath, backup);
     }
     appendFileSync(auditLogPath, `${JSON.stringify(entry)}\n`);
-  } catch {
+    trackPersistentStorageIssue("audit-log", auditLogPath, null);
+  } catch (error) {
+    trackPersistentStorageIssue("audit-log", auditLogPath, `audit log write failed: ${error.message}`);
+    console.error(`[launcher] audit log write failed: ${error.message}`);
   }
 }
 
@@ -6114,6 +6165,7 @@ const ctx = {
   getPendingEditCount: () => 0,
   getLatestVersion: () => latestVersion,
   getSessionName: () => "desktop",
+  getPersistentStorageIssues: () => [...persistentStorageIssues.values()],
   getModels: () => null,
   getLoopRunStatus: () => null,
   getActiveModal: () => activeModal,

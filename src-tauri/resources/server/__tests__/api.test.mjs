@@ -184,6 +184,10 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     const health = await apiGet("/api/health", overrides);
     assert.equal(health.json.storage.totalBytes, 42);
     assert.equal(health.json.storage.configStatus, "current");
+    assert.deepEqual(health.json.storageIssues, []);
+
+    const unhealthy = await apiGet("/api/health", { ...overrides, getPersistentStorageIssues: () => [{ key: "prompt-queue", error: "invalid JSON" }] });
+    assert.equal(unhealthy.json.storageIssues[0].key, "prompt-queue");
   });
 
   test("备份 API 对无服务、未知路径和无效 JSON 返回明确错误", async () => {
