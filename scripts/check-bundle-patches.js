@@ -18,7 +18,7 @@ const root = join(__dirname, "..");
 const required = [
   {
     file: "src-tauri/resources/server/lib/provider-configuration.mjs",
-    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProvider", "confirmDestructive", "validateRequestDefaults"],
+    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults"],
   },
   {
     file: "scripts/prepare-runtime-package.js",
@@ -301,6 +301,7 @@ const required = [
       "__VISIONOX_BUILD_STAMP__",
       "resolveProviderModelRequest",
       "validateRequestDefaults",
+      'purpose: "verification"',
       'previewProviderImport',
       'credentials" && rest[1] === "test"',
     ],

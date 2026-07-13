@@ -6,7 +6,7 @@ const PROVIDER_CHANGE_FIELDS = new Set([
 ]);
 const MODEL_CHANGE_FIELDS = new Set([
   "id", "name", "presets", "efforts", "thinkingMode", "multimodal",
-  "maxContextLength", "requestDefaults", "disabled",
+  "maxContextLength", "requestDefaults", "verificationRequestDefaults", "disabled",
 ]);
 const V3_OPERATIONS = new Set([
   "updateProvider", "removeProvider", "upsertModel", "updateModel", "disableModel", "removeModel", "syncModels",
@@ -61,6 +61,12 @@ function validateProvider(provider) {
     if (provider.requestPolicy === "json") {
       const requestIssue = validateRequestDefaults(model.requestDefaults);
       if (requestIssue) return `model "${model.id}" ${requestIssue}`;
+      if (model.verificationRequestDefaults !== undefined) {
+        const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
+        if (verificationIssue) return `model "${model.id}" verification ${verificationIssue}`;
+      }
+    } else if (model.verificationRequestDefaults !== undefined) {
+      return `model "${model.id}" verificationRequestDefaults requires provider requestPolicy "json"`;
     }
     if (model.disabled !== true) enabled += 1;
   }
@@ -76,9 +82,17 @@ function importV2(source, payload) {
   const config = clone(source);
   const existing = config.providers ?? [];
   const incoming = payload.providers;
+  const removeProviderIds = payload.removeProviderIds ?? [];
   const importMode = payload.importMode ?? "merge";
   if (!Array.isArray(incoming) || incoming.length === 0) throw new Error("providers must be a non-empty array");
   if (!["merge", "replace"].includes(importMode)) throw new Error("importMode must be merge | replace");
+  if (!Array.isArray(removeProviderIds) || removeProviderIds.some((id) => typeof id !== "string" || !id.trim())) {
+    throw new Error("removeProviderIds must be an array of non-empty provider ids");
+  }
+  const removalIds = [...new Set(removeProviderIds.map((id) => id.trim()))];
+  const incomingIds = new Set(incoming.map((provider) => provider?.id));
+  const conflict = removalIds.find((id) => incomingIds.has(id));
+  if (conflict) throw new Error(`provider "${conflict}" cannot be both imported and removed`);
   const touched = new Set();
   const actions = [];
   for (const raw of incoming) {
@@ -100,6 +114,16 @@ function importV2(source, payload) {
       throw new Error("activeProviderId must reference an imported or existing provider");
     }
     config.activeProviderId = payload.activeProviderId;
+  }
+  for (const providerId of removalIds) {
+    const index = existing.findIndex((provider) => provider.id === providerId);
+    if (index < 0) continue;
+    const activeProvider = existing.find((provider) => provider.id === config.activeProviderId) ?? existing[0];
+    if (activeProvider?.id === providerId) throw new Error(`cannot remove active provider "${providerId}"; switch to another provider first`);
+    if (existing.length === 1) throw new Error("cannot remove the only configured provider");
+    const [provider] = existing.splice(index, 1);
+    touched.add(provider.id);
+    actions.push({ kind: "remove-provider", providerId: provider.id, destructive: true, requiresConfirmation: true, label: `永久删除服务商 ${provider.name ?? provider.id}` });
   }
   for (const provider of existing) {
     normalizeProviderModels(provider);

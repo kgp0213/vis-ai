@@ -281,7 +281,7 @@
     <ol class="steps">
       <li>
         <h3>取得完整配置文件</h3>
-        <p>使用管理员或 AI 根据公司最新信息生成的完整 JSON。文件中不应出现 <code>YOUR_API_KEY</code>、<code>placeholder</code> 等占位文字。</p>
+        <p>当前完整配置文件是 <span class="path">providers-ful-new-0713.json</span>。它包含可直接使用的服务商、模型、地址、Key 和模型参数，不需要普通用户手工修改。</p>
       </li>
       <li>
         <h3>选择 JSON</h3>
@@ -297,26 +297,36 @@
       </li>
     </ol>
 
+    <h3>0713 完整配置导入后会发生什么</h3>
+    <table>
+      <thead>
+        <tr><th>配置内容</th><th>导入结果</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>外部 DeepSeek</td><td>新增或完整更新 <code>deepseek-official</code>，保留 auto / flash / pro 切换和自动升级逻辑。</td></tr>
+        <tr><td>公司 Qwen</td><td>新增或完整更新 <code>local-qwen</code>，使用唯一的 Qwen3.5-397B 模型，不显示 DeepSeek 的推理强度选择。</td></tr>
+        <tr><td>旧 local-deepseek</td><td>通过 <code>removeProviderIds</code> 永久删除；预览中必须明确显示这项删除。</td></tr>
+        <tr><td>默认使用模型</td><td>导入后选择 <code>deepseek-official</code>；完成“检测全部模型”后自动启用该服务商中第一个检测成功的模型。</td></tr>
+        <tr><td>Qwen 正式对话</td><td>开启隐藏思考，固定传入 <code>thinking_budget: 8192</code>；程序不会按问题难度自动改值。</td></tr>
+        <tr><td>Qwen 通信检测</td><td>通过 <code>verificationRequestDefaults</code> 临时关闭思考，只验证连接、Key 和模型 ID，不改变正式对话参数。</td></tr>
+      </tbody>
+    </table>
+
     <div class="tip">
-      JSON 分为两类：新电脑一般使用“完整配置”；日常新增、改名、升级或下架模型使用“维护配置”。普通用户不需要手写 JSON，把最新的模型 ID、显示名称、API 地址和 Key 提供给管理员或 AI 生成即可。
+      0713 文件使用 schema v2、<code>importMode: "replace"</code>。这里的 replace 是完整替换 JSON 中同 ID 的服务商，不会删除未列出的其他服务商；只有 <code>removeProviderIds</code> 明确列出的服务商会被删除。
+    </div>
+
+    <div class="tip">
+      JSON 分为两类：新电脑或需要同步完整模型清单时使用 0713 这类“完整配置”；日常只更换 Key 或地址使用设置页；单模型新增、改名、升级、停用或删除才使用 schema v3“维护配置”。
     </div>
 
     <h2>四、通过 JSON 清理过期模型</h2>
     <p>清理前先确认过期的是“整个服务商”还是“服务商中的一个模型”。优先停用旧模型；只有明确不再需要时才永久删除。</p>
 
-    <h3>情况 A：移除整个 local-deepseek 服务商</h3>
-    <p>项目已经准备好 <span class="path">docs/移除-local-deepseek.json</span>。在“模型”菜单选择该文件，预览中应显示“永久删除服务商 Vis-DeepSeek”，确认无误后再导入。</p>
-    <pre>{
-  "schemaVersion": 3,
-  "operations": [
-    {
-      "op": "removeProvider",
-      "providerId": "local-deepseek"
-    }
-  ]
-}</pre>
+    <h3>情况 A：使用 0713 完整配置移除 local-deepseek</h3>
+    <p><code>providers-ful-new-0713.json</code> 已在 <code>removeProviderIds</code> 中列出 <code>local-deepseek</code>，因此可以在更新 DeepSeek 和 Qwen 的同时清理该旧服务商，不需要额外导入删除文件。</p>
     <div class="warning">
-      <strong>如果 local-deepseek 正在使用：</strong>系统会拒绝删除。先在“模型”菜单切换到其他服务商，再重新导入清理 JSON。删除后仍需执行“检测全部模型”。
+      <strong>预览是最终依据：</strong>0713 文件把 <code>activeProviderId</code> 设置为 <code>deepseek-official</code>，允许安全删除正在使用的旧服务商。确认导入前仍要检查预览中同时出现“更新服务商”和“永久删除 local-deepseek”。
     </div>
 
     <h3>情况 B：停用一个服务商中的旧模型</h3>
@@ -344,13 +354,30 @@
       "models": [
         {
           "key": "company-qwen-primary",
-          "id": "公司当前 API 模型 ID",
-          "name": "公司 Qwen",
+          "id": "qwen3.5-397b-a17b",
+          "name": "Qwen3.5-397B",
           "presets": ["flash"],
+          "multimodal": true,
           "maxContextLength": 262144,
           "requestDefaults": {
             "temperature": 0.6,
-            "max_tokens": 4096
+            "max_tokens": 4096,
+            "top_p": 0.95,
+            "top_k": 20,
+            "extra_body": {
+              "chat_template_kwargs": {
+                "enable_thinking": true,
+                "thinking_budget": 8192
+              }
+            }
+          },
+          "verificationRequestDefaults": {
+            "temperature": 0,
+            "extra_body": {
+              "chat_template_kwargs": {
+                "enable_thinking": false
+              }
+            }
           }
         }
       ]
@@ -358,7 +385,11 @@
   ]
 }</pre>
     <div class="tip">
-      不建议小白手动修改这些示例。把服务商 ID、旧模型 key、最新模型 ID、名称、上下文长度和公司要求的参数交给管理员或 AI，让其生成维护 JSON，然后只负责“选择文件 → 核对预览 → 确认导入 → 检测全部模型”。
+      上面的 Qwen 模型结构与 0713 完整配置一致。后续模型 ID、名称、上下文容量或原生请求参数变化时，让管理员或 AI 以最新完整配置为基准生成维护 JSON；普通用户只负责“选择文件 → 核对预览 → 确认导入 → 检测全部模型”。
+    </div>
+
+    <div class="tip">
+      <code>requestDefaults</code> 是正式对话参数；<code>verificationRequestDefaults</code> 只在“检测 API”和“检测全部模型”时递归覆盖正式参数。公司模型较慢或默认开启思考时，可在检测参数中关闭思考。以后模型升级通常只需更新 JSON 中的模型 ID、容量和原生参数，不需要重新安装软件。
     </div>
 
     <h2>五、如何判断操作是否成功</h2>
@@ -387,6 +418,7 @@
         <tr><td>保存后原来的对号消失</td><td>这是正常现象。凭据变化后旧检测结果不再可信，需要“检测全部模型”。</td></tr>
         <tr><td>不知道应该选择哪个服务商</td><td>根据公司通知中的服务商名称确认；不确定时不要尝试覆盖多个服务商。</td></tr>
         <tr><td>公司模型已经下架</td><td>让管理员或 AI 生成维护 JSON，将旧模型停用；不要通过修改 API Key 来处理模型下架。</td></tr>
+        <tr><td>Qwen 简单问题也配置了 8192</td><td><code>thinking_budget</code> 是最大预算，不代表每次都会用满；程序会原样传递，简单问题通常由模型提前结束。</td></tr>
       </tbody>
     </table>
 

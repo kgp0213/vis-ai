@@ -53,6 +53,29 @@ describe("model request policy", () => {
     });
   });
 
+  test("verification defaults recursively override only the model detection request", () => {
+    const provider = {
+      requestPolicy: "json",
+      models: [{
+        id: "qwen",
+        requestDefaults: {
+          temperature: 0.6,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 }, keep: true },
+        },
+        verificationRequestDefaults: {
+          temperature: 0,
+          extra_body: { chat_template_kwargs: { enable_thinking: false } },
+        },
+      }],
+    };
+
+    assert.deepEqual(resolveProviderModelRequest(provider, "qwen").requestDefaults, provider.models[0].requestDefaults);
+    assert.deepEqual(resolveProviderModelRequest(provider, "qwen", { purpose: "verification" }).requestDefaults, {
+      temperature: 0,
+      extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 8192 }, keep: true },
+    });
+  });
+
   test("JSON policy sends API-native defaults and suppresses software reasoning parameters", async () => {
     let payload;
     const requestDefaults = {
@@ -110,8 +133,8 @@ describe("model request policy", () => {
     assert.match(launcher, /function createConfiguredModelClient/);
     assert.match(launcher, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(getActiveProvider\(config\), modelId\)/);
     assert.doesNotMatch(launcher, /new DeepSeekClient\(\{ apiKey, baseUrl \}\)/);
-    assert.match(server, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(provider, modelId\)/);
-    assert.match(server, /requestConfig: resolveProviderModelRequest\(provider, model\.id\)/);
+    assert.match(server, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(provider, modelId, \{ purpose: "verification" \}\)/);
+    assert.match(server, /requestConfig: resolveProviderModelRequest\(provider, model\.id, \{ purpose: "verification" \}\)/);
     assert.match(providerConfiguration, /validateRequestDefaults\(model\.requestDefaults\)/);
     assert.match(providerConfiguration, /importMode === "replace"/);
     assert.match(providerConfiguration, /config\.activeProviderId = payload\.activeProviderId/);
@@ -152,6 +175,7 @@ describe("model request policy", () => {
             presets: ["flash"],
             maxContextLength: 262144,
             requestDefaults: { top_p: 0.95, extra_body: { chat_template_kwargs: { enable_thinking: true } } },
+            verificationRequestDefaults: { extra_body: { chat_template_kwargs: { enable_thinking: false } } },
           }],
         }],
       }, {
@@ -165,6 +189,7 @@ describe("model request policy", () => {
       assert.equal(stored.activeProviderId, "qwen");
       assert.equal(stored.providers[0].stale, undefined);
       assert.equal(stored.providers[0].models[0].requestDefaults.extra_body.chat_template_kwargs.enable_thinking, true);
+      assert.equal(stored.providers[0].models[0].verificationRequestDefaults.extra_body.chat_template_kwargs.enable_thinking, false);
 
       const rejected = await apiRequest("/api/providers/import", {
         schemaVersion: 2,
@@ -176,6 +201,22 @@ describe("model request policy", () => {
       }, { configPath });
       assert.equal(rejected.status, 400);
       assert.match(rejected.body.error, /reserved field.*model/i);
+
+      const invalidVerification = await apiRequest("/api/providers/import", {
+        schemaVersion: 2,
+        providers: [{
+          id: "qwen",
+          requestPolicy: "json",
+          models: [{
+            id: "qwen-new",
+            maxContextLength: 262144,
+            requestDefaults: {},
+            verificationRequestDefaults: { messages: [] },
+          }],
+        }],
+      }, { configPath });
+      assert.equal(invalidVerification.status, 400);
+      assert.match(invalidVerification.body.error, /verification.*reserved field.*messages/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

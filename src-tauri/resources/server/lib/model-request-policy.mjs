@@ -46,13 +46,35 @@ export function validateRequestDefaults(value) {
   return null;
 }
 
-export function resolveProviderModelRequest(provider, modelId) {
+function mergeJsonObjects(base, overrides) {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    const current = merged[key];
+    if (
+      current && value &&
+      typeof current === "object" && typeof value === "object" &&
+      !Array.isArray(current) && !Array.isArray(value)
+    ) {
+      merged[key] = mergeJsonObjects(current, value);
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+export function resolveProviderModelRequest(provider, modelId, options = {}) {
   const policy = provider?.requestPolicy === JSON_REQUEST_POLICY ? JSON_REQUEST_POLICY : "legacy";
   const model = provider?.models?.find((item) => item?.id === modelId);
-  const requestDefaults = policy === JSON_REQUEST_POLICY ? model?.requestDefaults ?? {} : {};
+  let requestDefaults = policy === JSON_REQUEST_POLICY ? model?.requestDefaults ?? {} : {};
   if (policy === JSON_REQUEST_POLICY) {
     const issue = validateRequestDefaults(requestDefaults);
     if (issue) throw new Error(`invalid request configuration for model "${modelId}": ${issue}`);
+    if (options.purpose === "verification" && model?.verificationRequestDefaults !== undefined) {
+      const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
+      if (verificationIssue) throw new Error(`invalid verification request configuration for model "${modelId}": ${verificationIssue}`);
+      requestDefaults = mergeJsonObjects(requestDefaults, model.verificationRequestDefaults);
+    }
   }
   return { policy, requestDefaults };
 }

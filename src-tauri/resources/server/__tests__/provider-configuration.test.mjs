@@ -119,6 +119,57 @@ describe("Provider schema v3 maintenance", () => {
   });
 });
 
+describe("Provider schema v2 combined import and cleanup", () => {
+  test("adds providers and removes an existing retired provider atomically", () => {
+    const source = baseConfig();
+    source.providers.push({
+      id: "local-deepseek",
+      name: "Retired DeepSeek",
+      baseUrl: "https://retired.example/v1",
+      apiKey: "retired-provider-key",
+      models: [{ key: "local-deepseek-primary", id: "retired-model", presets: ["flash"], maxContextLength: 32768 }],
+    });
+    const payload = {
+      schemaVersion: 2,
+      importMode: "replace",
+      activeProviderId: "company",
+      removeProviderIds: ["local-deepseek", "already-absent"],
+      providers: [{
+        id: "new-qwen",
+        name: "New Qwen",
+        baseUrl: "https://qwen.example/v1",
+        apiKey: "new-qwen-provider-key",
+        requestPolicy: "json",
+        models: [{ key: "qwen-primary", id: "qwen-model", presets: ["flash"], maxContextLength: 65536, requestDefaults: { temperature: 0.6 } }],
+      }],
+    };
+
+    const preview = previewProviderImport(source, payload);
+    assert.equal(preview.preview.requiresConfirmation, true);
+    assert.deepEqual(preview.preview.actions.map((action) => action.kind), ["add-provider", "remove-provider"]);
+    assert.throws(() => previewProviderImport(source, payload, { confirmDestructive: false }), /confirmDestructive/);
+    const applied = previewProviderImport(source, payload, { confirmDestructive: true });
+    assert.deepEqual(applied.config.providers.map((provider) => provider.id), ["company", "new-qwen"]);
+    assert.equal(applied.config.activeProviderId, "company");
+    assert.deepEqual(source.providers.map((provider) => provider.id), ["company", "local-deepseek"]);
+  });
+
+  test("rejects conflicting or active provider cleanup", () => {
+    const source = baseConfig();
+    const provider = source.providers[0];
+    assert.throws(() => previewProviderImport(source, {
+      schemaVersion: 2,
+      providers: [provider],
+      removeProviderIds: [provider.id],
+    }), /both imported and removed/);
+    assert.throws(() => previewProviderImport(source, {
+      schemaVersion: 2,
+      providers: [{ id: "new-provider", baseUrl: "https://new.example/v1", apiKey: "new-provider-key", models: [{ id: "new-model", maxContextLength: 32768 }] }],
+      removeProviderIds: [provider.id],
+    }), /active provider/);
+  });
+});
+
 describe("Provider credential rotation API", () => {
   test("requires a matching successful test before credentials can be saved", async () => {
     let testedCandidate;

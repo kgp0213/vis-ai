@@ -4329,7 +4329,7 @@ function modelVerificationFingerprint(provider, model) {
     baseUrl: String(provider.baseUrl || "").trim().replace(/\/+$/, ""),
     apiKey: String(provider.apiKey || ""),
     modelId: model.id,
-    requestConfig: resolveProviderModelRequest(provider, model.id)
+    requestConfig: resolveProviderModelRequest(provider, model.id, { purpose: "verification" })
   })).digest("hex");
 }
 async function testProviderModelCommunication(provider, model) {
@@ -4338,7 +4338,7 @@ async function testProviderModelCommunication(provider, model) {
     baseUrl: provider.baseUrl,
     timeoutMs: 1e4,
     retry: { maxAttempts: 1 },
-    requestConfigForModel: (modelId) => resolveProviderModelRequest(provider, modelId)
+    requestConfigForModel: (modelId) => resolveProviderModelRequest(provider, modelId, { purpose: "verification" })
   });
   await client.chat({
     model: model.id,

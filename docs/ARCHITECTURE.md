@@ -131,6 +131,20 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 
 迁移日志只记录版本和状态，不输出 API Key 或配置正文。
 
+## 模型请求配置契约
+
+Provider 的 `requestPolicy: "json"` 表示模型请求参数由导入 JSON 管理。模型的 `requestDefaults` 会合并到
+OpenAI 兼容的 `/chat/completions` 请求中；`model`、`messages`、`stream` 和 `tools` 属于程序维护的协议字段，
+不允许被配置覆盖。厂商新增的采样、思考或扩展字段无需在程序中逐项登记，只要仍使用兼容协议即可透传。
+
+模型可选配 `verificationRequestDefaults`。全模型检测和设置页凭据检测会将该对象递归覆盖到
+`requestDefaults`，但不会改变正式聊天配置。该机制用于让通信检测关闭耗时思考或采用更轻量的采样参数；
+检测仍固定为单次尝试、10 秒超时和最多 8 个输出 token。检测配置也经过协议保留字段、JSON 深度和大小校验，
+并纳入模型检测指纹；导入任何模型配置后，旧检测结果会失效。
+
+程序不把 UI 的 DeepSeek `efforts` 或 `thinkingMode` 映射为 Qwen 的 `thinking_budget`。JSON 策略下的模型
+升级应通过配置文件按新接口的真实字段和层级更新；只有服务不再兼容 `/chat/completions` 时才扩展程序协议层。
+
 ## 用户数据保护
 
 完整用户快照位于 `~/.visionox/backups/snapshots/`，与 `backups/` 根目录中的配置迁移恢复文件分开。

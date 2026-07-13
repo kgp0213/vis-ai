@@ -10,7 +10,7 @@
 | [用户指南](USER_GUIDE.md) | 产品入口、记忆、模式、会话、搜索和常用操作 |
 | [OfficeCLI 指南](OFFICECLI_GUIDE.md) | 内置 OfficeCLI 的使用、工作流与排障 |
 | [更新日志](CHANGELOG.md) | 按版本记录已经交付的变更 |
-| [Qwen3.5-397B 配置与验证手册](Qwen3.5-397B_能力手册.md) | 公司 Qwen 的 JSON 请求契约、证据边界、升级与下架方法 |
+| [Qwen 思考与推理能力边界](qwen-thinking-reasoning-能力边界.md) | 公司 Qwen 的实测参数、JSON 请求契约、检测配置与升级边界 |
 | [API Key 维护与更新指南](API-Key维护与更新指南.html) | 面向普通用户的凭据轮换、新电脑 JSON 导入与排障操作单 |
 
 ## 工程与交付
