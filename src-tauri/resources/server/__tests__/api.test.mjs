@@ -524,7 +524,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.ok(res.json.appliesAt !== undefined);
   });
 
-  test("设置页凭据读取和保存都以当前 Provider 为准", async () => {
+  test("设置页凭据读取以当前 Provider 为准且禁止绕过检测保存", async () => {
     const before = JSON.parse(readFileSync(configPath, "utf8"));
     writeConfig({
       ...before,
@@ -562,41 +562,13 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(initial.json.baseUrl, "http://localhost:11434/v1");
     assert.equal(initial.json.credentialTarget.id, "test-provider");
 
-    let syncedProvider = null;
-    const saved = await apiPost("/api/settings", {
+    const rejectedBypass = await apiPost("/api/settings", {
       apiKey: "sk-updated-provider-key",
       baseUrl: "http://localhost:12434/v1",
-    }, {
-      syncProvider: async (id) => { syncedProvider = id; },
     });
-    assert.equal(saved.status, 200);
-    assert.equal(syncedProvider, "test-provider");
-    assert.equal(saved.json.requiresModelTest, true);
-
-    const after = JSON.parse(readFileSync(configPath, "utf8"));
-    const active = after.providers.find((provider) => provider.id === "test-provider");
-    const other = after.providers.find((provider) => provider.id === "other-provider");
-    assert.equal(active.apiKey, "sk-updated-provider-key");
-    assert.equal(active.baseUrl, "http://localhost:12434/v1");
-    assert.equal(active.models[0].verification, undefined);
-    assert.equal(other.models[0].verification.ok, true);
-    assert.equal(after.modelVerification.dirty, true);
-    assert.equal(after.modelVerification.reason, "provider-credentials");
-    assert.equal(after.modelVerification.providerId, "test-provider");
-    assert.equal(after.apiKey, "legacy-key-should-not-be-used");
-
-    const listed = await apiGet("/api/providers");
-    assert.equal(listed.json.providers.find((provider) => provider.id === "test-provider").models[0].testStatus, "untested");
-    assert.equal(listed.json.providers.find((provider) => provider.id === "other-provider").models[0].testStatus, "passed");
-
-    let busySyncCalled = false;
-    const deferred = await apiPost("/api/settings", { apiKey: "sk-deferred-provider-key" }, {
-      isBusy: () => true,
-      syncProvider: async () => { busySyncCalled = true; },
-    });
-    assert.equal(deferred.status, 200);
-    assert.equal(deferred.json.credentialSync.deferred, true);
-    assert.equal(busySyncCalled, false);
+    assert.equal(rejectedBypass.status, 400);
+    const unchanged = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.equal(unchanged.providers.find((provider) => provider.id === "test-provider").apiKey, "sk-test-key");
 
     writeConfig(before);
   });

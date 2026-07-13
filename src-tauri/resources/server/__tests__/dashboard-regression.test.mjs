@@ -540,13 +540,15 @@ describe("Dashboard 回归护栏", () => {
     const source = readFileSync(dashboardAppUrl, "utf8");
     const chatPanel = source.slice(source.indexOf("function ChatPanel()"), source.indexOf("var ChatFeed ="));
     const settingsPanel = source.slice(source.indexOf("function SettingsPanel()"), source.indexOf("// dashboard/src/panels/skills.ts"));
-    assert.match(source, /function providerImportPreview/);
+    assert.match(source, /function formatProviderImportPreview/);
     assert.match(source, /provider\.apiKey \? "\*\*\*\*\*\*\*\*/);
     assert.match(source, /API Key: \$\{apiKey\}/);
     assert.doesNotMatch(chatPanel, /JSON\.stringify\(providerImportDraft/);
-    assert.match(chatPanel, /providerImportPreview\(providerImportDraft\)/);
+    assert.match(chatPanel, /formatProviderImportPreview\(providerImportDraft, providerImportPlan\)/);
     assert.match(chatPanel, /dash\.kind === "config-changed"[\s\S]*?Promise\.allSettled\(\[api\("\/overview"\), api\("\/providers"\)\]\)/);
-    assert.match(settingsPanel, /requiresModelTest/);
+    assert.match(settingsPanel, /\/providers\/credentials\/test/);
+    assert.match(settingsPanel, /\/providers\/credentials\/save/);
+    assert.match(settingsPanel, /disabled=\$\{saving \|\| credentialTesting \|\| !credentialVerification\}/);
     assert.match(settingsPanel, /settings\.credentialsRetest/);
     assert.doesNotMatch(settingsPanel, /save\(\{ preset:/);
     assert.doesNotMatch(settingsPanel, /save\(\{ reasoningEffort:/);
@@ -902,7 +904,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /busy && loop\?\.model !== modelConfig\.model/);
     assert.match(launcher, /const appliedSwitch = commitPendingModelSwitch\(\)/);
     assert.match(launcher, /for \(const model of runtimeContextCapModels\) delete DEEPSEEK_CONTEXT_TOKENS\[model\]/);
-    assert.match(launcher, /for \(const model of provider\?\.models \?\? \[\]\) applyContextCap\(model\.id, cfg\)/);
+    assert.match(launcher, /provider\?\.models\?\.filter\(\(item\) => item\.disabled !== true\)/);
     assert.match(app, /将在当前回答结束后切换，保留/);
     assert.match(app, /已切换到 \$\{switched\.model\}，保留/);
     assert.match(app, /stats\.estimatedContextTokens \?\? stats\.lastPromptTokens/);

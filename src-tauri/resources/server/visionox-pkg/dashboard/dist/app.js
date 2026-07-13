@@ -19388,6 +19388,12 @@ var en = {
     credentialCurrent: "Current provider: {name}",
     credentialsScope: "Maintains credentials for the active provider only. Import and verification remain in the model menu.",
     credentialsRetest: "Credentials updated. Re-run all model checks from the model menu.",
+    credentialProvider: "Provider",
+    detectApi: "Test API",
+    detectingApi: "Testing...",
+    detectionRequired: "Test the API before saving",
+    detectionPassed: "API test passed with {model}",
+    saveCredentials: "Save credentials",
     apiKey: "API key",
     notSet: "(not set)",
     replace: "replace",
@@ -20354,6 +20360,12 @@ var zhCN = {
     credentialCurrent: "\u5F53\u524D\u670D\u52A1\uFF1A{name}",
     credentialsScope: "\u6B64\u5904\u53EA\u7EF4\u62A4\u5F53\u524D\u670D\u52A1\u7684\u5BC6\u94A5\u548C API \u5730\u5740\uFF1B\u5BFC\u5165\u3001\u9009\u62E9\u548C\u6A21\u578B\u68C0\u6D4B\u4ECD\u5728\u6A21\u578B\u83DC\u5355\u4E2D\u5B8C\u6210\u3002",
     credentialsRetest: "\u51ED\u636E\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5728\u6A21\u578B\u83DC\u5355\u4E2D\u91CD\u65B0\u68C0\u6D4B\u5168\u90E8\u6A21\u578B\u3002",
+    credentialProvider: "\u670D\u52A1\u5546",
+    detectApi: "\u68C0\u6D4B API",
+    detectingApi: "\u68C0\u6D4B\u4E2D...",
+    detectionRequired: "\u9700\u8981\u5148\u68C0\u6D4B API \u624D\u80FD\u4FDD\u5B58",
+    detectionPassed: "API \u68C0\u6D4B\u901A\u8FC7\uFF1A{model}",
+    saveCredentials: "\u4FDD\u5B58\u51ED\u636E",
     apiKey: "API \u5BC6\u94A5",
     notSet: "\uFF08\u672A\u8BBE\u7F6E\uFF09",
     replace: "\u66FF\u6362",
@@ -24835,6 +24847,10 @@ var CHAT_DRAFT_KEY = "visionox.chatDraft.v1";
 var CHAT_INITIAL_RENDER_COUNT = 30;
 function parseProviderImportJson(text) {
   const parsed = JSON.parse(String(text || ""));
+  if (parsed.schemaVersion === 3) {
+    if (!Array.isArray(parsed.operations) || parsed.operations.length === 0) throw new Error("维护 JSON 必须包含非空 operations 数组");
+    return parsed;
+  }
   if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) throw new Error("JSON 必须包含非空 providers 数组");
   for (const provider of parsed.providers) {
     if (!provider?.id || typeof provider.id !== "string") throw new Error("每个 provider 都必须包含 id");
@@ -24846,18 +24862,24 @@ function parseProviderImportJson(text) {
   }
   return parsed;
 }
-function providerImportPreview(config) {
+function formatProviderImportPreview(config, plan) {
+  if (plan?.actions) {
+    const heading = plan.schemaVersion === 3 ? "维护配置变更" : "完整配置变更";
+    const warning = plan.requiresConfirmation ? "\n\n警告：包含永久删除，确认后无法从配置中恢复。" : plan.destructive ? "\n\n注意：包含替换操作，请核对模型清单。" : "";
+    return `${heading}\n${plan.actions.map((action) => `• ${action.label}`).join("\n")}${warning}`;
+  }
   return (config?.providers ?? []).map((provider) => {
     const label = provider.name ? `${provider.name} (${provider.id})` : provider.id;
     const models = (provider.models ?? []).map((model) => model.name ?? model.id).join(", ") || "\u672A\u5305\u542B";
     const baseUrl = provider.baseUrl || "\u672A\u5305\u542B";
     const apiKey = provider.apiKey ? "********\uFF08\u5DF2\u9690\u85CF\uFF09" : "\u672A\u5305\u542B";
-    return `${label}\n  URL: ${baseUrl}\n  API Key: ${apiKey}\n  \u6A21\u578B: ${models}`;
+    const requestPolicy = provider.requestPolicy === "json" ? "JSON \u56FA\u5B9A\u53C2\u6570" : "\u517C\u5BB9\u6A21\u5F0F";
+    return `${label}\n  URL: ${baseUrl}\n  API Key: ${apiKey}\n  \u6A21\u578B: ${models}\n  \u8BF7\u6C42\u7B56\u7565: ${requestPolicy}`;
   }).join("\n\n");
 }
 function providerOptionLabel(provider) {
   const name = provider?.name ?? provider?.id ?? "Provider";
-  const models = Array.isArray(provider?.models) ? provider.models : [];
+  const models = Array.isArray(provider?.models) ? provider.models.filter((model) => model.disabled !== true) : [];
   if (models.length === 0) return name;
   const results = models.map((model) => {
     const modelName = model.name ?? model.id ?? "model";
@@ -25497,6 +25519,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (modelNoticeTimerRef.current !== null) clearTimeout(modelNoticeTimerRef.current);
   }, []);
   const [providerImportDraft, setProviderImportDraft] = d2(null);
+  const [providerImportPlan, setProviderImportPlan] = d2(null);
   const [providerImportFileName, setProviderImportFileName] = d2("");
   const [providerImportError, setProviderImportError] = d2(null);
   const [providerTesting, setProviderTesting] = d2(false);
@@ -27038,17 +27061,20 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (!file) return;
     try {
       const draft = parseProviderImportJson(await file.text());
+      const plan = await api("/providers/import/preview", { method: "POST", body: draft });
       setProviderImportDraft(draft);
+      setProviderImportPlan(plan);
       setProviderImportFileName(file.name);
       setProviderImportError(null);
     } catch (err) {
       setProviderImportDraft(null);
+      setProviderImportPlan(null);
       setProviderImportFileName(file.name);
       setProviderImportError(err.message);
     }
   }, []);
   const testAllProviders = q2(async () => {
-    if (!(providers ?? []).some((provider) => (provider.models ?? []).length > 0) || providerTesting) return;
+    if (!(providers ?? []).some((provider) => (provider.models ?? []).some((model) => model.disabled !== true)) || providerTesting) return;
     setProviderTesting(true);
     pushModelNotice("正在检测全部模型...", "info", 0);
     try {
@@ -27074,7 +27100,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       const imported = await api("/providers/import", {
         method: "POST",
-        body: providerImportDraft
+        body: { ...providerImportDraft, confirmDestructive: providerImportPlan?.requiresConfirmation === true }
       });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
       setProviders(pr.providers ?? []);
@@ -27085,6 +27111,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? null);
       setProviderImportDraft(null);
+      setProviderImportPlan(null);
       setProviderImportFileName("");
       setProviderImportError(null);
       pushModelNotice("✓ 配置导入成功，请检测全部模型后使用", "success", 5e3);
@@ -27092,7 +27119,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setProviderImportError(err.message);
       pushModelNotice("导入失败：" + err.message, "error", 5e3);
     }
-  }, [providerImportDraft, pushModelNotice]);
+  }, [providerImportDraft, providerImportPlan, pushModelNotice]);
   const pickWorkspace = q2(async (dir) => {
     setShowWsPicker(false);
     try {
@@ -27435,14 +27462,14 @@ const [providerCaps, setProviderCaps] = d2(null);
                       <select style="flex:1;min-width:0;font-size:12px;padding:4px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-default);color:var(--text-primary);" onChange=${(e3) => { switchProvider(e3.target.value); }}>
                         ${(providers ?? []).map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${providerOptionLabel(p)}</option>`)}
                       </select>
-                      <button disabled=${!(providers ?? []).some((provider) => (provider.models ?? []).length > 0) || providerTesting || busy} style="padding:4px 8px;font-size:11px;white-space:nowrap;border:1px solid var(--border-default);border-radius:4px;background:var(--surface-default);color:var(--text-primary);cursor:pointer;" onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+                      <button disabled=${!(providers ?? []).some((provider) => (provider.models ?? []).some((model) => model.disabled !== true)) || providerTesting || busy} style="padding:4px 8px;font-size:11px;white-space:nowrap;border:1px solid var(--border-default);border-radius:4px;background:var(--surface-default);color:var(--text-primary);cursor:pointer;" onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
                     </div>
                     <div role="status" aria-live="polite" style="min-height:18px;margin-top:5px;font-size:11px;line-height:18px;overflow-wrap:anywhere;color:${modelNotice?.kind === 'error' ? 'var(--c-err)' : modelNotice?.kind === 'success' ? 'var(--c-ok)' : 'var(--fg-3)'};">${modelNotice?.text ?? ""}</div>
                     ${(() => {
                       if (modelVerification?.dirty) {
                         return html4`<div style="font-size:11px;margin-top:6px;color:var(--c-warn);">配置已更新，请重新检测全部模型</div>`;
                       }
-                      const allModels = (providers ?? []).flatMap((provider) => (provider.models ?? []).map((model) => ({ provider, model })));
+                      const allModels = (providers ?? []).flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => ({ provider, model })));
                       const testedModels = allModels.filter(({ model }) => model.testStatus !== "untested");
                       if (testedModels.length === 0) return null;
                       const passed = allModels.filter(({ model }) => model.testStatus === "passed").length;
@@ -27462,23 +27489,30 @@ const [providerCaps, setProviderCaps] = d2(null);
                       </div>
                     ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}（固定）</div>`}
                   </div>
-                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">强度</label>
-                    ${(providerCaps?.efforts?.length ?? 0) > 1 ? html4`
-                      <div class="model-choice-row">
-                        ${providerCaps.efforts.map((e3) => html4`<button type="button" key=${e3} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => { setSetting('reasoningEffort', e3); }}>${e3}</button>`)}
-                      </div>
-                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
-                  </div>
+                  ${(providers ?? []).find((provider) => provider.id === activeProviderId)?.requestPolicy === "json" ? html4`
+                    <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模型参数</label>
+                      <div style="font-size:12px;color:var(--text-primary);">由导入 JSON 固定</div>
+                    </div>
+                  ` : html4`
+                    <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">强度</label>
+                      ${(providerCaps?.efforts?.length ?? 0) > 1 ? html4`
+                        <div class="model-choice-row">
+                          ${providerCaps.efforts.map((e3) => html4`<button type="button" key=${e3} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => { setSetting('reasoningEffort', e3); }}>${e3}</button>`)}
+                        </div>
+                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
+                    </div>
+                  `}
                   <div style="padding:8px;">
                     <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none;" onChange=${loadProviderImportFile} />
                     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                       <button type="button" class="model-primary-action" onClick=${() => { const inp = document.getElementById('provider-import-file'); inp.value = ''; inp.click(); }}>选择 JSON 文件</button>
                       <span style="font-size:11px;color:var(--text-secondary);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${providerImportFileName}</span>
                     </div>
-                    <textarea value=${providerImportDraft ? providerImportPreview(providerImportDraft) : ""} placeholder="已选配置摘要..." readonly style="width:100%;height:76px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
+                    <textarea value=${providerImportDraft ? formatProviderImportPreview(providerImportDraft, providerImportPlan) : ""} placeholder="选择文件后将在这里预览实际变更..." readonly style="width:100%;height:96px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
                     ${providerImportError ? html4`<div style="font-size:11px;color:var(--c-err);margin-top:5px;overflow-wrap:anywhere;">${providerImportError}</div>` : null}
-                    <button type="button" class="model-primary-action" disabled=${!providerImportDraft || busy} style="margin-top:6px" onClick=${confirmProviderImport}>确认导入</button>
+                    <button type="button" class=${providerImportPlan?.requiresConfirmation ? "btn danger" : "model-primary-action"} disabled=${!providerImportDraft || !providerImportPlan || busy} style="margin-top:6px" onClick=${confirmProviderImport}>${providerImportPlan?.requiresConfirmation ? "确认永久删除并导入" : "确认导入"}</button>
                   </div>
                 </div>
               ` : null}
@@ -29470,7 +29504,7 @@ function OverviewPanel() {
       <div class="health-grid">
         <div class="health-item"><div class="lbl">${t4("overview.workspace")}</div><div class="v">${workspaceName}</div><div class="meta">${o3.session ?? t4("overview.noSession")}</div></div>
         <div class="health-item"><div class="lbl">${t4("overview.provider")}</div><div class="v">${o3.activeProviderName ?? o3.activeProviderId ?? "\u2014"}</div><div class="meta">${t4("overview.runtimeModel")}: ${o3.runtimeModel ?? o3.displayModel ?? "\u2014"}</div></div>
-        <div class="health-item"><div class="lbl">${t4("overview.presetMode")}</div><div class="v">${o3.preset ?? "auto"}</div><div class="meta">${o3.reasoningEffort ?? "\u2014"}</div></div>
+        <div class="health-item"><div class="lbl">${t4("overview.presetMode")}</div><div class="v">${o3.preset ?? "auto"}</div><div class="meta">${o3.requestPolicy === "json" ? "JSON \u53C2\u6570" : o3.reasoningEffort ?? "\u2014"}</div></div>
         <div class="health-item"><div class="lbl">${t4("overview.workScene")}</div><div class="v">${sceneName}</div><div class="meta">${o3.editMode ?? "\u2014"}</div></div>
         <div class=${`health-item ${missingRequiredIndex ? "warn" : ""}`}><div class="lbl">${t4("system.semanticIndex")}</div><div class="v">${o3.semanticIndexExists ? t4("overview.semanticReady") : t4("overview.semanticMissing")}</div><div class="meta">${o3.semanticIndexExists ? t4("system.built") : t4("system.runIndex")}</div></div>
       </div>
@@ -32256,6 +32290,9 @@ function SettingsPanel() {
   const [saving, setSaving] = d2(false);
   const [saved, setSaved] = d2(null);
   const [draft, setDraft] = d2({});
+  const [credentialProviderId, setCredentialProviderId] = d2(null);
+  const [credentialVerification, setCredentialVerification] = d2(null);
+  const [credentialTesting, setCredentialTesting] = d2(false);
   const [catalog, setCatalog] = d2(null);
   const [loopStatus, setLoopStatus] = d2(null);
   const [loopAvgCost, setLoopAvgCost] = d2(null);
@@ -32306,6 +32343,8 @@ function SettingsPanel() {
       const r3 = await api("/settings");
       setData(r3);
       setDraft({});
+      setCredentialProviderId((current) => r3.credentialProviders?.some((provider) => provider.id === current) ? current : r3.credentialTarget?.id ?? r3.credentialProviders?.[0]?.id ?? null);
+      setCredentialVerification(null);
     } catch (err) {
       setError(err.message);
     }
@@ -32408,11 +32447,54 @@ function SettingsPanel() {
     },
     [load]
   );
+  const testCredentials = q2(async () => {
+    const provider = data?.credentialProviders?.find((item) => item.id === credentialProviderId);
+    if (!provider) return;
+    setCredentialTesting(true);
+    setCredentialVerification(null);
+    setError(null);
+    try {
+      const payload = { providerId: provider.id, baseUrl: draft.baseUrl ?? provider.baseUrl };
+      if ((draft.apiKey ?? "").trim()) payload.apiKey = draft.apiKey.trim();
+      const result = await api("/providers/credentials/test", { method: "POST", body: payload });
+      setCredentialVerification({ ...result, apiKey: payload.apiKey, baseUrl: payload.baseUrl });
+    } catch (err) {
+      setError(`API 检测失败：${err.message}`);
+    } finally {
+      setCredentialTesting(false);
+    }
+  }, [data, credentialProviderId, draft]);
+  const saveCredentials = q2(async () => {
+    const provider = data?.credentialProviders?.find((item) => item.id === credentialProviderId);
+    if (!provider || !credentialVerification) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = {
+        providerId: provider.id,
+        baseUrl: credentialVerification.baseUrl,
+        verificationToken: credentialVerification.verificationToken
+      };
+      if (credentialVerification.apiKey) payload.apiKey = credentialVerification.apiKey;
+      await api("/providers/credentials/save", { method: "POST", body: payload });
+      await load();
+      setSaved(t4("settings.credentialsRetest"));
+      setTimeout(() => setSaved(null), 4e3);
+    } catch (err) {
+      setCredentialVerification(null);
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }, [data, credentialProviderId, credentialVerification, load]);
   if (!data && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("settings.loading")}</div>`;
   if (error && !data) return html4`<div class="card accent-err">${error}</div>`;
   if (!data) return null;
   const v3 = data;
+  const credentialProvider = v3.credentialProviders?.find((provider) => provider.id === credentialProviderId) ?? v3.credentialProviders?.[0] ?? null;
+  const credentialBaseUrl = draft.baseUrl ?? credentialProvider?.baseUrl ?? "";
+  const credentialChanged = Boolean((draft.apiKey ?? "").trim()) || credentialBaseUrl !== (credentialProvider?.baseUrl ?? "");
   const lockedPreset = ["flash", "pro"].includes(v3.preset ?? "");
   const modelControlValue = lockedPreset ? v3.effectiveModel ?? v3.displayModel ?? v3.model ?? "\u2014" : v3.configuredModel ?? v3.effectiveModel ?? v3.model ?? "\u2014";
   const runtimeModel = v3.runtimeModel ?? v3.displayModel ?? v3.model ?? "\u2014";
@@ -32463,13 +32545,23 @@ function SettingsPanel() {
       ${sectionH3(t4("settings.sectionApi"))}
       <div class="card">
         <div style="padding:2px 0 8px;border-bottom:1px solid var(--bd);margin-bottom:4px">
-          <div style="font-size:12px;color:var(--fg-1);font-weight:600">${t4("settings.credentialCurrent", { name: v3.credentialTarget?.name ?? "Legacy" })}</div>
-          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">${t4("settings.credentialsScope")}</div>
+          <div style="font-size:12px;color:var(--fg-1);font-weight:600">${t4("settings.credentialCurrent", { name: credentialProvider?.name ?? "Legacy" })}</div>
+          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">修改内容不会立即生效；API 检测通过后才能保存。</div>
         </div>
         ${fieldRow(
+    t4("settings.credentialProvider"),
+    html4`<select value=${credentialProvider?.id ?? ""} disabled=${saving || credentialTesting} onChange=${(e3) => {
+      const nextId = e3.target.value;
+      const next = v3.credentialProviders?.find((provider) => provider.id === nextId);
+      setCredentialProviderId(nextId);
+      setDraft({ ...draft, apiKey: "", baseUrl: next?.baseUrl ?? "" });
+      setCredentialVerification(null);
+    }}>${(v3.credentialProviders ?? []).map((provider) => html4`<option value=${provider.id}>${provider.name}</option>`)}</select>`
+  )}
+        ${fieldRow(
     t4("settings.apiKey"),
-    html4`<code class="mono" style="color:var(--fg-2);font-size:11.5px">${v3.apiKey ?? t4("settings.notSet")}</code>`,
-    v3.credentialTarget?.kind === "provider" ? `当前服务：${v3.credentialTarget.name}` : "兼容配置"
+    html4`<code class="mono" style="color:var(--fg-2);font-size:11.5px">${credentialProvider?.apiKey ?? t4("settings.notSet")}</code>`,
+    credentialProvider?.credentialTest?.checkedAt ? `上次凭据检测：${fmtRelativeTime(credentialProvider.credentialTest.checkedAt)}` : "尚无已保存的检测记录"
   )}
         ${fieldRow(
     t4("settings.replace"),
@@ -32478,14 +32570,9 @@ function SettingsPanel() {
               type="password"
               placeholder=${t4("settings.pasteKey")}
               value=${draft.apiKey ?? ""}
-              onInput=${(e3) => setDraft({ ...draft, apiKey: e3.target.value })}
+              onInput=${(e3) => { setDraft({ ...draft, apiKey: e3.target.value }); setCredentialVerification(null); }}
               style="flex:1"
             />
-            <button
-              class="btn primary"
-              disabled=${saving || !(draft.apiKey ?? "").trim()}
-              onClick=${() => save({ apiKey: draft.apiKey })}
-            >${t4("settings.saveKey")}</button>
           `
   )}
         ${fieldRow(
@@ -32493,18 +32580,18 @@ function SettingsPanel() {
     html4`
             <input
               type="text"
-              value=${draft.baseUrl ?? v3.baseUrl ?? ""}
+              value=${credentialBaseUrl}
               placeholder=${t4("settings.baseUrlPlaceholder")}
-              onInput=${(e3) => setDraft({ ...draft, baseUrl: e3.target.value })}
+              onInput=${(e3) => { setDraft({ ...draft, baseUrl: e3.target.value }); setCredentialVerification(null); }}
               style="flex:1"
             />
-            <button
-              class="btn"
-              disabled=${saving || (draft.baseUrl ?? v3.baseUrl ?? "") === (v3.baseUrl ?? "")}
-              onClick=${() => save({ baseUrl: draft.baseUrl })}
-            >${t4("common.save")}</button>
           `
   )}
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)">
+          <button class="btn" disabled=${saving || credentialTesting || !credentialProvider || !credentialBaseUrl.trim() || (!credentialChanged && !credentialProvider.apiKeySet)} onClick=${testCredentials}>${credentialTesting ? t4("settings.detectingApi") : t4("settings.detectApi")}</button>
+          <button class="btn primary" disabled=${saving || credentialTesting || !credentialVerification} onClick=${saveCredentials}>${t4("settings.saveCredentials")}</button>
+          <span style="font-size:11px;color:${credentialVerification ? 'var(--c-ok)' : 'var(--fg-3)'}">${credentialVerification ? t4("settings.detectionPassed", { model: credentialVerification.modelId }) : t4("settings.detectionRequired")}</span>
+        </div>
       </div>
 
       ${sectionH3(t4("settings.sectionDefaults"))}
@@ -35371,12 +35458,10 @@ function App() {
     });
   }, []);
   const [wsRoot, setWsRoot] = d2(null);
-  const [version2, setVersion] = d2(null);
   const [buildDate2, setBuildDate] = d2(null);
   y2(() => {
     const unsub = subscribeSse("health", (ev) => {
       setWsRoot(ev.cwd ?? null);
-      setVersion(ev.version ?? null);
       setBuildDate(ev.buildDate ?? null);
     });
     return unsub;
@@ -35478,7 +35563,6 @@ function App() {
           ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
           <span class="sep">·</span>
           <span class="lbl">@${buildDate2 && !buildDate2.startsWith("__") ? buildDate2 : (() => { const now = new Date(); return `${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}`; })()}</span>
-          ${version2 ? html7`<span class="sep">·</span><span class="v">Ver${version2}</span>` : null}
         </span>
       </header>
       <div class="app-body">

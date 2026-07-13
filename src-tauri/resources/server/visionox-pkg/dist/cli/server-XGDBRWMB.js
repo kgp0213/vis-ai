@@ -47,6 +47,13 @@ import {
   saveSkillCredential
 } from "../../../lib/skill-credentials.mjs";
 import {
+  resolveProviderModelRequest,
+  validateRequestDefaults
+} from "../../../lib/model-request-policy.mjs";
+import {
+  previewProviderImport
+} from "../../../lib/provider-configuration.mjs";
+import {
   DeepSeekClient
 } from "./chunk-2KDUS647.js";
 import {
@@ -2735,6 +2742,10 @@ async function handleOverview(method, _rest, _body, ctx) {
     semanticIndexExists,
     cockpit: computeCockpit(ctx),
     activeProviderId: cfg.activeProviderId ?? null,
+    requestPolicy: (() => {
+      const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
+      return provider?.requestPolicy === "json" ? "json" : "legacy";
+    })(),
     activeProviderName: (() => {
       const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
       return provider?.name ?? provider?.id ?? null;
@@ -4052,12 +4063,13 @@ function effectiveModelConfig(cfg) {
   const preset = LEGACY_PRESET_ALIASES[rawPreset] ?? rawPreset;
   const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
   if (provider) {
+    const enabledModels = (provider.models ?? []).filter((model) => model.disabled !== true);
     const supportedPresets = new Set();
-    for (const m of provider.models ?? []) {
+    for (const m of enabledModels) {
       for (const pr of m.presets ?? []) supportedPresets.add(pr);
     }
     const resolvedPreset = supportedPresets.has(preset) ? preset : (provider.defaultPreset ?? "flash");
-    const modelObj = provider.models?.find((m) => m.presets?.includes(resolvedPreset)) ?? provider.models?.[0];
+    const modelObj = enabledModels.find((m) => m.presets?.includes(resolvedPreset)) ?? enabledModels[0];
     const model = modelObj?.id ?? DEFAULT_MODEL;
     return { rawPreset, preset: resolvedPreset, configuredModel: model, model, locked: true };
   }
@@ -4088,6 +4100,25 @@ function modelState(ctx, cfg) {
     modelDrift
   };
 }
+var credentialVerificationTokens = /* @__PURE__ */ new Map();
+function credentialCandidate(cfg, fields) {
+  const provider = (cfg.providers ?? []).find((item) => item.id === fields.providerId);
+  if (!provider) throw new Error(`provider "${fields.providerId}" not found`);
+  const apiKey2 = fields.apiKey === void 0 ? provider.apiKey : fields.apiKey;
+  const baseUrl2 = fields.baseUrl === void 0 ? provider.baseUrl : fields.baseUrl;
+  if (typeof apiKey2 !== "string" || !isPlausibleKey(apiKey2)) throw new Error("apiKey must be 16+ chars with no whitespace");
+  if (typeof baseUrl2 !== "string" || !baseUrl2.trim()) throw new Error("baseUrl must be a non-empty string");
+  let parsedUrl;
+  try { parsedUrl = new URL(baseUrl2.trim()); } catch { throw new Error("baseUrl must be a valid URL"); }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") throw new Error("baseUrl must use http or https");
+  return { provider, apiKey: apiKey2.trim(), baseUrl: baseUrl2.trim().replace(/\/+$/, "") };
+}
+function credentialCandidateFingerprint(configPath, providerId, apiKey2, baseUrl2) {
+  return createHash("sha256").update(JSON.stringify({ configPath, providerId, apiKey: apiKey2, baseUrl: baseUrl2 })).digest("hex");
+}
+function pruneCredentialVerificationTokens(now = Date.now()) {
+  for (const [token, record] of credentialVerificationTokens) if (record.expiresAt <= now) credentialVerificationTokens.delete(token);
+}
 async function handleProviders(method, rest, body, ctx) {
   if (method === "GET") {
     const cfg = readConfig(ctx.configPath);
@@ -4103,20 +4134,22 @@ async function handleProviders(method, rest, body, ctx) {
           testError: current && verification.ok !== true ? verification.error ?? "model test failed" : null
         };
       });
-      const passed = models.filter((model) => model.testStatus === "passed").length;
-      const failed = models.filter((model) => model.testStatus === "failed").length;
+      const enabledModels = models.filter((model) => model.disabled !== true);
+      const passed = enabledModels.filter((model) => model.testStatus === "passed").length;
+      const failed = enabledModels.filter((model) => model.testStatus === "failed").length;
       return {
         ...p,
         apiKey: p.apiKey ? redactKey(p.apiKey) : null,
         apiKeySet: Boolean(p.apiKey),
         models,
-        modelTest: { passed, failed, tested: passed + failed, total: models.length }
+        credentialTest: p.credentialVerification ? { ok: true, checkedAt: p.credentialVerification.checkedAt, modelId: p.credentialVerification.modelId } : null,
+        modelTest: { passed, failed, tested: passed + failed, total: enabledModels.length }
       };
     });
     const activeProvider = providers.find((p) => p.id === cfg.activeProviderId) ?? providers[0] ?? null;
     const allPresets = new Set();
     const allEfforts = new Set();
-    for (const m of activeProvider?.models ?? []) {
+    for (const m of activeProvider?.models?.filter((model) => model.disabled !== true) ?? []) {
       for (const pr of m.presets ?? []) allPresets.add(pr);
       for (const ef of m.efforts ?? []) allEfforts.add(ef);
     }
@@ -4148,11 +4181,68 @@ async function handleProviders(method, rest, body, ctx) {
       : await ctx.syncProvider?.(parsed.id);
     return { status: 200, body: { ok: true, modelSwitch } };
   }
+  if (method === "POST" && rest[0] === "credentials" && rest[1] === "test") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    const cfg = readConfig(ctx.configPath);
+    let candidate;
+    try { candidate = credentialCandidate(cfg, parsed); } catch (error) { return { status: 400, body: { error: error.message } }; }
+    const model = candidate.provider.models?.find((item) => item.disabled !== true);
+    if (!model) return { status: 400, body: { error: "provider has no enabled model to test" } };
+    const temporaryProvider = { ...candidate.provider, apiKey: candidate.apiKey, baseUrl: candidate.baseUrl };
+    const startedAt = Date.now();
+    try {
+      const tester = ctx.testProviderModel ?? testProviderModelCommunication;
+      await tester(temporaryProvider, model);
+    } catch (error) {
+      return { status: 422, body: { error: safeProviderTestError(error, candidate.apiKey), providerId: candidate.provider.id, modelId: model.id } };
+    }
+    pruneCredentialVerificationTokens();
+    if (credentialVerificationTokens.size >= 100) credentialVerificationTokens.delete(credentialVerificationTokens.keys().next().value);
+    const verificationToken = randomBytes(24).toString("hex");
+    const checkedAt = new Date().toISOString();
+    credentialVerificationTokens.set(verificationToken, {
+      fingerprint: credentialCandidateFingerprint(ctx.configPath, candidate.provider.id, candidate.apiKey, candidate.baseUrl),
+      expiresAt: Date.now() + 5 * 60 * 1e3,
+      checkedAt,
+      modelId: model.id
+    });
+    return { status: 200, body: { ok: true, verificationToken, providerId: candidate.provider.id, modelId: model.id, checkedAt, elapsedMs: Date.now() - startedAt, expiresInSeconds: 300 } };
+  }
+  if (method === "POST" && rest[0] === "credentials" && rest[1] === "save") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    const cfg = readConfig(ctx.configPath);
+    let candidate;
+    try { candidate = credentialCandidate(cfg, parsed); } catch (error) { return { status: 400, body: { error: error.message } }; }
+    pruneCredentialVerificationTokens();
+    const token = typeof parsed.verificationToken === "string" ? parsed.verificationToken : "";
+    const verified = credentialVerificationTokens.get(token);
+    const fingerprint = credentialCandidateFingerprint(ctx.configPath, candidate.provider.id, candidate.apiKey, candidate.baseUrl);
+    if (!verified || verified.fingerprint !== fingerprint) {
+      if (token) credentialVerificationTokens.delete(token);
+      return { status: 409, body: { error: "API configuration changed or has not passed detection; detect it again before saving" } };
+    }
+    credentialVerificationTokens.delete(token);
+    candidate.provider.apiKey = candidate.apiKey;
+    candidate.provider.baseUrl = candidate.baseUrl;
+    candidate.provider.credentialVerification = { ok: true, checkedAt: verified.checkedAt, modelId: verified.modelId, fingerprint };
+    for (const model of candidate.provider.models ?? []) delete model.verification;
+    cfg.modelVerification = { dirty: true, reason: "provider-credentials", providerId: candidate.provider.id, changedAt: new Date().toISOString() };
+    writeConfig(cfg, ctx.configPath);
+    let credentialSync = null;
+    if (cfg.activeProviderId === candidate.provider.id && ctx.syncProvider) {
+      if (ctx.isBusy?.()) credentialSync = { deferred: true, providerId: candidate.provider.id };
+      else credentialSync = await ctx.syncProvider(candidate.provider.id) ?? { deferred: false, providerId: candidate.provider.id };
+    }
+    ctx.audit?.({ ts: Date.now(), action: "rotate-provider-credentials", payload: { providerId: candidate.provider.id } });
+    return { status: 200, body: { ok: true, providerId: candidate.provider.id, requiresModelTest: true, credentialSync } };
+  }
   if (method === "POST" && rest[0] === "test") {
     const cfg = readConfig(ctx.configPath);
     const providers = cfg.providers ?? [];
     const activeProvider = providers.find((item) => item.id === cfg.activeProviderId) ?? providers[0] ?? null;
-    const jobs = providers.flatMap((provider) => (provider.models ?? []).map((model) => ({ provider, model })));
+    const jobs = providers.flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => ({ provider, model })));
     if (jobs.length === 0) return { status: 400, body: { error: "no configured models to test" } };
     if (ctx.isBusy?.()) return { status: 409, body: { error: "请等待当前回答结束后再检测模型" } };
     const results = new Array(jobs.length);
@@ -4189,13 +4279,15 @@ async function handleProviders(method, rest, body, ctx) {
       }
     };
     await Promise.all(Array.from({ length: Math.min(2, jobs.length) }, () => worker()));
-    const firstPassed = activeProvider?.models?.find((model) => model.verification?.ok === true);
+    const firstPassed = activeProvider?.models?.find((model) => model.disabled !== true && model.verification?.ok === true);
     let activated = null;
     if (firstPassed) {
       const preset = activationPresetForModel(firstPassed);
       cfg.activeProviderId = activeProvider.id;
       cfg.preset = preset;
-      if (!firstPassed.efforts?.includes(cfg.reasoningEffort)) cfg.reasoningEffort = firstPassed.efforts?.[0] ?? activeProvider.defaultEffort ?? "high";
+      if (activeProvider.requestPolicy !== "json" && !firstPassed.efforts?.includes(cfg.reasoningEffort)) {
+        cfg.reasoningEffort = firstPassed.efforts?.[0] ?? activeProvider.defaultEffort ?? "high";
+      }
       activated = { providerId: activeProvider.id, modelId: firstPassed.id, preset };
     }
     cfg.modelVerification = {
@@ -4211,45 +4303,19 @@ async function handleProviders(method, rest, body, ctx) {
   if (method === "POST" && rest[0] === "import") {
     let parsed;
     try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
-    const incoming = parsed.providers;
     const cfg = readConfig(ctx.configPath);
-    const existing = cfg.providers ?? [];
-    const validationError = validateIncomingProviders(incoming, existing);
-    if (validationError) return { status: 400, body: { error: validationError } };
-    for (const p of incoming) {
-      if (!p.id || typeof p.id !== "string") continue;
-      const idx = existing.findIndex((e) => e.id === p.id);
-      if (idx >= 0) {
-        for (const key of Object.keys(p)) existing[idx][key] = p[key];
-      } else {
-        existing.push(p);
-      }
-    }
-    for (const provider of existing) {
-      for (const model of provider.models ?? []) delete model.verification;
-    }
-    cfg.modelVerification = { dirty: true, reason: "provider-import", changedAt: new Date().toISOString() };
-    cfg.providers = existing;
-    writeConfig(cfg, ctx.configPath);
+    let result;
+    try { result = previewProviderImport(cfg, parsed, rest[1] === "preview" ? {} : { confirmDestructive: parsed.confirmDestructive === true }); }
+    catch (error) { return { status: 400, body: { error: error.message } }; }
+    if (rest[1] === "preview") return { status: 200, body: result.preview };
+    const nextConfig = result.config;
+    nextConfig.modelVerification = { dirty: true, reason: "provider-import", changedAt: new Date().toISOString() };
+    writeConfig(nextConfig, ctx.configPath);
+    const providerSync = nextConfig.activeProviderId ? await ctx.syncProvider?.(nextConfig.activeProviderId) : null;
     const refreshed = ctx.refreshContextCap?.() ?? null;
-    return { status: 200, body: { ok: true, count: existing.length, requiresModelTest: true, modelSwitch: refreshed?.modelSwitch ?? null, contextPolicy: refreshed?.contextPolicy ?? null } };
+    return { status: 200, body: { ok: true, count: nextConfig.providers?.length ?? 0, preview: result.preview, requiresModelTest: true, modelSwitch: providerSync ?? refreshed?.modelSwitch ?? null, contextPolicy: refreshed?.contextPolicy ?? null } };
   }
   return { status: 404, body: { error: "not found" } };
-}
-function validateIncomingProviders(incoming, existing) {
-  if (!Array.isArray(incoming) || incoming.length === 0) return "providers must be a non-empty array";
-  for (const provider of incoming) {
-    if (!provider || typeof provider !== "object" || typeof provider.id !== "string" || !provider.id.trim()) return "each provider must have a non-empty id";
-    const prior = existing.find((entry) => entry.id === provider.id);
-    const merged = { ...prior, ...provider };
-    if (provider.models === void 0 && prior) continue;
-    if (!Array.isArray(merged.models) || merged.models.length === 0) return `provider "${provider.id}" must include a non-empty models array`;
-    for (const model of merged.models) {
-      if (!model || typeof model.id !== "string" || !model.id.trim()) return `provider "${provider.id}" contains a model without an id`;
-      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) return `model "${model.id}" must declare a positive integer maxContextLength`;
-    }
-  }
-  return null;
 }
 function activationPresetForModel(model) {
   const presets = Array.isArray(model.presets) ? model.presets : [];
@@ -4262,7 +4328,8 @@ function modelVerificationFingerprint(provider, model) {
     providerId: provider.id,
     baseUrl: String(provider.baseUrl || "").trim().replace(/\/+$/, ""),
     apiKey: String(provider.apiKey || ""),
-    modelId: model.id
+    modelId: model.id,
+    requestConfig: resolveProviderModelRequest(provider, model.id)
   })).digest("hex");
 }
 async function testProviderModelCommunication(provider, model) {
@@ -4270,7 +4337,8 @@ async function testProviderModelCommunication(provider, model) {
     apiKey: provider.apiKey,
     baseUrl: provider.baseUrl,
     timeoutMs: 1e4,
-    retry: { maxAttempts: 1 }
+    retry: { maxAttempts: 1 },
+    requestConfigForModel: (modelId) => resolveProviderModelRequest(provider, modelId)
   });
   await client.chat({
     model: model.id,
@@ -4300,6 +4368,14 @@ async function handleSettings(method, _rest, body, ctx) {
         apiKeySet: Boolean(activeProvider?.apiKey ?? cfg.apiKey),
         baseUrl: activeProvider?.baseUrl ?? cfg.baseUrl ?? null,
         credentialTarget: activeProvider ? { kind: "provider", id: activeProvider.id, name: activeProvider.name ?? activeProvider.id } : { kind: "legacy", id: null, name: "Legacy configuration" },
+        credentialProviders: (cfg.providers ?? []).map((provider) => ({
+          id: provider.id,
+          name: provider.name ?? provider.id,
+          apiKey: provider.apiKey ? redactKey(provider.apiKey) : null,
+          apiKeySet: Boolean(provider.apiKey),
+          baseUrl: provider.baseUrl ?? null,
+          credentialTest: provider.credentialVerification ? { ok: true, checkedAt: provider.credentialVerification.checkedAt, modelId: provider.credentialVerification.modelId } : null
+        })),
         lang: getLanguage(),
         preset: state.preset,
         reasoningEffort: ctx.loop?.reasoningEffort ?? cfg.reasoningEffort ?? "max",
@@ -4333,7 +4409,7 @@ async function handleSettings(method, _rest, body, ctx) {
           const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
           const allPresets = new Set();
           const allEfforts = new Set();
-          for (const m of provider?.models ?? []) {
+          for (const m of provider?.models?.filter((model) => model.disabled !== true) ?? []) {
             for (const pr of m.presets ?? []) allPresets.add(pr);
             for (const ef of m.efforts ?? []) allEfforts.add(ef);
           }
@@ -4361,6 +4437,9 @@ async function handleSettings(method, _rest, body, ctx) {
   }
   if (method === "POST") {
     const fields = parseBody9(body);
+    if (fields.apiKey !== void 0 || fields.baseUrl !== void 0) {
+      return { status: 400, body: { error: "API credentials must pass detection before saving" } };
+    }
     const cfg = readConfig(ctx.configPath);
     const activeCredentialProvider = (cfg.providers ?? []).find((provider) => provider.id === cfg.activeProviderId) ?? cfg.providers?.[0] ?? null;
     const changed = [];
@@ -4405,7 +4484,7 @@ async function handleSettings(method, _rest, body, ctx) {
       const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
       if (provider) {
         const capsPresets = new Set();
-        for (const m of provider.models ?? []) for (const pr of m.presets ?? []) capsPresets.add(pr);
+        for (const m of provider.models?.filter((model) => model.disabled !== true) ?? []) for (const pr of m.presets ?? []) capsPresets.add(pr);
         const resolvedPreset = LEGACY_PRESET_ALIASES[fields.preset] ?? fields.preset;
         if (!capsPresets.has(resolvedPreset)) {
           return { status: 400, body: { error: `preset "${fields.preset}" not supported by active provider "${provider.id}"` } };
@@ -4422,7 +4501,7 @@ async function handleSettings(method, _rest, body, ctx) {
       const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
       if (provider) {
         const capsEfforts = new Set();
-        for (const m of provider.models ?? []) for (const ef of m.efforts ?? []) capsEfforts.add(ef);
+        for (const m of provider.models?.filter((model) => model.disabled !== true) ?? []) for (const ef of m.efforts ?? []) capsEfforts.add(ef);
         if (!capsEfforts.has(fields.reasoningEffort)) {
           return { status: 400, body: { error: `effort "${fields.reasoningEffort}" not supported by active provider "${provider.id}"` } };
         }

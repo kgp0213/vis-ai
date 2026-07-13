@@ -119,6 +119,7 @@ var DeepSeekClient = class {
   timeoutMs;
   retry;
   _fetch;
+  requestConfigForModel;
   constructor(opts = {}) {
     const apiKey = opts.apiKey ?? process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
@@ -133,9 +134,16 @@ var DeepSeekClient = class {
     this.timeoutMs = opts.timeoutMs ?? 66e4;
     this._fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.retry = opts.retry ?? {};
+    this.requestConfigForModel = opts.requestConfigForModel ?? (() => ({ policy: "legacy", requestDefaults: {} }));
   }
   buildPayload(opts, stream) {
+    const requestConfig = this.requestConfigForModel(opts.model) ?? {};
+    const jsonPolicy = requestConfig.policy === "json";
+    const requestDefaults = jsonPolicy && requestConfig.requestDefaults && typeof requestConfig.requestDefaults === "object" && !Array.isArray(requestConfig.requestDefaults)
+      ? requestConfig.requestDefaults
+      : {};
     const payload = {
+      ...requestDefaults,
       model: opts.model,
       messages: opts.messages,
       stream
@@ -144,10 +152,10 @@ var DeepSeekClient = class {
     if (opts.temperature !== void 0) payload.temperature = opts.temperature;
     if (opts.maxTokens !== void 0) payload.max_tokens = opts.maxTokens;
     if (opts.responseFormat) payload.response_format = opts.responseFormat;
-    if (opts.thinking) {
+    if (!jsonPolicy && opts.thinking) {
       payload.extra_body = { thinking: { type: opts.thinking } };
     }
-    if (opts.reasoningEffort) {
+    if (!jsonPolicy && opts.reasoningEffort) {
       payload.reasoning_effort = opts.reasoningEffort;
     }
     return payload;

@@ -45,6 +45,7 @@ node_modules/
 .env.*
 !.env.example
 !**/.env.example
+/docs/providers-ful-new.json
 
 # Operating system and editor state
 .DS_Store

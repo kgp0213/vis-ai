@@ -85,6 +85,21 @@ describe("getProviderCapabilities", () => {
     assert.deepEqual(caps.presets, []);
     assert.deepEqual(caps.modelIds, []);
   });
+
+  test("停用模型不参与能力和运行模型解析", () => {
+    const provider = {
+      defaultPreset: "flash",
+      models: [
+        { id: "retired-pro", disabled: true, presets: ["pro"], efforts: ["max"] },
+        { id: "active-flash", presets: ["flash"], efforts: ["high"] },
+      ],
+    };
+    const caps = getProviderCapabilities(provider);
+    assert.deepEqual(caps.presets, ["flash"]);
+    assert.deepEqual(caps.modelIds, ["active-flash"]);
+    assert.equal(resolveModelForProvider("pro", provider), "active-flash");
+    assert.equal(pickSummaryModel(provider.models), "active-flash");
+  });
 });
 
 // ── resolvePresetForProvider ───────────────────────────────────

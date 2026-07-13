@@ -55,6 +55,7 @@ const {
   pickSummaryModel,
   buildLegacyProvider,
 } = await importEarly("./lib/provider.mjs");
+const { resolveProviderModelRequest } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
@@ -962,7 +963,7 @@ function rebuildProviderContextCaps(cfg = config) {
   for (const model of runtimeContextCapModels) delete DEEPSEEK_CONTEXT_TOKENS[model];
   runtimeContextCapModels.clear();
   const provider = getActiveProvider(cfg);
-  for (const model of provider?.models ?? []) applyContextCap(model.id, cfg);
+  for (const model of provider?.models?.filter((item) => item.disabled !== true) ?? []) applyContextCap(model.id, cfg);
   const effective = effectiveModelConfig(cfg);
   const policy = applyContextCap(effective.model, cfg);
   activeContextPolicy = policy;
@@ -3411,7 +3412,7 @@ function buildLoop(client, rootDir) {
   });
   // Determine vision capability from the active provider model config.
   const provider = getActiveProvider(config);
-  const activeModel = provider?.models?.find((m) => m.id === modelConfig.model);
+  const activeModel = provider?.models?.find((m) => m.disabled !== true && m.id === modelConfig.model);
   const visionCfg = activeModel?.multimodal
     ? { vision: true, visionDetail: "high" }
     : { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
@@ -3419,7 +3420,7 @@ function buildLoop(client, rootDir) {
   // Set provider-driven globals for chunk-2R4QCDOZ.js thinkingMode/summaryModel overrides
   if (provider) {
     const tmMap = {};
-    for (const m of provider.models ?? []) tmMap[m.id] = m.thinkingMode;
+    for (const m of provider.models?.filter((model) => model.disabled !== true) ?? []) tmMap[m.id] = m.thinkingMode;
     globalThis.__visionoxThinkingModeMap = tmMap;
     globalThis.__visionoxSummaryModel = pickSummaryModel(provider.models);
   }
@@ -3441,6 +3442,14 @@ function buildLoop(client, rootDir) {
 let client = null;
 let loop = null;
 
+function createConfiguredModelClient(clientApiKey = apiKey, clientBaseUrl = baseUrl) {
+  return new DeepSeekClient({
+    apiKey: clientApiKey,
+    baseUrl: clientBaseUrl,
+    requestConfigForModel: (modelId) => resolveProviderModelRequest(getActiveProvider(config), modelId),
+  });
+}
+
 function rebuildLoopPreservingContext(nextClient = client, rootDir = workspaceDir) {
   const priorEntries = loop?.log?.toMessages ? loop.log.toMessages() : [];
   const previousModel = loop?.model ?? null;
@@ -3457,7 +3466,7 @@ function rebuildLoopPreservingContext(nextClient = client, rootDir = workspaceDi
 
 if (apiKey) {
   try {
-    client = new DeepSeekClient({ apiKey, baseUrl });
+    client = createConfiguredModelClient();
     loop = buildLoop(client, workspaceDir);
     console.error(`[launcher] CacheFirstLoop created (model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
   } catch (err) {
@@ -6595,7 +6604,7 @@ const ctx = {
     const provider = getActiveProvider(cfg);
     if (provider) {
       globalThis.__visionoxThinkingModeMap = Object.fromEntries(
-        (provider.models ?? []).map((model) => [model.id, model.thinkingMode])
+        (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => [model.id, model.thinkingMode])
       );
       globalThis.__visionoxSummaryModel = pickSummaryModel(provider.models);
     }
@@ -6648,7 +6657,7 @@ const ctx = {
     apiKey = provider.apiKey;
     baseUrl = provider.baseUrl;
     if (apiKey) {
-      client = new DeepSeekClient({ apiKey, baseUrl });
+      client = createConfiguredModelClient();
       const modelSwitch = rebuildLoopPreservingContext(client, workspaceDir);
       refreshBalance();
       console.error(`[launcher] provider switched: ${providerId} (preset=${newPreset}, effort=${newEffort})`);
@@ -6676,7 +6685,7 @@ const ctx = {
       apiKey = newApiKey;
       baseUrl = newBaseUrl;
       if (apiKey) {
-        client = new DeepSeekClient({ apiKey, baseUrl });
+        client = createConfiguredModelClient();
         rebuildLoopPreservingContext(client, workspaceDir);
         refreshBalance();
         console.error(`[launcher] client & loop recreated with new credentials`);

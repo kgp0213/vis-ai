@@ -25,6 +25,8 @@ const requiredDomainTests = [
   "session-knowledge.test.mjs",
   "skill-availability.test.mjs",
   "memory-trash.test.mjs",
+  "model-request-policy.test.mjs",
+  "provider-configuration.test.mjs",
   "skill-invocation.test.mjs",
   "workspace-switcher.test.mjs",
 ];

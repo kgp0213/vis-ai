@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visionox-Whale API Key 维护与更新指南</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f9;
+      --surface: #ffffff;
+      --text: #17202a;
+      --muted: #586474;
+      --border: #d7dde4;
+      --brand: #176b5b;
+      --brand-soft: #e8f4f0;
+      --info: #245c8f;
+      --info-soft: #edf5fb;
+      --warn: #8a5a00;
+      --warn-soft: #fff7e6;
+      --danger: #a13636;
+      --ok: #166b45;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.75;
+      letter-spacing: 0;
+    }
+
+    .page {
+      width: min(920px, calc(100% - 32px));
+      margin: 32px auto 64px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 22px;
+      border-bottom: 2px solid var(--brand);
+    }
+
+    header img {
+      width: 58px;
+      height: 58px;
+      flex: 0 0 58px;
+      border-radius: 8px;
+    }
+
+    h1, h2, h3 { line-height: 1.35; letter-spacing: 0; }
+    h1 { margin: 0; font-size: 30px; }
+    h2 { margin: 38px 0 14px; font-size: 22px; }
+    h3 { margin: 0 0 6px; font-size: 17px; }
+    p { margin: 8px 0; }
+
+    .subtitle, .meta { color: var(--muted); }
+    .subtitle { margin: 4px 0 0; }
+    .meta { margin-top: 10px; font-size: 13px; }
+
+    .notice, .tip, .warning {
+      margin: 20px 0;
+      padding: 14px 16px;
+      border: 1px solid;
+      border-radius: 6px;
+    }
+
+    .notice { background: var(--brand-soft); border-color: #a8d2c8; }
+    .tip { background: var(--info-soft); border-color: #b8d2e7; }
+    .warning { background: var(--warn-soft); border-color: #e8cb8c; }
+    .notice strong { color: var(--ok); }
+    .warning strong { color: var(--warn); }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .decision {
+      padding: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .decision .route {
+      display: block;
+      margin-top: 8px;
+      color: var(--brand);
+      font-weight: 700;
+    }
+
+    .steps {
+      margin: 16px 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: step;
+    }
+
+    .steps li {
+      position: relative;
+      min-height: 64px;
+      margin: 0 0 12px;
+      padding: 12px 14px 12px 58px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      counter-increment: step;
+    }
+
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--brand);
+      color: white;
+      font-weight: 700;
+    }
+
+    .path, code {
+      font-family: Consolas, "Microsoft YaHei", monospace;
+      font-size: 0.94em;
+    }
+
+    pre {
+      margin: 12px 0 18px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #20262d;
+      color: #f4f7fa;
+      font: 14px/1.6 Consolas, "Microsoft YaHei", monospace;
+      letter-spacing: 0;
+    }
+
+    .path {
+      display: inline-block;
+      padding: 2px 7px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #f8fafb;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 24px;
+      background: var(--surface);
+    }
+
+    th, td {
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { background: #eef1f4; }
+    .ok { color: var(--ok); font-weight: 700; }
+    .bad { color: var(--danger); font-weight: 700; }
+
+    .checklist {
+      padding: 14px 18px 14px 42px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    footer {
+      margin-top: 42px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 700px) {
+      .page { width: min(100% - 20px, 920px); margin-top: 18px; }
+      header { align-items: flex-start; }
+      h1 { font-size: 24px; }
+      .decision-grid { grid-template-columns: 1fr; }
+      table { font-size: 14px; }
+      th, td { padding: 8px; }
+    }
+
+    @media print {
+      body { background: white; font-size: 12pt; }
+      .page { width: 100%; margin: 0; }
+      .decision, .steps li, table, .checklist { break-inside: avoid; }
+      header img { width: 44px; height: 44px; flex-basis: 44px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <img src="../src-tauri/icons/128x128.png" alt="Visionox-Whale 图标">
+      <div>
+        <h1>API Key 维护与更新指南</h1>
+        <p class="subtitle">面向 Visionox-Whale 普通用户，无需手动编辑程序配置。</p>
+        <div class="meta">适用版本：1.28.0 及以上　|　更新日期：2026-07-13</div>
+      </div>
+    </header>
+
+    <div class="notice">
+      <strong>最重要的保护：</strong>新 API 配置必须先检测成功才能保存。检测失败时，原来的 API Key 和地址不会被覆盖，软件仍保留原配置。
+    </div>
+
+    <h2>一、先判断应该从哪里操作</h2>
+    <div class="decision-grid">
+      <div class="decision">
+        <h3>定期更换 API Key</h3>
+        <p>模型和参数不变，只替换公司发放的新 Key。</p>
+        <span class="route">使用“高级 → 设置”</span>
+      </div>
+      <div class="decision">
+        <h3>更换 API 地址</h3>
+        <p>公司调整了 Base URL，模型配置基本不变。</p>
+        <span class="route">使用“高级 → 设置”</span>
+      </div>
+      <div class="decision">
+        <h3>新电脑或模型升级</h3>
+        <p>需要一次导入服务商、模型、Key 和模型参数。</p>
+        <span class="route">使用“模型 → 导入 JSON”</span>
+      </div>
+    </div>
+
+    <h2>二、在设置页更换 API Key 或地址</h2>
+    <ol class="steps">
+      <li>
+        <h3>打开模型服务凭据</h3>
+        <p>进入 <span class="path">高级 → 设置 → 当前模型服务凭据</span>。</p>
+      </li>
+      <li>
+        <h3>选择正确的服务商</h3>
+        <p>在“服务商”下拉框中选择公司要求更新的服务。不要只看当前聊天使用的模型名称。</p>
+      </li>
+      <li>
+        <h3>填写新配置</h3>
+        <p>更换 Key 时，把新 Key 粘贴到“替换”输入框。更换地址时，在“基础 URL”中填写完整的 <code>http://</code> 或 <code>https://</code> 地址。</p>
+        <p>如果只改地址，可以不填写新 Key，软件会继续使用该服务商原来保存的 Key。</p>
+      </li>
+      <li>
+        <h3>点击“检测 API”</h3>
+        <p>软件会使用刚填写的 Key 和地址进行一次临时通信测试，通常在 10 秒内返回结果。此时新配置还没有保存。</p>
+      </li>
+      <li>
+        <h3>确认显示“API 检测通过”</h3>
+        <p>检测通过后会显示本次测试使用的模型，“保存凭据”按钮才会解锁。</p>
+      </li>
+      <li>
+        <h3>点击“保存凭据”</h3>
+        <p>保存后新 Key 或地址正式生效。为了避免沿用旧检测结果，该服务商的模型会恢复为“待检测”状态。</p>
+      </li>
+      <li>
+        <h3>再检测全部模型</h3>
+        <p>回到主界面，点击输入框下方的 <span class="path">模型 → 检测全部模型</span>。通信通过的模型名称后会显示对号。</p>
+      </li>
+    </ol>
+
+    <div class="warning">
+      <strong>注意：</strong>“检测 API”通过后，如果再次修改 Key、地址或切换服务商，原检测结果会立即失效，必须重新点击“检测 API”。这是正常的防误操作设计。
+    </div>
+
+    <h2>三、在新电脑上通过 JSON 完整配置</h2>
+    <ol class="steps">
+      <li>
+        <h3>取得完整配置文件</h3>
+        <p>使用管理员或 AI 根据公司最新信息生成的完整 JSON。文件中不应出现 <code>YOUR_API_KEY</code>、<code>placeholder</code> 等占位文字。</p>
+      </li>
+      <li>
+        <h3>选择 JSON</h3>
+        <p>在主界面点击 <span class="path">模型 → 选择 JSON 文件</span>，选择准备好的配置。</p>
+      </li>
+      <li>
+        <h3>阅读变更预览</h3>
+        <p>界面会列出将新增、更新、停用或删除的服务商和模型。发现服务商不对、模型数量异常或出现永久删除时，先不要确认。</p>
+      </li>
+      <li>
+        <h3>确认导入并检测模型</h3>
+        <p>确认内容正确后导入，再点击“检测全部模型”。只有名称后出现对号的模型才表示当前电脑能够正常通信。</p>
+      </li>
+    </ol>
+
+    <div class="tip">
+      JSON 分为两类：新电脑一般使用“完整配置”；日常新增、改名、升级或下架模型使用“维护配置”。普通用户不需要手写 JSON，把最新的模型 ID、显示名称、API 地址和 Key 提供给管理员或 AI 生成即可。
+    </div>
+
+    <h2>四、通过 JSON 清理过期模型</h2>
+    <p>清理前先确认过期的是“整个服务商”还是“服务商中的一个模型”。优先停用旧模型；只有明确不再需要时才永久删除。</p>
+
+    <h3>情况 A：移除整个 local-deepseek 服务商</h3>
+    <p>项目已经准备好 <span class="path">docs/移除-local-deepseek.json</span>。在“模型”菜单选择该文件，预览中应显示“永久删除服务商 Vis-DeepSeek”，确认无误后再导入。</p>
+    <pre>{
+  "schemaVersion": 3,
+  "operations": [
+    {
+      "op": "removeProvider",
+      "providerId": "local-deepseek"
+    }
+  ]
+}</pre>
+    <div class="warning">
+      <strong>如果 local-deepseek 正在使用：</strong>系统会拒绝删除。先在“模型”菜单切换到其他服务商，再重新导入清理 JSON。删除后仍需执行“检测全部模型”。
+    </div>
+
+    <h3>情况 B：停用一个服务商中的旧模型</h3>
+    <p>保留模型配置但不再让软件选择它，使用 <code>disableModel</code>。<code>modelKey</code> 必须使用原配置中的稳定 key，不能凭显示名称猜测。</p>
+    <pre>{
+  "schemaVersion": 3,
+  "operations": [
+    {
+      "op": "disableModel",
+      "providerId": "local-qwen",
+      "modelKey": "company-qwen-old"
+    }
+  ]
+}</pre>
+    <p>如果一个服务商只有这一个模型，不能单独停用，否则该服务商将没有可用模型。此时应新增替代模型，或者像情况 A 一样移除整个过期服务商。</p>
+
+    <h3>情况 C：按公司最新模型清单自动整理</h3>
+    <p>当管理员提供该服务商当前全部在售模型时，使用 <code>syncModels</code>。清单中的模型会新增或更新，没有出现在清单中的旧模型会自动停用，不会永久删除。</p>
+    <pre>{
+  "schemaVersion": 3,
+  "operations": [
+    {
+      "op": "syncModels",
+      "providerId": "local-qwen",
+      "models": [
+        {
+          "key": "company-qwen-primary",
+          "id": "公司当前 API 模型 ID",
+          "name": "公司 Qwen",
+          "presets": ["flash"],
+          "maxContextLength": 262144,
+          "requestDefaults": {
+            "temperature": 0.6,
+            "max_tokens": 4096
+          }
+        }
+      ]
+    }
+  ]
+}</pre>
+    <div class="tip">
+      不建议小白手动修改这些示例。把服务商 ID、旧模型 key、最新模型 ID、名称、上下文长度和公司要求的参数交给管理员或 AI，让其生成维护 JSON，然后只负责“选择文件 → 核对预览 → 确认导入 → 检测全部模型”。
+    </div>
+
+    <h2>五、如何判断操作是否成功</h2>
+    <table>
+      <thead>
+        <tr><th>界面状态</th><th>含义</th><th>下一步</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="ok">API 检测通过</td><td>新 Key、地址和至少一个模型可以通信。</td><td>点击“保存凭据”。</td></tr>
+        <tr><td class="bad">API 检测失败</td><td>新配置未通过，旧配置没有被覆盖。</td><td>检查服务商、Key、地址和网络后重新检测。</td></tr>
+        <tr><td>保存按钮不可用</td><td>尚未检测，或检测后又修改了配置。</td><td>重新点击“检测 API”。</td></tr>
+        <tr><td class="ok">模型名称后有对号</td><td>该模型在最近一次完整检测中通信成功。</td><td>可以开始对话。</td></tr>
+        <tr><td>模型名称后没有标识</td><td>该模型尚未检测或配置变化后需要重测。</td><td>点击“检测全部模型”。</td></tr>
+      </tbody>
+    </table>
+
+    <h2>六、常见问题</h2>
+    <table>
+      <thead>
+        <tr><th>问题</th><th>处理方法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>检测超过 10 秒或提示超时</td><td>确认已连接公司网络或 VPN，Base URL 可访问，然后重试。不要反复点击保存。</td></tr>
+        <tr><td>提示 Key 格式不正确</td><td>重新复制完整 Key，不要带空格、换行或引号。</td></tr>
+        <tr><td>检测通过但保存失败</td><td>检测结果可能已过期，或检测后字段发生变化。重新检测一次再立即保存。</td></tr>
+        <tr><td>保存后原来的对号消失</td><td>这是正常现象。凭据变化后旧检测结果不再可信，需要“检测全部模型”。</td></tr>
+        <tr><td>不知道应该选择哪个服务商</td><td>根据公司通知中的服务商名称确认；不确定时不要尝试覆盖多个服务商。</td></tr>
+        <tr><td>公司模型已经下架</td><td>让管理员或 AI 生成维护 JSON，将旧模型停用；不要通过修改 API Key 来处理模型下架。</td></tr>
+      </tbody>
+    </table>
+
+    <h2>七、操作前最后检查</h2>
+    <ul class="checklist">
+      <li>我选择的是公司要求更新的服务商。</li>
+      <li>API Key 没有多余空格、换行或引号。</li>
+      <li>Base URL 包含完整的 <code>http://</code> 或 <code>https://</code>。</li>
+      <li>我先完成了“检测 API”，再点击“保存凭据”。</li>
+      <li>保存后又执行了“检测全部模型”。</li>
+    </ul>
+
+    <footer>
+      Visionox-Whale 用户操作文档。通常不需要重新安装或重启程序；设置保存后会自动更新模型服务连接。
+    </footer>
+  </main>
+</body>
+</html>

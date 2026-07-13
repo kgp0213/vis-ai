@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 3,
+  "operations": [
+    {
+      "op": "removeProvider",
+      "providerId": "local-deepseek"
+    }
+  ]
+}

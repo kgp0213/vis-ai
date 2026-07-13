@@ -33,7 +33,7 @@ export function getProviderCapabilities(provider) {
   const allPresets = new Set();
   const allEfforts = new Set();
   const modelIds = [];
-  for (const m of provider?.models ?? []) {
+  for (const m of provider?.models?.filter((model) => model.disabled !== true) ?? []) {
     for (const p of m.presets ?? []) allPresets.add(p);
     for (const e of m.efforts ?? []) allEfforts.add(e);
     modelIds.push(m.id);
@@ -66,8 +66,9 @@ export function resolveEffortForProvider(effort, provider) {
  * @returns {string} model id, falling back to first model or DEFAULT_MODEL
  */
 export function resolveModelForProvider(preset, provider) {
-  const model = provider?.models?.find((m) => m.presets?.includes(preset));
-  return model?.id ?? provider?.models?.[0]?.id ?? DEFAULT_MODEL;
+  const models = provider?.models?.filter((model) => model.disabled !== true) ?? [];
+  const model = models.find((m) => m.presets?.includes(preset));
+  return model?.id ?? models[0]?.id ?? DEFAULT_MODEL;
 }
 
 /**
@@ -86,13 +87,15 @@ export function effectiveModelConfig(source) {
   if (provider) {
     const resolvedPreset = resolvePresetForProvider(preset, provider);
     const model = resolveModelForProvider(resolvedPreset, provider);
+    const escalationModel = provider.escalationModel ?? PRESET_MODELS.pro;
+    const canEscalate = provider.models?.some((item) => item.disabled !== true && item.id === escalationModel) === true;
     return {
       rawPreset,
       preset: resolvedPreset,
       configuredModel: model,
       model,
       locked: true,
-      autoEscalate: provider.autoEscalate === true && resolvedPreset === "auto",
+      autoEscalate: provider.autoEscalate === true && resolvedPreset === "auto" && canEscalate,
     };
   }
 
@@ -116,13 +119,14 @@ export function effectiveModelConfig(source) {
  * @returns {string|undefined} model id
  */
 export function pickSummaryModel(models) {
-  if (!models || models.length === 0) return undefined;
-  const flash = models.find((m) => /flash|lite|mini/i.test(m.id));
+  const enabledModels = models?.filter((model) => model.disabled !== true) ?? [];
+  if (enabledModels.length === 0) return undefined;
+  const flash = enabledModels.find((m) => /flash|lite|mini/i.test(m.id));
   if (flash) return flash.id;
-  const smallest = models
+  const smallest = enabledModels
     .slice()
     .sort((a, b) => (a.maxContextLength ?? Infinity) - (b.maxContextLength ?? Infinity))[0];
-  return smallest?.id ?? models[0]?.id;
+  return smallest?.id ?? enabledModels[0]?.id;
 }
 
 /**

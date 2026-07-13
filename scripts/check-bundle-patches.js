@@ -17,6 +17,10 @@ const root = join(__dirname, "..");
 
 const required = [
   {
+    file: "src-tauri/resources/server/lib/provider-configuration.mjs",
+    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProvider", "confirmDestructive", "validateRequestDefaults"],
+  },
+  {
     file: "scripts/prepare-runtime-package.js",
     markers: [
       "function pruneRuntimeFiles(path)",
@@ -85,6 +89,8 @@ const required = [
       "acceptedPromptRequest",
       "pendingModelSwitch",
       "requestModelSwitch",
+      "createConfiguredModelClient",
+      "resolveProviderModelRequest",
       "rebuildProviderContextCaps",
       "contextCapacitySource",
       "beginActiveOperation",
@@ -261,7 +267,7 @@ const required = [
       "saveSkillCredential(name, fields.apiKey, options)",
       "requestId: typeof requestId",
       "modelSwitch",
-      "must declare a positive integer maxContextLength",
+      "credentialVerificationTokens",
       "function handleBackgroundJobs",
       "readTranscriptPage",
       "writeTranscriptMarkdown",
@@ -293,6 +299,10 @@ const required = [
       "ctx.enableBootstrapSkill?.(name)",
       "ctx.getSlashCommands",
       "__VISIONOX_BUILD_STAMP__",
+      "resolveProviderModelRequest",
+      "validateRequestDefaults",
+      'previewProviderImport',
+      'credentials" && rest[1] === "test"',
     ],
   },
   {
@@ -363,8 +373,15 @@ const required = [
       "workspaceScopeCurrent",
       "rebindWorkspace",
       "buildDate2 && !buildDate2.startsWith",
+      "JSON \\u56FA\\u5B9A\\u53C2\\u6570",
+      "requestPolicy === \"json\"",
       "user data issues need attention",
     ],
+    forbidden: ['<span class="v">Ver${version2}</span>'],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2KDUS647.js",
+    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
