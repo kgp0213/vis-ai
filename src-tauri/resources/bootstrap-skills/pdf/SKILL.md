@@ -23,7 +23,6 @@ Windows PowerShell:
 ```powershell
 $env:PDF_SKILL_DIR = '<path from the run_skill result header>'
 python "$env:PDF_SKILL_DIR\scripts\pdf.py" env.check
-python "$env:PDF_SKILL_DIR\scripts\pdf.py" env.fix
 ```
 
 macOS/Linux:
@@ -32,11 +31,29 @@ macOS/Linux:
 export PDF_SKILL_DIR='<path from the run_skill result header>'
 bash "$PDF_SKILL_DIR/scripts/setup.sh"             # Interactive environment check + install
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" env.check  # Detailed dependency status (JSON: add -j)
-python3 "$PDF_SKILL_DIR/scripts/pdf.py" env.fix     # Auto-install missing Python packages
 ```
 
 Do not run `setup.sh` directly on Windows. Use the Python commands above so the
 same deployed scripts work without requiring Bash.
+
+Never install dependencies automatically. `env.fix --allow-install` is an explicit
+maintenance command and may be used only after the user approves package installation.
+
+## Existing Local PDFs
+
+For reading, extracting, or summarizing an existing local PDF:
+
+1. Call `prepare_local_document` with the user's original path or wording.
+2. Call `extract_pdf_text` with the returned `documentRef`. This bundled PDF.js tool is
+   the primary reader and does not require Python.
+3. If the result reports `likelyScanned`, explain that OCR is required. Do not repeatedly
+   try text parsers against an image-only PDF.
+4. Use `pdf.py extract.text --method auto` only when `extract_pdf_text` is unavailable.
+   Its local fallback order is pdfplumber, pypdfium2, then pypdf; it never installs them.
+
+Do not use OfficeCLI for PDF files. OfficeCLI is reserved for Word, Excel, and PowerPoint.
+Keep using the same `documentRef` when changing tools so the host can restore a missing
+readable copy from the original protected file.
 
 ## Triage
 
@@ -589,7 +606,7 @@ All file paths must be reported to the user. **Never deliver only the PDF withou
 ```bash
 # Environment
 env.check                    # Check deps
-env.fix                      # Auto-install missing
+env.fix --allow-install      # Explicitly approved optional dependency maintenance
 
 # Quality
 code.sanitize <script>       # Sanitize forbidden Unicode
@@ -605,7 +622,7 @@ convert.latex <tex>           # LaTeX → PDF (Tectonic). Bundled binary is macO
 convert.office <file>         # Office → PDF (LibreOffice)
 
 # Processing
-extract.text <pdf>            # Extract text
+extract.text <pdf> [--method auto|pdfplumber|pdfium|pypdf]  # Local fallback text extraction
 extract.table <pdf>           # Extract tables
 extract.image <pdf>           # Extract images
 pages.merge a.pdf b.pdf -o out.pdf

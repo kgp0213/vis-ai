@@ -19953,6 +19953,15 @@ var en = {
     name: "Name",
     prompt: "Prompt",
     promptPlaceholder: "What should Visionox-Whale do when this task runs?",
+    executionSource: "Execution source",
+    executionPrompt: "Free prompt",
+    executionSkill: "Skill template",
+    skillTemplate: "Skill template",
+    skillTemplateUnavailable: "No compatible scheduled Skill templates are installed.",
+    skillReadOnlyHint: "This template is read-only, global, and follows the latest compatible Skill version. Login is required when it runs.",
+    skillAddendum: "Additional requirements",
+    skillAddendumPlaceholder: "Optional: focus, exclusions, output format...",
+    skillWaitingAuth: "Waiting for login",
     type: "Schedule",
     interval: "Interval",
     customInterval: "Custom interval",
@@ -19981,6 +19990,7 @@ var en = {
     saved: "task saved",
     deleted: "task deleted",
     runAccepted: "task started",
+    runQueued: "task added to the waiting queue",
     runCompleted: "task completed",
     runCancelled: "task cancelled",
     runFailed: "task failed",
@@ -19989,7 +19999,7 @@ var en = {
     runPending: "task is waiting for confirmation",
     selectHint: "Select a task to edit it, or create a new one.",
     minInterval: "Interval must be 1 minute to 30 days.",
-    busyHint: "The app must stay open for scheduled runs. If chat is busy, the task waits and retries automatically.",
+    busyHint: "The app must stay open for scheduled runs. Busy tasks wait in trigger order and start automatically when the previous work finishes.",
     workspace: "Workspace",
     currentWorkspace: "current",
     workspaceMismatch: "workspace changed",
@@ -20963,6 +20973,15 @@ var zhCN = {
     name: "\u540D\u79F0",
     prompt: "\u63D0\u793A\u8BCD",
     promptPlaceholder: "\u4EFB\u52A1\u89E6\u53D1\u65F6\uFF0C\u5E0C\u671B Visionox-Whale \u505A\u4EC0\u4E48\uFF1F",
+    executionSource: "\u6267\u884C\u65B9\u5F0F",
+    executionPrompt: "\u81EA\u7531\u63D0\u793A\u8BCD",
+    executionSkill: "Skill \u6A21\u677F",
+    skillTemplate: "Skill \u6A21\u677F",
+    skillTemplateUnavailable: "\u6CA1\u6709\u53EF\u7528\u7684\u517C\u5BB9 Skill \u5B9A\u65F6\u6A21\u677F\u3002",
+    skillReadOnlyHint: "\u6B64\u6A21\u677F\u4E3A\u53EA\u8BFB\u3001\u5168\u5C40\u4EFB\u52A1\uFF0C\u6BCF\u6B21\u6267\u884C\u90FD\u4F7F\u7528\u5F53\u524D\u517C\u5BB9 Skill \u7684\u6700\u65B0\u6D41\u7A0B\uFF1B\u8FD0\u884C\u65F6\u9700\u8981\u5DF2\u767B\u5F55\u3002",
+    skillAddendum: "\u8865\u5145\u8981\u6C42",
+    skillAddendumPlaceholder: "\u53EF\u9009\uFF1A\u5173\u6CE8\u91CD\u70B9\u3001\u6392\u9664\u9879\u3001\u8F93\u51FA\u683C\u5F0F\u2026\u2026",
+    skillWaitingAuth: "\u7B49\u5F85\u767B\u5F55",
     type: "\u65F6\u95F4\u89C4\u5219",
     interval: "\u95F4\u9694",
     customInterval: "\u81EA\u5B9A\u4E49\u65F6\u95F4\u6BB5",
@@ -20991,6 +21010,7 @@ var zhCN = {
     saved: "\u4EFB\u52A1\u5DF2\u4FDD\u5B58",
     deleted: "\u4EFB\u52A1\u5DF2\u5220\u9664",
     runAccepted: "\u4EFB\u52A1\u5DF2\u5F00\u59CB\u8FD0\u884C",
+    runQueued: "\u4EFB\u52A1\u5DF2\u52A0\u5165\u7B49\u5F85\u961F\u5217",
     runCompleted: "\u4EFB\u52A1\u5DF2\u5B8C\u6210",
     runCancelled: "\u4EFB\u52A1\u5DF2\u53D6\u6D88",
     runFailed: "\u4EFB\u52A1\u8FD0\u884C\u5931\u8D25",
@@ -20999,7 +21019,7 @@ var zhCN = {
     runPending: "\u4EFB\u52A1\u6B63\u5728\u7B49\u5F85\u786E\u8BA4",
     selectHint: "\u9009\u62E9\u4E00\u4E2A\u4EFB\u52A1\u8FDB\u884C\u7F16\u8F91\uFF0C\u6216\u65B0\u5EFA\u4EFB\u52A1\u3002",
     minInterval: "\u95F4\u9694\u5FC5\u987B\u5728 1 \u5206\u949F\u5230 30 \u5929\u4E4B\u95F4\u3002",
-    busyHint: "\u5B9A\u65F6\u4EFB\u52A1\u9700\u8981\u4FDD\u6301\u8F6F\u4EF6\u8FD0\u884C\uFF1B\u5982\u679C\u5BF9\u8BDD\u6B63\u5FD9\uFF0C\u4EFB\u52A1\u4F1A\u7B49\u5F85\u5E76\u81EA\u52A8\u91CD\u8BD5\u3002",
+    busyHint: "\u5B9A\u65F6\u4EFB\u52A1\u9700\u8981\u4FDD\u6301\u8F6F\u4EF6\u8FD0\u884C\uFF1B\u5FD9\u788C\u65F6\u4F1A\u6309\u89E6\u53D1\u987A\u5E8F\u6392\u961F\uFF0C\u524D\u4E00\u9879\u5B8C\u6210\u540E\u81EA\u52A8\u5F00\u59CB\u3002",
     workspace: "\u5DE5\u4F5C\u533A",
     currentWorkspace: "\u5F53\u524D",
     workspaceMismatch: "\u5DE5\u4F5C\u533A\u5DF2\u53D8\u66F4",
@@ -26750,11 +26770,9 @@ const [providerCaps, setProviderCaps] = d2(null);
     function shouldQueryClipboardPaths() {
       if (fileNames.length > 0) return true;
       if (imageFiles.length > 0) return false;
-      if (gotFullPaths && fullPaths.length > 0) return fullPaths.some(pathLikeClipboardText);
-      if (!plainText.trim()) return true;
-      var first = plainText.split(/\r?\n/).find(function(s) { return s.trim(); }) || "";
-      first = first.trim();
-      return pathLikeClipboardText(first);
+      if (gotFullPaths && fullPaths.length > 0) return false;
+      if (plainText.trim()) return false;
+      return true;
     }
     if (shouldPasteImagesAsAttachments()) {
       addPendingImages(imageFiles);
@@ -26782,9 +26800,17 @@ const [providerCaps, setProviderCaps] = d2(null);
           showClipboardNotice("无法读取剪贴板中的文件路径，请重新复制文件或文件夹。");
         }
       }
+      function tryServerClipboardPaths() {
+        var clipboardUrl = "/api/clipboard-files" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
+        fetch(clipboardUrl).then(function(r) { return r.json(); }).then(function(data) {
+          var paths = data.paths || [];
+          if (paths.length > 0) insertPaths(paths);
+          else fallbackPaste();
+        }).catch(fallbackPaste);
+      }
       function tryRustBridge() {
         if (!inIframe) {
-          fallbackPaste();
+          tryServerClipboardPaths();
           return;
         }
         try {
@@ -26797,7 +26823,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               if (e2.data.paths && e2.data.paths.length > 0) {
                 insertPaths(e2.data.paths.slice());
               } else {
-                fallbackPaste();
+                tryServerClipboardPaths();
               }
             }
           };
@@ -26806,24 +26832,14 @@ const [providerCaps, setProviderCaps] = d2(null);
           var timer = setTimeout(function() {
             if (!handled) {
               window.removeEventListener('message', listener);
-              fallbackPaste();
+              tryServerClipboardPaths();
             }
-          }, 2000);
+          }, 1000);
         } catch (_) {
-          fallbackPaste();
+          tryServerClipboardPaths();
         }
       }
-      var clipboardUrl = "/api/clipboard-files" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
-      fetch(clipboardUrl).then(function(r) { return r.json(); }).then(function(data) {
-        var paths = data.paths || [];
-        if (paths.length > 0) {
-          insertPaths(paths);
-        } else {
-          tryRustBridge();
-        }
-      }).catch(function() {
-        tryRustBridge();
-      });
+      tryRustBridge();
     } else if (gotFullPaths && fullPaths.length > 0) {
       insertAtCursor(fullPaths.map(normalizeClipboardPathText).join("\n"));
     } else {
@@ -29063,26 +29079,42 @@ function usePoll(path, intervalMs = 2e3, sseKind = null) {
   const [data, setData] = d2(null);
   const [error, setError] = d2(null);
   const [loading, setLoading] = d2(true);
+  const requestRevision = A2(0);
   const refresh = q2(async () => {
+    const revision = ++requestRevision.current;
     try {
       const next = await api(path);
-      setData(next);
-      setError(null);
+      if (revision === requestRevision.current) {
+        setData(next);
+        setError(null);
+      }
+      return next;
     } catch (err) {
-      setError(err);
+      if (revision === requestRevision.current) setError(err);
     } finally {
-      setLoading(false);
+      if (revision === requestRevision.current) setLoading(false);
     }
   }, [path]);
+  const replaceData = q2((next) => {
+    requestRevision.current += 1;
+    setData(next);
+    setError(null);
+    setLoading(false);
+    return next;
+  }, []);
   y2(() => {
     if (sseKind) {
       setLoading(false);
       const unsub = subscribeSse(sseKind, (ev) => {
         const { kind, ...rest } = ev;
+        requestRevision.current += 1;
         setData(rest);
         setError(null);
       });
-      return unsub;
+      return () => {
+        requestRevision.current += 1;
+        unsub();
+      };
     }
     let cancelled = false;
     let timer = null;
@@ -29095,10 +29127,11 @@ function usePoll(path, intervalMs = 2e3, sseKind = null) {
     tick();
     return () => {
       cancelled = true;
+      requestRevision.current += 1;
       if (timer) clearTimeout(timer);
     };
   }, [refresh, intervalMs, sseKind]);
-  return { data, error, loading, refresh };
+  return { data, error, loading, refresh, replaceData };
 }
 
 var __sseSource = null;
@@ -29921,6 +29954,13 @@ function emptyTaskDraft() {
     kind: "prompt",
     name: "",
     prompt: "",
+    executionSource: "prompt",
+    skillName: "",
+    skillAction: "",
+    skillPromptAddendum: "",
+    skillArchiveWorkspaceDir: "",
+    skillAutoArchive: false,
+    skillAutoIndex: false,
     sessionCleanupAction: "preview",
     sessionCleanupStrength: "standard",
     sessionCleanupSemanticMode: "uncertain",
@@ -29955,6 +29995,13 @@ function taskDraftFromSchedule(task) {
     kind: task.kind === "report" ? "report" : task.kind === "session_cleanup" ? "session_cleanup" : "prompt",
     name: task.name ?? "",
     prompt: task.prompt ?? "",
+    executionSource: task.skillName ? "skill" : "prompt",
+    skillName: task.skillName ?? "",
+    skillAction: task.skillAction ?? "",
+    skillPromptAddendum: task.skillPromptAddendum ?? "",
+    skillArchiveWorkspaceDir: task.skillArchiveWorkspaceDir ?? "",
+    skillAutoArchive: task.skillAutoArchive === true,
+    skillAutoIndex: task.skillAutoIndex === true,
     sessionCleanupAction: task.sessionCleanupAction === "delete" ? "delete" : "preview",
     sessionCleanupStrength: ["conservative", "standard", "aggressive"].includes(task.sessionCleanupStrength) ? task.sessionCleanupStrength : "standard",
     sessionCleanupSemanticMode: ["off", "uncertain", "deep"].includes(task.sessionCleanupSemanticMode) ? task.sessionCleanupSemanticMode : "uncertain",
@@ -30024,7 +30071,8 @@ function fmtScheduleCost(value) {
 }
 function fmtTaskKind(task) {
   if (task?.kind === "session_cleanup") return t4("tasks.kindSessionCleanup");
-  return task?.kind === "report" ? t4("tasks.kindReport") : t4("tasks.kindPrompt");
+  if (task?.kind === "report") return t4("tasks.kindReport");
+  return task?.skillName ? `${t4("tasks.executionSkill")} · ${task.skillName}` : t4("tasks.kindPrompt");
 }
 function fmtReportPeriod(period) {
   if (period === "daily") return t4("tasks.reportDaily");
@@ -30061,7 +30109,8 @@ function taskStatusPill(task) {
   if (task.lastStatus === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
   if (task.lastStatus === "accepted") return html4`<span class="pill ok">${t4("tasks.accepted")}</span>`;
   if (task.lastStatus === "skipped") return html4`<span class="pill warn">${t4("tasks.skipped")}</span>`;
-  if (task.lastStatus === "deferred") return html4`<span class="pill warn">${t4("tasks.deferred")}</span>`;
+  if (task.lastStatus === "deferred") return html4`<span class="pill warn">${t4("tasks.deferred")}${task.queued && task.queuePosition ? ` \u00B7 ${task.queuePosition}` : ""}</span>`;
+  if (task.lastStatus === "waiting_auth") return html4`<span class="pill warn">${t4("tasks.skillWaitingAuth")}</span>`;
   if (task.lastStatus === "pending_confirmation") return html4`<span class="pill warn">${t4("tasks.pendingConfirmation")}</span>`;
   if (task.lastStatus === "rejected") return html4`<span class="pill err">${t4("tasks.rejected")}</span>`;
   return html4`<span class="pill info">${t4("tasks.enabled")}</span>`;
@@ -30075,6 +30124,7 @@ function scheduleRunPill(status) {
   if (status === "accepted") return html4`<span class="pill ok">${t4("tasks.accepted")}</span>`;
   if (status === "skipped") return html4`<span class="pill warn">${t4("tasks.skipped")}</span>`;
   if (status === "deferred") return html4`<span class="pill warn">${t4("tasks.deferred")}</span>`;
+  if (status === "waiting_auth") return html4`<span class="pill warn">${t4("tasks.skillWaitingAuth")}</span>`;
   if (status === "pending_confirmation") return html4`<span class="pill warn">${t4("tasks.pendingConfirmation")}</span>`;
   if (status === "rejected") return html4`<span class="pill err">${t4("tasks.rejected")}</span>`;
   return html4`<span class="pill">${status || "\u2014"}</span>`;
@@ -30083,6 +30133,7 @@ function ScheduledTasksPanel() {
   useLang();
   const { data, error, loading, refresh } = usePoll("/schedules", 3e4);
   const { data: semanticConfig } = usePoll("/semantic/config", 3e4);
+  const { data: skillTemplateData } = usePoll("/schedules/templates", 6e4);
   const [selectedId, setSelectedId] = d2(null);
   const [draft, setDraft] = d2(() => emptyTaskDraft());
   const [busy, setBusy] = d2(false);
@@ -30097,6 +30148,10 @@ function ScheduledTasksPanel() {
     };
   }, [refresh]);
   const schedules = data?.schedules ?? [];
+  const skillTemplates = (skillTemplateData?.integrations ?? []).flatMap((integration) => integration.compatible
+    ? (integration.templates ?? []).map((template) => ({ ...template, skillName: integration.id, integrationName: integration.displayName, integrationVersion: integration.version }))
+    : []);
+  const selectedSkillTemplate = skillTemplates.find((template) => template.skillName === draft.skillName && template.id === draft.skillAction) ?? null;
   const pendingSchedules = schedules.filter((task) => task.lastStatus === "pending_confirmation");
   const selected = schedules.find((task) => task.id === selectedId) ?? null;
   const latestRun = selected?.history?.[0] ?? null;
@@ -30131,6 +30186,12 @@ function ScheduledTasksPanel() {
       kind: draft.kind,
       name: draft.name,
       prompt: draft.prompt,
+      skillName: draft.kind === "prompt" && draft.executionSource === "skill" ? draft.skillName : null,
+      skillAction: draft.kind === "prompt" && draft.executionSource === "skill" ? draft.skillAction : null,
+      skillPromptAddendum: draft.kind === "prompt" && draft.executionSource === "skill" ? draft.skillPromptAddendum : "",
+      skillArchiveWorkspaceDir: draft.kind === "prompt" && draft.executionSource === "skill" ? draft.skillArchiveWorkspaceDir : null,
+      skillAutoArchive: draft.kind === "prompt" && draft.executionSource === "skill" ? draft.skillAutoArchive : false,
+      skillAutoIndex: draft.kind === "prompt" && draft.executionSource === "skill" ? draft.skillAutoIndex : false,
       sessionCleanupAction: draft.sessionCleanupAction,
       sessionCleanupStrength: draft.sessionCleanupStrength,
       sessionCleanupSemanticMode: draft.sessionCleanupSemanticMode,
@@ -30192,8 +30253,13 @@ function ScheduledTasksPanel() {
     setNotice(null);
     try {
       const res = await api(`/schedules/${encodeURIComponent(task.id)}/run`, { method: "POST", body: {} });
-      setPendingRunNotice({ taskId: task.id, runId: res.runId || null });
-      setNotice(t4("tasks.runAccepted"));
+      if (res.queued) {
+        setPendingRunNotice(null);
+        setNotice(t4("tasks.runQueued"));
+      } else {
+        setPendingRunNotice({ taskId: task.id, runId: res.runId || null });
+        setNotice(t4("tasks.runAccepted"));
+      }
       await refresh();
     } catch (err) {
       setPendingRunNotice(null);
@@ -30236,6 +30302,32 @@ function ScheduledTasksPanel() {
       showToast(err.message || "文件操作失败", "error", 5e3);
     }
   }, []);
+  const pickSkillArchiveWorkspace = q2(async () => {
+    try {
+      const path = await pickWorkspaceDirectoryFromBridge();
+      if (path) setDraft((current) => ({ ...current, skillArchiveWorkspaceDir: path }));
+    } catch (err) {
+      showToast(err.message || "选择归档工作区失败", "error", 5e3);
+    }
+  }, []);
+  const archiveTaskResult = q2(async (task, run) => {
+    if (!task?.id || !run?.runId) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const result = await api(`/schedules/${encodeURIComponent(task.id)}/archive`, {
+        method: "POST",
+        body: { runId: run.runId, autoIndex: task.skillAutoIndex === true }
+      });
+      showToast(result.duplicate ? "该结果已经归档" : "已归档到知识库", "info", 4e3);
+      await refresh();
+    } catch (err) {
+      setNotice(err.message || "知识归档失败");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
   const deleteTask = q2(async (task) => {
     if (!confirm(t4("tasks.deleteConfirm"))) return;
     setBusy(true);
@@ -30259,7 +30351,9 @@ function ScheduledTasksPanel() {
   const validInterval = Number.isFinite(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 30 * 24 * 60;
   const validSchedule = draft.type === "daily" || draft.type === "weekly" ? /^([01]\d|2[0-3]):[0-5]\d$/.test(draft.timeOfDay) : validInterval;
   const validReport = draft.reportRangeMode === "custom" ? !!draft.reportStartDate && !!draft.reportEndDate && draft.reportEndDate >= draft.reportStartDate : true;
-  const canSave = validWindow && validSchedule && (draft.kind === "report" ? validReport : draft.kind === "session_cleanup" ? true : draft.prompt.trim().length > 0);
+  const validSkillAddendum = draft.executionSource !== "skill" || draft.skillAction !== "topic-investigation" || draft.skillPromptAddendum.trim().length > 0;
+  const validPromptTask = draft.executionSource === "skill" ? Boolean(selectedSkillTemplate) && validSkillAddendum : draft.prompt.trim().length > 0;
+  const canSave = validWindow && validSchedule && (draft.kind === "report" ? validReport : draft.kind === "session_cleanup" ? true : validPromptTask);
   const embeddingApiReady = semanticConfig?.provider === "openai-compat" && semanticConfig?.openaiCompat?.apiKeySet === true;
   const weekdayLabels = scheduleWeekdayLabels();
   return html4`
@@ -30362,8 +30456,10 @@ function ScheduledTasksPanel() {
                   <div style="display:flex;flex-direction:column;gap:6px;color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                       <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>预览报告</button>
+                      ${selected?.skillName ? html4`<button class="btn btn-sm" disabled=${busy || !selected.skillArchiveWorkspaceDir || latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate"} title=${selected.skillArchiveWorkspaceDir ? "通过质量审核后归档到固定工作区" : "请先在下方选择归档工作区并保存任务"} onClick=${() => archiveTaskResult(selected, latestRun)}>${latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate" ? "已归档" : "归档到知识库"}</button>` : null}
                     </div>
                     <div>${t4("tasks.reportStored")}</div>
+                    ${latestRun.knowledgeArchiveError ? html4`<div style="color:var(--c-warn)">知识归档：${latestRun.knowledgeArchiveError}</div>` : null}
                     ${latestRun.reportExportPath ? html4`
                       <div>${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportExportPath}</code></div>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -30394,7 +30490,14 @@ function ScheduledTasksPanel() {
             <span class="lbl">${t4("tasks.taskKind")}</span>
             <select class="input mono" value=${draft.kind} onChange=${(e3) => {
     const kind = e3.target.value;
-    setDraft({ ...draft, kind, runMode: kind === "prompt" ? draft.runMode : "auto" });
+    setDraft({
+      ...draft,
+      kind,
+      runMode: kind === "prompt" ? draft.runMode : "auto",
+      executionSource: kind === "prompt" ? draft.executionSource : "prompt",
+      skillName: kind === "prompt" ? draft.skillName : "",
+      skillAction: kind === "prompt" ? draft.skillAction : ""
+    });
   }}>
               <option value="prompt">${t4("tasks.kindPrompt")}</option>
               <option value="report">${t4("tasks.kindReport")}</option>
@@ -30491,30 +30594,91 @@ function ScheduledTasksPanel() {
             </div>
           ` : html4`
             <div class="form-row" style="align-items:flex-start">
-              <span class="lbl">${t4("tasks.prompt")}</span>
+              <span class="lbl">${t4("tasks.executionSource")}</span>
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-                <textarea class="input mono" rows="8" placeholder=${t4("tasks.promptPlaceholder")} value=${draft.prompt} onInput=${(e3) => setDraft({ ...draft, prompt: e3.target.value })}></textarea>
-                <span style="color:var(--fg-3);font-size:11px">${t4("tasks.templateVars")}</span>
-              </div>
-            </div>
-            <div class="form-row">
-              <span class="lbl">${t4("tasks.runMode")}</span>
-              <select class="input mono" value=${draft.runMode} onChange=${(e3) => setDraft({ ...draft, runMode: e3.target.value })}>
-                <option value="auto">${t4("tasks.runModeAuto")}</option>
-                <option value="readonly">${t4("tasks.runModeReadonly")}</option>
-                <option value="confirm">${t4("tasks.runModeConfirm")}</option>
-              </select>
-            </div>
-            <div class="form-row" style="align-items:flex-start">
-              <span class="lbl">${t4("tasks.workspaceScope")}</span>
-              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-                <select class="input mono" value=${draft.workspaceScope} onChange=${(e3) => setDraft({ ...draft, workspaceScope: e3.target.value, rebindWorkspace: false })}>
-                  <option value="bound">${t4("tasks.workspaceScopeBound")}</option>
-                  <option value="current">${t4("tasks.workspaceScopeCurrent")}</option>
+                <select class="input" value=${draft.executionSource} onChange=${(e3) => {
+    const executionSource = e3.target.value;
+    const first = skillTemplates[0] ?? null;
+    setDraft({
+      ...draft,
+      executionSource,
+      skillName: executionSource === "skill" ? draft.skillName || first?.skillName || "" : "",
+      skillAction: executionSource === "skill" ? draft.skillAction || first?.id || "" : "",
+      runMode: executionSource === "skill" ? "readonly" : draft.runMode
+    });
+  }}>
+                  <option value="prompt">${t4("tasks.executionPrompt")}</option>
+                  <option value="skill">${t4("tasks.executionSkill")}</option>
                 </select>
-                <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.workspaceScopeHint")}</span>
               </div>
             </div>
+            ${draft.executionSource === "skill" ? html4`
+              <div class="form-row" style="align-items:flex-start">
+                <span class="lbl">${t4("tasks.skillTemplate")}</span>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+                  ${skillTemplates.length > 0 ? html4`
+                    <select class="input" value=${draft.skillName && draft.skillAction ? `${draft.skillName}/${draft.skillAction}` : ""} onChange=${(e3) => {
+    const template = skillTemplates.find((item) => `${item.skillName}/${item.id}` === e3.target.value);
+    if (!template) return;
+    setDraft({ ...draft, skillName: template.skillName, skillAction: template.id, name: draft.name || template.title, runMode: "readonly" });
+  }}>
+                      ${skillTemplates.map((template) => html4`<option value=${`${template.skillName}/${template.id}`}>${template.integrationName} · ${template.title}</option>`)}
+                    </select>
+                    <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${selectedSkillTemplate?.description ?? ""}</span>
+                    <span style="color:var(--c-warn);font-size:11px;line-height:1.45">${t4("tasks.skillReadOnlyHint")}</span>
+                  ` : html4`<span style="color:var(--c-warn);font-size:12px">${t4("tasks.skillTemplateUnavailable")}</span>`}
+                </div>
+              </div>
+              <div class="form-row" style="align-items:flex-start">
+                <span class="lbl">${t4("tasks.skillAddendum")}</span>
+                <textarea class="input" maxlength="2000" rows="4" placeholder=${t4("tasks.skillAddendumPlaceholder")} value=${draft.skillPromptAddendum} onInput=${(e3) => setDraft({ ...draft, skillPromptAddendum: e3.target.value.slice(0, 2000) })}></textarea>
+              </div>
+              <div class="form-row" style="align-items:flex-start">
+                <span class="lbl">知识归档</span>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:7px">
+                  <div style="display:flex;gap:7px;align-items:center;min-width:0">
+                    <input class="input mono" style="flex:1;min-width:0" readonly value=${draft.skillArchiveWorkspaceDir} placeholder="未选择归档工作区" />
+                    <button class="btn" type="button" onClick=${pickSkillArchiveWorkspace}>选择</button>
+                    ${draft.skillArchiveWorkspaceDir ? html4`<button class="btn ghost" type="button" onClick=${() => setDraft({ ...draft, skillArchiveWorkspaceDir: "", skillAutoArchive: false, skillAutoIndex: false })}>清除</button>` : null}
+                  </div>
+                  <span style="color:var(--fg-3);font-size:11px;line-height:1.45">报告先保存在任务记录中；归档目标固定为此工作区，不随当前工作区切换。</span>
+                  <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
+                    <input type="checkbox" disabled=${!draft.skillArchiveWorkspaceDir} checked=${draft.skillAutoArchive} onChange=${(e3) => setDraft({ ...draft, skillAutoArchive: e3.target.checked })} />
+                    高质量结果自动归档
+                  </label>
+                  <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
+                    <input type="checkbox" disabled=${!draft.skillArchiveWorkspaceDir || !embeddingApiReady} checked=${draft.skillAutoIndex && embeddingApiReady} onChange=${(e3) => setDraft({ ...draft, skillAutoIndex: e3.target.checked })} />
+                    归档后自动更新本地索引${embeddingApiReady ? "" : " · 需先配置 embedding API"}
+                  </label>
+                </div>
+              </div>
+            ` : html4`
+              <div class="form-row" style="align-items:flex-start">
+                <span class="lbl">${t4("tasks.prompt")}</span>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+                  <textarea class="input mono" rows="8" placeholder=${t4("tasks.promptPlaceholder")} value=${draft.prompt} onInput=${(e3) => setDraft({ ...draft, prompt: e3.target.value })}></textarea>
+                  <span style="color:var(--fg-3);font-size:11px">${t4("tasks.templateVars")}</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <span class="lbl">${t4("tasks.runMode")}</span>
+                <select class="input mono" value=${draft.runMode} onChange=${(e3) => setDraft({ ...draft, runMode: e3.target.value })}>
+                  <option value="auto">${t4("tasks.runModeAuto")}</option>
+                  <option value="readonly">${t4("tasks.runModeReadonly")}</option>
+                  <option value="confirm">${t4("tasks.runModeConfirm")}</option>
+                </select>
+              </div>
+              <div class="form-row" style="align-items:flex-start">
+                <span class="lbl">${t4("tasks.workspaceScope")}</span>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+                  <select class="input mono" value=${draft.workspaceScope} onChange=${(e3) => setDraft({ ...draft, workspaceScope: e3.target.value, rebindWorkspace: false })}>
+                    <option value="bound">${t4("tasks.workspaceScopeBound")}</option>
+                    <option value="current">${t4("tasks.workspaceScopeCurrent")}</option>
+                  </select>
+                  <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.workspaceScopeHint")}</span>
+                </div>
+              </div>
+            `}
           `}
           <div class="form-row">
             <span class="lbl">${t4("tasks.type")}</span>
@@ -30563,7 +30727,7 @@ function ScheduledTasksPanel() {
               ` : null}
             </div>
           </div>
-          ${selected && draft.kind === "prompt" ? html4`
+          ${selected && draft.kind === "prompt" && draft.executionSource !== "skill" ? html4`
             <div class="form-row">
               <span class="lbl">${t4("tasks.workspace")}</span>
               <div style="min-width:0;display:flex;flex-direction:column;gap:4px">
@@ -35395,11 +35559,40 @@ function tabSections() {
     }
   ];
 }
+function formatVHomeCountdown(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds) || 0);
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+function vhomeLoginFailureMessage(login) {
+  if (login?.message) return login.message;
+  const messages = {
+    "dws-not-found": "未找到 V来家登录组件，请重新安装或修复 Visionox-Whale。",
+    "login-start-failed": "无法启动 V来家登录组件，请重启软件后再试。",
+    "login-network-failed": "无法连接 V来家授权服务，请检查网络、代理或防火墙后重试。",
+    "login-tls-failed": "V来家授权服务的安全连接失败，请检查系统时间、证书或网络代理。",
+    "login-permission-denied": "V来家授权服务拒绝了当前请求，请确认账号权限或联系管理员。",
+    "login-command-unsupported": "当前 DWS 登录命令不受支持，请更新或重新安装 Visionox-Whale。",
+    "login-timeout": "登录等待已超时，请确认网络正常后重新获取授权链接。",
+    "login-link-unavailable": "DWS 已启动，但没有返回授权链接。请检查网络或代理后重试。",
+    "authentication-required": "尚未检测到授权完成，请确认浏览器中的授权已成功后重试。",
+    "identity-unavailable": "授权可能已完成，但暂时无法获取当前用户信息，请稍后刷新。",
+    "communication-failed": "授权进程已结束，但无法确认 V来家连接状态，请检查网络后重试。"
+  };
+  return messages[login?.reason] ?? "V来家登录未完成，请根据诊断信息重试。";
+}
 function App() {
   useLang();
   y2(() => {
     initLangFromServer();
   }, []);
+  const { data: vhomeStatus, refresh: refreshVHome, replaceData: replaceVHomeStatus } = usePoll("/vhome/status", 3e5);
+  const [vhomeMenuOpen, setVhomeMenuOpen] = d2(false);
+  const [vhomeBusy, setVhomeBusy] = d2(false);
+  const [vhomeError, setVhomeError] = d2(null);
+  const [vhomeOpenFallback, setVhomeOpenFallback] = d2(false);
+  const [vhomeCopyStatus, setVhomeCopyStatus] = d2(null);
+  const [vhomeRemainingSeconds, setVhomeRemainingSeconds] = d2(null);
   const [activeId, setActiveId] = d2(() => {
     try {
       return localStorage.getItem("rx.activeTab") ?? "chat";
@@ -35468,6 +35661,145 @@ function App() {
   }, []);
   const ALL_TABS = TAB_SECTIONS.flatMap((s3) => s3.tabs);
   const active = ALL_TABS.find((t5) => t5.id === activeId) ?? ALL_TABS[0];
+  const vhomeConnected = vhomeStatus?.connected === true && Boolean(vhomeStatus.userName);
+  const vhomeLoginState = vhomeStatus?.login?.state ?? "idle";
+  const vhomeLoginActive = ["starting", "awaiting-user", "completing"].includes(vhomeLoginState);
+  const vhomeLoginUrl = vhomeStatus?.login?.loginUrl ?? null;
+  const vhomeLoginFailure = vhomeLoginState === "failed" ? vhomeLoginFailureMessage(vhomeStatus?.login) : null;
+  const vhomeLoginDetail = vhomeLoginState === "failed" ? vhomeStatus?.login?.detail ?? null : null;
+  const vhomeAuthorizationReady = Boolean(vhomeLoginUrl || vhomeStatus?.login?.userCode);
+  const vhomeLoginPreparing = vhomeLoginState === "starting" && !vhomeAuthorizationReady;
+  const sidebarIdentity = vhomeConnected ? vhomeStatus.userName : "127.0.0.1";
+  const sidebarIdentityTitle = vhomeConnected ? `${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}` : "127.0.0.1 · 本地服务";
+  const vhomeControlText = vhomeConnected ? "V来家已连接" : vhomeLoginPreparing ? "正在获取授权链接" : vhomeLoginActive ? "等待 V来家授权" : "登录 V来家";
+  const vhomeLoginExpiresAt = vhomeStatus?.login?.expiresAt ?? null;
+  const vhomeLoginExpired = vhomeRemainingSeconds === 0;
+  y2(() => {
+    if (!vhomeLoginExpiresAt) {
+      setVhomeRemainingSeconds(null);
+      return;
+    }
+    const update = () => setVhomeRemainingSeconds(Math.max(0, Math.ceil((Date.parse(vhomeLoginExpiresAt) - Date.now()) / 1e3)));
+    update();
+    const timer = setInterval(update, 1e3);
+    return () => clearInterval(timer);
+  }, [vhomeLoginExpiresAt]);
+  const finishVHomeLogin = q2((nextStatus) => {
+    const nextLoginState = nextStatus?.login?.state ?? "idle";
+    if (nextStatus?.connected === true || nextStatus?.connected === false && nextLoginState === "idle") {
+      setVhomeMenuOpen(false);
+    }
+  }, []);
+  y2(() => {
+    finishVHomeLogin(vhomeStatus);
+  }, [vhomeStatus, finishVHomeLogin]);
+  y2(() => {
+    if (!vhomeLoginActive) return;
+    const timer = setInterval(() => {
+      void refreshVHome().then(finishVHomeLogin);
+    }, 1e3);
+    return () => clearInterval(timer);
+  }, [vhomeLoginActive, refreshVHome, finishVHomeLogin]);
+  const startVHomeLogin = q2(async () => {
+    setVhomeBusy(true);
+    setVhomeError(null);
+    setVhomeOpenFallback(false);
+    setVhomeCopyStatus(null);
+    setVhomeMenuOpen(true);
+    try {
+      const nextStatus = await api("/vhome/login", { method: "POST", body: {} });
+      replaceVHomeStatus(nextStatus);
+      setVhomeMenuOpen(true);
+      finishVHomeLogin(nextStatus);
+    } catch (error) {
+      setVhomeError(error.message || "登录启动失败");
+    } finally {
+      setVhomeBusy(false);
+    }
+  }, [replaceVHomeStatus, finishVHomeLogin]);
+  const restartVHomeLogin = q2(async () => {
+    setVhomeBusy(true);
+    setVhomeError(null);
+    setVhomeOpenFallback(false);
+    setVhomeCopyStatus(null);
+    try {
+      await api("/vhome/login", { method: "DELETE", body: {} });
+      const nextStatus = await api("/vhome/login", { method: "POST", body: {} });
+      replaceVHomeStatus(nextStatus);
+      setVhomeMenuOpen(true);
+    } catch (error) {
+      setVhomeError(error.message || "重新生成授权链接失败");
+    } finally {
+      setVhomeBusy(false);
+    }
+  }, [replaceVHomeStatus]);
+  const cancelVHomeLogin = q2(async () => {
+    setVhomeBusy(true);
+    setVhomeError(null);
+    try {
+      const nextStatus = await api("/vhome/login", { method: "DELETE", body: {} });
+      replaceVHomeStatus(nextStatus);
+      setVhomeMenuOpen(false);
+    } catch (error) {
+      setVhomeError(error.message || "取消登录失败");
+    } finally {
+      setVhomeBusy(false);
+    }
+  }, [replaceVHomeStatus]);
+  const logoutVHome = q2(async () => {
+    if (!window.confirm("确认退出当前 V来家组织？退出后不会影响 AI、文件、索引和其他本地功能。")) return;
+    setVhomeBusy(true);
+    setVhomeError(null);
+    try {
+      const nextStatus = await api("/vhome/logout", { method: "POST", body: {} });
+      replaceVHomeStatus(nextStatus);
+      setVhomeMenuOpen(false);
+    } catch (error) {
+      await refreshVHome();
+      setVhomeError(error.message || "退出登录失败");
+    } finally {
+      setVhomeBusy(false);
+    }
+  }, [refreshVHome, replaceVHomeStatus]);
+  const refreshVHomeNow = q2(async () => {
+    setVhomeBusy(true);
+    setVhomeError(null);
+    try {
+      const nextStatus = await api("/vhome/refresh", { method: "POST", body: {} });
+      finishVHomeLogin(replaceVHomeStatus(nextStatus));
+    } catch (error) {
+      setVhomeError(error.message || "刷新状态失败");
+    } finally {
+      setVhomeBusy(false);
+    }
+  }, [replaceVHomeStatus, finishVHomeLogin]);
+  const openVHomeAuthorization = q2(async (browser = "default") => {
+    if (!vhomeLoginUrl) return;
+    setVhomeError(null);
+    try {
+      await api("/open-url", { method: "POST", body: { url: vhomeLoginUrl, browser } });
+    } catch (error) {
+      setVhomeError(browser === "edge" ? "无法使用 Microsoft Edge 打开，请复制授权链接。" : "默认浏览器未能打开，请复制授权链接或尝试 Microsoft Edge。");
+    } finally {
+      if (browser === "default") setVhomeOpenFallback(true);
+    }
+  }, [vhomeLoginUrl]);
+  const copyVHomeValue = q2(async (value, label) => {
+    try {
+      await writeClipboardText(value);
+      setVhomeCopyStatus(`${label}已复制`);
+      setTimeout(() => setVhomeCopyStatus(null), 2e3);
+    } catch (error) {
+      setVhomeError(error.message || `${label}复制失败`);
+    }
+  }, []);
+  const toggleVHomeControl = q2(() => {
+    if (!vhomeConnected && !vhomeLoginActive) {
+      void startVHomeLogin();
+      return;
+    }
+    setVhomeMenuOpen((open) => !open);
+  }, [vhomeConnected, vhomeLoginActive, startVHomeLogin]);
   y2(() => {
     if (active.id !== activeId) setActiveId(active.id);
   }, [active.id, activeId]);
@@ -35538,8 +35870,55 @@ function App() {
             <option value="deep-charcoal">\u6DF1\u70AD\u7070</option>
           </select>
         </div>
+        <div class="vhome-control">
+          <button type="button"
+            class=${`vhome-control-button ${vhomeConnected ? "connected" : vhomeLoginActive ? "authorizing" : ""}`}
+            title=${vhomeConnected ? `${vhomeControlText} · ${vhomeStatus.corpName ?? ""}` : vhomeControlText}
+            disabled=${vhomeBusy}
+            onClick=${toggleVHomeControl}
+          >
+            <span class="vhome-status-dot"></span>
+            <span class="vhome-control-label">${vhomeControlText}</span>
+          </button>
+          ${vhomeMenuOpen ? html7`
+            <div class="vhome-popover" role="dialog" aria-label="V来家连接">
+              <div class="vhome-popover-title">${vhomeConnected ? "V来家已连接" : "登录 V来家"}</div>
+              ${vhomeConnected ? html7`
+                <div class="vhome-popover-meta">${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}</div>
+                <div class="vhome-popover-actions">
+                  <button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>刷新状态</button>
+                  <button type="button" class="danger" disabled=${vhomeBusy} onClick=${logoutVHome}>退出当前组织</button>
+                </div>
+              ` : html7`
+                <div class="vhome-popover-meta">${vhomeLoginPreparing ? "正在获取授权链接，请稍候。此时可以继续使用 AI 和其他本地功能。" : vhomeLoginState === "completing" ? "正在确认授权结果，请稍候。" : vhomeLoginActive ? "授权等待期间可以继续使用 AI 和其他本地功能。" : vhomeLoginFailure ?? "使用浏览器和 V来家完成一次授权。"}</div>
+                ${vhomeStatus?.login?.userCode ? html7`
+                  <div class="vhome-code-row"><span>授权码</span><code>${vhomeStatus.login.userCode}</code><button type="button" onClick=${() => copyVHomeValue(vhomeStatus.login.userCode, "授权码")}>复制</button></div>
+                ` : null}
+                ${vhomeLoginUrl ? html7`
+                  <div class="vhome-login-link" title=${vhomeLoginUrl}>
+                    <span>login.dingtalk.com</span>
+                    <button type="button" onClick=${() => copyVHomeValue(vhomeLoginUrl, "授权链接")}>复制链接</button>
+                  </div>
+                  <div class=${`vhome-popover-meta ${vhomeLoginExpired ? "vhome-popover-error" : ""}`}>
+                    ${vhomeLoginExpired ? "授权链接已过期，请重新生成。" : vhomeRemainingSeconds === null ? "浏览器未打开？复制链接到任意可用浏览器。" : `剩余 ${formatVHomeCountdown(vhomeRemainingSeconds)} · 浏览器未打开可复制链接。`}
+                  </div>
+                ` : null}
+                ${vhomeCopyStatus ? html7`<div class="vhome-copy-status" role="status">${vhomeCopyStatus}</div>` : null}
+                ${vhomeLoginDetail ? html7`<div class="vhome-popover-error" role="alert">DWS 诊断：${vhomeLoginDetail}</div>` : null}
+                <div class="vhome-popover-actions">
+                  ${vhomeLoginUrl && !vhomeLoginExpired ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("default")}>打开浏览器</button>` : null}
+                  ${vhomeLoginUrl && vhomeOpenFallback && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("edge")}>使用 Edge 打开</button>` : null}
+                  ${vhomeAuthorizationReady && vhomeLoginActive && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>我已完成授权</button>` : null}
+                  ${vhomeLoginExpired || vhomeLoginState === "failed" ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${restartVHomeLogin}>重新生成链接</button>` : null}
+                  ${vhomeLoginActive ? html7`<button type="button" disabled=${vhomeBusy} onClick=${cancelVHomeLogin}>取消</button>` : vhomeLoginState === "failed" ? null : html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${startVHomeLogin}>${vhomeBusy ? "正在启动..." : "重新登录"}</button>`}
+                </div>
+              `}
+              ${vhomeError ? html7`<div class="vhome-popover-error">${vhomeError}</div>` : null}
+            </div>
+          ` : null}
+        </div>
         <div class="side-foot">
-          <span class="label">127.0.0.1</span>
+          <span class="label" title=${sidebarIdentityTitle}>${sidebarIdentity}</span>
           <button type="button"
             class="toggle"
             title=${sidebarCollapsed ? "\u5C55\u5F00\u5BFC\u822A\u680F" : "\u6536\u8D77\u5BFC\u822A\u680F"}
@@ -35578,4 +35957,7 @@ function App() {
   `;
 }
 R(html7`<${App} />`, document.getElementById("root"));
+if (window.parent && window.parent !== window) {
+  setTimeout(() => window.parent.postMessage({ type: "vis_dashboard_ready" }, "*"), 0);
+}
 //# sourceMappingURL=app.js.map

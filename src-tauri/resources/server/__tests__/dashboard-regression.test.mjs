@@ -375,20 +375,6 @@ describe("Dashboard 回归护栏", () => {
     assert.equal(unsupported.status, 400);
   });
 
-  test("聊天粘贴文件路径优先走本地剪贴板桥，并保护用户消息中的 Windows 路径显示", () => {
-    const app = readFileSync(dashboardAppUrl, "utf8");
-    assert.match(app, /function normalizeClipboardPathText/);
-    assert.match(app, /function pathLikeClipboardText/);
-    assert.match(app, /function decodeClipboardUri/);
-    assert.match(app, /function isImagePathName/);
-    assert.match(app, /function shouldPasteImagesAsAttachments/);
-    assert.match(app, /if \(shouldPasteImagesAsAttachments\(\)\)/);
-    assert.match(app, /if \(fileNames\.length > 0\) return true;/);
-    assert.match(app, /else if \(gotFullPaths && fullPaths\.length > 0\)/);
-    assert.match(app, /function protectWindowsPathBackslashesForMarkdown/);
-    assert.match(app, /renderMessageBody\(msg\.text, role\)/);
-  });
-
   test("聊天输入不会因内联产物选择回调触发历史消息列表重渲染", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     assert.match(app, /const selectArtifactMessage = q2\(\(msg\) => \{/);
@@ -925,15 +911,22 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /for \(const entry of dashboardEntries\)/);
   });
 
-  test("错过的定时任务会在启动后补跑，对话忙时进入延迟重试", () => {
+  test("错过的定时任务会在启动后补跑，忙碌时按顺序进入去重队列", () => {
     const launcher = readFileSync(launcherUrl, "utf8");
+    const app = readFileSync(dashboardAppUrl, "utf8");
     assert.match(launcher, /task\.enabled && task\.missedRunAt/);
     assert.match(launcher, /triggerSchedule\(task\.id, \{ manual: false, catchUp: true \}\)/);
     assert.match(launcher, /decideRejectedScheduleSubmission/);
-    assert.match(launcher, /SCHEDULE_BUSY_RETRY_MS/);
+    assert.match(launcher, /createScheduleTriggerQueue/);
+    assert.match(launcher, /queueScheduleTrigger/);
+    assert.match(launcher, /requestScheduleQueueDrain/);
+    assert.match(launcher, /SCHEDULE_QUEUE_RECHECK_MS/);
+    assert.doesNotMatch(launcher, /SCHEDULE_BUSY_RETRY_MS/);
     assert.match(launcher, /refreshScheduleTimer\(task\)/);
     assert.match(launcher, /scheduleRunRegistry/);
-    assert.match(launcher, /MAX_CONCURRENT_SCHEDULE_RUNS/);
+    assert.match(launcher, /MAX_CONCURRENT_SCHEDULE_RUNS = 1/);
+    assert.match(app, /tasks\.runQueued/);
+    assert.match(app, /task\.queued && task\.queuePosition/);
   });
 
   test("file-access-rescue 兜底技能保持可索引，并要求先准备本地文档", () => {

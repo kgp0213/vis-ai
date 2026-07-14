@@ -34,7 +34,7 @@ const { spawnSync } = await importEarly("node:child_process");
 const { createInterface } = await importEarly("node:readline");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
 const { commitScheduleMutation, readScheduleStore, writeScheduleStore } = await importEarly("./lib/schedule-store.mjs");
-const { replacePathTransactional } = await importEarly("./lib/transactional-path.mjs");
+const { replacePathTransactional, restoreLatestPathHistory } = await importEarly("./lib/transactional-path.mjs");
 const { createPlanStore } = await importEarly("./lib/plan-store.mjs");
 const {
   computeNextScheduleRun,
@@ -63,6 +63,7 @@ const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJson
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
+const { validateDwsInvocation } = await importEarly("./lib/dws-invocation-policy.mjs");
 const { buildBudgetedBlocks, buildMemoryIndex, memoryTokenBudgetForCapacity } = await importEarly("./lib/memory-prompt.mjs");
 const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-recovery.mjs");
 const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
@@ -75,9 +76,18 @@ const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.m
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
 const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, normalizeWorkspacePath, removeRecentWorkspace, sameWorkspacePath } = await importEarly("./lib/workspace-history.mjs");
-const { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } = await importEarly("./lib/schedule-execution.mjs");
+const { createScheduleRunRegistry, createScheduleTriggerQueue, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, orderMissedSchedules, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } = await importEarly("./lib/schedule-execution.mjs");
 const { createScheduleReportStore } = await importEarly("./lib/schedule-report-store.mjs");
-const { getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, normalizeScheduledKnowledgeReview } = await importEarly("./lib/scheduled-knowledge-store.mjs");
+const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
+const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
+const { buildMessageRiskPrompt, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
+const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
+const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
+const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
+const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
+const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { extractPdfText } = await importEarly("./lib/pdf-text.mjs");
 const {
   buildTopicDocumentPrompt,
   buildTopicPlanPrompt,
@@ -196,6 +206,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
 const DEFAULT_SOUL_RESOURCE = resolve(__dirname, "..", "default-soul.md");
 const bootstrapSkillsRoot = resolve(__dirname, "..", "bootstrap-skills");
+const dwsExecutable = resolve(__dirname, process.platform === "win32" ? "dws.exe" : "dws");
+const dwsDocsRoot = resolve(bootstrapSkillsRoot, "dws");
+process.env.VISIONOX_DWS_EXECUTABLE = dwsExecutable;
+process.env.VISIONOX_NODE_EXECUTABLE = process.execPath;
+const vhomeIntegration = createVHomeIntegration({ executable: dwsExecutable, logger: console });
+const openExternalUrl = createExternalUrlOpener();
+const integrationRuntimeVersions = readRuntimeVersions(resolve(__dirname, "..", "runtime-manifest.json"));
+let activeMessageSendContext = { source: "idle", userPrompt: "", operationId: null };
 
 // ── Centralized constants ───────────────────────────────────────
 const CONSTANTS = {
@@ -210,6 +228,7 @@ const CONSTANTS = {
   LOGIN_SHELL_TIMEOUT_MS: 2000,
   BALANCE_REFRESH_MS: 60_000,
   BALANCE_FETCH_TIMEOUT_MS: 5000,
+  OFFICECLI_MCP_REQUEST_TIMEOUT_MS: 180_000,
   SKILL_RATE_LIMIT: 10,
   SKILL_RATE_WINDOW_MS: 60_000,
 
@@ -324,6 +343,7 @@ const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
 const skillsRoot = resolve(visionoxDataDir, "skills");
+const vhomeSkillDraftStore = createVHomeSkillDraftStore(resolve(visionoxDataDir, "vhome-skill-drafts.json"));
 const BOOTSTRAP_SKILLS_DISABLED_DIR = resolve(skillsRoot, ".disabled");
 if (!existsSync(sessionsDir)) {
   mkdirSync(sessionsDir, { recursive: true });
@@ -756,6 +776,11 @@ function validateSkillMarkdown(contents) {
 
 async function readSkillVersion(skillDir) {
   try {
+    const integration = JSON.parse(await readFile(resolve(skillDir, "integration.json"), "utf8"));
+    if (typeof integration?.version === "string" && integration.version.trim()) return integration.version.trim();
+  } catch {
+  }
+  try {
     const skillMd = await readFile(resolve(skillDir, "SKILL.md"), "utf8");
     return /^version:\s*["']?([^"'\r\n]+)["']?\s*$/m.exec(skillMd)?.[1]?.trim() || null;
   } catch {
@@ -833,8 +858,9 @@ async function installBootstrapSkill(name, { force = false } = {}) {
       return { name, installed: false, skipped: true, reason: "user skill with same name exists" };
     }
     // Fast path: source dir unchanged since last install → reuse cached hash.
+    const sourceVersion = await readSkillVersion(sourceDir);
     let sourceHash;
-    if (!force && srcMtime !== null && marker.sourceMtime === srcMtime && marker.sourceHash) {
+    if (!force && marker.version === sourceVersion && srcMtime !== null && marker.sourceMtime === srcMtime && marker.sourceHash) {
       sourceHash = marker.sourceHash;
     } else {
       sourceHash = await hashDirectory(sourceDir);
@@ -1097,6 +1123,7 @@ async function retrieveSemanticContext(text, recentMessages, signal) {
 async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   const before = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
   const { jobs } = opts;
+  const preparedDocumentRegistry = opts.preparedDocumentRegistry;
 
   registerFilesystemTools(tools, {
     rootDir,
@@ -1107,11 +1134,12 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     readConfig: () => readConfig(configPath),
     env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
     logger: console,
+    registry: preparedDocumentRegistry,
   });
 
   tools.register({
     name: "prepare_local_document",
-    description: "Prepare a user-provided local document path before reading/parsing it. Use this FIRST for local PDF/Word/Excel/PPT/XML/DSN/text/image files, odd Chinese filenames, wildcard paths, or when another document reader fails. It fixes common Windows path typos such as D:_folder, resolves one matching local file, and returns readablePath for the next parser. Do not explain internal path preparation details to the user.",
+    description: "Prepare a user-provided local document path before reading/parsing it. Use this FIRST for local PDF/Word/Excel/PPT/XML/DSN/text/image files, odd Chinese filenames, wildcard paths, or when another document reader fails. It fixes common Windows path typos such as D:_folder, resolves one matching local file, and returns a stable documentRef plus the current readablePath. Keep using documentRef when switching tools so a missing readable copy can be recreated. Do not explain internal path preparation details to the user.",
     parameters: {
       type: "object",
       properties: {
@@ -1132,7 +1160,47 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       logger: console,
       allowMultiple: Boolean(args?.allowMultiple),
       signal: toolCtx?.signal,
+      registry: preparedDocumentRegistry,
     })),
+  });
+
+  tools.register({
+    name: "extract_pdf_text",
+    description: "Extract text from an existing local PDF with the bundled PDF.js runtime. Accepts an original path, readablePath, or documentRef from prepare_local_document. This is the primary PDF reader; do not use OfficeCLI or install Python packages for PDF text extraction.",
+    parameters: {
+      type: "object",
+      properties: {
+        input: { type: "string", description: "Original PDF path, prepared readablePath, or visionox-document reference." },
+        pages: { type: "string", description: "Optional 1-based page selection such as 1-3 or 1,4,7." },
+        maxChars: { type: "integer", minimum: 10000, maximum: 8000000, description: "Maximum extracted characters; default 1000000." },
+      },
+      required: ["input"],
+    },
+    fn: async (args, toolCtx) => {
+      const prepared = await prepareLocalDocument(args?.input, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+        signal: toolCtx?.signal,
+        registry: preparedDocumentRegistry,
+      });
+      if (!prepared.ok) return JSON.stringify(prepared);
+      if (prepared.documentKind !== "pdf") {
+        return JSON.stringify({ ok: false, error: "extract_pdf_text only accepts PDF documents", documentKind: prepared.documentKind });
+      }
+      const extracted = await extractPdfText(prepared.readablePath, {
+        pages: args?.pages,
+        maxChars: args?.maxChars,
+        signal: toolCtx?.signal,
+      });
+      return JSON.stringify({
+        ok: true,
+        documentId: prepared.documentId,
+        documentRef: prepared.documentRef,
+        sourcePath: prepared.sourcePath,
+        ...extracted,
+      });
+    },
   });
 
   registerShellTools(tools, {
@@ -1146,6 +1214,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     readConfig: () => readConfig(configPath),
     env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
     logger: console,
+    registry: preparedDocumentRegistry,
   });
 
   registerMemoryTools(tools, { projectRoot: rootDir });
@@ -1185,14 +1254,21 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 // ── Create registry & register all tools ────────────────────────
 const tools = new ToolRegistry();
 const jobs = new JobRegistry();
+const preparedDocumentRegistry = createPreparedDocumentRegistry({
+  onChange: (preparedDocuments) => { void writeActiveSessionMeta({ preparedDocuments }); },
+});
 
 tools.setToolInterceptor((name, args) => {
-  const issue = validateOfficecliInvocation(name, args);
+  const issue = validateOfficecliInvocation(name, args) ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable });
   return issue ? JSON.stringify(issue) : undefined;
 });
 
 // Workspace-dependent tools — registered via shared function
-const wsResult = await registerWorkspaceTools(tools, workspaceDir, { jobs, getOperationId: () => activeOperation?.id ?? null });
+const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
+  jobs,
+  getOperationId: () => activeOperation?.id ?? null,
+  preparedDocumentRegistry,
+});
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
 
@@ -1245,7 +1321,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理任何本地文档路径（PDF/Word/Excel/PPT/XML/DSN/文本/图片等）时，先调用 prepare_local_document，把用户原始路径或完整句子交给它，后续只使用返回的 readablePath 交给 officecli、pdf 或 read_file 等工具。不要先安装依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。OfficeCLI（Word/Excel/PPT）通过 MCP 工具注入时，优先使用 create/view/get/query/set/add/remove/move/validate/batch/merge/watch 等工具处理 Office 文档。PDF 也先准备本地文档，再使用 pdf/officecli 等专项工具。交付前先 validate 检查质量，并通过 view issues 定位问题和自修复。",
+    prompt: "你处于办公模式。处理任何本地文档路径（PDF/Word/Excel/PPT/XML/DSN/文本/图片等）时，先调用 prepare_local_document 并保留返回的 documentRef，切换工具或 Skill 时继续使用同一引用，由程序自动恢复可读副本。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。读取现有 PDF 必须优先调用内置 extract_pdf_text；PDF.js 结果显示 likelyScanned 时再说明需要 OCR，不要反复更换文本解析器。OfficeCLI 只处理 Word/Excel/PPT，不得用于 PDF。复杂 PDF 编辑或生成使用 pdf Skill；md-to-pdf-cjk 只用于 Markdown 生成 PDF。交付前对 Office 文档执行 validate 并通过 view issues 定位问题和自修复。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -1355,6 +1431,22 @@ function validateSkillDirForInstall(dir, expectedName) {
   if (!validation.ok) return validation;
   if (validation.name !== expectedName) {
     return { ok: false, error: `SKILL.md name "${validation.name}" does not match install name "${expectedName}".` };
+  }
+  const integrationPath = resolve(dir, "integration.json");
+  const templatesPath = resolve(dir, "schedule-templates.json");
+  if (existsSync(integrationPath) !== existsSync(templatesPath)) {
+    return { ok: false, error: "integration.json and schedule-templates.json must be provided together." };
+  }
+  if (existsSync(integrationPath)) {
+    try {
+      validateSkillIntegration(
+        JSON.parse(readFileSync(integrationPath, "utf8")),
+        JSON.parse(readFileSync(templatesPath, "utf8")),
+        { expectedId: expectedName }
+      );
+    } catch (error) {
+      return { ok: false, error: `invalid skill integration: ${error.message}` };
+    }
   }
   return { ok: true };
 }
@@ -1570,6 +1662,80 @@ tools.register({
 });
 
 console.error(`[launcher] install_skill tool registered — skills root: ${skillsRoot}`);
+
+tools.register({
+  name: "rollback_skill",
+  description: "仅在用户明确要求回退某个 Skill 更新时使用。恢复该 Skill 最近保留的上一版本；不会回退应用程序、认证状态或运行时二进制。",
+  parameters: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "要回退的 Skill 名称，仅限小写字母、数字和连字符。" },
+    },
+    required: ["name"],
+  },
+  fn: async ({ name: rawName }) => {
+    const name = String(rawName ?? "").trim();
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) return JSON.stringify({ error: "invalid skill name" });
+    if (installingSkill) return JSON.stringify({ error: "another skill installation is in progress, please wait" });
+    const skillDir = resolve(skillsRoot, name);
+    if (!existsSync(skillDir)) return JSON.stringify({ error: `skill not found: ${name}` });
+    installingSkill = true;
+    try {
+      const restored = restoreLatestPathHistory(skillDir, {
+        retain: 3,
+        validate: (candidate) => {
+          const validation = validateSkillDirForInstall(candidate, name);
+          if (!validation.ok) throw new Error(validation.error);
+        },
+      });
+      return JSON.stringify({ restored: true, name, path: skillDir, previousVersionRetained: true, source: restored.restoredFrom });
+    } catch (error) {
+      return JSON.stringify({ error: `skill rollback failed: ${error.message}` });
+    } finally {
+      installingSkill = false;
+    }
+  },
+});
+
+registerVHomeSkillTools(tools, {
+  draftStore: vhomeSkillDraftStore,
+  runDwsRead,
+  runDwsWrite,
+  runDwsHelp,
+  runDwsExec,
+  dwsExecutable,
+  dwsDocsRoot,
+  validateSkillDir: validateSkillDirForInstall,
+  installSkillDir: (name, sourceDir, options) => {
+    if (installingSkill) return { installed: false, error: "another skill installation is in progress, please wait" };
+    installingSkill = true;
+    try {
+      return installSkillDirectoryAtomic(name, sourceDir, options);
+    } finally {
+      installingSkill = false;
+    }
+  },
+  isBootstrapSkill: (name) => existsSync(resolve(bootstrapSkillsRoot, name, "SKILL.md")),
+  skillExists: (name) => existsSync(resolve(skillsRoot, name, "SKILL.md")),
+  getSendContext: () => ({ ...activeMessageSendContext }),
+  reviewMessageRisk: async (message, { signal } = {}) => {
+    if (!client) return { level: "unknown", confidence: 0, categories: ["model-unavailable"], reason: "风险审查模型不可用" };
+    const modelConfig = effectiveModelConfig(config);
+    const raw = await requestModelJson({
+      label: "V-home outgoing message risk evaluator",
+      model: modelConfig.model,
+      messages: [
+        { role: "system", content: "You are a conservative enterprise message safety reviewer. Return valid JSON only." },
+        { role: "user", content: buildMessageRiskPrompt(message) },
+      ],
+      temperature: 0,
+      maxTokens: 800,
+      signal,
+    });
+    return normalizeMessageRiskReview(raw);
+  },
+});
+console.error(`[launcher] V来家 Skill builder tools registered`);
 
 // ── Session memory tool ────────────────────────────────────────
 tools.register({
@@ -2153,6 +2319,10 @@ function autoOfficecliMcpSpec() {
   return null;
 }
 
+function mcpRequestTimeoutMs(serverName) {
+  return serverName === "officecli" ? CONSTANTS.OFFICECLI_MCP_REQUEST_TIMEOUT_MS : undefined;
+}
+
 function effectiveMcpSpecs(cfg) {
   const manualSpecs = (cfg.mcp ?? []).map((spec) => String(spec).trim()).filter(Boolean);
   if (hasOfficecliMcpSpec(manualSpecs)) return manualSpecs;
@@ -2249,7 +2419,7 @@ async function reloadMcp() {
       const spec = parseMcpSpec(rawSpec.trim());
       if (!spec) continue;
       const transport = buildTransportFromSpec(spec, { env: mcpEnvFor(spec.name, cfg) });
-      const client = new McpClient({ transport });
+      const client = new McpClient({ transport, requestTimeoutMs: mcpRequestTimeoutMs(spec.name) });
       await client.initialize();
       const report = await inspectMcpServer(client);
       const { registeredNames } = await bridgeMcpTools(client, { registry: tools });
@@ -2258,6 +2428,7 @@ async function reloadMcp() {
         readConfig: () => readConfig(configPath),
         env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir: workspaceDir },
         logger: console,
+        registry: preparedDocumentRegistry,
       });
       // Add new tool specs to loop prefix
       for (const ts of tools.specs().filter((s) => registeredNames.includes(s.function?.name))) {
@@ -3739,9 +3910,9 @@ function rememberAcceptedPromptRequest(id, result = {}) {
 const schedulesFile = resolve(visionoxDataDir, "schedules.json");
 const scheduleReportStore = createScheduleReportStore(resolve(visionoxDataDir, "reports"));
 const MAX_SCHEDULE_DELAY_MS = 2_147_000_000;
-const SCHEDULE_BUSY_RETRY_MS = 30 * 1000;
+const SCHEDULE_QUEUE_RECHECK_MS = 2 * 1000;
 const SCHEDULE_HISTORY_LIMIT = 20;
-const MAX_CONCURRENT_SCHEDULE_RUNS = 2;
+const MAX_CONCURRENT_SCHEDULE_RUNS = 1;
 const SCHEDULE_RUN_MODES = new Set(["auto", "readonly", "confirm"]);
 const SCHEDULE_TYPES = new Set(["interval", "daily", "weekly"]);
 const SCHEDULE_KINDS = new Set(["prompt", "report", "session_cleanup"]);
@@ -3764,6 +3935,9 @@ let schedules = [];
 let scheduleStoreError = null;
 const scheduleTimers = new Map();
 const scheduleRunRegistry = createScheduleRunRegistry();
+const scheduleTriggerQueue = createScheduleTriggerQueue();
+let scheduleQueueDrainTimer = null;
+let scheduleQueueDraining = false;
 
 function scheduleAbortError() {
   return new DOMException("scheduled task cancelled", "AbortError");
@@ -3832,7 +4006,6 @@ function normalizeSchedule(raw) {
   if (isLegacySessionCleanupSchedule(raw, prompt)) {
     kind = "session_cleanup";
   }
-  if (kind === "prompt" && !prompt) return null;
   const type = SCHEDULE_TYPES.has(raw.type) ? raw.type : "interval";
   const sessionCleanupAction = SCHEDULE_SESSION_CLEANUP_ACTIONS.has(raw.sessionCleanupAction) ? raw.sessionCleanupAction : "preview";
   const sessionCleanupStrength = SCHEDULE_SESSION_CLEANUP_STRENGTHS.has(raw.sessionCleanupStrength) ? raw.sessionCleanupStrength : "standard";
@@ -3840,6 +4013,15 @@ function normalizeSchedule(raw) {
   const sessionCleanupPromptAddendum = kind === "session_cleanup" && typeof raw.sessionCleanupPromptAddendum === "string"
     ? raw.sessionCleanupPromptAddendum.trim().slice(0, 4000)
     : "";
+  const skillName = kind === "prompt" && typeof raw.skillName === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(raw.skillName) ? raw.skillName : null;
+  const skillAction = skillName && typeof raw.skillAction === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(raw.skillAction) ? raw.skillAction : null;
+  const skillPromptAddendum = skillName && typeof raw.skillPromptAddendum === "string" ? raw.skillPromptAddendum.trim().slice(0, 2000) : "";
+  const skillArchiveWorkspaceDir = skillName && typeof raw.skillArchiveWorkspaceDir === "string" && raw.skillArchiveWorkspaceDir.trim()
+    ? resolve(raw.skillArchiveWorkspaceDir.trim())
+    : null;
+  const skillAutoArchive = Boolean(skillArchiveWorkspaceDir) && raw.skillAutoArchive === true;
+  const skillAutoIndex = Boolean(skillArchiveWorkspaceDir) && raw.skillAutoIndex === true;
+  if (kind === "prompt" && !prompt && (!skillName || !skillAction)) return null;
   const knowledgeEnabled = kind === "session_cleanup" && raw.knowledgeEnabled === true;
   const knowledgeAutoIndex = knowledgeEnabled && raw.knowledgeAutoIndex === true;
   const knowledgeLookbackDays = Math.max(1, Math.min(365, Math.floor(Number(raw.knowledgeLookbackDays) || 30)));
@@ -3858,7 +4040,13 @@ function normalizeSchedule(raw) {
     id,
     kind,
     name: typeof raw.name === "string" && raw.name.trim() ? raw.name.trim().slice(0, 80) : (kind === "report" ? "会话报告任务" : kind === "session_cleanup" ? "会话整理任务" : prompt.slice(0, 36)),
-    prompt: kind === "prompt" ? prompt : "",
+    prompt: kind === "prompt" && !skillName ? prompt : "",
+    skillName,
+    skillAction,
+    skillPromptAddendum,
+    skillArchiveWorkspaceDir,
+    skillAutoArchive,
+    skillAutoIndex,
     sessionCleanupAction: kind === "session_cleanup" ? sessionCleanupAction : "preview",
     sessionCleanupStrength: kind === "session_cleanup" ? sessionCleanupStrength : "standard",
     sessionCleanupSemanticMode: kind === "session_cleanup" ? sessionCleanupSemanticMode : "off",
@@ -3877,7 +4065,7 @@ function normalizeSchedule(raw) {
     reportEndDate,
     reportExport: raw.reportExport !== false,
     type,
-    runMode: kind === "prompt" && SCHEDULE_RUN_MODES.has(raw.runMode) ? raw.runMode : "auto",
+    runMode: skillName ? "readonly" : kind === "prompt" && SCHEDULE_RUN_MODES.has(raw.runMode) ? raw.runMode : "auto",
     intervalMs: type === "interval" ? Number(raw.intervalMs) || 60 * 60 * 1000 : null,
     timeOfDay: (type === "daily" || type === "weekly") && isValidDailyTime(raw.timeOfDay) ? raw.timeOfDay : "09:00",
     dayOfWeek: type === "weekly" ? normalizeDayOfWeek(raw.dayOfWeek, 1) : null,
@@ -3888,10 +4076,10 @@ function normalizeSchedule(raw) {
     enabled: raw.enabled !== false,
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : nowIso,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : nowIso,
-    workspaceDir: kind === "report"
+    workspaceDir: kind === "report" || skillName
       ? null
       : (typeof raw.workspaceDir === "string" && raw.workspaceDir.trim() ? raw.workspaceDir : workspaceDir),
-    workspaceScope: kind === "prompt" && raw.workspaceScope === "current" ? "current" : kind === "prompt" ? "bound" : "global",
+    workspaceScope: skillName ? "global" : kind === "prompt" && raw.workspaceScope === "current" ? "current" : kind === "prompt" ? "bound" : "global",
     lastRunAt: typeof raw.lastRunAt === "string" ? raw.lastRunAt : null,
     lastStatus: typeof raw.lastStatus === "string" ? raw.lastStatus : null,
     lastError: typeof raw.lastError === "string" ? raw.lastError : null,
@@ -3927,6 +4115,8 @@ function normalizeScheduleHistoryEntry(raw) {
     summary: typeof raw.summary === "string" ? raw.summary : null,
     assistantMessageId: typeof raw.assistantMessageId === "string" ? raw.assistantMessageId : null,
     userMessageId: typeof raw.userMessageId === "string" ? raw.userMessageId : null,
+    skillName: typeof raw.skillName === "string" ? raw.skillName : null,
+    skillAction: typeof raw.skillAction === "string" ? raw.skillAction : null,
     lastPromptTokens: Number.isFinite(raw.lastPromptTokens) ? Math.max(0, Math.floor(raw.lastPromptTokens)) : null,
     lastTurnCostUsd: Number.isFinite(raw.lastTurnCostUsd) ? Math.max(0, raw.lastTurnCostUsd) : null,
     totalCostUsd: Number.isFinite(raw.totalCostUsd) ? Math.max(0, raw.totalCostUsd) : null,
@@ -3962,11 +4152,13 @@ function normalizeScheduleHistoryEntry(raw) {
     knowledgeTopicsRemoved: Number.isFinite(raw.knowledgeTopicsRemoved) ? Math.max(0, Math.floor(raw.knowledgeTopicsRemoved)) : null,
     knowledgeAIReviewed: Number.isFinite(raw.knowledgeAIReviewed) ? Math.max(0, Math.floor(raw.knowledgeAIReviewed)) : null,
     knowledgeAIFailed: Number.isFinite(raw.knowledgeAIFailed) ? Math.max(0, Math.floor(raw.knowledgeAIFailed)) : null,
+    knowledgeArchiveStatus: typeof raw.knowledgeArchiveStatus === "string" ? raw.knowledgeArchiveStatus : null,
+    knowledgeArchiveError: typeof raw.knowledgeArchiveError === "string" ? raw.knowledgeArchiveError : null,
   };
 }
 
 function sameScheduleWorkspace(task) {
-  if (task?.kind !== "prompt" || task?.workspaceScope === "current") return true;
+  if (task?.kind !== "prompt" || task?.skillName || task?.workspaceScope === "current") return true;
   if (!task?.workspaceDir) return true;
   try {
     return resolve(task.workspaceDir) === resolve(workspaceDir);
@@ -4020,10 +4212,110 @@ function repairInterruptedSchedules() {
 function publicSchedule(task) {
   return {
     ...task,
+    queued: scheduleTriggerQueue.has(task?.id),
+    queuePosition: scheduleTriggerQueue.position(task?.id) || null,
     workspaceMismatch: task?.kind === "prompt" && task?.workspaceScope !== "current" && !sameScheduleWorkspace(task),
     workspaceDifferent: Boolean(task?.workspaceDir) && !sameWorkspacePath(task.workspaceDir, workspaceDir),
     currentWorkspaceDir: workspaceDir,
   };
+}
+
+function requestScheduleQueueDrain(delayMs = 0) {
+  if (scheduleTriggerQueue.size() === 0) return;
+  if (scheduleQueueDrainTimer) {
+    if (delayMs > 0) return;
+    clearTimeout(scheduleQueueDrainTimer);
+  }
+  scheduleQueueDrainTimer = setTimeout(() => {
+    scheduleQueueDrainTimer = null;
+    void drainScheduleQueue();
+  }, Math.max(0, delayMs));
+}
+
+function queueScheduleTrigger(task, { manual = false, catchUp = false, requestedAt, reason } = {}) {
+  const queueResult = scheduleTriggerQueue.enqueue(task.id, { manual, catchUp, requestedAt });
+  if (!queueResult.enqueued) {
+    requestScheduleQueueDrain();
+    return {
+      ok: true,
+      accepted: false,
+      queued: true,
+      duplicate: true,
+      queuePosition: queueResult.position,
+      reason: reason || "waiting for the active task to finish",
+      runId: null,
+      schedule: publicSchedule(task),
+    };
+  }
+
+  const previous = {
+    lastStatus: task.lastStatus,
+    lastError: task.lastError,
+    missedRunAt: task.missedRunAt,
+    nextRunAt: task.nextRunAt,
+    updatedAt: task.updatedAt,
+  };
+  const nowIso = requestedAt || new Date().toISOString();
+  task.updatedAt = nowIso;
+  task.lastStatus = "deferred";
+  task.lastError = reason || "waiting for the active task to finish";
+  task.missedRunAt ||= nowIso;
+  if (task.enabled) task.nextRunAt = computeNextScheduleRun(task, Date.now());
+  const persisted = writeScheduleRuntimeState(`scheduled task ${task.id} queue state was not saved`);
+  if (!persisted.ok) {
+    scheduleTriggerQueue.remove(task.id);
+    Object.assign(task, previous);
+    return { ok: false, error: persisted.error, schedule: publicSchedule(task) };
+  }
+  if (task.enabled) refreshScheduleTimer(task);
+  broadcastDashboardEvent({
+    kind: "schedule-run",
+    id: task.id,
+    runId: null,
+    name: task.name,
+    accepted: false,
+    queued: true,
+    queuePosition: queueResult.position,
+    status: "deferred",
+    reason: task.lastError,
+  });
+  requestScheduleQueueDrain();
+  return {
+    ok: true,
+    accepted: false,
+    queued: true,
+    duplicate: false,
+    queuePosition: queueResult.position,
+    reason: task.lastError,
+    runId: null,
+    schedule: publicSchedule(task),
+  };
+}
+
+async function drainScheduleQueue() {
+  if (scheduleQueueDraining || scheduleTriggerQueue.size() === 0) return;
+  if (scheduleRunRegistry.size() >= MAX_CONCURRENT_SCHEDULE_RUNS || busy) {
+    requestScheduleQueueDrain(SCHEDULE_QUEUE_RECHECK_MS);
+    return;
+  }
+  scheduleQueueDraining = true;
+  try {
+    while (scheduleTriggerQueue.size() > 0 && scheduleRunRegistry.size() < MAX_CONCURRENT_SCHEDULE_RUNS && !busy) {
+      const entry = scheduleTriggerQueue.shift();
+      if (!entry) break;
+      const task = schedules.find((item) => item.id === entry.taskId);
+      if (!task || (!task.enabled && !entry.manual)) continue;
+      const result = await triggerSchedule(entry.taskId, {
+        manual: entry.manual,
+        catchUp: true,
+        fromQueue: true,
+      });
+      if (result?.accepted || result?.queued) break;
+    }
+  } finally {
+    scheduleQueueDraining = false;
+    if (scheduleTriggerQueue.size() > 0) requestScheduleQueueDrain(SCHEDULE_QUEUE_RECHECK_MS);
+  }
 }
 
 function refreshScheduleTimer(task) {
@@ -4044,7 +4336,7 @@ function refreshAllScheduleTimers() {
   for (const timer of scheduleTimers.values()) clearTimeout(timer);
   scheduleTimers.clear();
   for (const task of schedules) refreshScheduleTimer(task);
-  const missed = schedules.filter((task) => task.enabled && task.missedRunAt);
+  const missed = orderMissedSchedules(schedules.filter((task) => task.enabled && task.missedRunAt));
   if (missed.length > 0) {
     missed.forEach((task, index) => {
       setTimeout(() => {
@@ -4054,15 +4346,42 @@ function refreshAllScheduleTimers() {
   }
 }
 
+let lastObservedVHomeConnection = false;
+async function getVHomeStatusAndResumeSchedules(options = {}) {
+  const status = await vhomeIntegration.getStatus(options);
+  if (status.connected && !lastObservedVHomeConnection) {
+    schedules
+      .filter((task) => task.enabled && task.skillName === "dws" && task.lastStatus === "waiting_auth")
+      .forEach((task, index) => setTimeout(() => void triggerSchedule(task.id, { catchUp: true }), 250 + index * 250));
+  }
+  lastObservedVHomeConnection = status.connected;
+  return status;
+}
+
 function scheduleFromInput(input, previous = null) {
   const patch = input && typeof input === "object" ? input : {};
   const kind = SCHEDULE_KINDS.has(patch.kind) ? patch.kind : previous?.kind ?? "prompt";
   const type = SCHEDULE_TYPES.has(patch.type) ? patch.type : previous?.type ?? "interval";
   const name = typeof patch.name === "string" ? patch.name.trim() : previous?.name ?? "";
   const prompt = typeof patch.prompt === "string" ? patch.prompt.trim() : previous?.prompt ?? "";
+  const requestedSkillName = typeof patch.skillName === "string" ? patch.skillName.trim() : previous?.skillName ?? "";
+  const requestedSkillAction = typeof patch.skillAction === "string" ? patch.skillAction.trim() : previous?.skillAction ?? "";
+  const skillName = kind === "prompt" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(requestedSkillName) ? requestedSkillName : null;
+  const skillAction = skillName && /^[a-z0-9][a-z0-9-]{0,63}$/.test(requestedSkillAction) ? requestedSkillAction : null;
+  const skillPromptAddendum = skillName
+    ? (typeof patch.skillPromptAddendum === "string" ? patch.skillPromptAddendum.trim().slice(0, 2000) : previous?.skillPromptAddendum ?? "")
+    : "";
+  const requestedArchiveWorkspace = typeof patch.skillArchiveWorkspaceDir === "string"
+    ? patch.skillArchiveWorkspaceDir.trim()
+    : previous?.skillArchiveWorkspaceDir ?? "";
+  const skillArchiveWorkspaceDir = skillName && requestedArchiveWorkspace
+    ? normalizeWorkspacePath(requestedArchiveWorkspace, { homeDir: home })
+    : null;
+  const skillAutoArchive = Boolean(skillArchiveWorkspaceDir) && (typeof patch.skillAutoArchive === "boolean" ? patch.skillAutoArchive : previous?.skillAutoArchive === true);
+  const skillAutoIndex = Boolean(skillArchiveWorkspaceDir) && (typeof patch.skillAutoIndex === "boolean" ? patch.skillAutoIndex : previous?.skillAutoIndex === true);
   const enabled = typeof patch.enabled === "boolean" ? patch.enabled : previous?.enabled ?? true;
   const runMode = SCHEDULE_RUN_MODES.has(patch.runMode) ? patch.runMode : previous?.runMode ?? "auto";
-  const workspaceScope = kind === "prompt" && (patch.workspaceScope === "current" || previous?.workspaceScope === "current")
+  const workspaceScope = skillName ? "global" : kind === "prompt" && (patch.workspaceScope === "current" || previous?.workspaceScope === "current")
     ? (patch.workspaceScope === "bound" ? "bound" : "current")
     : kind === "prompt" ? "bound" : "global";
   const weekdaysOnly = typeof patch.weekdaysOnly === "boolean" ? patch.weekdaysOnly : previous?.weekdaysOnly ?? false;
@@ -4102,7 +4421,17 @@ function scheduleFromInput(input, previous = null) {
   const knowledgeAutoIndex = knowledgeEnabled
     && (typeof patch.knowledgeAutoIndex === "boolean" ? patch.knowledgeAutoIndex : previous?.knowledgeAutoIndex === true);
   const knowledgeLookbackDays = Math.max(1, Math.min(365, Math.floor(Number(patch.knowledgeLookbackDays ?? previous?.knowledgeLookbackDays) || 30)));
-  if (kind === "prompt" && !prompt) return { ok: false, error: "prompt must be a non-empty string" };
+  if (kind === "prompt" && !skillName && !prompt) return { ok: false, error: "prompt must be a non-empty string" };
+  if (skillName && !skillAction) return { ok: false, error: "skillAction is required for a skill schedule" };
+  if (skillAutoArchive && !isWorkspaceDirectory(skillArchiveWorkspaceDir)) return { ok: false, error: "automatic Skill archive requires an existing archive workspace" };
+  let skillTemplateTitle = "";
+  if (skillName) {
+    try {
+      skillTemplateTitle = resolveSkillScheduleTemplate(skillsRoot, skillName, skillAction, { runtimeVersions: integrationRuntimeVersions }).template.title;
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
   const reportRangeCheck = validateReportRange(reportRangeMode, reportStartDate, reportEndDate);
   if (kind === "report" && !reportRangeCheck.ok) return { ok: false, error: reportRangeCheck.error };
   if (name.length > 80) return { ok: false, error: "name must be 80 characters or fewer" };
@@ -4113,8 +4442,14 @@ function scheduleFromInput(input, previous = null) {
   const task = {
     id: previous?.id ?? randomUUID(),
     kind,
-    name: name || (kind === "report" ? "会话报告任务" : kind === "session_cleanup" ? "会话整理任务" : prompt.slice(0, 36)),
-    prompt: kind === "prompt" ? prompt : "",
+    name: name || (kind === "report" ? "会话报告任务" : kind === "session_cleanup" ? "会话整理任务" : skillTemplateTitle || prompt.slice(0, 36)),
+    prompt: kind === "prompt" && !skillName ? prompt : "",
+    skillName,
+    skillAction,
+    skillPromptAddendum,
+    skillArchiveWorkspaceDir,
+    skillAutoArchive,
+    skillAutoIndex,
     sessionCleanupAction: kind === "session_cleanup" ? sessionCleanupAction : "preview",
     sessionCleanupStrength: kind === "session_cleanup" ? sessionCleanupStrength : "standard",
     sessionCleanupSemanticMode: kind === "session_cleanup" ? sessionCleanupSemanticMode : "off",
@@ -4131,7 +4466,7 @@ function scheduleFromInput(input, previous = null) {
     reportEndDate,
     reportExport,
     type,
-    runMode: kind === "prompt" ? runMode : "auto",
+    runMode: skillName ? "readonly" : kind === "prompt" ? runMode : "auto",
     workspaceScope,
     intervalMs: null,
     timeOfDay: null,
@@ -4143,7 +4478,7 @@ function scheduleFromInput(input, previous = null) {
     enabled,
     createdAt: previous?.createdAt ?? nowIso,
     updatedAt: nowIso,
-    workspaceDir: resolveStoredScheduleWorkspace({
+    workspaceDir: skillName ? null : resolveStoredScheduleWorkspace({
       kind,
       previousWorkspace: previous?.workspaceDir,
       currentWorkspace: workspaceDir,
@@ -4276,6 +4611,19 @@ function writeManagedScheduledReport(markdown, stats, task, runId) {
     taskId: task.id,
     runId,
     filename: scheduledReportFilename(stats, task),
+    markdown,
+  });
+  rememberGeneratedArtifactPath(filePath);
+  return filePath;
+}
+
+function writeManagedScheduledSkillReport(markdown, task, runId, startedAt) {
+  const date = Number.isFinite(Date.parse(startedAt)) ? startedAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const safeTaskName = String(task.name || task.skillAction || "skill-report").replace(/[\\/:*?"<>|]/g, "_").slice(0, 48);
+  const filePath = scheduleReportStore.write({
+    taskId: task.id,
+    runId,
+    filename: `Visionox-Whale_${safeTaskName}_${date}.md`,
     markdown,
   });
   rememberGeneratedArtifactPath(filePath);
@@ -4849,7 +5197,7 @@ async function updateKnowledgeSemanticIndex(task, signal) {
       signal,
       indexConfig: { ...loadIndexConfig(configPath), includeKnowledgeDocs: true },
     });
-    await activateSemanticSearch(task.workspaceDir);
+    if (sameWorkspacePath(task.workspaceDir, workspaceDir)) await activateSemanticSearch(task.workspaceDir);
     if (result.committed === false || result.chunksSkipped > 0 || result.skipBuckets?.readError > 0) {
       setKnowledgeIndexDirty(task.workspaceDir, true);
       return { requested: true, status: `pending: ${result.chunksSkipped} embedding chunk(s) failed and the previous index was preserved` };
@@ -4860,6 +5208,103 @@ async function updateKnowledgeSemanticIndex(task, signal) {
     setKnowledgeIndexDirty(task.workspaceDir, true);
     return { requested: true, status: `pending: ${err.message}` };
   }
+}
+
+function scheduledKnowledgeCategory(skillAction) {
+  if (skillAction === "meeting-action-digest") return "meetings";
+  if (skillAction === "topic-investigation") return "investigations";
+  return "projects";
+}
+
+const scheduledKnowledgeArchiveRuns = new Map();
+
+async function performScheduleSkillArchive(taskId, { runId, autoIndex = false } = {}) {
+  const task = schedules.find((item) => item.id === taskId);
+  if (!task?.skillName) return { ok: false, error: "scheduled Skill task not found" };
+  if (!task.skillArchiveWorkspaceDir || !isWorkspaceDirectory(task.skillArchiveWorkspaceDir)) {
+    return { ok: false, error: "请先为该任务选择有效的知识归档工作区" };
+  }
+  const run = task.history?.find((entry) => entry?.runId === runId) ?? task.history?.find((entry) => entry?.status === "completed" && entry?.reportPath);
+  if (!run || run.status !== "completed" || !run.reportPath) return { ok: false, error: "没有可归档的成功报告" };
+  if (!scheduleReportStore.isManagedPath(run.reportPath) || !existsSync(run.reportPath)) return { ok: false, error: "受管理的任务报告不存在" };
+  if (!client) return { ok: false, error: "模型尚未配置，无法执行知识质量审核" };
+  const size = statSync(run.reportPath).size;
+  if (size > 2 * 1024 * 1024) return { ok: false, error: "任务报告超过 2 MB，暂不支持归档" };
+
+  try {
+    const markdown = readFileSync(run.reportPath, "utf8");
+    const modelConfig = effectiveModelConfig(config);
+    const rawReview = await requestModelJson({
+      label: "scheduled V-home knowledge evaluator",
+      model: modelConfig.model,
+      messages: [
+        { role: "system", content: "You are an independent evidence and knowledge quality reviewer. Return valid JSON only." },
+        { role: "user", content: buildScheduledKnowledgeReviewPrompt(markdown, { taskName: task.name, skillAction: task.skillAction }) },
+      ],
+      temperature: 0,
+      maxTokens: 2500,
+    });
+    const review = normalizeScheduledKnowledgeReview(rawReview);
+    if (review.action !== "accept") {
+      updateScheduleRun(task, run.runId, {
+        knowledgeAIReviewed: 1,
+        knowledgeDocumentsRejected: 1,
+        knowledgeArchiveStatus: "rejected",
+        knowledgeArchiveError: review.reason,
+      });
+      writeScheduleRuntimeState(`scheduled knowledge review ${run.runId} rejection was not saved`);
+      broadcastDashboardEvent({ kind: "schedule-changed", action: "archive-rejected", id: task.id, runId: run.runId });
+      return { ok: false, error: `质量审核未通过：${review.reason}`, review };
+    }
+
+    const store = createScheduledKnowledgeStore(task.skillArchiveWorkspaceDir);
+    const archived = store.archive({
+      markdown,
+      taskId: task.id,
+      runId: run.runId,
+      skillAction: task.skillAction,
+      taskName: task.name,
+      sourcePath: run.reportPath,
+      review,
+      category: scheduledKnowledgeCategory(task.skillAction),
+    });
+    rememberGeneratedArtifactPath(archived.path);
+    setKnowledgeIndexDirty(task.skillArchiveWorkspaceDir, true);
+    const semanticIndex = autoIndex
+      ? await updateKnowledgeSemanticIndex({ knowledgeAutoIndex: true, workspaceDir: task.skillArchiveWorkspaceDir })
+      : { requested: false, status: "disabled" };
+    updateScheduleRun(task, run.runId, {
+      knowledgeAIReviewed: 1,
+      knowledgeDocumentsCreated: archived.created ? 1 : 0,
+      knowledgeDocumentsUpdated: archived.updated ? 1 : 0,
+      knowledgeOutputPaths: [archived.path],
+      knowledgeArchiveStatus: archived.duplicate ? "duplicate" : "accepted",
+      knowledgeArchiveError: null,
+      semanticIndexRequested: semanticIndex.requested,
+      semanticIndexStatus: semanticIndex.status,
+    });
+    const persisted = writeScheduleRuntimeState(`scheduled knowledge archive ${run.runId} was not saved`);
+    if (!persisted.ok) return { ok: false, error: persisted.error };
+    broadcastDashboardEvent({ kind: "schedule-changed", action: "archive", id: task.id, runId: run.runId });
+    return { ok: true, ...archived, review, semanticIndex };
+  } catch (error) {
+    updateScheduleRun(task, run.runId, {
+      knowledgeAIReviewed: 1,
+      knowledgeArchiveStatus: "failed",
+      knowledgeArchiveError: String(error?.message || error).slice(0, 1000),
+    });
+    writeScheduleRuntimeState(`scheduled knowledge archive ${run.runId} failure was not saved`);
+    broadcastDashboardEvent({ kind: "schedule-changed", action: "archive-failed", id: task.id, runId: run.runId });
+    return { ok: false, error: error.message || "knowledge archive failed" };
+  }
+}
+
+function archiveScheduleSkillRun(taskId, options = {}) {
+  const key = `${taskId}:${options.runId || "latest"}`;
+  if (scheduledKnowledgeArchiveRuns.has(key)) return scheduledKnowledgeArchiveRuns.get(key);
+  const pending = performScheduleSkillArchive(taskId, options).finally(() => scheduledKnowledgeArchiveRuns.delete(key));
+  scheduledKnowledgeArchiveRuns.set(key, pending);
+  return pending;
 }
 
 async function runScheduleSessionCleanupTask(taskId, runId, startedAt = new Date().toISOString(), signal) {
@@ -4951,6 +5396,7 @@ function completeScheduleRun(taskId, runId, patch) {
   const task = schedules.find((item) => item.id === taskId);
   if (!task) {
     scheduleRunRegistry.finish(taskId);
+    requestScheduleQueueDrain();
     return;
   }
   const completedAt = patch.completedAt || new Date().toISOString();
@@ -4988,6 +5434,7 @@ function completeScheduleRun(taskId, runId, patch) {
     status: task.lastStatus,
     reason: task.lastError,
   });
+  requestScheduleQueueDrain();
 }
 
 function renderSchedulePrompt(task, startedAt, previousLastRunAt) {
@@ -5033,6 +5480,20 @@ function createScheduleConfirmationMessage(task, startedAt) {
   broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text });
 }
 
+function resolveScheduledSkillInvocation(task, startedAt, previousLastRunAt) {
+  if (!task?.skillName) return null;
+  const { integration, template } = resolveSkillScheduleTemplate(skillsRoot, task.skillName, task.skillAction, { runtimeVersions: integrationRuntimeVersions });
+  const now = new Date(startedAt);
+  const lookbackStart = previousLastRunAt || new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const skillTask = renderSkillScheduleTask(template, {
+    date: formatDateKey(now),
+    time: now.toTimeString().slice(0, 8),
+    lastRunAt: lookbackStart,
+    taskName: task.name || "",
+  }, task.skillPromptAddendum);
+  return { integration, template, skillInvocation: { name: task.skillName, task: skillTask } };
+}
+
 function recordScheduleAdmission(task, { runId, startedAt, manual, catchUp, status, reason, nextFromMs = Date.now() }) {
   const completedAt = new Date().toISOString();
   task.updatedAt = completedAt;
@@ -5068,10 +5529,21 @@ function recordScheduleAdmission(task, { runId, startedAt, manual, catchUp, stat
   return persisted;
 }
 
-async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
+async function triggerSchedule(id, { manual = false, catchUp = false, fromQueue = false } = {}) {
   const task = schedules.find((item) => item.id === id);
   if (!task) return { ok: false, error: "schedule not found" };
   const startedAt = new Date().toISOString();
+  if (!fromQueue && scheduleTriggerQueue.has(id)) {
+    return queueScheduleTrigger(task, { manual, catchUp, requestedAt: startedAt });
+  }
+  if (busy && !scheduleRunRegistry.isRunning(id)) {
+    return queueScheduleTrigger(task, {
+      manual,
+      catchUp: catchUp || fromQueue,
+      requestedAt: startedAt,
+      reason: "waiting for the active conversation or task to finish",
+    });
+  }
   const startedMs = Date.parse(startedAt);
   const workspaceMatches = sameScheduleWorkspace(task);
   const windowCheck = manual || catchUp ? { ok: true, reason: null } : isScheduleAllowedAt(task, startedMs);
@@ -5095,23 +5567,21 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
     return { ok: true, accepted: false, reason: admission.reason, runId: null, schedule: publicSchedule(task) };
   }
   if (admission.kind === "deferred") {
-    if (admission.persist) {
-      task.missedRunAt = startedAt;
-      task.lastStatus = "deferred";
-      task.lastError = admission.reason;
-      task.nextRunAt = computeNextScheduleRun(task, Date.now());
-      const persisted = writeScheduleRuntimeState(`scheduled task ${task.id} deferral was not saved`);
-      if (!persisted.ok) return { ok: false, error: persisted.error, schedule: publicSchedule(task) };
-      refreshScheduleTimer(task);
-      if (admission.retry) setTimeout(() => void triggerSchedule(task.id, { manual: false, catchUp: true }), SCHEDULE_BUSY_RETRY_MS);
-    }
-    return { ok: true, accepted: false, reason: admission.reason, runId: null, schedule: publicSchedule(task) };
+    return queueScheduleTrigger(task, {
+      manual,
+      catchUp: true,
+      requestedAt: startedAt,
+      reason: "waiting for another scheduled task to finish",
+    });
   }
   const runId = randomUUID();
   const previousLastRunAt = task.lastRunAt;
-  task.lastRunAt = startedAt;
-  task.missedRunAt = null;
+  const previousSuccessfulRunAt = task.skillName
+    ? task.history?.find((entry) => entry?.status === "completed" && entry?.skillName === task.skillName && entry?.skillAction === task.skillAction && entry?.startedAt)?.startedAt ?? null
+    : previousLastRunAt;
   if (!admission.accepted) {
+    task.lastRunAt = startedAt;
+    task.missedRunAt = null;
     const reason = admission.kind === "skipped" && !workspaceMatches
       ? `workspace mismatch: task is bound to ${task.workspaceDir}, current workspace is ${workspaceDir}`
       : admission.reason;
@@ -5130,13 +5600,22 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
     if (!persisted.ok) return { ok: false, error: persisted.error, runId, schedule: publicSchedule(task) };
     return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
   }
+  const activeRun = scheduleRunRegistry.start(task.id, runId);
+  if (!activeRun) {
+    return queueScheduleTrigger(task, {
+      manual,
+      catchUp: true,
+      requestedAt: startedAt,
+      reason: "waiting for another scheduled task to finish",
+    });
+  }
+  task.lastRunAt = startedAt;
+  task.missedRunAt = null;
   task.updatedAt = startedAt;
   task.runCount += 1;
   task.lastStatus = "running";
   task.lastError = null;
   task.nextRunAt = computeNextScheduleRun(task);
-  const activeRun = scheduleRunRegistry.start(task.id, runId);
-  if (!activeRun) return { ok: true, accepted: false, reason: "task is already running", runId: null, schedule: publicSchedule(task) };
   const runController = activeRun.controller;
   recordScheduleRun(task, {
     runId,
@@ -5147,10 +5626,13 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
     accepted: true,
     reason: null,
     workspaceDir,
+    skillName: task.skillName ?? null,
+    skillAction: task.skillAction ?? null,
   });
   const persistedStart = writeScheduleRuntimeState(`scheduled run ${runId} start was not saved`);
   if (!persistedStart.ok) {
     scheduleRunRegistry.finish(task.id);
+    requestScheduleQueueDrain();
     const completedAt = new Date().toISOString();
     task.lastStatus = "failed";
     task.lastError = persistedStart.error;
@@ -5182,22 +5664,58 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
     void runScheduleSessionCleanupTask(task.id, runId, startedAt, runController.signal);
     return { ok: true, accepted: true, runId, schedule: publicSchedule(task) };
   }
-  const prompt = renderSchedulePrompt(task, startedAt, previousLastRunAt);
+  let scheduledSkill = null;
+  try {
+    scheduledSkill = resolveScheduledSkillInvocation(task, startedAt, previousSuccessfulRunAt);
+  } catch (error) {
+    completeScheduleRun(task.id, runId, { status: "failed", reason: error.message, summary: error.message });
+    return { ok: true, accepted: false, reason: error.message, runId, schedule: publicSchedule(task) };
+  }
+  if (scheduledSkill?.template.requiresConnection === "vhome") {
+    const status = await vhomeIntegration.getStatus();
+    if (!status.connected) {
+      task.missedRunAt = startedAt;
+      const reason = "等待 V来家登录；登录后将补跑本次任务";
+      completeScheduleRun(task.id, runId, { status: "waiting_auth", reason, summary: reason });
+      return { ok: true, accepted: false, reason, runId, schedule: publicSchedule(task) };
+    }
+  }
+  const prompt = scheduledSkill
+    ? `[定时 Skill 任务: ${task.name || scheduledSkill.template.title}]\n触发时间: ${startedAt}\n\n${scheduledSkill.skillInvocation.task}`
+    : renderSchedulePrompt(task, startedAt, previousLastRunAt);
   let result;
   try {
     result = await ctx.submitPrompt(prompt, null, null, {
       readonly: task.runMode === "readonly",
       newConversation: true,
+      skillInvocation: scheduledSkill?.skillInvocation ?? null,
+      disableSemanticRetrieval: Boolean(scheduledSkill),
+      sendAuthorizationPrompt: scheduledSkill?.skillInvocation?.task ?? task.prompt,
       signal: runController.signal,
       onComplete: (done) => {
+        let reportPath = null;
+        let reportError = null;
+        if (done.ok && scheduledSkill && typeof done.assistantText === "string" && done.assistantText.trim()) {
+          try {
+            reportPath = writeManagedScheduledSkillReport(done.assistantText, task, runId, startedAt);
+          } catch (error) {
+            reportError = `scheduled Skill report could not be saved: ${error.message}`;
+            console.error(`[launcher] ${reportError}`);
+          }
+        }
+        const completedOk = done.ok && !reportError;
         completeScheduleRun(task.id, runId, {
-          status: done.cancelled ? "cancelled" : done.ok ? "completed" : "failed",
-          reason: done.cancelled ? "cancelled by user" : done.ok ? null : done.error || "scheduled task failed",
+          status: done.cancelled ? "cancelled" : completedOk ? "completed" : "failed",
+          reason: done.cancelled ? "cancelled by user" : reportError || (done.ok ? null : done.error || "scheduled task failed"),
           summary: done.cancelled ? "cancelled by user" : done.ok ? summarizeScheduleResult(done.assistantText) : done.error || "scheduled task failed",
           assistantMessageId: done.assistantMessageId,
           userMessageId: done.userMessageId,
+          reportPath,
           ...scheduleRunStats(done.stats),
         });
+        if (completedOk && reportPath && task.skillAutoArchive) {
+          void archiveScheduleSkillRun(task.id, { runId, autoIndex: task.skillAutoIndex });
+        }
       },
     });
   } catch (err) {
@@ -5214,9 +5732,12 @@ async function triggerSchedule(id, { manual = false, catchUp = false } = {}) {
       task.missedRunAt = startedAt;
       const persistedRetry = writeScheduleRuntimeState(`scheduled run ${runId} retry was not saved`);
       if (!persistedRetry.ok) return { ok: false, error: persistedRetry.error, runId, schedule: publicSchedule(task) };
-      setTimeout(() => {
-        void triggerSchedule(task.id, { manual: false, catchUp: true });
-      }, SCHEDULE_BUSY_RETRY_MS);
+      return queueScheduleTrigger(task, {
+        manual,
+        catchUp: true,
+        requestedAt: startedAt,
+        reason: rejected.reason,
+      });
     }
     return { ok: true, accepted: false, reason: rejected.reason, runId, schedule: publicSchedule(task) };
   }
@@ -5358,6 +5879,7 @@ function finishActiveOperation(operation) {
     operation: { ...publicActiveOperation(operation), state: operation.controller.signal.aborted ? "cancelled" : "completed" },
   });
   activeOperation = null;
+  requestScheduleQueueDrain();
 }
 
 function operationKindForPrompt(text, opts = {}) {
@@ -5515,6 +6037,12 @@ async function writeActiveSessionEntries(entries) {
   }
 }
 
+function clearMessageSendContext(operation) {
+  if (activeMessageSendContext.operationId === operation?.id) {
+    activeMessageSendContext = { source: "idle", userPrompt: "", operationId: null };
+  }
+}
+
 async function syncActiveSessionFromLoop(pendingUser = null) {
   if (!loop?.log?.toMessages) return;
   try {
@@ -5641,6 +6169,7 @@ async function loadActiveSession() {
     if (storedMeta.ok && storedMeta.value) {
       const meta = storedMeta.value;
       restoreSessionMemories(meta.sessionMemories);
+      preparedDocumentRegistry.restore(meta.preparedDocuments, { replace: true, notifyChange: false });
       const modeRestore = applyModeForSessionMeta(meta);
       if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
     }
@@ -5656,6 +6185,7 @@ async function loadActiveSession() {
 
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
   await finalizeActiveSession();
+  preparedDocumentRegistry.clear({ notifyChange: false });
   if (loop) loop.clearLog();
   clearSessionMemories();
   clearTutorMode();
@@ -6326,6 +6856,12 @@ const ctx = {
   getLatestVersion: () => latestVersion,
   getSessionName: () => "desktop",
   getPersistentStorageIssues: () => runtimeIssues.listUserActionable(),
+  openExternalUrl,
+  getVHomeStatus: () => getVHomeStatusAndResumeSchedules(),
+  refreshVHomeStatus: () => getVHomeStatusAndResumeSchedules({ force: true }),
+  startVHomeLogin: () => vhomeIntegration.startLogin(),
+  cancelVHomeLogin: () => vhomeIntegration.cancelLogin(),
+  logoutVHome: () => vhomeIntegration.logout(),
   getModels: () => null,
   getLoopRunStatus: () => null,
   getActiveModal: () => activeModal,
@@ -6372,6 +6908,7 @@ const ctx = {
       rootDir: workspaceDir,
     },
     logger: console,
+    registry: preparedDocumentRegistry,
   }),
   getModeMemory: (modeId) => listModeMemory(modeId || config.mode || "general"),
   getAllModeMemory: () => listAllModeMemory(),
@@ -6402,6 +6939,8 @@ const ctx = {
     if (scheduleStoreError) throw new Error(scheduleStoreError);
     return schedules.map(publicSchedule);
   },
+  listSkillScheduleTemplates: () => loadSkillIntegrations(skillsRoot, { runtimeVersions: integrationRuntimeVersions }),
+  archiveScheduleSkillRun: (id, options) => archiveScheduleSkillRun(id, options),
   createSchedule: (input) => {
     const result = scheduleFromInput(input);
     if (!result.ok) return result;
@@ -6433,13 +6972,20 @@ const ctx = {
     const idx = schedules.findIndex((item) => item.id === id);
     const task = schedules[idx];
     if (!task) return { ok: false, error: "schedule not found" };
+    const wasQueued = scheduleTriggerQueue.has(id);
     const committed = commitSchedules((next) => {
       next[idx].enabled = !!enabled;
       next[idx].updatedAt = new Date().toISOString();
       next[idx].nextRunAt = computeNextScheduleRun(next[idx]);
+      if (!enabled && wasQueued) {
+        next[idx].lastStatus = "skipped";
+        next[idx].lastError = "queued run cancelled because the task was disabled";
+        next[idx].missedRunAt = null;
+      }
       return { ok: true };
     });
     if (!committed.ok) return committed;
+    if (!enabled && wasQueued) scheduleTriggerQueue.remove(id);
     refreshScheduleTimer(schedules[idx]);
     broadcastDashboardEvent({ kind: "schedule-changed", action: "toggle", id });
     return { ok: true, schedule: publicSchedule(schedules[idx]) };
@@ -6453,6 +6999,7 @@ const ctx = {
       return { ok: true };
     });
     if (!committed.ok) return committed;
+    scheduleTriggerQueue.remove(id);
     try {
       scheduleReportStore.removeTask(id);
     } catch (error) {
@@ -6720,7 +7267,11 @@ const ctx = {
 
     // Re-register with new root
     if (!existsSync(configuredDir)) mkdirSync(configuredDir, { recursive: true });
-    const result = await registerWorkspaceTools(tools, configuredDir, { jobs, getOperationId: () => activeOperation?.id ?? null });
+    const result = await registerWorkspaceTools(tools, configuredDir, {
+      jobs,
+      getOperationId: () => activeOperation?.id ?? null,
+      preparedDocumentRegistry,
+    });
     hasSemanticSearch = result.hasSemantic;
     wsToolNames = result.toolNames;
     workspaceDir = configuredDir;
@@ -6831,6 +7382,15 @@ ${modeList}
 
     busy = true;
     const operation = beginActiveOperation(operationKindForPrompt(text, opts));
+    activeMessageSendContext = {
+      source: operation.kind,
+      userPrompt: operation.kind === "chat"
+        ? String(text ?? "").slice(0, 12_000)
+        : operation.kind === "scheduled-prompt"
+          ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
+          : "",
+      operationId: operation.id,
+    };
     const stopFromExternalSignal = () => {
       if (operation.controller.signal.aborted) return;
       operation.state = "stopping";
@@ -6866,10 +7426,12 @@ ${modeList}
           return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only letters, numbers, Chinese characters, underscore, dot, or hyphen.` };
         }
         clearSessionMemories();
+        preparedDocumentRegistry.clear({ notifyChange: false });
         try {
           const sessionFile = sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
           restoreSessionMemories(sessionMeta.sessionMemories);
+          preparedDocumentRegistry.restore(sessionMeta.preparedDocuments, { replace: true, notifyChange: false });
           const modeRestore = applyModeForSessionMeta(sessionMeta);
           if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
           const raw = await readFile(sessionFile, "utf8");
@@ -6994,6 +7556,13 @@ ${modeList}
           const maxChars = 12000;
           const body = skill.body.length > maxChars ? `${skill.body.slice(0, maxChars)}\n\n…（内容过长，已截断）` : skill.body;
           return emitSkillResult(`## ${skill.name}\n\n${skill.description || "无描述"}\n\n${body}`);
+        }
+
+        if (skill.name === "dws") {
+          const status = await vhomeIntegration.getStatus();
+          if (!status.connected) {
+            return emitSkillResult("V来家尚未连接。你仍可正常使用 AI、文件、索引和其他本地功能；需要访问 V来家时，请点击左侧导航栏底部的“登录 V来家”，完成授权后重新发送这条请求。");
+          }
         }
 
         manualSkillTask = task;
@@ -7353,7 +7922,9 @@ ${modeList}
         const turnArtifactPaths = new Set();
         try {
           const retrievalText = manualSkillTask ?? text;
-          const retrieval = await retrieveSemanticContext(retrievalText, retrievalHistory, operation.controller.signal);
+          const retrieval = opts.disableSemanticRetrieval
+            ? { input: retrievalText, sources: [], status: "disabled-for-skill-schedule", elapsedMs: 0 }
+            : await retrieveSemanticContext(retrievalText, retrievalHistory, operation.controller.signal);
           const retrievedInput = retrieval.sources.length > 0 ? retrieval.input : retrievalText;
           if (manualSkillInput) {
             loopInput = `${manualSkillInput}\n\n# User task\n\n${retrievedInput}`;
@@ -7515,6 +8086,7 @@ ${modeList}
           busy = false;
           broadcastDashboardEvent({ kind: "busy-change", busy: false });
           detachExternalSignal();
+          clearMessageSendContext(operation);
           finishActiveOperation(operation);
         }
       })();
@@ -7528,6 +8100,7 @@ ${modeList}
         detachExternalSignal();
         busy = false;
         broadcastDashboardEvent({ kind: "busy-change", busy: false });
+        clearMessageSendContext(operation);
         finishActiveOperation(operation);
       }
     }

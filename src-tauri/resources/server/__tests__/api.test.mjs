@@ -802,6 +802,7 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
   test("POST/GET/DELETE /api/schedules 管理定时任务", async () => {
     const schedules = [];
     let runId = null;
+    let archiveRequest = null;
     const ctx = {
       listSchedules: () => schedules,
       createSchedule: (input) => {
@@ -874,6 +875,10 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
         });
         return { ok: true, accepted: true, runId: "run-ok", schedule };
       },
+      archiveScheduleSkillRun: async (id, options) => {
+        archiveRequest = { id, options };
+        return { ok: true, path: "C:\\workspace\\knowledge\\vhome\\projects\\daily.md", duplicate: false };
+      },
       deleteSchedule: (id) => {
         const idx = schedules.findIndex((s) => s.id === id);
         if (idx < 0) return { ok: false, error: "schedule not found" };
@@ -944,6 +949,11 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(run.json.schedule.history[0].summary, "All checks passed");
     assert.equal(run.json.schedule.history[0].lastPromptTokens, 1234);
 
+    const archived = await apiPost("/api/schedules/task-1/archive", { runId: "run-ok", autoIndex: true }, ctx);
+    assert.equal(archived.status, 200);
+    assert.equal(archived.json.duplicate, false);
+    assert.deepEqual(archiveRequest, { id: "task-1", options: { runId: "run-ok", autoIndex: true } });
+
     schedules[0].forceReject = true;
     const rejected = await apiPost("/api/schedules/task-1/run", {}, ctx);
     assert.equal(rejected.status, 409);
@@ -993,6 +1003,20 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     const res = await apiGet("/api/health");
     assert.equal(res.status, 200);
     assert.match(res.json.semantic.path, /semantic[\\/]projects[\\/][a-f0-9]{64}$/);
+  });
+
+  test("GET /api/schedules/templates 返回兼容 Skill 的结构化定时模板", async () => {
+    const integrations = [{
+      id: "dws",
+      displayName: "V来家",
+      version: "1.0.51.2",
+      compatible: true,
+      reason: null,
+      templates: [{ id: "unread-message-digest", title: "未读消息摘要", risk: "read", requiresConnection: "vhome" }],
+    }];
+    const res = await apiGet("/api/schedules/templates", { listSkillScheduleTemplates: () => integrations });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json.integrations, integrations);
   });
 
   test("一次检测覆盖所有服务商，限制双并发且只激活当前服务商的通过模型", async () => {

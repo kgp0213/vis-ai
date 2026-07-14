@@ -18,9 +18,19 @@
       "sha256": "937db176b585e874aa5bff48d536bce78037665cd862b5deefe56e79977e6588"
     },
     {
+      "id": "dws",
+      "path": "server/dws.exe",
+      "version": "1.0.51",
+      "source": "https://github.com/open-dingtalk/dingtalk-workspace-cli",
+      "license": "Apache-2.0",
+      "licenseFile": "DWS_LICENSE.txt",
+      "noticeFile": "DWS_NOTICE.txt",
+      "sha256": "cdab71518a3107ebcf1430d704dfd063b104285a4b5f4402dd8eb5c0e6c09797"
+    },
+    {
       "id": "reasonix",
       "path": "server/visionox-pkg",
-      "version": "260710",
+      "version": "260713",
       "source": "https://github.com/esengine/reasonix",
       "license": "MIT",
       "licenseFile": "server/visionox-pkg/LICENSE"
@@ -32,6 +42,22 @@
       "source": "https://github.com/KaTeX/KaTeX",
       "license": "MIT",
       "licenseFile": "server/visionox-pkg/dashboard/vendor/katex/LICENSE"
+    },
+    {
+      "id": "pdfjs-dist",
+      "path": "server/visionox-pkg/node_modules/pdfjs-dist",
+      "version": "5.4.296",
+      "source": "https://github.com/mozilla/pdf.js",
+      "license": "Apache-2.0",
+      "licenseFile": "server/visionox-pkg/node_modules/pdfjs-dist/LICENSE"
+    },
+    {
+      "id": "napi-rs-canvas",
+      "path": "server/visionox-pkg/node_modules/@napi-rs/canvas",
+      "version": "0.1.80",
+      "source": "https://github.com/Brooooooklyn/canvas",
+      "license": "MIT",
+      "licenseFile": "server/visionox-pkg/node_modules/@napi-rs/canvas/LICENSE"
     },
     {
       "id": "bootstrap-skills",

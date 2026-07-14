@@ -1,0 +1,4 @@
+interface:
+  display_name: "V来家 Skill 创建"
+  short_description: "通过自然对话和交互选择卡片创建只读 V来家工作技能"
+  default_prompt: "Use $vhome-skill-builder to create a read-only V来家 weekly summary Skill."

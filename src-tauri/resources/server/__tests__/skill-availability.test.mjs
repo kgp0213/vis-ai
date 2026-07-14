@@ -25,7 +25,7 @@ test("all bundled skill directories contain a readable SKILL.md and provenance",
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(skillNames.length, 42);
+  assert.equal(skillNames.length, 44);
   for (const name of skillNames) {
     const path = skillFile(name);
     assert.ok(existsSync(path), `${name} is missing SKILL.md`);
@@ -44,11 +44,21 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   assert.ok(initialization >= 0 && firstWindowsCall > initialization);
   assert.match(pdf, /path.*run_skill result header/i);
   assert.match(pdf, /Do not run `setup\.sh` directly on Windows/);
+  assert.match(pdf, /Call `extract_pdf_text` with the returned `documentRef`/);
+  assert.match(pdf, /Do not use OfficeCLI for PDF files/);
+  assert.match(pdf, /Never install dependencies automatically/);
+  const pdfScript = readFileSync(skillFile("pdf", "scripts/pdf.py"), "utf8");
+  assert.match(pdfScript, /PermissionRequired/);
+  assert.match(pdfScript, /\["pdfplumber", "pdfium", "pypdf"\]/);
+  assert.match(pdfScript, /import pypdfium2 as pdfium/);
+  const statsFunction = pdfScript.slice(pdfScript.indexOf("def _pdf_stats"), pdfScript.indexOf("def _classify_lines"));
+  assert.doesNotMatch(statsFunction, /pip[\s\S]{0,40}install|subprocess\.run/);
 
   const cjk = readFileSync(skillFile("md-to-pdf-cjk"), "utf8");
   assert.match(cjk, /python -m pip install reportlab/);
   assert.match(cjk, /ReportLab is not bundled with Visionox/);
   assert.match(cjk, /md_to_pdf\.py input\.md output\.pdf/);
+  assert.match(cjk, /must never be used as a fallback PDF reader/);
   assert.doesNotMatch(cjk, /md_to_pdf\.py input\.md "Document Title"/);
   const converter = readFileSync(skillFile("md-to-pdf-cjk", "scripts/md_to_pdf.py"), "utf8");
   assert.match(converter, /sys\.platform == 'win32'/);
@@ -130,6 +140,42 @@ test("bundled Tavily implementation matches the supported local skill behavior",
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("bundled DWS skill keeps V来家 operations discoverable and side effects confirmed", () => {
+  const skill = readFileSync(skillFile("dws"), "utf8");
+  const integration = JSON.parse(readFileSync(skillFile("dws", "integration.json"), "utf8"));
+  const templates = JSON.parse(readFileSync(skillFile("dws", "schedule-templates.json"), "utf8"));
+  assert.match(skill, /name: dws/);
+  assert.equal(integration.version, "1.0.51.10");
+  assert.match(skill, /查钉钉消息\/未读\/@我\/群聊/);
+  assert.match(skill, /equivalent English requests/);
+  assert.equal(integration.license, "Apache-2.0");
+  assert.equal(templates.templates.length, 6);
+  assert.ok(templates.templates.every((template) => template.risk === "read" && template.scheduleAllowed === true));
+  assert.match(skill, /call the `dws_read` tool directly/);
+  assert.match(skill, /DWS is not read-only/);
+  assert.match(skill, /without a Visionox command allowlist/);
+  assert.match(skill, /`dws_help`, `dws_docs_search`, and confirmed `dws_exec`/);
+  assert.match(skill, /仍然发送/);
+  assert.match(skill, /request ceiling of 200/);
+  assert.match(skill, /Individual DWS services can impose a lower page size/);
+  assert.match(skill, /Never place a DWS executable path/);
+  assert.match(skill, /"auth","status"/);
+  assert.match(skill, /"contact","user","get-self"/);
+  assert.match(skill, /"list-unread-conversations","--count","20"/);
+  assert.match(skill, /"message","list","--group","<openConversationId>","--time"/);
+  assert.match(skill, /"list-by-sender","--sender-open-dingtalk-id"/);
+  assert.match(skill, /"report","outbox","list","--cursor","0","--size","20"/);
+  assert.match(skill, /"minutes","list","all","--start","<ISO-8601>"/);
+  assert.match(skill, /"--dimension","jobNumber"/);
+  assert.match(skill, /"minutes","get","summary","--id","<taskUuid>"/);
+  assert.match(skill, /string `"true"` as success/);
+  assert.match(skill, /"todo","task","create"/);
+  assert.match(skill, /presents its own confirmation card/);
+  assert.match(skill, /Never supply `--yes`/);
+  assert.match(skill, /~\/\.dws/);
+  assert.match(skill, /never read, copy, print, edit, export, import, or back up those credential files/);
 });
 
 test("systematic debugging includes scripts for Windows and POSIX", () => {

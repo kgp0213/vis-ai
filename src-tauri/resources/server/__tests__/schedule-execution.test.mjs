@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
-import { createScheduleRunRegistry, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } from "../lib/schedule-execution.mjs";
+import { createScheduleRunRegistry, createScheduleTriggerQueue, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, orderMissedSchedules, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } from "../lib/schedule-execution.mjs";
 import { readScheduleStore, writeScheduleStore } from "../lib/schedule-store.mjs";
+
+const { dispatch } = await import(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url).href);
+const API_TOKEN = "schedule-test-token";
 
 let tempRoot = null;
 afterEach(() => {
@@ -27,14 +31,95 @@ describe("schedule run registry", () => {
   });
 });
 
+describe("schedule trigger queue", () => {
+  test("keeps FIFO order and coalesces repeated triggers for the same task", () => {
+    const queue = createScheduleTriggerQueue();
+    assert.deepEqual(queue.enqueue("task-1", { manual: false, requestedAt: "2026-07-14T01:00:00.000Z" }), {
+      enqueued: true,
+      duplicate: false,
+      position: 1,
+    });
+    assert.deepEqual(queue.enqueue("task-2", { manual: true, requestedAt: "2026-07-14T01:00:01.000Z" }), {
+      enqueued: true,
+      duplicate: false,
+      position: 2,
+    });
+    assert.deepEqual(queue.enqueue("task-1", { manual: true, catchUp: true }), {
+      enqueued: false,
+      duplicate: true,
+      position: 1,
+    });
+    assert.equal(queue.size(), 2);
+    assert.equal(queue.position("task-2"), 2);
+    assert.deepEqual(queue.shift(), {
+      taskId: "task-1",
+      manual: true,
+      catchUp: true,
+      requestedAt: "2026-07-14T01:00:00.000Z",
+    });
+    assert.equal(queue.has("task-1"), false);
+    assert.equal(queue.remove("task-2"), true);
+    assert.equal(queue.size(), 0);
+  });
+
+  test("restores missed triggers in original trigger order", () => {
+    const tasks = [
+      { id: "task-late", missedRunAt: "2026-07-14T02:00:00.000Z" },
+      { id: "task-first", missedRunAt: "2026-07-14T01:00:00.000Z" },
+      { id: "task-same-a", missedRunAt: "2026-07-14T01:30:00.000Z" },
+      { id: "task-same-b", missedRunAt: "2026-07-14T01:30:00.000Z" },
+    ];
+    assert.deepEqual(orderMissedSchedules(tasks).map((task) => task.id), [
+      "task-first",
+      "task-same-a",
+      "task-same-b",
+      "task-late",
+    ]);
+    assert.deepEqual(tasks.map((task) => task.id), ["task-late", "task-first", "task-same-a", "task-same-b"]);
+  });
+
+  test("manual run API accepts a queued task instead of returning a conflict", async () => {
+    const request = Readable.from([Buffer.from("{}")]);
+    request.url = "/api/schedules/task-2/run";
+    request.method = "POST";
+    request.headers = { "x-reasonix-token": API_TOKEN, "content-type": "application/json" };
+    let status = null;
+    let body = null;
+    const response = {
+      writeHead(nextStatus) { status = nextStatus; },
+      end(value) { body = value; },
+    };
+    await dispatch(request, response, {
+      runScheduleNow: async () => ({
+        ok: true,
+        accepted: false,
+        queued: true,
+        queuePosition: 2,
+        reason: "waiting for another scheduled task to finish",
+        runId: null,
+        schedule: { id: "task-2", lastStatus: "deferred" },
+      }),
+    }, API_TOKEN);
+    assert.equal(status, 202);
+    assert.deepEqual(JSON.parse(body), {
+      ok: true,
+      accepted: false,
+      queued: true,
+      queuePosition: 2,
+      reason: "waiting for another scheduled task to finish",
+      runId: null,
+      schedule: { id: "task-2", lastStatus: "deferred" },
+    });
+  });
+});
+
 describe("schedule admission policy", () => {
   const task = { kind: "prompt", runMode: "auto" };
 
   test("prioritizes active and concurrency checks", () => {
     assert.equal(decideScheduleAdmission({ task, isRunning: true }).kind, "already_running");
-    const deferred = decideScheduleAdmission({ task, runningCount: 2, maxConcurrent: 2 });
+    const deferred = decideScheduleAdmission({ task, manual: true, runningCount: 1, maxConcurrent: 1 });
     assert.deepEqual({ kind: deferred.kind, retry: deferred.retry, persist: deferred.persist }, { kind: "deferred", retry: true, persist: true });
-    assert.equal(decideScheduleAdmission({ task, manual: true, runningCount: 2, maxConcurrent: 2 }).persist, false);
   });
 
   test("applies workspace checks only to workspace-bound prompt tasks", () => {
@@ -53,8 +138,9 @@ describe("schedule admission policy", () => {
 
   test("classifies rejected prompt submissions without changing API statuses", () => {
     assert.deepEqual(decideRejectedScheduleSubmission({ reason: "loop is busy" }), { status: "deferred", reason: "loop is busy", retry: true });
-    assert.equal(decideRejectedScheduleSubmission({ manual: true, reason: "loop is busy" }).status, "rejected");
+    assert.deepEqual(decideRejectedScheduleSubmission({ manual: true, reason: "loop is busy" }), { status: "deferred", reason: "loop is busy", retry: true });
     assert.equal(decideRejectedScheduleSubmission({ reason: "permission denied" }).status, "skipped");
+    assert.equal(decideRejectedScheduleSubmission({ manual: true, reason: "permission denied" }).status, "rejected");
   });
 });
 
@@ -67,6 +153,7 @@ describe("schedule workspace policy", () => {
     assert.equal(resolveScheduleRunWorkspace({ kind: "prompt", workspaceScope: "current", workspaceDir: first }, second), second);
     assert.equal(resolveScheduleRunWorkspace({ kind: "session_cleanup", workspaceDir: first }, second), first);
     assert.equal(resolveScheduleRunWorkspace({ kind: "report", workspaceDir: first }, second), null);
+    assert.equal(resolveScheduleRunWorkspace({ kind: "prompt", skillName: "dws", workspaceDir: first }, second), null);
   });
 
   test("keeps the knowledge workspace when a session cleanup task is edited elsewhere", () => {

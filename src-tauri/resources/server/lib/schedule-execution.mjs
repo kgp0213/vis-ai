@@ -26,6 +26,68 @@ export function createScheduleRunRegistry({ createController = () => new AbortCo
   };
 }
 
+export function createScheduleTriggerQueue() {
+  const pending = [];
+  const byTaskId = new Map();
+
+  function enqueue(taskId, options = {}) {
+    if (!taskId) throw new TypeError("taskId is required");
+    const existing = byTaskId.get(taskId);
+    if (existing) {
+      existing.manual ||= options.manual === true;
+      existing.catchUp ||= options.catchUp === true;
+      return { enqueued: false, duplicate: true, position: pending.indexOf(existing) + 1 };
+    }
+    const entry = {
+      taskId,
+      manual: options.manual === true,
+      catchUp: options.catchUp === true,
+      requestedAt: typeof options.requestedAt === "string" ? options.requestedAt : new Date().toISOString(),
+    };
+    pending.push(entry);
+    byTaskId.set(taskId, entry);
+    return { enqueued: true, duplicate: false, position: pending.length };
+  }
+
+  function remove(taskId) {
+    const entry = byTaskId.get(taskId);
+    if (!entry) return false;
+    byTaskId.delete(taskId);
+    const index = pending.indexOf(entry);
+    if (index >= 0) pending.splice(index, 1);
+    return true;
+  }
+
+  function shift() {
+    const entry = pending.shift() ?? null;
+    if (entry) byTaskId.delete(entry.taskId);
+    return entry;
+  }
+
+  return {
+    enqueue,
+    has: (taskId) => byTaskId.has(taskId),
+    position: (taskId) => {
+      const entry = byTaskId.get(taskId);
+      return entry ? pending.indexOf(entry) + 1 : 0;
+    },
+    remove,
+    shift,
+    size: () => pending.length,
+  };
+}
+
+export function orderMissedSchedules(tasks = []) {
+  if (!Array.isArray(tasks)) return [];
+  return tasks
+    .map((task, index) => {
+      const timestamp = Date.parse(task?.missedRunAt);
+      return { task, index, timestamp: Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER };
+    })
+    .sort((left, right) => left.timestamp - right.timestamp || left.index - right.index)
+    .map(({ task }) => task);
+}
+
 export function decideScheduleAdmission({
   task,
   manual = false,
@@ -44,8 +106,8 @@ export function decideScheduleAdmission({
       kind: "deferred",
       accepted: false,
       reason: `scheduled task concurrency limit reached (${maxConcurrent})`,
-      persist: !manual,
-      retry: !manual,
+      persist: true,
+      retry: true,
     };
   }
   const requiresBoundWorkspace = task?.kind === "prompt" && task?.workspaceScope !== "current";
@@ -62,16 +124,16 @@ export function decideScheduleAdmission({
 }
 
 export function decideRejectedScheduleSubmission({ manual = false, reason = "loop is busy" } = {}) {
-  const retry = !manual && /busy/i.test(reason);
+  const retry = /busy/i.test(reason);
   return {
-    status: manual ? "rejected" : retry ? "deferred" : "skipped",
+    status: retry ? "deferred" : manual ? "rejected" : "skipped",
     reason,
     retry,
   };
 }
 
 export function resolveScheduleRunWorkspace(task, currentWorkspace) {
-  if (task?.kind === "report") return null;
+  if (task?.kind === "report" || task?.skillName) return null;
   if (task?.kind === "prompt" && task?.workspaceScope === "current") return currentWorkspace ?? null;
   return task?.workspaceDir || currentWorkspace || null;
 }

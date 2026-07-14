@@ -27,6 +27,7 @@
   --accent-primary-hover: #ffc04d;
   --accent-secondary: #e8930a;
   --accent-contrast: #0c0d10;
+  --accent-hover-contrast: #0c0d10;
 
   /* Semantic */
   --color-success: #34d399;
@@ -257,6 +258,7 @@
 
   --accent-primary: #d97706;
   --accent-primary-hover: #b45309;
+  --accent-hover-contrast: #ffffff;
 
   --border-subtle: #e5e5e8;
   --border-default: #d1d1d6;
@@ -460,6 +462,187 @@ code, .mono {
   padding: var(--space-2);
 }
 
+/* V来家 connection */
+.vhome-control {
+  position: relative;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.vhome-control-button {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px 7px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.vhome-control-button:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.vhome-control-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.vhome-status-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.vhome-control-button.connected .vhome-status-dot {
+  background: var(--c-ok);
+}
+
+.vhome-control-button.authorizing .vhome-status-dot {
+  background: var(--c-warn);
+}
+
+.vhome-control-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vhome-popover {
+  position: fixed;
+  left: 8px;
+  bottom: 58px;
+  z-index: 80;
+  width: min(300px, calc(100vw - 16px));
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+}
+
+.vhome-popover-title {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.vhome-popover-meta,
+.vhome-popover-error {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.vhome-popover-error {
+  color: var(--c-err);
+}
+
+.vhome-code-row {
+  min-width: 0;
+  margin-top: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.vhome-code-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+}
+
+.vhome-code-row > span,
+.vhome-login-link > span {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.vhome-login-link {
+  min-width: 0;
+  margin-top: var(--space-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 5px 7px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+}
+
+.vhome-login-link > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vhome-copy-status {
+  margin-top: var(--space-2);
+  color: var(--c-ok);
+  font-size: var(--text-xs);
+}
+
+.vhome-popover-actions {
+  margin-top: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.vhome-popover-actions button,
+.vhome-code-row button,
+.vhome-login-link button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.vhome-popover-actions button.primary {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: var(--accent-contrast);
+}
+
+.vhome-popover-actions button.primary:hover:not(:disabled) {
+  border-color: var(--accent-primary-hover);
+  background: var(--accent-primary-hover);
+  color: var(--accent-hover-contrast);
+}
+
+.vhome-popover-actions button.danger {
+  color: var(--c-err);
+}
+
+.app.collapsed .vhome-control {
+  padding-inline: 5px;
+}
+
+.app.collapsed .vhome-control-button {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.app.collapsed .vhome-control-label {
+  display: none;
+}
+
 /* Sidebar Footer */
 .side-foot {
   padding: var(--space-3);
@@ -470,6 +653,7 @@ code, .mono {
 }
 
 .side-foot .toggle {
+  flex: 0 0 32px;
   width: 32px;
   height: 32px;
   border-radius: var(--radius-md);
@@ -489,6 +673,11 @@ code, .mono {
 }
 
 .side-foot .label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
@@ -701,12 +890,13 @@ code, .mono {
 
 .btn-primary {
   background: var(--accent-primary);
-  color: #0c0d10;
+  color: var(--accent-contrast);
   border-color: var(--accent-primary);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-primary-hover);
+  color: var(--accent-hover-contrast);
   border-color: var(--accent-primary-hover);
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
@@ -770,7 +960,7 @@ code, .mono {
 /* Legacy button classes */
 button.primary {
   background: var(--accent-primary);
-  color: #0c0d10;
+  color: var(--accent-contrast);
   border: 1px solid var(--accent-primary);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
@@ -782,6 +972,7 @@ button.primary {
 
 button.primary:hover {
   background: var(--accent-primary-hover);
+  color: var(--accent-hover-contrast);
 }
 
 button.danger {

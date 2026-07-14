@@ -36,3 +36,35 @@ test("release verifier covers every top-level governance resource bundled by Tau
     assert.match(verifier, new RegExp(name.replaceAll(".", "\\.")));
   }
 });
+
+test("release Rust tests use the prepared runtime from a temporary directory", () => {
+  const releaseCheck = readFileSync(new URL("../../../../scripts/release-check.js", import.meta.url), "utf8");
+  assert.match(releaseCheck, /visionox-rust-runtime-/);
+  assert.match(releaseCheck, /scripts\/prepare-runtime-package\.js/);
+  assert.match(releaseCheck, /VISIONOX_RUNTIME_PACKAGE: runtimePackage/);
+  assert.match(releaseCheck, /TAURI_CONFIG: JSON\.stringify\(resourceOverride\)/);
+  assert.match(releaseCheck, /rmSync\(stagingRoot, \{ recursive: true, force: true \}\)/);
+});
+
+test("release guard validates the injected build stamp without rewriting the vendored package version", () => {
+  const releaseCheck = readFileSync(new URL("../../../../scripts/release-check.js", import.meta.url), "utf8");
+  assert.match(releaseCheck, /checkReleaseBuildStamp/);
+  assert.match(releaseCheck, /valid YYMMDD HH build stamp/);
+  assert.doesNotMatch(releaseCheck, /expected UI Ver/);
+  assert.doesNotMatch(releaseCheck, /pkg\.version !== expected/);
+});
+
+test("third-party inventory tracks the actual vendored Reasonix package version", () => {
+  const inventory = JSON.parse(readFileSync(new URL("../../../../src-tauri/resources/third-party-resources.json", import.meta.url), "utf8"));
+  const reasonixPackage = JSON.parse(readFileSync(new URL("../visionox-pkg/package.json", import.meta.url), "utf8"));
+  const notices = readFileSync(new URL("../../../../src-tauri/resources/THIRD_PARTY_NOTICES.md", import.meta.url), "utf8");
+  assert.equal(inventory.resources.find((resource) => resource.id === "reasonix")?.version, reasonixPackage.version);
+  assert.match(notices, new RegExp(`Version: ${reasonixPackage.version}`));
+});
+
+test("OfficeCLI receives a longer MCP request timeout without changing other servers", () => {
+  const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
+  assert.match(launcher, /OFFICECLI_MCP_REQUEST_TIMEOUT_MS:\s*180_000/);
+  assert.match(launcher, /requestTimeoutMs:\s*mcpRequestTimeoutMs\(spec\.name\)/);
+  assert.match(launcher, /serverName === "officecli"\s*\?\s*CONSTANTS\.OFFICECLI_MCP_REQUEST_TIMEOUT_MS\s*:\s*undefined/);
+});

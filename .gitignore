@@ -7,6 +7,7 @@
 /skills/
 /tep/
 /tools/
+/DWS/
 /.claude/
 /.reasonix/
 /.workbuddy/
@@ -20,6 +21,7 @@
 node_modules/
 /src-tauri/resources/server/node.exe
 /src-tauri/resources/server/officecli.exe
+/src-tauri/resources/server/dws.exe
 
 # Non-runtime metadata from the vendored upstream package. The JavaScript
 # bundles themselves are maintained and tracked by this repository.
@@ -34,6 +36,8 @@ node_modules/
 /record.txt
 /launcher_*.log
 /launcher_url*.txt
+/visionox-whale.log
+/visionox-server-stderr.log
 
 # Portable distribution and temporary icon work
 /portable/
@@ -48,6 +52,7 @@ node_modules/
 /docs/providers-ful-new.json
 /docs/providers-ful-new-merged.json
 /docs/providers-ful-new-0713.json
+/docs/providers-ful-new-0713-2.json
 
 # Operating system and editor state
 .DS_Store

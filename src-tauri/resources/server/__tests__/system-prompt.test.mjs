@@ -22,6 +22,22 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /"command":"add"/);
   });
 
+  test("本地 PDF 使用稳定文档引用和内置提取器", () => {
+    const prompt = buildSystemPrompt([], "/root", false);
+    assert.match(prompt, /keep its stable `documentRef`/);
+    assert.match(prompt, /existing PDF call `extract_pdf_text`/);
+    assert.match(prompt, /Never use OfficeCLI for PDF/);
+    assert.match(prompt, /host will recreate a missing readable copy automatically/);
+  });
+
+  test("结构化选择必须使用交互卡片而不是正文菜单", () => {
+    const prompt = buildSystemPrompt([], "/root", false);
+    assert.match(prompt, /call `ask_choice`/);
+    assert.match(prompt, /Do not enumerate A\/B\/C/);
+    assert.match(prompt, /short stable ids such as A, B, and C/);
+    assert.match(prompt, /open-ended free-form answer/);
+  });
+
   test("rootDir 注入到安全边界", () => {
     const prompt = buildSystemPrompt([], "/my/workspace", false);
     assert.ok(prompt.includes("/my/workspace"));

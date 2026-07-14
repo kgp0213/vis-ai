@@ -14,6 +14,8 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
+import { writeReleaseManifest } from "./release-manifest.js";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 const productName = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8")).productName;
@@ -107,6 +109,19 @@ try {
   const expectedFiles = collectFiles(releaseResources);
   const packedFiles = collectFiles(packedResources);
   const failures = [];
+  const criticalDwsResources = [
+    "server/dws.exe",
+    "DWS_LICENSE.txt",
+    "DWS_NOTICE.txt",
+    "bootstrap-skills/dws/SKILL.md",
+    "bootstrap-skills/dws/integration.json",
+    "bootstrap-skills/dws/scripts/dws-json.mjs",
+    "bootstrap-skills/dws/references/upstream/README.md",
+    "bootstrap-skills/dws/references/upstream/products/chat.md",
+  ];
+  for (const path of criticalDwsResources) {
+    if (!packedFiles.has(path)) failures.push(`missing critical DWS resource: ${path}`);
+  }
   for (const [path, expected] of expectedFiles) {
     const packed = packedFiles.get(path);
     if (!packed) {
@@ -119,6 +134,12 @@ try {
   }
   for (const path of packedFiles.keys()) {
     if (!expectedFiles.has(path)) failures.push(`unexpected resource: ${path}`);
+    if (/(?:^|\/)\.dws(?:\/|$)|(?:^|\/)(?:identity\.json|app\.json|dws\.log)$/i.test(path)) failures.push(`forbidden DWS user state: ${path}`);
+    if (/^bootstrap-skills\/dws\/.*\.(?:exe|bat|py)$/i.test(path)) failures.push(`forbidden portable DWS file: ${path}`);
+    if (/^(?:bootstrap-skills\/dws\/|server\/lib\/dws-|server\/launcher\.mjs)/i.test(path)) {
+      const content = readFileSync(packedFiles.get(path), "utf8");
+      if (/D:\\V-ABC|C:\\Users\\Lenovo/i.test(content)) failures.push(`development-machine path leaked into installer: ${path}`);
+    }
   }
   if (failures.length > 0) {
     for (const failure of failures) console.error(`[verify-nsis] ${failure}`);
@@ -134,6 +155,7 @@ try {
   }
   console.log(`[verify-nsis] ok ${binaryName}: expected Tauri UNK -> NSS marker only`);
   console.log(`[verify-nsis] verified ${installer}`);
+  writeReleaseManifest({ root, releaseVerified: true, includeNsis: true, nsisVerified: true });
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

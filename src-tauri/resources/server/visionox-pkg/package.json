@@ -1,6 +1,6 @@
 {
   "name": "reasonix",
-  "version": "260710",
+  "version": "260713",
   "description": "DeepSeek-native coding agent: cache-first loop, flash-first cost control, tool-call repair.",
   "type": "module",
   "bin": {
@@ -68,6 +68,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@napi-rs/canvas": "0.1.80",
     "cli-highlight": "^2.1.11",
     "commander": "^12.1.0",
     "eventsource-parser": "^3.0.0",
@@ -76,6 +77,7 @@
     "ink": "^7.0.2",
     "ink-text-input": "^6.0.0",
     "node-html-parser": "^7.1.0",
+    "pdfjs-dist": "5.4.296",
     "picomatch": "^4.0.4",
     "react": "^19.2.6",
     "string-width": "^7.2.0",

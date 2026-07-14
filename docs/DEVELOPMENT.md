@@ -20,7 +20,7 @@ git clone git@gitee.com:hufz_admin/vis-ai.git
 cd vis-ai
 npm ci
 
-# 将获准使用的 node.exe 和 officecli.exe 放入 src-tauri/resources/server/
+# 将获准使用的 node.exe、officecli.exe 和 dws.exe 放入 src-tauri/resources/server/
 # 二进制被 Git 忽略，版本、大小和 SHA-256 必须与 runtime-manifest.json 一致
 
 # 开发测试：只构建 exe，不生成安装包
@@ -44,7 +44,7 @@ npm run bundle:nsis
 - `npm run release:check` 的 Rust 测试产物写入系统临时目录并自动删除，不会生成或使用项目内的 `target/debug`。
 - 实际交付 exe 或 NSIS 时填写 [发布验收清单](RELEASE_CHECKLIST.md)，记录 commit、版本、功能抽查和产物 SHA-256。
 - `scripts/restore-visionox-pkg.js` 是维护/重拉上游 reasonix 包的工具，不是常规构建步骤。普通 `npm run restore:pkg` 已禁用；必须在备份并准备重新迁移补丁后，才使用 `npm run restore:pkg:danger -- --force`。
-- Node.js 和 OfficeCLI 都有公开上游来源。普通构建不联网；缺少已批准的本地二进制时应停止并说明。只有用户明确授权联网更新后，才可运行 `npm run fetch:binaries:danger`，下载到系统临时目录并通过 manifest 校验后更新源码资源。
+- Node.js、OfficeCLI 和 DWS 都有公开上游来源。普通构建不联网；缺少已批准的本地二进制时应停止并说明。只有用户明确授权联网更新后，才可运行危险维护入口，下载到系统临时目录并通过 manifest 校验后更新源码资源。
 
 ---
 

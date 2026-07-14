@@ -2,7 +2,10 @@ use std::io::{BufRead, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -400,6 +403,7 @@ fn wait_for_child_exit(pid: u32) {
 struct ServerState {
     child: Option<Child>,
     url: Option<String>,
+    shutting_down: Arc<AtomicBool>,
     // SAFETY: This field is a RAII guard. The Arc keeps the JobObject
     // alive; when the last Arc is dropped, KILL_ON_JOB_CLOSE terminates
     // all child processes. Do NOT remove this field — it is "read" by
@@ -925,6 +929,53 @@ fn spawn_initial_server(
     Err(last_error.into())
 }
 
+fn restore_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, source: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        log_diag(&format!(
+            "window restore failed: source={source} main window not found"
+        ));
+        return;
+    };
+
+    let visible_before = window.is_visible().ok();
+    let minimized_before = window.is_minimized().ok();
+    log_diag(&format!(
+        "window restore requested: source={source} visible={visible_before:?} minimized={minimized_before:?}"
+    ));
+
+    if let Err(e) = window.unminimize() {
+        log_diag(&format!(
+            "window unminimize failed: source={source} error={e}"
+        ));
+    }
+    match window.current_monitor() {
+        Ok(None) => {
+            log_diag(&format!(
+                "window is outside current monitors; recentering: source={source}"
+            ));
+            if let Err(e) = window.center() {
+                log_diag(&format!("window center failed: source={source} error={e}"));
+            }
+        }
+        Ok(Some(_)) => {}
+        Err(e) => log_diag(&format!(
+            "window monitor query failed: source={source} error={e}"
+        )),
+    }
+    if let Err(e) = window.show() {
+        log_diag(&format!("window show failed: source={source} error={e}"));
+    }
+    if let Err(e) = window.set_focus() {
+        log_diag(&format!("window focus failed: source={source} error={e}"));
+    }
+
+    let visible_after = window.is_visible().ok();
+    let minimized_after = window.is_minimized().ok();
+    log_diag(&format!(
+        "window restore completed: source={source} visible={visible_after:?} minimized={minimized_after:?}"
+    ));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> anyhow::Result<()> {
     // P3: initialize diagnostics log path early so background threads
@@ -949,15 +1000,7 @@ pub fn run() -> anyhow::Result<()> {
                 guard.cwd.clone_from(&cwd);
             }
 
-            // Bring the main window to the foreground.
-            if let Some(w) = app.get_webview_window("main") {
-                if let Err(e) = w.show() {
-                    log_diag(&format!("single-instance show failed: {e}"));
-                }
-                if let Err(e) = w.set_focus() {
-                    log_diag(&format!("single-instance set_focus failed: {e}"));
-                }
-            }
+            restore_main_window(app, "single-instance");
 
             // Notify the loader UI (and via postMessage the dashboard) about the args.
             let payload = StartupArgs {
@@ -971,6 +1014,7 @@ pub fn run() -> anyhow::Result<()> {
         .manage(Mutex::new(ServerState {
             child: None,
             url: None,
+            shutting_down: Arc::new(AtomicBool::new(false)),
             job: None,
         }))
         .manage(Mutex::new(StartupArgs {
@@ -1002,6 +1046,11 @@ pub fn run() -> anyhow::Result<()> {
             // Spawn server in background thread so UI isn't blocked
             let win_for_url = main_window.clone();
             let app_handle = app.handle().clone();
+            let shutting_down_for_thread = {
+                let state = app_handle.state::<Mutex<ServerState>>();
+                let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                guard.shutting_down.clone()
+            };
 
             // P0-4: catch_unwind so a panic doesn't silently kill the thread
             let _handle = std::thread::spawn(move || {
@@ -1009,7 +1058,13 @@ pub fn run() -> anyhow::Result<()> {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         log_diag("[rust] background thread started");
                         match spawn_initial_server(&job_for_thread) {
-                            Ok((child, url, port, _token)) => {
+                            Ok((mut child, url, port, _token)) => {
+                                if shutting_down_for_thread.load(Ordering::Acquire) {
+                                    log_diag("[rust] server startup completed during application shutdown; terminating child");
+                                    let _ = child.kill();
+                                    let _ = child.wait();
+                                    return;
+                                }
                                 log_diag(&format!(
                                     "[rust] server spawned — url={url}, port={port}"
                                 ));
@@ -1037,7 +1092,7 @@ pub fn run() -> anyhow::Result<()> {
                                         .and_then(|origin| serde_json::to_string(&origin).ok())
                                         .unwrap_or_else(|| "\"\"".to_string());
                                     let nav_js = format!(
-                                        "(function(){{var url={url_json};var origin={origin_json};var theme='';try{{theme=localStorage.getItem('visionox-theme')||'';}}catch(e){{}}if(theme&&/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)){{url+=(url.indexOf('?')===-1?'?':'&')+'theme='+encodeURIComponent(theme);}}try{{sessionStorage.setItem('visionox.dashboardUrl',url);sessionStorage.setItem('visionox.dashboardOrigin',origin);localStorage.setItem('visionox.dashboardUrl',url);localStorage.setItem('visionox.dashboardOrigin',origin);}}catch(e){{}}var spinner=document.querySelector('.wrap');if(spinner)spinner.style.display='none';var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.appendChild(f);}}f.src=url;if(window.__visionoxRestoreDashboard)window.__visionoxRestoreDashboard();}})();"
+                                        "(function(){{var url={url_json};var origin={origin_json};var theme='';try{{theme=localStorage.getItem('visionox-theme')||'';}}catch(e){{}}if(theme&&/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)){{url+=(url.indexOf('?')===-1?'?':'&')+'theme='+encodeURIComponent(theme);}}try{{sessionStorage.setItem('visionox.dashboardUrl',url);sessionStorage.setItem('visionox.dashboardOrigin',origin);localStorage.setItem('visionox.dashboardUrl',url);localStorage.setItem('visionox.dashboardOrigin',origin);}}catch(e){{}}var spinner=document.querySelector('.wrap');if(spinner)spinner.style.display='';var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.appendChild(f);}}f.style.visibility='hidden';f.dataset.ready='';f.src=url;if(window.__visionoxRestoreDashboard)window.__visionoxRestoreDashboard();}})();"
                                     );
                                     log_diag(&format!("[rust] eval js: {nav_js}"));
                                     // P1-5: log eval failure instead of silently discarding
@@ -1050,6 +1105,7 @@ pub fn run() -> anyhow::Result<()> {
                                     // P0-3: monitor child process for unexpected exit and auto-restart with backoff
                                     let win_for_monitor = win_for_url.clone();
                                     let app_handle_for_monitor = app_handle.clone();
+                                    let shutting_down_for_monitor = shutting_down_for_thread.clone();
                                     let _handle = std::thread::spawn(move || {
                                         let mut child_pid = child_pid;
                                         let mut restart_attempt = 0u32;
@@ -1062,6 +1118,11 @@ pub fn run() -> anyhow::Result<()> {
                                             // misclassified exit code 259 (STILL_ACTIVE) as "running"
                                             // forever — the blocking wait fixes that on both platforms.
                                             wait_for_child_exit(child_pid);
+
+                                            if shutting_down_for_monitor.load(Ordering::Acquire) {
+                                                log_diag("[rust] child process exited during application shutdown");
+                                                break;
+                                            }
 
                                             log_diag("[rust] child process exited unexpectedly after navigation");
                                             let prior_attempt = restart_attempt;
@@ -1084,6 +1145,10 @@ pub fn run() -> anyhow::Result<()> {
                                             log_diag(&format!(
                                                 "[rust] restart attempt {restart_attempt}/{CHILD_MAX_RESTART_ATTEMPTS}"
                                             ));
+                                            if shutting_down_for_monitor.load(Ordering::Acquire) {
+                                                log_diag("[rust] server restart cancelled during application shutdown");
+                                                break;
+                                            }
                                             match spawn_server_blocking(&job_for_monitor) {
                                                 Ok((mut child, url, port, token)) => {
                                                     let mut healthy = false;
@@ -1119,7 +1184,7 @@ pub fn run() -> anyhow::Result<()> {
                                                             .and_then(|origin| serde_json::to_string(&origin).ok())
                                                             .unwrap_or_else(|| "\"\"".to_string());
                                                         let nav_js = format!(
-                                                            "(function(){{var url={url_json};var origin={origin_json};var theme='';try{{theme=localStorage.getItem('visionox-theme')||'';}}catch(e){{}}if(theme&&/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)){{url+=(url.indexOf('?')===-1?'?':'&')+'theme='+encodeURIComponent(theme);}}try{{sessionStorage.setItem('visionox.dashboardUrl',url);sessionStorage.setItem('visionox.dashboardOrigin',origin);localStorage.setItem('visionox.dashboardUrl',url);localStorage.setItem('visionox.dashboardOrigin',origin);}}catch(e){{}}var spinner=document.querySelector('.wrap');if(spinner)spinner.style.display='none';var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.appendChild(f);}}f.src=url;if(window.__visionoxRestoreDashboard)window.__visionoxRestoreDashboard();}})();"
+                                                            "(function(){{var url={url_json};var origin={origin_json};var theme='';try{{theme=localStorage.getItem('visionox-theme')||'';}}catch(e){{}}if(theme&&/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)){{url+=(url.indexOf('?')===-1?'?':'&')+'theme='+encodeURIComponent(theme);}}try{{sessionStorage.setItem('visionox.dashboardUrl',url);sessionStorage.setItem('visionox.dashboardOrigin',origin);localStorage.setItem('visionox.dashboardUrl',url);localStorage.setItem('visionox.dashboardOrigin',origin);}}catch(e){{}}var spinner=document.querySelector('.wrap');if(spinner)spinner.style.display='';var f=document.getElementById('vis-app-frame');if(!f){{f=document.createElement('iframe');f.id='vis-app-frame';f.style.position='fixed';f.style.top='0';f.style.left='0';f.style.width='100%';f.style.height='100%';f.style.border='none';document.body.appendChild(f);}}f.style.visibility='hidden';f.dataset.ready='';f.src=url;if(window.__visionoxRestoreDashboard)window.__visionoxRestoreDashboard();}})();"
                                                         );
                                                         if let Err(e) = win_for_monitor.eval(&nav_js) {
                                                             log_diag(&format!("eval(restart navigate) failed: {e}"));
@@ -1213,17 +1278,7 @@ pub fn run() -> anyhow::Result<()> {
                 .tooltip("Visionox-Whale")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            // P1-5: log failures
-                            if let Err(e) = w.show() {
-                                log_diag(&format!("show failed: {e}"));
-                            }
-                            if let Err(e) = w.set_focus() {
-                                log_diag(&format!("set_focus failed: {e}"));
-                            }
-                        }
-                    }
+                    "show" => restore_main_window(app, "tray-menu"),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1233,15 +1288,7 @@ pub fn run() -> anyhow::Result<()> {
                         ..
                     } = event
                     {
-                        let win = tray.app_handle().get_webview_window("main");
-                        if let Some(w) = win {
-                            if let Err(e) = w.show() {
-                                log_diag(&format!("show failed: {e}"));
-                            }
-                            if let Err(e) = w.set_focus() {
-                                log_diag(&format!("set_focus failed: {e}"));
-                            }
-                        }
+                        restore_main_window(tray.app_handle(), "tray-left-click");
                     }
                 })
                 .build(app)?;
@@ -1286,6 +1333,7 @@ pub fn run() -> anyhow::Result<()> {
                     let state = app_handle.state::<Mutex<ServerState>>();
                     // P1-4: poison-safe lock
                     let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.shutting_down.store(true, Ordering::Release);
                     if let Some(ref mut child) = guard.child {
                         log_diag("[tauri] shutting down server...");
                         let _ = child.kill();

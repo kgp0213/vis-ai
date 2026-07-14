@@ -7,9 +7,9 @@ Usage:
 
 Commands:
     env.check [--json]          Check environment dependencies
-    env.fix                     Auto-install missing dependencies
+    env.fix --allow-install     Install optional dependencies after user approval
 
-    extract.text  <pdf> [-p pages]
+    extract.text  <pdf> [-p pages] [--method auto|pdfplumber|pdfium|pypdf]
     extract.table <pdf> [-p pages]
     extract.image <pdf> -o <dir>
 
@@ -368,15 +368,25 @@ def env_check(argv: list):
 
 @cmd("env.fix")
 def env_fix(argv: list):
-    """Auto-install missing Python dependencies."""
+    """Install missing Python dependencies only after explicit approval."""
+    allowed = _pop_flag(argv, "--allow-install", "--allow-install", needs_value=False)
+    if not allowed:
+        Output.error(
+            "PermissionRequired",
+            "Dependency installation is disabled by default.",
+            hint="Use --allow-install only after the user explicitly approves package installation.",
+            code=2,
+        )
     modules = {
         "pikepdf": "pikepdf",
         "pdfplumber": "pdfplumber",
+        "pypdfium2": "pypdfium2",
         "pypdf": "pypdf",
         "pdf2image": "pdf2image",
         "PIL": "Pillow",
     }
     installed = []
+    failed = []
     for mod, pkg in modules.items():
         s, _ = _probe_python_module(mod)
         if s == "missing":
@@ -392,7 +402,10 @@ def env_fix(argv: list):
                     break
             else:
                 print(f"  Failed to install {pkg}")
+                failed.append(pkg)
 
+    if failed:
+        Output.error("InstallFailed", f"Failed to install: {', '.join(failed)}", code=3)
     if installed:
         print(f"\nInstalled: {', '.join(installed)}")
     else:
@@ -411,31 +424,70 @@ def extract_text(argv: list):
         Output.error("MissingArg", "pdf path required")
     pdf_path = argv.pop(0)
     page_range = _pop_flag(argv, "-p", "--pages")
-
-    import pdfplumber
+    method = (_pop_flag(argv, "-m", "--method") or "auto").lower()
+    if method not in {"auto", "pdfplumber", "pdfium", "pypdf"}:
+        Output.error("InvalidMethod", f"Unsupported extraction method: {method}")
     src = Output.check_file(pdf_path)
-    try:
-        doc = pdfplumber.open(src)
-    except Exception as exc:
-        Output.error("PDFError", f"Cannot open PDF: {exc}", code=3)
-
-    total_pages = len(doc.pages)
-    target_pages = _resolve_page_indices(page_range, total_pages)
-    char_total = 0
-    page_results = []
-
-    for pg_idx in target_pages:
-        content = doc.pages[pg_idx].extract_text() or ""
-        char_total += len(content)
-        page_results.append({"page": pg_idx + 1, "chars": len(content), "text": content})
-
-    doc.close()
-    Output.success({
-        "total_pages": total_pages,
-        "extracted_pages": len(target_pages),
-        "total_chars": char_total,
-        "pages": page_results,
-    })
+    methods = ["pdfplumber", "pdfium", "pypdf"] if method == "auto" else [method]
+    failures = []
+    for candidate in methods:
+        try:
+            if candidate == "pdfplumber":
+                import pdfplumber
+                doc = pdfplumber.open(src)
+                try:
+                    total_pages = len(doc.pages)
+                    target_pages = _resolve_page_indices(page_range, total_pages)
+                    texts = [doc.pages[index].extract_text() or "" for index in target_pages]
+                finally:
+                    doc.close()
+            elif candidate == "pdfium":
+                import pypdfium2 as pdfium
+                doc = pdfium.PdfDocument(str(src))
+                try:
+                    total_pages = len(doc)
+                    target_pages = _resolve_page_indices(page_range, total_pages)
+                    texts = []
+                    for index in target_pages:
+                        page = doc[index]
+                        text_page = page.get_textpage()
+                        try:
+                            texts.append(text_page.get_text_range() or "")
+                        finally:
+                            text_page.close()
+                            page.close()
+                finally:
+                    doc.close()
+            else:
+                from pypdf import PdfReader
+                doc = PdfReader(str(src))
+                total_pages = len(doc.pages)
+                target_pages = _resolve_page_indices(page_range, total_pages)
+                texts = [doc.pages[index].extract_text() or "" for index in target_pages]
+            page_results = [
+                {"page": index + 1, "chars": len(text), "text": text}
+                for index, text in zip(target_pages, texts)
+            ]
+            char_total = sum(item["chars"] for item in page_results)
+            Output.success({
+                "engine": candidate,
+                "total_pages": total_pages,
+                "extracted_pages": len(target_pages),
+                "total_chars": char_total,
+                "likely_scanned": char_total < max(20, len(target_pages) * 10),
+                "fallback_failures": failures,
+                "pages": page_results,
+            })
+        except (ImportError, ModuleNotFoundError) as exc:
+            failures.append({"engine": candidate, "error": f"dependency unavailable: {exc}"})
+        except Exception as exc:
+            failures.append({"engine": candidate, "error": str(exc)})
+    Output.error(
+        "PDFExtractionUnavailable",
+        "No local PDF text backend could read the document.",
+        hint=json.dumps(failures, ensure_ascii=False),
+        code=3,
+    )
 
 
 @cmd("extract.table")
@@ -1832,17 +1884,7 @@ def _pdf_stats(pdf_file: Path):
     try:
         from pypdf import PdfReader
     except ImportError:
-        for attempt in (
-            [sys.executable, "-m", "pip", "install", "-q", "pypdf"],
-            [sys.executable, "-m", "pip", "install", "-q", "--break-system-packages", "pypdf"],
-            [sys.executable, "-m", "pip", "install", "-q", "--user", "pypdf"],
-        ):
-            if subprocess.run(attempt, check=False, capture_output=True).returncode == 0:
-                break
-        try:
-            from pypdf import PdfReader
-        except ImportError:
-            return None, None, None
+        return None, None, None
 
     try:
         reader = PdfReader(str(pdf_file))

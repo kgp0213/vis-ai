@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  createPreparedDocumentRegistry,
   DlpDecryptError,
   getDlpConfig,
   prepareLocalDocument,
@@ -49,6 +50,19 @@ async function createFakeDlpScript(dir, decryptedPath) {
   return scriptPath;
 }
 
+async function createRegeneratingDlpScript(dir, decryptedPath) {
+  const scriptPath = join(dir, "regenerating-visionox-file.mjs");
+  await writeFile(scriptPath, [
+    'import { writeFileSync } from "node:fs";',
+    "const src = process.argv[2];",
+    `const dst = ${JSON.stringify(decryptedPath)};`,
+    "const name = src.split(/[\\\\/]/).pop();",
+    "writeFileSync(dst, Buffer.from('%PDF-1.7 regenerated'));",
+    "console.log(JSON.stringify({ ok: true, files: [{ status: 'ok', src, dst, name }] }));",
+  ].join("\n"), "utf8");
+  return scriptPath;
+}
+
 test("getDlpConfig defaults to auto mode and discovers installed script candidates", async () => {
   await withTempDir(async (dir) => {
     const scriptDir = join(dir, ".visionox", "skills", "visionox-file");
@@ -79,6 +93,21 @@ test("resolveDlpScriptPath discovers bundled server skill candidate", async () =
 
     const script = resolveDlpScriptPath({}, { homeDir: join(dir, "home"), serverDir: dir });
     assert.equal(resolve(script), resolve(scriptPath));
+  });
+});
+
+test("resolveDlpScriptPath prefers the bundled script over a stale user skill copy", async () => {
+  await withTempDir(async (dir) => {
+    const homeDir = join(dir, "home");
+    const serverDir = join(dir, "server");
+    const userScript = join(homeDir, ".visionox", "skills", "visionox-file", "visionox_file.py");
+    const bundledScript = join(serverDir, "visionox-file", "visionox_file.py");
+    mkdirSync(resolve(userScript, ".."), { recursive: true });
+    mkdirSync(resolve(bundledScript, ".."), { recursive: true });
+    writeFileSync(userScript, "print('stale')", "utf8");
+    writeFileSync(bundledScript, "print('bundled')", "utf8");
+
+    assert.equal(resolve(resolveDlpScriptPath({}, { homeDir, serverDir })), resolve(bundledScript));
   });
 });
 
@@ -135,6 +164,68 @@ test("prepareLocalDocument extracts a malformed Windows drive path from a full p
     assert.equal(result.documentKind, "pdf");
     assert.equal(result.usedCompatibilityAdapter, true);
   });
+});
+
+test("managed documents recover a missing readable copy across tools and registry restore", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "（20260714）加密 说明书.pdf");
+    const readable = join(dir, "prepared copy.pdf");
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    const scriptPath = await createRegeneratingDlpScript(dir, readable);
+    const registry = createPreparedDocumentRegistry();
+    const options = {
+      cfg: { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry,
+    };
+
+    const prepared = await prepareLocalDocument(source, options);
+    assert.match(prepared.documentId, /^doc_[a-f0-9]{20}$/);
+    assert.equal(prepared.documentRef, `visionox-document:${prepared.documentId}`);
+    assert.equal(resolve(prepared.readablePath), resolve(readable));
+    assert.equal(registry.snapshot().length, 1);
+
+    await rm(readable, { force: true });
+    let receivedArgs = null;
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async (args) => {
+        receivedArgs = args;
+        return "ok";
+      },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => options.cfg,
+      env: options.env,
+      logger: null,
+      registry,
+    });
+
+    assert.equal(await defs.get("run_command").fn({ command: `python extract.py "${prepared.readablePath}"` }), "ok");
+    assert.equal(receivedArgs.command, `python extract.py "${readable}"`);
+    assert.equal(existsSync(readable), true);
+
+    const restored = createPreparedDocumentRegistry();
+    restored.restore(registry.snapshot());
+    await rm(readable, { force: true });
+    const resumed = await prepareLocalDocument(prepared.documentRef, { ...options, registry: restored });
+    assert.equal(resumed.documentId, prepared.documentId);
+    assert.equal(resolve(resumed.sourcePath), resolve(source));
+    assert.equal(resolve(resumed.readablePath), resolve(readable));
+    assert.equal(existsSync(readable), true);
+  });
+});
+
+test("launcher shares and restores managed documents across every document tool", () => {
+  const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
+  assert.match(launcher, /createPreparedDocumentRegistry\(\{[\s\S]*?writeActiveSessionMeta\(\{ preparedDocuments \}\)/);
+  assert.match(launcher, /preparedDocumentRegistry\.restore\(meta\.preparedDocuments/);
+  assert.match(launcher, /preparedDocumentRegistry\.restore\(sessionMeta\.preparedDocuments/);
+  assert.match(launcher, /name: "extract_pdf_text"[\s\S]*?extractPdfText\(prepared\.readablePath/);
+  assert.match(launcher, /wrapReadFileToolWithDlp[\s\S]*?registry: preparedDocumentRegistry/);
+  assert.match(launcher, /wrapToolsPathArgsWithDlp\(tools, registeredNames[\s\S]*?registry: preparedDocumentRegistry/);
 });
 
 test("resolveReadablePathForDlp skips code-like extensions in auto mode", async () => {
@@ -257,6 +348,33 @@ test("wrapToolsPathArgsWithDlp rewrites encrypted officecli command string paths
 
     assert.equal(await defs.get("officecli").fn({ command: `view "${encrypted}" text` }), "ok");
     assert.deepEqual(receivedArgs, { command: ["view", decrypted, "text"] });
+  });
+});
+
+test("wrapToolsPathArgsWithDlp pre-splits a managed OfficeCLI path containing spaces and parentheses", async () => {
+  await withTempDir(async (dir) => {
+    const source = join(dir, "NT71880 技术认证计划 (1).pptx");
+    await writeFile(source, Buffer.from("PK\x03\x04"));
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: source, readablePath: source, encrypted: false });
+
+    let receivedArgs = null;
+    const { defs, tools } = createToolRegistry([["officecli", {
+      name: "officecli",
+      fn: async (args) => {
+        receivedArgs = args;
+        return "ok";
+      },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["officecli"], {
+      readConfig: () => ({ dlp: { mode: "on" } }),
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry,
+    });
+
+    assert.equal(await defs.get("officecli").fn({ command: `view "${source}" text` }), "ok");
+    assert.deepEqual(receivedArgs, { command: ["view", source, "text"] });
   });
 });
 

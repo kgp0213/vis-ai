@@ -62,8 +62,12 @@ PDF 相关技能在办公模式中继续保留：
 
 | 技能 | 用途 |
 |------|------|
-| `pdf` | PDF 创建与编辑 |
+| 内置 `extract_pdf_text` | 使用 PDF.js 读取、提取和总结现有 PDF，不依赖 Python |
+| `pdf` | PDF 深度处理、创建与编辑 |
 | `md-to-pdf-cjk` | Markdown 转 PDF（支持中文） |
+
+OfficeCLI 不处理 PDF。现有 PDF 会先获得稳定的文档引用，再交给 `extract_pdf_text`；切换工具时继续使用
+同一引用。`md-to-pdf-cjk` 是单向生成工具，不能作为现有 PDF 读取失败后的备用解析器。
 
 ---
 

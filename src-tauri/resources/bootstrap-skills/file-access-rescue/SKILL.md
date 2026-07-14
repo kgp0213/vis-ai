@@ -1,6 +1,6 @@
 ---
 name: file-access-rescue
-description: Rescue workflow for local document reading failures, protected/encrypted workplace files, odd Windows paths, wildcard filenames, weird Chinese filenames, local PDF/Office parse failures, and polluted chat context. Always prepare the local document first, then parse the returned readablePath with the right document tool.
+description: Rescue workflow for local document reading failures, protected/encrypted workplace files, odd Windows paths, wildcard filenames, weird Chinese filenames, local PDF/Office parse failures, and polluted chat context. Always prepare the local document first, then keep its stable documentRef while using the right document tool.
 ---
 
 # File Access Rescue
@@ -17,12 +17,12 @@ First call:
 prepare_local_document({ "input": "<the user's raw path or full sentence>" })
 ```
 
-Then use the returned `readablePath` with the appropriate parser:
+Then use the returned stable `documentRef` with the appropriate parser. The host resolves it to the current readable copy before the tool runs:
 
-- PDF: use PDF tools or officecli against `readablePath`.
-- Word/Excel/PPT: use officecli against `readablePath`.
-- XML/DSN/TXT/MD/JSON/YAML/CSV/INI/config/log: use read_file against `readablePath`.
-- Images: use image-capable reading tools against `readablePath`.
+- PDF: call `extract_pdf_text` with `documentRef`; use the `pdf` skill only for advanced processing. Never use OfficeCLI for PDF.
+- Word/Excel/PPT: use officecli against `documentRef`.
+- XML/DSN/TXT/MD/JSON/YAML/CSV/INI/config/log: use read_file against `documentRef`.
+- Images: use image-capable reading tools against `documentRef`.
 
 ## Path Handling
 
@@ -32,6 +32,11 @@ Pass the user's original wording into `prepare_local_document`; do not try to "f
 - Chinese punctuation, spaces, parentheses, and long filenames.
 - Single-file wildcard paths such as `D:\folder\*keyword*.pdf`.
 - Full prompts that contain a path plus extra instructions.
+
+Keep the returned `documentRef` when switching tools. It is stable across Skill changes and
+lets the host recreate a missing readable copy from the original file. Do not depend on a
+temporary path remaining unchanged. The returned `readablePath` is only the current plaintext
+location for diagnostics or a tool that cannot accept the stable reference.
 
 ## User-Facing Answer
 

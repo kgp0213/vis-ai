@@ -14,9 +14,12 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 - 工作区与 `knowledge/` 知识文档语义索引，以及自动召回、按需搜索、不使用三种会话级模式
 - 定时会话整理、AI 质量评估、同主题知识合并和可选的自动 embedding 更新
 - `/learn` 学习功能
-- 内置 Node.js、OfficeCLI、bootstrap skills 和 ECC 规则
+- 内置 Node.js、OfficeCLI、PDF.js、DWS、bootstrap skills 和 ECC 规则
+- V来家/企业钉钉互通：后台检查连接，提供非阻塞登录/退出入口，并支持通讯录、消息读取、智能确认发送、日程、待办、审批和协作文档等能力
+- 可在聊天中通过交互卡片定制只读 V来家 Skill，测试通过并确认后再原子安装
+- V来家定时整理结果可直接预览，并可经质量审核归档到用户指定工作区的 `knowledge/vhome/`；自动归档和索引更新均由用户决定
 - Markdown 打开、预览、文件关联和对话产物管理，统一支持 KaTeX 行内与块级公式
-- 定时任务、执行记录和报告生成
+- 定时任务、执行记录和报告生成；普通任务可选择由已安装 Skill 提供的只读 AI 整理模板
 - 概览页用户数据健康检查，以及带 SHA-256 清单的备份、预览和冲突安全恢复
 
 ## 数据兼容与安全
@@ -77,6 +80,7 @@ src-tauri\target\release\resources\
 - 已安装项目根目录的 npm 依赖
 - `src-tauri/resources/server/node.exe`
 - `src-tauri/resources/server/officecli.exe`
+- `src-tauri/resources/server/dws.exe`
 - `src-tauri/resources/runtime-manifest.json` 中的版本、大小和 SHA-256 与上述二进制一致
 
 规范构建强制 npm 与 Cargo 离线。缺少依赖或运行时资源时会直接失败，不会在构建过程中下载或从旧安装恢复。
@@ -156,7 +160,7 @@ src-tauri\target\release\bundle\nsis\Visionox-Whale_<版本>_x64-setup.exe
 
 - 安装包内主程序与 release exe 一致，仅允许 Tauri bundle marker 差异。
 - 整个 `resources/` 文件集合与 release 完全一致。
-- Node.js、OfficeCLI、Dashboard、服务端、bootstrap skills 和 ECC 规则均存在且 SHA256 一致。
+- Node.js、OfficeCLI、PDF.js、DWS、Dashboard、服务端、bootstrap skills 和 ECC 规则均存在且 SHA256 一致。
 - 安装包没有多余或缺失的运行资源。
 
 构建或验证不会安装生成的 NSIS 文件。
@@ -172,6 +176,7 @@ resources\
     launcher.mjs
     node.exe
     officecli.exe
+    dws.exe
     lib\
     visionox-file\
     visionox-pkg\
@@ -208,7 +213,7 @@ docs/                        使用、架构与开发文档
 | `scripts/prepare-runtime-package.js` | 在系统临时目录准备裁剪后的生产运行时 |
 | `scripts/check-bundle-patches.js` | 检查本地补丁、品牌和构建身份 |
 | `scripts/verify-release-resources.js` | 校验 exe 名和完整 release 资源树 |
-| `scripts/verify-runtime-manifest.js` | 构建前校验本地 Node.js 与 OfficeCLI 的版本清单、大小和 SHA-256 |
+| `scripts/verify-runtime-manifest.js` | 构建前校验本地 Node.js、OfficeCLI 与 DWS 的版本清单、大小和 SHA-256 |
 | `scripts/verify-nsis-bundle.js` | 解包并校验 NSIS 安装包 |
 | `scripts/release-check.js` | 完整发布前检查 |
 
@@ -227,6 +232,8 @@ docs/                        使用、架构与开发文档
 | 组件 | 上游仓库 | License | 说明 |
 |------|----------|---------|------|
 | OfficeCLI | [github.com/iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) | Apache-2.0 | C# 编写的 AI Agent Office 文档 CLI，支持 Word/Excel/PowerPoint。二进制 `officecli.exe` 打包在 `resources/server/` 下，办公模式自动通过 MCP 接入。 |
+| PDF.js | [github.com/mozilla/pdf.js](https://github.com/mozilla/pdf.js) | Apache-2.0 | 使用内置 Node.js 提取本地 PDF 文本，不依赖用户电脑的 Python；仅在读取 PDF 时延迟加载。 |
+| DingTalk Workspace CLI | [github.com/open-dingtalk/dingtalk-workspace-cli](https://github.com/open-dingtalk/dingtalk-workspace-cli) | Apache-2.0 | `dws.exe` 提供 V来家/企业钉钉 OAuth 互通。程序打包二进制、许可证和内置 Skill 的精选命令参考，不打包用户 `~/.dws/` 中的 Token、身份、日志或上游脚本。 |
 | KaTeX | [github.com/KaTeX/KaTeX](https://github.com/KaTeX/KaTeX) | MIT | 数学公式渲染库。`katex.min.js`、`katex.min.css` 及字体文件打包在 `resources/server/visionox-pkg/dashboard/vendor/katex/` 下，Dashboard 通过 `katex-support.js` 接入 marked 扩展，支持行内与块级公式。 |
 
 ## 平台状态

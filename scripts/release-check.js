@@ -8,7 +8,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -22,13 +22,13 @@ function shellQuote(value) {
   return `"${text.replace(/"/g, '\\"')}"`;
 }
 
-function run(label, command, args, cwd = root) {
+function run(label, command, args, cwd = root, env = process.env) {
   console.log(`\n[release-check] ${label}`);
   const display = [command, ...args].map(shellQuote).join(" ");
   console.log(`> ${display}`);
   const result = process.platform === "win32"
-    ? spawnSync(display, { cwd, stdio: "inherit", shell: true })
-    : spawnSync(command, args, { cwd, stdio: "inherit" });
+    ? spawnSync(display, { cwd, stdio: "inherit", shell: true, env })
+    : spawnSync(command, args, { cwd, stdio: "inherit", env });
   if (result.error) {
     console.error(`[release-check] ${result.error.message}`);
   }
@@ -39,36 +39,63 @@ function run(label, command, args, cwd = root) {
 
 function runRustTestsIsolated() {
   const targetDir = mkdtempSync(join(tmpdir(), "visionox-rust-tests-"));
-  console.log(`\n[release-check] rust tests (isolated target: ${targetDir})`);
-  const result = spawnSync("cargo", ["test"], {
-    cwd: join(root, "src-tauri"),
-    stdio: "inherit",
-    windowsHide: true,
-    env: { ...process.env, CARGO_TARGET_DIR: targetDir, CARGO_NET_OFFLINE: "true" },
-  });
-  rmSync(targetDir, { recursive: true, force: true });
-  if (result.error) console.error(`[release-check] ${result.error.message}`);
-  if (result.status !== 0) process.exit(result.status || 1);
+  const stagingRoot = mkdtempSync(join(tmpdir(), "visionox-rust-runtime-"));
+  const runtimePackage = join(stagingRoot, "visionox-pkg");
+  const resourceOverride = {
+    bundle: {
+      resources: {
+        "runtime/visionox-pkg/": null,
+        [`${runtimePackage}${sep}`]: "resources/server/visionox-pkg/",
+      },
+    },
+  };
+  const env = {
+    ...process.env,
+    CARGO_TARGET_DIR: targetDir,
+    CARGO_NET_OFFLINE: "true",
+    npm_config_offline: "true",
+    VISIONOX_RUNTIME_PACKAGE: runtimePackage,
+    TAURI_CONFIG: JSON.stringify(resourceOverride),
+  };
+  try {
+    run("prepare isolated Rust test runtime", process.execPath, ["scripts/prepare-runtime-package.js"], root, env);
+    console.log(`\n[release-check] rust tests (isolated target: ${targetDir})`);
+    const result = spawnSync("cargo", ["test"], {
+      cwd: join(root, "src-tauri"),
+      stdio: "inherit",
+      windowsHide: true,
+      env,
+    });
+    if (result.error) console.error(`[release-check] ${result.error.message}`);
+    if (result.status !== 0) process.exit(result.status || 1);
+  } finally {
+    rmSync(targetDir, { recursive: true, force: true });
+    rmSync(stagingRoot, { recursive: true, force: true });
+  }
 }
 
-function yyMMdd(date = new Date()) {
-  const yy = String(date.getFullYear() % 100).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  return `${yy}${mm}${dd}`;
-}
-
-function checkVersionDate() {
-  console.log("\n[release-check] version date");
-  const pkgPath = join(root, "src-tauri", "resources", "server", "visionox-pkg", "package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  const expected = yyMMdd();
-  if (pkg.version !== expected) {
-    console.error(`[release-check] expected UI Ver${expected}, got Ver${pkg.version}`);
-    console.error("[release-check] update src-tauri/resources/server/visionox-pkg/package.json and package-lock.json before release.");
+function checkBuildStampSource() {
+  const sourcePath = join(root, "src-tauri", "resources", "server", "visionox-pkg", "dist", "cli", "server-XGDBRWMB.js");
+  const source = readFileSync(sourcePath, "utf8");
+  if (!source.includes('buildDate: "__VISIONOX_BUILD_STAMP__"')) {
+    console.error("[release-check] runtime source is missing the build stamp placeholder");
     process.exit(1);
   }
-  console.log(`[release-check] ok: Ver${pkg.version}`);
+}
+
+function checkReleaseBuildStamp() {
+  const builtPath = join(root, "src-tauri", "target", "release", "resources", "server", "visionox-pkg", "dist", "cli", "server-XGDBRWMB.js");
+  const built = readFileSync(builtPath, "utf8");
+  if (built.includes("__VISIONOX_BUILD_STAMP__")) {
+    console.error("[release-check] release still contains the unresolved build stamp placeholder");
+    process.exit(1);
+  }
+  const match = /buildDate:\s*"(\d{6} \d{2})"/.exec(built);
+  if (!match) {
+    console.error("[release-check] release is missing a valid YYMMDD HH build stamp");
+    process.exit(1);
+  }
+  console.log(`[release-check] valid YYMMDD HH build stamp: ${match[1]}`);
 }
 
 function printArtifacts() {
@@ -86,9 +113,10 @@ run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visi
 run("bundled runtime Unicode path", npmCmd, ["run", "check:runtime-paths"]);
 run("bundle patch guard", npmCmd, ["run", "check:bundle-patches"]);
 run("node tests", npmCmd, ["test"]);
+checkBuildStampSource();
 runRustTestsIsolated();
-checkVersionDate();
 run("tauri no-bundle build", npmCmd, ["run", "tauri:build", "--", "--no-bundle"]);
+checkReleaseBuildStamp();
 printArtifacts();
 
 console.log("\n[release-check] ok");

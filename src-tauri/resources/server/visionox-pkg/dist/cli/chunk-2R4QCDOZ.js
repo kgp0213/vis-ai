@@ -9294,7 +9294,7 @@ function sanitizeOptions(raw) {
 function registerChoiceTool(registry, opts = {}) {
   registry.register({
     name: "ask_choice",
-    description: "Render an arrow-key picker with 2\u20136 alternatives. Use when the user is supposed to pick \u2014 never enumerate choices as prose. Use the current conversation language for the question, titles, and summaries. A summary must add useful detail; never repeat or translate the title. Skip when one option is clearly best (just do it) or a free-form text answer fits. Max 6 options; set `allowCustom:true` when their real answer might not fit.",
+    description: "Present 2\u20136 alternatives as an interactive Dashboard card. If the user is supposed to choose, call this tool instead of listing A/B/C or numbered options in assistant prose. Use it when the user asks for options, when several valid approaches require their preference, or before a user-controlled workflow branch. Use short stable ids (A/B/C), the current conversation language, concise titles, and summaries only when they add useful detail; never repeat or translate the title. Set allowCustom:true when the real answer may not fit. Skip only when one option is clearly best or an open-ended free-form answer is required. After calling, stop and wait for the selection.",
     readOnly: true,
     parameters: {
       type: "object",

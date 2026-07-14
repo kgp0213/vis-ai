@@ -101,6 +101,24 @@ test("dashboard sends selected mentions structurally and run_skill accepts named
   assert.match(tools, /not listed in the detailed catalog/);
 });
 
+test("scheduled Skill templates stay structured, read-only and dynamically resolved", () => {
+  const dashboard = readFileSync(dashboardUrl, "utf8");
+  const launcher = readFileSync(launcherUrl, "utf8");
+  assert.match(dashboard, /usePoll\("\/schedules\/templates", 6e4\)/);
+  assert.match(dashboard, /executionSource === "skill"/);
+  assert.match(dashboard, /skillPromptAddendum/);
+  assert.match(launcher, /resolveScheduledSkillInvocation/);
+  assert.match(launcher, /previousSuccessfulRunAt = task\.skillName/);
+  assert.match(launcher, /entry\?\.skillName === task\.skillName/);
+  assert.match(launcher, /24 \* 60 \* 60 \* 1000/);
+  assert.match(launcher, /skillInvocation: scheduledSkill\?\.skillInvocation/);
+  assert.match(launcher, /disableSemanticRetrieval: Boolean\(scheduledSkill\)/);
+  assert.match(launcher, /status: "disabled-for-skill-schedule"/);
+  assert.match(launcher, /status: "waiting_auth"/);
+  assert.match(launcher, /listSkillScheduleTemplates/);
+  assert.match(launcher, /name: "rollback_skill"/);
+});
+
 test("tavily credentials are stored locally without exposing their value", () => {
   const home = mkdtempSync(join(tmpdir(), "skill-credentials-"));
   const environment = {};
@@ -159,6 +177,43 @@ test("unambiguous weather questions route to the installed skill without hijacki
   const launcher = readFileSync(launcherUrl, "utf8");
   assert.match(launcher, /const automaticSkillInvocation = explicitSkillInvocation \? null : routeAutomaticSkill\(text\)/);
   assert.match(launcher, /\.read\(automaticSkillInvocation\.name\) \? automaticSkillInvocation : null/);
+});
+
+test("document intent routes existing PDFs and Markdown conversion to distinct skills", () => {
+  const pdfTask = "读取 D:\\_归档\\（20260703）OP Manual规范模板.pdf 并整理成 Markdown";
+  assert.deepEqual(routeAutomaticSkill(pdfTask), { name: "pdf", task: pdfTask, source: "automatic" });
+  const markdownTask = "把 D:\\sample-workspace\\分析报告.md 转成 PDF";
+  assert.deepEqual(routeAutomaticSkill(markdownTask), { name: "md-to-pdf-cjk", task: markdownTask, source: "automatic" });
+  assert.equal(routeAutomaticSkill("修改 pdf 技能的解析代码"), null);
+  assert.equal(routeAutomaticSkill("用 OfficeCLI 查看 D:\\sample-workspace\\汇报材料.pptx"), null);
+});
+
+test("unambiguous V来家 actions route to DWS without hijacking integration discussions", () => {
+  assert.deepEqual(routeAutomaticSkill("帮我查一下今天的钉钉日程"), { name: "dws", task: "帮我查一下今天的钉钉日程", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("通过V来家给张三发送消息"), { name: "dws", task: "通过V来家给张三发送消息", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("查询企业钉钉待办"), { name: "dws", task: "查询企业钉钉待办", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("帮我按工号查一下这个同事"), { name: "dws", task: "帮我按工号查一下这个同事", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("看看待我审批的事项"), { name: "dws", task: "看看待我审批的事项", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("整理一下AI听记"), { name: "dws", task: "整理一下AI听记", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("列出公司通讯录里的产品经理"), { name: "dws", task: "列出公司通讯录里的产品经理", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("汇总V来家里@我的消息"), { name: "dws", task: "汇总V来家里@我的消息", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("search DingTalk messages"), { name: "dws", task: "search DingTalk messages", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("show my DingTalk calendar"), { name: "dws", task: "show my DingTalk calendar", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("list pending DingTalk approvals"), { name: "dws", task: "list pending DingTalk approvals", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("find a person in the company directory"), { name: "dws", task: "find a person in the company directory", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("通过DWS创建一条公告"), { name: "dws", task: "通过DWS创建一条公告", source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill("DWS技能暂时没有这个功能，请帮我新增一条日程"), { name: "dws", task: "DWS技能暂时没有这个功能，请帮我新增一条日程", source: "automatic" });
+  assert.equal(routeAutomaticSkill("帮我看看未读消息"), null);
+  assert.equal(routeAutomaticSkill("同事刚才提到一个问题"), null);
+  assert.equal(routeAutomaticSkill("如何把钉钉 API 集成到项目"), null);
+  assert.deepEqual(routeAutomaticSkill("阅读 DWS 手册文档内容"), { name: "dws", task: "阅读 DWS 手册文档内容", source: "automatic" });
+  assert.equal(routeAutomaticSkill("search the DingTalk API documentation"), null);
+  assert.equal(routeAutomaticSkill("test the DWS integration"), null);
+  assert.equal(routeAutomaticSkill("修改钉钉技能创建逻辑"), null);
+  assert.equal(routeAutomaticSkill("@dws 查询今日日程"), null);
+  const launcher = readFileSync(launcherUrl, "utf8");
+  assert.match(launcher, /if \(skill\.name === "dws"\) \{[\s\S]*?if \(!status\.connected\)/);
+  assert.match(launcher, /点击左侧导航栏底部的“登录 V来家”/);
 });
 
 test("run_skill resolves the standard baseDir placeholder to the selected skill directory", async () => {

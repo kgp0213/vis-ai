@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "dws",
+  "displayName": "V来家",
+  "version": "1.0.51.10",
+  "license": "Apache-2.0",
+  "integrationApiVersion": 1,
+  "runtimeRequirements": {
+    "dws": {
+      "minVersion": "1.0.51"
+    }
+  },
+  "capabilities": [
+    "messages",
+    "contacts",
+    "calendar",
+    "todo",
+    "approvals",
+    "reports",
+    "mail",
+    "documents",
+    "drive",
+    "sheets",
+    "wiki",
+    "attendance",
+    "minutes"
+  ]
+}

@@ -3,6 +3,7 @@ import { open, access } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, parse, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const DLP_MAGIC = Buffer.from([0, 0, 0, 0]);
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -32,6 +33,122 @@ const DOCUMENT_PATH_EXTENSIONS = [
 ];
 
 const decryptCache = new Map();
+const DOCUMENT_REF_PREFIX = "visionox-document:";
+const DEFAULT_PREPARED_DOCUMENT_LIMIT = 100;
+
+function preparedPathKey(value) {
+  try {
+    const key = resolve(String(value ?? ""));
+    return process.platform === "win32" ? key.toLowerCase() : key;
+  } catch {
+    return null;
+  }
+}
+
+function preparedDocumentId(sourcePath) {
+  return `doc_${createHash("sha256").update(preparedPathKey(sourcePath) ?? String(sourcePath)).digest("hex").slice(0, 20)}`;
+}
+
+function publicPreparedDocument(entry) {
+  return {
+    documentId: entry.documentId,
+    documentRef: `${DOCUMENT_REF_PREFIX}${entry.documentId}`,
+    sourcePath: entry.sourcePath,
+    readablePath: entry.readablePath,
+    documentKind: entry.documentKind,
+    encrypted: entry.encrypted,
+    sourceSize: entry.sourceSize,
+    sourceMtimeMs: entry.sourceMtimeMs,
+    updatedAt: entry.updatedAt,
+  };
+}
+
+export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_DOCUMENT_LIMIT, onChange = () => {} } = {}) {
+  const limit = Math.max(1, Math.min(500, Number(maxEntries) || DEFAULT_PREPARED_DOCUMENT_LIMIT));
+  const byId = new Map();
+  const byPath = new Map();
+
+  function notify() {
+    onChange(snapshot());
+  }
+
+  function removeEntry(entry) {
+    byId.delete(entry.documentId);
+    for (const [key, id] of byPath) {
+      if (id === entry.documentId) byPath.delete(key);
+    }
+  }
+
+  function register(value, { notifyChange = true } = {}) {
+    if (!value?.sourcePath) throw new TypeError("prepared document sourcePath is required");
+    const sourcePath = resolve(String(value.sourcePath));
+    const sourceKey = preparedPathKey(sourcePath);
+    const existingId = byPath.get(sourceKey);
+    const requestedId = /^doc_[a-f0-9]{20}$/.test(String(value.documentId ?? "")) ? String(value.documentId) : null;
+    const documentId = requestedId ?? existingId ?? preparedDocumentId(sourcePath);
+    const previous = byId.get(documentId);
+    if (previous) removeEntry(previous);
+    const readablePath = resolve(String(value.readablePath || sourcePath));
+    const stat = safeStat(sourcePath);
+    const entry = {
+      documentId,
+      sourcePath,
+      readablePath,
+      documentKind: value.documentKind || publicDocumentKind(sourcePath),
+      encrypted: value.encrypted === true,
+      sourceSize: stat?.size ?? (Number.isFinite(value.sourceSize) ? Number(value.sourceSize) : null),
+      sourceMtimeMs: stat?.mtimeMs ?? (Number.isFinite(value.sourceMtimeMs) ? Number(value.sourceMtimeMs) : null),
+      updatedAt: new Date().toISOString(),
+    };
+    byId.set(documentId, entry);
+    byPath.set(sourceKey, documentId);
+    byPath.set(preparedPathKey(readablePath), documentId);
+    while (byId.size > limit) removeEntry(byId.values().next().value);
+    if (notifyChange) notify();
+    return publicPreparedDocument(entry);
+  }
+
+  function find(value) {
+    const raw = typeof value === "object" && value
+      ? String(value.documentRef ?? value.documentId ?? value.path ?? "").trim()
+      : String(value ?? "").trim();
+    if (!raw) return null;
+    const unquoted = raw.replace(/^["']|["']$/g, "");
+    const id = unquoted.startsWith(DOCUMENT_REF_PREFIX) ? unquoted.slice(DOCUMENT_REF_PREFIX.length) : unquoted;
+    const byDocumentId = byId.get(id);
+    if (byDocumentId) return publicPreparedDocument(byDocumentId);
+    const pathId = byPath.get(preparedPathKey(unquoted));
+    return pathId && byId.has(pathId) ? publicPreparedDocument(byId.get(pathId)) : null;
+  }
+
+  function snapshot() {
+    return [...byId.values()].map(publicPreparedDocument);
+  }
+
+  function restore(entries, { replace = true, notifyChange = false } = {}) {
+    if (replace) {
+      byId.clear();
+      byPath.clear();
+    }
+    for (const entry of Array.isArray(entries) ? entries.slice(-limit) : []) {
+      try {
+        register(entry, { notifyChange: false });
+      } catch {
+        // Ignore malformed or stale metadata; source access will be requested again if needed.
+      }
+    }
+    if (notifyChange) notify();
+    return snapshot();
+  }
+
+  function clear({ notifyChange = true } = {}) {
+    byId.clear();
+    byPath.clear();
+    if (notifyChange) notify();
+  }
+
+  return { register, find, snapshot, restore, clear };
+}
 
 export class DlpDecryptError extends Error {
   constructor(message, details = {}) {
@@ -42,14 +159,15 @@ export class DlpDecryptError extends Error {
 }
 
 export function defaultDlpScriptCandidates({ homeDir = homedir(), projectRoot, serverDir } = {}) {
-  const candidates = [
-    resolve(homeDir, ".visionox", "skills", "visionox-file", "visionox_file.py"),
-  ];
+  const candidates = [];
   if (serverDir) {
     candidates.push(
       resolve(serverDir, "visionox-file", "visionox_file.py"),
     );
   }
+  candidates.push(
+    resolve(homeDir, ".visionox", "skills", "visionox-file", "visionox_file.py"),
+  );
   if (projectRoot) {
     candidates.push(
       resolve(projectRoot, "skills", "skills", "visionox-file-temp", "visionox_file.py"),
@@ -267,7 +385,7 @@ function publicDocumentKind(path) {
 
 function suggestedToolsForPath(path) {
   const kind = publicDocumentKind(path);
-  if (kind === "pdf") return ["pdf tools", "officecli", "read_file fallback"];
+  if (kind === "pdf") return ["extract_pdf_text", "pdf skill"];
   if (kind === "word" || kind === "spreadsheet" || kind === "presentation") return ["officecli"];
   if (kind === "image") return ["image-capable document tools", "read_file metadata fallback"];
   if (kind === "text") return ["read_file"];
@@ -281,13 +399,17 @@ function buildPreparedDocumentResult({ input, sourcePath, readable, candidates =
     input,
     sourcePath,
     readablePath: readable?.path ?? sourcePath,
+    documentId: readable?.documentId ?? null,
+    documentRef: readable?.documentRef ?? null,
     pathChanged: changed,
     usedCompatibilityAdapter: Boolean(readable?.encrypted || readable?.decrypted),
     cached: Boolean(readable?.cached),
     documentKind: publicDocumentKind(sourcePath),
     suggestedTools: suggestedToolsForPath(sourcePath),
     candidateCount: candidates.length || 1,
-    note: "Use readablePath for the next document parsing tool. Do not describe path preparation internals to the user.",
+    note: publicDocumentKind(sourcePath) === "pdf"
+      ? "Use extract_pdf_text with documentRef first. Use the pdf skill for advanced PDF processing; do not use OfficeCLI for PDF."
+      : "Use documentRef or readablePath for the next document tool. The host will restore the readable copy if needed.",
   };
 }
 
@@ -370,10 +492,15 @@ function candidatesFromInput(input, rootDir) {
   return extractDocumentPathCandidates(input, rootDir);
 }
 
-export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger = console, allowMultiple = false, signal } = {}) {
+export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger = console, allowMultiple = false, signal, registry } = {}) {
   const raw = typeof input === "string"
     ? input
     : String(input?.path ?? input?.file ?? input?.input ?? input?.text ?? input?.prompt ?? "").trim();
+  const managed = registry?.find(raw);
+  if (managed) {
+    const readable = await resolveReadablePathForDlp(raw, { cfg, env, logger, signal, registry });
+    return buildPreparedDocumentResult({ input: raw, sourcePath: managed.sourcePath, readable });
+  }
   const candidates = candidatesFromInput(raw, env.rootDir);
   if (candidates.length !== 1) {
     if (allowMultiple && candidates.length > 1) {
@@ -389,19 +516,35 @@ export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger =
     return buildCandidateError(raw, candidates);
   }
   const sourcePath = candidates[0].abs;
-  const readable = await resolveReadablePathForDlp(sourcePath, { cfg, env, logger, signal });
+  const readable = await resolveReadablePathForDlp(sourcePath, { cfg, env, logger, signal, registry });
   return buildPreparedDocumentResult({ input: raw, sourcePath, readable, candidates });
 }
 
-export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console, signal } = {}) {
+export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console, signal, registry } = {}) {
   if (signal?.aborted) throw new DOMException("document preparation cancelled", "AbortError");
-  const abs = resolveInputPath(path, env.rootDir);
+  const managed = registry?.find(path);
+  const rawPath = String(path ?? "").trim();
+  if (rawPath.startsWith(DOCUMENT_REF_PREFIX) && !managed) {
+    throw new DlpDecryptError("文档引用已失效，无法恢复原始文件路径", { documentRef: rawPath });
+  }
+  const abs = resolveInputPath(managed?.sourcePath ?? path, env.rootDir);
+  const withManagedDocument = (result) => {
+    if (!registry) return result;
+    const prepared = registry.register({
+      documentId: managed?.documentId,
+      sourcePath: abs,
+      readablePath: result.path,
+      documentKind: managed?.documentKind,
+      encrypted: result.encrypted,
+    });
+    return { ...result, sourcePath: abs, documentId: prepared.documentId, documentRef: prepared.documentRef };
+  };
   const dlp = getDlpConfig(cfg, env);
-  if (process.platform !== "win32") return { path: abs, encrypted: false, skipped: "non-windows" };
-  if (dlp.mode === "off") return { path: abs, encrypted: false, skipped: "disabled" };
+  if (process.platform !== "win32") return withManagedDocument({ path: abs, encrypted: false, skipped: "non-windows" });
+  if (dlp.mode === "off") return withManagedDocument({ path: abs, encrypted: false, skipped: "disabled" });
   const ext = extname(abs).toLowerCase();
   if (dlp.mode !== "on" && dlp.skipExtensions.has(ext)) {
-    return { path: abs, encrypted: false, skipped: "extension" };
+    return withManagedDocument({ path: abs, encrypted: false, skipped: "extension" });
   }
 
   let stat;
@@ -410,7 +553,7 @@ export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logg
   } catch (err) {
     throw new DlpDecryptError(`无法读取文件状态: ${err.message}`, { sourcePath: abs });
   }
-  if (!stat.isFile()) return { path: abs, encrypted: false, skipped: "not-file" };
+  if (!stat.isFile()) return withManagedDocument({ path: abs, encrypted: false, skipped: "not-file" });
 
   let encrypted = false;
   try {
@@ -418,7 +561,7 @@ export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logg
   } catch (err) {
     throw new DlpDecryptError(`无法检测文件状态: ${err.message}`, { sourcePath: abs });
   }
-  if (!encrypted) return { path: abs, encrypted: false };
+  if (!encrypted) return withManagedDocument({ path: abs, encrypted: false });
 
   if (!dlp.scriptPath) {
     throw formatDecryptFailure("未找到内部文件读取组件，请联系管理员检查客户端配置。", {
@@ -429,7 +572,7 @@ export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logg
   const key = cacheKey(abs, stat);
   const cached = decryptCache.get(key);
   if (cached && await pathExists(cached)) {
-    return { path: cached, encrypted: true, decrypted: true, cached: true, sourcePath: abs };
+    return withManagedDocument({ path: cached, encrypted: true, decrypted: true, cached: true, sourcePath: abs });
   }
 
   logger?.error?.(`[dlp] encrypted file detected, decrypting via visionox-file: ${abs}`);
@@ -480,7 +623,7 @@ export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logg
     });
   }
   decryptCache.set(key, decryptedPath);
-  return { path: decryptedPath, encrypted: true, decrypted: true, cached: false, sourcePath: abs };
+  return withManagedDocument({ path: decryptedPath, encrypted: true, decrypted: true, cached: false, sourcePath: abs });
 }
 
 export function wrapReadFileToolWithDlp(tools, options = {}) {
@@ -498,6 +641,7 @@ export function wrapReadFileToolWithDlp(tools, options = {}) {
         env: options.env,
         logger: options.logger,
         signal: ctx?.signal,
+        registry: options.registry,
       });
       return await original.fn({ ...args, path: resolved.path }, ctx);
     },
@@ -624,7 +768,14 @@ function splitCommandLine(command) {
   const args = [];
   let current = "";
   let quote = null;
-  for (const ch of String(command)) {
+  const text = String(command);
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (ch === "\\" && quote && text[index + 1] === quote) {
+      current += quote;
+      index++;
+      continue;
+    }
     if ((ch === '"' || ch === "'") && !quote) {
       quote = ch;
       continue;
@@ -659,11 +810,40 @@ function quotedPathBounds(text, start, rawLength) {
   return { start, end: start + rawLength };
 }
 
+async function resolveRegisteredPathsInCommand(command, options) {
+  const registry = options.registry;
+  if (!registry) return { command, changed: false, matched: false };
+  let text = String(command ?? "");
+  let changed = false;
+  let matched = false;
+  for (const entry of registry.snapshot()) {
+    const candidates = [...new Set([entry.documentRef, entry.readablePath, entry.sourcePath].filter(Boolean))]
+      .sort((a, b) => b.length - a.length);
+    for (const candidate of candidates) {
+      const haystack = process.platform === "win32" ? text.toLowerCase() : text;
+      const needle = process.platform === "win32" ? candidate.toLowerCase() : candidate;
+      const start = haystack.indexOf(needle);
+      if (start < 0) continue;
+      matched = true;
+      const result = await resolveDlpPathToken(candidate, options);
+      if (result.value !== candidate) {
+        const bounds = quotedPathBounds(text, start, candidate.length);
+        text = `${text.slice(0, bounds.start)}"${String(result.value).replace(/"/g, '\\"')}"${text.slice(bounds.end)}`;
+        changed = true;
+      }
+      break;
+    }
+  }
+  return { command: changed ? text : command, changed, matched };
+}
+
 async function resolveEmbeddedOfficePaths(command, options) {
-  const text = String(command ?? "");
+  const registered = await resolveRegisteredPathsInCommand(command, options);
+  const text = String(registered.command ?? "");
   const drivePath = /[A-Za-z]:(?:[\\/])?/g;
   let match;
-  let changed = false;
+  let changed = registered.changed;
+  let matched = registered.matched;
   let cursor = 0;
   let out = "";
   while ((match = drivePath.exec(text)) !== null) {
@@ -671,6 +851,7 @@ async function resolveEmbeddedOfficePaths(command, options) {
     if (start < cursor) continue;
     const candidate = findOfficePathCandidate(text, start, options.env?.rootDir);
     if (!candidate || candidate.multiple) continue;
+    matched = true;
     const result = await resolveDlpPathToken(candidate.fromPattern ? candidate.raw : candidate.abs, options);
     if (!result.changed) continue;
     const bounds = quotedPathBounds(text, start, candidate.raw.length);
@@ -680,16 +861,17 @@ async function resolveEmbeddedOfficePaths(command, options) {
     cursor = bounds.end;
     drivePath.lastIndex = cursor;
   }
-  if (!changed) return { command, changed: false };
+  if (!changed) return { command, changed: false, matched };
   out += text.slice(cursor);
-  return { command: out, changed: true };
+  return { command: out, changed: true, matched };
 }
 
 async function resolveEmbeddedDocumentPaths(command, options) {
-  const text = String(command ?? "");
+  const registered = await resolveRegisteredPathsInCommand(command, options);
+  const text = String(registered.command ?? "");
   const drivePath = /[A-Za-z]:(?:[\\/])?/g;
   let match;
-  let changed = false;
+  let changed = registered.changed;
   let cursor = 0;
   let out = "";
   while ((match = drivePath.exec(text)) !== null) {
@@ -712,14 +894,19 @@ async function resolveEmbeddedDocumentPaths(command, options) {
 }
 
 async function resolveDlpPathToken(value, options) {
-  const candidate = singlePathCandidateFromString(value, options.env?.rootDir);
+  const managed = options.registry?.find(value);
+  const candidate = managed
+    ? { abs: managed.sourcePath, fromPattern: false }
+    : singlePathCandidateFromString(value, options.env?.rootDir);
   if (!candidate) return { value, changed: false };
   const resolved = await resolveReadablePathForDlp(candidate.abs, {
     cfg: typeof options.readConfig === "function" ? options.readConfig() : {},
     env: options.env,
     logger: options.logger,
     signal: options.signal,
+    registry: options.registry,
   });
+  if (managed) return { value: resolved.path, changed: String(value) !== resolved.path };
   if (resolved.encrypted) return { value: resolved.path, changed: true };
   if (candidate.fromPattern) return { value: candidate.abs, changed: true };
   return { value, changed: false };
@@ -727,7 +914,7 @@ async function resolveDlpPathToken(value, options) {
 
 async function resolveOfficecliCommandString(command, options) {
   const embedded = await resolveEmbeddedOfficePaths(command, options);
-  if (embedded.changed) {
+  if (embedded.changed || embedded.matched) {
     return splitCommandLine(embedded.command);
   }
   const tokens = splitCommandLine(command);

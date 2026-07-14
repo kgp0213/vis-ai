@@ -3,7 +3,7 @@
   "groups": [
     {
       "id": "visionox-mit",
-      "skills": ["basic-skill-example", "coding-standards", "skill-creation-guide", "verification-loop"],
+      "skills": ["basic-skill-example", "coding-standards", "skill-creation-guide", "verification-loop", "vhome-skill-builder"],
       "source": "Visionox repository history",
       "license": "MIT, declared in each SKILL.md",
       "status": "verified"
@@ -28,6 +28,15 @@
       "skills": ["officecli"],
       "source": "https://github.com/iOfficeAI/OfficeCLI",
       "license": "Apache-2.0, recorded in the project README",
+      "status": "verified"
+    },
+    {
+      "id": "dingtalk-workspace-cli",
+      "skills": ["dws"],
+      "source": "https://github.com/open-dingtalk/dingtalk-workspace-cli",
+      "version": "1.0.51",
+      "license": "Apache-2.0",
+      "licenseFile": "DWS_LICENSE.txt",
       "status": "verified"
     },
     {

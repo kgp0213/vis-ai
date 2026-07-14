@@ -105,13 +105,23 @@
     <script>
       (function () {
         var latestLogInfo = null;
+        var dashboardReadyTimer = null;
+
+        function getTauriInvoke() {
+          var api = window.__TAURI__;
+          if (!api) return null;
+          if (typeof api.invoke === "function") return api.invoke.bind(api);
+          if (api.core && typeof api.core.invoke === "function") return api.core.invoke.bind(api.core);
+          return null;
+        }
 
         function invokeTauriCommand(name, args, attemptsLeft) {
           attemptsLeft = attemptsLeft == null ? 50 : attemptsLeft;
           return new Promise(function (resolve, reject) {
             function tick(left) {
-              if (window.__TAURI__ && window.__TAURI__.invoke) {
-                window.__TAURI__.invoke(name, args || {}).then(resolve).catch(reject);
+              var invoke = getTauriInvoke();
+              if (invoke) {
+                invoke(name, args || {}).then(resolve).catch(reject);
                 return;
               }
               if (left <= 0) {
@@ -214,12 +224,12 @@
             }
             function doSimpleInvoke() {
               if (event.data.type === "vis_client_log") {
-                return window.__TAURI__.invoke("write_client_log", { message: String(event.data.message || "") });
+                return invokeTauriCommand("write_client_log", { message: String(event.data.message || "") }, 1);
               }
-              return window.__TAURI__.invoke("open_log_dir");
+              return invokeTauriCommand("open_log_dir", {}, 1);
             }
             function doMarkdownPickerInvoke() {
-              window.__TAURI__.invoke("pick_markdown_file")
+              invokeTauriCommand("pick_markdown_file", {}, 1)
                 .then(function (result) {
                   reply({
                     type: "vis_pick_markdown_file_result",
@@ -238,7 +248,7 @@
                 });
             }
             function doDirectoryPickerInvoke() {
-              window.__TAURI__.invoke("pick_directory")
+              invokeTauriCommand("pick_directory", {}, 1)
                 .then(function (result) {
                   reply({
                     type: "vis_pick_directory_result",
@@ -252,23 +262,16 @@
                 });
             }
             function doClipboardInvoke() {
-              window.__TAURI__.invoke("ping")
+              invokeTauriCommand("get_clipboard_files", {}, 1)
                 .then(function (result) {
-                  if (result !== "pong") {
-                    reply({ type: "vis_clipboard_result", error: "ping returned: " + String(result), paths: [] });
-                    return;
-                  }
-                  return window.__TAURI__.invoke("get_clipboard_files")
-                    .then(function (result) {
-                      var paths = (result && Array.isArray(result.paths)) ? result.paths : [];
-                      reply({ type: "vis_clipboard_result", paths: paths, error: result && result.error ? String(result.error) : undefined });
-                    });
+                  var paths = (result && Array.isArray(result.paths)) ? result.paths : [];
+                  reply({ type: "vis_clipboard_result", paths: paths, error: result && result.error ? String(result.error) : undefined });
                 })
                 .catch(function (error) {
                   reply({ type: "vis_clipboard_result", error: String(error), paths: [] });
                 });
             }
-            if (window.__TAURI__ && window.__TAURI__.invoke) {
+            if (getTauriInvoke()) {
               if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
               else if (event.data.type === "vis_pick_directory") doDirectoryPickerInvoke();
               else if (event.data.type === "vis_get_clipboard") doClipboardInvoke();
@@ -276,7 +279,7 @@
             } else {
               var attempts = 30;
               var timer = setInterval(function () {
-                if (window.__TAURI__ && window.__TAURI__.invoke) {
+                if (getTauriInvoke()) {
                   clearInterval(timer);
                   if (event.data.type === "vis_pick_markdown_file") doMarkdownPickerInvoke();
                   else if (event.data.type === "vis_pick_directory") doDirectoryPickerInvoke();
@@ -334,6 +337,35 @@
           }, 50);
         }
 
+        function armDashboardReadyGuard(frame, spinner) {
+          if (!frame) return;
+          frame.dataset.ready = "";
+          frame.style.visibility = "hidden";
+          if (spinner) spinner.style.display = "";
+          if (dashboardReadyTimer) clearTimeout(dashboardReadyTimer);
+          dashboardReadyTimer = setTimeout(function () {
+            if (frame.dataset.ready === "1") return;
+            startupLog("dashboard did not report ready within 12 seconds");
+            frame.style.visibility = "hidden";
+            showDiagnostics("界面加载超时，请查看运行日志后重试。");
+          }, 12000);
+        }
+
+        function finishDashboardReady(frame) {
+          if (!frame) return;
+          frame.dataset.ready = "1";
+          frame.dataset.loaded = "1";
+          frame.style.visibility = "visible";
+          if (dashboardReadyTimer) {
+            clearTimeout(dashboardReadyTimer);
+            dashboardReadyTimer = null;
+          }
+          var spinner = document.querySelector(".wrap");
+          if (spinner) spinner.style.display = "none";
+          startupLog("dashboard reported ready");
+          resendPendingOpenArgs();
+        }
+
         function restoreDashboard() {
           var url = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
           if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
@@ -354,28 +386,22 @@
             frame.style.width = "100%";
             frame.style.height = "100%";
             frame.style.border = "none";
+            frame.style.visibility = "hidden";
             document.body.appendChild(frame);
             isFreshFrame = true;
           }
           attachOpenArgsForwarding(frame);
-          if (frame.src !== url) frame.src = url;
+          var navigationChanged = frame.src !== url;
+          if (navigationChanged) frame.src = url;
           if (isFreshFrame) {
             frame.addEventListener("error", function () { fallbackToRust(); });
-            var guardTimer = setTimeout(function () {
-              if (frame.dataset.loaded !== "1") {
-                startupLog("stored dashboard iframe did not load in time");
-                fallbackToRust();
-              }
-            }, 6000);
             frame.addEventListener("load", function () {
               frame.dataset.loaded = "1";
-              clearTimeout(guardTimer);
               startupLog("dashboard iframe loaded");
-              if (spinner) spinner.style.display = "none";
             });
-          } else {
-            if (spinner) spinner.style.display = "none";
           }
+          if (navigationChanged || frame.dataset.ready !== "1") armDashboardReadyGuard(frame, spinner);
+          else finishDashboardReady(frame);
         }
 
         function fallbackToRust() {
@@ -400,10 +426,14 @@
         installTauriBridge();
         window.addEventListener("message", function (event) {
           var data = event.data;
-          if (!data || data.type !== "vis_theme_changed") return;
+          if (!data || !["vis_theme_changed", "vis_dashboard_ready"].includes(data.type)) return;
           var frame = document.getElementById("vis-app-frame");
           var dashboardOrigin = sessionStorage.getItem("visionox.dashboardOrigin") || localStorage.getItem("visionox.dashboardOrigin") || "";
           if (!frame || event.source !== frame.contentWindow || event.origin !== dashboardOrigin) return;
+          if (data.type === "vis_dashboard_ready") {
+            finishDashboardReady(frame);
+            return;
+          }
           try {
             localStorage.setItem("visionox-theme", String(data.theme || ""));
           } catch (e) {}
@@ -423,13 +453,13 @@
           } catch (e) {}
         }
 
-        if (window.__TAURI__ && window.__TAURI__.invoke && window.__TAURI__.event && window.__TAURI__.event.listen) {
+        if (getTauriInvoke() && window.__TAURI__.event && window.__TAURI__.event.listen) {
           window.__TAURI__.event.listen("visionox-startup-args", function (event) {
             if (event && event.payload) {
               rememberOpenArgs(event.payload.args || [], event.payload.cwd || "");
             }
           });
-          window.__TAURI__.invoke("get_startup_args")
+          invokeTauriCommand("get_startup_args", {}, 1)
             .then(function (res) {
               if (res && res.args && res.args.length > 1) {
                 rememberOpenArgs(res.args, res.cwd || "");
@@ -440,7 +470,7 @@
 
         function waitForTauri(cb, attemptsLeft) {
           attemptsLeft = attemptsLeft || 50;
-          if (window.__TAURI__ && window.__TAURI__.invoke) {
+          if (getTauriInvoke()) {
             cb();
             return;
           }
@@ -453,7 +483,7 @@
 
         function restoreFromRustAndShow() {
           waitForTauri(function () {
-            window.__TAURI__.invoke("get_dashboard_url")
+            invokeTauriCommand("get_dashboard_url", {}, 1)
               .then(function (url) {
                 if (url && /^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
                   startupLog("get_dashboard_url returned valid url");

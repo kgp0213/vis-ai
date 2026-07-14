@@ -51,6 +51,7 @@ vis-ai/
 │   ├── resources/server/
 │   │   ├── node.exe                  Node.js 二进制
 │   │   ├── officecli.exe             OfficeCLI 二进制
+│   │   ├── dws.exe                   V来家/企业钉钉 CLI
 │   │   ├── launcher.mjs              启动脚本
 │   │   ├── lib/                      本项目维护的运行时模块
 │   │   ├── __tests__/                Node/API/运行时测试
@@ -173,7 +174,7 @@ OpenAI 兼容的 `/chat/completions` 请求中；`model`、`messages`、`stream`
 `contracts/api-responses.schema.json` 定义概览、健康、备份、定时任务和 Provider 等核心响应的最低结构。
 质量门禁同时检查真实 API 响应和 schema，防止 Dashboard 与服务端在字段变更时静默失配。
 
-`resources/third-party-resources.json` 是打包运行资源的机器可读清单，记录 Node、OfficeCLI、Reasonix、
+`resources/third-party-resources.json` 是打包运行资源的机器可读清单，记录 Node、OfficeCLI、DWS、Reasonix、
 KaTeX 和 bootstrap skills 的版本、来源、许可证与可用哈希；`THIRD_PARTY_NOTICES.md` 随资源一起分发。
 OfficeCLI 与 KaTeX 使用 README 记录的上游仓库。bootstrap skills 是混合来源和混合许可证集合，按每个
 `SKILL.md` 元数据及随附许可证判断，不能整体标为 MIT。版本检查不执行二进制，也不在构建时联网查询。
@@ -181,9 +182,64 @@ Superpowers 工作流的运行副本只位于 `resources/bootstrap-skills/`，�
 `SUPERPOWERS_LICENSE.txt` 固定。仓库根目录中被忽略的 `skills/superpowers/` 只可作为本地上游参考，
 不参与运行时加载、构建或打包，不能作为交付资源依赖。
 
-`runtime-manifest.json` 进一步固定 Node.js 与 OfficeCLI 的版本、大小和 SHA-256。二进制不进入 Git；普通
+`runtime-manifest.json` 进一步固定 Node.js、OfficeCLI 与 DWS 的版本、大小和 SHA-256。二进制不进入 Git；普通
 构建完全离线。明确授权的危险维护入口可从公开上游获取资源，但必须下载到系统临时目录并在写入源码
-资源前完成清单校验。OfficeCLI MCP 在 Dashboard 服务可用后后台初始化，不阻塞 Tauri 首屏启动路径。
+资源前完成清单校验。OfficeCLI MCP 在 Dashboard 服务可用后后台初始化，不阻塞 Tauri 首屏启动路径；
+OfficeCLI 请求使用 180 秒超时，其他 MCP 保持上游默认 60 秒，避免长文档操作被通用超时提前终止。
+
+## V来家集成边界
+
+`lib/vhome-integration.mjs` 的常规后台检查只执行内置 `dws.exe` 的 `auth status` 和 `contact user get-self`，
+带 8 秒进程超时、并发去重和 60 秒缓存。Dashboard 首次渲染后请求 `/api/vhome/status`，之后每 5 分钟刷新；
+因此 DWS 启动、网络或 OAuth 异常不会进入桌面程序首屏关键路径。登录进程记录启动路径、stdout/stderr、
+退出码、signal 和各失败分支的稳定原因码到本机服务日志；原始输出限制为 64 KiB 尾部，便于异机故障定位。
+API 只返回连接状态、用户名、组织名、检查时间、Device Flow 临时授权状态以及经过脱敏的失败提示与短诊断，
+不返回 userId、corpId、Token 或原始命令输出。
+
+用户点击登录后，`POST /api/vhome/login` 启动可取消的 Device Flow 子进程；Dashboard 在授权期间短轮询状态，
+只显示钉钉登录 URL、一次性 user code 和过期时间。`DELETE /api/vhome/login` 取消等待，`POST /api/vhome/logout`
+仅退出服务端保留的当前组织 ID。登录、等待和失败均不阻塞普通 AI 功能；Launcher 不会在启动时自动打开浏览器。
+
+模型通过内置 `dws` Skill 使用协作能力。明确的 V来家业务请求可自动路由到该 Skill；技术讨论不自动路由。
+Skill 调用前检查连接状态，未连接时直接引导用户登录。消息读取按未读会话、指定会话、@我、发送者和关键词
+区分命令与时间参数，并以当前二进制的逐级 `--help` 为最终依据，避免静态手册参数漂移。
+消息发送通过结构化 `dws_write` 工具执行：模型只能提交收件人类型、稳定 ID 和内容。宿主只把当前聊天请求或
+用户保存的定时任务原始提示作为发送授权，系统包装、检索内容、引用示例和功能讨论均不构成授权；随后由本地
+规则与独立模型审查最终消息。明确授权的安全内容可直发，重要内容按用户当前指令决定，有害、不确定、附件或
+未授权内容必须确认，后台没有交互界面时不发送。实际发送才添加 `--yes` 和幂等 UUID。其他外部写操作仍由
+`dws_exec` 展示真实命令、目的和影响并逐次确认。Visionox 不读取、迁移或备份
+`~/.dws/`。安装包包含 `dws.exe`、Apache-2.0 LICENSE/NOTICE，以及内置 Skill 的精选只读命令参考；不包含 portable
+用户态目录、身份、Token、日志或上游脚本。Launcher 根据自身资源目录解析内置
+`dws.exe`，通过 `VISIONOX_DWS_EXECUTABLE` 和 `VISIONOX_NODE_EXECUTABLE` 将实际路径传给 Skill 只读适配器，
+不依赖开发机路径、系统 `PATH` 或仓库目录。受控 `dws_read` 单次最多读取 200 条并要求继续分页；Shell 策略拒绝
+项目外 DWS 绝对路径、绕过只读工具的直接查询，以及绕过 `dws_write` 的消息发送，避免旧会话沿用开发机路径或
+不同模型漏掉写入确认。
+
+对话式 Skill 创建由 `skill-routing.mjs` 的本地高精度规则识别，要求 V来家领域、创建动作和 Skill/工作流对象同时
+成立，并排除源码、测试、文档和产品讨论；不调用 embedding、网络或额外模型。命中后加载独立的
+`vhome-skill-builder`，由系统级提示词、Skill 工作流和 `ask_choice` 工具描述三层共同要求模型使用交互卡片，避免
+不同模型退化为正文 A/B/C 菜单。
+
+`vhome-skill-drafts.mjs` 管理七天有效、带修订冲突保护的版本化草稿，并确定性生成最小 Skill 目录。生成内容只包含
+`SKILL.md`、`references/workflow.md`，需要调度时才增加通过现有 schema 校验的 `integration.json` 与
+`schedule-templates.json`。`dws_read` 复用内置只读适配器并拒绝写命令、未知参数和过量分页；测试和安装预演位于
+系统临时目录。`install_vhome_skill_draft` 自行发起最终确认卡片，确认后复用现有原子 Skill 安装和历史回滚机制，
+取消时不安装且保留草稿，内置 Skill 永远不可覆盖。
+
+V来家采用三层维护边界：软件内核负责认证、进程、脱敏、连接门禁和副作用确认；`dws/SKILL.md` 负责模型可读的
+交互流程；`integration.json` 与 `schedule-templates.json` 负责机器可读的兼容版本、能力和只读定时模板。普通定时
+任务可以保存 `skillName + skillAction + 用户补充要求`，每次运行时再从当前已安装 Skill 解析模板并通过结构化
+`skillInvocation` 调用，因此更新 Skill 后已有任务自动使用新流程。模板必须通过 schema、DWS 最低版本、变量白名单
+和风险等级校验；当前只允许 AI 读取后整理总结，自动发送、审批、修改和删除不进入定时模板。
+
+定时 Skill 的完整回答写入用户数据目录下的受管理 Markdown 报告，任务页可直接预览。知识归档必须绑定一个
+稳定的归档工作区，目标为 `<workspace>/knowledge/vhome/`，不会跟随当前工作区切换。归档前由模型执行质量、
+证据覆盖和复用价值审核；来源指纹负责去重，同主题结果追加到同一文档。自动归档和归档后更新 embedding 索引
+均为独立的用户可选项，默认关闭。
+
+Skill 包更新沿用原子目录替换并保留最近三份历史，`rollback_skill` 仅在用户明确要求时恢复上一版。Skill 更新不修改
+DWS OAuth 凭据、软件认证内核或 DWS 二进制；DWS 自升级仍是独立且需要用户明确确认的维护动作。需要 V来家连接的
+定时模板在未登录时记录为“等待登录”，不自动打开浏览器；重新登录后由状态轮询触发一次补跑。
 
 ## 架构决策与后续优先级
 
@@ -205,11 +261,17 @@ Dashboard。实现位于 `src-tauri/src/lib.rs` 的 `get_clipboard_files_blockin
 `FileGroupDescriptorW` 或 Unix 剪贴板行为；修改时需验证单/多文件、文件夹、Unicode、长路径、纯文本和截图。
 PowerShell 只能作为排障工具，不能加入产品启动依赖。
 
-本地文档在交给 OfficeCLI 前由 `prepare_local_document` 统一准备，默认 `dlp.mode=auto`。普通文件保持原
-路径；只有命中文件头特征时才调用 `resources/server/visionox-file/visionox_file.py`。发现、超时、取消、
-缓存和参数重写由 `lib/dlp-file.mjs` 管理，Agent 约束位于同目录 `SKILL.md`。运行时只从 exe 同级资源发现
-脚本，不读取源码目录或机器专用路径。该文件头判断只是当前环境的兼容策略，不是通用加密标准；输出不得
-覆盖原文件，新增特征必须用测试证明普通文件不会被误判。
+本地文档在交给解析器前由 `prepare_local_document` 统一准备，默认 `dlp.mode=auto`。普通文件保持原路径；
+只有命中文件头特征时才调用 `resources/server/visionox-file/visionox_file.py`。`lib/dlp-file.mjs` 为每个已准备
+文档生成稳定 `documentRef`，双向记录原始路径和当前可读路径，并将活动引用写入会话元数据。切换 Skill、
+恢复会话或临时明文缺失时，所有文档工具都可通过原始路径重新准备；任务结束不自动删除明文副本，也不得
+把特定工作区路径写死到源码。运行时只从 exe 同级资源发现脚本，不读取源码目录或机器专用路径。该文件头
+判断只是当前环境的兼容策略，不是通用加密标准；输出不得覆盖原文件，新增特征必须用测试证明普通文件不会
+被误判。
+
+现有 PDF 的文本读取由 `lib/pdf-text.mjs` 使用随包 PDF.js 延迟执行，不经过 OfficeCLI，也不依赖系统 Python。
+复杂 PDF 编辑继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。PDF.js 判断文本极少时向上层
+报告可能为扫描件，再由用户决定是否使用 OCR，避免无意义地轮换文本解析器。
 
 ## 质量边界
 
@@ -229,8 +291,9 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 3. Launcher 启动 Dashboard HTTP Server，输出 {url, token, port} 到 stdout
 4. Rust 读取 stdout，执行 TCP 健康检查（最多 15 次 × 200ms）
 5. 健康检查通过后 eval 注入 __DASHBOARD_URL__ 到 WebView
-6. 加载页 JS 检测到 URL 后创建全屏 iframe 加载 Dashboard
-7. 子进程崩溃监控线程启动（阻塞等待，支持自动重启）
+6. 加载页 JS 检测到 URL 后创建隐藏 iframe，Dashboard 首次渲染后发送 `vis_dashboard_ready`
+7. 加载页收到同源 ready 后才显示 iframe；12 秒未就绪则显示日志诊断入口
+8. 子进程崩溃监控线程启动（阻塞等待，支持自动重启；主动退出时由 shutdown 标志禁止重启）
 ```
 
 ### 刷新恢复机制
@@ -239,7 +302,7 @@ iframe 方案下按 F5 刷新壳页面时，依赖三层恢复：
 
 1. **localStorage 后备**：所有 sessionStorage 读取点增加 `|| localStorage` 回退
 2. **Rust 兜底**：`get_dashboard_url` 命令返回当前有效 URL，前端从 Rust 重建
-3. **iframe 失败回退**：注册 error 事件 + 6s 超时守卫，触发 fallbackToRust()
+3. **iframe 失败回退**：注册 error 事件，并要求 Dashboard 首次渲染后完成同源 ready 握手；12 秒超时显示可操作诊断页
 
 ---
 

@@ -1297,6 +1297,12 @@ function parseBodySchedules(raw) {
   }
 }
 async function handleSchedules(method, rest, body, ctx) {
+  if (method === "GET" && rest[0] === "templates") {
+    if (!ctx.listSkillScheduleTemplates) {
+      return { status: 503, body: { error: "skill schedule templates are not available" } };
+    }
+    return { status: 200, body: { integrations: ctx.listSkillScheduleTemplates() } };
+  }
   if (method === "GET" && rest.length === 0) {
     if (!ctx.listSchedules) {
       return { status: 503, body: { error: "scheduled tasks are not available in this session" } };
@@ -1341,8 +1347,22 @@ async function handleSchedules(method, rest, body, ctx) {
     }
     const result = await ctx.runScheduleNow(id);
     if (!result.ok) return { status: 400, body: { error: result.error || "failed to run schedule" } };
-    ctx.audit?.({ ts: Date.now(), action: "schedule-run", payload: { id, accepted: result.accepted } });
-    return { status: result.accepted ? 202 : 409, body: result.accepted ? result : { ...result, error: result.reason || "scheduled task was not accepted" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-run", payload: { id, accepted: result.accepted, queued: result.queued === true } });
+    const acceptedOrQueued = result.accepted || result.queued === true;
+    return { status: acceptedOrQueued ? 202 : 409, body: acceptedOrQueued ? result : { ...result, error: result.reason || "scheduled task was not accepted" } };
+  }
+  if (method === "POST" && rest[1] === "archive") {
+    if (!ctx.archiveScheduleSkillRun) {
+      return { status: 503, body: { error: "scheduled Skill knowledge archive is not wired" } };
+    }
+    const parsed = parseBodySchedules(body);
+    const result = await ctx.archiveScheduleSkillRun(id, {
+      runId: typeof parsed.runId === "string" ? parsed.runId : null,
+      autoIndex: parsed.autoIndex === true
+    });
+    if (!result.ok) return { status: 422, body: { ...result, error: result.error || "knowledge archive was rejected" } };
+    ctx.audit?.({ ts: Date.now(), action: "schedule-archive", payload: { id, runId: parsed.runId || null, duplicate: result.duplicate === true } });
+    return { status: 200, body: result };
   }
   if (method === "POST" && rest[1] === "cancel") {
     if (!ctx.cancelScheduleRun) {
@@ -5133,22 +5153,15 @@ async function handleOpenUrl(method, _rest, body, ctx) {
   if (method !== "POST") {
     return { status: 405, body: { error: "POST only" } };
   }
-  const { url } = parseBody11(body);
+  const { url, browser = "default" } = parseBody11(body);
   if (typeof url !== "string" || !url.trim()) {
     return { status: 400, body: { error: "url required" } };
   }
+  if (typeof ctx.openExternalUrl !== "function") {
+    return { status: 503, body: { error: "external URL opener unavailable" } };
+  }
   try {
-    const { exec } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execAsync = promisify(exec);
-    if (process.platform === "win32") {
-      await execAsync(`start "" "${url.trim()}"`);
-    } else if (process.platform === "darwin") {
-      await execAsync(`open "${url.trim()}"`);
-    } else {
-      await execAsync(`xdg-open "${url.trim()}"`);
-    }
-    return { status: 200, body: { opened: true } };
+    return { status: 200, body: await ctx.openExternalUrl(url, { browser }) };
   } catch (err) {
     return { status: 500, body: { error: err.message } };
   }
@@ -5792,6 +5805,33 @@ function handleClipboardFiles(method, _rest, _body, _ctx) {
   return { status: 200, body: { paths: [], error: `clipboard file paths unsupported on ${process.platform}` } };
 }
 
+async function handleVHome(method, rest, _body, ctx) {
+  const action = rest[0] ?? "status";
+  if (action === "status") {
+    if (method !== "GET") return { status: 405, body: { error: "GET only" } };
+    if (typeof ctx.getVHomeStatus !== "function") {
+      return { status: 200, body: { available: false, connected: false, authenticated: false, userName: null, corpName: null, reason: "integration-unavailable", checkedAt: null, login: { state: "idle", loginUrl: null, userCode: null, expiresAt: null, reason: null } } };
+    }
+    return { status: 200, body: await ctx.getVHomeStatus() };
+  }
+  if (action === "login") {
+    if (method === "POST" && typeof ctx.startVHomeLogin === "function") return { status: 202, body: await ctx.startVHomeLogin() };
+    if (method === "DELETE" && typeof ctx.cancelVHomeLogin === "function") return { status: 200, body: await ctx.cancelVHomeLogin() };
+    return { status: 405, body: { error: "POST or DELETE required" } };
+  }
+  if (action === "refresh") {
+    if (method !== "POST") return { status: 405, body: { error: "POST only" } };
+    if (typeof ctx.refreshVHomeStatus !== "function") return { status: 503, body: { error: "V来家 integration unavailable" } };
+    return { status: 200, body: await ctx.refreshVHomeStatus() };
+  }
+  if (action === "logout") {
+    if (method !== "POST") return { status: 405, body: { error: "POST only" } };
+    if (typeof ctx.logoutVHome !== "function") return { status: 503, body: { error: "V来家 integration unavailable" } };
+    return { status: 200, body: await ctx.logoutVHome() };
+  }
+  return { status: 404, body: { error: "not found" } };
+}
+
 async function handleApi(pathTail, method, body, ctx, query = new URLSearchParams()) {
   const normalized = pathTail.replace(/\/+$/, "");
   const [head, ...rest] = normalized.split("/");
@@ -5821,6 +5861,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleBackgroundJobs(method, rest, body, ctx);
       case "health":
         return await handleHealth(method, rest, body, ctx);
+      case "vhome":
+        return await handleVHome(method, rest, body, ctx);
       case "logs":
         return await handleLogs(method, rest, body, ctx);
       case "sessions":

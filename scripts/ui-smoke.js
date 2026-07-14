@@ -222,10 +222,170 @@ try {
   cdp = connectCdp(page.webSocketDebuggerUrl);
   await cdp.ready;
   await Promise.all([cdp.send("Runtime.enable"), cdp.send("Page.enable"), cdp.send("Log.enable")]);
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(() => {
+    const makeState = (overrides = {}) => ({
+      available: true,
+      connected: false,
+      userName: null,
+      corpName: null,
+      checkedAt: new Date().toISOString(),
+      login: { state: 'idle', userCode: null, loginUrl: null },
+      ...overrides,
+    });
+    window.__vhomeMockState = makeState();
+    window.__vhomeOpenAttempts = [];
+    window.__vhomeRefreshCount = 0;
+    window.__vhomeStatusPolls = 0;
+    window.__vhomeOriginalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = String(init.method || input?.method || 'GET').toUpperCase();
+      const response = () => new Response(JSON.stringify(window.__vhomeMockState), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (url.pathname.endsWith('/vhome/status')) {
+        if (window.__vhomeMockState?.login?.state === 'starting') {
+          window.__vhomeStatusPolls += 1;
+          if (window.__vhomeStatusPolls >= 2) {
+            window.__vhomeMockState = makeState({ login: { state: 'awaiting-user', userCode: 'TEST-CODE', loginUrl: 'https://login.dingtalk.com/device?user_code=TEST-CODE', expiresAt: new Date(Date.now() + 900000).toISOString() } });
+          }
+        }
+        return response();
+      }
+      if (url.pathname.endsWith('/vhome/login') && method === 'POST') {
+        window.__vhomeStatusPolls = 0;
+        window.__vhomeMockState = makeState({ login: { state: 'starting', userCode: null, loginUrl: null, expiresAt: null } });
+        return response();
+      }
+      if (url.pathname.endsWith('/vhome/login') && method === 'DELETE') {
+        window.__vhomeMockState = makeState();
+        return response();
+      }
+      if (url.pathname.endsWith('/vhome/logout') && method === 'POST') {
+        window.__vhomeMockState = makeState();
+        return response();
+      }
+      if (url.pathname.endsWith('/vhome/refresh') && method === 'POST') {
+        window.__vhomeRefreshCount += 1;
+        return response();
+      }
+      if (url.pathname.endsWith('/open-url') && method === 'POST') {
+        const request = JSON.parse(String(init.body || '{}'));
+        window.__vhomeOpenAttempts.push(request.browser || 'default');
+        if ((request.browser || 'default') === 'default') {
+          return new Response(JSON.stringify({ error: 'default browser unavailable' }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ opened: true, browser: request.browser }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return window.__vhomeOriginalFetch(input, init);
+    };
+  })();` });
   await cdp.send("Page.navigate", { url: `http://127.0.0.1:${port}/?token=${token}` });
   const rendered = await waitForDashboard(cdp, 15_000);
   if (rendered.boot) throw new Error("Dashboard remained on its loading screen");
   if (rendered.title !== "Visionox") throw new Error(`unexpected Dashboard title: ${rendered.title}`);
+  const vhomeControl = await evaluate(cdp, `(() => {
+    const button = document.querySelector('.vhome-control-button');
+    const identity = document.querySelector('.side-foot .label');
+    return { button: button?.textContent?.trim() ?? '', identity: identity?.textContent?.trim() ?? '' };
+  })()`);
+  if (!vhomeControl.button.includes("V来家") || !vhomeControl.identity) throw new Error(`V来家 sidebar control did not render: ${JSON.stringify(vhomeControl)}`);
+  console.log("[ui-smoke] V来家 login control rendered without blocking the Dashboard");
+
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    popover: Boolean(document.querySelector('.vhome-popover')),
+    button: document.querySelector('.vhome-control-button')?.textContent?.trim() ?? '',
+    disabled: Boolean(document.querySelector('.vhome-control-button')?.disabled),
+    mockInstalled: typeof window.__vhomeOriginalFetch === 'function',
+    mockState: window.__vhomeMockState?.login?.state ?? null,
+  }))()`, (value) => value.popover && value.button.includes('正在获取') && value.mockState === 'starting');
+  const vhomePreparingControls = await evaluate(cdp, `(() => ({
+    buttons: [...document.querySelectorAll('.vhome-popover button')].map((button) => button.textContent.trim()),
+    message: document.querySelector('.vhome-popover-meta')?.textContent ?? '',
+  }))()`);
+  if (!vhomePreparingControls.buttons.some((text) => text.includes('取消')) || !vhomePreparingControls.message.includes('正在获取授权链接')) {
+    throw new Error(`V来家 preparing state is incomplete: ${JSON.stringify(vhomePreparingControls)}`);
+  }
+  for (const label of ['打开浏览器', '复制链接', '我已完成授权']) {
+    if (vhomePreparingControls.buttons.some((text) => text.includes(label))) throw new Error(`V来家 preparing state exposed ${label} too early`);
+  }
+  console.log("[ui-smoke] V来家 login popover keeps unavailable authorization actions hidden");
+  await waitForBrowserValue(cdp, `document.querySelector('.vhome-control-button')?.textContent?.includes('等待') && window.__vhomeMockState?.login?.state === 'awaiting-user'`, Boolean, 4_000);
+  console.log("[ui-smoke] V来家 delayed authorization link appeared without a refresh");
+  const vhomeFallbackControls = await evaluate(cdp, `(() => ({
+    buttons: [...document.querySelectorAll('.vhome-popover button')].map((button) => button.textContent.trim()),
+    countdown: document.querySelector('.vhome-popover-meta')?.parentElement?.textContent?.includes('剩余') ?? false,
+  }))()`);
+  for (const label of ['打开浏览器', '复制链接', '我已完成授权']) {
+    if (!vhomeFallbackControls.buttons.some((text) => text.includes(label))) throw new Error(`missing V来家 fallback control: ${label}`);
+  }
+  await evaluate(cdp, `[...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('打开浏览器'))?.click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    edge: [...document.querySelectorAll('.vhome-popover button')].some((button) => button.textContent.includes('Edge')),
+    error: document.querySelector('.vhome-popover-error')?.textContent ?? '',
+  }))()`, (value) => value.edge && value.error.includes('默认浏览器'));
+  await evaluate(cdp, `[...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('Edge'))?.click()`);
+  await waitForBrowserValue(cdp, `window.__vhomeOpenAttempts.join(',')`, (value) => value === 'default,edge');
+  await evaluate(cdp, `[...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('我已完成授权'))?.click()`);
+  await waitForBrowserValue(cdp, `window.__vhomeRefreshCount`, (value) => value === 1);
+  console.log("[ui-smoke] V来家 manual link, Edge fallback and explicit refresh controls passed");
+  await evaluate(cdp, `window.__vhomeMockState = { ...window.__vhomeMockState, connected: true, userName: '测试用户', corpName: '测试组织', checkedAt: new Date().toISOString(), login: { state: 'idle', userCode: null, loginUrl: null } }`);
+  await waitForBrowserValue(cdp, `document.querySelector('.vhome-control-button').textContent.includes('已连接') && !document.querySelector('.vhome-popover')`, Boolean, 4_000);
+  console.log("[ui-smoke] V来家 successful login closed the popover");
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.vhome-popover'))`, Boolean);
+  await evaluate(cdp, `(() => { window.confirm = () => true; [...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('退出'))?.click(); })()`);
+  await waitForBrowserValue(cdp, `document.querySelector('.vhome-control-button').textContent.includes('登录') && document.querySelector('.side-foot .label')?.textContent.includes('127.0.0.1') && !document.querySelector('.vhome-control-button').disabled && !document.querySelector('.vhome-popover')`, Boolean);
+  console.log("[ui-smoke] V来家 logout immediately reset identity and closed the popover");
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    popover: Boolean(document.querySelector('.vhome-popover')),
+    buttons: [...document.querySelectorAll('.vhome-popover button')].map((button) => button.textContent.trim()),
+    button: document.querySelector('.vhome-control-button')?.textContent?.trim() ?? '',
+    disabled: Boolean(document.querySelector('.vhome-control-button')?.disabled),
+    mockState: window.__vhomeMockState?.login?.state ?? null,
+  }))()`, (value) => value.buttons.some((text) => text.includes('取消')));
+  await evaluate(cdp, `[...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('取消'))?.click()`);
+  await waitForBrowserValue(cdp, `document.querySelector('.vhome-control-button').textContent.includes('登录') && !document.querySelector('.vhome-control-button').disabled && !document.querySelector('.vhome-popover')`, Boolean);
+  console.log("[ui-smoke] V来家 login cancellation closed the popover");
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.vhome-popover')) && window.__vhomeMockState?.login?.state === 'awaiting-user'`, Boolean);
+  await evaluate(cdp, `window.__vhomeMockState = { ...window.__vhomeMockState, connected: false, userName: null, corpName: null, checkedAt: new Date().toISOString(), login: { state: 'failed', userCode: null, loginUrl: null, reason: 'login-network-failed', message: '无法连接 V来家授权服务，请检查网络、代理或防火墙后重试。', detail: 'proxyconnect tcp: connection refused' } }`);
+  const vhomeFailure = await waitForBrowserValue(cdp, `(() => ({
+    message: document.querySelector('.vhome-popover-meta')?.textContent ?? '',
+    detail: document.querySelector('.vhome-popover-error')?.textContent ?? '',
+    buttons: [...document.querySelectorAll('.vhome-popover button')].map((button) => button.textContent.trim()),
+  }))()`, (value) => value.message.includes('网络、代理或防火墙') && value.detail.includes('connection refused'));
+  if (!vhomeFailure.buttons.some((text) => text.includes('重新生成链接'))) throw new Error(`V来家 failed state has no retry action: ${JSON.stringify(vhomeFailure)}`);
+  console.log("[ui-smoke] V来家 failure state exposed an actionable reason and safe DWS detail");
+  await evaluate(cdp, `[...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('重新生成链接'))?.click()`);
+  await waitForBrowserValue(cdp, `window.__vhomeMockState?.login?.state === 'awaiting-user' && document.querySelector('.vhome-control-button')?.textContent?.includes('等待')`, Boolean, 4_000);
+  await evaluate(cdp, `window.__vhomeMockState = { ...window.__vhomeMockState, connected: false, userName: null, corpName: null, checkedAt: new Date().toISOString(), login: { state: 'idle', userCode: null, loginUrl: null } }`);
+  await waitForBrowserValue(cdp, `document.querySelector('.vhome-control-button').textContent.includes('登录') && !document.querySelector('.vhome-popover')`, Boolean, 4_000);
+  console.log("[ui-smoke] V来家 background unauthenticated state closed the popover");
+  await evaluate(cdp, `(() => { window.fetch = window.__vhomeOriginalFetch; delete window.__vhomeOriginalFetch; delete window.__vhomeMockState; delete window.__vhomeOpenAttempts; delete window.__vhomeRefreshCount; delete window.__vhomeStatusPolls; })()`);
+  console.log("[ui-smoke] V来家 login success, cancellation and logout all close the popover");
+
+  const integrationTemplates = await waitForApiValue(`http://127.0.0.1:${port}/api/schedules/templates?token=${token}`, (value) => value.integrations?.some((item) => item.id === "dws" && item.compatible && item.templates?.length === 6));
+  const dwsTemplates = integrationTemplates.integrations.find((item) => item.id === "dws");
+  if (dwsTemplates.templates.some((template) => template.risk !== "read")) throw new Error("DWS scheduled templates must remain read-only");
+  for (const id of ["topic-investigation", "report-consistency-review"]) {
+    if (!dwsTemplates.templates.some((template) => template.id === id)) throw new Error(`missing DWS scheduled template: ${id}`);
+  }
+  await evaluate(cdp, `(() => {
+    const taskTab = [...document.querySelectorAll('.side-tab')].find((item) => item.textContent.includes('任务'));
+    if (!taskTab) throw new Error('task tab not found');
+    taskTab.click();
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('select option')].find((item) => item.value === 'skill'))`, Boolean);
+  await evaluate(cdp, `(() => {
+    const source = [...document.querySelectorAll('select')].find((item) => [...item.options].some((option) => option.value === 'skill'));
+    source.value = 'skill';
+    source.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('select option')].find((item) => item.value === 'dws/daily-work-briefing'))`, Boolean);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('input')].find((item) => item.placeholder === '未选择归档工作区'))`, Boolean);
+  console.log("[ui-smoke] read-only DWS schedule templates rendered from the installed Skill");
+  await evaluate(cdp, `[...document.querySelectorAll('.side-tab')].find((item) => item.textContent.includes('对话'))?.click()`);
 
   const messagePage = await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1200);
   if (messagePage.totalMessages !== 1200) throw new Error(`expected 1200 restored messages, got ${messagePage.totalMessages}`);
@@ -249,6 +409,27 @@ try {
   if (performance.renderedMessages > 35) throw new Error(`long session rendered too many messages: ${performance.renderedMessages}`);
   if (performance.p95Ms > 25) throw new Error(`chat input p95 exceeded 25ms: ${performance.p95Ms.toFixed(2)}ms`);
   console.log("[ui-smoke] long-session render and input latency passed");
+
+  const clipboardPath = String.raw`C:\Users\TestUser\Documents\Visionox Workspace\release\bundle\nsis`;
+  const pastePerformance = await evaluate(cdp, `new Promise((resolve) => {
+    const input = document.querySelector('.chat-input-area textarea');
+    if (!input) throw new Error('chat input not found');
+    const expected = ${JSON.stringify(clipboardPath)};
+    input.value = '';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContent' }));
+    const paste = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, 'clipboardData', { value: {
+      items: [],
+      getData(type) { return type === 'text/plain' ? expected : ''; },
+    }});
+    const started = performance.now();
+    input.dispatchEvent(paste);
+    const dispatchMs = performance.now() - started;
+    setTimeout(() => resolve({ dispatchMs, value: input.value }), 0);
+  })`);
+  if (pastePerformance.value !== clipboardPath) throw new Error(`plain path paste mismatch: ${pastePerformance.value}`);
+  if (pastePerformance.dispatchMs > 25) throw new Error(`plain path paste exceeded 25ms: ${pastePerformance.dispatchMs.toFixed(2)}ms`);
+  console.log(`[ui-smoke] plain Windows path paste stayed local (${pastePerformance.dispatchMs.toFixed(2)}ms)`);
 
   await evaluate(cdp, `(() => {
     const chip = [...document.querySelectorAll('.composer-chip')].find((item) => item.textContent.includes('模型'));

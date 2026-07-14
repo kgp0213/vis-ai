@@ -47,6 +47,7 @@ export function runTauriBuild(options = {}) {
   const root = resolve(options.root ?? defaultRoot);
   const args = options.args ?? [];
   validateBuildArgs(args);
+  rmSync(join(root, "src-tauri", "target", "release", "release-manifest.json"), { force: true });
   const stagingRoot = (options.makeStaging ?? (() => mkdtempSync(join(tmpdir(), "visionox-release-"))))();
   const runtimePackage = join(stagingRoot, "visionox-pkg");
   const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
@@ -73,6 +74,7 @@ export function runTauriBuild(options = {}) {
     };
     runner("build release", tauriCli, ["build", ...args, "--config", JSON.stringify(resourceOverride)], env);
     runner("verify release resources", join(root, "scripts", "verify-release-resources.js"), [], env);
+    runner("write release manifest", join(root, "scripts", "release-manifest.js"), ["--release-verified"], env);
     return { stagingRoot, runtimePackage, env };
   } finally {
     cleanup();

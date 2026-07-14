@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { replacePathTransactional } from "../lib/transactional-path.mjs";
+import { replacePathTransactional, restoreLatestPathHistory } from "../lib/transactional-path.mjs";
 
 function writeVersion(path, value) {
   mkdirSync(path, { recursive: true });
@@ -45,6 +45,23 @@ describe("transactional path replacement", () => {
         },
       }), /activation failed/);
       assert.equal(readFileSync(join(target, "version.txt"), "utf8"), "stable");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the latest retained version while keeping the replaced version recoverable", () => {
+    const root = mkdtempSync(join(tmpdir(), "visionox-path-history-restore-"));
+    try {
+      const target = join(root, "skill");
+      writeVersion(target, "one");
+      const staging = join(root, "stage-two");
+      writeVersion(staging, "two");
+      replacePathTransactional(target, staging, { retain: 3 });
+      const restored = restoreLatestPathHistory(target, { retain: 3 });
+      assert.equal(readFileSync(join(target, "version.txt"), "utf8"), "one");
+      assert.match(restored.restoredFrom, /skill\.history-/);
+      assert.equal(readdirSync(root).filter((name) => name.startsWith("skill.history-")).length, 1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

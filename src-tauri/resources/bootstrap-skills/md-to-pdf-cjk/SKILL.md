@@ -10,6 +10,9 @@ tags: markdown, pdf, chinese, japanese, korean, CJK, convert, report, document
 
 Convert Markdown to professional PDFs with full Chinese/Japanese/Korean text support.
 
+This skill only generates a new PDF from Markdown. It does not read, extract, summarize,
+repair, or decrypt an existing PDF and must never be used as a fallback PDF reader.
+
 ## Why This Exists
 
 Most Markdown-to-PDF tools break on CJK characters, require LaTeX, or need heavy dependencies. This skill uses reportlab for lightweight, reliable PDF generation that works on any server — including 2GB RAM VPS instances.
