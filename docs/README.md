@@ -21,8 +21,9 @@
 | [架构说明](ARCHITECTURE.md) | 系统边界、运行资源、数据保护、长期决策、技术债和 Windows 专项集成 |
 | [开发指南](DEVELOPMENT.md) | 环境、调试、编码、样式和规范构建入口 |
 | [质量门禁](QUALITY.md) | 完成标准、测试组织、提交门禁和 release 门禁 |
-| [发布验收清单](RELEASE_CHECKLIST.md) | exe/NSIS 每次交付时填写的操作清单与哈希记录 |
+| [发布验收清单](RELEASE_CHECKLIST.md) | exe/NSIS 每次交付时使用的操作清单与自动产物清单说明 |
 | [Dashboard 功能基线](DASHBOARD_PARITY.md) | 当前 bundle 功能基线与迁移到可重建源码的验收条件 |
+| [Launcher 模块化计划](LAUNCHER_MODULARIZATION_PLAN.md) | 按行为契约逐段拆分 Launcher 的实施顺序、边界与验收条件 |
 | [Skill 创建指南](skill-creation-guide.md) | 自定义 Skill 的开发与分发流程 |
 
 ## 待办审查
