@@ -2,6 +2,15 @@
 
 Work with existing PDFs: extract, merge, split, fill forms, convert formats, or **reformat** with a new design. Usually a Light triage path — except reformat, which escalates to Standard.
 
+## Saved Markdown Conversion
+
+When the user asks for an actual Markdown file from an existing PDF, use the host-managed
+`organize_document_to_markdown` tool and read `../references/pdf-to-markdown.md` first. The host
+owns preparation, complete page batches, model conversion, independent review, retries,
+coverage checks, and atomic delivery. Do not run `pdf.py extract.text`, write a custom
+parser, or manually copy extracted text into `write_file` for this workflow. Use the
+commands below only when the user asks for raw extraction or a PDF manipulation operation.
+
 ---
 
 ## Decision Tree
@@ -58,11 +67,16 @@ python3 "$PDF_SKILL_DIR/scripts/pdf.py" extract.image report.pdf -o ./images/
 ```bash
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.merge a.pdf b.pdf -o combined.pdf
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.split book.pdf -o ./chapters/
+python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.chunk huge-book.pdf -o ./volumes/ --pages-per-file 200
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.rotate doc.pdf 90 -o rotated.pdf
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.rotate doc.pdf 180 -o rotated.pdf -p 1-3
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.crop doc.pdf 50,50,550,750 -o trimmed.pdf
 python3 "$PDF_SKILL_DIR/scripts/pdf.py" pages.clean doc.pdf -o cleaned.pdf
 ```
+
+Use `pages.split` only when one PDF per page is intentional. Use `pages.chunk` for a
+large document; it preserves contiguous page ranges and writes `manifest.json` so later
+summaries can be merged without losing the original page mapping.
 
 ---
 
@@ -307,10 +321,10 @@ Issues caught: `CONV_TOC_LOST` (TOC disappeared), `CONV_HINT_LEAKED` (placeholde
 
 | Topic | Detail |
 |-------|--------|
-| Encrypted PDFs | Not supported. User must decrypt externally first. |
+| Protected/encrypted PDFs | Call `prepare_local_document` first and keep its `documentRef`; only request external help if the host reports the file remains unreadable. |
 | < 50 MB | Instant |
 | 50–200 MB | 1–2 minutes |
-| > 200 MB | Split first, or extend timeout |
+| > 200 MB | Prefer `pages.chunk` or a user-selected page range; do not load the whole file into one model request. |
 | Memory | ~2-3× input file size |
 | Merge failure | Partial output may remain; delete and retry |
 | Split failure | Some page files may exist; inspect output dir |

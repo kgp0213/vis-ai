@@ -4280,10 +4280,13 @@ var ToolRegistry = class {
     }
     const missing = tool.parameters ? missingRequiredParam(tool.parameters, args) : null;
     if (missing) {
+      const correction = missing === "content" && /^(?:append_file|write_file)$/i.test(name)
+        ? ' Required shape: {"path":"...","content":"actual text"}. A path-only call cannot create document content.'
+        : "";
       return this._noteMalformed(
         name,
         fingerprint,
-        `missing required parameter "${missing}". Retry with all required parameters filled.`
+        `missing required parameter "${missing}". Retry with all required parameters filled.${correction}`
       );
     }
     this._lastMalformed.delete(name);
@@ -4311,7 +4314,9 @@ var ToolRegistry = class {
       }
       const result = await tool.fn(args, {
         signal: opts.signal,
-        confirmationGate: opts.confirmationGate
+        confirmationGate: opts.confirmationGate,
+        maxResultTokens: opts.maxResultTokens,
+        maxResultChars: opts.maxResultChars
       });
       const str = typeof result === "string" ? result : JSON.stringify(result);
       let clipped = str;
@@ -5992,6 +5997,7 @@ var CacheFirstLoop = class {
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
+        if (String(_name).toLowerCase() === "extract_pdf_text" || String(_name).toLowerCase() === "organize_document_to_markdown") return result;
         const remaining = this.maxToolIters - this._toolDispatchesThisStep;
         if (remaining <= 0) {
           return `${result}
@@ -6712,6 +6718,7 @@ ${reason}`
           };
         }
         const settled = await Promise.allSettled(chunk.map((c) => this.runOneToolCall(c, signal)));
+        let finishTurnContent = null;
         for (let k = 0; k < chunk.length; k++) {
           const call = chunk[k];
           const name = call.function?.name ?? "";
@@ -6755,6 +6762,20 @@ ${reason}`
             toolArgs: args,
             callId: this.inflightIdFor(call)
           };
+          const finishTurnOnResult = this.tools.get(name)?.finishTurnOnResult;
+          if (typeof finishTurnOnResult === "function") {
+            try {
+              const content = finishTurnOnResult(result, safeParseToolArgs(args));
+              if (typeof content === "string" && content.trim()) finishTurnContent = content.trim();
+            } catch {
+            }
+          }
+        }
+        if (finishTurnContent) {
+          this.appendAndPersist(buildSyntheticAssistantMessage(finishTurnContent, this.model));
+          yield { turn: this._turn, role: "assistant_final", content: finishTurnContent };
+          yield { turn: this._turn, role: "done", content: finishTurnContent };
+          return;
         }
       }
     }
@@ -9189,6 +9210,24 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       await fs4.mkdir(pathMod5.dirname(abs), { recursive: true });
       await fs4.writeFile(abs, args.content, "utf8");
       return `wrote ${args.content.length} chars to ${displayRel4(rootDir, abs)}`;
+    }
+  });
+  registry.register({
+    name: "append_file",
+    description: "Append content to a file under the sandbox root. Parent directories are created as needed. Use this for large documents after writing the first section with write_file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" }
+      },
+      required: ["path", "content"]
+    },
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "append_file", ctx, "write");
+      await fs4.mkdir(pathMod5.dirname(abs), { recursive: true });
+      await fs4.appendFile(abs, args.content, "utf8");
+      return `appended ${args.content.length} chars to ${displayRel4(rootDir, abs)}`;
     }
   });
   registry.register({

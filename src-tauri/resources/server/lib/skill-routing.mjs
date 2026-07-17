@@ -12,10 +12,14 @@ const VHOME_SKILL_DIRECT = /(帮我|请|我想|我要|用于|用来|以后|每�
 const VHOME_SKILL_REUSABLE = /(以后|每次|定期|每天|每周|每月|固定|反复|复用|长期|重复|reus(?:e|able)|recurring|every\s+(?:day|week|month)|weekly|daily|monthly)/i;
 const VHOME_SKILL_PRODUCT_DISCUSSION = /(源码|代码|函数|组件|接口|架构|逻辑|路由|正则|关键词|bug|调试|测试|审查|评估|文档|说明书|实现方案|程序|软件|UI|交互卡片|弹窗|页面|前端|后端|source\s*code|architecture|router|regex|implementation|debug|test|review|documentation|UI)/i;
 const PDF_PATH = /\.pdf(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
+const DOCUMENT_PATH = /\.(?:pdf|docx|xlsx|csv|tsv|pptx|html?|markdown|md|txt|log|xml|jsonl?|ya?ml)(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
+const DOCUMENT_KIND = /(?:\bPDF\b|\bWord\b|\bExcel\b|\bPowerPoint\b|\bPPT\b|\bHTML\b|\bMarkdown\b|\bCSV\b|文档|表格|演示文稿)/i;
 const MARKDOWN_PATH = /\.(?:md|markdown)(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
 const MARKDOWN_TO_PDF = /(?:转(?:成|为|换成)|转换|导出|生成|制作).{0,24}(?:PDF|pdf)|(?:PDF|pdf).{0,24}(?:生成|导出)/i;
 const PDF_CREATE = /(?:创建|生成|制作|输出|导出).{0,24}(?:PDF|pdf)|(?:PDF|pdf).{0,24}(?:报告|文档|文件)/i;
-const PDF_TECHNICAL_DISCUSSION = /(源码|代码|函数|组件|接口|架构|逻辑|路由|正则|bug|调试|测试|审查|评估|实现方案|程序|软件|解析器|依赖|skill|技能|脚本|source\s*code|architecture|implementation|debug|test|review)/i;
+const DOCUMENT_MARKDOWN_ACTION = /(?:整理|转换|转成|转为|导出|保存|生成|提取|总结|归纳|convert|extract|export|save|organize|summari[sz]e)/i;
+const MARKDOWN_TARGET = /(?:\bmarkdown\b|\bmd\b|Markdown\s*文件|MD\s*文件)/i;
+const PDF_TECHNICAL_DISCUSSION = /(源码|代码|函数|组件|接口|架构|逻辑|路由|正则|bug|调试|测试|审查|评估|实现方案|流程是什么|工作流程|原理|如何实现|为什么|是否应该|讨论|建议|优化|程序|软件|解析器|依赖|skill|技能|脚本|source\s*code|architecture|implementation|debug|test|review)/i;
 
 export function classifyVHomeSkillAuthoringIntent(rawText) {
   const text = typeof rawText === "string" ? rawText.trim() : "";
@@ -53,6 +57,12 @@ export function routeAutomaticSkill(rawText) {
   }
   if (MARKDOWN_PATH.test(text) && MARKDOWN_TO_PDF.test(text) && !PDF_TECHNICAL_DISCUSSION.test(text)) {
     return { name: "md-to-pdf-cjk", task: text, source: "automatic" };
+  }
+  const savedDocumentMarkdown = (DOCUMENT_PATH.test(text) || DOCUMENT_KIND.test(text))
+    && DOCUMENT_MARKDOWN_ACTION.test(text)
+    && MARKDOWN_TARGET.test(text);
+  if (savedDocumentMarkdown && !PDF_TECHNICAL_DISCUSSION.test(text)) {
+    return { name: "document-organizer", task: text, source: "automatic" };
   }
   if ((PDF_PATH.test(text) || PDF_CREATE.test(text)) && !PDF_TECHNICAL_DISCUSSION.test(text)) {
     return { name: "pdf", task: text, source: "automatic" };

@@ -55,7 +55,7 @@ const {
   pickSummaryModel,
   buildLegacyProvider,
 } = await importEarly("./lib/provider.mjs");
-const { resolveProviderModelRequest } = await importEarly("./lib/model-request-policy.mjs");
+const { resolveProviderModelAgentPolicy, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
@@ -69,6 +69,7 @@ const { isMcpToolTimeout, mcpRecoveryError } = await importEarly("./lib/mcp-reco
 const { migrateConfigFile } = await importEarly("./lib/config-migrations.mjs");
 const { createSessionTrashStore } = await importEarly("./lib/session-trash.mjs");
 const { pruneLegacyBootstrapSkillBackups } = await importEarly("./lib/bootstrap-skill-cleanup.mjs");
+const { isKnownLegacyBootstrapSkill } = await importEarly("./lib/bootstrap-skill-ownership.mjs");
 const { createUserDataBackupStore } = await importEarly("./lib/user-data-backup.mjs");
 const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFile } = await importEarly("./lib/versioned-json-file.mjs");
 const { createPromptQueueStore } = await importEarly("./lib/prompt-queue-store.mjs");
@@ -86,8 +87,15 @@ const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, res
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
-const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
-const { extractPdfText } = await importEarly("./lib/pdf-text.mjs");
+const { createPreparedDocumentRegistry, getDlpConfig, latestPreparedDocumentRef, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { extractPdfText, inspectPdfText, processPdfTextBatches, LARGE_PDF_PAGE_THRESHOLD } = await importEarly("./lib/pdf-text.mjs");
+const { buildPdfDeliveryResult, formatPageRange, parsePageRange } = await importEarly("./lib/document-delivery.mjs");
+const { artifactDeliveryRetryPrompt, artifactMissingNotice, detectArtifactRequest, documentArtifactStateFromJob, documentJobToolMismatch, latestAssistantResponse, pendingDocumentArtifactFromToolEvent, pendingDocumentWriteConflict, registerSaveLastAssistantResponseTool, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
+const { generatePdfSectionWithModel, largePdfChoiceResult, registerPdfMarkdownWorkflowTool } = await importEarly("./lib/pdf-markdown-workflow.mjs");
+const { buildDocumentContract, buildDocumentSummaryMessages, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
+const { processDocumentSourceBatches, runOfficeCliJson } = await importEarly("./lib/document-extractors.mjs");
+const { createDocumentJobStore } = await importEarly("./lib/document-job-store.mjs");
+const { createDocumentMarkdownManager } = await importEarly("./lib/document-markdown-workflow.mjs");
 const {
   buildTopicDocumentPrompt,
   buildTopicPlanPrompt,
@@ -356,6 +364,17 @@ if (!existsSync(modeMemoryDir)) {
 
 const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
+const documentJobStore = createDocumentJobStore(resolve(visionoxDataDir, "document-jobs"), {
+  retentionDays: 30,
+  onManifestFallback: (error, jobId, snapshotPath) => {
+    console.error(`[document] manifest snapshot fallback job=${jobId} code=${error?.code || "UNKNOWN"} snapshot=${snapshotPath}`);
+  },
+});
+const repairedDocumentJobs = await documentJobStore.repairInterrupted();
+const prunedDocumentJobs = await documentJobStore.pruneExpired();
+if (repairedDocumentJobs.length > 0 || prunedDocumentJobs.deleted.length > 0) {
+  console.error(`[launcher] document jobs recovered=${repairedDocumentJobs.length} pruned=${prunedDocumentJobs.deleted.length}`);
+}
 const runtimeIssues = createRuntimeIssueRegistry({
   debug: process.env.VISIONOX_DEBUG_DIAGNOSTICS === "1",
   log: ({ level, message }) => console.error(`[launcher] ${level}: ${message}`),
@@ -853,9 +872,20 @@ async function installBootstrapSkill(name, { force = false } = {}) {
   }
   const srcMtime = sourceDirMtime(sourceDir);
   if (existsSync(targetDir)) {
-    const marker = await readBuiltinMarker(targetDir);
+    let marker = await readBuiltinMarker(targetDir);
     if (!marker) {
-      return { name, installed: false, skipped: true, reason: "user skill with same name exists" };
+      const legacyHash = await hashDirectory(targetDir);
+      if (!isKnownLegacyBootstrapSkill(name, legacyHash)) {
+        return { name, installed: false, skipped: true, reason: "user skill with same name exists" };
+      }
+      marker = {
+        owner: "visionox-bootstrap",
+        name,
+        version: await readSkillVersion(targetDir),
+        sourceHash: legacyHash,
+        sourceMtime: null,
+      };
+      console.error(`[launcher] adopting known legacy bootstrap skill before upgrade: ${name}`);
     }
     // Fast path: source dir unchanged since last install → reuse cached hash.
     const sourceVersion = await readSkillVersion(sourceDir);
@@ -1120,6 +1150,154 @@ async function retrieveSemanticContext(text, recentMessages, signal) {
   }
 }
 
+let documentMarkdownManager = null;
+const documentClientCache = new Map();
+const documentModelHealth = new Map();
+
+function documentModelCandidates(policyValue) {
+  const policy = normalizeDocumentPolicy(policyValue);
+  const providers = (config.providers ?? []).filter((provider) => provider && provider.disabled !== true);
+  const activeProvider = getActiveProvider(config);
+  const activeModelId = effectiveModelConfig(config).model;
+  const candidates = [];
+  const append = (provider, model, role) => {
+    if (!provider || !model || model.disabled === true || !String(provider.apiKey || "").trim() || !String(provider.baseUrl || "").trim()) return;
+    const key = `${provider.id}\0${model.id}`;
+    if (candidates.some((item) => item.key === key)) return;
+    const agentPolicy = resolveProviderModelAgentPolicy(provider, model.id);
+    const visionPolicy = resolveProviderModelVisionPolicy(provider, model.id);
+    candidates.push({
+      key,
+      providerId: provider.id,
+      modelId: model.id,
+      provider,
+      model,
+      role,
+      multimodal: model.multimodal === true,
+      maxImages: model.multimodal === true ? Number(visionPolicy.maxImages) || 5 : 0,
+      documentPolicy: agentPolicy.documentPolicy ?? null,
+    });
+  };
+  append(activeProvider, activeProvider?.models?.find((model) => model.id === activeModelId) ?? activeProvider?.models?.find((model) => model.disabled !== true), "primary");
+  if (policy.autoFallback) {
+    append(activeProvider, activeProvider?.models?.find((model) => model.disabled !== true && model.multimodal === true), "fallback");
+  }
+  const fallbackProviders = policy.fallbackProviderIds.length > 0
+    ? policy.fallbackProviderIds.map((id) => providers.find((provider) => provider.id === id)).filter(Boolean)
+    : providers.filter((provider) => provider.id !== activeProvider?.id);
+  for (const provider of fallbackProviders) {
+    const enabled = provider.models?.filter((model) => model.disabled !== true) ?? [];
+    const preferred = enabled.find((model) => model.presets?.includes(provider.defaultPreset))
+      ?? enabled.find((model) => /pro|reason|vision/i.test(`${model.id} ${model.name ?? ""}`))
+      ?? enabled[0];
+    append(provider, preferred, "fallback");
+    append(provider, enabled.find((model) => model.multimodal === true), "fallback");
+  }
+  return candidates;
+}
+
+function documentClient(candidate) {
+  const fingerprint = createHash("sha256")
+    .update(`${candidate.providerId}\0${candidate.provider.baseUrl}\0${candidate.provider.apiKey}`)
+    .digest("hex");
+  const cached = documentClientCache.get(candidate.key);
+  if (cached?.fingerprint === fingerprint) return cached.client;
+  const next = new DeepSeekClient({
+    apiKey: candidate.provider.apiKey,
+    baseUrl: candidate.provider.baseUrl,
+    requestConfigForModel: (modelId, requestOptions) => resolveProviderModelRequest(candidate.provider, modelId, requestOptions),
+  });
+  documentClientCache.set(candidate.key, { fingerprint, client: next });
+  return next;
+}
+
+async function probeDocumentModel(candidate, signal) {
+  const cached = documentModelHealth.get(candidate.key);
+  if (cached && Date.now() - cached.checkedAt < 5 * 60_000) return cached.ok;
+  const timeoutSignal = AbortSignal.timeout(10_000);
+  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  try {
+    const response = await documentClient(candidate).chat({
+      model: candidate.modelId,
+      messages: [{ role: "user", content: "Reply with OK." }],
+      temperature: 0,
+      maxTokens: 8,
+      requestPurpose: "verification",
+      signal: combined,
+    });
+    const ok = typeof response?.content === "string";
+    documentModelHealth.set(candidate.key, { ok, checkedAt: Date.now() });
+    return ok;
+  } catch (error) {
+    documentModelHealth.set(candidate.key, { ok: false, checkedAt: Date.now(), error: String(error?.message || error) });
+    console.error(`[document] fallback probe failed provider=${candidate.providerId} model=${candidate.modelId}: ${error.message}`);
+    return false;
+  }
+}
+
+async function generateDocumentContent({ candidate, batch, messages: requestMessages, purpose, maxTokens, requestTimeoutMs, onProgress, signal, retry }) {
+  return generatePdfSectionWithModel({
+    client: documentClient(candidate),
+    model: candidate.modelId,
+    messages: requestMessages,
+    pageRange: batch.label || batch.id,
+    stage: purpose === "verification" ? "quality-review" : retry ? "quality-repair" : "draft",
+    requestPurpose: purpose,
+    temperature: purpose === "verification" ? 0 : 0.1,
+    maxTokens,
+    hardTimeoutMs: requestTimeoutMs,
+    onProgress,
+    signal,
+  });
+}
+
+async function generateDocumentSummary({ title, sectionSummaries, contract, candidate, requestTimeoutMs, onProgress, signal }) {
+  return generatePdfSectionWithModel({
+    client: documentClient(candidate),
+    model: candidate.modelId,
+    messages: buildDocumentSummaryMessages({ title, sectionSummaries, contract }),
+    pageRange: "summary",
+    stage: "summary",
+    requestPurpose: "toolContinuation",
+    temperature: 0.1,
+    maxTokens: 2_048,
+    hardTimeoutMs: requestTimeoutMs,
+    onProgress,
+    signal,
+  });
+}
+
+function isPathWithinRoot(targetPath, rootPath) {
+  const target = resolve(String(targetPath ?? ""));
+  const root = resolve(String(rootPath ?? ""));
+  const normalize = process.platform === "win32" ? (value) => value.toLowerCase() : (value) => value;
+  const normalizedTarget = normalize(target);
+  const normalizedRoot = normalize(root);
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
+}
+
+async function writeDocumentOutput({ outputPath, content, signal, workspaceRoot, allowOutsideWorkspace, allowOutputOverwrite }) {
+  if (signal?.aborted) throw new DOMException("document task cancelled", "AbortError");
+  if (!allowOutsideWorkspace && !isPathWithinRoot(outputPath, workspaceRoot)) {
+    throw new Error("document output path is outside the task's original workspace");
+  }
+  if (!allowOutputOverwrite && existsSync(resolve(outputPath))) {
+    throw new Error("document output file appeared after the task started; choose a new filename or explicitly confirm overwrite");
+  }
+  await atomicWriteFile(resolve(outputPath), String(content ?? ""), "utf8");
+}
+
+function nextDocumentOutputPath(rootDir, sourceTitle) {
+  const stem = `${sourceTitle}-整理`;
+  const first = resolve(rootDir, `${stem}.md`);
+  if (!existsSync(first)) return first;
+  for (let index = 2; index <= 999; index++) {
+    const candidate = resolve(rootDir, `${stem} (${index}).md`);
+    if (!existsSync(candidate)) return candidate;
+  }
+  throw new Error("unable to choose an unused document output filename");
+}
+
 async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   const before = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
   const { jobs } = opts;
@@ -1129,6 +1307,9 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     rootDir,
     allowWriting: true,
     allowAllPaths: () => loadEditMode(configPath) === "admin",
+  });
+  registerSaveLastAssistantResponseTool(tools, {
+    getLastAssistantResponse: opts.getLastAssistantResponse,
   });
   wrapReadFileToolWithDlp(tools, {
     readConfig: () => readConfig(configPath),
@@ -1166,7 +1347,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 
   tools.register({
     name: "extract_pdf_text",
-    description: "Extract text from an existing local PDF with the bundled PDF.js runtime. Accepts an original path, readablePath, or documentRef from prepare_local_document. This is the primary PDF reader; do not use OfficeCLI or install Python packages for PDF text extraction.",
+    description: "Read or discuss an existing local PDF with the bundled PDF.js runtime. Do not use this when the user requested a saved Markdown file; call organize_document_to_markdown directly instead. Results contain complete pages only. When complete is false, immediately call again with the returned documentRef and nextPageRange. Input may be omitted only immediately after prepare_local_document, when the host can recover the latest PDF reference.",
     parameters: {
       type: "object",
       properties: {
@@ -1174,10 +1355,13 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
         pages: { type: "string", description: "Optional 1-based page selection such as 1-3 or 1,4,7." },
         maxChars: { type: "integer", minimum: 10000, maximum: 8000000, description: "Maximum extracted characters; default 1000000." },
       },
-      required: ["input"],
     },
     fn: async (args, toolCtx) => {
-      const prepared = await prepareLocalDocument(args?.input, {
+      const input = String(args?.input ?? "").trim() || latestPreparedDocumentRef(preparedDocumentRegistry, "pdf");
+      if (!input) {
+        return JSON.stringify({ ok: false, error: "extract_pdf_text needs input because no prepared PDF is available" });
+      }
+      const prepared = await prepareLocalDocument(input, {
         cfg: readConfig(configPath),
         env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
         logger: console,
@@ -1188,18 +1372,296 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       if (prepared.documentKind !== "pdf") {
         return JSON.stringify({ ok: false, error: "extract_pdf_text only accepts PDF documents", documentKind: prepared.documentKind });
       }
-      const extracted = await extractPdfText(prepared.readablePath, {
-        pages: args?.pages,
-        maxChars: args?.maxChars,
-        signal: toolCtx?.signal,
+      let extracted;
+      try {
+        extracted = await extractPdfText(prepared.readablePath, {
+          pages: args?.pages,
+          maxChars: args?.maxChars,
+          signal: toolCtx?.signal,
+        });
+      } catch (error) {
+        if (error instanceof RangeError && /PDF exceeds \d+ (?:bytes|pages)/.test(error.message)) {
+          const inspection = /pages/.test(error.message)
+            ? await inspectPdfText(prepared.readablePath, { signal: toolCtx?.signal })
+            : {
+                totalPages: null,
+                fileBytes: (await fsStat(prepared.readablePath)).size,
+                requiresPhysicalSplit: true,
+              };
+          return JSON.stringify(largePdfChoiceResult({
+            prepared,
+            inspection,
+            threshold: LARGE_PDF_PAGE_THRESHOLD,
+          }));
+        }
+        throw error;
+      }
+      if (extracted.requiresSegmentation) {
+        return JSON.stringify(largePdfChoiceResult({
+          prepared,
+          inspection: extracted,
+          threshold: LARGE_PDF_PAGE_THRESHOLD,
+        }));
+      }
+      const deliveryBudget = Number.isSafeInteger(toolCtx?.maxResultTokens) && toolCtx.maxResultTokens > 0
+        ? toolCtx.maxResultTokens
+        : 7000;
+      const { pages, requestedPageNumbers, ...extractionSummary } = extracted;
+      const delivery = buildPdfDeliveryResult({
+        base: {
+          ok: true,
+          documentId: prepared.documentId,
+          documentRef: prepared.documentRef,
+          sourcePath: prepared.sourcePath,
+          ...extractionSummary,
+        },
+        pages,
+        requestedPageNumbers,
+        sourceTruncated: extracted.truncated,
+        maxTokens: deliveryBudget,
+        countTokens,
       });
-      return JSON.stringify({
-        ok: true,
-        documentId: prepared.documentId,
-        documentRef: prepared.documentRef,
+      console.error(`[document] extract_pdf_text document=${prepared.documentId} delivered=${delivery.deliveredPageRange || "none"} remaining=${delivery.remainingPageRange || "none"} complete=${delivery.complete} budget=${deliveryBudget}`);
+      return JSON.stringify(delivery);
+    },
+  });
+
+  registerPdfMarkdownWorkflowTool(tools, {
+    countTokens,
+    resolveInput: () => latestPreparedDocumentRef(preparedDocumentRegistry, "pdf"),
+    preparePdf: async (input, signal) => {
+      const prepared = await prepareLocalDocument(input, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+        signal,
+        registry: preparedDocumentRegistry,
+      });
+      if (!prepared.ok) return prepared;
+      if (prepared.documentKind !== "pdf") {
+        return { ok: false, error: "organize_pdf_to_markdown only accepts PDF documents", documentKind: prepared.documentKind };
+      }
+      return prepared;
+    },
+    inspectPdf: (path, signal) => inspectPdfText(path, { signal }),
+    processBatches: (path, batchOptions) => processPdfTextBatches(path, batchOptions),
+    generateSection: async ({ messages: sectionMessages, batch, signal, progress, stage }) => {
+      if (!client) throw new Error("model client is unavailable");
+      const modelConfig = effectiveModelConfig(config);
+      return generatePdfSectionWithModel({
+        client,
+        model: modelConfig.model,
+        messages: sectionMessages,
+        pageRange: batch.pageRange,
+        signal,
+        onProgress: progress,
+        stage,
+      });
+    },
+    reviewSection: async ({ messages: reviewMessages, batch, signal, progress, stage }) => {
+      if (!client) throw new Error("model client is unavailable");
+      const modelConfig = effectiveModelConfig(config);
+      return generatePdfSectionWithModel({
+        client,
+        model: modelConfig.model,
+        messages: reviewMessages,
+        pageRange: batch.pageRange,
+        signal,
+        onProgress: progress,
+        stage,
+        temperature: 0,
+        maxTokens: 2_048,
+        requestPurpose: "verification",
+      });
+    },
+    onProgress: (progress) => {
+      broadcastDashboardEvent({ kind: "document-progress", ...progress });
+      if (progress.complete) {
+        broadcastDashboardEvent({ kind: "status", text: `PDF 文档已完成 ${progress.processedPages} 页整理并通过覆盖校验` });
+      } else if (progress.phase === "batch-complete") {
+        broadcastDashboardEvent({ kind: "status", text: `PDF 已完成 ${progress.processedPages}/${progress.totalPages ?? "?"} 页，继续处理后续内容` });
+      } else if (progress.phase === "coverage-retry") {
+        const pages = Array.isArray(progress.missingPages) && progress.missingPages.length > 0
+          ? `（缺少第 ${formatPageRange(progress.missingPages)} 页）`
+          : "";
+        broadcastDashboardEvent({ kind: "status", text: `PDF 第 ${progress.pageRange} 页覆盖校验未通过${pages}，正在缩小范围重试` });
+      } else if (progress.phase === "quality-review") {
+        broadcastDashboardEvent({ kind: "status", text: `正在逐页审校 PDF 第 ${progress.pageRange} 页的 Markdown` });
+      } else if (progress.phase === "quality-repair") {
+        broadcastDashboardEvent({ kind: "status", text: `PDF 第 ${progress.pageRange} 页审校发现 ${progress.issueCount ?? "若干"} 项问题，正在修复` });
+      } else if (progress.phase === "model") {
+        const seconds = Math.max(0, Math.floor(Number(progress.elapsedMs ?? 0) / 1_000));
+        const action = progress.stage === "quality-review"
+          ? "审校"
+          : progress.stage === "quality-repair"
+            ? "修复"
+            : progress.stage === "coverage-repair" || progress.stage === "retention-repair"
+              ? "补全"
+              : "整理";
+        broadcastDashboardEvent({ kind: "status", text: `正在${action} PDF 第 ${progress.pageRange} 页（${seconds} 秒）` });
+      } else if (progress.pageRange) {
+        broadcastDashboardEvent({ kind: "status", text: `正在整理 PDF 第 ${progress.pageRange} 页` });
+      }
+    },
+  });
+
+  if (!documentMarkdownManager) {
+    documentMarkdownManager = createDocumentMarkdownManager({
+      store: documentJobStore,
+      countTokens,
+      isForegroundBusy: () => busy,
+      prepareDocument: async (input, signal) => prepareLocalDocument(input, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir: workspaceDir },
+        logger: console,
+        signal,
+        registry: preparedDocumentRegistry,
+      }),
+      processSourceBatches: (prepared, batchOptions) => processDocumentSourceBatches(prepared, {
+        ...batchOptions,
+        processPdfBatches: (path, pdfOptions) => processPdfTextBatches(path, pdfOptions),
+        runOfficeCli: (args, officeOptions) => {
+          const executable = resolveBundledOfficecli();
+          if (!executable) throw new Error("bundled OfficeCLI is unavailable");
+          return runOfficeCliJson(executable, args, officeOptions);
+        },
+      }),
+      modelCandidates: documentModelCandidates,
+      probeModel: probeDocumentModel,
+      generate: generateDocumentContent,
+      generateSummary: generateDocumentSummary,
+      writeOutput: writeDocumentOutput,
+      onChange: (job) => {
+        broadcastDashboardEvent({ kind: "background-job-change", job });
+        broadcastDashboardEvent({ kind: "document-progress", jobId: job.documentJobId, status: job.status, progress: job.progress, model: job.model, modelRole: job.modelRole, outputPath: job.outputPath, qualityPassed: job.qualityPassed });
+        handleDocumentArtifactJobChange(job);
+      },
+      onPolicy: (jobId, trace) => {
+        const policy = trace?.effective ?? {};
+        const candidates = (trace?.candidates ?? []).map((candidate) => `${candidate.role}:${candidate.providerId}/${candidate.modelId}${candidate.hasDocumentPolicy ? ":configured" : ":default"}`).join(",");
+        console.error(`[document] policy job=${jobId} inputTokens=${policy.batchInputTokens ?? "?"} outputTokens=${policy.batchOutputTokens ?? "?"} units=${policy.maxUnitsPerBatch ?? "?"} visuals=${policy.maxVisualUnitsPerBatch ?? "?"} timeoutMs=${policy.requestTimeoutMs ?? "?"} candidates=${candidates}`);
+      },
+      onPersistenceError: (error, jobId, context) => {
+        const code = String(error?.code || "UNKNOWN");
+        runtimeIssues.report("warning", { key: `document-storage-${jobId}`, message: `文档任务状态保存失败（${context}/${code}），程序将继续运行并保留批次检查点。` });
+        console.error(`[document] persistence warning job=${jobId} context=${context} code=${code}: ${error.message}`);
+      },
+      onError: (error, jobId) => {
+        runtimeIssues.report("warning", { key: `document-job-${jobId}`, message: error.message });
+        console.error(`[document] job ${jobId} failed: ${error.stack || error.message}`);
+      },
+    });
+  }
+
+  tools.register({
+    name: "organize_document_to_markdown",
+    description: "Start a host-managed, resumable background job that converts a supported PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into a saved Markdown file. This is the default for extracting, organizing, or summarizing a document into an artifact. It preserves complete source blocks plus a separate summary, paginates deterministic extractors, audits quality, retries weak-model failures, and can use configured fallback providers only for failed blocks. A successful acceptance ends the current turn so the background worker can run; never call wait_for_job, list_jobs, read_file, OfficeCLI, extract_pdf_text, write_file, or a format Skill afterward for the same request.",
+    parameters: {
+      type: "object",
+      properties: {
+        input: { type: "string", description: "Original document path or stable documentRef. May be omitted only immediately after prepare_local_document." },
+        outputPath: { type: "string", description: "Destination Markdown path. If omitted, a new '<source>-整理.md' file is created in the current workspace." },
+        pages: { type: "string", description: "Optional PDF page selection such as 1-200. Leave empty for other formats." },
+        instructions: { type: "string", description: "Optional user-specific organization requirements. The default always preserves complete body content and adds a separate summary." },
+        fidelity: { type: "string", enum: ["complete-with-summary", "summary-only"], description: "Defaults to complete-with-summary. Use summary-only only when the user explicitly requested a brief summary." },
+        summaryOnlyConfirmed: { type: "boolean", description: "Set true only when the user explicitly requested a brief, lossy summary." },
+        overwriteConfirmed: { type: "boolean", description: "Set true only after the user explicitly confirmed overwriting an existing output file or the source file." },
+      },
+    },
+    fn: async (args, toolContext) => {
+      const input = String(args?.input ?? "").trim() || latestPreparedDocumentRef(preparedDocumentRegistry);
+      if (!input) return JSON.stringify({ ok: false, error: "organize_document_to_markdown needs input because no prepared document is available" });
+      const prepared = await prepareLocalDocument(input, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+        signal: toolContext?.signal,
+        registry: preparedDocumentRegistry,
+      });
+      if (!prepared.ok) return JSON.stringify(prepared);
+      const sourceTitle = basename(prepared.sourcePath).replace(/\.[^.]+$/, "") || "document";
+      const requestedOutputPath = String(args?.outputPath ?? "").trim();
+      const outputPath = requestedOutputPath || nextDocumentOutputPath(rootDir, sourceTitle);
+      if (!/\.(?:md|markdown)$/i.test(outputPath)) {
+        return JSON.stringify({ ok: false, error: "outputPath must end in .md or .markdown" });
+      }
+      if (prepared.documentKind === "pdf") {
+        const inspection = await inspectPdfText(prepared.readablePath, { signal: toolContext?.signal });
+        if (inspection.requiresPhysicalSplit || (inspection.totalPages > LARGE_PDF_PAGE_THRESHOLD && !String(args?.pages ?? "").trim())) {
+          return JSON.stringify(largePdfChoiceResult({ prepared, inspection, threshold: LARGE_PDF_PAGE_THRESHOLD }));
+        }
+      }
+      let contract;
+      try {
+        contract = buildDocumentContract({
+          sourcePath: prepared.sourcePath,
+          outputPath,
+          fidelity: args?.fidelity,
+          summaryOnlyConfirmed: args?.summaryOnlyConfirmed === true,
+          overwriteConfirmed: args?.overwriteConfirmed === true,
+          outputExists: Boolean(requestedOutputPath && existsSync(resolve(outputPath))),
+          instructions: args?.instructions,
+        });
+      } catch (error) {
+        return JSON.stringify({ ok: false, error: error.message });
+      }
+      if (contract.requiresDecision) {
+        return JSON.stringify({ ok: false, requiresUserChoice: true, decision: contract.decision, choices: contract.decision.choices });
+      }
+      const activeProvider = getActiveProvider(config);
+      const activeModel = effectiveModelConfig(config).model;
+      const agentPolicy = resolveProviderModelAgentPolicy(activeProvider, activeModel);
+      const accepted = await documentMarkdownManager.start({
         sourcePath: prepared.sourcePath,
-        ...extracted,
+        outputPath,
+        contract,
+        policy: agentPolicy.documentPolicy,
+        pages: args?.pages,
+        workspaceRoot: rootDir,
+        allowOutsideWorkspace: ["admin", "yolo"].includes(loadEditMode(configPath)),
+        allowOutputOverwrite: args?.overwriteConfirmed === true,
       });
+      const backgroundJobId = accepted.id ? `document:${String(accepted.id).replace(/^document:/, "")}` : null;
+      return JSON.stringify({
+        ...accepted,
+        id: backgroundJobId ?? accepted.id,
+        documentJobId: accepted.id ?? null,
+        backgroundJobId,
+        artifactStatus: accepted.accepted ? "pending" : "failed",
+        sourcePath: prepared.sourcePath,
+        message: accepted.accepted ? "文档整理任务已进入后台队列。当前轮次将立即结束以释放前台资源；请从输入框下方的后台任务查看进度。" : undefined,
+      });
+    },
+    finishTurnOnResult: (value) => {
+      const result = parseMaybeJsonObject(value);
+      return result?.ok === true && result?.accepted === true && result?.artifactStatus === "pending"
+        ? result.message
+        : null;
+    },
+  });
+
+  tools.register({
+    name: "get_document_job_status",
+    description: "Read document-conversion background status without waiting or polling. Use this in a later user turn when asked about progress. Pass the document:<UUID> returned by organize_document_to_markdown, or omit jobId to list recent document jobs. Never use wait_for_job or list_jobs for document jobs.",
+    readOnly: true,
+    parallelSafe: true,
+    stormExempt: true,
+    parameters: {
+      type: "object",
+      properties: {
+        jobId: { type: "string", description: "Optional document:<UUID> background job id." },
+      },
+    },
+    fn: async (args) => {
+      const jobId = String(args?.jobId ?? "").trim();
+      if (jobId) {
+        const job = await documentMarkdownManager?.getMetadata(jobId);
+        return JSON.stringify(job ? { ok: true, job } : { ok: false, error: `document job not found: ${jobId}` });
+      }
+      const jobs = (await documentMarkdownManager?.listMetadata() ?? [])
+        .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
+        .slice(0, 20);
+      return JSON.stringify({ ok: true, jobs });
     },
   });
 
@@ -1258,9 +1720,16 @@ const preparedDocumentRegistry = createPreparedDocumentRegistry({
   onChange: (preparedDocuments) => { void writeActiveSessionMeta({ preparedDocuments }); },
 });
 
-tools.setToolInterceptor((name, args) => {
-  const issue = validateOfficecliInvocation(name, args) ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable });
-  return issue ? JSON.stringify(issue) : undefined;
+tools.setToolInterceptor(async (name, args) => {
+  const issue = validateOfficecliInvocation(name, args)
+    ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable })
+    ?? documentJobToolMismatch(name, args);
+  if (issue) return JSON.stringify(issue);
+  if (/^(?:append_file|edit|multi_edit|organize_document_to_markdown|organize_pdf_to_markdown|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
+    const conflict = pendingDocumentWriteConflict(name, args, await documentMarkdownManager?.listMetadata() ?? []);
+    if (conflict) return JSON.stringify(conflict);
+  }
+  return undefined;
 });
 
 // Workspace-dependent tools — registered via shared function
@@ -1268,6 +1737,7 @@ const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
   jobs,
   getOperationId: () => activeOperation?.id ?? null,
   preparedDocumentRegistry,
+  getLastAssistantResponse: () => latestAssistantResponse(messages),
 });
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
@@ -1321,7 +1791,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理任何本地文档路径（PDF/Word/Excel/PPT/XML/DSN/文本/图片等）时，先调用 prepare_local_document 并保留返回的 documentRef，切换工具或 Skill 时继续使用同一引用，由程序自动恢复可读副本。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。读取现有 PDF 必须优先调用内置 extract_pdf_text；PDF.js 结果显示 likelyScanned 时再说明需要 OCR，不要反复更换文本解析器。OfficeCLI 只处理 Word/Excel/PPT，不得用于 PDF。复杂 PDF 编辑或生成使用 pdf Skill；md-to-pdf-cjk 只用于 Markdown 生成 PDF。交付前对 Office 文档执行 validate 并通过 view issues 定位问题和自修复。",
+    prompt: "你处于办公模式。用户要求把 PDF 整理、提取或总结成实际保存的 Markdown 文件时，直接调用 organize_pdf_to_markdown，并传入原始 PDF 路径和输出路径；宿主会完成文档准备、逐页分批、模型独立审校、写入和覆盖校验，不要预先调用 prepare_local_document 或 extract_pdf_text。仅阅读或讨论本地文档内容时，先调用 prepare_local_document 并保留返回的 documentRef；对于仅阅读的 PDF 再调用 extract_pdf_text，切换工具或 Skill 时继续使用同一引用。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。PDF.js 结果显示 likelyScanned 时再说明需要 OCR，不要反复更换文本解析器。若 organize_pdf_to_markdown 返回 qualityPassed=false，必须向用户说明审校降级和 warnings，不要声称无条件成功。OfficeCLI 只处理 Word/Excel/PPT，不得用于 PDF。复杂 PDF 编辑或生成使用 pdf Skill；md-to-pdf-cjk 只用于 Markdown 生成 PDF。交付前对 Office 文档执行 validate 并通过 view issues 定位问题和自修复。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -3299,6 +3769,8 @@ const GENERATED_ARTIFACT_PREVIEW_EXTS = new Set([
 const GENERATED_ARTIFACT_SCRIPT_EXTS = new Set([".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"]);
 const GENERATED_ARTIFACT_PREVIEW_MAX_BYTES = 512 * 1024;
 const generatedArtifactPaths = new Map();
+const pendingDocumentArtifacts = new Map();
+const notifiedDocumentArtifacts = new Set();
 
 function rememberGeneratedArtifactPath(value) {
   let raw = String(value || "").trim();
@@ -3371,7 +3843,7 @@ function parseMaybeJsonObject(value) {
 }
 
 function rememberToolGeneratedArtifacts(toolName, toolArgs) {
-  if (!/^(write_file|edit|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
+  if (!/^(write_file|append_file|save_last_assistant_response|organize_pdf_to_markdown|edit|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
   const args = parseMaybeJsonObject(toolArgs);
   if (!args) return [];
   const paths = [];
@@ -3532,6 +4004,10 @@ function getMemoryRuntimeStatus(rootDir = workspaceDir) {
 
 function buildLoop(client, rootDir) {
   const modelConfig = effectiveModelConfig(config);
+  const provider = getActiveProvider(config);
+  const activeModel = provider?.models?.find((model) => model.disabled !== true && model.id === modelConfig.model);
+  const agentPolicy = resolveProviderModelAgentPolicy(provider, modelConfig.model);
+  const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
   const memoryBudget = memoryPromptBudget(modelConfig.model);
   const fingerprint = computePrefixFingerprint(rootDir);
   let system, mc;
@@ -3577,15 +4053,16 @@ function buildLoop(client, rootDir) {
   const systemWithLearning = sessionLearningMode?.enabled
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
+  const systemWithAgentPolicy = agentPolicy.documentWorkflow === "guided"
+    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. When the user asks to turn an existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into an actual saved Markdown file, call organize_document_to_markdown directly with the original input and outputPath. The host handles preparation, stable extraction batches, independent quality review, targeted retries, fallback models, recoverable file writes, and coverage, so do not call prepare_local_document, extract_pdf_text, OfficeCLI, read_file, or write_file first for the same saved-document request. If that tool returns requiresUserChoice, use ask_choice with its structured choices. If qualityPassed is false, report the degraded review status and warnings instead of claiming unqualified success. For reading or discussing a document without creating a file, use the shortest reliable sequence: prepare_local_document once, retain documentRef, then use extract_pdf_text for PDF, OfficeCLI view text for Word/Excel/PowerPoint, or read_file for text formats. Do not start with annotated/query/html or cell-by-cell extraction unless the user asks for layout details or plain text is insufficient. Never rewrite or guess a prepared path; switch tools with documentRef. For screenshot-guided HTML or SVG corrections, inspect the image and only the relevant file region, apply one consolidated edit, then verify the written file instead of editing one visual element per tool call. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. Before any other write_file call, prepare both path and complete content, then verify the successful tool result before claiming the file exists. If a tool reports a missing required parameter, correct that parameter instead of repeating the incomplete call. If extract_pdf_text returns complete=false, immediately call it again with the same documentRef and nextPageRange; do not summarize, write, or claim full coverage until complete=true. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. For a long generated Markdown deliverable that is not based on an existing document, write the first section with write_file and append later sections with append_file instead of placing the whole document in one tool call. A continuation-window notice means the current turn has fresh tool rounds; continue the task without asking the user to send another message.`
+    : systemWithLearning;
   const prefix = new ImmutablePrefix({
-    system: systemWithLearning,
+    system: systemWithAgentPolicy,
     toolSpecs: presentedToolSpecs(),
   });
   // Determine vision capability from the active provider model config.
-  const provider = getActiveProvider(config);
-  const activeModel = provider?.models?.find((m) => m.disabled !== true && m.id === modelConfig.model);
   const visionCfg = activeModel?.multimodal
-    ? { vision: true, visionDetail: "high" }
+    ? { vision: true, visionDetail: visionPolicy.detail ?? "high" }
     : { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
 
   // Set provider-driven globals for chunk-2R4QCDOZ.js thinkingMode/summaryModel overrides
@@ -3598,6 +4075,9 @@ function buildLoop(client, rootDir) {
 
   activeContextPolicy = applyContextCap(modelConfig.model);
 
+  // The registry survives loop rebuilds; discard only the previous parent
+  // loop's closure so its counters and model policy cannot leak forward.
+  tools.setResultAugmenter(null);
   return new CacheFirstLoop({
     client,
     prefix,
@@ -3607,6 +4087,11 @@ function buildLoop(client, rootDir) {
     autoEscalate: modelConfig.autoEscalate,
     vision: visionCfg.vision ?? false,
     visionDetail: visionCfg.visionDetail ?? "",
+    visionPolicy,
+    maxToolIters: agentPolicy.maxToolIterations,
+    maxToolContinuationWindows: agentPolicy.maxToolContinuationWindows,
+    sameFailureClassLimit: agentPolicy.sameFailureClassLimit,
+    toolResultBudget: agentPolicy.toolResultBudget,
   });
 }
 
@@ -3617,7 +4102,7 @@ function createConfiguredModelClient(clientApiKey = apiKey, clientBaseUrl = base
   return new DeepSeekClient({
     apiKey: clientApiKey,
     baseUrl: clientBaseUrl,
-    requestConfigForModel: (modelId) => resolveProviderModelRequest(getActiveProvider(config), modelId),
+    requestConfigForModel: (modelId, options) => resolveProviderModelRequest(getActiveProvider(config), modelId, options),
   });
 }
 
@@ -3732,6 +4217,110 @@ function getActivePlanSnapshot() {
 }
 
 const MAX_PLAN_AUTO_CONTINUATIONS = 2;
+const MAX_DOCUMENT_AUTO_CONTINUATIONS = 16;
+const MAX_ARTIFACT_AUTO_CONTINUATIONS = 1;
+
+function parsePdfDeliveryResult(event) {
+  if (event?.role !== "tool" || event?.toolName !== "extract_pdf_text" || typeof event.content !== "string") return null;
+  try {
+    const result = JSON.parse(event.content);
+    if (!result?.ok || result.requiresUserChoice || typeof result.documentRef !== "string") return null;
+    return result;
+  } catch {
+    console.error("[document] extract_pdf_text returned non-JSON output after delivery budgeting");
+    return null;
+  }
+}
+
+function rememberPendingDocumentArtifact(artifact, { assistantId, operationId } = {}) {
+  if (!artifact?.jobId) return null;
+  const remembered = {
+    ...artifact,
+    assistantId: String(assistantId || artifact.assistantId || "").trim(),
+    operationId: String(operationId || artifact.operationId || "").trim(),
+  };
+  pendingDocumentArtifacts.set(artifact.jobId, remembered);
+  return remembered;
+}
+
+function handleDocumentArtifactJobChange(job) {
+  const rawId = String(job?.documentJobId ?? job?.id ?? "").replace(/^document:/, "");
+  if (!rawId) return;
+  const jobId = `document:${rawId}`;
+  const state = documentArtifactStateFromJob(job);
+  if (state === "pending" || notifiedDocumentArtifacts.has(jobId)) return;
+
+  const remembered = pendingDocumentArtifacts.get(jobId);
+  pendingDocumentArtifacts.delete(jobId);
+  notifiedDocumentArtifacts.add(jobId);
+  while (notifiedDocumentArtifacts.size > 500) {
+    notifiedDocumentArtifacts.delete(notifiedDocumentArtifacts.values().next().value);
+  }
+  if (state === "created") {
+    const outputPath = resolve(String(job.outputPath || remembered?.outputPath || ""));
+    const info = generatedArtifactFileInfo(outputPath);
+    if (info) {
+      rememberGeneratedArtifactPath(info.path);
+      broadcastDashboardEvent({
+        kind: "artifact-created",
+        assistantId: remembered?.assistantId || `document-job-${rawId}`,
+        files: [info],
+      });
+      broadcastDashboardEvent({ kind: "status", text: `后台文档整理完成：${info.filename}` });
+      return;
+    }
+    const message = `后台文档任务 ${jobId} 报告完成，但未找到输出文件：${job.outputPath || remembered?.outputPath || "未提供路径"}`;
+    runtimeIssues.report("warning", { key: `document-artifact-${rawId}`, message });
+    broadcastDashboardEvent({ kind: "warning", text: message });
+    return;
+  }
+
+  const reason = String(job?.error || "任务已取消");
+  if (String(job?.status).toLowerCase() === "cancelled") {
+    broadcastDashboardEvent({ kind: "status", text: `后台文档整理已取消（${jobId}）` });
+  } else {
+    broadcastDashboardEvent({ kind: "warning", text: `后台文档整理未完成（${jobId}）：${reason}` });
+  }
+}
+
+function updatePdfContinuationState(states, result) {
+  const key = result.documentRef;
+  let state = states.get(key);
+  const delivered = parsePageRange(result.deliveredPageRange);
+  const remaining = parsePageRange(result.remainingPageRange || result.nextPageRange);
+  if (!state && remaining.length === 0) return null;
+  state ??= {
+    documentRef: key,
+    documentId: result.documentId ?? null,
+    totalPages: Number(result.totalPages) || null,
+    delivered: new Set(),
+    remaining: new Set(),
+  };
+  for (const page of delivered) {
+    state.delivered.add(page);
+    state.remaining.delete(page);
+  }
+  for (const page of remaining) {
+    if (!state.delivered.has(page)) state.remaining.add(page);
+  }
+  if (state.remaining.size === 0) {
+    states.delete(key);
+    return null;
+  }
+  states.set(key, state);
+  return state;
+}
+
+function documentAutoContinuationPrompt(state, attempt) {
+  const nextPageRange = formatPageRange([...state.remaining]);
+  return [
+    `[系统自动续读 ${attempt}/${MAX_DOCUMENT_AUTO_CONTINUATIONS}]`,
+    `文档 ${state.documentRef} 仍有未读取页面：${nextPageRange}。`,
+    `立即调用 extract_pdf_text，input 使用 ${state.documentRef}，pages 使用 ${nextPageRange}。`,
+    "继续沿用用户要求的整理粒度。读取完成前不要写入或声称整份文档已处理完成。",
+    "长篇 Markdown 应先用 write_file 写第一段，再用 append_file 分段追加，最后读取文件信息确认产物存在。",
+  ].join("\n");
+}
 
 function incompleteActivePlanSnapshot() {
   const plan = getActivePlanSnapshot();
@@ -5894,12 +6483,19 @@ function operationKindForPrompt(text, opts = {}) {
 function modelRuntimeOptions(modelConfig) {
   const provider = getActiveProvider(config);
   const activeModel = provider?.models?.find((model) => model.id === modelConfig.model);
+  const agentPolicy = resolveProviderModelAgentPolicy(provider, modelConfig.model);
+  const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
   const legacyVision = { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
   return {
     model: modelConfig.model,
     autoEscalate: modelConfig.autoEscalate,
     vision: activeModel?.multimodal === true || legacyVision.vision === true,
-    visionDetail: activeModel?.multimodal === true ? "high" : legacyVision.visionDetail ?? "",
+    visionDetail: activeModel?.multimodal === true ? visionPolicy.detail ?? "high" : legacyVision.visionDetail ?? "",
+    visionPolicy,
+    maxToolIters: agentPolicy.maxToolIterations ?? 64,
+    maxToolContinuationWindows: agentPolicy.maxToolContinuationWindows ?? 0,
+    sameFailureClassLimit: agentPolicy.sameFailureClassLimit,
+    toolResultBudget: agentPolicy.toolResultBudget,
   };
 }
 
@@ -7271,6 +7867,7 @@ const ctx = {
       jobs,
       getOperationId: () => activeOperation?.id ?? null,
       preparedDocumentRegistry,
+      getLastAssistantResponse: () => latestAssistantResponse(messages),
     });
     hasSemanticSearch = result.hasSemantic;
     wsToolNames = result.toolNames;
@@ -7294,9 +7891,14 @@ const ctx = {
   // ── Chat bridge ────────────────────────────────────────────
   getMessages: () => messages,
   getActiveOperation: () => publicActiveOperation(),
-  listBackgroundJobs: () => jobs.listMetadata(),
-  getBackgroundJob: (id) => jobs.read(id),
-  stopBackgroundJob: (id) => jobs.stop(id),
+  listBackgroundJobs: async () => [...jobs.listMetadata(), ...(documentMarkdownManager ? await documentMarkdownManager.listMetadata() : [])],
+  getBackgroundJob: async (id) => String(id).startsWith("document:")
+    ? documentMarkdownManager?.getMetadata(id)
+    : jobs.read(Number(id)),
+  stopBackgroundJob: async (id) => String(id).startsWith("document:")
+    ? documentMarkdownManager?.control(id, "cancel")
+    : jobs.stop(Number(id)),
+  controlBackgroundJob: (id, action) => documentMarkdownManager?.control(id, action),
 
   subscribeEvents: (handler) => {
     eventSubscribers.add(handler);
@@ -7913,13 +8515,20 @@ ${modeList}
         tools.setPlanMode(true);
       }
       (async () => {
+        const turnStartedAt = Date.now();
         let assistantText = "";
         let turnError = null;
         let continuationAttempts = 0;
+        let documentContinuationAttempts = 0;
+        let artifactContinuationAttempts = 0;
         let continuationNeeded = false;
+        let artifactIncomplete = false;
+        let pendingDocumentArtifact = null;
         let loopInput = text;
         let augmentedLoopInput = null;
+        const artifactRequest = detectArtifactRequest(text);
         const turnArtifactPaths = new Set();
+        const pdfContinuationStates = new Map();
         try {
           const retrievalText = manualSkillTask ?? text;
           const retrieval = opts.disableSemanticRetrieval
@@ -7950,14 +8559,53 @@ ${modeList}
             for await (const ev of loop.step(loopInput)) {
               if (ev.role === "tool") {
                 sawToolActivity = true;
-                const artifactPaths = rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs);
+                const acceptedDocumentArtifact = pendingDocumentArtifactFromToolEvent(ev.toolName, ev.toolArgs, ev.content);
+                if (acceptedDocumentArtifact) {
+                  pendingDocumentArtifact = rememberPendingDocumentArtifact(acceptedDocumentArtifact, {
+                    assistantId,
+                    operationId: operation.id,
+                  });
+                  broadcastDashboardEvent({
+                    kind: "status",
+                    text: `文档整理已进入后台队列（${acceptedDocumentArtifact.jobId}）`,
+                  });
+                }
+                const pdfResult = parsePdfDeliveryResult(ev);
+                if (pdfResult) {
+                  const pdfState = updatePdfContinuationState(pdfContinuationStates, pdfResult);
+                  if (pdfState) {
+                    broadcastDashboardEvent({
+                      kind: "document-progress",
+                      documentRef: pdfState.documentRef,
+                      documentId: pdfState.documentId,
+                      totalPages: pdfState.totalPages,
+                      deliveredPages: pdfState.delivered.size,
+                      remainingPages: pdfState.remaining.size,
+                      complete: false,
+                    });
+                  } else {
+                    broadcastDashboardEvent({
+                      kind: "document-progress",
+                      documentRef: pdfResult.documentRef,
+                      documentId: pdfResult.documentId ?? null,
+                      totalPages: Number(pdfResult.totalPages) || null,
+                      deliveredPages: parsePageRange(pdfResult.deliveredPageRange).length,
+                      remainingPages: 0,
+                      complete: pdfResult.complete === true,
+                    });
+                  }
+                }
+                const artifactPaths = toolResultSucceeded(ev.content)
+                  ? rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs)
+                  : [];
                 const newFiles = [];
                 for (const artifactPath of artifactPaths) {
+                  const info = generatedArtifactFileInfo(artifactPath);
+                  if (!info || info.size <= 0 || info.mtimeMs < turnStartedAt - 2000) continue;
                   const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
                   if (turnArtifactPaths.has(key)) continue;
                   turnArtifactPaths.add(key);
-                  const info = generatedArtifactFileInfo(artifactPath);
-                  if (info) newFiles.push(info);
+                  newFiles.push(info);
                 }
                 if (newFiles.length > 0) {
                   broadcastDashboardEvent({
@@ -7993,6 +8641,31 @@ ${modeList}
               }
             }
 
+            if (pendingDocumentArtifact) break;
+
+            const pendingPdfState = pdfContinuationStates.values().next().value ?? null;
+            if (pendingPdfState && !operation.controller.signal.aborted) {
+              if (documentContinuationAttempts < MAX_DOCUMENT_AUTO_CONTINUATIONS) {
+                documentContinuationAttempts++;
+                broadcastDashboardEvent({
+                  kind: "status",
+                  text: `文档仍有 ${pendingPdfState.remaining.size} 页未读取，正在自动继续（${documentContinuationAttempts}/${MAX_DOCUMENT_AUTO_CONTINUATIONS}）`,
+                });
+                console.error(`[document] automatic continuation attempt=${documentContinuationAttempts} remaining=${formatPageRange([...pendingPdfState.remaining])}`);
+                assistantText = "";
+                loopInput = documentAutoContinuationPrompt(pendingPdfState, documentContinuationAttempts);
+                continue;
+              }
+              continuationNeeded = true;
+              broadcastDashboardEvent({
+                kind: "document-continuation-needed",
+                documentRef: pendingPdfState.documentRef,
+                remainingPages: formatPageRange([...pendingPdfState.remaining]),
+                attempts: documentContinuationAttempts,
+                maxAttempts: MAX_DOCUMENT_AUTO_CONTINUATIONS,
+              });
+            }
+
             const continuation = decidePlanContinuation({
               forcedSummaryReason: budgetForcedSummary ? "budget" : null,
               plan: incompleteActivePlanSnapshot(),
@@ -8025,7 +8698,35 @@ ${modeList}
                 plan: incompletePlan,
               });
             }
+            if (
+              continuation.action === "none" &&
+              !pendingPdfState &&
+              !pendingDocumentArtifact &&
+              artifactRequest.required &&
+              turnArtifactPaths.size === 0 &&
+              !operation.controller.signal.aborted &&
+              artifactContinuationAttempts < MAX_ARTIFACT_AUTO_CONTINUATIONS
+            ) {
+              artifactContinuationAttempts++;
+              broadcastDashboardEvent({
+                kind: "status",
+                text: "没有检测到实际生成的文件，正在自动修复文件交付",
+              });
+              console.error(`[artifact] automatic delivery retry attempt=${artifactContinuationAttempts}`);
+              assistantText = "";
+              loopInput = artifactDeliveryRetryPrompt(artifactRequest, text);
+              continue;
+            }
             break;
+          }
+          if (artifactRequest.required && turnArtifactPaths.size === 0 && !pendingDocumentArtifact && !operation.controller.signal.aborted) {
+            artifactIncomplete = true;
+            assistantText = `${assistantText}${artifactMissingNotice()}`;
+            broadcastDashboardEvent({
+              kind: "artifact-missing",
+              assistantId,
+              savePreviousResponse: artifactRequest.savePreviousResponse,
+            });
           }
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
@@ -8042,6 +8743,7 @@ ${modeList}
               text: assistantText,
               forcedSummary: continuationNeeded,
               planIncomplete: continuationNeeded,
+              artifactIncomplete,
             });
           }
         } catch (err) {
@@ -8063,9 +8765,9 @@ ${modeList}
           if (completeTurn) {
             try {
               completeTurn({
-                ok: !turnError && !operation.controller.signal.aborted,
+                ok: !turnError && !artifactIncomplete && !operation.controller.signal.aborted,
                 cancelled: operation.controller.signal.aborted,
-                error: turnError?.message ?? null,
+                error: turnError?.message ?? (artifactIncomplete ? "requested artifact was not created" : null),
                 assistantText,
                 assistantMessageId: assistantId,
                 userMessageId: userMsgId,

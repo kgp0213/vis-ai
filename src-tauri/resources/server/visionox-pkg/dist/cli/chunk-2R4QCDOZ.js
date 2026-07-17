@@ -6011,7 +6011,46 @@ function computeP95(samples) {
 // src/mcp/registry.ts
 var DEFAULT_MAX_RESULT_CHARS = 32e3;
 var DEFAULT_MAX_RESULT_TOKENS = 8e3;
+var MAX_CONFIGURED_RESULT_TOKENS = 32 * 1024;
 var DEFAULT_READY_TIMEOUT_MS = 3e4;
+var DOCUMENT_RESULT_TOOLS = /* @__PURE__ */ new Set(["extract_pdf_text", "officecli", "read_file"]);
+function normalizeToolResultBudget(value) {
+  const fallback = {
+    defaultTokens: DEFAULT_MAX_RESULT_TOKENS,
+    documentTokens: DEFAULT_MAX_RESULT_TOKENS,
+    absoluteMaxTokens: DEFAULT_MAX_RESULT_TOKENS,
+    configured: false
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const absoluteMaxTokens = Number.isSafeInteger(value.absoluteMaxTokens)
+    ? Math.max(1024, Math.min(value.absoluteMaxTokens, MAX_CONFIGURED_RESULT_TOKENS))
+    : DEFAULT_MAX_RESULT_TOKENS;
+  const clamp = (candidate) => Number.isSafeInteger(candidate)
+    ? Math.max(1024, Math.min(candidate, absoluteMaxTokens))
+    : Math.min(DEFAULT_MAX_RESULT_TOKENS, absoluteMaxTokens);
+  return {
+    defaultTokens: clamp(value.defaultTokens),
+    documentTokens: clamp(value.documentTokens),
+    absoluteMaxTokens,
+    configured: true
+  };
+}
+function normalizeVisionPolicy(value) {
+  const policy = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    maxImages: Number.isSafeInteger(policy.maxImages) ? Math.max(1, Math.min(policy.maxImages, 5)) : 5,
+    detail: ["auto", "low", "high"].includes(policy.detail) ? policy.detail : "high",
+    estimatedTokensPerImage: Number.isSafeInteger(policy.estimatedTokensPerImage)
+      ? Math.max(256, Math.min(policy.estimatedTokensPerImage, 32768))
+      : 4096,
+    contextReserveTokens: Number.isSafeInteger(policy.contextReserveTokens)
+      ? Math.max(0, Math.min(policy.contextReserveTokens, 65536))
+      : 0
+  };
+}
+function isDocumentResultTool(name) {
+  return DOCUMENT_RESULT_TOOLS.has(String(name ?? "").toLowerCase());
+}
 function registerSingleMcpTool(mcpTool, env) {
   if (!mcpTool.name) return "";
   const registeredName = `${env.prefix}${mcpTool.name}`;
@@ -6367,10 +6406,13 @@ var ToolRegistry = class {
     }
     const missing = tool.parameters ? missingRequiredParam(tool.parameters, args) : null;
     if (missing) {
+      const correction = missing === "content" && /^(?:append_file|write_file)$/i.test(name)
+        ? ' Required shape: {"path":"...","content":"actual text"}. A path-only call cannot create document content.'
+        : "";
       return this._noteMalformed(
         name,
         fingerprint,
-        `missing required parameter "${missing}". Retry with all required parameters filled.`
+        `missing required parameter "${missing}". Retry with all required parameters filled.${correction}`
       );
     }
     this._lastMalformed.delete(name);
@@ -6398,7 +6440,9 @@ var ToolRegistry = class {
       }
       const result = await tool.fn(args, {
         signal: opts.signal,
-        confirmationGate: opts.confirmationGate
+        confirmationGate: opts.confirmationGate,
+        maxResultTokens: opts.maxResultTokens,
+        maxResultChars: opts.maxResultChars
       });
       const str = typeof result === "string" ? result : JSON.stringify(result);
       let clipped = str;
@@ -6638,6 +6682,9 @@ var ContextManager = class {
     this.deps = deps;
   }
   deps;
+  tokenEstimateOptions() {
+    return this.deps.getTokenEstimateOptions?.() ?? {};
+  }
   thresholds(model) {
     return contextThresholdsForModel(model);
   }
@@ -6674,7 +6721,7 @@ var ContextManager = class {
   decidePreflight(messages, toolSpecs, model, thresholdKind = "emergency") {
     const thresholds = this.thresholds(model);
     const ctxMax = thresholds.ctxMax;
-    const estimate = estimateRequestTokens(messages, toolSpecs ?? null);
+    const estimate = estimateRequestTokens(messages, toolSpecs ?? null, this.tokenEstimateOptions());
     const thresholdTokens = thresholdKind === "fold" ? thresholds.foldTokens : thresholds.emergencyTokens;
     return {
       needsAction: estimate > thresholdTokens,
@@ -6696,7 +6743,7 @@ var ContextManager = class {
       summaryChars: 0
     };
     if (all.length === 0) return noop;
-    const tokenCounts = all.map((m) => estimateConversationTokens([m]));
+    const tokenCounts = all.map((m) => estimateConversationTokens([m], this.tokenEstimateOptions()));
     const totalTokens = tokenCounts.reduce((a, b) => a + b, 0);
     let cumTokens = 0;
     let boundary = all.length;
@@ -6759,7 +6806,7 @@ ${pinnedBodies.join("\n\n")}` : "";
     let summaryModel = globalThis.__visionoxSummaryModel || "deepseek-v4-flash";
     const systemPrompt = "You compress conversation history for a coding agent. The immutable system prefix already preserves identity, Soul, project instructions, skills, and durable or session memory. Do not restate or summarize Soul, identity, project rules, skill instructions, or memory bodies. Preserve only conversation-specific delta: the user's current goal, decisions and conclusions reached in this conversation, files inspected or modified, important tool results still relevant to ongoing work, and open todos. Keep existing memory references or identifiers when useful instead of copying their content. Skip turn-by-turn play-by-play, repeated explanations, completed transient steps, and superseded details. No tool calls, no markdown headings, no SEARCH/REPLACE blocks \u2014 plain prose only.";
     const healed = healLoadedMessages(messagesToSummarize, DEFAULT_MAX_RESULT_CHARS).messages;
-    const rawEstimate = estimateRequestTokens([{ role: "system", content: systemPrompt }, ...healed], null);
+    const rawEstimate = estimateRequestTokens([{ role: "system", content: systemPrompt }, ...healed], null, this.tokenEstimateOptions());
     const summaryCap = contextThresholdsForModel(summaryModel).ctxMax;
     const producingCap = contextThresholdsForModel(producingModel).ctxMax;
     if (rawEstimate > summaryCap * 0.9 && producingCap > summaryCap) {
@@ -6991,6 +7038,7 @@ async function* forceSummaryAfterIterLimit(ctx, opts = { reason: "budget" }) {
       model: summaryModel,
       messages,
       signal: ctx.signal,
+      requestPurpose: "finalAnswer",
       thinking: thinkingModeForModel(summaryModel),
       reasoningEffort: summaryEffort
     });
@@ -7034,6 +7082,7 @@ async function summarizePartialProgress(ctx) {
       model: globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL,
       messages,
       signal: ctx.signal,
+      requestPurpose: "finalAnswer",
       thinking: thinkingModeForModel(globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL),
       reasoningEffort: PAUSE_SUMMARY_EFFORT
     });
@@ -7155,8 +7204,8 @@ function stampMissingReasoningForThinkingMode(messages, model) {
   });
   return { messages: out, stampedCount };
 }
-function normalizeHistoryForModel(messages, model) {
-  const healed = healLoadedMessagesByTokens(messages, DEFAULT_MAX_RESULT_TOKENS);
+function normalizeHistoryForModel(messages, model, maxToolResultTokens = DEFAULT_MAX_RESULT_TOKENS) {
+  const healed = healLoadedMessagesByTokens(messages, maxToolResultTokens);
   if (isThinkingModeModel(model)) {
     const stamped = stampMissingReasoningForThinkingMode(healed.messages, model);
     return {
@@ -7243,6 +7292,33 @@ var TurnFailureTracker = class {
   formatBreakdown() {
     const parts = Object.entries(this.types).filter(([, n]) => n > 0).map(([kind, n]) => `${n}\xD7 ${kind}`);
     return parts.length > 0 ? parts.join(", ") : `${this.count} repair/error signal(s)`;
+  }
+};
+function classifyToolFailure(result) {
+  const text = String(result ?? "").toLowerCase();
+  if (/missing required parameter|invalid tool arguments json/.test(text)) return "invalid-tool-arguments";
+  if (/local file not found|no matching local file|no such file|\benoent\b|cannot find (?:the )?(?:file|path)|\u672a\u627e\u5230\u5339\u914d\u7684\u672c\u5730\u6587\u4ef6|\u7cfb\u7edf\u627e\u4e0d\u5230\u6307\u5b9a\u7684\u6587\u4ef6/.test(text)) return "local-file-not-found";
+  if (/search text not found/.test(text)) return "search-text-not-found";
+  if (/path parsing failed|invalid path argument|unexpected argument/.test(text)) return "command-path-arguments";
+  return null;
+}
+var SameFailureClassTracker = class {
+  limit;
+  counts = /* @__PURE__ */ new Map();
+  constructor(limit) {
+    this.limit = Number.isSafeInteger(limit) && limit >= 2 ? limit : null;
+  }
+  reset() {
+    this.counts.clear();
+  }
+  note(toolName, result) {
+    if (this.limit === null) return null;
+    const kind = classifyToolFailure(result);
+    if (!kind) return null;
+    const key = `${toolName}:${kind}`;
+    const count = (this.counts.get(key) ?? 0) + 1;
+    this.counts.set(key, count);
+    return count >= this.limit ? { kind, count, limit: this.limit } : null;
   }
 };
 
@@ -7570,6 +7646,9 @@ var CacheFirstLoop = class {
   prefix;
   tools;
   maxToolIters;
+  maxToolContinuationWindows;
+  toolResultBudget;
+  visionPolicy;
   log = new AppendOnlyLog();
   scratch = new VolatileScratch();
   stats = new SessionStats();
@@ -7601,11 +7680,13 @@ var CacheFirstLoop = class {
   _proArmedForNextTurn = false;
   _escalateThisTurn = false;
   _turnFailures;
+  _sameFailureClassTracker;
   _turnSelfCorrected = false;
   _foldedThisTurn = false;
   _contextRecheckRequired = false;
   _contextStatusCache = /* @__PURE__ */ new Map();
   _toolDispatchesThisStep = 0;
+  _toolRoundsThisStep = 0;
   _officeCliElementCallsThisStep = 0;
   context;
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
@@ -7623,13 +7704,19 @@ var CacheFirstLoop = class {
     this.reasoningEffort = opts.reasoningEffort ?? "max";
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
     this.vision = opts.vision ?? false;
-    this.visionDetail = opts.visionDetail ?? "";
+    this.visionPolicy = normalizeVisionPolicy(opts.visionPolicy);
+    this.visionDetail = opts.visionDetail ?? this.visionPolicy.detail;
     this._pendingImages = null;
+    this.toolResultBudget = normalizeToolResultBudget(opts.toolResultBudget);
     this.budgetUsd = typeof opts.budgetUsd === "number" && opts.budgetUsd > 0 ? opts.budgetUsd : null;
     this._turnFailures = new TurnFailureTracker(
       resolveFailureThreshold(opts.failureThreshold, FAILURE_ESCALATION_THRESHOLD)
     );
+    this._sameFailureClassTracker = new SameFailureClassTracker(opts.sameFailureClassLimit);
     this.maxToolIters = opts.maxToolIters ?? 64;
+    this.maxToolContinuationWindows = Number.isSafeInteger(opts.maxToolContinuationWindows)
+      ? Math.max(0, Math.min(opts.maxToolContinuationWindows, 2))
+      : 0;
     this.onIterBudgetExhausted = opts.onIterBudgetExhausted ?? "summarize";
     this.hooks = opts.hooks ?? [];
     this.hookCwd = opts.hookCwd ?? process.cwd();
@@ -7651,9 +7738,12 @@ var CacheFirstLoop = class {
       stormThreshold: parsePositiveIntEnv(process.env.visionox_STORM_THRESHOLD),
       stormWindow: parsePositiveIntEnv(process.env.visionox_STORM_WINDOW)
     });
+    // Parent-loop rebuilds clear their prior augmenter before construction.
+    // Child registries may already carry a stricter, purpose-built budget.
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
+        if (String(_name).toLowerCase() === "extract_pdf_text" || String(_name).toLowerCase() === "organize_document_to_markdown") return result;
         const officeCommand = String(_name).toLowerCase() === "officecli" ? String(_args?.command ?? "").trim() : "";
         if (/^(?:add|set|remove|move|swap)(?:\s|$)/i.test(officeCommand)) {
           this._officeCliElementCallsThisStep++;
@@ -7661,16 +7751,27 @@ var CacheFirstLoop = class {
             result = `${result}\n\n[OfficeCLI efficiency guard: ${this._officeCliElementCallsThisStep} element-level edits were sent individually this turn. Stop using one call per shape/cell/paragraph. Use one batch per slide or logical section with --commands JSON; each item uses {"command":"add",...}. Do not join CLI commands with newlines. Inspect existing content before retrying successful edits.]`;
           }
         }
-        const remaining = this.maxToolIters - this._toolDispatchesThisStep;
+        const totalRounds = this.maxToolIters * (this.maxToolContinuationWindows + 1);
+        const remaining = totalRounds - this._toolRoundsThisStep;
+        if (
+          this.maxToolContinuationWindows > 0 &&
+          this._toolRoundsThisStep > 0 &&
+          this._toolRoundsThisStep % this.maxToolIters === 0 &&
+          remaining > 0
+        ) {
+          return `${result}
+
+[tool-round checkpoint: ${this._toolRoundsThisStep} rounds completed; a continuation window is now active with ${remaining} total rounds remaining. Continue the current task without asking the user to send another message.]`;
+        }
         if (remaining <= 0) {
           return `${result}
 
-[budget: 0 of ${this.maxToolIters} tool calls left this turn \u2014 finalize NOW; the next iter forces a summary]`;
+[hard tool-round limit reached after ${totalRounds} rounds. No more tools are available. Do not promise to work in a later turn; report exactly what succeeded according to tool results and what remains incomplete.]`;
         }
         if (remaining <= PARENT_BUDGET_WARN_THRESHOLD) {
           return `${result}
 
-[budget: ${remaining} of ${this.maxToolIters} tool calls left this turn \u2014 wrap up soon]`;
+[tool-round budget: ${remaining} of ${totalRounds} rounds remain \u2014 prioritize the requested write and one verification pass.]`;
         }
         return result;
       });
@@ -7678,7 +7779,7 @@ var CacheFirstLoop = class {
     this.sessionName = opts.session ?? null;
     if (this.sessionName) {
       const prior = loadSessionMessages(this.sessionName);
-      const normalized = normalizeHistoryForModel(prior, this.model);
+      const normalized = normalizeHistoryForModel(prior, this.model, this.toolResultBudget.absoluteMaxTokens);
       const messages = normalized.messages;
       const healedCount = normalized.changedCount;
       const tokensSaved = normalized.tokensSaved;
@@ -7714,7 +7815,11 @@ var CacheFirstLoop = class {
       stats: this.stats,
       sessionName: this.sessionName,
       getAbortSignal: () => this._turnAbort.signal,
-      getCurrentTurn: () => this._turn
+      getCurrentTurn: () => this._turn,
+      getTokenEstimateOptions: () => ({
+        imageTokensPerImage: this.visionPolicy.estimatedTokensPerImage,
+        imageContextReserveTokens: this.visionPolicy.contextReserveTokens
+      })
     });
   }
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
@@ -7728,7 +7833,10 @@ var CacheFirstLoop = class {
     const cached = this._contextStatusCache.get(model);
     if (cached?.ctxMax === thresholds.ctxMax) return cached;
     const messages = this.buildMessages(null);
-    const estimatedTokens = estimateRequestTokens(messages, this.prefix.toolSpecs ?? null);
+    const estimatedTokens = estimateRequestTokens(messages, this.prefix.toolSpecs ?? null, {
+      imageTokensPerImage: this.visionPolicy.estimatedTokensPerImage,
+      imageContextReserveTokens: this.visionPolicy.contextReserveTokens
+    });
     const status = {
       ...thresholds,
       estimatedTokens,
@@ -7738,8 +7846,8 @@ var CacheFirstLoop = class {
     this._contextStatusCache.set(model, status);
     return status;
   }
-  adoptHistory(messages, model = this.model) {
-    const normalized = normalizeHistoryForModel(messages, model);
+  adoptHistory(messages, model = this.model, maxToolResultTokens = this.toolResultBudget.absoluteMaxTokens) {
+    const normalized = normalizeHistoryForModel(messages, model, maxToolResultTokens);
     this.log.compactInPlace(normalized.messages);
     this._contextStatusCache.clear();
     if (normalized.messages.length > 0) this._contextRecheckRequired = true;
@@ -7809,9 +7917,24 @@ var CacheFirstLoop = class {
   }
   configure(opts) {
     let modelSwitch = null;
+    if (Object.hasOwn(opts, "toolResultBudget")) {
+      this.toolResultBudget = normalizeToolResultBudget(opts.toolResultBudget);
+    }
+    if (Object.hasOwn(opts, "visionPolicy")) {
+      this.visionPolicy = normalizeVisionPolicy(opts.visionPolicy);
+    }
+    if (Object.hasOwn(opts, "maxToolIters")) this.maxToolIters = opts.maxToolIters ?? 64;
+    if (Object.hasOwn(opts, "maxToolContinuationWindows")) {
+      this.maxToolContinuationWindows = Number.isSafeInteger(opts.maxToolContinuationWindows)
+        ? Math.max(0, Math.min(opts.maxToolContinuationWindows, 2))
+        : 0;
+    }
+    if (Object.hasOwn(opts, "sameFailureClassLimit")) {
+      this._sameFailureClassTracker = new SameFailureClassTracker(opts.sameFailureClassLimit);
+    }
     if (opts.model !== void 0 && opts.model !== this.model) {
       const previousModel = this.model;
-      const context = this.adoptHistory(this.log.toMessages(), opts.model);
+      const context = this.adoptHistory(this.log.toMessages(), opts.model, this.toolResultBudget.absoluteMaxTokens);
       this.model = opts.model;
       this._contextRecheckRequired = true;
       modelSwitch = { previousModel, model: this.model, ...context, contextStatus: this.contextStatus() };
@@ -7824,6 +7947,7 @@ var CacheFirstLoop = class {
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
     if (opts.vision !== void 0) this.vision = opts.vision;
     if (opts.visionDetail !== void 0) this.visionDetail = opts.visionDetail;
+    else if (Object.hasOwn(opts, "visionPolicy")) this.visionDetail = this.visionPolicy.detail;
     return { modelSwitch };
   }
   /** `null` disables the cap; any change re-arms the 80% warning. */
@@ -7882,6 +8006,18 @@ var CacheFirstLoop = class {
     }
     return def.readOnly !== true;
   }
+  maxResultTokensForTool(name) {
+    const configured = isDocumentResultTool(name)
+      ? this.toolResultBudget.documentTokens
+      : this.toolResultBudget.defaultTokens;
+    if (!this.toolResultBudget.configured) return configured;
+    const status = this.contextStatus();
+    const reportedPromptTokens = this.stats.summary().lastPromptTokens ?? 0;
+    const occupiedTokens = Math.max(status.estimatedTokens, reportedPromptTokens);
+    const completionReserve = Math.max(4096, Math.min(16384, Math.floor(status.ctxMax * 0.05)));
+    const available = Math.max(1024, status.forceSummaryTokens - occupiedTokens - completionReserve);
+    return Math.max(1024, Math.min(configured, this.toolResultBudget.absoluteMaxTokens, available));
+  }
   async runOneToolCall(call, signal) {
     const name = call.function?.name ?? "";
     const args = call.function?.arguments ?? "{}";
@@ -7911,7 +8047,7 @@ ${reason}`
       }
       const result = await this.tools.dispatch(name, args, {
         signal,
-        maxResultTokens: DEFAULT_MAX_RESULT_TOKENS,
+        maxResultTokens: this.maxResultTokensForTool(name),
         confirmationGate: this.confirmationGate
       });
       const postReport = await runHooks({
@@ -7962,15 +8098,21 @@ ${reason}`
     }
     return parts;
   }
-  buildMessages(pendingUser) {
-    const healed = healLoadedMessages(this.log.toMessages(), DEFAULT_MAX_RESULT_CHARS);
+  buildMessages(pendingUser, turnImages = null) {
+    const healed = healLoadedMessagesByTokens(this.log.toMessages(), this.toolResultBudget.absoluteMaxTokens);
     const msgs = [...this.prefix.toMessages(), ...healed.messages];
     if (pendingUser !== null) {
-      const images = this._pendingImages;
-      if (this.vision && images && images.length > 0) {
-        msgs.push({ role: "user", content: this.buildUserContent(pendingUser, images, this.visionDetail) });
+      if (this.vision && turnImages && turnImages.length > 0) {
+        msgs.push({ role: "user", content: this.buildUserContent(pendingUser, turnImages, this.visionDetail) });
       } else {
         msgs.push({ role: "user", content: pendingUser });
+      }
+    } else if (this.vision && turnImages && turnImages.length > 0) {
+      for (let index = msgs.length - 1; index >= 0; index--) {
+        if (msgs[index]?.role !== "user") continue;
+        const text = typeof msgs[index].content === "string" ? msgs[index].content : "";
+        msgs[index] = { ...msgs[index], content: this.buildUserContent(text, turnImages, this.visionDetail) };
+        break;
       }
     }
     return msgs;
@@ -7979,7 +8121,7 @@ ${reason}`
     this._turnAbort.abort();
   }
   setPendingImages(images) {
-    this._pendingImages = images && images.length > 0 ? images : null;
+    this._pendingImages = images && images.length > 0 ? images.slice(0, this.visionPolicy.maxImages) : null;
   }
   /** Drop the last user message + everything after; caller re-sends. Persists to session file. */
   retryLastUser() {
@@ -8036,10 +8178,12 @@ ${reason}`
     this.scratch.reset();
     this.repair.resetStorm();
     this._turnFailures.reset();
+    this._sameFailureClassTracker.reset();
     this._turnSelfCorrected = false;
     this._escalateThisTurn = false;
     this._foldedThisTurn = false;
     this._toolDispatchesThisStep = 0;
+    this._toolRoundsThisStep = 0;
     this._officeCliElementCallsThisStep = 0;
     let armedConsumed = false;
     if (this._proArmedForNextTurn) {
@@ -8059,15 +8203,18 @@ ${reason}`
       };
     }
     let pendingUser = userInput;
+    const turnImages = this._pendingImages;
+    this._pendingImages = null;
     const toolSpecs = this.prefix.tools();
-    const warnAt = Math.max(1, Math.floor(this.maxToolIters * 0.7));
+    const maxToolRounds = this.maxToolIters * (this.maxToolContinuationWindows + 1);
+    const warnAt = Math.max(1, Math.floor(maxToolRounds * 0.7));
     let warnedForIterBudget = false;
-    for (let iter = 0; iter < this.maxToolIters; iter++) {
+    for (let iter = 0; iter <= maxToolRounds; iter++) {
       if (signal.aborted) {
         yield {
           turn: this._turn,
           role: "warning",
-          content: t("loop.abortedAtIter", { iter, cap: this.maxToolIters })
+          content: t("loop.abortedAtIter", { iter: this._toolRoundsThisStep, cap: maxToolRounds })
         };
         const stoppedMsg = "[aborted by user (Esc) \u2014 no summary produced. Ask again or /retry when ready; prior tool output is still in the log.]";
         this.appendAndPersist(buildSyntheticAssistantMessage(stoppedMsg, this.model));
@@ -8089,16 +8236,15 @@ ${reason}`
           content: t("loop.toolUploadStatus")
         };
       }
-      if (!warnedForIterBudget && iter >= warnAt) {
+      if (!warnedForIterBudget && this._toolRoundsThisStep >= warnAt) {
         warnedForIterBudget = true;
         yield {
           turn: this._turn,
           role: "warning",
-          content: t("loop.toolBudgetWarning", { iter, cap: this.maxToolIters })
+          content: t("loop.toolBudgetWarning", { iter: this._toolRoundsThisStep, cap: maxToolRounds })
         };
       }
-      let messages = this.buildMessages(pendingUser);
-      this._pendingImages = null;
+      let messages = this.buildMessages(pendingUser, turnImages);
       {
         const thresholdKind = this._contextRecheckRequired ? "fold" : "emergency";
         this._contextRecheckRequired = false;
@@ -8124,14 +8270,14 @@ ${reason}`
                 summaryChars: result.summaryChars
               })
             };
-            messages = this.buildMessages(pendingUser);
+            messages = this.buildMessages(pendingUser, turnImages);
             // Re-check after fold — if still over emergency threshold, try a
             // second aggressive fold (keepRecentTokens: 0) to avoid API 400.
             const recheck = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
             if (recheck.needsAction) {
               const result2 = await this.context.fold(this.model, { keepRecentTokens: 0 });
               if (result2.folded) {
-                messages = this.buildMessages(pendingUser);
+                messages = this.buildMessages(pendingUser, turnImages);
               }
               const recheck2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
               if (recheck2.needsAction) {
@@ -8163,6 +8309,7 @@ ${reason}`
       let reasoningContent = "";
       let toolCalls = [];
       let usage = null;
+      const toolsAvailable = this._toolRoundsThisStep < maxToolRounds;
       try {
         if (this.stream) {
           const callBuf = /* @__PURE__ */ new Map();
@@ -8174,8 +8321,9 @@ ${reason}`
           for await (const chunk of this.client.stream({
             model: callModel,
             messages,
-            tools: toolSpecs.length ? toolSpecs : void 0,
+            tools: toolsAvailable && toolSpecs.length ? toolSpecs : void 0,
             signal,
+            requestPurpose: iter === 0 ? "initial" : "toolContinuation",
             thinking: thinkingModeForModel(callModel),
             reasoningEffort: this.reasoningEffort
           })) {
@@ -8256,8 +8404,9 @@ ${reason}`
           const resp = await this.client.chat({
             model: callModel,
             messages,
-            tools: toolSpecs.length ? toolSpecs : void 0,
+            tools: toolsAvailable && toolSpecs.length ? toolSpecs : void 0,
             signal,
+            requestPurpose: iter === 0 ? "initial" : "toolContinuation",
             thinking: thinkingModeForModel(callModel),
             reasoningEffort: this.reasoningEffort
           });
@@ -8438,6 +8587,28 @@ ${reason}`
         yield { turn: this._turn, role: "done", content: assistantContent };
         return;
       }
+      if (!toolsAvailable) {
+        for (const call of repairedCalls) {
+          const result = "[hard tool-round limit reached; this requested call was not executed]";
+          this.appendAndPersist({
+            role: "tool",
+            tool_call_id: call.id ?? "",
+            name: call.function?.name ?? "",
+            content: result
+          });
+          yield {
+            turn: this._turn,
+            role: "tool",
+            content: result,
+            toolName: call.function?.name ?? "",
+            toolArgs: call.function?.arguments ?? "{}",
+            callId: this.inflightIdFor(call)
+          };
+        }
+        yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "budget" });
+        return;
+      }
+      this._toolRoundsThisStep++;
       const dispatchSerial = (process.env.visionox_TOOL_DISPATCH ?? "auto").toLowerCase() === "serial";
       const parallelMaxParsed = Number.parseInt(process.env.visionox_PARALLEL_MAX ?? "", 10);
       const parallelMax = Number.isFinite(parallelMaxParsed) && parallelMaxParsed >= 1 ? Math.min(parallelMaxParsed, 16) : 3;
@@ -8465,6 +8636,7 @@ ${reason}`
           };
         }
         const settled = await Promise.allSettled(chunk.map((c) => this.runOneToolCall(c, signal)));
+        let finishTurnContent = null;
         for (let k = 0; k < chunk.length; k++) {
           const call = chunk[k];
           const name = call.function?.name ?? "";
@@ -8480,6 +8652,10 @@ ${reason}`
           } else {
             const err = s.reason instanceof Error ? s.reason : new Error(String(s.reason));
             result = JSON.stringify({ error: `${err.name}: ${err.message}` });
+          }
+          const repeatedFailure = this._sameFailureClassTracker.note(name, result);
+          if (repeatedFailure) {
+            result = `${result}\n\n[same failure class guard: ${name} returned ${repeatedFailure.kind} ${repeatedFailure.count} times this turn. Do not retry another spelling of the same failing call. Correct the missing argument, use the prepared documentRef, or switch to a meaningfully different strategy.]`;
           }
           for (const w of preWarnings) yield w;
           for (const w of postWarnings) yield w;
@@ -8508,6 +8684,20 @@ ${reason}`
             toolArgs: args,
             callId: this.inflightIdFor(call)
           };
+          const finishTurnOnResult = this.tools.get(name)?.finishTurnOnResult;
+          if (typeof finishTurnOnResult === "function") {
+            try {
+              const content = finishTurnOnResult(result, safeParseToolArgs(args));
+              if (typeof content === "string" && content.trim()) finishTurnContent = content.trim();
+            } catch {
+            }
+          }
+        }
+        if (finishTurnContent) {
+          this.appendAndPersist(buildSyntheticAssistantMessage(finishTurnContent, this.model));
+          yield { turn: this._turn, role: "assistant_final", content: finishTurnContent };
+          yield { turn: this._turn, role: "done", content: finishTurnContent };
+          return;
         }
       }
     }
@@ -8518,7 +8708,7 @@ ${reason}`
         role: "paused",
         content: "",
         sessionName: this.sessionName ?? void 0,
-        pausedAtIter: this.maxToolIters,
+        pausedAtIter: this.maxToolIters * (this.maxToolContinuationWindows + 1),
         partialSummary: partial?.summary
       };
       yield { turn: this._turn, role: "done", content: "" };
@@ -8534,7 +8724,7 @@ ${reason}`
       appendAndPersist: (m) => this.appendAndPersist(m),
       recordStats: (model, usage) => this.stats.record(this._turn, model, usage),
       turn: this._turn,
-      maxToolIters: this.maxToolIters
+      maxToolIters: this.maxToolIters * (this.maxToolContinuationWindows + 1)
     };
   }
   async run(userInput, onEvent) {
@@ -10810,6 +11000,24 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
       await fs3.mkdir(pathMod4.dirname(abs), { recursive: true });
       await fs3.writeFile(abs, args.content, "utf8");
       return `wrote ${args.content.length} chars to ${displayRel3(rootDir, abs)}`;
+    }
+  });
+  registry.register({
+    name: "append_file",
+    description: "Append content to a file under the sandbox root. Parent directories are created as needed. Use this for large documents after writing the first section with write_file.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" }
+      },
+      required: ["path", "content"]
+    },
+    fn: async (args, ctx) => {
+      const abs = await safePath(args.path, "append_file", ctx, "write");
+      await fs3.mkdir(pathMod4.dirname(abs), { recursive: true });
+      await fs3.appendFile(abs, args.content, "utf8");
+      return `appended ${args.content.length} chars to ${displayRel3(rootDir, abs)}`;
     }
   });
   registry.register({

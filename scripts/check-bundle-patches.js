@@ -108,6 +108,21 @@ const required = [
       "beginActiveOperation",
       "preparedDocumentRegistry",
       "extract_pdf_text",
+      "buildPdfDeliveryResult",
+      "MAX_DOCUMENT_AUTO_CONTINUATIONS",
+      'kind: "document-progress"',
+      "append_file",
+      "save_last_assistant_response",
+      "organize_pdf_to_markdown",
+      "organize_document_to_markdown",
+      "get_document_job_status",
+      "pendingDocumentArtifactFromToolEvent",
+      "pendingDocumentWriteConflict",
+      "createDocumentMarkdownManager",
+      "isKnownLegacyBootstrapSkill",
+      "reviewSection",
+      'progress.phase === "quality-review"',
+      "MAX_ARTIFACT_AUTO_CONTINUATIONS",
       "jobs.stopOwned",
       "scheduleRunRegistry",
       "createScheduleTriggerQueue",
@@ -294,6 +309,8 @@ const required = [
       "modelSwitch",
       "credentialVerificationTokens",
       "function handleBackgroundJobs",
+      "parseBody(body).action",
+      'rawId.startsWith("document:")',
       "readTranscriptPage",
       "writeTranscriptMarkdown",
       "healthFilesystemSnapshot",
@@ -370,6 +387,11 @@ const required = [
       "skills.disabledBuiltin",
       "queuePaused || busy",
       "background-jobs",
+      "documentJobStatusLabel",
+      "controlDocumentJob",
+      "previewDocumentJob",
+      "重试失败部分",
+      "回退模型 · ",
       "stoppingBtn",
       "subscribeSseStatus",
       "setTimeout(flushStreaming, 75)",
@@ -432,7 +454,15 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2KDUS647.js",
-    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort"],
+    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose"],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-PV55UMTO.js",
+    markers: ["imageTokensPerImage", "imageContextReserveTokens", 'part?.type === "image_url"'],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-RE4RAVFF.js",
+    markers: ["tool rounds completed", "configured tool-result budget", "hard tool-round limit"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
@@ -448,8 +478,30 @@ const required = [
       "never repeat or translate the title",
       "forcedSummaryReason: opts.reason",
       "OfficeCLI efficiency guard",
+      "same failure class guard",
+      "normalizeToolResultBudget",
+      "tool-round checkpoint",
+      "maxToolContinuationWindows",
+      "finishTurnOnResult",
+      "A path-only call cannot create document content",
+      'requestPurpose: iter === 0 ? "initial" : "toolContinuation"',
       "overwrite: args.replace === true",
+      "maxResultTokens: opts.maxResultTokens",
+      'name: "append_file"',
+      'String(_name).toLowerCase() === "extract_pdf_text"',
     ],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/acp-DAGPCVFZ.js",
+    markers: ['"append_file"'],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-P7EKE5ZQ.js",
+    markers: ['name !== "edit_file" && name !== "write_file" && name !== "append_file"', 'name === "append_file"'],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/index.js",
+    markers: ["maxResultTokens: opts.maxResultTokens", 'name: "append_file"', 'String(_name).toLowerCase() === "extract_pdf_text"', "finishTurnOnResult", "A path-only call cannot create document content"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/app.css",
@@ -488,7 +540,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/skill-routing.mjs",
-    markers: ["routeAutomaticSkill", "TECHNICAL_DISCUSSION", "VHOME_TOPIC", "VHOME_SPECIFIC_TOPIC", "MARKDOWN_TO_PDF", 'name: "pdf"', 'name: "md-to-pdf-cjk"', 'name: "dws"', 'name: "weather"'],
+    markers: ["routeAutomaticSkill", "TECHNICAL_DISCUSSION", "VHOME_TOPIC", "VHOME_SPECIFIC_TOPIC", "MARKDOWN_TO_PDF", "DOCUMENT_PATH", 'name: "document-organizer"', 'name: "pdf"', 'name: "md-to-pdf-cjk"', 'name: "dws"', 'name: "weather"'],
   },
   {
     file: "src-tauri/src/lib.rs",
@@ -528,7 +580,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/SKILL.md",
-    markers: ["path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows"],
+    markers: ["PDF Workbench Router", "path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows", "references/pdf-to-markdown.md", "organize_document_to_markdown", "independent quality review"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/subagent-driven-development/SKILL.md",
@@ -639,6 +691,7 @@ const required = [
     file: "src-tauri/resources/server/lib/dlp-file.mjs",
     markers: [
       "createPreparedDocumentRegistry",
+      "latestPreparedDocumentRef",
       "visionox-document:",
       "document preparation cancelled",
       "signal: ctx?.signal",
@@ -646,7 +699,55 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/pdf-text.mjs",
-    markers: ["pdfjs-dist/legacy/build/pdf.mjs", "extractPdfText", "likelyScanned", "PDF extraction cancelled"],
+    markers: ["pdfjs-dist/legacy/build/pdf.mjs", "@napi-rs/canvas", "extractPdfText", "processPdfTextBatches", "renderPdfPageAsDataUrl", "visualDataUrl", "LARGE_PDF_PAGE_THRESHOLD", "requestedPageNumbers", "pageTexts", "likelyScanned", "PDF extraction cancelled"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/document-delivery.mjs",
+    markers: ["buildPdfDeliveryResult", "formatPageRange", "nextPageRange", "deliveryTruncated", "parsePageRange"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/artifact-delivery.mjs",
+    markers: ["registerSaveLastAssistantResponseTool", "detectArtifactRequest", "artifactDeliveryRetryPrompt", "artifactMissingNotice", "pendingDocumentArtifactFromToolEvent", "pendingDocumentWriteConflict", "documentJobToolMismatch", "toolResultSucceeded"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/pdf-markdown-workflow.mjs",
+    markers: ["registerPdfMarkdownWorkflowTool", "organize_pdf_to_markdown", "generatePdfSectionWithModel", "PdfModelTimeoutError", "resolveInput", "requiresUserChoice", "evaluateTechnicalRetention", "evaluatePdfPageCoverage", "buildPdfSectionReviewMessages", "parsePdfSectionReview", "quality-review", "quality-repair", "qualityPassed", "coverage-retry", "source-page: N"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/pdf/references/pdf-to-markdown.md",
+    markers: ["Skill owns strategy", "host owns execution", "organize_document_to_markdown", "independent model review", "Do not replace the host workflow"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/pdf/references/large-document.md",
+    markers: ["pages.chunk", "organize_document_to_markdown", "manifest.json"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/document-organizer/SKILL.md",
+    markers: ["name: document-organizer", "organize_document_to_markdown", "complete-with-summary", "summaryOnlyConfirmed", "background-task", "qualityPassed"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/bootstrap-skill-ownership.mjs",
+    markers: ["LEGACY_BOOTSTRAP_DIRECTORY_HASHES", "isKnownLegacyBootstrapSkill", "d587374b670b85430785212e4fa19304949ce510e253208d0014763d2fb3e681"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/document-intelligence.mjs",
+    markers: ["buildDocumentContract", "normalizeDocumentPolicy", "chunkDocumentUnits", "evaluateDocumentQuality", "resolvedVisualUnitIds", "renderDocumentSourceFallback", "buildDocumentReviewMessages"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/document-extractors.mjs",
+    markers: ["processDocumentSourceBatches", "runOfficeCliJson", "htmlDocumentUnits", "officeElementsToUnits", "visionox-office-visual-", "captureVisuals", "visualDataUrl"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/document-job-store.mjs",
+    markers: ["createDocumentJobStore", "retentionDays", "repairInterrupted", "pruneExpired", "failedBatches", "allowOutsideWorkspace", "writeBatchCheckpoint", "manifest-snapshots", "events.jsonl", "restart-recovery"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/document-markdown-workflow.mjs",
+    markers: ["createDocumentMarkdownManager", "messagesWithBatchVisuals", "generateHierarchicalSummary", "recoverSavedBatch", "orphan-section", "onPersistenceError", "policy-selected", "completed_with_warnings", "waiting_foreground", "retryFailed", "completions.delete"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/atomic-file.mjs",
+    markers: ["replaceFileWithRetry", "REPLACE_RETRY_CODES", '"EACCES", "EBUSY", "EPERM"'],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-O52OLQL3.js",

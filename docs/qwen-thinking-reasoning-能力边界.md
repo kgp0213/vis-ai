@@ -70,7 +70,7 @@
   "maxContextLength": 262144,
   "requestDefaults": {
     "temperature": 0.6,
-    "max_tokens": 4096,
+    "max_tokens": 8192,
     "top_p": 0.95,
     "top_k": 20,
     "extra_body": {
@@ -87,6 +87,26 @@
         "enable_thinking": false
       }
     }
+  },
+  "agentPolicy": {
+    "documentWorkflow": "guided",
+    "maxToolIterations": 24,
+    "maxToolContinuationWindows": 1,
+    "sameFailureClassLimit": 2,
+    "toolResultBudget": {
+      "defaultTokens": 16000,
+      "documentTokens": 32000,
+      "absoluteMaxTokens": 32768
+    },
+    "documentPolicy": {
+      "batchInputTokens": 3000,
+      "batchOutputTokens": 8192,
+      "maxUnitsPerBatch": 8,
+      "maxRetries": 2,
+      "autoFallback": true,
+      "semanticBatching": true,
+      "contextOverlapTokens": 1000
+    }
   }
 }
 ```
@@ -94,7 +114,9 @@
 配置含义：
 
 - `thinking_budget: 8192`：每次正式对话允许的最大隐藏思考预算。
-- `max_tokens: 4096`：可见回答的输出上限，与隐藏思考预算是两个不同参数。
+- `max_tokens: 8192`：可见回答的单次输出上限，与隐藏思考预算是两个不同参数；更长的 Markdown 由程序分段追加，不依赖一次生成全文。
+- `agentPolicy.toolResultBudget`：控制工具结果预算。PDF 超出预算时程序按完整页续读，不允许从页面中间截断。
+- `agentPolicy.documentPolicy`：控制 PDF、Office、HTML、Markdown 等保存型文档任务的单批输入/输出、来源区块数、重试次数、跨页语义分批、相邻上下文预算和备用服务商接管。Qwen 建议启用 `semanticBatching` 并将 `contextOverlapTokens` 设为约 `1000`；正文由宿主分批组装，不受单次回答长度限制。
 - `verificationRequestDefaults`：仅用于模型检测，不会覆盖磁盘中的正式配置。
 - 不配置 `efforts`、`thinkingMode` 或 `reasoning_effort`：这些字段不能控制当前 JSON 策略下的 Qwen 推理。
 

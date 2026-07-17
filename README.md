@@ -15,6 +15,8 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 - 定时会话整理、AI 质量评估、同主题知识合并和可选的自动 embedding 更新
 - `/learn` 学习功能
 - 内置 Node.js、OfficeCLI、PDF.js、DWS、bootstrap skills 和 ECC 规则
+- PDF、Word、Excel、PowerPoint、HTML、Markdown、CSV 和文本可通过统一后台任务整理为 Markdown：默认保留完整正文并在开头生成独立摘要，支持暂停、继续、取消、预览、失败块重试和检查点恢复；Windows 文件短暂占用不会终止后台服务
+- 大型文档保留页级来源清单并按跨页语义窗口处理；相邻区块以只读上下文帮助理解续表、跨页句子和步骤，最终再审计来源顺序、缺失与重复。Qwen 失败时只将失败块交给健康备用模型
 - V来家/企业钉钉互通：后台检查连接，提供非阻塞登录/退出入口，并支持通讯录、消息读取、智能确认发送、日程、待办、审批和协作文档等能力
 - 可在聊天中通过交互卡片定制只读 V来家 Skill，测试通过并确认后再原子安装
 - V来家定时整理结果可直接预览，并可经质量审核归档到用户指定工作区的 `knowledge/vhome/`；自动归档和索引更新均由用户决定
@@ -52,6 +54,7 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 | 切换执行权限 | 聊天页面顶部的 `auto / yolo / admin` 按钮 |
 | 导入、检测或切换模型 | 聊天输入区下方的“模型”菜单 |
 | 控制本地索引 | 聊天输入区下方、后台任务之后的“索引”选择框 |
+| 查看或控制大型文档整理 | 聊天输入区下方的“后台任务”，支持进度、模型、暂停、继续、取消、预览和失败块重试 |
 | 管理会话 | 左侧“会话”，支持批量移入回收站、预览和恢复 |
 | 管理任务 | 左侧“任务”，包括会话整理、报告和自定义任务 |
 | 查看运行概况或备份用户数据 | 左侧“概览”，位于“任务”和 OA 之间 |
@@ -232,7 +235,7 @@ docs/                        使用、架构与开发文档
 | 组件 | 上游仓库 | License | 说明 |
 |------|----------|---------|------|
 | OfficeCLI | [github.com/iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) | Apache-2.0 | C# 编写的 AI Agent Office 文档 CLI，支持 Word/Excel/PowerPoint。二进制 `officecli.exe` 打包在 `resources/server/` 下，办公模式自动通过 MCP 接入。 |
-| PDF.js | [github.com/mozilla/pdf.js](https://github.com/mozilla/pdf.js) | Apache-2.0 | 使用内置 Node.js 提取本地 PDF 文本，不依赖用户电脑的 Python；仅在读取 PDF 时延迟加载。 |
+| PDF.js | [github.com/mozilla/pdf.js](https://github.com/mozilla/pdf.js) | Apache-2.0 | 使用内置 Node.js 提取本地 PDF 文本，并在多模态文档任务需要时按页离线渲染图像；不依赖用户电脑的 Python，且仅在处理 PDF 时延迟加载。 |
 | DingTalk Workspace CLI | [github.com/open-dingtalk/dingtalk-workspace-cli](https://github.com/open-dingtalk/dingtalk-workspace-cli) | Apache-2.0 | `dws.exe` 提供 V来家/企业钉钉 OAuth 互通。程序打包二进制、许可证和内置 Skill 的精选命令参考，不打包用户 `~/.dws/` 中的 Token、身份、日志或上游脚本。 |
 | KaTeX | [github.com/KaTeX/KaTeX](https://github.com/KaTeX/KaTeX) | MIT | 数学公式渲染库。`katex.min.js`、`katex.min.css` 及字体文件打包在 `resources/server/visionox-pkg/dashboard/vendor/katex/` 下，Dashboard 通过 `katex-support.js` 接入 marked 扩展，支持行内与块级公式。 |
 

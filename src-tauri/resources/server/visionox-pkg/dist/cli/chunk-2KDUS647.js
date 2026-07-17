@@ -137,7 +137,7 @@ var DeepSeekClient = class {
     this.requestConfigForModel = opts.requestConfigForModel ?? (() => ({ policy: "legacy", requestDefaults: {} }));
   }
   buildPayload(opts, stream) {
-    const requestConfig = this.requestConfigForModel(opts.model) ?? {};
+    const requestConfig = this.requestConfigForModel(opts.model, { purpose: opts.requestPurpose }) ?? {};
     const jsonPolicy = requestConfig.policy === "json";
     const requestDefaults = jsonPolicy && requestConfig.requestDefaults && typeof requestConfig.requestDefaults === "object" && !Array.isArray(requestConfig.requestDefaults)
       ? requestConfig.requestDefaults

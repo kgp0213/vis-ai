@@ -6,11 +6,16 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import {
+  resolveProviderModelAgentPolicy,
   resolveProviderModelRequest,
+  resolveProviderModelVisionPolicy,
+  validateAgentPolicy,
   validateRequestDefaults,
+  validateVisionPolicy,
 } from "../lib/model-request-policy.mjs";
 
 const { DeepSeekClient } = await import(new URL("../visionox-pkg/dist/cli/chunk-2KDUS647.js", import.meta.url));
+const { CacheFirstLoop, ImmutablePrefix, ToolRegistry } = await import(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url));
 const { dispatch } = await import(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url));
 const TOKEN = "model-request-policy-test";
 
@@ -38,6 +43,53 @@ describe("model request policy", () => {
     assert.match(validateRequestDefaults({ extra_body: { __proto__: null } }), /plain JSON object|forbidden field/i);
   });
 
+  test("validates an explicit opt-in agent policy without inferring model brands", () => {
+    const policy = {
+      documentWorkflow: "guided",
+      maxToolIterations: 24,
+      maxToolContinuationWindows: 1,
+      sameFailureClassLimit: 2,
+      toolResultBudget: {
+        defaultTokens: 16000,
+        documentTokens: 24000,
+        absoluteMaxTokens: 32000,
+      },
+      requestProfiles: {
+        toolContinuation: {
+          temperature: 0.1,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 2048 } },
+        },
+        finalAnswer: {
+          temperature: 0.3,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 } },
+        },
+      },
+    };
+    assert.equal(validateAgentPolicy(policy, { requestPolicy: "json" }), null);
+    assert.match(validateAgentPolicy({ maxToolIterations: 0 }), /maxToolIterations/);
+    assert.match(validateAgentPolicy({ maxToolContinuationWindows: 3 }), /maxToolContinuationWindows/);
+    assert.match(validateAgentPolicy({ toolResultBudget: { defaultTokens: 16000, documentTokens: 40000, absoluteMaxTokens: 32000 } }), /documentTokens/);
+    assert.match(validateAgentPolicy({ sameFailureClassLimit: 0 }), /sameFailureClassLimit/);
+    assert.match(validateAgentPolicy({ documentWorkflow: "guess" }), /documentWorkflow/);
+    assert.match(validateAgentPolicy({ requestProfiles: policy.requestProfiles }, { requestPolicy: "legacy" }), /requestPolicy "json"/);
+    assert.match(validateAgentPolicy({ unknown: true }), /unknown field/);
+
+    const provider = { requestPolicy: "json", models: [{ id: "internal-model", agentPolicy: policy }] };
+    assert.deepEqual(resolveProviderModelAgentPolicy(provider, "internal-model"), policy);
+    assert.deepEqual(resolveProviderModelAgentPolicy({ models: [{ id: "qwen-by-name-only" }] }, "qwen-by-name-only"), {});
+
+    const visionPolicy = {
+      maxImages: 5,
+      detail: "high",
+      estimatedTokensPerImage: 4096,
+      contextReserveTokens: 16000,
+    };
+    assert.equal(validateVisionPolicy(visionPolicy), null);
+    assert.match(validateVisionPolicy({ maxImages: 0 }), /maxImages/);
+    assert.match(validateVisionPolicy({ detail: "full" }), /detail/);
+    assert.deepEqual(resolveProviderModelVisionPolicy({ models: [{ id: "internal-model", visionPolicy }] }, "internal-model"), visionPolicy);
+  });
+
   test("resolves fixed JSON policy per provider and model", () => {
     const provider = {
       requestPolicy: "json",
@@ -51,6 +103,31 @@ describe("model request policy", () => {
       policy: "legacy",
       requestDefaults: {},
     });
+  });
+
+  test("validates JSON-configurable weak-model document policy without model-name branches", () => {
+    const documentPolicy = {
+      defaultFidelity: "complete-with-summary",
+      batchInputTokens: 3000,
+      batchOutputTokens: 8192,
+      maxUnitsPerBatch: 8,
+      maxRetries: 2,
+      autoFallback: true,
+      semanticBatching: true,
+      contextOverlapTokens: 1024,
+      fallbackProviderIds: ["deepseek-official"],
+      foregroundPollMs: 250,
+      maxSplitDepth: 2,
+      maxModelCallsPerBatch: 24,
+      maxVisualUnitsPerBatch: 5,
+      requestTimeoutMs: 300000,
+    };
+    assert.equal(validateAgentPolicy({ documentWorkflow: "guided", documentPolicy }, { requestPolicy: "json" }), null);
+    assert.match(validateAgentPolicy({ documentPolicy: { batchInputTokens: 100 } }, { requestPolicy: "json" }), /batchInputTokens/);
+    assert.match(validateAgentPolicy({ documentPolicy: { contextOverlapTokens: 32 } }, { requestPolicy: "json" }), /contextOverlapTokens/);
+    assert.match(validateAgentPolicy({ documentPolicy: { semanticBatching: "yes" } }, { requestPolicy: "json" }), /semanticBatching/);
+    assert.match(validateAgentPolicy({ documentPolicy: { requestTimeoutMs: 1000 } }, { requestPolicy: "json" }), /requestTimeoutMs/);
+    assert.match(validateAgentPolicy({ documentPolicy: { unknown: true } }, { requestPolicy: "json" }), /unknown field/);
   });
 
   test("verification defaults recursively override only the model detection request", () => {
@@ -74,6 +151,36 @@ describe("model request policy", () => {
       temperature: 0,
       extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 8192 }, keep: true },
     });
+  });
+
+  test("agent request profiles recursively override only their declared request phase", () => {
+    const provider = {
+      requestPolicy: "json",
+      models: [{
+        id: "internal-model",
+        requestDefaults: {
+          temperature: 0.6,
+          max_tokens: 4096,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 }, keep: true },
+        },
+        agentPolicy: {
+          requestProfiles: {
+            toolContinuation: {
+              temperature: 0.1,
+              extra_body: { chat_template_kwargs: { thinking_budget: 2048 } },
+            },
+          },
+        },
+      }],
+    };
+
+    assert.deepEqual(resolveProviderModelRequest(provider, "internal-model").requestDefaults, provider.models[0].requestDefaults);
+    assert.deepEqual(resolveProviderModelRequest(provider, "internal-model", { purpose: "toolContinuation" }).requestDefaults, {
+      temperature: 0.1,
+      max_tokens: 4096,
+      extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 2048 }, keep: true },
+    });
+    assert.deepEqual(resolveProviderModelRequest(provider, "internal-model", { purpose: "unconfigured" }).requestDefaults, provider.models[0].requestDefaults);
   });
 
   test("JSON policy sends API-native defaults and suppresses software reasoning parameters", async () => {
@@ -107,6 +214,84 @@ describe("model request policy", () => {
     assert.equal(Object.hasOwn(payload.extra_body, "thinking"), false);
   });
 
+  test("model client forwards the request phase while legacy DeepSeek payload stays unchanged", async () => {
+    let purpose;
+    let payload;
+    const client = new DeepSeekClient({
+      apiKey: "test",
+      baseUrl: "https://model.test/v1",
+      requestConfigForModel: (_model, options) => {
+        purpose = options?.purpose;
+        return { policy: "legacy", requestDefaults: {} };
+      },
+      fetch: async (_url, init) => { payload = JSON.parse(init.body); return response(); },
+    });
+    await client.chat({
+      model: "deepseek",
+      messages: [{ role: "user", content: "test" }],
+      requestPurpose: "toolContinuation",
+      thinking: "enabled",
+      reasoningEffort: "max",
+    });
+    assert.equal(purpose, "toolContinuation");
+    assert.deepEqual(payload.extra_body, { thinking: { type: "enabled" } });
+    assert.equal(payload.reasoning_effort, "max");
+  });
+
+  test("agent loop applies continuation phases and same-failure guidance only when opted in", async () => {
+    const captured = [];
+    let responseIndex = 0;
+    const client = {
+      chat: async (options) => {
+        captured.push(structuredClone(options));
+        const path = responseIndex === 0 ? "D:/archive/report one.pptx" : "D:/archive/report(1).pptx";
+        if (responseIndex++ < 2) {
+          return {
+            content: "",
+            toolCalls: [{ id: `call-${responseIndex}`, type: "function", function: { name: "officecli", arguments: JSON.stringify({ command: `view ${path} text` }) } }],
+            usage: {},
+          };
+        }
+        return { content: "done", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "officecli",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+      readOnly: true,
+      fn: async () => JSON.stringify({ error: "local file not found" }),
+    });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "test", toolSpecs: tools.specs() }),
+      tools,
+      model: "internal-model",
+      stream: false,
+      autoEscalate: false,
+      maxToolIters: 12,
+      sameFailureClassLimit: 2,
+    });
+    const events = [];
+    for await (const event of loop.step("summarize the deck")) events.push(event);
+
+    assert.deepEqual(captured.map((call) => call.requestPurpose), ["initial", "toolContinuation", "toolContinuation"]);
+    const thirdMessages = captured[2].messages;
+    assert.ok(thirdMessages.some((message) => message.role === "tool" && /same failure class.*2 times/i.test(message.content)));
+    assert.equal(events.at(-1)?.role, "done");
+
+    const defaultTools = new ToolRegistry();
+    const defaultLoop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "default", toolSpecs: defaultTools.specs() }),
+      tools: defaultTools,
+      model: "qwen-by-name-only",
+      stream: false,
+    });
+    assert.equal(defaultLoop.maxToolIters, 64);
+    assert.equal(defaultLoop._sameFailureClassTracker.limit, null);
+  });
+
   test("legacy policy preserves existing DeepSeek thinking and effort fields", async () => {
     let payload;
     const client = new DeepSeekClient({
@@ -131,7 +316,13 @@ describe("model request policy", () => {
     const providerConfiguration = readFileSync(new URL("../lib/provider-configuration.mjs", import.meta.url), "utf8");
     const dashboard = readFileSync(new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url), "utf8");
     assert.match(launcher, /function createConfiguredModelClient/);
-    assert.match(launcher, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(getActiveProvider\(config\), modelId\)/);
+    assert.match(launcher, /requestConfigForModel: \(modelId, options\) => resolveProviderModelRequest\(getActiveProvider\(config\), modelId, options\)/);
+    assert.match(launcher, /resolveProviderModelAgentPolicy/);
+    assert.match(launcher, /resolveProviderModelVisionPolicy/);
+    assert.match(launcher, /maxToolContinuationWindows/);
+    assert.match(launcher, /toolResultBudget/);
+    assert.match(launcher, /tools\.setResultAugmenter\(null\)/);
+    assert.match(launcher, /sameFailureClassLimit/);
     assert.doesNotMatch(launcher, /new DeepSeekClient\(\{ apiKey, baseUrl \}\)/);
     assert.match(server, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(provider, modelId, \{ purpose: "verification" \}\)/);
     assert.match(server, /requestConfig: resolveProviderModelRequest\(provider, model\.id, \{ purpose: "verification" \}\)/);
@@ -176,6 +367,16 @@ describe("model request policy", () => {
             maxContextLength: 262144,
             requestDefaults: { top_p: 0.95, extra_body: { chat_template_kwargs: { enable_thinking: true } } },
             verificationRequestDefaults: { extra_body: { chat_template_kwargs: { enable_thinking: false } } },
+            agentPolicy: {
+              documentWorkflow: "guided",
+              maxToolIterations: 12,
+              maxToolContinuationWindows: 1,
+              sameFailureClassLimit: 2,
+              toolResultBudget: { defaultTokens: 16000, documentTokens: 24000, absoluteMaxTokens: 32000 },
+              requestProfiles: { toolContinuation: { temperature: 0.1 } },
+              documentPolicy: { batchInputTokens: 3000, batchOutputTokens: 8192, maxUnitsPerBatch: 8, maxRetries: 2, autoFallback: true },
+            },
+            visionPolicy: { maxImages: 5, detail: "high", estimatedTokensPerImage: 4096, contextReserveTokens: 16000 },
           }],
         }],
       }, {
@@ -190,6 +391,10 @@ describe("model request policy", () => {
       assert.equal(stored.providers[0].stale, undefined);
       assert.equal(stored.providers[0].models[0].requestDefaults.extra_body.chat_template_kwargs.enable_thinking, true);
       assert.equal(stored.providers[0].models[0].verificationRequestDefaults.extra_body.chat_template_kwargs.enable_thinking, false);
+      assert.equal(stored.providers[0].models[0].agentPolicy.maxToolIterations, 12);
+      assert.equal(stored.providers[0].models[0].agentPolicy.toolResultBudget.documentTokens, 24000);
+      assert.equal(stored.providers[0].models[0].agentPolicy.documentPolicy.batchInputTokens, 3000);
+      assert.equal(stored.providers[0].models[0].visionPolicy.contextReserveTokens, 16000);
 
       const rejected = await apiRequest("/api/providers/import", {
         schemaVersion: 2,
@@ -217,6 +422,28 @@ describe("model request policy", () => {
       }, { configPath });
       assert.equal(invalidVerification.status, 400);
       assert.match(invalidVerification.body.error, /verification.*reserved field.*messages/i);
+
+      const invalidAgentPolicy = await apiRequest("/api/providers/import", {
+        schemaVersion: 2,
+        providers: [{
+          id: "qwen",
+          requestPolicy: "json",
+          models: [{ id: "qwen-new", maxContextLength: 262144, requestDefaults: {}, agentPolicy: { maxToolIterations: 0 } }],
+        }],
+      }, { configPath });
+      assert.equal(invalidAgentPolicy.status, 400);
+      assert.match(invalidAgentPolicy.body.error, /agentPolicy.*maxToolIterations/i);
+
+      const invalidVisionPolicy = await apiRequest("/api/providers/import", {
+        schemaVersion: 2,
+        providers: [{
+          id: "qwen",
+          requestPolicy: "json",
+          models: [{ id: "qwen-new", maxContextLength: 262144, requestDefaults: {}, visionPolicy: { maxImages: 8 } }],
+        }],
+      }, { configPath });
+      assert.equal(invalidVisionPolicy.status, 400);
+      assert.match(invalidVisionPolicy.body.error, /visionPolicy.*maxImages/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

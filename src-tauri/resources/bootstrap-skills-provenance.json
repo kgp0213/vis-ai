@@ -3,7 +3,7 @@
   "groups": [
     {
       "id": "visionox-mit",
-      "skills": ["basic-skill-example", "coding-standards", "skill-creation-guide", "verification-loop", "vhome-skill-builder"],
+      "skills": ["basic-skill-example", "coding-standards", "document-organizer", "skill-creation-guide", "verification-loop", "vhome-skill-builder"],
       "source": "Visionox repository history",
       "license": "MIT, declared in each SKILL.md",
       "status": "verified"

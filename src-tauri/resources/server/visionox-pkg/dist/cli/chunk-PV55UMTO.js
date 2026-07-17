@@ -171,20 +171,36 @@ function encode(text) {
 function countTokens(text) {
   return encode(text).length;
 }
-function estimateConversationTokens(messages) {
+function estimateConversationTokens(messages, options = {}) {
   let total = 0;
+  let imageCount = 0;
+  const imageTokensPerImage = Number.isSafeInteger(options.imageTokensPerImage) && options.imageTokensPerImage > 0
+    ? options.imageTokensPerImage
+    : 4096;
   for (const m of messages) {
     if (typeof m.content === "string" && m.content) {
       total += countTokens(m.content);
+    } else if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        if (part?.type === "text" && typeof part.text === "string") {
+          total += countTokens(part.text);
+        } else if (part?.type === "image_url" || part?.type === "image") {
+          imageCount += 1;
+          total += imageTokensPerImage;
+        }
+      }
     }
     if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
       total += countTokens(JSON.stringify(m.tool_calls));
     }
   }
+  if (imageCount > 0 && Number.isSafeInteger(options.imageContextReserveTokens) && options.imageContextReserveTokens > 0) {
+    total += options.imageContextReserveTokens;
+  }
   return total;
 }
-function estimateRequestTokens(messages, toolSpecs) {
-  let total = estimateConversationTokens(messages);
+function estimateRequestTokens(messages, toolSpecs, options = {}) {
+  let total = estimateConversationTokens(messages, options);
   if (toolSpecs && toolSpecs.length > 0) {
     total += countTokens(JSON.stringify(toolSpecs));
   }

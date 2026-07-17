@@ -22,10 +22,23 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /"command":"add"/);
   });
 
-  test("本地 PDF 使用稳定文档引用和内置提取器", () => {
+  test("保存型文档使用统一后台流程，纯阅读 PDF 仍使用稳定引用", () => {
     const prompt = buildSystemPrompt([], "/root", false);
+    assert.match(prompt, /saved Markdown document from an existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text file.*organize_document_to_markdown/);
+    assert.match(prompt, /Except for the saved-Markdown workflow above/);
     assert.match(prompt, /keep its stable `documentRef`/);
-    assert.match(prompt, /existing PDF call `extract_pdf_text`/);
+    assert.match(prompt, /existing PDF that is only being read or discussed, call `extract_pdf_text`/);
+    assert.match(prompt, /returns `complete=false`/);
+    assert.match(prompt, /`nextPageRange`/);
+    assert.match(prompt, /append_file/);
+    assert.match(prompt, /organize_document_to_markdown/);
+    assert.match(prompt, /independent quality review/);
+    assert.match(prompt, /Acceptance means the artifact is pending/);
+    assert.match(prompt, /get_document_job_status/);
+    assert.match(prompt, /Do not call wait_for_job, list_jobs/);
+    assert.match(prompt, /qualityPassed is false/);
+    assert.match(prompt, /save_last_assistant_response/);
+    assert.match(prompt, /retain its tables, parameters, commands, and code/);
     assert.match(prompt, /Never use OfficeCLI for PDF/);
     assert.match(prompt, /host will recreate a missing readable copy automatically/);
   });

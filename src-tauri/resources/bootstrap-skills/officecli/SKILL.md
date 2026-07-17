@@ -36,6 +36,13 @@ OfficeCLI is a single binary that gives AI agents full control over Word, Excel,
 - Batch processing multiple changes in one open/save cycle
 - Rendering documents as HTML or PNG screenshots for visual inspection
 
+When the user asks to turn an existing Word, Excel, or PowerPoint file into a saved
+Markdown document, call `organize_document_to_markdown` instead of manually extracting
+and writing it. The host paginates OfficeCLI text, preserves stable element paths,
+captures useful visual elements when a configured multimodal model is available, checks
+quality, retries failed blocks, and saves a resumable result. Use the direct OfficeCLI
+commands below for reading, editing, validation, or layout-specific inspection.
+
 ## Path Addressing
 
 Every element has a stable path. Agent navigates without understanding XML:

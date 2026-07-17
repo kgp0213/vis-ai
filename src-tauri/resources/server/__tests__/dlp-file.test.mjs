@@ -9,6 +9,7 @@ import {
   createPreparedDocumentRegistry,
   DlpDecryptError,
   getDlpConfig,
+  latestPreparedDocumentRef,
   prepareLocalDocument,
   resolveDlpScriptPath,
   resolveReadablePathForDlp,
@@ -74,6 +75,14 @@ test("getDlpConfig defaults to auto mode and discovers installed script candidat
     assert.equal(cfg.mode, "auto");
     assert.equal(resolve(cfg.scriptPath), resolve(scriptPath));
   });
+});
+
+test("latestPreparedDocumentRef returns the newest prepared document of the requested kind", () => {
+  const registry = createPreparedDocumentRegistry();
+  registry.register({ sourcePath: "C:\\old.txt", readablePath: "C:\\old.txt", documentKind: "text", updatedAt: "2026-01-01T00:00:00.000Z" });
+  registry.register({ sourcePath: "C:\\new.pdf", readablePath: "C:\\new.pdf", documentKind: "pdf", updatedAt: "2026-01-02T00:00:00.000Z" });
+  assert.match(latestPreparedDocumentRef(registry, "pdf"), /^visionox-document:doc_/);
+  assert.equal(latestPreparedDocumentRef(registry, "spreadsheet"), null);
 });
 
 test("resolveDlpScriptPath returns null when configured script does not exist", () => {
@@ -224,6 +233,11 @@ test("launcher shares and restores managed documents across every document tool"
   assert.match(launcher, /preparedDocumentRegistry\.restore\(meta\.preparedDocuments/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(sessionMeta\.preparedDocuments/);
   assert.match(launcher, /name: "extract_pdf_text"[\s\S]*?extractPdfText\(prepared\.readablePath/);
+  assert.match(launcher, /registerPdfMarkdownWorkflowTool\(tools[\s\S]*?processPdfTextBatches/);
+  assert.match(launcher, /organize_pdf_to_markdown/);
+  assert.match(launcher, /const deliveryBudget[\s\S]*?buildPdfDeliveryResult\([\s\S]*?maxTokens: deliveryBudget/);
+  assert.match(launcher, /parsePdfDeliveryResult\(ev\)[\s\S]*?documentAutoContinuationPrompt/);
+  assert.match(launcher, /kind: "document-progress"/);
   assert.match(launcher, /wrapReadFileToolWithDlp[\s\S]*?registry: preparedDocumentRegistry/);
   assert.match(launcher, /wrapToolsPathArgsWithDlp\(tools, registeredNames[\s\S]*?registry: preparedDocumentRegistry/);
 });
@@ -374,6 +388,10 @@ test("wrapToolsPathArgsWithDlp pre-splits a managed OfficeCLI path containing sp
     });
 
     assert.equal(await defs.get("officecli").fn({ command: `view "${source}" text` }), "ok");
+    assert.deepEqual(receivedArgs, { command: ["view", source, "text"] });
+
+    receivedArgs = null;
+    assert.equal(await defs.get("officecli").fn({ command: `view ${source} text` }), "ok");
     assert.deepEqual(receivedArgs, { command: ["view", source, "text"] });
   });
 });

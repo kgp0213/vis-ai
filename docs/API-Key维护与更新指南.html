@@ -361,7 +361,7 @@
           "maxContextLength": 262144,
           "requestDefaults": {
             "temperature": 0.6,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "top_p": 0.95,
             "top_k": 20,
             "extra_body": {
@@ -378,6 +378,50 @@
                 "enable_thinking": false
               }
             }
+          },
+          "agentPolicy": {
+            "documentWorkflow": "guided",
+            "maxToolIterations": 24,
+            "maxToolContinuationWindows": 1,
+            "sameFailureClassLimit": 2,
+            "toolResultBudget": {
+              "defaultTokens": 16000,
+              "documentTokens": 32000,
+              "absoluteMaxTokens": 32768
+            },
+            "requestProfiles": {
+              "toolContinuation": {
+                "temperature": 0.1,
+                "extra_body": {
+                  "chat_template_kwargs": {
+                    "enable_thinking": true,
+                    "thinking_budget": 2048
+                  }
+                }
+              },
+              "finalAnswer": {
+                "temperature": 0.3,
+                "extra_body": {
+                  "chat_template_kwargs": {
+                    "enable_thinking": true,
+                    "thinking_budget": 8192
+                  }
+                }
+              }
+            },
+            "documentPolicy": {
+              "batchInputTokens": 3000,
+              "batchOutputTokens": 8192,
+              "maxUnitsPerBatch": 8,
+              "maxRetries": 2,
+              "autoFallback": true
+            }
+          },
+          "visionPolicy": {
+            "maxImages": 5,
+            "detail": "high",
+            "estimatedTokensPerImage": 4096,
+            "contextReserveTokens": 16000
           }
         }
       ]
@@ -390,6 +434,10 @@
 
     <div class="tip">
       <code>requestDefaults</code> 是正式对话参数；<code>verificationRequestDefaults</code> 只在“检测 API”和“检测全部模型”时递归覆盖正式参数。公司模型较慢或默认开启思考时，可在检测参数中关闭思考。以后模型升级通常只需更新 JSON 中的模型 ID、容量和原生参数，不需要重新安装软件。
+    </div>
+
+    <div class="tip">
+      <code>agentPolicy</code> 控制长文档的工具轮次、分页读取、工具结果预算和后台分批策略。Qwen 建议保留 <code>documentPolicy</code> 的 <code>3000 / 8192 / 8 / 2 / true</code> 配置；它适用于 PDF、Word、Excel、PPT、HTML、Markdown 等保存型整理任务。<code>max_tokens</code> 只控制单次模型输出，完整正文由宿主分批校验、失败块重试并最终组装，不要求模型一次生成全文。
     </div>
 
     <h2>五、如何判断操作是否成功</h2>

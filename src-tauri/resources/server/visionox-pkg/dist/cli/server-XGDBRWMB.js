@@ -333,29 +333,39 @@ async function handleAbort(method, _rest, _body, ctx) {
   return { status: result?.accepted === false ? 200 : 202, body: { aborted: result?.accepted !== false, ...result } };
 }
 
-async function handleBackgroundJobs(method, rest, _body, ctx) {
+async function handleBackgroundJobs(method, rest, body, ctx) {
   if (method === "GET" && rest.length === 0) {
-    const jobs = ctx.listBackgroundJobs ? ctx.listBackgroundJobs() : [];
+    const jobs = ctx.listBackgroundJobs ? await ctx.listBackgroundJobs() : [];
     return { status: 200, body: { jobs } };
   }
   if (method === "GET" && rest.length === 1) {
     if (!ctx.getBackgroundJob) return { status: 503, body: { error: "background job output is not available" } };
-    const id = Number.parseInt(rest[0], 10);
-    if (!Number.isInteger(id) || id < 1) return { status: 400, body: { error: "invalid background job id" } };
-    const job = ctx.getBackgroundJob(id);
+    const rawId = decodeURIComponent(rest[0]);
+    const id = rawId.startsWith("document:") ? rawId : Number.parseInt(rawId, 10);
+    if (!(rawId.startsWith("document:") || Number.isInteger(id) && id >= 1)) return { status: 400, body: { error: "invalid background job id" } };
+    const job = await ctx.getBackgroundJob(id);
     if (!job) return { status: 404, body: { error: "background job not found" } };
     return { status: 200, body: { job } };
   }
+  if (method === "POST" && rest.length === 1) {
+    const rawId = decodeURIComponent(rest[0]);
+    if (!rawId.startsWith("document:") || !ctx.controlBackgroundJob) return { status: 400, body: { error: "document background job id required" } };
+    const action = String(parseBody(body).action || "").trim();
+    if (!["pause", "resume", "retry", "cancel"].includes(action)) return { status: 400, body: { error: "invalid document job action" } };
+    const result = await ctx.controlBackgroundJob(rawId, action);
+    return { status: result?.ok === false ? 409 : 200, body: result };
+  }
   if (method === "DELETE" && rest.length === 1) {
     if (!ctx.stopBackgroundJob) return { status: 503, body: { error: "background job control is not available" } };
-    const id = Number.parseInt(rest[0], 10);
-    if (!Number.isInteger(id) || id < 1) return { status: 400, body: { error: "invalid background job id" } };
+    const rawId = decodeURIComponent(rest[0]);
+    const id = rawId.startsWith("document:") ? rawId : Number.parseInt(rawId, 10);
+    if (!(rawId.startsWith("document:") || Number.isInteger(id) && id >= 1)) return { status: 400, body: { error: "invalid background job id" } };
     const job = await ctx.stopBackgroundJob(id);
     if (!job) return { status: 404, body: { error: "background job not found" } };
     ctx.audit?.({ ts: Date.now(), action: "background-job-stop", payload: { id } });
     return { status: 200, body: { stopped: true, job } };
   }
-  return { status: 405, body: { error: "GET list or DELETE /:id only" } };
+  return { status: 405, body: { error: "GET list, POST action, or DELETE /:id only" } };
 }
 
 // src/server/api/checkpoint-create.ts

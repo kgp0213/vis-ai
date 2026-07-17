@@ -150,6 +150,17 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
   return { register, find, snapshot, restore, clear };
 }
 
+export function latestPreparedDocumentRef(registry, documentKind = null) {
+  const entries = registry?.snapshot?.();
+  if (!Array.isArray(entries)) return null;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (documentKind && entry?.documentKind !== documentKind) continue;
+    if (typeof entry?.documentRef === "string" && entry.documentRef.trim()) return entry.documentRef;
+  }
+  return null;
+}
+
 export class DlpDecryptError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -826,9 +837,10 @@ async function resolveRegisteredPathsInCommand(command, options) {
       if (start < 0) continue;
       matched = true;
       const result = await resolveDlpPathToken(candidate, options);
-      if (result.value !== candidate) {
-        const bounds = quotedPathBounds(text, start, candidate.length);
-        text = `${text.slice(0, bounds.start)}"${String(result.value).replace(/"/g, '\\"')}"${text.slice(bounds.end)}`;
+      const bounds = quotedPathBounds(text, start, candidate.length);
+      const replacement = `"${String(result.value).replace(/"/g, '\\"')}"`;
+      if (text.slice(bounds.start, bounds.end) !== replacement) {
+        text = `${text.slice(0, bounds.start)}${replacement}${text.slice(bounds.end)}`;
         changed = true;
       }
       break;

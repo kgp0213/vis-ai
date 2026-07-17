@@ -66,10 +66,35 @@ describe("Provider schema v3 maintenance", () => {
       schemaVersion: 3,
       operations: [
         { op: "updateProvider", providerId: "company", changes: { name: "Company Next", baseUrl: "https://new.example/v1" } },
-        { op: "updateModel", providerId: "company", modelKey: "company-primary", changes: { id: "model-next", name: "Next" } },
+        { op: "updateModel", providerId: "company", modelKey: "company-primary", changes: {
+          id: "model-next",
+          name: "Next",
+          agentPolicy: {
+            documentWorkflow: "guided",
+            maxToolIterations: 24,
+            maxToolContinuationWindows: 1,
+            sameFailureClassLimit: 2,
+            toolResultBudget: { defaultTokens: 16000, documentTokens: 24000, absoluteMaxTokens: 32000 },
+          },
+          visionPolicy: { maxImages: 5, detail: "high", estimatedTokensPerImage: 4096, contextReserveTokens: 16000 },
+        } },
         { op: "upsertModel", providerId: "company", model: { key: "company-vision", id: "vision-next", name: "Vision", presets: ["pro"], maxContextLength: 65536 } },
         { op: "syncModels", providerId: "company", models: [
-          { key: "company-primary", id: "model-next", name: "Next", presets: ["flash"], maxContextLength: 32768 },
+          {
+            key: "company-primary",
+            id: "model-next",
+            name: "Next",
+            presets: ["flash"],
+            maxContextLength: 32768,
+            agentPolicy: {
+              documentWorkflow: "guided",
+              maxToolIterations: 24,
+              maxToolContinuationWindows: 1,
+              sameFailureClassLimit: 2,
+              toolResultBudget: { defaultTokens: 16000, documentTokens: 24000, absoluteMaxTokens: 32000 },
+            },
+            visionPolicy: { maxImages: 5, detail: "high", estimatedTokensPerImage: 4096, contextReserveTokens: 16000 },
+          },
           { key: "company-vision", id: "vision-next", name: "Vision", presets: ["pro"], maxContextLength: 65536 },
         ] },
       ],
@@ -85,6 +110,9 @@ describe("Provider schema v3 maintenance", () => {
       ["company-vision", "vision-next", false],
     ]);
     assert.equal(result.preview.destructive, false);
+    assert.equal(provider.models[0].agentPolicy.maxToolIterations, 24);
+    assert.equal(provider.models[0].agentPolicy.toolResultBudget.documentTokens, 24000);
+    assert.equal(provider.models[0].visionPolicy.contextReserveTokens, 16000);
     assert.ok(result.preview.actions.some((action) => action.kind === "disable-model"));
     assert.deepEqual(source, baseConfig(), "preview must not mutate the persisted source");
   });

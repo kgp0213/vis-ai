@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const forbiddenExtensions = new Set([".map", ".zip", ".bak", ".old"]);
 const skippedDirectories = new Set([".git", "node_modules", "target"]);
+const localWorkingDirectories = new Set(["bug_report"]);
 const allowed = new Set([
   "skills/依赖包/poppler-windows.zip",
 ]);
@@ -22,7 +23,7 @@ function scan(path, { skipGenerated = true } = {}) {
     const child = join(path, name);
     const stat = statSync(child);
     if (stat.isDirectory()) {
-      if (skipGenerated && skippedDirectories.has(name)) continue;
+      if (skipGenerated && (skippedDirectories.has(name) || (path === root && localWorkingDirectories.has(name)))) continue;
       scan(child, { skipGenerated });
       continue;
     }

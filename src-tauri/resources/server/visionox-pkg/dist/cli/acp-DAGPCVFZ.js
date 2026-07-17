@@ -91,6 +91,7 @@ var READ_TOOLS = /* @__PURE__ */ new Set([
 ]);
 var EDIT_TOOLS = /* @__PURE__ */ new Set([
   "write_file",
+  "append_file",
   "edit_file",
   "multi_edit",
   "create_directory",

@@ -58455,7 +58455,7 @@ function AppInner({
   (0, import_react87.useEffect)(() => {
     if (!tools || !codeMode) return;
     tools.setToolInterceptor(async (name, args) => {
-      if (name !== "edit_file" && name !== "write_file") return null;
+      if (name !== "edit_file" && name !== "write_file" && name !== "append_file") return null;
       const rawPath = typeof args.path === "string" ? args.path : "";
       if (!rawPath) return null;
       let relPath = rawPath;
@@ -58470,6 +58470,10 @@ function AppInner({
         const replace = typeof args.replace === "string" ? args.replace : "";
         if (!search) return null;
         block2 = { path: relPath, search, replace, offset: 0 };
+      } else if (name === "append_file") {
+        const content = typeof args.content === "string" ? args.content : "";
+        const existing = toWholeFileEditBlock(relPath, "", rootForEdit);
+        block2 = toWholeFileEditBlock(relPath, `${existing.search}${content}`, rootForEdit);
       } else {
         const content = typeof args.content === "string" ? args.content : "";
         block2 = toWholeFileEditBlock(relPath, content, rootForEdit);

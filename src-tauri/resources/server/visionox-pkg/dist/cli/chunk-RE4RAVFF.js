@@ -574,7 +574,7 @@ var EN = {
     proArmed: "\u21E7 /pro armed \u2014 this turn runs on deepseek-v4-pro (one-shot \xB7 disarms after turn)",
     abortedAtIter: "aborted at iter {iter}/{cap} \u2014 stopped without producing a summary (press \u2191 + Enter or /retry to resume)",
     toolUploadStatus: "tool result uploaded \xB7 model thinking before next response\u2026",
-    toolBudgetWarning: "{iter}/{cap} tool calls used \u2014 approaching budget. Press Esc to force a summary now.",
+    toolBudgetWarning: "{iter}/{cap} tool rounds completed \u2014 approaching the hard limit. Press Esc to force a summary now.",
     preflightFoldStatus: "preflight: context near full, attempting fold\u2026",
     preflightFolded: "preflight: request ~{estimate}/{ctxMax} tokens ({pct}%) \u2014 folded {beforeMessages} messages \u2192 {afterMessages} (summary {summaryChars} chars). Sending.",
     preflightNoFold: "preflight: request ~{estimate}/{ctxMax} tokens ({pct}%) and nothing left to fold \u2014 DeepSeek will likely 400. Run /clear or /new to start fresh.",
@@ -592,7 +592,7 @@ var EN = {
     forcingSummary: "context {before}/{ctxMax} ({pct}%) \u2014 forcing summary from what was gathered. Run /compact, /clear, or /new to reset."
   },
   errors: {
-    contextOverflow: "Context overflow (DeepSeek 400): session history is {requested}, past the model's prompt limit (V4: 1M tokens; legacy chat/reasoner: 131k). Usually a single tool result grew too big. Visionox caps new tool results at 8k tokens and auto-heals oversized history on session load \u2014 a restart often clears it. If it still overflows, run /new to start fresh, or open /sessions and press [d] to delete this session.",
+    contextOverflow: "Context overflow: session history is {requested}, past the active model's configured prompt limit. Usually a single tool result grew too big. Visionox applies the active model's configured tool-result budget and auto-heals oversized history on session load. If it still overflows, run /new to start fresh, or open /sessions and press [d] to delete this session.",
     contextOverflowTooMany: "too many tokens",
     auth401: "Authentication failed (DeepSeek 401): {inner}. Your API key is rejected. Fix with `visionox setup` or `export DEEPSEEK_API_KEY=sk-...`. Get one at https://platform.deepseek.com/api_keys.",
     balance402: "Out of balance (DeepSeek 402): {inner}. Top up at https://platform.deepseek.com/top_up \u2014 the panel header shows your balance once it's non-zero.",
@@ -607,11 +607,11 @@ var EN = {
     reasonAborted: "[aborted by user (Esc) \u2014 summarizing what I found so far]",
     reasonContextGuard: "[context budget running low \u2014 summarizing before the next call would overflow]",
     reasonStuck: "[stuck on a repeated tool call \u2014 explaining what was tried and what's blocking progress]",
-    reasonBudget: "[tool-call budget ({iterCap}) reached \u2014 forcing summary from what I found]",
+    reasonBudget: "[hard tool-round limit ({iterCap}) reached \u2014 forcing summary from completed tool results]",
     labelAborted: "aborted by user",
     labelContextGuard: "context-guard triggered (prompt > 80% of window)",
     labelStuck: "stuck (repeated tool call suppressed by storm-breaker)",
-    labelBudget: "tool-call budget ({iterCap}) reached"
+    labelBudget: "hard tool-round limit ({iterCap}) reached"
   },
   handlers: {
     basic: {
@@ -1957,7 +1957,7 @@ var zhCN = {
     proArmed: "\u21E7 /pro \u5DF2\u88C5\u5907 \u2014 \u672C\u8F6E\u4F7F\u7528 deepseek-v4-pro\uFF08\u4E00\u6B21\u6027 \xB7 \u672C\u8F6E\u540E\u81EA\u52A8\u89E3\u9664\uFF09",
     abortedAtIter: "\u5728\u7B2C {iter}/{cap} \u6B21\u5DE5\u5177\u8C03\u7528\u5904\u4E2D\u65AD \u2014 \u672A\u751F\u6210\u603B\u7ED3\u5373\u505C\u6B62\uFF08\u6309 \u2191 + Enter \u6216 /retry \u6062\u590D\uFF09",
     toolUploadStatus: "\u5DE5\u5177\u7ED3\u679C\u5DF2\u4E0A\u4F20 \xB7 \u6A21\u578B\u5728\u751F\u6210\u4E0B\u4E00\u6761\u54CD\u5E94\u524D\u601D\u8003\u4E2D\u2026",
-    toolBudgetWarning: "\u5DF2\u7528 {iter}/{cap} \u6B21\u5DE5\u5177\u8C03\u7528 \u2014 \u63A5\u8FD1\u4E0A\u9650\u3002\u6309 Esc \u7ACB\u5373\u5F3A\u5236\u603B\u7ED3\u3002",
+    toolBudgetWarning: "\u5DF2\u5B8C\u6210 {iter}/{cap} \u6B21\u5DE5\u5177\u5F80\u8FD4 \u2014 \u63A5\u8FD1\u786C\u4E0A\u9650\u3002\u6309 Esc \u7ACB\u5373\u5F3A\u5236\u603B\u7ED3\u3002",
     preflightFoldStatus: "\u9884\u68C0\uFF1A\u4E0A\u4E0B\u6587\u63A5\u8FD1\u4E0A\u9650\uFF0C\u5C1D\u8BD5\u6298\u53E0\u2026",
     preflightFolded: "\u9884\u68C0\uFF1A\u8BF7\u6C42\u7EA6 {estimate}/{ctxMax} tokens\uFF08{pct}%\uFF09\u2014 \u5DF2\u6298\u53E0 {beforeMessages} \u6761\u6D88\u606F \u2192 {afterMessages}\uFF08\u603B\u7ED3 {summaryChars} \u5B57\uFF09\u3002\u53D1\u9001\u4E2D\u3002",
     preflightNoFold: "\u9884\u68C0\uFF1A\u8BF7\u6C42\u7EA6 {estimate}/{ctxMax} tokens\uFF08{pct}%\uFF09\u4E14\u6CA1\u6709\u53EF\u6298\u53E0\u7684\u5185\u5BB9 \u2014 DeepSeek \u5927\u6982\u7387\u4F1A\u8FD4\u56DE 400\u3002\u8BF7\u8FD0\u884C /clear \u6216 /new \u91CD\u65B0\u5F00\u59CB\u3002",
@@ -1975,7 +1975,7 @@ var zhCN = {
     forcingSummary: "\u4E0A\u4E0B\u6587 {before}/{ctxMax}\uFF08{pct}%\uFF09\u2014 \u57FA\u4E8E\u5DF2\u6536\u96C6\u5230\u7684\u5185\u5BB9\u5F3A\u5236\u603B\u7ED3\u3002\u8BF7\u8FD0\u884C /compact\u3001/clear \u6216 /new \u91CD\u7F6E\u3002"
   },
   errors: {
-    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF08DeepSeek 400\uFF09\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u6A21\u578B prompt \u4E0A\u9650\uFF08V4\uFF1A1M tokens\uFF1B\u65E7\u7248 chat/reasoner\uFF1A131k\uFF09\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Visionox \u9ED8\u8BA4\u5C06\u65B0\u5DE5\u5177\u7ED3\u679C\u9650\u5236\u5728 8k tokens\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2 \u2014 \u91CD\u542F\u5E38\u80FD\u6E05\u6389\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /new \u91CD\u65B0\u5F00\u59CB\uFF0C\u6216\u6253\u5F00 /sessions \u9009\u4E2D\u540E\u6309 [d] \u5220\u9664\u8BE5\u4F1A\u8BDD\u3002",
+    contextOverflow: "\u4E0A\u4E0B\u6587\u6EA2\u51FA\uFF1A\u4F1A\u8BDD\u5386\u53F2\u5DF2\u8FBE {requested}\uFF0C\u8D85\u51FA\u5F53\u524D\u6A21\u578B\u914D\u7F6E\u7684 prompt \u4E0A\u9650\u3002\u901A\u5E38\u662F\u5355\u4E2A\u5DE5\u5177\u7ED3\u679C\u592A\u5927\u3002Visionox \u4F1A\u6309\u5F53\u524D\u6A21\u578B\u914D\u7F6E\u7684\u5DE5\u5177\u7ED3\u679C\u9884\u7B97\u8FDB\u884C\u9650\u5236\uFF0C\u5E76\u5728\u4F1A\u8BDD\u52A0\u8F7D\u65F6\u81EA\u52A8\u4FEE\u590D\u8D85\u5927\u5386\u53F2\u3002\u5982\u679C\u4ECD\u7136\u6EA2\u51FA\uFF0C\u8FD0\u884C /new \u91CD\u65B0\u5F00\u59CB\uFF0C\u6216\u6253\u5F00 /sessions \u5220\u9664\u8BE5\u4F1A\u8BDD\u3002",
     contextOverflowTooMany: "tokens \u6570\u91CF\u8FC7\u591A",
     auth401: "\u8BA4\u8BC1\u5931\u8D25\uFF08DeepSeek 401\uFF09\uFF1A{inner}\u3002\u4F60\u7684 API key \u88AB\u62D2\u7EDD\u3002\u8FD0\u884C `visionox setup` \u6216 `export DEEPSEEK_API_KEY=sk-...` \u4FEE\u590D\u3002\u5728 https://platform.deepseek.com/api_keys \u83B7\u53D6 key\u3002",
     balance402: "\u4F59\u989D\u4E0D\u8DB3\uFF08DeepSeek 402\uFF09\uFF1A{inner}\u3002\u5728 https://platform.deepseek.com/top_up \u5145\u503C \u2014 \u4F59\u989D\u975E\u96F6\u65F6\u9762\u677F\u9876\u680F\u4F1A\u663E\u793A\u3002",
@@ -1990,11 +1990,11 @@ var zhCN = {
     reasonAborted: "[\u7528\u6237\u5DF2\u4E2D\u65AD\uFF08Esc\uFF09 \u2014 \u6B63\u5728\u603B\u7ED3\u5230\u76EE\u524D\u4E3A\u6B62\u7684\u53D1\u73B0]",
     reasonContextGuard: "[\u4E0A\u4E0B\u6587\u989D\u5EA6\u5373\u5C06\u8017\u5C3D \u2014 \u5728\u4E0B\u4E00\u6B21\u8C03\u7528\u6EA2\u51FA\u4E4B\u524D\u5148\u603B\u7ED3]",
     reasonStuck: "[\u5361\u5728\u91CD\u590D\u7684\u5DE5\u5177\u8C03\u7528\u4E0A \u2014 \u8BF4\u660E\u5DF2\u5C1D\u8BD5\u7684\u65B9\u6CD5\u4EE5\u53CA\u963B\u585E\u70B9]",
-    reasonBudget: "[\u5DE5\u5177\u8C03\u7528\u914D\u989D\uFF08{iterCap}\uFF09\u5DF2\u7528\u5C3D \u2014 \u57FA\u4E8E\u5DF2\u53D1\u73B0\u7684\u5185\u5BB9\u5F3A\u5236\u603B\u7ED3]",
+    reasonBudget: "[\u5DE5\u5177\u5F80\u8FD4\u786C\u4E0A\u9650\uFF08{iterCap}\uFF09\u5DF2\u8FBE\u5230 \u2014 \u57FA\u4E8E\u5DF2\u5B8C\u6210\u7684\u5DE5\u5177\u7ED3\u679C\u5F3A\u5236\u603B\u7ED3]",
     labelAborted: "\u7528\u6237\u4E2D\u65AD",
     labelContextGuard: "\u89E6\u53D1\u4E0A\u4E0B\u6587\u4FDD\u62A4\uFF08prompt > 80% \u7A97\u53E3\uFF09",
     labelStuck: "\u5361\u6B7B\uFF08\u91CD\u590D\u5DE5\u5177\u8C03\u7528\u88AB\u53CD\u98CE\u66B4\u673A\u5236\u6291\u5236\uFF09",
-    labelBudget: "\u5DE5\u5177\u8C03\u7528\u914D\u989D\uFF08{iterCap}\uFF09\u5DF2\u7528\u5C3D"
+    labelBudget: "\u5DE5\u5177\u5F80\u8FD4\u786C\u4E0A\u9650\uFF08{iterCap}\uFF09\u5DF2\u8FBE\u5230"
   },
   handlers: {
     basic: {

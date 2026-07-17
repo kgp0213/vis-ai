@@ -1,4 +1,4 @@
-import { validateRequestDefaults } from "./model-request-policy.mjs";
+import { validateAgentPolicy, validateRequestDefaults, validateVisionPolicy } from "./model-request-policy.mjs";
 
 const PROVIDER_CHANGE_FIELDS = new Set([
   "name", "baseUrl", "apiKey", "requestPolicy", "requestDefaults",
@@ -6,7 +6,7 @@ const PROVIDER_CHANGE_FIELDS = new Set([
 ]);
 const MODEL_CHANGE_FIELDS = new Set([
   "id", "name", "presets", "efforts", "thinkingMode", "multimodal",
-  "maxContextLength", "requestDefaults", "verificationRequestDefaults", "disabled",
+  "maxContextLength", "requestDefaults", "verificationRequestDefaults", "agentPolicy", "visionPolicy", "disabled",
 ]);
 const V3_OPERATIONS = new Set([
   "updateProvider", "removeProvider", "upsertModel", "updateModel", "disableModel", "removeModel", "syncModels",
@@ -67,6 +67,14 @@ function validateProvider(provider) {
       }
     } else if (model.verificationRequestDefaults !== undefined) {
       return `model "${model.id}" verificationRequestDefaults requires provider requestPolicy "json"`;
+    }
+    if (model.agentPolicy !== undefined) {
+      const agentPolicyIssue = validateAgentPolicy(model.agentPolicy, { requestPolicy: provider.requestPolicy });
+      if (agentPolicyIssue) return `model "${model.id}" ${agentPolicyIssue}`;
+    }
+    if (model.visionPolicy !== undefined) {
+      const visionPolicyIssue = validateVisionPolicy(model.visionPolicy);
+      if (visionPolicyIssue) return `model "${model.id}" ${visionPolicyIssue}`;
     }
     if (model.disabled !== true) enabled += 1;
   }

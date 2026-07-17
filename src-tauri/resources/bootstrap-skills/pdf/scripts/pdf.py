@@ -15,6 +15,7 @@ Commands:
 
     pages.merge <pdf>... -o <out>
     pages.split <pdf> -o <dir>
+    pages.chunk <pdf> -o <dir> [--pages-per-file 200]
     pages.rotate <pdf> <deg> -o <out> [-p pages]
     pages.crop <pdf> <box> -o <out> [-p pages]
 
@@ -662,6 +663,98 @@ def pages_split(argv: list):
         Output.error("SplitError", f"Split failed: {exc}", code=4)
 
     Output.success({"output_dir": str(dest), "total_pages": len(generated), "files": generated})
+
+
+def _chunk_page_ranges(total_pages: int, pages_per_file: int) -> List[Tuple[int, int]]:
+    if total_pages < 0:
+        raise ValueError("total_pages must not be negative")
+    if pages_per_file <= 0:
+        raise ValueError("pages_per_file must be positive")
+    return [
+        (start + 1, min(total_pages, start + pages_per_file))
+        for start in range(0, total_pages, pages_per_file)
+    ]
+
+
+@cmd("pages.chunk")
+def pages_chunk(argv: list):
+    """Split a large PDF into bounded multi-page parts and write a page manifest."""
+    if not argv:
+        Output.error("MissingArg", "pdf path required")
+    pdf_path = argv.pop(0)
+    out_dir = _pop_flag(argv, "-o", "--output") or "."
+    raw_pages_per_file = _pop_flag(argv, "-n", "--pages-per-file") or "200"
+    try:
+        pages_per_file = int(raw_pages_per_file)
+    except ValueError:
+        Output.error("InvalidArg", "--pages-per-file must be an integer")
+    if pages_per_file < 1 or pages_per_file > 1000:
+        Output.error("InvalidArg", "--pages-per-file must be between 1 and 1000")
+    if argv:
+        Output.error("InvalidArg", f"Unexpected arguments: {' '.join(argv)}")
+
+    import pikepdf
+    src = Output.check_file(pdf_path)
+    dest = Path(out_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        doc = pikepdf.open(src)
+    except Exception as exc:
+        Output.error("PDFError", f"Cannot open PDF: {exc}", code=3)
+
+    total_pages = len(doc.pages)
+    ranges = _chunk_page_ranges(total_pages, pages_per_file)
+    width = max(4, len(str(total_pages)))
+    parts = []
+    try:
+        for index, (first_page, last_page) in enumerate(ranges, 1):
+            filename = (
+                f"{src.stem}_part-{index:03d}_pages-"
+                f"{first_page:0{width}d}-{last_page:0{width}d}.pdf"
+            )
+            output_path = dest / filename
+            part = pikepdf.new()
+            for page_index in range(first_page - 1, last_page):
+                part.pages.append(doc.pages[page_index])
+            part.save(output_path)
+            part.close()
+            parts.append({
+                "index": index,
+                "file": filename,
+                "first_page": first_page,
+                "last_page": last_page,
+                "pages": last_page - first_page + 1,
+            })
+        doc.close()
+    except Exception as exc:
+        try:
+            doc.close()
+        except Exception:
+            pass
+        Output.error(
+            "ChunkError",
+            f"Chunking failed: {exc}",
+            hint="Already completed parts remain in the output directory and may be inspected before retrying.",
+            code=4,
+        )
+
+    manifest = {
+        "schemaVersion": 1,
+        "sourceFile": src.name,
+        "totalPages": total_pages,
+        "pagesPerFile": pages_per_file,
+        "parts": parts,
+    }
+    manifest_path = dest / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    Output.success({
+        "output_dir": str(dest),
+        "total_pages": total_pages,
+        "pages_per_file": pages_per_file,
+        "part_count": len(parts),
+        "manifest": str(manifest_path),
+        "parts": parts,
+    })
 
 
 @cmd("pages.rotate")

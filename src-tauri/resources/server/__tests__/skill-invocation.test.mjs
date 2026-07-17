@@ -179,12 +179,27 @@ test("unambiguous weather questions route to the installed skill without hijacki
   assert.match(launcher, /\.read\(automaticSkillInvocation\.name\) \? automaticSkillInvocation : null/);
 });
 
-test("document intent routes existing PDFs and Markdown conversion to distinct skills", () => {
+test("saved document intent routes every supported format through the resumable organizer", () => {
   const pdfTask = "读取 D:\\_归档\\（20260703）OP Manual规范模板.pdf 并整理成 Markdown";
-  assert.deepEqual(routeAutomaticSkill(pdfTask), { name: "pdf", task: pdfTask, source: "automatic" });
+  assert.deepEqual(routeAutomaticSkill(pdfTask), { name: "document-organizer", task: pdfTask, source: "automatic" });
+  for (const task of [
+    "把这个PDF转换成Markdown文件",
+    "将刚才上传的 PDF 整理为 md",
+    "提取PDF内容并保存成Markdown",
+    "能否帮我把 PDF 转成 Markdown",
+    "把 D:\\docs\\manual.docx 整理成 Markdown",
+    "提取 D:\\docs\\data.xlsx 并保存为 md 文件",
+    "将 D:\\docs\\deck.pptx 总结成 Markdown 文件",
+    "把 D:\\docs\\report.html 转换为 Markdown",
+  ]) {
+    assert.deepEqual(routeAutomaticSkill(task), { name: "document-organizer", task, source: "automatic" });
+  }
   const markdownTask = "把 D:\\sample-workspace\\分析报告.md 转成 PDF";
   assert.deepEqual(routeAutomaticSkill(markdownTask), { name: "md-to-pdf-cjk", task: markdownTask, source: "automatic" });
   assert.equal(routeAutomaticSkill("修改 pdf 技能的解析代码"), null);
+  assert.equal(routeAutomaticSkill("讨论 PDF 转 Markdown Skill 的实现方案"), null);
+  assert.equal(routeAutomaticSkill("PDF 转 MD 的流程是什么"), null);
+  assert.equal(routeAutomaticSkill("讨论 DOCX 大文档转换成 Markdown 的实现方案"), null);
   assert.equal(routeAutomaticSkill("用 OfficeCLI 查看 D:\\sample-workspace\\汇报材料.pptx"), null);
 });
 

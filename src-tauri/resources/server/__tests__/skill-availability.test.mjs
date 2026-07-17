@@ -25,7 +25,7 @@ test("all bundled skill directories contain a readable SKILL.md and provenance",
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  assert.equal(skillNames.length, 44);
+  assert.equal(skillNames.length, 45);
   for (const name of skillNames) {
     const path = skillFile(name);
     assert.ok(existsSync(path), `${name} is missing SKILL.md`);
@@ -45,14 +45,24 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   assert.match(pdf, /path.*run_skill result header/i);
   assert.match(pdf, /Do not run `setup\.sh` directly on Windows/);
   assert.match(pdf, /Call `extract_pdf_text` with the returned `documentRef`/);
+  assert.match(pdf, /organize_document_to_markdown/);
+  assert.match(pdf, /references\/pdf-to-markdown\.md/);
+  assert.match(pdf, /references\/large-document\.md/);
   assert.match(pdf, /Do not use OfficeCLI for PDF files/);
   assert.match(pdf, /Never install dependencies automatically/);
   const pdfScript = readFileSync(skillFile("pdf", "scripts/pdf.py"), "utf8");
   assert.match(pdfScript, /PermissionRequired/);
   assert.match(pdfScript, /\["pdfplumber", "pdfium", "pypdf"\]/);
   assert.match(pdfScript, /import pypdfium2 as pdfium/);
+  assert.match(pdfScript, /@cmd\("pages\.chunk"\)/);
+  assert.match(pdfScript, /manifest\.json/);
   const statsFunction = pdfScript.slice(pdfScript.indexOf("def _pdf_stats"), pdfScript.indexOf("def _classify_lines"));
   assert.doesNotMatch(statsFunction, /pip[\s\S]{0,40}install|subprocess\.run/);
+  const markdownWorkflow = readFileSync(skillFile("pdf", "references/pdf-to-markdown.md"), "utf8");
+  assert.match(markdownWorkflow, /Skill.*strategy[\s\S]*host.*execution/i);
+  assert.match(markdownWorkflow, /organize_document_to_markdown/);
+  assert.match(markdownWorkflow, /independent model review/i);
+  assert.match(markdownWorkflow, /Do not replace the host workflow/i);
 
   const cjk = readFileSync(skillFile("md-to-pdf-cjk"), "utf8");
   assert.match(cjk, /python -m pip install reportlab/);

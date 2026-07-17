@@ -4,7 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { atomicWriteFile, atomicWriteFileSync } from "../lib/atomic-file.mjs";
+import {
+  atomicWriteFile,
+  atomicWriteFileSync,
+  replaceFileWithRetry,
+  replaceFileWithRetrySync,
+} from "../lib/atomic-file.mjs";
+
+function fsError(code) {
+  return Object.assign(new Error(`${code} replacement failure`), { code });
+}
 
 describe("atomic file persistence", () => {
   it("replaces a file synchronously without leaving a sibling temp file", () => {
@@ -43,5 +52,35 @@ describe("atomic file persistence", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("retries transient Windows replacement failures without hiding permanent errors", async () => {
+    let asyncCalls = 0;
+    await replaceFileWithRetry("source", "target", {
+      delays: [1, 1],
+      renameFile: async () => {
+        asyncCalls++;
+        if (asyncCalls < 3) throw fsError("EPERM");
+      },
+    });
+    assert.equal(asyncCalls, 3);
+
+    let syncCalls = 0;
+    replaceFileWithRetrySync("source", "target", {
+      delays: [0],
+      renameFile: () => {
+        syncCalls++;
+        if (syncCalls < 2) throw fsError("EBUSY");
+      },
+    });
+    assert.equal(syncCalls, 2);
+
+    await assert.rejects(
+      () => replaceFileWithRetry("source", "target", {
+        delays: [0, 0],
+        renameFile: async () => { throw fsError("ENOSPC"); },
+      }),
+      (error) => error.code === "ENOSPC",
+    );
   });
 });

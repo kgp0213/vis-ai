@@ -19,6 +19,7 @@ prepare_local_document({ "input": "<the user's raw path or full sentence>" })
 
 Then use the returned stable `documentRef` with the appropriate parser. The host resolves it to the current readable copy before the tool runs:
 
+- Saved Markdown from PDF/Word/Excel/PPT/HTML/MD/CSV/text: call `organize_document_to_markdown` with the original input directly. Do not prepare the same document first unless recovering from an earlier failed read.
 - PDF: call `extract_pdf_text` with `documentRef`; use the `pdf` skill only for advanced processing. Never use OfficeCLI for PDF.
 - Word/Excel/PPT: use officecli against `documentRef`.
 - XML/DSN/TXT/MD/JSON/YAML/CSV/INI/config/log: use read_file against `documentRef`.
