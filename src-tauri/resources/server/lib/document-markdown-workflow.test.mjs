@@ -656,6 +656,60 @@ test("fallback weak-model policy does not constrain primary extraction", async (
   }
 });
 
+test("declared model capacity bounds execution without relying on the model name", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-capability-bounds-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const draftCalls = [];
+    const units = Array.from({ length: 4 }, (_value, index) => ({
+      id: `u${index + 1}`,
+      location: `section ${index + 1}`,
+      text: (`Section ${index + 1} contains reusable technical value ${index + 1}. `).repeat(50),
+    }));
+    const manager = createDocumentMarkdownManager({
+      store,
+      countTokens: (value) => Math.ceil(String(value).length / 4),
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "source-parent", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [{
+        providerId: "future-provider",
+        modelId: "arbitrary-model-id",
+        role: "primary",
+        verificationStatus: "passed",
+        requiresProbe: false,
+        maxContextTokens: 4096,
+        maxOutputTokens: 1024,
+        contextReserveTokens: 1024,
+      }],
+      generate: async ({ batch, purpose, maxTokens }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        draftCalls.push({ units: batch.units.length, maxTokens });
+        return faithful(batch.units, "arbitrary-model-id");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      policy: { batchInputTokens: 8000, batchOutputTokens: 8192, maxUnitsPerBatch: 10 },
+    });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed", job.error);
+    assert.ok(draftCalls.length > 1, "the source batch should be split to the declared context window");
+    assert.ok(draftCalls.every((call) => call.maxTokens === 1024));
+    assert.ok(draftCalls.every((call) => call.units < units.length));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an oversized failed primary batch is split only when handed to a weaker fallback", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-fallback-split-"));
   try {
