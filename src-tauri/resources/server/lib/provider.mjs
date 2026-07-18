@@ -127,7 +127,11 @@ export function pickSummaryModel(models) {
   if (flash) return flash.id;
   const smallest = enabledModels
     .slice()
-    .sort((a, b) => (a.maxContextLength ?? Infinity) - (b.maxContextLength ?? Infinity))[0];
+    .sort((a, b) => (
+      a.capabilities?.maxContextTokens ?? a.maxContextLength ?? Infinity
+    ) - (
+      b.capabilities?.maxContextTokens ?? b.maxContextLength ?? Infinity
+    ))[0];
   return smallest?.id ?? enabledModels[0]?.id;
 }
 

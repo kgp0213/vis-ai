@@ -11,7 +11,12 @@ function positiveInteger(value) {
 
 export function resolveContextPolicy(model, config, provider, fallback = FALLBACK_CONTEXT_TOKENS) {
   const modelObj = provider?.models?.find((entry) => entry.id === model);
-  const declaredCap = positiveInteger(modelObj?.maxContextLength);
+  const capabilityCap = positiveInteger(modelObj?.capabilities?.maxContextTokens);
+  const legacyCap = positiveInteger(modelObj?.maxContextLength);
+  const declaredCap = capabilityCap ?? legacyCap;
+  const capacitySource = capabilityCap !== null
+    ? "json-capabilities"
+    : legacyCap !== null ? "json" : "fallback";
   const fallbackCap = positiveInteger(fallback) ?? FALLBACK_CONTEXT_TOKENS;
   const modelCap = declaredCap ?? fallbackCap;
   const userLimit = positiveInteger(config?.contextCapTokens);
@@ -21,10 +26,11 @@ export function resolveContextPolicy(model, config, provider, fallback = FALLBAC
     providerId: provider?.id ?? null,
     modelMaxContextLength: modelCap,
     declaredMaxContextLength: declaredCap,
+    declaredMaxContextTokens: declaredCap,
     userLimit,
     effectiveCap,
-    capacitySource: declaredCap === null ? "fallback" : "json",
-    source: userLimit !== null && userLimit < modelCap ? "user-limit" : declaredCap === null ? "fallback" : "json",
+    capacitySource,
+    source: userLimit !== null && userLimit < modelCap ? "user-limit" : capacitySource,
     clamped: userLimit !== null && userLimit > modelCap,
   };
 }
