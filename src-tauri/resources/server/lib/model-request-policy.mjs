@@ -27,7 +27,15 @@ const MODEL_PROTOCOLS = new Set(["openai-chat-completions"]);
 const MODEL_INPUT_MODALITIES = new Set(["text", "image"]);
 const MODEL_ROLES = new Set(["chat", "document-draft", "document-review", "vision-review", "summary"]);
 const LEGACY_TEXT_ROLES = ["chat", "document-draft", "document-review", "summary"];
-const REQUEST_PROFILE_NAMES = new Set(["toolContinuation", "finalAnswer"]);
+const REQUEST_PROFILE_NAMES = new Set([
+  "toolContinuation",
+  "finalAnswer",
+  "summary",
+  "report",
+  "knowledge",
+  "learn",
+  "sessionReview",
+]);
 const DOCUMENT_POLICY_FIELDS = new Set([
   "defaultFidelity",
   "batchInputTokens",
