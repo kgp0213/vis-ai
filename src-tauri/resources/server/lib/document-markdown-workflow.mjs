@@ -235,6 +235,12 @@ const DOCUMENT_MODEL_ERROR_DEFINITIONS = Object.freeze({
     retryable: true,
     requiresUserAction: true,
   },
+  context_overflow: {
+    message: "当前区块超过模型上下文窗口，正在自动拆分后继续。",
+    action: "程序会缩小区块重试；如果仍失败，可降低单区块大小或更换模型。",
+    retryable: true,
+    requiresUserAction: false,
+  },
   capability_mismatch: {
     message: "模型不支持本次请求所需的内容或参数格式。",
     action: "检查模型 JSON 能力配置，或改用兼容模型后重试。",
@@ -287,6 +293,7 @@ export function classifyDocumentModelError(error) {
   let category = "unknown";
   if (/(?:\b402\b|balance.{0,30}(?:insufficient|not enough|exhausted|empty)|(?:insufficient|not enough).{0,30}balance|余额(?:不足|已用尽|耗尽)|欠费)/iu.test(source)) category = "insufficient_balance";
   else if (/quota\s+(?:is\s+)?(?:insufficient|exhausted|exceeded)|insufficient\s+quota|配额(?:不足|已用尽|耗尽)|调用额度/iu.test(source)) category = "quota_exhausted";
+  else if (/(?:context[_ -]?(?:length|window|limit)|maximum context|context window|上下文.{0,12}(?:超出|过大|上限|窗口)|输入.{0,12}(?:过长|超限))/iu.test(source)) category = "context_overflow";
   else if (/output.{0,30}(?:limit|truncat|incomplete)|truncat(?:ed|ion)|结果不完整|输出达到.{0,12}上限|finish.?reason.{0,12}length/iu.test(source)) category = "output_truncated";
   else if (/timeout|timed out|deadline|aborted due to timeout|总时长上限|响应超时|请求超时/iu.test(source)) category = "timeout";
   else if (/\b429\b|rate.?limit|too many requests|请求过于频繁|限流/iu.test(source)) category = "rate_limit";
@@ -514,6 +521,7 @@ function documentPolicyTrace(requested, effective, candidates) {
 
 export function isNonRetryableDocumentModelError(error) {
   const message = String(error?.message || error || "");
+  if (/(?:context[_ -]?(?:length|window|limit)|maximum context|context window|上下文.{0,12}(?:超出|过大|上限|窗口)|输入.{0,12}(?:过长|超限))/iu.test(message)) return false;
   if (/\b429\b|rate.?limit|temporar(?:y|ily)|\b5\d\d\b/i.test(message)) return false;
   return /(?:\b(?:400|401|403|404|405|410|422)\b|invalid_request_error|failed to deserialize|unknown variant|unsupported (?:content|media|message)|model .* (?:not found|does not exist))/i.test(message);
 }
@@ -1017,7 +1025,7 @@ export function createDocumentMarkdownManager(options = {}) {
           disableCandidate(runtime, candidate);
           break;
         }
-        if (category === "output_truncated") break;
+        if (["output_truncated", "context_overflow"].includes(category)) break;
         continue;
       }
       lastSection = section;
@@ -1101,7 +1109,7 @@ export function createDocumentMarkdownManager(options = {}) {
     const types = new Set((result?.quality?.failures ?? []).map((failure) => failure.type));
     if (["coverage", "length-retention", "technical-value-retention"].some((type) => types.has(type))) return true;
     const categories = new Set(result?.failureCategories ?? []);
-    if (categories.has("output_truncated") || categories.has("timeout")) return true;
+    if (categories.has("output_truncated") || categories.has("context_overflow") || categories.has("timeout")) return true;
     return (result?.errors ?? []).some((message) => /timeout|timed out|deadline|总时长上限/i.test(message));
   }
 
