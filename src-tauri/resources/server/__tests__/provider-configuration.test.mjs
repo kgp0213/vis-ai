@@ -56,6 +56,15 @@ async function post(path, body, overrides = {}) {
   return { status, json: raw ? JSON.parse(raw) : null };
 }
 
+async function get(path, overrides = {}) {
+  const req = { url: path, method: "GET", headers: { "x-reasonix-token": TOKEN } };
+  let status;
+  let raw;
+  const res = { writeHead(value) { status = value; }, end(value) { raw = value; } };
+  await dispatch(req, res, ctx(overrides), TOKEN);
+  return { status, json: raw ? JSON.parse(raw) : null };
+}
+
 beforeEach(() => writeFileSync(configPath, JSON.stringify(baseConfig(), null, 2)));
 after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -250,6 +259,31 @@ describe("Provider schema v2 combined import and cleanup", () => {
 });
 
 describe("Provider credential rotation API", () => {
+  test("settings API uses capabilities.maxContextTokens as the model capacity", async () => {
+    writeFileSync(configPath, JSON.stringify({
+      preset: "auto",
+      model: "future-model",
+      providers: [{
+        id: "future-provider",
+        models: [{
+          id: "future-model",
+          presets: ["auto"],
+          efforts: ["high"],
+          capabilities: { maxContextTokens: 262144 },
+        }],
+      }],
+      activeProviderId: "future-provider",
+    }, null, 2));
+
+    const settings = await get("/api/settings");
+    assert.equal(settings.status, 200);
+    assert.equal(settings.json.providerContextCap, 262144);
+
+    const rejected = await post("/api/settings", { contextCapTokens: 300000 });
+    assert.equal(rejected.status, 400);
+    assert.match(rejected.json.error, /262144/);
+  });
+
   test("requires a matching successful test before credentials can be saved", async () => {
     let testedCandidate;
     const tested = await post("/api/providers/credentials/test", {

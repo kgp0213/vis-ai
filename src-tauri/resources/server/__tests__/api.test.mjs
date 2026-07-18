@@ -997,31 +997,6 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.ok(res.json.error);
   });
 
-  test("设置接口使用 capabilities.maxContextTokens 作为模型容量上限", async () => {
-    writeConfig({
-      preset: "auto",
-      model: "future-model",
-      providers: [{
-        id: "future-provider",
-        models: [{
-          id: "future-model",
-          presets: ["auto"],
-          efforts: ["high"],
-          capabilities: { maxContextTokens: 262144 },
-        }],
-      }],
-      activeProviderId: "future-provider",
-    });
-
-    const settings = await apiGet("/api/settings");
-    assert.equal(settings.status, 200);
-    assert.equal(settings.json.providerContextCap, 262144);
-
-    const rejected = await apiPost("/api/settings", { contextCapTokens: 300000 });
-    assert.equal(rejected.status, 400);
-    assert.match(rejected.json.error, /262144/);
-  });
-
   // ── Health + 404 ──────────────────────────────────────────
 
   test("GET /api/health → 200", async () => {
