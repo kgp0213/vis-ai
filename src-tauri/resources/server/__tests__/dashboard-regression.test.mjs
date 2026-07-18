@@ -28,6 +28,7 @@ const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.
 const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import.meta.url);
 const katexSupportUrl = new URL("../visionox-pkg/dashboard/katex-support.js", import.meta.url);
 const launcherUrl = new URL("../launcher.mjs", import.meta.url);
+const modelTaskRequestUrl = new URL("../lib/model-task-request.mjs", import.meta.url);
 const fileAccessRescueSkillUrl = new URL("../../bootstrap-skills/file-access-rescue/SKILL.md", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
 const { listSessions, sessionPath } = await import(sessionUrl.href);
@@ -629,6 +630,7 @@ describe("Dashboard 回归护栏", () => {
   test("会话整理保持原任务类型并显式控制知识提炼和自动 embedding", () => {
     const source = readFileSync(dashboardAppUrl, "utf8");
     const launcher = readFileSync(launcherUrl, "utf8");
+    const modelTaskRequest = readFileSync(modelTaskRequestUrl, "utf8");
     assert.match(source, /knowledgeEnabled: draft\.knowledgeEnabled/);
     assert.match(source, /knowledgeAutoIndex: draft\.knowledgeAutoIndex/);
     assert.match(source, /sessionCleanupPromptAddendum: draft\.sessionCleanupPromptAddendum/);
@@ -652,7 +654,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /update\.action === "delete" && item\.action !== "delete" \? "keep"/);
     assert.match(launcher, /buildSessionQualityPrompt/);
     assert.match(launcher, /normalizeSessionQualityEvaluations/);
-    assert.match(launcher, /responseFormat: structuredOutput \? \{ type: "json_object" \} : undefined/);
+    assert.match(launcher, /requestTaskModelJson/);
+    assert.match(modelTaskRequest, /responseFormat: structuredOutput \? \{ type: "json_object" \} : undefined/);
     assert.match(launcher, /offset \+= 4/);
     assert.match(launcher, /evaluationFailures\.push/);
     assert.match(launcher, /knowledgeAIFailed: aiFailed/);
