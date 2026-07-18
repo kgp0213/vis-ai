@@ -357,6 +357,7 @@ const required = [
       "refreshVHomeStatus",
       "logoutVHome",
       'previewProviderImport',
+      "capabilities?.maxContextTokens",
       'credentials" && rest[1] === "test"',
     ],
   },
