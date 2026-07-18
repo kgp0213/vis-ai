@@ -872,12 +872,13 @@ export function createDocumentMarkdownManager(options = {}) {
     persistCandidateCircuit(runtime, "model-circuit-disabled");
   }
 
-  function enableCandidate(runtime, candidate) {
+  function enableCandidate(runtime, candidate, available = true) {
     const key = candidateCircuitKey(candidate);
     runtime.disabledCandidates?.delete(key);
     runtime.disabledCandidateDetails?.delete(key);
     runtime.candidateAvailability ??= new Map();
-    runtime.candidateAvailability.set(key, true);
+    if (available) runtime.candidateAvailability.set(key, true);
+    else runtime.candidateAvailability.delete(key);
     persistCandidateCircuit(runtime, "model-circuit-enabled");
   }
 
@@ -1390,7 +1391,9 @@ export function createDocumentMarkdownManager(options = {}) {
     const verificationStatus = String(candidate?.verificationStatus ?? "").toLowerCase();
     if (candidateDisabled(runtime, candidate)) {
       const disabledOrigin = runtime.disabledCandidateDetails?.get(key)?.origin;
-      if (verificationStatus === "passed" && ["probe", "verification"].includes(disabledOrigin)) enableCandidate(runtime, candidate);
+      const verificationCanRetry = disabledOrigin === "verification" && ["passed", "stale", "untested"].includes(verificationStatus);
+      const probeRecovered = disabledOrigin === "probe" && verificationStatus === "passed";
+      if (verificationCanRetry || probeRecovered) enableCandidate(runtime, candidate, verificationStatus === "passed");
       else return false;
     }
     if (runtime.candidateAvailability.has(key)) return runtime.candidateAvailability.get(key) === true;
