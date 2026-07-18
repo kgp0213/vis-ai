@@ -649,6 +649,15 @@ function targetedRepairUnitIds(result, batch) {
   return (batch?.unitIds ?? []).filter((id) => requested.has(String(id)));
 }
 
+function targetedRepairRequiresVision(result, batch) {
+  const targets = targetedRepairUnitIds(result, batch);
+  if (targets.length === 0) return false;
+  const visual = new Set((result?.quality?.failures ?? [])
+    .filter((failure) => failure?.type === "visual-pending")
+    .flatMap((failure) => failure.unitIds ?? []).map(String));
+  return visual.size > 0 && targets.every((id) => visual.has(String(id)));
+}
+
 function repairContextUnits(batch, targetIds) {
   const target = new Set(targetIds);
   const neighbors = [];
@@ -1438,16 +1447,17 @@ export function createDocumentMarkdownManager(options = {}) {
     return (result?.errors ?? []).some((message) => /timeout|timed out|deadline|总时长上限/i.test(message));
   }
 
-  async function processBatch(batch, runtime, state, startCandidateIndex = 0) {
+  async function processBatch(batch, runtime, state, startCandidateIndex = 0, seedResult = null) {
     const candidates = runtime.candidates;
     const attempts = [];
-    let bestResult = null;
+    let bestResult = seedResult;
     let splitEligible = false;
     const countTokens = typeof options.countTokens === "function" ? options.countTokens : (text) => Math.ceil(String(text ?? "").length / 2);
     for (let candidateIndex = startCandidateIndex; candidateIndex < candidates.length; candidateIndex++) {
       const candidate = candidates[candidateIndex];
       if (state.budget.used >= state.budget.limit) break;
       if (!await candidateAvailable(candidate, runtime, batch)) continue;
+      if (bestResult && targetedRepairRequiresVision(bestResult, batch) && candidate.multimodal !== true) continue;
       const candidatePolicy = documentPolicyForCandidate(runtime.policy, candidate);
       const repairIds = bestResult ? targetedRepairUnitIds(bestResult, batch) : [];
       const policyBatch = repairIds.length > 0 ? createRepairBatch(batch, repairIds, "policy") : batch;
@@ -1886,8 +1896,36 @@ export function createDocumentMarkdownManager(options = {}) {
             if (recovered.record.status !== "completed") degraded = true;
             return;
           }
+          let retrySeed = null;
+          if (retryFailed && prior?.status === "needs_review" && batchRecordMatches(prior, batch)) {
+            const section = await savedSection(runtime.id, prior.sectionId || batch.id);
+            if (section !== null) {
+              const resolvedVisualUnitIds = Array.isArray(prior.resolvedVisualUnitIds) ? prior.resolvedVisualUnitIds : [];
+              retrySeed = {
+                passed: false,
+                section,
+                quality: evaluateDocumentQuality({
+                  units: batch.units,
+                  markdown: section,
+                  fidelity: runtime.contract.fidelity,
+                  resolvedVisualUnitIds,
+                }),
+                review: prior.review ?? null,
+                resolvedVisualUnitIds,
+                attempts: 0,
+                errors: [],
+                failureCategories: [],
+              };
+              await store.appendEvent?.(runtime.id, {
+                type: "batch-retry-seeded",
+                batchId: batch.id,
+                sectionId: prior.sectionId || batch.id,
+                resolvedVisualUnitIds,
+              }).catch((error) => reportPersistenceError(runtime, error, "retry-seed-event"));
+            }
+          }
           const budget = { used: 0, limit: runtime.policy.maxModelCallsPerBatch };
-          const result = await processBatch(batch, runtime, { depth: 0, budget });
+          const result = await processBatch(batch, runtime, { depth: 0, budget }, 0, retrySeed);
           const sectionId = batch.id;
           await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
           const record = {
