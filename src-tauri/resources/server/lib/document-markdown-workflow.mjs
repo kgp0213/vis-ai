@@ -14,6 +14,8 @@ import {
   renderDocumentSourceFallback,
 } from "./document-intelligence.mjs";
 
+const WAITING_MANIFEST_HEARTBEAT_MS = 5_000;
+
 function abortError(message = "document task cancelled") {
   return new DOMException(message, "AbortError");
 }
@@ -1027,19 +1029,29 @@ export function createDocumentMarkdownManager(options = {}) {
 
   async function waitForTurn(runtime) {
     let announced = false;
-    while (runtime.paused || options.isForegroundBusy?.() || options.isProviderBusy?.()) {
+    let lastWaitingStatus = null;
+    let lastWaitingPersistAt = 0;
+    while (true) {
       if (runtime.controller.signal.aborted) throw abortError();
-      const waitingForForeground = !runtime.paused && options.isForegroundBusy?.();
-      const waitingForProvider = !runtime.paused && !waitingForForeground && options.isProviderBusy?.();
-      await emit(runtime.id, {
-        status: runtime.paused ? "paused" : waitingForForeground ? "waiting_foreground" : "waiting_provider",
-        running: !runtime.paused,
-        paused: runtime.paused,
-        progress: {
-          stage: runtime.paused ? "paused" : waitingForForeground ? "waiting-foreground" : "waiting-provider",
-          lastHeartbeatAt: new Date().toISOString(),
-        },
-      });
+      const paused = runtime.paused === true;
+      const waitingForForeground = !paused && Boolean(options.isForegroundBusy?.());
+      const waitingForProvider = !paused && !waitingForForeground && Boolean(options.isProviderBusy?.());
+      if (!paused && !waitingForForeground && !waitingForProvider) break;
+      const waitingStatus = paused ? "paused" : waitingForForeground ? "waiting_foreground" : "waiting_provider";
+      const now = Date.now();
+      if (waitingStatus !== lastWaitingStatus || now - lastWaitingPersistAt >= WAITING_MANIFEST_HEARTBEAT_MS) {
+        await emit(runtime.id, {
+          status: waitingStatus,
+          running: !paused,
+          paused,
+          progress: {
+            stage: paused ? "paused" : waitingForForeground ? "waiting-foreground" : "waiting-provider",
+            lastHeartbeatAt: new Date(now).toISOString(),
+          },
+        });
+        lastWaitingStatus = waitingStatus;
+        lastWaitingPersistAt = now;
+      }
       if ((waitingForForeground || waitingForProvider) && !announced) {
         announced = true;
         if (waitingForForeground) options.onWaitingForForeground?.(runtime.id);
@@ -1958,6 +1970,15 @@ export function createDocumentMarkdownManager(options = {}) {
           if (!result.passed) degraded = true;
         },
       });
+      const extractionWarnings = (Array.isArray(sourceSummary?.warnings) ? sourceSummary.warnings : []).map((warning) => {
+        const expected = Number(warning?.expected);
+        const actual = Number(warning?.actual);
+        const message = warning?.type === "office-element-count-mismatch" && Number.isFinite(expected) && Number.isFinite(actual)
+          ? `Office 文档提取数量与 OfficeCLI 报告不一致：应有 ${expected} 个元素，实际提取 ${actual} 个，输出需要复核。`
+          : String(warning?.message || "文档来源提取存在完整性告警，输出需要复核。");
+        return { ...warning, message };
+      });
+      if (extractionWarnings.length > 0) degraded = true;
 
       await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
       let current = await store.read(runtime.id);
@@ -2078,6 +2099,7 @@ export function createDocumentMarkdownManager(options = {}) {
         diagnostics: finalState.modelDiagnostics,
         assemblyAudit,
       });
+      warnings.push(...extractionWarnings);
       await emit(runtime.id, {
         status: degraded ? "completed_with_warnings" : "completed",
         running: false,
@@ -2089,6 +2111,7 @@ export function createDocumentMarkdownManager(options = {}) {
           sources: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries : [],
           selectedPages: Number.isFinite(Number(sourceSummary?.selectedPages)) ? Number(sourceSummary.selectedPages) : null,
           processedPages: Number.isFinite(Number(sourceSummary?.processedPages)) ? Number(sourceSummary.processedPages) : null,
+          extractionWarnings,
           assembly: assemblyAudit,
         },
         warnings,
