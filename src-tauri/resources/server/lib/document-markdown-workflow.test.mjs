@@ -1001,6 +1001,53 @@ test("declared model capacity bounds execution without relying on the model name
   }
 });
 
+test("candidate quality thresholds govern every draft evaluation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-candidate-quality-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const units = [
+      { id: "u1", location: "section 1", text: "A".repeat(1_000) },
+      { id: "u2", location: "section 2", text: "B".repeat(1_000) },
+    ];
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "source-parent", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [{
+        providerId: "strict-provider",
+        modelId: "strict-model",
+        role: "primary",
+        verificationStatus: "passed",
+        requiresProbe: false,
+        documentPolicy: {
+          maxRetries: 0,
+          qualityThresholds: { unitLengthRatio: 0.95 },
+        },
+      }],
+      generate: async ({ purpose }) => purpose === "verification"
+        ? '{"pass":true,"issues":[]}'
+        : [
+            `<!-- source-unit: u1 -->\n\n${"A".repeat(800)}`,
+            `<!-- source-unit: u2 -->\n\n${"B".repeat(1_000)}`,
+          ].join("\n\n"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed_with_warnings");
+    assert.deepEqual(job.batches[0].quality.coverage.thinUnitIds, ["u1"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an oversized failed primary batch is split only when handed to a weaker fallback", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-fallback-split-"));
   try {
