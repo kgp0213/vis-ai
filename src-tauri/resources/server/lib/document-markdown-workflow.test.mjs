@@ -167,6 +167,47 @@ test("quality warning summaries keep visual review and model service causes dist
   assert.equal(grouped[0].affectedBatches[0].label, "PDF pages 1");
 });
 
+test("source extraction warnings mark an otherwise faithful document for review", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-extraction-warning-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.docx", readablePath: "manual.docx", documentKind: "word" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        const units = [{ id: "u1", location: "paragraph 1", text: "Complete extracted source content." }];
+        await onBatch({ id: "b1", label: "section 1", units });
+        return {
+          totalUnits: 1,
+          warnings: [{
+            type: "office-element-count-mismatch",
+            expected: 2,
+            actual: 1,
+            message: "OfficeCLI reported 2 elements but 1 unique element was extracted.",
+          }],
+        };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      probeModel: async () => ({ ok: true }),
+      generate: async ({ batch, purpose }) => purpose === "verification"
+        ? '{"pass":true,"issues":[]}'
+        : faithful(batch.units, "qwen"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.docx", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed_with_warnings");
+    assert.equal(job.qualityPassed, false);
+    assert.equal(job.warnings.find((warning) => warning.type === "office-element-count-mismatch")?.expected, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("document workflow sends only failed batches to a healthy fallback and assembles summary before body", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-manager-"));
   const output = join(root, "result.md");
@@ -374,6 +415,60 @@ test("document work yields the provider lane to scheduled tasks and resumes auto
     await manager.wait(accepted.id);
     assert.equal((await store.read(accepted.id)).status, "completed");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider wait polling stays responsive without rewriting the manifest every poll", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-provider-wait-persistence-"));
+  let releaseProvider = null;
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const update = store.update.bind(store);
+    let waitingProviderWrites = 0;
+    let providerChecks = 0;
+    let providerBusy = true;
+    store.update = async (id, changes = {}) => {
+      if (changes.status === "waiting_provider") waitingProviderWrites++;
+      return update(id, changes);
+    };
+
+    const manager = createDocumentMarkdownManager({
+      store,
+      foregroundPollMs: 10,
+      isForegroundBusy: () => false,
+      isProviderBusy: () => {
+        providerChecks++;
+        return providerBusy;
+      },
+      onWaitingForProvider: () => {
+        releaseProvider ??= setTimeout(() => { providerBusy = false; }, 180);
+      },
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "b1", units: [{ id: "u1", location: "section", text: "Complete source text." }] });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "qwen"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      policy: { foregroundPollMs: 10 },
+    });
+    await manager.wait(accepted.id);
+    assert.equal((await store.read(accepted.id)).status, "completed");
+    assert.ok(providerChecks > 2, "provider availability must still be polled while the task waits");
+    assert.ok(
+      waitingProviderWrites <= 2,
+      `waiting for one provider slot wrote the full manifest ${waitingProviderWrites} times`,
+    );
+  } finally {
+    if (releaseProvider) clearTimeout(releaseProvider);
     await rm(root, { recursive: true, force: true });
   }
 });
