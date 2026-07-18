@@ -7,9 +7,11 @@ import { Readable } from "node:stream";
 
 import {
   resolveProviderModelAgentPolicy,
+  resolveProviderModelCapabilities,
   resolveProviderModelRequest,
   resolveProviderModelVisionPolicy,
   validateAgentPolicy,
+  validateModelCapabilities,
   validateRequestDefaults,
   validateVisionPolicy,
 } from "../lib/model-request-policy.mjs";
@@ -102,6 +104,90 @@ describe("model request policy", () => {
     assert.deepEqual(resolveProviderModelRequest({ models: [{ id: "deepseek" }] }, "deepseek"), {
       policy: "legacy",
       requestDefaults: {},
+    });
+  });
+
+  test("validates a model capability declaration independently from document execution hints", () => {
+    const capabilities = {
+      protocol: "openai-chat-completions",
+      inputModalities: ["text", "image"],
+      streaming: true,
+      toolCalling: true,
+      structuredOutput: false,
+      maxContextTokens: 1_000_000,
+      maxOutputTokens: 32_768,
+      maxImagesPerRequest: 12,
+      roles: ["chat", "document-draft", "document-review", "vision-review", "summary"],
+    };
+
+    assert.equal(validateModelCapabilities(capabilities), null);
+    assert.match(validateModelCapabilities({ ...capabilities, streaming: "yes" }), /streaming.*boolean/i);
+    assert.match(validateModelCapabilities({ ...capabilities, inputModalities: ["image"] }), /inputModalities.*text/i);
+    assert.match(validateModelCapabilities({ ...capabilities, roles: ["document-draft", "unknown-role"] }), /roles.*unknown-role/i);
+    assert.match(validateModelCapabilities({ ...capabilities, maxOutputTokens: 0 }), /maxOutputTokens.*positive integer/i);
+    assert.match(validateModelCapabilities({ ...capabilities, extra: true }), /unknown field.*extra/i);
+
+    const provider = {
+      models: [{
+        id: "future-model",
+        multimodal: false,
+        maxContextLength: 32_768,
+        visionPolicy: { maxImages: 2 },
+        capabilities,
+        agentPolicy: { documentPolicy: { batchOutputTokens: 8_192 } },
+      }],
+    };
+    assert.deepEqual(resolveProviderModelCapabilities(provider, "future-model"), capabilities);
+    assert.equal(resolveProviderModelAgentPolicy(provider, "future-model").documentPolicy.batchOutputTokens, 8_192);
+  });
+
+  test("resolves legacy model fields and safely ignores malformed persisted capability fields", () => {
+    const legacyProvider = {
+      models: [{
+        id: "legacy-vision",
+        multimodal: true,
+        maxContextLength: 131_072,
+        visionPolicy: { maxImages: 3 },
+      }],
+    };
+    assert.deepEqual(resolveProviderModelCapabilities(legacyProvider, "legacy-vision"), {
+      protocol: "openai-chat-completions",
+      inputModalities: ["text", "image"],
+      streaming: true,
+      toolCalling: true,
+      structuredOutput: true,
+      maxContextTokens: 131_072,
+      maxOutputTokens: null,
+      maxImagesPerRequest: 3,
+      roles: ["chat", "document-draft", "document-review", "vision-review", "summary"],
+    });
+
+    const malformedProvider = {
+      models: [{
+        id: "malformed-history",
+        multimodal: false,
+        maxContextLength: 65_536,
+        capabilities: {
+          protocol: "openai-chat-completions",
+          inputModalities: "image",
+          streaming: "yes",
+          maxContextTokens: "many",
+          maxOutputTokens: 4_096,
+          roles: ["not-a-real-role"],
+        },
+      }],
+    };
+    assert.doesNotThrow(() => resolveProviderModelCapabilities(malformedProvider, "malformed-history"));
+    assert.deepEqual(resolveProviderModelCapabilities(malformedProvider, "malformed-history"), {
+      protocol: "openai-chat-completions",
+      inputModalities: ["text"],
+      streaming: true,
+      toolCalling: true,
+      structuredOutput: true,
+      maxContextTokens: 65_536,
+      maxOutputTokens: 4_096,
+      maxImagesPerRequest: 0,
+      roles: ["chat", "document-draft", "document-review", "summary"],
     });
   });
 

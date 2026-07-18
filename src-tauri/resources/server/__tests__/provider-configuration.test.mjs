@@ -60,6 +60,57 @@ beforeEach(() => writeFileSync(configPath, JSON.stringify(baseConfig(), null, 2)
 after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
 describe("Provider schema v3 maintenance", () => {
+  test("imports explicit model capabilities without requiring duplicate legacy capacity fields", () => {
+    const capabilities = {
+      protocol: "openai-chat-completions",
+      inputModalities: ["text", "image"],
+      streaming: true,
+      toolCalling: true,
+      structuredOutput: true,
+      maxContextTokens: 262_144,
+      maxOutputTokens: 16_384,
+      maxImagesPerRequest: 8,
+      roles: ["chat", "document-draft", "document-review", "vision-review", "summary"],
+    };
+    const result = previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "upsertModel",
+        providerId: "company",
+        model: {
+          key: "company-next",
+          id: "model-next",
+          name: "Next",
+          presets: ["pro"],
+          capabilities,
+        },
+      }],
+    });
+
+    const imported = result.config.providers[0].models.find((model) => model.key === "company-next");
+    assert.deepEqual(imported.capabilities, capabilities);
+    assert.equal(imported.maxContextLength, undefined);
+  });
+
+  test("rejects malformed capability structure before it can be persisted", () => {
+    assert.throws(() => previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateModel",
+        providerId: "company",
+        modelKey: "company-primary",
+        changes: {
+          capabilities: {
+            protocol: "openai-chat-completions",
+            inputModalities: ["text"],
+            streaming: "sometimes",
+            roles: ["chat"],
+          },
+        },
+      }],
+    }), /capabilities.*streaming.*boolean/i);
+  });
+
   test("stable key supports API id/name changes, additions, and sync disabling", () => {
     const source = baseConfig();
     const payload = {
