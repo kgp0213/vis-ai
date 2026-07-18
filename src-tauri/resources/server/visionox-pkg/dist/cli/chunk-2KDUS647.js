@@ -195,7 +195,7 @@ var DeepSeekClient = class {
   async chat(opts) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    const signal = opts.signal ?? ctrl.signal;
+    const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
     try {
       const resp = await fetchWithRetry(
         this._fetch,
@@ -231,7 +231,7 @@ var DeepSeekClient = class {
   async *stream(opts) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    const signal = opts.signal ?? ctrl.signal;
+    const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
     let resp;
     try {
       resp = await fetchWithRetry(
@@ -272,6 +272,20 @@ var DeepSeekClient = class {
         }
         try {
           const json = JSON.parse(ev.data);
+          if (json?.error) {
+            const providerError = json.error;
+            let providerMessage = typeof providerError === "string"
+              ? providerError
+              : providerError?.message || providerError?.detail || providerError?.error;
+            if (!providerMessage) {
+              try { providerMessage = JSON.stringify(providerError); } catch { providerMessage = String(providerError); }
+            }
+            const error = new Error(`model provider stream error: ${providerMessage || "unknown provider error"}`);
+            error.name = "ModelProviderStreamError";
+            protocolError = error;
+            done = true;
+            return;
+          }
           const delta = json.choices?.[0]?.delta ?? {};
           const finishReason = json.choices?.[0]?.finish_reason ?? void 0;
           if (typeof finishReason === "string" && finishReason) lastFinishReason = finishReason;
