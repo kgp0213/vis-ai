@@ -68,6 +68,94 @@ test("model probe failures are persisted and surfaced in completed-with-warning 
   }
 });
 
+test("fresh failed verification is skipped while a passed fallback avoids probing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-persisted-verification-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const generatedBy = [];
+    let probeCalls = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "section-1", units: [{ id: "u1", location: "section 1", text: "Complete source content." }] });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [
+        {
+          providerId: "unavailable-primary",
+          modelId: "unavailable-primary",
+          role: "primary",
+          verificationStatus: "failed",
+          verificationError: "401 Unauthorized",
+          requiresProbe: false,
+        },
+        {
+          providerId: "verified-fallback",
+          modelId: "verified-fallback",
+          role: "fallback",
+          verificationStatus: "passed",
+          requiresProbe: false,
+        },
+      ],
+      probeModel: async () => { probeCalls++; return { ok: true }; },
+      generate: async ({ candidate, batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        generatedBy.push(candidate.providerId);
+        return faithful(batch.units, candidate.modelId);
+      },
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed", job.error);
+    assert.deepEqual(generatedBy, ["verified-fallback"]);
+    assert.equal(probeCalls, 0, "persisted verification results must not trigger a redundant network probe");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an untested primary model is probed only once for the whole execution", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-probe-once-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let probeCalls = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "section-1", units: [{ id: "u1", location: "section 1", text: "First complete source section." }] });
+        await onBatch({ id: "section-2", units: [{ id: "u2", location: "section 2", text: "Second complete source section." }] });
+        return { totalUnits: 2 };
+      },
+      modelCandidates: () => [{
+        providerId: "untested-primary",
+        modelId: "untested-primary",
+        role: "primary",
+        verificationStatus: "untested",
+        requiresProbe: true,
+      }],
+      probeModel: async () => { probeCalls++; return { ok: true }; },
+      generate: async ({ batch, purpose }) => purpose === "verification"
+        ? '{"pass":true,"issues":[]}'
+        : faithful(batch.units, "untested-primary"),
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    assert.equal((await store.read(accepted.id)).status, "completed");
+    assert.equal(probeCalls, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("quality warning summaries keep visual review and model service causes distinct", () => {
   const warnings = buildDocumentQualityWarnings({
     batches: [{ id: "pages-1", label: "PDF pages 1", status: "needs_review", quality: { failures: [{ type: "visual-pending" }] } }],
@@ -713,6 +801,136 @@ test("a non-retryable provider request error disables that model for the rest of
     assert.equal(job.batches[0].attempts[0].attempts, 1);
     assert.equal(job.batches[0].attempts[0].disabledForJob, true);
     assert.ok(!job.batches[1].attempts.some((attempt) => attempt.providerId === "deepseek"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resume preserves model diagnostics and does not retry a model disabled by an earlier execution", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-disabled-resume-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let sourceRound = 1;
+    let primaryDraftCalls = 0;
+    let probeCalls = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({
+          id: `section-${sourceRound}`,
+          units: [{ id: `u${sourceRound}`, location: `section ${sourceRound}`, text: `Complete source section ${sourceRound}.` }],
+        });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [
+        {
+          key: "primary-model",
+          providerId: "primary",
+          modelId: "primary",
+          role: "primary",
+          verificationStatus: "passed",
+          requiresProbe: false,
+        },
+        {
+          key: "fallback-model",
+          providerId: "fallback",
+          modelId: "fallback",
+          role: "fallback",
+          verificationStatus: "passed",
+          requiresProbe: false,
+        },
+      ],
+      probeModel: async () => { probeCalls++; return { ok: true }; },
+      generate: async ({ candidate, batch, purpose }) => {
+        if (candidate.providerId === "primary" && purpose !== "verification") {
+          primaryDraftCalls++;
+          throw new Error("401 Unauthorized: invalid API key");
+        }
+        return purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "fallback");
+      },
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    sourceRound = 2;
+    await store.update(accepted.id, { status: "interrupted", running: false, paused: true });
+    await manager.resume(accepted.id);
+    await manager.wait(accepted.id);
+
+    const resumed = await store.read(accepted.id);
+    assert.equal(resumed.status, "completed", resumed.error);
+    assert.equal(primaryDraftCalls, 1, "the disabled primary must not be retried after resume");
+    assert.equal(probeCalls, 0, "persisted passed verification must remain sufficient after resume");
+    assert.deepEqual(resumed.disabledCandidates, ["primary-model"]);
+    assert.ok(resumed.modelDiagnostics.some((entry) => entry.providerId === "primary" && entry.category === "authentication"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a fresh passed verification clears an older verification circuit on resume", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-reverified-resume-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let sourceRound = 1;
+    let verificationStatus = "failed";
+    let primaryDraftCalls = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({
+          id: `section-${sourceRound}`,
+          units: [{ id: `u${sourceRound}`, location: `section ${sourceRound}`, text: `Complete source section ${sourceRound}.` }],
+        });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [
+        {
+          key: "reverified-primary",
+          configFingerprint: "stable-config",
+          providerId: "primary",
+          modelId: "primary",
+          role: "primary",
+          verificationStatus,
+          verificationError: verificationStatus === "failed" ? "verification timed out" : null,
+          verificationCheckedAt: verificationStatus === "failed" ? "2026-07-18T09:00:00.000Z" : "2026-07-18T10:00:00.000Z",
+          requiresProbe: false,
+        },
+        {
+          key: "verified-fallback",
+          configFingerprint: "fallback-config",
+          providerId: "fallback",
+          modelId: "fallback",
+          role: "fallback",
+          verificationStatus: "passed",
+          requiresProbe: false,
+        },
+      ],
+      generate: async ({ candidate, batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        if (candidate.providerId === "primary") primaryDraftCalls++;
+        return faithful(batch.units, candidate.modelId);
+      },
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    sourceRound = 2;
+    verificationStatus = "passed";
+    await store.update(accepted.id, { status: "interrupted", running: false, paused: true });
+    await manager.resume(accepted.id);
+    await manager.wait(accepted.id);
+
+    const resumed = await store.read(accepted.id);
+    assert.equal(resumed.status, "completed", resumed.error);
+    assert.equal(primaryDraftCalls, 1, "a newly verified primary should be eligible after resume");
+    assert.deepEqual(resumed.disabledCandidates, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
