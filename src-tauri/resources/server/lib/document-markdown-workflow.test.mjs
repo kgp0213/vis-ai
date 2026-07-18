@@ -762,6 +762,54 @@ test("truncated model output splits immediately instead of retrying the same bat
   }
 });
 
+test("context window errors split the batch without permanently disabling the model", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-context-overflow-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const draftCalls = [];
+    const units = Array.from({ length: 4 }, (_value, index) => ({
+      id: `u${index + 1}`,
+      location: `section ${index + 1}`,
+      text: `Complete source section ${index + 1}.`,
+    }));
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "batch-all", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        draftCalls.push(batch.units.length);
+        if (batch.units.length > 1) {
+          throw new Error("400 context_length_exceeded: maximum context window reached");
+        }
+        return faithful(batch.units, "qwen");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      policy: { maxRetries: 1, maxSplitDepth: 4, maxModelCallsPerBatch: 100 },
+    });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed", job.error);
+    assert.equal(draftCalls.filter((size) => size === 4).length, 1);
+    assert.equal(draftCalls.filter((size) => size === 2).length, 2);
+    assert.equal(draftCalls.filter((size) => size === 1).length, 4);
+    assert.deepEqual(job.disabledCandidates ?? [], []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a non-retryable provider request error disables that model for the rest of the job", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-provider-disable-"));
   try {
