@@ -889,6 +889,7 @@ export function createDocumentMarkdownManager(options = {}) {
     let attempts = 0;
     let reviewRepairs = 0;
     const errors = [];
+    const failureCategories = new Set();
     for (let attempt = 0; attempt <= candidatePolicy.maxRetries; attempt++) {
       await waitForTurn(runtime);
       const modelCall = reserveModelCall(runtime, budget, {
@@ -945,10 +946,13 @@ export function createDocumentMarkdownManager(options = {}) {
       } catch (error) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
         errors.push(String(error?.message || error).slice(0, 500));
+        const category = classifyDocumentModelError(error).category;
+        failureCategories.add(category);
         if (isNonRetryableDocumentModelError(error)) {
           runtime.disabledCandidates.add(candidateKey(candidate));
           break;
         }
+        if (category === "output_truncated") break;
         continue;
       }
       lastSection = section;
@@ -965,11 +969,11 @@ export function createDocumentMarkdownManager(options = {}) {
       }
       lastReview = await requestReview(candidate, batch, section, runtime, budget, candidatePolicy);
       errors.push(...(lastReview.errors ?? []));
-      if (lastReview.pass) return { passed: true, section, quality: lastQuality, review: lastReview, attempts, candidate, errors };
+      if (lastReview.pass) return { passed: true, section, quality: lastQuality, review: lastReview, attempts, candidate, errors, failureCategories: [...failureCategories] };
       if (lastReview.unavailable || reviewRepairs >= 1) break;
       reviewRepairs++;
     }
-    return { passed: false, section: lastSection, quality: lastQuality, review: lastReview, attempts, candidate, errors };
+    return { passed: false, section: lastSection, quality: lastQuality, review: lastReview, attempts, candidate, errors, failureCategories: [...failureCategories] };
   }
 
   async function candidateAvailable(candidate, runtime, batch = null) {
@@ -1005,6 +1009,8 @@ export function createDocumentMarkdownManager(options = {}) {
   function canSplitResult(result) {
     const types = new Set((result?.quality?.failures ?? []).map((failure) => failure.type));
     if (["coverage", "length-retention", "technical-value-retention"].some((type) => types.has(type))) return true;
+    const categories = new Set(result?.failureCategories ?? []);
+    if (categories.has("output_truncated") || categories.has("timeout")) return true;
     return (result?.errors ?? []).some((message) => /timeout|timed out|deadline|总时长上限/i.test(message));
   }
 
@@ -1367,6 +1373,7 @@ export function createDocumentMarkdownManager(options = {}) {
         sourceFingerprint: sourceFingerprint ?? previous.sourceFingerprint ?? null,
       });
       const priorBatches = new Map((previous.batches ?? []).map((batch) => [batch.id, batch]));
+      const activeBatchIds = new Set();
       const sectionSummaries = [];
       let batchIndex = 0;
       let degraded = false;
@@ -1393,6 +1400,7 @@ export function createDocumentMarkdownManager(options = {}) {
         onBatch: async (value) => {
           await waitForTurn(runtime);
           const batch = normalizeBatch(value, batchIndex++);
+          activeBatchIds.add(batch.id);
           const prior = priorBatches.get(batch.id);
           const retryFailed = runtime.retryFailed === true;
           const recovered = !retryFailed || prior?.status === "completed"
@@ -1435,7 +1443,21 @@ export function createDocumentMarkdownManager(options = {}) {
       });
 
       await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
-      const current = await store.read(runtime.id);
+      let current = await store.read(runtime.id);
+      const staleBatches = current.batches.filter((batch) => !activeBatchIds.has(batch.id));
+      if (staleBatches.length > 0) {
+        const batches = current.batches.filter((batch) => activeBatchIds.has(batch.id));
+        await emit(runtime.id, {
+          batches,
+          modelHistory: batches.flatMap((batch) => batch.attempts ?? []),
+        });
+        await store.appendEvent?.(runtime.id, {
+          type: "stale-batches-pruned",
+          count: staleBatches.length,
+          batchIds: staleBatches.map((batch) => batch.id),
+        }).catch((error) => reportPersistenceError(runtime, error, "stale-batches-event"));
+        current = await store.read(runtime.id);
+      }
       const totalUnits = Number(sourceSummary?.totalUnits) || current.batches.reduce((sum, batch) => sum + (batch.unitIds?.length ?? 0), 0);
       if (Number.isFinite(Number(sourceSummary?.selectedPages)) && Number(sourceSummary.selectedPages) !== Number(sourceSummary.processedPages)) {
         throw new Error(`document extraction stopped after ${sourceSummary.processedPages} of ${sourceSummary.selectedPages} selected pages`);
@@ -1740,7 +1762,7 @@ export function createDocumentMarkdownManager(options = {}) {
     const storedPolicy = normalizeDocumentPolicy(job.policy);
     const candidates = options.modelCandidates?.(storedPolicy) ?? [];
     if (candidates.length === 0) throw new Error("no document model is configured");
-    const policy = effectiveDocumentPolicy(storedPolicy, candidates);
+    const policy = storedPolicy;
     const policyTrace = documentPolicyTrace(storedPolicy, policy, candidates);
     let resolveCompletion;
     const completion = new Promise((resolve) => { resolveCompletion = resolve; });
