@@ -162,6 +162,65 @@ function unitManifest(units) {
   });
 }
 
+const SOURCE_PLAN_POLICY_FIELDS = [
+  "batchInputTokens",
+  "maxUnitsPerBatch",
+  "maxVisualUnitsPerBatch",
+  "semanticBatching",
+  "contextOverlapTokens",
+];
+
+function sourcePlanPolicy(policy) {
+  return Object.fromEntries(SOURCE_PLAN_POLICY_FIELDS.map((field) => [field, policy?.[field] ?? null]));
+}
+
+function sourcePlanBatch(batch) {
+  return {
+    id: String(batch?.id ?? ""),
+    index: Number(batch?.index) || 0,
+    label: String(batch?.label ?? ""),
+    unitIds: Array.isArray(batch?.unitIds) ? batch.unitIds.map(String) : [],
+    unitManifest: unitManifest(batch?.units ?? []),
+  };
+}
+
+function hashSourcePlan(plan) {
+  const stable = {
+    schemaVersion: 1,
+    sourceFingerprint: plan?.sourceFingerprint ?? null,
+    planningPolicy: plan?.planningPolicy ?? null,
+    batches: (Array.isArray(plan?.batches) ? plan.batches : [])
+      .slice()
+      .sort((left, right) => (Number(left.index) || 0) - (Number(right.index) || 0))
+      .map((batch) => ({
+        id: batch.id,
+        index: batch.index,
+        unitIds: batch.unitIds,
+        unitManifest: batch.unitManifest,
+      })),
+  };
+  return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
+}
+
+function executionEpochSnapshot(jobId, sequence, reason, candidates, sourcePlanHash = null, inheritedModelCallCount = 0) {
+  return {
+    id: `${jobId}:${sequence}`,
+    sequence,
+    reason,
+    startedAt: new Date().toISOString(),
+    sourcePlanHash: sourcePlanHash || null,
+    inheritedModelCallCount: Number(inheritedModelCallCount) || 0,
+    candidates: (Array.isArray(candidates) ? candidates : []).map((candidate) => ({
+      providerId: candidate?.providerId ?? null,
+      modelId: candidate?.modelId ?? null,
+      role: candidate?.role ?? null,
+      configFingerprint: candidate?.configFingerprint ?? null,
+      verificationStatus: candidate?.verificationStatus ?? null,
+      documentPolicy: candidate?.documentPolicy ?? null,
+    })),
+  };
+}
+
 function batchRecordMatches(record, batch) {
   if (!record || record.id !== batch.id) return false;
   const expected = unitManifest(batch.units);
@@ -1470,8 +1529,14 @@ export function createDocumentMarkdownManager(options = {}) {
         modelDiagnostics: persistedModelDiagnostics(runtime),
         disabledCandidates: persistedDisabledCandidates(runtime),
         disabledCandidateDetails: persistedDisabledCandidateDetails(runtime),
+        executionEpoch: runtime.executionEpoch ?? null,
       });
-      await store.appendEvent?.(runtime.id, { type: "execution-started", retryFailed: runtime.retryFailed === true })
+      await store.appendEvent?.(runtime.id, {
+        type: "execution-started",
+        retryFailed: runtime.retryFailed === true,
+        epochId: runtime.executionEpoch?.id ?? null,
+        sourcePlanHash: runtime.executionEpoch?.sourcePlanHash ?? null,
+      })
         .catch((error) => reportPersistenceError(runtime, error, "execution-event"));
       const prepareInput = Array.isArray(runtime.input.sourcePaths) && runtime.input.sourcePaths.length > 0
         ? runtime.input.sourcePaths
@@ -1496,6 +1561,21 @@ export function createDocumentMarkdownManager(options = {}) {
         });
         return;
       }
+      const effectiveSourceFingerprint = sourceFingerprint ?? previous.sourceFingerprint ?? null;
+      const priorSourcePlan = previous.sourcePlan?.schemaVersion === 1 ? previous.sourcePlan : null;
+      const sourcePlanBatches = new Map((priorSourcePlan?.batches ?? []).map((batch) => [batch.id, batch]));
+      runtime.sourcePlan = {
+        schemaVersion: 1,
+        status: "planning",
+        sourceFingerprint: effectiveSourceFingerprint,
+        planningPolicy: sourcePlanPolicy(runtime.policy),
+        batches: [...sourcePlanBatches.values()],
+        totalUnits: priorSourcePlan?.totalUnits ?? null,
+        totalBatches: priorSourcePlan?.totalBatches ?? null,
+        planHash: priorSourcePlan?.planHash ?? null,
+        createdAt: priorSourcePlan?.createdAt ?? new Date().toISOString(),
+        completedAt: null,
+      };
       await emit(runtime.id, {
         sourcePath: prepared.sourcePath || runtime.input.sourcePath,
         sourcePaths: Array.isArray(prepared.sources) && prepared.sources.length > 0
@@ -1504,7 +1584,8 @@ export function createDocumentMarkdownManager(options = {}) {
         readablePath: prepared.readablePath || prepared.sourcePath || runtime.input.sourcePath,
         sourceKind: prepared.documentKind || runtime.contract.format,
         sourceCount: Array.isArray(prepared.sources) && prepared.sources.length > 0 ? prepared.sources.length : 1,
-        sourceFingerprint: sourceFingerprint ?? previous.sourceFingerprint ?? null,
+        sourceFingerprint: effectiveSourceFingerprint,
+        sourcePlan: runtime.sourcePlan,
       });
       const priorBatches = new Map((previous.batches ?? []).map((batch) => [batch.id, batch]));
       const activeBatchIds = new Set();
@@ -1519,6 +1600,14 @@ export function createDocumentMarkdownManager(options = {}) {
         captureVisuals: runtime.candidates.some((candidate) => candidate.multimodal === true),
         pages: runtime.input.pages,
         onPlan: async (plan = {}) => {
+          runtime.sourcePlan = {
+            ...runtime.sourcePlan,
+            status: "planning",
+            totalUnits: Number(plan.totalUnits) || runtime.sourcePlan.totalUnits || null,
+            totalBatches: Number(plan.totalBatches) || runtime.sourcePlan.totalBatches || null,
+            batches: [...sourcePlanBatches.values()].sort((left, right) => left.index - right.index),
+          };
+          await queueEmit(runtime, { sourcePlan: runtime.sourcePlan });
           await updateProgress(runtime, {
           totalUnits: Number(plan.totalUnits) || null,
           totalBatches: Number(plan.totalBatches) || null,
@@ -1535,6 +1624,12 @@ export function createDocumentMarkdownManager(options = {}) {
           await waitForTurn(runtime);
           const batch = normalizeBatch(value, batchIndex++);
           activeBatchIds.add(batch.id);
+          sourcePlanBatches.set(batch.id, sourcePlanBatch(batch));
+          runtime.sourcePlan = {
+            ...runtime.sourcePlan,
+            batches: [...sourcePlanBatches.values()].sort((left, right) => left.index - right.index),
+          };
+          await queueEmit(runtime, { sourcePlan: runtime.sourcePlan });
           const prior = priorBatches.get(batch.id);
           const retryFailed = runtime.retryFailed === true;
           const recovered = !retryFailed || prior?.status === "completed"
@@ -1592,6 +1687,30 @@ export function createDocumentMarkdownManager(options = {}) {
         }).catch((error) => reportPersistenceError(runtime, error, "stale-batches-event"));
         current = await store.read(runtime.id);
       }
+      const finalizedPlan = {
+        ...runtime.sourcePlan,
+        status: "completed",
+        batches: [...sourcePlanBatches.values()]
+          .filter((batch) => activeBatchIds.has(batch.id))
+          .sort((left, right) => left.index - right.index),
+        totalUnits: Number(sourceSummary?.totalUnits) || runtime.sourcePlan?.totalUnits || null,
+        totalBatches: Number(sourceSummary?.batches) || runtime.sourcePlan?.totalBatches || activeBatchIds.size,
+        completedAt: new Date().toISOString(),
+      };
+      finalizedPlan.planHash = hashSourcePlan(finalizedPlan);
+      runtime.sourcePlan = finalizedPlan;
+      runtime.executionEpoch = {
+        ...(runtime.executionEpoch ?? {}),
+        sourcePlanHash: finalizedPlan.planHash,
+      };
+      await queueEmit(runtime, { sourcePlan: finalizedPlan, executionEpoch: runtime.executionEpoch });
+      await store.appendEvent?.(runtime.id, {
+        type: "source-plan-finalized",
+        planHash: finalizedPlan.planHash,
+        totalUnits: finalizedPlan.totalUnits,
+        totalBatches: finalizedPlan.totalBatches,
+        epochId: runtime.executionEpoch?.id ?? null,
+      }).catch((error) => reportPersistenceError(runtime, error, "source-plan-event"));
       const totalUnits = Number(sourceSummary?.totalUnits) || current.batches.reduce((sum, batch) => sum + (batch.unitIds?.length ?? 0), 0);
       if (Number.isFinite(Number(sourceSummary?.selectedPages)) && Number(sourceSummary.selectedPages) !== Number(sourceSummary.processedPages)) {
         throw new Error(`document extraction stopped after ${sourceSummary.processedPages} of ${sourceSummary.selectedPages} selected pages`);
@@ -1859,7 +1978,10 @@ export function createDocumentMarkdownManager(options = {}) {
       policy,
       policyTrace,
     });
+    const executionEpoch = executionEpochSnapshot(job.id, 1, "start", candidates, null, 0);
+    await store.update(job.id, { executionEpoch });
     await store.appendEvent?.(job.id, { type: "policy-selected", ...policyTrace }).catch(() => {});
+    await store.appendEvent?.(job.id, { type: "execution-epoch-started", epochId: executionEpoch.id, sequence: executionEpoch.sequence, reason: executionEpoch.reason }).catch(() => {});
     options.onPolicy?.(job.id, policyTrace);
     let resolveCompletion;
     const completion = new Promise((resolve) => { resolveCompletion = resolve; });
@@ -1870,6 +1992,8 @@ export function createDocumentMarkdownManager(options = {}) {
       policy,
       contract,
       candidates,
+      sourcePlan: null,
+      executionEpoch,
       modelCallCount: 0,
       modelDiagnostics: new Map(),
       controller: new AbortController(),
@@ -1900,6 +2024,15 @@ export function createDocumentMarkdownManager(options = {}) {
     if (candidates.length === 0) throw new Error("no document model is configured");
     const policy = storedPolicy;
     const policyTrace = documentPolicyTrace(storedPolicy, policy, candidates);
+    const executionEpoch = executionEpochSnapshot(
+      id,
+      (Number(job.executionEpoch?.sequence) || 0) + 1,
+      "resume",
+      candidates,
+      job.sourcePlan?.planHash ?? null,
+      job.modelCallCount,
+    );
+    await store.update(id, { executionEpoch });
     let resolveCompletion;
     const completion = new Promise((resolve) => { resolveCompletion = resolve; });
     completions.set(id, completion);
@@ -1919,6 +2052,8 @@ export function createDocumentMarkdownManager(options = {}) {
       policy,
       contract: job.contract ?? buildDocumentContract({ sourcePath: job.sourcePath, outputPath: job.outputPath }),
       candidates,
+      sourcePlan: job.sourcePlan ?? null,
+      executionEpoch,
       modelCallCount: Number(job.modelCallCount) || (job.batches ?? []).reduce((sum, batch) => sum + (Number(batch.modelCalls) || 0), 0),
       modelDiagnostics: modelDiagnosticMap(job.modelDiagnostics),
       controller: new AbortController(),
@@ -1933,8 +2068,8 @@ export function createDocumentMarkdownManager(options = {}) {
       resolve: resolveCompletion,
     };
     try {
-      await emit(id, { status: "queued", running: false, paused: false, error: null, policy, policyTrace });
-      await store.appendEvent?.(id, { type: "resume-requested", retryFailed, ...policyTrace }).catch(() => {});
+      await emit(id, { status: "queued", running: false, paused: false, error: null, policy, policyTrace, executionEpoch });
+      await store.appendEvent?.(id, { type: "resume-requested", retryFailed, epochId: executionEpoch.id, sourcePlanHash: executionEpoch.sourcePlanHash, ...policyTrace }).catch(() => {});
       options.onPolicy?.(id, policyTrace);
     } catch (error) {
       completions.delete(id);

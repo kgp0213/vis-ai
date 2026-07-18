@@ -174,6 +174,8 @@ export function createDocumentJobStore(rootDir, options = {}) {
       contract: clone(input.contract ?? null),
       policy: clone(input.policy ?? null),
       policyTrace: clone(input.policyTrace ?? null),
+      sourcePlan: clone(input.sourcePlan ?? null),
+      executionEpoch: clone(input.executionEpoch ?? null),
       progress: { completedUnits: 0, totalUnits: null, completedBatches: 0, totalBatches: null },
       batches: [],
       modelHistory: [],
