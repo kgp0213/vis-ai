@@ -623,6 +623,57 @@ test("an oversized failed primary batch is split only when handed to a weaker fa
   }
 });
 
+test("truncated model output splits immediately instead of retrying the same batch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-truncated-split-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const draftCalls = [];
+    const units = Array.from({ length: 4 }, (_value, index) => ({
+      id: `u${index + 1}`,
+      location: `section ${index + 1}`,
+      text: `Complete source section ${index + 1} with value ${index + 1}.`,
+    }));
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "batch-all", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose, maxTokens }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        draftCalls.push({ batchId: batch.id, units: batch.units.length, maxTokens });
+        if (batch.units.length > 1) {
+          throw Object.assign(new Error("model output reached the configured limit and was truncated"), {
+            name: "DocumentModelOutputTruncatedError",
+            code: "output_truncated",
+          });
+        }
+        return faithful(batch.units, "qwen");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      policy: { maxRetries: 4, maxSplitDepth: 4, maxModelCallsPerBatch: 100 },
+    });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed", job.error);
+    assert.equal(draftCalls.filter((call) => call.units === 4).length, 1, "the same truncated parent request must not be retried");
+    assert.equal(draftCalls.filter((call) => call.units === 2).length, 2, "each truncated child is split once");
+    assert.equal(draftCalls.filter((call) => call.units === 1).length, 4);
+    assert.equal(job.batches[0].quality.split, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a non-retryable provider request error disables that model for the rest of the job", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-provider-disable-"));
   try {
@@ -816,6 +867,120 @@ test("resume adopts a durable batch checkpoint instead of calling the model agai
     assert.equal((await store.read(job.id)).status, "completed");
     assert.match(await readFile(output, "utf8"), /Complete source text/);
     assert.ok((await store.readEvents(job.id)).some((event) => event.type === "batch-recovered" && event.source === "checkpoint"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resume keeps the stored source plan while a smaller current model splits only its execution window", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-resume-plan-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const storedPolicy = {
+      batchInputTokens: 12_000,
+      batchOutputTokens: 8_192,
+      maxUnitsPerBatch: 10,
+      maxRetries: 0,
+      maxSplitDepth: 4,
+      maxModelCallsPerBatch: 100,
+    };
+    const job = await store.create({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      workspaceRoot: root,
+      contract: { fidelity: "complete-with-summary", format: "markdown" },
+      policy: storedPolicy,
+    });
+    await store.update(job.id, { status: "interrupted", paused: true });
+    let sourcePlanningPolicy = null;
+    const draftSizes = [];
+    const units = Array.from({ length: 4 }, (_value, index) => ({
+      id: `u${index + 1}`,
+      location: `section ${index + 1}`,
+      text: `Complete source section ${index + 1}.`,
+    }));
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { policy, onBatch }) => {
+        sourcePlanningPolicy = policy;
+        await onBatch({ id: "source-parent", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [{
+        providerId: "new-small-model",
+        modelId: "new-small-model",
+        role: "primary",
+        documentPolicy: { batchInputTokens: 3_000, maxUnitsPerBatch: 2 },
+      }],
+      generate: async ({ batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        draftSizes.push(batch.units.length);
+        return faithful(batch.units, "new-small-model");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    await manager.resume(job.id);
+    await manager.wait(job.id);
+    const resumed = await store.read(job.id);
+    assert.equal(resumed.status, "completed", resumed.error);
+    assert.equal(sourcePlanningPolicy.maxUnitsPerBatch, 10, "resume must preserve the stored source batch plan");
+    assert.equal(resumed.policy.maxUnitsPerBatch, 10);
+    assert.deepEqual(draftSizes, [2, 2], "the current model policy applies only inside the parent execution window");
+    assert.deepEqual(resumed.batches.map((batch) => batch.id), ["source-parent"]);
+    assert.deepEqual(resumed.batches[0].unitIds, units.map((unit) => unit.id));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resume removes stale manifest batches that are absent from the current source plan", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-stale-plan-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const job = await store.create({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      workspaceRoot: root,
+      contract: { fidelity: "complete-with-summary", format: "markdown" },
+      policy: { maxRetries: 0 },
+    });
+    await store.update(job.id, {
+      status: "interrupted",
+      paused: true,
+      batches: [
+        { id: "old-plan-a", index: 1, status: "completed", sectionId: "old-plan-a", unitIds: ["old-1", "old-2"] },
+        { id: "old-plan-b", index: 2, status: "completed", sectionId: "old-plan-b", unitIds: ["old-3", "old-4"] },
+      ],
+    });
+    const currentUnits = [
+      { id: "u1", location: "section 1", text: "Current source section one." },
+      { id: "u2", location: "section 2", text: "Current source section two." },
+    ];
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "current-plan", units: currentUnits });
+        return { totalUnits: currentUnits.length };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "qwen"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    await manager.resume(job.id);
+    await manager.wait(job.id);
+    const resumed = await store.read(job.id);
+    assert.equal(resumed.status, "completed", resumed.error);
+    assert.deepEqual(resumed.batches.map((batch) => batch.id), ["current-plan"]);
+    assert.equal(resumed.progress.totalUnits, currentUnits.length);
+    assert.ok((await store.readEvents(job.id)).some((event) => event.type === "stale-batches-pruned" && event.count === 2));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
