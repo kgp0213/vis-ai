@@ -351,15 +351,21 @@ async function handleBackgroundJobs(method, rest, body, ctx) {
     const rawId = decodeURIComponent(rest[0]);
     if (!rawId.startsWith("document:") || !ctx.controlBackgroundJob) return { status: 400, body: { error: "document background job id required" } };
     const action = String(parseBody(body).action || "").trim();
-    if (!["pause", "resume", "retry", "cancel"].includes(action)) return { status: 400, body: { error: "invalid document job action" } };
+    if (!["pause", "resume", "retry", "stop", "cancel", "abandon"].includes(action)) return { status: 400, body: { error: "invalid document job action" } };
     const result = await ctx.controlBackgroundJob(rawId, action);
     return { status: result?.ok === false ? 409 : 200, body: result };
   }
   if (method === "DELETE" && rest.length === 1) {
-    if (!ctx.stopBackgroundJob) return { status: 503, body: { error: "background job control is not available" } };
     const rawId = decodeURIComponent(rest[0]);
     const id = rawId.startsWith("document:") ? rawId : Number.parseInt(rawId, 10);
     if (!(rawId.startsWith("document:") || Number.isInteger(id) && id >= 1)) return { status: 400, body: { error: "invalid background job id" } };
+    if (rawId.startsWith("document:")) {
+      if (!ctx.controlBackgroundJob) return { status: 503, body: { error: "document background job control is not available" } };
+      const result = await ctx.controlBackgroundJob(rawId, "delete");
+      ctx.audit?.({ ts: Date.now(), action: "background-job-delete-record", payload: { id } });
+      return { status: result?.ok === false ? 409 : 200, body: result };
+    }
+    if (!ctx.stopBackgroundJob) return { status: 503, body: { error: "background job control is not available" } };
     const job = await ctx.stopBackgroundJob(id);
     if (!job) return { status: 404, body: { error: "background job not found" } };
     ctx.audit?.({ ts: Date.now(), action: "background-job-stop", payload: { id } });

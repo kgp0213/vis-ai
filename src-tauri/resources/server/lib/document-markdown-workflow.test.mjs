@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { createDocumentJobStore } from "./document-job-store.mjs";
+import { buildDocumentContract } from "./document-intelligence.mjs";
 import { createDocumentMarkdownManager } from "./document-markdown-workflow.mjs";
 
 function faithful(units, model) {
@@ -183,7 +184,46 @@ test("unrecoverable model output keeps source text, marks degraded quality, and 
   }
 });
 
-test("a queued document job can be cancelled without leaking its completion", async () => {
+test("document work yields the provider lane to scheduled tasks and resumes automatically", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-provider-lane-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let providerBusy = true;
+    let waitingNotified = false;
+    const manager = createDocumentMarkdownManager({
+      store,
+      foregroundPollMs: 5,
+      isForegroundBusy: () => false,
+      isProviderBusy: () => providerBusy,
+      onWaitingForProvider: () => { waitingNotified = true; },
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "b1", units: [{ id: "u1", location: "section", text: "Complete source text." }] });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "qwen"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal((await store.read(accepted.id)).status, "waiting_provider");
+    assert.equal(waitingNotified, true);
+    assert.equal(manager.activeCount(), 1);
+    assert.equal(manager.isProviderBusy(), true);
+    const listed = await manager.listMetadata();
+    assert.equal(listed[0]?.documentJobId, accepted.id);
+    providerBusy = false;
+    await manager.wait(accepted.id);
+    assert.equal((await store.read(accepted.id)).status, "completed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a queued document job can be stopped without losing its resumable record", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-cancel-"));
   try {
     const store = createDocumentJobStore(join(root, "jobs"));
@@ -214,13 +254,48 @@ test("a queued document job can be cancelled without leaking its completion", as
     const first = await manager.start({ sourcePath: "first.md", outputPath: join(root, "first-output.md") });
     await firstStarted;
     const second = await manager.start({ sourcePath: "second.md", outputPath: join(root, "second-output.md") });
-    const cancelled = await manager.control(second.id, "cancel");
-    assert.equal(cancelled.cancelled, true);
-    assert.equal((await manager.wait(second.id)).status, "cancelled");
+    const stopped = await manager.control(second.id, "stop");
+    assert.equal(stopped.stopped, true);
+    assert.equal((await manager.wait(second.id)).status, "stopped");
+    assert.equal((await store.read(second.id)).paused, true);
     assert.equal(extractionCalls, 1);
 
     releaseFirst();
     await manager.wait(first.id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("abandon and delete-record are distinct and never remove source or final output files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-lifecycle-"));
+  const source = join(root, "source.md");
+  const output = join(root, "output.md");
+  try {
+    await import("node:fs/promises").then(({ writeFile }) => Promise.all([
+      writeFile(source, "source", "utf8"),
+      writeFile(output, "output", "utf8"),
+    ]));
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const job = await store.create({ sourcePath: source, outputPath: output });
+    await store.update(job.id, { status: "stopped", running: false, paused: true });
+    const manager = createDocumentMarkdownManager({
+      store,
+      prepareDocument: async () => ({ ok: false }),
+      processSourceBatches: async () => ({}),
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async () => "",
+      writeOutput: async () => {},
+    });
+
+    const abandoned = await manager.control(job.id, "abandon");
+    assert.equal(abandoned.abandoned, true);
+    assert.equal((await store.read(job.id)).status, "abandoned");
+    const deleted = await manager.control(job.id, "delete");
+    assert.equal(deleted.deleted, true);
+    await assert.rejects(() => store.read(job.id), /invalid document job manifest/);
+    assert.equal(await readFile(source, "utf8"), "source");
+    assert.equal(await readFile(output, "utf8"), "output");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -385,7 +460,7 @@ test("large document summaries are reduced hierarchically instead of one oversiz
   }
 });
 
-test("fallback weak-model policy constrains extraction even when the primary model has no document policy", async () => {
+test("fallback weak-model policy does not constrain primary extraction", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-policy-"));
   try {
     const store = createDocumentJobStore(join(root, "jobs"));
@@ -413,14 +488,69 @@ test("fallback weak-model policy constrains extraction even when the primary mod
     const accepted = await manager.start({ sourcePath: "manual.pdf", outputPath: join(root, "result.md") });
     await manager.wait(accepted.id);
     const job = await store.read(accepted.id);
-    assert.equal(receivedPolicy.batchInputTokens, 3000);
-    assert.equal(receivedPolicy.maxUnitsPerBatch, 8);
-    assert.equal(job.policy.batchInputTokens, 3000);
-    assert.equal(job.policyTrace.effective.batchInputTokens, 3000);
+    assert.equal(receivedPolicy.batchInputTokens, 8000);
+    assert.equal(receivedPolicy.maxUnitsPerBatch, 20);
+    assert.equal(job.policy.batchInputTokens, 8000);
+    assert.equal(job.policyTrace.effective.batchInputTokens, 8000);
     assert.equal(job.policyTrace.candidates.find((candidate) => candidate.providerId === "qwen").hasDocumentPolicy, true);
-    assert.ok((await store.readEvents(job.id)).some((event) => event.type === "policy-selected" && event.effective.batchInputTokens === 3000));
+    assert.ok((await store.readEvents(job.id)).some((event) => event.type === "policy-selected" && event.effective.batchInputTokens === 8000));
     assert.equal(job.progress.totalUnits, 1);
     assert.equal(job.progress.unitLabel, "页");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an oversized failed primary batch is split only when handed to a weaker fallback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-fallback-split-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const calls = [];
+    const units = Array.from({ length: 12 }, (_value, index) => ({
+      id: `u${index + 1}`,
+      location: `section ${index + 1}`,
+      text: `Complete source section ${index + 1}.`,
+    }));
+    const manager = createDocumentMarkdownManager({
+      store,
+      countTokens: (text) => Math.ceil(String(text).length / 4),
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { policy, onBatch }) => {
+        assert.equal(policy.maxUnitsPerBatch, 20);
+        await onBatch({ id: "batch-all", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [
+        { key: "strong", providerId: "strong", modelId: "strong", role: "primary" },
+        { key: "weak", providerId: "weak", modelId: "weak", role: "fallback", documentPolicy: { batchInputTokens: 3000, maxUnitsPerBatch: 8 } },
+      ],
+      probeModel: async () => true,
+      generate: async ({ candidate, batch, purpose }) => {
+        calls.push({ provider: candidate.providerId, units: batch.units.length, purpose });
+        if (candidate.providerId === "strong") throw new Error("temporary upstream failure");
+        return purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "weak");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      policy: { maxRetries: 0, maxSplitDepth: 3, maxModelCallsPerBatch: 24 },
+    });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed", job.error);
+    assert.deepEqual(calls.filter((call) => call.provider === "strong").map((call) => call.units), [12]);
+    assert.ok(calls.filter((call) => call.provider === "weak" && call.purpose !== "verification").every((call) => call.units <= 8));
+    const events = await store.readEvents(job.id, 1000);
+    assert.ok(events.some((event) => event.type === "fallback-batch-split" && event.providerId === "weak"));
+    assert.equal(job.modelCallCount, calls.length + 1, "summary generation is included in the task-wide model call count");
+    assert.equal(events.filter((event) => event.type === "model-call-started").length, job.modelCallCount);
+    assert.equal(events.filter((event) => ["model-call-completed", "model-call-failed"].includes(event.type)).length, job.modelCallCount);
+    assert.equal((await manager.getMetadata(job.id)).progress.taskModelCalls, job.modelCallCount);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -754,6 +884,151 @@ test("a failed best-effort progress heartbeat cannot terminate the document work
     await manager.wait(accepted.id);
     assert.equal((await baseStore.read(accepted.id)).status, "completed");
     assert.deepEqual(persistenceErrors, ["EPERM"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a source change before final commit preserves the draft and pauses the task", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-source-change-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let fingerprintCalls = 0;
+    let outputWrites = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      fingerprintSource: async () => fingerprintCalls++ === 0
+        ? [{ path: "manual.md", size: 10, mtimeMs: 1, sha256: "a".repeat(64) }]
+        : [{ path: "manual.md", size: 11, mtimeMs: 2, sha256: "b".repeat(64) }],
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "b1", units: [{ id: "u1", location: "section", text: "Complete source text." }] });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "qwen"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => { outputWrites++; },
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "source_changed");
+    assert.equal(job.paused, true);
+    assert.equal(outputWrites, 0);
+    assert.equal(job.batches.length, 1, "completed draft checkpoints remain available");
+    assert.ok((await store.readEvents(job.id)).some((event) => event.type === "source-changed" && event.stage === "before-output"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a duplicate completed task is reused without another model call", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-idempotent-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let generationCalls = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "b1", units: [{ id: "u1", location: "section", text: "Complete source text." }] });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => {
+        generationCalls++;
+        return purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "qwen");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+    const input = {
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      taskFingerprint: "same-task",
+    };
+    const first = await manager.start(input);
+    await manager.wait(first.id);
+    const callsAfterFirstRun = generationCalls;
+    const duplicate = await manager.start(input);
+
+    assert.equal(duplicate.accepted, false);
+    assert.equal(duplicate.reused, true);
+    assert.equal(duplicate.completed, true);
+    assert.equal(duplicate.id, first.id);
+    assert.equal(generationCalls, callsAfterFirstRun);
+    assert.equal((await store.list()).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("collection workflow preserves source list and audits the complete collection before commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-collection-workflow-"));
+  const first = join(root, "first.md");
+  const second = join(root, "second.md");
+  const output = join(root, "report.md");
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const prepared = {
+      ok: true,
+      documentKind: "collection",
+      sourcePath: first,
+      readablePath: first,
+      sources: [
+        { sourcePath: first, readablePath: first, documentKind: "markdown" },
+        { sourcePath: second, readablePath: second, documentKind: "markdown" },
+      ],
+    };
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => prepared,
+      fingerprintSource: async () => [
+        { path: first, size: 10, mtimeMs: 1, sha256: "a".repeat(64) },
+        { path: second, size: 11, mtimeMs: 1, sha256: "b".repeat(64) },
+      ],
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "source-001-b1", label: "first.md · section", units: [{ id: "source-001-u1", location: "first.md > section", text: "First source complete." }] });
+        await onBatch({ id: "source-002-b1", label: "second.md · section", units: [{ id: "source-002-u1", location: "second.md > section", text: "Second source complete." }] });
+        return {
+          totalUnits: 2,
+          batches: 2,
+          sourceSummaries: [
+            { sourceId: "source-001", sourcePath: first, sourceName: "first.md", documentKind: "markdown", totalUnits: 1 },
+            { sourceId: "source-002", sourcePath: second, sourceName: "second.md", documentKind: "markdown", totalUnits: 1 },
+          ],
+        };
+      },
+      modelCandidates: () => [{ providerId: "qwen", modelId: "qwen", role: "primary" }],
+      generate: async ({ batch, purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "qwen"),
+      generateSummary: async () => "## 摘要\n\n两个来源均已核对。",
+      writeOutput: async ({ outputPath, content }) => { await import("node:fs/promises").then(({ writeFile }) => writeFile(outputPath, content, "utf8")); },
+    });
+
+    const accepted = await manager.start({
+      sourcePath: first,
+      sourcePaths: [first, second],
+      outputPath: output,
+      title: "跨文档报告",
+      contract: buildDocumentContract({ sourcePaths: [first, second], outputPath: output, title: "跨文档报告" }),
+      taskFingerprint: "collection-task",
+    });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    const content = await readFile(output, "utf8");
+    assert.equal(job.status, "completed");
+    assert.equal(job.sourceAudit.sourceCount, 2);
+    assert.match(content, /# 跨文档报告/);
+    assert.match(content, /## 来源清单/);
+    assert.match(content, /first\.md/);
+    assert.match(content, /second\.md/);
+    assert.match(content, /source-unit: source-001-u1/);
+    assert.match(content, /source-unit: source-002-u1/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

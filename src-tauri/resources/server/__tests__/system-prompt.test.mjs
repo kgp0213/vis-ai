@@ -37,6 +37,9 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /get_document_job_status/);
     assert.match(prompt, /Do not call wait_for_job, list_jobs/);
     assert.match(prompt, /qualityPassed is false/);
+    assert.match(prompt, /create one report from multiple existing documents/);
+    assert.match(prompt, /organize_documents_to_report/);
+    assert.match(prompt, /verifies that none of the sources changed/);
     assert.match(prompt, /save_last_assistant_response/);
     assert.match(prompt, /retain its tables, parameters, commands, and code/);
     assert.match(prompt, /Never use OfficeCLI for PDF/);
@@ -98,7 +101,8 @@ describe("buildSystemPrompt", () => {
     // 搜索路由段（hasSemantic=true）
     assert.ok(prompt.includes("# Search routing"));
     // 身份声明
-    assert.ok(prompt.startsWith("You are Visionox, a helpful DeepSeek-powered AI assistant."));
+    assert.ok(prompt.startsWith("You are Visionox, a helpful AI assistant."));
+    assert.doesNotMatch(prompt, /DeepSeek-powered/);
     // 语言跟随
     assert.ok(prompt.includes("Respond in the same language as the user's message."));
   });

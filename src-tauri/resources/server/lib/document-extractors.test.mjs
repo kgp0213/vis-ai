@@ -131,3 +131,36 @@ test("an oversized single text line is split below the configured token target",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("multi-document extraction prefixes every batch and unit with stable source provenance", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-collection-"));
+  try {
+    const first = join(root, "first.md");
+    const second = join(root, "second.md");
+    await writeFile(first, "# Shared\nFirst value 3.3V", "utf8");
+    await writeFile(second, "# Shared\nSecond value 5V", "utf8");
+    const batches = [];
+    const result = await processDocumentSourceBatches({
+      ok: true,
+      documentKind: "collection",
+      sources: [
+        { sourcePath: first, readablePath: first, documentKind: "markdown" },
+        { sourcePath: second, readablePath: second, documentKind: "markdown" },
+      ],
+    }, {
+      onBatch: async (batch) => batches.push(batch),
+    });
+
+    assert.equal(result.sourceCount, 2);
+    assert.equal(result.sourceSummaries.length, 2);
+    assert.equal(result.totalUnits, 2);
+    assert.deepEqual(batches.map((batch) => batch.index), [1, 2]);
+    assert.notEqual(batches[0].units[0].id, batches[1].units[0].id);
+    assert.match(batches[0].units[0].id, /^source-001-[a-f0-9]{8}-markdown-/);
+    assert.match(batches[1].units[0].id, /^source-002-[a-f0-9]{8}-markdown-/);
+    assert.match(batches[0].units[0].location, /^first\.md > Shared/);
+    assert.equal(batches[1].units[0].sourceName, "second.md");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

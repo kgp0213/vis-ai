@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "document-organizer",
+  "displayName": "文档整理",
+  "version": "1.1.0",
+  "license": "MIT",
+  "integrationApiVersion": 1,
+  "runtimeRequirements": {},
+  "capabilities": ["document-conversion", "document-report", "resumable-jobs"]
+}

@@ -426,9 +426,7 @@ async function runChain(chain, opts) {
     if (opts.signal?.aborted) break;
   }
   const output = buf.toString();
-  const truncated = output.length > opts.maxOutputChars ? `${output.slice(0, opts.maxOutputChars)}
-
-[\u2026 truncated ${output.length - opts.maxOutputChars} chars \u2026]` : output;
+  const truncated = truncateCommandOutput(output, opts.maxOutputChars);
   return { exitCode: lastExit, output: truncated, timedOut };
 }
 function isNullDeviceAlias(target) {
@@ -626,25 +624,54 @@ function toBuf(chunk) {
 var OutputBuffer = class {
   constructor(cap) {
     this.cap = cap;
+    this.headCap = Math.ceil(cap * 0.65);
+    this.tailCap = Math.max(0, cap - this.headCap);
   }
   cap;
-  chunks = [];
-  bytes = 0;
+  headCap;
+  tailCap;
+  headChunks = [];
+  headBytes = 0;
+  tail = Buffer.alloc(0);
+  totalBytes = 0;
   push(b) {
-    if (this.bytes >= this.cap) return;
-    const remaining = this.cap - this.bytes;
-    if (b.length > remaining) {
-      this.chunks.push(b.subarray(0, remaining));
-      this.bytes = this.cap;
-    } else {
-      this.chunks.push(b);
-      this.bytes += b.length;
+    this.totalBytes += b.length;
+    let remaining = b;
+    if (this.headBytes < this.headCap) {
+      const take = Math.min(this.headCap - this.headBytes, remaining.length);
+      if (take > 0) {
+        this.headChunks.push(remaining.subarray(0, take));
+        this.headBytes += take;
+        remaining = remaining.subarray(take);
+      }
     }
+    if (remaining.length === 0 || this.tailCap === 0) return;
+    if (remaining.length >= this.tailCap) {
+      this.tail = remaining.subarray(remaining.length - this.tailCap);
+      return;
+    }
+    const combined = Buffer.concat([this.tail, remaining]);
+    this.tail = combined.length > this.tailCap ? combined.subarray(combined.length - this.tailCap) : combined;
   }
   toString() {
-    return smartDecodeOutput(Buffer.concat(this.chunks));
+    const head = Buffer.concat(this.headChunks);
+    if (this.totalBytes <= head.length + this.tail.length) {
+      return smartDecodeOutput(Buffer.concat([head, this.tail]));
+    }
+    return `${decodeTruncatedOutputPart(head, false)}${decodeTruncatedOutputPart(this.tail, true)}`;
   }
 };
+function decodeTruncatedOutputPart(buffer, trimStart) {
+  const maxTrim = Math.min(3, buffer.length);
+  for (let trim = 0; trim <= maxTrim; trim++) {
+    const candidate = trimStart ? buffer.subarray(trim) : buffer.subarray(0, buffer.length - trim);
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(candidate);
+    } catch {
+    }
+  }
+  return smartDecodeOutput(buffer);
+}
 
 // src/tools/shell/parse.ts
 var BUILTIN_ALLOWLIST = [
@@ -864,6 +891,15 @@ function isCommandAllowed(cmd, extra = [], projectRoot) {
 // src/tools/shell/exec.ts
 var DEFAULT_TIMEOUT_SEC = 60;
 var DEFAULT_MAX_OUTPUT_CHARS = 32e3;
+function truncateCommandOutput(value, maxChars) {
+  const text = String(value ?? "");
+  if (text.length <= maxChars) return text;
+  const marker = "\n\n[\u2026 output truncated; showing beginning and end \u2026]\n\n";
+  const contentBudget = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(contentBudget * 0.65);
+  const tailChars = Math.max(0, contentBudget - headChars);
+  return `${text.slice(0, headChars)}${marker}${tailChars > 0 ? text.slice(-tailChars) : ""}`;
+}
 function killProcessTree(child) {
   if (!child.pid || child.killed) return;
   if (process.platform === "win32") {
@@ -930,9 +966,8 @@ async function runCommand(cmd, opts) {
       reject(err);
       return;
     }
-    const chunks = [];
-    let totalBytes = 0;
     const byteCap = maxChars * 2 * 4;
+    const outputBuffer = new OutputBuffer(byteCap);
     let timedOut = false;
     let aborted = false;
     const killChildTree = () => killProcessTree(child);
@@ -951,15 +986,7 @@ async function runCommand(cmd, opts) {
     }
     const onData = (chunk) => {
       const b = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      if (totalBytes >= byteCap) return;
-      const remaining = byteCap - totalBytes;
-      if (b.length > remaining) {
-        chunks.push(b.subarray(0, remaining));
-        totalBytes = byteCap;
-      } else {
-        chunks.push(b);
-        totalBytes += b.length;
-      }
+      outputBuffer.push(b);
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
@@ -971,11 +998,8 @@ async function runCommand(cmd, opts) {
     child.on("close", (code) => {
       clearTimeout(killTimer);
       opts.signal?.removeEventListener("abort", onAbort);
-      const merged = Buffer.concat(chunks);
-      const buf = smartDecodeOutput(merged);
-      const output = buf.length > maxChars ? `${buf.slice(0, maxChars)}
-
-[\u2026 truncated ${buf.length - maxChars} chars \u2026]` : buf;
+      const buf = outputBuffer.toString();
+      const output = truncateCommandOutput(buf, maxChars);
       resolve4({ exitCode: code, output, timedOut });
     });
   });

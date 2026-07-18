@@ -6379,3 +6379,168 @@ button.side-tab.active {
   padding: 4px 10px;
   font-style: italic;
 }
+
+/* ============================================================================
+   Visionox UI Refinement — 精致化打磨层 (2026-07)
+   visionox-ui-refinement-2026
+   纯追加覆盖层：更大圆角、柔和层次、pill 化控件、消息气泡质感、
+   聚焦反馈、内容限宽。全部基于 design tokens，8 套主题自动生效。
+   ============================================================================ */
+
+/* ── 圆角体系升级：sm 4→6 / md 8→10 / lg 12→14 / xl 16→18 ── */
+:root {
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+}
+
+/* ── 字体渲染优化 ── */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── 滚动条：更圆润、带留白 ── */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-strong) 75%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* ── 侧边栏导航：选中态加重 + accent 指示条 ── */
+.side-tab {
+  margin-bottom: 1px;
+}
+.side-tab.active {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  color: var(--accent-primary);
+  box-shadow: inset 2.5px 0 0 var(--accent-primary);
+}
+.app.collapsed .side-tab.active {
+  box-shadow: none;
+}
+.side-tab .badge {
+  border-radius: 999px;
+}
+
+/* ── 顶栏：路径弱化、操作按钮 pill 化 ── */
+.app-top .ws .path {
+  color: var(--text-tertiary);
+}
+.top-action {
+  border-radius: 999px;
+}
+
+/* ── 模式/安全级切换器：分段控件 → 现代 pill 组 ── */
+.mode-picker {
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+  border-color: var(--border-subtle);
+  background: var(--surface-input);
+}
+.mode-btn {
+  border-radius: 999px;
+}
+.mode-btn + .mode-btn {
+  border-left: none;
+}
+.work-mode-summary {
+  border-radius: 999px;
+}
+
+/* ── 消息气泡：柔和阴影 + 更干净的 accent 着色 ── */
+.chat-msg .body {
+  border-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-3) var(--space-5);
+}
+.chat-msg.user .body {
+  background: color-mix(in srgb, var(--accent-primary) 10%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-sm);
+}
+/* 选中/搜索命中的光晕从硬编码琥珀改为 token 驱动，换强调色不再失真 */
+.chat-msg.artifact-selected .body {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+}
+.chat-msg.search-hit .body,
+.chat-msg.search-hit .tool-card {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 34%, transparent);
+}
+
+/* ── 提示横幅：更柔和的着色与圆角 ── */
+.chat-banner {
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent-primary) 5%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+}
+
+/* ── 输入区：聚焦光环反馈 ── */
+.chat-input-area textarea {
+  border-radius: var(--radius-lg);
+  transition: border-color var(--duration-fast) var(--ease-out-quart),
+    box-shadow var(--duration-fast) var(--ease-out-quart);
+}
+.chat-input-area textarea:focus {
+  border-color: var(--accent-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
+.chat-send-btn {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.chat-send-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+}
+
+/* ── 徽章 pill 化 ── */
+.badge {
+  border-radius: 999px;
+}
+
+/* ── 主按钮悬停光晕 ── */
+.btn-primary {
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+}
+
+/* ── 对话区内容限宽居中，阅读更聚焦 ── */
+.chat-feed > *,
+.chat-input-area,
+.chat-statusbar,
+.chat-toolbar {
+  max-width: 1180px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ── 统一聚焦环 ── */
+.btn:focus-visible,
+button:focus-visible,
+.side-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-primary) 70%, transparent);
+  outline-offset: 1px;
+}
+
+/* ── 减少动态偏好用户：保持既有 reduce 策略，不新增动画 ── */

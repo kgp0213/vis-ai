@@ -179,6 +179,33 @@ test("unambiguous weather questions route to the installed skill without hijacki
   assert.match(launcher, /\.read\(automaticSkillInvocation\.name\) \? automaticSkillInvocation : null/);
 });
 
+test("local Skill archives route through the installation guide without hijacking technical reviews", () => {
+  const task = "请安装这个 Skill：D:\\_归档\\visionox-attendance.zip";
+  assert.deepEqual(routeAutomaticSkill(task), { name: "skill-creation-guide", task, source: "automatic" });
+  const skillFileTask = "import this skill C:\\packages\\attendance.skill";
+  assert.deepEqual(routeAutomaticSkill(skillFileTask), { name: "skill-creation-guide", task: skillFileTask, source: "automatic" });
+  assert.equal(routeAutomaticSkill("评估 Skill ZIP 安装逻辑如何优化"), null);
+  assert.equal(routeAutomaticSkill("安装 C:\\packages\\ordinary-software.zip"), null);
+});
+
+test("archive Skill installation commits the extracted payload without recursive Node copy", () => {
+  const launcher = readFileSync(launcherUrl, "utf8");
+  const archiveBranch = launcher.slice(launcher.indexOf("if (args.source) {"), launcher.indexOf("if (args.source_dir) {"));
+  assert.match(archiveBranch, /installPreparedSkillDirectoryAtomic\(name, payloadRoot/);
+  assert.doesNotMatch(archiveBranch, /installSkillDirectoryAtomic\(name, payloadRoot|cpSync\(|runIsolatedSkillDirectoryCopy/);
+  assert.match(launcher, /source_dir[\s\S]*?宿主会在隔离子进程中受控安装/);
+  assert.match(launcher, /runIsolatedSkillDirectoryCopy\(srcDir, stagingDir\)/);
+  assert.match(launcher, /只有返回 installed=true 才表示成功/);
+  assert.match(launcher, /args\.source_dir && SKILL_ARCHIVE_IN_PROMPT\.test\(String\(activeMessageSendContext\.userPrompt/);
+  assert.match(launcher, /archive-present-in-user-request/);
+
+  const guide = readFileSync(new URL("../../skill-creation-guide.md", import.meta.url), "utf8");
+  const builtin = readFileSync(new URL("../../bootstrap-skills/skill-creation-guide/SKILL.md", import.meta.url), "utf8");
+  assert.match(guide, /原始文件路径直接传给 `source`/);
+  assert.doesNotMatch(guide, /AI 会调用 `install_skill\(\{ name: "my-skill", source_dir:[\s\S]*?递归复制/);
+  assert.match(builtin, /Do not search for or prefer a same-named directory/);
+});
+
 test("saved document intent routes every supported format through the resumable organizer", () => {
   const pdfTask = "读取 D:\\_归档\\（20260703）OP Manual规范模板.pdf 并整理成 Markdown";
   assert.deepEqual(routeAutomaticSkill(pdfTask), { name: "document-organizer", task: pdfTask, source: "automatic" });

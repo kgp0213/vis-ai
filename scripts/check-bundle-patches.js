@@ -115,6 +115,7 @@ const required = [
       "save_last_assistant_response",
       "organize_pdf_to_markdown",
       "organize_document_to_markdown",
+      "organize_documents_to_report",
       "get_document_job_status",
       "pendingDocumentArtifactFromToolEvent",
       "pendingDocumentWriteConflict",
@@ -311,6 +312,8 @@ const required = [
       "function handleBackgroundJobs",
       "parseBody(body).action",
       'rawId.startsWith("document:")',
+      '"stop", "cancel", "abandon"',
+      "background-job-delete-record",
       "readTranscriptPage",
       "writeTranscriptMarkdown",
       "healthFilesystemSnapshot",
@@ -388,10 +391,11 @@ const required = [
       "queuePaused || busy",
       "background-jobs",
       "documentJobStatusLabel",
+      "background-jobs-workbench",
       "controlDocumentJob",
       "previewDocumentJob",
       "重试失败部分",
-      "回退模型 · ",
+      "备用候选",
       "stoppingBtn",
       "subscribeSseStatus",
       "setTimeout(flushStreaming, 75)",
@@ -454,7 +458,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2KDUS647.js",
-    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose"],
+    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "ModelStreamProtocolError", "ModelStreamIncompleteError", "streamComplete", "finishReason: data.choices?.[0]?.finish_reason"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-PV55UMTO.js",
@@ -482,13 +486,17 @@ const required = [
       "normalizeToolResultBudget",
       "tool-round checkpoint",
       "maxToolContinuationWindows",
+      "escalationModel",
       "finishTurnOnResult",
       "A path-only call cannot create document content",
       'requestPurpose: iter === 0 ? "initial" : "toolContinuation"',
       "overwrite: args.replace === true",
       "maxResultTokens: opts.maxResultTokens",
       'name: "append_file"',
-      'String(_name).toLowerCase() === "extract_pdf_text"',
+      '"organize_documents_to_report"',
+      "ModelOutputTruncatedError",
+      "assertModelResponseComplete",
+      "Do not use this for PDF or Office binary content",
     ],
   },
   {
@@ -501,7 +509,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/index.js",
-    markers: ["maxResultTokens: opts.maxResultTokens", 'name: "append_file"', 'String(_name).toLowerCase() === "extract_pdf_text"', "finishTurnOnResult", "A path-only call cannot create document content"],
+    markers: ["maxResultTokens: opts.maxResultTokens", 'name: "append_file"', '"organize_documents_to_report"', "escalationModel", "finishTurnOnResult", "A path-only call cannot create document content", "Do not use this for PDF or Office binary content", "truncateCommandOutput", "decodeTruncatedOutputPart", "showing beginning and end", "ModelStreamProtocolError", "ModelStreamIncompleteError", "ModelOutputTruncatedError"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/app.css",
@@ -528,6 +536,7 @@ const required = [
       "text-overflow: ellipsis",
       ".vhome-control-button",
       ".vhome-popover",
+      "visionox-ui-refinement-2026",
     ],
   },
   {
@@ -692,6 +701,7 @@ const required = [
     markers: [
       "createPreparedDocumentRegistry",
       "latestPreparedDocumentRef",
+      "prepareLocalDocuments",
       "visionox-document:",
       "document preparation cancelled",
       "signal: ctx?.signal",
@@ -723,7 +733,19 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/SKILL.md",
-    markers: ["name: document-organizer", "organize_document_to_markdown", "complete-with-summary", "summaryOnlyConfirmed", "background-task", "qualityPassed"],
+    markers: ["name: document-organizer", "organize_document_to_markdown", "organize_documents_to_report", "complete-with-summary", "summaryOnlyConfirmed", "full-size background task workbench", "qualityPassed"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/document-organizer/integration.json",
+    markers: ['"id": "document-organizer"', '"version": "1.1.0"', '"resumable-jobs"'],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/document-organizer/task-recipes.json",
+    markers: ['"single-document-markdown"', '"multi-document-report"', '"hostManaged": true', '"resumable": true'],
+  },
+  {
+    file: "src-tauri/resources/server/lib/tool-repair-notice.mjs",
+    markers: ["formatToolRepairNotice", "Never include repair notes or tool arguments", "系统已", "truncationsFixed", "scavenged"],
   },
   {
     file: "src-tauri/resources/server/lib/bootstrap-skill-ownership.mjs",
@@ -731,11 +753,11 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/document-intelligence.mjs",
-    markers: ["buildDocumentContract", "normalizeDocumentPolicy", "chunkDocumentUnits", "evaluateDocumentQuality", "resolvedVisualUnitIds", "renderDocumentSourceFallback", "buildDocumentReviewMessages"],
+    markers: ["buildDocumentContract", "document-collection", "normalizeDocumentPolicy", "chunkDocumentUnits", "evaluateDocumentQuality", "resolvedVisualUnitIds", "renderDocumentSourceFallback", "buildDocumentReviewMessages"],
   },
   {
     file: "src-tauri/resources/server/lib/document-extractors.mjs",
-    markers: ["processDocumentSourceBatches", "runOfficeCliJson", "htmlDocumentUnits", "officeElementsToUnits", "visionox-office-visual-", "captureVisuals", "visualDataUrl"],
+    markers: ["processDocumentSourceBatches", "sourceSummaries", "prefixCollectionUnit", "runOfficeCliJson", "htmlDocumentUnits", "officeElementsToUnits", "visionox-office-visual-", "captureVisuals", "visualDataUrl"],
   },
   {
     file: "src-tauri/resources/server/lib/document-job-store.mjs",
@@ -743,7 +765,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/document-markdown-workflow.mjs",
-    markers: ["createDocumentMarkdownManager", "messagesWithBatchVisuals", "generateHierarchicalSummary", "recoverSavedBatch", "orphan-section", "onPersistenceError", "policy-selected", "completed_with_warnings", "waiting_foreground", "retryFailed", "completions.delete"],
+    markers: ["createDocumentMarkdownManager", "renderCollectionSources", "messagesWithBatchVisuals", "generateHierarchicalSummary", "recoverSavedBatch", "orphan-section", "onPersistenceError", "policy-selected", "completed_with_warnings", "waiting_foreground", "waiting_provider", "isProviderBusy", "retryFailed", 'action === "abandon"', 'action === "delete"', "completions.delete"],
   },
   {
     file: "src-tauri/resources/server/lib/atomic-file.mjs",
@@ -757,7 +779,14 @@ const required = [
       "lifecycle: opts.lifecycle",
       "listMetadata()",
       "completedRetention = 50",
+      "truncateCommandOutput",
+      "decodeTruncatedOutputPart",
+      "showing beginning and end",
     ],
+  },
+  {
+    file: "src-tauri/resources/server/launcher.mjs",
+    markers: ["formatToolRepairNotice", "agent-repair", "ev.repair"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-7O5ALB4C.js",

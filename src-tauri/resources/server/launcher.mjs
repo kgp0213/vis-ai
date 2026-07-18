@@ -13,6 +13,17 @@ try {
   process.stderr.write("[launcher] entered launcher.mjs\n");
 } catch {}
 
+const launcherStartedAt = Date.now();
+
+try {
+  process.on("uncaughtExceptionMonitor", (error, origin) => {
+    process.stderr.write(`[launcher] uncaught exception (${origin}): ${error?.stack || error?.message || error}\n`);
+  });
+  process.on("exit", (code) => {
+    process.stderr.write(`[launcher] process exit: code=${code}\n`);
+  });
+} catch {}
+
 async function importEarly(spec) {
   try {
     return await import(spec);
@@ -33,8 +44,11 @@ const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto")
 const { spawnSync } = await importEarly("node:child_process");
 const { createInterface } = await importEarly("node:readline");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
+const { fingerprintPaths } = await importEarly("./lib/source-fingerprint.mjs");
 const { commitScheduleMutation, readScheduleStore, writeScheduleStore } = await importEarly("./lib/schedule-store.mjs");
 const { replacePathTransactional, restoreLatestPathHistory } = await importEarly("./lib/transactional-path.mjs");
+const { runIsolatedSkillDirectoryCopy } = await importEarly("./lib/skill-directory-copy.mjs");
+const { extractSkillArchive } = await importEarly("./lib/skill-archive.mjs");
 const { createPlanStore } = await importEarly("./lib/plan-store.mjs");
 const {
   computeNextScheduleRun,
@@ -83,16 +97,17 @@ const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, norm
 const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
 const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
 const { buildMessageRiskPrompt, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
+const { formatToolRepairNotice } = await importEarly("./lib/tool-repair-notice.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
-const { createPreparedDocumentRegistry, getDlpConfig, latestPreparedDocumentRef, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { createPreparedDocumentRegistry, getDlpConfig, latestPreparedDocumentRef, prepareLocalDocument, prepareLocalDocuments, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const { extractPdfText, inspectPdfText, processPdfTextBatches, LARGE_PDF_PAGE_THRESHOLD } = await importEarly("./lib/pdf-text.mjs");
 const { buildPdfDeliveryResult, formatPageRange, parsePageRange } = await importEarly("./lib/document-delivery.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, detectArtifactRequest, documentArtifactStateFromJob, documentJobToolMismatch, latestAssistantResponse, pendingDocumentArtifactFromToolEvent, pendingDocumentWriteConflict, registerSaveLastAssistantResponseTool, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { generatePdfSectionWithModel, largePdfChoiceResult, registerPdfMarkdownWorkflowTool } = await importEarly("./lib/pdf-markdown-workflow.mjs");
-const { buildDocumentContract, buildDocumentSummaryMessages, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
+const { buildDocumentContract, buildDocumentSummaryMessages, documentTaskFingerprint, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
 const { processDocumentSourceBatches, runOfficeCliJson } = await importEarly("./lib/document-extractors.mjs");
 const { createDocumentJobStore } = await importEarly("./lib/document-job-store.mjs");
 const { createDocumentMarkdownManager } = await importEarly("./lib/document-markdown-workflow.mjs");
@@ -244,6 +259,7 @@ const CONSTANTS = {
   MAX_BODY_SIZE: 1024 * 1024,       // 1 MB
   MAX_ZIP_SIZE: 50 * 1024 * 1024,   // 50 MB
   MAX_UNZIP_BUFFER_BYTES: 10 * 1024 * 1024, // 10 MB
+  SKILL_ARCHIVE_TIMEOUT_MS: 120_000,
   MESSAGES_CAP: 10_000,
 
   // Mode memory
@@ -866,13 +882,23 @@ async function installBootstrapSkill(name, { force = false } = {}) {
   if (!existsSync(skillMdPath)) {
     return { name, installed: false, reason: "missing bootstrap SKILL.md" };
   }
-  const validation = validateSkillMarkdown(await readFile(skillMdPath, "utf8"));
-  if (!validation.ok || validation.name !== name) {
-    return { name, installed: false, reason: validation.error || "bootstrap name mismatch" };
-  }
   const srcMtime = sourceDirMtime(sourceDir);
   if (existsSync(targetDir)) {
     let marker = await readBuiltinMarker(targetDir);
+    if (
+      !force
+      && marker?.name === name
+      && marker.sourceHash
+      && srcMtime !== null
+      && marker.sourceMtime === srcMtime
+      && existsSync(resolve(targetDir, "SKILL.md"))
+    ) {
+      return { name, installed: false, skipped: true, reason: "already up to date (fast path)" };
+    }
+    const validation = validateSkillMarkdown(await readFile(skillMdPath, "utf8"));
+    if (!validation.ok || validation.name !== name) {
+      return { name, installed: false, reason: validation.error || "bootstrap name mismatch" };
+    }
     if (!marker) {
       const legacyHash = await hashDirectory(targetDir);
       if (!isKnownLegacyBootstrapSkill(name, legacyHash)) {
@@ -909,6 +935,10 @@ async function installBootstrapSkill(name, { force = false } = {}) {
       await rm(stagingDir, { recursive: true, force: true });
     }
   }
+  const validation = validateSkillMarkdown(await readFile(skillMdPath, "utf8"));
+  if (!validation.ok || validation.name !== name) {
+    return { name, installed: false, reason: validation.error || "bootstrap name mismatch" };
+  }
   const sourceHash = await hashDirectory(sourceDir);
   const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
   try {
@@ -922,6 +952,7 @@ async function installBootstrapSkill(name, { force = false } = {}) {
 }
 
 async function deployBootstrapSkills({ force = false, restoreDisabled = false } = {}) {
+  const startedAt = Date.now();
   const result = { root: skillsRoot, source: bootstrapSkillsRoot, installed: [], skipped: [], errors: [] };
   if (!existsSync(bootstrapSkillsRoot)) {
     result.errors.push({ reason: "bootstrap-skills resource directory not found", path: bootstrapSkillsRoot });
@@ -940,7 +971,7 @@ async function deployBootstrapSkills({ force = false, restoreDisabled = false } 
     else if (item.skipped) result.skipped.push(item);
     else result.errors.push(item);
   }
-  console.error(`[launcher] bootstrap skills: installed=${result.installed.length}, skipped=${result.skipped.length}, errors=${result.errors.length}`);
+  console.error(`[launcher] bootstrap skills: installed=${result.installed.length}, skipped=${result.skipped.length}, errors=${result.errors.length}, durationMs=${Date.now() - startedAt}`);
   return result;
 }
 
@@ -1288,7 +1319,12 @@ async function writeDocumentOutput({ outputPath, content, signal, workspaceRoot,
 }
 
 function nextDocumentOutputPath(rootDir, sourceTitle) {
-  const stem = `${sourceTitle}-整理`;
+  const safeTitle = String(sourceTitle || "document")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .trim()
+    .slice(0, 120) || "document";
+  const stem = `${safeTitle}-整理`;
   const first = resolve(rootDir, `${stem}.md`);
   if (!existsSync(first)) return first;
   for (let index = 2; index <= 999; index++) {
@@ -1510,13 +1546,21 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       store: documentJobStore,
       countTokens,
       isForegroundBusy: () => busy,
-      prepareDocument: async (input, signal) => prepareLocalDocument(input, {
+      isProviderBusy: () => scheduleRunRegistry.size() > 0,
+      onIdle: () => requestScheduleQueueDrain(),
+      prepareDocument: async (input, signal) => prepareLocalDocuments(input, {
         cfg: readConfig(configPath),
         env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir: workspaceDir },
         logger: console,
         signal,
         registry: preparedDocumentRegistry,
       }),
+      fingerprintSource: async (prepared, signal) => {
+        const paths = Array.isArray(prepared?.sources) && prepared.sources.length > 0
+          ? prepared.sources.map((source) => source.sourcePath || source.readablePath).filter(Boolean)
+          : [prepared?.sourcePath || prepared?.readablePath].filter(Boolean);
+        return fingerprintPaths(paths, { signal });
+      },
       processSourceBatches: (prepared, batchOptions) => processDocumentSourceBatches(prepared, {
         ...batchOptions,
         processPdfBatches: (path, pdfOptions) => processPdfTextBatches(path, pdfOptions),
@@ -1553,6 +1597,97 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     });
   }
 
+  async function startManagedDocumentJob(prepared, args, toolContext, { report = false } = {}) {
+    const sources = Array.isArray(prepared?.sources) && prepared.sources.length > 0 ? prepared.sources : [prepared];
+    const sourcePaths = sources.map((source) => resolve(source.sourcePath)).filter(Boolean);
+    if (sourcePaths.length === 0) return { ok: false, error: "没有可处理的来源文件" };
+    const sourceTitle = report
+      ? String(args?.title ?? "").trim() || `${sourcePaths.length} 份文档汇总`
+      : basename(sourcePaths[0]).replace(/\.[^.]+$/, "") || "document";
+    const requestedOutputPath = String(args?.outputPath ?? "").trim();
+    const outputPath = requestedOutputPath || nextDocumentOutputPath(rootDir, sourceTitle);
+    if (!/\.(?:md|markdown)$/i.test(outputPath)) {
+      return { ok: false, error: "outputPath must end in .md or .markdown" };
+    }
+
+    for (const source of sources) {
+      if (source.documentKind !== "pdf") continue;
+      const inspection = await inspectPdfText(source.readablePath, { signal: toolContext?.signal });
+      const pages = sources.length === 1 ? String(args?.pages ?? "").trim() : "";
+      if (inspection.requiresPhysicalSplit || (inspection.totalPages > LARGE_PDF_PAGE_THRESHOLD && !pages)) {
+        return largePdfChoiceResult({ prepared: source, inspection, threshold: LARGE_PDF_PAGE_THRESHOLD });
+      }
+    }
+
+    let contract;
+    try {
+      contract = buildDocumentContract({
+        sourcePath: sourcePaths[0],
+        sourcePaths,
+        outputPath,
+        fidelity: args?.fidelity,
+        summaryOnlyConfirmed: args?.summaryOnlyConfirmed === true,
+        overwriteConfirmed: args?.overwriteConfirmed === true,
+        outputExists: Boolean(requestedOutputPath && existsSync(resolve(outputPath))),
+        instructions: args?.instructions,
+        title: report ? sourceTitle : "",
+      });
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+    if (contract.requiresDecision) {
+      return { ok: false, requiresUserChoice: true, decision: contract.decision, choices: contract.decision.choices };
+    }
+
+    const activeProvider = getActiveProvider(config);
+    const activeModel = effectiveModelConfig(config).model;
+    const agentPolicy = resolveProviderModelAgentPolicy(activeProvider, activeModel);
+    const sourceStats = sourcePaths.map((sourcePath) => {
+      const sourceInfo = statSync(sourcePath);
+      return { path: sourcePath, size: sourceInfo.size, mtimeMs: sourceInfo.mtimeMs };
+    });
+    const taskFingerprint = documentTaskFingerprint({
+      sourcePaths,
+      sourceStats,
+      outputPath: resolve(outputPath),
+      contract,
+    });
+    const accepted = await documentMarkdownManager.start({
+      sourcePath: sourcePaths[0],
+      sourcePaths,
+      sourceName: report ? sourceTitle : basename(sourcePaths[0]),
+      title: report ? sourceTitle : "",
+      outputPath,
+      taskType: report ? "document-report" : "document",
+      taskFingerprint,
+      contract,
+      policy: agentPolicy.documentPolicy,
+      pages: sources.length === 1 ? args?.pages : undefined,
+      workspaceRoot: rootDir,
+      allowOutsideWorkspace: ["admin", "yolo"].includes(loadEditMode(configPath)),
+      allowOutputOverwrite: args?.overwriteConfirmed === true,
+    });
+    const backgroundJobId = accepted.id ? `document:${String(accepted.id).replace(/^document:/, "")}` : null;
+    const taskLabel = report ? "多文档汇总" : "文档整理";
+    return {
+      ...accepted,
+      id: backgroundJobId ?? accepted.id,
+      documentJobId: accepted.id ?? null,
+      backgroundJobId,
+      artifactStatus: accepted.accepted ? "pending" : accepted.completed ? "completed" : "failed",
+      sourcePath: sourcePaths[0],
+      sourcePaths,
+      sourceCount: sourcePaths.length,
+      message: accepted.accepted
+        ? accepted.reused
+          ? `检测到相同的后台${taskLabel}任务，已继续使用原任务 ${backgroundJobId ?? accepted.id}。当前回复结束后任务仍会继续运行；点击输入框下方“后台”查看进度。`
+          : `${taskLabel}任务 ${backgroundJobId ?? accepted.id} 已进入后台队列。当前回复在任务交接后结束，但任务仍会继续运行；点击输入框下方“后台”查看进度、预览草稿或暂停任务。`
+        : accepted.reused && accepted.completed
+          ? `相同来源和要求的${taskLabel}任务已经完成：${accepted.outputPath}`
+          : undefined,
+    };
+  }
+
   tools.register({
     name: "organize_document_to_markdown",
     description: "Start a host-managed, resumable background job that converts a supported PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into a saved Markdown file. This is the default for extracting, organizing, or summarizing a document into an artifact. It preserves complete source blocks plus a separate summary, paginates deterministic extractors, audits quality, retries weak-model failures, and can use configured fallback providers only for failed blocks. A successful acceptance ends the current turn so the background worker can run; never call wait_for_job, list_jobs, read_file, OfficeCLI, extract_pdf_text, write_file, or a format Skill afterward for the same request.",
@@ -1579,58 +1714,50 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
         registry: preparedDocumentRegistry,
       });
       if (!prepared.ok) return JSON.stringify(prepared);
-      const sourceTitle = basename(prepared.sourcePath).replace(/\.[^.]+$/, "") || "document";
-      const requestedOutputPath = String(args?.outputPath ?? "").trim();
-      const outputPath = requestedOutputPath || nextDocumentOutputPath(rootDir, sourceTitle);
-      if (!/\.(?:md|markdown)$/i.test(outputPath)) {
-        return JSON.stringify({ ok: false, error: "outputPath must end in .md or .markdown" });
-      }
-      if (prepared.documentKind === "pdf") {
-        const inspection = await inspectPdfText(prepared.readablePath, { signal: toolContext?.signal });
-        if (inspection.requiresPhysicalSplit || (inspection.totalPages > LARGE_PDF_PAGE_THRESHOLD && !String(args?.pages ?? "").trim())) {
-          return JSON.stringify(largePdfChoiceResult({ prepared, inspection, threshold: LARGE_PDF_PAGE_THRESHOLD }));
-        }
-      }
-      let contract;
-      try {
-        contract = buildDocumentContract({
-          sourcePath: prepared.sourcePath,
-          outputPath,
-          fidelity: args?.fidelity,
-          summaryOnlyConfirmed: args?.summaryOnlyConfirmed === true,
-          overwriteConfirmed: args?.overwriteConfirmed === true,
-          outputExists: Boolean(requestedOutputPath && existsSync(resolve(outputPath))),
-          instructions: args?.instructions,
-        });
-      } catch (error) {
-        return JSON.stringify({ ok: false, error: error.message });
-      }
-      if (contract.requiresDecision) {
-        return JSON.stringify({ ok: false, requiresUserChoice: true, decision: contract.decision, choices: contract.decision.choices });
-      }
-      const activeProvider = getActiveProvider(config);
-      const activeModel = effectiveModelConfig(config).model;
-      const agentPolicy = resolveProviderModelAgentPolicy(activeProvider, activeModel);
-      const accepted = await documentMarkdownManager.start({
-        sourcePath: prepared.sourcePath,
-        outputPath,
-        contract,
-        policy: agentPolicy.documentPolicy,
-        pages: args?.pages,
-        workspaceRoot: rootDir,
-        allowOutsideWorkspace: ["admin", "yolo"].includes(loadEditMode(configPath)),
-        allowOutputOverwrite: args?.overwriteConfirmed === true,
+      return JSON.stringify(await startManagedDocumentJob(prepared, args, toolContext));
+    },
+    finishTurnOnResult: (value) => {
+      const result = parseMaybeJsonObject(value);
+      return result?.ok === true && result?.accepted === true && result?.artifactStatus === "pending"
+        ? result.message
+        : null;
+    },
+  });
+
+  tools.register({
+    name: "organize_documents_to_report",
+    description: "Start one host-managed, resumable report job over multiple local PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text sources. Use this when the requested artifact must compare, merge, reconcile, or summarize two or more documents. Every source receives a stable identity; all source units remain traceable; the report includes a source list, independent summary, complete reviewed body, checkpoints, and whole-collection change detection. A successful acceptance ends the current turn while the background worker continues.",
+    parameters: {
+      type: "object",
+      properties: {
+        inputs: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 1,
+          maxItems: 50,
+          description: "Local source paths or stable documentRefs. Put each source in a separate array item.",
+        },
+        outputPath: { type: "string", description: "Destination Markdown path. If omitted, a new report file is created in the current workspace." },
+        title: { type: "string", description: "Optional report title. Defaults to '<count> 份文档汇总'." },
+        instructions: { type: "string", description: "Optional comparison, reconciliation, or organization requirements. Complete source coverage remains mandatory by default." },
+        fidelity: { type: "string", enum: ["complete-with-summary", "summary-only"], description: "Defaults to complete-with-summary. Use summary-only only after an explicit user request." },
+        summaryOnlyConfirmed: { type: "boolean", description: "Set true only when the user explicitly requested a brief, lossy summary." },
+        overwriteConfirmed: { type: "boolean", description: "Set true only after explicit confirmation to replace an existing output." },
+      },
+      required: ["inputs"],
+    },
+    fn: async (args, toolContext) => {
+      const inputs = Array.isArray(args?.inputs) ? args.inputs.map((value) => String(value ?? "").trim()).filter(Boolean) : [];
+      if (inputs.length === 0) return JSON.stringify({ ok: false, error: "organize_documents_to_report needs at least one source path" });
+      const prepared = await prepareLocalDocuments(inputs, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+        signal: toolContext?.signal,
+        registry: preparedDocumentRegistry,
       });
-      const backgroundJobId = accepted.id ? `document:${String(accepted.id).replace(/^document:/, "")}` : null;
-      return JSON.stringify({
-        ...accepted,
-        id: backgroundJobId ?? accepted.id,
-        documentJobId: accepted.id ?? null,
-        backgroundJobId,
-        artifactStatus: accepted.accepted ? "pending" : "failed",
-        sourcePath: prepared.sourcePath,
-        message: accepted.accepted ? "文档整理任务已进入后台队列。当前轮次将立即结束以释放前台资源；请从输入框下方的后台任务查看进度。" : undefined,
-      });
+      if (!prepared.ok) return JSON.stringify(prepared);
+      return JSON.stringify(await startManagedDocumentJob(prepared, args, toolContext, { report: true }));
     },
     finishTurnOnResult: (value) => {
       const result = parseMaybeJsonObject(value);
@@ -1725,7 +1852,7 @@ tools.setToolInterceptor(async (name, args) => {
     ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable })
     ?? documentJobToolMismatch(name, args);
   if (issue) return JSON.stringify(issue);
-  if (/^(?:append_file|edit|multi_edit|organize_document_to_markdown|organize_pdf_to_markdown|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
+  if (/^(?:append_file|edit|multi_edit|organize_document_to_markdown|organize_documents_to_report|organize_pdf_to_markdown|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
     const conflict = pendingDocumentWriteConflict(name, args, await documentMarkdownManager?.listMetadata() ?? []);
     if (conflict) return JSON.stringify(conflict);
   }
@@ -1921,7 +2048,11 @@ function validateSkillDirForInstall(dir, expectedName) {
   return { ok: true };
 }
 
-function installSkillDirectoryAtomic(name, srcDir, { overwrite = false } = {}) {
+function logSkillInstall(name, stage, details = {}) {
+  console.error(`[skill-install] ${JSON.stringify({ name, stage, ...details })}`);
+}
+
+function skillTargetConflict(name, overwrite) {
   const skillDir = resolve(skillsRoot, name);
   if (existsSync(skillDir) && !overwrite) {
     return {
@@ -1929,6 +2060,38 @@ function installSkillDirectoryAtomic(name, srcDir, { overwrite = false } = {}) {
       hint: "Pass overwrite: true only when replacing this skill is intentional.",
     };
   }
+  return null;
+}
+
+function installPreparedSkillDirectoryAtomic(name, preparedDir, { overwrite = false, mode = "prepared" } = {}) {
+  const skillDir = resolve(skillsRoot, name);
+  const conflict = skillTargetConflict(name, overwrite);
+  if (conflict) return conflict;
+
+  const validation = validateSkillDirForInstall(preparedDir, name);
+  if (!validation.ok) return { error: validation.error };
+
+  try {
+    logSkillInstall(name, "commit-start", { mode, target: skillDir });
+    const replaced = replacePathTransactional(skillDir, preparedDir, { retain: 3 });
+    logSkillInstall(name, "completed", { mode, target: skillDir, replaced: Boolean(replaced.history) });
+    return {
+      installed: true,
+      name,
+      path: skillDir,
+      backup: replaced.history,
+      cleanupError: replaced.cleanupError,
+      hint: "新对话或 /new 后即可使用此 skill。",
+    };
+  } catch (error) {
+    logSkillInstall(name, "commit-failed", { mode, error: error.message });
+    return { error: `install failed: ${error.message}` };
+  }
+}
+
+function installSkillDirectoryAtomic(name, srcDir, { overwrite = false } = {}) {
+  const conflict = skillTargetConflict(name, overwrite);
+  if (conflict) return conflict;
 
   const validation = validateSkillDirForInstall(srcDir, name);
   if (!validation.ok) {
@@ -1938,47 +2101,38 @@ function installSkillDirectoryAtomic(name, srcDir, { overwrite = false } = {}) {
   if (!existsSync(skillsRoot)) mkdirSync(skillsRoot, { recursive: true });
   const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
   try {
-    cpSync(srcDir, stagingDir, { recursive: true });
+    logSkillInstall(name, "isolated-copy-start", { mode: "source_dir", source: srcDir });
+    const copied = runIsolatedSkillDirectoryCopy(srcDir, stagingDir);
+    logSkillInstall(name, "isolated-copy-exit", {
+      mode: "source_dir",
+      ok: copied.ok,
+      exitCode: copied.exitCode,
+      signal: copied.signal,
+      files: copied.files,
+      bytes: copied.bytes,
+    });
+    if (!copied.ok) return { error: copied.error };
     const stagedValidation = validateSkillDirForInstall(stagingDir, name);
     if (!stagedValidation.ok) return { error: stagedValidation.error };
-    const replaced = replacePathTransactional(skillDir, stagingDir, { retain: 3 });
-    return {
-      installed: true,
-      name,
-      path: skillDir,
-      backup: replaced.history,
-      cleanupError: replaced.cleanupError,
-      hint: "新对话或 /new 后即可使用此 skill。",
-    };
+    const installed = installPreparedSkillDirectoryAtomic(name, stagingDir, { overwrite, mode: "source_dir" });
+    return installed.installed ? { ...installed, copiedFiles: copied.files, copiedBytes: copied.bytes } : installed;
   } catch (err) {
+    logSkillInstall(name, "source-dir-failed", { mode: "source_dir", error: err.message });
     return { error: `install failed: ${err.message}` };
   } finally {
     try { rmSync(stagingDir, { recursive: true, force: true }); } catch {}
   }
 }
 
-function extractSkillArchive(sourcePath, destDir) {
-  const result = process.platform === "win32"
-    ? spawnSync(
-        "powershell.exe",
-        ["-NoProfile", "-Command", "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force", sourcePath, destDir],
-        { encoding: "utf8", maxBuffer: CONSTANTS.MAX_UNZIP_BUFFER_BYTES }
-      )
-    : spawnSync("unzip", ["-o", sourcePath, "-d", destDir], { encoding: "utf8", maxBuffer: CONSTANTS.MAX_UNZIP_BUFFER_BYTES });
-  if (result.error) return { error: result.error.message };
-  if (result.status !== 0) {
-    return { error: (result.stderr || result.stdout || `archive extraction exited with ${result.status}`).trim() };
-  }
-  return { ok: true };
-}
+const SKILL_ARCHIVE_IN_PROMPT = /\.(?:skill|zip)(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
 
 tools.register({
   name: "install_skill",
-  description: `安装或导入一个 Skill。支持三种方式:
-1. name + body — 仅写入 SKILL.md，不含辅助文件。适合快速创建简单 skill。
-2. name + source — 从 .skill 文件（ZIP 格式）解压安装。适合分发打包好的 skill。
-3. name + source_dir — 从本地目录递归复制所有文件（含 scripts/、references/、templates/、README.md 等）。适合开发中的完整 skill 目录。
-默认不会覆盖已有 Skill；需要替换时必须显式传 overwrite: true。Skill 安装后在新对话或 /new 后加载。`,
+  description: `安装或导入一个 Skill。严格按输入类型选择一种方式:
+1. name + source — 用户提供 .skill/.zip 时必须使用原始压缩包路径。禁止寻找同名目录、手动解压、通用递归复制或改用 source_dir。
+2. name + body — 仅写入 SKILL.md，不含辅助文件。
+3. name + source_dir — 仅当用户明确提供目录且没有压缩包时使用；宿主会在隔离子进程中受控安装。
+安装阶段只校验和部署文件，不执行 Skill 脚本或下载依赖。默认不覆盖已有 Skill；替换时必须显式传 overwrite: true。只有返回 installed=true 才表示成功；安装后在新对话或 /new 后加载。`,
   parameters: {
     type: "object",
     properties: {
@@ -1992,11 +2146,11 @@ tools.register({
       },
       source: {
         type: "string",
-        description: ".skill 文件的本地路径（ZIP 格式）。与 body、source_dir 三选一。",
+        description: "用户提供的原始 .skill 或 .zip 文件路径。存在压缩包时必须选此项，不得寻找或改用同名目录。与 body、source_dir 三选一。",
       },
       source_dir: {
         type: "string",
-        description: "本地目录路径，递归复制所有文件到 ~/.visionox/skills/<name>/。目录必须包含 SKILL.md。与 body、source 三选一。",
+        description: "受限开发模式：仅接受用户明确提供、且没有对应压缩包的本地目录。目录必须包含 SKILL.md，由宿主隔离安装。与 body、source 三选一。",
       },
       overwrite: {
         type: "boolean",
@@ -2010,6 +2164,13 @@ tools.register({
     if (!name || !/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(name)) {
       return JSON.stringify({
         error: `invalid name: "${name}". Use lowercase + hyphens only, e.g. "my-skill". No spaces, no Chinese, no uppercase.`,
+      });
+    }
+    if (args.source_dir && SKILL_ARCHIVE_IN_PROMPT.test(String(activeMessageSendContext.userPrompt ?? ""))) {
+      logSkillInstall(name, "rejected", { mode: "source_dir", reason: "archive-present-in-user-request" });
+      return JSON.stringify({
+        error: "source_dir is not allowed because the current user request contains a .skill/.zip archive.",
+        hint: "Call install_skill again with source set to the exact archive path. Do not search for or copy a same-named directory.",
       });
     }
 
@@ -2049,6 +2210,13 @@ tools.register({
     installingSkill = true;
     try {
       const overwrite = Boolean(args.overwrite);
+      const mode = modes[0];
+      logSkillInstall(name, "start", { mode, overwrite });
+      const conflict = skillTargetConflict(name, overwrite);
+      if (conflict) {
+        logSkillInstall(name, "rejected", { mode, reason: "target-exists" });
+        return JSON.stringify(conflict);
+      }
 
       if (args.body) {
         const body = String(args.body);
@@ -2060,7 +2228,8 @@ tools.register({
         const sourceDir = createInstallTempDir(`${name}-body`);
         try {
           writeFileSync(resolve(sourceDir, "SKILL.md"), body, "utf8");
-          return JSON.stringify(installSkillDirectoryAtomic(name, sourceDir, { overwrite }));
+          logSkillInstall(name, "prepared", { mode: "body" });
+          return JSON.stringify(installPreparedSkillDirectoryAtomic(name, sourceDir, { overwrite, mode: "body" }));
         } finally {
           try { rmSync(sourceDir, { recursive: true, force: true }); } catch {}
         }
@@ -2071,7 +2240,8 @@ tools.register({
         if (!existsSync(src)) {
           return JSON.stringify({ error: `source file not found: ${src}` });
         }
-        if (!src.endsWith(".skill") && !src.endsWith(".zip")) {
+        const sourceExtension = extname(src).toLowerCase();
+        if (sourceExtension !== ".skill" && sourceExtension !== ".zip") {
           return JSON.stringify({ error: `source must be a .skill or .zip file, got: ${src}` });
         }
         const srcStat = statSync(src);
@@ -2081,12 +2251,25 @@ tools.register({
           });
         }
         const extractDir = createInstallTempDir(`${name}-extract`);
-        const archivePath = src.endsWith(".skill") ? resolve(extractDir, `${name}.zip`) : src;
+        const archivePath = sourceExtension === ".skill" ? resolve(extractDir, `${name}.zip`) : src;
         try {
-          if (src.endsWith(".skill")) await copyFile(src, archivePath);
-          const extracted = extractSkillArchive(archivePath, extractDir);
-          if (!extracted.ok) return JSON.stringify({ error: `extract failed: ${extracted.error}` });
-          if (src.endsWith(".skill")) {
+          logSkillInstall(name, "archive-extract-start", { mode: "source", source: src, bytes: srcStat.size });
+          if (sourceExtension === ".skill") await copyFile(src, archivePath);
+          const extracted = extractSkillArchive(archivePath, extractDir, {
+            maxBuffer: CONSTANTS.MAX_UNZIP_BUFFER_BYTES,
+            timeoutMs: CONSTANTS.SKILL_ARCHIVE_TIMEOUT_MS,
+          });
+          logSkillInstall(name, "archive-extract-exit", {
+            mode: "source",
+            ok: extracted.ok === true,
+            exitCode: extracted.exitCode,
+            signal: extracted.signal,
+          });
+          if (!extracted.ok) {
+            logSkillInstall(name, "archive-extract-failed", { mode: "source", error: extracted.error });
+            return JSON.stringify({ error: `extract failed: ${extracted.error}` });
+          }
+          if (sourceExtension === ".skill") {
             try { await rm(archivePath, { force: true }); } catch {}
           }
           const payloadRoot = findSkillPayloadRoot(extractDir, name);
@@ -2095,7 +2278,8 @@ tools.register({
               error: "archive must contain SKILL.md at its root or in a single top-level skill directory.",
             });
           }
-          return JSON.stringify(installSkillDirectoryAtomic(name, payloadRoot, { overwrite }));
+          logSkillInstall(name, "archive-validated", { mode: "source", nested: payloadRoot !== extractDir });
+          return JSON.stringify(installPreparedSkillDirectoryAtomic(name, payloadRoot, { overwrite, mode: "source" }));
         } finally {
           try { rmSync(extractDir, { recursive: true, force: true }); } catch {}
         }
@@ -2125,6 +2309,9 @@ tools.register({
       return JSON.stringify({
         error: "provide exactly one of: body (SKILL.md content), source (.skill/.zip file path), or source_dir (local directory path).",
       });
+    } catch (error) {
+      logSkillInstall(name, "failed", { mode: modes[0], error: error.message });
+      return JSON.stringify({ error: `install failed: ${error.message}` });
     } finally {
       installingSkill = false;
     }
@@ -4016,6 +4203,7 @@ function buildLoop(client, rootDir) {
     system = _prefixCache.upToPersistent;
     mc = _prefixCache.mc;
   } else {
+    const prefixBuildStartedAt = Date.now();
     mc = getModeConfig();
     const soul = loadSoul();
     const baseSystem = buildSystemPromptForLoop(rootDir, hasSemanticSearch);
@@ -4042,7 +4230,7 @@ function buildLoop(client, rootDir) {
     const systemWithSkills = applySkillsIndex(systemWithRules, { projectRoot: rootDir, modeSkills: mc.skills });
     system = systemWithSkills + formatPersistentMemoryForPrompt(rootDir, memoryBudget.persistentTokens);
     _prefixCache = { fingerprint, upToPersistent: system, mc };
-    console.error(`[launcher] system prefix rebuilt (fingerprint changed)`);
+    console.error(`[launcher] system prefix rebuilt (fingerprint changed, durationMs=${Date.now() - prefixBuildStartedAt})`);
   }
   // Session-scoped layers stay dynamic — never cached.
   const systemWithSession = system + getSessionMemoryBlock(memoryBudget.sessionTokens);
@@ -4054,16 +4242,16 @@ function buildLoop(client, rootDir) {
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
   const systemWithAgentPolicy = agentPolicy.documentWorkflow === "guided"
-    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. When the user asks to turn an existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into an actual saved Markdown file, call organize_document_to_markdown directly with the original input and outputPath. The host handles preparation, stable extraction batches, independent quality review, targeted retries, fallback models, recoverable file writes, and coverage, so do not call prepare_local_document, extract_pdf_text, OfficeCLI, read_file, or write_file first for the same saved-document request. If that tool returns requiresUserChoice, use ask_choice with its structured choices. If qualityPassed is false, report the degraded review status and warnings instead of claiming unqualified success. For reading or discussing a document without creating a file, use the shortest reliable sequence: prepare_local_document once, retain documentRef, then use extract_pdf_text for PDF, OfficeCLI view text for Word/Excel/PowerPoint, or read_file for text formats. Do not start with annotated/query/html or cell-by-cell extraction unless the user asks for layout details or plain text is insufficient. Never rewrite or guess a prepared path; switch tools with documentRef. For screenshot-guided HTML or SVG corrections, inspect the image and only the relevant file region, apply one consolidated edit, then verify the written file instead of editing one visual element per tool call. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. Before any other write_file call, prepare both path and complete content, then verify the successful tool result before claiming the file exists. If a tool reports a missing required parameter, correct that parameter instead of repeating the incomplete call. If extract_pdf_text returns complete=false, immediately call it again with the same documentRef and nextPageRange; do not summarize, write, or claim full coverage until complete=true. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. For a long generated Markdown deliverable that is not based on an existing document, write the first section with write_file and append later sections with append_file instead of placing the whole document in one tool call. A continuation-window notice means the current turn has fresh tool rounds; continue the task without asking the user to send another message.`
+    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. When the user asks to turn one existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into an actual saved Markdown file, call organize_document_to_markdown directly with the original input and outputPath. When one report must compare, merge, reconcile, or summarize multiple source documents, call organize_documents_to_report once with every source in inputs. The host handles preparation, stable extraction batches, independent quality review, targeted retries, fallback models, recoverable file writes, source traceability, and coverage, so do not call prepare_local_document, extract_pdf_text, OfficeCLI, read_file, or write_file first for the same saved-document request. If that tool returns requiresUserChoice, use ask_choice with its structured choices. If qualityPassed is false, report the degraded review status and warnings instead of claiming unqualified success. For reading or discussing a document without creating a file, use the shortest reliable sequence: prepare_local_document once, retain documentRef, then use extract_pdf_text for PDF, OfficeCLI view text for Word/Excel/PowerPoint, or read_file for text formats. Do not start with annotated/query/html or cell-by-cell extraction unless the user asks for layout details or plain text is insufficient. Never rewrite or guess a prepared path; switch tools with documentRef. For screenshot-guided HTML or SVG corrections, inspect the image and only the relevant file region, apply one consolidated edit, then verify the written file instead of editing one visual element per tool call. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. Before any other write_file call, prepare both path and complete content, then verify the successful tool result before claiming the file exists. If a tool reports a missing required parameter, correct that parameter instead of repeating the incomplete call. If extract_pdf_text returns complete=false, immediately call it again with the same documentRef and nextPageRange; do not summarize, write, or claim full coverage until complete=true. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. For a long generated Markdown deliverable that is not based on an existing document, write the first section with write_file and append later sections with append_file instead of placing the whole document in one tool call. A continuation-window notice means the current turn has fresh tool rounds; continue the task without asking the user to send another message.`
     : systemWithLearning;
   const prefix = new ImmutablePrefix({
     system: systemWithAgentPolicy,
     toolSpecs: presentedToolSpecs(),
   });
   // Determine vision capability from the active provider model config.
-  const visionCfg = activeModel?.multimodal
+  const visionCfg = activeModel?.multimodal === true
     ? { vision: true, visionDetail: visionPolicy.detail ?? "high" }
-    : { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
+    : { vision: false, visionDetail: "" };
 
   // Set provider-driven globals for chunk-2R4QCDOZ.js thinkingMode/summaryModel overrides
   if (provider) {
@@ -4085,6 +4273,7 @@ function buildLoop(client, rootDir) {
     model: modelConfig.model,
     reasoningEffort: config.reasoningEffort ?? "max",
     autoEscalate: modelConfig.autoEscalate,
+    escalationModel: modelConfig.escalationModel,
     vision: visionCfg.vision ?? false,
     visionDetail: visionCfg.visionDetail ?? "",
     visionPolicy,
@@ -4528,6 +4717,10 @@ const scheduleTriggerQueue = createScheduleTriggerQueue();
 let scheduleQueueDrainTimer = null;
 let scheduleQueueDraining = false;
 
+function documentProviderLaneBusy() {
+  return documentMarkdownManager?.isProviderBusy?.() === true;
+}
+
 function scheduleAbortError() {
   return new DOMException("scheduled task cancelled", "AbortError");
 }
@@ -4883,13 +5076,13 @@ function queueScheduleTrigger(task, { manual = false, catchUp = false, requested
 
 async function drainScheduleQueue() {
   if (scheduleQueueDraining || scheduleTriggerQueue.size() === 0) return;
-  if (scheduleRunRegistry.size() >= MAX_CONCURRENT_SCHEDULE_RUNS || busy) {
+  if (scheduleRunRegistry.size() >= MAX_CONCURRENT_SCHEDULE_RUNS || busy || documentProviderLaneBusy()) {
     requestScheduleQueueDrain(SCHEDULE_QUEUE_RECHECK_MS);
     return;
   }
   scheduleQueueDraining = true;
   try {
-    while (scheduleTriggerQueue.size() > 0 && scheduleRunRegistry.size() < MAX_CONCURRENT_SCHEDULE_RUNS && !busy) {
+    while (scheduleTriggerQueue.size() > 0 && scheduleRunRegistry.size() < MAX_CONCURRENT_SCHEDULE_RUNS && !busy && !documentProviderLaneBusy()) {
       const entry = scheduleTriggerQueue.shift();
       if (!entry) break;
       const task = schedules.find((item) => item.id === entry.taskId);
@@ -6125,12 +6318,14 @@ async function triggerSchedule(id, { manual = false, catchUp = false, fromQueue 
   if (!fromQueue && scheduleTriggerQueue.has(id)) {
     return queueScheduleTrigger(task, { manual, catchUp, requestedAt: startedAt });
   }
-  if (busy && !scheduleRunRegistry.isRunning(id)) {
+  if ((busy || documentProviderLaneBusy()) && !scheduleRunRegistry.isRunning(id)) {
     return queueScheduleTrigger(task, {
       manual,
       catchUp: catchUp || fromQueue,
       requestedAt: startedAt,
-      reason: "waiting for the active conversation or task to finish",
+      reason: documentProviderLaneBusy()
+        ? "waiting for the active document task to release the model provider"
+        : "waiting for the active conversation or task to finish",
     });
   }
   const startedMs = Date.parse(startedAt);
@@ -6365,7 +6560,13 @@ function cancelScheduleRun(id) {
 }
 
 try {
-  eventSink = openEventSink(eventLogPath("desktop"));
+  const openedEventSink = openEventSink(eventLogPath("desktop"));
+  openedEventSink.stream?.on?.("error", (error) => {
+    console.error(`[launcher] event sink disabled after stream error: ${error.message}`);
+    trackPersistentStorageIssue("event-log", eventLogPath("desktop"), `event log stream failed: ${error.message}`, "warning");
+    if (eventSink === openedEventSink) eventSink = null;
+  });
+  eventSink = openedEventSink;
   eventizer = new Eventizer();
   eventSink.append(eventizer.emitSessionOpened(0, "desktop", 0));
   console.error(`[launcher] event sink opened`);
@@ -6485,12 +6686,12 @@ function modelRuntimeOptions(modelConfig) {
   const activeModel = provider?.models?.find((model) => model.id === modelConfig.model);
   const agentPolicy = resolveProviderModelAgentPolicy(provider, modelConfig.model);
   const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
-  const legacyVision = { "deepseek-v4-pro": { vision: true, visionDetail: "high" } }[modelConfig.model] ?? {};
   return {
     model: modelConfig.model,
     autoEscalate: modelConfig.autoEscalate,
-    vision: activeModel?.multimodal === true || legacyVision.vision === true,
-    visionDetail: activeModel?.multimodal === true ? visionPolicy.detail ?? "high" : legacyVision.visionDetail ?? "",
+    escalationModel: modelConfig.escalationModel,
+    vision: activeModel?.multimodal === true,
+    visionDetail: activeModel?.multimodal === true ? visionPolicy.detail ?? "high" : "",
     visionPolicy,
     maxToolIters: agentPolicy.maxToolIterations ?? 64,
     maxToolContinuationWindows: agentPolicy.maxToolContinuationWindows ?? 0,
@@ -6729,6 +6930,7 @@ async function writeActiveSessionMeta(patch = {}) {
 }
 
 async function loadActiveSession() {
+  const startedAt = Date.now();
   try {
     await access(activeSessionFile);
   } catch {
@@ -6770,7 +6972,7 @@ async function loadActiveSession() {
       if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
     }
     await writeActiveSessionMeta({ messageCount: entries.length });
-    console.error(`[launcher] active session restored: ui=${messages.length}, model=${modelEntries.length}`);
+    console.error(`[launcher] active session restored: ui=${messages.length}, model=${modelEntries.length}, durationMs=${Date.now() - startedAt}`);
     return true;
   } catch (err) {
     trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be loaded: ${err.message}`);
@@ -7896,7 +8098,7 @@ const ctx = {
     ? documentMarkdownManager?.getMetadata(id)
     : jobs.read(Number(id)),
   stopBackgroundJob: async (id) => String(id).startsWith("document:")
-    ? documentMarkdownManager?.control(id, "cancel")
+    ? documentMarkdownManager?.control(id, "stop")
     : jobs.stop(Number(id)),
   controlBackgroundJob: (id, action) => documentMarkdownManager?.control(id, action),
 
@@ -8629,7 +8831,20 @@ ${modeList}
               if (ev.role === "assistant_delta") {
                 assistantText += ev.content ?? "";
               }
+              if (ev.role === "error") {
+                // A protocol or transport failure invalidates streamed partial text.
+                assistantText = "";
+              }
               if (ev.role === "assistant_final") {
+                const repairNotice = formatToolRepairNotice(ev.repair);
+                if (repairNotice) {
+                  broadcastDashboardEvent({
+                    kind: "warning",
+                    id: `${assistantId}-repair-${Date.now()}`,
+                    text: repairNotice,
+                  });
+                  console.error(`[agent-repair] ${repairNotice}`);
+                }
                 if (ev.forcedSummaryReason === "budget") {
                   budgetForcedSummary = true;
                   assistantText = ev.content || assistantText;
@@ -8893,7 +9108,7 @@ try {
     token,
   });
 
-  console.error(`[launcher] dashboard ready: ${url}`);
+  console.error(`[launcher] dashboard ready: ${url}; startupMs=${Date.now() - launcherStartedAt}`);
 
   // Write URL as JSON to stdout so the Rust sidecar can parse it
   const msg = JSON.stringify({ url, token: actualToken, port: actualPort });

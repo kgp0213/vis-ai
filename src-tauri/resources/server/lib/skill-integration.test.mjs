@@ -7,6 +7,7 @@ import {
   compareVersions,
   loadSkillIntegrations,
   renderSkillScheduleTask,
+  resolveSkillTaskRecipe,
   resolveSkillScheduleTemplate,
   validateSkillIntegration,
 } from "./skill-integration.mjs";
@@ -62,6 +63,52 @@ test("installed integration templates are version-gated and resolved at run time
     const resolved = resolveSkillScheduleTemplate(root, "dws", "unread-digest", { runtimeVersions: { dws: "1.0.51" } });
     assert.equal(resolved.integration.version, "1.0.52");
     assert.equal(renderSkillScheduleTask(resolved.template, { date: "2026-07-13", lastRunAt: "09:00" }, "仅列重要事项"), "汇总 09:00 之后的未读消息，当前日期 2026-07-13。\n\n用户补充要求：\n仅列重要事项");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("versioned task recipes keep long-task execution under host control", () => {
+  const root = mkdtempSync(join(tmpdir(), "skill-task-recipe-"));
+  const skillDir = join(root, "document-organizer");
+  const recipeFile = {
+    schemaVersion: 1,
+    integration: "document-organizer",
+    recipes: [{
+      id: "multi-document-report",
+      title: "跨文档报告",
+      description: "合并多个来源并保留追溯。",
+      version: 1,
+      tool: "organize_documents_to_report",
+      inputCardinality: "multiple",
+      formats: ["pdf", "word"],
+      phases: ["prepare", "extract", "review", "commit"],
+      permissions: ["read-source", "write-output"],
+      completionContract: "complete-with-summary-and-source-list",
+      hostManaged: true,
+      resumable: true,
+    }],
+  };
+  const recipeManifest = {
+    schemaVersion: 1,
+    id: "document-organizer",
+    displayName: "文档整理",
+    version: "1.1.0",
+    integrationApiVersion: 1,
+    runtimeRequirements: {},
+  };
+  try {
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "integration.json"), `${JSON.stringify(recipeManifest)}\n`);
+    writeFileSync(join(skillDir, "schedule-templates.json"), `${JSON.stringify({ schemaVersion: 1, integration: "document-organizer", templates: [] })}\n`);
+    writeFileSync(join(skillDir, "task-recipes.json"), `${JSON.stringify(recipeFile)}\n`);
+    const loaded = loadSkillIntegrations(root);
+    assert.equal(loaded[0].recipes[0].tool, "organize_documents_to_report");
+    const resolved = resolveSkillTaskRecipe(root, "document-organizer", "multi-document-report");
+    assert.equal(resolved.recipe.resumable, true);
+    assert.throws(() => validateSkillIntegration(recipeManifest, { schemaVersion: 1, integration: "document-organizer", templates: [] }, {
+      recipesFile: { ...recipeFile, recipes: [{ ...recipeFile.recipes[0], hostManaged: false }] },
+    }), /hostManaged and resumable/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

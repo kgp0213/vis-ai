@@ -40,8 +40,8 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-    PROCESS_TERMINATE,
+    GetExitCodeProcess, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SET_QUOTA, PROCESS_TERMINATE,
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::Shell::DragQueryFileW;
@@ -54,6 +54,8 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 // export this constant under the currently enabled features.
 #[cfg(windows)]
 const INFINITE_WAIT: u32 = 0xFFFFFFFF;
+#[cfg(windows)]
+const WAIT_FAILED_RESULT: u32 = 0xFFFFFFFF;
 // PROCESS_SYNCHRONIZE access right (0x00100000) — not exported by the
 // currently enabled windows-sys features, so define locally. Required by
 // OpenProcess to obtain a waitable handle for WaitForSingleObject.
@@ -361,7 +363,7 @@ fn configure_child_command(cmd: &mut Command) {
 /// Windows: OpenProcess + WaitForSingleObject (blocking).
 /// Unix: waitpid in a loop (handles EINTR). The child is in its own session
 ///       (setsid), so we can wait on it by pid without holding a Child handle.
-fn wait_for_child_exit(pid: u32) {
+fn wait_for_child_exit(pid: u32) -> String {
     #[cfg(windows)]
     {
         let wait_handle = unsafe {
@@ -372,12 +374,28 @@ fn wait_for_child_exit(pid: u32) {
             )
         };
         if wait_handle.is_null() {
-            log_diag("[rust] monitor: OpenProcess failed — assuming child exited");
+            return format!("monitor_open_failed={}", std::io::Error::last_os_error());
         } else {
+            let wait_result = unsafe { WaitForSingleObject(wait_handle, INFINITE_WAIT) };
+            let wait_error = (wait_result == WAIT_FAILED_RESULT)
+                .then(|| std::io::Error::last_os_error().to_string());
+            let mut exit_code = 0u32;
+            let exit_code_result = unsafe { GetExitCodeProcess(wait_handle, &mut exit_code) };
+            let exit_code_error =
+                (exit_code_result == 0).then(|| std::io::Error::last_os_error().to_string());
             unsafe {
-                WaitForSingleObject(wait_handle, INFINITE_WAIT);
                 windows_sys::Win32::Foundation::CloseHandle(wait_handle);
             }
+            if let Some(error) = wait_error {
+                return format!("wait_failed={error}");
+            }
+            if let Some(error) = exit_code_error {
+                return format!("exit_code_unavailable={error}");
+            }
+            return format!(
+                "exit_code={exit_code} (0x{exit_code:08X}, signed={})",
+                exit_code as i32
+            );
         }
     }
     #[cfg(unix)]
@@ -386,14 +404,14 @@ fn wait_for_child_exit(pid: u32) {
         let nix_pid = nix::unistd::Pid::from_raw(pid as i32);
         loop {
             match waitpid(nix_pid, None) {
-                Ok(WaitStatus::Exited(_, _)) | Ok(WaitStatus::Signaled(_, _, _)) => break,
+                Ok(WaitStatus::Exited(_, code)) => return format!("exit_code={code}"),
+                Ok(WaitStatus::Signaled(_, signal, core_dumped)) => {
+                    return format!("signal={signal:?}, core_dumped={core_dumped}")
+                }
                 Ok(_) => continue,
                 Err(nix::errno::Errno::EINTR) => continue,
                 Err(e) => {
-                    log_diag(&format!(
-                        "[rust] monitor: waitpid failed: {e} — assuming child exited"
-                    ));
-                    break;
+                    return format!("waitpid_failed={e}");
                 }
             }
         }
@@ -1117,14 +1135,18 @@ pub fn run() -> anyhow::Result<()> {
                                             // so we wait by pid). The old Windows polling loop
                                             // misclassified exit code 259 (STILL_ACTIVE) as "running"
                                             // forever — the blocking wait fixes that on both platforms.
-                                            wait_for_child_exit(child_pid);
+                                            let exit_status = wait_for_child_exit(child_pid);
 
                                             if shutting_down_for_monitor.load(Ordering::Acquire) {
-                                                log_diag("[rust] child process exited during application shutdown");
+                                                log_diag(&format!(
+                                                    "[rust] child process exited during application shutdown — pid={child_pid}, {exit_status}"
+                                                ));
                                                 break;
                                             }
 
-                                            log_diag("[rust] child process exited unexpectedly after navigation");
+                                            log_diag(&format!(
+                                                "[rust] child process exited unexpectedly after navigation — pid={child_pid}, {exit_status}"
+                                            ));
                                             let prior_attempt = restart_attempt;
                                             restart_attempt = restart_attempt_after_uptime(
                                                 restart_attempt,

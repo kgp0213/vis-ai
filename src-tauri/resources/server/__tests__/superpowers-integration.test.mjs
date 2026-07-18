@@ -125,6 +125,9 @@ test("删除受管 bootstrap skill 会持久停用，修复操作可以恢复", 
   const server = readFileSync(serverUrl, "utf8");
   const dashboard = readFileSync(dashboardUrl, "utf8");
   assert.match(launcher, /BOOTSTRAP_SKILLS_DISABLED_DIR/);
+  assert.match(launcher, /already up to date \(fast path\)/);
+  assert.match(launcher, /marker\.sourceMtime === srcMtime/);
+  assert.match(launcher, /durationMs=\$\{Date\.now\(\) - startedAt\}/);
   assert.match(launcher, /isBootstrapSkillDisabled/);
   assert.match(launcher, /restoreDisabled: true/);
   assert.match(server, /if \(disabledBuiltin\) ctx\.enableBootstrapSkill\?\.\(name\)/);

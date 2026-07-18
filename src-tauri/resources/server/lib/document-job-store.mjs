@@ -161,18 +161,24 @@ export function createDocumentJobStore(rootDir, options = {}) {
       running: false,
       paused: false,
       sourcePath: String(input.sourcePath ?? ""),
+      sourcePaths: Array.isArray(input.sourcePaths) ? input.sourcePaths.map((path) => String(path)).filter(Boolean) : [],
       outputPath: String(input.outputPath ?? ""),
+      taskType: String(input.taskType || "document"),
+      taskFingerprint: input.taskFingerprint ?? null,
+      sourceFingerprint: input.sourceFingerprint ?? null,
       pages: String(input.pages ?? ""),
       workspaceRoot: String(input.workspaceRoot ?? ""),
       allowOutsideWorkspace: input.allowOutsideWorkspace === true,
       allowOutputOverwrite: input.allowOutputOverwrite === true,
-      sourceName: basename(String(input.sourcePath ?? "document")),
+      sourceName: String(input.sourceName || basename(String(input.sourcePath ?? "document"))),
       contract: clone(input.contract ?? null),
       policy: clone(input.policy ?? null),
       policyTrace: clone(input.policyTrace ?? null),
       progress: { completedUnits: 0, totalUnits: null, completedBatches: 0, totalBatches: null },
       batches: [],
       modelHistory: [],
+      modelCallCount: 0,
+      lastModelCall: null,
       warnings: [],
       qualityPassed: null,
       outputCommittedAt: null,
@@ -340,7 +346,7 @@ export function createDocumentJobStore(rootDir, options = {}) {
   async function repairInterrupted() {
     const repaired = [];
     for (const job of await list()) {
-      if (["running", "waiting_foreground", "pausing"].includes(job.status)) {
+      if (["running", "waiting_foreground", "waiting_provider", "pausing"].includes(job.status)) {
         await update(job.id, { status: "interrupted", running: false, paused: true, error: "application stopped before the document task completed" });
         await appendEvent(job.id, { type: "restart-recovery", previousStatus: job.status }).catch(() => {});
         repaired.push(job.id);

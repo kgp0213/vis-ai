@@ -3,7 +3,115 @@
   <head>
     <meta charset="utf-8" />
     <title>Visionox-Whale</title>
+    <script>
+      (function () {
+        try {
+          var theme = localStorage.getItem("visionox-theme") || "light";
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)) theme = "light";
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
     <style>
+      :root,
+      :root[data-theme="light"] {
+        --startup-bg: #f4f6f8;
+        --startup-fg: #18202a;
+        --startup-muted: #667085;
+        --startup-track: #d8dee6;
+        --startup-accent: #1769aa;
+        --startup-button: #ffffff;
+        --startup-button-hover: #eef2f6;
+        --startup-border: #c7d0dc;
+        --startup-danger: #c0362c;
+      }
+
+      :root[data-theme="dark"] {
+        --startup-bg: #17191c;
+        --startup-fg: #f1f3f5;
+        --startup-muted: #a7adb5;
+        --startup-track: #343940;
+        --startup-accent: #6aa8e8;
+        --startup-button: #22262b;
+        --startup-button-hover: #2a3036;
+        --startup-border: #414850;
+        --startup-danger: #ff8178;
+      }
+
+      :root[data-theme="warm-sand"] {
+        --startup-bg: #f3efe7;
+        --startup-fg: #292621;
+        --startup-muted: #716b62;
+        --startup-track: #d8d0c3;
+        --startup-accent: #24726b;
+        --startup-button: #faf8f3;
+        --startup-button-hover: #ebe5da;
+        --startup-border: #cbc1b1;
+        --startup-danger: #b53a31;
+      }
+
+      :root[data-theme="cool-ash"] {
+        --startup-bg: #edf0f2;
+        --startup-fg: #20262b;
+        --startup-muted: #606a72;
+        --startup-track: #cbd2d7;
+        --startup-accent: #2e6f95;
+        --startup-button: #f7f9fa;
+        --startup-button-hover: #e3e8eb;
+        --startup-border: #bac4ca;
+        --startup-danger: #bb3e37;
+      }
+
+      :root[data-theme="soft-sage"] {
+        --startup-bg: #eef2ed;
+        --startup-fg: #222923;
+        --startup-muted: #606a60;
+        --startup-track: #ccd6cb;
+        --startup-accent: #32756a;
+        --startup-button: #f7faf6;
+        --startup-button-hover: #e1e9df;
+        --startup-border: #bdc9bb;
+        --startup-danger: #b43c35;
+      }
+
+      :root[data-theme="espresso"] {
+        --startup-bg: #211e1c;
+        --startup-fg: #f2eeea;
+        --startup-muted: #b7aea7;
+        --startup-track: #443d38;
+        --startup-accent: #70aaa1;
+        --startup-button: #2d2926;
+        --startup-button-hover: #39332f;
+        --startup-border: #514943;
+        --startup-danger: #ff8a7f;
+      }
+
+      :root[data-theme="midnight-ink"] {
+        --startup-bg: #111820;
+        --startup-fg: #edf3f8;
+        --startup-muted: #9ba9b6;
+        --startup-track: #2b3946;
+        --startup-accent: #55a5d8;
+        --startup-button: #19232d;
+        --startup-button-hover: #22303c;
+        --startup-border: #344656;
+        --startup-danger: #ff8178;
+      }
+
+      :root[data-theme="deep-charcoal"] {
+        --startup-bg: #181a1b;
+        --startup-fg: #f0f1f1;
+        --startup-muted: #a5aaad;
+        --startup-track: #35393b;
+        --startup-accent: #72a7c7;
+        --startup-button: #232628;
+        --startup-button-hover: #2c3032;
+        --startup-border: #41474a;
+        --startup-danger: #ff8178;
+      }
+
       html,
       body {
         width: 100%;
@@ -17,43 +125,103 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #f3f4f6;
-        font-family: system-ui, sans-serif;
+        background: var(--startup-bg);
+        color: var(--startup-fg);
+        font-family: "Segoe UI", system-ui, sans-serif;
       }
 
       .wrap {
+        width: min(360px, calc(100vw - 48px));
         text-align: center;
       }
 
-      .spin {
-        width: 36px;
-        height: 36px;
-        border: 3px solid #e5e7eb;
-        border-top-color: #1a6fd4;
-        border-radius: 50%;
-        margin: 0 auto 20px;
-        animation: spin 0.8s linear infinite;
+      .brand-row {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
       }
 
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
+      .signal {
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+      }
+
+      .signal span {
+        display: block;
+        width: 3px;
+        height: 20px;
+        border-radius: 2px;
+        background: var(--startup-accent);
+        transform-origin: center;
+        animation: signal 1.15s ease-in-out infinite;
+      }
+
+      .signal span:nth-child(2) {
+        height: 28px;
+        animation-delay: 0.12s;
+      }
+
+      .signal span:nth-child(3) {
+        height: 14px;
+        animation-delay: 0.24s;
+      }
+
+      @keyframes signal {
+        0%, 100% { transform: scaleY(0.45); opacity: 0.5; }
+        50% { transform: scaleY(1); opacity: 1; }
       }
 
       h1 {
-        font-size: 15px;
+        font-size: 18px;
         font-weight: 600;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: #4b5563;
+        letter-spacing: 0;
+        color: var(--startup-fg);
         margin: 0;
+      }
+
+      .startup-progress {
+        width: 100%;
+        height: 2px;
+        margin-top: 24px;
+        overflow: hidden;
+        background: var(--startup-track);
+      }
+
+      .startup-progress span {
+        display: block;
+        width: 34%;
+        height: 100%;
+        background: var(--startup-accent);
+        animation: progress 1.6s ease-in-out infinite;
+      }
+
+      @keyframes progress {
+        from { transform: translateX(-110%); }
+        to { transform: translateX(310%); }
       }
 
       #status {
         font-size: 12px;
-        color: #9ca3af;
-        margin: 10px 0 0;
+        color: var(--startup-muted);
+        margin: 12px 0 0;
+        min-height: 18px;
+        line-height: 18px;
+      }
+
+      .wrap.is-error .signal span,
+      .wrap.is-error .startup-progress span {
+        animation: none;
+        background: var(--startup-danger);
+      }
+
+      .wrap.is-error .startup-progress span {
+        width: 100%;
+        transform: none;
       }
 
       .diag-actions {
@@ -68,34 +236,47 @@
       .diag-actions button {
         height: 30px;
         padding: 0 12px;
-        border: 1px solid #d1d5db;
+        border: 1px solid var(--startup-border);
         border-radius: 6px;
-        background: #fff;
-        color: #374151;
+        background: var(--startup-button);
+        color: var(--startup-fg);
         font-size: 12px;
         cursor: pointer;
       }
 
       .diag-actions button:hover {
-        background: #f9fafb;
+        background: var(--startup-button-hover);
       }
 
       #log-path {
         width: min(560px, calc(100vw - 48px));
         margin: 10px auto 0;
-        color: #6b7280;
+        color: var(--startup-muted);
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
         font-size: 11px;
         line-height: 1.45;
         word-break: break-all;
       }
+
+      @media (prefers-reduced-motion: reduce) {
+        .signal span,
+        .startup-progress span {
+          animation: none;
+        }
+
+        .signal span { opacity: 0.85; transform: none; }
+        .startup-progress span { width: 100%; transform: none; opacity: 0.75; }
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <div class="spin"></div>
-      <h1>Visionox-Whale</h1>
-      <p id="status">Starting server...</p>
+      <div class="brand-row">
+        <div class="signal" aria-hidden="true"><span></span><span></span><span></span></div>
+        <h1>Visionox-Whale</h1>
+      </div>
+      <div class="startup-progress" aria-hidden="true"><span></span></div>
+      <p id="status" aria-live="polite">正在启动本地服务</p>
       <div class="diag-actions" id="diag-actions">
         <button id="open-log-dir" type="button">打开日志目录</button>
         <button id="copy-log-path" type="button">复制日志路径</button>
@@ -106,6 +287,35 @@
       (function () {
         var latestLogInfo = null;
         var dashboardReadyTimer = null;
+        var dashboardUrlPollTimer = null;
+        var startupStatusTimers = [];
+
+        function setStartupStatus(message) {
+          var status = document.getElementById("status");
+          if (status && message) status.textContent = message;
+        }
+
+        function clearStartupStatusTimers() {
+          startupStatusTimers.forEach(function (timer) { clearTimeout(timer); });
+          startupStatusTimers = [];
+        }
+
+        function scheduleStartupStatus() {
+          clearStartupStatusTimers();
+          [
+            [2500, "正在准备工作区"],
+            [7000, "正在恢复工作状态"],
+            [15000, "启动时间较长，仍在等待本地服务"],
+          ].forEach(function (entry) {
+            startupStatusTimers.push(setTimeout(function () {
+              var frame = document.getElementById("vis-app-frame");
+              var wrap = document.querySelector(".wrap");
+              if ((!frame || frame.dataset.ready !== "1") && wrap && !wrap.classList.contains("is-error")) {
+                setStartupStatus(entry[1]);
+              }
+            }, entry[0]));
+          });
+        }
 
         function getTauriInvoke() {
           var api = window.__TAURI__;
@@ -166,10 +376,17 @@
         }
 
         function showDiagnostics(message) {
+          clearStartupStatusTimers();
+          if (dashboardUrlPollTimer) {
+            clearTimeout(dashboardUrlPollTimer);
+            dashboardUrlPollTimer = null;
+          }
+          var wrap = document.querySelector(".wrap");
+          if (wrap) wrap.classList.add("is-error");
           var status = document.getElementById("status");
           if (status && message) {
             status.textContent = message;
-            status.style.color = "#ef4444";
+            status.style.color = "var(--startup-danger)";
           }
           var actions = document.getElementById("diag-actions");
           if (actions) actions.style.display = "flex";
@@ -339,9 +556,11 @@
 
         function armDashboardReadyGuard(frame, spinner) {
           if (!frame) return;
+          clearStartupStatusTimers();
           frame.dataset.ready = "";
           frame.style.visibility = "hidden";
           if (spinner) spinner.style.display = "";
+          setStartupStatus("正在加载界面");
           if (dashboardReadyTimer) clearTimeout(dashboardReadyTimer);
           dashboardReadyTimer = setTimeout(function () {
             if (frame.dataset.ready === "1") return;
@@ -353,6 +572,11 @@
 
         function finishDashboardReady(frame) {
           if (!frame) return;
+          clearStartupStatusTimers();
+          if (dashboardUrlPollTimer) {
+            clearTimeout(dashboardUrlPollTimer);
+            dashboardUrlPollTimer = null;
+          }
           frame.dataset.ready = "1";
           frame.dataset.loaded = "1";
           frame.style.visibility = "visible";
@@ -367,10 +591,14 @@
         }
 
         function restoreDashboard() {
-          var url = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
+          var url = sessionStorage.getItem("visionox.dashboardUrl") || "";
           if (!/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
-            startupLog("restoreDashboard skipped: no stored dashboard url");
+            startupLog("restoreDashboard skipped: no current-session dashboard url");
             return;
+          }
+          if (dashboardUrlPollTimer) {
+            clearTimeout(dashboardUrlPollTimer);
+            dashboardUrlPollTimer = null;
           }
           startupLog("restoreDashboard using stored dashboard url");
           url = applyThemeToUrl(url, getStoredTheme());
@@ -418,8 +646,7 @@
           if (oldFrame) { try { oldFrame.parentNode.removeChild(oldFrame); } catch (e) {} }
           var spinner = document.querySelector(".wrap");
           if (spinner) spinner.style.display = "";
-          var status = document.getElementById("status");
-          if (status) status.textContent = "Reconnecting...";
+          setStartupStatus("正在重新连接本地服务");
           restoreFromRustAndShow();
         }
 
@@ -436,6 +663,9 @@
           }
           try {
             localStorage.setItem("visionox-theme", String(data.theme || ""));
+          } catch (e) {}
+          try {
+            document.documentElement.setAttribute("data-theme", String(data.theme || "light"));
           } catch (e) {}
           try {
             var currentUrl = sessionStorage.getItem("visionox.dashboardUrl") || localStorage.getItem("visionox.dashboardUrl") || "";
@@ -475,13 +705,14 @@
             return;
           }
           if (attemptsLeft <= 0) {
-            restoreDashboard();
+            showDiagnostics("本地桥接未就绪，请查看运行日志后重试。");
             return;
           }
           setTimeout(function () { waitForTauri(cb, attemptsLeft - 1); }, 100);
         }
 
-        function restoreFromRustAndShow() {
+        function restoreFromRustAndShow(attempt) {
+          attempt = Number.isFinite(attempt) ? attempt : 0;
           waitForTauri(function () {
             invokeTauriCommand("get_dashboard_url", {}, 1)
               .then(function (url) {
@@ -494,18 +725,34 @@
                     try { sessionStorage.setItem("visionox.dashboardOrigin", originMatch[0]); } catch (e) {}
                     try { localStorage.setItem("visionox.dashboardOrigin", originMatch[0]); } catch (e) {}
                   }
+                  restoreDashboard();
                 } else {
-                  startupLog("get_dashboard_url returned empty or invalid url");
+                  if (attempt === 0) startupLog("get_dashboard_url is not ready; waiting for current server");
+                  if (attempt >= 199) {
+                    showDiagnostics("本地服务启动超时，请查看运行日志后重试。");
+                    return;
+                  }
+                  dashboardUrlPollTimer = setTimeout(function () {
+                    dashboardUrlPollTimer = null;
+                    restoreFromRustAndShow(attempt + 1);
+                  }, 150);
                 }
-                restoreDashboard();
               })
               .catch(function (err) {
-                startupLog("get_dashboard_url failed: " + String(err && err.message || err));
-                restoreDashboard();
+                if (attempt === 0) startupLog("get_dashboard_url failed: " + String(err && err.message || err));
+                if (attempt >= 199) {
+                  showDiagnostics("无法连接本地服务，请查看运行日志后重试。");
+                  return;
+                }
+                dashboardUrlPollTimer = setTimeout(function () {
+                  dashboardUrlPollTimer = null;
+                  restoreFromRustAndShow(attempt + 1);
+                }, 150);
               });
           });
         }
 
+        scheduleStartupStatus();
         var hasStoredUrl = sessionStorage.getItem("visionox.dashboardUrl");
         if (hasStoredUrl) {
           restoreDashboard();

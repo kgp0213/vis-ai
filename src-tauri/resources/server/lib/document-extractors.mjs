@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chunkDocumentUnits, classifyDocumentPath, normalizeDocumentPolicy } from "./document-intelligence.mjs";
@@ -382,7 +382,7 @@ async function processUnits(units, options) {
   };
 }
 
-export async function processDocumentSourceBatches(prepared, options = {}) {
+async function processSingleDocumentSourceBatches(prepared, options = {}) {
   if (typeof options.onBatch !== "function") throw new TypeError("onBatch callback is required");
   const policy = normalizeDocumentPolicy(options.policy);
   const path = String(prepared?.readablePath || prepared?.sourcePath || "");
@@ -448,4 +448,135 @@ export async function processDocumentSourceBatches(prepared, options = {}) {
   else if (extension === ".tsv") units = delimitedDocumentUnits(text, "\t");
   else units = plainTextDocumentUnits(text);
   return processUnits(units, { ...options, policy });
+}
+
+function collectionSourceIdentity(source, index) {
+  const sourcePath = String(source?.sourcePath || source?.readablePath || "document");
+  const sourceName = basename(sourcePath) || `document-${index + 1}`;
+  const hash = createHash("sha1").update(resolve(sourcePath)).digest("hex").slice(0, 8);
+  return {
+    sourceId: `source-${String(index + 1).padStart(3, "0")}-${hash}`,
+    sourcePath,
+    sourceName,
+  };
+}
+
+function prefixCollectionUnit(value, identity) {
+  const unitValue = value && typeof value === "object" ? value : {};
+  return {
+    ...unitValue,
+    id: `${identity.sourceId}-${String(unitValue.id || "unit")}`,
+    location: `${identity.sourceName} > ${String(unitValue.location || unitValue.id || "区块")}`,
+    sourceId: identity.sourceId,
+    sourcePath: identity.sourcePath,
+    sourceName: identity.sourceName,
+    sourceUnitId: String(unitValue.id || "unit"),
+  };
+}
+
+function prefixCollectionBatch(batch, identity, index) {
+  return {
+    ...batch,
+    id: `${identity.sourceId}-${String(batch?.id || `batch-${index}`)}`,
+    index,
+    label: `${identity.sourceName} · ${String(batch?.label || `区块 ${index}`)}`,
+    units: (Array.isArray(batch?.units) ? batch.units : []).map((entry) => prefixCollectionUnit(entry, identity)),
+    contextUnits: (Array.isArray(batch?.contextUnits) ? batch.contextUnits : []).map((entry) => prefixCollectionUnit(entry, identity)),
+    sourceId: identity.sourceId,
+    sourcePath: identity.sourcePath,
+    sourceName: identity.sourceName,
+  };
+}
+
+export async function processDocumentSourceBatches(prepared, options = {}) {
+  const sources = Array.isArray(prepared?.sources) && prepared.sources.length > 0
+    ? prepared.sources
+    : [prepared];
+  if (sources.length === 1) return processSingleDocumentSourceBatches(sources[0], options);
+  if (typeof options.onBatch !== "function") throw new TypeError("onBatch callback is required");
+
+  const totals = {
+    totalUnits: 0,
+    batches: 0,
+    sourceChars: 0,
+    visualPending: 0,
+    selectedPages: 0,
+    processedPages: 0,
+  };
+  const sourceSummaries = [];
+  let globalBatchIndex = 0;
+  let allSourcesHavePageCounts = true;
+  await options.onPlan?.({
+    totalSources: sources.length,
+    completedSources: 0,
+    totalUnits: null,
+    totalBatches: null,
+    unitLabel: "区块",
+  });
+
+  for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+    const source = sources[sourceIndex];
+    const identity = collectionSourceIdentity(source, sourceIndex);
+    let sourcePlan = null;
+    const result = await processSingleDocumentSourceBatches(source, {
+      ...options,
+      pages: undefined,
+      onPlan: async (plan = {}) => {
+        sourcePlan = plan;
+        await options.onPlan?.({
+          totalSources: sources.length,
+          completedSources: sourceIndex,
+          currentSource: identity.sourceName,
+          currentSourceIndex: sourceIndex + 1,
+          totalUnits: totals.totalUnits + (Number(plan.totalUnits) || 0) || null,
+          totalBatches: totals.batches + (Number(plan.totalBatches) || 0) || null,
+          unitLabel: "区块",
+          estimating: sourceIndex + 1 < sources.length,
+        });
+      },
+      onBatch: async (batch) => {
+        globalBatchIndex++;
+        await options.onBatch(prefixCollectionBatch(batch, identity, globalBatchIndex));
+      },
+    });
+    const totalUnits = Number(result?.totalUnits) || 0;
+    const batchCount = Number(result?.batches) || Number(sourcePlan?.totalBatches) || 0;
+    totals.totalUnits += totalUnits;
+    totals.batches += batchCount;
+    totals.sourceChars += Number(result?.sourceChars) || 0;
+    totals.visualPending += Number(result?.visualPending) || 0;
+    if (Number.isFinite(Number(result?.selectedPages)) && Number.isFinite(Number(result?.processedPages))) {
+      totals.selectedPages += Number(result.selectedPages);
+      totals.processedPages += Number(result.processedPages);
+    } else {
+      allSourcesHavePageCounts = false;
+    }
+    sourceSummaries.push({
+      ...identity,
+      documentKind: source?.documentKind || classifyDocumentPath(identity.sourcePath),
+      totalUnits,
+      batches: batchCount,
+      sourceChars: Number(result?.sourceChars) || 0,
+      visualPending: Number(result?.visualPending) || 0,
+      selectedPages: Number.isFinite(Number(result?.selectedPages)) ? Number(result.selectedPages) : null,
+      processedPages: Number.isFinite(Number(result?.processedPages)) ? Number(result.processedPages) : null,
+    });
+  }
+
+  await options.onPlan?.({
+    totalSources: sources.length,
+    completedSources: sources.length,
+    totalUnits: totals.totalUnits,
+    totalBatches: totals.batches,
+    unitLabel: "区块",
+    estimating: false,
+  });
+  return {
+    ...totals,
+    selectedPages: allSourcesHavePageCounts ? totals.selectedPages : null,
+    processedPages: allSourcesHavePageCounts ? totals.processedPages : null,
+    sourceCount: sources.length,
+    sourceSummaries,
+    largeDocument: totals.batches > 1,
+  };
 }

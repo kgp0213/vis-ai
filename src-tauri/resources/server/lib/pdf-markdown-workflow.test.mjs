@@ -127,6 +127,45 @@ test("PDF review requests can select the provider verification profile", async (
   assert.equal(capturedRequest.requestPurpose, "verification");
 });
 
+test("PDF model section rejects output truncated by the provider token limit", async () => {
+  const client = {
+    async *stream() {
+      yield { contentDelta: "## Incomplete section" };
+      yield { finishReason: "length", streamComplete: true };
+    },
+  };
+
+  await assert.rejects(
+    () => generatePdfSectionWithModel({
+      client,
+      model: "limited-model",
+      messages: [],
+      pageRange: "21-25",
+      idleTimeoutMs: 100,
+    }),
+    (error) => error?.name === "DocumentModelOutputTruncatedError" && /输出上限/.test(error.message),
+  );
+});
+
+test("PDF model section rejects non-stream output truncated by the provider token limit", async () => {
+  const client = {
+    async chat() {
+      return { content: "## Incomplete section", finishReason: "length" };
+    },
+  };
+
+  await assert.rejects(
+    () => generatePdfSectionWithModel({
+      client,
+      model: "limited-model",
+      messages: [],
+      pageRange: "26-30",
+      idleTimeoutMs: 100,
+    }),
+    (error) => error?.name === "DocumentModelOutputTruncatedError" && /输出上限/.test(error.message),
+  );
+});
+
 test("PDF model section falls back to chat when a compatible endpoint returns an empty stream", async () => {
   let chatCalls = 0;
   const client = {

@@ -531,6 +531,46 @@ export async function prepareLocalDocument(input, { cfg = {}, env = {}, logger =
   return buildPreparedDocumentResult({ input: raw, sourcePath, readable, candidates });
 }
 
+export async function prepareLocalDocuments(inputs, options = {}) {
+  const values = (Array.isArray(inputs) ? inputs : [inputs])
+    .map((value) => typeof value === "string" ? value.trim() : value)
+    .filter((value) => typeof value !== "string" || value.length > 0);
+  if (values.length === 0) return { ok: false, error: "至少需要一个本地文档路径" };
+  if (values.length > 50) return { ok: false, error: "单次多文档任务最多支持 50 个来源文件" };
+  if (values.length === 1) return prepareLocalDocument(values[0], options);
+
+  const sources = [];
+  const seen = new Set();
+  for (let index = 0; index < values.length; index++) {
+    const prepared = await prepareLocalDocument(values[index], options);
+    if (!prepared?.ok) {
+      return {
+        ...prepared,
+        ok: false,
+        sourceIndex: index,
+        error: `第 ${index + 1} 个来源准备失败：${prepared?.error || "未知错误"}`,
+      };
+    }
+    const key = preparedPathKey(prepared.sourcePath) ?? prepared.sourcePath;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push(prepared);
+  }
+  if (sources.length === 0) return { ok: false, error: "没有可处理的唯一来源文件" };
+  if (sources.length === 1) return sources[0];
+  return {
+    ok: true,
+    multiple: true,
+    documentKind: "collection",
+    sourcePath: sources[0].sourcePath,
+    readablePath: sources[0].readablePath,
+    sourcePaths: sources.map((source) => source.sourcePath),
+    sources,
+    sourceCount: sources.length,
+    usedCompatibilityAdapter: sources.some((source) => source.usedCompatibilityAdapter === true),
+  };
+}
+
 export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console, signal, registry } = {}) {
   if (signal?.aborted) throw new DOMException("document preparation cancelled", "AbortError");
   const managed = registry?.find(path);

@@ -4,10 +4,13 @@ import assert from "node:assert/strict";
 import {
   buildDocumentContract,
   buildDocumentSectionMessages,
+  buildDocumentSummaryMessages,
   chunkDocumentUnits,
+  createDocumentContextUnit,
   evaluateDocumentAssembly,
   evaluateDocumentQuality,
   normalizeDocumentPolicy,
+  documentTaskFingerprint,
   renderDocumentSourceFallback,
 } from "./document-intelligence.mjs";
 
@@ -24,6 +27,31 @@ const technicalUnits = [
   },
 ];
 
+test("summary prompt stays separate from the detailed document body", () => {
+  const messages = buildDocumentSummaryMessages({
+    title: "量产手册",
+    sectionSummaries: ["第 1 节：电压限制和寄存器顺序。"],
+    contract: { fidelity: "complete-with-summary", preserveSource: true },
+  });
+  assert.equal(messages[0].role, "system");
+  assert.match(messages[0].content, /executive summary/);
+  assert.equal(messages[1].role, "user");
+  assert.match(messages[1].content, /量产手册/);
+  assert.match(messages[1].content, /电压限制/);
+});
+
+test("default boundary context budgeting and fallback provider normalization remain deterministic", () => {
+  const context = createDocumentContextUnit({
+    id: "page-2",
+    location: "PDF page 2",
+    text: "相邻页上下文。".repeat(200),
+  }, "before");
+  assert.equal(context.contextOnly, true);
+  assert.equal(context.contextRole, "before");
+  const policy = normalizeDocumentPolicy({ fallbackProviderIds: ["qwen", " qwen ", "deepseek"] });
+  assert.deepEqual(policy.fallbackProviderIds, ["qwen", "deepseek"]);
+});
+
 test("document contract defaults every supported format to complete content plus a separate summary", () => {
   for (const sourcePath of ["manual.pdf", "manual.docx", "data.xlsx", "deck.pptx", "report.html", "notes.md"]) {
     const contract = buildDocumentContract({ sourcePath, outputPath: "result.md" });
@@ -34,10 +62,43 @@ test("document contract defaults every supported format to complete content plus
   }
 });
 
+test("collection contracts validate every source and refuse overwriting any member", () => {
+  const contract = buildDocumentContract({
+    sourcePaths: ["manual.pdf", "data.xlsx", "notes.md"],
+    outputPath: "report.md",
+    title: "Cross-source review",
+  });
+  assert.equal(contract.contractKind, "document-collection");
+  assert.equal(contract.format, "collection");
+  assert.deepEqual(contract.sourceFormats, ["pdf", "spreadsheet", "markdown"]);
+  assert.equal(contract.title, "Cross-source review");
+  assert.match(contract.completionCriteria[0], /每个来源文件/);
+
+  const overwrite = buildDocumentContract({ sourcePaths: ["one.md", "two.md"], outputPath: "two.md" });
+  assert.equal(overwrite.requiresDecision, true);
+  assert.equal(overwrite.decision.id, "source-overwrite");
+  assert.throws(() => buildDocumentContract({ sourcePaths: ["one.md", "unsupported.bin"], outputPath: "report.md" }), /unsupported document format/);
+});
+
 test("legacy binary Office formats are rejected instead of being falsely advertised as OfficeCLI-compatible", () => {
   for (const sourcePath of ["legacy.doc", "legacy.xls", "legacy.ppt", "legacy.rtf"]) {
     assert.throws(() => buildDocumentContract({ sourcePath, outputPath: "result.md" }), /unsupported document format/);
   }
+});
+
+test("document task fingerprints are stable and include source version hints", () => {
+  const input = {
+    sourcePaths: ["C:/docs/manual.pdf"],
+    sourceStats: [{ path: "C:/docs/manual.pdf", size: 42, mtimeMs: 100 }],
+    outputPath: "C:/workspace/manual.md",
+    contract: { fidelity: "complete-with-summary", instructions: "keep tables" },
+  };
+  const first = documentTaskFingerprint(input);
+  assert.equal(first, documentTaskFingerprint(structuredClone(input)));
+  assert.notEqual(first, documentTaskFingerprint({
+    ...input,
+    sourceStats: [{ ...input.sourceStats[0], mtimeMs: 101 }],
+  }));
 });
 
 test("document contract refuses an implicit source overwrite and asks one decision at a time", () => {

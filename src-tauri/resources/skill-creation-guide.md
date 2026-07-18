@@ -28,7 +28,7 @@ created: 2026-05-15
 ```
 ~/.visionox/skills/<skill-name>/
 ├── SKILL.md               # 【必需】Skill 描述（YAML front-matter + markdown）
-├── README.md              # 【推荐】用户安装使用说明
+├── README.md              # 可选：仅在 Skill 运行确实需要时保留
 ├── _skillhub_meta.json    # 【推荐】Skill Hub 元数据
 ├── scripts/               # 核心脚本
 │   └── <tool>.js / .py / .sh / .ps1
@@ -118,40 +118,48 @@ main();
 
 ### 第 5 步：打包分发
 
-有三种安装方式，按场景选择。
+按以下优先级选择安装方式。所有安装都必须调用 `install_skill`，不要使用通用文件工具或 Shell 命令把内容复制到 `~/.visionox/skills`。
 
-#### 方式一：source_dir 目录直接安装（开发/调试推荐）
+#### 方式一：.skill 或 .zip 文件安装（推荐）
 
-如果你的 skill 包含辅助文件（`scripts/`、`references/`、`templates/`、`README.md`、`_skillhub_meta.json` 等），直接告诉 AI：
+跨机器部署或用户已经提供压缩包时，必须把用户给出的原始文件路径直接传给 `source`：
 
+```text
+install_skill({ name: "my-skill", source: "C:\\path\\my-skill.zip" })
 ```
-请用 source_dir 安装 ~/my-skill/ 到 visionox
-```
 
-AI 会调用 `install_skill({ name: "my-skill", source_dir: "/path/to/my-skill/" })` 递归复制所有文件到 `~/.visionox/skills/<name>/`。
+硬性规则：
 
-这是开发阶段最方便的方式 —— 无需打包，修改即时生效。目录必须包含有效的 `SKILL.md`。
+- 不要寻找压缩包旁边的同名目录。
+- 不要先手动解压，再改用 `source_dir`。
+- 不要使用 `Copy-Item -Recurse`、`cp`、`robocopy`、`xcopy` 或自写脚本递归复制。
+- 安装阶段不要执行 Skill 内脚本，也不要下载依赖。
+- 只有工具返回 `installed: true` 才能告知用户安装成功。
 
-#### 方式二：.skill 文件分发（跨机器部署）
+`.skill` 本质是标准 ZIP。制作 `.skill` 时可先输出 ZIP，再修改扩展名；安装时不需要改回 ZIP：
 
 ```powershell
-# 先压缩
-Compress-Archive -Path 'skill-dir\*' -DestinationPath 'skill-dir.zip' -Force
-# 改名 .skill（本质是 ZIP）
-ren skill-dir.zip skill-name.skill
-
-# 用户安装（反过来）
-ren skill-name.skill skill-name.zip
-# 解压到 ~/.visionox/skills/<skill-name>/
+Compress-Archive -Path 'skill-dir\*' -DestinationPath 'skill-name.zip' -Force
+Rename-Item 'skill-name.zip' 'skill-name.skill'
 ```
 
-`.skill` 文件本质是标准 ZIP，只是扩展名不同。PowerShell 的 `Compress-Archive` 不支持直接输出 `.skill`，所以先 `.zip` 再改名。
+压缩包根目录应直接包含 `SKILL.md`，或者只包含一个带有 `SKILL.md` 的顶层 Skill 目录。
 
-#### 方式三：body 直接写入（仅单一 SKILL.md）
+#### 方式二：body 直接写入（仅单一 SKILL.md）
 
-只用 `install_skill({ name: "my-skill", body: "---\nname: ...\n---\n..." })` 创建仅含 `SKILL.md` 的 skill。
+使用 `install_skill({ name: "my-skill", body: "---\nname: ...\n---\n..." })` 创建只含 `SKILL.md` 的 Skill。
 
-**注意**：body 模式**只会写入一个 SKILL.md 文件**，不会安装 `scripts/`、`references/`、`templates/` 等辅助文件。如果你的 skill 需要脚本或参考文档，请使用方式一（source_dir）或方式二（.skill）。
+`body` 不会安装 `scripts/`、`references/`、`templates/` 等辅助文件；含辅助文件时应先打包为 `.skill` 或 `.zip`。
+
+#### 方式三：source_dir 目录安装（受限开发场景）
+
+只有用户明确提供的是目录、并且没有同时提供 `.skill` 或 `.zip` 时，才允许调用：
+
+```text
+install_skill({ name: "my-skill", source_dir: "C:\\path\\my-skill" })
+```
+
+目录必须包含有效的 `SKILL.md`。此模式由宿主隔离安装，不要自行补充任何递归复制命令。日常分发和其他电脑安装仍优先使用压缩包。
 
 #### 方式四：用 `/learn skill <目录>` 自动萃取（Visionox ≥ 1.11.0）
 
@@ -256,11 +264,11 @@ try {
 ## 七、快速创建模板
 
 ```bash
-# 1. 创建目录结构
-mkdir -p ~/.visionox/skills/<name>/{scripts,references,templates}
+# 1. 在独立开发目录创建结构，不要直接写入 ~/.visionox/skills
+mkdir -p ~/skill-work/<name>/{scripts,references,templates}
 
 # 2. 创建 SKILL.md
-cat > ~/.visionox/skills/<name>/SKILL.md << 'EOF'
+cat > ~/skill-work/<name>/SKILL.md << 'EOF'
 ---
 name: <name>
 description: "简短英文描述"
@@ -268,16 +276,17 @@ version: 1.0.0
 ---
 EOF
 
-# 3. 安装依赖
-cd ~/.visionox/skills/<name>
+# 3. 在源目录安装并验证开发依赖
+cd ~/skill-work/<name>
 npm install <pkg>
 
 # 4.（可选）打包为 .skill 分发
-# 开发阶段可跳过此步，直接用 source_dir 安装到目标机器
 # Compress-Archive -Path .\* -DestinationPath ..\<name>.zip -Force
-# ren ..\<name>.zip <name>.skill
+# Rename-Item ..\<name>.zip ..\<name>.skill
+# 将原始 .skill/.zip 路径交给 install_skill 的 source 参数
 ```
 
 **推荐工作流**：
-- 开发/调试时：直接操作 `~/.visionox/skills/<name>/` 目录，修改后即时生效
-- 分发给他人时：打包为 `.skill` 文件（方式二），或让对方用 `source_dir` 从共享目录安装（方式一）
+- 开发/调试时：在独立源目录修改和验证，再通过 `source_dir` 的宿主隔离流程安装
+- 分发给他人时：打包为 `.skill` 或 `.zip`，让程序直接从原始压缩包安装
+- 安装完成后：新建对话或使用 `/new`，让 Skill 索引重新加载

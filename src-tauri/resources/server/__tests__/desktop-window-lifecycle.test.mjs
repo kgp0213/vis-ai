@@ -38,3 +38,22 @@ test("startup loader waits for a rendered dashboard readiness handshake", () => 
   assert.match(loader, /frame\.style\.visibility = "hidden"/);
   assert.doesNotMatch(desktop, /spinner\.style\.display='none'/);
 });
+
+test("cold startup waits for the current server instead of navigating to a stale saved port", () => {
+  const restoreStart = loader.indexOf("function restoreDashboard()");
+  const restoreEnd = loader.indexOf("function fallbackToRust()", restoreStart);
+  const restoreBody = loader.slice(restoreStart, restoreEnd);
+  assert.match(restoreBody, /sessionStorage\.getItem\("visionox\.dashboardUrl"\) \|\| ""/);
+  assert.doesNotMatch(restoreBody, /localStorage\.getItem\("visionox\.dashboardUrl"\)/);
+  assert.match(loader, /get_dashboard_url is not ready; waiting for current server/);
+  assert.match(loader, /restoreFromRustAndShow\(attempt \+ 1\)/);
+  assert.match(loader, /本地服务启动超时/);
+});
+
+test("startup loader is theme-aware and avoids the legacy spinner", () => {
+  assert.doesNotMatch(loader, /class="spin"/);
+  assert.match(loader, /class="startup-progress"/);
+  assert.match(loader, /data-theme="midnight-ink"/);
+  assert.match(loader, /prefers-reduced-motion: reduce/);
+  assert.match(loader, /正在启动本地服务/);
+});

@@ -78,6 +78,40 @@ test("pre-aborted command chains do not spawn commands", async () => {
   );
 });
 
+test("long command output keeps both the beginning and the diagnostic tail", async () => {
+  const result = await runCommand(
+    nodeCommand("process.stdout.write('HEAD-' + 'x'.repeat(5000) + '-TAIL')"),
+    {
+      cwd: process.cwd(),
+      timeoutSec: 5,
+      maxOutputChars: 500,
+    },
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.output.startsWith("HEAD-"));
+  assert.ok(result.output.endsWith("-TAIL"));
+  assert.match(result.output, /showing beginning and end/);
+  assert.ok(result.output.length <= 500);
+});
+
+test("long UTF-8 command output keeps readable beginning and tail", async () => {
+  const result = await runCommand(
+    nodeCommand("process.stdout.write('\\u5f00\\u5934-' + '\\u4e2d'.repeat(5000) + '-\\u7ed3\\u5c3e')"),
+    {
+      cwd: process.cwd(),
+      timeoutSec: 5,
+      maxOutputChars: 500,
+    },
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.output.startsWith("开头-"));
+  assert.ok(result.output.endsWith("-结尾"));
+  assert.match(result.output, /showing beginning and end/);
+  assert.doesNotMatch(result.output, /�/);
+});
+
 test("hooks stop promptly when their signal is aborted", async () => {
   const controller = new AbortController();
   const pending = runHooks({

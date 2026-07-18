@@ -216,6 +216,7 @@ var DeepSeekClient = class {
         reasoningContent: choice.reasoning_content ?? null,
         toolCalls: choice.tool_calls ?? [],
         usage: Usage.fromApi(data.usage),
+        finishReason: data.choices?.[0]?.finish_reason ?? void 0,
         raw: data
       };
     } finally {
@@ -253,9 +254,14 @@ var DeepSeekClient = class {
     }
     const queue = [];
     let done = false;
+    let receivedDoneMarker = false;
+    let lastFinishReason;
+    let protocolError = null;
     const parser = createParser({
       onEvent: (ev) => {
-        if (!ev.data || ev.data === "[DONE]") {
+        if (!ev.data || !ev.data.trim()) return;
+        if (ev.data === "[DONE]") {
+          receivedDoneMarker = true;
           done = true;
           return;
         }
@@ -263,6 +269,7 @@ var DeepSeekClient = class {
           const json = JSON.parse(ev.data);
           const delta = json.choices?.[0]?.delta ?? {};
           const finishReason = json.choices?.[0]?.finish_reason ?? void 0;
+          if (typeof finishReason === "string" && finishReason) lastFinishReason = finishReason;
           const chunk = { raw: json, finishReason };
           if (typeof delta.content === "string" && delta.content.length > 0) {
             chunk.contentDelta = delta.content;
@@ -283,7 +290,10 @@ var DeepSeekClient = class {
             chunk.usage = Usage.fromApi(json.usage);
           }
           queue.push(chunk);
-        } catch {
+        } catch (error) {
+          protocolError = new Error(`model provider returned malformed SSE JSON (${ev.data.length} chars): ${error.message}`);
+          protocolError.name = "ModelStreamProtocolError";
+          done = true;
         }
       }
     });
@@ -295,12 +305,24 @@ var DeepSeekClient = class {
           yield queue.shift();
           continue;
         }
+        if (protocolError) throw protocolError;
         if (done) break;
         const { value, done: streamDone } = await reader.read();
         if (streamDone) break;
         parser.feed(decoder.decode(value, { stream: true }));
       }
       while (queue.length > 0) yield queue.shift();
+      if (protocolError) throw protocolError;
+      if (!receivedDoneMarker && !lastFinishReason) {
+        const error = new Error("model response stream closed without an explicit completion marker or finish reason");
+        error.name = "ModelStreamIncompleteError";
+        throw error;
+      }
+      yield {
+        streamComplete: true,
+        completionSource: receivedDoneMarker ? "done-marker" : "finish-reason",
+        finishReason: lastFinishReason
+      };
     } finally {
       clearTimeout(timer);
       reader.releaseLock();
@@ -5910,6 +5932,18 @@ function signature(call) {
 
 // src/loop.ts
 var ESCALATION_MODEL = "deepseek-v4-pro";
+function assertModelResponseComplete(finishReason) {
+  if (finishReason === "length") {
+    const error = new Error("model response reached the provider output limit and was truncated");
+    error.name = "ModelOutputTruncatedError";
+    throw error;
+  }
+  if (finishReason === "content_filter") {
+    const error = new Error("model response was stopped by the provider content filter");
+    error.name = "ModelOutputFilteredError";
+    throw error;
+  }
+}
 var PARENT_BUDGET_WARN_THRESHOLD = 5;
 var CacheFirstLoop = class {
   client;
@@ -5926,6 +5960,7 @@ var CacheFirstLoop = class {
   stream;
   reasoningEffort;
   autoEscalate = true;
+  escalationModel;
   budgetUsd;
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   _budgetWarned = false;
@@ -5963,6 +5998,7 @@ var CacheFirstLoop = class {
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
     this.model = opts.model ?? "deepseek-v4-flash";
+    this.escalationModel = typeof opts.escalationModel === "string" && opts.escalationModel.trim() ? opts.escalationModel.trim() : ESCALATION_MODEL;
     this.reasoningEffort = opts.reasoningEffort ?? "max";
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
     this.vision = opts.vision ?? false;
@@ -5997,7 +6033,7 @@ var CacheFirstLoop = class {
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
-        if (String(_name).toLowerCase() === "extract_pdf_text" || String(_name).toLowerCase() === "organize_document_to_markdown") return result;
+        if (["extract_pdf_text", "organize_document_to_markdown", "organize_documents_to_report"].includes(String(_name).toLowerCase())) return result;
         const remaining = this.maxToolIters - this._toolDispatchesThisStep;
         if (remaining <= 0) {
           return `${result}
@@ -6114,6 +6150,7 @@ var CacheFirstLoop = class {
     }
     if (opts.reasoningEffort !== void 0) this.reasoningEffort = opts.reasoningEffort;
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
+    if (typeof opts.escalationModel === "string" && opts.escalationModel.trim()) this.escalationModel = opts.escalationModel.trim();
     if (opts.vision !== void 0) this.vision = opts.vision;
     if (opts.visionDetail !== void 0) this.visionDetail = opts.visionDetail;
   }
@@ -6143,7 +6180,7 @@ var CacheFirstLoop = class {
     return this.modelForCurrentCall();
   }
   modelForCurrentCall() {
-    return this._escalateThisTurn ? ESCALATION_MODEL : this.model;
+    return this._escalateThisTurn ? this.escalationModel : this.model;
   }
   /** Returns true ONLY on the tipping call — caller surfaces a one-shot warning. */
   noteToolFailureSignal(resultJson, repair) {
@@ -6428,12 +6465,13 @@ ${reason}`
       let reasoningContent = "";
       let toolCalls = [];
       let usage = null;
+      let finishReason = null;
       try {
         if (this.stream) {
           const callBuf = /* @__PURE__ */ new Map();
           const readyIndices = /* @__PURE__ */ new Set();
           const callModel = this.modelForCurrentCall();
-          const bufferForEscalation = this.autoEscalate && callModel !== ESCALATION_MODEL;
+          const bufferForEscalation = this.autoEscalate && callModel !== this.escalationModel;
           let escalationBuf = "";
           let escalationBufFlushed = false;
           for await (const chunk of this.client.stream({
@@ -6444,6 +6482,7 @@ ${reason}`
             thinking: thinkingModeForModel(callModel),
             reasoningEffort: this.reasoningEffort
           })) {
+            if (chunk.finishReason) finishReason = chunk.finishReason;
             if (chunk.reasoningDelta) {
               reasoningContent += chunk.reasoningDelta;
               yield {
@@ -6506,6 +6545,7 @@ ${reason}`
             }
             if (chunk.usage) usage = chunk.usage;
           }
+          assertModelResponseComplete(finishReason);
           toolCalls = [...callBuf.values()];
           if (bufferForEscalation && !escalationBufFlushed && escalationBuf.length > 0) {
             if (!isEscalationRequest(escalationBuf)) {
@@ -6530,6 +6570,8 @@ ${reason}`
           reasoningContent = resp.reasoningContent ?? "";
           toolCalls = resp.toolCalls;
           usage = resp.usage;
+          finishReason = resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason ?? null;
+          assertModelResponseComplete(finishReason);
         }
       } catch (err) {
         if (signal.aborted) {
@@ -6546,14 +6588,14 @@ ${reason}`
         };
         return;
       }
-      if (this.autoEscalate && this.modelForCurrentCall() !== ESCALATION_MODEL && isEscalationRequest(assistantContent)) {
+      if (this.autoEscalate && this.modelForCurrentCall() !== this.escalationModel && isEscalationRequest(assistantContent)) {
         const { reason } = parseEscalationMarker(assistantContent);
         this._escalateThisTurn = true;
         const reasonSuffix = reason ? ` \u2014 ${reason}` : "";
         yield {
           turn: this._turn,
           role: "warning",
-          content: t("loop.flashEscalation", { model: ESCALATION_MODEL, reasonSuffix })
+          content: t("loop.flashEscalation", { model: this.escalationModel, reasonSuffix })
         };
         assistantContent = "";
         reasoningContent = "";
@@ -6597,7 +6639,7 @@ ${reason}`
           turn: this._turn,
           role: "warning",
           content: t("loop.autoEscalation", {
-            model: ESCALATION_MODEL,
+            model: this.escalationModel,
             breakdown: this._turnFailures.formatBreakdown(),
             fallback: this.model
           })
@@ -6748,7 +6790,7 @@ ${reason}`
               turn: this._turn,
               role: "warning",
               content: t("loop.autoEscalation", {
-                model: ESCALATION_MODEL,
+                model: this.escalationModel,
                 breakdown: this._turnFailures.formatBreakdown(),
                 fallback: this.model
               })
@@ -8867,7 +8909,7 @@ function registerFilesystemTools(registry, opts) {
   registry.register({
     name: "read_file",
     parallelSafe: true,
-    description: `Read a file under the sandbox root. To save context, PREFER to scope the read instead of pulling the whole file:
+    description: `Read a UTF-8 text file under the sandbox root. Do not use this for PDF or Office binary content; use prepare_local_document plus extract_pdf_text, OfficeCLI, or the managed document workflow. To save context, PREFER to scope the read instead of pulling the whole file:
   - head: N  \u2192 first N lines (imports, public API, small configs)
   - tail: N  \u2192 last N lines (recently-added code, log tails)
   - range: "A-B"  \u2192 inclusive line range A..B, 1-indexed (e.g. "120-180" around an edit site)
@@ -11048,9 +11090,7 @@ async function runChain(chain, opts) {
     if (opts.signal?.aborted) break;
   }
   const output = buf.toString();
-  const truncated = output.length > opts.maxOutputChars ? `${output.slice(0, opts.maxOutputChars)}
-
-[\u2026 truncated ${output.length - opts.maxOutputChars} chars \u2026]` : output;
+  const truncated = truncateCommandOutput(output, opts.maxOutputChars);
   return { exitCode: lastExit, output: truncated, timedOut };
 }
 function isNullDeviceAlias(target) {
@@ -11196,25 +11236,54 @@ function toBuf(chunk) {
 var OutputBuffer = class {
   constructor(cap) {
     this.cap = cap;
+    this.headCap = Math.ceil(cap * 0.65);
+    this.tailCap = Math.max(0, cap - this.headCap);
   }
   cap;
-  chunks = [];
-  bytes = 0;
+  headCap;
+  tailCap;
+  headChunks = [];
+  headBytes = 0;
+  tail = Buffer.alloc(0);
+  totalBytes = 0;
   push(b) {
-    if (this.bytes >= this.cap) return;
-    const remaining = this.cap - this.bytes;
-    if (b.length > remaining) {
-      this.chunks.push(b.subarray(0, remaining));
-      this.bytes = this.cap;
-    } else {
-      this.chunks.push(b);
-      this.bytes += b.length;
+    this.totalBytes += b.length;
+    let remaining = b;
+    if (this.headBytes < this.headCap) {
+      const take = Math.min(this.headCap - this.headBytes, remaining.length);
+      if (take > 0) {
+        this.headChunks.push(remaining.subarray(0, take));
+        this.headBytes += take;
+        remaining = remaining.subarray(take);
+      }
     }
+    if (remaining.length === 0 || this.tailCap === 0) return;
+    if (remaining.length >= this.tailCap) {
+      this.tail = remaining.subarray(remaining.length - this.tailCap);
+      return;
+    }
+    const combined = Buffer.concat([this.tail, remaining]);
+    this.tail = combined.length > this.tailCap ? combined.subarray(combined.length - this.tailCap) : combined;
   }
   toString() {
-    return smartDecodeOutput(Buffer.concat(this.chunks));
+    const head = Buffer.concat(this.headChunks);
+    if (this.totalBytes <= head.length + this.tail.length) {
+      return smartDecodeOutput(Buffer.concat([head, this.tail]));
+    }
+    return `${decodeTruncatedOutputPart(head, false)}${decodeTruncatedOutputPart(this.tail, true)}`;
   }
 };
+function decodeTruncatedOutputPart(buffer, trimStart) {
+  const maxTrim = Math.min(3, buffer.length);
+  for (let trim = 0; trim <= maxTrim; trim++) {
+    const candidate = trimStart ? buffer.subarray(trim) : buffer.subarray(0, buffer.length - trim);
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(candidate);
+    } catch {
+    }
+  }
+  return smartDecodeOutput(buffer);
+}
 
 // src/tools/shell/parse.ts
 var BUILTIN_ALLOWLIST = [
@@ -11433,6 +11502,15 @@ function isCommandAllowed(cmd, extra = []) {
 // src/tools/shell/exec.ts
 var DEFAULT_TIMEOUT_SEC = 60;
 var DEFAULT_MAX_OUTPUT_CHARS = 32e3;
+function truncateCommandOutput(value, maxChars) {
+  const text = String(value ?? "");
+  if (text.length <= maxChars) return text;
+  const marker = "\n\n[\u2026 output truncated; showing beginning and end \u2026]\n\n";
+  const contentBudget = Math.max(0, maxChars - marker.length);
+  const headChars = Math.ceil(contentBudget * 0.65);
+  const tailChars = Math.max(0, contentBudget - headChars);
+  return `${text.slice(0, headChars)}${marker}${tailChars > 0 ? text.slice(-tailChars) : ""}`;
+}
 function killProcessTree2(child) {
   if (!child.pid || child.killed) return;
   if (process.platform === "win32") {
@@ -11496,9 +11574,8 @@ async function runCommand(cmd, opts) {
       reject(err);
       return;
     }
-    const chunks = [];
-    let totalBytes = 0;
     const byteCap = maxChars * 2 * 4;
+    const outputBuffer = new OutputBuffer(byteCap);
     let timedOut = false;
     let aborted = false;
     const killChildTree = () => killProcessTree2(child);
@@ -11517,15 +11594,7 @@ async function runCommand(cmd, opts) {
     }
     const onData = (chunk) => {
       const b = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
-      if (totalBytes >= byteCap) return;
-      const remaining = byteCap - totalBytes;
-      if (b.length > remaining) {
-        chunks.push(b.subarray(0, remaining));
-        totalBytes = byteCap;
-      } else {
-        chunks.push(b);
-        totalBytes += b.length;
-      }
+      outputBuffer.push(b);
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
@@ -11537,11 +11606,8 @@ async function runCommand(cmd, opts) {
     child.on("close", (code) => {
       clearTimeout(killTimer);
       opts.signal?.removeEventListener("abort", onAbort);
-      const merged = Buffer.concat(chunks);
-      const buf = smartDecodeOutput(merged);
-      const output = buf.length > maxChars ? `${buf.slice(0, maxChars)}
-
-[\u2026 truncated ${buf.length - maxChars} chars \u2026]` : buf;
+      const buf = outputBuffer.toString();
+      const output = truncateCommandOutput(buf, maxChars);
       resolve10({ exitCode: code, output, timedOut });
     });
   });

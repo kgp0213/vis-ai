@@ -12,6 +12,7 @@ const DOCUMENT_WRITER_NAMES = new Set([
   "edit",
   "multi_edit",
   "organize_document_to_markdown",
+  "organize_documents_to_report",
   "organize_pdf_to_markdown",
   "save_file",
   "save_last_assistant_response",
@@ -26,6 +27,9 @@ const PENDING_DOCUMENT_STATUSES = new Set([
   "queued",
   "running",
   "waiting_foreground",
+  "waiting_provider",
+  "stopped",
+  "source_changed",
 ]);
 
 function parseMaybeObject(value) {
@@ -157,7 +161,7 @@ export function artifactMissingNotice() {
 }
 
 export function pendingDocumentArtifactFromToolEvent(toolName, toolArgs, toolResult) {
-  if (String(toolName ?? "").toLowerCase() !== "organize_document_to_markdown") return null;
+  if (!["organize_document_to_markdown", "organize_documents_to_report"].includes(String(toolName ?? "").toLowerCase())) return null;
   const result = parseMaybeObject(toolResult);
   if (result?.ok !== true || result?.accepted !== true || result?.artifactStatus !== "pending") return null;
   const args = parseMaybeObject(toolArgs) ?? {};
@@ -168,14 +172,14 @@ export function pendingDocumentArtifactFromToolEvent(toolName, toolArgs, toolRes
     jobId,
     documentJobId: String(result.documentJobId ?? jobId.replace(/^document:/, "")),
     outputPath: String(result.outputPath ?? args.outputPath ?? "").trim(),
-    sourcePath: String(result.sourcePath ?? args.input ?? "").trim(),
+    sourcePath: String(result.sourcePath ?? args.input ?? args.inputs?.[0] ?? "").trim(),
   };
 }
 
 export function documentArtifactStateFromJob(job) {
   const status = String(job?.status ?? "").toLowerCase();
   if (status === "completed" || status === "completed_with_warnings") return "created";
-  if (status === "failed" || status === "cancelled") return "failed";
+  if (status === "failed" || status === "cancelled" || status === "abandoned") return "failed";
   return "pending";
 }
 

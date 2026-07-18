@@ -1,68 +1,56 @@
 ---
 name: skill-creation-guide
-description: Offline guide for creating, packaging, installing, and repairing Visionox skills.
-description_zh: Visionox Skill 创建、打包、安装和故障修复的离线指南。
-version: 1.0.0
+description: Create, package, install, update, diagnose, or repair Visionox Skills. Use this whenever the user asks to install or import a local .skill/.zip archive or Skill directory.
 license: MIT
 metadata:
   builtin: true
   category: system
 ---
 
-# Skill Creation Guide
+# Visionox Skill Workflow
 
-Use this skill when the user needs to create, import, package, diagnose, or repair Visionox skills.
+Use the host `install_skill` tool for installation. Do not install a Skill with generic filesystem or shell copy commands.
 
-## Emergency Recovery
+## Install an existing Skill
 
-Visionox keeps global skills in:
+Follow this decision order exactly:
 
-```text
-~/.visionox/skills/<skill-name>/
-```
+1. If the user supplied a `.skill` or `.zip` file, call `install_skill` with `name` and the exact archive path in `source`.
+2. If the user supplied only one complete `SKILL.md`, call `install_skill` with `name` and `body`.
+3. Use `source_dir` only when the user explicitly supplied a directory and no archive was supplied.
 
-Every skill directory must contain a root `SKILL.md` with YAML frontmatter:
+For an archive installation:
 
-```yaml
----
-name: my-skill
-description: One-line description that helps the model choose this skill.
-version: 1.0.0
----
-```
+- Do not search for or prefer a same-named directory beside the archive.
+- Do not extract the archive manually before calling `install_skill`.
+- Do not use `Copy-Item -Recurse`, `cp`, `robocopy`, `xcopy`, a custom script, or another recursive-copy mechanism.
+- Do not execute scripts from the Skill or download dependencies during installation.
+- Claim success only when the tool returns `installed: true`. Report the returned error otherwise.
 
-If skill installation is broken, use the Skills panel repair action first. It restores Visionox bootstrap skills without deleting user-created skills.
+After successful installation, tell the user to start a new conversation or use `/new` before invoking the Skill.
 
-Manual fallback:
+## Create or update a Skill
 
-1. Create `~/.visionox/skills/<skill-name>/`.
-2. Add `SKILL.md` at the root.
-3. Put scripts in `scripts/`, references in `references/`, and templates in `templates/`.
-4. Start a new conversation so the skill index is rebuilt.
-
-## Naming
-
-Use lowercase English letters, numbers, and hyphens only:
+Use lowercase letters, numbers, and hyphens for the directory and frontmatter name. Keep the Skill focused and place only reusable resources beside `SKILL.md`:
 
 ```text
-my-skill-name
+skill-name/
+|- SKILL.md
+|- scripts/       # deterministic helpers, when needed
+|- references/    # detailed material loaded on demand
+`- assets/        # templates or output resources, when needed
 ```
 
-Avoid spaces, Chinese characters, and uppercase letters in skill names and script filenames.
+Write a precise `description` that states both the capability and the requests that should trigger it. Keep the body procedural and concise. Do not add auxiliary documentation that the Skill does not need.
 
-## Installation Choices
+Before packaging:
 
-- `source_dir`: best for full skill folders during development.
-- `.skill` or `.zip`: best for sharing across machines.
-- `body`: only for a single `SKILL.md` without helper files.
+- Validate the `SKILL.md` frontmatter and name.
+- Run a representative smoke test for every bundled script.
+- Make scripts display usage for missing arguments and return non-zero on failure.
+- Keep API keys, tokens, user identities, and machine-specific paths out of the package.
+- Put `SKILL.md` at the archive root or inside one top-level Skill directory.
 
-When a skill includes `scripts/`, `references/`, `templates/`, `README.md`, or metadata files, prefer `source_dir` or `.skill`.
+## Repair
 
-## Quality Checklist
-
-- `SKILL.md` has valid frontmatter and a precise description.
-- The skill states what it supports and what it does not support.
-- Scripts show usage when called without required arguments.
-- Scripts return non-zero exit codes on failure.
-- Dependencies and setup commands are documented in `README.md`.
-- A simple sample input or smoke test is included when practical.
+Use the Skills panel repair action for missing bootstrap Skills. It restores managed Skills without deleting user-created Skills. Do not work around a failed installation by manually copying files into `~/.visionox/skills`.

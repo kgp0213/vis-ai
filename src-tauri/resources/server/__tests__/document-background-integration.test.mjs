@@ -42,11 +42,14 @@ test("document background API supports string ids and lifecycle actions", async 
   assert.equal(listed.body.jobs[0].kind, "document");
   const detail = await request("GET", `/api/background-jobs/${encodeURIComponent(id)}`, undefined, ctx);
   assert.equal(detail.status, 200);
-  for (const action of ["pause", "resume", "retry"]) {
+  for (const action of ["pause", "resume", "retry", "stop", "abandon"]) {
     const response = await request("POST", `/api/background-jobs/${encodeURIComponent(id)}`, { action }, ctx);
     assert.equal(response.status, 200);
   }
-  assert.deepEqual(actions, [[id, "pause"], [id, "resume"], [id, "retry"]]);
+  const deleted = await request("DELETE", `/api/background-jobs/${encodeURIComponent(id)}`, undefined, ctx);
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.action, "delete");
+  assert.deepEqual(actions, [[id, "pause"], [id, "resume"], [id, "retry"], [id, "stop"], [id, "abandon"], [id, "delete"]]);
 });
 
 test("background task panel controls and previews resumable document jobs", () => {
@@ -56,17 +59,21 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(app, /function documentJobStatusLabel/);
   assert.match(app, /function documentJobProgressLabel/);
   assert.match(app, /documentJobStageLabel/);
-  assert.match(app, /controlDocumentJob\(job\.id, "pause"\)/);
-  assert.match(app, /controlDocumentJob\(job\.id, "resume"\)/);
-  assert.match(app, /controlDocumentJob\(job\.id, "retry"\)/);
-  assert.match(app, /previewDocumentJob\(job\)/);
-  assert.match(app, /回退模型 · /);
+  assert.match(app, /background-jobs-workbench/);
+  assert.match(app, /onControl\(selected\.id, "pause"\)/);
+  assert.match(app, /onControl\(selected\.id, "resume"\)/);
+  assert.match(app, /onControl\(selected\.id, "retry"\)/);
+  assert.match(app, /立即停止/);
+  assert.match(app, /放弃任务会终止后续处理/);
+  assert.match(app, /仅删除任务记录和中间草稿/);
+  assert.match(app, /备用候选/);
+  assert.doesNotMatch(app, /bottom:100%;right:0;width:420px;max-height:280px/);
   assert.match(app, /encodeURIComponent\(id\)/);
-  assert.match(app, /job\.progress\?\.percent/);
+  assert.match(app, /progress\.percent/);
   assert.match(app, /detail\?\.job\?\.preview/);
   assert.match(app, /当前还没有可预览的已完成区块/);
   assert.match(server, /parseBody\(body\)\.action/);
-  assert.match(server, /\["pause", "resume", "retry", "cancel"\]/);
+  assert.match(server, /\["pause", "resume", "retry", "stop", "cancel", "abandon"\]/);
   assert.match(launcher, /documentMarkdownManager\.listMetadata/);
   assert.match(launcher, /documentMarkdownManager\?\.control\(id, action\)/);
 });

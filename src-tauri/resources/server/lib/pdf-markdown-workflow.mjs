@@ -434,17 +434,32 @@ export async function generatePdfSectionWithModel({
   const hardTimer = setTimeout(() => hardController.abort(), hardMs);
   let generatedChars = 0;
   let content = "";
+  let finishReason = null;
+
+  const assertCompleteOutput = () => {
+    if (finishReason === "length") {
+      const error = new Error(`模型整理 ${pageRange || "当前区块"} 的输出达到模型输出上限，结果不完整，必须缩小区块后重试。`);
+      error.name = "DocumentModelOutputTruncatedError";
+      throw error;
+    }
+    if (finishReason === "content_filter") {
+      const error = new Error(`模型整理 ${pageRange || "当前区块"} 的输出被服务端内容策略中止，结果不完整。`);
+      error.name = "DocumentModelOutputFilteredError";
+      throw error;
+    }
+  };
 
   const armIdleTimeout = () => {
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => idleController.abort(), idleMs);
   };
-  const emitProgress = () => onProgress?.({
+  const emitProgress = (extra = {}) => onProgress?.({
     phase: "model",
     stage,
     pageRange,
     elapsedMs: Date.now() - startedAt,
     generatedChars,
+    ...extra,
   });
   armIdleTimeout();
   emitProgress();
@@ -462,20 +477,24 @@ export async function generatePdfSectionWithModel({
     if (typeof client.stream === "function") {
       for await (const chunk of client.stream(request)) {
         armIdleTimeout();
+        if (chunk?.finishReason) finishReason = chunk.finishReason;
         if (chunk?.contentDelta) {
           content += chunk.contentDelta;
           generatedChars = content.length;
         }
       }
+      assertCompleteOutput();
     }
     if (!content.trim() && typeof client.chat === "function") {
       armIdleTimeout();
       const response = await client.chat(request);
       armIdleTimeout();
       content = response?.content ?? "";
+      finishReason = response?.finishReason ?? response?.raw?.choices?.[0]?.finish_reason ?? null;
+      assertCompleteOutput();
       generatedChars = content.length;
     }
-    emitProgress();
+    emitProgress({ complete: true, finishReason });
     return content;
   } catch (error) {
     if (hardController.signal.aborted && !signal?.aborted) {

@@ -11,6 +11,7 @@ import {
   getDlpConfig,
   latestPreparedDocumentRef,
   prepareLocalDocument,
+  prepareLocalDocuments,
   resolveDlpScriptPath,
   resolveReadablePathForDlp,
   wrapToolsPathArgsWithDlp,
@@ -172,6 +173,33 @@ test("prepareLocalDocument extracts a malformed Windows drive path from a full p
     assert.equal(resolve(result.readablePath), resolve(decrypted));
     assert.equal(result.documentKind, "pdf");
     assert.equal(result.usedCompatibilityAdapter, true);
+  });
+});
+
+test("prepareLocalDocuments prepares a deduplicated source collection without changing single-document behavior", async () => {
+  await withTempDir(async (dir) => {
+    const first = join(dir, "first.md");
+    const second = join(dir, "second.html");
+    await writeFile(first, "# First\n", "utf8");
+    await writeFile(second, "<h1>Second</h1>", "utf8");
+    const options = {
+      cfg: { dlp: { mode: "off" } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry: createPreparedDocumentRegistry(),
+    };
+
+    const collection = await prepareLocalDocuments([first, second, first], options);
+    assert.equal(collection.ok, true);
+    assert.equal(collection.documentKind, "collection");
+    assert.equal(collection.sourceCount, 2);
+    assert.deepEqual(collection.sourcePaths.map((path) => resolve(path)), [resolve(first), resolve(second)]);
+    assert.equal(collection.sources.length, 2);
+    assert.ok(collection.sources.every((source) => typeof source.documentKind === "string" && source.documentKind.length > 0));
+
+    const single = await prepareLocalDocuments([first], options);
+    assert.notEqual(single.documentKind, "collection");
+    assert.equal(single.sources, undefined);
   });
 });
 

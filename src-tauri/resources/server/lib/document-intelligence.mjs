@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { extname, resolve } from "node:path";
 
 export const DOCUMENT_FIDELITIES = new Set(["complete-with-summary", "summary-only"]);
@@ -71,19 +72,31 @@ function samePath(left, right) {
 
 export function buildDocumentContract({
   sourcePath,
+  sourcePaths,
   outputPath,
   fidelity,
   summaryOnlyConfirmed = false,
   overwriteConfirmed = false,
   outputExists = false,
   instructions = "",
+  title = "",
 } = {}) {
-  const format = classifyDocumentPath(sourcePath);
-  if (format === "unsupported") throw new TypeError(`unsupported document format: ${extname(String(sourcePath ?? "")) || "unknown"}`);
+  const normalizedSourcePaths = (Array.isArray(sourcePaths) && sourcePaths.length > 0 ? sourcePaths : [sourcePath])
+    .map((path) => String(path ?? "").trim())
+    .filter(Boolean);
+  if (normalizedSourcePaths.length === 0) throw new TypeError("at least one document source is required");
+  const sourceFormats = normalizedSourcePaths.map((path) => classifyDocumentPath(path));
+  const unsupportedIndex = sourceFormats.indexOf("unsupported");
+  if (unsupportedIndex >= 0) {
+    const unsupportedPath = normalizedSourcePaths[unsupportedIndex];
+    throw new TypeError(`unsupported document format: ${extname(unsupportedPath) || "unknown"}`);
+  }
+  const collection = normalizedSourcePaths.length > 1;
+  const format = collection ? "collection" : sourceFormats[0];
   const normalizedFidelity = fidelity === "summary-only" && summaryOnlyConfirmed === true
     ? "summary-only"
     : "complete-with-summary";
-  const overwrite = samePath(sourcePath, outputPath);
+  const overwrite = normalizedSourcePaths.some((path) => samePath(path, outputPath));
   const decision = !overwriteConfirmed && (overwrite || outputExists)
     ? overwrite ? {
         id: "source-overwrite",
@@ -105,9 +118,13 @@ export function buildDocumentContract({
     : null;
   return {
     version: 1,
-    sourcePath: String(sourcePath ?? "").trim(),
+    contractKind: collection ? "document-collection" : "document",
+    sourcePath: normalizedSourcePaths[0],
+    sourcePaths: normalizedSourcePaths,
+    sourceFormats,
     outputPath: String(outputPath ?? "").trim(),
     format,
+    title: String(title ?? "").trim(),
     fidelity: normalizedFidelity,
     summaryPlacement: normalizedFidelity === "complete-with-summary" ? "before-body" : "only",
     preserveSource: !overwrite || !overwriteConfirmed,
@@ -117,12 +134,32 @@ export function buildDocumentContract({
     completionCriteria: normalizedFidelity === "summary-only"
       ? ["重要结论、风险、决定和关键数值准确", "输出文件成功创建"]
       : [
-          "所有来源区块均有可追溯结果",
+          collection ? "每个来源文件及其全部来源区块均有可追溯结果" : "所有来源区块均有可追溯结果",
           "表格、参数、命令、公式、链接和警告按来源特征保留",
           "有信息价值但无法分析的视觉内容明确标记待处理",
           "详细正文通过质量审计，摘要独立生成且不覆盖正文",
         ],
   };
+}
+
+export function documentTaskFingerprint({ sourcePaths, sourceStats, outputPath, contract } = {}) {
+  const paths = (Array.isArray(sourcePaths) ? sourcePaths : [sourcePaths])
+    .map((path) => String(path ?? "").trim())
+    .filter(Boolean);
+  const stats = (Array.isArray(sourceStats) ? sourceStats : [])
+    .map((entry) => ({
+      path: String(entry?.path ?? ""),
+      size: Number(entry?.size) || 0,
+      mtimeMs: Number(entry?.mtimeMs) || 0,
+    }));
+  const value = {
+    version: 1,
+    sourcePaths: paths,
+    sourceStats: stats,
+    outputPath: String(outputPath ?? ""),
+    contract: contract ?? null,
+  };
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 function renderSourceUnit(unit) {

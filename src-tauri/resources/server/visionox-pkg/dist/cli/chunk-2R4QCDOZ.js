@@ -7641,6 +7641,18 @@ function signature(call) {
 // src/loop.ts
 var ESCALATION_MODEL = "deepseek-v4-pro";
 var PARENT_BUDGET_WARN_THRESHOLD = 5;
+function assertModelResponseComplete(finishReason) {
+  if (finishReason === "length") {
+    const error = new Error("model response reached the provider output limit and was truncated");
+    error.name = "ModelOutputTruncatedError";
+    throw error;
+  }
+  if (finishReason === "content_filter") {
+    const error = new Error("model response was stopped by the provider content filter");
+    error.name = "ModelOutputFilteredError";
+    throw error;
+  }
+}
 var CacheFirstLoop = class {
   client;
   prefix;
@@ -7659,6 +7671,7 @@ var CacheFirstLoop = class {
   stream;
   reasoningEffort;
   autoEscalate = true;
+  escalationModel;
   budgetUsd;
   /** One-shot 80% warning latch — cleared by setBudget so a bump re-arms at the new boundary. */
   _budgetWarned = false;
@@ -7701,6 +7714,7 @@ var CacheFirstLoop = class {
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
     this.model = opts.model ?? "deepseek-v4-flash";
+    this.escalationModel = typeof opts.escalationModel === "string" && opts.escalationModel.trim() ? opts.escalationModel.trim() : ESCALATION_MODEL;
     this.reasoningEffort = opts.reasoningEffort ?? "max";
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
     this.vision = opts.vision ?? false;
@@ -7743,7 +7757,7 @@ var CacheFirstLoop = class {
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
-        if (String(_name).toLowerCase() === "extract_pdf_text" || String(_name).toLowerCase() === "organize_document_to_markdown") return result;
+        if (["extract_pdf_text", "organize_document_to_markdown", "organize_documents_to_report"].includes(String(_name).toLowerCase())) return result;
         const officeCommand = String(_name).toLowerCase() === "officecli" ? String(_args?.command ?? "").trim() : "";
         if (/^(?:add|set|remove|move|swap)(?:\s|$)/i.test(officeCommand)) {
           this._officeCliElementCallsThisStep++;
@@ -7945,6 +7959,7 @@ var CacheFirstLoop = class {
     }
     if (opts.reasoningEffort !== void 0) this.reasoningEffort = opts.reasoningEffort;
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
+    if (typeof opts.escalationModel === "string" && opts.escalationModel.trim()) this.escalationModel = opts.escalationModel.trim();
     if (opts.vision !== void 0) this.vision = opts.vision;
     if (opts.visionDetail !== void 0) this.visionDetail = opts.visionDetail;
     else if (Object.hasOwn(opts, "visionPolicy")) this.visionDetail = this.visionPolicy.detail;
@@ -7976,7 +7991,7 @@ var CacheFirstLoop = class {
     return this.modelForCurrentCall();
   }
   modelForCurrentCall() {
-    return this._escalateThisTurn ? ESCALATION_MODEL : this.model;
+    return this._escalateThisTurn ? this.escalationModel : this.model;
   }
   /** Returns true ONLY on the tipping call — caller surfaces a one-shot warning. */
   noteToolFailureSignal(resultJson, repair) {
@@ -8309,13 +8324,14 @@ ${reason}`
       let reasoningContent = "";
       let toolCalls = [];
       let usage = null;
+      let finishReason = null;
       const toolsAvailable = this._toolRoundsThisStep < maxToolRounds;
       try {
         if (this.stream) {
           const callBuf = /* @__PURE__ */ new Map();
           const readyIndices = /* @__PURE__ */ new Set();
           const callModel = this.modelForCurrentCall();
-          const bufferForEscalation = this.autoEscalate && callModel !== ESCALATION_MODEL;
+          const bufferForEscalation = this.autoEscalate && callModel !== this.escalationModel;
           let escalationBuf = "";
           let escalationBufFlushed = false;
           for await (const chunk of this.client.stream({
@@ -8327,6 +8343,7 @@ ${reason}`
             thinking: thinkingModeForModel(callModel),
             reasoningEffort: this.reasoningEffort
           })) {
+            if (chunk.finishReason) finishReason = chunk.finishReason;
             if (chunk.reasoningDelta) {
               reasoningContent += chunk.reasoningDelta;
               yield {
@@ -8389,6 +8406,7 @@ ${reason}`
             }
             if (chunk.usage) usage = chunk.usage;
           }
+          assertModelResponseComplete(finishReason);
           toolCalls = [...callBuf.values()];
           if (bufferForEscalation && !escalationBufFlushed && escalationBuf.length > 0) {
             if (!isEscalationRequest(escalationBuf)) {
@@ -8414,6 +8432,8 @@ ${reason}`
           reasoningContent = resp.reasoningContent ?? "";
           toolCalls = resp.toolCalls;
           usage = resp.usage;
+          finishReason = resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason ?? null;
+          assertModelResponseComplete(finishReason);
         }
       } catch (err) {
         if (signal.aborted) {
@@ -8430,7 +8450,7 @@ ${reason}`
         };
         return;
       }
-      if (this.autoEscalate && this.modelForCurrentCall() !== ESCALATION_MODEL && isEscalationRequest(assistantContent)) {
+      if (this.autoEscalate && this.modelForCurrentCall() !== this.escalationModel && isEscalationRequest(assistantContent)) {
         const { reason } = parseEscalationMarker(assistantContent);
         const discardedModel = this.modelForCurrentCall();
         // Record the wasted flash-tier usage before discarding it, so the
@@ -8443,7 +8463,7 @@ ${reason}`
         yield {
           turn: this._turn,
           role: "warning",
-          content: t("loop.flashEscalation", { model: ESCALATION_MODEL, reasonSuffix })
+          content: t("loop.flashEscalation", { model: this.escalationModel, reasonSuffix })
         };
         assistantContent = "";
         reasoningContent = "";
@@ -8487,7 +8507,7 @@ ${reason}`
           turn: this._turn,
           role: "warning",
           content: t("loop.autoEscalation", {
-            model: ESCALATION_MODEL,
+            model: this.escalationModel,
             breakdown: this._turnFailures.formatBreakdown(),
             fallback: this.model
           })
@@ -8670,7 +8690,7 @@ ${reason}`
               turn: this._turn,
               role: "warning",
               content: t("loop.autoEscalation", {
-                model: ESCALATION_MODEL,
+                model: this.escalationModel,
                 breakdown: this._turnFailures.formatBreakdown(),
                 fallback: this.model
               })
@@ -10660,7 +10680,7 @@ function registerFilesystemTools(registry, opts) {
   registry.register({
     name: "read_file",
     parallelSafe: true,
-    description: `Read a file under sandbox root. Supports head/tail/range scoping. Returns content with line numbers (cat -n). Handles images, PDFs (pages, max 20), .ipynb. Do NOT re-read just-edited files.`,
+    description: `Read a UTF-8 text file under the sandbox root. Supports head/tail/range scoping and returns text with line-oriented boundaries. Do not use this for PDF or Office binary content; use prepare_local_document plus extract_pdf_text, OfficeCLI, or the managed document workflow. Do NOT re-read just-edited files.`,
     readOnly: true,
     stormExempt: true,
     parameters: {

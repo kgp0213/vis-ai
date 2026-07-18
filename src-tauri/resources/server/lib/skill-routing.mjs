@@ -11,6 +11,10 @@ const VHOME_SKILL_CREATE = /(创建|新建|制作|做一个|定制|自定义|保
 const VHOME_SKILL_DIRECT = /(帮我|请|我想|我要|用于|用来|以后|每次|定期|每天|每周|每月|固定|反复|复用|如何|怎么|can you|i want|for me|reusable|weekly|daily)/i;
 const VHOME_SKILL_REUSABLE = /(以后|每次|定期|每天|每周|每月|固定|反复|复用|长期|重复|reus(?:e|able)|recurring|every\s+(?:day|week|month)|weekly|daily|monthly)/i;
 const VHOME_SKILL_PRODUCT_DISCUSSION = /(源码|代码|函数|组件|接口|架构|逻辑|路由|正则|关键词|bug|调试|测试|审查|评估|文档|说明书|实现方案|程序|软件|UI|交互卡片|弹窗|页面|前端|后端|source\s*code|architecture|router|regex|implementation|debug|test|review|documentation|UI)/i;
+const SKILL_INSTALL_ARCHIVE = /\.(?:skill|zip)(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
+const SKILL_INSTALL_TOPIC = /(?:\bskill\b|技能)/i;
+const SKILL_INSTALL_ACTION = /(?:安装|导入|部署|添加|install|import|deploy|add)/i;
+const SKILL_INSTALL_TECHNICAL_DISCUSSION = /(?:源码|代码|函数|接口|架构|逻辑|路由|正则|bug|调试|测试|审查|评估|文档|实现方案|为什么|如何实现|讨论|建议|优化|程序|软件|source\s*code|architecture|implementation|debug|test|review|documentation)/i;
 const PDF_PATH = /\.pdf(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
 const DOCUMENT_PATH = /\.(?:pdf|docx|xlsx|csv|tsv|pptx|html?|markdown|md|txt|log|xml|jsonl?|ya?ml)(?=$|[\s"'“”‘’),;，。；、）\]}])/i;
 const DOCUMENT_KIND = /(?:\bPDF\b|\bWord\b|\bExcel\b|\bPowerPoint\b|\bPPT\b|\bHTML\b|\bMarkdown\b|\bCSV\b|文档|表格|演示文稿)/i;
@@ -49,6 +53,9 @@ export function routeAutomaticSkill(rawText) {
   const text = typeof rawText === "string" ? rawText.trim() : "";
   if (!text || text.startsWith("/") || /@[A-Za-z0-9][A-Za-z0-9._-]*/.test(text)) return null;
   if (text.length > 1200) return null;
+  if (text.length <= 600 && SKILL_INSTALL_ARCHIVE.test(text) && SKILL_INSTALL_TOPIC.test(text) && SKILL_INSTALL_ACTION.test(text) && !SKILL_INSTALL_TECHNICAL_DISCUSSION.test(text)) {
+    return { name: "skill-creation-guide", task: text, source: "automatic" };
+  }
   if (classifyVHomeSkillAuthoringIntent(text).matched) {
     return { name: "vhome-skill-builder", task: text, source: "automatic" };
   }

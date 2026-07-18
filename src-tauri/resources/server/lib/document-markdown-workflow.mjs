@@ -41,6 +41,39 @@ function titleForPath(path) {
   return extension ? name.slice(0, -extension.length) : name;
 }
 
+function titleForDocument(prepared, contract = {}) {
+  const configured = String(contract?.title ?? "").trim();
+  if (configured) return configured;
+  const sources = Array.isArray(prepared?.sources) ? prepared.sources : [];
+  if (sources.length > 1) return `${sources.length} 份文档汇总`;
+  return titleForPath(prepared?.sourcePath || contract?.sourcePath);
+}
+
+function titleForJob(job) {
+  const configured = String(job?.contract?.title ?? "").trim();
+  if (configured) return configured;
+  const sourcePaths = Array.isArray(job?.sourcePaths) ? job.sourcePaths : [];
+  if (sourcePaths.length > 1) return `${sourcePaths.length} 份文档汇总`;
+  return titleForPath(job?.sourcePath);
+}
+
+function renderCollectionSources(prepared, sourceSummary) {
+  const summaries = Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries : [];
+  if (summaries.length <= 1) return "";
+  const byPath = new Map(summaries.map((entry) => [String(entry.sourcePath), entry]));
+  const sources = Array.isArray(prepared?.sources) ? prepared.sources : [];
+  const rows = sources.map((source, index) => {
+    const sourcePath = String(source?.sourcePath || source?.readablePath || "");
+    const summary = byPath.get(sourcePath) ?? summaries[index] ?? {};
+    const sourceId = summary.sourceId || `source-${String(index + 1).padStart(3, "0")}`;
+    const sourceName = basename(sourcePath) || `document-${index + 1}`;
+    const kind = summary.documentKind || source?.documentKind || "document";
+    const units = Number(summary.totalUnits) || 0;
+    return `- \`${sourceId}\` ${sourceName}（${kind}，${units} 个来源区块）`;
+  });
+  return ["## 来源清单", ...rows].join("\n\n");
+}
+
 function batchSummary(section, batch) {
   const compact = String(section ?? "")
     .replace(/<!--[^>]*-->/g, "")
@@ -144,6 +177,17 @@ function batchRecordMatches(record, batch) {
   });
 }
 
+function sourceFingerprintsMatch(left, right) {
+  const normalize = (value) => (Array.isArray(value) ? value : [value])
+    .filter(Boolean)
+    .map((entry) => ({
+      path: String(entry?.path ?? ""),
+      size: Number(entry?.size) || 0,
+      sha256: String(entry?.sha256 ?? ""),
+    }));
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
 function candidateKey(candidate) {
   return candidate?.key || `${candidate?.providerId || "unknown"}\0${candidate?.modelId || "unknown"}`;
 }
@@ -162,7 +206,9 @@ function effectiveDocumentPolicy(value, candidates = []) {
     "maxVisualUnitsPerBatch",
     "requestTimeoutMs",
   ];
-  for (const candidate of candidates) {
+  const primaryCandidates = candidates.filter((candidate) => candidate?.role === "primary");
+  const policyCandidates = primaryCandidates.length > 0 ? primaryCandidates : candidates.slice(0, 1);
+  for (const candidate of policyCandidates) {
     const policy = candidate?.documentPolicy;
     if (policy && typeof policy === "object" && !Array.isArray(policy)) {
       for (const field of minimumFields) {
@@ -174,6 +220,28 @@ function effectiveDocumentPolicy(value, candidates = []) {
     }
   }
   return normalizeDocumentPolicy(merged);
+}
+
+function documentPolicyForCandidate(basePolicy, candidate) {
+  const policy = normalizeDocumentPolicy({
+    ...basePolicy,
+    ...(candidate?.documentPolicy && typeof candidate.documentPolicy === "object" ? candidate.documentPolicy : {}),
+  });
+  if (candidate?.multimodal === true && Number.isSafeInteger(candidate.maxImages)) {
+    policy.maxVisualUnitsPerBatch = Math.min(policy.maxVisualUnitsPerBatch, candidate.maxImages);
+  }
+  return policy;
+}
+
+function batchPolicyViolations(batch, policy, countTokens) {
+  const violations = [];
+  const units = Array.isArray(batch?.units) ? batch.units : [];
+  const inputTokens = countTokens(String(batch?.text || units.map((unit) => unit.text || "").join("\n\n")));
+  const visualUnits = units.filter((unit) => unit?.visualPending && /^data:image\//i.test(String(unit?.visualDataUrl || ""))).length;
+  if (units.length > policy.maxUnitsPerBatch) violations.push({ type: "units", actual: units.length, limit: policy.maxUnitsPerBatch });
+  if (inputTokens > policy.batchInputTokens) violations.push({ type: "input-tokens", actual: inputTokens, limit: policy.batchInputTokens });
+  if (visualUnits > policy.maxVisualUnitsPerBatch) violations.push({ type: "visual-units", actual: visualUnits, limit: policy.maxVisualUnitsPerBatch });
+  return violations;
 }
 
 function documentPolicyTrace(requested, effective, candidates) {
@@ -241,7 +309,7 @@ function publicBackgroundJob(job) {
   return {
     id: `document:${job.id}`,
     documentJobId: job.id,
-    command: `整理 ${job.sourceName || basename(job.sourcePath || "document")}`,
+    command: `整理 ${job.sourceName || titleForJob(job)}`,
     running: job.running === true,
     paused: job.paused === true,
     lifecycle: "task",
@@ -262,13 +330,25 @@ function publicBackgroundJob(job) {
       elapsedMs: Number(progress.elapsedMs) || 0,
       modelCalls: Number(progress.modelCalls) || 0,
       modelCallLimit: Number(progress.modelCallLimit) || null,
+      taskModelCalls: Number(job?.modelCallCount) || 0,
+      totalSources: Number(progress.totalSources) || (Array.isArray(job.sourcePaths) && job.sourcePaths.length > 0 ? job.sourcePaths.length : 1),
+      completedSources: Number(progress.completedSources) || 0,
+      currentSource: progress.currentSource || null,
       unitLabel: progress.unitLabel || (/\.pdf$/i.test(String(job.sourcePath || "")) ? "页" : "区块"),
       lastHeartbeatAt: progress.lastHeartbeatAt || null,
     },
     model: job.currentModel ?? (latestBatch ? `${latestBatch.providerId}/${latestBatch.modelId}` : null),
     modelRole: job.currentModelRole ?? latestBatch?.modelRole ?? null,
     sourceKind: job.sourceKind ?? null,
+    taskType: job.taskType ?? "document",
+    sourcePaths: Array.isArray(job.sourcePaths) ? job.sourcePaths : [],
+    sourceFingerprint: job.sourceFingerprint ?? null,
+    taskFingerprint: job.taskFingerprint ?? null,
     outputPath: job.outputPath,
+    contract: job.contract ?? null,
+    sourceAudit: job.sourceAudit ?? null,
+    modelHistory: Array.isArray(job.modelHistory) ? job.modelHistory : [],
+    policyTrace: job.policyTrace ?? null,
     policy: job.policy ? {
       batchInputTokens: job.policy.batchInputTokens,
       maxUnitsPerBatch: job.policy.maxUnitsPerBatch,
@@ -276,6 +356,7 @@ function publicBackgroundJob(job) {
     } : null,
     previewAvailable: Array.isArray(job.batches) && job.batches.length > 0,
     qualityPassed: job.qualityPassed,
+    lastModelCall: job.lastModelCall ?? null,
     warnings: job.warnings ?? [],
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -337,30 +418,99 @@ export function createDocumentMarkdownManager(options = {}) {
     void updateProgress(runtime, changes, extra).catch((error) => reportPersistenceError(runtime, error, context));
   }
 
+  function reserveTaskModelCall(runtime, details) {
+    runtime.modelCallCount = Math.max(0, Number(runtime.modelCallCount) || 0) + 1;
+    const call = {
+      id: `${runtime.id}:${runtime.modelCallCount}`,
+      number: runtime.modelCallCount,
+      providerId: details.providerId ?? null,
+      modelId: details.modelId ?? null,
+      role: details.role ?? null,
+      purpose: details.purpose ?? null,
+      stage: details.stage ?? null,
+      batchId: details.batchId ?? null,
+      batchLabel: details.batchLabel ?? null,
+      startedAt: new Date().toISOString(),
+      finishReason: null,
+    };
+    queueProgress(runtime, {
+      taskModelCalls: runtime.modelCallCount,
+    }, {
+      modelCallCount: runtime.modelCallCount,
+      lastModelCall: call,
+    }, "task-model-call-reservation");
+    return call;
+  }
+
   function reserveModelCall(runtime, budget, details) {
-    if (budget.used >= budget.limit) return false;
+    if (budget.used >= budget.limit) return null;
     budget.used++;
+    const call = reserveTaskModelCall(runtime, details);
     queueProgress(runtime, {
       ...details,
       modelCalls: budget.used,
       modelCallLimit: budget.limit,
+      taskModelCalls: runtime.modelCallCount,
     }, {}, "model-call-reservation");
-    return true;
+    return call;
+  }
+
+  async function runTrackedModelCall(runtime, call, invoke) {
+    await store.appendEvent?.(runtime.id, {
+      type: "model-call-started",
+      ...call,
+    }).catch((error) => reportPersistenceError(runtime, error, "model-call-start-event"));
+    const startedAt = Date.parse(call.startedAt) || Date.now();
+    try {
+      const result = await invoke(call);
+      const completed = {
+        ...call,
+        type: "model-call-completed",
+        completedAt: new Date().toISOString(),
+        durationMs: Math.max(0, Date.now() - startedAt),
+        outputChars: String(result ?? "").length,
+        status: "completed",
+      };
+      queueProgress(runtime, { taskModelCalls: runtime.modelCallCount }, { lastModelCall: completed }, "model-call-completion");
+      await store.appendEvent?.(runtime.id, completed)
+        .catch((error) => reportPersistenceError(runtime, error, "model-call-completed-event"));
+      return result;
+    } catch (error) {
+      const failed = {
+        ...call,
+        type: "model-call-failed",
+        completedAt: new Date().toISOString(),
+        durationMs: Math.max(0, Date.now() - startedAt),
+        status: "failed",
+        errorName: String(error?.name || "Error"),
+        error: String(error?.message || error).slice(0, 500),
+      };
+      queueProgress(runtime, { taskModelCalls: runtime.modelCallCount }, { lastModelCall: failed }, "model-call-failure");
+      await store.appendEvent?.(runtime.id, failed)
+        .catch((eventError) => reportPersistenceError(runtime, eventError, "model-call-failed-event"));
+      throw error;
+    }
   }
 
   async function waitForTurn(runtime) {
     let announced = false;
-    while (runtime.paused || options.isForegroundBusy?.()) {
+    while (runtime.paused || options.isForegroundBusy?.() || options.isProviderBusy?.()) {
       if (runtime.controller.signal.aborted) throw abortError();
       const waitingForForeground = !runtime.paused && options.isForegroundBusy?.();
+      const waitingForProvider = !runtime.paused && !waitingForForeground && options.isProviderBusy?.();
       await emit(runtime.id, {
-        status: runtime.paused ? "paused" : "waiting_foreground",
+        status: runtime.paused ? "paused" : waitingForForeground ? "waiting_foreground" : "waiting_provider",
         running: !runtime.paused,
         paused: runtime.paused,
+        progress: {
+          stage: runtime.paused ? "paused" : waitingForForeground ? "waiting-foreground" : "waiting-provider",
+          lastHeartbeatAt: new Date().toISOString(),
+        },
       });
-      if (waitingForForeground && !announced) {
+      if ((waitingForForeground || waitingForProvider) && !announced) {
         announced = true;
-        options.onWaitingForForeground?.(runtime.id);
+        if (waitingForForeground) options.onWaitingForForeground?.(runtime.id);
+        else options.onWaitingForProvider?.(runtime.id);
       }
       await delay(runtime.policy.foregroundPollMs, runtime.controller.signal);
     }
@@ -373,31 +523,40 @@ export function createDocumentMarkdownManager(options = {}) {
     return { ...review, pass: issues.length === 0, issues, advisoryIssues };
   }
 
-  async function requestReview(candidate, batch, section, runtime, budget) {
+  async function requestReview(candidate, batch, section, runtime, budget, candidatePolicy) {
     const messages = buildDocumentReviewMessages({ batch, markdown: section, contract: runtime.contract });
     const errors = [];
     for (let attempt = 0; attempt < 2; attempt++) {
-      if (!reserveModelCall(runtime, budget, {
+      const modelCall = reserveModelCall(runtime, budget, {
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        role: candidate.role,
+        purpose: "verification",
         stage: "quality-review",
+        batchId: batch.id,
+        batchLabel: batch.label,
         currentBatch: batch.id,
         currentLabel: batch.label,
         attempt: attempt + 1,
         maxAttempts: 2,
         generatedChars: 0,
         elapsedMs: 0,
-      })) break;
+      });
+      if (!modelCall) break;
       const reviewMessages = attempt === 0 ? messages : buildDocumentReviewMessages({ batch, markdown: section, contract: runtime.contract, retry: true });
       const withVisuals = messagesWithBatchVisuals(reviewMessages, batch, candidate);
       try {
-        const value = await options.generate({
+        const value = await runTrackedModelCall(runtime, modelCall, () => options.generate({
           candidate,
           batch,
           contract: runtime.contract,
           messages: withVisuals.messages,
           purpose: "verification",
           maxTokens: 2_048,
-          requestTimeoutMs: runtime.policy.requestTimeoutMs,
-          onProgress: (progress) => { queueProgress(runtime, {
+          requestTimeoutMs: candidatePolicy.requestTimeoutMs,
+          onProgress: (progress) => {
+            if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
+            queueProgress(runtime, {
             stage: "quality-review",
             currentBatch: batch.id,
             currentLabel: batch.label,
@@ -409,7 +568,7 @@ export function createDocumentMarkdownManager(options = {}) {
             modelCallLimit: budget.limit,
           }, {}, "quality-review-progress"); },
           signal: runtime.controller.signal,
-        });
+        }));
         const parsed = parseDocumentReview(value, batch.unitIds);
         if (parsed) return { ...softenReview(parsed), errors };
       } catch (error) {
@@ -430,24 +589,31 @@ export function createDocumentMarkdownManager(options = {}) {
     };
   }
 
-  async function tryCandidate(candidate, batch, runtime, budget) {
+  async function tryCandidate(candidate, batch, runtime, budget, candidatePolicy) {
     let lastQuality = null;
     let lastReview = null;
     let lastSection = "";
     let attempts = 0;
     let reviewRepairs = 0;
     const errors = [];
-    for (let attempt = 0; attempt <= runtime.policy.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= candidatePolicy.maxRetries; attempt++) {
       await waitForTurn(runtime);
-      if (!reserveModelCall(runtime, budget, {
+      const modelCall = reserveModelCall(runtime, budget, {
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        role: candidate.role,
+        purpose: "toolContinuation",
         stage: attempt > 0 ? "quality-repair" : "draft",
+        batchId: batch.id,
+        batchLabel: batch.label,
         currentBatch: batch.id,
         currentLabel: batch.label,
         attempt: attempt + 1,
-        maxAttempts: runtime.policy.maxRetries + 1,
+        maxAttempts: candidatePolicy.maxRetries + 1,
         generatedChars: 0,
         elapsedMs: 0,
-      })) {
+      });
+      if (!modelCall) {
         errors.push(`document batch model-call budget exhausted (${budget.used}/${budget.limit})`);
         break;
       }
@@ -459,20 +625,22 @@ export function createDocumentMarkdownManager(options = {}) {
       );
       let section;
       try {
-        section = cleanMarkdown(await options.generate({
+        section = cleanMarkdown(await runTrackedModelCall(runtime, modelCall, () => options.generate({
           candidate,
           batch,
           contract: runtime.contract,
           messages: withVisuals.messages,
           purpose: "toolContinuation",
-          maxTokens: runtime.policy.batchOutputTokens,
-          requestTimeoutMs: runtime.policy.requestTimeoutMs,
-          onProgress: (progress) => { queueProgress(runtime, {
+          maxTokens: candidatePolicy.batchOutputTokens,
+          requestTimeoutMs: candidatePolicy.requestTimeoutMs,
+          onProgress: (progress) => {
+            if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
+            queueProgress(runtime, {
             stage: attempt > 0 ? "quality-repair" : "draft",
             currentBatch: batch.id,
             currentLabel: batch.label,
             attempt: attempt + 1,
-            maxAttempts: runtime.policy.maxRetries + 1,
+            maxAttempts: candidatePolicy.maxRetries + 1,
             generatedChars: Number(progress?.generatedChars) || 0,
             elapsedMs: Number(progress?.elapsedMs) || 0,
             modelCalls: budget.used,
@@ -480,7 +648,7 @@ export function createDocumentMarkdownManager(options = {}) {
           }, {}, "draft-progress"); },
           retry: attempt > 0,
           signal: runtime.controller.signal,
-        }));
+        })));
       } catch (error) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
         errors.push(String(error?.message || error).slice(0, 500));
@@ -502,7 +670,7 @@ export function createDocumentMarkdownManager(options = {}) {
         if (onlyUnresolvedVisuals) break;
         continue;
       }
-      lastReview = await requestReview(candidate, batch, section, runtime, budget);
+      lastReview = await requestReview(candidate, batch, section, runtime, budget, candidatePolicy);
       errors.push(...(lastReview.errors ?? []));
       if (lastReview.pass) return { passed: true, section, quality: lastQuality, review: lastReview, attempts, candidate, errors };
       if (lastReview.unavailable || reviewRepairs >= 1) break;
@@ -524,14 +692,45 @@ export function createDocumentMarkdownManager(options = {}) {
     return (result?.errors ?? []).some((message) => /timeout|timed out|deadline|总时长上限/i.test(message));
   }
 
-  async function processBatch(batch, runtime, state) {
+  async function processBatch(batch, runtime, state, startCandidateIndex = 0) {
     const candidates = runtime.candidates;
     const attempts = [];
     let bestResult = null;
     let splitEligible = false;
-    for (const candidate of candidates) {
+    const countTokens = typeof options.countTokens === "function" ? options.countTokens : (text) => Math.ceil(String(text ?? "").length / 2);
+    for (let candidateIndex = startCandidateIndex; candidateIndex < candidates.length; candidateIndex++) {
+      const candidate = candidates[candidateIndex];
       if (state.budget.used >= state.budget.limit) break;
       if (!await candidateAvailable(candidate, runtime)) continue;
+      const candidatePolicy = documentPolicyForCandidate(runtime.policy, candidate);
+      const policyViolations = batchPolicyViolations(batch, candidatePolicy, countTokens);
+      const splitDepthLimit = Math.min(runtime.policy.maxSplitDepth, candidatePolicy.maxSplitDepth);
+      if (policyViolations.length > 0 && batch.units.length > 1 && state.depth < splitDepthLimit) {
+        const { left, right } = splitBatchWithContext(batch, { ...runtime, policy: candidatePolicy }, countTokens);
+        await store.appendEvent?.(runtime.id, {
+          type: candidate.role === "fallback" ? "fallback-batch-split" : "candidate-batch-split",
+          batchId: batch.id,
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          role: candidate.role,
+          depth: state.depth,
+          violations: policyViolations,
+          childBatchIds: [left.id, right.id],
+        }).catch((error) => reportPersistenceError(runtime, error, "candidate-split-event"));
+        const childState = { depth: state.depth + 1, budget: state.budget };
+        const leftResult = await processBatch(left, runtime, childState, candidateIndex);
+        const rightResult = await processBatch(right, runtime, childState, candidateIndex);
+        const passed = leftResult.passed && rightResult.passed;
+        return {
+          passed,
+          section: [leftResult.section, rightResult.section].filter(Boolean).join("\n\n"),
+          status: passed ? "completed" : "needs_review",
+          candidate: rightResult.candidate ?? leftResult.candidate,
+          quality: { passed, split: true, policyDriven: true },
+          review: null,
+          attempts: [...attempts, ...(leftResult.attempts ?? []), ...(rightResult.attempts ?? [])],
+        };
+      }
       await updateProgress(runtime, {
         stage: "selecting-model",
         currentBatch: batch.id,
@@ -542,7 +741,7 @@ export function createDocumentMarkdownManager(options = {}) {
         currentModel: `${candidate.providerId}/${candidate.modelId}`,
         currentModelRole: candidate.role || "primary",
       });
-      const result = await tryCandidate(candidate, batch, runtime, state.budget);
+      const result = await tryCandidate(candidate, batch, runtime, state.budget, candidatePolicy);
       attempts.push({
         providerId: candidate.providerId,
         modelId: candidate.modelId,
@@ -554,6 +753,12 @@ export function createDocumentMarkdownManager(options = {}) {
         advisoryReviewIssues: result.review?.advisoryIssues ?? [],
         errors: result.errors ?? [],
         disabledForJob: runtime.disabledCandidates.has(candidateKey(candidate)),
+        policy: {
+          batchInputTokens: candidatePolicy.batchInputTokens,
+          batchOutputTokens: candidatePolicy.batchOutputTokens,
+          maxUnitsPerBatch: candidatePolicy.maxUnitsPerBatch,
+          requestTimeoutMs: candidatePolicy.requestTimeoutMs,
+        },
         at: new Date().toISOString(),
       });
       if (result.passed) return { ...result, status: "completed", attempts };
@@ -564,7 +769,6 @@ export function createDocumentMarkdownManager(options = {}) {
     }
 
     if (!bestResult && splitEligible && batch.units.length > 1 && state.depth < runtime.policy.maxSplitDepth && state.budget.used < state.budget.limit) {
-      const countTokens = typeof options.countTokens === "function" ? options.countTokens : (text) => Math.ceil(String(text ?? "").length / 2);
       const { left, right } = splitBatchWithContext(batch, runtime, countTokens);
       const childState = { depth: state.depth + 1, budget: state.budget };
       const leftResult = await processBatch(left, runtime, childState);
@@ -737,17 +941,28 @@ export function createDocumentMarkdownManager(options = {}) {
       if (!await candidateAvailable(candidate, runtime)) continue;
       try {
         await waitForTurn(runtime);
+        const candidatePolicy = documentPolicyForCandidate(runtime.policy, candidate);
+        const modelCall = reserveTaskModelCall(runtime, {
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          role: candidate.role,
+          purpose: "toolContinuation",
+          stage: "summary",
+          batchLabel: title,
+        });
         await updateProgress(runtime, { stage: "summary", currentBatch: null, currentLabel: title, generatedChars: 0, elapsedMs: 0 }, {
           currentModel: `${candidate.providerId}/${candidate.modelId}`,
           currentModelRole: candidate.role || "primary",
         });
-        return cleanMarkdown(await options.generateSummary?.({
+        return cleanMarkdown(await runTrackedModelCall(runtime, modelCall, () => options.generateSummary?.({
           title,
           sectionSummaries: notes,
           contract: runtime.contract,
           candidate,
-          requestTimeoutMs: runtime.policy.requestTimeoutMs,
-          onProgress: (progress) => { queueProgress(runtime, {
+          requestTimeoutMs: candidatePolicy.requestTimeoutMs,
+          onProgress: (progress) => {
+            if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
+            queueProgress(runtime, {
             stage: "summary",
             currentBatch: null,
             currentLabel: title,
@@ -755,7 +970,7 @@ export function createDocumentMarkdownManager(options = {}) {
             elapsedMs: Number(progress?.elapsedMs) || 0,
           }, {}, "summary-progress"); },
           signal: runtime.controller.signal,
-        }));
+        })));
       } catch (error) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
         if (isNonRetryableDocumentModelError(error)) runtime.disabledCandidates.add(candidateKey(candidate));
@@ -791,14 +1006,39 @@ export function createDocumentMarkdownManager(options = {}) {
       await emit(runtime.id, { status: "running", running: true, paused: false, error: null });
       await store.appendEvent?.(runtime.id, { type: "execution-started", retryFailed: runtime.retryFailed === true })
         .catch((error) => reportPersistenceError(runtime, error, "execution-event"));
-      prepared = await options.prepareDocument(runtime.input.sourcePath, runtime.controller.signal);
+      const prepareInput = Array.isArray(runtime.input.sourcePaths) && runtime.input.sourcePaths.length > 0
+        ? runtime.input.sourcePaths
+        : runtime.input.sourcePath;
+      prepared = await options.prepareDocument(prepareInput, runtime.controller.signal);
       if (!prepared?.ok) throw new Error(prepared?.error || "document preparation failed");
+      const sourceFingerprint = await options.fingerprintSource?.(prepared, runtime.controller.signal);
+      const previous = await store.read(runtime.id);
+      if (previous.sourceFingerprint && sourceFingerprint && !sourceFingerprintsMatch(previous.sourceFingerprint, sourceFingerprint)) {
+        await store.appendEvent?.(runtime.id, {
+          type: "source-changed",
+          previous: previous.sourceFingerprint,
+          current: sourceFingerprint,
+        }).catch((error) => reportPersistenceError(runtime, error, "source-change-event"));
+        await emit(runtime.id, {
+          status: "source_changed",
+          running: false,
+          paused: true,
+          error: "source changed while the task was waiting to resume; choose whether to restart with the new version",
+          sourceFingerprint,
+          progress: { stage: "source-changed", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
+        });
+        return;
+      }
       await emit(runtime.id, {
         sourcePath: prepared.sourcePath || runtime.input.sourcePath,
+        sourcePaths: Array.isArray(prepared.sources) && prepared.sources.length > 0
+          ? prepared.sources.map((source) => source.sourcePath || source.readablePath).filter(Boolean)
+          : runtime.input.sourcePaths,
         readablePath: prepared.readablePath || prepared.sourcePath || runtime.input.sourcePath,
         sourceKind: prepared.documentKind || runtime.contract.format,
+        sourceCount: Array.isArray(prepared.sources) && prepared.sources.length > 0 ? prepared.sources.length : 1,
+        sourceFingerprint: sourceFingerprint ?? previous.sourceFingerprint ?? null,
       });
-      const previous = await store.read(runtime.id);
       const priorBatches = new Map((previous.batches ?? []).map((batch) => [batch.id, batch]));
       const sectionSummaries = [];
       let batchIndex = 0;
@@ -812,8 +1052,11 @@ export function createDocumentMarkdownManager(options = {}) {
         pages: runtime.input.pages,
         onPlan: async (plan = {}) => {
           await updateProgress(runtime, {
-            totalUnits: Number(plan.totalUnits) || null,
-            totalBatches: Number(plan.totalBatches) || null,
+          totalUnits: Number(plan.totalUnits) || null,
+          totalBatches: Number(plan.totalBatches) || null,
+            totalSources: Number(plan.totalSources) || null,
+            completedSources: Number(plan.completedSources) || 0,
+            currentSource: plan.currentSource || null,
             unitLabel: plan.unitLabel || (prepared.documentKind === "pdf" ? "页" : "区块"),
             stage: "extracting",
             currentBatch: null,
@@ -903,12 +1146,32 @@ export function createDocumentMarkdownManager(options = {}) {
       let summary = "";
       if (runtime.contract.fidelity === "complete-with-summary") {
         try {
-          summary = await generateHierarchicalSummary(titleForPath(prepared.sourcePath || runtime.input.sourcePath), sectionSummaries, runtime);
+          summary = await generateHierarchicalSummary(titleForDocument(prepared, runtime.contract), sectionSummaries, runtime);
         } catch { /* A missing summary must not discard the verified body. */ }
         if (!/^##\s+摘要/m.test(summary)) summary = `## 摘要\n\n文档正文已按 ${totalUnits} 个来源区块完成整理。${degraded ? "部分区块保留了原始提取内容，需要复核。" : "详细内容见下文。"}`;
       }
-      const title = titleForPath(prepared.sourcePath || runtime.input.sourcePath);
-      const content = [`# ${title}`, summary, "## 详细正文", detailedBody].filter(Boolean).join("\n\n");
+      const title = titleForDocument(prepared, runtime.contract);
+      const sourceList = renderCollectionSources(prepared, sourceSummary);
+      const content = [`# ${title}`, summary, sourceList, "## 详细正文", detailedBody].filter(Boolean).join("\n\n");
+      const finalFingerprint = await options.fingerprintSource?.(prepared, runtime.controller.signal);
+      const storedFingerprint = (await store.read(runtime.id)).sourceFingerprint;
+      if (storedFingerprint && finalFingerprint && !sourceFingerprintsMatch(storedFingerprint, finalFingerprint)) {
+        await store.appendEvent?.(runtime.id, {
+          type: "source-changed",
+          previous: storedFingerprint,
+          current: finalFingerprint,
+          stage: "before-output",
+        }).catch((error) => reportPersistenceError(runtime, error, "source-change-event"));
+        await emit(runtime.id, {
+          status: "source_changed",
+          running: false,
+          paused: true,
+          error: "source changed before final output; the draft is preserved for review",
+          sourceFingerprint: finalFingerprint,
+          progress: { stage: "source-changed", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
+        });
+        return;
+      }
       await options.writeOutput({
         outputPath: runtime.input.outputPath,
         content,
@@ -929,6 +1192,8 @@ export function createDocumentMarkdownManager(options = {}) {
         qualityPassed: !degraded,
         sourceAudit: {
           totalUnits,
+          sourceCount: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries.length : 1,
+          sources: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries : [],
           selectedPages: Number.isFinite(Number(sourceSummary?.selectedPages)) ? Number(sourceSummary.selectedPages) : null,
           processedPages: Number.isFinite(Number(sourceSummary?.processedPages)) ? Number(sourceSummary.processedPages) : null,
           assembly: assemblyAudit,
@@ -942,6 +1207,9 @@ export function createDocumentMarkdownManager(options = {}) {
           stage: "completed",
           currentBatch: null,
           currentLabel: null,
+          totalSources: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries.length : 1,
+          completedSources: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries.length : 1,
+          currentSource: null,
           generatedChars: content.length,
           elapsedMs: 0,
           lastHeartbeatAt: new Date().toISOString(),
@@ -949,19 +1217,22 @@ export function createDocumentMarkdownManager(options = {}) {
       });
     } catch (error) {
       const cancelled = runtime.controller.signal.aborted || error?.name === "AbortError";
+      const terminalAction = runtime.stopAction === "abandon" ? "abandon" : "stop";
+      const terminalStatus = cancelled ? (terminalAction === "abandon" ? "abandoned" : "stopped") : "failed";
       await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
       try {
         await emit(runtime.id, {
-          status: cancelled ? "cancelled" : "failed",
+          status: terminalStatus,
           running: false,
-          paused: false,
+          paused: terminalStatus === "stopped",
           qualityPassed: false,
-          error: cancelled ? "cancelled by user" : String(error?.message || error),
-          completedAt: new Date().toISOString(),
+          error: cancelled ? (terminalAction === "abandon" ? "abandoned by user" : null) : String(error?.message || error),
+          completedAt: terminalAction === "abandon" || !cancelled ? new Date().toISOString() : null,
+          stoppedAt: cancelled ? new Date().toISOString() : null,
           currentModel: null,
           currentModelRole: null,
           progress: {
-            stage: cancelled ? "cancelled" : "failed",
+            stage: terminalStatus,
             currentBatch: null,
             currentLabel: null,
             lastHeartbeatAt: new Date().toISOString(),
@@ -981,23 +1252,27 @@ export function createDocumentMarkdownManager(options = {}) {
       while (queue.length > 0) {
         const runtime = queue.shift();
         if (runtime.controller.signal.aborted) {
-          let cancelled;
+          const abandoned = runtime.stopAction === "abandon";
+          let stopped;
           try {
-            cancelled = await emit(runtime.id, {
-              status: "cancelled",
+            stopped = await emit(runtime.id, {
+              status: abandoned ? "abandoned" : "stopped",
               running: false,
-              paused: false,
+              paused: !abandoned,
               qualityPassed: false,
-              error: "cancelled by user",
-              completedAt: new Date().toISOString(),
+              error: abandoned ? "abandoned by user" : null,
+              completedAt: abandoned ? new Date().toISOString() : null,
+              stoppedAt: new Date().toISOString(),
+              progress: { stage: abandoned ? "abandoned" : "stopped", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
             });
           } catch (error) {
-            reportPersistenceError(runtime, error, "queued-cancellation");
-            cancelled = { id: runtime.id, status: "cancelled", running: false, error: "cancelled by user" };
+            reportPersistenceError(runtime, error, "queued-stop");
+            stopped = { id: runtime.id, status: abandoned ? "abandoned" : "stopped", running: false, paused: !abandoned };
           }
-          runtime.resolve?.(cancelled);
+          runtime.resolve?.(stopped);
           runtimes.delete(runtime.id);
           completions.delete(runtime.id);
+          options.onIdle?.(runtime.id);
           continue;
         }
         runtime.executing = true;
@@ -1023,6 +1298,7 @@ export function createDocumentMarkdownManager(options = {}) {
           runtime.executing = false;
           runtimes.delete(runtime.id);
           completions.delete(runtime.id);
+          options.onIdle?.(runtime.id);
         }
       }
     } finally {
@@ -1042,21 +1318,53 @@ export function createDocumentMarkdownManager(options = {}) {
     const requestedPolicy = normalizeDocumentPolicy(input.policy);
     const contract = input.contract ?? buildDocumentContract({
       sourcePath: input.sourcePath,
+      sourcePaths: input.sourcePaths,
+      taskType: input.taskType,
+      taskFingerprint: input.taskFingerprint,
       outputPath: input.outputPath,
       pages: input.pages,
       fidelity: input.fidelity,
       summaryOnlyConfirmed: input.summaryOnlyConfirmed,
       overwriteConfirmed: input.overwriteConfirmed,
       instructions: input.instructions,
+      title: input.title,
     });
     if (contract.requiresDecision) return { ok: false, requiresUserChoice: true, decision: contract.decision };
     const candidates = options.modelCandidates?.(requestedPolicy) ?? [];
     if (candidates.length === 0) throw new Error("no document model is configured");
     const policy = effectiveDocumentPolicy(requestedPolicy, candidates);
     const policyTrace = documentPolicyTrace(requestedPolicy, policy, candidates);
+    if (input.taskFingerprint && typeof store.list === "function") {
+      const duplicate = (await store.list()).find((job) => job.taskFingerprint === input.taskFingerprint);
+      if (duplicate) {
+        if (["completed", "completed_with_warnings"].includes(duplicate.status)) {
+          return {
+            ok: true,
+            accepted: false,
+            reused: true,
+            completed: true,
+            id: duplicate.id,
+            status: duplicate.status,
+            outputPath: duplicate.outputPath,
+            contract: duplicate.contract ?? contract,
+          };
+        }
+        if (["queued", "running", "waiting_foreground", "waiting_provider", "pausing"].includes(duplicate.status)) {
+          return { ok: true, accepted: true, background: true, reused: true, id: duplicate.id, outputPath: duplicate.outputPath, contract: duplicate.contract ?? contract };
+        }
+        if (["paused", "interrupted", "stopped", "failed"].includes(duplicate.status)) {
+          await resume(duplicate.id, { retryFailed: duplicate.status === "failed" });
+          return { ok: true, accepted: true, background: true, reused: true, resumed: true, id: duplicate.id, outputPath: duplicate.outputPath, contract: duplicate.contract ?? contract };
+        }
+      }
+    }
     const job = await store.create({
       sourcePath: input.sourcePath,
+      sourcePaths: input.sourcePaths,
+      sourceName: input.sourceName,
       outputPath: input.outputPath,
+      taskType: input.taskType,
+      taskFingerprint: input.taskFingerprint,
       pages: input.pages,
       workspaceRoot: input.workspaceRoot,
       allowOutsideWorkspace: input.allowOutsideWorkspace,
@@ -1076,10 +1384,12 @@ export function createDocumentMarkdownManager(options = {}) {
       policy,
       contract,
       candidates,
+      modelCallCount: 0,
       controller: new AbortController(),
       disabledCandidates: new Set(),
       emitQueue: Promise.resolve(),
       paused: false,
+      stopAction: null,
       retryFailed: false,
       executing: false,
       resolve: resolveCompletion,
@@ -1108,7 +1418,10 @@ export function createDocumentMarkdownManager(options = {}) {
       id,
       input: {
         sourcePath: job.sourcePath,
+        sourcePaths: job.sourcePaths,
         outputPath: job.outputPath,
+        taskType: job.taskType,
+        taskFingerprint: job.taskFingerprint,
         pages: job.pages,
         workspaceRoot: job.workspaceRoot || dirname(job.outputPath),
         allowOutsideWorkspace: job.allowOutsideWorkspace === true,
@@ -1117,10 +1430,12 @@ export function createDocumentMarkdownManager(options = {}) {
       policy,
       contract: job.contract ?? buildDocumentContract({ sourcePath: job.sourcePath, outputPath: job.outputPath }),
       candidates,
+      modelCallCount: Number(job.modelCallCount) || (job.batches ?? []).reduce((sum, batch) => sum + (Number(batch.modelCalls) || 0), 0),
       controller: new AbortController(),
       disabledCandidates: new Set(),
       emitQueue: Promise.resolve(),
       paused: false,
+      stopAction: null,
       retryFailed,
       executing: false,
       resolve: resolveCompletion,
@@ -1142,34 +1457,65 @@ export function createDocumentMarkdownManager(options = {}) {
     const runtime = runtimes.get(id);
     if (action === "pause") {
       if (!runtime) return { ok: false, error: "document job is not running" };
+      if (runtime.stopAction) return { ok: false, error: "document job is stopping; wait for the current action to finish" };
       runtime.paused = true;
       await emit(id, { status: "pausing", paused: true });
       return { ok: true, paused: true, id };
     }
     if (action === "resume") return resume(id);
     if (action === "retry") return resume(id, { retryFailed: true });
-    if (action === "cancel" || action === "stop") {
+    if (action === "cancel" || action === "stop" || action === "abandon") {
+      const abandon = action === "abandon";
       if (runtime) {
+        runtime.stopAction = abandon ? "abandon" : "stop";
         runtime.controller.abort();
         if (!runtime.executing) {
           const queueIndex = queue.indexOf(runtime);
           if (queueIndex >= 0) queue.splice(queueIndex, 1);
-          const cancelled = await emit(id, {
-            status: "cancelled",
+          const stopped = await emit(id, {
+            status: abandon ? "abandoned" : "stopped",
             running: false,
-            paused: false,
+            paused: !abandon,
             qualityPassed: false,
-            error: "cancelled by user",
-            completedAt: new Date().toISOString(),
+            error: abandon ? "abandoned by user" : null,
+            completedAt: abandon ? new Date().toISOString() : null,
+            stoppedAt: new Date().toISOString(),
+            progress: { stage: abandon ? "abandoned" : "stopped", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
           });
-          runtime.resolve?.(cancelled);
+          runtime.resolve?.(stopped);
           runtimes.delete(id);
           completions.delete(id);
+          options.onIdle?.(id);
         }
       } else {
-        await emit(id, { status: "cancelled", running: false, paused: false, qualityPassed: false, error: "cancelled by user", completedAt: new Date().toISOString() });
+        const job = await store.read(id);
+        const stoppable = ["queued", "paused", "interrupted", "stopped", "source_changed"].includes(job.status);
+        const abandonable = stoppable || job.status === "failed";
+        if (abandon ? abandonable : stoppable) {
+          await emit(id, {
+            status: abandon ? "abandoned" : "stopped",
+            running: false,
+            paused: !abandon,
+            qualityPassed: false,
+            error: abandon ? "abandoned by user" : null,
+            completedAt: abandon ? new Date().toISOString() : null,
+            stoppedAt: new Date().toISOString(),
+            progress: { stage: abandon ? "abandoned" : "stopped", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
+          });
+        } else {
+          return { ok: false, error: "document job is not in a stoppable state" };
+        }
       }
-      return { ok: true, cancelled: true, id };
+      return { ok: true, stopped: true, abandoned: abandon, id };
+    }
+    if (action === "delete") {
+      if (runtime || ["running", "queued", "waiting_foreground", "waiting_provider", "pausing"].includes((await store.read(id)).status)) {
+        return { ok: false, error: "请先立即停止或放弃任务，再删除任务记录" };
+      }
+      const job = await store.read(id);
+      await store.remove(id);
+      options.onDelete?.(publicBackgroundJob(job), job);
+      return { ok: true, deleted: true, id, outputPath: job.outputPath ?? null };
     }
     return { ok: false, error: `unknown document job action: ${action}` };
   }
@@ -1197,7 +1543,7 @@ export function createDocumentMarkdownManager(options = {}) {
         for (const sectionId of sectionIds) {
           try { sections.push(await store.readSection(id, sectionId)); } catch { /* Keep other completed sections previewable. */ }
         }
-        const title = titleForPath(job.sourcePath);
+        const title = titleForJob(job);
         const notice = ["completed", "completed_with_warnings"].includes(job.status)
           ? ""
           : "> 此为后台任务的中间预览，仅包含已经完成并保存的区块。";
@@ -1224,5 +1570,14 @@ export function createDocumentMarkdownManager(options = {}) {
     return store.read(id);
   }
 
-  return { control, getMetadata, listMetadata, resume, start, wait };
+  return {
+    activeCount: () => [...runtimes.values()].filter((runtime) => !runtime.paused && !runtime.controller.signal.aborted).length,
+    control,
+    getMetadata,
+    isProviderBusy: () => [...runtimes.values()].some((runtime) => runtime.executing && !runtime.paused && !runtime.controller.signal.aborted),
+    listMetadata,
+    resume,
+    start,
+    wait,
+  };
 }

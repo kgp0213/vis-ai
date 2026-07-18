@@ -96,6 +96,7 @@ export function effectiveModelConfig(source) {
       model,
       locked: true,
       autoEscalate: provider.autoEscalate === true && resolvedPreset === "auto" && canEscalate,
+      escalationModel,
     };
   }
 
@@ -109,6 +110,7 @@ export function effectiveModelConfig(source) {
     model: lockedModel ?? configuredModel,
     locked: Boolean(lockedModel),
     autoEscalate: preset === "auto" ? source.autoEscalate !== false : false,
+    escalationModel: source.escalationModel ?? PRESET_MODELS.pro,
   };
 }
 
@@ -146,7 +148,7 @@ export function buildLegacyProvider(cfg) {
       apiKey: cfg.apiKey ?? "",
       models: [
         { id: "deepseek-v4-flash", name: "Flash", presets: ["auto", "flash"], efforts: ["high", "max"], thinkingMode: "enabled" },
-        { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled" },
+        { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled", multimodal: true, visionPolicy: { detail: "high", maxImages: 5 } },
       ],
       defaultPreset: cfg.preset ?? "auto",
       defaultEffort: cfg.reasoningEffort ?? "max",

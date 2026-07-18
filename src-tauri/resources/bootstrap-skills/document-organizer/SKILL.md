@@ -6,7 +6,8 @@ license: MIT
 
 # Document Organizer
 
-Use the host-managed `organize_document_to_markdown` tool for the actual work. Do not
+Use the host-managed `organize_document_to_markdown` tool for one source, or
+`organize_documents_to_report` when the user asks to compare or merge multiple sources. Do not
 manually chain `prepare_local_document`, `extract_pdf_text`, OfficeCLI, `read_file`, or
 `write_file` for the same saved-Markdown request.
 
@@ -40,6 +41,20 @@ workspace. If a PDF above 3000 pages returns `requiresUserChoice`, use `ask_choi
 process only the selected range or split volume. Ask only the unresolved question; do
 not replace the structured choices with a prose menu.
 
+For a report based on several sources, pass the complete collection in one call:
+
+```json
+{
+  "inputs": ["C:\\path\\spec.docx", "C:\\path\\results.xlsx"],
+  "outputPath": "C:\\path\\combined-report.md",
+  "fidelity": "complete-with-summary",
+  "instructions": "Compare the requirements with the measured results"
+}
+```
+
+Do not start one independent task per file when the requested result depends on relationships
+between sources. The collection workflow keeps source boundaries and produces one source list.
+
 ## Runtime Behavior
 
 The host extracts stable source units, processes cross-boundary semantic windows with
@@ -49,8 +64,9 @@ model only for failures. Page or element ids remain the traceability units; boun
 context cannot be duplicated into the body. A final source-order audit runs before the
 host saves the file outside the model response, so a weak model cannot silently stop halfway.
 
-The task continues in the background and appears under the input box's background-task
-panel. The user may pause, resume, cancel, preview, or retry failed blocks. Failed blocks
+The task continues in the background and appears in the full-size background task workbench.
+The user may pause, resume, stop immediately, abandon, preview, or retry failed blocks.
+Deleting a task record never deletes source files or a committed final artifact. Failed blocks
 retain deterministic source text and are marked for review; never report an unqualified
 success when `qualityPassed` is false or visual content remains pending.
 

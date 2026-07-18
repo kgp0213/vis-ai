@@ -173,6 +173,7 @@ describe("effectiveModelConfig", () => {
     assert.equal(mc.model, "deepseek-v4-flash");
     assert.equal(mc.locked, true);
     assert.equal(mc.autoEscalate, true);
+    assert.equal(mc.escalationModel, "deepseek-v4-pro");
   });
 
   test("Provider 模式 + preset=flash → model 为 flash 模型", () => {
@@ -180,6 +181,21 @@ describe("effectiveModelConfig", () => {
     const mc = effectiveModelConfig(cfg);
     assert.equal(mc.preset, "flash");
     assert.equal(mc.model, "deepseek-v4-flash");
+  });
+
+  test("Provider 的自定义 escalationModel 直接进入运行配置", () => {
+    const provider = {
+      ...officialProvider,
+      models: [
+        { id: "qwen-fast", presets: ["auto"], efforts: ["high"] },
+        { id: "qwen-strong", presets: ["pro"], efforts: ["high"] },
+      ],
+      escalationModel: "qwen-strong",
+    };
+    const mc = effectiveModelConfig({ preset: "auto", providers: [provider], activeProviderId: provider.id });
+    assert.equal(mc.model, "qwen-fast");
+    assert.equal(mc.escalationModel, "qwen-strong");
+    assert.equal(mc.autoEscalate, true);
   });
 
   test("Provider 模式 + preset=pro（本地不支持）→ 回退 flash", () => {

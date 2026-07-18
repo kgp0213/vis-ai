@@ -221,6 +221,7 @@ var DeepSeekClient = class {
         reasoningContent: choice.reasoning_content ?? null,
         toolCalls: choice.tool_calls ?? [],
         usage: Usage.fromApi(data.usage),
+        finishReason: data.choices?.[0]?.finish_reason ?? void 0,
         raw: data
       };
     } finally {
@@ -258,9 +259,14 @@ var DeepSeekClient = class {
     }
     const queue = [];
     let done = false;
+    let receivedDoneMarker = false;
+    let lastFinishReason;
+    let protocolError = null;
     const parser = createParser({
       onEvent: (ev) => {
-        if (!ev.data || ev.data === "[DONE]") {
+        if (!ev.data || !ev.data.trim()) return;
+        if (ev.data === "[DONE]") {
+          receivedDoneMarker = true;
           done = true;
           return;
         }
@@ -268,6 +274,7 @@ var DeepSeekClient = class {
           const json = JSON.parse(ev.data);
           const delta = json.choices?.[0]?.delta ?? {};
           const finishReason = json.choices?.[0]?.finish_reason ?? void 0;
+          if (typeof finishReason === "string" && finishReason) lastFinishReason = finishReason;
           const chunk = { raw: json, finishReason };
           if (typeof delta.content === "string" && delta.content.length > 0) {
             chunk.contentDelta = delta.content;
@@ -288,7 +295,10 @@ var DeepSeekClient = class {
             chunk.usage = Usage.fromApi(json.usage);
           }
           queue.push(chunk);
-        } catch {
+        } catch (error) {
+          protocolError = new Error(`model provider returned malformed SSE JSON (${ev.data.length} chars): ${error.message}`);
+          protocolError.name = "ModelStreamProtocolError";
+          done = true;
         }
       }
     });
@@ -300,12 +310,24 @@ var DeepSeekClient = class {
           yield queue.shift();
           continue;
         }
+        if (protocolError) throw protocolError;
         if (done) break;
         const { value, done: streamDone } = await reader.read();
         if (streamDone) break;
         parser.feed(decoder.decode(value, { stream: true }));
       }
       while (queue.length > 0) yield queue.shift();
+      if (protocolError) throw protocolError;
+      if (!receivedDoneMarker && !lastFinishReason) {
+        const error = new Error("model response stream closed without an explicit completion marker or finish reason");
+        error.name = "ModelStreamIncompleteError";
+        throw error;
+      }
+      yield {
+        streamComplete: true,
+        completionSource: receivedDoneMarker ? "done-marker" : "finish-reason",
+        finishReason: lastFinishReason
+      };
     } finally {
       clearTimeout(timer);
       reader.releaseLock();

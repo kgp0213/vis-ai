@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "integration": "document-organizer",
+  "recipes": [
+    {
+      "id": "single-document-markdown",
+      "title": "单文档完整整理",
+      "description": "将一个支持的本地文档转换为带独立摘要、来源追溯和质量审校的 Markdown 文件。",
+      "version": 1,
+      "tool": "organize_document_to_markdown",
+      "inputCardinality": "single",
+      "formats": ["pdf", "word", "spreadsheet", "presentation", "html", "markdown", "csv", "text"],
+      "phases": ["prepare", "extract", "draft", "review", "assemble", "commit"],
+      "permissions": ["read-source", "write-output"],
+      "completionContract": "complete-with-summary",
+      "hostManaged": true,
+      "resumable": true
+    },
+    {
+      "id": "multi-document-report",
+      "title": "跨文档报告",
+      "description": "将多个支持的本地文档合并为一份保留各来源边界和证据追溯的 Markdown 报告。",
+      "version": 1,
+      "tool": "organize_documents_to_report",
+      "inputCardinality": "multiple",
+      "formats": ["pdf", "word", "spreadsheet", "presentation", "html", "markdown", "csv", "text"],
+      "phases": ["prepare", "extract", "draft", "review", "assemble", "commit"],
+      "permissions": ["read-source", "write-output"],
+      "completionContract": "complete-with-summary-and-source-list",
+      "hostManaged": true,
+      "resumable": true
+    }
+  ]
+}

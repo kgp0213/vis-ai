@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { formatToolRepairNotice } from "../lib/tool-repair-notice.mjs";
+
 const {
   CacheFirstLoop,
   ImmutablePrefix,
@@ -47,6 +49,38 @@ function makeLoop(client, tools, options = {}) {
 }
 
 describe("agent runtime policy", () => {
+  test("tool repair reports become a concise redacted user notice", () => {
+    const notice = formatToolRepairNotice({
+      truncationsFixed: 2,
+      scavenged: 1,
+      notes: ["apiKey=do-not-display", "C:\\private\\secret.txt"],
+    });
+    assert.match(notice, /自动修复了 2 次工具参数格式/);
+    assert.match(notice, /恢复了 1 个未按协议返回的工具调用/);
+    assert.doesNotMatch(notice, /do-not-display|secret\.txt|notes/);
+    assert.equal(formatToolRepairNotice({ truncationsFixed: 0, scavenged: 0 }), null);
+  });
+
+  test("configured escalation model replaces the bundled DeepSeek target", async () => {
+    const models = [];
+    const client = {
+      chat: async (options) => {
+        models.push(options.model);
+        return { content: "done", toolCalls: [], usage: {} };
+      },
+    };
+    const loop = makeLoop(client, new ToolRegistry(), {
+      autoEscalate: true,
+      escalationModel: "qwen-strong",
+    });
+    loop.armProForNextTurn();
+    for await (const _event of loop.step("complex task")) {
+      // Drain the turn.
+    }
+    assert.deepEqual(models, ["qwen-strong"]);
+    assert.equal(loop.escalationModel, "qwen-strong");
+  });
+
   test("tool functions receive the effective result budget", async () => {
     const tools = new ToolRegistry();
     let receivedBudget = null;
@@ -115,6 +149,40 @@ describe("agent runtime policy", () => {
     assert.equal(fallbackWrites, 0);
     assert.equal(events.filter((event) => event.role === "tool").length, 1);
     assert.equal(events.findLast((event) => event.role === "assistant_final")?.content, "文档整理任务已进入后台队列。");
+  });
+
+  test("provider length truncation is surfaced instead of persisted as a final answer", async () => {
+    const client = {
+      chat: async () => ({
+        content: "partial answer",
+        toolCalls: [],
+        usage: {},
+        finishReason: "length",
+      }),
+    };
+    const loop = makeLoop(client, new ToolRegistry());
+    const events = [];
+    for await (const event of loop.step("produce a long answer")) events.push(event);
+
+    assert.equal(events.some((event) => event.role === "assistant_final"), false);
+    assert.match(events.find((event) => event.role === "error")?.error ?? "", /output limit|truncated/i);
+    assert.equal(loop.log.toMessages().some((message) => message.content === "partial answer"), false);
+  });
+
+  test("streamed provider length truncation is surfaced instead of persisted", async () => {
+    const client = {
+      async *stream() {
+        yield { contentDelta: "partial answer" };
+        yield { finishReason: "length", streamComplete: true };
+      },
+    };
+    const loop = makeLoop(client, new ToolRegistry(), { stream: true });
+    const events = [];
+    for await (const event of loop.step("produce a long answer")) events.push(event);
+
+    assert.equal(events.some((event) => event.role === "assistant_final"), false);
+    assert.match(events.find((event) => event.role === "error")?.error ?? "", /output limit|truncated/i);
+    assert.equal(loop.log.toMessages().some((message) => message.content === "partial answer"), false);
   });
 
   test("file writer validation explains the required content shape", async () => {

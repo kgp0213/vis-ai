@@ -25209,9 +25209,13 @@ function documentJobStatusLabel(status) {
     queued: "排队中",
     running: "处理中",
     waiting_foreground: "等待前台对话",
+    waiting_provider: "等待其他模型任务",
     pausing: "正在暂停",
     paused: "已暂停",
     interrupted: "可继续",
+    stopped: "已停止，可继续",
+    abandoned: "已放弃",
+    source_changed: "来源已变化",
     completed: "已完成",
     completed_with_warnings: "需要复核",
     failed: "失败",
@@ -25230,7 +25234,11 @@ function documentJobStageLabel(stage) {
     summary: "正在生成摘要",
     completed: "文档已经完成",
     failed: "任务执行失败",
-    cancelled: "任务已取消"
+    cancelled: "任务已取消",
+    stopped: "已停止，检查点已保留",
+    abandoned: "任务已放弃",
+    "source-changed": "来源已变化",
+    "waiting-provider": "等待其他模型任务"
   }[stage] || "";
 }
 function documentJobProgressLabel(job) {
@@ -25240,6 +25248,67 @@ function documentJobProgressLabel(job) {
   if (progress.completed) return `已完成 ${progress.completed} ${unit}`;
   return documentJobStageLabel(progress.stage) || "正在准备文档";
 }
+var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selectedId, detail, onSelect, onClose, onControl, onStop, onAbandon, onDelete, onPreview }) {
+  const selected = detail || jobs.find((job) => job.id === selectedId) || null;
+  const isDocument = selected?.kind === "document";
+  const progress = selected?.progress || {};
+  const sourcePaths = Array.isArray(selected?.sourcePaths) ? selected.sourcePaths : [];
+  const criteria = Array.isArray(selected?.contract?.completionCriteria) ? selected.contract.completionCriteria : [];
+  const modelHistory = Array.isArray(selected?.modelHistory) ? selected.modelHistory : [];
+  const events = Array.isArray(selected?.events) ? selected.events.slice(-30).reverse() : [];
+  const preview = selected?.preview?.content ? String(selected.preview.content).slice(0, 120000) : "";
+  const resumable = ["paused", "interrupted", "stopped"].includes(selected?.status);
+  const active = selected?.running || ["queued", "waiting_foreground", "pausing"].includes(selected?.status);
+  const abandonable = active || ["paused", "interrupted", "stopped", "failed", "source_changed"].includes(selected?.status);
+  const deletable = isDocument && !active && !selected?.running;
+  const modelCaption = selected?.model
+    ? `${selected.running ? "当前模型" : "最近使用模型"} · ${selected.model}${selected.modelRole === "fallback" ? "（备用候选）" : ""}`
+    : "尚未开始模型调用";
+  return html4`
+    <section class="background-jobs-workbench" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface-default);border-top:1px solid var(--border-default)">
+      <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-default)">
+        <div style="min-width:0"><strong style="font-size:15px">后台任务</strong><span class="meta" style="margin-left:10px">运行中 ${jobs.filter((job) => job.running).length} · 共 ${jobs.length}</span></div>
+        <button type="button" onClick=${onClose} title="返回对话" aria-label="返回对话">×</button>
+      </header>
+      <div style="flex:1;min-height:0;display:flex;flex-wrap:wrap;overflow:hidden">
+        <nav style="flex:0 1 290px;min-width:220px;max-width:360px;min-height:160px;overflow-y:auto;border-right:1px solid var(--border-default);border-bottom:1px solid var(--border-default)">
+          ${jobs.length === 0 ? html4`<div class="meta" style="padding:18px">当前没有后台任务</div>` : jobs.map((job) => html4`
+            <button type="button" onClick=${() => onSelect(job.id)} style=${`width:100%;display:block;text-align:left;padding:11px 12px;border:0;border-bottom:1px solid var(--border-subtle);border-radius:0;background:${job.id === selected?.id ? "var(--surface-hover)" : "transparent"};color:var(--fg-0)`}>
+              <div style="display:flex;align-items:center;gap:7px"><span class=${`pill ${job.running ? "info" : job.qualityPassed === false ? "warn" : job.status === "completed" ? "ok" : ""}`}>${job.kind === "document" ? "文档" : job.lifecycle === "service" ? "服务" : "任务"}</span><span class="name" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${job.command || `#${job.id}`}</span></div>
+              <div class="meta" style="display:flex;justify-content:space-between;gap:8px;margin-top:6px"><span>${job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? "运行中" : `exit ${job.exitCode ?? "?"}`}</span><span>${job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
+            </button>
+          `)}
+        </nav>
+        <main style="flex:1 1 520px;min-width:0;min-height:0;overflow-y:auto;padding:16px 18px">
+          ${!selected ? html4`<div class="meta">选择左侧任务查看详情</div>` : !isDocument ? html4`
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h3 style="margin:0 0 6px;font-size:15px">${selected.command}</h3><div class="meta">${selected.running ? "正在运行" : `已结束 · exit ${selected.exitCode ?? "?"}`}</div></div>${selected.running ? html4`<button type="button" onClick=${() => onStop(selected.id)}>停止</button>` : null}</div>
+          ` : html4`
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+              <div style="min-width:0;flex:1"><h3 style="margin:0 0 5px;font-size:16px;overflow-wrap:anywhere">${selected.command}</h3><div class="meta">${documentJobStatusLabel(selected.status)} · ${documentJobStageLabel(progress.stage) || "等待下一步"}</div></div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>暂停</button>` : null}
+                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>继续</button>` : null}
+                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" onClick=${() => onControl(selected.id, "retry")}>重试失败部分</button>` : null}
+                ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>立即停止</button>` : null}
+                ${abandonable ? html4`<button type="button" onClick=${() => { if (confirm("放弃任务会终止后续处理，但保留任务记录和已保存草稿。确定继续？")) onAbandon(selected.id); }}>放弃</button>` : null}
+                ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>预览产物</button>` : null}
+                ${deletable ? html4`<button type="button" onClick=${() => { if (confirm("仅删除任务记录和中间草稿；源文件及已经生成的最终产物不会删除。确定继续？")) onDelete(selected.id); }}>删除记录</button>` : null}
+              </div>
+            </div>
+            <div style="height:6px;background:var(--border-subtle);overflow:hidden;margin:16px 0 8px"><div style=${`height:100%;width:${progress.percent ?? 0}%;background:${selected.qualityPassed === false ? "var(--color-warning)" : "var(--accent-primary)"}`}></div></div>
+            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>累计模型调用 ${progress.taskModelCalls || 0} 次</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>当前区块 · ${progress.currentLabel}</span>` : null}</div>
+            ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
+            <section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">来源与产物</h4><div class="meta" style="overflow-wrap:anywhere">输出 · ${selected.outputPath || "尚未确定"}</div>${sourcePaths.length > 0 ? html4`<ol style="margin:8px 0 0;padding-left:22px">${sourcePaths.map((path) => html4`<li style="font-size:12px;line-height:1.6;overflow-wrap:anywhere">${path}</li>`)}</ol>` : null}</section>
+            ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">完成条件</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
+            ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">模型调用链</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">模型</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">角色</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">结果</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">调用</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? "备用" : "主模型"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? "通过" : "未通过"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
+            ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">已保存草稿预览${selected.preview?.partial ? "（处理中）" : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? "\n\n[预览过长，已在工作台截断显示]" : ""}</pre></section>` : null}
+            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">最近事件</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
+          `}
+        </main>
+      </div>
+    </section>
+  `;
+});
 function pickWorkspaceDirectoryFromBridge() {
   if (window.__TAURI__?.invoke) {
     return window.__TAURI__.invoke("pick_directory").then((result) => {
@@ -25595,6 +25664,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [operation, setOperation] = d2(null);
   const [backgroundJobs, setBackgroundJobs] = d2([]);
   const [showBackgroundJobs, setShowBackgroundJobs] = d2(false);
+  const [selectedBackgroundJobId, setSelectedBackgroundJobId] = d2(null);
+  const [backgroundJobDetail, setBackgroundJobDetail] = d2(null);
   var fileInputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
@@ -25630,26 +25701,71 @@ const [providerCaps, setProviderCaps] = d2(null);
   const refreshBackgroundJobs = q2(async () => {
     try {
       const result = await api("/background-jobs");
-      setBackgroundJobs(Array.isArray(result.jobs) ? result.jobs : []);
+      const next = Array.isArray(result.jobs) ? result.jobs : [];
+      setBackgroundJobs(next);
+      return next;
     } catch {
+      return [];
     }
   }, []);
   const stopBackgroundJob = q2(async (id) => {
     try {
-      await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (String(id).startsWith("document:")) {
+        await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: { action: "stop" } });
+      } else {
+        await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
       await refreshBackgroundJobs();
     } catch (err) {
       setError(err.message);
     }
   }, [refreshBackgroundJobs]);
+  const abandonBackgroundJob = q2(async (id) => {
+    try {
+      await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: { action: "abandon" } });
+      await refreshBackgroundJobs();
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [refreshBackgroundJobs]);
+  const deleteBackgroundJobRecord = q2(async (id) => {
+    try {
+      await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (selectedBackgroundJobId === id) {
+        setSelectedBackgroundJobId(null);
+        setBackgroundJobDetail(null);
+      }
+      await refreshBackgroundJobs();
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [refreshBackgroundJobs, selectedBackgroundJobId]);
   const controlDocumentJob = q2(async (id, action) => {
     try {
       await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: { action } });
       await refreshBackgroundJobs();
+      const detail = await api(`/background-jobs/${encodeURIComponent(id)}`);
+      setBackgroundJobDetail(detail?.job ?? null);
     } catch (err) {
       setError(err.message);
     }
   }, [refreshBackgroundJobs]);
+  const openBackgroundWorkbench = q2(async (id = null) => {
+    setShowBackgroundJobs(true);
+    setShowSkillPicker(false);
+    setShowWsPicker(false);
+    setShowModelPicker(false);
+    const refreshed = await refreshBackgroundJobs();
+    const nextId = id || selectedBackgroundJobId || refreshed.find((job) => job.kind === "document")?.id || refreshed[0]?.id;
+    if (!nextId) return;
+    setSelectedBackgroundJobId(nextId);
+    try {
+      const detail = await api(`/background-jobs/${encodeURIComponent(nextId)}`);
+      setBackgroundJobDetail(detail?.job ?? null);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [refreshBackgroundJobs, selectedBackgroundJobId, backgroundJobs]);
   const previewDocumentJob = q2(async (job) => {
     try {
       if (["completed", "completed_with_warnings"].includes(job?.status) && job?.outputPath) {
@@ -25676,6 +25792,20 @@ const [providerCaps, setProviderCaps] = d2(null);
     const id = setInterval(refreshBackgroundJobs, 5e3);
     return () => clearInterval(id);
   }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
+  y2(() => {
+    if (!showBackgroundJobs || !selectedBackgroundJobId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const detail = await api(`/background-jobs/${encodeURIComponent(selectedBackgroundJobId)}`);
+        if (!cancelled) setBackgroundJobDetail(detail?.job ?? null);
+      } catch {
+      }
+    };
+    void load();
+    const timer = setInterval(load, 4e3);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [showBackgroundJobs, selectedBackgroundJobId]);
   y2(() => {
     if (!draftReady || !queueStorageKey) return;
     let cancelled = false;
@@ -27369,9 +27499,20 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>` : null}
       ${error ? html4`<div class="notice err">${error}</div>` : null}
 
-      <div class=${`chat-body ${activePlan || fileArtifacts.length && !fileArtifactsDismissed ? "with-rail" : ""}`}>
+      <div class=${`chat-body ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? "with-rail" : ""}`}>
         <div class="chat-main">
-          <${ChatFeed}
+          ${showBackgroundJobs ? html4`<${BackgroundJobsWorkbench}
+            jobs=${backgroundJobs}
+            selectedId=${selectedBackgroundJobId}
+            detail=${backgroundJobDetail}
+            onSelect=${openBackgroundWorkbench}
+            onClose=${() => { setShowBackgroundJobs(false); setBackgroundJobDetail(null); }}
+            onControl=${controlDocumentJob}
+            onStop=${stopBackgroundJob}
+            onAbandon=${abandonBackgroundJob}
+            onDelete=${deleteBackgroundJobRecord}
+            onPreview=${previewDocumentJob}
+          />` : html4`<${ChatFeed}
             messages=${messages}
             totalMessages=${totalMessages}
             streaming=${streaming}
@@ -27384,11 +27525,11 @@ const [providerCaps, setProviderCaps] = d2(null);
             onFillInput=${fillInputFromMessage}
             selectedArtifactMessageId=${fileArtifactsSelectedMessageId}
             onSelectArtifactMessage=${selectArtifactMessage}
-          />
+          />`}
 
           ${modal ? html4`<div class=${modalResolving ? "modal-resolving" : ""}>${modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null}</div>` : null}
 
-          ${planContinuation ? html4`
+          ${!showBackgroundJobs && planContinuation ? html4`
             <div class="plan-continuation-bar" role="status">
               <span class="plan-continuation-icon">!</span>
               <span class="plan-continuation-text">
@@ -27400,9 +27541,9 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>
           ` : null}
 
-          ${todos.length > 0 ? html4`<${TodoBar} todos=${todos} expanded=${todoExpanded} onToggle=${() => setTodoExpanded(!todoExpanded)} />` : null}
+          ${!showBackgroundJobs && todos.length > 0 ? html4`<${TodoBar} todos=${todos} expanded=${todoExpanded} onToggle=${() => setTodoExpanded(!todoExpanded)} />` : null}
 
-          <div class="chat-input-area" style="position:relative;flex-direction:column;gap:2px;padding-top:6px">
+          <div class="chat-input-area" style=${showBackgroundJobs ? "position:relative;flex-direction:column;gap:2px;padding-top:6px;flex:0 0 auto" : "position:relative;flex-direction:column;gap:2px;padding-top:6px"}>
             ${popoverKind && popoverItems.length > 0 ? html4`
                   <div class="popover" style="position:absolute;bottom:calc(100% + 6px);left:0;width:380px;max-height:280px;overflow-y:auto;z-index:10">
                     <div class="popover-h">${popoverKind === "slash" ? t4("chat.slashCommands") : t4("chat.mentionTargets")}</div>
@@ -27596,42 +27737,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                   </div>
                 </div>
               ` : null}
-              <button type="button" class=${`composer-chip ${backgroundJobs.some((job) => job.running) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => { setShowBackgroundJobs(!showBackgroundJobs); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); void refreshBackgroundJobs(); }}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</button>
-              ${showBackgroundJobs ? html4`
-                <div class="popover" style="position:absolute;bottom:100%;right:0;width:420px;max-height:280px;overflow-y:auto;z-index:10">
-                  <div class="popover-h">${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</div>
-                  ${backgroundJobs.length === 0 ? html4`<div class="popover-row"><span class="meta">${t4("chat.backgroundEmpty")}</span></div>` : backgroundJobs.map((job) => job.kind === "document" ? html4`
-                    <div class="popover-row" style="display:flex;flex-direction:column;align-items:stretch;gap:7px;padding:9px 10px">
-                      <div style="display:flex;align-items:flex-start;gap:8px;min-width:0">
-                        <span class=${`pill ${job.qualityPassed === false ? "warn" : job.running ? "info" : job.status === "completed" ? "ok" : ""}`}>文档</span>
-                        <span class="name" style="white-space:normal;overflow-wrap:anywhere;flex:1;min-width:0" title=${job.command}>${job.command}</span>
-                        <span class="meta" style="white-space:nowrap">${documentJobStatusLabel(job.status)}</span>
-                      </div>
-                      <div style="height:4px;background:var(--border-subtle);overflow:hidden">
-                        <div style=${`height:100%;width:${job.progress?.percent ?? 0}%;background:${job.qualityPassed === false ? "var(--color-warning)" : "var(--accent-primary)"}`}></div>
-                      </div>
-                      <div class="meta" style="display:flex;justify-content:space-between;gap:8px">
-                        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1" title=${job.progress?.currentLabel || ""}>${documentJobProgressLabel(job)}${job.progress?.currentLabel ? ` · ${job.progress.currentLabel}` : ""}</span>
-                        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px" title=${job.model || ""}>${job.model ? `${job.modelRole === "fallback" ? "回退模型 · " : ""}${job.model}` : ""}</span>
-                      </div>
-                      ${documentJobStageLabel(job.progress?.stage) ? html4`<div class="meta" style="display:flex;justify-content:space-between;gap:8px"><span>${documentJobStageLabel(job.progress?.stage)}</span>${job.progress?.modelCallLimit ? html4`<span>${job.progress.modelCalls || 0}/${job.progress.modelCallLimit} 次调用</span>` : null}</div>` : null}
-                      <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
-                        ${job.running && !job.paused ? html4`<button type="button" onClick=${() => controlDocumentJob(job.id, "pause")}>暂停</button>` : null}
-                        ${["paused", "interrupted"].includes(job.status) ? html4`<button type="button" onClick=${() => controlDocumentJob(job.id, "resume")}>继续</button>` : null}
-                        ${["completed_with_warnings", "failed"].includes(job.status) ? html4`<button type="button" onClick=${() => controlDocumentJob(job.id, "retry")}>重试失败部分</button>` : null}
-                        ${job.previewAvailable || (["completed", "completed_with_warnings"].includes(job.status) && job.outputPath) ? html4`<button type="button" onClick=${() => previewDocumentJob(job)}>预览</button>` : null}
-                        ${job.running || ["paused", "interrupted", "queued"].includes(job.status) ? html4`<button type="button" onClick=${() => stopBackgroundJob(job.id)}>${t4("chat.backgroundStop")}</button>` : null}
-                      </div>
-                    </div>
-                  ` : html4`
-                    <div class="popover-row" style="align-items:flex-start;gap:8px">
-                      <span class=${`pill ${job.running ? "info" : ""}`}>${job.lifecycle === "service" ? t4("chat.backgroundService") : t4("chat.backgroundTask")}</span>
-                      <span class="name" style="white-space:normal;overflow-wrap:anywhere;flex:1" title=${job.command}>#${job.id} ${job.command}</span>
-                      ${job.running ? html4`<button type="button" onClick=${() => stopBackgroundJob(job.id)}>${t4("chat.backgroundStop")}</button>` : html4`<span class="meta">exit ${job.exitCode ?? "?"}</span>`}
-                    </div>
-                  `)}
-                </div>
-              ` : null}
+              <button type="button" class=${`composer-chip ${backgroundJobs.some((job) => job.running) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => showBackgroundJobs ? setShowBackgroundJobs(false) : void openBackgroundWorkbench()}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</button>
               <label class="composer-chip composer-index">
                 <span class="composer-index-label" title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。">索引</span>
                 <select title=${globalThis.VisionoxIndexModePolicy.hint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode}>
@@ -27659,7 +27765,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                   </div>
                 ` : null}
               ` : null}
-              ${(showSkillPicker || showWsPicker || showModelPicker || showBackgroundJobs || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowBackgroundJobs(false); setShowRetrievalSources(false); }}></div>` : null}
+              ${(showSkillPicker || showWsPicker || showModelPicker || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowRetrievalSources(false); }}></div>` : null}
               <div style="flex:1"></div>
               <button
                 type="button"
@@ -27694,7 +27800,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} />
         </div>
-        ${activePlan || fileArtifacts.length && !fileArtifactsDismissed ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
+        ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
       </div>
     </div>
   `;
