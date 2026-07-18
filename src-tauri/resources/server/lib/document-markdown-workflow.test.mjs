@@ -1257,6 +1257,65 @@ test("resume keeps the stored source plan while a smaller current model splits o
   }
 });
 
+test("persists one immutable source plan and advances an execution epoch on resume", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-source-plan-epoch-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const units = [
+      { id: "u1", location: "section 1", text: "Complete source section one." },
+      { id: "u2", location: "section 2", text: "Complete source section two." },
+    ];
+    let sourcePlanCallbacks = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onPlan, onBatch }) => {
+        sourcePlanCallbacks++;
+        await onPlan({ totalUnits: units.length, totalBatches: 1, unitLabel: "区块" });
+        await onBatch({ id: "source-parent", index: 1, label: "section 1-2", units });
+        await onPlan({ totalUnits: units.length, totalBatches: 1, unitLabel: "区块", estimating: false });
+        return { totalUnits: units.length, batches: 1 };
+      },
+      modelCandidates: () => [{
+        providerId: "provider",
+        modelId: "model",
+        role: "primary",
+        configFingerprint: "fingerprint-without-secrets",
+        verificationStatus: "passed",
+        requiresProbe: false,
+      }],
+      generate: async ({ batch, purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : faithful(batch.units, "model"),
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const first = await store.read(accepted.id);
+    assert.equal(first.sourcePlan?.status, "completed");
+    assert.equal(first.sourcePlan?.batches?.length, 1);
+    assert.equal(first.sourcePlan?.batches[0]?.unitIds?.join(","), "u1,u2");
+    assert.match(first.sourcePlan?.planHash ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(first.executionEpoch?.sequence, 1);
+    assert.equal(first.executionEpoch?.candidates?.[0]?.configFingerprint, "fingerprint-without-secrets");
+    assert.equal(Object.hasOwn(first.executionEpoch?.candidates?.[0] ?? {}, "apiKey"), false);
+    assert.equal(Object.hasOwn(first.executionEpoch?.candidates?.[0] ?? {}, "baseUrl"), false);
+
+    await store.update(accepted.id, { status: "interrupted", running: false, paused: true });
+    await manager.resume(accepted.id);
+    await manager.wait(accepted.id);
+    const resumed = await store.read(accepted.id);
+    assert.equal(resumed.status, "completed", resumed.error);
+    assert.equal(resumed.executionEpoch?.sequence, 2);
+    assert.equal(resumed.sourcePlan?.planHash, first.sourcePlan?.planHash);
+    assert.equal(resumed.sourcePlan?.batches?.length, 1);
+    assert.equal(sourcePlanCallbacks, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("resume removes stale manifest batches that are absent from the current source plan", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-stale-plan-"));
   try {
