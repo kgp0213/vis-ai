@@ -8,6 +8,7 @@ import {
   createDocumentContextUnit,
   evaluateDocumentAssembly,
   evaluateDocumentQuality,
+  mergeDocumentUnitSections,
   normalizeDocumentPolicy,
   parseDocumentReview,
   renderDocumentSourceFallback,
@@ -628,6 +629,62 @@ function messagesWithBatchVisuals(messages, batch, candidate) {
   return { messages: next, visualUnitIds: visualUnits.map((unit) => unit.id) };
 }
 
+function targetedRepairUnitIds(result, batch) {
+  const requested = new Set();
+  let hasUnscopedFailure = false;
+  for (const failure of result?.quality?.failures ?? []) {
+    if (failure?.type === "coverage") {
+      for (const id of [...(failure.missingUnitIds ?? []), ...(failure.thinUnitIds ?? []), ...(failure.duplicateUnitIds ?? [])]) requested.add(String(id));
+      if ((failure.unexpectedUnitIds ?? []).length > 0) hasUnscopedFailure = true;
+    } else if (failure?.type === "visual-pending") {
+      for (const id of failure.unitIds ?? []) requested.add(String(id));
+    } else {
+      hasUnscopedFailure = true;
+    }
+  }
+  for (const issue of result?.review?.issues ?? []) {
+    if (issue?.unitId) requested.add(String(issue.unitId));
+  }
+  if (hasUnscopedFailure) return [];
+  return (batch?.unitIds ?? []).filter((id) => requested.has(String(id)));
+}
+
+function repairContextUnits(batch, targetIds) {
+  const target = new Set(targetIds);
+  const neighbors = [];
+  for (let index = 0; index < (batch?.units ?? []).length; index++) {
+    if (!target.has(batch.units[index].id)) continue;
+    for (const neighborIndex of [index - 1, index + 1]) {
+      const unit = batch.units[neighborIndex];
+      if (!unit || target.has(unit.id)) continue;
+      neighbors.push({ ...unit, contextOnly: true, contextRole: neighborIndex < index ? "before" : "after", visualDataUrl: null });
+    }
+  }
+  return uniqueContextUnits([...(batch?.contextUnits ?? []), ...neighbors]);
+}
+
+function createRepairBatch(batch, unitIds, suffix = "1") {
+  const wanted = new Set(unitIds);
+  return normalizeBatch({
+    id: `${batch.id}-repair-${suffix}`,
+    index: batch.index,
+    label: `${batch.label} · targeted repair`,
+    units: (batch.units ?? []).filter((unit) => wanted.has(unit.id)),
+    contextUnits: repairContextUnits(batch, unitIds),
+  });
+}
+
+function canonicalRepairBase(batch, section) {
+  const fallback = renderDocumentSourceFallback(batch.units, "等待针对性修复");
+  if (!String(section ?? "").trim()) return fallback;
+  const merged = mergeDocumentUnitSections({
+    markdown: fallback,
+    patchMarkdown: section,
+    allowedUnitIds: batch.unitIds,
+  });
+  return merged.ok ? merged.markdown : fallback;
+}
+
 function publicBackgroundJob(job) {
   const completed = Number(job?.progress?.completedUnits) || 0;
   const total = Number(job?.progress?.totalUnits) || null;
@@ -1038,14 +1095,162 @@ export function createDocumentMarkdownManager(options = {}) {
     };
   }
 
-  async function tryCandidate(candidate, batch, runtime, budget, candidatePolicy) {
+  async function tryTargetedRepair(candidate, batch, runtime, budget, candidatePolicy, seedResult) {
+    const targetIds = targetedRepairUnitIds(seedResult, batch);
+    if (targetIds.length === 0) return null;
+    const visualIds = new Set((seedResult?.quality?.failures ?? [])
+      .filter((failure) => failure?.type === "visual-pending")
+      .flatMap((failure) => failure.unitIds ?? []).map(String));
+    if (visualIds.size > 0 && targetIds.every((id) => visualIds.has(id)) && candidate.multimodal !== true) return null;
+
+    const repairBatch = createRepairBatch(batch, targetIds);
+    const base = canonicalRepairBase(batch, seedResult.section);
+    const issueText = [
+      ...(seedResult?.quality?.failures ?? []).map((failure) => `${failure.type}: ${JSON.stringify(failure)}`),
+      ...(seedResult?.review?.issues ?? []).map((issue) => `${issue.type} ${issue.unitId}: ${issue.detail}`),
+    ].join("\n");
+    const messages = buildDocumentSectionMessages({ batch: repairBatch, contract: runtime.contract, retry: true });
+    const lastMessage = messages.at(-1);
+    if (lastMessage && typeof lastMessage.content === "string") {
+      lastMessage.content = `${lastMessage.content}\n\n<targeted_repair>\nRepair only these source-unit markers: ${targetIds.join(", ")}.\nDo not emit any other marker.\nKnown issues:\n${issueText}\n</targeted_repair>`;
+    }
+    const withVisuals = messagesWithBatchVisuals(messages, repairBatch, candidate);
+    const modelCall = reserveModelCall(runtime, budget, {
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      role: candidate.role,
+      purpose: "toolContinuation",
+      stage: "unit-repair",
+      batchId: batch.id,
+      batchLabel: batch.label,
+      currentBatch: batch.id,
+      currentLabel: batch.label,
+      attempt: 1,
+      maxAttempts: 1,
+      generatedChars: 0,
+      elapsedMs: 0,
+      repairUnitIds: targetIds,
+    });
+    if (!modelCall) return null;
+    try {
+      await store.appendEvent?.(runtime.id, {
+        type: "unit-repair-started",
+        batchId: batch.id,
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        unitIds: targetIds,
+      }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+      const patch = cleanMarkdown(await runTrackedModelCall(runtime, modelCall, () => options.generate({
+        candidate,
+        batch: repairBatch,
+        contract: runtime.contract,
+        messages: withVisuals.messages,
+        purpose: "toolContinuation",
+        maxTokens: candidatePolicy.batchOutputTokens,
+        requestTimeoutMs: candidatePolicy.requestTimeoutMs,
+        onProgress: (progress) => {
+          if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
+          queueProgress(runtime, {
+            stage: "unit-repair",
+            currentBatch: batch.id,
+            currentLabel: batch.label,
+            repairUnitIds: targetIds,
+            generatedChars: Number(progress?.generatedChars) || 0,
+            elapsedMs: Number(progress?.elapsedMs) || 0,
+            modelCalls: budget.used,
+            modelCallLimit: budget.limit,
+          }, {}, "unit-repair-progress");
+        },
+        retry: true,
+        signal: runtime.controller.signal,
+      })));
+      const merged = mergeDocumentUnitSections({ markdown: base, patchMarkdown: patch, allowedUnitIds: targetIds });
+      const replaced = new Set(merged.replacedUnitIds ?? []);
+      if (!merged.ok || replaced.size !== targetIds.length || targetIds.some((id) => !replaced.has(id))) {
+        await store.appendEvent?.(runtime.id, {
+          type: "unit-repair-rejected",
+          batchId: batch.id,
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          unitIds: targetIds,
+          replacedUnitIds: merged.replacedUnitIds ?? [],
+          reason: "patch markers did not match the requested unit set",
+        }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+        return {
+          passed: false,
+          section: base,
+          quality: evaluateDocumentQuality({ units: batch.units, markdown: base, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: seedResult.resolvedVisualUnitIds ?? [] }),
+          review: null,
+          attempts: 1,
+          candidate,
+          errors: ["targeted repair returned an incomplete or unexpected marker set"],
+          failureCategories: [],
+        };
+      }
+      const resolvedVisualUnitIds = [...new Set([...(seedResult.resolvedVisualUnitIds ?? []), ...withVisuals.visualUnitIds])];
+      const quality = evaluateDocumentQuality({ units: batch.units, markdown: merged.markdown, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds });
+      if (!quality.passed) {
+        await store.appendEvent?.(runtime.id, {
+          type: "unit-repair-completed",
+          batchId: batch.id,
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          unitIds: targetIds,
+          passed: false,
+          failures: quality.failures,
+        }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+        return { passed: false, section: merged.markdown, quality, review: null, attempts: 1, candidate, errors: [], failureCategories: [], resolvedVisualUnitIds };
+      }
+      const review = await requestReview(candidate, batch, merged.markdown, runtime, budget, candidatePolicy);
+      await store.appendEvent?.(runtime.id, {
+        type: "unit-repair-completed",
+        batchId: batch.id,
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        unitIds: targetIds,
+        passed: review.pass === true,
+      }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+      return {
+        passed: review.pass === true,
+        section: merged.markdown,
+        quality,
+        review,
+        attempts: 1,
+        candidate,
+        errors: review.errors ?? [],
+        failureCategories: [],
+        resolvedVisualUnitIds,
+      };
+    } catch (error) {
+      if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
+      if (isNonRetryableDocumentModelError(error)) disableCandidate(runtime, candidate);
+      return {
+        passed: false,
+        section: base,
+        quality: evaluateDocumentQuality({ units: batch.units, markdown: base, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: seedResult.resolvedVisualUnitIds ?? [] }),
+        review: null,
+        attempts: 1,
+        candidate,
+        errors: [String(error?.message || error).slice(0, 500)],
+        failureCategories: [classifyDocumentModelError(error).category],
+        resolvedVisualUnitIds: seedResult.resolvedVisualUnitIds ?? [],
+      };
+    }
+  }
+
+  async function tryCandidate(candidate, batch, runtime, budget, candidatePolicy, seedResult = null) {
     let lastQuality = null;
     let lastReview = null;
     let lastSection = "";
+    let lastResolvedVisualUnitIds = [];
     let attempts = 0;
     let reviewRepairs = 0;
     const errors = [];
     const failureCategories = new Set();
+    if (seedResult && candidatePolicy.maxRetries >= 0) {
+      const targeted = await tryTargetedRepair(candidate, batch, runtime, budget, candidatePolicy, seedResult);
+      if (targeted) return targeted;
+    }
     for (let attempt = 0; attempt <= candidatePolicy.maxRetries; attempt++) {
       await waitForTurn(runtime);
       const modelCall = reserveModelCall(runtime, budget, {
@@ -1118,18 +1323,35 @@ export function createDocumentMarkdownManager(options = {}) {
         fidelity: runtime.contract.fidelity,
         resolvedVisualUnitIds: withVisuals.visualUnitIds,
       });
+      lastResolvedVisualUnitIds = withVisuals.visualUnitIds;
       if (!lastQuality.passed) {
         const onlyUnresolvedVisuals = lastQuality.failures.every((failure) => failure.type === "visual-pending");
         if (onlyUnresolvedVisuals) break;
+        if (attempt < candidatePolicy.maxRetries) {
+          const targeted = await tryTargetedRepair(candidate, batch, runtime, budget, candidatePolicy, {
+            section,
+            quality: lastQuality,
+            review: null,
+            resolvedVisualUnitIds: lastResolvedVisualUnitIds,
+          });
+          if (targeted) return targeted;
+        }
         continue;
       }
       lastReview = await requestReview(candidate, batch, section, runtime, budget, candidatePolicy);
       errors.push(...(lastReview.errors ?? []));
-      if (lastReview.pass) return { passed: true, section, quality: lastQuality, review: lastReview, attempts, candidate, errors, failureCategories: [...failureCategories] };
+      if (lastReview.pass) return { passed: true, section, quality: lastQuality, review: lastReview, attempts, candidate, errors, failureCategories: [...failureCategories], resolvedVisualUnitIds: lastResolvedVisualUnitIds };
       if (lastReview.unavailable || reviewRepairs >= 1) break;
       reviewRepairs++;
+      const targeted = await tryTargetedRepair(candidate, batch, runtime, budget, candidatePolicy, {
+        section,
+        quality: lastQuality,
+        review: lastReview,
+        resolvedVisualUnitIds: lastResolvedVisualUnitIds,
+      });
+      if (targeted) return { ...targeted, attempts: attempts + targeted.attempts };
     }
-    return { passed: false, section: lastSection, quality: lastQuality, review: lastReview, attempts, candidate, errors, failureCategories: [...failureCategories] };
+    return { passed: false, section: lastSection, quality: lastQuality, review: lastReview, attempts, candidate, errors, failureCategories: [...failureCategories], resolvedVisualUnitIds: lastResolvedVisualUnitIds };
   }
 
   async function candidateAvailable(candidate, runtime, batch = null) {
@@ -1207,9 +1429,11 @@ export function createDocumentMarkdownManager(options = {}) {
       if (state.budget.used >= state.budget.limit) break;
       if (!await candidateAvailable(candidate, runtime, batch)) continue;
       const candidatePolicy = documentPolicyForCandidate(runtime.policy, candidate);
-      const policyViolations = batchPolicyViolations(batch, candidatePolicy, countTokens);
+      const repairIds = bestResult ? targetedRepairUnitIds(bestResult, batch) : [];
+      const policyBatch = repairIds.length > 0 ? createRepairBatch(batch, repairIds, "policy") : batch;
+      const policyViolations = batchPolicyViolations(policyBatch, candidatePolicy, countTokens);
       const splitDepthLimit = Math.min(runtime.policy.maxSplitDepth, candidatePolicy.maxSplitDepth);
-      if (policyViolations.length > 0 && batch.units.length > 1 && state.depth < splitDepthLimit) {
+      if (repairIds.length === 0 && policyViolations.length > 0 && batch.units.length > 1 && state.depth < splitDepthLimit) {
         const { left, right } = splitBatchWithContext(batch, { ...runtime, policy: candidatePolicy }, countTokens);
         await store.appendEvent?.(runtime.id, {
           type: candidate.role === "fallback" ? "fallback-batch-split" : "candidate-batch-split",
@@ -1235,6 +1459,7 @@ export function createDocumentMarkdownManager(options = {}) {
           quality: { passed, split: true, policyDriven: true },
           review: null,
           attempts: [...attempts, ...(leftResult.attempts ?? []), ...(rightResult.attempts ?? [])],
+          resolvedVisualUnitIds: [...new Set([...(leftResult.resolvedVisualUnitIds ?? []), ...(rightResult.resolvedVisualUnitIds ?? [])])],
         };
       }
       await updateProgress(runtime, {
@@ -1247,7 +1472,7 @@ export function createDocumentMarkdownManager(options = {}) {
         currentModel: `${candidate.providerId}/${candidate.modelId}`,
         currentModelRole: candidate.role || "primary",
       });
-      const result = await tryCandidate(candidate, batch, runtime, state.budget, candidatePolicy);
+      const result = await tryCandidate(candidate, batch, runtime, state.budget, candidatePolicy, bestResult);
       attempts.push({
         providerId: candidate.providerId,
         modelId: candidate.modelId,
@@ -1293,6 +1518,7 @@ export function createDocumentMarkdownManager(options = {}) {
         quality: { passed, split: true },
         review: null,
         attempts: [...attempts, ...(leftResult.attempts ?? []), ...(rightResult.attempts ?? [])],
+        resolvedVisualUnitIds: [...new Set([...(leftResult.resolvedVisualUnitIds ?? []), ...(rightResult.resolvedVisualUnitIds ?? [])])],
       };
     }
 
@@ -1657,6 +1883,7 @@ export function createDocumentMarkdownManager(options = {}) {
             modelRole: result.candidate?.role ?? null,
             quality: result.quality,
             review: result.review,
+            resolvedVisualUnitIds: result.resolvedVisualUnitIds ?? [],
             attempts: result.attempts,
             sourceFallback: result.sourceFallback === true,
             modelCalls: budget.used,
