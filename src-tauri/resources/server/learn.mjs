@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, statSync, readdirSync, readFileSync, writeFileSy
 import { readdir, readFile, stat, writeFile, cp, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { getConceptManager } from "./learn-track.mjs";
+import { requestModelJson, requestModelText } from "./lib/model-task-request.mjs";
 
 // ── Constants ───────────────────────────────────────────────────
 const LEARN_COMMANDS = ["skill", "project", "index", "ask", "tutor", "track", "status", "help"];
@@ -92,7 +93,7 @@ const LEARN_LIMITS = {
 };
 
 // ── Concept extraction helpers ──────────────────────────────────
-async function extractConceptsFromText(client, model, text, source, signal) {
+async function extractConceptsFromText(client, model, text, source, signal, capabilities = {}) {
   if (!client || !text?.trim()) return [];
   const system = `You are a learning-track assistant. Extract the key concepts a developer would need to learn to understand the content below.
 
@@ -104,7 +105,10 @@ Return ONLY a JSON array. Each item must have:
 Example: [{"name":"Tauri-invoke","level":3,"tags":["rust","tauri"]}]
 Do not wrap in markdown code fences. Keep names concise and avoid duplicates.`;
 
-  const result = await client.chat({
+  const parsed = await requestModelJson({
+    client,
+    capabilities,
+    label: "learn concept extraction",
     model,
     messages: [
       { role: "system", content: system },
@@ -113,24 +117,18 @@ Do not wrap in markdown code fences. Keep names concise and avoid duplicates.`;
     signal,
     temperature: 0.2,
     maxTokens: 1024,
+    requestPurpose: "learn",
+    preferStructuredOutput: false,
   });
-
-  const raw = result.content ?? "";
-  const cleaned = raw.replace(/```json\s*|\s*```/g, "").trim();
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item) => item && typeof item.name === "string" && item.name.trim())
-      .map((item) => ({
-        name: item.name.trim(),
-        level: Math.max(1, Math.min(5, Number(item.level) || 1)),
-        source,
-        tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === "string") : [],
-      }));
-  } catch {
-    return [];
-  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((item) => item && typeof item.name === "string" && item.name.trim())
+    .map((item) => ({
+      name: item.name.trim(),
+      level: Math.max(1, Math.min(5, Number(item.level) || 1)),
+      source,
+      tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === "string") : [],
+    }));
 }
 
 function recordExtractedConcepts(concepts, sourcePrefix) {
@@ -339,7 +337,7 @@ function validateSkillMarkdown(contents) {
   return { ok: true, name: nameMatch[1], frontmatter };
 }
 
-async function callLlmForSkill(client, model, files, skillName, signal) {
+async function callLlmForSkill(client, model, files, skillName, signal, capabilities = {}) {
   const fileBlocks = files
     .map((f) => `### File: ${f.path}\n\n\`\`\`\n${f.content}\n\`\`\``)
     .join("\n\n");
@@ -356,7 +354,10 @@ Output rules:
 
   const user = `Please create a SKILL.md for the skill named "${skillName}" based on the following files:\n\n${fileBlocks}`;
 
-  const result = await client.chat({
+  return requestModelText({
+    client,
+    capabilities,
+    label: "learn skill generation",
     model,
     messages: [
       { role: "system", content: system },
@@ -365,9 +366,8 @@ Output rules:
     signal,
     temperature: 0.2,
     maxTokens: 4096,
+    requestPurpose: "learn",
   });
-
-  return result.content ?? "";
 }
 
 function installSkillDirectoryAtomic(name, srcDir, { overwrite = false, skillsRoot } = {}) {
@@ -411,7 +411,7 @@ function installSkillDirectoryAtomic(name, srcDir, { overwrite = false, skillsRo
 }
 
 async function runLearnSkill(args, opts) {
-  const { client, model, workspaceDir, skillsRoot, allowAllPaths } = opts;
+  const { client, model, workspaceDir, skillsRoot, allowAllPaths, capabilities } = opts;
 
   if (!client) {
     return { ok: false, message: "尚未配置 API Key，无法使用 /learn skill。请先在 设置 → 模型服务 中配置。" };
@@ -457,7 +457,7 @@ async function runLearnSkill(args, opts) {
 
   let generated;
   try {
-    generated = await callLlmForSkill(client, model, files, skillName, opts.signal);
+    generated = await callLlmForSkill(client, model, files, skillName, opts.signal, capabilities);
   } catch (err) {
     return { ok: false, message: `调用 LLM 生成 SKILL.md 失败: ${err.message}` };
   }
@@ -490,7 +490,7 @@ async function runLearnSkill(args, opts) {
 
     let conceptNote = "";
     try {
-      const concepts = await extractConceptsFromText(client, model, generated, `skill:${skillName}`, opts.signal);
+      const concepts = await extractConceptsFromText(client, model, generated, `skill:${skillName}`, opts.signal, capabilities);
       if (concepts.length > 0) {
         const { added, existed } = recordExtractedConcepts(concepts, "skill");
         conceptNote = `\n\n同时已提取 ${concepts.length} 个核心概念到学习追踪库（新增 ${added}，已存在 ${existed}）。`;
@@ -566,7 +566,7 @@ async function collectProjectFiles(rootDir) {
   return { files, totalBytes };
 }
 
-async function callLlmForProjectMemory(client, model, files, projectName, signal) {
+async function callLlmForProjectMemory(client, model, files, projectName, signal, capabilities = {}) {
   const fileBlocks = files
     .map((f) => `### ${f.path}\n\n\`\`\`\n${f.content}\n\`\`\``)
     .join("\n\n");
@@ -583,7 +583,10 @@ Output rules:
 
   const user = `Project name: ${projectName}\n\nCreate a project memory file based on these files:\n\n${fileBlocks}`;
 
-  const result = await client.chat({
+  return requestModelText({
+    client,
+    capabilities,
+    label: "learn project memory generation",
     model,
     messages: [
       { role: "system", content: system },
@@ -592,13 +595,12 @@ Output rules:
     signal,
     temperature: 0.2,
     maxTokens: 3072,
+    requestPurpose: "learn",
   });
-
-  return result.content ?? "";
 }
 
 async function runLearnProject(args, opts) {
-  const { client, model, workspaceDir } = opts;
+  const { client, model, workspaceDir, capabilities } = opts;
 
   if (!client) {
     return { ok: false, message: "尚未配置 API Key，无法使用 /learn project。请先在 设置 → 模型服务 中配置。" };
@@ -615,7 +617,7 @@ async function runLearnProject(args, opts) {
 
   let generated;
   try {
-    generated = await callLlmForProjectMemory(client, model, files, projectName, opts.signal);
+    generated = await callLlmForProjectMemory(client, model, files, projectName, opts.signal, capabilities);
   } catch (err) {
     return { ok: false, message: `调用 LLM 生成项目记忆失败: ${err.message}` };
   }
@@ -628,7 +630,7 @@ async function runLearnProject(args, opts) {
 
     let conceptNote = "";
     try {
-      const concepts = await extractConceptsFromText(client, model, generated, `project:${projectName}`, opts.signal);
+      const concepts = await extractConceptsFromText(client, model, generated, `project:${projectName}`, opts.signal, capabilities);
       if (concepts.length > 0) {
         const { added, existed } = recordExtractedConcepts(concepts, "project");
         conceptNote = `\n\n同时已提取 ${concepts.length} 个核心概念到学习追踪库（新增 ${added}，已存在 ${existed}）。`;
@@ -732,7 +734,7 @@ async function runLearnIndex(args, opts) {
 }
 
 async function runLearnAsk(args, opts) {
-  const { client, model, workspaceDir, configPath, querySemantic, indexExists, loadSemanticEmbeddingUserConfig } = opts;
+  const { client, model, workspaceDir, configPath, querySemantic, indexExists, loadSemanticEmbeddingUserConfig, capabilities } = opts;
 
   if (!querySemantic || !indexExists) {
     return { ok: false, message: "语义搜索模块未加载，无法使用 /learn ask。" };
@@ -795,7 +797,10 @@ Rules:
   const user = `Question: ${question}\n\nSource snippets:\n${context}\n\nPlease answer the question.`;
 
   try {
-    const result = await client.chat({
+    const answer = (await requestModelText({
+      client,
+      capabilities,
+      label: "learn indexed answer",
       model,
       messages: [
         { role: "system", content: system },
@@ -804,8 +809,8 @@ Rules:
       signal: opts.signal,
       temperature: 0.2,
       maxTokens: 2048,
-    });
-    const answer = result.content?.trim() ?? "（LLM 未返回有效回答）";
+      requestPurpose: "learn",
+    })).trim();
     return {
       ok: true,
       message: `${answer}\n\n---\n基于 ${hits.length} 条索引片段回答。如需查看原始片段，请说“显示来源”。`,

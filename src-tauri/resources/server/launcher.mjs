@@ -97,6 +97,7 @@ const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, norm
 const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
 const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
 const { buildMessageRiskPrompt, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
+const { requestModelJson: requestTaskModelJson, requestModelText: requestTaskModelText } = await importEarly("./lib/model-task-request.mjs");
 const { formatToolRepairNotice } = await importEarly("./lib/tool-repair-notice.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
@@ -1331,7 +1332,7 @@ async function generateDocumentSummary({ title, sectionSummaries, contract, cand
     messages: buildDocumentSummaryMessages({ title, sectionSummaries, contract }),
     pageRange: "summary",
     stage: "summary",
-    requestPurpose: "toolContinuation",
+    requestPurpose: "summary",
     temperature: 0.1,
     maxTokens: Math.min(2_048, Number(candidate.maxOutputTokens) || 2_048),
     hardTimeoutMs: requestTimeoutMs,
@@ -2675,7 +2676,8 @@ async function semanticReviewCleanupItems(items, semanticMode = "off", signal, p
   ].join("\n\n");
   try {
     const modelConfig = effectiveModelConfig(config);
-    const resp = await client.chat({
+    const parsed = await requestModelJson({
+      label: "session cleanup semantic reviewer",
       model: modelConfig.model,
       messages: [
         { role: "system", content: "你只返回 JSON 数组，每项包含 name, action, confidence, reason。" },
@@ -2683,10 +2685,10 @@ async function semanticReviewCleanupItems(items, semanticMode = "off", signal, p
       ],
       temperature: 0.1,
       maxTokens: 4000,
+      requestPurpose: "sessionReview",
+      preferStructuredOutput: false,
       signal,
     });
-    const raw = String(resp?.content || "").trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
-    const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) throw new Error("semantic review did not return an array");
     const byName = new Map(parsed.map((item) => [String(item.name || ""), item]));
     const next = items.map((item) => {
@@ -5518,61 +5520,41 @@ async function runScheduleReportTask(taskId, runId, startedAt = new Date().toISO
   }
 }
 
-function parseModelJson(content, label) {
-  const raw = String(content || "").trim()
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-  try {
-    return JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`${label} returned invalid JSON: ${err.message}`);
-  }
+function activeTaskModelCapabilities(model) {
+  const provider = getActiveProvider(config);
+  return resolveProviderModelCapabilities(provider, model);
 }
 
-function responseFormatUnsupported(error) {
-  return /response[_ ]?format|json_object/i.test(String(error?.message || error || ""));
+async function requestModelJson({ label, messages, model, maxTokens, temperature = 0, signal, requestPurpose, preferStructuredOutput = true }) {
+  throwIfScheduleAborted(signal);
+  return requestTaskModelJson({
+    client,
+    capabilities: activeTaskModelCapabilities(model),
+    label,
+    messages,
+    model,
+    maxTokens,
+    temperature,
+    requestPurpose,
+    signal,
+    preferStructuredOutput,
+  });
 }
 
-async function requestModelJson({ label, messages, model, maxTokens, temperature = 0, signal }) {
-  let structuredOutput = true;
-  let parseFailures = 0;
-  let retryMessages = messages;
-  while (parseFailures < 2) {
-    throwIfScheduleAborted(signal);
-    let response;
-    try {
-      response = await client.chat({
-        model,
-        messages: retryMessages,
-        temperature,
-        maxTokens,
-        responseFormat: structuredOutput ? { type: "json_object" } : undefined,
-        signal,
-      });
-    } catch (error) {
-      if (structuredOutput && responseFormatUnsupported(error)) {
-        structuredOutput = false;
-        continue;
-      }
-      throw error;
-    }
-    try {
-      return parseModelJson(response?.content, label);
-    } catch (error) {
-      parseFailures++;
-      if (parseFailures >= 2) {
-        const finishReason = response?.raw?.choices?.[0]?.finish_reason;
-        throw new Error(`${error.message}${finishReason ? ` (finish reason: ${finishReason})` : ""}`);
-      }
-      retryMessages = [
-        ...messages,
-        { role: "system", content: "The previous response was invalid or incomplete JSON. Return the requested compact JSON object again, with all string control characters properly escaped and no Markdown." },
-      ];
-    }
-  }
-  throw new Error(`${label} did not return valid JSON`);
+async function requestModelText({ label, messages, model, maxTokens, temperature = 0, signal, requestPurpose, allowEmpty = false }) {
+  throwIfScheduleAborted(signal);
+  return requestTaskModelText({
+    client,
+    capabilities: activeTaskModelCapabilities(model),
+    label,
+    messages,
+    model,
+    maxTokens,
+    temperature,
+    requestPurpose,
+    signal,
+    allowEmpty,
+  });
 }
 
 function knowledgePaths(workspace) {
@@ -5767,6 +5749,7 @@ async function evaluateSessionKnowledge(task, signal) {
         ],
         temperature: 0,
         maxTokens: 5000,
+        requestPurpose: "sessionReview",
         signal,
       });
       const batchEvaluations = normalizeSessionQualityEvaluations(raw, batch, new Set(manifest.topics.map((topic) => topic.id)));
@@ -5804,6 +5787,7 @@ async function evaluateKnowledgeDocument(markdown, sourceSessions, existingTopic
     ],
     temperature: 0,
     maxTokens: 5000,
+    requestPurpose: "knowledge",
     signal,
   });
   return normalizeDocumentQualityEvaluation(raw);
@@ -5860,6 +5844,7 @@ async function generateSessionKnowledge(task, signal, qualityState = null) {
     ],
     temperature: 0.1,
     maxTokens: 5000,
+    requestPurpose: "knowledge",
     signal,
   });
   const groups = normalizeTopicPlan(rawPlan, candidates.map((item) => item.name));
@@ -5919,6 +5904,7 @@ async function generateSessionKnowledge(task, signal, qualityState = null) {
         ],
         temperature: 0.1,
         maxTokens: 10000,
+        requestPurpose: "knowledge",
         signal,
       });
       return normalizeTopicDocument(
@@ -6076,6 +6062,7 @@ async function performScheduleSkillArchive(taskId, { runId, autoIndex = false } 
       ],
       temperature: 0,
       maxTokens: 2500,
+      requestPurpose: "knowledge",
     });
     const review = normalizeScheduledKnowledgeReview(rawReview);
     if (review.action !== "accept") {
@@ -7419,14 +7406,16 @@ async function migrateReportPromptAddendum(signal) {
             `请输出 addendum（若无需保留则输出空字符串）：`,
         },
       ];
-      const result = await client.chat({
+      addendum = (await requestModelText({
+        label: "report prompt migration",
         model: modelConfig.model,
         messages: migrationMessages,
         temperature: 0.2,
         maxTokens: 600,
+        requestPurpose: "report",
         signal,
-      });
-      addendum = (result.content || "").trim();
+        allowEmpty: true,
+      })).trim();
       if (addendum.startsWith("```")) {
         addendum = addendum.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "").trim();
       }
@@ -7489,14 +7478,15 @@ async function generateReport(period, anchorDate, customRange = null, options = 
   const model = cfg.model;
 
   console.error(`[report] generating ${period} report: ${totalSessions} sessions, ${totalMessages} messages, model=${model}`);
-  const result = await client.chat({
+  const markdown = (await requestModelText({
+    label: `${periodLabel}生成`,
     model,
     messages,
     temperature: 0.3,
     maxTokens: 4096,
+    requestPurpose: "report",
     signal: options.signal,
-  });
-  const markdown = result.content?.trim() || "生成失败：模型返回空内容";
+  })).trim();
   return { markdown, stats };
 }
 
@@ -8345,6 +8335,7 @@ ${modeList}
         const learnOpts = {
           client,
           model: modelConfig.model,
+          capabilities: resolveProviderModelCapabilities(getActiveProvider(config), modelConfig.model),
           workspaceDir,
           skillsRoot,
           hasSemanticSearch,
