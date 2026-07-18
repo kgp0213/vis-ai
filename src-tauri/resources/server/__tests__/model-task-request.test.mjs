@@ -71,6 +71,29 @@ describe("model task request policy", () => {
     assert.equal(arrayShape.calls[0].responseFormat, undefined);
   });
 
+  test("falls back without response_format when a declared capability is rejected", async () => {
+    let attempts = 0;
+    const client = fakeClient((options) => {
+      attempts++;
+      if (options.responseFormat) throw new Error("response_format json_object is unsupported");
+      return { content: '{"ok":true}', finishReason: "stop" };
+    });
+
+    const result = await requestModelJson({
+      client,
+      model: "misdeclared-json-model",
+      capabilities: { structuredOutput: true, maxOutputTokens: 4096 },
+      messages: baseMessages,
+      maxTokens: 2048,
+      label: "fallback task",
+    });
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(attempts, 2);
+    assert.deepEqual(client.calls[0].responseFormat, { type: "json_object" });
+    assert.equal(client.calls[1].responseFormat, undefined);
+  });
+
   test("rejects JSON and text responses that ended at length or content-filter", async () => {
     for (const finishReason of ["length", "content_filter"]) {
       const jsonClient = fakeClient({ content: '{"ok":true}', finishReason });
@@ -99,6 +122,22 @@ describe("model task request policy", () => {
         new RegExp(finishReason),
       );
     }
+
+    const rawOnly = fakeClient({
+      content: '{"ok":true}',
+      raw: { choices: [{ finish_reason: "length" }] },
+    });
+    await assert.rejects(
+      requestModelJson({
+        client: rawOnly,
+        model: "model",
+        capabilities: { structuredOutput: false, maxOutputTokens: 4096 },
+        messages: baseMessages,
+        maxTokens: 2048,
+        label: "raw finish reason task",
+      }),
+      /length/,
+    );
   });
 
   test("clamps explicit maxTokens to the declared model output capacity", async () => {
