@@ -269,6 +269,87 @@ describe("model request policy", () => {
     assert.deepEqual(resolveProviderModelRequest(provider, "internal-model", { purpose: "unconfigured" }).requestDefaults, provider.models[0].requestDefaults);
   });
 
+  test("JSON providers accept and merge task-specific request profiles", () => {
+    const requestDefaults = {
+      temperature: 0.6,
+      top_p: 0.95,
+      max_tokens: 8_192,
+      extra_body: {
+        chat_template_kwargs: { enable_thinking: true, thinking_budget: 8_192 },
+        keep: true,
+      },
+    };
+    const requestProfiles = {
+      summary: {
+        temperature: 0.2,
+        extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      },
+      report: {
+        max_tokens: 4_096,
+        extra_body: { chat_template_kwargs: { thinking_budget: 2_048 } },
+      },
+      knowledge: {
+        top_p: 0.8,
+        extra_body: { knowledge_mode: "extract" },
+      },
+      learn: {
+        temperature: 0.15,
+        extra_body: { learning_mode: "project" },
+      },
+      sessionReview: {
+        temperature: 0,
+        extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      },
+    };
+    const provider = {
+      requestPolicy: "json",
+      models: [{
+        id: "task-profile-model",
+        requestDefaults,
+        agentPolicy: { requestProfiles },
+      }],
+    };
+
+    assert.equal(validateAgentPolicy(provider.models[0].agentPolicy, { requestPolicy: "json" }), null);
+    assert.deepEqual(resolveProviderModelRequest(provider, "task-profile-model", { purpose: "summary" }).requestDefaults, {
+      temperature: 0.2,
+      top_p: 0.95,
+      max_tokens: 8_192,
+      extra_body: {
+        chat_template_kwargs: { enable_thinking: false, thinking_budget: 8_192 },
+        keep: true,
+      },
+    });
+    assert.deepEqual(resolveProviderModelRequest(provider, "task-profile-model", { purpose: "report" }).requestDefaults, {
+      temperature: 0.6,
+      top_p: 0.95,
+      max_tokens: 4_096,
+      extra_body: {
+        chat_template_kwargs: { enable_thinking: true, thinking_budget: 2_048 },
+        keep: true,
+      },
+    });
+    assert.deepEqual(resolveProviderModelRequest(provider, "task-profile-model", { purpose: "knowledge" }).requestDefaults, {
+      ...requestDefaults,
+      top_p: 0.8,
+      extra_body: { ...requestDefaults.extra_body, knowledge_mode: "extract" },
+    });
+    assert.deepEqual(resolveProviderModelRequest(provider, "task-profile-model", { purpose: "learn" }).requestDefaults, {
+      ...requestDefaults,
+      temperature: 0.15,
+      extra_body: { ...requestDefaults.extra_body, learning_mode: "project" },
+    });
+    assert.deepEqual(resolveProviderModelRequest(provider, "task-profile-model", { purpose: "sessionReview" }).requestDefaults, {
+      temperature: 0,
+      top_p: 0.95,
+      max_tokens: 8_192,
+      extra_body: {
+        chat_template_kwargs: { enable_thinking: false, thinking_budget: 8_192 },
+        keep: true,
+      },
+    });
+  });
+
   test("JSON policy sends API-native defaults and suppresses software reasoning parameters", async () => {
     let payload;
     const requestDefaults = {
