@@ -1234,6 +1234,73 @@ test("a fresh passed verification clears an older verification circuit on resume
   }
 });
 
+test("an expired failed verification is probed once on resume", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-stale-verification-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    let sourceRound = 1;
+    let verificationStatus = "failed";
+    let primaryDraftCalls = 0;
+    let probeCalls = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({
+          id: `section-${sourceRound}`,
+          units: [{ id: `u${sourceRound}`, location: `section ${sourceRound}`, text: `Complete source section ${sourceRound}.` }],
+        });
+        return { totalUnits: 1 };
+      },
+      modelCandidates: () => [
+        {
+          key: "stale-primary",
+          configFingerprint: "stable-config",
+          providerId: "primary",
+          modelId: "primary",
+          role: "primary",
+          verificationStatus,
+          verificationError: verificationStatus === "failed" ? "verification timed out" : null,
+          requiresProbe: verificationStatus === "stale",
+        },
+        {
+          key: "verified-fallback",
+          configFingerprint: "fallback-config",
+          providerId: "fallback",
+          modelId: "fallback",
+          role: "fallback",
+          verificationStatus: "passed",
+          requiresProbe: false,
+        },
+      ],
+      probeModel: async () => { probeCalls++; return { ok: true }; },
+      generate: async ({ candidate, batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        if (candidate.providerId === "primary") primaryDraftCalls++;
+        return faithful(batch.units, candidate.modelId);
+      },
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    sourceRound = 2;
+    verificationStatus = "stale";
+    await store.update(accepted.id, { status: "interrupted", running: false, paused: true });
+    await manager.resume(accepted.id);
+    await manager.wait(accepted.id);
+
+    const resumed = await store.read(accepted.id);
+    assert.equal(resumed.status, "completed", resumed.error);
+    assert.equal(probeCalls, 1);
+    assert.equal(primaryDraftCalls, 1);
+    assert.deepEqual(resumed.disabledCandidates, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("command-retention failures do not recursively split a batch into individual units", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-no-command-split-"));
   try {
