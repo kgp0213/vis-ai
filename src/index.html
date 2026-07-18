@@ -7,7 +7,7 @@
       (function () {
         try {
           var theme = localStorage.getItem("visionox-theme") || "light";
-          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(theme)) theme = "light";
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal|indigo-night)$/.test(theme)) theme = "light";
           document.documentElement.setAttribute("data-theme", theme);
         } catch (e) {
           document.documentElement.setAttribute("data-theme", "light");
@@ -110,6 +110,18 @@
         --startup-button-hover: #2c3032;
         --startup-border: #41474a;
         --startup-danger: #ff8178;
+      }
+
+      :root[data-theme="indigo-night"] {
+        --startup-bg: #0c0d10;
+        --startup-fg: #f0f0f2;
+        --startup-muted: #a0a4ad;
+        --startup-track: #2a2e38;
+        --startup-accent: #818cf8;
+        --startup-button: #13151a;
+        --startup-button-hover: #1a1d24;
+        --startup-border: #3d424f;
+        --startup-danger: #f87171;
       }
 
       html,
@@ -520,7 +532,7 @@
         function getStoredTheme() {
           try {
             var t = window.localStorage ? localStorage.getItem("visionox-theme") : "";
-            if (t && /^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) return t;
+            if (t && /^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal|indigo-night)$/.test(t)) return t;
           } catch (e) {}
           return "";
         }

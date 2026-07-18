@@ -256,8 +256,9 @@
   --text-tertiary: #8b8f9a;
   --text-placeholder: #b0b3bc;
 
-  --accent-primary: #d97706;
-  --accent-primary-hover: #b45309;
+  --accent-primary: #0d9488;
+  --accent-primary-hover: #0f766e;
+  --accent-secondary: #115e59;
   --accent-hover-contrast: #ffffff;
 
   --border-subtle: #e5e5e8;
@@ -267,7 +268,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
-  --shadow-glow: 0 0 20px rgba(217, 119, 6, 0.1);
+  --shadow-glow: 0 0 20px rgba(13, 148, 136, 0.12);
 }
 
 /* ============================================================================
@@ -6544,3 +6545,136 @@ button:focus-visible,
 }
 
 /* ── 减少动态偏好用户：保持既有 reduce 策略，不新增动画 ── */
+
+/* ── 残留硬编码琥珀 → token 驱动（换强调色后全 UI 一致跟随） ── */
+.badge-primary {
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+}
+.pill.acc,
+.chip-f.acc {
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+.ssl-row.sel {
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
+}
+.tree-node.sel {
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+}
+.editor-line:hover {
+  background: color-mix(in srgb, var(--accent-primary) 4%, transparent);
+}
+.editor-line.cur {
+  background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+}
+.cfg-nav .cfg-item.active {
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+}
+.matrix .cell.on {
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
+}
+.plan-step.active::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+/* ============================================================================
+   Indigo Night Theme — 靛夜：深色系 +  refined indigo 强调色（方案 B）
+   visionox-theme-indigo-night
+   ============================================================================ */
+[data-theme="indigo-night"] {
+  --surface-base: #0c0d10;
+  --surface-raised: #13151a;
+  --surface-overlay: #1a1d24;
+  --surface-input: #0f1014;
+
+  --text-primary: #f0f0f2;
+  --text-secondary: #a0a4ad;
+  --text-tertiary: #6b7080;
+  --text-placeholder: #4a4e5a;
+
+  --accent-primary: #818cf8;
+  --accent-primary-hover: #a5b0fc;
+  --accent-secondary: #6366f1;
+  --accent-contrast: #0c0d10;
+  --accent-hover-contrast: #0c0d10;
+
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-info: #60a5fa;
+
+  --border-subtle: #1f2229;
+  --border-default: #2a2e38;
+  --border-strong: #3d424f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(129, 140, 248, 0.15);
+}
+
+/* ── 安全级按钮（AUTO/YOLO/ADMIN/REVIEW）：实心填充 → 柔和色调徽章 ──
+   解决亮红 #f87171 实心块在各主题下刺眼的问题；
+   激活 = 16% 色调底 + 同色文字 + 细色环 + 状态点，语义不变、视效轻盈 */
+.mode-btn.review.active,
+.mode-btn.auto.active,
+.mode-btn.active.yolo,
+.mode-btn.active.admin {
+  font-weight: 600;
+}
+.mode-btn.review.active {
+  background: color-mix(in srgb, #34d399 16%, transparent);
+  color: #34d399;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #34d399 32%, transparent);
+}
+.mode-btn.auto.active {
+  background: color-mix(in srgb, #60a5fa 16%, transparent);
+  color: #60a5fa;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #60a5fa 32%, transparent);
+}
+.mode-btn.active.yolo {
+  background: color-mix(in srgb, #fb923c 16%, transparent);
+  color: #fb923c;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fb923c 34%, transparent);
+}
+.mode-btn.active.admin {
+  background: color-mix(in srgb, #f87171 14%, transparent);
+  color: #f87171;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #f87171 34%, transparent);
+}
+/* 激活态前置状态点，强化"当前安全级"的可读性 */
+.mode-btn.review.active::before,
+.mode-btn.auto.active::before,
+.mode-btn.yolo.active::before,
+.mode-btn.admin.active::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: 1px;
+  background: currentColor;
+}
+
+/* light 主题：文字与色环加深，保证白底对比度 */
+[data-theme="light"] .mode-btn.review.active {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.35);
+}
+[data-theme="light"] .mode-btn.auto.active {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.35);
+}
+[data-theme="light"] .mode-btn.active.yolo {
+  background: rgba(234, 88, 12, 0.12);
+  color: #c2410c;
+  box-shadow: inset 0 0 0 1px rgba(234, 88, 12, 0.35);
+}
+[data-theme="light"] .mode-btn.active.admin {
+  background: rgba(220, 38, 38, 0.10);
+  color: #b91c1c;
+  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.32);
+}

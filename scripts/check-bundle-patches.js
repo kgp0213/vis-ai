@@ -453,6 +453,7 @@ const required = [
       'class="vhome-control"',
       "user data issues need attention",
       "vis_dashboard_ready",
+      'value="indigo-night"',
     ],
     forbidden: ['<span class="v">Ver${version2}</span>'],
   },
@@ -537,6 +538,8 @@ const required = [
       ".vhome-control-button",
       ".vhome-popover",
       "visionox-ui-refinement-2026",
+      "visionox-theme-indigo-night",
+      "柔和色调徽章",
     ],
   },
   {
@@ -553,11 +556,11 @@ const required = [
   },
   {
     file: "src-tauri/src/lib.rs",
-    markers: ["pick_directory", "FolderBrowserDialog", "validated_directory_result", ".env(\"PATH\", runtime_path)", "shutting_down", "child process exited during application shutdown", "f.dataset.ready=''"],
+    markers: ["pick_directory", "FolderBrowserDialog", "validated_directory_result", ".env(\"PATH\", runtime_path)", "shutting_down", "child process exited during application shutdown", "f.dataset.ready=''", "indigo-night"],
   },
   {
     file: "src/index.html",
-    markers: ["vis_pick_directory", "vis_pick_directory_result", "pick_directory", "getTauriInvoke", "api.core.invoke", "armDashboardReadyGuard", "vis_dashboard_ready", "界面加载超时"],
+    markers: ["vis_pick_directory", "vis_pick_directory_result", "pick_directory", "getTauriInvoke", "api.core.invoke", "armDashboardReadyGuard", "vis_dashboard_ready", "界面加载超时", "indigo-night"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/requesting-code-review/SKILL.md",
@@ -623,7 +626,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/index.html",
-    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js", "index-mode-support.js", "overview-alerts-support.js"],
+    markers: ["vendor/katex/katex.min.css", "vendor/katex/katex.min.js", "katex-support.js", "backup-support.js", "index-mode-support.js", "overview-alerts-support.js", "indigo-night"],
   },
   {
     file: "src-tauri/resources/server/lib/plan-continuation.mjs",

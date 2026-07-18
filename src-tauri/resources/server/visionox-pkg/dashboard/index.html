@@ -26,7 +26,7 @@
             if (cm) t = decodeURIComponent(cm[1]);
           }
           if (!t) t = localStorage.getItem('visionox-theme') || '';
-          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal)$/.test(t)) t = 'light';
+          if (!/^(light|dark|warm-sand|cool-ash|soft-sage|espresso|midnight-ink|deep-charcoal|indigo-night)$/.test(t)) t = 'light';
           document.documentElement.setAttribute('data-theme', t);
         } catch(e) {}
       })();
