@@ -148,7 +148,7 @@ export function buildLegacyProvider(cfg) {
       apiKey: cfg.apiKey ?? "",
       models: [
         { id: "deepseek-v4-flash", name: "Flash", presets: ["auto", "flash"], efforts: ["high", "max"], thinkingMode: "enabled" },
-        { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled", multimodal: true, visionPolicy: { detail: "high", maxImages: 5 } },
+        { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled", multimodal: false },
       ],
       defaultPreset: cfg.preset ?? "auto",
       defaultEffort: cfg.reasoningEffort ?? "max",

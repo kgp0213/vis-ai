@@ -23,7 +23,7 @@ const officialProvider = {
   apiKey: "sk-test",
   models: [
     { id: "deepseek-v4-flash", name: "Flash", presets: ["auto", "flash"], efforts: ["high", "max"], thinkingMode: "enabled", maxContextLength: 131072 },
-    { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled", multimodal: true, maxContextLength: 131072 },
+    { id: "deepseek-v4-pro", name: "Pro", presets: ["pro"], efforts: ["high", "max"], thinkingMode: "enabled", multimodal: false, maxContextLength: 131072 },
   ],
   defaultPreset: "auto",
   defaultEffort: "max",
