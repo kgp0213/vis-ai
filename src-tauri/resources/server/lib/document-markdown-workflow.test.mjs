@@ -588,6 +588,49 @@ test("a visual fallback repairs only visual units and preserves accepted text by
   }
 });
 
+test("targeted visual repair respects the candidate image limit across multiple patches", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-targeted-visual-limit-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const units = [
+      { id: "u1", location: "page 1", text: "Accepted plain text section." },
+      { id: "u2", location: "page 2 chart", text: "First chart caption.", visualPending: true, visualDataUrl: "data:image/png;base64,iVBORw0KGgo=" },
+      { id: "u3", location: "page 3 chart", text: "Second chart caption.", visualPending: true, visualDataUrl: "data:image/png;base64,iVBORw0KGgo=" },
+    ];
+    const visualCalls = [];
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.pdf", readablePath: "manual.pdf", documentKind: "pdf" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "pages-1-3", units });
+        return { totalUnits: units.length, selectedPages: 3, processedPages: 3 };
+      },
+      modelCandidates: () => [
+        { providerId: "text", modelId: "text", role: "primary", multimodal: false },
+        { providerId: "vision", modelId: "vision", role: "fallback", multimodal: true, maxImages: 1 },
+      ],
+      probeModel: async () => true,
+      generate: async ({ candidate, batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        if (candidate.providerId === "vision") visualCalls.push(batch.units.map((unit) => unit.id));
+        return faithful(batch.units, candidate.modelId);
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.pdf", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed", job.error);
+    assert.deepEqual(visualCalls, [["u2"], ["u3"]]);
+    assert.deepEqual(job.batches[0].resolvedVisualUnitIds, ["u2", "u3"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("review repair rewrites only the reported unit and rechecks the complete batch", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-targeted-review-"));
   try {
