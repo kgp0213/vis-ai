@@ -197,14 +197,16 @@ function officeElementText(element) {
   return alt ? String(alt) : "";
 }
 
-export function officeElementsToUnits(elements) {
+export function officeElementsToUnits(elements, indexOffset = 0) {
   return (Array.isArray(elements) ? elements : []).map((element, index) => {
-    const location = String(element?.path || element?.location || `office element ${index + 1}`);
+    const absoluteIndex = Math.max(0, Number(indexOffset) || 0) + index;
+    const location = String(element?.path || element?.location || `office element ${absoluteIndex + 1}`);
     const type = String(element?.type || "element").toLowerCase();
     const text = normalizeText(officeElementText(element));
     const visual = ["picture", "image", "chart", "diagram", "shape-image"].includes(type);
-    return unit("office", index, location, text || `${type} 视觉内容`, {
+    return unit("office", absoluteIndex, location, text || (visual ? `${type} 视觉内容` : ""), {
       sourceType: type,
+      empty: !text,
       visualPending: visual,
       visualType: visual ? type : null,
     });
@@ -271,8 +273,10 @@ async function readOfficeUnits(path, options) {
   const pageSize = Math.max(1, Math.min(500, options.policy.maxUnitsPerBatch || 20));
   const units = [];
   const seenPaths = new Set();
+  const warnings = [];
   let start = 1;
   let total = null;
+  let consecutiveNoProgress = 0;
   const captureRoot = options.captureVisuals ? await mkdtemp(join(tmpdir(), "visionox-office-visual-")) : null;
   try {
     for (let request = 0; request < 100_000; request++) {
@@ -289,7 +293,7 @@ async function readOfficeUnits(path, options) {
       const elements = Array.isArray(data?.elements) ? data.elements : [];
       if (Number.isFinite(Number(data?.totalElements))) total = Number(data.totalElements);
       let added = 0;
-      for (const entry of officeElementsToUnits(elements)) {
+      for (const entry of officeElementsToUnits(elements, start - 1)) {
         const key = entry.location.toLowerCase();
         if (seenPaths.has(key)) continue;
         seenPaths.add(key);
@@ -309,13 +313,37 @@ async function readOfficeUnits(path, options) {
         units.push(entry);
         added++;
       }
-      if (elements.length === 0 || added === 0 || (total !== null && start + pageSize > total)) break;
+      consecutiveNoProgress = added === 0 ? consecutiveNoProgress + 1 : 0;
+      const reachedTotal = total !== null && units.length >= total;
+      if (reachedTotal) break;
+      if (elements.length === 0 || added === 0) {
+        const canProbeNextPage = total !== null && units.length < total && consecutiveNoProgress < 3;
+        if (!canProbeNextPage) {
+          if (total !== null && units.length !== total) {
+            warnings.push({
+              type: "office-element-count-mismatch",
+              expected: total,
+              actual: units.length,
+              message: `OfficeCLI reported ${total} elements but ${units.length} unique elements were extracted.`,
+            });
+          }
+          break;
+        }
+      }
       start += pageSize;
     }
   } finally {
     if (captureRoot) await rm(captureRoot, { recursive: true, force: true });
   }
-  return units;
+  if (total !== null && units.length !== total && !warnings.some((warning) => warning.type === "office-element-count-mismatch")) {
+    warnings.push({
+      type: "office-element-count-mismatch",
+      expected: total,
+      actual: units.length,
+      message: `OfficeCLI reported ${total} elements but ${units.length} unique elements were extracted.`,
+    });
+  }
+  return { units, warnings };
 }
 
 function splitOversizedUnits(units, policy, countTokens) {
@@ -331,11 +359,13 @@ function splitOversizedUnits(units, policy, countTokens) {
     let part = 0;
     const flush = () => {
       if (current.length === 0) return;
+      const text = current.join("\n");
       out.push({
         ...original,
         id: `${original.id}-part-${String(++part).padStart(3, "0")}`,
         location: `${original.location} (part ${part})`,
-        text: current.join("\n"),
+        text,
+        sourceHash: createHash("sha256").update(text).digest("hex"),
       });
       current = [];
       tokens = 0;
@@ -378,6 +408,7 @@ async function processUnits(units, options) {
     batches: batches.length,
     sourceChars: expanded.reduce((sum, entry) => sum + entry.text.length, 0),
     visualPending: expanded.filter((entry) => entry.visualPending).length,
+    warnings: Array.isArray(options.warnings) ? options.warnings : [],
     largeDocument: batches.length > 1,
   };
 }
@@ -408,7 +439,7 @@ async function processSingleDocumentSourceBatches(prepared, options = {}) {
       signal: options.signal,
       onPlan: options.onPlan,
       onBatch: async (batch) => {
-        const units = (batch.pageTexts ?? []).map((entry) => ({
+        const pageUnits = (batch.pageTexts ?? []).map((entry) => ({
           id: `page-${entry.page}`,
           location: `PDF page ${entry.page}`,
           text: String(entry.text ?? ""),
@@ -417,6 +448,8 @@ async function processSingleDocumentSourceBatches(prepared, options = {}) {
           visualPending: entry.visualPending === true,
           visualDataUrl: entry.visualDataUrl || null,
         }));
+        const countTokens = typeof options.countTokens === "function" ? options.countTokens : (text) => Math.ceil(String(text).length / 2);
+        const units = splitOversizedUnits(pageUnits, policy, countTokens);
         const contextUnits = (batch.contextPageTexts ?? []).map((entry) => ({
           id: `page-${entry.page}`,
           location: `PDF page ${entry.page}`,
@@ -428,14 +461,15 @@ async function processSingleDocumentSourceBatches(prepared, options = {}) {
         }));
         totalUnits += units.length;
         visualPending += units.filter((entry) => entry.visualPending).length;
-        await options.onBatch({ ...batch, id: `pages-${batch.pageRange}`, label: `PDF pages ${batch.pageRange}`, units, contextUnits });
+        const text = units.map((entry) => `--- Source unit ${entry.id} (${entry.location}) ---\n\n${entry.text}`).join("\n\n");
+        await options.onBatch({ ...batch, id: `pages-${batch.pageRange}`, label: `PDF pages ${batch.pageRange}`, units, contextUnits, text });
       },
     });
     return { ...result, totalUnits, visualPending, largeDocument: Number(result?.batches) > 1 };
   }
   if (["word", "presentation"].includes(kind) || (kind === "spreadsheet" && ![".csv", ".tsv"].includes(extension))) {
-    const units = await readOfficeUnits(path, { ...options, policy });
-    return processUnits(units, { ...options, policy });
+    const extracted = await readOfficeUnits(path, { ...options, policy });
+    return processUnits(extracted.units, { ...options, policy, warnings: extracted.warnings });
   }
   const text = await (options.readText ? options.readText(path, options.signal) : readFile(path, "utf8"));
   let units;
@@ -504,6 +538,7 @@ export async function processDocumentSourceBatches(prepared, options = {}) {
     processedPages: 0,
   };
   const sourceSummaries = [];
+  const warnings = [];
   let globalBatchIndex = 0;
   let allSourcesHavePageCounts = true;
   await options.onPlan?.({
@@ -545,6 +580,7 @@ export async function processDocumentSourceBatches(prepared, options = {}) {
     totals.batches += batchCount;
     totals.sourceChars += Number(result?.sourceChars) || 0;
     totals.visualPending += Number(result?.visualPending) || 0;
+    if (Array.isArray(result?.warnings)) warnings.push(...result.warnings.map((warning) => ({ ...warning, sourceId: identity.sourceId, sourceName: identity.sourceName })));
     if (Number.isFinite(Number(result?.selectedPages)) && Number.isFinite(Number(result?.processedPages))) {
       totals.selectedPages += Number(result.selectedPages);
       totals.processedPages += Number(result.processedPages);
@@ -558,6 +594,7 @@ export async function processDocumentSourceBatches(prepared, options = {}) {
       batches: batchCount,
       sourceChars: Number(result?.sourceChars) || 0,
       visualPending: Number(result?.visualPending) || 0,
+      warnings: Array.isArray(result?.warnings) ? result.warnings : [],
       selectedPages: Number.isFinite(Number(result?.selectedPages)) ? Number(result.selectedPages) : null,
       processedPages: Number.isFinite(Number(result?.processedPages)) ? Number(result.processedPages) : null,
     });
@@ -577,6 +614,7 @@ export async function processDocumentSourceBatches(prepared, options = {}) {
     processedPages: allSourcesHavePageCounts ? totals.processedPages : null,
     sourceCount: sources.length,
     sourceSummaries,
+    warnings,
     largeDocument: totals.batches > 1,
   };
 }
