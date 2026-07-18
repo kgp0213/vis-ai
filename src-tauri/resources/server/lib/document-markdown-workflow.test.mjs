@@ -718,6 +718,59 @@ test("a text-only model keeps a faithful draft for review when no visual fallbac
   }
 });
 
+test("retrying a needs-review batch uses the saved draft as the repair seed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-retry-seed-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const units = [
+      { id: "u1", location: "page 1", text: "Accepted plain text section." },
+      { id: "u2", location: "page 2 chart", text: "Chart caption.", visualPending: true, visualDataUrl: "data:image/png;base64,iVBORw0KGgo=" },
+    ];
+    const acceptedBlock = `<!-- source-unit: u1 -->\n\n### page 1\n\n${units[0].text}\n\nKEEP-EXACT`;
+    let includeVision = false;
+    let primaryDrafts = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.pdf", readablePath: "manual.pdf", documentKind: "pdf" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "pages-1-2", units });
+        return { totalUnits: units.length, selectedPages: 2, processedPages: 2 };
+      },
+      modelCandidates: () => [
+        { providerId: "text", modelId: "text", role: "primary", multimodal: false },
+        ...(includeVision ? [{ providerId: "vision", modelId: "vision", role: "fallback", multimodal: true, maxImages: 1 }] : []),
+      ],
+      probeModel: async () => true,
+      generate: async ({ candidate, batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        if (candidate.providerId === "text") {
+          primaryDrafts++;
+          return `${acceptedBlock}\n\n<!-- source-unit: u2 -->\n\n### page 2 chart\n\n${units[1].text}`;
+        }
+        return faithful(batch.units, "vision");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.pdf", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    assert.equal((await store.read(accepted.id)).status, "completed_with_warnings");
+
+    includeVision = true;
+    await manager.control(accepted.id, "retry");
+    await manager.wait(accepted.id);
+    const retried = await store.read(accepted.id);
+    const section = await store.readSection(accepted.id, "pages-1-2");
+    assert.equal(retried.status, "completed", retried.error);
+    assert.equal(primaryDrafts, 1, "retry must not regenerate the saved text draft");
+    assert.equal(section.slice(0, section.indexOf("<!-- source-unit: u2 -->")).trimEnd(), acceptedBlock);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("large document summaries are reduced hierarchically instead of one oversized request", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-summary-tree-"));
   try {
