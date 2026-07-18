@@ -69,7 +69,7 @@ const {
   pickSummaryModel,
   buildLegacyProvider,
 } = await importEarly("./lib/provider.mjs");
-const { resolveProviderModelAgentPolicy, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
+const { resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
@@ -111,6 +111,7 @@ const { buildDocumentContract, buildDocumentSummaryMessages, documentTaskFingerp
 const { processDocumentSourceBatches, runOfficeCliJson } = await importEarly("./lib/document-extractors.mjs");
 const { createDocumentJobStore } = await importEarly("./lib/document-job-store.mjs");
 const { createDocumentMarkdownManager } = await importEarly("./lib/document-markdown-workflow.mjs");
+const { getModelVerificationState, modelConfigFingerprint } = await importEarly("./lib/document-model-routing.mjs");
 const {
   buildTopicDocumentPrompt,
   buildTopicPlanPrompt,
@@ -1191,46 +1192,70 @@ function documentModelCandidates(policyValue) {
   const activeProvider = getActiveProvider(config);
   const activeModelId = effectiveModelConfig(config).model;
   const candidates = [];
+  const supportsRole = (provider, model, role) => (
+    provider && model && resolveProviderModelCapabilities(provider, model.id).roles?.includes(role) === true
+  );
   const append = (provider, model, role) => {
     if (!provider || !model || model.disabled === true || !String(provider.apiKey || "").trim() || !String(provider.baseUrl || "").trim()) return;
     const key = `${provider.id}\0${model.id}`;
     if (candidates.some((item) => item.key === key)) return;
     const agentPolicy = resolveProviderModelAgentPolicy(provider, model.id);
     const visionPolicy = resolveProviderModelVisionPolicy(provider, model.id);
+    const verificationRequest = resolveProviderModelRequest(provider, model.id, { purpose: "verification" });
+    const verification = getModelVerificationState(provider, model, { requestConfig: verificationRequest });
+    const capabilities = resolveProviderModelCapabilities(provider, model.id);
+    const inputModalities = capabilities.inputModalities ?? ["text"];
+    const configFingerprint = modelConfigFingerprint(provider, model, verificationRequest);
     candidates.push({
       key,
+      configFingerprint,
       providerId: provider.id,
       modelId: model.id,
       provider,
       model,
       role,
-      multimodal: model.multimodal === true,
-      maxImages: model.multimodal === true ? Number(visionPolicy.maxImages) || 5 : 0,
+      multimodal: inputModalities.includes("image"),
+      maxImages: inputModalities.includes("image")
+        ? Number(capabilities.maxImagesPerRequest) || Number(visionPolicy.maxImages) || 5
+        : 0,
+      maxContextTokens: capabilities.maxContextTokens,
+      maxOutputTokens: capabilities.maxOutputTokens,
+      contextReserveTokens: Number(visionPolicy.contextReserveTokens) || null,
+      verificationStatus: verification.status,
+      verificationReason: verification.reason,
+      verificationError: verification.error,
+      verificationCheckedAt: verification.checkedAt,
+      requiresProbe: verification.requiresProbe,
       documentPolicy: agentPolicy.documentPolicy ?? null,
     });
   };
-  append(activeProvider, activeProvider?.models?.find((model) => model.id === activeModelId) ?? activeProvider?.models?.find((model) => model.disabled !== true), "primary");
+  const activeModels = activeProvider?.models?.filter((model) => model.disabled !== true) ?? [];
+  const activeDocumentModel = activeModels.find((model) => model.id === activeModelId && supportsRole(activeProvider, model, "document-draft"))
+    ?? activeModels.find((model) => supportsRole(activeProvider, model, "document-draft"));
+  append(activeProvider, activeDocumentModel, "primary");
   if (policy.autoFallback) {
-    append(activeProvider, activeProvider?.models?.find((model) => model.disabled !== true && model.multimodal === true), "fallback");
+    append(activeProvider, activeModels.find((model) => supportsRole(activeProvider, model, "vision-review")), "fallback");
   }
   const fallbackProviders = policy.fallbackProviderIds.length > 0
     ? policy.fallbackProviderIds.map((id) => providers.find((provider) => provider.id === id)).filter(Boolean)
     : providers.filter((provider) => provider.id !== activeProvider?.id);
   for (const provider of fallbackProviders) {
     const enabled = provider.models?.filter((model) => model.disabled !== true) ?? [];
-    const preferred = enabled.find((model) => model.presets?.includes(provider.defaultPreset))
-      ?? enabled.find((model) => /pro|reason|vision/i.test(`${model.id} ${model.name ?? ""}`))
-      ?? enabled[0];
+    const documentModels = enabled.filter((model) => supportsRole(provider, model, "document-draft"));
+    const preferred = documentModels.find((model) => model.presets?.includes(provider.defaultPreset))
+      ?? documentModels[0];
     append(provider, preferred, "fallback");
-    append(provider, enabled.find((model) => model.multimodal === true), "fallback");
+    append(provider, enabled.find((model) => supportsRole(provider, model, "vision-review")), "fallback");
   }
   return candidates;
 }
 
 function documentClient(candidate) {
-  const fingerprint = createHash("sha256")
-    .update(`${candidate.providerId}\0${candidate.provider.baseUrl}\0${candidate.provider.apiKey}`)
-    .digest("hex");
+  const fingerprint = candidate.configFingerprint || modelConfigFingerprint(
+    candidate.provider,
+    candidate.model,
+    resolveProviderModelRequest(candidate.provider, candidate.modelId, { purpose: "verification" }),
+  );
   const cached = documentClientCache.get(candidate.key);
   if (cached?.fingerprint === fingerprint) return cached.client;
   const next = new DeepSeekClient({
@@ -1243,7 +1268,17 @@ function documentClient(candidate) {
 }
 
 async function probeDocumentModel(candidate, signal) {
-  const cached = documentModelHealth.get(candidate.key);
+  if (candidate.verificationStatus === "failed") {
+    return {
+      ok: false,
+      error: candidate.verificationError || "recent model verification failed",
+      errorName: "ModelVerificationFailed",
+      reason: candidate.verificationReason,
+    };
+  }
+  if (candidate.verificationStatus === "passed") return { ok: true, source: "persisted-verification" };
+  const healthKey = candidate.configFingerprint || candidate.key;
+  const cached = documentModelHealth.get(healthKey);
   if (cached && Date.now() - cached.checkedAt < 5 * 60_000) {
     return {
       ok: cached.ok === true,
@@ -1263,11 +1298,11 @@ async function probeDocumentModel(candidate, signal) {
       signal: combined,
     });
     const ok = typeof response?.content === "string";
-    documentModelHealth.set(candidate.key, { ok, checkedAt: Date.now() });
+    documentModelHealth.set(healthKey, { ok, checkedAt: Date.now() });
     return { ok };
   } catch (error) {
     const message = String(error?.message || error);
-    documentModelHealth.set(candidate.key, { ok: false, checkedAt: Date.now(), error: message, errorName: String(error?.name || "Error") });
+    documentModelHealth.set(healthKey, { ok: false, checkedAt: Date.now(), error: message, errorName: String(error?.name || "Error") });
     console.error(`[document] fallback probe failed provider=${candidate.providerId} model=${candidate.modelId}: ${error.message}`);
     return { ok: false, error: message, errorName: String(error?.name || "Error") };
   }
@@ -1298,7 +1333,7 @@ async function generateDocumentSummary({ title, sectionSummaries, contract, cand
     stage: "summary",
     requestPurpose: "toolContinuation",
     temperature: 0.1,
-    maxTokens: 2_048,
+    maxTokens: Math.min(2_048, Number(candidate.maxOutputTokens) || 2_048),
     hardTimeoutMs: requestTimeoutMs,
     onProgress,
     signal,

@@ -12,8 +12,10 @@ function capabilitiesForFingerprint(model) {
     capabilities: model?.capabilities ?? null,
     multimodal: model?.multimodal === true,
     maxContextLength: Number.isSafeInteger(model?.maxContextLength) ? model.maxContextLength : null,
+    requestDefaults: model?.requestDefaults ?? null,
+    verificationRequestDefaults: model?.verificationRequestDefaults ?? null,
     visionPolicy: model?.visionPolicy ?? null,
-    documentPolicy: model?.agentPolicy?.documentPolicy ?? null,
+    agentPolicy: model?.agentPolicy ?? null,
     disabled: model?.disabled === true,
   };
 }
