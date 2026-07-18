@@ -467,7 +467,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2KDUS647.js",
-    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "ModelStreamProtocolError", "ModelStreamIncompleteError", "streamComplete", "finishReason: data.choices?.[0]?.finish_reason"],
+    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "ModelStreamProtocolError", "ModelStreamIncompleteError", "ModelProviderStreamError", "AbortSignal.any", "streamComplete", "finishReason: data.choices?.[0]?.finish_reason"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-PV55UMTO.js",
