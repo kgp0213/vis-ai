@@ -1,4 +1,4 @@
-import { validateAgentPolicy, validateRequestDefaults, validateVisionPolicy } from "./model-request-policy.mjs";
+import { validateAgentPolicy, validateModelCapabilities, validateRequestDefaults, validateVisionPolicy } from "./model-request-policy.mjs";
 
 const PROVIDER_CHANGE_FIELDS = new Set([
   "name", "baseUrl", "apiKey", "requestPolicy", "requestDefaults",
@@ -6,7 +6,7 @@ const PROVIDER_CHANGE_FIELDS = new Set([
 ]);
 const MODEL_CHANGE_FIELDS = new Set([
   "id", "name", "presets", "efforts", "thinkingMode", "multimodal",
-  "maxContextLength", "requestDefaults", "verificationRequestDefaults", "agentPolicy", "visionPolicy", "disabled",
+  "maxContextLength", "capabilities", "requestDefaults", "verificationRequestDefaults", "agentPolicy", "visionPolicy", "disabled",
 ]);
 const V3_OPERATIONS = new Set([
   "updateProvider", "removeProvider", "upsertModel", "updateModel", "disableModel", "removeModel", "syncModels",
@@ -57,7 +57,17 @@ function validateProvider(provider) {
     if (!model || typeof model.id !== "string" || !model.id.trim()) return `provider "${provider.id}" contains a model without an id`;
     if (ids.has(model.id)) return `provider "${provider.id}" contains duplicate model id "${model.id}"`;
     ids.add(model.id);
-    if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) return `model "${model.id}" must declare a positive integer maxContextLength`;
+    if (model.capabilities !== undefined) {
+      const capabilitiesIssue = validateModelCapabilities(model.capabilities);
+      if (capabilitiesIssue) return `model "${model.id}" ${capabilitiesIssue}`;
+    }
+    const declaredContextTokens = model.capabilities?.maxContextTokens;
+    if (
+      (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) &&
+      (!Number.isSafeInteger(declaredContextTokens) || declaredContextTokens <= 0)
+    ) {
+      return `model "${model.id}" must declare a positive integer maxContextLength or capabilities.maxContextTokens`;
+    }
     if (provider.requestPolicy === "json") {
       const requestIssue = validateRequestDefaults(model.requestDefaults);
       if (requestIssue) return `model "${model.id}" ${requestIssue}`;

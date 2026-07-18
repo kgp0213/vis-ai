@@ -12,6 +12,21 @@ const AGENT_POLICY_FIELDS = new Set([
 ]);
 const TOOL_RESULT_BUDGET_FIELDS = new Set(["defaultTokens", "documentTokens", "absoluteMaxTokens"]);
 const VISION_POLICY_FIELDS = new Set(["maxImages", "detail", "estimatedTokensPerImage", "contextReserveTokens"]);
+const MODEL_CAPABILITY_FIELDS = new Set([
+  "protocol",
+  "inputModalities",
+  "streaming",
+  "toolCalling",
+  "structuredOutput",
+  "maxContextTokens",
+  "maxOutputTokens",
+  "maxImagesPerRequest",
+  "roles",
+]);
+const MODEL_PROTOCOLS = new Set(["openai-chat-completions"]);
+const MODEL_INPUT_MODALITIES = new Set(["text", "image"]);
+const MODEL_ROLES = new Set(["chat", "document-draft", "document-review", "vision-review", "summary"]);
+const LEGACY_TEXT_ROLES = ["chat", "document-draft", "document-review", "summary"];
 const REQUEST_PROFILE_NAMES = new Set(["toolContinuation", "finalAnswer"]);
 const DOCUMENT_POLICY_FIELDS = new Set([
   "defaultFidelity",
@@ -218,6 +233,103 @@ export function validateVisionPolicy(value) {
     return "visionPolicy contextReserveTokens must be an integer from 0 to 65536";
   }
   return validateJsonValue(value, "visionPolicy", 0, new Set());
+}
+
+function validateCapabilityList(value, field, allowed) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > allowed.size) {
+    return `capabilities ${field} must be a non-empty array`;
+  }
+  const seen = new Set();
+  for (const entry of value) {
+    if (typeof entry !== "string" || !allowed.has(entry)) {
+      return `capabilities ${field} contains unsupported value "${String(entry)}"`;
+    }
+    if (seen.has(entry)) return `capabilities ${field} contains duplicate value "${entry}"`;
+    seen.add(entry);
+  }
+  return null;
+}
+
+export function validateModelCapabilities(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    return "capabilities must be a plain JSON object";
+  }
+  for (const key of Object.keys(value)) {
+    if (!MODEL_CAPABILITY_FIELDS.has(key)) return `capabilities contains unknown field "${key}"`;
+  }
+  if (value.protocol !== undefined && !MODEL_PROTOCOLS.has(value.protocol)) {
+    return 'capabilities protocol must be "openai-chat-completions"';
+  }
+  if (value.inputModalities !== undefined) {
+    const issue = validateCapabilityList(value.inputModalities, "inputModalities", MODEL_INPUT_MODALITIES);
+    if (issue) return issue;
+    if (!value.inputModalities.includes("text")) return "capabilities inputModalities must include text";
+  }
+  for (const field of ["streaming", "toolCalling", "structuredOutput"]) {
+    if (value[field] !== undefined && typeof value[field] !== "boolean") {
+      return `capabilities ${field} must be a boolean`;
+    }
+  }
+  for (const field of ["maxContextTokens", "maxOutputTokens", "maxImagesPerRequest"]) {
+    if (value[field] !== undefined && (!Number.isSafeInteger(value[field]) || value[field] <= 0)) {
+      return `capabilities ${field} must be a positive integer`;
+    }
+  }
+  if (value.roles !== undefined) {
+    const issue = validateCapabilityList(value.roles, "roles", MODEL_ROLES);
+    if (issue) return issue;
+  }
+  if (Array.isArray(value.inputModalities) && !value.inputModalities.includes("image")) {
+    if (value.maxImagesPerRequest !== undefined) return "capabilities maxImagesPerRequest requires image inputModalities";
+    if (value.roles?.includes("vision-review")) return "capabilities vision-review role requires image inputModalities";
+  }
+  return validateJsonValue(value, "capabilities", 0, new Set());
+}
+
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function validCapabilityList(value, allowed) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > allowed.size) return null;
+  if (value.some((entry) => typeof entry !== "string" || !allowed.has(entry))) return null;
+  if (new Set(value).size !== value.length) return null;
+  return [...value];
+}
+
+export function resolveProviderModelCapabilities(provider, modelId) {
+  const model = provider?.models?.find((item) => item?.id === modelId);
+  if (!model) return {};
+  const declared = model.capabilities && typeof model.capabilities === "object" && !Array.isArray(model.capabilities)
+    ? model.capabilities
+    : {};
+  const declaredModalities = validCapabilityList(declared.inputModalities, MODEL_INPUT_MODALITIES);
+  const inputModalities = declaredModalities?.includes("text")
+    ? declaredModalities
+    : model.multimodal === true ? ["text", "image"] : ["text"];
+  const supportsImages = inputModalities.includes("image");
+  const declaredRoles = validCapabilityList(declared.roles, MODEL_ROLES);
+  let roles = declaredRoles ?? (supportsImages
+    ? ["chat", "document-draft", "document-review", "vision-review", "summary"]
+    : [...LEGACY_TEXT_ROLES]);
+  if (!supportsImages) roles = roles.filter((role) => role !== "vision-review");
+  if (roles.length === 0) roles = [...LEGACY_TEXT_ROLES];
+  const legacyMaxImages = isPositiveInteger(model.visionPolicy?.maxImages) ? model.visionPolicy.maxImages : 5;
+  return {
+    protocol: MODEL_PROTOCOLS.has(declared.protocol) ? declared.protocol : "openai-chat-completions",
+    inputModalities,
+    streaming: typeof declared.streaming === "boolean" ? declared.streaming : true,
+    toolCalling: typeof declared.toolCalling === "boolean" ? declared.toolCalling : true,
+    structuredOutput: typeof declared.structuredOutput === "boolean" ? declared.structuredOutput : false,
+    maxContextTokens: isPositiveInteger(declared.maxContextTokens)
+      ? declared.maxContextTokens
+      : isPositiveInteger(model.maxContextLength) ? model.maxContextLength : null,
+    maxOutputTokens: isPositiveInteger(declared.maxOutputTokens) ? declared.maxOutputTokens : null,
+    maxImagesPerRequest: supportsImages
+      ? isPositiveInteger(declared.maxImagesPerRequest) ? declared.maxImagesPerRequest : legacyMaxImages
+      : 0,
+    roles,
+  };
 }
 
 function mergeJsonObjects(base, overrides) {
