@@ -290,6 +290,7 @@ describe("buildLegacyProvider", () => {
     assert.equal(result.providers[0].apiKey, "sk-test");
     assert.equal(result.providers[0].models.length, 2);
     assert.equal(result.providers[0].defaultPreset, "auto");
+    assert.equal(result.providers[0].models.find((model) => model.id === "deepseek-v4-pro").multimodal, false);
   });
 
   test("已有 providers → 返回 null", () => {
