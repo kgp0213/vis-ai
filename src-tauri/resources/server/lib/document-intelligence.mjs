@@ -329,6 +329,57 @@ function parseUnitSections(markdown) {
   return { sections, duplicates: [...duplicates], markerIds: matches.map((match) => match[1]) };
 }
 
+function parseUnitBlocks(markdown) {
+  const source = String(markdown ?? "");
+  const matches = [...source.matchAll(/<!--\s*source-unit:\s*([^>\s]+)\s*-->/gi)];
+  const blocks = [];
+  const duplicates = new Set();
+  const seen = new Set();
+  for (let index = 0; index < matches.length; index++) {
+    const id = matches[index][1];
+    const start = matches[index].index;
+    const end = index + 1 < matches.length ? matches[index + 1].index : source.length;
+    if (seen.has(id)) duplicates.add(id);
+    seen.add(id);
+    blocks.push({ id, start, end, text: source.slice(start, end) });
+  }
+  return { source, blocks, duplicates: [...duplicates] };
+}
+
+export function mergeDocumentUnitSections({ markdown = "", patchMarkdown = "", allowedUnitIds = [] } = {}) {
+  const base = parseUnitBlocks(markdown);
+  const patch = parseUnitBlocks(patchMarkdown);
+  const allowed = new Set(Array.isArray(allowedUnitIds) ? allowedUnitIds.map(String) : []);
+  const baseIds = new Set(base.blocks.map((block) => block.id));
+  const unexpectedUnitIds = [...new Set(patch.blocks.map((block) => block.id)
+    .filter((id) => !allowed.has(id) || !baseIds.has(id)))];
+  if (base.duplicates.length > 0 || patch.duplicates.length > 0 || patch.blocks.length === 0 || unexpectedUnitIds.length > 0) {
+    return {
+      ok: false,
+      markdown: base.source,
+      replacedUnitIds: [],
+      unexpectedUnitIds,
+      duplicateUnitIds: [...new Set([...base.duplicates, ...patch.duplicates])],
+    };
+  }
+
+  const patchById = new Map(patch.blocks.map((block) => [block.id, block.text]));
+  const replacements = base.blocks.filter((block) => patchById.has(block.id));
+  let merged = base.source;
+  for (const block of [...replacements].reverse()) {
+    const trailingWhitespace = block.text.match(/\s*$/)?.[0] ?? "";
+    const replacement = `${patchById.get(block.id).trimEnd()}${trailingWhitespace}`;
+    merged = `${merged.slice(0, block.start)}${replacement}${merged.slice(block.end)}`;
+  }
+  return {
+    ok: replacements.length > 0,
+    markdown: replacements.length > 0 ? merged : base.source,
+    replacedUnitIds: replacements.map((block) => block.id),
+    unexpectedUnitIds: [],
+    duplicateUnitIds: [],
+  };
+}
+
 function meaningfulLength(value) {
   return String(value ?? "").replace(/<!--[^>]*-->/g, "").replace(/[#>*_`|\-\s]/g, "").length;
 }
