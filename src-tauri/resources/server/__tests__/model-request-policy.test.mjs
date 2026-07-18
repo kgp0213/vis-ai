@@ -404,7 +404,11 @@ describe("model request policy", () => {
     assert.match(launcher, /function createConfiguredModelClient/);
     assert.match(launcher, /requestConfigForModel: \(modelId, options\) => resolveProviderModelRequest\(getActiveProvider\(config\), modelId, options\)/);
     assert.match(launcher, /resolveProviderModelAgentPolicy/);
+    assert.match(launcher, /resolveProviderModelCapabilities/);
     assert.match(launcher, /resolveProviderModelVisionPolicy/);
+    assert.match(launcher, /maxContextTokens: capabilities\.maxContextTokens/);
+    assert.match(launcher, /maxOutputTokens: capabilities\.maxOutputTokens/);
+    assert.doesNotMatch(launcher, /\/pro\|reason\|vision\/i/);
     assert.match(launcher, /maxToolContinuationWindows/);
     assert.match(launcher, /toolResultBudget/);
     assert.match(launcher, /tools\.setResultAugmenter\(null\)/);
