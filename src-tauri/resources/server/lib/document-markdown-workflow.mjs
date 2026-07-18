@@ -674,6 +674,23 @@ function createRepairBatch(batch, unitIds, suffix = "1") {
   });
 }
 
+function partitionRepairUnitIds(batch, unitIds, policy, countTokens) {
+  const groups = [];
+  let current = [];
+  for (const id of unitIds) {
+    const candidate = [...current, id];
+    const candidateBatch = createRepairBatch(batch, candidate, "partition");
+    if (current.length > 0 && batchPolicyViolations(candidateBatch, policy, countTokens).length > 0) {
+      groups.push(current);
+      current = [id];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
 function canonicalRepairBase(batch, section) {
   const fallback = renderDocumentSourceFallback(batch.units, "等待针对性修复");
   if (!String(section ?? "").trim()) return fallback;
@@ -1103,139 +1120,142 @@ export function createDocumentMarkdownManager(options = {}) {
       .flatMap((failure) => failure.unitIds ?? []).map(String));
     if (visualIds.size > 0 && targetIds.every((id) => visualIds.has(id)) && candidate.multimodal !== true) return null;
 
-    const repairBatch = createRepairBatch(batch, targetIds);
-    const base = canonicalRepairBase(batch, seedResult.section);
-    const issueText = [
-      ...(seedResult?.quality?.failures ?? []).map((failure) => `${failure.type}: ${JSON.stringify(failure)}`),
-      ...(seedResult?.review?.issues ?? []).map((issue) => `${issue.type} ${issue.unitId}: ${issue.detail}`),
-    ].join("\n");
-    const messages = buildDocumentSectionMessages({ batch: repairBatch, contract: runtime.contract, retry: true });
-    const lastMessage = messages.at(-1);
-    if (lastMessage && typeof lastMessage.content === "string") {
-      lastMessage.content = `${lastMessage.content}\n\n<targeted_repair>\nRepair only these source-unit markers: ${targetIds.join(", ")}.\nDo not emit any other marker.\nKnown issues:\n${issueText}\n</targeted_repair>`;
-    }
-    const withVisuals = messagesWithBatchVisuals(messages, repairBatch, candidate);
-    const modelCall = reserveModelCall(runtime, budget, {
-      providerId: candidate.providerId,
-      modelId: candidate.modelId,
-      role: candidate.role,
-      purpose: "toolContinuation",
-      stage: "unit-repair",
-      batchId: batch.id,
-      batchLabel: batch.label,
-      currentBatch: batch.id,
-      currentLabel: batch.label,
-      attempt: 1,
-      maxAttempts: 1,
-      generatedChars: 0,
-      elapsedMs: 0,
-      repairUnitIds: targetIds,
-    });
-    if (!modelCall) return null;
-    try {
-      await store.appendEvent?.(runtime.id, {
-        type: "unit-repair-started",
-        batchId: batch.id,
+    const countTokens = typeof options.countTokens === "function" ? options.countTokens : (text) => Math.ceil(String(text ?? "").length / 2);
+    const groups = partitionRepairUnitIds(batch, targetIds, candidatePolicy, countTokens);
+    let section = canonicalRepairBase(batch, seedResult.section);
+    const resolvedVisualUnitIds = new Set(seedResult.resolvedVisualUnitIds ?? []);
+    const errors = [];
+    const failureCategories = new Set();
+    let attempts = 0;
+
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      const repairIds = groups[groupIndex];
+      const repairBatch = createRepairBatch(batch, repairIds, String(groupIndex + 1));
+      const issueText = [
+        ...(seedResult?.quality?.failures ?? []).map((failure) => `${failure.type}: ${JSON.stringify(failure)}`),
+        ...(seedResult?.review?.issues ?? []).filter((issue) => repairIds.includes(issue.unitId)).map((issue) => `${issue.type} ${issue.unitId}: ${issue.detail}`),
+      ].join("\n");
+      const messages = buildDocumentSectionMessages({ batch: repairBatch, contract: runtime.contract, retry: true });
+      const lastMessage = messages.at(-1);
+      if (lastMessage && typeof lastMessage.content === "string") {
+        lastMessage.content = `${lastMessage.content}\n\n<targeted_repair>\nRepair only these source-unit markers: ${repairIds.join(", ")}.\nDo not emit any other marker.\nKnown issues:\n${issueText}\n</targeted_repair>`;
+      }
+      const withVisuals = messagesWithBatchVisuals(messages, repairBatch, candidate);
+      const modelCall = reserveModelCall(runtime, budget, {
         providerId: candidate.providerId,
         modelId: candidate.modelId,
-        unitIds: targetIds,
-      }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
-      const patch = cleanMarkdown(await runTrackedModelCall(runtime, modelCall, () => options.generate({
-        candidate,
-        batch: repairBatch,
-        contract: runtime.contract,
-        messages: withVisuals.messages,
+        role: candidate.role,
         purpose: "toolContinuation",
-        maxTokens: candidatePolicy.batchOutputTokens,
-        requestTimeoutMs: candidatePolicy.requestTimeoutMs,
-        onProgress: (progress) => {
-          if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
-          queueProgress(runtime, {
-            stage: "unit-repair",
-            currentBatch: batch.id,
-            currentLabel: batch.label,
-            repairUnitIds: targetIds,
-            generatedChars: Number(progress?.generatedChars) || 0,
-            elapsedMs: Number(progress?.elapsedMs) || 0,
-            modelCalls: budget.used,
-            modelCallLimit: budget.limit,
-          }, {}, "unit-repair-progress");
-        },
-        retry: true,
-        signal: runtime.controller.signal,
-      })));
-      const merged = mergeDocumentUnitSections({ markdown: base, patchMarkdown: patch, allowedUnitIds: targetIds });
-      const replaced = new Set(merged.replacedUnitIds ?? []);
-      if (!merged.ok || replaced.size !== targetIds.length || targetIds.some((id) => !replaced.has(id))) {
+        stage: "unit-repair",
+        batchId: batch.id,
+        batchLabel: batch.label,
+        currentBatch: batch.id,
+        currentLabel: batch.label,
+        attempt: groupIndex + 1,
+        maxAttempts: groups.length,
+        generatedChars: 0,
+        elapsedMs: 0,
+        repairUnitIds: repairIds,
+      });
+      if (!modelCall) return null;
+      attempts++;
+      try {
         await store.appendEvent?.(runtime.id, {
-          type: "unit-repair-rejected",
+          type: "unit-repair-started",
           batchId: batch.id,
           providerId: candidate.providerId,
           modelId: candidate.modelId,
-          unitIds: targetIds,
-          replacedUnitIds: merged.replacedUnitIds ?? [],
-          reason: "patch markers did not match the requested unit set",
+          unitIds: repairIds,
+          group: groupIndex + 1,
+          groups: groups.length,
         }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
-        return {
-          passed: false,
-          section: base,
-          quality: evaluateDocumentQuality({ units: batch.units, markdown: base, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: seedResult.resolvedVisualUnitIds ?? [] }),
-          review: null,
-          attempts: 1,
+        const patch = cleanMarkdown(await runTrackedModelCall(runtime, modelCall, () => options.generate({
           candidate,
-          errors: ["targeted repair returned an incomplete or unexpected marker set"],
-          failureCategories: [],
-        };
+          batch: repairBatch,
+          contract: runtime.contract,
+          messages: withVisuals.messages,
+          purpose: "toolContinuation",
+          maxTokens: candidatePolicy.batchOutputTokens,
+          requestTimeoutMs: candidatePolicy.requestTimeoutMs,
+          onProgress: (progress) => {
+            if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
+            queueProgress(runtime, {
+              stage: "unit-repair",
+              currentBatch: batch.id,
+              currentLabel: batch.label,
+              repairUnitIds: repairIds,
+              attempt: groupIndex + 1,
+              maxAttempts: groups.length,
+              generatedChars: Number(progress?.generatedChars) || 0,
+              elapsedMs: Number(progress?.elapsedMs) || 0,
+              modelCalls: budget.used,
+              modelCallLimit: budget.limit,
+            }, {}, "unit-repair-progress");
+          },
+          retry: true,
+          signal: runtime.controller.signal,
+        })));
+        const merged = mergeDocumentUnitSections({ markdown: section, patchMarkdown: patch, allowedUnitIds: repairIds });
+        const replaced = new Set(merged.replacedUnitIds ?? []);
+        if (!merged.ok || replaced.size !== repairIds.length || repairIds.some((id) => !replaced.has(id))) {
+          await store.appendEvent?.(runtime.id, {
+            type: "unit-repair-rejected",
+            batchId: batch.id,
+            providerId: candidate.providerId,
+            modelId: candidate.modelId,
+            unitIds: repairIds,
+            replacedUnitIds: merged.replacedUnitIds ?? [],
+            reason: "patch markers did not match the requested unit set",
+          }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+          errors.push("targeted repair returned an incomplete or unexpected marker set");
+          break;
+        }
+        section = merged.markdown;
+        for (const id of withVisuals.visualUnitIds) resolvedVisualUnitIds.add(id);
+      } catch (error) {
+        if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
+        if (isNonRetryableDocumentModelError(error)) disableCandidate(runtime, candidate);
+        errors.push(String(error?.message || error).slice(0, 500));
+        failureCategories.add(classifyDocumentModelError(error).category);
+        break;
       }
-      const resolvedVisualUnitIds = [...new Set([...(seedResult.resolvedVisualUnitIds ?? []), ...withVisuals.visualUnitIds])];
-      const quality = evaluateDocumentQuality({ units: batch.units, markdown: merged.markdown, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds });
-      if (!quality.passed) {
-        await store.appendEvent?.(runtime.id, {
-          type: "unit-repair-completed",
-          batchId: batch.id,
-          providerId: candidate.providerId,
-          modelId: candidate.modelId,
-          unitIds: targetIds,
-          passed: false,
-          failures: quality.failures,
-        }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
-        return { passed: false, section: merged.markdown, quality, review: null, attempts: 1, candidate, errors: [], failureCategories: [], resolvedVisualUnitIds };
-      }
-      const review = await requestReview(candidate, batch, merged.markdown, runtime, budget, candidatePolicy);
+    }
+
+    const resolved = [...resolvedVisualUnitIds];
+    const quality = evaluateDocumentQuality({ units: batch.units, markdown: section, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: resolved });
+    if (!quality.passed || errors.length > 0) {
       await store.appendEvent?.(runtime.id, {
         type: "unit-repair-completed",
         batchId: batch.id,
         providerId: candidate.providerId,
         modelId: candidate.modelId,
         unitIds: targetIds,
-        passed: review.pass === true,
-      }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
-      return {
-        passed: review.pass === true,
-        section: merged.markdown,
-        quality,
-        review,
-        attempts: 1,
-        candidate,
-        errors: review.errors ?? [],
-        failureCategories: [],
-        resolvedVisualUnitIds,
-      };
-    } catch (error) {
-      if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
-      if (isNonRetryableDocumentModelError(error)) disableCandidate(runtime, candidate);
-      return {
         passed: false,
-        section: base,
-        quality: evaluateDocumentQuality({ units: batch.units, markdown: base, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: seedResult.resolvedVisualUnitIds ?? [] }),
-        review: null,
-        attempts: 1,
-        candidate,
-        errors: [String(error?.message || error).slice(0, 500)],
-        failureCategories: [classifyDocumentModelError(error).category],
-        resolvedVisualUnitIds: seedResult.resolvedVisualUnitIds ?? [],
-      };
+        failures: quality.failures,
+      }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+      return { passed: false, section, quality, review: null, attempts, candidate, errors, failureCategories: [...failureCategories], resolvedVisualUnitIds: resolved };
     }
+
+    const review = await requestReview(candidate, batch, section, runtime, budget, candidatePolicy);
+    await store.appendEvent?.(runtime.id, {
+      type: "unit-repair-completed",
+      batchId: batch.id,
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      unitIds: targetIds,
+      passed: review.pass === true,
+    }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
+    return {
+      passed: review.pass === true,
+      section,
+      quality,
+      review,
+      attempts,
+      candidate,
+      errors: review.errors ?? [],
+      failureCategories: [...failureCategories],
+      resolvedVisualUnitIds: resolved,
+    };
   }
 
   async function tryCandidate(candidate, batch, runtime, budget, candidatePolicy, seedResult = null) {
