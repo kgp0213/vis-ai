@@ -541,6 +541,106 @@ test("visual source units move to a multimodal fallback and stay pending without
   }
 });
 
+test("a visual fallback repairs only visual units and preserves accepted text byte-for-byte", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-targeted-visual-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const units = [
+      { id: "u1", location: "page 1", text: "Accepted plain text section." },
+      { id: "u2", location: "page 2 chart", text: "Extracted chart caption.", visualPending: true, visualDataUrl: "data:image/png;base64,iVBORw0KGgo=" },
+    ];
+    const acceptedBlock = `<!-- source-unit: u1 -->\n\n### page 1\n\n${units[0].text}\n\nKEEP-EXACT`;
+    const fallbackDraftUnits = [];
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.pdf", readablePath: "manual.pdf", documentKind: "pdf" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "pages-1-2", units });
+        return { totalUnits: units.length, selectedPages: 2, processedPages: 2 };
+      },
+      modelCandidates: () => [
+        { providerId: "text", modelId: "text", role: "primary", multimodal: false },
+        { providerId: "vision", modelId: "vision", role: "fallback", multimodal: true, maxImages: 1 },
+      ],
+      probeModel: async () => true,
+      generate: async ({ candidate, batch, purpose }) => {
+        if (purpose === "verification") return '{"pass":true,"issues":[]}';
+        if (candidate.providerId === "text") {
+          return `${acceptedBlock}\n\n<!-- source-unit: u2 -->\n\n### page 2 chart\n\n${units[1].text}`;
+        }
+        fallbackDraftUnits.push(batch.units.map((unit) => unit.id));
+        return faithful(batch.units, "vision");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.pdf", outputPath: join(root, "result.md") });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    const section = await store.readSection(accepted.id, "pages-1-2");
+    assert.equal(job.status, "completed", job.error);
+    assert.deepEqual(fallbackDraftUnits, [["u2"]]);
+    assert.equal(section.slice(0, section.indexOf("<!-- source-unit: u2 -->")).trimEnd(), acceptedBlock);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("review repair rewrites only the reported unit and rechecks the complete batch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-targeted-review-"));
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const units = [
+      { id: "u1", location: "section 1", text: "Accepted source statement one." },
+      { id: "u2", location: "section 2", text: "Source statement two must be corrected." },
+    ];
+    const acceptedBlock = `<!-- source-unit: u1 -->\n\n### section 1\n\n${units[0].text}\n\nKEEP-EXACT`;
+    const initial = `${acceptedBlock}\n\n<!-- source-unit: u2 -->\n\n### section 2\n\n${units[1].text}`;
+    const draftUnits = [];
+    let reviews = 0;
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "sections-1-2", units });
+        return { totalUnits: units.length };
+      },
+      modelCandidates: () => [{ providerId: "reviewer", modelId: "reviewer", role: "primary" }],
+      generate: async ({ batch, purpose }) => {
+        if (purpose === "verification") {
+          reviews++;
+          return reviews === 1
+            ? '{"pass":false,"issues":[{"unitId":"u2","type":"distortion","detail":"value is distorted"}]}'
+            : '{"pass":true,"issues":[]}';
+        }
+        draftUnits.push(batch.units.map((unit) => unit.id));
+        if (draftUnits.length === 1) return initial;
+        return faithful(batch.units, "review-repair");
+      },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async () => {},
+    });
+
+    const accepted = await manager.start({
+      sourcePath: "manual.md",
+      outputPath: join(root, "result.md"),
+      policy: { maxRetries: 1 },
+    });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    const section = await store.readSection(accepted.id, "sections-1-2");
+    assert.equal(job.status, "completed", job.error);
+    assert.deepEqual(draftUnits, [["u1", "u2"], ["u2"]]);
+    assert.equal(reviews, 2);
+    assert.equal(section.slice(0, section.indexOf("<!-- source-unit: u2 -->")).trimEnd(), acceptedBlock);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a text-only model keeps a faithful draft for review when no visual fallback is available", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-text-visual-"));
   try {
