@@ -465,14 +465,38 @@ function effectiveDocumentPolicy(value, candidates = []) {
       merged.maxVisualUnitsPerBatch = Math.min(merged.maxVisualUnitsPerBatch, candidate.maxImages);
     }
   }
-  return normalizeDocumentPolicy(merged);
+  let effective = normalizeDocumentPolicy(merged);
+  for (const candidate of policyCandidates) effective = boundPolicyToCandidateCapabilities(effective, candidate);
+  return effective;
+}
+
+function positiveCapabilityInteger(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function boundPolicyToCandidateCapabilities(policy, candidate) {
+  const bounded = { ...policy };
+  const maxOutputTokens = positiveCapabilityInteger(candidate?.maxOutputTokens);
+  if (maxOutputTokens !== null) bounded.batchOutputTokens = Math.min(bounded.batchOutputTokens, maxOutputTokens);
+
+  const maxContextTokens = positiveCapabilityInteger(candidate?.maxContextTokens);
+  if (maxContextTokens !== null) {
+    const declaredReserve = positiveCapabilityInteger(candidate?.contextReserveTokens);
+    const reserve = Math.min(
+      Math.floor(maxContextTokens / 2),
+      declaredReserve ?? Math.max(1_024, Math.floor(maxContextTokens / 10)),
+    );
+    const availableInput = Math.max(256, maxContextTokens - bounded.batchOutputTokens - reserve);
+    bounded.batchInputTokens = Math.min(bounded.batchInputTokens, availableInput);
+  }
+  return bounded;
 }
 
 function documentPolicyForCandidate(basePolicy, candidate) {
-  const policy = normalizeDocumentPolicy({
+  const policy = boundPolicyToCandidateCapabilities(normalizeDocumentPolicy({
     ...basePolicy,
     ...(candidate?.documentPolicy && typeof candidate.documentPolicy === "object" ? candidate.documentPolicy : {}),
-  });
+  }), candidate);
   if (candidate?.multimodal === true && Number.isSafeInteger(candidate.maxImages)) {
     policy.maxVisualUnitsPerBatch = Math.min(policy.maxVisualUnitsPerBatch, candidate.maxImages);
   }
@@ -918,7 +942,7 @@ export function createDocumentMarkdownManager(options = {}) {
           contract: runtime.contract,
           messages: withVisuals.messages,
           purpose: "verification",
-          maxTokens: 2_048,
+          maxTokens: Math.min(2_048, positiveCapabilityInteger(candidate?.maxOutputTokens) ?? 2_048),
           requestTimeoutMs: candidatePolicy.requestTimeoutMs,
           onProgress: (progress) => {
             if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
