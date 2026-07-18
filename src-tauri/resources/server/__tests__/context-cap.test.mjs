@@ -27,6 +27,29 @@ describe("resolveContextCap — JSON 驱动容量策略", () => {
     assert.equal(resolveContextCap("local-flash", config, provider), 1048576);
   });
 
+  test("新能力契约的 maxContextTokens 可独立声明上下文容量", () => {
+    const policy = resolveContextPolicy("future-model", {}, {
+      id: "future-provider",
+      models: [{
+        id: "future-model",
+        capabilities: { maxContextTokens: 262144 },
+      }],
+    });
+    assert.equal(policy.effectiveCap, 262144);
+    assert.equal(policy.declaredMaxContextTokens, 262144);
+    assert.equal(policy.capacitySource, "json-capabilities");
+  });
+
+  test("显式能力字段优先于旧容量字段", () => {
+    assert.equal(resolveContextCap("future-model", {}, {
+      models: [{
+        id: "future-model",
+        maxContextLength: 131072,
+        capabilities: { maxContextTokens: 262144 },
+      }],
+    }), 262144);
+  });
+
   test("模型不在当前 Provider JSON 中时保守回退 128K", () => {
     const config = {};
     assert.equal(resolveContextCap("unknown-model", config, provider), FALLBACK_CONTEXT_TOKENS);

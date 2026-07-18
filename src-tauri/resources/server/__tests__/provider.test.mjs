@@ -270,6 +270,14 @@ describe("pickSummaryModel", () => {
     assert.equal(pickSummaryModel(models), "model-a");
   });
 
+  test("无轻量名称时按 capabilities.maxContextTokens 选择最小模型", () => {
+    const models = [
+      { id: "model-large", capabilities: { maxContextTokens: 262144 } },
+      { id: "model-small", capabilities: { maxContextTokens: 65536 } },
+    ];
+    assert.equal(pickSummaryModel(models), "model-small");
+  });
+
   test("空数组 → undefined", () => {
     assert.equal(pickSummaryModel([]), undefined);
     assert.equal(pickSummaryModel(undefined), undefined);
