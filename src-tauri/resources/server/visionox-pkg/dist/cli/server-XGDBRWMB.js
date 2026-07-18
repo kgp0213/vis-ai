@@ -4438,7 +4438,8 @@ async function handleSettings(method, _rest, body, ctx) {
         providerContextCap: (() => {
           const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
           const mc = effectiveModelConfig(cfg);
-          return provider?.models?.find((m) => m.id === mc.model)?.maxContextLength ?? null;
+          const model = provider?.models?.find((m) => m.id === mc.model);
+          return model?.capabilities?.maxContextTokens ?? model?.maxContextLength ?? null;
         })(),
         activeProviderId: cfg.activeProviderId ?? null,
         providerCapabilities: (() => {
@@ -4607,7 +4608,7 @@ async function handleSettings(method, _rest, body, ctx) {
         const capProvider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
         const capMc = effectiveModelConfig(cfg);
         const capModelObj = capProvider?.models?.find((m) => m.id === capMc.model);
-        const capMaxLen = capModelObj?.maxContextLength;
+        const capMaxLen = capModelObj?.capabilities?.maxContextTokens ?? capModelObj?.maxContextLength;
         if (capMaxLen && typeof capMaxLen === "number" && cfg.contextCapTokens > capMaxLen) {
           return { status: 400, body: { error: `contextCapTokens (${cfg.contextCapTokens}) exceeds model "${capMc.model}" maxContextLength (${capMaxLen})` } };
         }
