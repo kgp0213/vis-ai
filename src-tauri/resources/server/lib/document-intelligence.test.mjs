@@ -9,6 +9,7 @@ import {
   createDocumentContextUnit,
   evaluateDocumentAssembly,
   evaluateDocumentQuality,
+  mergeDocumentUnitSections,
   normalizeDocumentPolicy,
   documentTaskFingerprint,
   renderDocumentSourceFallback,
@@ -224,4 +225,35 @@ test("final assembly audit rejects missing, duplicate, unexpected, or reordered 
   const audit = evaluateDocumentAssembly({ expectedUnitIds: ["page-1", "page-2"], markdown: reordered });
   assert.equal(audit.passed, false);
   assert.equal(audit.orderMismatch, true);
+});
+
+test("unit patch merge preserves accepted text byte-for-byte and replaces only requested units", () => {
+  const acceptedPage = "### PDF page 1\n\nAccepted voltage 3.3V and command `REGW 0x11`.";
+  const base = [
+    `<!-- source-unit: page-1 -->\n${acceptedPage}`,
+    "<!-- source-unit: page-2 -->\n### PDF page 2\n\n[visual pending]",
+  ].join("\n\n");
+  const patch = "<!-- source-unit: page-2 -->\n### PDF page 2\n\nFigure 2 shows the DSI timing relationship.";
+
+  const merged = mergeDocumentUnitSections({
+    markdown: base,
+    patchMarkdown: patch,
+    allowedUnitIds: ["page-2"],
+  });
+
+  assert.equal(merged.ok, true);
+  assert.deepEqual(merged.replacedUnitIds, ["page-2"]);
+  assert.match(merged.markdown, new RegExp(acceptedPage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(merged.markdown, /Figure 2 shows the DSI timing relationship/);
+  assert.doesNotMatch(merged.markdown, /\[visual pending\]/);
+});
+
+test("unit patch merge rejects unexpected units instead of adding unsupported content", () => {
+  const base = "<!-- source-unit: page-1 -->\nOriginal content.";
+  const patch = "<!-- source-unit: page-9 -->\nUnsupported addition.";
+  const merged = mergeDocumentUnitSections({ markdown: base, patchMarkdown: patch, allowedUnitIds: ["page-1"] });
+
+  assert.equal(merged.ok, false);
+  assert.deepEqual(merged.unexpectedUnitIds, ["page-9"]);
+  assert.equal(merged.markdown, base);
 });
