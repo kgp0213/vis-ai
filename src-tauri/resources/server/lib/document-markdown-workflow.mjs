@@ -192,6 +192,12 @@ function candidateKey(candidate) {
   return candidate?.key || `${candidate?.providerId || "unknown"}\0${candidate?.modelId || "unknown"}`;
 }
 
+function candidateCircuitKey(candidate) {
+  const key = candidateKey(candidate);
+  const fingerprint = String(candidate?.configFingerprint ?? "").trim();
+  return fingerprint ? `${key}\0${fingerprint}` : key;
+}
+
 const DOCUMENT_MODEL_ERROR_DEFINITIONS = Object.freeze({
   insufficient_balance: {
     message: "模型账户余额不足，暂时无法调用。",
@@ -306,6 +312,20 @@ function diagnosticEntryKey(entry) {
 
 function normalizeDiagnosticList(value) {
   return Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object") : [];
+}
+
+function modelDiagnosticMap(value) {
+  return new Map(normalizeDiagnosticList(value).map((entry) => [diagnosticEntryKey(entry), entry]));
+}
+
+function disabledCandidateSet(value) {
+  return new Set(Array.isArray(value) ? value.map((entry) => String(entry)).filter(Boolean) : []);
+}
+
+function disabledCandidateDetailMap(value) {
+  return new Map((Array.isArray(value) ? value : [])
+    .filter((entry) => entry && typeof entry === "object" && String(entry.key ?? ""))
+    .map((entry) => [String(entry.key), entry]));
 }
 
 /** Group per-call diagnostics into concise task-level entries for the UI. */
@@ -642,6 +662,51 @@ export function createDocumentMarkdownManager(options = {}) {
     return [...(runtime.modelDiagnostics ?? new Map()).values()];
   }
 
+  function persistedDisabledCandidates(runtime) {
+    return [...(runtime.disabledCandidates ?? new Set())];
+  }
+
+  function persistedDisabledCandidateDetails(runtime) {
+    return [...(runtime.disabledCandidateDetails ?? new Map()).values()];
+  }
+
+  function candidateDisabled(runtime, candidate) {
+    return runtime.disabledCandidates?.has(candidateCircuitKey(candidate)) === true;
+  }
+
+  function persistCandidateCircuit(runtime, context) {
+    queueProgress(runtime, {}, {
+      disabledCandidates: persistedDisabledCandidates(runtime),
+      disabledCandidateDetails: persistedDisabledCandidateDetails(runtime),
+    }, context);
+  }
+
+  function disableCandidate(runtime, candidate, origin = "request") {
+    runtime.disabledCandidates ??= new Set();
+    runtime.disabledCandidateDetails ??= new Map();
+    runtime.candidateAvailability ??= new Map();
+    const key = candidateCircuitKey(candidate);
+    runtime.candidateAvailability.set(key, false);
+    if (runtime.disabledCandidates.has(key)) return;
+    runtime.disabledCandidates.add(key);
+    runtime.disabledCandidateDetails.set(key, {
+      key,
+      origin,
+      disabledAt: new Date().toISOString(),
+      verificationCheckedAt: candidate?.verificationCheckedAt ?? null,
+    });
+    persistCandidateCircuit(runtime, "model-circuit-disabled");
+  }
+
+  function enableCandidate(runtime, candidate) {
+    const key = candidateCircuitKey(candidate);
+    runtime.disabledCandidates?.delete(key);
+    runtime.disabledCandidateDetails?.delete(key);
+    runtime.candidateAvailability ??= new Map();
+    runtime.candidateAvailability.set(key, true);
+    persistCandidateCircuit(runtime, "model-circuit-enabled");
+  }
+
   function recordModelDiagnostic(runtime, details, error, origin = "request") {
     runtime.modelDiagnostics ??= new Map();
     const classified = classifyDocumentModelError(error);
@@ -868,7 +933,7 @@ export function createDocumentMarkdownManager(options = {}) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
         errors.push(String(error?.message || error).slice(0, 500));
         if (isNonRetryableDocumentModelError(error)) {
-          runtime.disabledCandidates.add(candidateKey(candidate));
+          disableCandidate(runtime, candidate);
           break;
         }
       }
@@ -949,7 +1014,7 @@ export function createDocumentMarkdownManager(options = {}) {
         const category = classifyDocumentModelError(error).category;
         failureCategories.add(category);
         if (isNonRetryableDocumentModelError(error)) {
-          runtime.disabledCandidates.add(candidateKey(candidate));
+          disableCandidate(runtime, candidate);
           break;
         }
         if (category === "output_truncated") break;
@@ -977,9 +1042,16 @@ export function createDocumentMarkdownManager(options = {}) {
   }
 
   async function candidateAvailable(candidate, runtime, batch = null) {
-    if (runtime.disabledCandidates.has(candidateKey(candidate))) return false;
-    if (candidate.role === "primary") return true;
-    if (!runtime.policy.autoFallback) return false;
+    if (candidate.role !== "primary" && !runtime.policy.autoFallback) return false;
+    runtime.candidateAvailability ??= new Map();
+    const key = candidateCircuitKey(candidate);
+    const verificationStatus = String(candidate?.verificationStatus ?? "").toLowerCase();
+    if (candidateDisabled(runtime, candidate)) {
+      const disabledOrigin = runtime.disabledCandidateDetails?.get(key)?.origin;
+      if (verificationStatus === "passed" && ["probe", "verification"].includes(disabledOrigin)) enableCandidate(runtime, candidate);
+      else return false;
+    }
+    if (runtime.candidateAvailability.has(key)) return runtime.candidateAvailability.get(key) === true;
     const details = {
       providerId: candidate.providerId,
       modelId: candidate.modelId,
@@ -988,20 +1060,39 @@ export function createDocumentMarkdownManager(options = {}) {
       batchId: batch?.id ?? null,
       batchLabel: batch?.label ?? null,
     };
+    if (verificationStatus === "failed") {
+      recordModelDiagnostic(runtime, details, candidate.verificationError || "最近一次模型检测未通过", "verification");
+      disableCandidate(runtime, candidate, "verification");
+      return false;
+    }
+    if (verificationStatus === "passed" && candidate.requiresProbe !== true) {
+      runtime.candidateAvailability.set(key, true);
+      return true;
+    }
+    const explicitlyRequiresProbe = candidate.requiresProbe === true || ["untested", "stale"].includes(verificationStatus);
+    if (!explicitlyRequiresProbe && candidate.role === "primary") {
+      runtime.candidateAvailability.set(key, true);
+      return true;
+    }
+    if (typeof options.probeModel !== "function") {
+      runtime.candidateAvailability.set(key, true);
+      return true;
+    }
     try {
-      const result = await options.probeModel?.(candidate, runtime.controller.signal);
+      const result = await options.probeModel(candidate, runtime.controller.signal);
       if (runtime.controller.signal.aborted) throw abortError();
       if (result === true || result?.ok === true) {
+        runtime.candidateAvailability.set(key, true);
         resolveModelDiagnostics(runtime, details, "probe");
         return true;
       }
-      if (result && typeof result === "object" && result.ok === false) {
-        recordModelDiagnostic(runtime, details, result.error || result.message || "模型连通性检测未通过", "probe");
-      }
+      recordModelDiagnostic(runtime, details, result?.error || result?.message || "模型连通性检测未通过", "probe");
+      disableCandidate(runtime, candidate, "probe");
       return false;
     } catch (error) {
       if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
       recordModelDiagnostic(runtime, details, error, "probe");
+      disableCandidate(runtime, candidate, "probe");
       return false;
     }
   }
@@ -1076,7 +1167,7 @@ export function createDocumentMarkdownManager(options = {}) {
         reviewIssues: result.review?.issues ?? [],
         advisoryReviewIssues: result.review?.advisoryIssues ?? [],
         errors: result.errors ?? [],
-        disabledForJob: runtime.disabledCandidates.has(candidateKey(candidate)),
+        disabledForJob: candidateDisabled(runtime, candidate),
         policy: {
           batchInputTokens: candidatePolicy.batchInputTokens,
           batchOutputTokens: candidatePolicy.batchOutputTokens,
@@ -1305,7 +1396,7 @@ export function createDocumentMarkdownManager(options = {}) {
         })));
       } catch (error) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
-        if (isNonRetryableDocumentModelError(error)) runtime.disabledCandidates.add(candidateKey(candidate));
+        if (isNonRetryableDocumentModelError(error)) disableCandidate(runtime, candidate);
       }
     }
     return "";
@@ -1335,8 +1426,19 @@ export function createDocumentMarkdownManager(options = {}) {
   async function execute(runtime) {
     let prepared;
     try {
-      runtime.modelDiagnostics = new Map();
-      await emit(runtime.id, { status: "running", running: true, paused: false, error: null, modelDiagnostics: [] });
+      runtime.modelDiagnostics ??= new Map();
+      runtime.disabledCandidates ??= new Set();
+      runtime.disabledCandidateDetails ??= new Map();
+      runtime.candidateAvailability ??= new Map();
+      await emit(runtime.id, {
+        status: "running",
+        running: true,
+        paused: false,
+        error: null,
+        modelDiagnostics: persistedModelDiagnostics(runtime),
+        disabledCandidates: persistedDisabledCandidates(runtime),
+        disabledCandidateDetails: persistedDisabledCandidateDetails(runtime),
+      });
       await store.appendEvent?.(runtime.id, { type: "execution-started", retryFailed: runtime.retryFailed === true })
         .catch((error) => reportPersistenceError(runtime, error, "execution-event"));
       const prepareInput = Array.isArray(runtime.input.sourcePaths) && runtime.input.sourcePaths.length > 0
@@ -1740,6 +1842,8 @@ export function createDocumentMarkdownManager(options = {}) {
       modelDiagnostics: new Map(),
       controller: new AbortController(),
       disabledCandidates: new Set(),
+      disabledCandidateDetails: new Map(),
+      candidateAvailability: new Map(),
       emitQueue: Promise.resolve(),
       paused: false,
       stopAction: null,
@@ -1784,9 +1888,11 @@ export function createDocumentMarkdownManager(options = {}) {
       contract: job.contract ?? buildDocumentContract({ sourcePath: job.sourcePath, outputPath: job.outputPath }),
       candidates,
       modelCallCount: Number(job.modelCallCount) || (job.batches ?? []).reduce((sum, batch) => sum + (Number(batch.modelCalls) || 0), 0),
-      modelDiagnostics: new Map(),
+      modelDiagnostics: modelDiagnosticMap(job.modelDiagnostics),
       controller: new AbortController(),
-      disabledCandidates: new Set(),
+      disabledCandidates: disabledCandidateSet(job.disabledCandidates),
+      disabledCandidateDetails: disabledCandidateDetailMap(job.disabledCandidateDetails),
+      candidateAvailability: new Map(),
       emitQueue: Promise.resolve(),
       paused: false,
       stopAction: null,
