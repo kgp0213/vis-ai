@@ -76,6 +76,94 @@ test("cross-format batch processor paginates OfficeCLI instead of trusting one t
   }
 });
 
+test("OfficeCLI pagination continues past a duplicate fallback location and reconciles totalElements", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-office-reconcile-"));
+  try {
+    const source = join(root, "manual.docx");
+    await writeFile(source, "placeholder");
+    const starts = [];
+    const batches = [];
+    const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "word" }, {
+      policy: { batchInputTokens: 1024, maxUnitsPerBatch: 2 },
+      countTokens: (text) => text.length,
+      runOfficeCli: async (args) => {
+        const start = Number(args[args.indexOf("--start") + 1]);
+        starts.push(start);
+        const page = (index, text) => ({ type: "paragraph", text });
+        const elements = start === 1
+          ? [page(1, "one"), page(2, "two")]
+          : start === 3
+            ? [page(3, "three"), page(4, "four")]
+            : start === 5
+              ? [page(5, "five")]
+              : [];
+        return { success: true, data: { totalElements: 5, elements } };
+      },
+      onBatch: async (batch) => batches.push(batch),
+    });
+
+    assert.equal(result.totalUnits, 5);
+    assert.deepEqual(starts, [1, 3, 5]);
+    assert.deepEqual(batches.flatMap((batch) => batch.units.map((unit) => unit.text)), ["one", "two", "three", "four", "five"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("empty non-visual Office elements remain explicit empty units instead of visual placeholders", () => {
+  const units = officeElementsToUnits([
+    { path: "/body/table[1]", type: "table", text: "" },
+    { path: "/body/p[1]", type: "paragraph", text: "" },
+  ]);
+
+  assert.equal(units.length, 2);
+  assert.ok(units.every((unit) => unit.empty === true));
+  assert.ok(units.every((unit) => unit.text === ""));
+  assert.ok(units.every((unit) => unit.visualPending !== true));
+  assert.ok(units.every((unit) => !/视觉内容/.test(unit.text)));
+});
+
+test("an oversized PDF page is split into stable page-internal source units", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-pdf-page-split-"));
+  try {
+    const source = join(root, "large.pdf");
+    await writeFile(source, "placeholder");
+    const pageText = "0123456789".repeat(500);
+    const extract = async () => {
+      const batches = [];
+      const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "pdf" }, {
+        policy: { batchInputTokens: 1024, maxUnitsPerBatch: 20 },
+        countTokens: (text) => String(text).length,
+        processPdfBatches: async (_path, options) => {
+          await options.onBatch({
+            pageRange: "1",
+            pageNumbers: [1],
+            pageTexts: [{ page: 1, text: pageText, chars: pageText.length }],
+            contextPageTexts: [],
+            batches: 1,
+          });
+          return { batches: 1, selectedPages: 1, processedPages: 1, sourceChars: pageText.length };
+        },
+        onBatch: async (batch) => batches.push(batch),
+      });
+      return { result, batches };
+    };
+
+    const first = await extract();
+    const second = await extract();
+    const firstUnits = first.batches.flatMap((batch) => batch.units);
+    const secondUnits = second.batches.flatMap((batch) => batch.units);
+
+    assert.ok(first.result.totalUnits > 1);
+    assert.deepEqual(firstUnits.map((unit) => unit.id), secondUnits.map((unit) => unit.id));
+    assert.deepEqual(firstUnits.map((unit) => unit.text).join(""), pageText);
+    assert.ok(firstUnits.every((unit) => unit.id.startsWith("page-1-part-")));
+    assert.ok(firstUnits.every((unit) => unit.text.length <= 922));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("HTML and Office visual assets are attached only during multimodal extraction", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-visuals-"));
   try {
