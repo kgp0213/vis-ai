@@ -6,11 +6,78 @@ import { tmpdir } from "node:os";
 
 import { createDocumentJobStore } from "./document-job-store.mjs";
 import { buildDocumentContract } from "./document-intelligence.mjs";
-import { createDocumentMarkdownManager } from "./document-markdown-workflow.mjs";
+import {
+  buildDocumentQualityWarnings,
+  classifyDocumentModelError,
+  createDocumentMarkdownManager,
+  summarizeDocumentModelDiagnostics,
+} from "./document-markdown-workflow.mjs";
 
 function faithful(units, model) {
   return units.map((unit) => `<!-- source-unit: ${unit.id} -->\n\n### ${unit.location}\n\n${unit.text}\n\nHandled by ${model}`).join("\n\n");
 }
+
+test("model service errors expose stable user-facing categories", () => {
+  const balance = classifyDocumentModelError("DeepSeek 403: {\"message\":\"Sorry, your account balance is insufficient\"}");
+  assert.equal(balance.category, "insufficient_balance");
+  assert.match(balance.message, /余额不足/);
+  assert.equal(balance.requiresUserAction, true);
+
+  const timeout = classifyDocumentModelError(new Error("The operation was aborted due to timeout"));
+  assert.equal(timeout.category, "timeout");
+  assert.equal(timeout.retryable, true);
+});
+
+test("model probe failures are persisted and surfaced in completed-with-warning metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-model-diagnostics-"));
+  const output = join(root, "result.md");
+  try {
+    const store = createDocumentJobStore(join(root, "jobs"));
+    const manager = createDocumentMarkdownManager({
+      store,
+      isForegroundBusy: () => false,
+      prepareDocument: async () => ({ ok: true, sourcePath: "manual.pdf", readablePath: "manual.pdf", documentKind: "pdf" }),
+      processSourceBatches: async (_prepared, { onBatch }) => {
+        await onBatch({ id: "pages-1", label: "PDF pages 1", units: [{ id: "page-1", location: "PDF page 1", text: "Source content." }] });
+        return { totalUnits: 1, selectedPages: 1, processedPages: 1 };
+      },
+      modelCandidates: () => [
+        { providerId: "primary", modelId: "primary", role: "primary" },
+        { providerId: "siliconflow-kimi", modelId: "kimi", role: "fallback" },
+      ],
+      probeModel: async (candidate) => candidate.role === "fallback"
+        ? { ok: false, error: "DeepSeek 403: account balance is insufficient" }
+        : { ok: true },
+      generate: async () => { throw new Error("primary request timed out"); },
+      generateSummary: async () => "## 摘要\n\nDone.",
+      writeOutput: async ({ outputPath, content }) => { await import("node:fs/promises").then(({ writeFile }) => writeFile(outputPath, content, "utf8")); },
+    });
+
+    const accepted = await manager.start({ sourcePath: "manual.pdf", outputPath: output, policy: { maxRetries: 0 } });
+    await manager.wait(accepted.id);
+    const job = await store.read(accepted.id);
+    assert.equal(job.status, "completed_with_warnings");
+    assert.ok(job.modelDiagnostics.some((diagnostic) => diagnostic.category === "insufficient_balance"));
+    assert.match(job.warnings.find((warning) => warning.type === "model-service-issue" && warning.category === "insufficient_balance")?.message || "", /余额不足/);
+    const metadata = await manager.getMetadata(accepted.id);
+    const balanceIssue = metadata.modelIssues.find((issue) => issue.category === "insufficient_balance");
+    assert.ok(balanceIssue);
+    assert.deepEqual(balanceIssue.affectedBatches.map((batch) => batch.id), ["pages-1"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("quality warning summaries keep visual review and model service causes distinct", () => {
+  const warnings = buildDocumentQualityWarnings({
+    batches: [{ id: "pages-1", label: "PDF pages 1", status: "needs_review", quality: { failures: [{ type: "visual-pending" }] } }],
+    diagnostics: [{ providerId: "kimi", modelId: "k2", category: "insufficient_balance", message: "模型账户余额不足", action: "充值后重试", requiresUserAction: true, retryable: false, batchId: "pages-1", batchLabel: "PDF pages 1", occurrences: 1, technicalMessage: "balance is insufficient" }],
+  });
+  assert.ok(warnings.some((warning) => warning.type === "document-visual-review-pending"));
+  assert.ok(warnings.some((warning) => warning.type === "model-service-issue" && /余额不足/.test(warning.message)));
+  const grouped = summarizeDocumentModelDiagnostics([{ providerId: "kimi", modelId: "k2", category: "insufficient_balance", message: "余额不足", batchId: "pages-1", batchLabel: "PDF pages 1", occurrences: 1 }]);
+  assert.equal(grouped[0].affectedBatches[0].label, "PDF pages 1");
+});
 
 test("document workflow sends only failed batches to a healthy fallback and assembles summary before body", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-document-manager-"));

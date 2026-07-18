@@ -25217,7 +25217,7 @@ function documentJobStatusLabel(status) {
     abandoned: "已放弃",
     source_changed: "来源已变化",
     completed: "已完成",
-    completed_with_warnings: "需要复核",
+    completed_with_warnings: "已完成，需复核",
     failed: "失败",
     cancelled: "已取消"
   }[status] || status || "未知";
@@ -25248,6 +25248,18 @@ function documentJobProgressLabel(job) {
   if (progress.completed) return `已完成 ${progress.completed} ${unit}`;
   return documentJobStageLabel(progress.stage) || "正在准备文档";
 }
+function documentRetryLabel(modelIssues) {
+  const issues = Array.isArray(modelIssues) ? modelIssues : [];
+  if (issues.some((issue) => issue.category === "insufficient_balance" || issue.category === "quota_exhausted")) return "余额/额度处理后重试";
+  if (issues.some((issue) => issue.requiresUserAction === true)) return "处理模型问题后重试";
+  return "重试失败部分";
+}
+function documentIssueBatchLabel(issue) {
+  const batches = Array.isArray(issue?.affectedBatches) ? issue.affectedBatches : [];
+  if (batches.length === 0) return "任务级模型调用";
+  const labels = batches.slice(0, 6).map((batch) => batch.label || batch.id).filter(Boolean);
+  return `${labels.join("、")}${batches.length > labels.length ? "等" : ""}`;
+}
 var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selectedId, detail, onSelect, onClose, onControl, onStop, onAbandon, onDelete, onPreview }) {
   const selected = detail || jobs.find((job) => job.id === selectedId) || null;
   const isDocument = selected?.kind === "document";
@@ -25257,6 +25269,9 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selec
   const modelHistory = Array.isArray(selected?.modelHistory) ? selected.modelHistory : [];
   const events = Array.isArray(selected?.events) ? selected.events.slice(-30).reverse() : [];
   const preview = selected?.preview?.content ? String(selected.preview.content).slice(0, 120000) : "";
+  const modelIssues = Array.isArray(selected?.modelIssues) ? selected.modelIssues : [];
+  const reviewWarnings = (Array.isArray(selected?.warnings) ? selected.warnings : []).filter((warning) => warning?.type !== "model-service-issue");
+  const showReviewReasons = selected?.status === "completed_with_warnings" || selected?.status === "failed" || selected?.qualityPassed === false;
   const resumable = ["paused", "interrupted", "stopped"].includes(selected?.status);
   const active = selected?.running || ["queued", "waiting_foreground", "pausing"].includes(selected?.status);
   const abandonable = active || ["paused", "interrupted", "stopped", "failed", "source_changed"].includes(selected?.status);
@@ -25264,6 +25279,7 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selec
   const modelCaption = selected?.model
     ? `${selected.running ? "当前模型" : "最近使用模型"} · ${selected.model}${selected.modelRole === "fallback" ? "（备用候选）" : ""}`
     : "尚未开始模型调用";
+  const retryLabel = documentRetryLabel(modelIssues);
   return html4`
     <section class="background-jobs-workbench" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface-default);border-top:1px solid var(--border-default)">
       <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-default)">
@@ -25288,7 +25304,7 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selec
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                 ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>暂停</button>` : null}
                 ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>继续</button>` : null}
-                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" onClick=${() => onControl(selected.id, "retry")}>重试失败部分</button>` : null}
+                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" title=${modelIssues.find((issue) => issue.requiresUserAction)?.action || "重试失败部分"} onClick=${() => onControl(selected.id, "retry")}>${retryLabel}</button>` : null}
                 ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>立即停止</button>` : null}
                 ${abandonable ? html4`<button type="button" onClick=${() => { if (confirm("放弃任务会终止后续处理，但保留任务记录和已保存草稿。确定继续？")) onAbandon(selected.id); }}>放弃</button>` : null}
                 ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>预览产物</button>` : null}
@@ -25297,7 +25313,22 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selec
             </div>
             <div style="height:6px;background:var(--border-subtle);overflow:hidden;margin:16px 0 8px"><div style=${`height:100%;width:${progress.percent ?? 0}%;background:${selected.qualityPassed === false ? "var(--color-warning)" : "var(--accent-primary)"}`}></div></div>
             <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>累计模型调用 ${progress.taskModelCalls || 0} 次</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>当前区块 · ${progress.currentLabel}</span>` : null}</div>
+            ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>任务已经结束，输出文件已生成。</strong><div style="margin-top:4px">部分区块未通过完整质量审查，请根据下方原因处理后复核或重试。</div></div>` : null}
             ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
+            ${showReviewReasons && (reviewWarnings.length > 0 || modelIssues.length > 0) ? html4`
+              <section style="margin-top:18px">
+                <h4 style="font-size:13px;margin:0 0 8px">需要复核的原因</h4>
+                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || "部分内容需要复核。"}</div>`)}
+                ${modelIssues.map((issue) => html4`
+                  <div class="notice warn" style="margin:0 0 8px">
+                    <div><strong>${issue.providerId || "未知服务商"}/${issue.modelId || "未知模型"}</strong> · ${issue.message || "模型调用失败"}</div>
+                    <div class="meta" style="margin-top:5px">影响区块 · ${documentIssueBatchLabel(issue)}</div>
+                    ${issue.action ? html4`<div style="margin-top:5px">建议：${issue.action}</div>` : null}
+                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">技术信息</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join("；")}</div></details>` : null}
+                  </div>
+                `)}
+              </section>
+            ` : null}
             <section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">来源与产物</h4><div class="meta" style="overflow-wrap:anywhere">输出 · ${selected.outputPath || "尚未确定"}</div>${sourcePaths.length > 0 ? html4`<ol style="margin:8px 0 0;padding-left:22px">${sourcePaths.map((path) => html4`<li style="font-size:12px;line-height:1.6;overflow-wrap:anywhere">${path}</li>`)}</ol>` : null}</section>
             ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">完成条件</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
             ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">模型调用链</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">模型</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">角色</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">结果</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">调用</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? "备用" : "主模型"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? "通过" : "未通过"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}

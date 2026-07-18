@@ -1244,7 +1244,13 @@ function documentClient(candidate) {
 
 async function probeDocumentModel(candidate, signal) {
   const cached = documentModelHealth.get(candidate.key);
-  if (cached && Date.now() - cached.checkedAt < 5 * 60_000) return cached.ok;
+  if (cached && Date.now() - cached.checkedAt < 5 * 60_000) {
+    return {
+      ok: cached.ok === true,
+      error: cached.error ?? null,
+      errorName: cached.errorName ?? null,
+    };
+  }
   const timeoutSignal = AbortSignal.timeout(10_000);
   const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   try {
@@ -1258,11 +1264,12 @@ async function probeDocumentModel(candidate, signal) {
     });
     const ok = typeof response?.content === "string";
     documentModelHealth.set(candidate.key, { ok, checkedAt: Date.now() });
-    return ok;
+    return { ok };
   } catch (error) {
-    documentModelHealth.set(candidate.key, { ok: false, checkedAt: Date.now(), error: String(error?.message || error) });
+    const message = String(error?.message || error);
+    documentModelHealth.set(candidate.key, { ok: false, checkedAt: Date.now(), error: message, errorName: String(error?.name || "Error") });
     console.error(`[document] fallback probe failed provider=${candidate.providerId} model=${candidate.modelId}: ${error.message}`);
-    return false;
+    return { ok: false, error: message, errorName: String(error?.name || "Error") };
   }
 }
 
@@ -4455,7 +4462,16 @@ function handleDocumentArtifactJobChange(job) {
         assistantId: remembered?.assistantId || `document-job-${rawId}`,
         files: [info],
       });
-      broadcastDashboardEvent({ kind: "status", text: `后台文档整理完成：${info.filename}` });
+      if (job.status === "completed_with_warnings") {
+        const modelIssue = (job.modelIssues ?? []).find((issue) => issue.requiresUserAction) ?? job.modelIssues?.[0];
+        const qualityWarning = (job.warnings ?? []).find((warning) => warning.type !== "model-service-issue");
+        const reason = modelIssue
+          ? `${modelIssue.providerId || "未知服务商"}/${modelIssue.modelId || "未知模型"}：${modelIssue.message}`
+          : qualityWarning?.message || "部分区块未通过完整质量审查";
+        broadcastDashboardEvent({ kind: "warning", text: `后台文档已生成但需要复核：${info.filename}。${reason}` });
+      } else {
+        broadcastDashboardEvent({ kind: "status", text: `后台文档整理完成：${info.filename}` });
+      }
       return;
     }
     const message = `后台文档任务 ${jobId} 报告完成，但未找到输出文件：${job.outputPath || remembered?.outputPath || "未提供路径"}`;

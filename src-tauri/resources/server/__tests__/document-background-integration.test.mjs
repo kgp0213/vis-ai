@@ -59,6 +59,11 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(app, /function documentJobStatusLabel/);
   assert.match(app, /function documentJobProgressLabel/);
   assert.match(app, /documentJobStageLabel/);
+  assert.match(app, /已完成，需复核/);
+  assert.match(app, /documentRetryLabel/);
+  assert.match(app, /余额\/额度处理后重试/);
+  assert.match(app, /需要复核的原因/);
+  assert.match(app, /modelIssues/);
   assert.match(app, /background-jobs-workbench/);
   assert.match(app, /onControl\(selected\.id, "pause"\)/);
   assert.match(app, /onControl\(selected\.id, "resume"\)/);
@@ -76,4 +81,6 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(server, /\["pause", "resume", "retry", "stop", "cancel", "abandon"\]/);
   assert.match(launcher, /documentMarkdownManager\.listMetadata/);
   assert.match(launcher, /documentMarkdownManager\?\.control\(id, action\)/);
+  assert.match(launcher, /后台文档已生成但需要复核/);
+  assert.match(launcher, /job\.modelIssues/);
 });

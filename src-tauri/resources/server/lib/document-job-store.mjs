@@ -177,6 +177,7 @@ export function createDocumentJobStore(rootDir, options = {}) {
       progress: { completedUnits: 0, totalUnits: null, completedBatches: 0, totalBatches: null },
       batches: [],
       modelHistory: [],
+      modelDiagnostics: [],
       modelCallCount: 0,
       lastModelCall: null,
       warnings: [],

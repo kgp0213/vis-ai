@@ -192,6 +192,225 @@ function candidateKey(candidate) {
   return candidate?.key || `${candidate?.providerId || "unknown"}\0${candidate?.modelId || "unknown"}`;
 }
 
+const DOCUMENT_MODEL_ERROR_DEFINITIONS = Object.freeze({
+  insufficient_balance: {
+    message: "模型账户余额不足，暂时无法调用。",
+    action: "充值或更换可用模型后，再重试受影响区块。",
+    retryable: false,
+    requiresUserAction: true,
+  },
+  quota_exhausted: {
+    message: "模型调用额度不足或已用尽。",
+    action: "补充额度或更换可用模型后，再重试受影响区块。",
+    retryable: false,
+    requiresUserAction: true,
+  },
+  authentication: {
+    message: "模型 API Key 无效，或当前账号没有访问权限。",
+    action: "检查服务商配置和 API Key 后，再重试受影响区块。",
+    retryable: false,
+    requiresUserAction: true,
+  },
+  rate_limit: {
+    message: "模型服务请求过于频繁，触发了限流。",
+    action: "稍后再重试受影响区块。",
+    retryable: true,
+    requiresUserAction: false,
+  },
+  timeout: {
+    message: "模型响应超时，未能在规定时间内返回完整结果。",
+    action: "确认模型服务可用后，再重试受影响区块。",
+    retryable: true,
+    requiresUserAction: false,
+  },
+  output_truncated: {
+    message: "模型输出达到长度上限，结果不完整。",
+    action: "缩小处理区块或调整模型输出上限后，再重试。",
+    retryable: true,
+    requiresUserAction: true,
+  },
+  capability_mismatch: {
+    message: "模型不支持本次请求所需的内容或参数格式。",
+    action: "检查模型 JSON 能力配置，或改用兼容模型后重试。",
+    retryable: false,
+    requiresUserAction: true,
+  },
+  model_unavailable: {
+    message: "指定模型不存在、已下架或当前不可用。",
+    action: "更新模型配置或改用其他模型后重试。",
+    retryable: false,
+    requiresUserAction: true,
+  },
+  network: {
+    message: "无法连接模型服务，可能是网络、代理或服务暂时不可用。",
+    action: "检查网络或代理后，再重试受影响区块。",
+    retryable: true,
+    requiresUserAction: false,
+  },
+  unknown: {
+    message: "模型调用失败，未能完成本区块处理。",
+    action: "查看技术详情，确认模型配置后再重试。",
+    retryable: true,
+    requiresUserAction: false,
+  },
+});
+
+function diagnosticText(value) {
+  return String(value ?? "")
+    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/(api[_-]?key|authorization)\s*[:=]\s*["']?[^\s,"'}]+/gi, "$1=[redacted]")
+    .replace(/\b(?:sk|key)-[a-z0-9_-]{12,}\b/gi, "[redacted-key]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+
+function diagnosticStatusCode(value) {
+  const match = diagnosticText(value).match(/\b([45]\d{2})\b/);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Convert provider-specific failures into a stable, user-facing category.
+ * The raw provider message remains available as a short, redacted technical detail.
+ */
+export function classifyDocumentModelError(error) {
+  const raw = diagnosticText(typeof error === "string" ? error : error?.message || error?.error || error);
+  const errorName = String(error?.name || error?.errorName || "");
+  const source = `${errorName} ${raw}`;
+  let category = "unknown";
+  if (/(?:\b402\b|balance.{0,30}(?:insufficient|not enough|exhausted|empty)|(?:insufficient|not enough).{0,30}balance|余额(?:不足|已用尽|耗尽)|欠费)/iu.test(source)) category = "insufficient_balance";
+  else if (/quota\s+(?:is\s+)?(?:insufficient|exhausted|exceeded)|insufficient\s+quota|配额(?:不足|已用尽|耗尽)|调用额度/iu.test(source)) category = "quota_exhausted";
+  else if (/output.{0,30}(?:limit|truncat|incomplete)|truncat(?:ed|ion)|结果不完整|输出达到.{0,12}上限|finish.?reason.{0,12}length/iu.test(source)) category = "output_truncated";
+  else if (/timeout|timed out|deadline|aborted due to timeout|总时长上限|响应超时|请求超时/iu.test(source)) category = "timeout";
+  else if (/\b429\b|rate.?limit|too many requests|请求过于频繁|限流/iu.test(source)) category = "rate_limit";
+  else if (/\b(?:401|403)\b|unauthori[sz]ed|forbidden|invalid api key|api key.{0,20}(?:invalid|错误|无效)|无权限|未授权/iu.test(source)) category = "authentication";
+  else if (/unknown variant|unsupported (?:content|media|message)|image_url|不支持.*(?:图片|参数|格式)|failed to deserialize|invalid_request_error/iu.test(source)) category = "capability_mismatch";
+  else if (/\b(?:404|410)\b|model .*?(?:not found|does not exist)|模型.*(?:不存在|下架|不可用)/i.test(source)) category = "model_unavailable";
+  else if (/fetch failed|enotfound|econn(reset|refused)|network|proxy|certificate|tls|ssl|网络|代理|连接失败/iu.test(source)) category = "network";
+  const definition = DOCUMENT_MODEL_ERROR_DEFINITIONS[category];
+  return {
+    category,
+    message: definition.message,
+    action: definition.action,
+    retryable: definition.retryable,
+    requiresUserAction: definition.requiresUserAction,
+    statusCode: diagnosticStatusCode(raw),
+    technicalMessage: raw || "未返回具体错误信息",
+  };
+}
+
+function diagnosticEntryKey(entry) {
+  return [entry.providerId, entry.modelId, entry.category, entry.batchId || "task", entry.origin || "request"].join("\0");
+}
+
+function normalizeDiagnosticList(value) {
+  return Array.isArray(value) ? value.filter((entry) => entry && typeof entry === "object") : [];
+}
+
+/** Group per-call diagnostics into concise task-level entries for the UI. */
+export function summarizeDocumentModelDiagnostics(value) {
+  const groups = new Map();
+  for (const entry of normalizeDiagnosticList(value)) {
+    if (entry.active === false) continue;
+    const key = [entry.providerId, entry.modelId, entry.category].join("\0");
+    const existing = groups.get(key) ?? {
+      providerId: entry.providerId ?? null,
+      modelId: entry.modelId ?? null,
+      category: entry.category || "unknown",
+      message: entry.message || DOCUMENT_MODEL_ERROR_DEFINITIONS.unknown.message,
+      action: entry.action || DOCUMENT_MODEL_ERROR_DEFINITIONS.unknown.action,
+      retryable: entry.retryable !== false,
+      requiresUserAction: entry.requiresUserAction === true,
+      occurrences: 0,
+      affectedBatches: [],
+      technicalMessages: [],
+      statusCodes: [],
+      stages: [],
+    };
+    existing.occurrences += Math.max(1, Number(entry.occurrences) || 1);
+    existing.retryable &&= entry.retryable !== false;
+    existing.requiresUserAction ||= entry.requiresUserAction === true;
+    if (entry.batchId && !existing.affectedBatches.some((batch) => batch.id === entry.batchId)) {
+      existing.affectedBatches.push({ id: entry.batchId, label: entry.batchLabel || entry.batchId });
+    }
+    if (entry.technicalMessage && !existing.technicalMessages.includes(entry.technicalMessage)) existing.technicalMessages.push(entry.technicalMessage);
+    if (Number.isInteger(entry.statusCode) && !existing.statusCodes.includes(entry.statusCode)) existing.statusCodes.push(entry.statusCode);
+    if (entry.stage && !existing.stages.includes(entry.stage)) existing.stages.push(entry.stage);
+    groups.set(key, existing);
+  }
+  return [...groups.values()].map((entry) => ({
+    ...entry,
+    affectedBatches: entry.affectedBatches.slice(0, 50),
+    technicalMessages: entry.technicalMessages.slice(0, 3),
+    statusCodes: entry.statusCodes.slice(0, 3),
+    stages: entry.stages.slice(0, 8),
+  }));
+}
+
+export function buildDocumentQualityWarnings({ batches = [], diagnostics = [], assemblyAudit = null } = {}) {
+  const records = Array.isArray(batches) ? batches : [];
+  const degraded = records.filter((batch) => batch?.status !== "completed");
+  const warnings = [];
+  if (degraded.length > 0) {
+    warnings.push({
+      type: "document-quality-degraded",
+      message: `${degraded.length} 个来源区块未通过完整质量审查，输出文件已生成，需要复核。`,
+      batchCount: degraded.length,
+    });
+  }
+  const visualPending = records.filter((batch) => (batch?.quality?.failures ?? []).some((failure) => failure?.type === "visual-pending"));
+  if (visualPending.length > 0) {
+    warnings.push({
+      type: "document-visual-review-pending",
+      message: `${visualPending.length} 个区块包含图片或图表，视觉内容尚未完成模型复核。`,
+      batchCount: visualPending.length,
+    });
+  }
+  const sourceFallback = records.filter((batch) => batch?.sourceFallback === true);
+  if (sourceFallback.length > 0) {
+    warnings.push({
+      type: "document-source-fallback",
+      message: `${sourceFallback.length} 个区块未能生成合格的模型整理，已保留原始提取内容。`,
+      batchCount: sourceFallback.length,
+    });
+  }
+  const reviewUnavailable = records.filter((batch) => (batch?.review?.unavailable === true) || (batch?.review?.errors?.length > 0 && batch?.status !== "completed"));
+  if (reviewUnavailable.length > 0) {
+    warnings.push({
+      type: "document-quality-review-unavailable",
+      message: `${reviewUnavailable.length} 个区块未能完成独立质量审校。`,
+      batchCount: reviewUnavailable.length,
+    });
+  }
+  for (const issue of summarizeDocumentModelDiagnostics(diagnostics)) {
+    const batchesText = issue.affectedBatches.length > 0
+      ? `影响区块：${issue.affectedBatches.slice(0, 6).map((batch) => batch.label).join("、")}${issue.affectedBatches.length > 6 ? "等" : ""}。`
+      : "影响任务级模型调用。";
+    warnings.push({
+      type: "model-service-issue",
+      category: issue.category,
+      providerId: issue.providerId,
+      modelId: issue.modelId,
+      message: `${issue.message} ${batchesText}`,
+      action: issue.action,
+      retryable: issue.retryable,
+      requiresUserAction: issue.requiresUserAction,
+      occurrences: issue.occurrences,
+      affectedBatches: issue.affectedBatches,
+      technicalMessages: issue.technicalMessages,
+    });
+  }
+  if (assemblyAudit && assemblyAudit.passed === false) {
+    warnings.push({
+      type: "document-assembly-audit",
+      message: "最终正文的来源顺序或覆盖审计未通过，需要复核。",
+      details: assemblyAudit,
+    });
+  }
+  return warnings;
+}
+
 function effectiveDocumentPolicy(value, candidates = []) {
   const base = normalizeDocumentPolicy(value);
   const merged = { ...base };
@@ -357,6 +576,7 @@ function publicBackgroundJob(job) {
     previewAvailable: Array.isArray(job.batches) && job.batches.length > 0,
     qualityPassed: job.qualityPassed,
     lastModelCall: job.lastModelCall ?? null,
+    modelIssues: summarizeDocumentModelDiagnostics(job.modelDiagnostics),
     warnings: job.warnings ?? [],
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -418,6 +638,77 @@ export function createDocumentMarkdownManager(options = {}) {
     void updateProgress(runtime, changes, extra).catch((error) => reportPersistenceError(runtime, error, context));
   }
 
+  function persistedModelDiagnostics(runtime) {
+    return [...(runtime.modelDiagnostics ?? new Map()).values()];
+  }
+
+  function recordModelDiagnostic(runtime, details, error, origin = "request") {
+    runtime.modelDiagnostics ??= new Map();
+    const classified = classifyDocumentModelError(error);
+    const now = new Date().toISOString();
+    const next = {
+      providerId: details?.providerId ?? null,
+      modelId: details?.modelId ?? null,
+      role: details?.role ?? null,
+      stage: details?.stage ?? null,
+      batchId: details?.batchId ?? null,
+      batchLabel: details?.batchLabel ?? null,
+      origin,
+      ...classified,
+      active: true,
+      occurrences: 1,
+      firstAt: now,
+      lastAt: now,
+    };
+    const key = diagnosticEntryKey(next);
+    const previous = runtime.modelDiagnostics.get(key);
+    if (previous) {
+      next.occurrences = Math.max(1, Number(previous.occurrences) || 1) + 1;
+      next.firstAt = previous.firstAt || now;
+    }
+    runtime.modelDiagnostics.set(key, next);
+    queueProgress(runtime, {}, { modelDiagnostics: persistedModelDiagnostics(runtime) }, "model-diagnostic");
+    if (!previous) {
+      void store.appendEvent?.(runtime.id, {
+        type: origin === "probe" ? "model-probe-failed" : "model-diagnostic",
+        providerId: next.providerId,
+        modelId: next.modelId,
+        role: next.role,
+        stage: next.stage,
+        batchId: next.batchId,
+        batchLabel: next.batchLabel,
+        category: next.category,
+        message: next.message,
+        action: next.action,
+        statusCode: next.statusCode,
+        technicalMessage: next.technicalMessage,
+      }).catch((eventError) => reportPersistenceError(runtime, eventError, "model-diagnostic-event"));
+    }
+    return next;
+  }
+
+  function resolveModelDiagnostics(runtime, details, origin = "request") {
+    let changed = false;
+    for (const [key, entry] of runtime.modelDiagnostics ?? []) {
+      if (entry.active === false || entry.origin !== origin) continue;
+      if (entry.providerId !== (details?.providerId ?? null) || entry.modelId !== (details?.modelId ?? null)) continue;
+      if ((entry.batchId ?? null) !== (details?.batchId ?? null)) continue;
+      runtime.modelDiagnostics.set(key, { ...entry, active: false, resolvedAt: new Date().toISOString() });
+      changed = true;
+    }
+    if (changed) queueProgress(runtime, {}, { modelDiagnostics: persistedModelDiagnostics(runtime) }, "model-diagnostic-resolved");
+  }
+
+  function resolveBatchModelDiagnostics(runtime, batchId) {
+    let changed = false;
+    for (const [key, entry] of runtime.modelDiagnostics ?? []) {
+      if (entry.active === false || entry.batchId !== batchId) continue;
+      runtime.modelDiagnostics.set(key, { ...entry, active: false, resolvedAt: new Date().toISOString() });
+      changed = true;
+    }
+    if (changed) queueProgress(runtime, {}, { modelDiagnostics: persistedModelDiagnostics(runtime) }, "batch-diagnostic-resolved");
+  }
+
   function reserveTaskModelCall(runtime, details) {
     runtime.modelCallCount = Math.max(0, Number(runtime.modelCallCount) || 0) + 1;
     const call = {
@@ -463,6 +754,7 @@ export function createDocumentMarkdownManager(options = {}) {
     const startedAt = Date.parse(call.startedAt) || Date.now();
     try {
       const result = await invoke(call);
+      resolveModelDiagnostics(runtime, call);
       const completed = {
         ...call,
         type: "model-call-completed",
@@ -476,6 +768,7 @@ export function createDocumentMarkdownManager(options = {}) {
         .catch((error) => reportPersistenceError(runtime, error, "model-call-completed-event"));
       return result;
     } catch (error) {
+      recordModelDiagnostic(runtime, call, error);
       const failed = {
         ...call,
         type: "model-call-failed",
@@ -679,11 +972,34 @@ export function createDocumentMarkdownManager(options = {}) {
     return { passed: false, section: lastSection, quality: lastQuality, review: lastReview, attempts, candidate, errors };
   }
 
-  async function candidateAvailable(candidate, runtime) {
+  async function candidateAvailable(candidate, runtime, batch = null) {
     if (runtime.disabledCandidates.has(candidateKey(candidate))) return false;
     if (candidate.role === "primary") return true;
     if (!runtime.policy.autoFallback) return false;
-    try { return await options.probeModel?.(candidate, runtime.controller.signal) === true; } catch { return false; }
+    const details = {
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      role: candidate.role,
+      stage: "availability-probe",
+      batchId: batch?.id ?? null,
+      batchLabel: batch?.label ?? null,
+    };
+    try {
+      const result = await options.probeModel?.(candidate, runtime.controller.signal);
+      if (runtime.controller.signal.aborted) throw abortError();
+      if (result === true || result?.ok === true) {
+        resolveModelDiagnostics(runtime, details, "probe");
+        return true;
+      }
+      if (result && typeof result === "object" && result.ok === false) {
+        recordModelDiagnostic(runtime, details, result.error || result.message || "模型连通性检测未通过", "probe");
+      }
+      return false;
+    } catch (error) {
+      if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
+      recordModelDiagnostic(runtime, details, error, "probe");
+      return false;
+    }
   }
 
   function canSplitResult(result) {
@@ -701,7 +1017,7 @@ export function createDocumentMarkdownManager(options = {}) {
     for (let candidateIndex = startCandidateIndex; candidateIndex < candidates.length; candidateIndex++) {
       const candidate = candidates[candidateIndex];
       if (state.budget.used >= state.budget.limit) break;
-      if (!await candidateAvailable(candidate, runtime)) continue;
+      if (!await candidateAvailable(candidate, runtime, batch)) continue;
       const candidatePolicy = documentPolicyForCandidate(runtime.policy, candidate);
       const policyViolations = batchPolicyViolations(batch, candidatePolicy, countTokens);
       const splitDepthLimit = Math.min(runtime.policy.maxSplitDepth, candidatePolicy.maxSplitDepth);
@@ -721,10 +1037,12 @@ export function createDocumentMarkdownManager(options = {}) {
         const leftResult = await processBatch(left, runtime, childState, candidateIndex);
         const rightResult = await processBatch(right, runtime, childState, candidateIndex);
         const passed = leftResult.passed && rightResult.passed;
+        if (passed) resolveBatchModelDiagnostics(runtime, batch.id);
         return {
           passed,
           section: [leftResult.section, rightResult.section].filter(Boolean).join("\n\n"),
           status: passed ? "completed" : "needs_review",
+          sourceFallback: leftResult.sourceFallback === true || rightResult.sourceFallback === true,
           candidate: rightResult.candidate ?? leftResult.candidate,
           quality: { passed, split: true, policyDriven: true },
           review: null,
@@ -761,7 +1079,10 @@ export function createDocumentMarkdownManager(options = {}) {
         },
         at: new Date().toISOString(),
       });
-      if (result.passed) return { ...result, status: "completed", attempts };
+      if (result.passed) {
+        resolveBatchModelDiagnostics(runtime, batch.id);
+        return { ...result, status: "completed", attempts };
+      }
       const onlyUnresolvedVisuals = (result.quality?.failures ?? []).length > 0
         && result.quality.failures.every((failure) => failure.type === "visual-pending");
       if (result.section && (result.quality?.passed || onlyUnresolvedVisuals)) bestResult = result;
@@ -773,12 +1094,15 @@ export function createDocumentMarkdownManager(options = {}) {
       const childState = { depth: state.depth + 1, budget: state.budget };
       const leftResult = await processBatch(left, runtime, childState);
       const rightResult = await processBatch(right, runtime, childState);
+      const passed = leftResult.passed && rightResult.passed;
+      if (passed) resolveBatchModelDiagnostics(runtime, batch.id);
       return {
-        passed: leftResult.passed && rightResult.passed,
+        passed,
         section: [leftResult.section, rightResult.section].filter(Boolean).join("\n\n"),
-        status: leftResult.passed && rightResult.passed ? "completed" : "needs_review",
+        status: passed ? "completed" : "needs_review",
+        sourceFallback: leftResult.sourceFallback === true || rightResult.sourceFallback === true,
         candidate: rightResult.candidate ?? leftResult.candidate,
-        quality: { passed: leftResult.passed && rightResult.passed, split: true },
+        quality: { passed, split: true },
         review: null,
         attempts: [...attempts, ...(leftResult.attempts ?? []), ...(rightResult.attempts ?? [])],
       };
@@ -789,6 +1113,7 @@ export function createDocumentMarkdownManager(options = {}) {
         ...bestResult,
         passed: false,
         status: "needs_review",
+        sourceFallback: false,
         attempts,
       };
     }
@@ -797,6 +1122,7 @@ export function createDocumentMarkdownManager(options = {}) {
       passed: false,
       section: renderDocumentSourceFallback(batch.units, "模型整理和备用模型修复均未通过质量检查"),
       status: "needs_review",
+      sourceFallback: true,
       candidate: attempts.length > 0 ? candidates.find((candidate) => candidate.providerId === attempts.at(-1).providerId && candidate.modelId === attempts.at(-1).modelId) : null,
       quality: attempts.at(-1)?.failures ? { passed: false, failures: attempts.at(-1).failures } : { passed: false, failures: [{ type: "model-unavailable" }] },
       review: null,
@@ -1003,7 +1329,8 @@ export function createDocumentMarkdownManager(options = {}) {
   async function execute(runtime) {
     let prepared;
     try {
-      await emit(runtime.id, { status: "running", running: true, paused: false, error: null });
+      runtime.modelDiagnostics = new Map();
+      await emit(runtime.id, { status: "running", running: true, paused: false, error: null, modelDiagnostics: [] });
       await store.appendEvent?.(runtime.id, { type: "execution-started", retryFailed: runtime.retryFailed === true })
         .catch((error) => reportPersistenceError(runtime, error, "execution-event"));
       const prepareInput = Array.isArray(runtime.input.sourcePaths) && runtime.input.sourcePaths.length > 0
@@ -1094,6 +1421,7 @@ export function createDocumentMarkdownManager(options = {}) {
             quality: result.quality,
             review: result.review,
             attempts: result.attempts,
+            sourceFallback: result.sourceFallback === true,
             modelCalls: budget.used,
             sectionChars: result.section.length,
             updatedAt: new Date().toISOString(),
@@ -1140,7 +1468,6 @@ export function createDocumentMarkdownManager(options = {}) {
       const assemblyAudit = runtime.contract.fidelity === "complete-with-summary"
         ? evaluateDocumentAssembly({ expectedUnitIds, markdown: detailedBody })
         : { passed: true, expectedUnits: expectedUnitIds.length, actualMarkers: null };
-      const batchDegraded = degraded;
       if (!assemblyAudit.passed) degraded = true;
 
       let summary = "";
@@ -1148,7 +1475,7 @@ export function createDocumentMarkdownManager(options = {}) {
         try {
           summary = await generateHierarchicalSummary(titleForDocument(prepared, runtime.contract), sectionSummaries, runtime);
         } catch { /* A missing summary must not discard the verified body. */ }
-        if (!/^##\s+摘要/m.test(summary)) summary = `## 摘要\n\n文档正文已按 ${totalUnits} 个来源区块完成整理。${degraded ? "部分区块保留了原始提取内容，需要复核。" : "详细内容见下文。"}`;
+        if (!/^##\s+摘要/m.test(summary)) summary = `## 摘要\n\n文档正文已按 ${totalUnits} 个来源区块完成整理。${degraded ? "部分区块未通过完整质量审查，需要复核。" : "详细内容见下文。"}`;
       }
       const title = titleForDocument(prepared, runtime.contract);
       const sourceList = renderCollectionSources(prepared, sourceSummary);
@@ -1181,10 +1508,13 @@ export function createDocumentMarkdownManager(options = {}) {
         allowOutputOverwrite: runtime.input.allowOutputOverwrite === true || Boolean((await store.read(runtime.id)).outputCommittedAt),
       });
       const outputCommittedAt = new Date().toISOString();
-      const warnings = [];
-      if (batchDegraded) warnings.push({ type: "document-quality-degraded", message: "部分来源区块使用原文保底，需要复核。" });
-      if (!assemblyAudit.passed) warnings.push({ type: "document-assembly-audit", message: "最终正文的来源顺序或覆盖审计未通过，需要复核。", details: assemblyAudit });
       await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
+      const finalState = await store.read(runtime.id);
+      const warnings = buildDocumentQualityWarnings({
+        batches: finalState.batches,
+        diagnostics: finalState.modelDiagnostics,
+        assemblyAudit,
+      });
       await emit(runtime.id, {
         status: degraded ? "completed_with_warnings" : "completed",
         running: false,
@@ -1385,6 +1715,7 @@ export function createDocumentMarkdownManager(options = {}) {
       contract,
       candidates,
       modelCallCount: 0,
+      modelDiagnostics: new Map(),
       controller: new AbortController(),
       disabledCandidates: new Set(),
       emitQueue: Promise.resolve(),
@@ -1431,6 +1762,7 @@ export function createDocumentMarkdownManager(options = {}) {
       contract: job.contract ?? buildDocumentContract({ sourcePath: job.sourcePath, outputPath: job.outputPath }),
       candidates,
       modelCallCount: Number(job.modelCallCount) || (job.batches ?? []).reduce((sum, batch) => sum + (Number(batch.modelCalls) || 0), 0),
+      modelDiagnostics: new Map(),
       controller: new AbortController(),
       disabledCandidates: new Set(),
       emitQueue: Promise.resolve(),
