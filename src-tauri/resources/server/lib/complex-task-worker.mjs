@@ -23,6 +23,11 @@ function number(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function timestamp(value, fallback) {
+  const parsed = typeof value === "number" ? value : Date.parse(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function safeRaw(value) {
   let output;
   if (typeof value === "string") output = value;
@@ -366,7 +371,7 @@ export function createDurableAgentWorker(options = {}) {
       heartbeatHalted = true;
       await heartbeat.stop();
     };
-    const startedAt = now();
+    const executionStartedAt = timestamp(task.executionStartedAt, number(now(), Date.now()));
     const limit = Math.max(1, Math.min(number(options.maxAttempts, DEFAULT_MAX_ATTEMPTS), number(task.contract?.executionLimits?.attemptLimit, DEFAULT_MAX_ATTEMPTS)));
     const wallClockMs = Math.max(1, number(options.wallClockMs, task.contract?.executionLimits?.wallClockMs ?? 3_600_000));
     const attemptTimeoutMs = Math.max(1, number(options.attemptTimeoutMs, DEFAULT_ATTEMPT_TIMEOUT_MS));
@@ -389,7 +394,9 @@ export function createDurableAgentWorker(options = {}) {
           break;
         }
         if (heartbeat.failure) return { status: "superseded", reason: heartbeat.failure, task: await store.read(task.id) };
-        if (Number(now()) - Number(startedAt) >= wallClockMs) {
+        const elapsedMs = Math.max(0, number(now(), Date.now()) - executionStartedAt);
+        const remainingWallClockMs = wallClockMs - elapsedMs;
+        if (remainingWallClockMs <= 0) {
           diagnostics.category = "attempt-timeout";
           diagnostics.attempts.push({ attempt, category: "attempt-timeout", message: `task wall clock exceeded ${wallClockMs}ms`, rawResponse: "" });
           break;
@@ -422,7 +429,7 @@ export function createDurableAgentWorker(options = {}) {
             signal,
             tools: { invoke: invokeBoundTool },
             invokeTool: invokeBoundTool,
-          }), attemptTimeoutMs, controlSignal);
+          }), Math.max(1, Math.min(attemptTimeoutMs, remainingWallClockMs)), controlSignal);
           if (interaction) {
             pendingRequest = interaction;
             diagnostics.category = "user-input-request";

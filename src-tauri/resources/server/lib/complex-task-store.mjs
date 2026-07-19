@@ -304,6 +304,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       outcome: null,
       outbox: [],
       metadata: clone(input.metadata ?? null),
+      executionStartedAt: null,
       createdAt: iso(now),
       updatedAt: iso(now),
     };
@@ -366,8 +367,11 @@ export function createComplexTaskStore(rootDir, options = {}) {
       if (current.lifecycle !== "queued") return leaseResult(false, "not-queued", current);
       const epoch = Number(current.epoch || 0) + 1;
       const lease = { leaseId: randomUUID(), owner: String(input.owner ?? "worker"), epoch, acquiredAt: now, expiresAt: now + Math.max(1, numberOr(input.ttlMs, leaseMs)) };
-      const saved = await writeManifest({ ...current, lifecycle: "leased", status: "leased", lease, epoch, revision: current.revision + 1, updatedAt: iso(now) });
-      await appendEvent(key, "lease-acquired", { leaseId: lease.leaseId, epoch, revision: saved.revision });
+      const executionStartedAt = current.executionStartedAt
+        || (Number(current.epoch || 0) > 0 ? current.createdAt : null)
+        || iso(now);
+      const saved = await writeManifest({ ...current, lifecycle: "leased", status: "leased", lease, epoch, executionStartedAt, revision: current.revision + 1, updatedAt: iso(now) });
+      await appendEvent(key, "lease-acquired", { leaseId: lease.leaseId, epoch, executionStartedAt, revision: saved.revision });
       return { ok: true, leaseId: lease.leaseId, epoch, lease: clone(lease), task: saved };
     });
   }
