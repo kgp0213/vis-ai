@@ -4,7 +4,8 @@ export const TASK_LIFECYCLE_STATES = Object.freeze([
 export const TASK_OUTCOMES = Object.freeze([
   "delivered", "delivered_with_warnings", "partial", "failed", "cancelled", "abandoned",
 ]);
-export const TASK_QUALITY_STATES = Object.freeze(["unknown", "passed", "needs_review", "degraded", "failed"]);
+// `passed` remains accepted for v1 compatibility; `verified` is the public name.
+export const TASK_QUALITY_STATES = Object.freeze(["unknown", "verified", "passed", "needs_review", "degraded", "failed"]);
 
 const TASK_ID_RE = /^task:[0-9a-f-]{36}$/i;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;

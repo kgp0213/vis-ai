@@ -234,6 +234,29 @@ test("lifecycle changes use revision CAS and cannot bypass terminal outcome comm
   });
 });
 
+test("a fresh lease may enter assembly without a fake running phase", async () => {
+  await withStore({}, async (store) => {
+    const task = await createTask(store);
+    const lease = await store.acquireLease(task.id, {
+      expectedRevision: task.revision,
+      owner: "assembler-a",
+      ttlMs: 1_000,
+      now: 1_000,
+    });
+    assert.equal(lease.ok, true);
+    const assembling = await store.transition(task.id, {
+      expectedRevision: lease.task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: "assembler-a",
+      now: 1_001,
+    });
+    assert.equal(assembling.applied, true);
+    assert.equal(assembling.task.lifecycle, "assembling");
+  });
+});
+
 test("lease epochs fence stale workers and heartbeat extends only the active lease", async () => {
   await withStore({}, async (store) => {
     const { task, lease } = await startTask(store, { now: 1_000 });
@@ -294,6 +317,12 @@ test("unit checkpoints require revision, current lease, and authorized coverage"
     });
     assert.equal(saved.applied, true);
     assert.equal(saved.task.unitResults["unit-1"].proposedStatus, "completed");
+    assert.deepEqual(saved.task.coverageLedger["page:1"], {
+      state: "completed",
+      primaryUnitId: "unit-1",
+      artifactRefs: ["artifact:unit-1"],
+    });
+    assert.equal(saved.task.coverageLedger["page:2"].state, "pending");
 
     const stale = await store.checkpointUnit(task.id, validUnitResult("unit-2", ["page:2"]), {
       expectedRevision: saved.task.revision,
@@ -383,6 +412,52 @@ test("supervisor keeps active leases, surfaces attention states, and isolates on
   assert.equal(issues.length, 1);
 });
 
+test("attention transitions persist one Outbox delivery and release the execution lease", async () => {
+  await withStore({}, async (store) => {
+    for (const lifecycle of ["waiting_user", "blocked"]) {
+      const task = await createTask(store, validContract({ goal: `Attention ${lifecycle}` }));
+      const lease = await store.acquireLease(task.id, { expectedRevision: task.revision, owner: "attention-test", now: 100 });
+      assert.equal(lease.ok, true);
+      const moved = await store.transition(task.id, {
+        expectedRevision: lease.task.revision,
+        lifecycle,
+        leaseId: lease.leaseId,
+        epoch: lease.epoch,
+        owner: "attention-test",
+        quality: lifecycle === "waiting_user" ? "needs_review" : "failed",
+        blockingReason: { code: "TEST_BLOCK", message: "需要用户处理" },
+        userInputRequest: lifecycle === "waiting_user" ? { requestId: "attention-1", question: "请选择" } : null,
+        now: 101,
+      });
+      assert.equal(moved.applied, true);
+      assert.equal(moved.task.lease, null);
+      assert.equal(moved.task.outbox.length, 1);
+      assert.equal(moved.task.outbox[0].kind, "task-attention");
+      assert.equal(moved.task.outbox[0].payload.lifecycle, lifecycle);
+      assert.deepEqual(moved.task.outbox[0].pendingConsumers, ["task-center", "conversation"]);
+      const duplicate = await store.transition(task.id, {
+        expectedRevision: lease.task.revision,
+        lifecycle,
+        leaseId: lease.leaseId,
+        epoch: lease.epoch,
+        owner: "attention-test",
+        now: 102,
+      });
+      assert.equal(duplicate.applied, false);
+      assert.equal((await store.read(task.id)).outbox.length, 1);
+      const restarted = createComplexTaskStore(store.root);
+      const pending = await restarted.listPendingOutbox({ consumer: "task-center" });
+      assert.equal(pending.filter((entry) => entry.taskId === task.id).length, 1);
+      const ack = await restarted.ackOutbox(task.id, pending.find((entry) => entry.taskId === task.id).deliveryId, {
+        expectedRevision: moved.task.revision,
+        consumer: "task-center",
+      });
+      assert.equal(ack.applied, true);
+      assert.equal((await restarted.listPendingOutbox({ consumer: "task-center" })).some((entry) => entry.taskId === task.id), false);
+    }
+  });
+});
+
 test("terminal outcome and per-consumer Outbox acknowledgements survive restart", async () => {
   await withStore({}, async (store, root) => {
     const { task, lease } = await startTask(store, { now: 10 });
@@ -404,6 +479,8 @@ test("terminal outcome and per-consumer Outbox acknowledgements survive restart"
     assert.equal(completed.task.lifecycle, "terminal");
     assert.equal(completed.task.outcome.outcome, "delivered_with_warnings");
     assert.equal(completed.task.quality, "needs_review");
+    assert.equal(completed.task.needsAttention, true);
+    assert.equal(completed.task.outbox.at(-1).kind, "task-outcome");
 
     const duplicate = await store.complete(task.id, validOutcome(task.id), {
       expectedRevision: assembling.task.revision,

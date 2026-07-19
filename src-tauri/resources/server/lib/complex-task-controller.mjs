@@ -213,7 +213,7 @@ export function createComplexTaskController({ store } = {}) {
     if (action === "delete_record") {
       const result = await store.removeIfUnreferenced(id, { expectedRevision: request.expectedRevision });
       return result?.applied === true || result?.deleted === true
-        ? success(action, result, null)
+        ? { ok: true, applied: true, action, deleted: true }
         : failedStoreResult(action, result, task);
     }
 

@@ -269,6 +269,7 @@ test("acknowledges one delivery consumer and deletes only through CAS-safe Store
   });
   assert.equal(deleted.ok, true);
   assert.equal(deleted.deleted, true);
+  assert.equal(deleted.task, undefined);
   assert.deepEqual(deleteStore.calls.at(-1), ["removeIfUnreferenced", TASK_ID, { expectedRevision: 3 }]);
 });
 
@@ -377,15 +378,22 @@ test("runs the full control lifecycle against the durable task Store", async () 
     });
     assert.equal(cancelled.ok, true);
     assert.equal(cancelled.task.lifecycle, "terminal");
-    const delivery = cancelled.task.outbox[0];
+    const delivery = cancelled.task.outbox.find((entry) => entry.kind === "task-outcome") || cancelled.task.outbox.at(-1);
     assert.ok(delivery);
-
-    const acknowledged = await controller.control(TASK_ID, {
+    let acknowledged = await controller.control(TASK_ID, {
       action: "ack_outcome",
       expectedRevision: cancelled.task.revision,
       payload: { deliveryId: delivery.deliveryId, consumer: "task-center" },
     });
     assert.equal(acknowledged.ok, true);
+    for (const pending of acknowledged.task.outbox.filter((entry) => (entry.pendingConsumers || []).includes("task-center"))) {
+      acknowledged = await controller.control(TASK_ID, {
+        action: "ack_outcome",
+        expectedRevision: acknowledged.task.revision,
+        payload: { deliveryId: pending.deliveryId, consumer: "task-center" },
+      });
+      assert.equal(acknowledged.ok, true);
+    }
     assert.deepEqual(acknowledged.allowedActions, ["delete_record"]);
 
     const deleted = await controller.control(TASK_ID, {

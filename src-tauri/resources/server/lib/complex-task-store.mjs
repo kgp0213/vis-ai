@@ -19,9 +19,10 @@ const DEFAULT_LEASE_MS = 60_000;
 const TASK_ID_RE = /^task:[0-9a-f-]{36}$/i;
 const GUARDED_LIFECYCLES = new Set(["leased", "running", "assembling"]);
 const ACTIVE_LIFECYCLES = new Set(["queued", "leased", "running", "assembling", "waiting_user", "blocked", "paused"]);
+const ATTENTION_LIFECYCLES = new Set(["waiting_user", "blocked"]);
 const ALLOWED_TRANSITIONS = new Map([
   ["queued", new Set(["leased", "paused", "waiting_user", "blocked"])],
-  ["leased", new Set(["running", "queued", "paused", "waiting_user", "blocked"])],
+  ["leased", new Set(["running", "assembling", "queued", "paused", "waiting_user", "blocked"])],
   ["running", new Set(["running", "assembling", "paused", "waiting_user", "blocked"])],
   ["assembling", new Set(["terminal", "paused", "waiting_user", "blocked"])],
   ["waiting_user", new Set(["queued", "paused", "blocked"])],
@@ -88,6 +89,41 @@ function project(task) {
   copy.status = copy.lifecycle;
   copy.outbox = (copy.outbox ?? []).map((entry) => ({ ...entry, pendingConsumers: pendingConsumers(entry) }));
   return copy;
+}
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value ?? {}, key);
+}
+
+function attentionPayload(task, lifecycle, input = {}) {
+  const request = hasOwn(input, "userInputRequest") ? clone(input.userInputRequest) : clone(task.userInputRequest ?? null);
+  const reason = hasOwn(input, "blockingReason") ? clone(input.blockingReason) : clone(task.blockingReason ?? null);
+  const message = typeof reason === "string"
+    ? reason
+    : reason?.message || (lifecycle === "waiting_user" ? "任务需要用户补充信息后才能继续。" : "任务被外部条件阻塞，需要用户处理。");
+  return {
+    schemaVersion: 1,
+    type: "task-attention",
+    taskId: task.id,
+    lifecycle,
+    quality: String(input.quality ?? task.quality ?? "unknown"),
+    summary: message,
+    blockingReason: reason,
+    userInputRequest: request,
+    resumable: true,
+  };
+}
+
+function outboxEntry(task, payload, kind, now) {
+  return {
+    deliveryId: randomUUID(),
+    taskId: task.id,
+    kind,
+    payload: clone(payload),
+    consumers: consumersFor(task),
+    acknowledgements: {},
+    createdAt: iso(now),
+  };
 }
 
 export function createComplexTaskStore(rootDir, options = {}) {
@@ -269,19 +305,36 @@ export function createComplexTaskStore(rootDir, options = {}) {
       if (!TASK_LIFECYCLE_STATES.includes(nextLifecycle) || !ALLOWED_TRANSITIONS.get(current.lifecycle)?.has(nextLifecycle)) return applied(false, "invalid-transition", current);
       const now = numberOr(input.now, Date.now());
       if (GUARDED_LIFECYCLES.has(current.lifecycle) && !input.userControlled && !leaseMatches(current, input, now)) return applied(false, "stale-lease", current);
+      const enteringAttention = ATTENTION_LIFECYCLES.has(nextLifecycle);
+      const lease = GUARDED_LIFECYCLES.has(nextLifecycle) ? clone(current.lease) : null;
+      const blockingReason = hasOwn(input, "blockingReason")
+        ? clone(input.blockingReason)
+        : enteringAttention ? clone(current.blockingReason ?? null) : null;
+      const userInputRequest = hasOwn(input, "userInputRequest")
+        ? clone(input.userInputRequest)
+        : nextLifecycle === "waiting_user" ? clone(current.userInputRequest ?? null) : null;
+      const pendingAssembly = hasOwn(input, "pendingAssembly")
+        ? clone(input.pendingAssembly)
+        : nextLifecycle === "waiting_user" ? clone(current.pendingAssembly ?? null) : null;
+      const attention = enteringAttention && nextLifecycle !== current.lifecycle
+        ? outboxEntry(current, attentionPayload(current, nextLifecycle, input), "task-attention", now)
+        : null;
       const next = {
         ...current,
         lifecycle: nextLifecycle,
         status: nextLifecycle,
         revision: current.revision + 1,
         updatedAt: iso(now),
-        ...(input.userControlled ? { lease: null } : {}),
+        lease,
         ...(input.quality ? { quality: String(input.quality) } : {}),
-        ...(input.userInputRequest ? { userInputRequest: clone(input.userInputRequest) } : {}),
-        ...(input.blockingReason ? { blockingReason: clone(input.blockingReason) } : {}),
+        userInputRequest,
+        blockingReason,
+        pendingAssembly,
+        needsAttention: enteringAttention,
+        ...(attention ? { outbox: [...(current.outbox ?? []), attention] } : {}),
       };
       const saved = await writeManifest(next);
-      await appendEvent(key, "lifecycle-changed", { from: current.lifecycle, to: nextLifecycle, revision: saved.revision });
+      await appendEvent(key, "lifecycle-changed", { from: current.lifecycle, to: nextLifecycle, revision: saved.revision, ...(attention ? { deliveryId: attention.deliveryId } : {}) });
       return applied(true, null, saved);
     });
   }
@@ -323,7 +376,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       const now = numberOr(input.now, Date.now());
       if (!Number.isInteger(input.expectedRevision) || current.revision !== input.expectedRevision) return leaseResult(false, "revision-mismatch", current);
       if (!leaseMatches(current, input, now)) return leaseResult(false, "stale-lease", current);
-      const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, revision: current.revision + 1, updatedAt: iso(now) });
+      const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, needsAttention: false, blockingReason: null, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
       await appendEvent(key, "lease-released", { revision: saved.revision });
       return { ok: true, task: saved };
     });
@@ -338,7 +391,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       if (input.expectedEpoch !== undefined && Number(current.epoch) !== Number(input.expectedEpoch)) return applied(false, "epoch-mismatch", current);
       if (!GUARDED_LIFECYCLES.has(current.lifecycle)) return applied(false, "not-running", current);
       if (current.lease && Number(current.lease.expiresAt) > now) return applied(false, "lease-active", current);
-      const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, recovery: { reason: String(input.reason ?? "worker lease expired"), recoveredAt: iso(now), previousEpoch: current.epoch }, revision: current.revision + 1, updatedAt: iso(now) });
+      const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, needsAttention: false, blockingReason: null, userInputRequest: null, recovery: { reason: String(input.reason ?? "worker lease expired"), recoveredAt: iso(now), previousEpoch: current.epoch }, revision: current.revision + 1, updatedAt: iso(now) });
       await appendEvent(key, "lease-recovered", { epoch: current.epoch, revision: saved.revision });
       return applied(true, null, saved);
     });
@@ -355,15 +408,29 @@ export function createComplexTaskStore(rootDir, options = {}) {
       if (!plan) return applied(false, "invalid-unit-result", current);
       let resultValue;
       try { resultValue = assertUnitResult(inputResult, { unitPlan: plan }); } catch { return applied(false, "invalid-unit-result", current); }
-      const saved = await writeManifest({ ...current, unitResults: { ...current.unitResults, [resultValue.unitId]: { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId } }, revision: current.revision + 1, updatedAt: iso(now) });
-      await appendEvent(key, "unit-checkpoint", { unitId: resultValue.unitId, revision: saved.revision });
+      const ledgerState = resultValue.proposedStatus === "completed" ? "completed"
+        : resultValue.proposedStatus === "skipped" ? "source_fallback"
+          : resultValue.proposedStatus === "needs_review" ? "degraded"
+            : resultValue.proposedStatus === "blocked" ? "blocked"
+              : "unresolved";
+      const coverageLedger = { ...current.coverageLedger };
+      for (const coverage of resultValue.proposedPrimaryCoverage) {
+        coverageLedger[coverage] = {
+          ...coverageLedger[coverage],
+          state: ledgerState,
+          primaryUnitId: resultValue.unitId,
+          artifactRefs: [...resultValue.artifactRefs],
+        };
+      }
+      const saved = await writeManifest({ ...current, unitResults: { ...current.unitResults, [resultValue.unitId]: { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId } }, coverageLedger, revision: current.revision + 1, updatedAt: iso(now) });
+      await appendEvent(key, "unit-checkpoint", { unitId: resultValue.unitId, coverage: resultValue.proposedPrimaryCoverage, revision: saved.revision });
       return applied(true, null, saved);
     });
   }
 
   async function commitTerminal(current, outcome, { now = Date.now(), quality = current.quality } = {}) {
-    const deliveryId = randomUUID();
-    const entry = { deliveryId, taskId: current.id, payload: outcome, consumers: consumersFor(current), acknowledgements: {}, createdAt: iso(now) };
+    const entry = outboxEntry(current, outcome, "task-outcome", now);
+    const deliveryId = entry.deliveryId;
     const saved = await writeManifest({
       ...current,
       lifecycle: "terminal",
@@ -372,6 +439,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       outcome,
       lease: null,
       outbox: [...(current.outbox ?? []), entry],
+      needsAttention: ["partial", "delivered_with_warnings", "failed"].includes(String(outcome.outcome)),
       revision: current.revision + 1,
       updatedAt: iso(now),
       completedAt: iso(now),
@@ -436,6 +504,9 @@ export function createComplexTaskStore(rootDir, options = {}) {
           quality: "unknown",
           outcome: null,
           lease: null,
+          needsAttention: false,
+          blockingReason: null,
+          userInputRequest: null,
           epoch: Number(current.epoch || 0) + 1,
           outcomeHistory: [...(current.outcomeHistory ?? []), current.outcome],
           revision: current.revision + 1,
@@ -456,7 +527,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
           : Object.prototype.hasOwnProperty.call(payload, "resolution") ? payload.resolution
             : Object.prototype.hasOwnProperty.call(payload, "choiceId") ? { choiceId: payload.choiceId }
               : payload.value;
-        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", userInputResolution: { requestId: String(payload.requestId), answer: clone(answer), resolvedAt: iso(now) }, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
+        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, needsAttention: false, blockingReason: null, userInputResolution: { requestId: String(payload.requestId), answer: clone(answer), resolvedAt: iso(now) }, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
         await appendEvent(key, "user-input-resolved", { requestId: String(payload.requestId), revision: saved.revision });
         return applied(true, null, saved);
       }
@@ -465,19 +536,20 @@ export function createComplexTaskStore(rootDir, options = {}) {
         const requestedPath = String(payload.requestedPath || "").trim();
         if (!requestedPath) return applied(false, "invalid-output-path", current);
         const output = { ...current.contract.output, requestedPath, ...(payload.conflictPolicy ? { conflictPolicy: String(payload.conflictPolicy) } : {}) };
-        const saved = await writeManifest({ ...current, contract: { ...current.contract, output }, contractRevision: Number(current.contractRevision || 1) + 1, lifecycle: current.lifecycle === "paused" || current.lifecycle === "waiting_user" || current.lifecycle === "blocked" ? "queued" : current.lifecycle, status: current.lifecycle === "paused" || current.lifecycle === "waiting_user" || current.lifecycle === "blocked" ? "queued" : current.lifecycle, revision: current.revision + 1, updatedAt: iso(now) });
+        const nextLifecycle = current.lifecycle === "paused" || current.lifecycle === "waiting_user" || current.lifecycle === "blocked" ? "queued" : current.lifecycle;
+        const saved = await writeManifest({ ...current, contract: { ...current.contract, output }, contractRevision: Number(current.contractRevision || 1) + 1, lifecycle: nextLifecycle, status: nextLifecycle, lease: null, needsAttention: false, blockingReason: nextLifecycle === "queued" ? null : current.blockingReason ?? null, userInputRequest: nextLifecycle === "queued" ? null : current.userInputRequest ?? null, revision: current.revision + 1, updatedAt: iso(now) });
         await appendEvent(key, "output-retargeted", { requestedPath, revision: saved.revision });
         return applied(true, null, saved);
       }
       if (["pause", "resume", "retry"].includes(action)) {
         if (action === "pause") {
           if (isTerminalLifecycle(current.lifecycle)) return applied(false, "already-terminal", current);
-          const saved = await writeManifest({ ...current, lifecycle: "paused", status: "paused", lease: null, revision: current.revision + 1, updatedAt: iso(now) });
+          const saved = await writeManifest({ ...current, lifecycle: "paused", status: "paused", lease: null, needsAttention: false, revision: current.revision + 1, updatedAt: iso(now) });
           await appendEvent(key, "user-paused", { revision: saved.revision });
           return applied(true, null, saved);
         }
         if (!["paused", "waiting_user", "blocked"].includes(current.lifecycle)) return applied(false, "not-resumable", current);
-        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, revision: current.revision + 1, updatedAt: iso(now) });
+        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, needsAttention: false, blockingReason: null, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
         await appendEvent(key, "user-resumed", { revision: saved.revision });
         return applied(true, null, saved);
       }

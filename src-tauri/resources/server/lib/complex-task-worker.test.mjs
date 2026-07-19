@@ -145,6 +145,105 @@ test("durable worker processes one eligible unit, uses broker, heartbeats, and i
   }, { leaseMs: 200 });
 });
 
+test("explicit controlSignal stops a worker without converting a host stop into a task failure", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    const parent = new AbortController();
+    const control = new AbortController();
+    const worker = createDurableAgentWorker({
+      store,
+      owner: "worker-control-test",
+      leaseTtlMs: 500,
+      heartbeatIntervalMs: 25,
+      attemptTimeoutMs: 2_000,
+      executeUnit: async ({ signal }) => new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }),
+    });
+    const running = worker.runOne(task.id, { signal: parent.signal, controlSignal: control.signal });
+    await delay(15);
+    parent.abort(new Error("chat closed"));
+    await delay(15);
+    assert.equal((await store.read(task.id)).lifecycle, "running");
+    control.abort(new Error("host shutdown"));
+    const result = await running;
+    assert.equal(result.status, "stopped");
+    assert.equal(result.reason, "control-signal");
+    const saved = await store.read(task.id);
+    assert.equal(saved.lifecycle, "queued");
+    assert.equal(saved.outbox.length, 0);
+  });
+});
+
+test("a needs_review unit is a resolved dependency and allows the next unit to run", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 2 });
+    let calls = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      owner: "worker-review-test",
+      maxAttempts: 1,
+      executeUnit: async ({ unitPlan, attemptId }) => {
+        calls += 1;
+        const result = unitResult(unitPlan, attemptId);
+        if (calls === 1) return {
+          ...result,
+          proposedStatus: "needs_review",
+          warnings: [{ code: "QUALITY_REVIEW", message: "需要复核" }],
+          userInputRequest: { requestId: "review-1", question: "确认后继续" },
+        };
+        return result;
+      },
+    });
+    const first = await worker.runOne(task.id);
+    assert.equal(first.status, "waiting_user");
+    const waiting = await store.read(task.id);
+    const resumed = await store.applyUserControl(task.id, {
+      action: "resolve_user_input",
+      expectedRevision: waiting.revision,
+      expectedEpoch: waiting.epoch,
+      payload: { requestId: "review-1", answer: "continue" },
+    });
+    assert.equal(resumed.applied, true);
+    const second = await worker.runOne(task.id);
+    assert.equal(second.status, "unit_completed");
+    assert.equal(second.unitResult.unitId, "unit-2");
+  });
+});
+
+test("bounded model failure uses a generic adapter recoverUnit before yielding for attention", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    let recoveryInput = null;
+    const worker = createDurableAgentWorker({
+      store,
+      owner: "worker-fallback-test",
+      maxAttempts: 1,
+      executeUnit: async () => "malformed model output",
+    });
+    const result = await worker.runOne(task.id, {
+      adapter: {
+        async recoverUnit(input) {
+          recoveryInput = input;
+          return {
+            ...unitResult(input.unitPlan, input.attemptId),
+            proposedStatus: "needs_review",
+            warnings: [{ code: "HOST_FALLBACK", message: "已用宿主保底结果交付" }],
+            confidence: 0.5,
+            userInputRequest: { requestId: "review-fallback", question: "请复核保底结果" },
+          };
+        },
+      },
+    });
+    assert.equal(result.status, "waiting_user");
+    assert.equal(result.unitResult.warnings[0].code, "HOST_FALLBACK");
+    assert.equal(recoveryInput.task.id, task.id);
+    assert.equal(recoveryInput.unitPlan.unitId, "unit-1");
+    assert.equal(recoveryInput.diagnostics.attempts.length, 1);
+    assert.equal((await store.read(task.id)).unitResults["unit-1"].proposedStatus, "needs_review");
+  });
+});
+
 test("malformed, empty, and tool-style model output becomes a durable degraded candidate", async () => {
   await withStore(async (store) => {
     const task = await createTask(store, { unitCount: 1 });

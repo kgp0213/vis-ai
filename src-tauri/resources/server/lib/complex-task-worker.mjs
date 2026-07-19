@@ -7,7 +7,7 @@ const DEFAULT_ATTEMPT_TIMEOUT_MS = 120_000;
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 20_000;
 const RAW_RESPONSE_LIMIT = 16_000;
-const SUCCESS_UNIT_STATES = new Set(["completed", "skipped"]);
+const SUCCESS_UNIT_STATES = new Set(["completed", "skipped", "needs_review"]);
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -103,10 +103,35 @@ function timeoutError(timeoutMs) {
   return error;
 }
 
-async function runWithTimeout(callback, timeoutMs) {
+function isAbortSignal(value) {
+  return Boolean(value && typeof value === "object" && typeof value.aborted === "boolean" && typeof value.addEventListener === "function");
+}
+
+function controlStopError(reason = "worker control signal aborted") {
+  const error = reason instanceof Error ? reason : new Error(String(reason || "worker control signal aborted"));
+  if (!error.code) error.code = "TASK_CONTROL_STOPPED";
+  return error;
+}
+
+function controlSignalFrom(input = {}) {
+  if (isAbortSignal(input.controlSignal)) return input.controlSignal;
+  if (isAbortSignal(input.stopSignal)) return input.stopSignal;
+  if (isAbortSignal(input.stop)) return input.stop;
+  return null;
+}
+
+function stopRequested(input = {}) {
+  if (input.stop === true) return true;
+  const signal = controlSignalFrom(input);
+  return Boolean(signal?.aborted);
+}
+
+async function runWithTimeout(callback, timeoutMs, controlSignal = null) {
+  if (controlSignal?.aborted) throw controlStopError(controlSignal.reason);
   const controller = new AbortController();
   let timer;
   let settled = false;
+  let removeControlListener = null;
   const operation = Promise.resolve().then(() => callback(controller.signal));
   operation.catch(() => {});
   const timeout = new Promise((_, reject) => {
@@ -116,11 +141,24 @@ async function runWithTimeout(callback, timeoutMs) {
       reject(timeoutError(timeoutMs));
     }, timeoutMs);
   });
+  const control = controlSignal
+    ? new Promise((_, reject) => {
+      const abort = () => {
+        const reason = controlStopError(controlSignal.reason);
+        controller.abort(reason);
+        reject(reason);
+      };
+      removeControlListener = () => controlSignal.removeEventListener("abort", abort);
+      if (controlSignal.aborted) abort();
+      else controlSignal.addEventListener("abort", abort, { once: true });
+    })
+    : null;
   try {
-    return await Promise.race([operation, timeout]);
+    return await Promise.race(control ? [operation, timeout, control] : [operation, timeout]);
   } finally {
     settled = true;
     clearTimeout(timer);
+    removeControlListener?.();
     controller.abort();
   }
 }
@@ -245,7 +283,10 @@ export function createDurableAgentWorker(options = {}) {
   const heartbeatIntervalMs = Math.max(1, number(options.heartbeatIntervalMs, Math.min(DEFAULT_HEARTBEAT_INTERVAL_MS, Math.floor(leaseTtlMs / 3))));
 
   async function runOne(id, _parentOptions = {}) {
+    const runOptions = _parentOptions && typeof _parentOptions === "object" ? _parentOptions : {};
+    const controlSignal = controlSignalFrom(runOptions);
     let task = await store.read(id);
+    if (stopRequested(runOptions)) return { status: "stopped", reason: "control-signal", task };
     if (task.lifecycle !== "queued") return { status: "not-runnable", reason: `lifecycle-${task.lifecycle}`, task };
     if (!runnablePlan(task)) {
       if (allUnitsResolved(task)) return { status: "ready_for_assembly", task };
@@ -254,7 +295,23 @@ export function createDurableAgentWorker(options = {}) {
     if (!lease.ok) return { status: "not-claimed", reason: lease.reason, task: lease.task || task };
     const guard = { leaseId: lease.leaseId, epochId: Number(lease.epoch), revision: lease.task.revision };
     task = lease.task;
+    const releaseForControl = async () => {
+      const current = await store.read(task.id).catch(() => task);
+      if (current.lifecycle !== "running" || !current.lease) return { status: "stopped", reason: "control-signal", task: current };
+      const released = await store.releaseLease(task.id, {
+        expectedRevision: current.revision,
+        leaseId: current.lease.leaseId,
+        epoch: current.lease.epoch,
+        owner,
+        now: now(),
+      });
+      return { status: "stopped", reason: "control-signal", task: released.task || current };
+    };
     let plan = runnablePlan(task);
+    if (stopRequested(runOptions)) {
+      const released = await store.releaseLease(task.id, { expectedRevision: guard.revision, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now() });
+      return { status: "stopped", reason: "control-signal", task: released.task || task };
+    }
     if (!plan) {
       if (allUnitsResolved(task)) {
         const released = await store.releaseLease(task.id, { expectedRevision: guard.revision, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now() });
@@ -281,9 +338,14 @@ export function createDurableAgentWorker(options = {}) {
     const diagnostics = { category: "model-output-invalid", attempts: [] };
     let accepted = null;
     let pendingRequest = null;
+    let controlStopped = false;
     let lastAttemptId = null;
     try {
       for (let attempt = 1; attempt <= limit; attempt += 1) {
+        if (stopRequested(runOptions)) {
+          controlStopped = true;
+          break;
+        }
         if (heartbeat.failure) return { status: "superseded", reason: heartbeat.failure, task: await store.read(task.id) };
         if (Number(now()) - Number(startedAt) >= wallClockMs) {
           diagnostics.category = "attempt-timeout";
@@ -326,7 +388,7 @@ export function createDurableAgentWorker(options = {}) {
               if (response?.kind === "user_input_request") interaction = response;
               return response;
             },
-          }), attemptTimeoutMs);
+          }), attemptTimeoutMs, controlSignal);
           if (interaction) {
             pendingRequest = interaction;
             diagnostics.category = "user-input-request";
@@ -342,6 +404,10 @@ export function createDurableAgentWorker(options = {}) {
           diagnostics.attempts.push({ attempt, category: parsed.category, message: parsed.errors?.join("; ") || parsed.request?.question || "model response is not a UnitResult", rawResponse: parsed.rawResponse });
           if (parsed.request) { pendingRequest = parsed.request; break; }
         } catch (error) {
+          if (errorCode(error) === "task_control_stopped" || stopRequested(runOptions)) {
+            controlStopped = true;
+            break;
+          }
           const code = errorCode(error);
           const category = code === "attempt_timeout" ? "attempt-timeout" : code.includes("balance") ? "insufficient_balance" : code.includes("auth") ? "authentication" : code.includes("quota") ? "quota" : "model-error";
           diagnostics.category = category;
@@ -350,7 +416,39 @@ export function createDurableAgentWorker(options = {}) {
         }
       }
 
+      if (!accepted && !controlStopped) {
+        const recoverUnit = typeof options.recoverUnit === "function"
+          ? options.recoverUnit
+          : typeof runOptions.adapter?.recoverUnit === "function" ? runOptions.adapter.recoverUnit.bind(runOptions.adapter)
+            : typeof options.adapter?.recoverUnit === "function" ? options.adapter.recoverUnit.bind(options.adapter) : null;
+        if (recoverUnit) {
+          const recoveryAttemptId = `recovery:${owner}:${task.id}:${plan.unitId}:${randomUUID()}`;
+          lastAttemptId = recoveryAttemptId;
+          try {
+            const recoveredRaw = await runWithTimeout((signal) => recoverUnit({
+              task: clone(task),
+              unitPlan: clone(plan),
+              diagnostics: clone(diagnostics),
+              attemptId: recoveryAttemptId,
+              signal,
+            }), attemptTimeoutMs, controlSignal);
+            const recovered = recoveredRaw?.ok === true && recoveredRaw.value ? recoveredRaw.value : recoveredRaw;
+            const parsed = parseModelResponse(recovered, plan, recoveryAttemptId);
+            if (parsed.ok) {
+              accepted = parsed.value;
+              diagnostics.recoveredBy = "adapter";
+            } else {
+              diagnostics.attempts.push({ attempt: "recovery", category: "fallback-invalid", message: parsed.errors?.join("; ") || "adapter recovery did not return a UnitResult", rawResponse: parsed.rawResponse });
+            }
+          } catch (error) {
+            if (errorCode(error) === "task_control_stopped" || stopRequested(runOptions)) controlStopped = true;
+            else diagnostics.attempts.push({ attempt: "recovery", category: "fallback-error", message: errorMessage(error), code: errorCode(error), rawResponse: "" });
+          }
+        }
+      }
+
       await haltHeartbeat();
+      if (controlStopped || stopRequested(runOptions)) return await releaseForControl();
       if (heartbeat.failure) return { status: "superseded", reason: heartbeat.failure, task: await store.read(task.id) };
       if (accepted) {
         const checkpoint = await store.checkpointUnit(task.id, accepted, { expectedRevision: guard.revision, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now() });
@@ -358,11 +456,11 @@ export function createDurableAgentWorker(options = {}) {
         task = checkpoint.task;
         guard.revision = task.revision;
         if (accepted.proposedStatus === "needs_review") {
-          const waiting = await store.transition(task.id, { expectedRevision: guard.revision, lifecycle: "waiting_user", leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now(), quality: "needs_review", userInputRequest: accepted.userInputRequest || null });
+          const waiting = await store.transition(task.id, { expectedRevision: guard.revision, lifecycle: "waiting_user", leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now(), quality: "needs_review", blockingReason: { code: "UNIT_NEEDS_REVIEW", message: accepted.warnings?.[0]?.message || "单元结果需要用户复核。" }, userInputRequest: accepted.userInputRequest || null });
           return waiting.applied ? { status: "waiting_user", reason: "unit-needs-review", task: waiting.task, unitResult: accepted } : { status: "superseded", reason: waiting.reason, task: waiting.task || task };
         }
         if (["failed", "blocked"].includes(accepted.proposedStatus)) {
-          const blocked = await store.transition(task.id, { expectedRevision: guard.revision, lifecycle: "blocked", leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now(), quality: "failed" });
+          const blocked = await store.transition(task.id, { expectedRevision: guard.revision, lifecycle: "blocked", leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now(), quality: "failed", blockingReason: { code: "UNIT_REPORTED_FAILURE", message: accepted.warnings?.[0]?.message || "单元报告无法完成。" } });
           return blocked.applied ? { status: "blocked", reason: "unit-reported-failure", task: blocked.task, unitResult: accepted } : { status: "superseded", reason: blocked.reason, task: blocked.task || task };
         }
         const released = await store.releaseLease(task.id, { expectedRevision: guard.revision, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now() });
@@ -385,7 +483,7 @@ export function createDurableAgentWorker(options = {}) {
         return completed.applied ? { status: "terminal", reason: "bounded-failure", task: completed.task, outcome: completed.task.outcome, unitResult: fallback } : { status: "superseded", reason: completed.reason, task: completed.task || task };
       }
       const lifecycle = disposition === "waiting_user" ? "waiting_user" : "blocked";
-      const moved = await store.transition(task.id, { expectedRevision: guard.revision, lifecycle, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now(), quality: lifecycle === "waiting_user" ? "needs_review" : "failed", userInputRequest: lifecycle === "waiting_user" ? (pendingRequest || fallback.userInputRequest || null) : null });
+      const moved = await store.transition(task.id, { expectedRevision: guard.revision, lifecycle, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now(), quality: lifecycle === "waiting_user" ? "needs_review" : "failed", blockingReason: { code: diagnostics.category, message: diagnostics.attempts.at(-1)?.message || diagnosticMessage(diagnostics.category) }, userInputRequest: lifecycle === "waiting_user" ? (pendingRequest || fallback.userInputRequest || null) : null });
       return moved.applied ? { status: lifecycle, reason: diagnostics.category, task: moved.task, unitResult: fallback } : { status: "superseded", reason: moved.reason, task: moved.task || task };
     } finally {
       await haltHeartbeat();
