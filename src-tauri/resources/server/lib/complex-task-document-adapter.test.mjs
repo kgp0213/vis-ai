@@ -81,7 +81,7 @@ test("adapter writes immutable unit artifacts and assembles in source order", as
     const second = await adapter.executeUnit({ task: draft, unitPlan: draft.unitPlans[0], attempt: 1, attemptId: "attempt-2" });
     const artifacts = [await artifactStore.read(first.artifactRefs[0]), await artifactStore.read(second.artifactRefs[0])];
     const assembled = await adapter.assemble({ task: draft, selectedArtifacts: artifacts, report: { complete: true } });
-    assert.match(assembled, /Rendered page-1[\s\S]*Rendered page-2/);
+    assert.match(assembled, /Rendered batch-1[\s\S]*Rendered batch-2/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
