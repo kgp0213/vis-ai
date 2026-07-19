@@ -331,6 +331,49 @@ test("an unknown host effect stops at user confirmation instead of retrying anot
     const saved = await store.read(task.id);
     assert.equal(saved.userInputRequest.reason, "unknown-effect");
     assert.match(saved.userInputRequest.effectId, /^effect:/);
+    assert.equal(saved.unitResults["unit-1"].proposedStatus, "blocked");
+
+    const resolved = await store.applyUserControl(task.id, {
+      action: "resolve_user_input",
+      expectedRevision: saved.revision,
+      expectedEpoch: saved.epoch,
+      payload: { requestId: saved.userInputRequest.requestId, answer: "mark-confirmed" },
+    });
+    assert.equal(resolved.applied, true);
+    const resumed = await worker.runOne(task.id);
+    assert.equal(resumed.status, "unit_completed");
+    assert.equal(sends, 1);
+    assert.equal((await store.read(task.id)).unitResults["unit-1"].proposedStatus, "completed");
+  });
+});
+
+test("a blocked unit remains runnable after the user requests a retry", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    let attempts = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      maxAttempts: 1,
+      executeUnit: async ({ unitPlan, attemptId }) => {
+        attempts += 1;
+        return attempts === 1
+          ? { ...unitResult(unitPlan, attemptId), proposedStatus: "blocked", proposedPrimaryCoverage: [], artifactRefs: [], missingSourceRanges: [...unitPlan.primaryCoverage], warnings: [{ code: "TEMPORARY", message: "retry later" }] }
+          : unitResult(unitPlan, attemptId);
+      },
+    });
+    const first = await worker.runOne(task.id);
+    assert.equal(first.status, "blocked");
+    const blocked = await store.read(task.id);
+    const resumed = await store.applyUserControl(task.id, {
+      action: "resume",
+      expectedRevision: blocked.revision,
+      expectedEpoch: blocked.epoch,
+      payload: {},
+    });
+    assert.equal(resumed.applied, true);
+    const second = await worker.runOne(task.id);
+    assert.equal(second.status, "unit_completed");
+    assert.equal(attempts, 2);
   });
 });
 
