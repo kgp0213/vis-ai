@@ -107,7 +107,7 @@ test("adapter recovers a failed model unit with an immutable extracted-source ar
     assert.deepEqual(result.proposedPrimaryCoverage, ["page-1"]);
     assert.deepEqual(result.missingSourceRanges, []);
     assert.equal(result.fallbackKind, "source");
-    assert.match(result.warnings[0].message, /extracted source text/i);
+    assert.match(result.warnings[0].message, /提取出的原文/);
     const artifact = await artifactStore.read(result.artifactRefs[0]);
     assert.equal(artifact.content.toString("utf8"), "Introduction");
     assert.equal(artifact.manifest.producer.fallbackKind, "source");

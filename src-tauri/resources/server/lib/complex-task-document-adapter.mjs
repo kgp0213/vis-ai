@@ -80,6 +80,20 @@ function sourceInventory(source, unitIds) {
   };
 }
 
+function unitBelongsToSource(unit, source, sourceId, sourceIndex, sourceCount) {
+  const unitSourceId = text(unit?.sourceId);
+  if (unitSourceId) {
+    if (unitSourceId === sourceId || unitSourceId.startsWith(`${sourceId}-`) || sourceId.startsWith(`${unitSourceId}-`)) return true;
+  }
+  const unitSourcePath = text(unit?.sourcePath);
+  const sourcePath = text(source?.sourcePath || source?.readablePath);
+  if (unitSourcePath && sourcePath && unitSourcePath.toLowerCase() === sourcePath.toLowerCase()) return true;
+  // Older single-source extractors did not annotate source ownership. Keep
+  // their unambiguous behavior while refusing to infer ownership for a
+  // multi-source collection without an explicit identity.
+  return sourceCount === 1 || (!unitSourceId && !unitSourcePath && Number(unit?.batchIndex) === sourceIndex);
+}
+
 export function buildDocumentTaskDraft({
   taskId = `task:${randomUUID()}`,
   prepared,
@@ -96,7 +110,7 @@ export function buildDocumentTaskDraft({
 } = {}) {
   const normalized = normalizeBatches(batches);
   const sources = sourceList(prepared);
-  const sourceIds = sources.map((_source, index) => `source-${String(index + 1).padStart(3, "0")}`);
+  const sourceIds = sources.map((source, index) => text(source?.sourceId, `source-${String(index + 1).padStart(3, "0")}`));
   const requiredCoverage = normalized.units.map((unit) => unit.id);
   if (requiredCoverage.length === 0) throw new Error("document task requires at least one extracted source unit");
   const documentUnits = Object.fromEntries(normalized.units.map((unit) => [unit.id, clone(unit)]));
@@ -123,7 +137,7 @@ export function buildDocumentTaskDraft({
     };
   });
   const sourceObjects = sources.map((source, index) => {
-    const sourceUnits = normalized.units.filter((unit) => unit.batchIndex === index || sources.length === 1);
+    const sourceUnits = normalized.units.filter((unit) => unitBelongsToSource(unit, source, sourceIds[index], index, sources.length));
     const uri = text(source?.sourcePath || source?.readablePath, `source-${index + 1}`);
     const fingerprint = text(source?.fingerprint || source?.sourceFingerprint || prepared?.sourceFingerprint, `sha256:${hash(uri)}`);
     return {
@@ -257,6 +271,46 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
     };
   }
 
+  async function recoverUnit({ task, unitPlan, attemptId } = {}) {
+    const allUnits = task?.metadata?.documentUnits && typeof task.metadata.documentUnits === "object" ? task.metadata.documentUnits : {};
+    const sourceUnits = unitPlan.primaryCoverage.map((id) => allUnits[id]).filter(Boolean);
+    const content = sourceUnits.map((unit) => String(unit?.text ?? "")).filter(Boolean).join("\n\n");
+    const artifactId = artifactIdFor(task, unitPlan);
+    const stored = await artifactStore.put({
+      manifest: {
+        schemaVersion: 1,
+        artifactId,
+        revision: 1,
+        mediaType: "text/markdown",
+        primaryCoverage: [...unitPlan.primaryCoverage],
+        contextRefs: [],
+        producer: {
+          adapterVersion: text(task?.contract?.pinned?.adapterVersion, DOCUMENT_ADAPTER_VERSION),
+          skillHash: text(task?.contract?.pinned?.skillHash, skillHash()),
+          modelConfigFingerprint: text(task?.metadata?.currentModelConfigFingerprint, "host:source-fallback"),
+          toolSchemaVersion: text(task?.contract?.pinned?.toolSchemaVersion, "1"),
+          fallbackKind: "source",
+        },
+      },
+      content,
+    });
+    if (stored.ok === false) throw new Error(`document source fallback artifact conflict: ${artifactId}`);
+    return {
+      unitId: unitPlan.unitId,
+      attemptId: text(attemptId, `source-fallback-${unitPlan.unitId}`),
+      proposedStatus: "skipped",
+      artifactRefs: [stored.manifest.artifactId],
+      proposedPrimaryCoverage: [...unitPlan.primaryCoverage],
+      contextRefsUsed: [],
+      missingSourceRanges: [],
+      evidenceRefs: sourceUnits.map((unit) => unit.id),
+      warnings: [{ code: "SOURCE_FALLBACK", message: "模型整理失败，已保留提取出的原文作为可交付内容；该区块需要复核。" }],
+      confidence: 0.2,
+      nextActionProposal: "review-source-fallback",
+      fallbackKind: "source",
+    };
+  }
+
   async function selectPrimaryCandidate({ candidates }) {
     return [...candidates].sort((left, right) => Number(right.manifest.revision) - Number(left.manifest.revision)
       || String(left.manifest.artifactId).localeCompare(String(right.manifest.artifactId)))[0]?.manifest?.artifactId ?? null;
@@ -280,5 +334,5 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
     return chunks.join("\n\n");
   }
 
-  return { executeUnit, selectPrimaryCandidate, assemble, version: DOCUMENT_ADAPTER_VERSION, skillHash: skillHash() };
+  return { executeUnit, recoverUnit, selectPrimaryCandidate, assemble, version: DOCUMENT_ADAPTER_VERSION, skillHash: skillHash() };
 }
