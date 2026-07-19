@@ -13,6 +13,7 @@ import {
   validateUnitPlanSet,
   validateUnitResult,
 } from "./complex-task-contracts.mjs";
+import { atomicWriteFile } from "./atomic-file.mjs";
 import { createComplexTaskStore } from "./complex-task-store.mjs";
 import { createComplexTaskSupervisor } from "./complex-task-supervisor.mjs";
 
@@ -176,6 +177,13 @@ test("UnitPlan, UnitResult, ArtifactManifest, and OutcomeEnvelope reject authori
   const escapedCoverage = validateUnitResult(validUnitResult("unit-1", ["page:99"]), { unitPlan: validUnitPlans()[0] });
   assert.equal(escapedCoverage.ok, false);
   assert.ok(escapedCoverage.errors.some((error) => /authorized primary coverage/i.test(error)));
+  const incompleteCompleted = validateUnitResult({
+    ...validUnitResult("unit-1", []),
+    artifactRefs: [],
+    missingSourceRanges: ["page:1"],
+  }, { unitPlan: validUnitPlans()[0] });
+  assert.equal(incompleteCompleted.ok, false);
+  assert.ok(incompleteCompleted.errors.some((error) => /complete primary coverage/i.test(error)));
 
   const artifact = validateArtifactManifest({
     schemaVersion: 1,
@@ -367,6 +375,29 @@ test("a damaged canonical manifest is recovered from the newest bounded snapshot
     assert.equal(restored.id, task.id);
     assert.equal(restored.revision, task.revision);
     assert.equal(restored.lifecycle, "queued");
+  });
+});
+
+test("manifest fallback is observable when canonical persistence degrades", async () => {
+  let failManifest = false;
+  const issues = [];
+  await withStore({
+    atomicWrite: async (path, content, encoding) => {
+      if (failManifest && path.endsWith("manifest.json")) {
+        failManifest = false;
+        throw new Error("manifest replacement denied");
+      }
+      return atomicWriteFile(path, content, encoding);
+    },
+    onManifestFallback: (...args) => issues.push(args),
+  }, async (store) => {
+    const task = await createTask(store);
+    failManifest = true;
+    const paused = await store.transition(task.id, { expectedRevision: task.revision, lifecycle: "paused" });
+    assert.equal(paused.applied, true);
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0][1], task.id);
+    assert.match(String(issues[0][0]?.message), /manifest replacement denied/);
   });
 });
 
