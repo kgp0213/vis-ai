@@ -81,6 +81,18 @@ async function withStore(fn, options = {}) {
   }
 }
 
+async function waitForLifecycle(store, id, lifecycle, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const task = await store.read(id);
+    if (task.lifecycle === lifecycle) return task;
+    await delay(5);
+  }
+  const task = await store.read(id);
+  assert.equal(task.lifecycle, lifecycle, `task did not reach ${lifecycle} within ${timeoutMs}ms`);
+  return task;
+}
+
 async function createTask(store, { unitCount = 2, contractOverrides = {} } = {}) {
   const id = taskId();
   return store.create({
@@ -145,6 +157,43 @@ test("durable worker processes one eligible unit, uses broker, heartbeats, and i
   }, { leaseMs: 200 });
 });
 
+test("task wall-clock budget survives unit boundaries and lease epochs", async () => {
+  await withStore(async (store) => {
+    let clock = 1_000;
+    const id = taskId();
+    const task = await store.create({
+      contract: contract(id, { executionLimits: { wallClockMs: 100, attemptLimit: 3 } }),
+      unitPlans: plans(2),
+      now: clock,
+    });
+    let modelCalls = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      now: () => clock,
+      attemptTimeoutMs: 500,
+      executeUnit: async ({ unitPlan, attemptId }) => {
+        modelCalls += 1;
+        clock += 60;
+        return unitResult(unitPlan, attemptId);
+      },
+    });
+
+    const first = await worker.runOne(task.id);
+    assert.equal(first.status, "unit_completed");
+    assert.equal(modelCalls, 1);
+    const afterFirst = await store.read(task.id);
+    assert.equal(Date.parse(afterFirst.executionStartedAt), 1_000);
+
+    clock = 1_101;
+    const second = await worker.runOne(task.id);
+
+    assert.equal(second.status, "blocked");
+    assert.equal(second.reason, "attempt-timeout");
+    assert.equal(modelCalls, 1, "an expired task budget must not restart for the next unit");
+    assert.equal(Date.parse((await store.read(task.id)).executionStartedAt), 1_000);
+  });
+});
+
 test("explicit controlSignal stops a worker without converting a host stop into a task failure", async () => {
   await withStore(async (store) => {
     const task = await createTask(store, { unitCount: 1 });
@@ -161,9 +210,9 @@ test("explicit controlSignal stops a worker without converting a host stop into 
       }),
     });
     const running = worker.runOne(task.id, { signal: parent.signal, controlSignal: control.signal });
-    await delay(15);
+    await waitForLifecycle(store, task.id, "running");
     parent.abort(new Error("chat closed"));
-    await delay(15);
+    await delay(5);
     assert.equal((await store.read(task.id)).lifecycle, "running");
     control.abort(new Error("host shutdown"));
     const result = await running;
