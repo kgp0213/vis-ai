@@ -131,6 +131,8 @@ test("projects a persisted complex-task manifest without losing outcome, coverag
       resumable: true,
     },
     outbox: [{ deliveryId: "delivery-1", pendingConsumers: ["task-center"] }],
+    epoch: 3,
+    userInputRequest: { requestId: "request-1", question: "请选择输出位置" },
     updatedAt: "2026-07-19T08:00:00.000Z",
   });
 
@@ -141,6 +143,8 @@ test("projects a persisted complex-task manifest without losing outcome, coverag
   assert.equal(projected.outcomeSummary, "文档已交付，第 2 页使用原文兜底。");
   assert.deepEqual(projected.progress, { completedUnits: 2, totalUnits: 2, degradedUnits: 1 });
   assert.equal(projected.outputPath, "D:/workspace/manual.md");
+  assert.equal(projected.epoch, 3);
+  assert.equal(projected.userAction.requestId, "request-1");
   assert.equal(projected.artifacts[0].artifactId, "artifact:final");
   assert.deepEqual(projected.allowedActions, ["retry", "ack_outcome"]);
 });
