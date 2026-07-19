@@ -30,7 +30,10 @@ function adapterRegistry(value) {
 }
 
 function adapterFor(adapters, task) {
-  return adapters.get(text(task?.contract?.taskType)) ?? null;
+  const type = text(task?.contract?.taskType || task?.taskType || task?.kind);
+  if (typeof adapters === "function") return adapters(type, task) ?? null;
+  if (adapters && typeof adapters.resolve === "function") return adapters.resolve(type, task) ?? null;
+  return adapters.get(type) ?? null;
 }
 
 function pinnedEngine(task) {
@@ -58,12 +61,12 @@ function artifactRefs(task) {
     .filter(Boolean))];
 }
 
-function failedOutcome(task, message, code = "ORCHESTRATION_FAILURE") {
+function failedOutcome(task, message, code = "ORCHESTRATION_FAILURE", { forceFailed = false } = {}) {
   const refs = artifactRefs(task);
   return {
     schemaVersion: 1,
     taskId: task.id,
-    outcome: refs.length > 0 ? "partial" : "failed",
+    outcome: forceFailed || refs.length === 0 ? "failed" : "partial",
     summary: `任务未能完成：${message}`,
     artifactRefs: refs,
     coverage: unresolvedCoverage(task),
@@ -80,7 +83,8 @@ function assemblyOutcome(task, assembled) {
   const selectedRefs = Array.isArray(assembled?.selectedArtifacts)
     ? assembled.selectedArtifacts.map((item) => item?.manifest?.artifactId).filter(Boolean)
     : [];
-  const refs = [...new Set([...artifactRefs(task), ...selectedRefs])];
+  const committedRefs = Array.isArray(assembled?.artifactRefs) ? assembled.artifactRefs.map(String).filter(Boolean) : [];
+  const refs = [...new Set([...artifactRefs(task), ...selectedRefs, ...committedRefs])];
   const complete = assembled?.ok === true;
   const coverage = {
     required: Array.isArray(report.required) ? report.required.length : unresolvedCoverage(task).required,
@@ -92,17 +96,69 @@ function assemblyOutcome(task, assembled) {
   for (const invalid of Array.isArray(report.invalid) ? report.invalid : []) {
     warnings.push({ code: text(invalid?.code) || "ASSEMBLY_INVALID", message: compactError(invalid?.message || invalid?.code) });
   }
+  for (const result of Object.values(task?.unitResults ?? {})) {
+    for (const warning of Array.isArray(result?.warnings) ? result.warnings : []) {
+      warnings.push({
+        code: text(warning?.code || warning?.type) || "UNIT_WARNING",
+        message: compactError(warning?.message || warning),
+        ...(result?.unitId ? { unitId: result.unitId } : {}),
+      });
+    }
+    if (result?.fallbackKind === "source" && !(result?.warnings ?? []).length) {
+      warnings.push({ code: "SOURCE_FALLBACK", message: "部分范围使用了提取原文保底，需要用户复核。", ...(result?.unitId ? { unitId: result.unitId } : {}) });
+    }
+  }
+  const uniqueWarnings = [...new Map(warnings.map((warning) => [`${warning.code}\0${warning.message}\0${warning.unitId || ""}`, warning])).values()];
   return {
     schemaVersion: 1,
     taskId: task.id,
-    outcome: complete ? (warnings.length ? "delivered_with_warnings" : "delivered") : (refs.length ? "partial" : "failed"),
-    summary: complete ? "任务产物已完成装配。" : "任务已收敛，但产物装配不完整。",
+    outcome: complete ? (uniqueWarnings.length ? "delivered_with_warnings" : "delivered") : (refs.length ? "partial" : "failed"),
+    summary: complete ? (uniqueWarnings.length ? "任务产物已完成装配，但部分内容需要复核。" : "任务产物已完成装配。") : "任务已收敛，但产物装配不完整。",
     artifactRefs: refs,
     coverage,
-    warnings,
+    warnings: uniqueWarnings,
     blockingReason: complete ? null : "artifact assembly incomplete",
     userAction: complete ? null : { kind: "review", label: "查看可用产物" },
     resumable: !complete,
+  };
+}
+
+function pendingAssemblySnapshot(task, assembled) {
+  const selectedRefs = Array.isArray(assembled?.selectedArtifacts)
+    ? assembled.selectedArtifacts.map((item) => item?.manifest?.artifactId).filter(Boolean)
+    : [];
+  const explicitRefs = Array.isArray(assembled?.artifactRefs) ? assembled.artifactRefs.map(String).filter(Boolean) : [];
+  return {
+    schemaVersion: 1,
+    taskId: task.id,
+    artifactRefs: [...new Set([...artifactRefs(task), ...selectedRefs, ...explicitRefs])],
+    report: assembled?.report && typeof assembled.report === "object" ? clone(assembled.report) : null,
+    outcome: assembled?.outcome && typeof assembled.outcome === "object" ? clone(assembled.outcome) : null,
+  };
+}
+
+function normalizeOutcome(task, outcome, fallback) {
+  const source = outcome && typeof outcome === "object" ? clone(outcome) : {};
+  const coverage = source.coverage && typeof source.coverage === "object"
+    ? source.coverage
+    : unresolvedCoverage(task);
+  const refs = Array.isArray(source.artifactRefs)
+    ? source.artifactRefs.map(String).filter(Boolean)
+    : artifactRefs(task);
+  const kind = ["delivered", "delivered_with_warnings", "partial", "failed", "cancelled", "abandoned"].includes(text(source.outcome))
+    ? text(source.outcome)
+    : fallback?.outcome || "failed";
+  return {
+    schemaVersion: 1,
+    taskId: task.id,
+    outcome: kind,
+    summary: text(source.summary) || fallback?.summary || "任务未能完成。",
+    artifactRefs: [...new Set(refs)],
+    coverage,
+    warnings: Array.isArray(source.warnings) ? source.warnings : (fallback?.warnings || []),
+    blockingReason: source.blockingReason ?? fallback?.blockingReason ?? null,
+    userAction: source.userAction ?? fallback?.userAction ?? null,
+    resumable: source.resumable === true,
   };
 }
 
@@ -262,6 +318,7 @@ export function createComplexTaskOrchestrator(options = {}) {
       signal,
     });
     let outcome;
+    let waiting = null;
     let failed = false;
     try {
       const assembled = await assembler({
@@ -271,7 +328,12 @@ export function createComplexTaskOrchestrator(options = {}) {
         lease: { leaseId: guard.leaseId, epoch: guard.epoch },
         signal,
       });
-      outcome = assemblyOutcome(current, assembled);
+      if (assembled?.waitingUser === true || assembled?.status === "waiting_user") waiting = {
+        userInputRequest: clone(assembled.userInputRequest ?? null),
+        blockingReason: clone(assembled.blockingReason ?? { code: "ASSEMBLY_WAITING_USER", message: "任务装配需要用户选择后才能继续。" }),
+        pendingAssembly: pendingAssemblySnapshot(current, assembled),
+      };
+      else outcome = assemblyOutcome(current, assembled);
     } catch (error) {
       failed = true;
       outcome = failedOutcome(current, compactError(error), "ASSEMBLY_ERROR");
@@ -279,6 +341,23 @@ export function createComplexTaskOrchestrator(options = {}) {
       await heartbeat.stop();
     }
     if (heartbeat.failure) return { status: "superseded", reason: heartbeat.failure, task: await latestTask(current) };
+    if (waiting) {
+      const moved = await store.transition(current.id, {
+        expectedRevision: guard.revision,
+        lifecycle: "waiting_user",
+        leaseId: guard.leaseId,
+        epoch: guard.epoch,
+        owner,
+        quality: "needs_review",
+        userInputRequest: waiting.userInputRequest,
+        blockingReason: waiting.blockingReason,
+        pendingAssembly: waiting.pendingAssembly,
+        now: Date.now(),
+      });
+      return moved?.applied
+        ? { status: "waiting_user", reason: "assembly-waiting-user", task: moved.task, pendingAssembly: waiting.pendingAssembly }
+        : { status: "superseded", reason: moved?.reason || "assembly-waiting-transition-rejected", task: moved?.task || current };
+    }
     const completed = await store.complete(current.id, outcome, {
       expectedRevision: guard.revision,
       leaseId: guard.leaseId,
@@ -348,6 +427,9 @@ export function createComplexTaskOrchestrator(options = {}) {
       report.results.push(entry.result);
       if (entry.issue) report.issues.push(entry.issue);
       if (entry.result?.status === "unit_completed") report.rescheduleRequested = true;
+      try { await options.onChange?.(entry.result?.task ?? null, entry.result); } catch (error) {
+        report.issues.push({ taskId: entry.result?.task?.id ?? null, operation: "onChange", message: compactError(error) });
+      }
     }
     if (report.rescheduleRequested) scheduleWake();
     return report;
