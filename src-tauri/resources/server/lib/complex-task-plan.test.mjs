@@ -50,6 +50,8 @@ test("validates a structured work graph and produces a deterministic revision", 
   assert.equal(first.revisionId, second.revisionId);
   assert.deepEqual(first.topologicalOrder, ["prepare", "write"]);
   assert.equal(first.nodes[0].acceptanceCriteria.length, 1);
+  const runtimeOnlyChange = assertWorkPlan(plan({ nodes: [node("prepare", { status: "completed" }), node("write", { dependencies: ["prepare"] })] }));
+  assert.equal(runtimeOnlyChange.revisionId, first.revisionId);
 });
 
 test("rejects missing goal, acceptance, permissions, capabilities, and bounded termination", () => {
@@ -75,7 +77,7 @@ test("rejects missing goal, acceptance, permissions, capabilities, and bounded t
 test("rejects unknown dependencies, duplicate coverage owners, and dependency cycles", () => {
   const result = validateWorkPlan(plan({
     nodes: [
-      node("a", { dependencies: ["missing", "b"] }),
+      node("a", { dependencies: ["missing", "b"], primaryCoverage: ["prepare"] }),
       node("b", { dependencies: ["a"], primaryCoverage: ["prepare"] }),
     ],
   }));
@@ -132,18 +134,36 @@ test("bounded replan replaces unfinished nodes, preserves completed nodes and re
   assert.equal(result.value.replanCount, 1);
 });
 
-test("rejects replan that removes completed nodes, drops required coverage, creates a cycle, or exceeds bound", () => {
+test("rejects replan that replaces completed nodes, drops coverage, creates a cycle, or exceeds bound", () => {
   const current = assertWorkPlan(plan({
     nodes: [node("prepare", { status: "completed" }), node("write", { dependencies: ["prepare"] })],
-    replanCount: 2,
   }));
-  const missingCompleted = replanWorkPlan(current, { nodes: [node("write")] });
-  assert.equal(missingCompleted.ok, false);
-  assert.match(missingCompleted.errors.join("\n"), /completed|preserve/i);
+  const completedReplacement = replanWorkPlan(current, {
+    replaceNodeIds: ["prepare"],
+    nodes: [node("prepare", { goal: "试图改写已完成节点" })],
+  });
+  assert.equal(completedReplacement.ok, false);
+  assert.match(completedReplacement.errors.join("\n"), /completed|preserve/i);
 
-  const overLimit = replanWorkPlan(current, { nodes: [node("write", { primaryCoverage: ["write"] })] });
+  const atLimit = assertWorkPlan(plan({ replanCount: 2 }));
+  const overLimit = replanWorkPlan(atLimit, { nodes: [node("write", { primaryCoverage: ["write"] })] });
   assert.equal(overLimit.ok, false);
   assert.match(overLimit.errors.join("\n"), /replan.*limit|bound/i);
+
+  const allowed = assertWorkPlan(plan());
+  const dropped = replanWorkPlan(allowed, {
+    replaceNodeIds: ["write"],
+    nodes: [node("draft", { primaryCoverage: ["draft"] })],
+  });
+  assert.equal(dropped.ok, false);
+  assert.match(dropped.errors.join("\n"), /required coverage.*write|unplanned.*write/i);
+
+  const cyclic = replanWorkPlan(allowed, {
+    replaceNodeIds: ["prepare", "write"],
+    nodes: [node("prepare", { dependencies: ["write"] }), node("write", { dependencies: ["prepare"] })],
+  });
+  assert.equal(cyclic.ok, false);
+  assert.match(cyclic.errors.join("\n"), /cycle/i);
 });
 
 test("accepts unitPlans as an input alias and keeps stable IDs through a no-op replan", () => {
@@ -154,4 +174,13 @@ test("accepts unitPlans as an input alias and keeps stable IDs through a no-op r
   const result = replanWorkPlan(created, { nodes: [node("write", { dependencies: ["prepare"] })] });
   assert.equal(result.ok, true);
   assert.equal(result.value.nodes.find((item) => item.nodeId === "prepare").status, "pending");
+});
+
+test("accepts structured acceptance checks while keeping the host-owned fields explicit", () => {
+  const checked = assertWorkPlan(plan({
+    nodes: [node("prepare", {
+      acceptanceCriteria: [{ id: "artifact", description: "artifact hash is present" }],
+    }), node("write", { dependencies: ["prepare"] })],
+  }));
+  assert.deepEqual(checked.nodes[0].acceptanceCriteria, [{ id: "artifact", description: "artifact hash is present" }]);
 });
