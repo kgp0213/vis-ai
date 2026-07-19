@@ -87,3 +87,53 @@ test("adapter writes immutable unit artifacts and assembles in source order", as
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("adapter recovers a failed model unit with an immutable extracted-source artifact", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-document-adapter-fallback-"));
+  try {
+    const artifactStore = createComplexTaskArtifactStore(join(root, "artifacts"));
+    const adapter = createComplexDocumentAdapter({
+      artifactStore,
+      generateUnit: async () => { throw new Error("model unavailable"); },
+    });
+    const draft = buildDocumentTaskDraft({ taskId: TASK_ID, prepared: prepared(), batches: batches(), outputPath: "D:/docs/manual.md", workspace: "D:/docs" });
+    const result = await adapter.recoverUnit({
+      task: draft,
+      unitPlan: draft.unitPlans[0],
+      attemptId: "source-fallback-1",
+      diagnostics: { category: "model-error" },
+    });
+    assert.equal(result.proposedStatus, "skipped");
+    assert.deepEqual(result.proposedPrimaryCoverage, ["page-1"]);
+    assert.deepEqual(result.missingSourceRanges, []);
+    assert.equal(result.fallbackKind, "source");
+    assert.match(result.warnings[0].message, /extracted source text/i);
+    const artifact = await artifactStore.read(result.artifactRefs[0]);
+    assert.equal(artifact.content.toString("utf8"), "Introduction");
+    assert.equal(artifact.manifest.producer.fallbackKind, "source");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("multi-source inventory associates units by sourceId rather than global batch position", () => {
+  const multiPrepared = {
+    sources: [
+      { sourcePath: "D:/docs/a.md", documentKind: "markdown", fingerprint: "sha256:a" },
+      { sourcePath: "D:/docs/b.md", documentKind: "markdown", fingerprint: "sha256:b" },
+    ],
+  };
+  const draft = buildDocumentTaskDraft({
+    taskId: TASK_ID,
+    prepared: multiPrepared,
+    outputPath: "D:/docs/report.md",
+    workspace: "D:/docs",
+    batches: [
+      { id: "a-1", units: [{ id: "a-unit", sourceId: "source-001", text: "A" }] },
+      { id: "a-2", units: [{ id: "a-unit-2", sourceId: "source-001", text: "A2" }] },
+      { id: "b-1", units: [{ id: "b-unit", sourceId: "source-002", text: "B" }] },
+    ],
+  });
+  assert.deepEqual(draft.contract.sources[0].extractionInventory.expectedUnitIds, ["a-unit", "a-unit-2"]);
+  assert.deepEqual(draft.contract.sources[1].extractionInventory.expectedUnitIds, ["b-unit"]);
+});
