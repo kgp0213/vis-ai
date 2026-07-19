@@ -12,6 +12,12 @@ import {
   isTerminalLifecycle,
   TASK_LIFECYCLE_STATES,
 } from "./complex-task-contracts.mjs";
+import {
+  assertWorkPlan,
+  createWorkPlan,
+  replanWorkPlan,
+  workPlanUnitPlans,
+} from "./complex-task-plan.mjs";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_RETENTION_MS = 30 * DAY_MS;
@@ -93,6 +99,66 @@ function project(task) {
 
 function hasOwn(value, key) {
   return Object.prototype.hasOwnProperty.call(value ?? {}, key);
+}
+
+function sameStringSet(left, right) {
+  const leftSet = new Set(Array.isArray(left) ? left : []);
+  const rightSet = new Set(Array.isArray(right) ? right : []);
+  return leftSet.size === rightSet.size && [...leftSet].every((value) => rightSet.has(value));
+}
+
+function taskWorkPlan(contract, id, suppliedPlan, legacyUnitPlans = []) {
+  const plan = suppliedPlan
+    ? assertWorkPlan(suppliedPlan, { permissionBoundary: contract.permissions })
+    : createWorkPlan({
+      planId: `plan:${id.slice("task:".length)}`,
+      goal: contract.goal,
+      requiredCoverage: contract.completion.requiredCoverage,
+      permissions: contract.permissions,
+      unitPlans: legacyUnitPlans,
+    }, { permissionBoundary: contract.permissions });
+  if (!sameStringSet(plan.requiredCoverage, contract.completion.requiredCoverage)) {
+    const error = new TypeError("invalid work plan: required coverage must match the TaskContract");
+    error.code = "INVALID_WORK_PLAN";
+    error.errors = ["required coverage must match the TaskContract"];
+    throw error;
+  }
+  return plan;
+}
+
+function ledgerStateForResult(result) {
+  return result?.proposedStatus === "completed" ? "completed"
+    : result?.proposedStatus === "skipped" ? "source_fallback"
+      : result?.proposedStatus === "needs_review" ? "degraded"
+        : result?.proposedStatus === "blocked" ? "blocked"
+          : "unresolved";
+}
+
+function coverageLedgerFor(contract, unitPlans, unitResults = {}) {
+  return Object.fromEntries(contract.completion.requiredCoverage.map((coverage) => {
+    const plan = unitPlans.find((candidate) => candidate.primaryCoverage.includes(coverage));
+    const result = plan ? unitResults[plan.unitId] : null;
+    const covered = Array.isArray(result?.proposedPrimaryCoverage) && result.proposedPrimaryCoverage.includes(coverage);
+    return [coverage, {
+      state: covered ? ledgerStateForResult(result) : "pending",
+      primaryUnitId: plan?.unitId ?? null,
+      artifactRefs: covered && Array.isArray(result?.artifactRefs) ? [...result.artifactRefs] : [],
+    }];
+  }));
+}
+
+function checkpointWorkPlan(plan, result) {
+  if (!plan) return null;
+  const status = result.proposedStatus === "needs_review" ? "waiting_user" : result.proposedStatus;
+  const completedNodeIds = new Set(Array.isArray(plan.completedNodeIds) ? plan.completedNodeIds : []);
+  if (["completed", "skipped"].includes(status)) completedNodeIds.add(result.unitId);
+  else completedNodeIds.delete(result.unitId);
+  return assertWorkPlan({
+    ...clone(plan),
+    nodes: plan.nodes.map((node) => node.nodeId === result.unitId ? { ...node, status } : node),
+    nodeResults: { ...(plan.nodeResults ?? {}), [result.unitId]: clone(result) },
+    completedNodeIds: [...completedNodeIds],
+  });
 }
 
 function attentionPayload(task, lifecycle, input = {}) {
@@ -278,14 +344,14 @@ export function createComplexTaskStore(rootDir, options = {}) {
     const draft = input.contract ?? input;
     const id = taskId(input.id ?? draft.taskId ?? `task:${randomUUID()}`);
     const contract = assertTaskContract({ ...clone(draft), taskId: id });
-    const unitPlans = assertUnitPlanSet(input.unitPlans ?? [], { requiredCoverage: contract.completion.requiredCoverage });
+    const legacyUnitPlans = Array.isArray(input.unitPlans) && input.unitPlans.length > 0
+      ? assertUnitPlanSet(input.unitPlans, { requiredCoverage: contract.completion.requiredCoverage })
+      : [];
+    const workPlan = taskWorkPlan(contract, id, input.workPlan, legacyUnitPlans);
+    const unitPlans = assertUnitPlanSet(workPlanUnitPlans(workPlan), { requiredCoverage: contract.completion.requiredCoverage });
     if (existsSync(manifestFor(id))) throw new Error(`complex task already exists: ${id}`);
     const now = numberOr(input.now, Date.now());
-    const coverageLedger = Object.fromEntries(contract.completion.requiredCoverage.map((coverage) => [coverage, {
-      state: "pending",
-      primaryUnitId: unitPlans.find((plan) => plan.primaryCoverage.includes(coverage))?.unitId ?? null,
-      artifactRefs: [],
-    }]));
+    const coverageLedger = coverageLedgerFor(contract, unitPlans);
     const task = {
       schemaVersion: 1,
       id,
@@ -296,6 +362,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       revision: 0,
       contract,
       contractRevision: 1,
+      workPlan,
       unitPlans,
       unitResults: {},
       coverageLedger,
@@ -429,11 +496,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       if (!plan) return applied(false, "invalid-unit-result", current);
       let resultValue;
       try { resultValue = assertUnitResult(inputResult, { unitPlan: plan }); } catch { return applied(false, "invalid-unit-result", current); }
-      const ledgerState = resultValue.proposedStatus === "completed" ? "completed"
-        : resultValue.proposedStatus === "skipped" ? "source_fallback"
-          : resultValue.proposedStatus === "needs_review" ? "degraded"
-            : resultValue.proposedStatus === "blocked" ? "blocked"
-              : "unresolved";
+      const ledgerState = ledgerStateForResult(resultValue);
       const coverageLedger = { ...current.coverageLedger };
       for (const coverage of resultValue.proposedPrimaryCoverage) {
         coverageLedger[coverage] = {
@@ -444,8 +507,45 @@ export function createComplexTaskStore(rootDir, options = {}) {
         };
       }
       const resolutionConsumed = current.userInputResolution?.unitId === resultValue.unitId;
-      const saved = await writeManifest({ ...current, unitResults: { ...current.unitResults, [resultValue.unitId]: { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId } }, coverageLedger, ...(resolutionConsumed ? { userInputResolution: null } : {}), revision: current.revision + 1, updatedAt: iso(now) });
+      const checkpointedResult = { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId };
+      const workPlan = current.workPlan ? checkpointWorkPlan(current.workPlan, checkpointedResult) : null;
+      const saved = await writeManifest({ ...current, ...(workPlan ? { workPlan } : {}), unitResults: { ...current.unitResults, [resultValue.unitId]: checkpointedResult }, coverageLedger, ...(resolutionConsumed ? { userInputResolution: null } : {}), revision: current.revision + 1, updatedAt: iso(now) });
       await appendEvent(key, "unit-checkpoint", { unitId: resultValue.unitId, coverage: resultValue.proposedPrimaryCoverage, revision: saved.revision });
+      return applied(true, null, saved);
+    });
+  }
+
+  async function replan(id, request = {}, guard = {}) {
+    const key = taskId(id);
+    return serialize(mutationChains, key, async () => {
+      const current = await read(key);
+      if (!Number.isInteger(guard.expectedRevision) || current.revision !== guard.expectedRevision) return applied(false, "revision-mismatch", current);
+      if (guard.expectedEpoch !== undefined && Number(current.epoch) !== Number(guard.expectedEpoch)) return applied(false, "epoch-mismatch", current);
+      if (!["queued", "paused", "waiting_user", "blocked"].includes(current.lifecycle) || current.lease) return applied(false, "replan-requires-idle-task", current);
+      const currentPlan = current.workPlan ?? taskWorkPlan(current.contract, current.id, null, current.unitPlans);
+      const result = replanWorkPlan(currentPlan, request, { permissionBoundary: current.contract.permissions });
+      if (!result.ok) return { ...applied(false, "invalid-replan", current), errors: result.errors };
+      const workPlan = result.value;
+      const unitPlans = assertUnitPlanSet(workPlanUnitPlans(workPlan), { requiredCoverage: current.contract.completion.requiredCoverage });
+      const unitIds = new Set(unitPlans.map((plan) => plan.unitId));
+      const unitResults = Object.fromEntries(Object.entries(current.unitResults ?? {}).filter(([unitId]) => unitIds.has(unitId) && workPlan.nodeResults?.[unitId]));
+      const now = numberOr(guard.now, Date.now());
+      const saved = await writeManifest({
+        ...current,
+        lifecycle: "queued",
+        status: "queued",
+        lease: null,
+        needsAttention: false,
+        blockingReason: null,
+        userInputRequest: null,
+        workPlan,
+        unitPlans,
+        unitResults,
+        coverageLedger: coverageLedgerFor(current.contract, unitPlans, unitResults),
+        revision: current.revision + 1,
+        updatedAt: iso(now),
+      });
+      await appendEvent(key, "work-plan-replanned", { planRevision: workPlan.planRevision, planRevisionId: workPlan.revisionId, revision: saved.revision });
       return applied(true, null, saved);
     });
   }
@@ -678,5 +778,5 @@ export function createComplexTaskStore(rootDir, options = {}) {
     return { deleted, kept };
   }
 
-  return { root, retentionMs, acquireLease, ackOutbox, appendEvent, applyUserControl, checkpointUnit, complete, create, heartbeat, list, listPendingOutbox, pruneExpired, read, readEvents, readOutbox, recoverExpiredLease, releaseLease, remove, removeIfUnreferenced, transition };
+  return { root, retentionMs, acquireLease, ackOutbox, appendEvent, applyUserControl, checkpointUnit, complete, create, heartbeat, list, listPendingOutbox, pruneExpired, read, readEvents, readOutbox, recoverExpiredLease, releaseLease, remove, removeIfUnreferenced, replan, transition };
 }

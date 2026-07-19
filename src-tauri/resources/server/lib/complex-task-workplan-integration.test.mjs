@@ -123,6 +123,7 @@ test("Worker executes the persisted WorkPlan graph and checkpoints node progress
     const afterFirst = await store.read(created.id);
     assert.equal(afterFirst.workPlan.nodeResults["analyze-part-1"].proposedStatus, "completed");
     assert.equal(afterFirst.workPlan.nodes.find((node) => node.nodeId === "analyze-part-1").status, "completed");
+    assert.equal(afterFirst.workPlan.revisionId, created.workPlan.revisionId);
 
     const second = await worker.runOne(created.id);
     assert.equal(second.status, "unit_completed");
@@ -153,6 +154,8 @@ test("bounded Store replan preserves completed nodes and replaces only unfinishe
 
     assert.equal(replanned.applied, true);
     assert.equal(replanned.task.workPlan.planRevision, 2);
+    assert.equal(replanned.task.workPlan.parentRevision, checkpointed.workPlan.revisionId);
+    assert.notEqual(replanned.task.workPlan.revisionId, checkpointed.workPlan.revisionId);
     assert.deepEqual(replanned.task.unitPlans.map((unit) => unit.unitId), ["analyze-part-1", "analyze-part-2-v2"]);
     assert.equal(replanned.task.unitResults["analyze-part-1"].proposedStatus, "completed");
     assert.equal(replanned.task.unitResults["analyze-part-2"], undefined);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { validateUnitResult } from "./complex-task-contracts.mjs";
+import { workPlanUnitPlans } from "./complex-task-plan.mjs";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 120_000;
@@ -88,19 +89,25 @@ function parseModelResponse(raw, unitPlan, attemptId) {
   return { ok: true, value: validation.value, rawResponse: safeRaw(raw) };
 }
 
+function taskUnitPlans(task) {
+  if (task?.workPlan) return workPlanUnitPlans(task.workPlan);
+  return Array.isArray(task?.unitPlans) ? task.unitPlans : [];
+}
+
 function runnablePlan(task) {
   const results = task?.unitResults && typeof task.unitResults === "object" ? task.unitResults : {};
-  return (Array.isArray(task?.unitPlans) ? task.unitPlans : []).find((plan) => {
+  const plans = taskUnitPlans(task);
+  return plans.find((plan) => {
     if (unitIsResolved(plan, results[plan.unitId])) return false;
     return (Array.isArray(plan.dependencies) ? plan.dependencies : []).every((dependency) => unitIsResolved(
-      (Array.isArray(task?.unitPlans) ? task.unitPlans : []).find((candidate) => candidate.unitId === dependency),
+      plans.find((candidate) => candidate.unitId === dependency),
       results[dependency],
     ));
   }) || null;
 }
 
 function allUnitsResolved(task) {
-  const plans = Array.isArray(task?.unitPlans) ? task.unitPlans : [];
+  const plans = taskUnitPlans(task);
   const results = task?.unitResults && typeof task.unitResults === "object" ? task.unitResults : {};
   return plans.length > 0 && plans.every((plan) => unitIsResolved(plan, results[plan.unitId]));
 }

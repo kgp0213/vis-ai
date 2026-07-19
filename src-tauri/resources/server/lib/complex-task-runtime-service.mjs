@@ -46,6 +46,7 @@ function withTaskDetail(raw, controller) {
     lease: clone(raw?.lease ?? null),
     userInputRequest: clone(raw?.userInputRequest ?? null),
     coverageLedger: clone(raw?.coverageLedger ?? {}),
+    workPlan: clone(raw?.workPlan ?? null),
     unitPlans: clone(raw?.unitPlans ?? []),
     unitResults: clone(raw?.unitResults ?? {}),
     contract: clone(raw?.contract ?? null),

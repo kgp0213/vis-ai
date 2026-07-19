@@ -454,6 +454,31 @@ export function getRunnableWorkNodes(input) {
   }).map(clone);
 }
 
+/**
+ * Project the authoritative graph into the v1 UnitPlan shape consumed by
+ * adapters and workers. This keeps existing adapters compatible while the
+ * WorkPlan remains the source of node identity, order, and dependencies.
+ */
+export function workPlanUnitPlans(input) {
+  const plan = assertWorkPlan(input);
+  const byId = new Map(plan.nodes.map((node) => [node.nodeId, node]));
+  return plan.topologicalOrder.map((nodeId) => {
+    const node = byId.get(nodeId);
+    const { nodeId: _nodeId, status: _status, ...fields } = clone(node);
+    return {
+      ...fields,
+      unitId: nodeId,
+      primaryCoverage: [...node.primaryCoverage],
+      dependencies: [...node.dependencies],
+      contextRefs: Array.isArray(node.contextRefs) ? clone(node.contextRefs) : [],
+      requiredCapabilities: [...node.requiredCapabilities],
+      outputRole: text(node.outputRole) || "artifact",
+      fallbackPolicy: text(node.fallbackPolicy) || "host-recovery",
+      planRevision: plan.planRevision,
+    };
+  });
+}
+
 export function computePlanFingerprint(plan) {
   return hash(fingerprintInput(plan));
 }
