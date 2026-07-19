@@ -405,8 +405,11 @@ export function createComplexTaskOrchestrator(options = {}) {
   async function performRun(input = {}) {
     const report = { initialized: false, started: [], results: [], issues: [], rescheduleRequested: false };
     if (stopped) return { ...report, stopped: true };
+    // Reconcile on every poll so a lease that expires after startup is
+    // recovered without requiring a process restart. The supervisor is
+    // idempotent and fences active leases by revision/epoch.
+    report.reconcile = await supervisor.reconcile({ now: input.now ?? Date.now() });
     if (!initialized) {
-      report.reconcile = await supervisor.reconcile({ now: input.now ?? Date.now() });
       initialized = true;
       report.initialized = true;
     }
