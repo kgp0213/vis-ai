@@ -71,7 +71,7 @@ test("adapter writes immutable unit artifacts and assembles in source order", as
     const artifactStore = createComplexTaskArtifactStore(join(root, "artifacts"));
     const adapter = createComplexDocumentAdapter({
       artifactStore,
-      generateUnit: async ({ unitPlan }) => ({ markdown: `Rendered ${unitPlan.unitId}`, confidence: 0.9 }),
+      generateUnit: async ({ unitPlan }) => ({ markdown: `Rendered ${unitPlan.unitId}`, confidence: 0.9, modelConfigFingerprint: "model-config-1" }),
     });
     const draft = buildDocumentTaskDraft({ taskId: TASK_ID, prepared: prepared(), batches: batches(), outputPath: "D:/docs/manual.md", workspace: "D:/docs" });
     const first = await adapter.executeUnit({ task: draft, unitPlan: draft.unitPlans[1], attempt: 1, attemptId: "attempt-1" });
@@ -80,6 +80,7 @@ test("adapter writes immutable unit artifacts and assembles in source order", as
     assert.equal(first.artifactRefs.length, 1);
     const second = await adapter.executeUnit({ task: draft, unitPlan: draft.unitPlans[0], attempt: 1, attemptId: "attempt-2" });
     const artifacts = [await artifactStore.read(first.artifactRefs[0]), await artifactStore.read(second.artifactRefs[0])];
+    assert.equal(artifacts[0].manifest.producer.modelConfigFingerprint, "model-config-1");
     const assembled = await adapter.assemble({ task: draft, selectedArtifacts: artifacts, report: { complete: true } });
     assert.match(assembled, /Rendered batch-1[\s\S]*Rendered batch-2/);
   } finally {
