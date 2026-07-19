@@ -62,9 +62,11 @@ test("runtime service aggregates canonical generic jobs and exposes attention de
 test("runtime service converts UI shorthand into fenced controller requests", async () => {
   const task = genericTask({ lifecycle: "waiting_user", status: "waiting_user", userInputRequest: { requestId: "request-1", question: "选择" } });
   const calls = [];
+  let wakeCount = 0;
   const service = createComplexTaskRuntimeService({
     store: { read: async () => structuredClone(task), list: async () => [task], listPendingOutbox: async () => [] },
     controller: { control: async (id, request) => { calls.push([id, request]); return { ok: true, applied: true, task: { ...task, lifecycle: "queued", revision: 8 } }; } },
+    wake: () => { wakeCount += 1; },
   });
 
   const result = await service.controlBackgroundJob(TASK_ID, "resolve_user_input", {
@@ -80,6 +82,7 @@ test("runtime service converts UI shorthand into fenced controller requests", as
     requestId: "ui-request-1",
     payload: { value: "continue", requestId: "request-1" },
   }]);
+  assert.equal(wakeCount, 1);
 });
 
 test("runtime service reports generic not-found without touching legacy controls", async () => {

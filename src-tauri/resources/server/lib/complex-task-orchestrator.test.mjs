@@ -211,6 +211,30 @@ test("runs one unit then requests another wake without recursively claiming the 
   assert.equal(runs, 1);
 });
 
+test("started orchestrator keeps polling after an attention result so a later user resume is claimed", async () => {
+  const runtime = createFakeRuntime([task(TASK_A)]);
+  let runs = 0;
+  const orchestrator = createComplexTaskOrchestrator({
+    store: runtime.store,
+    worker: {
+      async runOne(id) {
+        runs += 1;
+        return runs < 3
+          ? { status: "waiting_user", task: await runtime.store.read(id) }
+          : { status: "unit_completed", task: await runtime.store.read(id) };
+      },
+    },
+    supervisor: runtime.supervisor,
+    adapters: { "document.test": {} },
+    assembler: async () => successfulAssembly(task(TASK_A)),
+    pollIntervalMs: 5,
+  });
+  await orchestrator.start();
+  await delay(25);
+  await orchestrator.stop();
+  assert.ok(runs >= 3, `expected polling to continue after attention, got ${runs}`);
+});
+
 test("ready_for_assembly acquires a fresh lease, fences assembly, and commits a terminal outcome", async () => {
   const runtime = createFakeRuntime([task(TASK_A)]);
   const adapter = { name: "doc-adapter" };
