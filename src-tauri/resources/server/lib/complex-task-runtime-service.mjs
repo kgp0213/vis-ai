@@ -125,6 +125,13 @@ export function createComplexTaskRuntimeService(options = {}) {
     };
     const result = await controller.control(id, request);
     if (result?.task) result.job = withTaskDetail(result.task, controller);
+    if (result?.applied === true && result?.task?.lifecycle === "queued" && typeof options.wake === "function") {
+      try {
+        Promise.resolve(options.wake(result.task, { action: normalizedAction })).catch((error) => options.onWakeError?.(error, result.task));
+      } catch (error) {
+        try { options.onWakeError?.(error, result.task); } catch { /* Control result remains authoritative. */ }
+      }
+    }
     try { await options.onChange?.(result?.task ?? task, { action: normalizedAction, result }); } catch { /* UI invalidation must not change task outcome. */ }
     return result;
   }

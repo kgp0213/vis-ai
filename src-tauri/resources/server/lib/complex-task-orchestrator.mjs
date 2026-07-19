@@ -232,6 +232,7 @@ export function createComplexTaskOrchestrator(options = {}) {
   let initialized = false;
   let running = false;
   let stopped = false;
+  let polling = false;
   let currentRun = null;
   let wakeTimer = null;
 
@@ -390,10 +391,13 @@ export function createComplexTaskOrchestrator(options = {}) {
   }
 
   function scheduleWake() {
-    if (stopped || wakeTimer) return;
+    if (stopped || !polling || wakeTimer) return;
     wakeTimer = setTimeout(() => {
       wakeTimer = null;
-      if (!stopped) void runOnce().catch(() => {});
+      if (stopped || !polling) return;
+      void runOnce().catch(async (error) => {
+        try { await options.onError?.(error, { operation: "poll" }); } catch { /* Error reporting cannot stop polling. */ }
+      }).finally(() => scheduleWake());
     }, pollIntervalMs);
     wakeTimer.unref?.();
   }
@@ -447,13 +451,24 @@ export function createComplexTaskOrchestrator(options = {}) {
 
   async function start() {
     stopped = false;
+    polling = true;
     const report = await runOnce();
     if (!stopped) scheduleWake();
     return report;
   }
 
+  async function wake() {
+    if (stopped) return { stopped: true, started: [], results: [], issues: [] };
+    if (wakeTimer) clearTimeout(wakeTimer);
+    wakeTimer = null;
+    const report = await runOnce();
+    if (polling && !stopped) scheduleWake();
+    return report;
+  }
+
   async function stop() {
     stopped = true;
+    polling = false;
     if (wakeTimer) clearTimeout(wakeTimer);
     wakeTimer = null;
     for (const controller of active.values()) controller.abort(new Error("complex task orchestrator stopped"));
@@ -466,6 +481,7 @@ export function createComplexTaskOrchestrator(options = {}) {
     get running() { return running; },
     runOnce,
     start,
+    wake,
     stop,
   };
 }

@@ -6,6 +6,7 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 120_000;
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 20_000;
+const CONTROL_DRAIN_GRACE_MS = 1_000;
 const RAW_RESPONSE_LIMIT = 16_000;
 const SUCCESS_UNIT_STATES = new Set(["completed", "skipped", "needs_review"]);
 
@@ -85,7 +86,7 @@ function parseModelResponse(raw, unitPlan, attemptId) {
 function runnablePlan(task) {
   const results = task?.unitResults && typeof task.unitResults === "object" ? task.unitResults : {};
   return (Array.isArray(task?.unitPlans) ? task.unitPlans : []).find((plan) => {
-    if (results[plan.unitId]) return false;
+    if (SUCCESS_UNIT_STATES.has(results[plan.unitId]?.proposedStatus)) return false;
     return (Array.isArray(plan.dependencies) ? plan.dependencies : []).every((dependency) => SUCCESS_UNIT_STATES.has(results[dependency]?.proposedStatus));
   }) || null;
 }
@@ -126,12 +127,22 @@ function stopRequested(input = {}) {
   return Boolean(signal?.aborted);
 }
 
+function effectResolutionFor(task, unitPlan) {
+  const resolution = task?.userInputResolution;
+  if (!resolution || resolution.reason !== "unknown-effect" || !text(resolution.effectId)) return null;
+  if (text(resolution.unitId) && resolution.unitId !== unitPlan.unitId) return null;
+  const answer = resolution.answer;
+  const action = text(typeof answer === "string" ? answer : answer?.choiceId ?? answer?.action ?? answer?.id).toLowerCase();
+  return action ? { effectId: resolution.effectId, action } : null;
+}
+
 async function runWithTimeout(callback, timeoutMs, controlSignal = null) {
   if (controlSignal?.aborted) throw controlStopError(controlSignal.reason);
   const controller = new AbortController();
   let timer;
   let settled = false;
   let removeControlListener = null;
+  let stoppedByControl = false;
   const operation = Promise.resolve().then(() => callback(controller.signal));
   operation.catch(() => {});
   const timeout = new Promise((_, reject) => {
@@ -144,6 +155,7 @@ async function runWithTimeout(callback, timeoutMs, controlSignal = null) {
   const control = controlSignal
     ? new Promise((_, reject) => {
       const abort = () => {
+        stoppedByControl = true;
         const reason = controlStopError(controlSignal.reason);
         controller.abort(reason);
         reject(reason);
@@ -160,6 +172,15 @@ async function runWithTimeout(callback, timeoutMs, controlSignal = null) {
     clearTimeout(timer);
     removeControlListener?.();
     controller.abort();
+    if (stoppedByControl) {
+      let drainTimer;
+      const drain = new Promise((resolveDrain) => {
+        drainTimer = setTimeout(resolveDrain, CONTROL_DRAIN_GRACE_MS);
+        drainTimer.unref?.();
+      });
+      await Promise.race([operation.catch(() => {}), drain]);
+      clearTimeout(drainTimer);
+    }
   }
 }
 
@@ -169,7 +190,7 @@ function failureDisposition({ task, category, options }) {
     if (["waiting_user", "blocked", "terminal"].includes(choice)) return choice;
   }
   if (task?.contract?.interactionPolicy?.mode === "never") return "terminal";
-  if (["model-output-invalid", "user-input-request", "insufficient_balance", "authentication", "quota"].includes(category)) return "waiting_user";
+  if (["model-output-invalid", "user-input-request", "unknown-effect", "effect-idempotency-conflict"].includes(category)) return "waiting_user";
   return "blocked";
 }
 
@@ -178,6 +199,8 @@ function diagnosticMessage(category, details = "") {
   if (category === "model-output-invalid") return `模型输出无法解析，已保存原始诊断${suffix}`;
   if (category === "attempt-timeout") return `模型处理超过单次时限，已保存当前诊断${suffix}`;
   if (category === "user-input-request") return "模型请求用户补充信息后才能继续";
+  if (category === "unknown-effect") return `外部操作结果未知，必须确认后才能继续${suffix}`;
+  if (category === "effect-idempotency-conflict") return `同一外部操作标识对应了不同参数，已停止执行${suffix}`;
   return `后台单元处理失败，已保存诊断${suffix}`;
 }
 
@@ -341,6 +364,13 @@ export function createDurableAgentWorker(options = {}) {
     let controlStopped = false;
     let lastAttemptId = null;
     try {
+      const effectResolution = effectResolutionFor(task, plan);
+      if (effectResolution) {
+        if (typeof toolBroker.resolveEffect !== "function") {
+          throw Object.assign(new Error("host tool broker cannot resolve the pending external effect"), { code: "EFFECT_RESOLUTION_UNAVAILABLE" });
+        }
+        await toolBroker.resolveEffect(effectResolution.effectId, { action: effectResolution.action });
+      }
       for (let attempt = 1; attempt <= limit; attempt += 1) {
         if (stopRequested(runOptions)) {
           controlStopped = true;
@@ -355,6 +385,22 @@ export function createDurableAgentWorker(options = {}) {
         const attemptId = `${owner}:${task.id}:${plan.unitId}:${attempt}:${randomUUID()}`;
         lastAttemptId = attemptId;
         let interaction = null;
+        let toolCallIndex = 0;
+        const invokeBoundTool = async (name, args, context = {}) => {
+          const callIndex = toolCallIndex;
+          toolCallIndex += 1;
+          const response = await toolBroker.invoke(name, args, {
+            ...context,
+            taskId: task.id,
+            unitId: plan.unitId,
+            attemptId,
+            leaseId: guard.leaseId,
+            epochId: guard.epochId,
+            effectKey: context.effectKey || `${plan.unitId}:call:${callIndex}:${name}`,
+          });
+          if (response?.kind === "user_input_request") interaction = response;
+          return response;
+        };
         try {
           const raw = await runWithTimeout((signal) => executeUnit({
             task: clone(task),
@@ -362,32 +408,8 @@ export function createDurableAgentWorker(options = {}) {
             attempt,
             attemptId,
             signal,
-            tools: { invoke: async (name, args, context = {}) => {
-              const response = await toolBroker.invoke(name, args, {
-                ...context,
-                taskId: task.id,
-                unitId: plan.unitId,
-                attemptId,
-                leaseId: guard.leaseId,
-                epochId: guard.epochId,
-                effectKey: context.effectKey || `${plan.unitId}:${attempt}:${name}`,
-              });
-              if (response?.kind === "user_input_request") interaction = response;
-              return response;
-            } },
-            invokeTool: async (name, args, context = {}) => {
-              const response = await toolBroker.invoke(name, args, {
-                ...context,
-                taskId: task.id,
-                unitId: plan.unitId,
-                attemptId,
-                leaseId: guard.leaseId,
-                epochId: guard.epochId,
-                effectKey: context.effectKey || `${plan.unitId}:${attempt}:${name}`,
-              });
-              if (response?.kind === "user_input_request") interaction = response;
-              return response;
-            },
+            tools: { invoke: invokeBoundTool },
+            invokeTool: invokeBoundTool,
           }), attemptTimeoutMs, controlSignal);
           if (interaction) {
             pendingRequest = interaction;
@@ -409,6 +431,42 @@ export function createDurableAgentWorker(options = {}) {
             break;
           }
           const code = errorCode(error);
+          if (code === "effect_confirmation_required") {
+            const effect = error?.effect && typeof error.effect === "object" ? clone(error.effect) : {};
+            pendingRequest = {
+              kind: "user_input_request",
+              requestId: `request:${effect.effectId || randomUUID()}`,
+              taskId: task.id,
+              reason: "unknown-effect",
+              question: `外部操作 ${effect.operation || "未知操作"} 可能已经执行。为避免重复操作，请确认处理方式。`,
+              choices: [
+                { id: "mark-confirmed", label: "已执行，继续" },
+                { id: "retry", label: "确认未执行，重试" },
+              ],
+              effectId: effect.effectId || null,
+              operation: effect.operation || null,
+              unitId: plan.unitId,
+            };
+            diagnostics.category = "unknown-effect";
+            diagnostics.attempts.push({ attempt, category: "unknown-effect", message: errorMessage(error), code, rawResponse: "", effectId: effect.effectId || null });
+            break;
+          }
+          if (code === "effect_idempotency_conflict") {
+            const effect = error?.effect && typeof error.effect === "object" ? clone(error.effect) : {};
+            pendingRequest = {
+              kind: "user_input_request",
+              requestId: `request:${effect.effectId || randomUUID()}:conflict`,
+              taskId: task.id,
+              reason: "effect-idempotency-conflict",
+              question: `外部操作 ${effect.operation || "未知操作"} 的参数与已记录操作不一致，任务已暂停以避免误操作。`,
+              choices: [{ id: "cancel", label: "停止任务" }],
+              effectId: effect.effectId || null,
+              operation: effect.operation || null,
+            };
+            diagnostics.category = "effect-idempotency-conflict";
+            diagnostics.attempts.push({ attempt, category: "effect-idempotency-conflict", message: errorMessage(error), code, rawResponse: "", effectId: effect.effectId || null });
+            break;
+          }
           const category = code === "attempt_timeout" ? "attempt-timeout" : code.includes("balance") ? "insufficient_balance" : code.includes("auth") ? "authentication" : code.includes("quota") ? "quota" : "model-error";
           diagnostics.category = category;
           diagnostics.attempts.push({ attempt, category, message: errorMessage(error), code, rawResponse: "" });
@@ -468,7 +526,7 @@ export function createDurableAgentWorker(options = {}) {
       }
 
       const disposition = failureDisposition({ task, category: diagnostics.category, options });
-      const fallbackStatus = disposition === "waiting_user" ? "needs_review" : disposition === "terminal" ? "failed" : "blocked";
+      const fallbackStatus = pendingRequest ? "blocked" : disposition === "waiting_user" ? "needs_review" : disposition === "terminal" ? "failed" : "blocked";
       const fallback = makeFallbackResult(plan, lastAttemptId, fallbackStatus, diagnostics, pendingRequest);
       const checkpoint = await store.checkpointUnit(task.id, fallback, { expectedRevision: guard.revision, leaseId: guard.leaseId, epoch: guard.epochId, owner, now: now() });
       if (!checkpoint.applied) return { status: "superseded", reason: checkpoint.reason, task: checkpoint.task || await store.read(task.id) };

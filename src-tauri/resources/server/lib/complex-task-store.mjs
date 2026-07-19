@@ -422,7 +422,8 @@ export function createComplexTaskStore(rootDir, options = {}) {
           artifactRefs: [...resultValue.artifactRefs],
         };
       }
-      const saved = await writeManifest({ ...current, unitResults: { ...current.unitResults, [resultValue.unitId]: { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId } }, coverageLedger, revision: current.revision + 1, updatedAt: iso(now) });
+      const resolutionConsumed = current.userInputResolution?.unitId === resultValue.unitId;
+      const saved = await writeManifest({ ...current, unitResults: { ...current.unitResults, [resultValue.unitId]: { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId } }, coverageLedger, ...(resolutionConsumed ? { userInputResolution: null } : {}), revision: current.revision + 1, updatedAt: iso(now) });
       await appendEvent(key, "unit-checkpoint", { unitId: resultValue.unitId, coverage: resultValue.proposedPrimaryCoverage, revision: saved.revision });
       return applied(true, null, saved);
     });
@@ -527,7 +528,27 @@ export function createComplexTaskStore(rootDir, options = {}) {
           : Object.prototype.hasOwnProperty.call(payload, "resolution") ? payload.resolution
             : Object.prototype.hasOwnProperty.call(payload, "choiceId") ? { choiceId: payload.choiceId }
               : payload.value;
-        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", lease: null, needsAttention: false, blockingReason: null, userInputResolution: { requestId: String(payload.requestId), answer: clone(answer), resolvedAt: iso(now) }, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
+        const request = current.userInputRequest && typeof current.userInputRequest === "object" ? current.userInputRequest : {};
+        const saved = await writeManifest({
+          ...current,
+          lifecycle: "queued",
+          status: "queued",
+          lease: null,
+          needsAttention: false,
+          blockingReason: null,
+          userInputResolution: {
+            requestId: String(payload.requestId),
+            answer: clone(answer),
+            resolvedAt: iso(now),
+            ...(request.reason ? { reason: String(request.reason) } : {}),
+            ...(request.effectId ? { effectId: String(request.effectId) } : {}),
+            ...(request.unitId ? { unitId: String(request.unitId) } : {}),
+            ...(request.operation ? { operation: String(request.operation) } : {}),
+          },
+          userInputRequest: null,
+          revision: current.revision + 1,
+          updatedAt: iso(now),
+        });
         await appendEvent(key, "user-input-resolved", { requestId: String(payload.requestId), revision: saved.revision });
         return applied(true, null, saved);
       }
