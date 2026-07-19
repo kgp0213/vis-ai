@@ -441,9 +441,17 @@ export function createComplexTaskStore(rootDir, options = {}) {
       }
       if (action === "resolve_user_input") {
         if (current.lifecycle !== "waiting_user") return applied(false, "not-waiting-user", current);
-        if (!String(payload.requestId || "") || payload.answer === undefined) return applied(false, "invalid-user-input", current);
+        const hasAnswer = Object.prototype.hasOwnProperty.call(payload, "answer")
+          || Object.prototype.hasOwnProperty.call(payload, "resolution")
+          || Object.prototype.hasOwnProperty.call(payload, "choiceId")
+          || Object.prototype.hasOwnProperty.call(payload, "value");
+        if (!String(payload.requestId || "") || !hasAnswer) return applied(false, "invalid-user-input", current);
         if (current.userInputRequest?.requestId && current.userInputRequest.requestId !== payload.requestId) return applied(false, "request-mismatch", current);
-        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", userInputResolution: { requestId: String(payload.requestId), answer: clone(payload.answer), resolvedAt: iso(now) }, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
+        const answer = Object.prototype.hasOwnProperty.call(payload, "answer") ? payload.answer
+          : Object.prototype.hasOwnProperty.call(payload, "resolution") ? payload.resolution
+            : Object.prototype.hasOwnProperty.call(payload, "choiceId") ? { choiceId: payload.choiceId }
+              : payload.value;
+        const saved = await writeManifest({ ...current, lifecycle: "queued", status: "queued", userInputResolution: { requestId: String(payload.requestId), answer: clone(answer), resolvedAt: iso(now) }, userInputRequest: null, revision: current.revision + 1, updatedAt: iso(now) });
         await appendEvent(key, "user-input-resolved", { requestId: String(payload.requestId), revision: saved.revision });
         return applied(true, null, saved);
       }
@@ -536,7 +544,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       if (!isTerminalLifecycle(current.lifecycle)) return applied(false, "lifecycle-not-terminal", current);
       if ((current.outbox ?? []).some((entry) => pendingConsumers(entry).length > 0)) return applied(false, "outbox-pending", current);
       await rm(dirFor(key), { recursive: true, force: true });
-      return applied(true, null, current);
+      return { ...applied(true, null, current), deleted: true };
     });
   }
 

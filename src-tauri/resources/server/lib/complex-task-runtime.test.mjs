@@ -451,7 +451,7 @@ test("user control actions are CAS/epoch fenced and preserve an input resolution
       action: "resolve_user_input",
       expectedRevision: waiting.task.revision,
       expectedEpoch: lease.epoch + 1,
-      payload: { requestId: "request-1", answer: "a" },
+      payload: { requestId: "request-1", resolution: { choiceId: "a" } },
       now: 21,
     });
     assert.equal(stale.applied, false);
@@ -461,12 +461,12 @@ test("user control actions are CAS/epoch fenced and preserve an input resolution
       action: "resolve_user_input",
       expectedRevision: waiting.task.revision,
       expectedEpoch: lease.epoch,
-      payload: { requestId: "request-1", answer: "a" },
+      payload: { requestId: "request-1", resolution: { choiceId: "a" } },
       now: 22,
     });
     assert.equal(resolved.applied, true);
     assert.equal(resolved.task.lifecycle, "queued");
-    assert.equal(resolved.task.userInputResolution.answer, "a");
+    assert.deepEqual(resolved.task.userInputResolution.answer, { choiceId: "a" });
 
     const retargeted = await store.applyUserControl(task.id, {
       action: "retarget_output",
@@ -519,6 +519,7 @@ test("cancel creates a durable terminal outcome and deletion requires every Outb
     }
     const deleted = await store.removeIfUnreferenced(task.id, { expectedRevision: revision });
     assert.equal(deleted.applied, true);
+    assert.equal(deleted.deleted, true);
     assert.equal(await store.read(task.id).catch(() => null), null);
   });
 });
