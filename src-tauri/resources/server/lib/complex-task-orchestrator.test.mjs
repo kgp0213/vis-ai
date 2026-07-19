@@ -280,10 +280,12 @@ test("a pinned engine is passed through unchanged even when live configuration c
 test("stop aborts in-flight work and prevents new claims", async () => {
   const runtime = createFakeRuntime([task(TASK_A), task(TASK_B)]);
   let aborted = false;
+  let runs = 0;
   const orchestrator = createComplexTaskOrchestrator({
     store: runtime.store,
     worker: {
       async runOne(id, { signal }) {
+        runs += 1;
         await new Promise((resolve) => {
           signal.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true });
         });
@@ -300,5 +302,5 @@ test("stop aborts in-flight work and prevents new claims", async () => {
   await orchestrator.stop();
   await running;
   assert.equal(aborted, true);
-  assert.equal(runtime.calls.filter(([name]) => name === "runOne").length, 1);
+  assert.equal(runs, 1);
 });
