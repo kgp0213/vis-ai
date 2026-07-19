@@ -136,7 +136,7 @@ test("Assembler lets the Adapter choose among candidates and rejects unauthorize
       adapter: { selectPrimaryCandidate: ({ candidates }) => candidates.find((candidate) => candidate.manifest.artifactId === secondId).manifest.artifactId },
     });
     assert.equal(selected.report.selectedByCoverage["page:1"], secondId);
-    assert.deepEqual(selected.report.conflicts, ["page:2"]);
+    assert.deepEqual(selected.report.missing, ["page:2"]);
 
     const unauthorizedId = artifactId("unauthorized");
     await store.put({ manifest: artifactDraft(unauthorizedId, { primaryCoverage: ["page:99"] }), content: "X" });
@@ -174,5 +174,20 @@ test("Assembler uses a deterministic Adapter assembly hook", async () => {
     const result = await assembleComplexTask({ task, artifactStore: store, adapter: { assemble: ({ selectedArtifacts }) => `TITLE\n${selectedArtifacts[0].content.toString()}` } });
     assert.equal(result.ok, true);
     assert.equal(result.content, "TITLE\nBODY");
+  });
+});
+
+test("Assembler turns invalid coverage contracts and Adapter failures into explainable results", async () => {
+  await withStore(async (store) => {
+    const id = artifactId("selector-error");
+    await store.put({ manifest: artifactDraft(id, { primaryCoverage: ["page:1"] }), content: "BODY" });
+    const task = taskFixture({ unitResults: { "unit-1": { unitId: "unit-1", artifactRefs: [id] } } });
+    const selectorFailure = await assembleComplexTask({ task, artifactStore: store, adapter: { selectPrimaryCandidate: () => { throw new Error("adapter rejected candidate"); } } });
+    assert.equal(selectorFailure.ok, false);
+    assert.ok(selectorFailure.report.invalid.some((item) => item.code === "selector-error"));
+
+    const invalidContract = await assembleComplexTask({ task: taskFixture({ contract: { completion: { requiredCoverage: [], requiredArtifacts: [] } } }), artifactStore: store });
+    assert.equal(invalidContract.ok, false);
+    assert.ok(invalidContract.report.invalid.some((item) => item.code === "invalid-contract"));
   });
 });
