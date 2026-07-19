@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -313,9 +313,31 @@ test("unit checkpoints require revision, current lease, and authorized coverage"
     assert.equal(escaped.applied, false);
     assert.equal(escaped.reason, "invalid-unit-result");
 
+    const unknown = await store.checkpointUnit(task.id, validUnitResult("unit-unknown", ["page:1"]), {
+      expectedRevision: saved.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 23,
+    });
+    assert.equal(unknown.applied, false);
+    assert.equal(unknown.reason, "invalid-unit-result");
+
     const restarted = createComplexTaskStore(root);
     assert.equal((await restarted.read(task.id)).unitResults["unit-1"].attemptId, "attempt-1");
     assert.ok((await restarted.readEvents(task.id)).some((event) => event.type === "unit-checkpoint"));
+  });
+});
+
+test("a damaged canonical manifest is recovered from the newest bounded snapshot", async () => {
+  await withStore({}, async (store, root) => {
+    const task = await createTask(store);
+    const manifestPath = join(root, encodeURIComponent(task.id), "manifest.json");
+    await writeFile(manifestPath, "{broken", "utf8");
+    const restarted = createComplexTaskStore(root);
+    const restored = await restarted.read(task.id);
+    assert.equal(restored.id, task.id);
+    assert.equal(restored.revision, task.revision);
+    assert.equal(restored.lifecycle, "queued");
   });
 });
 
@@ -330,6 +352,35 @@ test("supervisor requeues an expired worker lease and reports pending deliveries
     assert.equal(restored.epoch, lease.epoch);
     assert.ok((await store.readEvents(task.id)).some((event) => event.type === "lease-recovered"));
   });
+});
+
+test("supervisor keeps active leases, surfaces attention states, and isolates one recovery error", async () => {
+  await withStore({}, async (store) => {
+    const active = await startTask(store, { now: 100 });
+    const waiting = await createTask(store, validContract({ goal: "Needs an answer" }));
+    const waitingState = await store.transition(waiting.id, { expectedRevision: waiting.revision, lifecycle: "waiting_user", userInputRequest: { requestId: "r", question: "?" }, now: 101 });
+    assert.equal(waitingState.applied, true);
+    const blocked = await createTask(store, validContract({ goal: "Blocked by provider" }));
+    const blockedState = await store.transition(blocked.id, { expectedRevision: blocked.revision, lifecycle: "blocked", now: 102 });
+    assert.equal(blockedState.applied, true);
+    const report = await createComplexTaskSupervisor({ store }).reconcile({ now: 200 });
+    assert.deepEqual(report.active, [active.task.id]);
+    assert.ok(report.needsAttention.includes(waiting.id));
+    assert.ok(report.needsAttention.includes(blocked.id));
+  });
+
+  const issues = [];
+  const failingSupervisor = createComplexTaskSupervisor({
+    store: {
+      async list() { return [{ id: "task:00000000-0000-4000-8000-000000000000", lifecycle: "running", revision: 1, epoch: 1, lease: null, outbox: [] }]; },
+      async recoverExpiredLease() { throw new Error("simulated recovery failure"); },
+    },
+    onIssue(issue) { issues.push(issue); },
+  });
+  const isolated = await failingSupervisor.reconcile({ now: 200 });
+  assert.equal(isolated.issues.length, 1);
+  assert.match(isolated.issues[0].message, /simulated recovery failure/);
+  assert.equal(issues.length, 1);
 });
 
 test("terminal outcome and per-consumer Outbox acknowledgements survive restart", async () => {
@@ -380,6 +431,109 @@ test("terminal outcome and per-consumer Outbox acknowledgements survive restart"
     });
     assert.equal(conversationAck.applied, true);
     assert.equal((await restarted.listPendingOutbox()).length, 0);
+  });
+});
+
+test("user control actions are CAS/epoch fenced and preserve an input resolution", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const waiting = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "waiting_user",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      userInputRequest: { requestId: "request-1", question: "Choose a source", choices: ["a", "b"] },
+      now: 20,
+    });
+    assert.equal(waiting.applied, true);
+
+    const stale = await store.applyUserControl(task.id, {
+      action: "resolve_user_input",
+      expectedRevision: waiting.task.revision,
+      expectedEpoch: lease.epoch + 1,
+      payload: { requestId: "request-1", answer: "a" },
+      now: 21,
+    });
+    assert.equal(stale.applied, false);
+    assert.equal(stale.reason, "epoch-mismatch");
+
+    const resolved = await store.applyUserControl(task.id, {
+      action: "resolve_user_input",
+      expectedRevision: waiting.task.revision,
+      expectedEpoch: lease.epoch,
+      payload: { requestId: "request-1", answer: "a" },
+      now: 22,
+    });
+    assert.equal(resolved.applied, true);
+    assert.equal(resolved.task.lifecycle, "queued");
+    assert.equal(resolved.task.userInputResolution.answer, "a");
+
+    const retargeted = await store.applyUserControl(task.id, {
+      action: "retarget_output",
+      expectedRevision: resolved.task.revision,
+      payload: { requestedPath: "result-v2.md", conflictPolicy: "replace" },
+      now: 23,
+    });
+    assert.equal(retargeted.applied, true);
+    assert.equal(retargeted.task.contract.output.requestedPath, "result-v2.md");
+    assert.equal(retargeted.task.contractRevision, 2);
+
+    const paused = await store.applyUserControl(task.id, {
+      action: "pause",
+      expectedRevision: retargeted.task.revision,
+      expectedEpoch: lease.epoch,
+      now: 24,
+    });
+    assert.equal(paused.applied, true);
+    assert.equal(paused.task.lifecycle, "paused");
+    const retried = await store.applyUserControl(task.id, {
+      action: "retry",
+      expectedRevision: paused.task.revision,
+      now: 25,
+    });
+    assert.equal(retried.applied, true);
+    assert.equal(retried.task.lifecycle, "queued");
+  });
+});
+
+test("cancel creates a durable terminal outcome and deletion requires every Outbox consumer ack", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: Date.now() });
+    const cancelled = await store.applyUserControl(task.id, {
+      action: "cancel",
+      expectedRevision: task.revision,
+      expectedEpoch: lease.epoch,
+      payload: { summary: "Stopped by the user" },
+    });
+    assert.equal(cancelled.applied, true);
+    assert.equal(cancelled.task.lifecycle, "terminal");
+    assert.equal(cancelled.task.outcome.outcome, "cancelled");
+    const delivery = (await store.listPendingOutbox())[0];
+    const blockedDelete = await store.removeIfUnreferenced(task.id, { expectedRevision: cancelled.task.revision });
+    assert.equal(blockedDelete.applied, false);
+    assert.equal(blockedDelete.reason, "outbox-pending");
+    let revision = cancelled.task.revision;
+    for (const consumer of delivery.pendingConsumers) {
+      const ack = await store.ackOutbox(task.id, delivery.deliveryId, { expectedRevision: revision, consumer });
+      revision = ack.task.revision;
+    }
+    const deleted = await store.removeIfUnreferenced(task.id, { expectedRevision: revision });
+    assert.equal(deleted.applied, true);
+    assert.equal(await store.read(task.id).catch(() => null), null);
+  });
+});
+
+test("a resumable terminal outcome can be retried without deleting its previous delivery record", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const assembling = await store.transition(task.id, { expectedRevision: task.revision, lifecycle: "assembling", leaseId: lease.leaseId, epoch: lease.epoch, now: 20 });
+    const done = await store.complete(task.id, validOutcome(task.id, { resumable: true }), { expectedRevision: assembling.task.revision, leaseId: lease.leaseId, epoch: lease.epoch, now: 30 });
+    const retried = await store.applyUserControl(task.id, { action: "retry", expectedRevision: done.task.revision, expectedEpoch: lease.epoch, now: 40 });
+    assert.equal(retried.applied, true);
+    assert.equal(retried.task.lifecycle, "queued");
+    assert.equal(retried.task.epoch, lease.epoch + 1);
+    assert.equal(retried.task.outcome, null);
+    assert.equal((await store.listPendingOutbox()).length, 1);
   });
 });
 
