@@ -75,7 +75,16 @@ function createFakeRuntime(initialTasks, options = {}) {
       calls.push(["transition", id, structuredClone(input)]);
       const current = states.get(id);
       if (!current || current.revision !== input.expectedRevision) return { applied: false, reason: "revision-mismatch", task: structuredClone(current) };
-      const next = { ...current, lifecycle: input.lifecycle, status: input.lifecycle, revision: current.revision + 1 };
+      const next = {
+        ...current,
+        lifecycle: input.lifecycle,
+        status: input.lifecycle,
+        revision: current.revision + 1,
+        lease: ["leased", "running", "assembling"].includes(input.lifecycle) ? current.lease : null,
+        ...(input.userInputRequest !== undefined ? { userInputRequest: structuredClone(input.userInputRequest) } : {}),
+        ...(input.blockingReason !== undefined ? { blockingReason: structuredClone(input.blockingReason) } : {}),
+        ...(input.pendingAssembly !== undefined ? { pendingAssembly: structuredClone(input.pendingAssembly) } : {}),
+      };
       states.set(id, next);
       return { applied: true, task: structuredClone(next) };
     },
@@ -260,6 +269,59 @@ test("worker and assembly exceptions converge visibly instead of disappearing", 
   assert.equal(assemblyReport.results[0].status, "assembled_failure");
   assert.equal((await assemblyRuntime.store.read(TASK_B)).lifecycle, "terminal");
   assert.equal((await assemblyRuntime.store.read(TASK_B)).outcome.outcome, "failed");
+});
+
+test("assembler can wait for user without committing terminal and preserves the draft references", async () => {
+  const runtime = createFakeRuntime([task(TASK_A)]);
+  const adapter = { name: "doc-adapter" };
+  const orchestrator = createComplexTaskOrchestrator({
+    store: runtime.store,
+    worker: { runOne: async (id) => ({ status: "ready_for_assembly", task: await runtime.store.read(id) }) },
+    supervisor: runtime.supervisor,
+    adapters: { "document.test": adapter },
+    assembler: async () => ({
+      waitingUser: true,
+      userInputRequest: { requestId: "output-conflict-1", question: "输出文件已存在，如何处理？" },
+      blockingReason: { code: "OUTPUT_CONFLICT", message: "输出文件已存在" },
+      artifactRefs: ["artifact:draft"],
+      report: { covered: ["unit-1"], missing: [] },
+    }),
+  });
+  const report = await orchestrator.runOnce();
+  assert.equal(report.results[0].status, "waiting_user");
+  const saved = await runtime.store.read(TASK_A);
+  assert.equal(saved.lifecycle, "waiting_user");
+  assert.equal(saved.outcome, undefined);
+  assert.equal(saved.lease, null);
+  assert.equal(saved.userInputRequest.requestId, "output-conflict-1");
+  assert.equal(saved.pendingAssembly.artifactRefs[0], "artifact:draft");
+  assert.equal(runtime.calls.some(([name]) => name === "complete"), false);
+});
+
+test("assembly outcome exposes source fallback warnings instead of reporting unqualified delivery", async () => {
+  const runtime = createFakeRuntime([task(TASK_A, {
+    unitResults: {
+      "unit-1": {
+        unitId: "unit-1",
+        proposedStatus: "skipped",
+        artifactRefs: ["artifact:source"],
+        warnings: [{ code: "SOURCE_FALLBACK", message: "模型失败，已保留原文" }],
+        fallbackKind: "source",
+        proposedPrimaryCoverage: ["unit-1"],
+      },
+    },
+  })]);
+  const orchestrator = createComplexTaskOrchestrator({
+    store: runtime.store,
+    worker: { runOne: async (id) => ({ status: "ready_for_assembly", task: await runtime.store.read(id) }) },
+    supervisor: runtime.supervisor,
+    adapters: { "document.test": {} },
+    assembler: async () => ({ ok: true, report: { complete: true, required: ["unit-1"], covered: ["unit-1"], missing: [], invalid: [] }, content: "原文" }),
+  });
+  await orchestrator.runOnce();
+  const saved = await runtime.store.read(TASK_A);
+  assert.equal(saved.outcome.outcome, "delivered_with_warnings");
+  assert.match(saved.outcome.warnings[0].message, /保留原文/);
 });
 
 test("a pinned engine is passed through unchanged even when live configuration changes", async () => {
