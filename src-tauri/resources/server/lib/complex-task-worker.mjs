@@ -90,7 +90,7 @@ function parseModelResponse(raw, unitPlan, attemptId) {
 }
 
 function taskUnitPlans(task) {
-  if (task?.workPlan) return workPlanUnitPlans(task.workPlan);
+  if (task?.workPlan) return workPlanUnitPlans(task.workPlan, { permissionBoundary: task.contract?.permissions });
   return Array.isArray(task?.unitPlans) ? task.unitPlans : [];
 }
 

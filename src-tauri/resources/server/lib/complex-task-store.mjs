@@ -147,7 +147,7 @@ function coverageLedgerFor(contract, unitPlans, unitResults = {}) {
   }));
 }
 
-function checkpointWorkPlan(plan, result) {
+function checkpointWorkPlan(plan, result, options = {}) {
   if (!plan) return null;
   const status = result.proposedStatus === "needs_review" ? "waiting_user" : result.proposedStatus;
   const completedNodeIds = new Set(Array.isArray(plan.completedNodeIds) ? plan.completedNodeIds : []);
@@ -158,7 +158,7 @@ function checkpointWorkPlan(plan, result) {
     nodes: plan.nodes.map((node) => node.nodeId === result.unitId ? { ...node, status } : node),
     nodeResults: { ...(plan.nodeResults ?? {}), [result.unitId]: clone(result) },
     completedNodeIds: [...completedNodeIds],
-  });
+  }, options);
 }
 
 function attentionPayload(task, lifecycle, input = {}) {
@@ -348,7 +348,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       ? assertUnitPlanSet(input.unitPlans, { requiredCoverage: contract.completion.requiredCoverage })
       : [];
     const workPlan = taskWorkPlan(contract, id, input.workPlan, legacyUnitPlans);
-    const unitPlans = assertUnitPlanSet(workPlanUnitPlans(workPlan), { requiredCoverage: contract.completion.requiredCoverage });
+    const unitPlans = assertUnitPlanSet(workPlanUnitPlans(workPlan, { permissionBoundary: contract.permissions }), { requiredCoverage: contract.completion.requiredCoverage });
     if (existsSync(manifestFor(id))) throw new Error(`complex task already exists: ${id}`);
     const now = numberOr(input.now, Date.now());
     const coverageLedger = coverageLedgerFor(contract, unitPlans);
@@ -508,7 +508,9 @@ export function createComplexTaskStore(rootDir, options = {}) {
       }
       const resolutionConsumed = current.userInputResolution?.unitId === resultValue.unitId;
       const checkpointedResult = { ...resultValue, checkpointedAt: iso(now), epoch: current.epoch, leaseId: current.lease.leaseId };
-      const workPlan = current.workPlan ? checkpointWorkPlan(current.workPlan, checkpointedResult) : null;
+      const workPlan = current.workPlan
+        ? checkpointWorkPlan(current.workPlan, checkpointedResult, { permissionBoundary: current.contract.permissions })
+        : null;
       const saved = await writeManifest({ ...current, ...(workPlan ? { workPlan } : {}), unitResults: { ...current.unitResults, [resultValue.unitId]: checkpointedResult }, coverageLedger, ...(resolutionConsumed ? { userInputResolution: null } : {}), revision: current.revision + 1, updatedAt: iso(now) });
       await appendEvent(key, "unit-checkpoint", { unitId: resultValue.unitId, coverage: resultValue.proposedPrimaryCoverage, revision: saved.revision });
       return applied(true, null, saved);
@@ -526,7 +528,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
       const result = replanWorkPlan(currentPlan, request, { permissionBoundary: current.contract.permissions });
       if (!result.ok) return { ...applied(false, "invalid-replan", current), errors: result.errors };
       const workPlan = result.value;
-      const unitPlans = assertUnitPlanSet(workPlanUnitPlans(workPlan), { requiredCoverage: current.contract.completion.requiredCoverage });
+      const unitPlans = assertUnitPlanSet(workPlanUnitPlans(workPlan, { permissionBoundary: current.contract.permissions }), { requiredCoverage: current.contract.completion.requiredCoverage });
       const unitIds = new Set(unitPlans.map((plan) => plan.unitId));
       const unitResults = Object.fromEntries(Object.entries(current.unitResults ?? {}).filter(([unitId]) => unitIds.has(unitId) && workPlan.nodeResults?.[unitId]));
       const now = numberOr(guard.now, Date.now());

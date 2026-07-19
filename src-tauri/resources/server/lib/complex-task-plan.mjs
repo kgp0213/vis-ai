@@ -459,8 +459,8 @@ export function getRunnableWorkNodes(input) {
  * adapters and workers. This keeps existing adapters compatible while the
  * WorkPlan remains the source of node identity, order, and dependencies.
  */
-export function workPlanUnitPlans(input) {
-  const plan = assertWorkPlan(input);
+export function workPlanUnitPlans(input, options = {}) {
+  const plan = assertWorkPlan(input, options);
   const byId = new Map(plan.nodes.map((node) => [node.nodeId, node]));
   return plan.topologicalOrder.map((nodeId) => {
     const node = byId.get(nodeId);
