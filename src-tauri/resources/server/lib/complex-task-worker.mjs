@@ -86,15 +86,27 @@ function parseModelResponse(raw, unitPlan, attemptId) {
 function runnablePlan(task) {
   const results = task?.unitResults && typeof task.unitResults === "object" ? task.unitResults : {};
   return (Array.isArray(task?.unitPlans) ? task.unitPlans : []).find((plan) => {
-    if (SUCCESS_UNIT_STATES.has(results[plan.unitId]?.proposedStatus)) return false;
-    return (Array.isArray(plan.dependencies) ? plan.dependencies : []).every((dependency) => SUCCESS_UNIT_STATES.has(results[dependency]?.proposedStatus));
+    if (unitIsResolved(plan, results[plan.unitId])) return false;
+    return (Array.isArray(plan.dependencies) ? plan.dependencies : []).every((dependency) => unitIsResolved(
+      (Array.isArray(task?.unitPlans) ? task.unitPlans : []).find((candidate) => candidate.unitId === dependency),
+      results[dependency],
+    ));
   }) || null;
 }
 
 function allUnitsResolved(task) {
   const plans = Array.isArray(task?.unitPlans) ? task.unitPlans : [];
   const results = task?.unitResults && typeof task.unitResults === "object" ? task.unitResults : {};
-  return plans.length > 0 && plans.every((plan) => ["completed", "skipped", "needs_review"].includes(results[plan.unitId]?.proposedStatus));
+  return plans.length > 0 && plans.every((plan) => unitIsResolved(plan, results[plan.unitId]));
+}
+
+function unitIsResolved(plan, result) {
+  const status = text(result?.proposedStatus);
+  if (status === "completed" || status === "skipped") return true;
+  if (status !== "needs_review") return false;
+  const expected = new Set(Array.isArray(plan?.primaryCoverage) ? plan.primaryCoverage : []);
+  const actual = new Set(Array.isArray(result?.proposedPrimaryCoverage) ? result.proposedPrimaryCoverage : []);
+  return expected.size === actual.size && [...expected].every((coverage) => actual.has(coverage)) && !(result?.missingSourceRanges?.length > 0);
 }
 
 function timeoutError(timeoutMs) {

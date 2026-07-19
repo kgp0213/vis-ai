@@ -10,6 +10,7 @@ export const TASK_QUALITY_STATES = Object.freeze(["unknown", "verified", "passed
 const TASK_ID_RE = /^task:[0-9a-f-]{36}$/i;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const UNIT_RESULT_STATES = new Set(["completed", "failed", "blocked", "needs_review", "skipped"]);
+const RESOLVED_UNIT_RESULT_STATES = new Set(["completed", "skipped"]);
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -192,6 +193,13 @@ export function validateUnitResult(input, { unitPlan } = {}) {
   if (unitPlan) {
     const authorized = new Set(unitPlan.primaryCoverage);
     if (proposedPrimaryCoverage.some((item) => !authorized.has(item))) errors.push("unitResult exceeds authorized primary coverage");
+    if (RESOLVED_UNIT_RESULT_STATES.has(text(result.proposedStatus))) {
+      const proposed = new Set(proposedPrimaryCoverage);
+      if (proposed.size !== authorized.size || [...authorized].some((item) => !proposed.has(item))) {
+        errors.push("resolved unitResult must include complete primary coverage");
+      }
+      if (missingSourceRanges.length > 0) errors.push("resolved unitResult cannot retain missing source ranges");
+    }
   }
   return errors.length ? { ok: false, errors, value: null } : {
     ok: true,

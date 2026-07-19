@@ -131,6 +131,7 @@ export function createComplexTaskStore(rootDir, options = {}) {
   const retentionMs = Math.max(0, numberOr(options.retentionMs, DEFAULT_RETENTION_MS));
   const leaseMs = Math.max(1, numberOr(options.leaseMs, DEFAULT_LEASE_MS));
   const atomicWrite = options.atomicWrite ?? atomicWriteFile;
+  const onManifestFallback = typeof options.onManifestFallback === "function" ? options.onManifestFallback : null;
   const mutationChains = new Map();
   const eventChains = new Map();
   const dirFor = (id) => join(root, storageKey(id));
@@ -210,8 +211,19 @@ export function createComplexTaskStore(rootDir, options = {}) {
   async function writeSnapshot(task) {
     await mkdir(snapshotDirFor(task.id), { recursive: true });
     const name = `${String(Number(task.revision) || 0).padStart(12, "0")}-${randomUUID()}.json`;
-    await atomicWriteFileSnapshot(join(snapshotDirFor(task.id), name), `${JSON.stringify(task, null, 2)}\n`);
+    const path = join(snapshotDirFor(task.id), name);
+    await atomicWriteFileSnapshot(path, `${JSON.stringify(task, null, 2)}\n`);
     await pruneSnapshots(task.id);
+    return path;
+  }
+
+  async function reportManifestFallback(error, taskIdValue, snapshotPath) {
+    if (!onManifestFallback) return;
+    try {
+      await onManifestFallback(error, taskIdValue, snapshotPath);
+    } catch (reportError) {
+      console.error(`[complex-task-store] manifest fallback reporting failed for ${taskIdValue}: ${reportError?.message || reportError}`);
+    }
   }
 
   async function atomicWriteFileSnapshot(path, content) {
@@ -246,14 +258,19 @@ export function createComplexTaskStore(rootDir, options = {}) {
       await atomicWrite(manifestFor(task.id), serialized, "utf8");
     } catch (error) {
       try {
-        await writeSnapshot(task);
+        const snapshotPath = await writeSnapshot(task);
+        await reportManifestFallback(error, task.id, snapshotPath);
         return project(task);
       } catch (snapshotError) {
         snapshotError.cause = error;
         throw snapshotError;
       }
     }
-    try { await writeSnapshot(task); } catch { /* Canonical manifest remains authoritative when snapshot pruning is unavailable. */ }
+    try {
+      await writeSnapshot(task);
+    } catch (snapshotError) {
+      await reportManifestFallback(snapshotError, task.id, snapshotDirFor(task.id));
+    }
     return project(task);
   }
 
