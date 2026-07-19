@@ -292,6 +292,48 @@ test("a broker user-input request is persisted on the task before the worker yie
   });
 });
 
+test("an unknown host effect stops at user confirmation instead of retrying another attempt", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    const effectStore = new Map();
+    const intents = {
+      async get(id) { return effectStore.get(id) ?? null; },
+      async put(value) { effectStore.set(value.effectId, structuredClone(value)); return structuredClone(value); },
+    };
+    let sends = 0;
+    const { createHostToolBroker } = await import("./host-tool-broker.mjs");
+    const broker = createHostToolBroker({
+      effectStore: intents,
+      operations: {
+        send_message: {
+          effect: true,
+          execute: async () => {
+            sends += 1;
+            const error = new Error("connection closed after send");
+            error.effectUnknown = true;
+            throw error;
+          },
+        },
+      },
+    });
+    const worker = createDurableAgentWorker({
+      store,
+      toolBroker: broker,
+      maxAttempts: 3,
+      executeUnit: async ({ invokeTool }) => {
+        await invokeTool("send_message", { text: "hello" });
+        return unitResult({ unitId: "unit-1", primaryCoverage: ["page:1"], dependencies: [] }, "attempt");
+      },
+    });
+    const result = await worker.runOne(task.id);
+    assert.equal(result.status, "waiting_user");
+    assert.equal(sends, 1);
+    const saved = await store.read(task.id);
+    assert.equal(saved.userInputRequest.reason, "unknown-effect");
+    assert.match(saved.userInputRequest.effectId, /^effect:/);
+  });
+});
+
 test("bounded attempt timeout checkpoints the failure and leaves an explainable blocked task", async () => {
   await withStore(async (store) => {
     const task = await createTask(store, { unitCount: 1 });
