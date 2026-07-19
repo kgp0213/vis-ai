@@ -172,6 +172,27 @@ test("malformed, empty, and tool-style model output becomes a durable degraded c
   });
 });
 
+test("a broker user-input request is persisted on the task before the worker yields", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    const request = { kind: "user_input_request", requestId: "request:output-conflict", question: "请选择输出方式", choices: [{ id: "rename", label: "使用新文件名" }] };
+    const worker = createDurableAgentWorker({
+      store,
+      toolBroker: { invoke: async () => request },
+      heartbeatIntervalMs: 100,
+      executeUnit: async ({ invokeTool }) => {
+        await invokeTool("choose_output", {});
+        return null;
+      },
+    });
+    const result = await worker.runOne(task.id);
+    assert.equal(result.status, "waiting_user");
+    const saved = await store.read(task.id);
+    assert.equal(saved.userInputRequest.requestId, request.requestId);
+    assert.equal(saved.unitResults["unit-1"].userInputRequest.question, request.question);
+  });
+});
+
 test("bounded attempt timeout checkpoints the failure and leaves an explainable blocked task", async () => {
   await withStore(async (store) => {
     const task = await createTask(store, { unitCount: 1 });
