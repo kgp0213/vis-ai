@@ -1,36 +1,112 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
   assertTaskContract,
+  validateArtifactManifest,
   validateOutcomeEnvelope,
   validateTaskContract,
+  validateUnitPlanSet,
+  validateUnitResult,
 } from "./complex-task-contracts.mjs";
 import { createComplexTaskStore } from "./complex-task-store.mjs";
+import { createComplexTaskSupervisor } from "./complex-task-supervisor.mjs";
+
+function nextTaskId() {
+  return `task:${randomUUID()}`;
+}
 
 function validContract(overrides = {}) {
-  return {
+  const base = {
+    schemaVersion: 1,
+    taskId: nextTaskId(),
     taskType: "document.markdown",
-    goal: "Convert the source into a complete Markdown document",
-    units: [
-      { id: "unit-1", kind: "source", sourceRefs: ["page:1"] },
-      { id: "unit-2", kind: "source", sourceRefs: ["page:2"] },
+    goal: "Convert every selected source range into a complete Markdown document",
+    workspace: "D:/workspace",
+    sources: [
+      { sourceId: "source-1", uri: "manual.pdf", kind: "pdf", fingerprint: "sha256:source", required: true },
     ],
-    output: { kind: "file", path: "result.md", format: "markdown" },
+    output: { format: "markdown", requestedPath: "result.md", conflictPolicy: "ask" },
+    completion: { requiredCoverage: ["page:1", "page:2"], requiredArtifacts: ["final-markdown"] },
+    quality: { requestedFidelity: "complete", semanticReviewMode: "llm", maxRepairPasses: 2 },
+    permissions: { readSources: true, writeOutput: true },
+    interactionPolicy: { mode: "ask_when_blocked", deliveryChannels: ["task-center", "conversation"] },
+    executionLimits: { wallClockMs: 14_400_000, stallTimeoutMs: 600_000, attemptLimit: 8 },
+    pinned: {
+      adapterVersion: "document-v1",
+      skillHash: "sha256:skill",
+      toolSchemaVersion: "1",
+      initialModelConfigFingerprints: ["model-config-1"],
+    },
+  };
+  return {
+    ...base,
     ...overrides,
+    output: { ...base.output, ...(overrides.output ?? {}) },
+    completion: { ...base.completion, ...(overrides.completion ?? {}) },
+    quality: { ...base.quality, ...(overrides.quality ?? {}) },
+    executionLimits: { ...base.executionLimits, ...(overrides.executionLimits ?? {}) },
+    pinned: { ...base.pinned, ...(overrides.pinned ?? {}) },
   };
 }
 
-function validOutcome(overrides = {}) {
+function validUnitPlans() {
+  return [
+    {
+      unitId: "unit-1",
+      primaryCoverage: ["page:1"],
+      dependencies: [],
+      contextRefs: [],
+      requiredCapabilities: ["text"],
+      outputRole: "section",
+      fallbackPolicy: "preserve-source",
+      planRevision: 1,
+    },
+    {
+      unitId: "unit-2",
+      primaryCoverage: ["page:2"],
+      dependencies: ["unit-1"],
+      contextRefs: [{ sourceId: "source-1", range: "page:1", role: "context-only" }],
+      requiredCapabilities: ["text"],
+      outputRole: "section",
+      fallbackPolicy: "preserve-source",
+      planRevision: 1,
+    },
+  ];
+}
+
+function validUnitResult(unitId = "unit-1", coverage = ["page:1"]) {
   return {
-    status: "completed_with_warnings",
-    summary: "The document was produced and needs a small review.",
-    artifacts: [{ id: "artifact-1", path: "result.md", sha256: "a".repeat(64) }],
+    unitId,
+    attemptId: "attempt-1",
+    proposedStatus: "completed",
+    artifactRefs: [`artifact:${unitId}`],
+    proposedPrimaryCoverage: coverage,
+    contextRefsUsed: [],
+    missingSourceRanges: [],
+    evidenceRefs: ["source-1"],
+    warnings: [],
+    confidence: 0.8,
+    nextActionProposal: "continue",
+  };
+}
+
+function validOutcome(taskId, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    taskId,
+    outcome: "delivered_with_warnings",
+    summary: "The document is available and one table needs review.",
+    artifactRefs: ["artifact:final"],
+    coverage: { required: 2, completed: 2, unresolved: [] },
     warnings: [{ code: "QUALITY_REVIEW", message: "Review one table." }],
-    errors: [],
+    blockingReason: null,
+    userAction: { kind: "review", label: "Review result" },
+    resumable: true,
     ...overrides,
   };
 }
@@ -44,211 +120,314 @@ async function withStore(options, fn) {
   }
 }
 
-test("task contracts validate required goal, units, and output without accepting duplicates", () => {
-  const contract = assertTaskContract(validContract());
-  assert.equal(contract.version, 1);
-  assert.equal(contract.taskType, "document.markdown");
-  assert.deepEqual(contract.units.map((unit) => unit.status), ["pending", "pending"]);
+async function createTask(store, contract = validContract()) {
+  return store.create({ contract, unitPlans: validUnitPlans() });
+}
 
-  const duplicate = validateTaskContract(validContract({
-    units: [{ id: "same", kind: "source" }, { id: "same", kind: "source" }],
+async function startTask(store, { now = 1_000 } = {}) {
+  const task = await createTask(store);
+  const lease = await store.acquireLease(task.id, {
+    expectedRevision: task.revision,
+    owner: "worker-a",
+    ttlMs: 1_000,
+    now,
+  });
+  assert.equal(lease.ok, true);
+  const started = await store.transition(task.id, {
+    expectedRevision: lease.task.revision,
+    lifecycle: "running",
+    leaseId: lease.leaseId,
+    epoch: lease.epoch,
+    now,
+  });
+  assert.equal(started.applied, true);
+  return { task: started.task, lease };
+}
+
+test("TaskContract v1 validates host-owned sources, completion, limits, and pins", () => {
+  const contract = assertTaskContract(validContract());
+  assert.equal(contract.schemaVersion, 1);
+  assert.match(contract.taskId, /^task:/);
+  assert.deepEqual(contract.completion.requiredCoverage, ["page:1", "page:2"]);
+
+  const duplicateSources = validateTaskContract(validContract({
+    sources: [
+      { sourceId: "same", uri: "a.pdf", kind: "pdf", fingerprint: "a", required: true },
+      { sourceId: "same", uri: "b.pdf", kind: "pdf", fingerprint: "b", required: true },
+    ],
   }));
-  assert.equal(duplicate.ok, false);
-  assert.ok(duplicate.errors.some((error) => /unique/i.test(error)));
+  assert.equal(duplicateSources.ok, false);
+  assert.ok(duplicateSources.errors.some((error) => /unique/i.test(error)));
   assert.throws(() => assertTaskContract({}), (error) => {
     assert.equal(error.code, "INVALID_TASK_CONTRACT");
     return /goal/i.test(error.message);
   });
 });
 
-test("outcome envelopes are explicit and reject non-terminal statuses", () => {
-  assert.equal(validateOutcomeEnvelope(validOutcome()).ok, true);
-  const invalid = validateOutcomeEnvelope(validOutcome({ status: "running" }));
-  assert.equal(invalid.ok, false);
-  assert.ok(invalid.errors.some((error) => /terminal/i.test(error)));
+test("UnitPlan, UnitResult, ArtifactManifest, and OutcomeEnvelope reject authority leaks", () => {
+  assert.equal(validateUnitPlanSet(validUnitPlans(), { requiredCoverage: ["page:1", "page:2"] }).ok, true);
+  const cyclic = validUnitPlans();
+  cyclic[0].dependencies = ["unit-2"];
+  const invalidPlan = validateUnitPlanSet(cyclic, { requiredCoverage: ["page:1", "page:2"] });
+  assert.equal(invalidPlan.ok, false);
+  assert.ok(invalidPlan.errors.some((error) => /cycle/i.test(error)));
+
+  assert.equal(validateUnitResult(validUnitResult(), { unitPlan: validUnitPlans()[0] }).ok, true);
+  const escapedCoverage = validateUnitResult(validUnitResult("unit-1", ["page:99"]), { unitPlan: validUnitPlans()[0] });
+  assert.equal(escapedCoverage.ok, false);
+  assert.ok(escapedCoverage.errors.some((error) => /authorized primary coverage/i.test(error)));
+
+  const artifact = validateArtifactManifest({
+    schemaVersion: 1,
+    artifactId: "artifact:unit-1",
+    revision: 1,
+    mediaType: "text/markdown",
+    path: "artifacts/unit-1.md",
+    sha256: "a".repeat(64),
+    primaryCoverage: ["page:1"],
+    contextRefs: [],
+    producer: {
+      adapterVersion: "document-v1",
+      skillHash: "sha256:skill",
+      modelConfigFingerprint: "model-config-1",
+      toolSchemaVersion: "1",
+    },
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal(artifact.ok, true);
+
+  const taskId = nextTaskId();
+  assert.equal(validateOutcomeEnvelope(validOutcome(taskId)).ok, true);
+  const invalidOutcome = validateOutcomeEnvelope(validOutcome(taskId, { outcome: "running" }));
+  assert.equal(invalidOutcome.ok, false);
+  assert.ok(invalidOutcome.errors.some((error) => /terminal outcome/i.test(error)));
 });
 
-test("generic task lifecycle uses revision CAS and persists a task-prefixed id", async () => {
+test("lifecycle changes use revision CAS and cannot bypass terminal outcome commit", async () => {
   await withStore({}, async (store) => {
-    const task = await store.create({ contract: validContract() });
+    const task = await createTask(store);
     assert.match(task.id, /^task:[0-9a-f-]{36}$/i);
-    assert.equal(task.status, "queued");
-    assert.equal(task.revision, 0);
+    assert.equal(task.lifecycle, "queued");
+    assert.equal(task.outcome, null);
+    assert.equal(task.quality, "unknown");
 
-    const running = await store.transition(task.id, {
+    const paused = await store.transition(task.id, {
       expectedRevision: 0,
-      status: "running",
+      lifecycle: "paused",
     });
-    assert.equal(running.applied, true);
-    assert.equal(running.task.status, "running");
-    assert.equal(running.task.revision, 1);
+    assert.equal(paused.applied, true);
+    assert.equal(paused.task.lifecycle, "paused");
 
     const stale = await store.transition(task.id, {
       expectedRevision: 0,
-      status: "paused",
+      lifecycle: "queued",
     });
     assert.equal(stale.applied, false);
     assert.equal(stale.reason, "revision-mismatch");
-    assert.equal((await store.read(task.id)).status, "running");
 
-    const invalid = await store.transition(task.id, {
-      expectedRevision: 1,
-      status: "queued",
+    const bypass = await store.transition(task.id, {
+      expectedRevision: paused.task.revision,
+      lifecycle: "terminal",
     });
-    assert.equal(invalid.applied, false);
-    assert.equal(invalid.reason, "invalid-transition");
+    assert.equal(bypass.applied, false);
+    assert.equal(bypass.reason, "outcome-required");
   });
 });
 
-test("lease epochs fence stale workers and heartbeat extends the active lease", async () => {
+test("lease epochs fence stale workers and heartbeat extends only the active lease", async () => {
   await withStore({}, async (store) => {
-    const task = await store.create({ contract: validContract() });
-    await store.transition(task.id, { expectedRevision: 0, status: "running" });
+    const { task, lease } = await startTask(store, { now: 1_000 });
+    assert.equal(task.lifecycle, "running");
+    assert.equal(lease.epoch, 1);
 
-    const first = await store.acquireLease(task.id, {
-      owner: "worker-a",
-      ttlMs: 10,
-      now: 1_000,
-    });
-    assert.equal(first.ok, true);
-    assert.equal(first.epoch, 1);
     const heartbeat = await store.heartbeat(task.id, {
-      leaseId: first.leaseId,
-      epoch: first.epoch,
+      expectedRevision: task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
       owner: "worker-a",
       ttlMs: 500,
-      now: 1_005,
+      now: 1_100,
     });
     assert.equal(heartbeat.ok, true);
-    assert.equal(heartbeat.lease.expiresAt, 1_505);
+    assert.equal(heartbeat.lease.expiresAt, 1_600);
 
     const blocked = await store.acquireLease(task.id, {
+      expectedRevision: heartbeat.task.revision,
       owner: "worker-b",
-      now: 1_100,
+      now: 1_200,
     });
     assert.equal(blocked.ok, false);
     assert.equal(blocked.reason, "lease-held");
 
+    const supervisor = createComplexTaskSupervisor({ store });
+    assert.deepEqual((await supervisor.reconcile({ now: 1_700 })).requeued, [task.id]);
+    const queued = await store.read(task.id);
     const second = await store.acquireLease(task.id, {
+      expectedRevision: queued.revision,
       owner: "worker-b",
       ttlMs: 500,
-      now: 1_600,
+      now: 1_701,
     });
     assert.equal(second.ok, true);
     assert.equal(second.epoch, 2);
-    assert.notEqual(second.leaseId, first.leaseId);
 
     const staleHeartbeat = await store.heartbeat(task.id, {
-      leaseId: first.leaseId,
-      epoch: first.epoch,
+      expectedRevision: second.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
       owner: "worker-a",
-      now: 1_601,
+      now: 1_702,
     });
     assert.equal(staleHeartbeat.ok, false);
     assert.equal(staleHeartbeat.reason, "stale-lease");
   });
 });
 
-test("unit checkpoints require the current lease and remain readable after a store restart", async () => {
+test("unit checkpoints require revision, current lease, and authorized coverage", async () => {
   await withStore({}, async (store, root) => {
-    const task = await store.create({ contract: validContract() });
-    await store.transition(task.id, { expectedRevision: 0, status: "running" });
-    const lease = await store.acquireLease(task.id, { owner: "worker", ttlMs: 10_000, now: 10 });
-
-    const saved = await store.checkpointUnit(task.id, "unit-1", {
-      status: "completed",
-      content: "first unit",
-      sourceRefs: ["page:1"],
-    }, { leaseId: lease.leaseId, epoch: lease.epoch, now: 20 });
-    assert.equal(saved.applied, true);
-    assert.equal(saved.task.unitResults["unit-1"].status, "completed");
-
-    const stale = await store.checkpointUnit(task.id, "unit-2", {
-      status: "completed",
-      content: "late unit",
-    }, { leaseId: "wrong", epoch: lease.epoch, now: 21 });
-    assert.equal(stale.applied, false);
-    assert.equal(stale.reason, "stale-lease");
-
-    const restarted = createComplexTaskStore(root);
-    const restored = await restarted.read(task.id);
-    assert.equal(restored.unitResults["unit-1"].content, "first unit");
-    assert.equal(restored.unitResults["unit-2"], undefined);
-    const events = await restarted.readEvents(task.id);
-    assert.ok(events.some((event) => event.type === "unit-checkpoint"));
-    assert.ok(events.every((event, index) => event.sequence === index + 1));
-  });
-});
-
-test("terminal outcome is idempotent and its outbox can be replayed after restart", async () => {
-  await withStore({}, async (store, root) => {
-    const task = await store.create({ contract: validContract() });
-    await store.transition(task.id, { expectedRevision: 0, status: "running" });
-    const lease = await store.acquireLease(task.id, { owner: "worker", ttlMs: 10_000, now: 10 });
-
-    const completed = await store.complete(task.id, validOutcome(), {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const saved = await store.checkpointUnit(task.id, validUnitResult(), {
+      expectedRevision: task.revision,
       leaseId: lease.leaseId,
       epoch: lease.epoch,
       now: 20,
     });
-    assert.equal(completed.applied, true);
-    assert.equal(completed.task.status, "completed_with_warnings");
-    assert.equal(completed.task.outcome.summary, validOutcome().summary);
-    assert.equal((await store.listPendingOutbox()).length, 1);
+    assert.equal(saved.applied, true);
+    assert.equal(saved.task.unitResults["unit-1"].proposedStatus, "completed");
 
-    const duplicate = await store.complete(task.id, validOutcome(), {
-      leaseId: lease.leaseId,
+    const stale = await store.checkpointUnit(task.id, validUnitResult("unit-2", ["page:2"]), {
+      expectedRevision: saved.task.revision,
+      leaseId: "wrong",
       epoch: lease.epoch,
       now: 21,
     });
+    assert.equal(stale.applied, false);
+    assert.equal(stale.reason, "stale-lease");
+
+    const escaped = await store.checkpointUnit(task.id, validUnitResult("unit-2", ["page:99"]), {
+      expectedRevision: saved.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 22,
+    });
+    assert.equal(escaped.applied, false);
+    assert.equal(escaped.reason, "invalid-unit-result");
+
+    const restarted = createComplexTaskStore(root);
+    assert.equal((await restarted.read(task.id)).unitResults["unit-1"].attemptId, "attempt-1");
+    assert.ok((await restarted.readEvents(task.id)).some((event) => event.type === "unit-checkpoint"));
+  });
+});
+
+test("supervisor requeues an expired worker lease and reports pending deliveries", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: 100 });
+    const report = await createComplexTaskSupervisor({ store }).reconcile({ now: 2_000 });
+    assert.deepEqual(report.requeued, [task.id]);
+    const restored = await store.read(task.id);
+    assert.equal(restored.lifecycle, "queued");
+    assert.equal(restored.lease, null);
+    assert.equal(restored.epoch, lease.epoch);
+    assert.ok((await store.readEvents(task.id)).some((event) => event.type === "lease-recovered"));
+  });
+});
+
+test("terminal outcome and per-consumer Outbox acknowledgements survive restart", async () => {
+  await withStore({}, async (store, root) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const assembling = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 20,
+    });
+    const completed = await store.complete(task.id, validOutcome(task.id), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      quality: "needs_review",
+      now: 30,
+    });
+    assert.equal(completed.applied, true);
+    assert.equal(completed.task.lifecycle, "terminal");
+    assert.equal(completed.task.outcome.outcome, "delivered_with_warnings");
+    assert.equal(completed.task.quality, "needs_review");
+
+    const duplicate = await store.complete(task.id, validOutcome(task.id), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 31,
+    });
     assert.equal(duplicate.applied, false);
     assert.equal(duplicate.reason, "already-terminal");
-    assert.equal((await store.listPendingOutbox()).length, 1);
 
     const restarted = createComplexTaskStore(root);
     const pending = await restarted.listPendingOutbox();
-    assert.equal(pending[0].taskId, task.id);
-    assert.equal(pending[0].payload.summary, validOutcome().summary);
-    const acked = await restarted.ackOutbox(task.id, pending[0].deliveryId);
-    assert.equal(acked.applied, true);
+    assert.equal(pending.length, 1);
+    assert.deepEqual(pending[0].pendingConsumers, ["task-center", "conversation"]);
+    const taskCenterAck = await restarted.ackOutbox(task.id, pending[0].deliveryId, {
+      expectedRevision: completed.task.revision,
+      consumer: "task-center",
+    });
+    assert.equal(taskCenterAck.applied, true);
+    assert.equal((await restarted.listPendingOutbox({ consumer: "task-center" })).length, 0);
+    assert.equal((await restarted.listPendingOutbox({ consumer: "conversation" })).length, 1);
+    const conversationAck = await restarted.ackOutbox(task.id, pending[0].deliveryId, {
+      expectedRevision: taskCenterAck.task.revision,
+      consumer: "conversation",
+    });
+    assert.equal(conversationAck.applied, true);
     assert.equal((await restarted.listPendingOutbox()).length, 0);
-    assert.equal((await restarted.read(task.id)).outbox[0].acknowledged, true);
   });
 });
 
-test("retention removes only acknowledged terminal tasks and never live or undelivered tasks", async () => {
+test("retention removes only fully acknowledged terminal tasks", async () => {
   await withStore({ retentionMs: 0 }, async (store) => {
-    const delivered = await store.create({ contract: validContract() });
-    await store.transition(delivered.id, { expectedRevision: 0, status: "running" });
-    const lease = await store.acquireLease(delivered.id, { owner: "worker", ttlMs: 10_000, now: 1 });
-    await store.complete(delivered.id, validOutcome(), { leaseId: lease.leaseId, epoch: lease.epoch, now: 2 });
-    const delivery = (await store.listPendingOutbox())[0];
-    await store.ackOutbox(delivered.id, delivery.deliveryId);
+    async function finish(contract, acknowledge) {
+      const { task, lease } = await startTask(store, { now: Date.now() });
+      const assembling = await store.transition(task.id, {
+        expectedRevision: task.revision,
+        lifecycle: "assembling",
+        leaseId: lease.leaseId,
+        epoch: lease.epoch,
+      });
+      const completed = await store.complete(task.id, validOutcome(task.id), {
+        expectedRevision: assembling.task.revision,
+        leaseId: lease.leaseId,
+        epoch: lease.epoch,
+      });
+      if (!acknowledge) return completed.task;
+      const delivery = (await store.listPendingOutbox()).find((entry) => entry.taskId === task.id);
+      let revision = completed.task.revision;
+      for (const consumer of delivery.pendingConsumers) {
+        const ack = await store.ackOutbox(task.id, delivery.deliveryId, { expectedRevision: revision, consumer });
+        revision = ack.task.revision;
+      }
+      return store.read(task.id);
+    }
 
-    const undelivered = await store.create({ contract: validContract({ goal: "Keep this result" }) });
-    await store.transition(undelivered.id, { expectedRevision: 0, status: "running" });
-    const lease2 = await store.acquireLease(undelivered.id, { owner: "worker", ttlMs: 10_000, now: 1 });
-    await store.complete(undelivered.id, validOutcome({ summary: "Pending delivery" }), { leaseId: lease2.leaseId, epoch: lease2.epoch, now: 2 });
-
-    const live = await store.create({ contract: validContract({ goal: "Keep live task" }) });
-    const result = await store.pruneExpired(10_000);
+    const delivered = await finish(validContract(), true);
+    const undelivered = await finish(validContract({ goal: "Keep pending delivery" }), false);
+    const live = await createTask(store, validContract({ goal: "Keep live task" }));
+    const result = await store.pruneExpired(Date.now() + 10_000);
     assert.deepEqual(result.deleted, [delivered.id]);
-    assert.ok(result.kept >= 2);
-    assert.equal((await store.read(delivered.id).catch(() => null)), null);
-    assert.equal((await store.read(undelivered.id)).status, "completed_with_warnings");
-    assert.equal((await store.read(live.id)).status, "queued");
+    assert.equal(await store.read(delivered.id).catch(() => null), null);
+    assert.equal((await store.read(undelivered.id)).lifecycle, "terminal");
+    assert.equal((await store.read(live.id)).lifecycle, "queued");
   });
 });
 
-test("event log survives malformed tail without hiding valid history", async () => {
+test("event log keeps monotonic valid history when its tail is truncated", async () => {
   await withStore({}, async (store, root) => {
-    const task = await store.create({ contract: validContract() });
+    const task = await createTask(store);
     const eventsPath = join(root, encodeURIComponent(task.id), "events.jsonl");
     await readFile(eventsPath, "utf8");
-    const { appendFile } = await import("node:fs/promises");
     await appendFile(eventsPath, "{broken\n", "utf8");
     const events = await store.readEvents(task.id);
     assert.equal(events.length, 1);
     assert.equal(events[0].type, "created");
+    assert.ok(events.every((event, index) => event.sequence === index + 1));
   });
 });
