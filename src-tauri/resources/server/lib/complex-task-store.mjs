@@ -193,6 +193,11 @@ export function createComplexTaskStore(rootDir, options = {}) {
     }
     const parsed = candidates.sort((left, right) => Number(right.revision || 0) - Number(left.revision || 0))[0];
     if (parsed) return project(parsed);
+    if (!existsSync(dirFor(key))) {
+      const missing = new Error(`complex task not found: ${key}`);
+      missing.code = "ENOENT";
+      throw missing;
+    }
     const wrapped = new Error(`invalid complex task manifest: ${key}`);
     wrapped.code = existsSync(dirFor(key)) ? "COMPLEX_TASK_MANIFEST_CORRUPT" : "ENOENT";
     throw wrapped;
