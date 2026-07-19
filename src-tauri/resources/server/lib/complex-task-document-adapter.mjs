@@ -201,6 +201,8 @@ function normalizeGenerated(value, unitPlan, units) {
     warnings: Array.isArray(objectValue.warnings) ? objectValue.warnings : [],
     confidence: Number.isFinite(Number(objectValue.confidence)) ? Number(objectValue.confidence) : (usedFallback ? 0.25 : 0.8),
     nextActionProposal: objectValue.nextActionProposal || (usedFallback ? "review-source-fallback" : "continue"),
+    modelConfigFingerprint: text(objectValue.modelConfigFingerprint, ""),
+    fallbackKind: text(objectValue.fallbackKind, usedFallback ? "source" : ""),
   };
 }
 
@@ -232,8 +234,9 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
         producer: {
           adapterVersion: text(task?.contract?.pinned?.adapterVersion, DOCUMENT_ADAPTER_VERSION),
           skillHash: text(task?.contract?.pinned?.skillHash, skillHash()),
-          modelConfigFingerprint: text(task?.metadata?.currentModelConfigFingerprint, "unknown"),
+          modelConfigFingerprint: text(generated.modelConfigFingerprint, text(task?.metadata?.currentModelConfigFingerprint, "unknown")),
           toolSchemaVersion: text(task?.contract?.pinned?.toolSchemaVersion, "1"),
+          ...(generated.fallbackKind ? { fallbackKind: generated.fallbackKind } : {}),
         },
       },
       content: generated.markdown,
