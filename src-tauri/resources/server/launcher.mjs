@@ -71,7 +71,7 @@ const {
 } = await importEarly("./lib/provider.mjs");
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
-const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention } = await importEarly("./lib/context-input-transaction.mjs");
+const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage } = await importEarly("./lib/context-input-transaction.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
@@ -5138,12 +5138,6 @@ function documentAutoContinuationPrompt(state, attempt) {
     `上一批已持久化后，再调用 extract_pdf_text，input 使用 ${state.documentRef}，pages 使用 ${nextPageRange}。`,
     "继续沿用用户要求的整理粒度；长篇 Markdown 分段追加，最后确认产物存在且覆盖范围完整。",
   ].join("\n");
-}
-
-function requiresCompleteContextCoverage(text, artifactRequest) {
-  if (artifactRequest?.required !== true) return false;
-  const value = String(text ?? "");
-  return !/(?:只要|仅需|仅|只).{0,10}(?:摘要|总结|概述|要点)|summary[ -]?only|brief summary/i.test(value);
 }
 
 function incompleteActivePlanSnapshot() {

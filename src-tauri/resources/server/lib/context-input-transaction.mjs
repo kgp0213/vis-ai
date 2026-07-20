@@ -101,6 +101,16 @@ export function buildContextInputFlushPrompt(status) {
   return `[CONTEXT_INPUT_FLUSH_REQUIRED]\n当前任务仍有未处理输入。一次只处理一个待处理输入：使用 read_context_input 按段恢复，立即通过 write_file、append_file 或 edit_file 把该段持久化或整合到交付物，再读取下一段。不要声称任务已完整完成。\n\n${list}`;
 }
 
+export function requiresCompleteContextCoverage(text, artifactRequest = {}) {
+  if (artifactRequest.required !== true) return false;
+  const value = String(text ?? "");
+  if (/(?:只要|仅需|仅|只).{0,12}(?:摘要|总结|概述|要点)|summary[ -]?only|brief summary/i.test(value)) return false;
+  if (/(?:完整(?:内容|全文)?|全文|全部内容|逐页完整|无损|verbatim|lossless|complete content|entire (?:document|content)|full content)/i.test(value)) return true;
+  const existingDocument = /\.(?:pdf|docx?|xlsx?|pptx?|html?|md|markdown|csv|txt)(?:\b|["'`，。；、)）（\]])|\b(?:pdf|word|excel|powerpoint|ppt)\b/i.test(value);
+  const markdownOutput = /\.(?:md|markdown)(?:\b|["'`，。；、)）（\]])|markdown|保存为\s*md|转(?:为|成)\s*md/i.test(value);
+  return existingDocument && markdownOutput;
+}
+
 export function createContextInputTransactionStore(root, options = {}) {
   const storeRoot = resolve(root);
   const blobRoot = resolve(storeRoot, "blobs");
@@ -111,6 +121,8 @@ export function createContextInputTransactionStore(root, options = {}) {
   const atomicWrite = options.atomicWrite ?? atomicWriteFileSync;
   let state = null;
   let statePath = null;
+  let deferredInputs = [];
+  let deferredChars = 0;
 
   function persist() {
     if (!state || !statePath) return;
@@ -131,34 +143,61 @@ export function createContextInputTransactionStore(root, options = {}) {
       }
     }
     state = normalizeState(saved, turnId, turn);
+    deferredInputs = [];
+    deferredChars = 0;
     return status();
   }
 
   function captureInput({ source = "unknown", content, metadata = null } = {}) {
     if (!state) throw new Error("beginTurn must be called before captureInput");
     const value = typeof content === "string" ? content : JSON.stringify(content ?? "");
-    if (value.length < inputThresholdChars) return { ok: true, cached: false, chars: value.length };
     const hash = sha256(value);
     const contextId = `context:${hash}`;
     const existing = state.inputs.find((entry) => entry.contextId === contextId);
     if (existing) return { ok: true, cached: true, contextId, chars: existing.chars, deduplicated: true };
+    const candidate = {
+      contextId,
+      hash,
+      source: String(source).slice(0, 160),
+      metadata: metadata && typeof metadata === "object" ? metadata : null,
+      content: value,
+    };
+    const cumulativeToolInput = candidate.source.startsWith("tool:");
+    if (value.length < inputThresholdChars) {
+      if (!cumulativeToolInput) return { ok: true, cached: false, chars: value.length };
+      deferredInputs.push(candidate);
+      deferredChars += value.length;
+      if (deferredChars < inputThresholdChars) return { ok: true, cached: false, chars: value.length };
+    } else {
+      deferredInputs.push(candidate);
+      deferredChars += value.length;
+    }
 
-    const blobPath = resolve(blobRoot, `${hash}.txt`);
     try {
-      if (!existsSync(blobPath)) atomicWrite(blobPath, value, "utf8");
-      state.inputs.push({
-        contextId,
-        hash,
-        source: String(source).slice(0, 160),
-        metadata: metadata && typeof metadata === "object" ? metadata : null,
-        chars: value.length,
-        materializedChars: 0,
-        state: "pending",
-        capturedAt: new Date().toISOString(),
-      });
+      const knownIds = new Set(state.inputs.map((entry) => entry.contextId));
+      const additions = [];
+      for (const pending of deferredInputs) {
+        if (knownIds.has(pending.contextId)) continue;
+        const blobPath = resolve(blobRoot, `${pending.hash}.txt`);
+        if (!existsSync(blobPath)) atomicWrite(blobPath, pending.content, "utf8");
+        knownIds.add(pending.contextId);
+        additions.push({
+          contextId: pending.contextId,
+          hash: pending.hash,
+          source: pending.source,
+          metadata: pending.metadata,
+          chars: pending.content.length,
+          materializedChars: 0,
+          state: "pending",
+          capturedAt: new Date().toISOString(),
+        });
+      }
+      state.inputs.push(...additions);
       state.finalWithPending = false;
       state.completionClaimWithPending = false;
       persist();
+      deferredInputs = [];
+      deferredChars = 0;
       return { ok: true, cached: true, contextId, chars: value.length };
     } catch (error) {
       state.cacheFailures.push(String(error?.message || error).slice(0, 500));
@@ -272,7 +311,10 @@ export function createContextInputTransactionStore(root, options = {}) {
     state.interventionChoice = selected || null;
     state.finalWithPending = false;
     state.completionClaimWithPending = false;
-    if (selected === "continue") state.blockedReadCount = 0;
+    if (selected === "continue") {
+      state.blockedReadCount = 0;
+      state.cacheFailures = [];
+    }
     if (selected === "accept-partial") {
       for (const entry of pendingInputs(state)) entry.state = "foldable";
     }

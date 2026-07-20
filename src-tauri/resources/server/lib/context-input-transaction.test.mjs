@@ -8,6 +8,7 @@ import {
   buildContextInputFlushPrompt,
   createContextInputTransactionStore,
   decideContextInputIntervention,
+  requiresCompleteContextCoverage,
 } from "./context-input-transaction.mjs";
 
 async function withStore(fn, options = {}) {
@@ -24,6 +25,14 @@ async function withStore(fn, options = {}) {
     await rm(root, { recursive: true, force: true });
   }
 }
+
+test("complete coverage is limited to explicit fidelity requests and document-to-Markdown delivery", () => {
+  assert.equal(requiresCompleteContextCoverage("提取 manual.pdf 完整内容并保存为 md", { required: true }), true);
+  assert.equal(requiresCompleteContextCoverage("把 report.docx 整理成 Markdown", { required: true }), true);
+  assert.equal(requiresCompleteContextCoverage("只要 PDF 摘要并保存为 md", { required: true }), false);
+  assert.equal(requiresCompleteContextCoverage("修改 src/app.js 并保存文件", { required: true }), false);
+  assert.equal(requiresCompleteContextCoverage("完整解释这段代码", { required: false }), false);
+});
 
 test("large context inputs are cached losslessly and survive a store restart", async () => {
   await withStore(async (store, root) => {
@@ -44,6 +53,21 @@ test("large context inputs are cached losslessly and survive a store restart", a
     resumed.beginTurn({ turnId: "turn-1", requiresArtifact: true, requiresCompleteCoverage: true });
     assert.equal(resumed.status().pendingCount, 1);
     assert.equal(resumed.readInput(captured.contextId).content, content);
+  });
+});
+
+test("successive bounded reads are cached together once their cumulative input crosses the threshold", async () => {
+  await withStore(async (store) => {
+    store.beginTurn({ turnId: "turn-batches", requiresArtifact: true, requiresCompleteCoverage: true });
+    const first = store.captureInput({ source: "tool:first_reader", content: "a".repeat(60) });
+    const second = store.captureInput({ source: "tool:second_reader", content: "b".repeat(60) });
+
+    assert.equal(first.cached, false);
+    assert.equal(second.cached, true);
+    const status = store.status();
+    assert.equal(status.pendingCount, 2);
+    assert.equal(status.pendingChars, 120);
+    assert.deepEqual(status.pendingInputs.map((entry) => store.readInput(entry.contextId).content), ["a".repeat(60), "b".repeat(60)]);
   });
 });
 

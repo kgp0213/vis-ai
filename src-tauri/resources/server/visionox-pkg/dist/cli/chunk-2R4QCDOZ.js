@@ -8189,6 +8189,7 @@ ${reason}`
         confirmationGate: this.confirmationGate,
         onRawResult: this.contextInputGuard && contextTool.readOnly && !contextTool.contextControl
           ? ({ result: rawResult }) => {
+              if (!contextToolResultSucceeded(rawResult)) return "";
               const captured = this.contextInputGuard.captureInput({
                 source: `tool:${name}`,
                 content: rawResult,
@@ -8828,6 +8829,16 @@ ${reason}`
         }
         }
       } else if (decision.kind === "recovery-required") {
+        let inputCompaction = null;
+        try { inputCompaction = this.contextInputGuard?.beforeCompaction() ?? null; } catch {}
+        if (inputCompaction?.blocked) {
+          yield {
+            turn: this._turn,
+            role: "context_input_flush_required",
+            content: "上下文恢复已暂停，先执行当前输入的持久化操作。",
+            contextInputStatus: this.contextInputGuard?.status?.() ?? null,
+          };
+        } else {
         const before = decision.promptTokens;
         const ctxMax = decision.ctxMax;
         yield {
@@ -8846,6 +8857,7 @@ ${reason}`
         this.context.trimTrailingToolCalls();
         yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "context-guard" });
         return;
+        }
       }
       if (repairedCalls.length === 0) {
         yield { turn: this._turn, role: "done", content: assistantContent };
