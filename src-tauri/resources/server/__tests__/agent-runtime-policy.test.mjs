@@ -244,38 +244,94 @@ describe("agent runtime policy", () => {
     assert.equal(events.findLast((event) => event.role === "assistant_final")?.content, "文档整理任务已进入后台队列。");
   });
 
-  test("provider length truncation is surfaced instead of persisted as a final answer", async () => {
+  test("provider text truncation automatically continues once and persists the complete answer", async () => {
+    let calls = 0;
+    const requests = [];
     const client = {
-      chat: async () => ({
-        content: "partial answer",
-        toolCalls: [],
-        usage: {},
-        finishReason: "length",
-      }),
+      chat: async (request) => {
+        requests.push(request);
+        calls++;
+        if (calls === 1) return {
+          content: "partial answer",
+          toolCalls: [],
+          usage: {},
+          finishReason: "length",
+        };
+        return { content: " completed", toolCalls: [], usage: {}, finishReason: "stop" };
+      },
     };
     const loop = makeLoop(client, new ToolRegistry());
     const events = [];
     for await (const event of loop.step("produce a long answer")) events.push(event);
 
-    assert.equal(events.some((event) => event.role === "assistant_final"), false);
-    assert.match(events.find((event) => event.role === "error")?.error ?? "", /output limit|truncated/i);
-    assert.equal(loop.log.toMessages().some((message) => message.content === "partial answer"), false);
+    assert.equal(calls, 2);
+    assert.match(requests[1].messages.findLast((message) => message.role === "user")?.content ?? "", /continue|续写|截断/i);
+    assert.equal(events.some((event) => event.role === "error"), false);
+    assert.equal(events.findLast((event) => event.role === "assistant_final")?.content, "partial answer completed");
+    assert.equal(loop.log.toMessages().some((message) => message.content === "partial answer completed"), true);
   });
 
-  test("streamed provider length truncation is surfaced instead of persisted", async () => {
+  test("streamed provider text truncation automatically continues without losing the partial text", async () => {
+    let calls = 0;
     const client = {
       async *stream() {
-        yield { contentDelta: "partial answer" };
-        yield { finishReason: "length", streamComplete: true };
+        calls++;
+        if (calls === 1) {
+          yield { contentDelta: "partial answer" };
+          yield { finishReason: "length", streamComplete: true };
+          return;
+        }
+        yield { contentDelta: " completed" };
+        yield { finishReason: "stop", streamComplete: true };
       },
     };
     const loop = makeLoop(client, new ToolRegistry(), { stream: true });
     const events = [];
     for await (const event of loop.step("produce a long answer")) events.push(event);
 
-    assert.equal(events.some((event) => event.role === "assistant_final"), false);
-    assert.match(events.find((event) => event.role === "error")?.error ?? "", /output limit|truncated/i);
-    assert.equal(loop.log.toMessages().some((message) => message.content === "partial answer"), false);
+    assert.equal(calls, 2);
+    assert.equal(events.some((event) => event.role === "error"), false);
+    assert.equal(events.findLast((event) => event.role === "assistant_final")?.content, "partial answer completed");
+    assert.equal(loop.log.toMessages().some((message) => message.content === "partial answer completed"), true);
+  });
+
+  test("truncated mutating tool arguments are discarded and retried as smaller calls", async () => {
+    let calls = 0;
+    let writes = 0;
+    const requests = [];
+    const client = {
+      chat: async (request) => {
+        requests.push(request);
+        calls++;
+        if (calls === 1) return {
+          content: "",
+          toolCalls: [toolCall("write-cut", "write_file", '{"path":"report.md","content":"partial')],
+          usage: {},
+          finishReason: "length",
+        };
+        if (calls === 2) return {
+          content: "",
+          toolCalls: [toolCall("write-safe", "write_file", { path: "report.md", content: "short section" })],
+          usage: {},
+          finishReason: "tool_calls",
+        };
+        return { content: "done", toolCalls: [], usage: {}, finishReason: "stop" };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "write_file",
+      parameters: { type: "object", properties: {} },
+      readOnly: false,
+      fn: async () => { writes++; return "wrote"; },
+    });
+    const events = [];
+    for await (const event of makeLoop(client, tools).step("write a report")) events.push(event);
+
+    assert.equal(calls, 3);
+    assert.equal(writes, 1);
+    assert.match(requests[1].messages.findLast((message) => message.role === "user")?.content ?? "", /split|smaller|分段/i);
+    assert.equal(events.some((event) => event.role === "error"), false);
   });
 
   test("file writer validation explains the required content shape", async () => {

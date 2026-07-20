@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const runtimeChunkUrl = new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url);
-const { contextThresholdsForCapacity } = await import(runtimeChunkUrl.href);
+const {
+  contextThresholdsForCapacity,
+  createContextFoldState,
+  decideDynamicContextAction,
+  recordContextFoldOutcome,
+} = await import(runtimeChunkUrl.href);
 
 // ── Threshold constants (mirrored from chunk-2R4QCDOZ.js:6589-6601) ─────
 // These are golden-value tests: if the constants in the chunk change,
@@ -154,14 +159,11 @@ describe("decideAfterUsage 决策逻辑", () => {
     assert.ok(contextDecision < noToolReturn, "context decision must run before the no-tool return");
   });
 
-  test("强制总结前真正压缩历史，普通最终回答不会重复生成第二份总结", () => {
+  test("高水位先激进压缩并继续，只有恢复熔断才生成总结", () => {
     const source = readFileSync(runtimeChunkUrl, "utf8");
-    const forceBranch = source.indexOf('decision.kind === "exit-with-summary"');
-    const compact = source.indexOf("await this.compactHistory({ keepRecentTokens: decision.tailBudget })", forceBranch);
-    const noTool = source.indexOf("if (repairedCalls.length === 0)", compact);
-    const forceSummary = source.indexOf("yield* forceSummaryAfterIterLimit", noTool);
-    assert.ok(forceBranch >= 0 && compact > forceBranch);
-    assert.ok(noTool > compact && forceSummary > noTool);
+    assert.doesNotMatch(source, /decision\.kind === "exit-with-summary"/);
+    assert.match(source, /decision\.kind === "recovery-required"/);
+    assert.match(source, /recordContextFoldOutcome/);
   });
 
   test("切换模型后下一次请求按普通压缩阈值预检", () => {
@@ -204,12 +206,55 @@ describe("decideAfterUsage 决策逻辑", () => {
     assert.equal(exit.kind, "exit-with-summary");
   });
 
-  test("alreadyFoldedThisTurn=true 阻止二次折叠（但 exit-with-summary 仍生效）", () => {
-    const d = decideAfterUsage(Math.floor(CTX.K128 * 0.6), CTX.K128, true);
-    assert.equal(d.kind, "none");
-    // forceSummary 优先级高于 alreadyFolded
-    const d2 = decideAfterUsage(Math.floor(CTX.K128 * 0.85), CTX.K128, true);
-    assert.equal(d2.kind, "exit-with-summary");
+  test("同一轮上下文重新增长后可连续进行四次有效压缩", () => {
+    let state = createContextFoldState();
+    const thresholds = contextThresholdsForCapacity(256000);
+    for (let index = 0; index < 4; index++) {
+      const beforeTokens = 144000 + index * 4000;
+      const decision = decideDynamicContextAction({ promptTokens: beforeTokens, thresholds, state });
+      assert.equal(decision.kind, "fold");
+      state = recordContextFoldOutcome(state, {
+        beforeTokens,
+        afterTokens: 60000,
+        folded: true,
+      });
+    }
+    assert.equal(state.foldCount, 4);
+    assert.equal(state.consecutiveIneffectiveFolds, 0);
+  });
+
+  test("有效压缩后未重新增长 32K 时不会重复压缩", () => {
+    const thresholds = contextThresholdsForCapacity(256000);
+    const state = recordContextFoldOutcome(createContextFoldState(), {
+      beforeTokens: 144000,
+      afterTokens: 120000,
+      folded: true,
+    });
+    assert.equal(decideDynamicContextAction({ promptTokens: 145000, thresholds, state }).kind, "none");
+    assert.equal(decideDynamicContextAction({ promptTokens: 155000, thresholds, state }).kind, "fold");
+  });
+
+  test("连续两次压缩无效后要求恢复，而不是无限循环", () => {
+    const thresholds = contextThresholdsForCapacity(256000);
+    let state = createContextFoldState();
+    state = recordContextFoldOutcome(state, { beforeTokens: 144000, afterTokens: 120000, folded: true });
+    state = recordContextFoldOutcome(state, { beforeTokens: 150000, afterTokens: 130000, folded: true });
+    const decision = decideDynamicContextAction({ promptTokens: 170000, thresholds, state });
+    assert.equal(state.consecutiveIneffectiveFolds, 2);
+    assert.equal(decision.kind, "recovery-required");
+    assert.equal(decision.reason, "ineffective-folds");
+  });
+
+  test("达到强制总结水位时改为激进压缩并继续", () => {
+    const thresholds = contextThresholdsForCapacity(256000);
+    const decision = decideDynamicContextAction({
+      promptTokens: 212382,
+      thresholds,
+      state: createContextFoldState(),
+    });
+    assert.equal(decision.kind, "fold");
+    assert.equal(decision.aggressive, true);
+    assert.equal(decision.tailBudget, thresholds.aggressiveTailTokens);
   });
 });
 
