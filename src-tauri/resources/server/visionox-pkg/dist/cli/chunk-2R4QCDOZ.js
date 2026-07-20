@@ -8497,9 +8497,9 @@ ${reason}`
             thinking: thinkingModeForModel(callModel),
             reasoningEffort: this.reasoningEffort
           });
-          assistantContent = resp.content;
+          assistantContent = resp.content ?? "";
           reasoningContent = resp.reasoningContent ?? "";
-          toolCalls = resp.toolCalls;
+          toolCalls = Array.isArray(resp.toolCalls) ? resp.toolCalls : [];
           usage = resp.usage;
           finishReason = resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason ?? null;
           assertModelResponseComplete(finishReason);
@@ -8511,14 +8511,17 @@ ${reason}`
           return;
         }
         if (err?.name === "ModelOutputTruncatedError") {
-          const hasToolFragments = toolCalls.length > 0;
+          const hasToolFragments = Array.isArray(toolCalls) && toolCalls.length > 0;
+          if (usage) {
+            try { this.stats.record(this._turn, this.modelForCurrentCall(), usage); } catch {}
+          }
           if (outputRecoveryAttempts < 1) {
             outputRecoveryAttempts++;
             if (hasToolFragments) {
               outputRecoveryPrefix = "";
               outputRecoveryInstruction = "Your previous tool call was truncated by the provider output limit. Discard it completely. Retry the same task using smaller, complete tool calls. For write_file or append_file, split content into sections no larger than 12000 characters. Do not repeat any tool call that already completed.";
             } else {
-              outputRecoveryPrefix += assistantContent;
+              outputRecoveryPrefix += assistantContent ?? "";
               outputRecoveryInstruction = "The previous response was truncated by the provider output limit. Continue exactly where it stopped, keep the remainder concise, and do not repeat the text already written.";
             }
             yield {
@@ -8533,7 +8536,7 @@ ${reason}`
             iter--;
             continue;
           }
-          const partial = `${outputRecoveryPrefix}${assistantContent}`;
+          const partial = `${outputRecoveryPrefix}${assistantContent ?? ""}`;
           if (partial.trim() && !hasToolFragments) {
             if (pendingUser !== null) {
               this.appendAndPersist({ role: "user", content: pendingUser });

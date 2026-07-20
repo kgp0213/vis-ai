@@ -334,6 +334,36 @@ describe("agent runtime policy", () => {
     assert.equal(events.some((event) => event.role === "error"), false);
   });
 
+  test("two truncated mutating tool responses stop safely without executing either fragment", async () => {
+    let calls = 0;
+    let writes = 0;
+    const client = {
+      chat: async () => {
+        calls++;
+        return {
+          content: "",
+          toolCalls: [toolCall(`write-cut-${calls}`, "write_file", '{"path":"report.md","content":"partial')],
+          usage: {},
+          finishReason: "length",
+        };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "write_file",
+      parameters: { type: "object", properties: {} },
+      readOnly: false,
+      fn: async () => { writes++; return "wrote"; },
+    });
+    const events = [];
+    for await (const event of makeLoop(client, tools).step("write a report")) events.push(event);
+
+    assert.equal(calls, 2);
+    assert.equal(writes, 0);
+    assert.equal(events.filter((event) => event.role === "output_recovery_required").length, 1);
+    assert.equal(events.filter((event) => event.role === "tool_start").length, 0);
+  });
+
   test("file writer validation explains the required content shape", async () => {
     const tools = new ToolRegistry();
     tools.register({
