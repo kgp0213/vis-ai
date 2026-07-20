@@ -227,11 +227,11 @@ describe("decideAfterUsage 决策逻辑", () => {
     const thresholds = contextThresholdsForCapacity(256000);
     const state = recordContextFoldOutcome(createContextFoldState(), {
       beforeTokens: 144000,
-      afterTokens: 120000,
+      afterTokens: 100000,
       folded: true,
     });
-    assert.equal(decideDynamicContextAction({ promptTokens: 145000, thresholds, state }).kind, "none");
-    assert.equal(decideDynamicContextAction({ promptTokens: 155000, thresholds, state }).kind, "fold");
+    assert.equal(decideDynamicContextAction({ promptTokens: 129000, thresholds, state }).kind, "none");
+    assert.equal(decideDynamicContextAction({ promptTokens: 133000, thresholds, state }).kind, "fold");
   });
 
   test("连续两次压缩无效后要求恢复，而不是无限循环", () => {

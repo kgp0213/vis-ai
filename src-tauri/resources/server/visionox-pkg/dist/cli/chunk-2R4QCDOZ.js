@@ -6643,6 +6643,9 @@ var FORCE_SUMMARY_THRESHOLD = 0.8;
 var FORCE_SUMMARY_ABSOLUTE_CAP = 320000;
 var PREFLIGHT_EMERGENCY_THRESHOLD = 0.95;
 var PREFLIGHT_EMERGENCY_ABSOLUTE_CAP = 380000;
+var CONTEXT_FOLD_MIN_GROWTH_TOKENS = 32000;
+var CONTEXT_FOLD_MAX_PER_TURN = 8;
+var CONTEXT_FOLD_MAX_INEFFECTIVE = 2;
 var HISTORY_FOLD_MARKER = "[CONVERSATION HISTORY SUMMARY \u2014 earlier turns folded for context efficiency]\n\n";
 var SKILL_PIN_MEMO_HEADER = "[Active skill memos \u2014 preserved verbatim across the fold:]";
 var SKILL_PIN_REGEX = /<skill-pin name="([^"]+)">\n[\s\S]*?\n<\/skill-pin>/g;
@@ -6661,6 +6664,67 @@ function contextThresholdsForCapacity(ctxMax) {
 }
 function contextThresholdsForModel(model) {
   return contextThresholdsForCapacity(DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS);
+}
+function createContextFoldState() {
+  return {
+    foldCount: 0,
+    consecutiveIneffectiveFolds: 0,
+    lastFoldAfterTokens: null,
+    lastFoldEffective: false
+  };
+}
+function recordContextFoldOutcome(state, outcome) {
+  const current = state ?? createContextFoldState();
+  const beforeTokens = Number(outcome?.beforeTokens) || 0;
+  const afterTokens = Number(outcome?.afterTokens) || beforeTokens;
+  const savingsFraction = beforeTokens > 0 ? Math.max(0, beforeTokens - afterTokens) / beforeTokens : 0;
+  const effective = outcome?.folded === true && savingsFraction >= HISTORY_FOLD_MIN_SAVINGS_FRACTION;
+  return {
+    foldCount: current.foldCount + 1,
+    consecutiveIneffectiveFolds: effective ? 0 : current.consecutiveIneffectiveFolds + 1,
+    lastFoldAfterTokens: afterTokens,
+    lastFoldEffective: effective,
+    lastSavingsFraction: savingsFraction
+  };
+}
+function decideDynamicContextAction({ promptTokens, thresholds, state }) {
+  const current = state ?? createContextFoldState();
+  const ctxMax = thresholds.ctxMax;
+  const measuredPromptTokens = Number(promptTokens);
+  const validPromptTokens = Number.isFinite(measuredPromptTokens) && measuredPromptTokens >= 0
+    ? measuredPromptTokens
+    : 0;
+  const ratio = ctxMax > 0 ? validPromptTokens / ctxMax : 0;
+  const base = { promptTokens: validPromptTokens, ctxMax, ratio };
+  if (validPromptTokens === 0) return { kind: "none", ...base };
+  if (current.consecutiveIneffectiveFolds >= CONTEXT_FOLD_MAX_INEFFECTIVE) {
+    return { kind: "recovery-required", reason: "ineffective-folds", ...base };
+  }
+  if (current.foldCount >= CONTEXT_FOLD_MAX_PER_TURN) {
+    return { kind: "recovery-required", reason: "fold-limit", ...base };
+  }
+  if (validPromptTokens <= thresholds.foldTokens) return { kind: "none", ...base };
+  const forceAggressive = validPromptTokens > thresholds.forceSummaryTokens;
+  const growthSinceFold = current.lastFoldAfterTokens === null
+    ? Number.POSITIVE_INFINITY
+    : validPromptTokens - current.lastFoldAfterTokens;
+  if (
+    !forceAggressive &&
+    current.foldCount > 0 &&
+    current.lastFoldEffective &&
+    growthSinceFold < CONTEXT_FOLD_MIN_GROWTH_TOKENS
+  ) {
+    return { kind: "none", ...base, reason: "insufficient-growth" };
+  }
+  const aggressive = forceAggressive ||
+    validPromptTokens > thresholds.aggressiveTokens ||
+    current.consecutiveIneffectiveFolds > 0;
+  return {
+    kind: "fold",
+    ...base,
+    tailBudget: aggressive ? thresholds.aggressiveTailTokens : thresholds.normalTailTokens,
+    aggressive
+  };
 }
 function extractPinnedSkills(head) {
   const pinned = /* @__PURE__ */ new Map();
@@ -6689,33 +6753,11 @@ var ContextManager = class {
     return contextThresholdsForModel(model);
   }
   /** Decision after a turn's response — fold, exit with summary, or carry on. */
-  decideAfterUsage(usage, model, alreadyFoldedThisTurn) {
+  decideAfterUsage(usage, model, foldState) {
     const thresholds = this.thresholds(model);
     const ctxMax = thresholds.ctxMax;
     if (!usage) return { kind: "none", promptTokens: 0, ctxMax, ratio: 0 };
-    const ratio = usage.promptTokens / ctxMax;
-    const base = { promptTokens: usage.promptTokens, ctxMax, ratio };
-    if (usage.promptTokens > thresholds.forceSummaryTokens) {
-      return { kind: "exit-with-summary", ...base, tailBudget: thresholds.aggressiveTailTokens };
-    }
-    if (alreadyFoldedThisTurn) return { kind: "none", ...base };
-    if (usage.promptTokens > thresholds.aggressiveTokens) {
-      return {
-        kind: "fold",
-        ...base,
-        tailBudget: thresholds.aggressiveTailTokens,
-        aggressive: true
-      };
-    }
-    if (usage.promptTokens > thresholds.foldTokens) {
-      return {
-        kind: "fold",
-        ...base,
-        tailBudget: thresholds.normalTailTokens,
-        aggressive: false
-      };
-    }
-    return { kind: "none", ...base };
+    return decideDynamicContextAction({ promptTokens: usage.promptTokens, thresholds, state: foldState });
   }
   /** Local-side preflight before sending a request — catches oversized payloads early. */
   decidePreflight(messages, toolSpecs, model, thresholdKind = "emergency") {
@@ -7704,7 +7746,7 @@ var CacheFirstLoop = class {
   _turnFailures;
   _sameFailureClassTracker;
   _turnSelfCorrected = false;
-  _foldedThisTurn = false;
+  _contextFoldState = createContextFoldState();
   _contextRecheckRequired = false;
   _contextStatusCache = /* @__PURE__ */ new Map();
   _toolDispatchesThisStep = 0;
@@ -8216,9 +8258,12 @@ ${reason}`
     this._sameFailureClassTracker.reset();
     this._turnSelfCorrected = false;
     this._escalateThisTurn = false;
-    this._foldedThisTurn = false;
+    this._contextFoldState = createContextFoldState();
     this._toolDispatchesThisStep = 0;
     this._toolRoundsThisStep = 0;
+    let outputRecoveryAttempts = 0;
+    let outputRecoveryPrefix = "";
+    let outputRecoveryInstruction = "";
     this._officeCliElementCallsThisStep = 0;
     let armedConsumed = false;
     if (this._proArmedForNextTurn) {
@@ -8280,6 +8325,10 @@ ${reason}`
         };
       }
       let messages = this.buildMessages(pendingUser, turnImages);
+      if (outputRecoveryInstruction) {
+        if (outputRecoveryPrefix) messages.push({ role: "assistant", content: outputRecoveryPrefix });
+        messages.push({ role: "user", content: outputRecoveryInstruction });
+      }
       {
         const thresholdKind = this._contextRecheckRequired ? "fold" : "emergency";
         this._contextRecheckRequired = false;
@@ -8426,8 +8475,8 @@ ${reason}`
             }
             if (chunk.usage) usage = chunk.usage;
           }
-          assertModelResponseComplete(finishReason);
           toolCalls = [...callBuf.values()];
+          assertModelResponseComplete(finishReason);
           if (bufferForEscalation && !escalationBufFlushed && escalationBuf.length > 0) {
             if (!isEscalationRequest(escalationBuf)) {
               yield {
@@ -8461,6 +8510,47 @@ ${reason}`
           this._turnAbort = new AbortController();
           return;
         }
+        if (err?.name === "ModelOutputTruncatedError") {
+          const hasToolFragments = toolCalls.length > 0;
+          if (outputRecoveryAttempts < 1) {
+            outputRecoveryAttempts++;
+            if (hasToolFragments) {
+              outputRecoveryPrefix = "";
+              outputRecoveryInstruction = "Your previous tool call was truncated by the provider output limit. Discard it completely. Retry the same task using smaller, complete tool calls. For write_file or append_file, split content into sections no larger than 12000 characters. Do not repeat any tool call that already completed.";
+            } else {
+              outputRecoveryPrefix += assistantContent;
+              outputRecoveryInstruction = "The previous response was truncated by the provider output limit. Continue exactly where it stopped, keep the remainder concise, and do not repeat the text already written.";
+            }
+            yield {
+              turn: this._turn,
+              role: "output_recovery",
+              content: hasToolFragments
+                ? "模型输出过长，正在改用较小的分段继续处理…"
+                : "回答较长，正在自动续写剩余内容…",
+              recoveryType: hasToolFragments ? "split-tool" : "continue-text",
+              attempt: outputRecoveryAttempts
+            };
+            iter--;
+            continue;
+          }
+          const partial = `${outputRecoveryPrefix}${assistantContent}`;
+          if (partial.trim() && !hasToolFragments) {
+            if (pendingUser !== null) {
+              this.appendAndPersist({ role: "user", content: pendingUser });
+              pendingUser = null;
+            }
+            this.appendAndPersist(buildAssistantMessage(partial, [], this.modelForCurrentCall(), reasoningContent));
+            yield { turn: this._turn, role: "assistant_final", content: partial, outputIncomplete: true };
+          }
+          yield {
+            turn: this._turn,
+            role: "output_recovery_required",
+            content: "模型连续两次达到输出上限，已安全停止。可以继续处理，系统不会执行残缺的工具操作。",
+            recoveryType: hasToolFragments ? "split-tool" : "continue-text"
+          };
+          yield { turn: this._turn, role: "done", content: partial };
+          return;
+        }
         const probe = is5xxError(err) ? await probeDeepSeekReachable(this.client) : void 0;
         yield {
           turn: this._turn,
@@ -8469,6 +8559,11 @@ ${reason}`
           error: formatLoopError(err, probe)
         };
         return;
+      }
+      if (outputRecoveryInstruction) {
+        assistantContent = `${outputRecoveryPrefix}${assistantContent}`;
+        outputRecoveryPrefix = "";
+        outputRecoveryInstruction = "";
       }
       if (this.autoEscalate && this.modelForCurrentCall() !== this.escalationModel && isEscalationRequest(assistantContent)) {
         const { reason } = parseEscalationMarker(assistantContent);
@@ -8572,36 +8667,39 @@ ${reason}`
         yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "stuck" });
         return;
       }
-      const decision = this.context.decideAfterUsage(usage, this.model, this._foldedThisTurn);
+      const decision = this.context.decideAfterUsage(usage, this.model, this._contextFoldState);
       if (decision.kind === "fold") {
-        this._foldedThisTurn = true;
         const before = decision.promptTokens;
         const ctxMax = decision.ctxMax;
-        const aggressiveTag = decision.aggressive ? t("loop.aggressiveTag") : "";
-        yield {
-          turn: this._turn,
-          role: "status",
-          content: t("loop.compactingHistoryStatus", { aggressiveTag })
-        };
         const result = await this.compactHistory({ keepRecentTokens: decision.tailBudget });
+        const after = this.context.decidePreflight(
+          this.buildMessages(null, turnImages),
+          this.prefix.toolSpecs,
+          this.model,
+          "fold"
+        ).estimateTokens;
+        this._contextFoldState = recordContextFoldOutcome(this._contextFoldState, {
+          beforeTokens: before,
+          afterTokens: after,
+          folded: result.folded
+        });
         if (result.folded) {
+          const foldCount = this._contextFoldState.foldCount;
           yield {
             turn: this._turn,
-            role: "warning",
-            content: t(
-              decision.aggressive ? "loop.aggressivelyFoldedHistory" : "loop.foldedHistory",
-              {
-                before: before.toLocaleString(),
-                ctxMax: ctxMax.toLocaleString(),
-                pct: Math.round(before / ctxMax * 100),
-                beforeMessages: result.beforeMessages,
-                afterMessages: result.afterMessages,
-                summaryChars: result.summaryChars
-              }
-            )
+            role: "context_compacted",
+            content: foldCount >= 4
+              ? "本次任务持续时间较长，较早的对话内容已多次整理；任务仍在继续。"
+              : "正在整理较早的对话内容，当前任务会继续执行…",
+            notice: foldCount === 1 ? "silent" : foldCount === 4 ? "warning" : "status",
+            foldCount,
+            aggressive: decision.aggressive,
+            beforeTokens: before,
+            afterTokens: after,
+            ctxMax
           };
         }
-      } else if (decision.kind === "exit-with-summary") {
+      } else if (decision.kind === "recovery-required") {
         const before = decision.promptTokens;
         const ctxMax = decision.ctxMax;
         yield {
@@ -8613,8 +8711,6 @@ ${reason}`
             pct: Math.round(before / ctxMax * 100)
           })
         };
-        this._foldedThisTurn = true;
-        await this.compactHistory({ keepRecentTokens: decision.tailBudget });
         if (repairedCalls.length === 0) {
           yield { turn: this._turn, role: "done", content: assistantContent };
           return;
@@ -12076,6 +12172,9 @@ export {
   snapshotBeforeEdits,
   restoreSnapshots,
   contextThresholdsForCapacity,
+  createContextFoldState,
+  decideDynamicContextAction,
+  recordContextFoldOutcome,
   normalizeHistoryForModel
 };
 /*! Bundled license information:
