@@ -8696,7 +8696,9 @@ ${reason}`
             aggressive: decision.aggressive,
             beforeTokens: before,
             afterTokens: after,
-            ctxMax
+            ctxMax,
+            beforeMessages: result.beforeMessages,
+            afterMessages: result.afterMessages
           };
         }
       } else if (decision.kind === "recovery-required") {

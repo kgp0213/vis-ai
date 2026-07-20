@@ -7574,6 +7574,17 @@ function loopEventToDashboard(ev, assistantId) {
       return { kind: "error", id, text: ev.content || ev.error || "unknown error" };
     case "status":
       return { kind: "status", text: ev.content };
+    case "context_compacted":
+      if (ev.notice === "silent") return null;
+      return {
+        kind: ev.notice === "warning" ? "warning" : "status",
+        id,
+        text: ev.content,
+      };
+    case "output_recovery":
+      return { kind: "status", text: ev.content };
+    case "output_recovery_required":
+      return { kind: "warning", id, text: ev.content };
     default:
       return null;
   }
@@ -10147,7 +10158,20 @@ ${modeList}
               if (eventSink && eventizer) {
                 try {
                   const ectx = { model: ev.stats?.model ?? loop.model ?? effectiveModelConfig(config).model, prefixHash: "", reasoningEffort: loop.reasoningEffort ?? "max" };
-                  for (const out of eventizer.consume(ev, ectx)) eventSink.append(out);
+                  if (ev.role === "context_compacted") {
+                    eventSink.append(eventizer.emitSessionCompacted(
+                      ev.turn,
+                      ev.beforeMessages,
+                      ev.afterMessages,
+                      ev.aggressive ? "dynamic-aggressive" : "dynamic",
+                      1,
+                    ));
+                  } else {
+                    const eventForLog = ev.role === "output_recovery"
+                      ? { ...ev, role: "status" }
+                      : ev.role === "output_recovery_required" ? { ...ev, role: "warning" } : ev;
+                    for (const out of eventizer.consume(eventForLog, ectx)) eventSink.append(out);
+                  }
                 } catch {}
               }
 
