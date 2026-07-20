@@ -267,10 +267,16 @@ export function toolResultSucceeded(value) {
   const text = String(value ?? "").trim();
   if (!text) return false;
   if (/^(?:error|failed|failure)\s*:/i.test(text)) return false;
+  const exitMatch = text.match(/\[exit\s+(-?\d+)\]\s*$/i);
+  if (exitMatch) return Number(exitMatch[1]) === 0;
   if (!text.startsWith("{")) return true;
   try {
     const parsed = JSON.parse(text);
-    return parsed?.ok !== false && typeof parsed?.error !== "string";
+    if (parsed?.ok === false || typeof parsed?.error === "string") return false;
+    if (parsed?.exitCode !== null && parsed?.exitCode !== undefined && parsed?.exitCode !== "" && Number.isFinite(Number(parsed.exitCode))) {
+      return Number(parsed.exitCode) === 0;
+    }
+    return true;
   } catch {
     return true;
   }

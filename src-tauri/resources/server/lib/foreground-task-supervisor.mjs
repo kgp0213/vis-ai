@@ -27,6 +27,26 @@ function hash(value) {
   return createHash("sha256").update(String(value ?? ""), "utf8").digest("hex");
 }
 
+export function normalizeForegroundModelFailure(value = {}) {
+  const message = String(value?.error ?? value?.message ?? value?.content ?? value ?? "").trim();
+  if (!message) return null;
+  const explicitCode = message.match(/["'](?:code|type)["']\s*:\s*["']([^"']+)["']/i)?.[1];
+  const knownCode = message.match(/\b(AccountQuotaExceeded|insufficient_quota|invalid_api_key|authentication_error|permission_denied)\b/i)?.[1];
+  const status = Number(message.match(/\b(?:HTTP|OpenAI|DeepSeek)?\s*(401|402|403|429)\b/i)?.[1] || 0) || null;
+  const retryAt = message.match(/20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})/i)?.[0] ?? null;
+  const permanentPattern = /AccountQuotaExceeded|insufficient[_ -]?quota|billing[_ -]?hard[_ -]?limit|余额不足|账户[^\r\n]{0,20}配额|配额(?:已)?耗尽|invalid[_ -]?api[_ -]?key|authentication[_ -]?(?:error|failed)|permission[_ -]?denied|unauthorized|forbidden/i;
+  const recoverable = typeof value?.recoverable === "boolean"
+    ? value.recoverable
+    : !(permanentPattern.test(message) || [401, 402, 403].includes(status));
+  return {
+    message: message.slice(0, 4_000),
+    code: String(explicitCode || knownCode || (status ? `HTTP_${status}` : "MODEL_REQUEST_FAILED")),
+    status,
+    recoverable,
+    retryAt,
+  };
+}
+
 function normalizePlan(plan) {
   if (!plan || typeof plan !== "object") return null;
   const steps = (Array.isArray(plan.steps) ? plan.steps : [])
@@ -132,6 +152,7 @@ export function startForegroundTask(input = {}) {
       mutatingToolCalls: 0,
       verificationToolCalls: 0,
       artifacts: [],
+      documentSources: {},
     },
     dispatch: {
       currentPhase: assessment.classification === "complex" ? "assessment" : "ordinary",
@@ -158,6 +179,9 @@ export function restoreForegroundTask(value) {
   restored.evidence ??= {};
   restored.evidence.calls = (Array.isArray(restored.evidence.calls) ? restored.evidence.calls : []).slice(-MAX_EVIDENCE_CALLS);
   restored.evidence.artifacts = [...new Set(Array.isArray(restored.evidence.artifacts) ? restored.evidence.artifacts.map(String) : [])].slice(-100);
+  restored.evidence.documentSources = restored.evidence.documentSources && typeof restored.evidence.documentSources === "object"
+    ? restored.evidence.documentSources
+    : {};
   restored.dispatch ??= { planningAttempts: 0, verificationAttempts: 0, stepAttempts: {} };
   restored.dispatch.stepAttempts = restored.dispatch.stepAttempts && typeof restored.dispatch.stepAttempts === "object"
     ? restored.dispatch.stepAttempts
@@ -230,6 +254,27 @@ export function recordForegroundToolEvent(state, event = {}, now = Date.now()) {
     ? event.readOnly === true
     : event.verificationEvidence === true;
   if (phase === "verification" && verificationEvidence && succeeded) next.evidence.verificationToolCalls += 1;
+  if (succeeded && /^(?:prepare_local_document|read_prepared_document)$/i.test(toolName)) {
+    try {
+      const result = typeof event.content === "string" ? JSON.parse(event.content) : event.content;
+      const documentRef = String(result?.documentRef || "").trim();
+      if (documentRef) {
+        const prior = next.evidence.documentSources[documentRef] ?? {};
+        const isRead = toolName === "read_prepared_document";
+        next.evidence.documentSources[documentRef] = {
+          documentRef,
+          documentKind: String(result?.documentKind || prior.documentKind || "unknown"),
+          complete: isRead ? result?.complete === true : prior.complete === true,
+          truncated: isRead ? result?.truncated === true : prior.truncated === true,
+          nextCursor: isRead ? clone(result?.nextCursor ?? null) : clone(prior.nextCursor ?? null),
+          coverage: isRead ? clone(result?.coverage ?? null) : clone(prior.coverage ?? null),
+          updatedAt: nowIso(now),
+        };
+      }
+    } catch {
+      // Coverage remains pending when a document tool does not return structured evidence.
+    }
+  }
   next.updatedAt = nowIso(now);
   return next;
 }
@@ -296,6 +341,15 @@ export function evaluateForegroundTask(state, runtime = {}) {
   if (runtime.aborted === true) {
     next.lifecycle = "stopped";
     return { state: next, decision: { type: "stopped", reason: "aborted" } };
+  }
+
+  const modelFailure = normalizeForegroundModelFailure(runtime.modelFailure);
+  if (modelFailure?.recoverable === false) {
+    next.lifecycle = "waiting_user";
+    next.blockingReason = "provider-blocked";
+    next.blockingFailure = modelFailure;
+    next.updatedAt = nowIso(runtime.now);
+    return { state: next, decision: { type: "intervene", reason: "provider-blocked", failure: modelFailure } };
   }
 
   if (next.classification === "simple") {
@@ -381,6 +435,19 @@ export function evaluateForegroundTask(state, runtime = {}) {
     next.lifecycle = "waiting_user";
     return { state: next, decision: { type: "intervene", reason: "source-coverage-pending" } };
   }
+  const pendingDocumentSources = Object.values(next.evidence.documentSources ?? {})
+    .filter((source) => source?.complete !== true);
+  if (!next.acceptance.partialAccepted && next.acceptance.completeCoverage && pendingDocumentSources.length > 0) {
+    next.lifecycle = "waiting_user";
+    return {
+      state: next,
+      decision: {
+        type: "intervene",
+        reason: "source-coverage-pending",
+        pendingSources: pendingDocumentSources.map((source) => source.documentRef),
+      },
+    };
+  }
   next.lifecycle = "completed";
   next.updatedAt = nowIso(runtime.now);
   return { state: next, decision: { type: "complete", reason: "acceptance-passed" } };
@@ -456,8 +523,21 @@ export function buildForegroundIntervention(state, decision = {}) {
     "source-coverage-pending": "仍有来源输入未完成处理，不能按完整结果交付。",
     "plan-persistence-failed": "批准的计划未能可靠保存，因此尚未开始执行步骤。",
     "plan-revision-requested": "当前步骤请求调整计划，需要先确认剩余范围。",
+    "provider-blocked": "模型服务当前因鉴权、余额或配额限制无法继续。任务计划、已完成步骤和工具结果均已保留。",
     "waiting-user": `${step}已暂停，正在等待用户决定下一步。`,
   }[decision.reason] || `${step}需要用户确认后才能继续。`;
+  if (decision.reason === "provider-blocked") {
+    const retryAt = decision.failure?.retryAt || state?.blockingFailure?.retryAt;
+    const retryHint = retryAt ? `服务方提示可重试时间：${retryAt}。\n\n` : "";
+    const question = `${reasonText}\n\n${retryHint}推荐：切换到可用模型后继续当前步骤。`;
+    const options = [
+      { id: "switch-model", title: "保留任务并切换模型（推荐）", summary: "先在主界面切换模型，再发送“继续”；不会消耗新的步骤尝试次数。" },
+      { id: "wait", title: "稍后再继续", summary: "保持暂停，不消耗新的步骤尝试次数。" },
+      { id: "accept-partial", title: "接受部分结果", summary: "验证并保留当前成果，明确标记未完成范围。" },
+      { id: "stop", title: "停止并保留现场", summary: "停止执行，保留计划、上下文和现有产物。" },
+    ];
+    return { kind: "choice", question, options, allowCustom: true, payload: { question, options, allowCustom: true } };
+  }
   const question = `${reasonText}\n\n推荐：保留现有上下文和工具结果，从当前步骤继续。`;
   const options = [
     { id: "continue", title: "继续当前步骤（推荐）", summary: "保留已有成果，只重置当前步骤的尝试预算。" },
@@ -477,6 +557,8 @@ export function applyForegroundIntervention(state, choice, decision = {}, now = 
     else if (decision.reason === "plan-attempts-exhausted") next.dispatch.planningAttempts = 0;
     else next.dispatch.verificationAttempts = 0;
     next.lifecycle = "running";
+  } else if (selected === "wait" || selected === "switch-model") {
+    next.lifecycle = "waiting_user";
   } else if (selected === "revise") {
     next.dispatch.planningAttempts = 0;
     next.workPlan = null;
@@ -488,7 +570,10 @@ export function applyForegroundIntervention(state, choice, decision = {}, now = 
   } else {
     next.lifecycle = "stopped";
   }
-  delete next.blockingReason;
+  if (selected !== "wait" && selected !== "switch-model") {
+    delete next.blockingReason;
+    delete next.blockingFailure;
+  }
   next.updatedAt = nowIso(now);
   return next;
 }

@@ -103,6 +103,9 @@ test("artifact completion rejects failed tool results", () => {
   assert.equal(toolResultSucceeded("command output\n[exit 1]"), false);
   assert.equal(toolResultSucceeded("'python' is not recognized\n[exit 9009]"), false);
   assert.equal(toolResultSucceeded("tests passed\n[exit 0]"), true);
+  assert.equal(toolResultSucceeded('{"ok":true,"exitCode":1,"stdout":"failed"}'), false);
+  assert.equal(toolResultSucceeded('{"ok":false,"exitCode":0,"error":"dispatch failed"}'), false);
+  assert.equal(toolResultSucceeded('{"ok":true,"exitCode":null}'), true);
 });
 
 test("accepted document jobs are pending artifacts rather than missing files", () => {

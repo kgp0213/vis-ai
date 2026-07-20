@@ -209,6 +209,7 @@ describe("foreground task step supervision", () => {
     const card = buildForegroundIntervention(evaluated.state, evaluated.decision);
     assert.match(card.question, /服务|模型|配额/);
     assert.ok(card.options.some((option) => option.id === "wait"));
+    assert.ok(card.options.some((option) => option.id === "switch-model"));
     assert.ok(card.options.some((option) => option.id === "stop"));
   });
 
@@ -260,6 +261,48 @@ describe("foreground task step supervision", () => {
       succeeded: true,
     });
     assert.equal(evaluateForegroundTask(state, {}).decision.type, "complete");
+  });
+
+  test("complete-coverage tasks cannot finish while a prepared document has a next cursor", () => {
+    let state = startForegroundTask({
+      turnId: "turn-coverage",
+      prompt: "完整提取文档并保存",
+      assessment: assessTaskComplexity({ prompt: "完整提取文档并保存", completeCoverage: true }),
+      completeCoverage: true,
+    });
+    state = recordForegroundPlan(state, {
+      steps: [{ id: "s1", title: "提取", action: "extract all content" }],
+      completedStepIds: ["s1"],
+    });
+    state = recordForegroundToolEvent(state, {
+      toolName: "prepare_local_document",
+      content: '{"ok":true,"documentRef":"visionox-document:doc_11111111111111111111","documentKind":"word"}',
+      readOnly: true,
+      succeeded: true,
+    });
+    state = recordForegroundToolEvent(state, {
+      toolName: "read_prepared_document",
+      content: '{"ok":true,"documentRef":"visionox-document:doc_11111111111111111111","documentKind":"word","complete":false,"nextCursor":{"unit":9},"coverage":{"totalUnits":20,"deliveredRange":[1,8]}}',
+      readOnly: true,
+      succeeded: true,
+    });
+    const verification = evaluateForegroundTask(state, {});
+    state = beginForegroundDispatch(verification.state, verification.decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "read_file",
+      content: "artifact exists",
+      readOnly: true,
+      succeeded: true,
+    });
+
+    const evaluated = evaluateForegroundTask(state, {});
+    assert.equal(evaluated.decision.type, "intervene");
+    assert.equal(evaluated.decision.reason, "source-coverage-pending");
+    assert.deepEqual(evaluated.decision.pendingSources, ["visionox-document:doc_11111111111111111111"]);
+    assert.deepEqual(
+      evaluated.state.evidence.documentSources["visionox-document:doc_11111111111111111111"].nextCursor,
+      { unit: 9 },
+    );
   });
 
   test("verifies user-accepted partial results before settling the outcome", () => {

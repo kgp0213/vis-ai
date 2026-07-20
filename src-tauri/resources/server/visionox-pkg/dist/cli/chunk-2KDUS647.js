@@ -6,6 +6,11 @@ import {
 
 // src/retry.ts
 var DEFAULT_RETRYABLE_STATUSES = [408, 429, 500, 502, 503, 504];
+async function isPermanentRateLimitResponse(resp) {
+  if (resp.status !== 429 || typeof resp.clone !== "function") return false;
+  const body = await resp.clone().text().catch(() => "");
+  return /AccountQuotaExceeded|insufficient[_ -]?quota|billing[_ -]?hard[_ -]?limit|余额不足|账户[^\r\n]{0,20}配额|配额(?:已)?耗尽/i.test(body);
+}
 async function fetchWithRetry(fetchFn, url, init, opts = {}) {
   const maxAttempts = opts.maxAttempts ?? 4;
   const initial = opts.initialBackoffMs ?? 500;
@@ -17,6 +22,7 @@ async function fetchWithRetry(fetchFn, url, init, opts = {}) {
     try {
       const resp = await fetchFn(url, init);
       if (resp.ok || !retryable.has(resp.status)) return resp;
+      if (await isPermanentRateLimitResponse(resp)) return resp;
       if (attempt === maxAttempts - 1) return resp;
       await resp.text().catch(() => void 0);
       const waitMs = computeWait(attempt, initial, cap, resp.headers.get("Retry-After"));

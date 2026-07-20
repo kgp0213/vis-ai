@@ -265,6 +265,9 @@ test("launcher shares managed document references without exposing the retired P
   assert.match(launcher, /preparedDocumentRegistry\.restore\(meta\.preparedDocuments/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(sessionMeta\.preparedDocuments/);
   assert.doesNotMatch(launcher, /name:\s*"extract_pdf_text"/);
+  assert.match(launcher, /name:\s*"read_prepared_document"/);
+  assert.match(launcher, /read_prepared_document[\s\S]*?never owns task continuation or completion/);
+  assert.match(launcher, /name:\s*"prepare_local_document"[\s\S]*?readOnly:\s*true[\s\S]*?parameters:/);
   assert.doesNotMatch(launcher, /MAX_DOCUMENT_AUTO_CONTINUATIONS|parsePdfDeliveryResult|updatePdfContinuationState|documentAutoContinuationPrompt|pdfContinuationStates/);
   assert.match(pdfText, /export async function extractPdfText\(/);
   assert.doesNotMatch(dlp, /extract_pdf_text/);

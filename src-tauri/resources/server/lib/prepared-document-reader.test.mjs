@@ -80,10 +80,64 @@ test("prepared document reader supports generic text cursors without loading unb
   });
 });
 
+test("prepared document reader pages Word content through the same generic cursor contract", async () => {
+  await withTempDir(async (dir) => {
+    const path = join(dir, "manual.docx");
+    await writeFile(path, "placeholder", "utf8");
+    const registry = createPreparedDocumentRegistry();
+    const prepared = registry.register({ sourcePath: path, readablePath: path, documentKind: "word" });
+    const calls = [];
+    const read = createPreparedDocumentReader({
+      registry,
+      runOfficeCli: async (args) => {
+        calls.push(args);
+        return {
+          success: true,
+          data: {
+            totalElements: 3,
+            elements: [
+              { path: "/body/p[1]", type: "paragraph", text: "Introduction" },
+              { path: "/body/table[1]", type: "table", text: "Voltage\t3.3V" },
+            ],
+          },
+        };
+      },
+    });
+
+    const result = await read({ documentRef: prepared.documentRef, cursor: { unit: 1 }, maxUnits: 2 });
+    assert.ok(calls[0].includes("--start") && calls[0].includes("1"));
+    assert.ok(calls[0].includes("--end") && calls[0].includes("2"));
+    assert.equal(result.documentKind, "word");
+    assert.deepEqual(result.coverage.deliveredRange, [1, 2]);
+    assert.deepEqual(result.nextCursor, { unit: 3 });
+    assert.match(result.content, /Introduction/);
+    assert.match(result.content, /Voltage/);
+  });
+});
+
 test("prepared document reader fails clearly for unknown refs and unsupported formats", async () => {
   const registry = createPreparedDocumentRegistry();
   const read = createPreparedDocumentReader({ registry });
   await assert.rejects(() => read({ documentRef: "visionox-document:doc_00000000000000000000" }), /not found/i);
   registry.register({ sourcePath: "C:\\unsupported.bin", readablePath: "C:\\unsupported.bin", documentKind: "binary" });
   await assert.rejects(() => read({ documentRef: "C:\\unsupported.bin" }), /unsupported/i);
+});
+
+test("prepared Office reads surface a no-progress intervention instead of claiming completion", async () => {
+  await withTempDir(async (dir) => {
+    const path = join(dir, "stalled.docx");
+    await writeFile(path, "placeholder", "utf8");
+    const registry = createPreparedDocumentRegistry();
+    const prepared = registry.register({ sourcePath: path, readablePath: path, documentKind: "word" });
+    const read = createPreparedDocumentReader({
+      registry,
+      runOfficeCli: async () => ({ success: true, data: { totalElements: 10, elements: [] } }),
+    });
+
+    const result = await read({ documentRef: prepared.documentRef, cursor: { unit: 5 } });
+    assert.equal(result.complete, false);
+    assert.equal(result.requiresIntervention, true);
+    assert.equal(result.interventionReason, "document-reader-no-progress");
+    assert.deepEqual(result.nextCursor, { unit: 5 });
+  });
 });

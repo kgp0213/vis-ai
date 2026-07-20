@@ -72,7 +72,7 @@ const {
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage } = await importEarly("./lib/context-input-transaction.mjs");
-const { applyForegroundIntervention, assessTaskComplexity, beginForegroundDispatch, buildForegroundIntervention, buildForegroundTaskPrompt, evaluateForegroundTask, finishForegroundTask, foregroundStepBoundaryMessage, pauseForegroundTask, recordForegroundArtifacts, recordForegroundPlan, recordForegroundStepCompletion, recordForegroundToolEvent, restoreForegroundTask, resumeForegroundTask, startForegroundTask } = await importEarly("./lib/foreground-task-supervisor.mjs");
+const { applyForegroundIntervention, assessTaskComplexity, beginForegroundDispatch, buildForegroundIntervention, buildForegroundTaskPrompt, evaluateForegroundTask, finishForegroundTask, foregroundStepBoundaryMessage, normalizeForegroundModelFailure, pauseForegroundTask, recordForegroundArtifacts, recordForegroundPlan, recordForegroundStepCompletion, recordForegroundToolEvent, restoreForegroundTask, resumeForegroundTask, startForegroundTask } = await importEarly("./lib/foreground-task-supervisor.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
@@ -112,7 +112,8 @@ const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-draf
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, prepareLocalDocuments, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
-const { processPdfTextBatches } = await importEarly("./lib/pdf-text.mjs");
+const { extractPdfText, inspectPdfText, processPdfTextBatches } = await importEarly("./lib/pdf-text.mjs");
+const { createPreparedDocumentReader } = await importEarly("./lib/prepared-document-reader.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, detectArtifactRequest, documentArtifactStateFromJob, documentJobToolMismatch, latestAssistantResponse, pendingDocumentArtifactFromToolEvent, pendingDocumentWriteConflict, registerSaveLastAssistantResponseTool, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { generatePdfSectionWithModel } = await importEarly("./lib/pdf-markdown-workflow.mjs");
 const { buildDocumentContract, buildDocumentSectionMessages, buildDocumentSummaryMessages, documentTaskFingerprint, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
@@ -319,7 +320,7 @@ const CONSTANTS = {
 
   // Mode versions
   DEFAULT_MODE_VERSION: 5,
-  OFFICE_MODE_VERSION: 9,
+  OFFICE_MODE_VERSION: 10,
 };
 const DEFAULT_SOUL_FALLBACK = `# Visionox-Whale Core Identity
 
@@ -1499,6 +1500,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   tools.register({
     name: "prepare_local_document",
     description: "Prepare a user-provided local document path before reading/parsing it. Use this FIRST for local PDF/Word/Excel/PPT/XML/DSN/text/image files, odd Chinese filenames, wildcard paths, or when another document reader fails. It fixes common Windows path typos such as D:_folder, resolves one matching local file, and returns a stable documentRef plus the current readablePath. Keep using documentRef when switching tools so a missing readable copy can be recreated. Do not explain internal path preparation details to the user.",
+    readOnly: true,
     parameters: {
       type: "object",
       properties: {
@@ -1613,6 +1615,50 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
         .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
         .slice(0, 20);
       return JSON.stringify({ ok: true, jobs });
+    },
+  });
+
+  const readPreparedDocument = createPreparedDocumentReader({
+    registry: preparedDocumentRegistry,
+    inspectPdfText,
+    extractPdfText,
+    runOfficeCli: (args, officeOptions) => {
+      const executable = resolveBundledOfficecli();
+      if (!executable) throw new Error("bundled OfficeCLI is unavailable");
+      return runOfficeCliJson(executable, args, officeOptions);
+    },
+  });
+  tools.register({
+    name: "read_prepared_document",
+    description: "Read exactly one bounded batch from a prepared local document using its stable documentRef. Works across PDF, Word, spreadsheet, presentation and text adapters. Continue only with nextCursor after the current batch has been processed or checkpointed. This tool supplies content to the ordinary model loop; it never owns task continuation or completion.",
+    readOnly: true,
+    parameters: {
+      type: "object",
+      properties: {
+        documentRef: { type: "string", description: "Stable visionox-document reference returned by prepare_local_document." },
+        cursor: {
+          type: "object",
+          properties: {
+            page: { type: "integer", minimum: 1, description: "Next PDF page." },
+            unit: { type: "integer", minimum: 1, description: "Next Office document unit." },
+            byteOffset: { type: "integer", minimum: 0, description: "Next text byte offset." },
+          },
+        },
+        maxUnits: { type: "integer", minimum: 1, maximum: 50, description: "Maximum PDF pages or Office units in this batch. Defaults to 8." },
+        maxChars: { type: "integer", minimum: 1, maximum: 100000, description: "Maximum text characters returned in this batch. Defaults to 24000." },
+      },
+      required: ["documentRef"],
+    },
+    fn: async (args, toolCtx) => {
+      const refreshed = await prepareLocalDocument(args?.documentRef, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+        signal: toolCtx?.signal,
+        registry: preparedDocumentRegistry,
+      });
+      if (!refreshed?.ok) throw new Error(refreshed?.error || "prepared document could not be refreshed");
+      return JSON.stringify(await readPreparedDocument(args, toolCtx));
     },
   });
 
@@ -1804,7 +1850,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。文档任务与代码、研究和批处理任务使用同一套任务评估、澄清、执行、监控和验收协议：先只读调查；遇到会改变范围、保真度、覆盖或输出位置的关键歧义时，只用 ask_choice 问一个问题，并把推荐选项及理由放在第一项。格式读取器或 Skill 只完成当前步骤，不拥有任务生命周期；需要分批处理时，每批内容先持久化或形成检查点，再接纳下一批输入。多来源任务也必须保留在同一个普通模型工具循环和同一份批准计划中。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。交付前验证实际文件、来源覆盖和任务契约，不得把工具成功或部分结果宣称为完整完成。",
+    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef，再用 read_prepared_document 读取一个有界批次。文档任务与代码、研究和批处理任务使用同一套任务评估、澄清、执行、监控和验收协议：先只读调查；遇到会改变范围、保真度、覆盖或输出位置的关键歧义时，只用 ask_choice 问一个问题，并把推荐选项及理由放在第一项。读取工具或 Skill 只完成当前步骤，不拥有任务生命周期；每批内容先持久化或形成检查点，再使用 nextCursor 接纳下一批输入。多来源任务也必须保留在同一个普通模型工具循环和同一份批准计划中。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。交付前验证实际文件、来源覆盖和任务契约，不得把工具成功或部分结果宣称为完整完成。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -4201,7 +4247,7 @@ function buildLoop(client, rootDir) {
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
   const systemWithAgentPolicy = agentPolicy.documentWorkflow === "guided"
-    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. Apply the same task assessment, clarification, execution, monitoring, and verification protocol to document work as to every other task. Start with read-only investigation: call prepare_local_document once, retain documentRef, and identify the requested artifact and acceptance conditions. If one unresolved high-impact ambiguity would change scope, fidelity, overwrite behavior, or output shape, call ask_choice with exactly one question; put the recommended option first and explain why. Otherwise proceed without asking. A format reader, parser, or Skill performs only the current step and never owns the task lifecycle. For bounded input, persist or checkpoint the processed result before accepting another batch. If a context-input memo appears, recover its referenced content through read_context_input in bounded segments and materialize each segment before reading another. Verify the output file, source coverage, and approved task requirements before claiming completion. Keep multi-source work in the same approved plan and ordinary tool loop; do not start a separate model worker. Never rewrite or guess a prepared path; the host can recreate a missing readable copy from documentRef. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. A continuation-window notice means the current turn has fresh tool rounds; continue the approved task without asking the user to send another message.`
+    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. Apply the same task assessment, clarification, execution, monitoring, and verification protocol to document work as to every other task. Start with read-only investigation: call prepare_local_document once, retain documentRef, then call read_prepared_document for exactly one bounded batch. Identify the requested artifact and acceptance conditions. If one unresolved high-impact ambiguity would change scope, fidelity, overwrite behavior, or output shape, call ask_choice with exactly one question; put the recommended option first and explain why. Otherwise proceed without asking. A reader, parser, or Skill performs only the current step and never owns the task lifecycle. Persist or checkpoint the processed result before following nextCursor to another batch. If a context-input memo appears, recover its referenced content through read_context_input in bounded segments and materialize each segment before reading another. Verify the output file, source coverage, and approved task requirements before claiming completion. Keep multi-source work in the same approved plan and ordinary tool loop; do not start a separate model worker. Never rewrite or guess a prepared path; the host can recreate a missing readable copy from documentRef. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. A continuation-window notice means the current turn has fresh tool rounds; continue the approved task without asking the user to send another message.`
     : systemWithLearning;
   const prefix = new ImmutablePrefix({
     system: systemWithAgentPolicy,
@@ -9389,6 +9435,7 @@ ${modeList}
           while (true) {
             let budgetForcedSummary = false;
             let sawToolActivity = false;
+            let foregroundModelFailure = null;
             for await (const ev of loop.step(loopInput)) {
               if (ev.role === "tool") {
                 sawToolActivity = true;
@@ -9489,6 +9536,7 @@ ${modeList}
               if (ev.role === "error") {
                 // A protocol or transport failure invalidates streamed partial text.
                 assistantText = "";
+                foregroundModelFailure = normalizeForegroundModelFailure(ev);
               }
               if (ev.role === "assistant_final") {
                 const repairNotice = formatToolRepairNotice(ev.repair);
@@ -9581,6 +9629,7 @@ ${modeList}
                 budgetForcedSummary,
                 sawToolActivity,
                 artifactCount: turnArtifactPaths.size,
+                modelFailure: foregroundModelFailure,
                 aborted: operation.controller.signal.aborted,
               });
               activeForegroundTask = evaluated.state;

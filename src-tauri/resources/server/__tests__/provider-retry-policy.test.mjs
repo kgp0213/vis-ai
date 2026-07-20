@@ -32,7 +32,7 @@ test("transient 429 responses remain retryable and bounded", async () => {
   const response = await fetchWithRetry(async () => {
     calls += 1;
     if (calls < 3) {
-      return new Response('{"error":{"code":"rate_limit","message":"try again"}}', { status: 429 });
+      return new Response('{"error":{"code":"rate_limit","message":"requests per minute quota exceeded; try again"}}', { status: 429 });
     }
     return new Response('{"ok":true}', { status: 200 });
   }, "https://example.invalid/chat", {}, {

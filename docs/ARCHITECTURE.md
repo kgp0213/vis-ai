@@ -135,6 +135,12 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 运行中出现大输入、工具窗口耗尽、长工具链、重复无进展或新计划时，简单任务在原 loop 上升级，
 保留 `loop.log`、活动 JSONL、上下文输入缓存、Plan Store、工具结果和已有文件。
 
+本地结构化内容通过普通循环中的 `read_prepared_document` 有界读取。该工具使用稳定 `documentRef`，按格式
+调用 PDF.js、OfficeCLI 或文本 Adapter，并返回本批内容、覆盖范围和 `nextCursor`；它不拥有生命周期或自动
+续跑。监督器把准备过的来源与读取进度记录到任务证据中，完整覆盖任务仍有下一游标时不能通过最终验收。
+模型请求遇到鉴权、余额或账户配额阻塞时立即进入用户干预，原 WorkPlan、已完成步骤和工具证据保持不变；
+普通瞬态限流仍由底层做有界重试。
+
 旧 `complexTaskEngine` 灰度路由不再控制 Launcher 的模型执行。历史 Durable Store、Outbox、任务中心投影
 和结果重新交付继续保留用于兼容；旧非终态任务启动时转为可见 `blocked`，`resume/retry` 不再进入旧
 Worker。历史文档任务同样只允许查看、停止、删除或重新交付已有结果，需要继续处理时必须回到主对话，
@@ -296,9 +302,14 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 页范围、来源和异常作为步骤证据返回，不能决定任务是否自动继续或已经完成。
 
 2026-07-20 已删除 Launcher 中的 PDF 自动续读状态、次数预算、专用提示和专用进度分支；系统提示、办公模式、
-DLP 建议及内置 Skill 也不再定义 PDF→Markdown 生命周期。单文档、Word、代码仓库或研究任务后续都必须由
-同一通用状态机决定是否分批、何时检查点、何时干预和何时完成。当前生产默认仍为 `legacy`，因此这次清理是
-统一状态机的前置条件，不代表通用准入和统一执行监督已经完成。
+DLP 建议及内置 Skill 也不再定义 PDF→Markdown 生命周期。单文档、Word、代码仓库或研究任务都由同一通用
+状态机决定是否分批、何时检查点、何时干预和何时完成。2026-07-21 起，交互式任务已接入前台统一监督；旧
+`legacy` 文档 Worker 只保留历史任务查看和结果交付，不再代表新任务执行主线。
+
+`lib/prepared-document-reader.mjs` 为普通模型循环提供跨格式有界读取：PDF 使用页游标，Office 文档使用元素游标，
+文本使用字节游标。每批返回明确的 `complete`、覆盖范围和 `nextCursor`，读取前会通过 `prepare_local_document`
+恢复可能丢失的可读副本。`foreground-task-supervisor.mjs` 将这些结果记入通用来源证据；完整覆盖任务存在未完成
+来源时，即使模型提前结束步骤，最终验收也会进入用户干预。格式 Adapter 仍只提供当前步骤输入，不控制是否继续。
 
 `lib/context-input-transaction.mjs` 将大段只读结果按 SHA-256 无损缓存到用户数据目录，记录
 `pending -> materialized -> foldable` 状态；普通上下文压缩必须等待 pending 输入处理完成，紧急压缩保留
