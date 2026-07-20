@@ -549,6 +549,7 @@ const required = [
       "if (repairedCalls.length === 0)",
       "normalizeHistoryForModel",
       "contextThresholdsForCapacity",
+      "CONTEXT_FIXED_GUARD_TOKENS",
       "decideDynamicContextAction",
       "recordContextFoldOutcome",
       "output_recovery_required",

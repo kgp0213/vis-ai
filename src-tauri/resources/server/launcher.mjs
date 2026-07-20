@@ -4843,6 +4843,7 @@ function getMemoryRuntimeStatus(rootDir = workspaceDir) {
 function buildLoop(client, rootDir) {
   const modelConfig = effectiveModelConfig(config);
   const provider = getActiveProvider(config);
+  const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
   const activeModel = provider?.models?.find((model) => model.disabled !== true && model.id === modelConfig.model);
   const agentPolicy = resolveProviderModelAgentPolicy(provider, modelConfig.model);
   const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
@@ -4922,6 +4923,7 @@ function buildLoop(client, rootDir) {
     prefix,
     tools,
     model: modelConfig.model,
+    maxOutputTokens: capabilities.maxOutputTokens,
     reasoningEffort: config.reasoningEffort ?? "max",
     autoEscalate: modelConfig.autoEscalate,
     escalationModel: modelConfig.escalationModel,
@@ -7652,6 +7654,7 @@ function modelRuntimeOptions(modelConfig) {
   const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
   return {
     model: modelConfig.model,
+    maxOutputTokens: resolveProviderModelCapabilities(provider, modelConfig.model).maxOutputTokens,
     autoEscalate: modelConfig.autoEscalate,
     escalationModel: modelConfig.escalationModel,
     vision: activeModel?.multimodal === true,

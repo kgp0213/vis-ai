@@ -6630,40 +6630,44 @@ var VolatileScratch = class {
 };
 
 // src/context-manager.ts
-var HISTORY_FOLD_THRESHOLD = 0.5;
-var HISTORY_FOLD_ABSOLUTE_CAP = 200000;
-var HISTORY_FOLD_TAIL_FRACTION = 0.2;
-var HISTORY_FOLD_TAIL_ABSOLUTE_CAP = 40000;
-var HISTORY_FOLD_AGGRESSIVE_THRESHOLD = 0.7;
-var HISTORY_FOLD_AGGRESSIVE_ABSOLUTE_CAP = 280000;
-var HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION = 0.1;
-var HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP = 20000;
+var HISTORY_FOLD_THRESHOLD = 0.75;
+var HISTORY_FOLD_TAIL_FRACTION = 0.4;
+var HISTORY_FOLD_TAIL_ABSOLUTE_CAP = 262144;
+var HISTORY_FOLD_AGGRESSIVE_THRESHOLD = 0.85;
+var HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION = 0.25;
+var HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP = 131072;
 var HISTORY_FOLD_MIN_SAVINGS_FRACTION = 0.3;
-var FORCE_SUMMARY_THRESHOLD = 0.8;
-var FORCE_SUMMARY_ABSOLUTE_CAP = 320000;
-var PREFLIGHT_EMERGENCY_THRESHOLD = 0.95;
-var PREFLIGHT_EMERGENCY_ABSOLUTE_CAP = 380000;
+var FORCE_SUMMARY_THRESHOLD = 0.9;
+var PREFLIGHT_EMERGENCY_THRESHOLD = 0.92;
+var DEFAULT_OUTPUT_RESERVE_TOKENS = 8192;
+var CONTEXT_FIXED_GUARD_TOKENS = 8192;
 var CONTEXT_FOLD_MIN_GROWTH_TOKENS = 32000;
 var CONTEXT_FOLD_MAX_PER_TURN = 8;
 var CONTEXT_FOLD_MAX_INEFFECTIVE = 2;
 var HISTORY_FOLD_MARKER = "[CONVERSATION HISTORY SUMMARY \u2014 earlier turns folded for context efficiency]\n\n";
 var SKILL_PIN_MEMO_HEADER = "[Active skill memos \u2014 preserved verbatim across the fold:]";
 var SKILL_PIN_REGEX = /<skill-pin name="([^"]+)">\n[\s\S]*?\n<\/skill-pin>/g;
-function contextThresholdsForCapacity(ctxMax) {
+function contextThresholdsForCapacity(ctxMax, maxOutputTokens = DEFAULT_OUTPUT_RESERVE_TOKENS) {
   const cap = Number.isFinite(ctxMax) && ctxMax > 0 ? Math.floor(ctxMax) : DEFAULT_CONTEXT_TOKENS;
-  const tokenThreshold = (ratio, absoluteCap) => Math.floor(cap * Math.min(ratio, absoluteCap / cap));
+  const outputReserveTokens = Number.isFinite(maxOutputTokens) && maxOutputTokens > 0
+    ? Math.floor(maxOutputTokens)
+    : DEFAULT_OUTPUT_RESERVE_TOKENS;
+  const safeInputTokens = Math.max(0, cap - outputReserveTokens - CONTEXT_FIXED_GUARD_TOKENS);
   return {
     ctxMax: cap,
-    foldTokens: tokenThreshold(HISTORY_FOLD_THRESHOLD, HISTORY_FOLD_ABSOLUTE_CAP),
-    aggressiveTokens: tokenThreshold(HISTORY_FOLD_AGGRESSIVE_THRESHOLD, HISTORY_FOLD_AGGRESSIVE_ABSOLUTE_CAP),
-    forceSummaryTokens: tokenThreshold(FORCE_SUMMARY_THRESHOLD, FORCE_SUMMARY_ABSOLUTE_CAP),
-    emergencyTokens: tokenThreshold(PREFLIGHT_EMERGENCY_THRESHOLD, PREFLIGHT_EMERGENCY_ABSOLUTE_CAP),
+    foldTokens: Math.floor(cap * HISTORY_FOLD_THRESHOLD),
+    aggressiveTokens: Math.floor(cap * HISTORY_FOLD_AGGRESSIVE_THRESHOLD),
+    forceSummaryTokens: Math.floor(cap * FORCE_SUMMARY_THRESHOLD),
+    emergencyTokens: Math.min(Math.floor(cap * PREFLIGHT_EMERGENCY_THRESHOLD), safeInputTokens),
     normalTailTokens: Math.min(Math.floor(cap * HISTORY_FOLD_TAIL_FRACTION), HISTORY_FOLD_TAIL_ABSOLUTE_CAP),
-    aggressiveTailTokens: Math.min(Math.floor(cap * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION), HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP)
+    aggressiveTailTokens: Math.min(Math.floor(cap * HISTORY_FOLD_AGGRESSIVE_TAIL_FRACTION), HISTORY_FOLD_AGGRESSIVE_TAIL_ABSOLUTE_CAP),
+    outputReserveTokens,
+    fixedGuardTokens: CONTEXT_FIXED_GUARD_TOKENS,
+    safeInputTokens
   };
 }
-function contextThresholdsForModel(model) {
-  return contextThresholdsForCapacity(DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS);
+function contextThresholdsForModel(model, maxOutputTokens) {
+  return contextThresholdsForCapacity(DEEPSEEK_CONTEXT_TOKENS[model] ?? DEFAULT_CONTEXT_TOKENS, maxOutputTokens);
 }
 function createContextFoldState() {
   return {
@@ -6750,7 +6754,7 @@ var ContextManager = class {
     return this.deps.getTokenEstimateOptions?.() ?? {};
   }
   thresholds(model) {
-    return contextThresholdsForModel(model);
+    return contextThresholdsForModel(model, this.deps.getMaxOutputTokens?.());
   }
   /** Decision after a turn's response — fold, exit with summary, or carry on. */
   decideAfterUsage(usage, model, foldState) {
@@ -7719,6 +7723,7 @@ var CacheFirstLoop = class {
   // Mutable via configure() — slash commands in the TUI / library callers tweak
   // these mid-session so users don't have to restart.
   model;
+  maxOutputTokens;
   stream;
   reasoningEffort;
   autoEscalate = true;
@@ -7765,6 +7770,9 @@ var CacheFirstLoop = class {
     this.prefix = opts.prefix;
     this.tools = opts.tools ?? new ToolRegistry();
     this.model = opts.model ?? "deepseek-v4-flash";
+    this.maxOutputTokens = Number.isFinite(opts.maxOutputTokens) && opts.maxOutputTokens > 0
+      ? Math.floor(opts.maxOutputTokens)
+      : DEFAULT_OUTPUT_RESERVE_TOKENS;
     this.escalationModel = typeof opts.escalationModel === "string" && opts.escalationModel.trim() ? opts.escalationModel.trim() : ESCALATION_MODEL;
     this.reasoningEffort = opts.reasoningEffort ?? "max";
     if (opts.autoEscalate !== void 0) this.autoEscalate = opts.autoEscalate;
@@ -7881,6 +7889,7 @@ var CacheFirstLoop = class {
       sessionName: this.sessionName,
       getAbortSignal: () => this._turnAbort.signal,
       getCurrentTurn: () => this._turn,
+      getMaxOutputTokens: () => this.maxOutputTokens,
       getTokenEstimateOptions: () => ({
         imageTokensPerImage: this.visionPolicy.estimatedTokensPerImage,
         imageContextReserveTokens: this.visionPolicy.contextReserveTokens
@@ -7982,6 +7991,12 @@ var CacheFirstLoop = class {
   }
   configure(opts) {
     let modelSwitch = null;
+    if (Object.hasOwn(opts, "maxOutputTokens")) {
+      this.maxOutputTokens = Number.isFinite(opts.maxOutputTokens) && opts.maxOutputTokens > 0
+        ? Math.floor(opts.maxOutputTokens)
+        : DEFAULT_OUTPUT_RESERVE_TOKENS;
+      this._contextStatusCache.clear();
+    }
     if (Object.hasOwn(opts, "toolResultBudget")) {
       this.toolResultBudget = normalizeToolResultBudget(opts.toolResultBudget);
     }
@@ -8081,7 +8096,7 @@ var CacheFirstLoop = class {
     const reportedPromptTokens = this.stats.summary().lastPromptTokens ?? 0;
     const occupiedTokens = Math.max(status.estimatedTokens, reportedPromptTokens);
     const completionReserve = Math.max(4096, Math.min(16384, Math.floor(status.ctxMax * 0.05)));
-    const available = Math.max(1024, status.forceSummaryTokens - occupiedTokens - completionReserve);
+    const available = Math.max(1024, status.foldTokens - occupiedTokens - completionReserve);
     return Math.max(1024, Math.min(configured, this.toolResultBudget.absoluteMaxTokens, available));
   }
   async runOneToolCall(call, signal) {

@@ -17,6 +17,7 @@ test("多次上下文压缩采用静默、状态、单次提醒三级反馈", ()
 });
 
 test("Launcher 把模型输出上限传给上下文安全预算", () => {
-  assert.match(launcher, /maxOutputTokens: capabilities\.maxOutputTokens/);
+  const buildLoop = launcher.slice(launcher.indexOf("function buildLoop"), launcher.indexOf("let client = null"));
+  assert.match(buildLoop, /maxOutputTokens: capabilities\.maxOutputTokens/);
   assert.match(launcher, /maxOutputTokens: resolveProviderModelCapabilities\(provider, modelConfig\.model\)\.maxOutputTokens/);
 });
