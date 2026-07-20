@@ -100,6 +100,9 @@ test("artifact completion rejects failed tool results", () => {
   assert.equal(toolResultSucceeded("Error: denied"), false);
   assert.equal(toolResultSucceeded("wrote 10 chars to report.md"), true);
   assert.equal(toolResultSucceeded('{"ok":true,"outputPath":"report.md"}'), true);
+  assert.equal(toolResultSucceeded("command output\n[exit 1]"), false);
+  assert.equal(toolResultSucceeded("'python' is not recognized\n[exit 9009]"), false);
+  assert.equal(toolResultSucceeded("tests passed\n[exit 0]"), true);
 });
 
 test("accepted document jobs are pending artifacts rather than missing files", () => {

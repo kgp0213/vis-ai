@@ -10,6 +10,7 @@ import {
   buildForegroundTaskPrompt,
   evaluateForegroundTask,
   finishForegroundTask,
+  normalizeForegroundModelFailure,
   pauseForegroundTask,
   recordForegroundPlan,
   recordForegroundStepCompletion,
@@ -177,6 +178,38 @@ describe("foreground task step supervision", () => {
     assert.equal(card.kind, "choice");
     assert.equal(card.options[0].id, "continue");
     assert.ok(card.options.some((option) => option.id === "accept-partial"));
+  });
+
+  test("non-recoverable provider failures pause immediately without consuming another step attempt", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [
+        { id: "s1", title: "调查", action: "inspect" },
+        { id: "s2", title: "生成", action: "generate" },
+      ],
+      completedStepIds: ["s1"],
+    });
+    const dispatched = evaluateForegroundTask(state, {});
+    state = beginForegroundDispatch(dispatched.state, dispatched.decision);
+    assert.equal(state.dispatch.stepAttempts.s2, 1);
+
+    const failure = normalizeForegroundModelFailure({
+      error: 'OpenAI 429: {"error":{"code":"AccountQuotaExceeded","message":"quota resets at 2026-07-21T01:00:28+08:00"}}',
+    });
+    const evaluated = evaluateForegroundTask(state, { modelFailure: failure });
+
+    assert.equal(evaluated.decision.type, "intervene");
+    assert.equal(evaluated.decision.reason, "provider-blocked");
+    assert.equal(evaluated.state.lifecycle, "waiting_user");
+    assert.equal(evaluated.state.dispatch.stepAttempts.s2, 1);
+    assert.deepEqual(evaluated.state.workPlan.completedStepIds, ["s1"]);
+    assert.equal(evaluated.state.workPlan.steps.length, 2);
+    assert.equal(evaluated.state.blockingFailure.code, "AccountQuotaExceeded");
+    assert.match(evaluated.state.blockingFailure.retryAt, /2026-07-21T01:00:28/);
+
+    const card = buildForegroundIntervention(evaluated.state, evaluated.decision);
+    assert.match(card.question, /服务|模型|配额/);
+    assert.ok(card.options.some((option) => option.id === "wait"));
+    assert.ok(card.options.some((option) => option.id === "stop"));
   });
 
   test("requires successful read-only evidence during final verification", () => {
