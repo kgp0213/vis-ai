@@ -394,6 +394,16 @@ describe("agent runtime policy", () => {
     assert.equal(multimodal, textOnly + 2 * 2048 + 4096);
   });
 
+  test("runtime context policy reserves the active model output budget", () => {
+    const loop = makeLoop({ chat: async () => ({ content: "done", toolCalls: [], usage: {} }) }, new ToolRegistry(), {
+      maxOutputTokens: 32768,
+    });
+    assert.equal(loop.context.thresholds("internal-model").outputReserveTokens, 32768);
+
+    loop.configure({ maxOutputTokens: 16384 });
+    assert.equal(loop.context.thresholds("internal-model").outputReserveTokens, 16384);
+  });
+
   test("images remain visible to tool-continuation requests without persisting base64 in the log", async () => {
     const captured = [];
     let response = 0;
