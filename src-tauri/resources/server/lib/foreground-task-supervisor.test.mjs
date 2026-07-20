@@ -16,6 +16,7 @@ import {
   recordForegroundStepCompletion,
   recordForegroundToolEvent,
   restoreForegroundTask,
+  resumeForegroundTask,
   startForegroundTask,
 } from "./foreground-task-supervisor.mjs";
 
@@ -384,6 +385,23 @@ describe("foreground task step supervision", () => {
     assert.equal(evaluateForegroundTask(state, {}).decision.type, "step");
   });
 
+  test("restore does not silently resume a waiting-user task without explicit approval", () => {
+    const paused = pauseForegroundTask(recordForegroundPlan(complexState(), {
+      steps: [{ id: "s1", title: "修改", action: "edit" }],
+      completedStepIds: [],
+    }), "provider-blocked");
+
+    const implicit = resumeForegroundTask(paused, { turnId: "turn-implicit", history: [] });
+    assert.equal(implicit.lifecycle, "waiting_user");
+
+    const explicit = resumeForegroundTask(paused, {
+      turnId: "turn-explicit",
+      history: [],
+      resumeWaitingUser: true,
+    });
+    assert.equal(explicit.lifecycle, "running");
+  });
+
   test("replanning retains completed checkpoints and their confirmed facts", () => {
     let state = recordForegroundPlan(complexState(), {
       steps: [
@@ -461,6 +479,8 @@ test("launcher reaches complex work only through the ordinary CacheFirstLoop", (
   assert.match(launcherSource, /plan cancelled|user stopped at checkpoint/);
   assert.match(launcherSource, /const approvedPlan = pendingPlan;[\s\S]*?if \(!activatePendingPlan\(\)\)[\s\S]*?recordForegroundPlan\(activeForegroundTask, approvedPlan\)/);
   assert.match(launcherSource, /const foregroundTool = tools\.get\(ev\.toolName\)[\s\S]*?recordForegroundToolEvent\([\s\S]*?verificationEvidence/);
+  assert.match(launcherSource, /const checkpointedTask = recordForegroundStepCompletion\([\s\S]*?if \(!markStepDone\(update\.stepId\)\)[\s\S]*?activeForegroundTask = checkpointedTask/);
+  assert.match(launcherSource, /revision requested[\s\S]{0,300}pauseForegroundTask\(activeForegroundTask, "plan-revision-requested"\)/i);
 });
 
 test("the generic supervisor has no document-format tool or cursor protocol", () => {
