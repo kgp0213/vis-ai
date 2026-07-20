@@ -902,6 +902,20 @@ describe("Dashboard 回归护栏", () => {
     assert.doesNotMatch(app, /class="fold-mark" style="left:50%"/);
   });
 
+  test("多次上下文压缩采用静默、状态、单次提醒三级反馈", () => {
+    const launcher = readFileSync(launcherUrl, "utf8");
+    const loop = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
+
+    assert.match(loop, /role: "context_compacted"/);
+    assert.match(loop, /notice: foldCount === 1 \? "silent" : foldCount === 4 \? "warning" : "status"/);
+    assert.match(launcher, /case "context_compacted"/);
+    assert.match(launcher, /ev\.notice === "silent"/);
+    assert.match(launcher, /ev\.notice === "warning" \? "warning" : "status"/);
+    assert.match(launcher, /eventizer\.emitSessionCompacted/);
+    assert.match(launcher, /case "output_recovery"/);
+    assert.match(launcher, /case "output_recovery_required"/);
+  });
+
   test("刷新和加载历史会话只恢复稳定对话，模型仍保留完整工具上下文", () => {
     const launcher = readFileSync(launcherUrl, "utf8");
     const activeSession = readFileSync(new URL("../lib/active-session.mjs", import.meta.url), "utf8");
