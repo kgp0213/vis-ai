@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { runTauriBuild, validateBuildArgs } from "../../../../scripts/run-tauri-build.js";
+import { pruneRetiredReleaseResources, runTauriBuild, validateBuildArgs } from "../../../../scripts/run-tauri-build.js";
 import { writeReleaseManifest } from "../../../../scripts/release-manifest.js";
 
 describe("release build contract", () => {
@@ -59,6 +59,29 @@ describe("release build contract", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(staging, { recursive: true, force: true });
+    }
+  });
+
+  it("removes only retired resources before rebuilding the canonical release tree", () => {
+    const root = mkdtempSync(join(tmpdir(), "visionox-retired-resource-"));
+    const resources = join(root, "src-tauri", "target", "release", "resources");
+    const retiredRecipe = join(resources, "bootstrap-skills", "document-organizer", "task-recipes.json");
+    const retiredPdfGuide = join(resources, "bootstrap-skills", "pdf", "references", "pdf-to-markdown.md");
+    const retainedResource = join(resources, "bootstrap-skills", "pdf", "SKILL.md");
+    try {
+      mkdirSync(join(resources, "bootstrap-skills", "document-organizer"), { recursive: true });
+      mkdirSync(join(resources, "bootstrap-skills", "pdf", "references"), { recursive: true });
+      writeFileSync(retiredRecipe, "retired");
+      writeFileSync(retiredPdfGuide, "retired");
+      writeFileSync(retainedResource, "keep");
+
+      pruneRetiredReleaseResources(root);
+
+      assert.equal(existsSync(retiredRecipe), false);
+      assert.equal(existsSync(retiredPdfGuide), false);
+      assert.equal(existsSync(retainedResource), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
