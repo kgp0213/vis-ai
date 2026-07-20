@@ -7,7 +7,7 @@ const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.
 test("后台工作台兼容通用任务投影并在恢复可见性时重新同步", async () => {
   const source = await readFile(dashboardAppUrl, "utf8");
   const workbench = source.slice(source.indexOf("function backgroundJobNeedsAttention"), source.indexOf("function pickWorkspaceDirectoryFromBridge"));
-  const chatPanel = source.slice(source.indexOf("function ChatPanel()"), source.indexOf("var ChatFeed ="));
+  const chatPanel = source.slice(source.indexOf("function ChatPanel("), source.indexOf("var ChatFeed ="));
 
   assert.match(workbench, /function backgroundJobGroup\(job\)/);
   assert.match(workbench, /function backgroundJobGroups\(jobs\)/);

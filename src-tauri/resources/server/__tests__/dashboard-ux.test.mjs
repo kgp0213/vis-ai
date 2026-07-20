@@ -26,17 +26,17 @@ describe("Dashboard desktop UX", () => {
     assert.doesNotMatch(app, /class="model-search"/);
     assert.match(app, /检测全部模型/);
     assert.match(app, /删除检测失败模型/);
-    assert.doesNotMatch(app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed =")), /model-manage-link|>模型管理</);
+    assert.doesNotMatch(app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed =")), /model-manage-link|>模型管理</);
   });
 
   test("keeps existing entry points while improving semantics, themes and composer hierarchy", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");
-    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
-    const sessionsPanel = app.slice(app.indexOf("function SessionsPanel()"), app.indexOf("// dashboard/src/lib/loop-control.ts"));
-    const memoryPanel = app.slice(app.indexOf("function MemoryPanel()"), app.indexOf("// dashboard/src/lib/budget.ts"));
-    const settingsPanel = app.slice(app.indexOf("function SettingsPanel()"), app.indexOf("// dashboard/src/panels/skills.ts"));
-    const appShell = app.slice(app.indexOf("function App()"));
+    const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
+    const sessionsPanel = app.slice(app.indexOf("function SessionsPanel("), app.indexOf("// dashboard/src/lib/loop-control.ts"));
+    const memoryPanel = app.slice(app.indexOf("function MemoryPanel("), app.indexOf("// dashboard/src/lib/budget.ts"));
+    const settingsPanel = app.slice(app.indexOf("function SettingsPanel("), app.indexOf("// dashboard/src/panels/skills.ts"));
+    const appShell = app.slice(app.indexOf("function App("));
 
     assert.match(appShell, /localStorage\.getItem\("rx\.openSections"\)/);
     assert.match(appShell, /localStorage\.setItem\("rx\.openSections"/);

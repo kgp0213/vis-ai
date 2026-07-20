@@ -385,8 +385,8 @@ describe("Dashboard 回归护栏", () => {
 
   test("会话页以独立批量模式管理会话和可预览回收站", async () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
-    const plansPanel = app.slice(app.indexOf("function PlansPanel()"), app.indexOf("function SessionsPanel()"));
-    const sessionsPanel = app.slice(app.indexOf("function SessionsPanel()"), app.indexOf("function parseCustomInterval"));
+    const plansPanel = app.slice(app.indexOf("function PlansPanel("), app.indexOf("function SessionsPanel("));
+    const sessionsPanel = app.slice(app.indexOf("function SessionsPanel("), app.indexOf("function parseCustomInterval"));
     assert.doesNotMatch(plansPanel, /selectedNames|retentionDraft/);
     assert.match(sessionsPanel, /const \[selectedNames, setSelectedNames\] = d2/);
     assert.match(sessionsPanel, /const \[selectedTrashIds, setSelectedTrashIds\] = d2/);
@@ -525,8 +525,8 @@ describe("Dashboard 回归护栏", () => {
 
   test("主界面提供模型导入，设置页保留凭据维护与全量检测", () => {
     const source = readFileSync(dashboardAppUrl, "utf8");
-    const chatPanel = source.slice(source.indexOf("function ChatPanel()"), source.indexOf("var ChatFeed ="));
-    const settingsPanel = source.slice(source.indexOf("function SettingsPanel()"), source.indexOf("// dashboard/src/panels/skills.ts"));
+    const chatPanel = source.slice(source.indexOf("function ChatPanel("), source.indexOf("var ChatFeed ="));
+    const settingsPanel = source.slice(source.indexOf("function SettingsPanel("), source.indexOf("// dashboard/src/panels/skills.ts"));
     assert.doesNotMatch(source, /function formatProviderImportPreview/);
     assert.doesNotMatch(chatPanel, /JSON\.stringify\(providerImportDraft/);
     assert.match(chatPanel, /loadProviderImportFile[\s\S]*?\/providers\/import\/preview[\s\S]*?confirmProviderImport\(draft, plan\)/);
@@ -556,7 +556,7 @@ describe("Dashboard 回归护栏", () => {
 
   test("模型菜单在操作位置显示固定高度反馈，不再发送远端 Toast", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
-    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
+    const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
     const providerSwitch = chatPanel.slice(chatPanel.indexOf("const selectProviderModel"), chatPanel.indexOf("const pickWorkspace"));
     assert.match(chatPanel, /const \[modelNotice, setModelNotice\] = d2\(null\)/);
     assert.match(chatPanel, /role="status" aria-live="polite" style="min-height:18px/);
@@ -568,7 +568,7 @@ describe("Dashboard 回归护栏", () => {
   test("概览位于任务和 OA 之间，系统能力合并后不再占用高级入口", () => {
     const source = readFileSync(dashboardAppUrl, "utf8");
     const workspace = source.slice(source.indexOf('label: t4("app.sectionWorkspace")'), source.indexOf('label: t4("app.sectionConfigure")'));
-    const advanced = source.slice(source.indexOf('label: t4("app.sectionConfigure")'), source.indexOf("function App()"));
+    const advanced = source.slice(source.indexOf('label: t4("app.sectionConfigure")'), source.indexOf("function App("));
     const workspaceIds = [...workspace.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
     const ids = [...advanced.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
     assert.deepEqual(workspaceIds, ["chat", "sessions", "files", "tasks", "overview"]);
@@ -678,7 +678,7 @@ describe("Dashboard 回归护栏", () => {
   test("聊天输入区提供会话级索引模式并展示自动召回来源", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const launcher = readFileSync(launcherUrl, "utf8");
-    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
+    const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
     assert.match(chatPanel, /\/index-retrieval-mode/);
     assert.match(chatPanel, /<option value="auto"/);
     assert.match(chatPanel, /<option value="tool"/);
@@ -716,8 +716,8 @@ describe("Dashboard 回归护栏", () => {
   test("全量检测所有已保存模型，并保留外部多模式和内部固定模式分支", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const server = readFileSync(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url), "utf8");
-    const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
-    const settingsPanel = app.slice(app.indexOf("function SettingsPanel()"), app.indexOf("// dashboard/src/panels/skills.ts"));
+    const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
+    const settingsPanel = app.slice(app.indexOf("function SettingsPanel("), app.indexOf("// dashboard/src/panels/skills.ts"));
     assert.match(chatPanel, /confirmProviderImport/);
     assert.match(settingsPanel, /testManagedProviders/);
     assert.match(chatPanel, /配置已更新，请重新检测全部模型/);
