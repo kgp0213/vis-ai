@@ -293,16 +293,18 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 复杂 PDF 编辑继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。PDF.js 判断文本极少时向上层
 报告可能为扫描件，再由用户决定是否使用 OCR，避免无意义地轮换文本解析器。
 
-保存型文档整理统一进入 `organize_document_to_markdown`。`lib/document-extractors.mjs` 将 PDF 页、OfficeCLI
-元素、HTML DOM、Markdown 标题、表格行或文本段落转换成稳定来源区块；`lib/document-markdown-workflow.mjs`
-按模型 JSON 中的 `agentPolicy.documentPolicy` 分批生成、做确定性保留率检查和结构化审校，并将失败限制在当前
-批次。页或元素是覆盖、哈希、恢复和重试单位，不直接等同于模型分析边界；PDF 会根据句尾、标题、续表和
-编号关系选择跨页语义窗口，所有格式的相邻来源都可作为裁剪后的只读上下文。上下文不得生成来源标记或
-重复进入正文。主模型重试后仍失败时，只探测并转交该批次给健康备用模型；无法修复的单区块保留确定性
-原文并标记复核，禁止虚报完整。图片和图表仅在存在已配置多模态候选时按需渲染，未分析的视觉区块会使
-任务以警告状态完成。
+单文档保存型整理使用通用前台工具循环：先 `prepare_local_document`，按格式通过 `extract_pdf_text`、
+OfficeCLI 文本视图或 `read_file` 分批读取，每批必须先由 `write_file`/`append_file` 持久化，再请求下一批。
+`lib/context-input-transaction.mjs` 将大段只读结果按 SHA-256 无损缓存到用户数据目录，记录
+`pending -> materialized -> foldable` 状态；普通上下文压缩必须等待 pending 输入处理完成，紧急压缩保留
+`read_context_input` 引用。重复阻塞、缓存失败或未完整处理便声称完成时，Launcher 通过一次一问卡片让用户
+选择继续、调整要求、接受部分结果或停止。该机制与文档格式和模型无关，Skill 只负责提示策略，不是可靠性
+前提。
 
-任务清单、来源批次、中间 Markdown、批次检查点和追加式事件流水位于
+`lib/document-extractors.mjs` 与 `lib/document-markdown-workflow.mjs` 继续服务多文档报告及历史后台任务。
+页或元素仍是覆盖、哈希、恢复和重试单位；旧任务的清单、检查点、审校结果与状态查询保持兼容。
+
+多文档报告及历史后台任务的任务清单、来源批次、中间 Markdown、批次检查点和追加式事件流水位于
 `%USERPROFILE%\.visionox\document-jobs\`，默认保留 30 天。每个完成批次先保存包含内容哈希的独立检查点，
 再写预览区块并登记任务清单；恢复时优先核对来源哈希和检查点，旧版遗留的孤立区块通过确定性质量审计后
 以“需要复核”登记，禁止无条件信任或重复生成。最终状态不会覆盖事件流水中的早期中断原因。

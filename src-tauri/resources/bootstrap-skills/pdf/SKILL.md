@@ -41,16 +41,15 @@ Do not run `setup.sh` directly on Windows. Never install dependencies automatica
 
 ### Saved Markdown
 
-For an actual saved Markdown artifact, read `references/pdf-to-markdown.md`, then call
-`organize_document_to_markdown` directly with the original PDF path and destination.
-The host owns extraction, stable page batches, independent quality review, retries,
-fallback models, progress, recovery, and atomic output. Do not call
-`prepare_local_document`, `extract_pdf_text`, `organize_pdf_to_markdown`, a Python parser,
-or `write_file` first for the same new request.
+For an actual saved Markdown artifact, read `references/pdf-to-markdown.md`. Use the
+generic foreground flow: prepare once, retain `documentRef`, read one bounded batch with
+`extract_pdf_text`, and persist it with `write_file` or `append_file` before reading the
+next batch. A context-input memo is a checkpoint: recover it with `read_context_input`
+and materialize one segment at a time.
 
 Use complete body plus a separate summary unless the user explicitly requests a brief,
-lossy summary. If quality is degraded, report the warning instead of claiming full
-success. For PDFs above 3000 pages or a host segmentation response, also read
+lossy summary. Verify page coverage and the actual output file before claiming success.
+For PDFs above 3000 pages or a host segmentation response, also read
 `references/large-document.md`.
 
 ### Read Or Discuss

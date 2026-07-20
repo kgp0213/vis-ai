@@ -6433,6 +6433,7 @@ var ToolRegistry = class {
       }
     }
     let finalResult;
+    let rawResultAnnotation = "";
     try {
       try {
         this._auditListener?.({ name, args });
@@ -6445,6 +6446,13 @@ var ToolRegistry = class {
         maxResultChars: opts.maxResultChars
       });
       const str = typeof result === "string" ? result : JSON.stringify(result);
+      if (typeof opts.onRawResult === "function") {
+        try {
+          const annotation = await opts.onRawResult({ name, args, result: str, tool });
+          if (typeof annotation === "string" && annotation.trim()) rawResultAnnotation = annotation.trim();
+        } catch {
+        }
+      }
       let clipped = str;
       if (opts.maxResultTokens !== void 0) {
         clipped = truncateForModelByTokens(clipped, opts.maxResultTokens);
@@ -6465,6 +6473,7 @@ var ToolRegistry = class {
         finalResult = JSON.stringify({ error: `${e.name}: ${e.message}` });
       }
     }
+    if (rawResultAnnotation) finalResult = `${finalResult}\n\n${rawResultAnnotation}`;
     if (this._resultAugmenter) {
       try {
         return this._resultAugmenter(name, args, finalResult);
@@ -7708,6 +7717,16 @@ function assertModelResponseComplete(finishReason) {
     throw error;
   }
 }
+function contextToolResultSucceeded(result) {
+  const text = String(result ?? "").trim();
+  if (!text || /^\[hook block\]/i.test(text)) return false;
+  try {
+    const value = JSON.parse(text);
+    return !(value?.ok === false || value?.success === false || typeof value?.error === "string");
+  } catch {
+    return !/^(?:error|failed):/i.test(text);
+  }
+}
 var CacheFirstLoop = class {
   client;
   prefix;
@@ -7758,6 +7777,7 @@ var CacheFirstLoop = class {
   _toolRoundsThisStep = 0;
   _officeCliElementCallsThisStep = 0;
   context;
+  contextInputGuard;
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
   get inflight() {
     return this._inflight;
@@ -7794,6 +7814,7 @@ var CacheFirstLoop = class {
     this.hooks = opts.hooks ?? [];
     this.hookCwd = opts.hookCwd ?? process.cwd();
     this.confirmationGate = opts.confirmationGate ?? pauseGate;
+    this.contextInputGuard = opts.contextInputGuard ?? null;
     this._rebuildSystem = opts.rebuildSystem ?? null;
     this._streamPreference = opts.stream ?? true;
     this.stream = this._streamPreference;
@@ -8103,6 +8124,17 @@ var CacheFirstLoop = class {
     const name = call.function?.name ?? "";
     const args = call.function?.arguments ?? "{}";
     const parsedArgs = safeParseToolArgs(args);
+    const toolDefinition = this.tools.get(name);
+    let contextReadOnly = toolDefinition?.readOnly === true;
+    if (typeof toolDefinition?.readOnlyCheck === "function") {
+      try { contextReadOnly = toolDefinition.readOnlyCheck(parsedArgs) === true; } catch {}
+    }
+    const contextTool = {
+      name,
+      readOnly: contextReadOnly,
+      contextControl: toolDefinition?.contextControl === true,
+      contextMaterializer: toolDefinition?.contextMaterializer === true,
+    };
     this._inflight.add(this.inflightIdFor(call));
     try {
       if (call[TOOL_CALL_REPAIR_META]?.changed === true && this.isMutating(call)) {
@@ -8115,6 +8147,20 @@ var CacheFirstLoop = class {
             retryable: true,
           }),
         };
+      }
+      if (this.contextInputGuard) {
+        try {
+          const inputDecision = this.contextInputGuard.beforeToolCall(contextTool);
+          if (inputDecision?.blocked) {
+            return { preWarnings: [], postWarnings: [], result: String(inputDecision.result || "[CONTEXT_INPUT_PENDING]") };
+          }
+        } catch (error) {
+          return {
+            preWarnings: [],
+            postWarnings: [],
+            result: `[CONTEXT_INPUT_GUARD_FAILED] ${error?.message || error}. Stop reading new input and ask the user how to proceed.`,
+          };
+        }
       }
       const preReport = await runHooks({
         hooks: this.hooks,
@@ -8140,8 +8186,35 @@ ${reason}`
       const result = await this.tools.dispatch(name, args, {
         signal,
         maxResultTokens: this.maxResultTokensForTool(name),
-        confirmationGate: this.confirmationGate
+        confirmationGate: this.confirmationGate,
+        onRawResult: this.contextInputGuard && contextTool.readOnly && !contextTool.contextControl
+          ? ({ result: rawResult }) => {
+              const captured = this.contextInputGuard.captureInput({
+                source: `tool:${name}`,
+                content: rawResult,
+                metadata: { tool: name, path: parsedArgs?.path ?? parsedArgs?.input ?? null },
+              });
+              if (captured?.ok === false) {
+                return `[CONTEXT_INPUT_CACHE_FAILED] ${captured.error || "input cache unavailable"}. Do not continue reading; ask the user how to proceed.`;
+              }
+              return captured?.cached
+                ? `[CONTEXT_INPUT_CACHED] Full result saved as ${captured.contextId} (${captured.chars} chars). Use read_context_input for lossless recovery after compaction.`
+                : "";
+            }
+          : void 0
       });
+      if (this.contextInputGuard && contextTool.contextMaterializer) {
+        try {
+          this.contextInputGuard.noteToolResult({
+            name,
+            args: parsedArgs,
+            result,
+            contextMaterializer: true,
+            succeeded: contextToolResultSucceeded(result),
+          });
+        } catch {
+        }
+      }
       const postReport = await runHooks({
         hooks: this.hooks,
         signal,
@@ -8192,7 +8265,17 @@ ${reason}`
   }
   buildMessages(pendingUser, turnImages = null) {
     const healed = healLoadedMessagesByTokens(this.log.toMessages(), this.toolResultBudget.absoluteMaxTokens);
-    const msgs = [...this.prefix.toMessages(), ...healed.messages];
+    const msgs = [...this.prefix.toMessages()];
+    if (this.contextInputGuard) {
+      try {
+        const contextInputMemo = this.contextInputGuard.memo();
+        if (typeof contextInputMemo === "string" && contextInputMemo.trim()) {
+          msgs.push({ role: "system", content: contextInputMemo.trim() });
+        }
+      } catch {
+      }
+    }
+    msgs.push(...healed.messages);
     if (pendingUser !== null) {
       if (this.vision && turnImages && turnImages.length > 0) {
         msgs.push({ role: "user", content: this.buildUserContent(pendingUser, turnImages, this.visionDetail) });
@@ -8349,6 +8432,19 @@ ${reason}`
         this._contextRecheckRequired = false;
         const decision2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model, thresholdKind);
         if (decision2.needsAction) {
+          let inputCompaction = null;
+          try {
+            inputCompaction = this.contextInputGuard?.beforeCompaction({ emergency: thresholdKind === "emergency" }) ?? null;
+          } catch {
+          }
+          if (inputCompaction?.blocked) {
+            yield {
+              turn: this._turn,
+              role: "context_input_flush_required",
+              content: "仍有大段输入尚未持久化，已推迟普通上下文整理；先处理缓存内容。",
+              contextInputStatus: this.contextInputGuard?.status?.() ?? null,
+            };
+          } else {
           const { estimateTokens: estimate, ctxMax } = decision2;
           yield {
             turn: this._turn,
@@ -8401,6 +8497,7 @@ ${reason}`
                 pct: Math.round(estimate / ctxMax * 100)
               })
             };
+          }
           }
         }
       }
@@ -8687,6 +8784,16 @@ ${reason}`
       }
       const decision = this.context.decideAfterUsage(usage, this.model, this._contextFoldState);
       if (decision.kind === "fold") {
+        let inputCompaction = null;
+        try { inputCompaction = this.contextInputGuard?.beforeCompaction() ?? null; } catch {}
+        if (inputCompaction?.blocked) {
+          yield {
+            turn: this._turn,
+            role: "context_input_flush_required",
+            content: "仍有大段输入尚未持久化，已推迟普通上下文整理；先处理缓存内容。",
+            contextInputStatus: this.contextInputGuard?.status?.() ?? null,
+          };
+        } else {
         const before = decision.promptTokens;
         const ctxMax = decision.ctxMax;
         const result = await this.compactHistory({ keepRecentTokens: decision.tailBudget });
@@ -8718,6 +8825,7 @@ ${reason}`
             beforeMessages: result.beforeMessages,
             afterMessages: result.afterMessages
           };
+        }
         }
       } else if (decision.kind === "recovery-required") {
         const before = decision.promptTokens;
@@ -9642,6 +9750,7 @@ function registerChoiceTool(registry, opts = {}) {
     name: "ask_choice",
     description: "Present 2\u20136 alternatives as an interactive Dashboard card. If the user is supposed to choose, call this tool instead of listing A/B/C or numbered options in assistant prose. Use it when the user asks for options, when several valid approaches require their preference, or before a user-controlled workflow branch. Use short stable ids (A/B/C), the current conversation language, concise titles, and summaries only when they add useful detail; never repeat or translate the title. Set allowCustom:true when the real answer may not fit. Skip only when one option is clearly best or an open-ended free-form answer is required. After calling, stop and wait for the selection.",
     readOnly: true,
+    contextControl: true,
     parameters: {
       type: "object",
       properties: {
@@ -11143,6 +11252,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   registry.register({
     name: "write_file",
     description: "Create or overwrite a file under the sandbox root with the given content. Parent directories are created as needed.",
+    contextMaterializer: true,
     parameters: {
       type: "object",
       properties: {
@@ -11161,6 +11271,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   registry.register({
     name: "append_file",
     description: "Append content to a file under the sandbox root. Parent directories are created as needed. Use this for large documents after writing the first section with write_file.",
+    contextMaterializer: true,
     parameters: {
       type: "object",
       properties: {
@@ -11179,6 +11290,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   registry.register({
     name: "edit_file",
     description: "Apply a SEARCH/REPLACE edit to an existing file. `search` must match exactly (whitespace sensitive) \u2014 no regex. The match must be unique in the file; otherwise the edit is refused to avoid surprise rewrites.",
+    contextMaterializer: true,
     parameters: {
       type: "object",
       properties: {
@@ -11193,6 +11305,7 @@ Prefer \`list_directory\` for a single-level view, \`search_files\` to find spec
   registry.register({
     name: "multi_edit",
     description: "Apply N SEARCH/REPLACE edits across ONE OR MORE files in a single atomic call. Edits run sequentially in array order; for edits that touch the same file, a later edit can match text inserted by an earlier one. If ANY edit fails validation (search not found, ambiguous match, empty search, file unreadable), NO files are written. If a write fails after partial application, any files that were already modified are rolled back to their original content. Same per-edit rules as edit_file: `search` is exact text (whitespace sensitive, no regex) and must be unique in its target file at the moment that edit applies. Use this for renames spanning multiple files, cross-file refactors, or any batch where you'd otherwise loop edit_file.",
+    contextMaterializer: true,
     parameters: {
       type: "object",
       properties: {

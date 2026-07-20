@@ -71,6 +71,7 @@ const {
 } = await importEarly("./lib/provider.mjs");
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
+const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention } = await importEarly("./lib/context-input-transaction.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
@@ -124,7 +125,7 @@ const { createPreparedDocumentRegistry, getDlpConfig, latestPreparedDocumentRef,
 const { extractPdfText, inspectPdfText, processPdfTextBatches, LARGE_PDF_PAGE_THRESHOLD } = await importEarly("./lib/pdf-text.mjs");
 const { buildPdfDeliveryResult, formatPageRange, parsePageRange } = await importEarly("./lib/document-delivery.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, detectArtifactRequest, documentArtifactStateFromJob, documentJobToolMismatch, latestAssistantResponse, pendingDocumentArtifactFromToolEvent, pendingDocumentWriteConflict, registerSaveLastAssistantResponseTool, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
-const { generatePdfSectionWithModel, largePdfChoiceResult, registerPdfMarkdownWorkflowTool } = await importEarly("./lib/pdf-markdown-workflow.mjs");
+const { generatePdfSectionWithModel, largePdfChoiceResult } = await importEarly("./lib/pdf-markdown-workflow.mjs");
 const { buildDocumentContract, buildDocumentSectionMessages, buildDocumentSummaryMessages, documentTaskFingerprint, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
@@ -329,7 +330,7 @@ const CONSTANTS = {
 
   // Mode versions
   DEFAULT_MODE_VERSION: 5,
-  OFFICE_MODE_VERSION: 8,
+  OFFICE_MODE_VERSION: 9,
 };
 const DEFAULT_SOUL_FALLBACK = `# Visionox-Whale Core Identity
 
@@ -409,6 +410,7 @@ const visionoxDataDir = resolve(home, ".visionox");
 if (!existsSync(visionoxDataDir)) {
   mkdirSync(visionoxDataDir, { recursive: true });
 }
+const contextInputTransactions = createContextInputTransactionStore(resolve(visionoxDataDir, "context-inputs"));
 const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
@@ -1663,7 +1665,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 
   tools.register({
     name: "extract_pdf_text",
-    description: "Read or discuss an existing local PDF with the bundled PDF.js runtime. Do not use this when the user requested a saved Markdown file; call organize_document_to_markdown directly instead. Results contain complete pages only. When complete is false, immediately call again with the returned documentRef and nextPageRange. Input may be omitted only immediately after prepare_local_document, when the host can recover the latest PDF reference.",
+    description: "Read an existing local PDF with the bundled PDF.js runtime. Results contain complete pages only. For a saved Markdown task, persist each delivered batch with write_file or append_file before requesting the next page range. When complete is false, continue with the returned documentRef and nextPageRange only after the current batch is materialized. Input may be omitted only immediately after prepare_local_document, when the host can recover the latest PDF reference.",
     parameters: {
       type: "object",
       properties: {
@@ -1739,92 +1741,6 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       });
       console.error(`[document] extract_pdf_text document=${prepared.documentId} delivered=${delivery.deliveredPageRange || "none"} remaining=${delivery.remainingPageRange || "none"} complete=${delivery.complete} budget=${deliveryBudget}`);
       return JSON.stringify(delivery);
-    },
-  });
-
-  registerPdfMarkdownWorkflowTool(tools, {
-    // The historical PDF-only tool name is retained for old conversations, but
-    // must enter the same resumable background queue as every other document.
-    delegate: (args, toolContext) => tools.dispatch("organize_document_to_markdown", args, toolContext),
-    countTokens,
-    resolveInput: () => latestPreparedDocumentRef(preparedDocumentRegistry, "pdf"),
-    preparePdf: async (input, signal) => {
-      const prepared = await prepareLocalDocument(input, {
-        cfg: readConfig(configPath),
-        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
-        logger: console,
-        signal,
-        registry: preparedDocumentRegistry,
-      });
-      if (!prepared.ok) return prepared;
-      if (prepared.documentKind !== "pdf") {
-        return { ok: false, error: "organize_pdf_to_markdown only accepts PDF documents", documentKind: prepared.documentKind };
-      }
-      return prepared;
-    },
-    inspectPdf: (path, signal) => inspectPdfText(path, { signal }),
-    processBatches: (path, batchOptions) => processPdfTextBatches(path, batchOptions),
-    generateSection: async ({ messages: sectionMessages, batch, signal, progress, stage }) => {
-      if (!client) throw new Error("model client is unavailable");
-      const modelConfig = effectiveModelConfig(config);
-      const provider = getActiveProvider(config);
-      return generatePdfSectionWithModel({
-        client,
-        model: modelConfig.model,
-        messages: sectionMessages,
-        pageRange: batch.pageRange,
-        signal,
-        onProgress: progress,
-        stage,
-        maxTokens: resolveDocumentOutputBudget(provider, modelConfig.model, { purpose: "toolContinuation" }),
-        requestPurpose: "toolContinuation",
-      });
-    },
-    reviewSection: async ({ messages: reviewMessages, batch, signal, progress, stage }) => {
-      if (!client) throw new Error("model client is unavailable");
-      const modelConfig = effectiveModelConfig(config);
-      const provider = getActiveProvider(config);
-      return generatePdfSectionWithModel({
-        client,
-        model: modelConfig.model,
-        messages: reviewMessages,
-        pageRange: batch.pageRange,
-        signal,
-        onProgress: progress,
-        stage,
-        temperature: 0,
-        maxTokens: resolveDocumentOutputBudget(provider, modelConfig.model, { purpose: "documentReview" }),
-        requestPurpose: "documentReview",
-      });
-    },
-    onProgress: (progress) => {
-      broadcastDashboardEvent({ kind: "document-progress", ...progress });
-      if (progress.complete) {
-        broadcastDashboardEvent({ kind: "status", text: `PDF 文档已完成 ${progress.processedPages} 页整理并通过覆盖校验` });
-      } else if (progress.phase === "batch-complete") {
-        broadcastDashboardEvent({ kind: "status", text: `PDF 已完成 ${progress.processedPages}/${progress.totalPages ?? "?"} 页，继续处理后续内容` });
-      } else if (progress.phase === "coverage-retry") {
-        const pages = Array.isArray(progress.missingPages) && progress.missingPages.length > 0
-          ? `（缺少第 ${formatPageRange(progress.missingPages)} 页）`
-          : "";
-        broadcastDashboardEvent({ kind: "status", text: `PDF 第 ${progress.pageRange} 页覆盖校验未通过${pages}，正在缩小范围重试` });
-      } else if (progress.phase === "quality-review") {
-        broadcastDashboardEvent({ kind: "status", text: `正在逐页审校 PDF 第 ${progress.pageRange} 页的 Markdown` });
-      } else if (progress.phase === "quality-repair") {
-        broadcastDashboardEvent({ kind: "status", text: `PDF 第 ${progress.pageRange} 页审校发现 ${progress.issueCount ?? "若干"} 项问题，正在修复` });
-      } else if (progress.phase === "model") {
-        const seconds = Math.max(0, Math.floor(Number(progress.elapsedMs ?? 0) / 1_000));
-        const action = progress.stage === "quality-review"
-          ? "审校"
-          : progress.stage === "quality-repair"
-            ? "修复"
-            : progress.stage === "coverage-repair" || progress.stage === "retention-repair"
-              ? "补全"
-              : "整理";
-        broadcastDashboardEvent({ kind: "status", text: `正在${action} PDF 第 ${progress.pageRange} 页（${seconds} 秒）` });
-      } else if (progress.pageRange) {
-        broadcastDashboardEvent({ kind: "status", text: `正在整理 PDF 第 ${progress.pageRange} 页` });
-      }
     },
   });
 
@@ -2266,42 +2182,6 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   }
 
   tools.register({
-    name: "organize_document_to_markdown",
-    description: "Start a host-managed, resumable background job that converts a supported PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into a saved Markdown file. This is the default for extracting, organizing, or summarizing a document into an artifact. It preserves complete source blocks plus a separate summary, paginates deterministic extractors, audits quality, retries weak-model failures, and can use configured fallback providers only for failed blocks. A successful acceptance ends the current turn so the background worker can run; never call wait_for_job, list_jobs, read_file, OfficeCLI, extract_pdf_text, write_file, or a format Skill afterward for the same request.",
-    parameters: {
-      type: "object",
-      properties: {
-        input: { type: "string", description: "Original document path or stable documentRef. May be omitted only immediately after prepare_local_document." },
-        outputPath: { type: "string", description: "Destination Markdown path. If omitted, a new '<source>-整理.md' file is created in the current workspace." },
-        pages: { type: "string", description: "Optional PDF page selection such as 1-200. Leave empty for other formats." },
-        instructions: { type: "string", description: "Optional user-specific organization requirements. The default always preserves complete body content and adds a separate summary." },
-        fidelity: { type: "string", enum: ["complete-with-summary", "summary-only"], description: "Defaults to complete-with-summary. Use summary-only only when the user explicitly requested a brief summary." },
-        summaryOnlyConfirmed: { type: "boolean", description: "Set true only when the user explicitly requested a brief, lossy summary." },
-        overwriteConfirmed: { type: "boolean", description: "Set true only after the user explicitly confirmed overwriting an existing output file or the source file." },
-      },
-    },
-    fn: async (args, toolContext) => {
-      const input = String(args?.input ?? "").trim() || latestPreparedDocumentRef(preparedDocumentRegistry);
-      if (!input) return JSON.stringify({ ok: false, error: "organize_document_to_markdown needs input because no prepared document is available" });
-      const prepared = await prepareLocalDocument(input, {
-        cfg: readConfig(configPath),
-        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
-        logger: console,
-        signal: toolContext?.signal,
-        registry: preparedDocumentRegistry,
-      });
-      if (!prepared.ok) return JSON.stringify(prepared);
-      return JSON.stringify(await startManagedDocumentJob(prepared, args, toolContext));
-    },
-    finishTurnOnResult: (value) => {
-      const result = parseMaybeJsonObject(value);
-      return result?.ok === true && result?.accepted === true && result?.artifactStatus === "pending"
-        ? result.message
-        : null;
-    },
-  });
-
-  tools.register({
     name: "organize_documents_to_report",
     description: "Start one host-managed, resumable report job over multiple local PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text sources. Use this when the requested artifact must compare, merge, reconcile, or summarize two or more documents. Every source receives a stable identity; all source units remain traceable; the report includes a source list, independent summary, complete reviewed body, checkpoints, and whole-collection change detection. A successful acceptance ends the current turn while the background worker continues.",
     parameters: {
@@ -2346,7 +2226,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 
   tools.register({
     name: "get_document_job_status",
-    description: "Read document-conversion background status without waiting or polling. Use this in a later user turn when asked about progress. Pass the document:<UUID> returned by organize_document_to_markdown, or omit jobId to list recent document jobs. Never use wait_for_job or list_jobs for document jobs.",
+    description: "Read status for an existing legacy document-conversion background task without waiting or polling. Pass its document:<UUID>, or omit jobId to list recent document jobs. Never use wait_for_job or list_jobs for document jobs.",
     readOnly: true,
     parallelSafe: true,
     stormExempt: true,
@@ -2468,7 +2348,7 @@ tools.setToolInterceptor(async (name, args) => {
     ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable })
     ?? documentJobToolMismatch(name, args);
   if (issue) return JSON.stringify(issue);
-  if (/^(?:append_file|edit|edit_file|multi_edit|move_file|delete_file|organize_document_to_markdown|organize_documents_to_report|organize_pdf_to_markdown|run_background|run_command|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
+  if (/^(?:append_file|edit|edit_file|multi_edit|move_file|delete_file|organize_documents_to_report|run_background|run_command|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
     const conflict = pendingDocumentWriteConflict(
       name,
       args,
@@ -2489,6 +2369,28 @@ const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
 });
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
+
+tools.register({
+  name: "read_context_input",
+  description: "Recover one bounded segment from a lossless context-input cache after compaction or a context-input flush notice. Read one segment, materialize it into the requested artifact, then request the next segment. This is a recovery/control tool and remains available while new read-only tools are paused.",
+  readOnly: true,
+  parallelSafe: true,
+  stormExempt: true,
+  contextControl: true,
+  parameters: {
+    type: "object",
+    properties: {
+      contextId: { type: "string", description: "Stable context:<sha256> reference shown in the context-input memo." },
+      offset: { type: "integer", minimum: 0, description: "Character offset. Start at 0 and continue with nextOffset." },
+      maxChars: { type: "integer", minimum: 1, maximum: 100000, description: "Bounded segment size. Defaults to 24000 characters." },
+    },
+    required: ["contextId"],
+  },
+  fn: async (args) => JSON.stringify(contextInputTransactions.readInput(args?.contextId, {
+    offset: args?.offset,
+    maxChars: args?.maxChars ?? 24_000,
+  })),
+});
 
 // Shell edit mode — default to admin on first run
 if (!config.editMode) {
@@ -2539,7 +2441,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。用户要求把 PDF、Word、Excel、PowerPoint、HTML、Markdown、CSV 或文本整理成实际保存的 Markdown 文件时，直接调用 organize_document_to_markdown，并传入原始输入路径和输出路径；宿主会完成文档准备、稳定分批、模型独立审校、写入和覆盖校验，不要预先调用 prepare_local_document、extract_pdf_text、OfficeCLI、read_file 或 write_file。多个来源需要比较、合并或形成报告时调用 organize_documents_to_report。仅阅读或讨论本地文档内容时，先调用 prepare_local_document 并保留返回的 documentRef；对于仅阅读的 PDF 再调用 extract_pdf_text，切换工具或 Skill 时继续使用同一引用。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。PDF.js 结果显示 likelyScanned 时再说明需要 OCR，不要反复更换文本解析器。若后台工具返回 qualityPassed=false，必须向用户说明审校降级和 warnings，不要声称无条件成功。OfficeCLI 只处理 Word/Excel/PPT，不得用于 PDF。复杂 PDF 编辑或生成使用 pdf Skill；md-to-pdf-cjk 只用于 Markdown 生成 PDF。交付前对 Office 文档执行 validate 并通过 view issues 定位问题和自修复。",
+    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。生成单文档 Markdown 时走通用前台流程：先做只读检查；遇到会改变范围、保真度、覆盖或输出位置的关键歧义时，只用 ask_choice 问一个问题，并把推荐选项及理由放在第一项；随后按格式分批读取，PDF 用 extract_pdf_text，Word/Excel/PPT 用 OfficeCLI 文本视图，文本格式用 read_file。每批内容必须先用 write_file 或 append_file 持久化，再读取下一批；压缩后用 read_context_input 恢复缓存块。多个来源需要比较、合并或形成报告时仍调用 organize_documents_to_report。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。PDF.js 显示 likelyScanned 时再说明需要 OCR。OfficeCLI 不得用于 PDF；交付前验证文件存在、覆盖完整且无虚假完成声明。复杂 PDF 编辑或生成使用 pdf Skill；md-to-pdf-cjk 只用于 Markdown 生成 PDF。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -4661,7 +4563,7 @@ function parseMaybeJsonObject(value) {
 }
 
 function rememberToolGeneratedArtifacts(toolName, toolArgs) {
-  if (!/^(write_file|append_file|save_last_assistant_response|organize_pdf_to_markdown|edit|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
+  if (!/^(write_file|append_file|save_last_assistant_response|edit|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
   const args = parseMaybeJsonObject(toolArgs);
   if (!args) return [];
   const paths = [];
@@ -4894,7 +4796,7 @@ function buildLoop(client, rootDir) {
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
   const systemWithAgentPolicy = agentPolicy.documentWorkflow === "guided"
-    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. When the user asks to turn one existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into an actual saved Markdown file, call organize_document_to_markdown directly with the original input and outputPath. When one report must compare, merge, reconcile, or summarize multiple source documents, call organize_documents_to_report once with every source in inputs. The host handles preparation, stable extraction batches, independent quality review, targeted retries, fallback models, recoverable file writes, source traceability, and coverage, so do not call prepare_local_document, extract_pdf_text, OfficeCLI, read_file, or write_file first for the same saved-document request. If that tool returns requiresUserChoice, use ask_choice with its structured choices. If qualityPassed is false, report the degraded review status and warnings instead of claiming unqualified success. For reading or discussing a document without creating a file, use the shortest reliable sequence: prepare_local_document once, retain documentRef, then use extract_pdf_text for PDF, OfficeCLI view text for Word/Excel/PowerPoint, or read_file for text formats. Do not start with annotated/query/html or cell-by-cell extraction unless the user asks for layout details or plain text is insufficient. Never rewrite or guess a prepared path; switch tools with documentRef. For screenshot-guided HTML or SVG corrections, inspect the image and only the relevant file region, apply one consolidated edit, then verify the written file instead of editing one visual element per tool call. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. Before any other write_file call, prepare both path and complete content, then verify the successful tool result before claiming the file exists. If a tool reports a missing required parameter, correct that parameter instead of repeating the incomplete call. If extract_pdf_text returns complete=false, immediately call it again with the same documentRef and nextPageRange; do not summarize, write, or claim full coverage until complete=true. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. For a long generated Markdown deliverable that is not based on an existing document, write the first section with write_file and append later sections with append_file instead of placing the whole document in one tool call. A continuation-window notice means the current turn has fresh tool rounds; continue the task without asking the user to send another message.`
+    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. Start document tasks with read-only investigation: call prepare_local_document once, retain documentRef, and identify the format and requested artifact. If one unresolved high-impact ambiguity would change scope, fidelity, overwrite behavior, or output shape, call ask_choice with exactly one question; put the recommended option first and explain why. Otherwise proceed without asking. For a single saved Markdown artifact, read one bounded batch at a time: use extract_pdf_text for PDF, an OfficeCLI text view for Word/Excel/PowerPoint, and read_file for text formats. Persist the first delivered batch with write_file and each later batch with append_file before requesting more source input. If extract_pdf_text returns complete=false, materialize the delivered pages before continuing with the same documentRef and nextPageRange. If a context-input memo appears, recover its referenced content through read_context_input in bounded segments and materialize each segment before reading another. Verify the output file and source coverage before claiming completion. When one report must compare, merge, reconcile, or summarize multiple source documents, call organize_documents_to_report once with every source in inputs. Do not start with annotated/query/html or cell-by-cell extraction unless layout details are requested or plain text is insufficient. Never rewrite or guess a prepared path; the host can recreate a missing readable copy from documentRef. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. A continuation-window notice means the current turn has fresh tool rounds; continue the task without asking the user to send another message.`
     : systemWithLearning;
   const prefix = new ImmutablePrefix({
     system: systemWithAgentPolicy,
@@ -4924,6 +4826,7 @@ function buildLoop(client, rootDir) {
     tools,
     model: modelConfig.model,
     maxOutputTokens: capabilities.maxOutputTokens,
+    contextInputGuard: contextInputTransactions,
     reasoningEffort: config.reasoningEffort ?? "max",
     autoEscalate: modelConfig.autoEscalate,
     escalationModel: modelConfig.escalationModel,
@@ -5231,10 +5134,16 @@ function documentAutoContinuationPrompt(state, attempt) {
   return [
     `[系统自动续读 ${attempt}/${MAX_DOCUMENT_AUTO_CONTINUATIONS}]`,
     `文档 ${state.documentRef} 仍有未读取页面：${nextPageRange}。`,
-    `立即调用 extract_pdf_text，input 使用 ${state.documentRef}，pages 使用 ${nextPageRange}。`,
-    "继续沿用用户要求的整理粒度。读取完成前不要写入或声称整份文档已处理完成。",
-    "长篇 Markdown 应先用 write_file 写第一段，再用 append_file 分段追加，最后读取文件信息确认产物存在。",
+    "先确认上一批内容已经通过 write_file 或 append_file 持久化；若尚未写入，先处理上一批，不得继续拉取新内容。",
+    `上一批已持久化后，再调用 extract_pdf_text，input 使用 ${state.documentRef}，pages 使用 ${nextPageRange}。`,
+    "继续沿用用户要求的整理粒度；长篇 Markdown 分段追加，最后确认产物存在且覆盖范围完整。",
   ].join("\n");
+}
+
+function requiresCompleteContextCoverage(text, artifactRequest) {
+  if (artifactRequest?.required !== true) return false;
+  const value = String(text ?? "");
+  return !/(?:只要|仅需|仅|只).{0,10}(?:摘要|总结|概述|要点)|summary[ -]?only|brief summary/i.test(value);
 }
 
 function incompleteActivePlanSnapshot() {
@@ -7583,6 +7492,8 @@ function loopEventToDashboard(ev, assistantId) {
         id,
         text: ev.content,
       };
+    case "context_input_flush_required":
+      return { kind: "warning", id, text: ev.content };
     case "output_recovery":
       return { kind: "status", text: ev.content };
     case "output_recovery_required":
@@ -10069,6 +9980,11 @@ ${modeList}
         const artifactRequest = opts.internalHandoff === true
           ? { required: false, savePreviousResponse: false }
           : detectArtifactRequest(text);
+        contextInputTransactions.beginTurn({
+          turnId: requestId || operation.id || assistantId,
+          requiresArtifact: artifactRequest.required,
+          requiresCompleteCoverage: requiresCompleteContextCoverage(text, artifactRequest),
+        });
         const turnArtifactPaths = new Set();
         const pdfContinuationStates = new Map();
         try {
@@ -10084,6 +10000,11 @@ ${modeList}
             loopInput = retrieval.input;
             augmentedLoopInput = retrieval.input;
           }
+          contextInputTransactions.captureInput({
+            source: augmentedLoopInput ? "user+retrieval" : "user",
+            content: loopInput,
+            metadata: { requestId: requestId || null, semanticSources: retrieval.sources.length },
+          });
           if (indexRetrievalMode === "auto") {
             broadcastDashboardEvent({
               kind: "semantic-retrieval",
@@ -10210,6 +10131,38 @@ ${modeList}
                   // shorter intermediate reasoning/tool-use summaries.
                   assistantText = ev.content;
                 }
+              }
+            }
+
+            let contextInputStatus = null;
+            try { contextInputStatus = contextInputTransactions.noteAssistantFinal(assistantText); } catch {}
+            const intervention = decideContextInputIntervention(contextInputStatus);
+            if (intervention && !operation.controller.signal.aborted) {
+              broadcastDashboardEvent({ kind: "warning", text: intervention.question });
+              const verdict = await pauseGate.ask(intervention);
+              if (verdict?.type === "text" && String(verdict.text || "").trim()) {
+                contextInputTransactions.resolveIntervention("continue");
+                assistantText = "";
+                loopInput = `${buildContextInputFlushPrompt(contextInputTransactions.status())}\n\n用户补充：${String(verdict.text).trim()}`;
+                continue;
+              }
+              const choice = verdict?.type === "pick" ? String(verdict.optionId || "") : "stop";
+              contextInputTransactions.resolveIntervention(choice);
+              if (choice === "continue") {
+                assistantText = "";
+                loopInput = buildContextInputFlushPrompt(contextInputTransactions.status());
+                continue;
+              }
+              if (choice === "accept-partial") {
+                assistantText = `${assistantText}\n\n> 已按你的选择保留当前部分结果；尚未处理的输入未计入完整交付。`.trim();
+              } else if (choice === "revise") {
+                continuationNeeded = true;
+                assistantText = "任务已暂停。请先说明你最希望调整的一个方面：处理范围、输出格式或内容优先级。";
+                break;
+              } else {
+                continuationNeeded = true;
+                assistantText = "任务已按你的选择停止；已缓存的输入仍可在后续恢复。";
+                break;
               }
             }
 

@@ -69,10 +69,11 @@ PDF 相关技能在办公模式中继续保留：
 OfficeCLI 不处理 PDF。现有 PDF 会先获得稳定的文档引用，再交给 `extract_pdf_text`；切换工具时继续使用
 同一引用。`md-to-pdf-cjk` 是单向生成工具，不能作为现有 PDF 读取失败后的备用解析器。
 
-需要把现有 PDF、Word、Excel、PowerPoint、HTML 或文本保存为 Markdown 时，统一使用
-`organize_document_to_markdown` 后台任务。OfficeCLI 在其中只负责分页提取 Office 元素和按需截图；宿主负责
-分批、质量检查、失败块重试、备用模型接管、恢复和最终文件组装。直接 OfficeCLI 命令仍用于阅读、编辑、
-验证或布局检查，不应手工替代这一保存型工作流。
+需要把现有 PDF、Word、Excel、PowerPoint、HTML 或文本保存为 Markdown 时，使用通用前台增量流程。
+先通过 `prepare_local_document` 获得稳定 `documentRef`，Office 文件用 OfficeCLI 文本视图分批读取；每批先用
+`write_file` 或 `append_file` 写入目标文件并确认成功，再读取下一批。大段输入会由上下文事务缓存，压缩后可用
+`read_context_input` 按段恢复。直接 OfficeCLI 命令仍用于阅读、编辑、验证或布局检查；多个来源形成同一报告时
+使用 `organize_documents_to_report`。
 
 ---
 

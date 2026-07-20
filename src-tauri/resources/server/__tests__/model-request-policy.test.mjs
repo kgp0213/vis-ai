@@ -628,8 +628,10 @@ describe("model request policy", () => {
     assert.match(launcher, /maxContextTokens: capabilities\.maxContextTokens/);
     assert.match(launcher, /maxOutputTokens: capabilities\.maxOutputTokens/);
     assert.match(launcher, /const requestPurpose = purpose === "verification" \? "documentReview" : purpose/);
-    assert.match(launcher, /maxTokens: resolveDocumentOutputBudget\(provider, modelConfig\.model, \{ purpose: "toolContinuation" \}\)/);
-    assert.match(launcher, /maxTokens: resolveDocumentOutputBudget\(provider, modelConfig\.model, \{ purpose: "documentReview" \}\)/);
+    assert.match(launcher, /maxTokens: resolveDocumentOutputBudget\(candidate\.provider, candidate\.modelId, \{ purpose: requestPurpose/);
+    assert.match(launcher, /return resolveDocumentOutputBudget\(provider, model, \{ purpose: "report", fallback \}\)/);
+    assert.match(launcher, /contextInputGuard: contextInputTransactions/);
+    assert.doesNotMatch(launcher, /name:\s*"organize_document_to_markdown"/);
     assert.doesNotMatch(launcher, /\/pro\|reason\|vision\/i/);
     assert.match(launcher, /maxToolContinuationWindows/);
     assert.match(launcher, /toolResultBudget/);

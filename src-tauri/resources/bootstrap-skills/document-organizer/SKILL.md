@@ -1,77 +1,53 @@
 ---
 name: document-organizer
-description: Convert an existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into a saved Markdown artifact through Visionox's resumable background workflow. Use for complete extraction, organization, conversion, or summarization into a file, especially for large documents or weak local models.
+description: Convert an existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text document into a saved Markdown artifact with a generic foreground, incremental workflow. Use for complete extraction, organization, conversion, or summarization into a file, especially for large documents or weak local models.
 license: MIT
 ---
 
 # Document Organizer
 
-Use the host-managed `organize_document_to_markdown` tool for one source, or
-`organize_documents_to_report` when the user asks to compare or merge multiple sources. Do not
-manually chain `prepare_local_document`, `extract_pdf_text`, OfficeCLI, `read_file`, or
-`write_file` for the same saved-Markdown request.
+Use the ordinary foreground tool loop. This Skill supplies strategy only; task reliability
+must not depend on the Skill being loaded.
 
-## Default Contract
+## Clarify Only High-Impact Ambiguity
 
-- Preserve the complete source body and add a separate summary at the beginning.
+First inspect the available conversation and source metadata. If one unresolved decision
+would materially change scope, fidelity, overwrite behavior, or output structure, call
+`ask_choice` with exactly one question. Put the recommended option first and state its
+reason. Do not ask a list of questions or repeat facts already present in context.
+
+## Single-Document Flow
+
+1. Call `prepare_local_document` once with the original path and keep its `documentRef`.
+2. Read one bounded batch with the format-appropriate reader:
+   - PDF: `extract_pdf_text`.
+   - Word/Excel/PowerPoint: an OfficeCLI text view.
+   - HTML/Markdown/CSV/text: `read_file` with a bounded range when needed.
+3. Immediately write the first processed batch with `write_file`; use `append_file` for
+   every later batch.
+4. Verify a successful write before reading more source content.
+5. Continue with the next source range. For PDF, reuse `documentRef` and
+   `nextPageRange` until `complete=true`.
+6. Verify the actual file and requested source coverage before reporting completion.
+
+When the runtime reports a cached context input, use `read_context_input` in bounded
+segments. Materialize one segment before requesting the next. Never replace missing
+source content with a context summary.
+
+## Fidelity
+
+- By default preserve the complete source body and add a separate concise summary.
 - Keep source order, tables, formulas, parameters, commands, links, warnings, code, and
   useful image or chart information.
-- Use `summary-only` only when the user explicitly requests a brief, lossy summary and
-  set `summaryOnlyConfirmed: true`.
-- Keep the source read-only. Generate a non-conflicting Markdown filename by default. If
-  an explicit output already exists or would overwrite the source, present the returned
-  choices with `ask_choice`.
-- Pass any user-specific organization request through `instructions`.
+- A brief summary is intentionally lossy only when the user explicitly requested it.
+- Keep the source read-only and use a non-conflicting output path unless overwrite was
+  explicitly confirmed.
+- Do not claim complete coverage from a partial output. If the runtime cannot cache or
+  recover input, use the intervention card and let the user continue, revise, accept a
+  partial result, or stop.
 
-## Invocation
+## Multiple Sources
 
-Call one high-level tool with the user's original path or the latest prepared document:
-
-```json
-{
-  "input": "C:\\path\\source.docx",
-  "outputPath": "C:\\path\\source-整理.md",
-  "fidelity": "complete-with-summary",
-  "instructions": "Optional user requirements"
-}
-```
-
-If `outputPath` is omitted, the host creates a new Markdown file in the current
-workspace. If a PDF above 3000 pages returns `requiresUserChoice`, use `ask_choice` and
-process only the selected range or split volume. Ask only the unresolved question; do
-not replace the structured choices with a prose menu.
-
-For a report based on several sources, pass the complete collection in one call:
-
-```json
-{
-  "inputs": ["C:\\path\\spec.docx", "C:\\path\\results.xlsx"],
-  "outputPath": "C:\\path\\combined-report.md",
-  "fidelity": "complete-with-summary",
-  "instructions": "Compare the requirements with the measured results"
-}
-```
-
-Do not start one independent task per file when the requested result depends on relationships
-between sources. The collection workflow keeps source boundaries and produces one source list.
-
-## Runtime Behavior
-
-The host extracts stable source units, processes cross-boundary semantic windows with
-read-only adjacent context, checks deterministic coverage and factual retention, performs
-a separate model review, retries failed blocks, and may use a healthy configured fallback
-model only for failures. Page or element ids remain the traceability units; boundary
-context cannot be duplicated into the body. A final source-order audit runs before the
-host saves the file outside the model response, so a weak model cannot silently stop halfway.
-
-The task continues in the background and appears in the full-size background task workbench.
-The user may pause, resume, stop immediately, abandon, preview, or retry failed blocks.
-Deleting a task record never deletes source files or a committed final artifact. Failed blocks
-retain deterministic source text and are marked for review; never report an unqualified
-success when `qualityPassed` is false or visual content remains pending.
-
-## Read-Only Requests
-
-When the user only wants to read or discuss a document and does not want a saved Markdown
-artifact, do not start this workflow. Use `prepare_local_document` followed by the
-format-appropriate reader instead.
+When one result depends on relationships between multiple source documents, call
+`organize_documents_to_report` once with all source paths. Keep that specialized
+collection workflow; do not start unrelated single-file chains.

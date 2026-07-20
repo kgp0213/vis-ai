@@ -119,9 +119,10 @@ const required = [
       'kind: "document-progress"',
       "append_file",
       "save_last_assistant_response",
-      "organize_pdf_to_markdown",
-      "organize_document_to_markdown",
       "organize_documents_to_report",
+      "contextInputTransactions",
+      'name: "read_context_input"',
+      "pauseGate.ask(intervention)",
       "get_document_job_status",
       "probeDocumentModel",
       "modelIssues",
@@ -130,8 +131,6 @@ const required = [
       "pendingDocumentWriteConflict",
       "createDocumentMarkdownManager",
       "isKnownLegacyBootstrapSkill",
-      "reviewSection",
-      'progress.phase === "quality-review"',
       "MAX_ARTIFACT_AUTO_CONTINUATIONS",
       "jobs.stopOwned",
       "scheduleRunRegistry",
@@ -253,6 +252,10 @@ const required = [
   {
     file: "src-tauri/resources/server/lib/schedule-policy.mjs",
     markers: ["computeNextScheduleRun", "isScheduleAllowedAt", "isValidRunWindow", "MAX_SCHEDULE_INTERVAL_MS"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/context-input-transaction.mjs",
+    markers: ["createContextInputTransactionStore", "atomicWriteFileSync", "CONTEXT_INPUT_PENDING", "read_context_input", "decideContextInputIntervention", "accept-partial"],
   },
   {
     file: "src-tauri/resources/server/lib/system-prompt.mjs",
@@ -577,6 +580,10 @@ const required = [
       "ModelOutputTruncatedError",
       "assertModelResponseComplete",
       "Do not use this for PDF or Office binary content",
+      "contextInputGuard",
+      "context_input_flush_required",
+      "onRawResult",
+      "contextMaterializer",
     ],
   },
   {
@@ -691,7 +698,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/SKILL.md",
-    markers: ["PDF Workbench Router", "path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows", "references/pdf-to-markdown.md", "organize_document_to_markdown", "independent quality review"],
+    markers: ["PDF Workbench Router", "path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows", "references/pdf-to-markdown.md", "extract_pdf_text", "read_context_input"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/subagent-driven-development/SKILL.md",
@@ -835,15 +842,15 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/references/pdf-to-markdown.md",
-    markers: ["Skill owns strategy", "host owns execution", "organize_document_to_markdown", "independent model review", "Do not replace the host workflow"],
+    markers: ["ordinary foreground model", "extract_pdf_text", "append_file", "read_context_input", "recommended option"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/references/large-document.md",
-    markers: ["pages.chunk", "organize_document_to_markdown", "manifest.json"],
+    markers: ["pages.chunk", "extract_pdf_text", "append_file", "manifest.json"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/SKILL.md",
-    markers: ["name: document-organizer", "organize_document_to_markdown", "organize_documents_to_report", "complete-with-summary", "summaryOnlyConfirmed", "full-size background task workbench", "qualityPassed"],
+    markers: ["name: document-organizer", "ordinary foreground tool loop", "organize_documents_to_report", "prepare_local_document", "read_context_input", "recommended option"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/integration.json",
@@ -851,7 +858,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/task-recipes.json",
-    markers: ['"single-document-markdown"', '"multi-document-report"', '"hostManaged": true', '"resumable": true'],
+    markers: ['"multi-document-report"', '"hostManaged": true', '"resumable": true'],
   },
   {
     file: "src-tauri/resources/server/lib/tool-repair-notice.mjs",

@@ -4,12 +4,11 @@ Work with existing PDFs: extract, merge, split, fill forms, convert formats, or 
 
 ## Saved Markdown Conversion
 
-When the user asks for an actual Markdown file from an existing PDF, use the host-managed
-`organize_document_to_markdown` tool and read `../references/pdf-to-markdown.md` first. The host
-owns preparation, complete page batches, model conversion, independent review, retries,
-coverage checks, and atomic delivery. Do not run `pdf.py extract.text`, write a custom
-parser, or manually copy extracted text into `write_file` for this workflow. Use the
-commands below only when the user asks for raw extraction or a PDF manipulation operation.
+When the user asks for an actual Markdown file from an existing PDF, read
+`../references/pdf-to-markdown.md` first. Prepare the source once, read bounded complete
+page batches with `extract_pdf_text`, and persist each batch before reading the next. Do
+not run `pdf.py extract.text` or write a custom parser for this workflow. Use the commands
+below only when the user asks for raw extraction or a PDF manipulation operation.
 
 ---
 

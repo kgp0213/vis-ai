@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { formatToolRepairNotice } from "../lib/tool-repair-notice.mjs";
+import { createContextInputTransactionStore } from "../lib/context-input-transaction.mjs";
 
 const {
   CacheFirstLoop,
@@ -199,6 +200,46 @@ describe("agent runtime policy", () => {
       await tools.dispatch("append_file", { path: "report.md", content: "\nSection 1\n" });
       await tools.dispatch("append_file", { path: "report.md", content: "\nSection 2\n" });
       assert.equal(await readFile(join(rootDir, "report.md"), "utf8"), "# Report\n\nSection 1\n\nSection 2\n");
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the runtime caches a large read before truncation and credits a successful file write", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "visionox-context-runtime-"));
+    try {
+      let modelCalls = 0;
+      const client = {
+        chat: async () => {
+          modelCalls++;
+          if (modelCalls === 1) return { content: "", toolCalls: [toolCall("read-1", "large_reader")], usage: {} };
+          if (modelCalls === 2) {
+            return {
+              content: "",
+              toolCalls: [toolCall("write-1", "write_file", { path: "result.md", content: "b".repeat(320) })],
+              usage: {},
+            };
+          }
+          return { content: "completed", toolCalls: [], usage: {} };
+        },
+      };
+      const tools = new ToolRegistry();
+      registerProbe(tools, { name: "large_reader", result: "a".repeat(800), readOnly: true });
+      registerFilesystemTools(tools, { rootDir, allowWriting: true });
+      const contextInputGuard = createContextInputTransactionStore(join(rootDir, "context-inputs"), {
+        inputThresholdChars: 100,
+        pendingLimitChars: 500,
+        completeOutputRatio: 0.3,
+      });
+      contextInputGuard.beginTurn({ turnId: "runtime-turn", requiresArtifact: true, requiresCompleteCoverage: true });
+
+      const events = [];
+      for await (const event of makeLoop(client, tools, { contextInputGuard }).step("create result.md")) events.push(event);
+
+      assert.equal(modelCalls, 3);
+      assert.match(events.find((event) => event.role === "tool" && event.toolName === "large_reader")?.content ?? "", /CONTEXT_INPUT_CACHED/);
+      assert.equal(contextInputGuard.status().pendingCount, 0);
+      assert.equal((await readFile(join(rootDir, "result.md"), "utf8")).length, 320);
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

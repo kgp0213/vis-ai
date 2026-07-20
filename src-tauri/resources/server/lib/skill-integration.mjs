@@ -7,8 +7,8 @@ const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SAFE_RISKS = new Set(["read"]);
 const SAFE_CONNECTIONS = new Set(["vhome"]);
 const TEMPLATE_VARIABLES = new Set(["date", "time", "lastRunAt", "taskName"]);
-const SAFE_RECIPE_TOOLS = new Set(["organize_document_to_markdown", "organize_documents_to_report"]);
-const SAFE_RECIPE_CARDINALITIES = new Set(["single", "multiple"]);
+const SAFE_RECIPE_TOOLS = new Set(["organize_documents_to_report"]);
+const SAFE_RECIPE_CARDINALITIES = new Set(["multiple"]);
 const SAFE_RECIPE_FORMATS = new Set(["pdf", "word", "spreadsheet", "presentation", "html", "markdown", "csv", "text"]);
 const SAFE_RECIPE_PERMISSIONS = new Set(["read-source", "write-output"]);
 
@@ -98,7 +98,6 @@ export function validateSkillIntegration(manifest, templatesFile, options = {}) 
       if (!Number.isSafeInteger(version) || version < 1) throw new Error(`task recipe ${id} version must be a positive integer`);
       if (!SAFE_RECIPE_TOOLS.has(tool)) throw new Error(`task recipe ${id} has unsupported tool: ${tool}`);
       if (!SAFE_RECIPE_CARDINALITIES.has(cardinality)) throw new Error(`task recipe ${id} has unsupported inputCardinality: ${cardinality}`);
-      if (cardinality === "single" && tool !== "organize_document_to_markdown") throw new Error(`single task recipe ${id} must use organize_document_to_markdown`);
       if (cardinality === "multiple" && tool !== "organize_documents_to_report") throw new Error(`multiple task recipe ${id} must use organize_documents_to_report`);
       if (raw.hostManaged !== true || raw.resumable !== true) throw new Error(`task recipe ${id} must be hostManaged and resumable`);
       const formats = Array.isArray(raw.formats) ? [...new Set(raw.formats.map((item) => String(item).trim()))] : [];

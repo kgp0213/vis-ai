@@ -28,17 +28,17 @@ Markdown output.
 
 ## Markdown Delivery
 
-- Use `organize_document_to_markdown` for each selected range or part.
-- Default to `complete-with-summary`; use `summary-only` only when the user explicitly
-  requests a brief result.
-- Never ask the model to place an entire large document inside one `write_file` call.
-- Treat a part as complete only after the host reports complete coverage and the output
-  file exists.
+- Prepare each selected range or part, then use `extract_pdf_text` in bounded page ranges.
+- Persist every delivered range with `write_file` or `append_file` before reading more.
+- Default to complete content plus a separate summary; use a lossy summary only when the
+  user explicitly requests a brief result.
+- Never place an entire large document inside one `write_file` call.
+- Treat a part as complete only after page coverage is verified and the output file exists.
 - Build a top-level index after all parts succeed. Do not rewrite every completed part in
   one final model response.
 
 ## Recovery
 
-Retain successful part outputs and `manifest.json`. Retry only failed page ranges. If at
+Retain successful part outputs, context-input checkpoints, and `manifest.json`. Retry only failed page ranges. If at
 least half of the selected pages contain almost no text, stop text parsing and explain
 that OCR is required.

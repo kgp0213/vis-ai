@@ -255,14 +255,15 @@ test("managed documents recover a missing readable copy across tools and registr
   });
 });
 
-test("launcher shares and restores managed documents across every document tool", () => {
+test("launcher shares managed document references without exposing the retired PDF organizer", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
   assert.match(launcher, /createPreparedDocumentRegistry\(\{[\s\S]*?writeActiveSessionMeta\(\{ preparedDocuments \}\)/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(meta\.preparedDocuments/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(sessionMeta\.preparedDocuments/);
   assert.match(launcher, /name: "extract_pdf_text"[\s\S]*?extractPdfText\(prepared\.readablePath/);
-  assert.match(launcher, /registerPdfMarkdownWorkflowTool\(tools[\s\S]*?processPdfTextBatches/);
-  assert.match(launcher, /organize_pdf_to_markdown/);
+  assert.doesNotMatch(launcher, /registerPdfMarkdownWorkflowTool\(tools/);
+  assert.doesNotMatch(launcher, /name:\s*"organize_pdf_to_markdown"/);
+  assert.match(launcher, /name: "read_context_input"[\s\S]*?contextInputTransactions\.readInput/);
   assert.match(launcher, /const deliveryBudget[\s\S]*?buildPdfDeliveryResult\([\s\S]*?maxTokens: deliveryBudget/);
   assert.match(launcher, /parsePdfDeliveryResult\(ev\)[\s\S]*?documentAutoContinuationPrompt/);
   assert.match(launcher, /kind: "document-progress"/);
