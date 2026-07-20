@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-import { createScheduleRunRegistry, createScheduleTriggerQueue, decideRejectedScheduleSubmission, decideScheduleAdmission, markScheduleCancellationRequested, orderMissedSchedules, repairInterruptedSchedule, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } from "../lib/schedule-execution.mjs";
+import { canAcceptScheduleCompletion, classifyScheduledSkillCompletion, classifyScheduleRunError, createScheduleRunRegistry, createScheduleTriggerQueue, decideRejectedScheduleSubmission, decideScheduleAdmission, DEFAULT_SCHEDULE_RUN_TIMEOUT_MS, guardSessionCleanupDeletion, MAX_SCHEDULE_RUN_TIMEOUT_MS, MIN_SCHEDULE_RUN_TIMEOUT_MS, markScheduleCancellationRequested, normalizeScheduleRunTimeoutMs, orderMissedSchedules, repairInterruptedSchedule, resolvePreviousSuccessfulSkillRunAt, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace, shouldAcceptScheduleCompletion } from "../lib/schedule-execution.mjs";
 import { readScheduleStore, writeScheduleStore } from "../lib/schedule-store.mjs";
 
 const { dispatch } = await import(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url).href);
@@ -28,6 +28,82 @@ describe("schedule run registry", () => {
     assert.equal(first.controller.signal.aborted, true);
     assert.equal(registry.finish("task-1"), true);
     assert.equal(registry.requestCancel("task-1"), null);
+  });
+
+  test("a stale completion cannot remove a newer run for the same task", () => {
+    const registry = createScheduleRunRegistry();
+    registry.start("task-1", "run-new");
+
+    assert.equal(registry.finish("task-1", "run-old"), false);
+    assert.equal(registry.get("task-1")?.runId, "run-new");
+    assert.equal(registry.finish("task-1", "run-new"), true);
+    assert.equal(registry.get("task-1"), null);
+  });
+
+  test("watchdog aborts an overdue run, releases its slot, and rejects late completion", () => {
+    const timers = new Map();
+    let nextTimerId = 0;
+    let timeoutEvent = null;
+    const registry = createScheduleRunRegistry({
+      defaultTimeoutMs: 1000,
+      minTimeoutMs: 1,
+      maxTimeoutMs: 10_000,
+      setTimeoutFn: (callback, delay) => {
+        const id = ++nextTimerId;
+        timers.set(id, { callback, delay });
+        return id;
+      },
+      clearTimeoutFn: (id) => timers.delete(id),
+      onTimeout: (event) => { timeoutEvent = event; },
+    });
+    const entry = registry.start("task-1", "run-1");
+    assert.equal(registry.size(), 1);
+    assert.equal(timers.size, 1);
+    assert.equal([...timers.values()][0].delay, 1000);
+
+    [...timers.values()][0].callback();
+
+    assert.equal(entry.controller.signal.aborted, true);
+    assert.equal(registry.size(), 0);
+    assert.deepEqual({ taskId: timeoutEvent.taskId, runId: timeoutEvent.runId, timeoutMs: timeoutEvent.timeoutMs }, {
+      taskId: "task-1",
+      runId: "run-1",
+      timeoutMs: 1000,
+    });
+    assert.equal(registry.finish("task-1", "run-1"), false);
+  });
+
+  test("a stale watchdog callback cannot abort a newer run", () => {
+    const callbacks = [];
+    let timeoutCount = 0;
+    const registry = createScheduleRunRegistry({
+      defaultTimeoutMs: 1000,
+      minTimeoutMs: 1,
+      maxTimeoutMs: 10_000,
+      setTimeoutFn: (callback) => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+      clearTimeoutFn: () => {},
+      onTimeout: () => { timeoutCount += 1; },
+    });
+    registry.start("task-1", "run-old");
+    assert.equal(registry.finish("task-1", "run-old"), true);
+    const current = registry.start("task-1", "run-new");
+
+    callbacks[0]();
+
+    assert.equal(timeoutCount, 0);
+    assert.equal(current.controller.signal.aborted, false);
+    assert.equal(registry.get("task-1")?.runId, "run-new");
+    assert.equal(registry.finish("task-1", "run-new"), true);
+  });
+
+  test("normalizes configured run timeout to bounded values", () => {
+    assert.equal(normalizeScheduleRunTimeoutMs(undefined), DEFAULT_SCHEDULE_RUN_TIMEOUT_MS);
+    assert.equal(normalizeScheduleRunTimeoutMs(1), MIN_SCHEDULE_RUN_TIMEOUT_MS);
+    assert.equal(normalizeScheduleRunTimeoutMs(Number.POSITIVE_INFINITY), DEFAULT_SCHEDULE_RUN_TIMEOUT_MS);
+    assert.equal(normalizeScheduleRunTimeoutMs(Number.MAX_SAFE_INTEGER), MAX_SCHEDULE_RUN_TIMEOUT_MS);
   });
 });
 
@@ -144,6 +220,32 @@ describe("schedule admission policy", () => {
   });
 });
 
+describe("session cleanup safety policy", () => {
+  test("blocks destructive deletion when enabled semantic review fails", () => {
+    assert.deepEqual(guardSessionCleanupDeletion({
+      names: ["session-a", "session-b", "session-a"],
+      semanticMode: "deep",
+      semanticError: "model unavailable",
+    }), {
+      names: [],
+      blocked: true,
+      warning: "语义复核失败，已跳过会话删除：model unavailable",
+    });
+  });
+
+  test("keeps rule-based deletion behavior when semantic review is disabled", () => {
+    assert.deepEqual(guardSessionCleanupDeletion({
+      names: ["session-a", "session-a", "session-b"],
+      semanticMode: "off",
+      semanticError: "stale reviewer error",
+    }), {
+      names: ["session-a", "session-b"],
+      blocked: false,
+      warning: null,
+    });
+  });
+});
+
 describe("schedule workspace policy", () => {
   const first = "C:\\workspaces\\first";
   const second = "C:\\workspaces\\second";
@@ -165,6 +267,73 @@ describe("schedule workspace policy", () => {
 });
 
 describe("schedule recovery transitions", () => {
+  test("accepts only the first completion for the matching running run id", () => {
+    const task = {
+      history: [
+        { runId: "new-run", status: "running" },
+        { runId: "old-run", status: "completed", completedAt: "2026-07-18T01:00:00.000Z" },
+      ],
+    };
+    assert.equal(shouldAcceptScheduleCompletion(task, "new-run"), true);
+    assert.equal(shouldAcceptScheduleCompletion(task, "old-run"), false);
+    assert.equal(shouldAcceptScheduleCompletion(task, "missing-run"), false);
+  });
+
+  test("rejects an old running history entry after the registry moved to a newer run", () => {
+    const task = {
+      history: [
+        { runId: "new-run", status: "running" },
+        { runId: "old-run", status: "running" },
+      ],
+    };
+    assert.equal(canAcceptScheduleCompletion(task, "old-run", { activeRunId: "new-run" }), false);
+    assert.equal(canAcceptScheduleCompletion(task, "new-run", { activeRunId: "new-run" }), true);
+    assert.equal(canAcceptScheduleCompletion(task, "old-run", { activeRunId: null }), false);
+    assert.equal(canAcceptScheduleCompletion(task, "old-run", { activeRunId: null, allowReleased: true }), true);
+    assert.equal(canAcceptScheduleCompletion(task, "old-run", { activeRunId: "new-run", allowReleased: true }), false);
+  });
+
+  test("an empty scheduled Skill result cannot advance the successful-run anchor", () => {
+    const empty = classifyScheduledSkillCompletion({ done: { ok: true, assistantText: "" }, scheduledSkill: true, reportPath: null });
+    assert.deepEqual(empty, {
+      status: "failed",
+      completed: false,
+      retryable: true,
+      reason: "scheduled Skill returned no content; no report was saved",
+    });
+    assert.equal(classifyScheduledSkillCompletion({ done: { ok: true }, scheduledSkill: true, reportPath: "report.md" }).status, "completed");
+    assert.equal(classifyScheduledSkillCompletion({ done: { ok: true }, scheduledSkill: false }).status, "completed");
+
+    const history = [
+      { status: "completed", skillName: "dws", skillAction: "digest", startedAt: "2026-07-18T03:00:00.000Z", reportPath: null },
+      { status: "completed", skillName: "dws", skillAction: "digest", startedAt: "2026-07-18T02:00:00.000Z", reportPath: "report.md" },
+    ];
+    assert.equal(resolvePreviousSuccessfulSkillRunAt(history, "dws", "digest"), "2026-07-18T02:00:00.000Z");
+  });
+
+  test("distinguishes a model timeout from an explicit user cancellation", () => {
+    const timeout = Object.assign(new Error("model request timed out after 1000ms"), {
+      name: "ModelRequestTimeoutError",
+      code: "MODEL_REQUEST_TIMEOUT",
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+    assert.deepEqual(classifyScheduleRunError(timeout, aborted.signal), {
+      cancelled: false,
+      status: "failed",
+      reason: "模型请求超时：model request timed out after 1000ms",
+      summary: "模型请求超时：model request timed out after 1000ms",
+    });
+    assert.equal(classifyScheduleRunError(new DOMException("cancelled", "AbortError"), aborted.signal).status, "cancelled");
+    assert.equal(classifyScheduleRunError(new DOMException("transport aborted", "AbortError"), new AbortController().signal).status, "failed");
+
+    const watchdog = new AbortController();
+    watchdog.abort(Object.assign(new Error("scheduled task exceeded run timeout (1000ms)"), {
+      code: "SCHEDULE_RUN_TIMEOUT",
+    }));
+    assert.equal(classifyScheduleRunError(new DOMException("scheduled task cancelled", "AbortError"), watchdog.signal).status, "failed");
+  });
+
   test("repairs only runs left active by a launcher restart", () => {
     const task = { lastStatus: "running", history: [{ runId: "run-1", status: "running", startedAt: "2026-07-12T01:00:00.000Z" }] };
     assert.equal(repairInterruptedSchedule(task, { nowIso: "2026-07-12T01:00:05.000Z", nextRunAt: "2026-07-12T02:00:00.000Z" }), true);
@@ -175,6 +344,25 @@ describe("schedule recovery transitions", () => {
     });
     assert.equal(task.history[0].durationMs, 5000);
     assert.equal(repairInterruptedSchedule({ lastStatus: "completed" }), false);
+  });
+
+  test("repairs a stopping run left active by a launcher restart and keeps its next run", () => {
+    const task = {
+      lastStatus: "stopping",
+      lastError: "cancellation requested",
+      nextRunAt: "2026-07-12T02:00:00.000Z",
+      history: [{ runId: "run-stop", status: "running", startedAt: "2026-07-12T01:00:00.000Z" }],
+    };
+    assert.equal(repairInterruptedSchedule(task, {
+      nowIso: "2026-07-12T01:00:05.000Z",
+    }), true);
+    assert.deepEqual({ status: task.lastStatus, error: task.lastError, next: task.nextRunAt }, {
+      status: "failed",
+      error: "interrupted by launcher restart",
+      next: "2026-07-12T02:00:00.000Z",
+    });
+    assert.equal(task.history[0].status, "failed");
+    assert.equal(task.history[0].durationMs, 5000);
   });
 
   test("marks cancellation as requested until the task confirms completion", () => {

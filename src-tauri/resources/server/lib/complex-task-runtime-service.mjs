@@ -21,6 +21,14 @@ function isNotFound(error) {
   return error?.code === "ENOENT" || /not found|missing/i.test(String(error?.message || error));
 }
 
+function maintenanceIssue(operation, error) {
+  return {
+    operation,
+    code: text(error?.code) || "MAINTENANCE_FAILED",
+    message: text(error?.message) || String(error || "后台任务启动维护失败"),
+  };
+}
+
 function pendingDeliverySnapshot(entries) {
   const output = [];
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -31,6 +39,7 @@ function pendingDeliverySnapshot(entries) {
       output.push({
         ...clone(entry),
         target: String(target),
+        deliveryState: clone(entry?.deliveryStates?.[target] ?? null),
         pendingConsumers: [...consumers],
       });
     }
@@ -45,6 +54,7 @@ function withTaskDetail(raw, controller) {
     epoch: Number(raw?.epoch ?? 0),
     lease: clone(raw?.lease ?? null),
     userInputRequest: clone(raw?.userInputRequest ?? null),
+    pendingAssembly: clone(raw?.pendingAssembly ?? null),
     coverageLedger: clone(raw?.coverageLedger ?? {}),
     workPlan: clone(raw?.workPlan ?? null),
     unitPlans: clone(raw?.unitPlans ?? []),
@@ -88,10 +98,47 @@ export function createComplexTaskRuntimeService(options = {}) {
   let initialized = false;
 
   async function initialize({ now = Date.now() } = {}) {
-    const reconcile = supervisor?.reconcile ? await supervisor.reconcile({ now }) : { scanned: 0, requeued: [], issues: [] };
-    const pruned = store.pruneExpired ? await store.pruneExpired(now) : { deleted: [], kept: 0 };
+    const issues = [];
+    let outboxRepair;
+    if (typeof store.reconcileOutbox === "function") {
+      try {
+        outboxRepair = await store.reconcileOutbox({ now });
+      } catch (error) {
+        const issue = maintenanceIssue("outbox-reconcile", error);
+        issues.push(issue);
+        outboxRepair = { scanned: 0, repaired: [], auditEvents: 0, issues: [issue] };
+      }
+    } else {
+      outboxRepair = { scanned: 0, repaired: [], auditEvents: 0, issues: [] };
+    }
+
+    let reconcile;
+    if (supervisor?.reconcile) {
+      try {
+        reconcile = await supervisor.reconcile({ now });
+      } catch (error) {
+        const issue = maintenanceIssue("supervisor-reconcile", error);
+        issues.push(issue);
+        reconcile = { scanned: 0, requeued: [], needsAttention: [], issues: [issue] };
+      }
+    } else {
+      reconcile = { scanned: 0, requeued: [], needsAttention: [], issues: [] };
+    }
+
+    let pruned;
+    if (store.pruneExpired) {
+      try {
+        pruned = await store.pruneExpired(now);
+      } catch (error) {
+        const issue = maintenanceIssue("prune-expired", error);
+        issues.push(issue);
+        pruned = { deleted: [], kept: 0, issues: [issue] };
+      }
+    } else {
+      pruned = { deleted: [], kept: 0, issues: [] };
+    }
     initialized = true;
-    return { initialized, reconcile, pruned };
+    return { initialized, outboxRepair, reconcile, pruned, issues };
   }
 
   async function listBackgroundJobs() {

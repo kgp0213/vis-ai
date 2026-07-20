@@ -221,9 +221,28 @@ export function validateArtifactManifest(input) {
   if (!/^[a-f0-9]{64}$/i.test(text(artifact.sha256))) errors.push("artifact.sha256 must be a SHA-256 hash");
   const primaryCoverage = stringArray(artifact.primaryCoverage, "artifact.primaryCoverage", errors);
   const contextRefs = Array.isArray(artifact.contextRefs) ? clone(artifact.contextRefs) : (errors.push("artifact.contextRefs must be an array"), []);
+  let owner = null;
+  if (artifact.owner !== undefined) {
+    const ownerInput = object(artifact.owner, "artifact.owner", errors);
+    const ownerTaskId = text(ownerInput.taskId);
+    const ownerUnitId = ownerInput.unitId == null ? null : text(ownerInput.unitId);
+    const ownerKind = text(ownerInput.kind);
+    if (!TASK_ID_RE.test(ownerTaskId)) errors.push("artifact.owner.taskId is invalid");
+    if (ownerUnitId !== null && !SAFE_ID_RE.test(ownerUnitId)) errors.push("artifact.owner.unitId is invalid");
+    if (!Number.isInteger(ownerInput.epoch) || ownerInput.epoch < 1) errors.push("artifact.owner.epoch must be positive");
+    if (ownerInput.attemptId != null && !text(ownerInput.attemptId)) errors.push("artifact.owner.attemptId must be non-empty");
+    if (!["unit", "final", "evidence"].includes(ownerKind)) errors.push("artifact.owner.kind is invalid");
+    owner = {
+      taskId: ownerTaskId,
+      unitId: ownerUnitId,
+      epoch: Number(ownerInput.epoch),
+      ...(ownerInput.attemptId != null ? { attemptId: text(ownerInput.attemptId) } : {}),
+      kind: ownerKind,
+    };
+  }
   const producer = object(artifact.producer, "artifact.producer", errors);
   for (const field of ["adapterVersion", "skillHash", "modelConfigFingerprint", "toolSchemaVersion"]) if (!text(producer[field])) errors.push(`artifact.producer.${field} is required`);
-  return errors.length ? { ok: false, errors, value: null } : { ok: true, errors: [], value: { ...clone(artifact), primaryCoverage, contextRefs, producer: clone(producer) } };
+  return errors.length ? { ok: false, errors, value: null } : { ok: true, errors: [], value: { ...clone(artifact), primaryCoverage, contextRefs, ...(owner ? { owner } : {}), producer: clone(producer) } };
 }
 
 export function assertArtifactManifest(input) {

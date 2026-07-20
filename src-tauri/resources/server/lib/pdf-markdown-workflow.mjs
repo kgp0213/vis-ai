@@ -8,6 +8,14 @@ export const DEFAULT_PDF_MODEL_HARD_TIMEOUT_MS = 300_000;
 const DEFAULT_PDF_MODEL_PROGRESS_INTERVAL_MS = 4_000;
 const PDF_REVIEW_TYPES = new Set(["omission", "distortion", "unsupported", "structure", "table", "other"]);
 
+export function resolvePdfModelTimeouts({ idleTimeoutMs, hardTimeoutMs } = {}) {
+  const hardMs = Math.max(10, Number(hardTimeoutMs) || DEFAULT_PDF_MODEL_HARD_TIMEOUT_MS);
+  const requestedIdle = Number(idleTimeoutMs);
+  const adaptiveIdle = Math.max(DEFAULT_PDF_MODEL_IDLE_TIMEOUT_MS, Math.floor(hardMs * 0.6));
+  const idleMs = Math.min(hardMs, Math.max(10, Number.isFinite(requestedIdle) && requestedIdle > 0 ? requestedIdle : adaptiveIdle));
+  return { idleMs, hardMs };
+}
+
 function parseJsonError(value) {
   if (typeof value !== "string" || !value.trim().startsWith("{")) return null;
   try {
@@ -411,8 +419,8 @@ export async function generatePdfSectionWithModel({
   signal,
   onProgress,
   stage = "draft",
-  idleTimeoutMs = DEFAULT_PDF_MODEL_IDLE_TIMEOUT_MS,
-  hardTimeoutMs = DEFAULT_PDF_MODEL_HARD_TIMEOUT_MS,
+  idleTimeoutMs,
+  hardTimeoutMs,
   progressIntervalMs = DEFAULT_PDF_MODEL_PROGRESS_INTERVAL_MS,
   temperature = 0.1,
   maxTokens = 8_192,
@@ -421,8 +429,9 @@ export async function generatePdfSectionWithModel({
   if (!client || (typeof client.stream !== "function" && typeof client.chat !== "function")) {
     throw new TypeError("model client is unavailable");
   }
-  const idleMs = Math.max(10, Number(idleTimeoutMs) || DEFAULT_PDF_MODEL_IDLE_TIMEOUT_MS);
-  const hardMs = Math.max(idleMs, Number(hardTimeoutMs) || DEFAULT_PDF_MODEL_HARD_TIMEOUT_MS);
+  const timeouts = resolvePdfModelTimeouts({ idleTimeoutMs, hardTimeoutMs });
+  const idleMs = timeouts.idleMs;
+  const hardMs = Math.max(idleMs, timeouts.hardMs);
   const progressMs = Math.max(5, Number(progressIntervalMs) || DEFAULT_PDF_MODEL_PROGRESS_INTERVAL_MS);
   const idleController = new AbortController();
   const hardController = new AbortController();
@@ -433,6 +442,8 @@ export async function generatePdfSectionWithModel({
   let idleTimer = null;
   const hardTimer = setTimeout(() => hardController.abort(), hardMs);
   let generatedChars = 0;
+  let reasoningChars = 0;
+  let toolCallDeltaCount = 0;
   let content = "";
   let finishReason = null;
 
@@ -459,6 +470,8 @@ export async function generatePdfSectionWithModel({
     pageRange,
     elapsedMs: Date.now() - startedAt,
     generatedChars,
+    reasoningChars,
+    toolCallDeltaCount,
     ...extra,
   });
   armIdleTimeout();
@@ -478,6 +491,8 @@ export async function generatePdfSectionWithModel({
       for await (const chunk of client.stream(request)) {
         armIdleTimeout();
         if (chunk?.finishReason) finishReason = chunk.finishReason;
+        if (chunk?.reasoningDelta) reasoningChars += String(chunk.reasoningDelta).length;
+        if (chunk?.toolCallDelta) toolCallDeltaCount += 1;
         if (chunk?.contentDelta) {
           content += chunk.contentDelta;
           generatedChars = content.length;
@@ -490,6 +505,7 @@ export async function generatePdfSectionWithModel({
       const response = await client.chat(request);
       armIdleTimeout();
       content = response?.content ?? "";
+      if (response?.reasoningContent || response?.reasoning) reasoningChars += String(response.reasoningContent ?? response.reasoning).length;
       finishReason = response?.finishReason ?? response?.raw?.choices?.[0]?.finish_reason ?? null;
       assertCompleteOutput();
       generatedChars = content.length;
@@ -537,11 +553,32 @@ export function largePdfChoiceResult({ prepared, inspection, threshold }) {
   };
 }
 
+function managedPdfCompatibilityArgs(args) {
+  const delegated = { ...(args && typeof args === "object" ? args : {}) };
+  const requestedMode = String(delegated.mode ?? "").trim();
+  delete delegated.mode;
+  if (!requestedMode) return delegated;
+  const mode = normalizePdfMarkdownMode(requestedMode);
+  if (mode === "summary") {
+    delegated.fidelity = "summary-only";
+    delegated.summaryOnlyConfirmed = true;
+  } else {
+    delegated.fidelity = "complete-with-summary";
+    if (mode === "transcription") {
+      delegated.instructions = [
+        String(delegated.instructions ?? "").trim(),
+        "Preserve all readable content in source order; do not summarize or omit repeated technical details.",
+      ].filter(Boolean).join("\n\n");
+    }
+  }
+  return delegated;
+}
+
 export function registerPdfMarkdownWorkflowTool(tools, options = {}) {
   const largePageThreshold = options.largePageThreshold ?? DEFAULT_LARGE_PDF_PAGE_THRESHOLD;
   tools.register({
     name: "organize_pdf_to_markdown",
-    description: "Compatibility workflow for a bounded PDF page range. Prefer organize_document_to_markdown for new saved-Markdown requests because it is resumable, runs in the background, supports cross-format documents and fallback models, and keeps failed source blocks for targeted retry. Use this legacy PDF-specific tool only when continuing an existing page-range flow.",
+    description: "Compatibility alias for older PDF page-range calls. The host routes this name to organize_document_to_markdown, the resumable background workflow, so use organize_document_to_markdown directly for new saved-Markdown requests. This name remains available only to keep older conversations and saved tool plans working.",
     parameters: {
       type: "object",
       properties: {
@@ -551,9 +588,15 @@ export function registerPdfMarkdownWorkflowTool(tools, options = {}) {
         pages: { type: "string", description: "Optional page range such as 1-200. Required to process only part of a PDF above the large-document threshold." },
         instructions: { type: "string", description: "Optional user requirements for the document." },
       },
-      required: ["outputPath"],
     },
     fn: async (args, toolContext) => {
+      // Keep the historical name callable, but never let a live host bypass the
+      // managed document queue. The standalone implementation below remains for
+      // focused compatibility tests and embedders that do not provide a delegate.
+      if (typeof options.delegate === "function") {
+        const result = await options.delegate(managedPdfCompatibilityArgs(args), toolContext);
+        return typeof result === "string" ? result : JSON.stringify(result);
+      }
       const outputPath = String(args?.outputPath ?? "").trim();
       if (!/\.(?:md|markdown)$/i.test(outputPath)) {
         return JSON.stringify({ ok: false, error: "outputPath must end in .md or .markdown" });
@@ -752,6 +795,16 @@ export function registerPdfMarkdownWorkflowTool(tools, options = {}) {
         qualityReview,
         warnings,
       });
+    },
+    finishTurnOnResult: (value) => {
+      if (typeof options.finishTurnOnResult === "function") return options.finishTurnOnResult(value);
+      let result = value;
+      if (typeof value === "string") {
+        try { result = JSON.parse(value); } catch { result = null; }
+      }
+      return result?.ok === true && result?.accepted === true && result?.artifactStatus === "pending"
+        ? String(result.message ?? "").trim() || null
+        : null;
     },
   });
 }

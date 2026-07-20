@@ -109,7 +109,7 @@ test("scheduled Skill templates stay structured, read-only and dynamically resol
   assert.match(dashboard, /skillPromptAddendum/);
   assert.match(launcher, /resolveScheduledSkillInvocation/);
   assert.match(launcher, /previousSuccessfulRunAt = task\.skillName/);
-  assert.match(launcher, /entry\?\.skillName === task\.skillName/);
+  assert.match(launcher, /resolvePreviousSuccessfulSkillRunAt\(task\.history, task\.skillName, task\.skillAction\)/);
   assert.match(launcher, /24 \* 60 \* 60 \* 1000/);
   assert.match(launcher, /skillInvocation: scheduledSkill\?\.skillInvocation/);
   assert.match(launcher, /disableSemanticRetrieval: Boolean\(scheduledSkill\)/);

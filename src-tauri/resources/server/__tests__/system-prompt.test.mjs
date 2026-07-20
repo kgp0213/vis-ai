@@ -1,6 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "../lib/system-prompt.mjs";
+
+const launcherSource = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
 
 describe("buildSystemPrompt", () => {
   const mockSpecs = [
@@ -44,6 +47,17 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /retain its tables, parameters, commands, and code/);
     assert.match(prompt, /Never use OfficeCLI for PDF/);
     assert.match(prompt, /host will recreate a missing readable copy automatically/);
+  });
+
+  test("办公模式升级后统一使用跨格式后台文档流程", () => {
+    assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*8/);
+    const officeMode = launcherSource.slice(
+      launcherSource.indexOf("office: {"),
+      launcherSource.indexOf("design: {"),
+    );
+    assert.match(officeMode, /organize_document_to_markdown/);
+    assert.match(officeMode, /organize_documents_to_report/);
+    assert.doesNotMatch(officeMode, /直接调用 organize_pdf_to_markdown/);
   });
 
   test("结构化选择必须使用交互卡片而不是正文菜单", () => {

@@ -85,6 +85,41 @@ test("runtime service converts UI shorthand into fenced controller requests", as
   assert.equal(wakeCount, 1);
 });
 
+test("runtime service preserves the conversation consumer for an explicit delivery retry", async () => {
+  const task = genericTask({
+    lifecycle: "terminal",
+    status: "terminal",
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { "task-center": true },
+      pendingConsumers: ["conversation"],
+      deliveryStates: { conversation: { status: "blocked_user_retry", attempts: 2 } },
+    }],
+  });
+  const calls = [];
+  const service = createComplexTaskRuntimeService({
+    store: { read: async () => structuredClone(task), list: async () => [task], listPendingOutbox: async () => [] },
+    controller: {
+      control: async (id, request) => {
+        calls.push([id, request]);
+        return { ok: true, applied: true, task: { ...task, revision: 8 } };
+      },
+    },
+  });
+  const result = await service.controlBackgroundJob(TASK_ID, "retry_delivery", {
+    expectedRevision: 7,
+    payload: { deliveryId: "delivery-1", consumer: "conversation" },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls[0], [TASK_ID, {
+    action: "retry_delivery",
+    expectedRevision: 7,
+    expectedEpoch: 3,
+    payload: { deliveryId: "delivery-1", consumer: "conversation" },
+  }]);
+});
+
 test("runtime service reports generic not-found without touching legacy controls", async () => {
   const service = createComplexTaskRuntimeService({
     store: { read: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); }, list: async () => [], listPendingOutbox: async () => [] },
@@ -93,4 +128,81 @@ test("runtime service reports generic not-found without touching legacy controls
   const result = await service.controlBackgroundJob(TASK_ID, "pause", { expectedRevision: 1 });
   assert.equal(result.ok, false);
   assert.equal(result.reason, "not-found");
+});
+
+test("runtime task detail retains pending assembly checkpoints for user recovery", async () => {
+  const pendingAssembly = { artifactRefs: ["artifact:final@r1#" + "a".repeat(64)], report: { complete: false } };
+  const task = genericTask({ lifecycle: "waiting_user", pendingAssembly });
+  const service = createComplexTaskRuntimeService({
+    store: { list: async () => [task], listPendingOutbox: async () => [], read: async () => structuredClone(task) },
+  });
+  const detail = await service.getBackgroundJob(TASK_ID);
+  assert.deepEqual(detail.pendingAssembly, pendingAssembly);
+});
+
+test("runtime initialization repairs outbox before supervision and pruning", async () => {
+  const calls = [];
+  const outboxRepair = { scanned: 2, repaired: [TASK_ID], auditEvents: 1 };
+  const task = genericTask();
+  const service = createComplexTaskRuntimeService({
+    store: {
+      list: async () => [task],
+      listPendingOutbox: async () => [],
+      read: async () => structuredClone(task),
+      reconcileOutbox: async ({ now }) => {
+        calls.push(["outbox", now]);
+        return outboxRepair;
+      },
+      pruneExpired: async (now) => {
+        calls.push(["prune", now]);
+        return { deleted: [], kept: 1 };
+      },
+    },
+    supervisor: {
+      reconcile: async ({ now }) => {
+        calls.push(["supervisor", now]);
+        return { scanned: 1, requeued: [], issues: [] };
+      },
+    },
+  });
+
+  const startup = await service.initialize({ now: 123 });
+  assert.deepEqual(calls, [["outbox", 123], ["supervisor", 123], ["prune", 123]]);
+  assert.deepEqual(startup.outboxRepair, outboxRepair);
+});
+
+test("runtime initialization isolates maintenance failures and continues later recovery stages", async () => {
+  const calls = [];
+  const service = createComplexTaskRuntimeService({
+    store: {
+      list: async () => [],
+      listPendingOutbox: async () => [],
+      read: async () => null,
+      reconcileOutbox: async () => {
+        calls.push("outbox");
+        throw new Error("outbox directory temporarily unavailable");
+      },
+      pruneExpired: async () => {
+        calls.push("prune");
+        return { deleted: [], kept: 2 };
+      },
+    },
+    supervisor: {
+      reconcile: async () => {
+        calls.push("supervisor");
+        return { scanned: 2, requeued: [TASK_ID], issues: [] };
+      },
+    },
+  });
+
+  const startup = await service.initialize({ now: 456 });
+
+  assert.equal(startup.initialized, true);
+  assert.deepEqual(calls, ["outbox", "supervisor", "prune"]);
+  assert.deepEqual(startup.reconcile.requeued, [TASK_ID]);
+  assert.equal(startup.pruned.kept, 2);
+  assert.equal(startup.issues.length, 1);
+  assert.equal(startup.issues[0].operation, "outbox-reconcile");
+  assert.match(startup.issues[0].message, /temporarily unavailable/);
+  assert.deepEqual(startup.outboxRepair.repaired, []);
 });

@@ -123,7 +123,7 @@ test("durable worker processes one eligible unit, uses broker, heartbeats, and i
       store,
       owner: "worker-test",
       toolBroker: broker,
-      leaseTtlMs: 200,
+      leaseTtlMs: 2_000,
       heartbeatIntervalMs: 5,
       attemptTimeoutMs: 500,
       executeUnit: async ({ unitPlan, attemptId, signal, invokeTool }) => {
@@ -154,7 +154,7 @@ test("durable worker processes one eligible unit, uses broker, heartbeats, and i
     const second = await worker.runOne(task.id);
     assert.equal(second.status, "unit_completed");
     assert.deepEqual(executed, ["unit-1", "unit-2"]);
-  }, { leaseMs: 200 });
+  }, { leaseMs: 2_000 });
 });
 
 test("task wall-clock budget survives unit boundaries and lease epochs", async () => {
@@ -194,6 +194,153 @@ test("task wall-clock budget survives unit boundaries and lease epochs", async (
   });
 });
 
+test("adapter recovery is skipped after the task wall-clock budget expires", async () => {
+  await withStore(async (store) => {
+    let clock = 1_000;
+    const id = taskId();
+    const task = await store.create({
+      contract: contract(id, { executionLimits: { wallClockMs: 20, attemptLimit: 1 }, completion: { requiredCoverage: ["page:1"] } }),
+      unitPlans: plans(1),
+      now: clock,
+    });
+    let recoveryCalls = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      now: () => clock,
+      maxAttempts: 1,
+      attemptTimeoutMs: 100,
+      executeUnit: async () => {
+        clock = 1_021;
+        return "malformed model output";
+      },
+      recoverUnit: async () => {
+        recoveryCalls += 1;
+        throw new Error("recovery must not start after the task deadline");
+      },
+    });
+
+    const result = await worker.runOne(task.id);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.reason, "attempt-timeout");
+    assert.equal(recoveryCalls, 0);
+    assert.equal((await store.read(task.id)).attemptBudget.units["unit-1"].recoveryAttempts, 0);
+  });
+});
+
+test("adapter recovery timeout is capped by the remaining task wall-clock budget", async () => {
+  await withStore(async (store) => {
+    let clock = 1_000;
+    const id = taskId();
+    const task = await store.create({
+      contract: contract(id, { executionLimits: { wallClockMs: 20, attemptLimit: 1 }, completion: { requiredCoverage: ["page:1"] } }),
+      unitPlans: plans(1),
+      now: clock,
+    });
+    let recoveryTimeoutMs = null;
+    const worker = createDurableAgentWorker({
+      store,
+      now: () => clock,
+      maxAttempts: 1,
+      attemptTimeoutMs: 30,
+      executeUnit: async () => {
+        clock = 1_015;
+        return "malformed model output";
+      },
+      recoverUnit: async ({ signal }) => new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          recoveryTimeoutMs = signal.reason?.timeoutMs;
+          reject(signal.reason);
+        }, { once: true });
+      }),
+    });
+
+    const result = await worker.runOne(task.id);
+
+    assert.equal(result.status, "blocked");
+    assert.equal(recoveryTimeoutMs, 5);
+  });
+});
+
+test("a consumed model attempt is not reset by a later lease epoch", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, {
+      unitCount: 1,
+      contractOverrides: { executionLimits: { attemptLimit: 1 } },
+    });
+    const control = new AbortController();
+    let modelCalls = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      maxAttempts: 1,
+      attemptTimeoutMs: 500,
+      executeUnit: async ({ unitPlan, attemptId, signal }) => {
+        modelCalls += 1;
+        if (modelCalls === 1) {
+          control.abort(new Error("simulate process handoff after request dispatch"));
+          await new Promise((resolve, reject) => {
+            if (signal.aborted) reject(signal.reason);
+            else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        }
+        return unitResult(unitPlan, attemptId);
+      },
+    });
+
+    const interrupted = await worker.runOne(task.id, { controlSignal: control.signal });
+    assert.equal(interrupted.status, "stopped");
+    assert.equal((await store.read(task.id)).lifecycle, "queued");
+
+    const resumed = await worker.runOne(task.id);
+    assert.equal(resumed.status, "blocked");
+    assert.equal(resumed.reason, "attempt-budget-exhausted");
+    assert.equal(modelCalls, 1, "a new epoch must not replay an already reserved model attempt");
+    assert.equal((await store.read(task.id)).attemptBudget.units["unit-1"].modelAttempts, 1);
+  });
+});
+
+test("adapter recovery budget remains exhausted after user resume creates another epoch", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, {
+      unitCount: 1,
+      contractOverrides: { executionLimits: { attemptLimit: 1 } },
+    });
+    let modelCalls = 0;
+    let recoveryCalls = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      maxAttempts: 1,
+      maxRecoveryAttempts: 1,
+      executeUnit: async () => {
+        modelCalls += 1;
+        return "malformed model output";
+      },
+      recoverUnit: async () => {
+        recoveryCalls += 1;
+        throw new Error("adapter recovery failed");
+      },
+    });
+
+    const first = await worker.runOne(task.id);
+    assert.equal(first.status, "blocked");
+    const blocked = await store.read(task.id);
+    assert.equal(blocked.attemptBudget.units["unit-1"].modelAttempts, 1);
+    assert.equal(blocked.attemptBudget.units["unit-1"].recoveryAttempts, 1);
+    const resumed = await store.applyUserControl(task.id, {
+      action: "resume",
+      expectedRevision: blocked.revision,
+      expectedEpoch: blocked.epoch,
+    });
+    assert.equal(resumed.applied, true);
+
+    const second = await worker.runOne(task.id);
+    assert.equal(second.status, "blocked");
+    assert.equal(second.reason, "recovery-budget-exhausted");
+    assert.equal(modelCalls, 1);
+    assert.equal(recoveryCalls, 1, "a new epoch must not replay an already reserved recovery attempt");
+  });
+});
+
 test("explicit controlSignal stops a worker without converting a host stop into a task failure", async () => {
   await withStore(async (store) => {
     const task = await createTask(store, { unitCount: 1 });
@@ -202,15 +349,15 @@ test("explicit controlSignal stops a worker without converting a host stop into 
     const worker = createDurableAgentWorker({
       store,
       owner: "worker-control-test",
-      leaseTtlMs: 500,
+      leaseTtlMs: 5_000,
       heartbeatIntervalMs: 25,
-      attemptTimeoutMs: 2_000,
+      attemptTimeoutMs: 10_000,
       executeUnit: async ({ signal }) => new Promise((resolve, reject) => {
         signal.addEventListener("abort", () => reject(signal.reason), { once: true });
       }),
     });
     const running = worker.runOne(task.id, { signal: parent.signal, controlSignal: control.signal });
-    await waitForLifecycle(store, task.id, "running");
+    await waitForLifecycle(store, task.id, "running", 5_000);
     parent.abort(new Error("chat closed"));
     await delay(5);
     assert.equal((await store.read(task.id)).lifecycle, "running");
@@ -221,6 +368,66 @@ test("explicit controlSignal stops a worker without converting a host stop into 
     const saved = await store.read(task.id);
     assert.equal(saved.lifecycle, "queued");
     assert.equal(saved.outbox.length, 0);
+  });
+});
+
+test("control stop cannot release a newer lease epoch held by the same owner", async () => {
+  await withStore(async (store) => {
+    let clock = 1_000;
+    const task = await createTask(store, { unitCount: 1 });
+    const control = new AbortController();
+    let replacementLease = null;
+    let markAttemptStarted;
+    const attemptStarted = new Promise((resolve) => { markAttemptStarted = resolve; });
+    const worker = createDurableAgentWorker({
+      store,
+      owner: "worker-control-guard",
+      now: () => clock,
+      leaseTtlMs: 100,
+      heartbeatIntervalMs: 10_000,
+      attemptTimeoutMs: 10_000,
+      executeUnit: async ({ signal }) => {
+        markAttemptStarted();
+        await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+        clock = 2_000;
+        const current = await store.read(task.id);
+        const recovered = await store.recoverExpiredLease(task.id, {
+          expectedRevision: current.revision,
+          expectedEpoch: current.epoch,
+          now: clock,
+          reason: "simulate worker replacement",
+        });
+        assert.equal(recovered.applied, true);
+        replacementLease = await store.acquireLease(task.id, {
+          expectedRevision: recovered.task.revision,
+          owner: worker.owner,
+          ttlMs: 1_000,
+          now: clock,
+        });
+        assert.equal(replacementLease.ok, true);
+        const replacementStarted = await store.transition(task.id, {
+          expectedRevision: replacementLease.task.revision,
+          lifecycle: "running",
+          leaseId: replacementLease.leaseId,
+          epoch: replacementLease.epoch,
+          owner: worker.owner,
+          now: clock,
+        });
+        assert.equal(replacementStarted.applied, true);
+        throw signal.reason;
+      },
+    });
+
+    const running = worker.runOne(task.id, { controlSignal: control.signal });
+    await attemptStarted;
+    control.abort(new Error("replace this worker"));
+    const result = await running;
+    const saved = await store.read(task.id);
+
+    assert.equal(result.status, "stopped");
+    assert.equal(saved.lifecycle, "running");
+    assert.equal(saved.lease.leaseId, replacementLease.leaseId);
+    assert.equal(saved.lease.epoch, replacementLease.epoch);
   });
 });
 
@@ -453,6 +660,131 @@ test("bounded attempt timeout checkpoints the failure and leaves an explainable 
     assert.equal(saved.unitResults["unit-1"].proposedStatus, "blocked");
     assert.equal(saved.unitResults["unit-1"].diagnostics.attempts.length, 2);
     assert.ok(saved.unitResults["unit-1"].diagnostics.attempts.every((item) => item.category === "attempt-timeout"));
+  });
+});
+
+test("a timed-out attempt that ignores abort drains before the next attempt starts", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    let calls = 0;
+    let active = 0;
+    let maxActive = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      heartbeatIntervalMs: 100,
+      attemptTimeoutMs: 5,
+      attemptDrainGraceMs: 100,
+      maxAttempts: 2,
+      executeUnit: async ({ unitPlan, attemptId }) => {
+        calls += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        try {
+          if (calls === 1) await delay(30); // Deliberately ignores AbortSignal.
+          return unitResult(unitPlan, attemptId);
+        } finally {
+          active -= 1;
+        }
+      },
+    });
+
+    const result = await worker.runOne(task.id);
+
+    assert.equal(result.status, "unit_completed");
+    assert.equal(calls, 2);
+    assert.equal(maxActive, 1, "attempt N+1 must not overlap a timed-out attempt");
+  });
+});
+
+test("an attempt whose termination cannot be confirmed is fenced until it settles", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    let calls = 0;
+    let releaseFirst;
+    const worker = createDurableAgentWorker({
+      store,
+      heartbeatIntervalMs: 100,
+      attemptTimeoutMs: 5,
+      attemptDrainGraceMs: 10,
+      maxAttempts: 2,
+      executeUnit: async ({ unitPlan, attemptId }) => {
+        calls += 1;
+        if (calls === 1) {
+          await new Promise((resolve) => { releaseFirst = resolve; }); // Deliberately ignores AbortSignal.
+        }
+        return unitResult(unitPlan, attemptId);
+      },
+    });
+
+    try {
+      const result = await worker.runOne(task.id);
+      assert.equal(result.status, "blocked");
+      assert.equal(result.reason, "attempt-termination-unconfirmed");
+      assert.equal(calls, 1, "an uncontained attempt must suppress automatic retries");
+
+      const blocked = await store.read(task.id);
+      assert.equal(blocked.blockingReason.code, "attempt-termination-unconfirmed");
+      const resumed = await store.applyUserControl(task.id, {
+        action: "resume",
+        expectedRevision: blocked.revision,
+        expectedEpoch: blocked.epoch,
+        payload: {},
+      });
+      assert.equal(resumed.applied, true);
+
+      const fenced = await worker.runOne(task.id);
+      assert.equal(fenced.status, "not-runnable");
+      assert.equal(fenced.reason, "prior-attempt-still-running");
+      assert.equal(calls, 1);
+
+      releaseFirst();
+      await delay(0);
+      const retried = await worker.runOne(task.id);
+      assert.equal(retried.status, "unit_completed");
+      assert.equal(calls, 2);
+    } finally {
+      releaseFirst?.();
+    }
+  });
+});
+
+test("a timed-out attempt cannot invoke host tools after its abort fence closes", async () => {
+  await withStore(async (store) => {
+    const task = await createTask(store, { unitCount: 1 });
+    let calls = 0;
+    let brokerCalls = 0;
+    let lateToolError = null;
+    const worker = createDurableAgentWorker({
+      store,
+      attemptTimeoutMs: 5,
+      attemptDrainGraceMs: 100,
+      maxAttempts: 2,
+      toolBroker: {
+        async invoke() {
+          brokerCalls += 1;
+          return { ok: true };
+        },
+      },
+      executeUnit: async ({ unitPlan, attemptId, invokeTool }) => {
+        calls += 1;
+        if (calls === 1) {
+          await delay(20); // Deliberately continues after timeout.
+          try {
+            await invokeTool("late_side_effect", {});
+          } catch (error) {
+            lateToolError = error;
+          }
+        }
+        return unitResult(unitPlan, attemptId);
+      },
+    });
+
+    const result = await worker.runOne(task.id);
+
+    assert.equal(result.status, "unit_completed");
+    assert.equal(calls, 2);
+    assert.equal(brokerCalls, 0);
+    assert.equal(lateToolError?.code, "ATTEMPT_FENCED");
   });
 });
 

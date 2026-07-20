@@ -102,6 +102,42 @@ describe("active session recovery", () => {
     ]);
   });
 
+  test("refresh hides internal background-task handoff prompts but keeps the agent's delivery", () => {
+    const entries = [
+      { role: "user", content: "把报告整理成 Markdown" },
+      { role: "assistant", content: "任务已进入后台队列。" },
+      { role: "user", content: "[系统后台任务接管 document:job-123]\n后台任务已完成，请继续交付" },
+      { role: "assistant", content: "后台结果已核实，文件已交付。" },
+    ];
+    const dashboard = activeEntriesForDashboard(entries, 456);
+    assert.deepEqual(dashboard.map((entry) => entry.text), [
+      "把报告整理成 Markdown",
+      "后台结果已核实，文件已交付。",
+    ]);
+  });
+
+  test("model recovery omits internal continuation prompts from new and legacy JSONL", () => {
+    const entries = [
+      { role: "user", content: "把报告整理成 Markdown" },
+      { role: "assistant", content: "任务已进入后台队列。" },
+      { role: "user", content: "宿主内部接管", internal: true },
+      { role: "assistant", content: "正在核实后台结果。" },
+      { role: "user", content: "[系统自动续跑 1/2]\n继续执行当前计划" },
+      { role: "assistant", content: "计划已继续。" },
+      { role: "user", content: "[系统后台任务接管 document:job-123]\n后台任务已完成，请继续交付" },
+      { role: "assistant", content: "后台结果已核实，文件已交付。" },
+    ];
+
+    const restored = activeEntriesForModel(entries);
+    assert.deepEqual(restored.map((entry) => [entry.role, entry.content]), [
+      ["user", "把报告整理成 Markdown"],
+      ["assistant", "任务已进入后台队列。"],
+      ["assistant", "正在核实后台结果。"],
+      ["assistant", "计划已继续。"],
+      ["assistant", "后台结果已核实，文件已交付。"],
+    ]);
+  });
+
   test("refresh hides an interrupted turn's temporary reasoning and tool output", () => {
     const entries = [
       { role: "user", content: "inspect the file" },

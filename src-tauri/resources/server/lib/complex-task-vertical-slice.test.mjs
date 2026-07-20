@@ -25,6 +25,7 @@ function documentDraft(outputPath, suffix = "") {
       { id: `section-a${suffix}`, label: "Section A", units: [{ id: `coverage-a${suffix}`, location: "Section A", text: "Alpha source" }] },
       { id: `section-b${suffix}`, label: "Section B", units: [{ id: `coverage-b${suffix}`, location: "Section B", text: "Beta source" }] },
     ],
+    extractionResult: { totalUnits: 2 },
     outputPath,
     workspace: join(outputPath, ".."),
     enginePin: { schemaVersion: 1, rolloutMode: "v2-default", executionEngine: "v2", selectedAt: "2026-07-19T00:00:00.000Z" },
@@ -32,8 +33,8 @@ function documentDraft(outputPath, suffix = "") {
 }
 
 async function createKernel(root, { generateUnit, reserveOutput } = {}) {
-  const store = createComplexTaskStore(join(root, "tasks"), { leaseMs: 2_000 });
   const artifactStore = createComplexTaskArtifactStore(join(root, "artifacts"));
+  const store = createComplexTaskStore(join(root, "tasks"), { leaseMs: 2_000, artifactStore });
   const adapter = createComplexDocumentAdapter({ artifactStore, generateUnit });
   const worker = createDurableAgentWorker({
     store,

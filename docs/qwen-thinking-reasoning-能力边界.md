@@ -105,7 +105,9 @@
       "maxRetries": 2,
       "autoFallback": true,
       "semanticBatching": true,
-      "contextOverlapTokens": 1000
+      "contextOverlapTokens": 1000,
+      "maxModelCallsPerJob": 1000,
+      "jobTimeoutMs": 21600000
     }
   }
 }
@@ -117,6 +119,8 @@
 - `max_tokens: 8192`：可见回答的单次输出上限，与隐藏思考预算是两个不同参数；更长的 Markdown 由程序分段追加，不依赖一次生成全文。
 - `agentPolicy.toolResultBudget`：控制工具结果预算。PDF 超出预算时程序按完整页续读，不允许从页面中间截断。
 - `agentPolicy.documentPolicy`：控制 PDF、Office、HTML、Markdown 等保存型文档任务的单批输入/输出、来源区块数、重试次数、跨页语义分批、相邻上下文预算和备用服务商接管。Qwen 建议启用 `semanticBatching` 并将 `contextOverlapTokens` 设为约 `1000`；正文由宿主分批组装，不受单次回答长度限制。
+- `maxModelCallsPerJob` 与 `jobTimeoutMs`：限制一次后台执行窗口的总模型调用和总时长。达到上限时任务会暂停并保留检查点，点击“继续”会开启新的窗口；这不是把文档截断后伪装成完成。
+- 若 JSON 没有 `requestProfiles.toolContinuation`，文档草稿会安全继承正式请求中的思考控制，但不会继承通信探针的 `max_tokens: 8`；建议为草稿显式配置用途 profile，避免思考预算挤占可见输出。
 - `verificationRequestDefaults`：仅用于模型检测，不会覆盖磁盘中的正式配置。
 - 不配置 `efforts`、`thinkingMode` 或 `reasoning_effort`：这些字段不能控制当前 JSON 策略下的 Qwen 推理。
 

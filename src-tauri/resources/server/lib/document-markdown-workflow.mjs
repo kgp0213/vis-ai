@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { basename, dirname, extname } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename, dirname, extname, resolve } from "node:path";
 
 import {
   buildDocumentContract,
@@ -13,11 +14,107 @@ import {
   parseDocumentReview,
   renderDocumentSourceFallback,
 } from "./document-intelligence.mjs";
+import { longTaskNeedsAttention, longTaskTerminalKey } from "./long-task-handoff.mjs";
 
 const WAITING_MANIFEST_HEARTBEAT_MS = 5_000;
+const DOCUMENT_JOB_CALL_BUDGET_CODE = "DOCUMENT_JOB_CALL_BUDGET_EXCEEDED";
+const DOCUMENT_JOB_TIMEOUT_CODE = "DOCUMENT_JOB_TIMEOUT";
+
+function documentJobBudgetError(kind, policy = {}) {
+  const minutes = Math.max(1, Math.round((Number(policy.jobTimeoutMs) || 0) / 60_000));
+  const error = new Error(kind === "timeout"
+    ? `文档任务达到本次执行的总时限（${minutes} 分钟），已保留已完成区块；请检查模型状态或缩小文档后点击“继续”。`
+    : `文档任务达到本次执行的总模型调用上限（${Number(policy.maxModelCallsPerJob) || 0} 次），已保留已完成区块；可点击“继续”开启新的执行窗口，或缩小文档后重试。`);
+  error.name = kind === "timeout" ? "DocumentJobTimeoutError" : "DocumentJobCallBudgetError";
+  error.code = kind === "timeout" ? DOCUMENT_JOB_TIMEOUT_CODE : DOCUMENT_JOB_CALL_BUDGET_CODE;
+  error.category = kind === "timeout" ? "job_timeout" : "job_call_budget";
+  return error;
+}
 
 function abortError(message = "document task cancelled") {
   return new DOMException(message, "AbortError");
+}
+
+async function inspectDocumentOutput(job, { verifyHash = false } = {}) {
+  const rawPath = String(job?.outputPath ?? "").trim();
+  if (!rawPath) return { status: "unknown", path: null, verified: false };
+  const outputPath = resolve(String(job?.workspaceRoot || dirname(rawPath)), rawPath);
+  let fileStat;
+  try {
+    fileStat = await stat(outputPath);
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return { status: "missing", path: outputPath, verified: false };
+    }
+    return { status: "unavailable", path: outputPath, verified: false, error: error?.message || String(error) };
+  }
+  if (!fileStat.isFile()) return { status: "unavailable", path: outputPath, verified: false, error: "output path is not a file" };
+  const signature = job?.outputSignature;
+  if (!verifyHash && Number.isFinite(Number(signature?.size)) && Number.isFinite(Number(signature?.mtimeMs))) {
+    const unchanged = fileStat.size === Number(signature.size) && fileStat.mtimeMs === Number(signature.mtimeMs);
+    return {
+      status: unchanged ? "verified" : "modified",
+      path: outputPath,
+      verified: unchanged,
+      verification: "stat-signature",
+      size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs,
+    };
+  }
+  if (!verifyHash || !job?.finalDraft?.sha256) {
+    return { status: "present", path: outputPath, verified: false, size: fileStat.size, mtimeMs: fileStat.mtimeMs };
+  }
+  try {
+    const content = await readFile(outputPath);
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    return {
+      status: sha256 === job.finalDraft.sha256 ? "verified" : "modified",
+      path: outputPath,
+      verified: sha256 === job.finalDraft.sha256,
+      size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs,
+      sha256,
+    };
+  } catch (error) {
+    return { status: "unavailable", path: outputPath, verified: false, error: error?.message || String(error) };
+  }
+}
+
+async function captureDocumentOutputSignature(job) {
+  const rawPath = String(job?.outputPath ?? "").trim();
+  if (!rawPath) return null;
+  const outputPath = resolve(String(job?.workspaceRoot || dirname(rawPath)), rawPath);
+  try {
+    const fileStat = await stat(outputPath);
+    if (!fileStat.isFile()) return null;
+    return { size: fileStat.size, mtimeMs: fileStat.mtimeMs, capturedAt: new Date().toISOString() };
+  } catch (error) {
+    // Test and compatibility writers may acknowledge the write without
+    // exposing a filesystem path. The durable output contract is still
+    // authoritative; absence of a signature only disables the cheap list
+    // check and is verified when the detail view is opened.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+
+async function attachDocumentOutputState(metadata, job, { verifyHash = false } = {}) {
+  if (!(["completed", "completed_with_warnings"].includes(job?.status) || job?.outputCommittedAt)) return metadata;
+  const outputArtifact = await inspectDocumentOutput(job, { verifyHash });
+  metadata.outputArtifact = outputArtifact;
+  metadata.artifactStatus = outputArtifact.status;
+  if (!["missing", "modified", "unavailable"].includes(outputArtifact.status)) return metadata;
+  const message = outputArtifact.status === "missing"
+    ? "任务曾完成交付，但最终输出文件已不存在；可以从后台保存的最终草稿恢复。"
+    : outputArtifact.status === "modified"
+      ? "最终输出文件在任务完成后被修改，当前内容与后台保存的最终草稿不一致。"
+      : `最终输出文件暂时无法核验：${outputArtifact.error || "文件不可访问"}`;
+  metadata.needsAttention = true;
+  metadata.warnings = [
+    ...(Array.isArray(metadata.warnings) ? metadata.warnings : []),
+    { type: `document-output-${outputArtifact.status}`, message },
+  ];
+  return metadata;
 }
 
 function delay(ms, signal) {
@@ -500,6 +597,16 @@ export function buildDocumentQualityWarnings({ batches = [], diagnostics = [], a
   return warnings;
 }
 
+export function normalizeDocumentWorkflowReview(review) {
+  const issues = Array.isArray(review?.issues) ? review.issues : [];
+  return {
+    ...review,
+    pass: review?.pass === true && issues.length === 0,
+    issues,
+    advisoryIssues: [],
+  };
+}
+
 function effectiveDocumentPolicy(value, candidates = []) {
   const base = normalizeDocumentPolicy(value);
   const merged = { ...base };
@@ -511,8 +618,10 @@ function effectiveDocumentPolicy(value, candidates = []) {
     "contextOverlapTokens",
     "maxSplitDepth",
     "maxModelCallsPerBatch",
+    "maxModelCallsPerJob",
     "maxVisualUnitsPerBatch",
     "requestTimeoutMs",
+    "jobTimeoutMs",
   ];
   const primaryCandidates = candidates.filter((candidate) => candidate?.role === "primary");
   const policyCandidates = primaryCandidates.length > 0 ? primaryCandidates : candidates.slice(0, 1);
@@ -589,6 +698,8 @@ function documentPolicyTrace(requested, effective, candidates) {
       maxUnitsPerBatch: effective.maxUnitsPerBatch,
       maxVisualUnitsPerBatch: effective.maxVisualUnitsPerBatch,
       requestTimeoutMs: effective.requestTimeoutMs,
+      maxModelCallsPerJob: effective.maxModelCallsPerJob,
+      jobTimeoutMs: effective.jobTimeoutMs,
     },
     candidates: candidates.map((candidate) => ({
       providerId: candidate.providerId,
@@ -600,6 +711,8 @@ function documentPolicyTrace(requested, effective, candidates) {
         batchInputTokens: candidate.documentPolicy.batchInputTokens ?? null,
         batchOutputTokens: candidate.documentPolicy.batchOutputTokens ?? null,
         maxUnitsPerBatch: candidate.documentPolicy.maxUnitsPerBatch ?? null,
+        maxModelCallsPerJob: candidate.documentPolicy.maxModelCallsPerJob ?? null,
+        jobTimeoutMs: candidate.documentPolicy.jobTimeoutMs ?? null,
       } : null,
     })),
   };
@@ -721,6 +834,29 @@ function publicBackgroundJob(job) {
     .filter((batch) => batch.providerId && batch.modelId)
     .sort((left, right) => Number(left.index) - Number(right.index))
     .at(-1) ?? null;
+  const persistedHandoff = job?.handoff && typeof job.handoff === "object"
+    ? {
+        state: job.handoff.state ?? null,
+        terminalStatus: job.handoff.terminalStatus ?? null,
+        attemptId: job.handoff.attemptId ?? null,
+        attempts: Number(job.handoff.attempts) || 0,
+        queuedAt: job.handoff.queuedAt ?? null,
+        startedAt: job.handoff.startedAt ?? null,
+        deliveredAt: job.handoff.deliveredAt ?? null,
+        failedAt: job.handoff.failedAt ?? null,
+        lastError: job.handoff.lastError ?? null,
+      }
+    : null;
+  const handoff = persistedHandoff ?? (
+    longTaskTerminalKey(job) && !job?.origin?.conversationId
+      ? {
+          state: "legacy_unassigned",
+          terminalStatus: job.status ?? null,
+          attempts: 0,
+          lastError: "这是旧版本创建的任务，无法安全关联到原会话；请在后台面板中手动点击“继续”或“重试”。",
+        }
+      : null
+  );
   return {
     id: `document:${job.id}`,
     documentJobId: job.id,
@@ -730,6 +866,8 @@ function publicBackgroundJob(job) {
     lifecycle: "task",
     kind: "document",
     status: job.status,
+    needsAttention: longTaskNeedsAttention(job),
+    handoff,
     progress: {
       completed,
       total,
@@ -746,6 +884,9 @@ function publicBackgroundJob(job) {
       modelCalls: Number(progress.modelCalls) || 0,
       modelCallLimit: Number(progress.modelCallLimit) || null,
       taskModelCalls: Number(job?.modelCallCount) || 0,
+      executionModelCalls: Number(progress.executionModelCalls) || 0,
+      taskModelCallLimit: Number(job?.policy?.maxModelCallsPerJob) || null,
+      executionDeadlineAt: job?.executionDeadlineAt || null,
       totalSources: Number(progress.totalSources) || (Array.isArray(job.sourcePaths) && job.sourcePaths.length > 0 ? job.sourcePaths.length : 1),
       completedSources: Number(progress.completedSources) || 0,
       currentSource: progress.currentSource || null,
@@ -760,6 +901,12 @@ function publicBackgroundJob(job) {
     sourceFingerprint: job.sourceFingerprint ?? null,
     taskFingerprint: job.taskFingerprint ?? null,
     outputPath: job.outputPath,
+    finalDraft: job.finalDraft ? {
+      chars: Number(job.finalDraft.chars) || 0,
+      sha256: job.finalDraft.sha256 ?? null,
+      writtenAt: job.finalDraft.writtenAt ?? null,
+      terminalStatus: job.finalDraft.terminalStatus ?? null,
+    } : null,
     contract: job.contract ?? null,
     sourceAudit: job.sourceAudit ?? null,
     modelHistory: Array.isArray(job.modelHistory) ? job.modelHistory : [],
@@ -768,6 +915,8 @@ function publicBackgroundJob(job) {
       batchInputTokens: job.policy.batchInputTokens,
       maxUnitsPerBatch: job.policy.maxUnitsPerBatch,
       maxVisualUnitsPerBatch: job.policy.maxVisualUnitsPerBatch,
+      maxModelCallsPerJob: job.policy.maxModelCallsPerJob,
+      jobTimeoutMs: job.policy.jobTimeoutMs,
     } : null,
     previewAvailable: Array.isArray(job.batches) && job.batches.length > 0,
     qualityPassed: job.qualityPassed,
@@ -791,6 +940,15 @@ export function createDocumentMarkdownManager(options = {}) {
   const queue = [];
   const runtimes = new Map();
   const completions = new Map();
+  // A resume request can arrive from both the background workbench and the
+  // automatic handoff at nearly the same time.  Keep one in-flight promise per
+  // job so those callers share the same execution (and, for a saved draft,
+  // the same output commit) instead of starting duplicate work.
+  const resumeFlights = new Map();
+  // A task fingerprint is the semantic identity of a document job. Serialize
+  // starts for that identity so later callers reach the normal duplicate path
+  // after the first job is durable (and can still register as subscribers).
+  const startFlights = new Map();
   let draining = false;
 
   const emit = async (id, changes = {}) => {
@@ -813,11 +971,48 @@ export function createDocumentMarkdownManager(options = {}) {
     try { options.onError?.(error, jobId, prepared); } catch { /* Error reporting must not stop the worker. */ }
   }
 
+  function assertExecutionAvailable(runtime) {
+    if (runtime.budgetError) throw runtime.budgetError;
+    if (runtime.controller.signal.aborted) throw abortError();
+    if (runtime.deadlineAt && Date.now() >= runtime.deadlineAt) {
+      runtime.budgetError = documentJobBudgetError("timeout", runtime.policy);
+      runtime.deadlineReached = true;
+      throw runtime.budgetError;
+    }
+  }
+
   function queueEmit(runtime, changes) {
     runtime.emitQueue = (runtime.emitQueue ?? Promise.resolve())
       .catch(() => {})
       .then(() => emit(runtime.id, changes));
     return runtime.emitQueue;
+  }
+
+  async function refreshRuntimeTaskFingerprint(runtime, prepared, sourceFingerprint, previousJob, reason) {
+    if (typeof options.refreshTaskFingerprint !== "function" || !sourceFingerprint) return previousJob?.taskFingerprint ?? runtime.input.taskFingerprint ?? null;
+    let next;
+    try {
+      next = String(await options.refreshTaskFingerprint({
+        input: runtime.input,
+        contract: runtime.contract,
+        prepared,
+        sourceFingerprint,
+        previousJob,
+      }) ?? "").trim();
+    } catch (error) {
+      reportPersistenceError(runtime, error, "task-fingerprint-refresh");
+      return previousJob?.taskFingerprint ?? runtime.input.taskFingerprint ?? null;
+    }
+    if (!next || next === String(previousJob?.taskFingerprint ?? runtime.input.taskFingerprint ?? "")) return next || previousJob?.taskFingerprint || null;
+    runtime.input.taskFingerprint = next;
+    await queueEmit(runtime, { taskFingerprint: next });
+    await store.appendEvent?.(runtime.id, {
+      type: "task-fingerprint-refreshed",
+      previous: previousJob?.taskFingerprint ?? null,
+      current: next,
+      reason: String(reason || "source-refresh"),
+    }).catch((error) => reportPersistenceError(runtime, error, "task-fingerprint-event"));
+    return next;
   }
 
   function updateProgress(runtime, changes = {}, extra = {}) {
@@ -952,7 +1147,15 @@ export function createDocumentMarkdownManager(options = {}) {
   }
 
   function reserveTaskModelCall(runtime, details) {
+    assertExecutionAvailable(runtime);
+    const limit = Math.max(4, Number(runtime.policy?.maxModelCallsPerJob) || 1_000);
+    const executionCalls = Math.max(0, Number(runtime.executionModelCalls) || 0);
+    if (executionCalls >= limit) {
+      runtime.budgetError = documentJobBudgetError("calls", runtime.policy);
+      throw runtime.budgetError;
+    }
     runtime.modelCallCount = Math.max(0, Number(runtime.modelCallCount) || 0) + 1;
+    runtime.executionModelCalls = executionCalls + 1;
     const call = {
       id: `${runtime.id}:${runtime.modelCallCount}`,
       number: runtime.modelCallCount,
@@ -968,8 +1171,10 @@ export function createDocumentMarkdownManager(options = {}) {
     };
     queueProgress(runtime, {
       taskModelCalls: runtime.modelCallCount,
+      executionModelCalls: runtime.executionModelCalls,
     }, {
       modelCallCount: runtime.modelCallCount,
+      executionModelCalls: runtime.executionModelCalls,
       lastModelCall: call,
     }, "task-model-call-reservation");
     return call;
@@ -984,6 +1189,7 @@ export function createDocumentMarkdownManager(options = {}) {
       modelCalls: budget.used,
       modelCallLimit: budget.limit,
       taskModelCalls: runtime.modelCallCount,
+      executionModelCalls: runtime.executionModelCalls,
     }, {}, "model-call-reservation");
     return call;
   }
@@ -1032,7 +1238,7 @@ export function createDocumentMarkdownManager(options = {}) {
     let lastWaitingStatus = null;
     let lastWaitingPersistAt = 0;
     while (true) {
-      if (runtime.controller.signal.aborted) throw abortError();
+      assertExecutionAvailable(runtime);
       const paused = runtime.paused === true;
       const waitingForForeground = !paused && Boolean(options.isForegroundBusy?.());
       const waitingForProvider = !paused && !waitingForForeground && Boolean(options.isProviderBusy?.());
@@ -1060,12 +1266,6 @@ export function createDocumentMarkdownManager(options = {}) {
       await delay(runtime.policy.foregroundPollMs, runtime.controller.signal);
     }
     if (announced) await emit(runtime.id, { status: "running", running: true, paused: false });
-  }
-
-  function softenReview(review) {
-    const advisoryIssues = review.issues.filter((issue) => issue.type === "structure");
-    const issues = review.issues.filter((issue) => issue.type !== "structure");
-    return { ...review, pass: issues.length === 0, issues, advisoryIssues };
   }
 
   async function requestReview(candidate, batch, section, runtime, budget, candidatePolicy) {
@@ -1097,7 +1297,7 @@ export function createDocumentMarkdownManager(options = {}) {
           contract: runtime.contract,
           messages: withVisuals.messages,
           purpose: "verification",
-          maxTokens: Math.min(2_048, positiveCapabilityInteger(candidate?.maxOutputTokens) ?? 2_048),
+          maxTokens: candidatePolicy.batchOutputTokens,
           requestTimeoutMs: candidatePolicy.requestTimeoutMs,
           onProgress: (progress) => {
             if (progress?.finishReason) modelCall.finishReason = progress.finishReason;
@@ -1115,7 +1315,7 @@ export function createDocumentMarkdownManager(options = {}) {
           signal: runtime.controller.signal,
         }));
         const parsed = parseDocumentReview(value, batch.unitIds);
-        if (parsed) return { ...softenReview(parsed), errors };
+        if (parsed) return { ...normalizeDocumentWorkflowReview(parsed), errors };
       } catch (error) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
         errors.push(String(error?.message || error).slice(0, 500));
@@ -1244,7 +1444,7 @@ export function createDocumentMarkdownManager(options = {}) {
     }
 
     const resolved = [...resolvedVisualUnitIds];
-    const quality = evaluateDocumentQuality({ units: batch.units, markdown: section, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: resolved });
+    const quality = evaluateDocumentQuality({ units: batch.units, markdown: section, fidelity: runtime.contract.fidelity, resolvedVisualUnitIds: resolved, qualityThresholds: candidatePolicy.qualityThresholds });
     if (!quality.passed || errors.length > 0) {
       await store.appendEvent?.(runtime.id, {
         type: "unit-repair-completed",
@@ -1255,7 +1455,10 @@ export function createDocumentMarkdownManager(options = {}) {
         passed: false,
         failures: quality.failures,
       }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
-      return { passed: false, section, quality, review: null, attempts, candidate, errors, failureCategories: [...failureCategories], resolvedVisualUnitIds: resolved };
+      const repaired = { passed: false, section, quality, review: null, attempts, candidate, errors, failureCategories: [...failureCategories], resolvedVisualUnitIds: resolved };
+      return strongerDocumentDraft(seedResult, repaired) === seedResult
+        ? { ...seedResult, passed: false, attempts, errors: [...(seedResult.errors ?? []), ...errors], failureCategories: [...new Set([...(seedResult.failureCategories ?? []), ...failureCategories])] }
+        : repaired;
     }
 
     const review = await requestReview(candidate, batch, section, runtime, budget, candidatePolicy);
@@ -1267,7 +1470,7 @@ export function createDocumentMarkdownManager(options = {}) {
       unitIds: targetIds,
       passed: review.pass === true,
     }).catch((error) => reportPersistenceError(runtime, error, "unit-repair-event"));
-    return {
+    const repaired = {
       passed: review.pass === true,
       section,
       quality,
@@ -1278,6 +1481,17 @@ export function createDocumentMarkdownManager(options = {}) {
       failureCategories: [...failureCategories],
       resolvedVisualUnitIds: resolved,
     };
+    const preferred = strongerDocumentDraft(seedResult, repaired);
+    if (preferred === seedResult && review.pass !== true) {
+      return {
+        ...seedResult,
+        passed: false,
+        attempts,
+        errors: [...(seedResult.errors ?? []), ...(review.errors ?? [])],
+        failureCategories: [...new Set([...(seedResult.failureCategories ?? []), ...failureCategories])],
+      };
+    }
+    return repaired;
   }
 
   async function tryCandidate(candidate, batch, runtime, budget, candidatePolicy, seedResult = null) {
@@ -1364,6 +1578,7 @@ export function createDocumentMarkdownManager(options = {}) {
         markdown: section,
         fidelity: runtime.contract.fidelity,
         resolvedVisualUnitIds: withVisuals.visualUnitIds,
+        qualityThresholds: candidatePolicy.qualityThresholds,
       });
       lastResolvedVisualUnitIds = withVisuals.visualUnitIds;
       if (!lastQuality.passed) {
@@ -1400,6 +1615,7 @@ export function createDocumentMarkdownManager(options = {}) {
     if (candidate.role !== "primary" && !runtime.policy.autoFallback) return false;
     runtime.candidateAvailability ??= new Map();
     const key = candidateCircuitKey(candidate);
+    if (runtime.transientBlockedCandidates?.has(key)) return false;
     const verificationStatus = String(candidate?.verificationStatus ?? "").toLowerCase();
     if (candidateDisabled(runtime, candidate)) {
       const disabledOrigin = runtime.disabledCandidateDetails?.get(key)?.origin;
@@ -1462,6 +1678,53 @@ export function createDocumentMarkdownManager(options = {}) {
     return (result?.errors ?? []).some((message) => /timeout|timed out|deadline|总时长上限/i.test(message));
   }
 
+  function exhaustedTransientCandidate(result, candidatePolicy) {
+    if (result?.passed || String(result?.section || "").trim()) return false;
+    const categories = new Set(result?.failureCategories ?? []);
+    if (!["timeout", "rate_limit", "network", "unknown"].some((category) => categories.has(category))) return false;
+    return Number(result?.attempts) >= Math.max(1, Number(candidatePolicy?.maxRetries) + 1);
+  }
+
+  function documentDraftRank(result) {
+    if (!String(result?.section || "").trim()) return null;
+    const quality = result?.quality ?? {};
+    const coverage = quality?.coverage ?? {};
+    const metrics = quality?.metrics ?? {};
+    const retention = ["lengthRatio", "signalRatio", "commandRatio", "tableRatio", "formulaRatio", "urlRatio"]
+      .map((key) => Number(metrics[key]))
+      .filter(Number.isFinite)
+      .map((value) => Math.max(0, Math.min(1, value)));
+    const missing = [
+      ...(coverage.missingUnitIds ?? []),
+      ...(coverage.thinUnitIds ?? []),
+      ...(coverage.duplicateUnitIds ?? []),
+      ...(coverage.unexpectedUnitIds ?? []),
+    ].length;
+    return [
+      result?.passed === true ? 1 : 0,
+      result?.review?.pass === true ? 1 : 0,
+      quality?.passed === true ? 1 : 0,
+      coverage?.complete === true ? 1 : 0,
+      -missing,
+      -(quality?.failures?.length ?? 0),
+      retention.length > 0 ? Math.min(...retention) : 0,
+      retention.length > 0 ? retention.reduce((sum, value) => sum + value, 0) / retention.length : 0,
+      String(result.section).replace(/<!--[^>]*-->/g, "").trim().length,
+    ];
+  }
+
+  function strongerDocumentDraft(current, candidate) {
+    const currentRank = documentDraftRank(current);
+    const candidateRank = documentDraftRank(candidate);
+    if (!candidateRank) return current;
+    if (!currentRank) return candidate;
+    for (let index = 0; index < currentRank.length; index++) {
+      if (candidateRank[index] === currentRank[index]) continue;
+      return candidateRank[index] > currentRank[index] ? candidate : current;
+    }
+    return current;
+  }
+
   async function processBatch(batch, runtime, state, startCandidateIndex = 0, seedResult = null) {
     const candidates = runtime.candidates;
     const attempts = [];
@@ -1518,6 +1781,23 @@ export function createDocumentMarkdownManager(options = {}) {
         currentModelRole: candidate.role || "primary",
       });
       const result = await tryCandidate(candidate, batch, runtime, state.budget, candidatePolicy, bestResult);
+      if (exhaustedTransientCandidate(result, candidatePolicy)) {
+        runtime.transientBlockedCandidates ??= new Set();
+        const circuitKey = candidateCircuitKey(candidate);
+        if (!runtime.transientBlockedCandidates.has(circuitKey)) {
+          runtime.transientBlockedCandidates.add(circuitKey);
+          await store.appendEvent?.(runtime.id, {
+            type: "candidate-transient-circuit-opened",
+            providerId: candidate.providerId,
+            modelId: candidate.modelId,
+            role: candidate.role,
+            batchId: batch.id,
+            categories: result.failureCategories ?? [],
+            attempts: result.attempts,
+            scope: "execution",
+          }).catch((error) => reportPersistenceError(runtime, error, "transient-circuit-event"));
+        }
+      }
       attempts.push({
         providerId: candidate.providerId,
         modelId: candidate.modelId,
@@ -1660,6 +1940,7 @@ export function createDocumentMarkdownManager(options = {}) {
       markdown: orphan,
       fidelity: runtime.contract.fidelity,
       resolvedVisualUnitIds: [],
+      qualityThresholds: runtime.policy.qualityThresholds,
     });
     const unsafeFailures = (quality.failures ?? []).filter((failure) => failure.type !== "visual-pending");
     if (unsafeFailures.length > 0) {
@@ -1758,6 +2039,7 @@ export function createDocumentMarkdownManager(options = {}) {
         })));
       } catch (error) {
         if (runtime.controller.signal.aborted || error?.name === "AbortError") throw error;
+        runtime.summaryModelFailure = true;
         if (isNonRetryableDocumentModelError(error)) disableCandidate(runtime, candidate);
       }
     }
@@ -1787,11 +2069,34 @@ export function createDocumentMarkdownManager(options = {}) {
 
   async function execute(runtime) {
     let prepared;
+    let deadlineTimer = null;
+    const executionStartedAtMs = Date.now();
+    const executionTimeoutMs = Math.max(1_000, Number(runtime.policy?.jobTimeoutMs) || 21_600_000);
+    runtime.executionStartedAt = new Date(executionStartedAtMs).toISOString();
+    runtime.deadlineAt = executionStartedAtMs + executionTimeoutMs;
+    runtime.executionDeadlineAt = new Date(runtime.deadlineAt).toISOString();
+    runtime.executionModelCalls = 0;
+    runtime.budgetError = null;
+    runtime.deadlineReached = false;
+    runtime.executionEpoch = {
+      ...(runtime.executionEpoch ?? {}),
+      startedAt: runtime.executionStartedAt,
+      deadlineAt: runtime.executionDeadlineAt,
+    };
+    deadlineTimer = setTimeout(() => {
+      if (runtime.controller.signal.aborted) return;
+      runtime.deadlineReached = true;
+      runtime.budgetError = documentJobBudgetError("timeout", runtime.policy);
+      runtime.controller.abort(runtime.budgetError);
+    }, executionTimeoutMs);
     try {
       runtime.modelDiagnostics ??= new Map();
       runtime.disabledCandidates ??= new Set();
       runtime.disabledCandidateDetails ??= new Map();
       runtime.candidateAvailability ??= new Map();
+      // Transient circuits intentionally live for one execution only. Resume
+      // starts a fresh epoch and gives a recovered primary model another try.
+      runtime.transientBlockedCandidates = new Set();
       await emit(runtime.id, {
         status: "running",
         running: true,
@@ -1801,21 +2106,37 @@ export function createDocumentMarkdownManager(options = {}) {
         disabledCandidates: persistedDisabledCandidates(runtime),
         disabledCandidateDetails: persistedDisabledCandidateDetails(runtime),
         executionEpoch: runtime.executionEpoch ?? null,
+        executionStartedAt: runtime.executionStartedAt,
+        executionDeadlineAt: runtime.executionDeadlineAt,
+        executionModelCalls: 0,
+        progress: {
+          executionModelCalls: 0,
+          taskModelCallLimit: runtime.policy.maxModelCallsPerJob,
+          executionDeadlineAt: runtime.executionDeadlineAt,
+          lastHeartbeatAt: new Date().toISOString(),
+        },
       });
       await store.appendEvent?.(runtime.id, {
         type: "execution-started",
         retryFailed: runtime.retryFailed === true,
         epochId: runtime.executionEpoch?.id ?? null,
         sourcePlanHash: runtime.executionEpoch?.sourcePlanHash ?? null,
+        deadlineAt: runtime.executionDeadlineAt,
+        maxModelCalls: runtime.policy.maxModelCallsPerJob,
       })
         .catch((error) => reportPersistenceError(runtime, error, "execution-event"));
+      assertExecutionAvailable(runtime);
       const prepareInput = Array.isArray(runtime.input.sourcePaths) && runtime.input.sourcePaths.length > 0
         ? runtime.input.sourcePaths
         : runtime.input.sourcePath;
       prepared = await options.prepareDocument(prepareInput, runtime.controller.signal);
+      assertExecutionAvailable(runtime);
       if (!prepared?.ok) throw new Error(prepared?.error || "document preparation failed");
-      const sourceFingerprint = await options.fingerprintSource?.(prepared, runtime.controller.signal);
+      const sourceFingerprint = runtime.initialSourceFingerprint
+        ?? await options.fingerprintSource?.(prepared, runtime.controller.signal);
+      runtime.initialSourceFingerprint = null;
       const previous = await store.read(runtime.id);
+      await refreshRuntimeTaskFingerprint(runtime, prepared, sourceFingerprint, previous, "execution-start");
       if (previous.sourceFingerprint && sourceFingerprint && !sourceFingerprintsMatch(previous.sourceFingerprint, sourceFingerprint)) {
         await store.appendEvent?.(runtime.id, {
           type: "source-changed",
@@ -1903,7 +2224,7 @@ export function createDocumentMarkdownManager(options = {}) {
           await queueEmit(runtime, { sourcePlan: runtime.sourcePlan });
           const prior = priorBatches.get(batch.id);
           const retryFailed = runtime.retryFailed === true;
-          const recovered = !retryFailed || prior?.status === "completed"
+          const recovered = !runtime.forceSourceRebuild && (!retryFailed || prior?.status === "completed")
             ? await recoverSavedBatch(runtime, batch, prior)
             : null;
           if (recovered) {
@@ -1924,6 +2245,7 @@ export function createDocumentMarkdownManager(options = {}) {
                   markdown: section,
                   fidelity: runtime.contract.fidelity,
                   resolvedVisualUnitIds,
+                  qualityThresholds: runtime.policy.qualityThresholds,
                 }),
                 review: prior.review ?? null,
                 resolvedVisualUnitIds,
@@ -1970,12 +2292,15 @@ export function createDocumentMarkdownManager(options = {}) {
           if (!result.passed) degraded = true;
         },
       });
+      assertExecutionAvailable(runtime);
       const extractionWarnings = (Array.isArray(sourceSummary?.warnings) ? sourceSummary.warnings : []).map((warning) => {
         const expected = Number(warning?.expected);
         const actual = Number(warning?.actual);
         const message = warning?.type === "office-element-count-mismatch" && Number.isFinite(expected) && Number.isFinite(actual)
           ? `Office 文档提取数量与 OfficeCLI 报告不一致：应有 ${expected} 个元素，实际提取 ${actual} 个，输出需要复核。`
-          : String(warning?.message || "文档来源提取存在完整性告警，输出需要复核。");
+          : warning?.type === "office-empty-elements"
+            ? `Office 文档有 ${Number(warning?.count) || 0} 个非视觉元素没有可读取文字${Array.isArray(warning?.locations) && warning.locations.length > 0 ? `（例如：${warning.locations.slice(0, 3).join("、")}）` : ""}，可能存在未支持或隐藏内容，输出需要复核。`
+            : String(warning?.message || "文档来源提取存在完整性告警，输出需要复核。");
         return { ...warning, message };
       });
       if (extractionWarnings.length > 0) degraded = true;
@@ -2055,17 +2380,65 @@ export function createDocumentMarkdownManager(options = {}) {
       if (!assemblyAudit.passed) degraded = true;
 
       let summary = "";
+      let summaryFallbackWarning = null;
       if (runtime.contract.fidelity === "complete-with-summary") {
+        const summaryExpected = typeof options.generateSummary === "function" && sectionSummaries.length > 0;
         try {
           summary = await generateHierarchicalSummary(titleForDocument(prepared, runtime.contract), sectionSummaries, runtime);
-        } catch { /* A missing summary must not discard the verified body. */ }
-        if (!/^##\s+摘要/m.test(summary)) summary = `## 摘要\n\n文档正文已按 ${totalUnits} 个来源区块完成整理。${degraded ? "部分区块未通过完整质量审查，需要复核。" : "详细内容见下文。"}`;
+        } catch (error) {
+          if (error?.code === DOCUMENT_JOB_TIMEOUT_CODE) throw error;
+          summaryFallbackWarning = {
+            type: "document-summary-fallback",
+            message: "文档正文已完成，但摘要模型未返回有效结果，已使用程序生成的简要说明，需要复核。",
+            technicalMessage: String(error?.message || error).slice(0, 500),
+          };
+          if (runtime.budgetError?.code === DOCUMENT_JOB_CALL_BUDGET_CODE) runtime.budgetError = null;
+        }
+        if (!/^##\s+摘要/m.test(summary) || (summaryExpected && runtime.summaryModelFailure === true)) {
+          if (summaryExpected && runtime.summaryModelFailure === true) {
+            summaryFallbackWarning ??= {
+              type: "document-summary-fallback",
+              message: "文档正文已完成，但摘要模型未返回有效结果，已使用程序生成的简要说明，需要复核。",
+            };
+          }
+          summary = `## 摘要\n\n文档正文已按 ${totalUnits} 个来源区块完成整理。${degraded || summaryFallbackWarning ? "部分处理结果需要复核。" : "详细内容见下文。"}`;
+        }
+        if (summaryFallbackWarning) degraded = true;
       }
+      assertExecutionAvailable(runtime);
       const title = titleForDocument(prepared, runtime.contract);
       const sourceList = renderCollectionSources(prepared, sourceSummary);
       const content = [`# ${title}`, summary, sourceList, "## 详细正文", detailedBody].filter(Boolean).join("\n\n");
+      await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
+      const finalState = await store.read(runtime.id);
+      const warnings = buildDocumentQualityWarnings({
+        batches: finalState.batches,
+        diagnostics: finalState.modelDiagnostics,
+        assemblyAudit,
+      });
+      warnings.push(...extractionWarnings);
+      if (summaryFallbackWarning) warnings.push(summaryFallbackWarning);
+      const terminalStatus = degraded ? "completed_with_warnings" : "completed";
+      const sourceAudit = {
+        totalUnits,
+        sourceCount: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries.length : 1,
+        sources: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries : [],
+        selectedPages: Number.isFinite(Number(sourceSummary?.selectedPages)) ? Number(sourceSummary.selectedPages) : null,
+        processedPages: Number.isFinite(Number(sourceSummary?.processedPages)) ? Number(sourceSummary.processedPages) : null,
+        extractionWarnings,
+        assembly: assemblyAudit,
+      };
+      await store.writeFinalDraft?.(runtime.id, content, {
+        terminalStatus,
+        qualityPassed: !degraded,
+        warnings,
+        sourceAudit,
+        outputPath: runtime.input.outputPath,
+      });
       const finalFingerprint = await options.fingerprintSource?.(prepared, runtime.controller.signal);
-      const storedFingerprint = (await store.read(runtime.id)).sourceFingerprint;
+      const beforeOutput = await store.read(runtime.id);
+      await refreshRuntimeTaskFingerprint(runtime, prepared, finalFingerprint, beforeOutput, "before-output");
+      const storedFingerprint = beforeOutput.sourceFingerprint;
       if (storedFingerprint && finalFingerprint && !sourceFingerprintsMatch(storedFingerprint, finalFingerprint)) {
         await store.appendEvent?.(runtime.id, {
           type: "source-changed",
@@ -2079,44 +2452,61 @@ export function createDocumentMarkdownManager(options = {}) {
           paused: true,
           error: "source changed before final output; the draft is preserved for review",
           sourceFingerprint: finalFingerprint,
+          qualityPassed: !degraded,
+          warnings,
+          sourceAudit,
           progress: { stage: "source-changed", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
         });
         return;
       }
-      await options.writeOutput({
-        outputPath: runtime.input.outputPath,
-        content,
-        signal: runtime.controller.signal,
-        workspaceRoot: runtime.input.workspaceRoot,
-        allowOutsideWorkspace: runtime.input.allowOutsideWorkspace === true,
-        allowOutputOverwrite: runtime.input.allowOutputOverwrite === true || Boolean((await store.read(runtime.id)).outputCommittedAt),
-      });
+      try {
+        await options.writeOutput({
+          outputPath: runtime.input.outputPath,
+          content,
+          signal: runtime.controller.signal,
+          workspaceRoot: runtime.input.workspaceRoot,
+          allowOutsideWorkspace: runtime.input.allowOutsideWorkspace === true,
+          allowOutputOverwrite: runtime.input.allowOutputOverwrite === true,
+        });
+      } catch (error) {
+        if (error?.code !== "DOCUMENT_OUTPUT_CONFLICT") throw error;
+        await emit(runtime.id, {
+          status: "awaiting_output",
+          running: false,
+          paused: true,
+          qualityPassed: !degraded,
+          warnings,
+          sourceAudit,
+          error: String(error?.message || error),
+          currentModel: null,
+          currentModelRole: null,
+          progress: {
+            stage: "awaiting-output",
+            currentBatch: null,
+            currentLabel: null,
+            generatedChars: content.length,
+            elapsedMs: 0,
+            lastHeartbeatAt: new Date().toISOString(),
+          },
+        });
+        return;
+      }
       const outputCommittedAt = new Date().toISOString();
-      await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
-      const finalState = await store.read(runtime.id);
-      const warnings = buildDocumentQualityWarnings({
-        batches: finalState.batches,
-        diagnostics: finalState.modelDiagnostics,
-        assemblyAudit,
+      const outputSignature = await captureDocumentOutputSignature({
+        outputPath: runtime.input.outputPath,
+        workspaceRoot: runtime.input.workspaceRoot,
       });
-      warnings.push(...extractionWarnings);
       await emit(runtime.id, {
-        status: degraded ? "completed_with_warnings" : "completed",
+        status: terminalStatus,
         running: false,
         paused: false,
         qualityPassed: !degraded,
-        sourceAudit: {
-          totalUnits,
-          sourceCount: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries.length : 1,
-          sources: Array.isArray(sourceSummary?.sourceSummaries) ? sourceSummary.sourceSummaries : [],
-          selectedPages: Number.isFinite(Number(sourceSummary?.selectedPages)) ? Number(sourceSummary.selectedPages) : null,
-          processedPages: Number.isFinite(Number(sourceSummary?.processedPages)) ? Number(sourceSummary.processedPages) : null,
-          extractionWarnings,
-          assembly: assemblyAudit,
-        },
+        sourceAudit,
         warnings,
         completedAt: new Date().toISOString(),
         outputCommittedAt,
+        outputSignature,
+        allowOutputOverwrite: false,
         currentModel: null,
         currentModelRole: null,
         progress: {
@@ -2132,23 +2522,25 @@ export function createDocumentMarkdownManager(options = {}) {
         },
       });
     } catch (error) {
-      const cancelled = runtime.controller.signal.aborted || error?.name === "AbortError";
+      const budgetError = runtime.budgetError
+        || ([DOCUMENT_JOB_CALL_BUDGET_CODE, DOCUMENT_JOB_TIMEOUT_CODE].includes(error?.code) ? error : null);
+      const cancelled = !budgetError && (runtime.controller.signal.aborted || error?.name === "AbortError");
       const terminalAction = runtime.stopAction === "abandon" ? "abandon" : "stop";
-      const terminalStatus = cancelled ? (terminalAction === "abandon" ? "abandoned" : "stopped") : "failed";
+      const terminalStatus = budgetError ? "paused" : cancelled ? (terminalAction === "abandon" ? "abandoned" : "stopped") : "failed";
       await (runtime.emitQueue ?? Promise.resolve()).catch(() => {});
       try {
         await emit(runtime.id, {
           status: terminalStatus,
           running: false,
-          paused: terminalStatus === "stopped",
+          paused: terminalStatus === "stopped" || terminalStatus === "paused",
           qualityPassed: false,
-          error: cancelled ? (terminalAction === "abandon" ? "abandoned by user" : null) : String(error?.message || error),
-          completedAt: terminalAction === "abandon" || !cancelled ? new Date().toISOString() : null,
-          stoppedAt: cancelled ? new Date().toISOString() : null,
+          error: budgetError ? budgetError.message : cancelled ? (terminalAction === "abandon" ? "abandoned by user" : null) : String(error?.message || error),
+          completedAt: budgetError ? null : terminalAction === "abandon" || !cancelled ? new Date().toISOString() : null,
+          stoppedAt: cancelled && !budgetError ? new Date().toISOString() : null,
           currentModel: null,
           currentModelRole: null,
           progress: {
-            stage: terminalStatus,
+            stage: budgetError?.code === DOCUMENT_JOB_TIMEOUT_CODE ? "job-timeout" : budgetError ? "job-call-budget" : terminalStatus,
             currentBatch: null,
             currentLabel: null,
             lastHeartbeatAt: new Date().toISOString(),
@@ -2157,7 +2549,9 @@ export function createDocumentMarkdownManager(options = {}) {
       } catch (persistenceError) {
         reportPersistenceError(runtime, persistenceError, "terminal-state");
       }
-      if (!cancelled) notifyError(error, runtime.id, prepared);
+      if (!cancelled) notifyError(budgetError || error, runtime.id, prepared);
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
     }
   }
 
@@ -2230,7 +2624,7 @@ export function createDocumentMarkdownManager(options = {}) {
     });
   }
 
-  async function start(input = {}) {
+  async function startInternal(input = {}) {
     const requestedPolicy = normalizeDocumentPolicy(input.policy);
     const contract = input.contract ?? buildDocumentContract({
       sourcePath: input.sourcePath,
@@ -2245,46 +2639,205 @@ export function createDocumentMarkdownManager(options = {}) {
       instructions: input.instructions,
       title: input.title,
     });
-    if (contract.requiresDecision) return { ok: false, requiresUserChoice: true, decision: contract.decision };
-    const candidates = options.modelCandidates?.(requestedPolicy) ?? [];
-    if (candidates.length === 0) throw new Error("no document model is configured");
-    const policy = effectiveDocumentPolicy(requestedPolicy, candidates);
-    const policyTrace = documentPolicyTrace(requestedPolicy, policy, candidates);
+    const attachOrigin = async (job) => {
+      if (!input.origin || typeof input.origin !== "object") return job;
+      const existingOrigin = job.origin && typeof job.origin === "object" ? job.origin : null;
+      const originKey = (origin) => {
+        if (!origin || typeof origin !== "object") return "";
+        return JSON.stringify({
+          conversationId: String(origin.conversationId ?? ""),
+          operationId: String(origin.operationId ?? ""),
+          workspace: String(origin.workspace ?? ""),
+        });
+      };
+      const incomingKey = originKey(input.origin);
+      const existingKey = originKey(existingOrigin);
+      const subscribers = Array.isArray(job.subscribers) ? [...job.subscribers] : [];
+      if (existingOrigin && incomingKey && incomingKey !== existingKey && !subscribers.some((entry) => originKey(entry) === incomingKey)) {
+        subscribers.push(input.origin);
+        while (subscribers.length > 32) subscribers.shift();
+      }
+      return store.update(job.id, {
+        // The first conversation owns automatic delivery.  A duplicate
+        // request may subscribe for visibility, but must never steal it.
+        origin: existingOrigin ?? input.origin,
+        ...(subscribers.length > 0 ? { subscribers } : {}),
+        handoff: {
+          ...(job.handoff ?? {}),
+          state: "waiting_worker",
+          terminalKey: null,
+          terminalStatus: null,
+          leaseId: null,
+          lastError: null,
+          userControlled: false,
+        },
+      });
+    };
+    const duplicateArtifactDecision = (artifactStatus) => ({
+      id: "document-output-integrity",
+      question: "已有任务的输出文件无法通过完整性核验，如何继续？",
+      recommendedChoiceId: "new-file",
+      choices: [
+        {
+          id: "new-file",
+          label: "使用新文件名",
+          description: "保留现有任务和文件，重新执行并写入新的输出文件。",
+        },
+        {
+          id: "overwrite-rerun",
+          label: "确认覆盖并重新执行",
+          description: `明确确认后使用 overwriteConfirmed 重新读取来源并生成新的结果（当前状态：${artifactStatus}）。`,
+        },
+      ],
+    });
+    const duplicateArtifactReview = (job, artifactStatus, error, code = "DOCUMENT_OUTPUT_INTEGRITY_REVIEW") => ({
+      ok: true,
+      accepted: false,
+      reused: true,
+      completed: false,
+      status: "needs_review",
+      sourceStatus: job.status,
+      artifactStatus,
+      requiresUserAction: true,
+      requiresUserChoice: true,
+      id: job.id,
+      outputPath: job.outputPath,
+      error,
+      code,
+      decision: duplicateArtifactDecision(artifactStatus),
+      contract: job.contract ?? contract,
+    });
+    const inspectCompletedDuplicate = async (job) => {
+      let draft = null;
+      let draftError = null;
+      if (job.finalDraft?.sha256 && typeof store.readFinalDraft === "function") {
+        try {
+          draft = await store.readFinalDraft(job.id);
+        } catch (error) {
+          draftError = error;
+        }
+      } else {
+        draftError = new Error("后台没有可验证的最终草稿，不能确认已完成输出的完整性");
+        draftError.code = "DOCUMENT_FINAL_DRAFT_UNAVAILABLE";
+      }
+
+      if (draftError) {
+        const artifactStatus = !job.finalDraft?.sha256
+          ? "unverified"
+          : draftError.code === "DOCUMENT_FINAL_DRAFT_CORRUPT" ? "corrupt" : "unavailable";
+        const reason = artifactStatus === "unverified"
+          ? "旧任务没有可验证的最终草稿"
+          : artifactStatus === "corrupt"
+            ? "后台最终草稿校验失败"
+            : "后台最终草稿无法读取";
+        return duplicateArtifactReview(
+          job,
+          artifactStatus,
+          `${reason}：${String(draftError.message || draftError).slice(0, 500)}`,
+          draftError.code || "DOCUMENT_FINAL_DRAFT_UNAVAILABLE",
+        );
+      }
+
+      const output = await inspectDocumentOutput(job, { verifyHash: true });
+      if (output.status === "verified") {
+        return {
+          ok: true,
+          accepted: false,
+          reused: true,
+          completed: true,
+          id: job.id,
+          status: job.status,
+          artifactStatus: "verified",
+          outputPath: job.outputPath,
+          contract: job.contract ?? contract,
+        };
+      }
+      if (output.status === "missing") {
+        try {
+          const recovered = await commitSavedFinalDraft(job, draft);
+          if (recovered?.ok) {
+            const restored = await inspectDocumentOutput({ ...job, finalDraft: draft }, { verifyHash: true });
+            if (restored.status === "verified") {
+              return {
+                ...recovered,
+                accepted: false,
+                reused: true,
+                completed: true,
+                recovered: true,
+                artifactStatus: "verified",
+                contract: job.contract ?? contract,
+              };
+            }
+            return duplicateArtifactReview(job, restored.status, "后台草稿提交后仍无法核验输出文件", "DOCUMENT_OUTPUT_INTEGRITY_REVIEW");
+          }
+          return {
+            ...duplicateArtifactReview(job, "missing", recovered?.error || "后台最终草稿未能提交到输出路径", recovered?.code || "DOCUMENT_OUTPUT_MISSING"),
+            ...recovered,
+            status: "needs_review",
+            completed: false,
+            requiresUserAction: true,
+          };
+        } catch (error) {
+          return duplicateArtifactReview(job, "missing", `后台最终草稿自动恢复失败：${String(error?.message || error).slice(0, 500)}`, String(error?.code || "DOCUMENT_OUTPUT_RESTORE_FAILED"));
+        }
+      }
+      const artifactStatus = output.status === "modified" ? "modified" : "unavailable";
+      const message = artifactStatus === "modified"
+        ? "已有任务的输出文件已被修改，与后台最终草稿不一致；不能直接宣称任务完成。"
+        : `已有任务的输出文件无法访问或不是普通文件：${output.error || "文件状态不可用"}`;
+      return duplicateArtifactReview(job, artifactStatus, message, artifactStatus === "modified" ? "DOCUMENT_OUTPUT_MODIFIED" : "DOCUMENT_OUTPUT_UNAVAILABLE");
+    };
     if (input.taskFingerprint && typeof store.list === "function") {
       const duplicate = (await store.list()).find((job) => job.taskFingerprint === input.taskFingerprint);
       if (duplicate) {
         if (["completed", "completed_with_warnings"].includes(duplicate.status)) {
-          return {
-            ok: true,
-            accepted: false,
-            reused: true,
-            completed: true,
-            id: duplicate.id,
-            status: duplicate.status,
-            outputPath: duplicate.outputPath,
-            contract: duplicate.contract ?? contract,
-          };
+          const integrity = await inspectCompletedDuplicate(duplicate);
+          // A missing file is safely recoverable from the verified draft and
+          // is handled above.  For a modified, unavailable, corrupt, or legacy
+          // artifact, only an explicit overwrite confirmation may create a
+          // fresh execution record.  Without it, never silently overwrite the
+          // user's file or loop back to the same completed duplicate.
+          if (integrity.completed === true || input.allowOutputOverwrite !== true) return integrity;
+          await store.appendEvent?.(duplicate.id, {
+            type: "duplicate-rerun-confirmed",
+            previousArtifactStatus: integrity.artifactStatus ?? null,
+          }).catch(() => {});
         }
         if (["queued", "running", "waiting_foreground", "waiting_provider", "pausing"].includes(duplicate.status)) {
-          return { ok: true, accepted: true, background: true, reused: true, id: duplicate.id, outputPath: duplicate.outputPath, contract: duplicate.contract ?? contract };
+          const attached = await attachOrigin(duplicate);
+          return { ok: true, accepted: true, background: true, reused: true, id: attached.id, outputPath: attached.outputPath, contract: attached.contract ?? contract };
         }
-        if (["paused", "interrupted", "stopped", "failed"].includes(duplicate.status)) {
+        if (["paused", "interrupted", "stopped", "failed", "awaiting_output"].includes(duplicate.status)) {
+          await attachOrigin(duplicate);
           await resume(duplicate.id, { retryFailed: duplicate.status === "failed" });
           return { ok: true, accepted: true, background: true, reused: true, resumed: true, id: duplicate.id, outputPath: duplicate.outputPath, contract: duplicate.contract ?? contract };
         }
       }
     }
+    // Duplicate identity and artifact integrity take precedence over a
+    // filesystem overwrite prompt.  A repeated request for a completed task
+    // must be able to report verified/missing/modified output before asking
+    // the user to choose a filename; a brand-new task still receives the
+    // normal contract decision below.
+    if (contract.requiresDecision) return { ok: false, requiresUserChoice: true, decision: contract.decision };
+    const candidates = options.modelCandidates?.(requestedPolicy) ?? [];
+    if (candidates.length === 0) throw new Error("no document model is configured");
+    const policy = effectiveDocumentPolicy(requestedPolicy, candidates);
+    const policyTrace = documentPolicyTrace(requestedPolicy, policy, candidates);
     const job = await store.create({
       sourcePath: input.sourcePath,
       sourcePaths: input.sourcePaths,
       sourceName: input.sourceName,
       outputPath: input.outputPath,
+      outputIdentity: input.outputIdentity,
       taskType: input.taskType,
       taskFingerprint: input.taskFingerprint,
+      sourceFingerprint: input.sourceFingerprint,
       pages: input.pages,
       workspaceRoot: input.workspaceRoot,
       allowOutsideWorkspace: input.allowOutsideWorkspace,
       allowOutputOverwrite: input.allowOutputOverwrite,
+      origin: input.origin,
       contract,
       policy,
       policyTrace,
@@ -2307,6 +2860,7 @@ export function createDocumentMarkdownManager(options = {}) {
       executionEpoch,
       modelCallCount: 0,
       modelDiagnostics: new Map(),
+      initialSourceFingerprint: input.sourceFingerprint ?? null,
       controller: new AbortController(),
       disabledCandidates: new Set(),
       disabledCandidateDetails: new Map(),
@@ -2321,13 +2875,134 @@ export function createDocumentMarkdownManager(options = {}) {
     return { ok: true, accepted: true, background: true, id: job.id, outputPath: input.outputPath, contract };
   }
 
-  async function resume(id, { retryFailed = false } = {}) {
+  function start(input = {}) {
+    const fingerprint = String(input?.taskFingerprint ?? "").trim();
+    if (!fingerprint) return startInternal(input);
+    const previous = startFlights.get(fingerprint) ?? Promise.resolve();
+    const promise = previous.catch(() => {}).then(() => startInternal(input)).finally(() => {
+      if (startFlights.get(fingerprint) === promise) startFlights.delete(fingerprint);
+    });
+    startFlights.set(fingerprint, promise);
+    return promise;
+  }
+
+  async function commitSavedFinalDraft(job, savedDraft = null) {
+    const draft = savedDraft ?? await store.readFinalDraft(job.id);
+    try {
+      await options.writeOutput({
+        outputPath: job.outputPath,
+        content: draft.content,
+        workspaceRoot: job.workspaceRoot || dirname(job.outputPath),
+        allowOutsideWorkspace: job.allowOutsideWorkspace === true,
+        allowOutputOverwrite: job.allowOutputOverwrite === true,
+      });
+    } catch (error) {
+      if (error?.code !== "DOCUMENT_OUTPUT_CONFLICT") throw error;
+      await emit(job.id, {
+        status: "awaiting_output",
+        running: false,
+        paused: true,
+        error: String(error?.message || error),
+        progress: { stage: "awaiting-output", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
+      });
+      return { ok: false, committed: false, requiresUserChoice: true, code: error.code, id: job.id, outputPath: job.outputPath };
+    }
+    const completedAt = new Date().toISOString();
+    const outputSignature = await captureDocumentOutputSignature(job);
+    const terminalStatus = ["completed", "completed_with_warnings"].includes(draft.terminalStatus)
+      ? draft.terminalStatus
+      : draft.qualityPassed === false ? "completed_with_warnings" : "completed";
+    await emit(job.id, {
+      status: terminalStatus,
+      running: false,
+      paused: false,
+      qualityPassed: draft.qualityPassed !== false,
+      warnings: Array.isArray(draft.warnings) ? draft.warnings : job.warnings ?? [],
+      sourceAudit: draft.sourceAudit ?? job.sourceAudit ?? null,
+      error: null,
+      completedAt,
+      outputCommittedAt: completedAt,
+      outputSignature,
+      allowOutputOverwrite: false,
+      progress: {
+        stage: "completed",
+        currentBatch: null,
+        currentLabel: null,
+        generatedChars: draft.content.length,
+        elapsedMs: 0,
+        lastHeartbeatAt: completedAt,
+      },
+    });
+    return { ok: true, resumed: true, committed: true, id: job.id, status: terminalStatus, outputPath: job.outputPath };
+  }
+
+  async function resumeInternal(id, request = {}) {
     const job = await store.read(id);
+    // A stale UI click after a saved-draft commit must be idempotent.  A
+    // completed-with-warnings job may still be explicitly retried, but a
+    // normal resume must never re-run a completed task.
+    if (job.status === "completed" || (job.status === "completed_with_warnings" && request.retryFailed !== true)) {
+      if (job.finalDraft && job.outputCommittedAt && typeof store.readFinalDraft === "function") {
+        const outputArtifact = await inspectDocumentOutput(job);
+        if (outputArtifact.status === "missing") {
+          try {
+            return await commitSavedFinalDraft(job, await store.readFinalDraft(id));
+          } catch (error) {
+            await store.appendEvent?.(id, {
+              type: "final-output-restore-failed",
+              code: String(error?.code || "OUTPUT_RESTORE_FAILED"),
+              message: String(error?.message || error).slice(0, 500),
+            }).catch(() => {});
+            return { ok: false, resumed: false, id, status: job.status, error: error?.message || String(error) };
+          }
+        }
+      }
+      return { ok: true, resumed: false, alreadyCompleted: true, id, status: job.status, outputPath: job.outputPath };
+    }
+    const terminalizingRuntime = runtimes.get(id);
+    if (
+      terminalizingRuntime?.executing === true
+      && ["failed", "paused", "stopped", "abandoned", "source_changed", "awaiting_output", "completed_with_warnings"].includes(job.status)
+    ) {
+      const completion = completions.get(id);
+      if (!completion) {
+        return { ok: false, resumed: false, reason: "document worker is finishing", id, status: job.status };
+      }
+      await completion;
+      return resumeInternal(id, request);
+    }
+    const resetHandoff = {
+      ...(job.handoff ?? {}),
+      state: "waiting_worker",
+      terminalKey: null,
+      terminalStatus: null,
+      leaseId: null,
+      lastError: null,
+      userControlled: false,
+    };
+    const savedDraftCanCompleteResume = job.finalDraft
+      && typeof store.readFinalDraft === "function"
+      && !job.outputCommittedAt
+      && job.status !== "source_changed"
+      && !(job.status === "completed_with_warnings" && request.retryFailed === true);
+    if (savedDraftCanCompleteResume) {
+      try {
+        const savedDraft = await store.readFinalDraft(id);
+        await store.update(id, { handoff: resetHandoff });
+        return commitSavedFinalDraft(job, savedDraft);
+      } catch (error) {
+        await store.appendEvent?.(id, {
+          type: "final-draft-recovery-rejected",
+          code: String(error?.code || "FINAL_DRAFT_UNAVAILABLE"),
+          message: String(error?.message || error).slice(0, 500),
+        }).catch(() => {});
+      }
+    }
     if (runtimes.has(id)) {
       const runtime = runtimes.get(id);
       runtime.paused = false;
-      runtime.retryFailed ||= retryFailed;
-      await emit(id, { status: "running", running: true, paused: false });
+      runtime.retryFailed ||= request.retryFailed === true;
+      await emit(id, { status: "running", running: true, paused: false, handoff: resetHandoff });
       return { ok: true, resumed: true, id };
     }
     const storedPolicy = normalizeDocumentPolicy(job.policy);
@@ -2343,7 +3018,7 @@ export function createDocumentMarkdownManager(options = {}) {
       job.sourcePlan?.planHash ?? null,
       job.modelCallCount,
     );
-    await store.update(id, { executionEpoch });
+    await store.update(id, { executionEpoch, handoff: resetHandoff });
     let resolveCompletion;
     const completion = new Promise((resolve) => { resolveCompletion = resolve; });
     completions.set(id, completion);
@@ -2353,6 +3028,7 @@ export function createDocumentMarkdownManager(options = {}) {
         sourcePath: job.sourcePath,
         sourcePaths: job.sourcePaths,
         outputPath: job.outputPath,
+        outputIdentity: job.outputIdentity ?? job.outputPath,
         taskType: job.taskType,
         taskFingerprint: job.taskFingerprint,
         pages: job.pages,
@@ -2367,6 +3043,7 @@ export function createDocumentMarkdownManager(options = {}) {
       executionEpoch,
       modelCallCount: Number(job.modelCallCount) || (job.batches ?? []).reduce((sum, batch) => sum + (Number(batch.modelCalls) || 0), 0),
       modelDiagnostics: modelDiagnosticMap(job.modelDiagnostics),
+      initialSourceFingerprint: null,
       controller: new AbortController(),
       disabledCandidates: disabledCandidateSet(job.disabledCandidates),
       disabledCandidateDetails: disabledCandidateDetailMap(job.disabledCandidateDetails),
@@ -2374,20 +3051,42 @@ export function createDocumentMarkdownManager(options = {}) {
       emitQueue: Promise.resolve(),
       paused: false,
       stopAction: null,
-      retryFailed,
+      retryFailed: request.retryFailed === true,
+      forceSourceRebuild: job.status === "source_changed",
       executing: false,
       resolve: resolveCompletion,
     };
     try {
       await emit(id, { status: "queued", running: false, paused: false, error: null, policy, policyTrace, executionEpoch });
-      await store.appendEvent?.(id, { type: "resume-requested", retryFailed, epochId: executionEpoch.id, sourcePlanHash: executionEpoch.sourcePlanHash, ...policyTrace }).catch(() => {});
+      await store.appendEvent?.(id, { type: "resume-requested", retryFailed: request.retryFailed === true, epochId: executionEpoch.id, sourcePlanHash: executionEpoch.sourcePlanHash, ...policyTrace }).catch(() => {});
       options.onPolicy?.(id, policyTrace);
+      runtime.retryFailed ||= request.retryFailed === true;
     } catch (error) {
       completions.delete(id);
       throw error;
     }
     enqueue(runtime);
     return { ok: true, resumed: true, id };
+  }
+
+  function resume(id, { retryFailed = false } = {}) {
+    const key = String(id).replace(/^document:/, "");
+    const existing = resumeFlights.get(key);
+    if (existing) {
+      if (retryFailed === true) {
+        existing.retryFailed = true;
+        const runtime = runtimes.get(key);
+        if (runtime) runtime.retryFailed = true;
+      }
+      return existing.promise;
+    }
+    const request = { retryFailed: retryFailed === true, promise: null };
+    const promise = resumeInternal(key, request).finally(() => {
+      if (resumeFlights.get(key) === request) resumeFlights.delete(key);
+    });
+    request.promise = promise;
+    resumeFlights.set(key, request);
+    return promise;
   }
 
   async function control(rawId, action) {
@@ -2397,7 +3096,12 @@ export function createDocumentMarkdownManager(options = {}) {
       if (!runtime) return { ok: false, error: "document job is not running" };
       if (runtime.stopAction) return { ok: false, error: "document job is stopping; wait for the current action to finish" };
       runtime.paused = true;
-      await emit(id, { status: "pausing", paused: true });
+      const job = await store.read(id);
+      await emit(id, {
+        status: "pausing",
+        paused: true,
+        handoff: { ...(job.handoff ?? {}), state: "user_paused", userControlled: true },
+      });
       return { ok: true, paused: true, id };
     }
     if (action === "resume") return resume(id);
@@ -2405,6 +3109,16 @@ export function createDocumentMarkdownManager(options = {}) {
     if (action === "cancel" || action === "stop" || action === "abandon") {
       const abandon = action === "abandon";
       if (runtime) {
+        const currentJob = await store.read(id);
+        const userHandoff = {
+          ...(currentJob.handoff ?? {}),
+          state: abandon ? "abandoned" : "user_paused",
+          userControlled: true,
+          terminalKey: null,
+          terminalStatus: null,
+          leaseId: null,
+        };
+        await emit(id, { handoff: userHandoff });
         runtime.stopAction = abandon ? "abandon" : "stop";
         runtime.controller.abort();
         if (!runtime.executing) {
@@ -2416,6 +3130,7 @@ export function createDocumentMarkdownManager(options = {}) {
             paused: !abandon,
             qualityPassed: false,
             error: abandon ? "abandoned by user" : null,
+            handoff: userHandoff,
             completedAt: abandon ? new Date().toISOString() : null,
             stoppedAt: new Date().toISOString(),
             progress: { stage: abandon ? "abandoned" : "stopped", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
@@ -2427,7 +3142,7 @@ export function createDocumentMarkdownManager(options = {}) {
         }
       } else {
         const job = await store.read(id);
-        const stoppable = ["queued", "paused", "interrupted", "stopped", "source_changed"].includes(job.status);
+        const stoppable = ["queued", "paused", "interrupted", "stopped", "source_changed", "awaiting_output"].includes(job.status);
         const abandonable = stoppable || job.status === "failed";
         if (abandon ? abandonable : stoppable) {
           await emit(id, {
@@ -2436,6 +3151,14 @@ export function createDocumentMarkdownManager(options = {}) {
             paused: !abandon,
             qualityPassed: false,
             error: abandon ? "abandoned by user" : null,
+            handoff: {
+              ...(job.handoff ?? {}),
+              state: abandon ? "abandoned" : "user_paused",
+              userControlled: true,
+              terminalKey: null,
+              terminalStatus: null,
+              leaseId: null,
+            },
             completedAt: abandon ? new Date().toISOString() : null,
             stoppedAt: new Date().toISOString(),
             progress: { stage: abandon ? "abandoned" : "stopped", currentBatch: null, currentLabel: null, lastHeartbeatAt: new Date().toISOString() },
@@ -2447,10 +3170,20 @@ export function createDocumentMarkdownManager(options = {}) {
       return { ok: true, stopped: true, abandoned: abandon, id };
     }
     if (action === "delete") {
-      if (runtime || ["running", "queued", "waiting_foreground", "waiting_provider", "pausing"].includes((await store.read(id)).status)) {
+      let job;
+      try {
+        job = await store.read(id);
+      } catch (error) {
+        const placeholder = typeof store.list === "function"
+          ? (await store.list()).find((item) => item.id === id && item.corrupt === true)
+          : null;
+        if (!placeholder) throw error;
+        job = placeholder;
+      }
+      const handoffActive = ["queued", "running"].includes(job?.handoff?.state);
+      if (runtime || handoffActive || ["running", "queued", "waiting_foreground", "waiting_provider", "pausing"].includes(job.status)) {
         return { ok: false, error: "请先立即停止或放弃任务，再删除任务记录" };
       }
-      const job = await store.read(id);
       await store.remove(id);
       options.onDelete?.(publicBackgroundJob(job), job);
       return { ok: true, deleted: true, id, outputPath: job.outputPath ?? null };
@@ -2461,8 +3194,9 @@ export function createDocumentMarkdownManager(options = {}) {
   async function listMetadata() {
     return Promise.all((await store.list()).map(async (job) => {
       const metadata = publicBackgroundJob(job);
+      if (job.finalDraft) metadata.previewAvailable = true;
       if (!metadata.previewAvailable) metadata.previewAvailable = (await store.listSectionIds?.(job.id) ?? []).length > 0;
-      return metadata;
+      return attachDocumentOutputState(metadata, job);
     }));
   }
 
@@ -2471,11 +3205,33 @@ export function createDocumentMarkdownManager(options = {}) {
     try {
       const job = await store.read(id);
       const metadata = publicBackgroundJob(job);
+      await attachDocumentOutputState(metadata, job, { verifyHash: true });
+      if (job.finalDraft && typeof store.readFinalDraft === "function") {
+        try {
+          const draft = await store.readFinalDraft(id);
+          const truncated = draft.content.length > 2_000_000;
+          metadata.previewAvailable = true;
+          metadata.preview = {
+            filename: basename(job.outputPath || `${titleForJob(job)}.md`),
+            content: truncated ? `${draft.content.slice(0, 2_000_000)}\n\n> 预览内容过长，后续部分暂未显示。` : draft.content,
+            partial: false,
+            staged: !["completed", "completed_with_warnings"].includes(job.status),
+            truncated,
+          };
+        } catch (error) {
+          metadata.needsAttention = true;
+          metadata.previewError = `后台保存的最终草稿无法校验：${error?.message || error}`;
+          metadata.warnings = [
+            ...(Array.isArray(metadata.warnings) ? metadata.warnings : []),
+            { type: "document-final-draft-unavailable", message: metadata.previewError },
+          ];
+        }
+      }
       const ordered = [...(job.batches ?? [])]
         .filter((batch) => batch.sectionId && ["completed", "needs_review"].includes(batch.status))
         .sort((left, right) => left.index - right.index);
       const orphanSectionIds = ordered.length === 0 ? await store.listSectionIds?.(id) ?? [] : [];
-      if (ordered.length > 0 || orphanSectionIds.length > 0) {
+      if (!metadata.preview && (ordered.length > 0 || orphanSectionIds.length > 0)) {
         const sections = [];
         const sectionIds = ordered.length > 0 ? ordered.map((batch) => batch.sectionId) : orphanSectionIds;
         for (const sectionId of sectionIds) {
@@ -2497,8 +3253,26 @@ export function createDocumentMarkdownManager(options = {}) {
       }
       metadata.events = await store.readEvents?.(id, 100) ?? [];
       return metadata;
-    } catch {
-      return null;
+    } catch (error) {
+      // `document-job-store.list()` exposes a read-only corrupt placeholder so
+      // a damaged manifest remains visible in the workbench.  Reuse that
+      // placeholder here instead of turning the detail request into a 404.
+      try {
+        const placeholder = (await store.list()).find((item) => item.id === id && item.corrupt === true);
+        if (!placeholder) return null;
+        const metadata = publicBackgroundJob(placeholder);
+        metadata.needsAttention = true;
+        metadata.previewAvailable = false;
+        metadata.previewError = placeholder.error || String(error?.message || error);
+        metadata.warnings = [
+          ...(Array.isArray(metadata.warnings) ? metadata.warnings : []),
+          { type: "document-manifest-corrupt", message: metadata.previewError },
+        ];
+        metadata.events = await store.readEvents?.(id, 100) ?? [];
+        return metadata;
+      } catch {
+        return null;
+      }
     }
   }
 

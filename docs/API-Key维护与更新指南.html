@@ -285,7 +285,7 @@
       </li>
       <li>
         <h3>选择 JSON</h3>
-        <p>在主界面点击 <span class="path">模型 → 选择 JSON 文件</span>，选择准备好的配置。</p>
+        <p>在主界面点击 <span class="path">模型 → 导入模型配置</span>，选择准备好的配置。普通新增和更新会自动导入；涉及永久删除时软件会额外确认一次。</p>
       </li>
       <li>
         <h3>阅读变更预览</h3>
@@ -293,7 +293,7 @@
       </li>
       <li>
         <h3>确认导入并检测模型</h3>
-        <p>确认内容正确后导入，再点击“检测全部模型”。只有名称后出现对号的模型才表示当前电脑能够正常通信。</p>
+        <p>导入完成后点击“检测全部模型”。模型会显示“可用”“不可用”或“未检测”；如需清理，可点击“删除检测失败模型”。</p>
       </li>
     </ol>
 
@@ -326,7 +326,7 @@
     <h3>情况 A：使用 0713 完整配置移除 local-deepseek</h3>
     <p><code>providers-ful-new-0713.json</code> 已在 <code>removeProviderIds</code> 中列出 <code>local-deepseek</code>，因此可以在更新 DeepSeek 和 Qwen 的同时清理该旧服务商，不需要额外导入删除文件。</p>
     <div class="warning">
-      <strong>预览是最终依据：</strong>0713 文件把 <code>activeProviderId</code> 设置为 <code>deepseek-official</code>，允许安全删除正在使用的旧服务商。确认导入前仍要检查预览中同时出现“更新服务商”和“永久删除 local-deepseek”。
+      <strong>永久删除需要确认：</strong>0713 文件把 <code>activeProviderId</code> 设置为 <code>deepseek-official</code>，允许安全删除正在使用的旧服务商。出现永久删除确认时，应先核对管理员提供的配置文件来源。
     </div>
 
     <h3>情况 B：停用一个服务商中的旧模型</h3>
@@ -429,7 +429,7 @@
   ]
 }</pre>
     <div class="tip">
-      上面的 Qwen 模型结构与 0713 完整配置一致。后续模型 ID、名称、上下文容量或原生请求参数变化时，让管理员或 AI 以最新完整配置为基准生成维护 JSON；普通用户只负责“选择文件 → 核对预览 → 确认导入 → 检测全部模型”。
+      上面的 Qwen 模型结构与 0713 完整配置一致。后续模型 ID、名称、上下文容量或原生请求参数变化时，让管理员或 AI 以最新完整配置为基准生成维护 JSON；普通用户只负责“导入模型配置 → 检测全部模型”，必要时再删除检测失败模型。
     </div>
 
     <div class="tip">

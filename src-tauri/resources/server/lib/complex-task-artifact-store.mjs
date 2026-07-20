@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 import { atomicWriteFile } from "./atomic-file.mjs";
 import { validateArtifactManifest } from "./complex-task-contracts.mjs";
+import { parseArtifactReference } from "./complex-task-artifact-reference.mjs";
 
 const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
@@ -33,6 +34,19 @@ function revision(value) {
 
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function immutableMetadata(manifest) {
+  const { createdAt: _createdAt, path: _path, sha256: _sha256, ...metadata } = manifest ?? {};
+  return stableJson(metadata);
 }
 
 function invalidManifest(errors) {
@@ -107,7 +121,9 @@ export function createComplexTaskArtifactStore(rootDir, options = {}) {
     const target = paths(id, rev);
     const existing = await readManifest(target.manifestPath, id);
     if (existing) {
-      if (existing.sha256 === manifest.sha256) return { ok: true, created: false, manifest: clone(existing) };
+      if (existing.sha256 === manifest.sha256 && immutableMetadata(existing) === immutableMetadata(manifest)) {
+        return { ok: true, created: false, manifest: clone(existing) };
+      }
       return { ok: false, reason: "immutable-conflict", manifest: clone(existing) };
     }
     await mkdir(target.revisionDir, { recursive: true });
@@ -134,8 +150,15 @@ export function createComplexTaskArtifactStore(rootDir, options = {}) {
   }
 
   async function read(id, requestedRevision) {
-    const key = artifactId(id);
-    const rev = requestedRevision === undefined ? (await revisionsFor(key))[0] : revision(requestedRevision);
+    const reference = parseArtifactReference(id);
+    const key = artifactId(reference.artifactId);
+    if (reference.exact && requestedRevision !== undefined && Number(requestedRevision) !== reference.revision) {
+      const error = new Error(`artifact reference revision mismatch: ${reference.raw}`);
+      error.code = "ARTIFACT_REFERENCE_MISMATCH";
+      throw error;
+    }
+    const pinnedRevision = requestedRevision === undefined ? reference.revision : requestedRevision;
+    const rev = pinnedRevision === null || pinnedRevision === undefined ? (await revisionsFor(key))[0] : revision(pinnedRevision);
     if (!rev) {
       const error = new Error(`artifact not found: ${key}`);
       error.code = "ARTIFACT_NOT_FOUND";
@@ -152,6 +175,11 @@ export function createComplexTaskArtifactStore(rootDir, options = {}) {
     if (sha256(body) !== manifest.sha256) {
       const error = new Error(`artifact hash mismatch: ${key}@${rev}`);
       error.code = "ARTIFACT_HASH_MISMATCH";
+      throw error;
+    }
+    if (reference.exact && manifest.sha256 !== reference.sha256) {
+      const error = new Error(`artifact reference hash mismatch: ${reference.raw}`);
+      error.code = "ARTIFACT_REFERENCE_HASH_MISMATCH";
       throw error;
     }
     return { manifest: clone(manifest), content: body };

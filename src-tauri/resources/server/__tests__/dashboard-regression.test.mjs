@@ -523,15 +523,19 @@ describe("Dashboard 回归护栏", () => {
     assert.doesNotMatch(settingsPanel, /document\.getElementById\("dev-log-panel"\)/);
   });
 
-  test("模型导入与设置页凭据维护职责分离，并同步刷新检测状态", () => {
+  test("主界面提供模型导入，设置页保留凭据维护与全量检测", () => {
     const source = readFileSync(dashboardAppUrl, "utf8");
     const chatPanel = source.slice(source.indexOf("function ChatPanel()"), source.indexOf("var ChatFeed ="));
     const settingsPanel = source.slice(source.indexOf("function SettingsPanel()"), source.indexOf("// dashboard/src/panels/skills.ts"));
-    assert.match(source, /function formatProviderImportPreview/);
-    assert.match(source, /provider\.apiKey \? "\*\*\*\*\*\*\*\*/);
-    assert.match(source, /API Key: \$\{apiKey\}/);
+    assert.doesNotMatch(source, /function formatProviderImportPreview/);
     assert.doesNotMatch(chatPanel, /JSON\.stringify\(providerImportDraft/);
-    assert.match(chatPanel, /formatProviderImportPreview\(providerImportDraft, providerImportPlan\)/);
+    assert.match(chatPanel, /loadProviderImportFile[\s\S]*?\/providers\/import\/preview[\s\S]*?confirmProviderImport\(draft, plan\)/);
+    assert.match(chatPanel, /confirmProviderImport[\s\S]*?\/providers\/import/);
+    assert.match(chatPanel, /testAllProviders/);
+    assert.match(chatPanel, /cleanupFailedModels/);
+    assert.match(chatPanel, /\/providers\/cleanup-failed/);
+    assert.doesNotMatch(settingsPanel, /providerImportDraft|confirmSettingsProviderImport|settings-provider-import-file/);
+    assert.match(settingsPanel, /testManagedProviders/);
     assert.match(chatPanel, /dash\.kind === "config-changed"[\s\S]*?Promise\.allSettled\(\[api\("\/overview"\), api\("\/providers"\)\]\)/);
     assert.match(settingsPanel, /\/providers\/credentials\/test/);
     assert.match(settingsPanel, /\/providers\/credentials\/save/);
@@ -553,18 +557,12 @@ describe("Dashboard 回归护栏", () => {
   test("模型菜单在操作位置显示固定高度反馈，不再发送远端 Toast", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
-    const providerSwitch = chatPanel.slice(chatPanel.indexOf("const switchProvider"), chatPanel.indexOf("const loadProviderImportFile"));
-    const modelTest = chatPanel.slice(chatPanel.indexOf("const testAllProviders"), chatPanel.indexOf("const confirmProviderImport"));
-    const providerImport = chatPanel.slice(chatPanel.indexOf("const confirmProviderImport"), chatPanel.indexOf("const pickWorkspace"));
+    const providerSwitch = chatPanel.slice(chatPanel.indexOf("const selectProviderModel"), chatPanel.indexOf("const pickWorkspace"));
     assert.match(chatPanel, /const \[modelNotice, setModelNotice\] = d2\(null\)/);
     assert.match(chatPanel, /role="status" aria-live="polite" style="min-height:18px/);
     assert.match(chatPanel, /pushModelNotice\("正在应用模型设置\.\.\."/);
-    assert.match(providerSwitch, /pushModelNotice\("正在切换模型服务\.\.\."/);
-    assert.match(modelTest, /pushModelNotice\("正在检测全部模型\.\.\."/);
-    assert.match(providerImport, /pushModelNotice\("正在导入模型配置\.\.\."/);
+    assert.match(providerSwitch, /pushModelNotice\("正在切换模型\.\.\."/);
     assert.doesNotMatch(providerSwitch, /showToast\(/);
-    assert.doesNotMatch(modelTest, /showToast\(/);
-    assert.doesNotMatch(providerImport, /showToast\(/);
   });
 
   test("概览位于任务和 OA 之间，系统能力合并后不再占用高级入口", () => {
@@ -642,7 +640,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(source, /includeKnowledgeDocs/);
     assert.doesNotMatch(source, /value="knowledge_digest"/);
     assert.match(launcher, /new Set\(\["prompt", "report", "session_cleanup"\]\)/);
-    assert.match(launcher, /const knowledge = await generateSessionKnowledge\(task, signal, qualityState\)[\s\S]*?trashSessions\(\[\.\.\.previewDeleteNames, \.\.\.aiTrashNames\], runId\)/);
+    assert.match(launcher, /const knowledge = await generateSessionKnowledge\(task, signal, qualityState\)[\s\S]*?guardSessionCleanupDeletion\([\s\S]*?trashSessions\(deletion\.names, runId\)/);
     assert.match(launcher, /item\.action !== "trash_candidate"[\s\S]*?protectedKnowledgeNames/);
     assert.match(launcher, /selectPendingKnowledgeSessions/);
     assert.match(launcher, /writeKnowledgeManifest/);
@@ -652,6 +650,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /const root = resolve\(projectRoot, "knowledge"\)/);
     assert.match(launcher, /renameSync\(legacyRoot, root\)/);
     assert.match(launcher, /update\.action === "delete" && item\.action !== "delete" \? "keep"/);
+    assert.match(launcher, /if \(!client\)[\s\S]*?semantic cleanup review/);
     assert.match(launcher, /buildSessionQualityPrompt/);
     assert.match(launcher, /normalizeSessionQualityEvaluations/);
     assert.match(launcher, /requestTaskModelJson/);
@@ -718,22 +717,23 @@ describe("Dashboard 回归护栏", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const server = readFileSync(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url), "utf8");
     const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
+    const settingsPanel = app.slice(app.indexOf("function SettingsPanel()"), app.indexOf("// dashboard/src/panels/skills.ts"));
     assert.match(chatPanel, /confirmProviderImport/);
-    assert.match(chatPanel, /testAllProviders/);
+    assert.match(settingsPanel, /testManagedProviders/);
     assert.match(chatPanel, /配置已更新，请重新检测全部模型/);
     assert.match(chatPanel, /检测全部模型/);
     assert.match(chatPanel, /setModelVerification\(pr\.modelVerification \?\? null\)/);
-    assert.doesNotMatch(chatPanel.slice(chatPanel.indexOf("const confirmProviderImport"), chatPanel.indexOf("const pickWorkspace")), /setShowModelPicker\(false\)/);
     assert.match(chatPanel, /model\.testStatus/);
     assert.match(chatPanel, /const allModels = \(providers \?\? \[\]\)\.flatMap/);
-    assert.match(chatPanel, /providerOptionLabel\(p\)/);
+    assert.match(chatPanel, /providerDisplayGroups\(providers \?\? \[\]\)/);
+    assert.match(chatPanel, /providerDisplayLabel\(provider\)/);
     assert.match(app, /return `\$\{name\} · \$\{results\.join\(" · "\)\}`/);
     const providerLabel = app.slice(app.indexOf("function providerOptionLabel"), app.indexOf("var CHAT_RENDER_STEP"));
     assert.match(providerLabel, /model\.testStatus === "passed" \? `\$\{modelName\} ✓` : modelName/);
     assert.doesNotMatch(providerLabel, /未检测|×/);
     assert.match(chatPanel, /providerCaps\?\.presets\?\.length \?\? 0\) > 1/);
     assert.match(chatPanel, /\$\{preset\}（固定）/);
-    assert.doesNotMatch(chatPanel, /selectProviderModel/);
+    assert.match(chatPanel, /selectProviderModel/);
     assert.match(server, /rest\[0\] === "test"/);
     assert.match(server, /testProviderModelCommunication/);
     assert.match(server, /Math\.min\(2, jobs\.length\)/);
@@ -893,6 +893,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /busy && loop\?\.model !== modelConfig\.model/);
     assert.match(launcher, /const appliedSwitch = commitPendingModelSwitch\(\)/);
     assert.match(launcher, /for \(const model of runtimeContextCapModels\) delete DEEPSEEK_CONTEXT_TOKENS\[model\]/);
+    assert.match(launcher, /modelcfg=/);
     assert.match(launcher, /provider\?\.models\?\.filter\(\(item\) => item\.disabled !== true\)/);
     assert.match(app, /将在当前回答结束后切换，保留/);
     assert.match(app, /已切换到 \$\{switched\.model\}，保留/);

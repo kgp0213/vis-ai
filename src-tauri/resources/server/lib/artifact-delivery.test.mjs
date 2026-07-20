@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 
 import {
@@ -126,6 +127,23 @@ test("accepted document jobs are pending artifacts rather than missing files", (
   assert.equal(documentArtifactStateFromJob({ status: "failed" }), "failed");
 });
 
+test("legacy PDF document jobs are also tracked as pending artifacts", () => {
+  const artifact = pendingDocumentArtifactFromToolEvent(
+    "organize_pdf_to_markdown",
+    { input: "manual.pdf", outputPath: "manual.md" },
+    JSON.stringify({
+      ok: true,
+      accepted: true,
+      artifactStatus: "pending",
+      backgroundJobId: "document:12345678-abcd-abcd-abcd-123456789012",
+      documentJobId: "12345678-abcd-abcd-abcd-123456789012",
+      outputPath: "manual.md",
+    }),
+  );
+  assert.equal(artifact?.jobId, "document:12345678-abcd-abcd-abcd-123456789012");
+  assert.equal(artifact?.sourcePath, "manual.pdf");
+});
+
 test("pending document outputs reject competing writers but allow unrelated files", () => {
   const jobs = [{
     id: "document:12345678-abcd-abcd-abcd-123456789012",
@@ -138,8 +156,84 @@ test("pending document outputs reject competing writers but allow unrelated file
   }, jobs);
   assert.equal(conflict?.code, "artifact-pending");
   assert.equal(conflict?.backgroundJobId, jobs[0].id);
+  assert.equal(pendingDocumentWriteConflict("edit_file", { path: "reports/manual.md", search: "old", replace: "new" }, jobs)?.code, "artifact-pending");
+  assert.equal(pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, jobs)?.code, "artifact-pending");
+  assert.equal(pendingDocumentWriteConflict("move_file", { source: "reports/manual.md", destination: "reports/archive.md" }, jobs)?.code, "artifact-pending");
   assert.equal(pendingDocumentWriteConflict("append_file", { path: "reports/other.md", content: "ok" }, jobs), null);
   assert.equal(pendingDocumentWriteConflict("read_file", { path: "reports/manual.md" }, jobs), null);
+});
+
+test("relative edit and delete paths are resolved from the active workspace", () => {
+  const workspaceRoot = resolve(process.cwd(), "artifact-delivery-workspace");
+  const jobs = [{
+    id: "document:12345678-abcd-abcd-abcd-123456789012",
+    status: "running",
+    outputPath: resolve(workspaceRoot, "reports/manual.md"),
+  }];
+  const options = { workspaceRoot };
+
+  assert.equal(
+    pendingDocumentWriteConflict("edit_file", { path: "reports/manual.md", search: "old", replace: "new" }, jobs, options)?.code,
+    "artifact-pending",
+  );
+  assert.equal(
+    pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, jobs, options)?.code,
+    "artifact-pending",
+  );
+  assert.equal(
+    pendingDocumentWriteConflict("delete_file", { path: "reports/other.md" }, jobs, options),
+    null,
+  );
+});
+
+test("failed or awaiting-output jobs keep their output protected until handoff is finished", () => {
+  for (const status of ["failed", "awaiting_output", "needs_review"]) {
+    const conflict = pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, [{
+      id: "document:12345678-abcd-abcd-abcd-123456789012",
+      status,
+      outputPath: "reports/manual.md",
+    }]);
+    assert.equal(conflict?.code, "artifact-pending", status);
+  }
+  const handoffConflict = pendingDocumentWriteConflict("write_file", { path: "reports/manual.md", content: "replacement" }, [{
+    id: "document:12345678-abcd-abcd-abcd-123456789012",
+    status: "completed_with_warnings",
+    outputPath: "reports/manual.md",
+    handoff: { state: "running" },
+  }]);
+  assert.equal(handoffConflict?.code, "artifact-pending");
+  assert.equal(pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, [{
+    id: "document:12345678-abcd-abcd-abcd-123456789012",
+    status: "completed_with_warnings",
+    outputPath: "reports/manual.md",
+    handoff: { state: "delivered" },
+  }]), null);
+});
+
+test("shell commands and helper scripts cannot bypass a pending document output lock", () => {
+  const workspaceRoot = resolve(process.cwd(), "artifact-shell-guard");
+  const outputPath = resolve(workspaceRoot, "reports", "manual.md");
+  const jobs = [{
+    id: "document:12345678-abcd-abcd-abcd-123456789012",
+    status: "completed_with_warnings",
+    outputPath,
+    handoff: { state: "running" },
+  }];
+  const options = { workspaceRoot };
+
+  assert.equal(pendingDocumentWriteConflict("run_command", {
+    command: `Set-Content -LiteralPath '${outputPath}' -Value 'replacement'`,
+  }, jobs, options)?.code, "artifact-pending");
+  assert.equal(pendingDocumentWriteConflict("run_background", {
+    command: `node cleanup.js "${outputPath}"`,
+  }, jobs, options)?.code, "artifact-pending");
+  assert.equal(pendingDocumentWriteConflict("write_file", {
+    path: "fix-output.ps1",
+    content: `$target = '${outputPath}'\nRemove-Item -LiteralPath $target`,
+  }, jobs, options)?.code, "artifact-pending");
+  assert.equal(pendingDocumentWriteConflict("run_command", {
+    command: "Get-ChildItem reports",
+  }, jobs, options), null);
 });
 
 test("process job tools redirect document UUIDs to the non-blocking status tool", () => {

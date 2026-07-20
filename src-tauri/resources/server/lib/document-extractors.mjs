@@ -4,9 +4,10 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
-import { chunkDocumentUnits, classifyDocumentPath, normalizeDocumentPolicy } from "./document-intelligence.mjs";
+import { chunkDocumentUnits, classifyDocumentPath, createDocumentContextUnit, normalizeDocumentPolicy } from "./document-intelligence.mjs";
 
 const requireFromBundle = createRequire(new URL("../visionox-pkg/package.json", import.meta.url));
 const { parse: parseHtml } = requireFromBundle("node-html-parser");
@@ -224,6 +225,28 @@ function parseOfficePayload(value) {
   }
 }
 
+export function buildOfficeExtractionWarnings(units, total = null) {
+  const nonVisualUnits = (Array.isArray(units) ? units : []).filter((unit) => unit?.visualPending !== true);
+  const emptyUnits = nonVisualUnits.filter((unit) => unit?.empty === true || !String(unit?.text ?? "").trim());
+  if (emptyUnits.length === 0) return [];
+  const ratio = emptyUnits.length / Math.max(1, nonVisualUnits.length);
+  const structurallyImportant = emptyUnits.some((unit) => ["table", "text", "textbox", "text-box"].includes(String(unit?.sourceType ?? "").toLowerCase()));
+  const significant = structurallyImportant
+    || emptyUnits.length === nonVisualUnits.length
+    || (emptyUnits.length >= 3 && ratio >= 0.25);
+  if (!significant) return [];
+  const locations = emptyUnits.map((unit) => String(unit?.location || unit?.id || "office element")).slice(0, 20);
+  const expected = Number.isFinite(Number(total)) ? Number(total) : null;
+  return [{
+    type: "office-empty-elements",
+    count: emptyUnits.length,
+    expected,
+    actual: Array.isArray(units) ? units.length : 0,
+    locations,
+    message: `OfficeCLI returned ${emptyUnits.length} non-visual element(s) without readable text; the document may contain unsupported or hidden content and needs review.`,
+  }];
+}
+
 export function runOfficeCliJson(executable, args, { signal, timeoutMs = 180_000, maxOutputBytes = 64 * 1024 * 1024 } = {}) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new DOMException("Office document extraction cancelled", "AbortError"));
@@ -234,6 +257,9 @@ export function runOfficeCliJson(executable, args, { signal, timeoutMs = 180_000
     });
     let stdout = "";
     let stderr = "";
+    let stdoutBytes = 0;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     let settled = false;
     const finish = (error, value) => {
       if (settled) return;
@@ -253,15 +279,18 @@ export function runOfficeCliJson(executable, args, { signal, timeoutMs = 180_000
     }, Math.max(1_000, Number(timeoutMs) || 180_000));
     signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-      if (Buffer.byteLength(stdout, "utf8") > maxOutputBytes) {
+      stdoutBytes += chunk.length;
+      stdout += stdoutDecoder.write(chunk);
+      if (stdoutBytes > maxOutputBytes) {
         child.kill();
         finish(new Error(`OfficeCLI output exceeded ${maxOutputBytes} bytes`));
       }
     });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += stderrDecoder.write(chunk); });
     child.on("error", (error) => finish(error));
     child.on("close", (code) => {
+      stdout += stdoutDecoder.end();
+      stderr += stderrDecoder.end();
       if (code !== 0) return finish(new Error(`OfficeCLI exited with code ${code}: ${stderr.trim().slice(0, 2_000)}`));
       try { finish(null, parseOfficePayload(stdout)); } catch (error) { finish(error); }
     });
@@ -343,58 +372,134 @@ async function readOfficeUnits(path, options) {
       message: `OfficeCLI reported ${total} elements but ${units.length} unique elements were extracted.`,
     });
   }
+  warnings.push(...buildOfficeExtractionWarnings(units, total));
   return { units, warnings };
 }
 
 function splitOversizedUnits(units, policy, countTokens) {
   const out = [];
+  const tokenLimit = Math.max(1_024, Number(policy.batchInputTokens) || 8_000);
+  const rendered = (id, location, text) => `--- Source unit ${id} (${location}) ---\n\n${text}`;
   for (const original of units) {
-    if (countTokens(original.text) <= policy.batchInputTokens) {
+    const originalId = String(original?.id || "unit");
+    const originalLocation = String(original?.location || originalId);
+    const sourceText = String(original?.text ?? "");
+    if (countTokens(rendered(originalId, originalLocation, sourceText)) <= tokenLimit) {
       out.push(original);
       continue;
     }
-    const lines = original.text.split(/\r?\n/);
-    let current = [];
-    let tokens = 0;
     let part = 0;
-    const flush = () => {
-      if (current.length === 0) return;
-      const text = current.join("\n");
+    const preview = (text, partNumber = part + 1) => ({
+      ...original,
+      id: `${originalId}-part-${String(partNumber).padStart(3, "0")}`,
+      location: `${originalLocation} (part ${partNumber})`,
+      text,
+    });
+    let offset = 0;
+    while (offset < sourceText.length) {
+      const partNumber = part + 1;
+      const remaining = sourceText.length - offset;
+      let low = 1;
+      let high = remaining;
+      let accepted = 0;
+      while (low <= high) {
+        const size = Math.floor((low + high) / 2);
+        const candidate = sourceText.slice(offset, offset + size);
+        const prepared = preview(candidate, partNumber);
+        const fits = countTokens(rendered(prepared.id, prepared.location, candidate)) <= tokenLimit;
+        if (fits) {
+          accepted = size;
+          low = size + 1;
+        } else {
+          high = size - 1;
+        }
+      }
+      // The token limit includes a source-unit marker, but the normalized
+      // minimum keeps enough room for at least one source character.
+      const maxSize = Math.max(1, accepted);
+      let end = offset + maxSize;
+      const newline = sourceText.lastIndexOf("\n", end - 1);
+      const minimumNewlineChunk = Math.max(1, Math.floor(maxSize / 2));
+      if (newline >= offset + minimumNewlineChunk) end = newline + 1;
+      if (end <= offset) end = Math.min(sourceText.length, offset + 1);
+      const text = sourceText.slice(offset, end);
+      part++;
       out.push({
-        ...original,
-        id: `${original.id}-part-${String(++part).padStart(3, "0")}`,
-        location: `${original.location} (part ${part})`,
+        ...preview(text, part),
         text,
         sourceHash: createHash("sha256").update(text).digest("hex"),
+        // A page image is shared context. Attach it to the first text part
+        // only, otherwise a single large page multiplies the request body for
+        // every part and can exhaust a multimodal model's image budget.
+        visualDataUrl: part === 1 ? original.visualDataUrl || null : null,
+        visualPending: original.visualPending === true && part === 1,
       });
-      current = [];
-      tokens = 0;
-    };
-    for (const line of lines) {
-      const lineTokens = Math.max(1, Number(countTokens(line)) || 1);
-      if (current.length > 0 && tokens + lineTokens > policy.batchInputTokens) flush();
-      if (lineTokens > policy.batchInputTokens) {
-        const tokenTarget = Math.max(1, Math.floor(policy.batchInputTokens * 0.9));
-        const maxChars = Math.max(1_000, policy.batchInputTokens * 2);
-        for (let offset = 0; offset < line.length;) {
-          let end = Math.min(line.length, offset + maxChars);
-          while (end > offset + 1 && countTokens(line.slice(offset, end)) > tokenTarget) {
-            end = offset + Math.max(1, Math.floor((end - offset) * 0.75));
-          }
-          if (current.length > 0) flush();
-          current.push(line.slice(offset, end));
-          tokens = countTokens(current[0]);
-          flush();
-          offset = end;
-        }
-      } else {
-        current.push(line);
-        tokens += lineTokens;
-      }
+      offset = end;
     }
-    flush();
   }
   return out;
+}
+
+function splitPdfBatchIntoPolicyBatches(batch, units, policy, countTokens) {
+  const source = Array.isArray(units) ? units.filter(Boolean) : [];
+  const groups = [];
+  let current = [];
+  let currentTokens = 0;
+  let currentVisualUnits = 0;
+  const tokenLimit = Math.max(1_024, Number(policy.batchInputTokens) || 8_000);
+  const maxUnits = Math.max(1, Number(policy.maxUnitsPerBatch) || 20);
+  const maxVisualUnits = Math.max(1, Number(policy.maxVisualUnitsPerBatch) || 5);
+  const render = (unit) => `--- Source unit ${unit.id} (${unit.location}) ---\n\n${unit.text}`;
+  const renderGroup = (group) => group.map(render).join("\n\n");
+  const flush = () => {
+    if (current.length === 0) return;
+    groups.push({ units: current, estimatedTokens: currentTokens });
+    current = [];
+    currentTokens = 0;
+    currentVisualUnits = 0;
+  };
+  for (const unit of source) {
+    const candidate = [...current, unit];
+    const candidateTokens = Math.max(1, Number(countTokens(renderGroup(candidate))) || 1);
+    const isVisual = unit.visualPending === true;
+    if (current.length > 0 && (
+      current.length >= maxUnits ||
+      candidateTokens > tokenLimit ||
+      (isVisual && currentVisualUnits >= maxVisualUnits)
+    )) flush();
+    current.push(unit);
+    currentTokens = Math.max(1, Number(countTokens(renderGroup(current))) || 1);
+    if (isVisual) currentVisualUnits++;
+  }
+  flush();
+  const parentId = String(batch?.id || `pages-${batch?.pageRange || "document"}`);
+  const parentLabel = String(batch?.label || `PDF pages ${batch?.pageRange || ""}`).trim();
+  const contextLimit = Math.max(128, Number(policy.contextOverlapTokens) || Math.floor(tokenLimit / 3));
+  return groups.map((group, index) => {
+    const multiple = groups.length > 1;
+    const id = multiple ? `${parentId}-part-${String(index + 1).padStart(3, "0")}` : parentId;
+    const adjacent = [];
+    if (index > 0 && policy.semanticBatching !== false) {
+      adjacent.push(createDocumentContextUnit(groups[index - 1].units.at(-1), "before", { maxTokens: contextLimit, countTokens }));
+    }
+    if (index + 1 < groups.length && policy.semanticBatching !== false) {
+      adjacent.push(createDocumentContextUnit(groups[index + 1].units[0], "after", { maxTokens: contextLimit, countTokens }));
+    }
+    const contextUnits = [...(Array.isArray(batch?.contextUnits) ? batch.contextUnits : []), ...adjacent].filter(Boolean);
+    const text = group.units.map(render).join("\n\n");
+    return {
+      ...batch,
+      id,
+      index: multiple ? (Number(batch?.index) || index + 1) * 1_000 + index + 1 : batch?.index,
+      label: multiple ? `${parentLabel}（子区块 ${index + 1}/${groups.length}）` : parentLabel,
+      units: group.units,
+      contextUnits,
+      unitIds: group.units.map((unit) => unit.id),
+      estimatedTokens: group.estimatedTokens,
+      totalChars: group.units.reduce((sum, unit) => sum + String(unit.text || "").length, 0),
+      text,
+    };
+  });
 }
 
 async function processUnits(units, options) {
@@ -426,6 +531,7 @@ async function processSingleDocumentSourceBatches(prepared, options = {}) {
     if (typeof options.processPdfBatches !== "function") throw new Error("PDF extraction runtime is unavailable");
     let totalUnits = 0;
     let visualPending = 0;
+    let emittedBatches = 0;
     const result = await options.processPdfBatches(path, {
       maxPagesPerBatch: policy.maxUnitsPerBatch,
       maxTokensPerBatch: policy.batchInputTokens,
@@ -461,11 +567,19 @@ async function processSingleDocumentSourceBatches(prepared, options = {}) {
         }));
         totalUnits += units.length;
         visualPending += units.filter((entry) => entry.visualPending).length;
-        const text = units.map((entry) => `--- Source unit ${entry.id} (${entry.location}) ---\n\n${entry.text}`).join("\n\n");
-        await options.onBatch({ ...batch, id: `pages-${batch.pageRange}`, label: `PDF pages ${batch.pageRange}`, units, contextUnits, text });
+        const parent = { ...batch, id: `pages-${batch.pageRange}`, label: `PDF pages ${batch.pageRange}`, units, contextUnits };
+        const policyBatches = splitPdfBatchIntoPolicyBatches(parent, units, policy, countTokens);
+        for (const policyBatch of policyBatches) {
+          // The parent extractor index is not sufficient after a parent batch
+          // is split: an unsplit later parent must still sort after every
+          // child emitted here. Use one deterministic sequence for the actual
+          // batches sent to the workflow.
+          emittedBatches += 1;
+          await options.onBatch({ ...policyBatch, index: emittedBatches });
+        }
       },
     });
-    return { ...result, totalUnits, visualPending, largeDocument: Number(result?.batches) > 1 };
+    return { ...result, totalUnits, batches: emittedBatches, visualPending, largeDocument: emittedBatches > 1 };
   }
   if (["word", "presentation"].includes(kind) || (kind === "spreadsheet" && ![".csv", ".tsv"].includes(extension))) {
     const extracted = await readOfficeUnits(path, { ...options, policy });

@@ -1,6 +1,6 @@
 # 模型配置 JSON 参数说明
 
-> 适用版本：Visionox-Whale 1.28.0。本文面向维护人员和辅助编写配置的 AI，用于新增、更新、停用或删除模型。普通用户仍应通过“选择 JSON → 核对预览 → 确认导入 → 检测全部模型”完成操作。
+> 适用版本：Visionox-Whale 1.28.0。本文面向维护人员和辅助编写配置的 AI，用于新增、更新、停用或删除模型。普通用户只需通过“导入模型配置 → 检测全部模型 → 可选删除检测失败模型”完成操作；涉及永久删除的配置会额外确认一次。
 
 ## 1. 先确定更新类型
 
@@ -74,6 +74,36 @@
 | `activeProviderId` | 否 | 导入后默认启用的服务商，必须指向导入后确实存在的服务商 |
 
 注意：v2 的 `merge` 是服务商级浅合并。只要传入 `models`，就会用传入的整个模型数组替换该服务商原数组。给已有服务商增加单个模型时不要使用 v2 `merge`，应使用 v3 `upsertModel`。
+
+### 服务商与模型分组展示
+
+同一个模型平台下配置多个独立 provider 时，可以使用 provider 的 `ui` 字段控制模型选择器分组。展示字段不参与请求、路由、检测指纹或回退判断。
+
+```json
+{
+  "id": "volcengine-ark-kimi-k3",
+  "name": "Kimi K3（火山云）",
+  "ui": {
+    "groupId": "volcengine-ark",
+    "groupName": "火山方舟 Ark",
+    "family": "通用与推理",
+    "modelLabel": "Kimi K3",
+    "order": 130,
+    "recommendedFor": ["chat", "vision", "long-context"]
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `groupId` | 稳定分组 ID；相同 ID 的 provider 在模型选择器中显示在同一个一级分组下 |
+| `groupName` | 面向用户的一级分组名称，例如“火山方舟 Ark” |
+| `family` | 模型类别，例如“通用与推理”“代码”“轻量”，用于搜索和后续筛选 |
+| `modelLabel` | provider 在模型列表中的简洁名称；具体模型仍显示 `models[].name` |
+| `order` | 分组内排序，范围 `-10000` 到 `10000` |
+| `recommendedFor` | 展示与推荐标签，最多 20 项；不能代替 `capabilities.roles` 等运行时能力声明 |
+
+禁止根据相同 API Key 或 `baseUrl` 自动合并 provider。不同账号、权限、请求参数和限流策略可能共用同一 URL，只有显式相同的 `groupId` 才能归为一组。旧配置省略 `ui` 时继续按独立服务商展示。
 
 ## 3. Schema v3：新增单个模型
 
@@ -267,7 +297,7 @@ JSON 配置不准确时，程序应有界降级：减小输入批次、降低图
 - 其他字段是否有效由服务商接口决定；程序负责保持 JSON 层级并透传，不替模型猜参数。
 - `requestDefaults` 最大 32 KB、最大嵌套深度 8，只能包含标准 JSON 值。
 - 单次可见输出使用服务商实际支持的 `max_tokens`。长文档完整输出由后台分批组装，不依赖一次生成全文。
-- `capabilities.maxOutputTokens` 是能力元数据，不会作为请求参数发送；`requestDefaults.max_tokens` 才是正式请求值，文档任务还会参考 `documentPolicy.batchOutputTokens`。运行时请求不能超过有效能力上限。
+- `capabilities.maxOutputTokens` 是能力元数据，不会作为请求参数发送；`requestDefaults.max_tokens` 是正式请求值，文档任务还会同时受 `documentPolicy.batchOutputTokens`、用途 profile 和模型能力上限约束，最终取所有已声明上限中的最小值。
 - 不要在 `requestDefaults` 中使用程序或服务商未读取的自造字段。模型能力声明只能放在 `capabilities`，厂商原生请求参数只能按其接口文档放在 `requestDefaults`。
 - `thinking_budget` 控制厂商思考预算，不等于最终可见输出上限，也不能代替 `max_tokens` 或 `capabilities.maxOutputTokens`。
 
@@ -286,9 +316,18 @@ JSON 配置不准确时，程序应有界降级：减小输入批次、降低图
 | `toolResultBudget.absoluteMaxTokens` | 1024–32768 | 绝对上限，不能小于前两项 |
 | `requestProfiles.toolContinuation` | JSON 对象 | 工具继续执行请求的参数覆盖 |
 | `requestProfiles.finalAnswer` | JSON 对象 | 最终回答请求的参数覆盖 |
+| `requestProfiles.summary` | JSON 对象 | 对话或文档摘要请求的参数覆盖 |
+| `requestProfiles.report` | JSON 对象 | 定时报告生成请求的参数覆盖 |
+| `requestProfiles.knowledge` | JSON 对象 | 会话知识评估、整理和复核请求的参数覆盖 |
+| `requestProfiles.learn` | JSON 对象 | `/learn` 相关提炼请求的参数覆盖 |
+| `requestProfiles.sessionReview` | JSON 对象 | 会话质量评估请求的参数覆盖 |
+| `requestProfiles.messageRisk` | JSON 对象 | V来家外发消息风险审查请求的参数覆盖；弱模型建议在此关闭思考并保留足够的可见输出预算 |
+| `requestProfiles.documentReview` | JSON 对象 | PDF、Office、HTML 等后台文档质量审校请求的参数覆盖 |
 | `documentPolicy` | 见下表 | PDF、Office、HTML、Markdown 等后台整理策略 |
 
 `toolResultBudget` 一旦配置，三个字段都必须填写。
+
+`requestProfiles` 只覆盖对应用途的请求，不会改变模型能力声明。文档质量审校使用 `requestProfiles.documentReview`；模型/API 通信检测继续使用独立的 `verificationRequestDefaults`。两者不能混用，也不要在 `requestProfiles` 中添加 `verification`。
 
 ### `agentPolicy.documentPolicy`
 
@@ -306,10 +345,29 @@ JSON 配置不准确时，程序应有界降级：减小输入批次、降低图
 | `foregroundPollMs` | 10–5000 | 前台忙碌状态轮询间隔 |
 | `maxSplitDepth` | 0–6 | 失败区块递归缩小的最大深度 |
 | `maxModelCallsPerBatch` | 4–200 | 单批所有重试、审校和回退的总调用上限 |
+| `maxModelCallsPerJob` | 4–10000 | 单次执行窗口的模型调用上限；达到后暂停并保留已完成检查点 |
 | `maxVisualUnitsPerBatch` | 1–20 | 单批最多视觉来源单元，仍受 `visionPolicy.maxImages` 限制 |
 | `requestTimeoutMs` | 30000–1800000 | 单次文档模型请求总时长上限，单位毫秒 |
+| `jobTimeoutMs` | 1000–172800000 | 单次执行窗口的总时限，单位毫秒；达到后暂停而不是伪装成功 |
+| `qualityThresholds` | JSON 对象 | 完整整理任务的确定性保真阈值；仅在确有模型实测依据时调整 |
+
+`qualityThresholds` 可包含以下 0–1 比例。字段可以省略，省略时使用程序的保守默认值：
+
+| 字段 | 默认值 | 说明 |
+|---|---:|---|
+| `unitLengthRatio` | 0.70 | 每个来源单元至少保留的有效文字比例 |
+| `lengthRatio` | 0.85 | 整个批次至少保留的有效文字比例 |
+| `signalRatio` | 0.55 | 技术数值等关键信号保留比例 |
+| `commandRatio` | 0.60 | 命令和寄存器操作保留比例 |
+| `tableRatio` | 0.60 | 表格行保留比例 |
+| `formulaRatio` | 0.60 | 公式保留比例 |
+| `urlRatio` | 0.60 | URL 保留比例 |
+
+降低这些阈值只会减少“需要复核”提示，不会提高模型的真实处理能力；不要为了让任务显示成功而调低阈值。`summary-only` 任务不使用完整文档保真比例。
 
 `documentPolicy` 是任务执行建议和安全预算，不是模型固有能力。模型升级后可以通过 JSON 调整这些建议，但程序仍需根据实际失败自适应缩小，并保证每次重试都有参数、批次、模型或降级状态上的变化。
+
+`maxModelCallsPerJob` 和 `jobTimeoutMs` 约束的是一次后台执行窗口，不是永久封禁任务。达到任一上限时，程序会暂停任务、保留已经写入的区块检查点和中间预览，并在后台任务页面显示原因；用户点击“继续”会开启新的执行窗口。模型探测、普通前台聊天不计入这个文档窗口预算。若同一窗口内某模型连续耗尽超时、限流或网络重试，程序会暂时跳过该模型，把后续区块交给备用候选；继续任务时会重新尝试。
 
 后台文档任务还遵循以下恢复规则：
 
@@ -387,7 +445,8 @@ JSON 配置不准确时，程序应有界降级：减小输入批次、降低图
 4. 图片请求未实测成功时，`multimodal` 必须为 `false`，`inputModalities` 只能包含 `text`，并删除 `visionPolicy` 和 `vision-review`。
 5. JSON 策略下每个模型是否提供合法的 `requestDefaults`。
 6. 维护配置是否只修改目标服务商/模型；永久删除是否确实必要。
-7. 导入预览中的新增、更新、停用、删除数量是否符合预期。
-8. 导入后是否执行“检测全部模型”；没有对号表示未检测或检测未通过。
-9. 一次连续执行使用稳定的模型快照；暂停、重启或显式重试会在新的执行纪元读取当前配置。恢复后应查看后台任务显示的实际模型与诊断，不能只按任务最初使用的模型判断新配置。
-10. `protocol` 是否与当前服务商接口兼容；模型名称和宣传能力不能代替协议与模态实测。
+7. 如果导入触发永久删除确认，确认删除范围是否符合预期。
+8. 导入后是否执行“检测全部模型”；“未检测”和“不可用”是不同状态。
+9. 只有本轮检测结果仍有效时才能删除失败模型；网络波动时应先重新检测。
+10. 一次连续执行使用稳定的模型快照；暂停、重启或显式重试会在新的执行纪元读取当前配置。恢复后应查看后台任务显示的实际模型与诊断，不能只按任务最初使用的模型判断新配置。
+11. `protocol` 是否与当前服务商接口兼容；模型名称和宣传能力不能代替协议与模态实测。

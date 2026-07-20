@@ -119,3 +119,48 @@ export function modelInputModalities(model) {
   if (declared.length > 0) return [...new Set(declared)];
   return model?.multimodal === true ? ["text", "image"] : ["text"];
 }
+
+/**
+ * Choose a candidate for one document unit using capability evidence first,
+ * then a bounded live probe for candidates whose persisted verification is
+ * missing or stale.  A vision requirement is fail-closed: a text-only model
+ * is never an acceptable fallback for visual work.
+ */
+export async function selectUsableDocumentModel(candidates, {
+  requiredCapabilities = [],
+  attempt = 1,
+  probe,
+  signal,
+} = {}) {
+  const list = Array.isArray(candidates) ? candidates.filter((candidate) => candidate && candidate.disabled !== true) : [];
+  const needsVision = (Array.isArray(requiredCapabilities) ? requiredCapabilities : []).some((capability) => String(capability).trim().toLowerCase() === "vision");
+  const capable = list.filter((candidate) => !needsVision || candidate.multimodal === true);
+  if (needsVision && capable.length === 0) {
+    return { ok: false, reason: "capability-unavailable", failures: [] };
+  }
+  const eligible = capable.filter((candidate) => candidate.verificationStatus !== "failed");
+  if (eligible.length === 0) {
+    return { ok: false, reason: "verification-failed", failures: [] };
+  }
+  const offset = Math.max(0, (Math.max(1, Number(attempt) || 1) - 1) % eligible.length);
+  const ordered = [...eligible.slice(offset), ...eligible.slice(0, offset)];
+  const failures = [];
+  for (const candidate of ordered) {
+    if (candidate.verificationStatus === "passed" && candidate.requiresProbe !== true) {
+      return { ok: true, candidate, verification: { ok: true, source: "persisted-verification" }, failures };
+    }
+    if (typeof probe !== "function") {
+      failures.push({ candidate: candidate.modelId, reason: "probe-unavailable" });
+      continue;
+    }
+    let result;
+    try {
+      result = await probe(candidate, signal);
+    } catch (error) {
+      result = { ok: false, error: String(error?.message || error) };
+    }
+    if (result?.ok === true) return { ok: true, candidate, verification: result, failures };
+    failures.push({ candidate: candidate.modelId, reason: result?.error || "probe-failed" });
+  }
+  return { ok: false, reason: "probe-failed", failures };
+}

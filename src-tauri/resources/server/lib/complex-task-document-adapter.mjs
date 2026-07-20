@@ -2,8 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
 import { assertTaskContract } from "./complex-task-contracts.mjs";
+import { formatArtifactReference } from "./complex-task-artifact-reference.mjs";
 
 export const DOCUMENT_ADAPTER_VERSION = "document-v2.1";
+export const DOCUMENT_TOOL_SCHEMA_VERSION = "1";
 const DOCUMENT_SKILL_TEXT = "Visionox-Whale durable document adapter: preserve every authorized source unit, report gaps explicitly, and use source text as a loss-aware fallback.";
 
 function clone(value) {
@@ -30,6 +32,18 @@ function sourceList(prepared) {
 
 function skillHash() {
   return `sha256:${hash(DOCUMENT_SKILL_TEXT)}`;
+}
+
+function pinnedSkillFor(task) {
+  const snapshot = task?.metadata?.pinnedSkill;
+  const content = text(snapshot?.content, DOCUMENT_SKILL_TEXT);
+  const expectedHash = text(snapshot?.hash, text(task?.contract?.pinned?.skillHash, skillHash()));
+  if (`sha256:${hash(content)}` !== expectedHash) {
+    const error = new Error("document Skill snapshot does not match the pinned hash");
+    error.code = "SKILL_PIN_MISMATCH";
+    throw error;
+  }
+  return { hash: expectedHash, content, version: text(snapshot?.version, DOCUMENT_ADAPTER_VERSION) };
 }
 
 function normalizeBatches(batches) {
@@ -69,15 +83,58 @@ function normalizeBatches(batches) {
   return { batches: normalized, units };
 }
 
-function sourceInventory(source, unitIds) {
+function sourceSummaryFor(sources, source, index, extractionResult) {
+  if (sources.length === 1) return extractionResult && typeof extractionResult === "object" ? extractionResult : null;
+  const summaries = Array.isArray(extractionResult?.sourceSummaries) ? extractionResult.sourceSummaries : [];
+  const sourcePath = text(source?.sourcePath || source?.readablePath).toLowerCase();
+  return summaries.find((summary) => text(summary?.sourcePath || summary?.readablePath).toLowerCase() === sourcePath)
+    || summaries.find((summary) => String(summary?.sourceId || "") === text(source?.sourceId))
+    || summaries[index]
+    || null;
+}
+
+function sourceInventory(source, unitIds, summary) {
+  const extracted = [...new Set(unitIds.map(String).filter(Boolean))];
+  const declaredTotal = Number(summary?.totalUnits);
+  const totalUnits = Number.isSafeInteger(declaredTotal) && declaredTotal > 0 ? declaredTotal : null;
+  const extractedUnitCount = extracted.length;
+  const selectedPages = Number(summary?.selectedPages);
+  const processedPages = Number(summary?.processedPages);
+  const pageCoverageKnown = Number.isSafeInteger(selectedPages) && Number.isSafeInteger(processedPages);
+  const explicitExpected = Array.isArray(summary?.expectedUnitIds)
+    ? [...new Set(summary.expectedUnitIds.map(String).filter(Boolean))]
+    : null;
+  const countComplete = totalUnits !== null && totalUnits === extractedUnitCount;
+  const pageComplete = !pageCoverageKnown || selectedPages === processedPages;
+  const expectedComplete = !explicitExpected || (explicitExpected.length === extracted.length && explicitExpected.every((id) => extracted.includes(id)));
   return {
-    complete: true,
-    expectedUnitIds: [...unitIds],
-    extractedUnitIds: [...unitIds],
-    totalUnits: unitIds.length,
-    extractedUnitCount: unitIds.length,
+    complete: countComplete && pageComplete && expectedComplete,
+    ...(explicitExpected ? { expectedUnitIds: explicitExpected } : {}),
+    extractedUnitIds: extracted,
+    totalUnits,
+    extractedUnitCount,
+    ...(pageCoverageKnown ? { selectedPages, processedPages } : {}),
     sourcePath: source?.sourcePath || source?.readablePath || null,
+    evidence: "extractor-declared",
   };
+}
+
+/**
+ * Build source inventories from extractor-declared totals, independently of
+ * the units collected by the caller.  An emitted unit list is evidence of
+ * what was received, never a declaration of what should have existed.
+ */
+export function buildDocumentSourceInventories({ prepared, batches = [], extractionResult } = {}) {
+  const normalized = normalizeBatches(batches);
+  const sources = sourceList(prepared);
+  return sources.map((source, index) => {
+    const sourceId = text(source?.sourceId, `source-${String(index + 1).padStart(3, "0")}`);
+    const sourceUnits = normalized.units.filter((unit) => unitBelongsToSource(unit, source, sourceId, index, sources.length));
+    return {
+      sourceId,
+      inventory: sourceInventory(source, sourceUnits.map((unit) => unit.id), sourceSummaryFor(sources, source, index, extractionResult)),
+    };
+  });
 }
 
 function unitBelongsToSource(unit, source, sourceId, sourceIndex, sourceCount) {
@@ -98,6 +155,7 @@ export function buildDocumentTaskDraft({
   taskId = `task:${randomUUID()}`,
   prepared,
   batches = [],
+  extractionResult,
   outputPath,
   workspace,
   goal = "将文档整理为完整 Markdown",
@@ -110,6 +168,13 @@ export function buildDocumentTaskDraft({
 } = {}) {
   const normalized = normalizeBatches(batches);
   const sources = sourceList(prepared);
+  const inventories = buildDocumentSourceInventories({ prepared, batches, extractionResult });
+  if (inventories.length === 0 || inventories.some((entry) => entry.inventory.complete !== true)) {
+    const error = new Error("document extraction inventory is incomplete; the extractor-declared source totals do not match the emitted units");
+    error.code = "EXTRACTION_INCOMPLETE";
+    error.inventories = clone(inventories);
+    throw error;
+  }
   const sourceIds = sources.map((source, index) => text(source?.sourceId, `source-${String(index + 1).padStart(3, "0")}`));
   const requiredCoverage = normalized.units.map((unit) => unit.id);
   if (requiredCoverage.length === 0) throw new Error("document task requires at least one extracted source unit");
@@ -146,7 +211,7 @@ export function buildDocumentTaskDraft({
       kind: text(source?.documentKind, "document"),
       fingerprint,
       required: true,
-      extractionInventory: sourceInventory(source, sourceUnits.map((unit) => unit.id)),
+      extractionInventory: clone(inventories[index]?.inventory),
     };
   });
   const requestedPath = text(outputPath, "document.md");
@@ -171,7 +236,7 @@ export function buildDocumentTaskDraft({
     pinned: {
       adapterVersion,
       skillHash: skillHash(),
-      toolSchemaVersion: "1",
+      toolSchemaVersion: DOCUMENT_TOOL_SCHEMA_VERSION,
       initialModelConfigFingerprints: Array.isArray(modelConfigFingerprints) ? [...modelConfigFingerprints] : [],
     },
   };
@@ -185,14 +250,15 @@ export function buildDocumentTaskDraft({
       createdAt: now,
       title: text(goal),
       instructions: String(instructions ?? ""),
+      pinnedSkill: { hash: skillHash(), content: DOCUMENT_SKILL_TEXT, version: adapterVersion },
       documentUnits,
       batchOrder: normalized.batches.map((batch) => batch.id),
       extractionInventory: {
-        complete: true,
-        expectedUnitIds: [...requiredCoverage],
-        extractedUnitIds: [...requiredCoverage],
-        totalUnits: requiredCoverage.length,
-        extractedUnitCount: requiredCoverage.length,
+        complete: inventories.every((entry) => entry.inventory.complete === true),
+        totalUnits: inventories.reduce((sum, entry) => sum + (Number(entry.inventory.totalUnits) || 0), 0),
+        extractedUnitCount: normalized.units.length,
+        extractedUnitIds: normalized.units.map((unit) => unit.id),
+        sourceSummaries: inventories.map((entry) => ({ sourceId: entry.sourceId, ...clone(entry.inventory) })),
       },
       ...(enginePin ? { complexTaskEngine: clone(enginePin) } : {}),
     },
@@ -200,7 +266,22 @@ export function buildDocumentTaskDraft({
 }
 
 function artifactIdFor(task, unitPlan) {
-  return `artifact:${safeId(task.id)}:${safeId(unitPlan.unitId)}`;
+  return `artifact:${safeId(task?.id || task?.contract?.taskId)}:${safeId(unitPlan.unitId)}`;
+}
+
+function artifactRevisionFor(task, attempt = 1) {
+  const epoch = Math.max(1, Number.isSafeInteger(Number(task?.epoch)) ? Number(task.epoch) : 1);
+  const attemptNumber = Math.max(1, Math.min(999, Number.isSafeInteger(Number(attempt)) ? Number(attempt) : 1));
+  return ((epoch - 1) * 1_000) + attemptNumber;
+}
+
+function recoveryAttemptFor(diagnostics) {
+  const attempts = Array.isArray(diagnostics?.attempts) ? diagnostics.attempts : [];
+  const highestModelAttempt = attempts.reduce((highest, entry) => {
+    const attempt = Number(entry?.attempt);
+    return Number.isSafeInteger(attempt) && attempt > highest ? attempt : highest;
+  }, 0);
+  return Math.min(999, highestModelAttempt + 1) || 1;
 }
 
 function normalizeGenerated(value, unitPlan, units) {
@@ -220,6 +301,35 @@ function normalizeGenerated(value, unitPlan, units) {
   };
 }
 
+function assertRuntimePins(task) {
+  const pinned = task?.contract?.pinned;
+  if (!pinned || typeof pinned !== "object") return;
+  const actual = {
+    adapterVersion: DOCUMENT_ADAPTER_VERSION,
+    skillHash: skillHash(),
+    toolSchemaVersion: DOCUMENT_TOOL_SCHEMA_VERSION,
+  };
+  for (const field of ["adapterVersion", "skillHash", "toolSchemaVersion"]) {
+    if (String(pinned[field] ?? "") && String(pinned[field]) !== actual[field]) {
+      const error = new Error(`document runtime pin mismatch: ${field} expected ${pinned[field]} but loaded ${actual[field]}`);
+      error.code = "RUNTIME_PIN_MISMATCH";
+      error.field = field;
+      error.expected = String(pinned[field]);
+      error.actual = actual[field];
+      throw error;
+    }
+  }
+}
+
+async function reportProgressSafely(reportProgress, evidence) {
+  if (typeof reportProgress !== "function") return { ok: false, reason: "progress-reporter-unavailable" };
+  try {
+    return await reportProgress(evidence);
+  } catch (error) {
+    return { ok: false, reason: "progress-report-failed", message: String(error?.message || error) };
+  }
+}
+
 export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {}) {
   if (!artifactStore || typeof artifactStore.put !== "function") throw new TypeError("document adapter requires an artifact store");
   const generate = typeof generateUnit === "function" ? generateUnit : async ({ unitPlan, sourceUnits }) => ({
@@ -229,14 +339,33 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
     confidence: 0.25,
   });
 
-  async function executeUnit({ task, unitPlan, attempt = 1, attemptId, signal, tools } = {}) {
+  async function executeUnit({ task, unitPlan, attempt = 1, attemptId, signal, tools, reportProgress } = {}) {
+    assertRuntimePins(task);
+    const pinnedSkill = pinnedSkillFor(task);
     const allUnits = task?.metadata?.documentUnits && typeof task.metadata.documentUnits === "object" ? task.metadata.documentUnits : {};
     const sourceUnits = unitPlan.primaryCoverage.map((id) => allUnits[id]).filter(Boolean);
     const contextUnits = (Array.isArray(unitPlan.contextRefs) ? unitPlan.contextRefs : []).map((ref) => Object.values(allUnits).find((unit) => unit.location === ref.range || unit.id === ref.range)).filter(Boolean);
-    const generated = normalizeGenerated(await generate({ task: clone(task), unitPlan: clone(unitPlan), sourceUnits: clone(sourceUnits), contextUnits: clone(contextUnits), signal, tools }), unitPlan, sourceUnits);
+    const generated = normalizeGenerated(await generate({ task: clone(task), unitPlan: clone(unitPlan), sourceUnits: clone(sourceUnits), contextUnits: clone(contextUnits), attempt, attemptId, signal, tools, reportProgress, pinnedSkill: clone(pinnedSkill) }), unitPlan, sourceUnits);
     if (generated.kind === "user_input_request") return generated;
+    if (!generated.markdown.trim()) {
+      return {
+        unitId: unitPlan.unitId,
+        attemptId: text(attemptId, `attempt-${attempt}`),
+        proposedStatus: "needs_review",
+        artifactRefs: [],
+        proposedPrimaryCoverage: [],
+        contextRefsUsed: [...(unitPlan.contextRefs ?? [])],
+        missingSourceRanges: [...unitPlan.primaryCoverage],
+        evidenceRefs: sourceUnits.map((unit) => unit.id),
+        warnings: [...generated.warnings, { code: "EMPTY_GENERATED_CONTENT", message: "没有可读内容：模型没有生成结果，当前来源也没有可用原文回退，无法安全标记为已完成；请改用支持当前输入的模型或人工处理。" }],
+        confidence: 0,
+        nextActionProposal: "retry-with-capable-model-or-human-review",
+        fallbackKind: "unavailable",
+      };
+    }
     const artifactId = artifactIdFor(task, unitPlan);
-    const revision = Math.max(1, Number(attempt) || 1);
+    const revision = artifactRevisionFor(task, attempt);
+    const ownerTaskId = text(task?.id || task?.contract?.taskId);
     const stored = await artifactStore.put({
       manifest: {
         schemaVersion: 1,
@@ -245,22 +374,31 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
         mediaType: "text/markdown",
         primaryCoverage: [...unitPlan.primaryCoverage],
         contextRefs: [...(unitPlan.contextRefs ?? [])],
+        owner: { taskId: ownerTaskId, unitId: unitPlan.unitId, epoch: Math.max(1, Number(task?.epoch) || 1), attemptId: text(attemptId, `attempt-${attempt}`), kind: "unit" },
         producer: {
-          adapterVersion: text(task?.contract?.pinned?.adapterVersion, DOCUMENT_ADAPTER_VERSION),
-          skillHash: text(task?.contract?.pinned?.skillHash, skillHash()),
+          adapterVersion: DOCUMENT_ADAPTER_VERSION,
+          skillHash: skillHash(),
           modelConfigFingerprint: text(generated.modelConfigFingerprint, text(task?.metadata?.currentModelConfigFingerprint, "unknown")),
-          toolSchemaVersion: text(task?.contract?.pinned?.toolSchemaVersion, "1"),
+          toolSchemaVersion: DOCUMENT_TOOL_SCHEMA_VERSION,
           ...(generated.fallbackKind ? { fallbackKind: generated.fallbackKind } : {}),
         },
       },
       content: generated.markdown,
     });
     if (stored.ok === false) throw new Error(`document artifact conflict: ${artifactId}@${revision}`);
+    const artifactRef = formatArtifactReference(stored.manifest);
+    await reportProgressSafely(reportProgress, {
+      kind: "artifact-committed",
+      unitId: unitPlan.unitId,
+      attemptId: text(attemptId, `attempt-${attempt}`),
+      coverage: [...unitPlan.primaryCoverage],
+      message: artifactRef,
+    });
     return {
       unitId: unitPlan.unitId,
       attemptId: text(attemptId, `attempt-${attempt}`),
       proposedStatus: generated.proposedStatus,
-      artifactRefs: [stored.manifest.artifactId],
+      artifactRefs: [artifactRef],
       proposedPrimaryCoverage: [...unitPlan.primaryCoverage],
       contextRefsUsed: [...(unitPlan.contextRefs ?? [])],
       missingSourceRanges: [],
@@ -271,35 +409,63 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
     };
   }
 
-  async function recoverUnit({ task, unitPlan, attemptId } = {}) {
+  async function recoverUnit({ task, unitPlan, attemptId, diagnostics, reportProgress } = {}) {
+    assertRuntimePins(task);
     const allUnits = task?.metadata?.documentUnits && typeof task.metadata.documentUnits === "object" ? task.metadata.documentUnits : {};
     const sourceUnits = unitPlan.primaryCoverage.map((id) => allUnits[id]).filter(Boolean);
     const content = sourceUnits.map((unit) => String(unit?.text ?? "")).filter(Boolean).join("\n\n");
+    if (!content.trim()) {
+      return {
+        unitId: unitPlan.unitId,
+        attemptId: text(attemptId, `source-fallback-${unitPlan.unitId}`),
+        proposedStatus: "needs_review",
+        artifactRefs: [],
+        proposedPrimaryCoverage: [],
+        contextRefsUsed: [],
+        missingSourceRanges: [...unitPlan.primaryCoverage],
+        evidenceRefs: sourceUnits.map((unit) => unit.id),
+        warnings: [{ code: "SOURCE_FALLBACK_UNAVAILABLE", message: "模型整理失败，当前来源没有可读原文，无法生成安全的回退文档；请改用多模态模型或人工处理。" }],
+        confidence: 0,
+        nextActionProposal: "retry-with-multimodal-or-human-review",
+        fallbackKind: "unavailable",
+      };
+    }
     const artifactId = artifactIdFor(task, unitPlan);
+    const revision = artifactRevisionFor(task, recoveryAttemptFor(diagnostics));
+    const ownerTaskId = text(task?.id || task?.contract?.taskId);
     const stored = await artifactStore.put({
       manifest: {
         schemaVersion: 1,
         artifactId,
-        revision: 1,
+        revision,
         mediaType: "text/markdown",
         primaryCoverage: [...unitPlan.primaryCoverage],
         contextRefs: [],
+        owner: { taskId: ownerTaskId, unitId: unitPlan.unitId, epoch: Math.max(1, Number(task?.epoch) || 1), attemptId: text(attemptId, `source-fallback-${unitPlan.unitId}`), kind: "unit" },
         producer: {
-          adapterVersion: text(task?.contract?.pinned?.adapterVersion, DOCUMENT_ADAPTER_VERSION),
-          skillHash: text(task?.contract?.pinned?.skillHash, skillHash()),
+          adapterVersion: DOCUMENT_ADAPTER_VERSION,
+          skillHash: skillHash(),
           modelConfigFingerprint: text(task?.metadata?.currentModelConfigFingerprint, "host:source-fallback"),
-          toolSchemaVersion: text(task?.contract?.pinned?.toolSchemaVersion, "1"),
+          toolSchemaVersion: DOCUMENT_TOOL_SCHEMA_VERSION,
           fallbackKind: "source",
         },
       },
       content,
     });
     if (stored.ok === false) throw new Error(`document source fallback artifact conflict: ${artifactId}`);
+    const artifactRef = formatArtifactReference(stored.manifest);
+    await reportProgressSafely(reportProgress, {
+      kind: "artifact-committed",
+      unitId: unitPlan.unitId,
+      attemptId: text(attemptId, `source-fallback-${unitPlan.unitId}`),
+      coverage: [...unitPlan.primaryCoverage],
+      message: artifactRef,
+    });
     return {
       unitId: unitPlan.unitId,
       attemptId: text(attemptId, `source-fallback-${unitPlan.unitId}`),
       proposedStatus: "skipped",
-      artifactRefs: [stored.manifest.artifactId],
+      artifactRefs: [artifactRef],
       proposedPrimaryCoverage: [...unitPlan.primaryCoverage],
       contextRefsUsed: [],
       missingSourceRanges: [],
@@ -334,5 +500,14 @@ export function createComplexDocumentAdapter({ artifactStore, generateUnit } = {
     return chunks.join("\n\n");
   }
 
-  return { executeUnit, recoverUnit, selectPrimaryCandidate, assemble, version: DOCUMENT_ADAPTER_VERSION, skillHash: skillHash() };
+  return {
+    executeUnit,
+    recoverUnit,
+    selectPrimaryCandidate,
+    assemble,
+    version: DOCUMENT_ADAPTER_VERSION,
+    adapterVersion: DOCUMENT_ADAPTER_VERSION,
+    skillHash: skillHash(),
+    toolSchemaVersion: DOCUMENT_TOOL_SCHEMA_VERSION,
+  };
 }

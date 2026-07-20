@@ -6828,9 +6828,11 @@ ${pinnedBodies.join("\n\n")}` : "";
           model: summaryModel,
           messages,
           signal: this.deps.getAbortSignal(),
+          requestPurpose: "summary",
           thinking: thinkingModeForModel(summaryModel),
           reasoningEffort: "high"
         });
+        assertModelResponseComplete(resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason);
         this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
         const summary = stripHallucinatedToolMarkup((resp.content ?? "").trim());
         if (summary) return summary;
@@ -7038,10 +7040,11 @@ async function* forceSummaryAfterIterLimit(ctx, opts = { reason: "budget" }) {
       model: summaryModel,
       messages,
       signal: ctx.signal,
-      requestPurpose: "finalAnswer",
+      requestPurpose: "summary",
       thinking: thinkingModeForModel(summaryModel),
       reasoningEffort: summaryEffort
     });
+    assertModelResponseComplete(resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason);
     const rawContent = resp.content?.trim() ?? "";
     const cleaned = stripHallucinatedToolMarkup(rawContent);
     const summary = cleaned || t("summary.hallucinatedFallback");
@@ -7082,10 +7085,11 @@ async function summarizePartialProgress(ctx) {
       model: globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL,
       messages,
       signal: ctx.signal,
-      requestPurpose: "finalAnswer",
+      requestPurpose: "summary",
       thinking: thinkingModeForModel(globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL),
       reasoningEffort: PAUSE_SUMMARY_EFFORT
     });
+    assertModelResponseComplete(resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason);
     const cleaned = stripHallucinatedToolMarkup(resp.content?.trim() ?? "");
     if (!cleaned) return null;
     const stats = ctx.recordStats(globalThis.__visionoxSummaryModel || PAUSE_SUMMARY_MODEL, resp.usage ?? new Usage());
@@ -7504,14 +7508,15 @@ var StormBreaker = class {
 };
 
 // src/repair/truncation.ts
+var TOOL_CALL_REPAIR_META = Symbol("toolCallRepairMeta");
 function repairTruncatedJson(input) {
   const notes = [];
   if (!input || !input.trim()) {
-    return { repaired: "{}", changed: input !== "{}", notes: ["empty input \u2192 {}"] };
+    return { repaired: "{}", changed: input !== "{}", droppedContent: false, notes: ["empty input \u2192 {}"] };
   }
   try {
     JSON.parse(input);
-    return { repaired: input, changed: false, notes: [] };
+    return { repaired: input, changed: false, droppedContent: false, notes: [] };
   } catch {
   }
   const stack = [];
@@ -7549,13 +7554,16 @@ function repairTruncatedJson(input) {
     s = s.replace(/,$/, "");
     notes.push("trimmed trailing comma");
   }
+  let droppedContent = false;
   if (/"\s*:\s*$/.test(s)) {
     s += " null";
+    droppedContent = true;
     notes.push("filled dangling key with null");
   }
   if (inString) {
     s += '"';
     stack.pop();
+    droppedContent = true;
     notes.push("closed unterminated string");
   }
   while (stack.length > 0) {
@@ -7566,10 +7574,10 @@ function repairTruncatedJson(input) {
   }
   try {
     JSON.parse(s);
-    return { repaired: s, changed: true, notes };
+    return { repaired: s, changed: true, droppedContent, notes };
   } catch (err) {
     notes.push(`fallback to {}: ${err.message}`);
-    return { repaired: "{}", changed: true, notes };
+    return { repaired: "{}", changed: true, droppedContent: true, notes };
   }
 }
 
@@ -7617,6 +7625,7 @@ var ToolCallRepair = class {
       const r = repairTruncatedJson(args);
       if (r.changed) {
         call.function.arguments = r.repaired;
+        call[TOOL_CALL_REPAIR_META] = { changed: true, droppedContent: r.droppedContent === true };
         report.truncationsFixed++;
         report.notes.push(...r.notes.map((n) => `[${call.function.name}] ${n}`));
       }
@@ -8039,6 +8048,17 @@ var CacheFirstLoop = class {
     const parsedArgs = safeParseToolArgs(args);
     this._inflight.add(this.inflightIdFor(call));
     try {
+      if (call[TOOL_CALL_REPAIR_META]?.changed === true && this.isMutating(call)) {
+        return {
+          preWarnings: [],
+          postWarnings: [],
+          result: JSON.stringify({
+            error: "TRUNCATED_TOOL_ARGUMENTS",
+            message: "工具参数在传输中被截断，已拦截写入类操作以避免落盘残缺内容。请缩小内容后分段重试。",
+            retryable: true,
+          }),
+        };
+      }
       const preReport = await runHooks({
         hooks: this.hooks,
         signal,

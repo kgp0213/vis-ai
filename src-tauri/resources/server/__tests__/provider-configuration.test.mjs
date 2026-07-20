@@ -69,6 +69,39 @@ beforeEach(() => writeFileSync(configPath, JSON.stringify(baseConfig(), null, 2)
 after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
 describe("Provider schema v3 maintenance", () => {
+  test("accepts validated provider UI grouping metadata", () => {
+    const result = previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateProvider",
+        providerId: "company",
+        changes: {
+          ui: {
+            groupId: "volcengine-ark",
+            groupName: "火山方舟 Ark",
+            family: "cloud-models",
+            modelLabel: "Company Models",
+            order: 20,
+            recommendedFor: ["chat", "code"],
+          },
+        },
+      }],
+    });
+    assert.equal(result.config.providers[0].ui.groupId, "volcengine-ark");
+    assert.deepEqual(result.config.providers[0].ui.recommendedFor, ["chat", "code"]);
+  });
+
+  test("rejects malformed provider UI grouping metadata", () => {
+    assert.throws(() => previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateProvider",
+        providerId: "company",
+        changes: { ui: { groupId: "volcengine-ark", order: "first" } },
+      }],
+    }), /provider.*ui.*order/i);
+  });
+
   test("imports explicit model capabilities without requiring duplicate legacy capacity fields", () => {
     const capabilities = {
       protocol: "openai-chat-completions",
@@ -259,6 +292,107 @@ describe("Provider schema v2 combined import and cleanup", () => {
 });
 
 describe("Provider credential rotation API", () => {
+  test("cleans only current failed models, removes empty providers, and selects a passed fallback", async () => {
+    writeFileSync(configPath, JSON.stringify({
+      preset: "flash",
+      model: "bad-active",
+      activeProviderId: "company",
+      providers: [
+        {
+          id: "company",
+          name: "Company",
+          baseUrl: "https://company.example/v1",
+          apiKey: "company-key",
+          models: [
+            { id: "bad-active", name: "Bad Active", presets: ["flash"], maxContextLength: 32768 },
+            { id: "good-fallback", name: "Good Fallback", presets: ["pro"], maxContextLength: 65536 },
+          ],
+        },
+        {
+          id: "failed-only",
+          name: "Failed Only",
+          baseUrl: "https://failed.example/v1",
+          apiKey: "failed-key",
+          models: [{ id: "dead-model", name: "Dead", presets: ["flash"], maxContextLength: 32768 }],
+        },
+      ],
+    }, null, 2));
+    const tested = await post("/api/providers/test", {}, {
+      testProviderModel: async (_provider, model) => {
+        if (model.id !== "good-fallback") throw new Error("probe failed");
+      },
+    });
+    assert.equal(tested.status, 200);
+    assert.equal(tested.json.passed, 1);
+    const testedAt = JSON.parse(readFileSync(configPath, "utf8")).modelVerification.testedAt;
+    let synced = null;
+    const cleaned = await post("/api/providers/cleanup-failed", { testedAt }, {
+      syncProvider: async (id) => { synced = id; return { model: "good-fallback" }; },
+    });
+    assert.equal(cleaned.status, 200);
+    assert.equal(cleaned.json.removedModels, 2);
+    assert.equal(cleaned.json.removedProviders, 1);
+    assert.equal(cleaned.json.activeModelId, "good-fallback");
+    assert.equal(synced, "company");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.deepEqual(config.providers.map((provider) => provider.id), ["company"]);
+    assert.deepEqual(config.providers[0].models.map((model) => model.id), ["good-fallback"]);
+    assert.equal(config.model, "good-fallback");
+    assert.equal(config.preset, "pro");
+  });
+
+  test("rejects failed-model cleanup for stale or dirty detection results", async () => {
+    const tested = await post("/api/providers/test", {}, {
+      testProviderModel: async () => { throw new Error("probe failed"); },
+    });
+    assert.equal(tested.status, 200);
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const stale = await post("/api/providers/cleanup-failed", { testedAt: "stale-result" });
+    assert.equal(stale.status, 409);
+    config.modelVerification.dirty = true;
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const dirty = await post("/api/providers/cleanup-failed", { testedAt: config.modelVerification.testedAt });
+    assert.equal(dirty.status, 409);
+  });
+
+  test("clears the active selection when every configured model failed", async () => {
+    const tested = await post("/api/providers/test", {}, {
+      testProviderModel: async () => { throw new Error("probe failed"); },
+    });
+    assert.equal(tested.status, 200);
+    const testedAt = JSON.parse(readFileSync(configPath, "utf8")).modelVerification.testedAt;
+    const cleaned = await post("/api/providers/cleanup-failed", { testedAt });
+    assert.equal(cleaned.status, 200);
+    assert.equal(cleaned.json.removedModels, 2);
+    assert.equal(cleaned.json.removedProviders, 1);
+    assert.equal(cleaned.json.activeProviderId, null);
+    assert.equal(cleaned.json.activeModelId, null);
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.deepEqual(config.providers, []);
+    assert.equal(config.activeProviderId, null);
+    assert.equal(config.model, null);
+  });
+
+  test("switches provider and concrete model atomically", async () => {
+    let synced = null;
+    const selected = await post("/api/providers/active", {
+      id: "company",
+      modelId: "legacy-model",
+    }, {
+      syncProvider: async (id) => {
+        synced = id;
+        return { model: "legacy-model", messageCount: 4 };
+      },
+    });
+    assert.equal(selected.status, 200);
+    assert.equal(synced, "company");
+    assert.equal(selected.json.activeModelId, "legacy-model");
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.equal(config.activeProviderId, "company");
+    assert.equal(config.model, "legacy-model");
+    assert.equal(config.preset, "pro");
+  });
+
   test("settings API uses capabilities.maxContextTokens as the model capacity", async () => {
     writeFileSync(configPath, JSON.stringify({
       preset: "auto",

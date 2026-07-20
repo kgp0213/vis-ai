@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 
 const ARTIFACT_EXTENSION_RE = /\.(?:md|markdown|html?|txt|pdf|docx?|pptx?|xlsx?|csv|json|xml|ya?ml)(?:\s|$|["'`，。；;、)）（\]])/i;
 const ARTIFACT_TARGET_RE = /(?:文件|文档|报告|markdown|html|pdf|word|excel|ppt)/i;
@@ -10,16 +10,22 @@ const DOCUMENT_JOB_ID_RE = /^(?:document:)?[0-9a-f]{8}-[0-9a-f-]{27,}$/i;
 const DOCUMENT_WRITER_NAMES = new Set([
   "append_file",
   "edit",
+  "edit_file",
   "multi_edit",
+  "move_file",
+  "delete_file",
   "organize_document_to_markdown",
   "organize_documents_to_report",
   "organize_pdf_to_markdown",
+  "run_background",
+  "run_command",
   "save_file",
   "save_last_assistant_response",
   "write_file",
 ]);
 const PENDING_DOCUMENT_STATUSES = new Set([
   "accepted",
+  "planning",
   "interrupted",
   "paused",
   "pausing",
@@ -30,6 +36,9 @@ const PENDING_DOCUMENT_STATUSES = new Set([
   "waiting_provider",
   "stopped",
   "source_changed",
+  "failed",
+  "awaiting_output",
+  "needs_review",
 ]);
 
 function parseMaybeObject(value) {
@@ -48,11 +57,11 @@ function publicDocumentJobId(value) {
   return raw ? `document:${raw}` : "";
 }
 
-function comparablePath(value) {
+function comparablePath(value, workspaceRoot = process.cwd()) {
   const raw = String(value ?? "").trim();
   if (!raw || /^visionox-document:/i.test(raw)) return "";
   try {
-    const absolute = resolve(raw);
+    const absolute = resolve(String(workspaceRoot || process.cwd()), raw);
     return process.platform === "win32" ? absolute.toLowerCase() : absolute;
   } catch {
     return process.platform === "win32" ? raw.toLowerCase() : raw;
@@ -62,13 +71,40 @@ function comparablePath(value) {
 function collectPathValues(value, paths = [], depth = 0) {
   if (!value || typeof value !== "object" || depth > 3) return paths;
   for (const [key, nested] of Object.entries(value)) {
-    if (["file", "filePath", "file_path", "filename", "output", "outputPath", "path", "reportPath"].includes(key) && typeof nested === "string") {
+    if (["file", "filePath", "file_path", "filename", "output", "outputPath", "path", "reportPath", "source", "destination"].includes(key) && typeof nested === "string") {
       paths.push(nested);
     } else if (nested && typeof nested === "object") {
       collectPathValues(nested, paths, depth + 1);
     }
   }
   return paths;
+}
+
+function collectStringValues(value, values = [], depth = 0) {
+  if (depth > 3) return values;
+  if (typeof value === "string") {
+    values.push(value);
+    return values;
+  }
+  if (!value || typeof value !== "object") return values;
+  for (const nested of Object.values(value)) collectStringValues(nested, values, depth + 1);
+  return values;
+}
+
+function comparableText(value) {
+  const text = String(value ?? "");
+  return process.platform === "win32" ? text.replace(/\//g, "\\").toLowerCase() : text;
+}
+
+function protectedPathNeedles(job, workspaceRoot) {
+  const raw = String(job?.outputPath ?? "").trim();
+  if (!raw) return [];
+  const jobRoot = String(job?.workspaceRoot || workspaceRoot || process.cwd());
+  const absolute = resolve(jobRoot, raw);
+  const workspaceRelative = relative(String(workspaceRoot || process.cwd()), absolute);
+  return Array.from(new Set([absolute, raw, workspaceRelative]
+    .map(comparableText)
+    .filter((value) => value.length >= 5 && value !== ".")));
 }
 
 export function latestAssistantResponse(messages) {
@@ -161,7 +197,7 @@ export function artifactMissingNotice() {
 }
 
 export function pendingDocumentArtifactFromToolEvent(toolName, toolArgs, toolResult) {
-  if (!["organize_document_to_markdown", "organize_documents_to_report"].includes(String(toolName ?? "").toLowerCase())) return null;
+  if (!["organize_document_to_markdown", "organize_documents_to_report", "organize_pdf_to_markdown"].includes(String(toolName ?? "").toLowerCase())) return null;
   const result = parseMaybeObject(toolResult);
   if (result?.ok !== true || result?.accepted !== true || result?.artifactStatus !== "pending") return null;
   const args = parseMaybeObject(toolArgs) ?? {};
@@ -183,16 +219,22 @@ export function documentArtifactStateFromJob(job) {
   return "pending";
 }
 
-export function pendingDocumentWriteConflict(toolName, toolArgs, jobs) {
+export function pendingDocumentWriteConflict(toolName, toolArgs, jobs, { workspaceRoot = process.cwd() } = {}) {
   const name = String(toolName ?? "").toLowerCase();
   if (!DOCUMENT_WRITER_NAMES.has(name)) return null;
   const args = parseMaybeObject(toolArgs) ?? {};
-  const requestedPaths = collectPathValues(args).map(comparablePath).filter(Boolean);
-  if (requestedPaths.length === 0) return null;
+  const requestedPaths = collectPathValues(args)
+    .map((value) => comparablePath(value, workspaceRoot))
+    .filter(Boolean);
+  const referencedText = collectStringValues(args).map(comparableText);
   const pending = (Array.isArray(jobs) ? jobs : []).find((job) => {
     const status = String(job?.status ?? "").toLowerCase();
-    const outputPath = comparablePath(job?.outputPath);
-    return PENDING_DOCUMENT_STATUSES.has(status) && outputPath && requestedPaths.includes(outputPath);
+    const outputPath = comparablePath(job?.outputPath, job?.workspaceRoot || workspaceRoot);
+    const handoffActive = ["queued", "running"].includes(String(job?.handoff?.state ?? "").toLowerCase());
+    if (!(PENDING_DOCUMENT_STATUSES.has(status) || handoffActive) || !outputPath) return false;
+    if (requestedPaths.includes(outputPath)) return true;
+    const needles = protectedPathNeedles(job, workspaceRoot);
+    return needles.some((needle) => referencedText.some((value) => value.includes(needle)));
   });
   if (!pending) return null;
   return {

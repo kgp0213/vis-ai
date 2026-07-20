@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -14,6 +14,8 @@ import {
   validateUnitResult,
 } from "./complex-task-contracts.mjs";
 import { atomicWriteFile } from "./atomic-file.mjs";
+import { allowedTaskActions } from "./complex-task-controller.mjs";
+import { createComplexTaskConversationDelivery } from "./complex-task-conversation-delivery.mjs";
 import { createComplexTaskStore } from "./complex-task-store.mjs";
 import { createComplexTaskSupervisor } from "./complex-task-supervisor.mjs";
 
@@ -378,6 +380,43 @@ test("a damaged canonical manifest is recovered from the newest bounded snapshot
   });
 });
 
+test("fully corrupt manifests become a durable failed Outcome without overwriting the damaged evidence", async () => {
+  await withStore({}, async (store, root) => {
+    const task = await createTask(store);
+    const taskDir = join(root, encodeURIComponent(task.id));
+    const manifestPath = join(taskDir, "manifest.json");
+    const snapshotDir = join(taskDir, "manifest-snapshots");
+    const snapshotNames = await readdir(snapshotDir);
+    await writeFile(manifestPath, "{broken-canonical", "utf8");
+    for (const name of snapshotNames) {
+      await writeFile(join(snapshotDir, name), "{broken-snapshot", "utf8");
+    }
+
+    const restarted = createComplexTaskStore(root);
+    await assert.rejects(
+      () => restarted.read(task.id),
+      (error) => error?.code === "COMPLEX_TASK_MANIFEST_CORRUPT",
+    );
+
+    const [recovered] = await restarted.list();
+    assert.equal(recovered.id, task.id);
+    assert.equal(recovered.lifecycle, "terminal");
+    assert.equal(recovered.outcome.outcome, "failed");
+    assert.equal(recovered.outcome.resumable, false);
+    assert.equal(recovered.needsAttention, true);
+    assert.deepEqual(recovered.outbox[0].pendingConsumers, ["task-center"]);
+    assert.deepEqual(recovered.contract.interactionPolicy.deliveryChannels, ["task-center"]);
+    assert.match(recovered.outcome.summary, /损坏|corrupt/i);
+
+    const reread = await createComplexTaskStore(root).read(task.id);
+    assert.equal(reread.outcome.outcome, "failed");
+    assert.equal(await readFile(manifestPath, "utf8"), "{broken-canonical");
+    assert.equal(await readFile(join(snapshotDir, snapshotNames[0]), "utf8"), "{broken-snapshot");
+    assert.equal(JSON.parse(await readFile(join(taskDir, "recovery.json"), "utf8")).id, task.id);
+    assert.ok((await restarted.readEvents(task.id)).some((event) => event.type === "manifest-corruption-recovered"));
+  });
+});
+
 test("manifest fallback is observable when canonical persistence degrades", async () => {
   let failManifest = false;
   const issues = [];
@@ -542,6 +581,241 @@ test("terminal outcome and per-consumer Outbox acknowledgements survive restart"
   });
 });
 
+test("a blocked conversation delivery survives restart and user retry creates only a new delivery attempt", async () => {
+  await withStore({}, async (store, root) => {
+    const contract = validContract();
+    const created = await store.create({
+      contract,
+      unitPlans: validUnitPlans(),
+      metadata: { origin: { conversationId: "conversation-1", workspace: "D:/workspace" } },
+    });
+    const lease = await store.acquireLease(created.id, {
+      expectedRevision: created.revision,
+      owner: "worker-a",
+      ttlMs: 1_000,
+      now: 10,
+    });
+    const assembling = await store.transition(created.id, {
+      expectedRevision: lease.task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: "worker-a",
+      now: 20,
+    });
+    const completed = await store.complete(created.id, validOutcome(created.id), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: "worker-a",
+      now: 30,
+    });
+    const deliveryId = completed.deliveryId;
+    let dispatches = 0;
+    const blocked = await createComplexTaskConversationDelivery({
+      store,
+      getConversationId: () => "conversation-1",
+      getWorkspace: () => "D:/workspace",
+      dispatch: async () => {
+        dispatches += 1;
+        return {
+          accepted: false,
+          completed: false,
+          requiresUserRetry: true,
+          code: "PROMPT_RECEIPT_UNCERTAIN",
+          reason: "上一次交付结果不确定",
+        };
+      },
+    }).rehydrate();
+    assert.equal(blocked.exhausted, 1);
+    assert.equal(dispatches, 1);
+
+    const restarted = createComplexTaskStore(root);
+    const persisted = await restarted.read(created.id);
+    const persistedEntry = persisted.outbox.find((entry) => entry.deliveryId === deliveryId);
+    const oldState = persistedEntry.deliveryStates.conversation;
+    assert.equal(oldState.status, "blocked_user_retry");
+    assert.equal(oldState.code, "PROMPT_RECEIPT_UNCERTAIN");
+    assert.ok(allowedTaskActions(persisted).includes("retry_delivery"));
+    assert.ok(allowedTaskActions(persisted).includes("ack_outcome"));
+
+    const stillBlocked = await createComplexTaskConversationDelivery({
+      store: restarted,
+      getConversationId: () => "conversation-1",
+      getWorkspace: () => "D:/workspace",
+      dispatch: async () => {
+        dispatches += 1;
+        return { accepted: true, completed: true, ok: true, assistantText: "must not auto-dispatch" };
+      },
+    }).rehydrate();
+    assert.equal(stillBlocked.exhausted, 1);
+    assert.equal(dispatches, 1);
+
+    const approved = await restarted.applyUserControl(created.id, {
+      action: "retry_delivery",
+      expectedRevision: persisted.revision,
+      payload: { deliveryId, consumer: "conversation" },
+      now: 40,
+    });
+    assert.equal(approved.applied, true);
+    assert.equal(approved.task.lifecycle, "terminal");
+    assert.equal(approved.task.outcome.outcome, completed.task.outcome.outcome);
+    const approvedState = approved.task.outbox.find((entry) => entry.deliveryId === deliveryId).deliveryStates.conversation;
+    assert.match(approvedState.attemptId, /^attempt:/);
+    assert.notEqual(approvedState.attemptId, oldState.attemptId);
+
+    const attempts = [];
+    const delivered = await createComplexTaskConversationDelivery({
+      store: createComplexTaskStore(root),
+      getConversationId: () => "conversation-1",
+      getWorkspace: () => "D:/workspace",
+      dispatch: async ({ attemptId }) => {
+        attempts.push(attemptId);
+        return { accepted: true, completed: true, ok: true, assistantText: "交付成功" };
+      },
+    }).rehydrate();
+    assert.equal(delivered.delivered, 1);
+    assert.deepEqual(attempts, [approvedState.attemptId]);
+    const finalTask = await createComplexTaskStore(root).read(created.id);
+    assert.equal(finalTask.lifecycle, "terminal");
+    assert.equal(finalTask.outbox.find((entry) => entry.deliveryId === deliveryId).acknowledgements.conversation, true);
+    assert.ok((await restarted.readEvents(created.id)).some((event) => event.type === "outbox-delivery-retry-requested"));
+  });
+});
+
+test("an exhausted conversation delivery remains fenced across a real Store restart", async () => {
+  await withStore({}, async (store, root) => {
+    const contract = validContract();
+    const created = await store.create({
+      contract,
+      unitPlans: validUnitPlans(),
+      metadata: { origin: { conversationId: "conversation-1", workspace: "D:/workspace" } },
+    });
+    const lease = await store.acquireLease(created.id, {
+      expectedRevision: created.revision,
+      owner: "worker-a",
+      ttlMs: 1_000,
+      now: 10,
+    });
+    const assembling = await store.transition(created.id, {
+      expectedRevision: lease.task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: "worker-a",
+      now: 20,
+    });
+    const completed = await store.complete(created.id, validOutcome(created.id), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: "worker-a",
+      now: 30,
+    });
+    let dispatches = 0;
+    await createComplexTaskConversationDelivery({
+      store,
+      getConversationId: () => "conversation-1",
+      getWorkspace: () => "D:/workspace",
+      maxDeliveryAttempts: 1,
+      dispatch: async () => {
+        dispatches += 1;
+        return { accepted: false, completed: true, error: "provider unavailable" };
+      },
+    }).rehydrate();
+
+    const restarted = createComplexTaskStore(root);
+    const persisted = await restarted.read(created.id);
+    const state = persisted.outbox.find((entry) => entry.deliveryId === completed.deliveryId).deliveryStates.conversation;
+    assert.equal(state.status, "exhausted");
+    assert.equal(state.attempts, 1);
+    assert.ok(allowedTaskActions(persisted).includes("retry_delivery"));
+    const fenced = await createComplexTaskConversationDelivery({
+      store: restarted,
+      getConversationId: () => "conversation-1",
+      getWorkspace: () => "D:/workspace",
+      dispatch: async () => {
+        dispatches += 1;
+        return { accepted: true, completed: true, ok: true, assistantText: "must wait for user" };
+      },
+    }).rehydrate();
+    assert.equal(fenced.exhausted, 1);
+    assert.equal(dispatches, 1);
+
+    const approved = await restarted.applyUserControl(created.id, {
+      action: "retry_delivery",
+      expectedRevision: persisted.revision,
+      payload: { deliveryId: completed.deliveryId, consumer: "conversation" },
+      now: 40,
+    });
+    assert.equal(approved.applied, true);
+    const approvedState = approved.task.outbox.find((entry) => entry.deliveryId === completed.deliveryId).deliveryStates.conversation;
+    assert.equal(approvedState.status, "ready");
+    assert.match(approvedState.attemptId, /^attempt:/);
+    assert.equal(approvedState.attempts, 0);
+  });
+});
+
+test("startup Outbox repair reconstructs a missing terminal notification and records the recovery event", async () => {
+  let failTerminalEvent = true;
+  await withStore({
+    eventAppend: async (...args) => {
+      const eventLine = String(args[1] ?? "");
+      if (failTerminalEvent && eventLine.includes("terminal-outcome")) {
+        failTerminalEvent = false;
+        throw new Error("simulated crash after terminal manifest commit");
+      }
+      return appendFile(...args);
+    },
+  }, async (store, root) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const assembling = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 20,
+    });
+    await assert.rejects(() => store.complete(task.id, validOutcome(task.id), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 30,
+    }), /simulated crash/);
+
+    const restarted = createComplexTaskStore(root, { eventAppend: appendFile });
+    const before = await restarted.read(task.id);
+    assert.equal(before.lifecycle, "terminal");
+    assert.equal((await restarted.listPendingOutbox()).length, 1);
+    const repair = await restarted.reconcileOutbox({ now: 40 });
+    assert.deepEqual(repair.repaired, []);
+    assert.ok(repair.auditEvents >= 1);
+    assert.ok((await restarted.readEvents(task.id)).some((event) => event.type === "outbox-recovered"));
+  });
+});
+
+test("startup Outbox repair creates a notification when an old attention manifest has none", async () => {
+  await withStore({}, async (store) => {
+    const task = await createTask(store);
+    const moved = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "waiting_user",
+      userInputRequest: { requestId: "repair-request", question: "需要选择" },
+      now: 10,
+    });
+    assert.equal(moved.applied, true);
+    const manifestPath = join(store.root, encodeURIComponent(task.id), "manifest.json");
+    const raw = JSON.parse(await readFile(manifestPath, "utf8"));
+    raw.outbox = [];
+    await writeFile(manifestPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
+    const restarted = createComplexTaskStore(store.root);
+    assert.equal((await restarted.listPendingOutbox()).length, 0);
+    const repair = await restarted.reconcileOutbox({ now: 20 });
+    assert.deepEqual(repair.repaired, [task.id]);
+    assert.equal((await restarted.listPendingOutbox()).length, 1);
+  });
+});
+
 test("user control actions are CAS/epoch fenced and preserve an input resolution", async () => {
   await withStore({}, async (store) => {
     const { task, lease } = await startTask(store, { now: 10 });
@@ -575,6 +849,11 @@ test("user control actions are CAS/epoch fenced and preserve an input resolution
     assert.equal(resolved.applied, true);
     assert.equal(resolved.task.lifecycle, "queued");
     assert.deepEqual(resolved.task.userInputResolution.answer, { choiceId: "a" });
+    assert.equal(
+      resolved.task.outbox.find((entry) => entry.kind === "task-attention").pendingConsumers.length,
+      0,
+      "resolving attention must supersede the obsolete notification for every consumer",
+    );
 
     const retargeted = await store.applyUserControl(task.id, {
       action: "retarget_output",
@@ -601,6 +880,117 @@ test("user control actions are CAS/epoch fenced and preserve an input resolution
     });
     assert.equal(retried.applied, true);
     assert.equal(retried.task.lifecycle, "queued");
+  });
+});
+
+test("output conflict choices change the durable commit policy instead of requeueing the same conflict", async () => {
+  await withStore({}, async (store) => {
+    const task = await createTask(store);
+    const waiting = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "waiting_user",
+      userInputRequest: {
+        requestId: "output-conflict-1",
+        kind: "user_input_request",
+        reason: "output-path-conflict",
+        question: "输出路径已存在，如何继续？",
+        choices: [
+          { id: "new-file", label: "使用新文件名" },
+          { id: "overwrite", label: "确认覆盖" },
+        ],
+      },
+      pendingAssembly: { artifactRefs: ["artifact:final"] },
+      now: 20,
+    });
+    assert.equal(waiting.applied, true);
+
+    const resolved = await store.applyUserControl(task.id, {
+      action: "resolve_user_input",
+      expectedRevision: waiting.task.revision,
+      payload: { requestId: "output-conflict-1", choiceId: "overwrite" },
+      now: 21,
+    });
+    assert.equal(resolved.applied, true);
+    assert.equal(resolved.task.lifecycle, "queued");
+    assert.equal(resolved.task.contract.output.conflictPolicy, "replace");
+    assert.equal(resolved.task.userInputRequest, null);
+    assert.deepEqual(resolved.task.pendingAssembly, { artifactRefs: ["artifact:final"] });
+    assert.equal(resolved.task.userInputResolution.answer.choiceId, "overwrite");
+
+    const numeric = await createTask(store);
+    const numericWaiting = await store.transition(numeric.id, {
+      expectedRevision: numeric.revision,
+      lifecycle: "waiting_user",
+      userInputRequest: {
+        requestId: "output-conflict-numeric",
+        reason: "output-path-conflict",
+        choices: [
+          { id: "new-file", label: "使用新文件名" },
+          { id: "overwrite", label: "确认覆盖" },
+        ],
+      },
+      now: 21,
+    });
+    const numericResolved = await store.applyUserControl(numeric.id, {
+      action: "resolve_user_input",
+      expectedRevision: numericWaiting.task.revision,
+      payload: { requestId: "output-conflict-numeric", value: "2" },
+      now: 22,
+    });
+    assert.equal(numericResolved.applied, true);
+    assert.equal(numericResolved.task.contract.output.conflictPolicy, "replace");
+
+    const reset = await store.transition(resolved.task.id, {
+      expectedRevision: resolved.task.revision,
+      lifecycle: "waiting_user",
+      userInputRequest: {
+        requestId: "output-conflict-2",
+        reason: "output-path-conflict",
+        choices: [{ id: "new-file", label: "使用新文件名" }],
+      },
+      now: 22,
+    });
+    const rejected = await store.applyUserControl(task.id, {
+      action: "resolve_user_input",
+      expectedRevision: reset.task.revision,
+      payload: { requestId: "output-conflict-2", choiceId: "overwrite" },
+      now: 23,
+    });
+    assert.equal(rejected.applied, false);
+    assert.equal(rejected.reason, "invalid-output-conflict-resolution");
+    assert.equal(rejected.task.lifecycle, "waiting_user");
+
+    const alternate = await createTask(store);
+    const alternateWaiting = await store.transition(alternate.id, {
+      expectedRevision: alternate.revision,
+      lifecycle: "waiting_user",
+      userInputRequest: {
+        requestId: "output-conflict-3",
+        reason: "output-path-conflict",
+        choices: [{ id: "new-file", label: "使用新文件名" }],
+      },
+      now: 24,
+    });
+    const requestedPath = await store.applyUserControl(alternate.id, {
+      action: "resolve_user_input",
+      expectedRevision: alternateWaiting.task.revision,
+      payload: { requestId: "output-conflict-3", choiceId: "new-file" },
+      now: 25,
+    });
+    assert.equal(requestedPath.applied, true);
+    assert.equal(requestedPath.task.lifecycle, "waiting_user");
+    assert.equal(requestedPath.task.userInputRequest.reason, "output-conflict-retarget");
+    assert.ok(requestedPath.task.outbox.some((entry) => entry.kind === "task-attention" && entry.pendingConsumers.length > 0));
+
+    const retargeted = await store.applyUserControl(alternate.id, {
+      action: "resolve_user_input",
+      expectedRevision: requestedPath.task.revision,
+      payload: { requestId: requestedPath.task.userInputRequest.requestId, value: "D:/workspace/result-new.md" },
+      now: 26,
+    });
+    assert.equal(retargeted.applied, true);
+    assert.equal(retargeted.task.lifecycle, "queued");
+    assert.equal(retargeted.task.contract.output.requestedPath, "D:/workspace/result-new.md");
   });
 });
 
@@ -646,6 +1036,80 @@ test("a resumable terminal outcome can be retried without deleting its previous 
   });
 });
 
+test("repeating the same terminal outcome after retry receives a distinct delivery id", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const firstAssembly = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 20,
+    });
+    const first = await store.complete(task.id, validOutcome(task.id, { resumable: true }), {
+      expectedRevision: firstAssembly.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 30,
+    });
+    const retried = await store.applyUserControl(task.id, {
+      action: "retry",
+      expectedRevision: first.task.revision,
+      expectedEpoch: lease.epoch,
+      now: 40,
+    });
+    const secondLease = await store.acquireLease(task.id, { expectedRevision: retried.task.revision, now: 50 });
+    const secondAssembly = await store.transition(task.id, {
+      expectedRevision: secondLease.task.revision,
+      lifecycle: "assembling",
+      leaseId: secondLease.leaseId,
+      epoch: secondLease.epoch,
+      now: 60,
+    });
+    const second = await store.complete(task.id, validOutcome(task.id, { resumable: true }), {
+      expectedRevision: secondAssembly.task.revision,
+      leaseId: secondLease.leaseId,
+      epoch: secondLease.epoch,
+      now: 70,
+    });
+    const deliveries = second.task.outbox.filter((entry) => entry.kind === "task-outcome");
+    assert.equal(deliveries.length, 2);
+    assert.notEqual(deliveries[0].deliveryId, deliveries[1].deliveryId);
+  });
+});
+
+test("Outbox reconciliation preserves a terminal entry after acknowledgement advances the task revision", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const assembling = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 20,
+    });
+    const completed = await store.complete(task.id, validOutcome(task.id), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 30,
+    });
+    const delivery = completed.task.outbox.find((entry) => entry.kind === "task-outcome");
+    const acknowledged = await store.ackOutbox(task.id, delivery.deliveryId, {
+      expectedRevision: completed.task.revision,
+      consumer: "task-center",
+      now: 40,
+    });
+    const restarted = createComplexTaskStore(store.root);
+    const repair = await restarted.reconcileOutbox({ now: 50 });
+    assert.deepEqual(repair.repaired, []);
+    const saved = await restarted.read(task.id);
+    assert.equal(saved.outbox.filter((entry) => entry.kind === "task-outcome").length, 1);
+    assert.equal(saved.outbox[0].acknowledgements["task-center"], true);
+    assert.ok(saved.revision >= acknowledged.task.revision);
+  });
+});
+
 test("retention removes only fully acknowledged terminal tasks", async () => {
   await withStore({ retentionMs: 0 }, async (store) => {
     async function finish(contract, acknowledge) {
@@ -682,6 +1146,50 @@ test("retention removes only fully acknowledged terminal tasks", async () => {
   });
 });
 
+test("a stale retention candidate cannot delete a task resumed after the scan", async () => {
+  await withStore({}, async (store) => {
+    const { task, lease } = await startTask(store, { now: 10 });
+    const assembling = await store.transition(task.id, {
+      expectedRevision: task.revision,
+      lifecycle: "assembling",
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 20,
+    });
+    const done = await store.complete(task.id, validOutcome(task.id, { resumable: true }), {
+      expectedRevision: assembling.task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      now: 30,
+    });
+    const delivery = done.task.outbox.at(-1);
+    let revision = done.task.revision;
+    for (const consumer of delivery.pendingConsumers) {
+      const acknowledged = await store.ackOutbox(task.id, delivery.deliveryId, {
+        expectedRevision: revision,
+        consumer,
+        now: 40,
+      });
+      revision = acknowledged.task.revision;
+    }
+    const scanned = await store.read(task.id);
+    const resumed = await store.applyUserControl(task.id, {
+      action: "retry",
+      expectedRevision: scanned.revision,
+      expectedEpoch: scanned.epoch,
+      now: 50,
+    });
+    assert.equal(resumed.applied, true);
+
+    const staleDelete = await store.removeIfUnreferenced(task.id, {
+      expectedRevision: scanned.revision,
+    });
+    assert.equal(staleDelete.applied, false);
+    assert.equal(staleDelete.reason, "revision-mismatch");
+    assert.equal((await store.read(task.id)).lifecycle, "queued");
+  });
+});
+
 test("event log keeps monotonic valid history when its tail is truncated", async () => {
   await withStore({}, async (store, root) => {
     const task = await createTask(store);
@@ -692,5 +1200,42 @@ test("event log keeps monotonic valid history when its tail is truncated", async
     assert.equal(events.length, 1);
     assert.equal(events[0].type, "created");
     assert.ok(events.every((event, index) => event.sequence === index + 1));
+  });
+});
+
+test("unit attempt reservations lazily upgrade old manifests and remain CAS fenced after restart", async () => {
+  await withStore({ leaseMs: 1_000 }, async (store, root) => {
+    const { task, lease } = await startTask(store, { now: 1_000 });
+    assert.equal(task.attemptBudget, undefined, "a manifest without attemptBudget must remain readable as zero usage");
+    const request = {
+      expectedRevision: task.revision,
+      leaseId: lease.leaseId,
+      epoch: lease.epoch,
+      owner: "worker-a",
+      now: 1_001,
+      unitId: "unit-1",
+      kind: "model",
+      limit: 1,
+    };
+
+    const results = await Promise.all([
+      store.reserveUnitAttempt(task.id, { ...request, attemptId: "attempt-concurrent-a" }),
+      store.reserveUnitAttempt(task.id, { ...request, attemptId: "attempt-concurrent-b" }),
+    ]);
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    assert.deepEqual(results.filter((result) => !result.ok).map((result) => result.reason), ["revision-mismatch"]);
+
+    const restarted = createComplexTaskStore(root, { leaseMs: 1_000 });
+    const persisted = await restarted.read(task.id);
+    assert.equal(persisted.attemptBudget.units["unit-1"].modelAttempts, 1);
+    const exhausted = await restarted.reserveUnitAttempt(task.id, {
+      ...request,
+      expectedRevision: persisted.revision,
+      now: 1_002,
+      attemptId: "attempt-after-restart",
+    });
+    assert.equal(exhausted.ok, false);
+    assert.equal(exhausted.reason, "model-budget-exhausted");
+    assert.equal(exhausted.used, 1);
   });
 });

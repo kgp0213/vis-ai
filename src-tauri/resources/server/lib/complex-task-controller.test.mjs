@@ -58,7 +58,7 @@ function fakeStore(current, overrides = {}) {
 
 test("derives conservative allowed actions from lifecycle, user request, and outbox state", () => {
   assert.deepEqual(TASK_CONTROL_ACTIONS, [
-    "pause", "resume", "retry", "cancel", "resolve_user_input", "retarget_output", "ack_outcome", "delete_record",
+    "pause", "resume", "retry", "retry_delivery", "cancel", "resolve_user_input", "retarget_output", "ack_outcome", "delete_record",
   ]);
   assert.deepEqual(allowedTaskActions(task()), ["pause", "cancel"]);
   assert.deepEqual(allowedTaskActions(task({ lifecycle: "running" })), ["pause", "cancel"]);
@@ -134,11 +134,17 @@ test("rejects missing revision, disallowed actions, and malformed action payload
     expectedRevision: 3,
     payload: { requestedPath: "  " },
   })).reason, "requested-path-required");
-  assert.equal((await waitingController.control(TASK_ID, {
+  const retargeted = await waitingController.control(TASK_ID, {
     action: "retarget_output",
     expectedRevision: 3,
     payload: { requestedPath: "C:\\work\\new.md" },
-  })).reason, "request-id-required");
+  });
+  assert.equal(retargeted.ok, true);
+  assert.deepEqual(waitingStore.calls.at(-1), ["applyUserControl", TASK_ID, {
+    action: "retarget_output",
+    expectedRevision: 3,
+    payload: { requestedPath: "C:\\work\\new.md", requestId: "request-1" },
+  }]);
 });
 
 test("active user controls require the current epoch and pass the observed lease identity", async () => {
@@ -271,6 +277,76 @@ test("acknowledges one delivery consumer and deletes only through CAS-safe Store
   assert.equal(deleted.deleted, true);
   assert.equal(deleted.task, undefined);
   assert.deepEqual(deleteStore.calls.at(-1), ["removeIfUnreferenced", TASK_ID, { expectedRevision: 3 }]);
+});
+
+test("exposes a separate user-approved delivery retry without retrying the business task", async () => {
+  const pending = task({
+    lifecycle: "terminal",
+    outcome: { resumable: false },
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { "task-center": true },
+      pendingConsumers: ["conversation"],
+      deliveryStates: {
+        conversation: {
+          status: "blocked_user_retry",
+          attemptId: "attempt:old",
+          attempts: 3,
+          reason: "上一次交付结果不确定",
+        },
+      },
+    }],
+  });
+  const store = fakeStore(pending);
+  const controller = createComplexTaskController({ store });
+  assert.deepEqual(allowedTaskActions(pending), ["retry_delivery", "ack_outcome"]);
+  const result = await controller.control(TASK_ID, {
+    action: "retry_delivery",
+    expectedRevision: 3,
+    payload: { deliveryId: "delivery-1", consumer: "conversation" },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(store.calls.at(-1), ["applyUserControl", TASK_ID, {
+    action: "retry_delivery",
+    expectedRevision: 3,
+    payload: { deliveryId: "delivery-1", consumer: "conversation" },
+  }]);
+});
+
+test("rejects delivery retry for another consumer or a delivery that is not blocked", async () => {
+  const pending = task({
+    lifecycle: "terminal",
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { "task-center": true },
+      pendingConsumers: ["conversation"],
+      deliveryStates: { conversation: { status: "blocked_user_retry", attempts: 0 } },
+    }],
+  });
+  const controller = createComplexTaskController({ store: fakeStore(pending) });
+  assert.equal((await controller.control(TASK_ID, {
+    action: "retry_delivery",
+    expectedRevision: 3,
+    payload: { deliveryId: "delivery-1", consumer: "task-center" },
+  })).reason, "delivery-retry-consumer-required");
+  const ready = task({
+    lifecycle: "terminal",
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { "task-center": true },
+      pendingConsumers: ["conversation"],
+      deliveryStates: { conversation: { status: "ready", attempts: 0 } },
+    }],
+  });
+  const readyController = createComplexTaskController({ store: fakeStore(ready) });
+  assert.equal((await readyController.control(TASK_ID, {
+    action: "retry_delivery",
+    expectedRevision: 3,
+    payload: { deliveryId: "delivery-1", consumer: "conversation" },
+  })).reason, "action-not-allowed");
 });
 
 test("rejects an acknowledgement for a missing or already acknowledged delivery", async () => {

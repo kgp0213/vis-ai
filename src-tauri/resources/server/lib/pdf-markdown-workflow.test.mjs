@@ -8,10 +8,17 @@ import {
   evaluatePdfPageCoverage,
   evaluateTechnicalRetention,
   generatePdfSectionWithModel,
+  resolvePdfModelTimeouts,
   parsePdfSectionReview,
   pdfMarkdownStagingPath,
   registerPdfMarkdownWorkflowTool,
 } from "./pdf-markdown-workflow.mjs";
+
+test("PDF idle timeout scales with the configured hard deadline", () => {
+  assert.deepEqual(resolvePdfModelTimeouts({ hardTimeoutMs: 600_000 }), { idleMs: 360_000, hardMs: 600_000 });
+  assert.deepEqual(resolvePdfModelTimeouts({ hardTimeoutMs: 600_000, idleTimeoutMs: 450_000 }), { idleMs: 450_000, hardMs: 600_000 });
+  assert.deepEqual(resolvePdfModelTimeouts({ hardTimeoutMs: 60_000 }), { idleMs: 60_000, hardMs: 60_000 });
+});
 
 function fakeTools() {
   const definitions = new Map();
@@ -23,6 +30,60 @@ function fakeTools() {
     async dispatch(name, args) { calls.push({ name, args }); return `${name} ok`; },
   };
 }
+
+test("legacy PDF tool delegates to the managed document workflow when hosted", async () => {
+  const tools = fakeTools();
+  let delegated = null;
+  registerPdfMarkdownWorkflowTool(tools, {
+    delegate: async (args, context) => {
+      delegated = { args, context };
+      return {
+        ok: true,
+        accepted: true,
+        artifactStatus: "pending",
+        message: "文档任务已进入后台队列",
+      };
+    },
+    // A delegated host must not accidentally execute the compatibility path.
+    preparePdf: async () => { throw new Error("compatibility path should not run"); },
+  });
+
+  const context = { signal: new AbortController().signal };
+  const result = JSON.parse(await tools.definitions.get("organize_pdf_to_markdown").fn({
+    input: "manual.pdf",
+    outputPath: "manual.md",
+    pages: "1-5",
+  }, context));
+  assert.deepEqual(delegated.args, {
+    input: "manual.pdf",
+    outputPath: "manual.md",
+    pages: "1-5",
+  });
+  assert.equal(delegated.context, context);
+  assert.equal(result.artifactStatus, "pending");
+  assert.equal(
+    tools.definitions.get("organize_pdf_to_markdown").finishTurnOnResult(JSON.stringify(result)),
+    "文档任务已进入后台队列",
+  );
+
+  await tools.definitions.get("organize_pdf_to_markdown").fn({
+    input: "manual.pdf",
+    mode: "summary",
+  }, context);
+  assert.equal(delegated.args.mode, undefined);
+  assert.equal(delegated.args.fidelity, "summary-only");
+  assert.equal(delegated.args.summaryOnlyConfirmed, true);
+
+  await tools.definitions.get("organize_pdf_to_markdown").fn({
+    input: "manual.pdf",
+    mode: "transcription",
+    instructions: "Keep the original headings.",
+  }, context);
+  assert.equal(delegated.args.mode, undefined);
+  assert.equal(delegated.args.fidelity, "complete-with-summary");
+  assert.match(delegated.args.instructions, /Keep the original headings/);
+  assert.match(delegated.args.instructions, /source order/i);
+});
 
 test("Markdown helpers keep sections composable and measure technical retention", () => {
   assert.equal(pdfMarkdownStagingPath("reports/manual.md"), "reports/manual.visionox-partial.md");
@@ -105,6 +166,7 @@ test("PDF model section streams content and emits progress while generating", as
   assert.ok(progress.some((event) => event.phase === "model" && event.pageRange === "1-2"));
   assert.ok(progress.every((event) => event.stage === "draft"));
   assert.ok(progress.some((event) => event.generatedChars > 0));
+  assert.ok(progress.some((event) => event.reasoningChars >= "thinking".length));
   assert.equal(capturedRequest.requestPurpose, "toolContinuation");
 });
 

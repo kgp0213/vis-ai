@@ -8,6 +8,16 @@ import { atomicWriteFile } from "./atomic-file.mjs";
 const DAY_MS = 86_400_000;
 const JOB_ID_RE = /^[a-f0-9-]{16,64}$/i;
 const SECTION_ID_RE = /^[a-z0-9._-]{1,120}$/i;
+const PERSISTED_LIVE_STATUSES = new Set([
+  "queued",
+  "accepted",
+  "preparing",
+  "planning",
+  "running",
+  "waiting_foreground",
+  "waiting_provider",
+  "pausing",
+]);
 
 function safeJobId(value) {
   const id = String(value ?? "").trim();
@@ -25,6 +35,40 @@ function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
+export async function runDocumentJobStartupMaintenance(store, options = {}) {
+  const result = {
+    repaired: [],
+    pruned: { deleted: [], kept: 0 },
+    issues: [],
+  };
+  const reportIssue = (operation, issue = {}, error = null) => {
+    const normalized = {
+      operation,
+      ...(issue?.jobId ? { jobId: issue.jobId } : {}),
+      code: String(issue?.code || error?.code || "UNKNOWN"),
+      message: String(issue?.message || error?.message || error || "document job maintenance failed"),
+    };
+    result.issues.push(normalized);
+    try { options.onIssue?.(normalized, error); } catch { /* Startup diagnostics must not stop maintenance. */ }
+  };
+  const operations = [
+    ["repair", "repaired", () => store.repairInterrupted({
+      onIssue: (issue, error) => reportIssue("repair", issue, error),
+    })],
+    ["prune", "pruned", () => store.pruneExpired(Date.now(), {
+      onIssue: (issue, error) => reportIssue("prune", issue, error),
+    })],
+  ];
+  for (const [operation, field, run] of operations) {
+    try {
+      result[field] = await run();
+    } catch (error) {
+      reportIssue(operation, {}, error);
+    }
+  }
+  return result;
+}
+
 export function createDocumentJobStore(rootDir, options = {}) {
   const root = resolve(String(rootDir));
   const retentionDays = Math.max(1, Math.min(365, Number(options.retentionDays) || 30));
@@ -37,6 +81,7 @@ export function createDocumentJobStore(rootDir, options = {}) {
   const manifestSnapshotsDir = (id) => join(jobDir(id), "manifest-snapshots");
   const sectionPath = (id, sectionId) => join(jobDir(id), "sections", `${safeSectionId(sectionId)}.md`);
   const checkpointPath = (id, sectionId) => join(jobDir(id), "checkpoints", `${safeSectionId(sectionId)}.json`);
+  const finalDraftPath = (id) => join(jobDir(id), "final-draft.md");
   const eventsPath = (id) => join(jobDir(id), "events.jsonl");
 
   function serializeMutation(id, action) {
@@ -163,6 +208,7 @@ export function createDocumentJobStore(rootDir, options = {}) {
       sourcePath: String(input.sourcePath ?? ""),
       sourcePaths: Array.isArray(input.sourcePaths) ? input.sourcePaths.map((path) => String(path)).filter(Boolean) : [],
       outputPath: String(input.outputPath ?? ""),
+      outputIdentity: input.outputIdentity == null ? null : String(input.outputIdentity),
       taskType: String(input.taskType || "document"),
       taskFingerprint: input.taskFingerprint ?? null,
       sourceFingerprint: input.sourceFingerprint ?? null,
@@ -171,6 +217,13 @@ export function createDocumentJobStore(rootDir, options = {}) {
       allowOutsideWorkspace: input.allowOutsideWorkspace === true,
       allowOutputOverwrite: input.allowOutputOverwrite === true,
       sourceName: String(input.sourceName || basename(String(input.sourcePath ?? "document"))),
+      origin: clone(input.origin ?? null),
+      handoff: clone(input.handoff ?? {
+        state: "waiting_worker",
+        attempts: 0,
+        terminalKey: null,
+        terminalStatus: null,
+      }),
       contract: clone(input.contract ?? null),
       policy: clone(input.policy ?? null),
       policyTrace: clone(input.policyTrace ?? null),
@@ -242,13 +295,74 @@ export function createDocumentJobStore(rootDir, options = {}) {
     });
   }
 
+  async function compareAndUpdateHandoff(id, expected = {}, changes = {}) {
+    return serializeMutation(id, async () => {
+      const current = await read(id);
+      const handoff = current.handoff && typeof current.handoff === "object" ? current.handoff : {};
+      const matches = Object.entries(expected && typeof expected === "object" ? expected : {}).every(([key, value]) => {
+        if (key === "userControlled") return (handoff.userControlled === true) === (value === true);
+        return handoff[key] === value;
+      });
+      if (!matches) {
+        return {
+          applied: false,
+          reason: "handoff-compare-failed",
+          job: clone(current),
+        };
+      }
+      const next = {
+        ...current,
+        handoff: {
+          ...handoff,
+          ...clone(changes && typeof changes === "object" ? changes : {}),
+        },
+        id: current.id,
+        revision: (Number(current.revision) || 0) + 1,
+        createdAt: current.createdAt,
+      };
+      const written = await writeManifest(next);
+      return { applied: true, job: written };
+    });
+  }
+
   async function list() {
     if (!existsSync(root)) return [];
     const entries = await readdir(root, { withFileTypes: true });
     const jobs = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || !JOB_ID_RE.test(entry.name)) continue;
-      try { jobs.push(await read(entry.name)); } catch { /* Keep one damaged job from hiding healthy jobs. */ }
+      try {
+        jobs.push(await read(entry.name));
+      } catch (error) {
+        let persistedAt = null;
+        try { persistedAt = new Date((await stat(jobDir(entry.name))).mtimeMs).toISOString(); } catch { /* Timestamp is optional. */ }
+        const message = `document job manifest is corrupt and could not be recovered: ${entry.name}`;
+        jobs.push({
+          version: 1,
+          id: entry.name,
+          revision: null,
+          kind: "document",
+          lifecycle: "task",
+          status: "corrupt",
+          running: false,
+          paused: true,
+          corrupt: true,
+          needsAttention: true,
+          sourcePath: "",
+          sourcePaths: [],
+          sourceName: "Damaged document job",
+          outputPath: "",
+          taskType: "document",
+          progress: { completedUnits: 0, totalUnits: null, completedBatches: 0, totalBatches: null, stage: "corrupt" },
+          batches: [],
+          warnings: [{ type: "document-manifest-corrupt", message }],
+          issues: [{ type: "document-manifest-corrupt", message, detail: String(error?.message || error) }],
+          handoff: { state: "needs_user", attempts: 0, lastError: message },
+          error: message,
+          createdAt: persistedAt,
+          updatedAt: persistedAt,
+        });
+      }
     }
     return jobs.sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
   }
@@ -300,6 +414,38 @@ export function createDocumentJobStore(rootDir, options = {}) {
     return clone(checkpoint);
   }
 
+  async function writeFinalDraft(id, content, metadata = {}) {
+    const key = safeJobId(id);
+    const body = String(content ?? "");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const record = {
+      ...clone(metadata),
+      file: "final-draft.md",
+      chars: body.length,
+      sha256,
+      writtenAt: new Date().toISOString(),
+    };
+    await mkdir(jobDir(key), { recursive: true });
+    await atomicWrite(finalDraftPath(key), body, "utf8");
+    await update(key, { finalDraft: record });
+    await appendEvent(key, { type: "final-draft-written", chars: body.length, sha256 }).catch(() => {});
+    return clone(record);
+  }
+
+  async function readFinalDraft(id) {
+    const key = safeJobId(id);
+    const job = await read(key);
+    if (!job.finalDraft?.sha256) throw new Error(`document final draft is unavailable: ${key}`);
+    const content = await readFile(finalDraftPath(key), "utf8");
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    if (sha256 !== job.finalDraft.sha256) {
+      const error = new Error(`document final draft hash mismatch: ${key}`);
+      error.code = "DOCUMENT_FINAL_DRAFT_CORRUPT";
+      throw error;
+    }
+    return { ...clone(job.finalDraft), content };
+  }
+
   async function readBatchCheckpoint(id, sectionId) {
     try {
       const checkpoint = JSON.parse(await readFile(checkpointPath(id, sectionId), "utf8"));
@@ -321,7 +467,7 @@ export function createDocumentJobStore(rootDir, options = {}) {
     await serializeMutation(id, () => rm(jobDir(id), { recursive: true, force: true }));
   }
 
-  async function pruneExpired(now = Date.now()) {
+  async function pruneExpired(now = Date.now(), options = {}) {
     if (!existsSync(root)) return { deleted: [], kept: 0 };
     const cutoff = Number(now) - retentionDays * DAY_MS;
     const deleted = [];
@@ -339,20 +485,29 @@ export function createDocumentJobStore(rootDir, options = {}) {
         } else {
           kept++;
         }
-      } catch {
+      } catch (error) {
         kept++;
+        try {
+          options.onIssue?.({ jobId: job.id, code: String(error?.code || "UNKNOWN"), message: String(error?.message || error) }, error);
+        } catch { /* Maintenance diagnostics must not stop pruning. */ }
       }
     }
     return { deleted, kept };
   }
 
-  async function repairInterrupted() {
+  async function repairInterrupted(options = {}) {
     const repaired = [];
     for (const job of await list()) {
-      if (["running", "waiting_foreground", "waiting_provider", "pausing"].includes(job.status)) {
-        await update(job.id, { status: "interrupted", running: false, paused: true, error: "application stopped before the document task completed" });
-        await appendEvent(job.id, { type: "restart-recovery", previousStatus: job.status }).catch(() => {});
-        repaired.push(job.id);
+      if (PERSISTED_LIVE_STATUSES.has(job.status)) {
+        try {
+          await update(job.id, { status: "interrupted", running: false, paused: true, error: "application stopped before the document task completed" });
+          await appendEvent(job.id, { type: "restart-recovery", previousStatus: job.status }).catch(() => {});
+          repaired.push(job.id);
+        } catch (error) {
+          try {
+            options.onIssue?.({ jobId: job.id, code: String(error?.code || "UNKNOWN"), message: String(error?.message || error) }, error);
+          } catch { /* Maintenance diagnostics must not stop recovery. */ }
+        }
       }
     }
     return repaired;
@@ -362,12 +517,14 @@ export function createDocumentJobStore(rootDir, options = {}) {
     root,
     retentionDays,
     appendEvent,
+    compareAndUpdateHandoff,
     create,
     failedBatches,
     list,
     pruneExpired,
     read,
     readBatchCheckpoint,
+    readFinalDraft,
     readEvents,
     readSection,
     remove,
@@ -375,6 +532,7 @@ export function createDocumentJobStore(rootDir, options = {}) {
     update,
     listSectionIds,
     writeBatchCheckpoint,
+    writeFinalDraft,
     writeSection,
   };
 }

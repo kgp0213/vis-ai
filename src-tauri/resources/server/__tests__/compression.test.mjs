@@ -135,6 +135,17 @@ describe("decideAfterUsage 决策逻辑", () => {
     assert.doesNotMatch(source, /This summary replaces the original turns to free context . make it self-contained/);
   });
 
+  test("上下文摘要使用独立用途配置并拒绝截断结果", () => {
+    const source = readFileSync(runtimeChunkUrl, "utf8");
+    const fold = source.slice(source.indexOf("async summarizeForFold"), source.indexOf("persistRewrite", source.indexOf("async summarizeForFold")));
+    const forced = source.slice(source.indexOf("async function* forceSummaryAfterIterLimit"), source.indexOf("async function summarizePartialProgress"));
+    const partial = source.slice(source.indexOf("async function summarizePartialProgress"), source.indexOf("// src/loop/shrink.ts"));
+    for (const section of [fold, forced, partial]) {
+      assert.match(section, /requestPurpose:\s*"summary"/);
+      assert.match(section, /assertModelResponseComplete\(resp\.finishReason \?\? resp\.raw\?\.choices\?\.\[0\]\?\.finish_reason\)/);
+    }
+  });
+
   test("普通最终回答也会先执行上下文决策，再结束当前轮次", () => {
     const source = readFileSync(runtimeChunkUrl, "utf8");
     const noToolReturn = source.indexOf("if (repairedCalls.length === 0)");

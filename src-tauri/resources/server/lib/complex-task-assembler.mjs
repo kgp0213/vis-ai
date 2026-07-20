@@ -1,3 +1,5 @@
+import { parseArtifactReference } from "./complex-task-artifact-reference.mjs";
+
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
@@ -25,6 +27,22 @@ function selectedCandidate(choice, candidates) {
 
 function invalidEntry(code, fields = {}) {
   return { code, ...clone(fields) };
+}
+
+function producerMismatch(task, manifest) {
+  const pinned = task?.contract?.pinned;
+  if (!pinned || typeof pinned !== "object") return [];
+  const producer = manifest?.producer ?? {};
+  const fields = ["adapterVersion", "skillHash", "toolSchemaVersion"]
+    .filter((field) => String(pinned[field] ?? "") && String(producer[field] ?? "") !== String(pinned[field]));
+  const allowedModels = new Set([
+    ...(Array.isArray(pinned.initialModelConfigFingerprints) ? pinned.initialModelConfigFingerprints : []),
+    task?.metadata?.currentModelConfigFingerprint,
+    ...(Array.isArray(task?.metadata?.modelConfigFingerprints) ? task.metadata.modelConfigFingerprints : []),
+  ].map((value) => String(value ?? "").trim()).filter(Boolean));
+  const model = String(producer.modelConfigFingerprint ?? "").trim();
+  if (allowedModels.size > 0 && !allowedModels.has(model) && !model.startsWith("host:")) fields.push("modelConfigFingerprint");
+  return fields;
 }
 
 export async function assembleComplexTask({ task, artifactStore, adapter = {} } = {}) {
@@ -68,19 +86,30 @@ export async function assembleComplexTask({ task, artifactStore, adapter = {} } 
     }
     const authorized = new Set(uniqueStrings(plan.primaryCoverage));
     for (const ref of uniqueStrings(unitResult?.artifactRefs)) {
+      const reference = parseArtifactReference(ref);
       let artifact;
       try {
         artifact = await artifactStore.read(ref);
       } catch (error) {
         const code = error?.code === "ARTIFACT_HASH_MISMATCH" ? "hash-mismatch"
+          : ["ARTIFACT_REFERENCE_HASH_MISMATCH", "ARTIFACT_REFERENCE_MISMATCH"].includes(error?.code) ? "artifact-pin-mismatch"
           : error?.code === "ARTIFACT_NOT_FOUND" ? "artifact-missing"
             : "artifact-invalid";
-        invalid.push(invalidEntry(code, { artifactId: ref, unitId, message: String(error?.message || error) }));
+        invalid.push(invalidEntry(code, { artifactId: reference.artifactId, artifactRef: ref, unitId, message: String(error?.message || error) }));
         continue;
       }
       const key = artifactKey(artifact);
       if (loaded.has(key)) artifact = loaded.get(key);
       else loaded.set(key, artifact);
+      const owner = artifact.manifest.owner;
+      if (owner) {
+        if (owner.taskId !== task.id) invalid.push(invalidEntry("foreign-task-artifact", { artifactId: reference.artifactId, unitId, ownerTaskId: owner.taskId }));
+        if (owner.kind !== "unit" || owner.unitId !== unitId) invalid.push(invalidEntry("foreign-unit-artifact", { artifactId: reference.artifactId, unitId, ownerUnitId: owner.unitId ?? null }));
+      } else if (task?.contract?.pinned) invalid.push(invalidEntry("artifact-owner-missing", { artifactId: reference.artifactId, unitId }));
+      if (task?.contract?.pinned && !reference.exact) invalid.push(invalidEntry("artifact-reference-unpinned", { artifactId: reference.artifactId, unitId }));
+      const mismatchedProducerFields = producerMismatch(task, artifact.manifest);
+      if (mismatchedProducerFields.length) invalid.push(invalidEntry("producer-mismatch", { artifactId: reference.artifactId, unitId, fields: mismatchedProducerFields }));
+      if ((owner && (owner.taskId !== task.id || owner.kind !== "unit" || owner.unitId !== unitId)) || mismatchedProducerFields.length > 0) continue;
       const primary = Array.isArray(artifact.manifest.primaryCoverage) ? artifact.manifest.primaryCoverage.map(String) : [];
       if (new Set(primary).size !== primary.length) {
         invalid.push(invalidEntry("duplicate-primary-coverage", { artifactId: ref, unitId }));

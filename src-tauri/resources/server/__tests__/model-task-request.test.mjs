@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import {
   requestModelJson,
   requestModelText,
+  assertUsableModelResponse,
+  assertModelProbeMarker,
 } from "../lib/model-task-request.mjs";
 
 function fakeClient(response) {
@@ -31,6 +33,7 @@ describe("model task request policy", () => {
     assert.match(launcher, /requestPurpose: "report"/);
     assert.match(launcher, /requestPurpose: "knowledge"/);
     assert.match(launcher, /requestPurpose: "sessionReview"/);
+    assert.match(launcher, /VISIONOX_PROBE_OK_7F3A/);
     assert.match(learn, /requestPurpose: "learn"/);
     assert.match(launcher, /capabilities: resolveProviderModelCapabilities\(getActiveProvider\(config\), modelConfig\.model\)/);
   });
@@ -184,5 +187,13 @@ describe("model task request policy", () => {
       }),
       /empty response/i,
     );
+  });
+
+  test("probe responses require non-empty content and the expected marker", () => {
+    assert.equal(assertUsableModelResponse({ content: "VISIONOX_PROBE_OK_7F3A", finishReason: "stop" }, { label: "probe" }), "VISIONOX_PROBE_OK_7F3A");
+    assert.throws(() => assertUsableModelResponse({ content: "", finishReason: "stop" }, { label: "probe" }), /empty response/);
+    assert.throws(() => assertUsableModelResponse({ content: "partial", finishReason: "length" }, { label: "probe" }), /length/);
+    assert.equal(assertModelProbeMarker({ content: '"VISIONOX_PROBE_OK_7F3A"', finishReason: "stop" }, "VISIONOX_PROBE_OK_7F3A"), "VISIONOX_PROBE_OK_7F3A");
+    assert.throws(() => assertModelProbeMarker({ content: "The marker is VISIONOX_PROBE_OK_7F3A", finishReason: "stop" }, "VISIONOX_PROBE_OK_7F3A"), /did not exactly echo/);
   });
 });

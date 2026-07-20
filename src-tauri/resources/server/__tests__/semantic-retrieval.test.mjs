@@ -2,12 +2,14 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildSemanticRetrievalCacheKey,
   buildRetrievalQuery,
   buildRetrievedModelInput,
   normalizeIndexRetrievalMode,
   rerankRetrievalHits,
   restoreOriginalUserInput,
   selectRetrievalHits,
+  semanticRetrievalConfigFingerprint,
 } from "../lib/semantic-retrieval.mjs";
 
 describe("semantic retrieval", () => {
@@ -15,6 +17,41 @@ describe("semantic retrieval", () => {
     assert.equal(normalizeIndexRetrievalMode("auto"), "auto");
     assert.equal(normalizeIndexRetrievalMode("invalid"), "tool");
     assert.match(buildRetrievalQuery("为什么？", [{ role: "user", text: "为什么技能版本不能自动递增" }]), /Previous question:[\s\S]*Current question:/);
+  });
+
+  test("cache keys cover embedding configuration without exposing the API key", () => {
+    const base = {
+      workspace: "D:\\visionox-workspace",
+      query: "检索发布流程",
+      provider: "openai-compat",
+      model: "embedding-model-a",
+      baseUrl: "https://embedding.internal.example/v1/",
+      extraBody: { dimensions: 1024, options: { normalize: true, precision: "float" } },
+      apiKey: "sensitive-semantic-api-key",
+    };
+    const fingerprint = semanticRetrievalConfigFingerprint(base);
+    const cacheKey = buildSemanticRetrievalCacheKey(base);
+
+    assert.match(fingerprint, /^sha256:[a-f0-9]{64}$/);
+    assert.match(cacheKey, /^semantic-retrieval:v1:[a-f0-9]{64}$/);
+    assert.doesNotMatch(fingerprint, /sensitive-semantic-api-key|embedding\.internal/i);
+    assert.doesNotMatch(cacheKey, /sensitive-semantic-api-key|embedding\.internal/i);
+
+    for (const changed of [
+      { provider: "ollama" },
+      { model: "embedding-model-b" },
+      { baseUrl: "https://embedding-backup.internal.example/v1" },
+      { extraBody: { ...base.extraBody, dimensions: 2048 } },
+      { apiKey: "rotated-semantic-api-key" },
+    ]) {
+      assert.notEqual(buildSemanticRetrievalCacheKey({ ...base, ...changed }), cacheKey);
+    }
+
+    assert.equal(buildSemanticRetrievalCacheKey({
+      ...base,
+      baseUrl: base.baseUrl.replace(/\/$/, ""),
+      extraBody: { options: { precision: "float", normalize: true }, dimensions: 1024 },
+    }), cacheKey, "equivalent URL and JSON key ordering should not invalidate the cache");
   });
 
   test("keeps separate knowledge and workspace quotas", () => {

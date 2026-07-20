@@ -124,7 +124,7 @@ async function evaluate(cdp, expression) {
   return evaluated.result?.value;
 }
 
-async function waitForBrowserValue(cdp, expression, predicate, timeoutMs = 10_000) {
+async function waitForBrowserValue(cdp, expression, predicate, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   let lastValue;
   while (Date.now() < deadline) {
@@ -151,11 +151,19 @@ async function waitForApiValue(url, predicate, timeoutMs = 10_000) {
   throw new Error(`API condition did not become true within ${timeoutMs}ms`);
 }
 
-function removeTempRoot(path) {
+async function removeTempRoot(path) {
   const resolvedTemp = `${resolve(tmpdir())}${sep}`.toLowerCase();
   const resolvedPath = resolve(path).toLowerCase();
   if (!resolvedPath.startsWith(resolvedTemp)) throw new Error(`refusing to remove non-temp path: ${path}`);
-  rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt === 9) throw error;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    }
+  }
 }
 
 function terminateProcessTree(child) {
@@ -180,6 +188,29 @@ const token = "uismoketoken123";
 const homeDir = join(tempRoot, "home");
 const visionoxDir = join(homeDir, ".visionox");
 mkdirSync(visionoxDir, { recursive: true });
+writeFileSync(join(visionoxDir, "config.json"), JSON.stringify({
+  preset: "flash",
+  model: "ark-chat-model",
+  activeProviderId: "ark-chat",
+  providers: [
+    {
+      id: "ark-chat",
+      name: "Ark Chat",
+      baseUrl: "https://ui-smoke.invalid/v1",
+      apiKey: "ui-smoke-placeholder-key",
+      ui: { groupId: "volcengine-ark", groupName: "火山方舟 Ark", order: 10 },
+      models: [{ id: "ark-chat-model", name: "Ark Chat Model", presets: ["flash"], maxContextLength: 32768 }],
+    },
+    {
+      id: "ark-code",
+      name: "Ark Code",
+      baseUrl: "https://ui-smoke.invalid/v1",
+      apiKey: "ui-smoke-placeholder-key",
+      ui: { groupId: "volcengine-ark", groupName: "火山方舟 Ark", order: 20 },
+      models: [{ id: "ark-code-model", name: "Ark Code Model", presets: ["flash"], maxContextLength: 65536 }],
+    },
+  ],
+}, null, 2), "utf8");
 const seededMessages = Array.from({ length: 1200 }, (_, index) => ({
   id: `seed-${index + 1}`,
   role: index % 2 === 0 ? "user" : "assistant",
@@ -333,6 +364,34 @@ try {
   console.log("[ui-smoke] V来家 successful login closed the popover");
   await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
   await waitForBrowserValue(cdp, `Boolean(document.querySelector('.vhome-popover'))`, Boolean);
+  const connectedPopoverLayout = await evaluate(cdp, `(() => {
+    const actions = document.querySelector('.vhome-popover-actions-connected');
+    const buttons = [...(actions?.querySelectorAll('button') || [])].map((button) => button.getBoundingClientRect());
+    const close = document.querySelector('.vhome-popover-close')?.getBoundingClientRect();
+    return {
+      display: actions ? getComputedStyle(actions).display : '',
+      buttons: buttons.map((rect) => ({ width: Math.round(rect.width), height: Math.round(rect.height) })),
+      close: close ? { width: Math.round(close.width), height: Math.round(close.height) } : null,
+    };
+  })()`);
+  if (connectedPopoverLayout.display !== 'grid' || connectedPopoverLayout.buttons.length !== 2 || Math.abs(connectedPopoverLayout.buttons[0].width - connectedPopoverLayout.buttons[1].width) > 1 || !connectedPopoverLayout.close || connectedPopoverLayout.close.width < 28 || connectedPopoverLayout.close.height < 28) {
+    throw new Error(`V来家 connected popover layout is uneven: ${JSON.stringify(connectedPopoverLayout)}`);
+  }
+  await new Promise((resolveWait) => setTimeout(resolveWait, 120));
+  await evaluate(cdp, `document.querySelector('.app-top').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.vhome-popover')`, Boolean);
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.vhome-popover'))`, Boolean);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 120));
+  await evaluate(cdp, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.vhome-popover')`, Boolean);
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.vhome-popover'))`, Boolean);
+  await evaluate(cdp, `document.querySelector('.vhome-popover-close').click()`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.vhome-popover')`, Boolean);
+  console.log("[ui-smoke] V来家 connected popover aligns actions and dismisses outside, on Escape and from close");
+  await evaluate(cdp, `document.querySelector('.vhome-control-button').click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.vhome-popover'))`, Boolean);
   await evaluate(cdp, `(() => { window.confirm = () => true; [...document.querySelectorAll('.vhome-popover button')].find((button) => button.textContent.includes('退出'))?.click(); })()`);
   await waitForBrowserValue(cdp, `document.querySelector('.vhome-control-button').textContent.includes('登录') && document.querySelector('.side-foot .label')?.textContent.includes('127.0.0.1') && !document.querySelector('.vhome-control-button').disabled && !document.querySelector('.vhome-popover')`, Boolean);
   console.log("[ui-smoke] V来家 logout immediately reset identity and closed the popover");
@@ -387,6 +446,219 @@ try {
   console.log("[ui-smoke] read-only DWS schedule templates rendered from the installed Skill");
   await evaluate(cdp, `[...document.querySelectorAll('.side-tab')].find((item) => item.textContent.includes('对话'))?.click()`);
 
+  await evaluate(cdp, `(() => {
+    const baseJob = {
+      id: 'document:ui-scroll-test-00',
+      kind: 'document',
+      command: '整理大型技术文档并生成完整 Markdown 审核报告',
+      status: 'completed_with_warnings',
+      running: false,
+      qualityPassed: false,
+      previewAvailable: true,
+      progress: { completed: 55, total: 55, unitLabel: '页', percent: 100, stage: 'completed', taskModelCalls: 24, currentLabel: 'PDF pages 51-55' },
+      model: 'deepseek-official/deepseek-v4-flash',
+      modelRole: 'fallback',
+      outputPath: 'D:/workspace/large-document.md',
+      sourcePaths: Array.from({ length: 8 }, (_, index) => 'D:/workspace/source/document-' + (index + 1) + '.pdf'),
+      contract: { completionCriteria: Array.from({ length: 12 }, (_, index) => '完成条件 ' + (index + 1) + '：保留原文证据、页码和全部关键数据。') },
+      warnings: Array.from({ length: 8 }, (_, index) => ({ type: 'quality-review', message: '第 ' + (index + 1) + ' 个区块需要人工复核。' })),
+      modelHistory: Array.from({ length: 24 }, (_, index) => ({ providerId: 'deepseek-official', modelId: 'deepseek-v4-flash', role: index % 3 ? 'primary' : 'fallback', passed: index % 4 !== 0, attempts: index % 3 + 1 })),
+      preview: { partial: true, content: Array.from({ length: 80 }, (_, index) => '## 草稿章节 ' + (index + 1) + '\\n用于验证后台任务详情滚动的长内容。').join('\\n\\n') },
+      events: Array.from({ length: 30 }, (_, index) => ({ at: new Date(Date.now() - index * 60000).toISOString(), type: 'quality-review', batchId: 'batch-' + (index + 1) })),
+    };
+    const genericRunning = {
+      id: 'task:ui-generic-running',
+      taskType: 'report',
+      kind: 'task',
+      goal: '通用任务：正在生成运行报告',
+      lifecycle: 'running',
+      outcome: null,
+      quality: 'unknown',
+      active: true,
+      revision: 3,
+      progress: { completedUnits: 2, totalUnits: 5, unitLabel: '步骤' },
+      allowedActions: ['pause', 'cancel'],
+      artifactRefs: [],
+    };
+    const genericAttention = {
+      id: 'task:ui-generic-attention',
+      taskType: 'report',
+      kind: 'task',
+      goal: '通用任务：等待用户处理',
+      lifecycle: 'waiting_user',
+      outcome: null,
+      quality: 'unknown',
+      active: false,
+      needsAttention: true,
+      revision: 7,
+      progress: { completedUnits: 4, totalUnits: 4, unitLabel: '步骤', percent: 100 },
+      allowedActions: ['retry', 'resolve_user_input', 'cancel'],
+      artifactRefs: [{ artifactId: 'draft-1', filename: '待复核报告.md', path: 'D:/workspace/waiting-report.md', mediaType: 'text/markdown' }],
+      warnings: [{ message: '等待用户确认输出范围。' }],
+      userAction: {
+        requestId: 'request-ui-choice',
+        question: '请选择是否继续复核。',
+        choices: [{ id: 'continue-review', label: '继续复核' }, { id: 'stop-review', label: '停止复核' }]
+      },
+    };
+    const genericDone = {
+      id: 'task:ui-generic-done',
+      taskType: 'report',
+      kind: 'task',
+      goal: '通用任务：已交付报告',
+      lifecycle: 'terminal',
+      outcome: 'delivered',
+      quality: 'verified',
+      active: false,
+      revision: 9,
+      progress: { completedUnits: 5, totalUnits: 5, unitLabel: '步骤', percent: 100 },
+      allowedActions: ['ack_outcome'],
+      artifactRefs: [{ artifactId: 'final-1', filename: '已交付报告.md', path: 'D:/workspace/final-report.md', mediaType: 'text/markdown' }],
+    };
+    const jobs = [
+      ...Array.from({ length: 30 }, (_, index) => ({ ...baseJob, id: 'document:ui-scroll-test-' + String(index).padStart(2, '0'), command: baseJob.command + ' ' + (index + 1) })),
+      genericRunning,
+      genericAttention,
+      genericDone,
+    ];
+    window.__backgroundJobsListReads = 0;
+    window.__backgroundJobActions = [];
+    const pendingDeliveries = [{ deliveryId: 'delivery-generic-done', taskId: genericDone.id, revision: genericDone.revision, outcome: 'delivered' }];
+    window.__backgroundJobsOriginalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = String(init.method || input?.method || 'GET').toUpperCase();
+      if (method === 'GET' && url.pathname.endsWith('/background-jobs')) {
+        window.__backgroundJobsListReads += 1;
+        return new Response(JSON.stringify({ jobs, pendingDeliveries }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (method === 'GET' && url.pathname.includes('/background-jobs/')) {
+        const id = decodeURIComponent(url.pathname.slice(url.pathname.lastIndexOf('/') + 1));
+        const delayMs = id.endsWith('-00') ? 180 : id.endsWith('-01') ? 10 : 0;
+        if (delayMs > 0) await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+        return new Response(JSON.stringify({ job: jobs.find((item) => item.id === id) || baseJob }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (method === 'POST' && url.pathname.includes('/background-jobs/')) {
+        window.__backgroundJobActions.push(JSON.parse(init.body || '{}'));
+        const id = decodeURIComponent(url.pathname.slice(url.pathname.lastIndexOf('/') + 1));
+        return new Response(JSON.stringify({ job: jobs.find((item) => item.id === id) || baseJob }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return window.__backgroundJobsOriginalFetch(input, init);
+    };
+  })()`);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    workbench: Boolean(document.querySelector('.background-jobs-workbench .background-jobs-detail')),
+    chip: [...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.textContent ?? '',
+    error: document.querySelector('.notice.err')?.textContent ?? '',
+  }))()`, (value) => value.workbench);
+  await waitForBrowserValue(cdp, `(() => ({
+    count: document.querySelectorAll('.background-job-list-item').length,
+    groups: [...document.querySelectorAll('.background-job-group-title')].map((item) => item.textContent.trim()),
+    detail: document.querySelector('.background-jobs-detail')?.textContent ?? '',
+  }))()`, (value) => value.count >= 2);
+  await evaluate(cdp, `[...document.querySelectorAll('.background-job-list-item')].find((item) => item.textContent.includes('审核报告 2'))?.click()`);
+  await waitForBrowserValue(cdp, `document.querySelector('.background-jobs-detail h3')?.textContent.trim().endsWith(' 2')`, Boolean);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 240));
+  const selectedBackgroundDetail = await evaluate(cdp, `document.querySelector('.background-jobs-detail h3')?.textContent.trim() || ''`);
+  if (!selectedBackgroundDetail.endsWith(' 2')) throw new Error(`stale background detail replaced the latest selection: ${selectedBackgroundDetail}`);
+  console.log("[ui-smoke] delayed background detail responses cannot replace the latest selection");
+  await evaluate(cdp, `[...document.querySelectorAll('.background-job-list-item')].find((item) => item.textContent.includes('通用任务：等待用户处理'))?.click()`);
+  const genericTaskProjection = await waitForBrowserValue(cdp, `(() => {
+    const detail = document.querySelector('.background-jobs-detail');
+    if (!detail?.textContent.includes('task:ui-generic-attention')) return null;
+    return {
+      groups: [...document.querySelectorAll('.background-job-group-title span:first-child')].map((item) => item.textContent.trim()),
+      actions: [...document.querySelectorAll('.background-task-actions button')].map((item) => item.textContent.trim()),
+      artifact: document.querySelector('.background-task-artifacts')?.textContent ?? '',
+      text: detail.textContent,
+    };
+  })()`, Boolean);
+  if (!genericTaskProjection.groups.includes('运行中') || !genericTaskProjection.groups.includes('需要处理') || !genericTaskProjection.actions.includes('重试') || !genericTaskProjection.actions.includes('提交处理结果') || !genericTaskProjection.actions.includes('取消任务') || !genericTaskProjection.artifact.includes('待复核报告.md') || !genericTaskProjection.text.includes('请选择是否继续复核')) {
+    throw new Error(`generic background task projection is incomplete: ${JSON.stringify(genericTaskProjection)}`);
+  }
+  await evaluate(cdp, `(() => {
+    window.__backgroundJobsOriginalPrompt = window.prompt;
+    window.prompt = () => '1';
+    [...document.querySelectorAll('.background-task-actions button')].find((item) => item.textContent.trim() === '提交处理结果')?.click();
+  })()`);
+  const choiceAction = await waitForBrowserValue(cdp, `window.__backgroundJobActions.find((item) => item.action === 'resolve_user_input') ?? null`, Boolean);
+  if (choiceAction?.payload?.requestId !== 'request-ui-choice' || choiceAction?.payload?.choiceId !== 'continue-review' || typeof choiceAction.requestId !== 'string' || !choiceAction.requestId) {
+    throw new Error(`generic background choice did not map to the durable choice id: ${JSON.stringify(choiceAction)}`);
+  }
+  await evaluate(cdp, `(() => { if (window.__backgroundJobsOriginalPrompt) window.prompt = window.__backgroundJobsOriginalPrompt; delete window.__backgroundJobsOriginalPrompt; })()`);
+  await evaluate(cdp, `[...document.querySelectorAll('.background-task-actions button')].find((item) => item.textContent.trim() === '重试')?.click()`);
+  const genericAction = await waitForBrowserValue(cdp, `window.__backgroundJobActions.at(-1) ?? null`, Boolean);
+  if (genericAction.action !== 'retry' || genericAction.expectedRevision !== 7 || typeof genericAction.requestId !== 'string' || !genericAction.requestId) {
+    throw new Error(`generic background action lost concurrency metadata: ${JSON.stringify(genericAction)}`);
+  }
+  const listReadsBeforeFocus = await evaluate(cdp, `window.__backgroundJobsListReads`);
+  await evaluate(cdp, `window.dispatchEvent(new Event('focus'))`);
+  await waitForBrowserValue(cdp, `window.__backgroundJobsListReads`, (value) => value > listReadsBeforeFocus);
+  console.log("[ui-smoke] generic background tasks group, render artifacts, gate actions and refresh on focus");
+  await evaluate(cdp, `[...document.querySelectorAll('.background-job-list-item')].find((item) => item.textContent.includes('审核报告 2'))?.click()`);
+  await waitForBrowserValue(cdp, `document.querySelector('.background-jobs-detail h3')?.textContent.trim().endsWith(' 2')`, Boolean);
+  const measureBackgroundWorkbench = async (width, height) => {
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 120));
+    return evaluate(cdp, `(() => {
+      const layout = document.querySelector('.background-jobs-layout');
+      const list = layout?.querySelector('.background-jobs-list');
+      const detail = layout?.querySelector('.background-jobs-detail');
+      if (!layout || !list || !detail) return null;
+      detail.scrollTop = 0;
+      detail.scrollTop = 120;
+      list.scrollTop = 0;
+      list.scrollTop = 120;
+      const layoutRect = layout.getBoundingClientRect();
+      const detailRect = detail.getBoundingClientRect();
+      const inputArea = document.querySelector('.chat-input-area');
+      const modelButton = [...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('模型'));
+      const closeButton = document.querySelector('.background-jobs-close');
+      const rect = (element) => {
+        const value = element.getBoundingClientRect();
+        return { x: Math.round(value.x), y: Math.round(value.y), width: Math.round(value.width), height: Math.round(value.height), bottom: Math.round(value.bottom) };
+      };
+      return {
+        detailClientHeight: detail.clientHeight,
+        detailScrollHeight: detail.scrollHeight,
+        detailScrollTop: detail.scrollTop,
+        listClientHeight: list.clientHeight,
+        listScrollHeight: list.scrollHeight,
+        listScrollTop: list.scrollTop,
+        detailClipped: detailRect.bottom > layoutRect.bottom + 1,
+        inputVisible: Boolean(inputArea && getComputedStyle(inputArea).display !== 'none' && inputArea.getBoundingClientRect().height > 0),
+        modelButtonVisible: Boolean(modelButton && getComputedStyle(modelButton).display !== 'none' && modelButton.getBoundingClientRect().height > 0),
+        closeButton: closeButton ? { text: closeButton.textContent.trim(), width: Math.round(closeButton.getBoundingClientRect().width), height: Math.round(closeButton.getBoundingClientRect().height) } : null,
+        layoutRect: rect(layout),
+        detailRect: rect(detail),
+        workbenchRect: rect(layout.closest('.background-jobs-workbench')),
+        chatMainRect: rect(layout.closest('.chat-main')),
+      };
+    })()`);
+  };
+  const lowBackgroundLayout = await measureBackgroundWorkbench(640, 650);
+  const stackedBackgroundLayout = await measureBackgroundWorkbench(640, 800);
+  const compactBackgroundLayout = await measureBackgroundWorkbench(800, 650);
+  const wideBackgroundLayout = await measureBackgroundWorkbench(1280, 800);
+  for (const [label, value] of [["low", lowBackgroundLayout], ["stacked", stackedBackgroundLayout], ["compact", compactBackgroundLayout], ["wide", wideBackgroundLayout]]) {
+    if (!value || value.detailScrollHeight <= value.detailClientHeight || value.detailScrollTop <= 0 || value.listScrollHeight <= value.listClientHeight || value.listScrollTop <= 0 || value.detailClipped || !value.inputVisible || !value.modelButtonVisible || value.closeButton?.text !== '←返回对话' || value.closeButton.width < 104 || value.closeButton.height < 36) {
+      throw new Error(`background workbench ${label} scrolling failed: ${JSON.stringify(value)}`);
+    }
+  }
+  await evaluate(cdp, `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.background-jobs-workbench'))`, Boolean);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.background-jobs-workbench'))`, Boolean);
+  await evaluate(cdp, `document.querySelector('.background-jobs-close')?.click()`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
+  await evaluate(cdp, `(() => { window.fetch = window.__backgroundJobsOriginalFetch; delete window.__backgroundJobsOriginalFetch; })()`);
+  console.log("[ui-smoke] background jobs preserve the composer, scroll across four layouts and close through all entry points");
+
   const messagePage = await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1200);
   if (messagePage.totalMessages !== 1200) throw new Error(`expected 1200 restored messages, got ${messagePage.totalMessages}`);
   const performance = await evaluate(cdp, `(() => {
@@ -436,9 +708,57 @@ try {
     if (!chip) throw new Error('model picker not found');
     chip.click();
   })()`);
-  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('button')].find((item) => item.textContent.includes('检测全部模型')))`, Boolean);
-  console.log("[ui-smoke] model picker interaction passed");
-  await evaluate(cdp, `[...document.querySelectorAll('.composer-chip')].find((item) => item.textContent.includes('模型'))?.click()`);
+  await waitForBrowserValue(cdp, `(() => {
+    const picker = document.querySelector('.model-popover');
+    return Boolean(
+      picker
+      && !picker.querySelector('.model-search')
+      && picker.querySelectorAll('.model-provider-trigger').length === 1
+      && picker.querySelector('.model-provider-trigger')?.textContent.includes('火山方舟 Ark')
+      && picker.querySelector('#provider-import-file')
+      && !picker.querySelector('.model-manage-link')
+      && [...picker.querySelectorAll('button')].some((item) => item.textContent.includes('检测全部模型'))
+    );
+  })()`, Boolean);
+  const providerTriggerPoint = await evaluate(cdp, `(() => {
+    const rect = document.querySelector('.model-provider-trigger')?.getBoundingClientRect();
+    return rect ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) } : null;
+  })()`);
+  if (!providerTriggerPoint) throw new Error('model provider trigger point not found');
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: providerTriggerPoint.x, y: providerTriggerPoint.y });
+  const cascadingModels = await waitForBrowserValue(cdp, `(() => ({
+    label: document.querySelector('.model-cascade-submenu')?.getAttribute('aria-label') || '',
+    models: [...document.querySelectorAll('.model-cascade-submenu .model-cascade-model')].map((item) => item.textContent.trim()),
+  }))()`, (value) => value.models.length === 2);
+  if (cascadingModels.label !== '火山方舟 Ark 模型' || !cascadingModels.models.some((name) => name.includes('Ark Chat Model')) || !cascadingModels.models.some((name) => name.includes('Ark Code Model'))) {
+    throw new Error(`grouped model submenu is incomplete: ${JSON.stringify(cascadingModels)}`);
+  }
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1270, y: 20 });
+  await waitForBrowserValue(cdp, `!document.querySelector('.model-cascade-submenu') && Boolean(document.querySelector('.model-popover'))`, Boolean);
+  await evaluate(cdp, `(() => {
+    window.__modelImportOriginalFetch = window.fetch.bind(window);
+    window.__modelImportCalls = [];
+    window.fetch = async (input, init = {}) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (url.pathname.endsWith('/providers/import/preview')) {
+        window.__modelImportCalls.push('preview');
+        return new Response(JSON.stringify({ requiresConfirmation: false, actions: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/providers/import')) {
+        window.__modelImportCalls.push('import');
+        return new Response(JSON.stringify({ ok: true, count: 2, requiresModelTest: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return window.__modelImportOriginalFetch(input, init);
+    };
+    const input = document.querySelector('#provider-import-file');
+    const file = new File([JSON.stringify({ schemaVersion: 3, operations: [{ op: 'ui-smoke' }] })], 'providers.json', { type: 'application/json' });
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`);
+  await waitForBrowserValue(cdp, `window.__modelImportCalls?.join(',')`, (value) => value === 'preview,import');
+  await waitForBrowserValue(cdp, `document.querySelector('.model-popover [role="status"]')?.textContent.includes('配置导入成功')`, Boolean);
+  await evaluate(cdp, `(() => { window.fetch = window.__modelImportOriginalFetch; delete window.__modelImportOriginalFetch; delete window.__modelImportCalls; })()`);
+  console.log("[ui-smoke] grouped model submenu hover lifecycle and one-step import passed");
 
   await evaluate(cdp, `(() => {
     const select = [...document.querySelectorAll('.chat-input-area select')].find((item) => [...item.options].some((option) => option.value === 'off'));
@@ -489,5 +809,5 @@ try {
   if (cdp) cdp.socket.close();
   terminateProcessTree(edgeProcess);
   terminateProcessTree(launcher);
-  removeTempRoot(tempRoot);
+  await removeTempRoot(tempRoot);
 }

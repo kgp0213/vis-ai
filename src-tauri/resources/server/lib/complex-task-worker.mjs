@@ -7,7 +7,7 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 120_000;
 const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 20_000;
-const CONTROL_DRAIN_GRACE_MS = 1_000;
+const DEFAULT_ATTEMPT_DRAIN_GRACE_MS = 1_000;
 const RAW_RESPONSE_LIMIT = 16_000;
 const SUCCESS_UNIT_STATES = new Set(["completed", "skipped", "needs_review"]);
 
@@ -160,20 +160,27 @@ function effectResolutionFor(task, unitPlan) {
   return action ? { effectId: resolution.effectId, action } : null;
 }
 
-async function runWithTimeout(callback, timeoutMs, controlSignal = null) {
+async function runWithTimeout(callback, timeoutMs, controlSignal = null, options = {}) {
   if (controlSignal?.aborted) throw controlStopError(controlSignal.reason);
   const controller = new AbortController();
+  const drainGraceMs = Math.max(0, number(options.drainGraceMs, DEFAULT_ATTEMPT_DRAIN_GRACE_MS));
   let timer;
   let settled = false;
+  let operationSettled = false;
   let removeControlListener = null;
   let stoppedByControl = false;
+  let timedOut = false;
+  let failure = null;
   const operation = Promise.resolve().then(() => callback(controller.signal));
+  operation.then(() => { operationSettled = true; }, () => { operationSettled = true; });
   operation.catch(() => {});
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => {
       if (settled) return;
-      controller.abort(timeoutError(timeoutMs));
-      reject(timeoutError(timeoutMs));
+      timedOut = true;
+      const reason = timeoutError(timeoutMs);
+      controller.abort(reason);
+      reject(reason);
     }, timeoutMs);
   });
   const control = controlSignal
@@ -191,19 +198,28 @@ async function runWithTimeout(callback, timeoutMs, controlSignal = null) {
     : null;
   try {
     return await Promise.race(control ? [operation, timeout, control] : [operation, timeout]);
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
     settled = true;
     clearTimeout(timer);
     removeControlListener?.();
     controller.abort();
-    if (stoppedByControl) {
+    if (timedOut || stoppedByControl) {
       let drainTimer;
-      const drain = new Promise((resolveDrain) => {
-        drainTimer = setTimeout(resolveDrain, CONTROL_DRAIN_GRACE_MS);
-        drainTimer.unref?.();
-      });
-      await Promise.race([operation.catch(() => {}), drain]);
-      clearTimeout(drainTimer);
+      if (!operationSettled && drainGraceMs > 0) {
+        const drain = new Promise((resolveDrain) => {
+          drainTimer = setTimeout(resolveDrain, drainGraceMs);
+          drainTimer.unref?.();
+        });
+        await Promise.race([operation.catch(() => {}), drain]);
+        clearTimeout(drainTimer);
+      }
+      if (failure) {
+        failure.terminationConfirmed = operationSettled;
+        if (!operationSettled) failure.pendingOperation = operation;
+      }
     }
   }
 }
@@ -222,6 +238,10 @@ function diagnosticMessage(category, details = "") {
   const suffix = details ? `：${details}` : "";
   if (category === "model-output-invalid") return `模型输出无法解析，已保存原始诊断${suffix}`;
   if (category === "attempt-timeout") return `模型处理超过单次时限，已保存当前诊断${suffix}`;
+  if (category === "attempt-termination-unconfirmed") return "模型调用超时后未确认已经停止，已暂停自动重试以避免并发执行；请稍后继续，若持续无响应请重启程序";
+  if (category === "attempt-budget-exhausted") return `该工作单元的模型尝试次数已达到任务上限；不会因重启或恢复自动增加${suffix}`;
+  if (category === "recovery-budget-exhausted") return `该工作单元的宿主恢复次数已达到任务上限；请调整任务或人工处理${suffix}`;
+  if (category === "attempt-budget-persistence-failed") return `无法持久保存工作单元的尝试预算，已停止自动重试${suffix}`;
   if (category === "user-input-request") return "模型请求用户补充信息后才能继续";
   if (category === "unknown-effect") return `外部操作结果未知，必须确认后才能继续${suffix}`;
   if (category === "effect-idempotency-conflict") return `同一外部操作标识对应了不同参数，已停止执行${suffix}`;
@@ -274,7 +294,7 @@ function outcomeForFailure(task, unitResult, reason) {
   };
 }
 
-function createHeartbeat({ store, taskId, owner, guard, leaseTtlMs, intervalMs, now }) {
+function createHeartbeat({ store, taskId, owner, guard, leaseTtlMs, intervalMs, now, mutate }) {
   let stopped = false;
   let timer = null;
   let inFlight = null;
@@ -286,7 +306,7 @@ function createHeartbeat({ store, taskId, owner, guard, leaseTtlMs, intervalMs, 
   };
   const tick = async () => {
     if (stopped) return;
-    inFlight = (async () => {
+    const operation = async () => {
       try {
         const result = await store.heartbeat(taskId, {
           expectedRevision: guard.revision,
@@ -301,7 +321,8 @@ function createHeartbeat({ store, taskId, owner, guard, leaseTtlMs, intervalMs, 
       } catch (error) {
         failure = `heartbeat-error:${errorMessage(error)}`;
       }
-    })();
+    };
+    inFlight = typeof mutate === "function" ? mutate(operation) : operation();
     await inFlight;
     inFlight = null;
     schedule();
@@ -328,12 +349,24 @@ export function createDurableAgentWorker(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => Date.now();
   const leaseTtlMs = Math.max(10, number(options.leaseTtlMs, DEFAULT_LEASE_TTL_MS));
   const heartbeatIntervalMs = Math.max(1, number(options.heartbeatIntervalMs, Math.min(DEFAULT_HEARTBEAT_INTERVAL_MS, Math.floor(leaseTtlMs / 3))));
+  const attemptDrainGraceMs = Math.max(0, number(options.attemptDrainGraceMs, DEFAULT_ATTEMPT_DRAIN_GRACE_MS));
+  const lingeringAttempts = new Map();
+
+  const fenceLingeringAttempt = (taskId, operation) => {
+    if (!operation || typeof operation.then !== "function") return;
+    const fence = { operation };
+    lingeringAttempts.set(taskId, fence);
+    operation.catch(() => {}).finally(() => {
+      if (lingeringAttempts.get(taskId) === fence) lingeringAttempts.delete(taskId);
+    });
+  };
 
   async function runOne(id, _parentOptions = {}) {
     const runOptions = _parentOptions && typeof _parentOptions === "object" ? _parentOptions : {};
     const controlSignal = controlSignalFrom(runOptions);
     let task = await store.read(id);
     if (stopRequested(runOptions)) return { status: "stopped", reason: "control-signal", task };
+    if (lingeringAttempts.has(task.id)) return { status: "not-runnable", reason: "prior-attempt-still-running", task };
     if (task.lifecycle !== "queued") return { status: "not-runnable", reason: `lifecycle-${task.lifecycle}`, task };
     if (!runnablePlan(task)) {
       if (allUnitsResolved(task)) return { status: "ready_for_assembly", task };
@@ -342,17 +375,24 @@ export function createDurableAgentWorker(options = {}) {
     if (!lease.ok) return { status: "not-claimed", reason: lease.reason, task: lease.task || task };
     const guard = { leaseId: lease.leaseId, epochId: Number(lease.epoch), revision: lease.task.revision };
     task = lease.task;
+    let leaseMutationTail = Promise.resolve();
+    const mutateLease = (operation) => {
+      const next = leaseMutationTail.catch(() => {}).then(operation);
+      leaseMutationTail = next.catch(() => {});
+      return next;
+    };
     const releaseForControl = async () => {
-      const current = await store.read(task.id).catch(() => task);
-      if (current.lifecycle !== "running" || !current.lease) return { status: "stopped", reason: "control-signal", task: current };
-      const released = await store.releaseLease(task.id, {
-        expectedRevision: current.revision,
-        leaseId: current.lease.leaseId,
-        epoch: current.lease.epoch,
+      // Never re-read the task here: a stopped worker may race with lease
+      // recovery and reacquisition by the same owner.  The original guard is
+      // the only lease this execution is authorized to release.
+      const released = await mutateLease(() => store.releaseLease(task.id, {
+        expectedRevision: guard.revision,
+        leaseId: guard.leaseId,
+        epoch: guard.epochId,
         owner,
         now: now(),
-      });
-      return { status: "stopped", reason: "control-signal", task: released.task || current };
+      }));
+      return { status: "stopped", reason: "control-signal", task: released.task || task };
     };
     let plan = runnablePlan(task);
     if (stopRequested(runOptions)) {
@@ -371,22 +411,76 @@ export function createDurableAgentWorker(options = {}) {
     if (!started.applied) return { status: "superseded", reason: started.reason, task: started.task || task };
     task = started.task;
     guard.revision = task.revision;
-    const heartbeat = createHeartbeat({ store, taskId: task.id, owner, guard, leaseTtlMs, intervalMs: heartbeatIntervalMs, now });
+    const heartbeat = createHeartbeat({ store, taskId: task.id, owner, guard, leaseTtlMs, intervalMs: heartbeatIntervalMs, now, mutate: mutateLease });
     let heartbeatHalted = false;
     const haltHeartbeat = async () => {
       if (heartbeatHalted) return;
       heartbeatHalted = true;
       await heartbeat.stop();
     };
+    const reportProgress = async (evidence) => {
+      if (typeof store.recordProgress !== "function") return { ok: false, reason: "progress-store-unavailable" };
+      try {
+        return await mutateLease(async () => {
+          const recorded = await store.recordProgress(task.id, {
+            expectedRevision: guard.revision,
+            leaseId: guard.leaseId,
+            epoch: guard.epochId,
+            owner,
+            now: now(),
+            evidence,
+          });
+          if (recorded?.ok) {
+            guard.revision = recorded.task.revision;
+            task = recorded.task;
+          }
+          return recorded;
+        });
+      } catch (error) {
+        return { ok: false, reason: "progress-record-failed", message: errorMessage(error) };
+      }
+    };
     const executionStartedAt = timestamp(task.executionStartedAt, number(now(), Date.now()));
-    const limit = Math.max(1, Math.min(number(options.maxAttempts, DEFAULT_MAX_ATTEMPTS), number(task.contract?.executionLimits?.attemptLimit, DEFAULT_MAX_ATTEMPTS)));
+    // The contract limit is the durable per-unit model budget across all
+    // execution epochs. `maxAttempts` only bounds work done in this run.
+    const modelBudgetLimit = Math.max(1, Math.floor(number(task.contract?.executionLimits?.attemptLimit, DEFAULT_MAX_ATTEMPTS)));
+    const runAttemptLimit = Math.max(1, Math.floor(number(options.maxAttempts, DEFAULT_MAX_ATTEMPTS)));
+    const recoveryBudgetLimit = Math.max(1, Math.floor(number(options.maxRecoveryAttempts, 1)));
     const wallClockMs = Math.max(1, number(options.wallClockMs, task.contract?.executionLimits?.wallClockMs ?? 3_600_000));
     const attemptTimeoutMs = Math.max(1, number(options.attemptTimeoutMs, DEFAULT_ATTEMPT_TIMEOUT_MS));
     const diagnostics = { category: "model-output-invalid", attempts: [] };
     let accepted = null;
     let pendingRequest = null;
     let controlStopped = false;
+    let terminationUnconfirmed = false;
     let lastAttemptId = null;
+    const reserveAttempt = async (kind, attemptId, limit) => {
+      if (typeof store.reserveUnitAttempt !== "function") {
+        return { ok: false, reason: "attempt-budget-persistence-failed", message: "attempt reservation API unavailable" };
+      }
+      try {
+        return await mutateLease(async () => {
+          const reserved = await store.reserveUnitAttempt(task.id, {
+            expectedRevision: guard.revision,
+            leaseId: guard.leaseId,
+            epoch: guard.epochId,
+            owner,
+            now: now(),
+            unitId: plan.unitId,
+            kind,
+            attemptId,
+            limit,
+          });
+          if (reserved?.ok && reserved.task) {
+            guard.revision = reserved.task.revision;
+            task = reserved.task;
+          }
+          return reserved;
+        });
+      } catch (error) {
+        return { ok: false, reason: "attempt-budget-persistence-failed", message: errorMessage(error) };
+      }
+    };
     try {
       const effectResolution = effectResolutionFor(task, plan);
       if (effectResolution) {
@@ -395,7 +489,7 @@ export function createDurableAgentWorker(options = {}) {
         }
         await toolBroker.resolveEffect(effectResolution.effectId, { action: effectResolution.action });
       }
-      for (let attempt = 1; attempt <= limit; attempt += 1) {
+      for (let runAttempt = 1; runAttempt <= runAttemptLimit; runAttempt += 1) {
         if (stopRequested(runOptions)) {
           controlStopped = true;
           break;
@@ -405,16 +499,41 @@ export function createDurableAgentWorker(options = {}) {
         const remainingWallClockMs = wallClockMs - elapsedMs;
         if (remainingWallClockMs <= 0) {
           diagnostics.category = "attempt-timeout";
-          diagnostics.attempts.push({ attempt, category: "attempt-timeout", message: `task wall clock exceeded ${wallClockMs}ms`, rawResponse: "" });
+          diagnostics.attempts.push({ attempt: runAttempt, category: "attempt-timeout", message: `task wall clock exceeded ${wallClockMs}ms`, rawResponse: "" });
           break;
         }
-        const attemptId = `${owner}:${task.id}:${plan.unitId}:${attempt}:${randomUUID()}`;
+        const priorModelAttempts = Math.max(0, Math.floor(Number(task.attemptBudget?.units?.[plan.unitId]?.modelAttempts) || 0));
+        const attemptId = `${owner}:${task.id}:${plan.unitId}:${priorModelAttempts + 1}:${randomUUID()}`;
+        const reservation = await reserveAttempt("model", attemptId, modelBudgetLimit);
+        if (!reservation?.ok) {
+          if (reservation?.reason === "model-budget-exhausted") {
+            diagnostics.category = "attempt-budget-exhausted";
+            diagnostics.attempts.push({ attempt: "budget", category: diagnostics.category, message: diagnosticMessage(diagnostics.category), rawResponse: "" });
+          } else {
+            diagnostics.category = "attempt-budget-persistence-failed";
+            diagnostics.attempts.push({ attempt: "budget", category: diagnostics.category, message: reservation?.message || reservation?.reason || diagnosticMessage(diagnostics.category), rawResponse: "" });
+          }
+          break;
+        }
+        const attempt = Number(reservation.used) || priorModelAttempts + 1;
         lastAttemptId = attemptId;
+        await reportProgress({ kind: "unit-started", unitId: plan.unitId, attemptId, coverage: plan.primaryCoverage });
         let interaction = null;
         let toolCallIndex = 0;
+        let attemptSignal = null;
+        const reportAttemptProgress = async (evidence) => {
+          if (attemptSignal?.aborted) return { ok: false, reason: "attempt-fenced" };
+          return reportProgress(evidence);
+        };
         const invokeBoundTool = async (name, args, context = {}) => {
+          if (attemptSignal?.aborted) {
+            const error = new Error(`attempt ${attemptId} is no longer active`);
+            error.code = "ATTEMPT_FENCED";
+            throw error;
+          }
           const callIndex = toolCallIndex;
           toolCallIndex += 1;
+          await reportAttemptProgress({ kind: "tool-call-started", unitId: plan.unitId, attemptId, message: String(name) });
           const response = await toolBroker.invoke(name, args, {
             ...context,
             taskId: task.id,
@@ -424,19 +543,30 @@ export function createDurableAgentWorker(options = {}) {
             epochId: guard.epochId,
             effectKey: context.effectKey || `${plan.unitId}:call:${callIndex}:${name}`,
           });
+          if (attemptSignal?.aborted) {
+            const error = new Error(`attempt ${attemptId} ended while host operation ${name} was running`);
+            error.code = "ATTEMPT_FENCED";
+            throw error;
+          }
+          await reportAttemptProgress({ kind: "tool-call-completed", unitId: plan.unitId, attemptId, message: String(name) });
           if (response?.kind === "user_input_request") interaction = response;
           return response;
         };
         try {
-          const raw = await runWithTimeout((signal) => executeUnit({
-            task: clone(task),
-            unitPlan: clone(plan),
-            attempt,
-            attemptId,
-            signal,
-            tools: { invoke: invokeBoundTool },
-            invokeTool: invokeBoundTool,
-          }), Math.max(1, Math.min(attemptTimeoutMs, remainingWallClockMs)), controlSignal);
+          const raw = await runWithTimeout((signal) => {
+            attemptSignal = signal;
+            return executeUnit({
+              task: clone(task),
+              unitPlan: clone(plan),
+              attempt,
+              attemptId,
+              signal,
+              tools: { invoke: invokeBoundTool },
+              invokeTool: invokeBoundTool,
+              reportProgress: reportAttemptProgress,
+            });
+          }, Math.max(1, Math.min(attemptTimeoutMs, remainingWallClockMs)), controlSignal, { drainGraceMs: attemptDrainGraceMs });
+          await reportProgress({ kind: "model-output", unitId: plan.unitId, attemptId });
           if (interaction) {
             pendingRequest = interaction;
             diagnostics.category = "user-input-request";
@@ -452,6 +582,10 @@ export function createDurableAgentWorker(options = {}) {
           diagnostics.attempts.push({ attempt, category: parsed.category, message: parsed.errors?.join("; ") || parsed.request?.question || "model response is not a UnitResult", rawResponse: parsed.rawResponse });
           if (parsed.request) { pendingRequest = parsed.request; break; }
         } catch (error) {
+          if (error?.terminationConfirmed === false) {
+            fenceLingeringAttempt(task.id, error.pendingOperation);
+            terminationUnconfirmed = true;
+          }
           if (errorCode(error) === "task_control_stopped" || stopRequested(runOptions)) {
             controlStopped = true;
             break;
@@ -493,40 +627,74 @@ export function createDurableAgentWorker(options = {}) {
             diagnostics.attempts.push({ attempt, category: "effect-idempotency-conflict", message: errorMessage(error), code, rawResponse: "", effectId: effect.effectId || null });
             break;
           }
-          const category = code === "attempt_timeout" ? "attempt-timeout" : code.includes("balance") ? "insufficient_balance" : code.includes("auth") ? "authentication" : code.includes("quota") ? "quota" : "model-error";
+          const category = terminationUnconfirmed ? "attempt-termination-unconfirmed" : code === "attempt_timeout" ? "attempt-timeout" : code.includes("balance") ? "insufficient_balance" : code.includes("auth") ? "authentication" : code.includes("quota") ? "quota" : "model-error";
           diagnostics.category = category;
-          diagnostics.attempts.push({ attempt, category, message: errorMessage(error), code, rawResponse: "" });
-          if (["insufficient_balance", "authentication", "quota"].includes(category)) break;
+          diagnostics.attempts.push({ attempt, category, message: category === "attempt-termination-unconfirmed" ? diagnosticMessage(category) : errorMessage(error), code, rawResponse: "" });
+          if (terminationUnconfirmed || ["insufficient_balance", "authentication", "quota"].includes(category)) break;
         }
       }
 
-      if (!accepted && !controlStopped) {
+      if (!accepted && !controlStopped && !terminationUnconfirmed) {
         const recoverUnit = typeof options.recoverUnit === "function"
           ? options.recoverUnit
           : typeof runOptions.adapter?.recoverUnit === "function" ? runOptions.adapter.recoverUnit.bind(runOptions.adapter)
             : typeof options.adapter?.recoverUnit === "function" ? options.adapter.recoverUnit.bind(options.adapter) : null;
         if (recoverUnit) {
           const recoveryAttemptId = `recovery:${owner}:${task.id}:${plan.unitId}:${randomUUID()}`;
-          lastAttemptId = recoveryAttemptId;
-          try {
-            const recoveredRaw = await runWithTimeout((signal) => recoverUnit({
-              task: clone(task),
-              unitPlan: clone(plan),
-              diagnostics: clone(diagnostics),
-              attemptId: recoveryAttemptId,
-              signal,
-            }), attemptTimeoutMs, controlSignal);
-            const recovered = recoveredRaw?.ok === true && recoveredRaw.value ? recoveredRaw.value : recoveredRaw;
-            const parsed = parseModelResponse(recovered, plan, recoveryAttemptId);
-            if (parsed.ok) {
-              accepted = parsed.value;
-              diagnostics.recoveredBy = "adapter";
+          const remainingBeforeRecoveryMs = wallClockMs - Math.max(0, number(now(), Date.now()) - executionStartedAt);
+          if (remainingBeforeRecoveryMs <= 0) {
+            diagnostics.category = "attempt-timeout";
+            diagnostics.attempts.push({ attempt: "recovery", category: diagnostics.category, message: `task wall clock exceeded ${wallClockMs}ms before recovery`, rawResponse: "" });
+          } else {
+            const reservation = await reserveAttempt("recovery", recoveryAttemptId, recoveryBudgetLimit);
+            if (!reservation?.ok) {
+              if (reservation?.reason === "recovery-budget-exhausted") {
+                diagnostics.category = "recovery-budget-exhausted";
+                diagnostics.attempts.push({ attempt: "recovery-budget", category: diagnostics.category, message: diagnosticMessage(diagnostics.category), rawResponse: "" });
+              } else {
+                diagnostics.category = "attempt-budget-persistence-failed";
+                diagnostics.attempts.push({ attempt: "recovery-budget", category: diagnostics.category, message: reservation?.message || reservation?.reason || diagnosticMessage(diagnostics.category), rawResponse: "" });
+              }
             } else {
-              diagnostics.attempts.push({ attempt: "recovery", category: "fallback-invalid", message: parsed.errors?.join("; ") || "adapter recovery did not return a UnitResult", rawResponse: parsed.rawResponse });
+              const remainingAfterReservationMs = wallClockMs - Math.max(0, number(now(), Date.now()) - executionStartedAt);
+              if (remainingAfterReservationMs <= 0) {
+                diagnostics.category = "attempt-timeout";
+                diagnostics.attempts.push({ attempt: "recovery", category: diagnostics.category, message: `task wall clock exceeded ${wallClockMs}ms before recovery`, rawResponse: "" });
+              } else {
+                lastAttemptId = recoveryAttemptId;
+                try {
+                  const recoveredRaw = await runWithTimeout((signal) => recoverUnit({
+                    task: clone(task),
+                    unitPlan: clone(plan),
+                    diagnostics: clone(diagnostics),
+                    attemptId: recoveryAttemptId,
+                    signal,
+                    reportProgress: (evidence) => signal.aborted
+                      ? { ok: false, reason: "attempt-fenced" }
+                      : reportProgress(evidence),
+                  }), Math.max(1, Math.min(attemptTimeoutMs, remainingAfterReservationMs)), controlSignal, { drainGraceMs: attemptDrainGraceMs });
+                  const recovered = recoveredRaw?.ok === true && recoveredRaw.value ? recoveredRaw.value : recoveredRaw;
+                  const parsed = parseModelResponse(recovered, plan, recoveryAttemptId);
+                  if (parsed.ok) {
+                    accepted = parsed.value;
+                    diagnostics.recoveredBy = "adapter";
+                  } else {
+                    diagnostics.attempts.push({ attempt: "recovery", category: "fallback-invalid", message: parsed.errors?.join("; ") || "adapter recovery did not return a UnitResult", rawResponse: parsed.rawResponse });
+                  }
+                } catch (error) {
+                  if (error?.terminationConfirmed === false) {
+                    fenceLingeringAttempt(task.id, error.pendingOperation);
+                    terminationUnconfirmed = true;
+                  }
+                  if (errorCode(error) === "task_control_stopped" || stopRequested(runOptions)) controlStopped = true;
+                  else {
+                    const category = terminationUnconfirmed ? "attempt-termination-unconfirmed" : errorCode(error) === "attempt_timeout" ? "attempt-timeout" : "fallback-error";
+                    diagnostics.category = category;
+                    diagnostics.attempts.push({ attempt: "recovery", category, message: category === "attempt-termination-unconfirmed" ? diagnosticMessage(category) : errorMessage(error), code: errorCode(error), rawResponse: "" });
+                  }
+                }
+              }
             }
-          } catch (error) {
-            if (errorCode(error) === "task_control_stopped" || stopRequested(runOptions)) controlStopped = true;
-            else diagnostics.attempts.push({ attempt: "recovery", category: "fallback-error", message: errorMessage(error), code: errorCode(error), rawResponse: "" });
           }
         }
       }

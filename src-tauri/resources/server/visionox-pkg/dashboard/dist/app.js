@@ -19386,8 +19386,8 @@ var en = {
     saved: "saved: {fields}",
     sectionApi: "Current model service credentials",
     credentialCurrent: "Current provider: {name}",
-    credentialsScope: "Maintains credentials for the active provider only. Import and verification remain in the model menu.",
-    credentialsRetest: "Credentials updated. Re-run all model checks from the model menu.",
+    credentialsScope: "Maintains credentials for the selected provider. Import and full model verification are available in Model Management below.",
+    credentialsRetest: "Credentials updated. Re-run all model checks from Model Management below.",
     credentialProvider: "Provider",
     detectApi: "Test API",
     detectingApi: "Testing...",
@@ -20368,8 +20368,8 @@ var zhCN = {
     saved: "\u5DF2\u4FDD\u5B58\uFF1A{fields}",
     sectionApi: "\u5F53\u524D\u6A21\u578B\u670D\u52A1\u51ED\u636E",
     credentialCurrent: "\u5F53\u524D\u670D\u52A1\uFF1A{name}",
-    credentialsScope: "\u6B64\u5904\u53EA\u7EF4\u62A4\u5F53\u524D\u670D\u52A1\u7684\u5BC6\u94A5\u548C API \u5730\u5740\uFF1B\u5BFC\u5165\u3001\u9009\u62E9\u548C\u6A21\u578B\u68C0\u6D4B\u4ECD\u5728\u6A21\u578B\u83DC\u5355\u4E2D\u5B8C\u6210\u3002",
-    credentialsRetest: "\u51ED\u636E\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5728\u6A21\u578B\u83DC\u5355\u4E2D\u91CD\u65B0\u68C0\u6D4B\u5168\u90E8\u6A21\u578B\u3002",
+    credentialsScope: "\u6B64\u5904\u7EF4\u62A4\u6240\u9009\u670D\u52A1\u7684\u5BC6\u94A5\u548C API \u5730\u5740\uFF1B\u914D\u7F6E\u5BFC\u5165\u4E0E\u5168\u91CF\u68C0\u6D4B\u4F4D\u4E8E\u4E0B\u65B9\u6A21\u578B\u7BA1\u7406\u3002",
+    credentialsRetest: "\u51ED\u636E\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5728\u4E0B\u65B9\u6A21\u578B\u7BA1\u7406\u4E2D\u91CD\u65B0\u68C0\u6D4B\u5168\u90E8\u6A21\u578B\u3002",
     credentialProvider: "\u670D\u52A1\u5546",
     detectApi: "\u68C0\u6D4B API",
     detectingApi: "\u68C0\u6D4B\u4E2D...",
@@ -24882,21 +24882,6 @@ function parseProviderImportJson(text) {
   }
   return parsed;
 }
-function formatProviderImportPreview(config, plan) {
-  if (plan?.actions) {
-    const heading = plan.schemaVersion === 3 ? "维护配置变更" : "完整配置变更";
-    const warning = plan.requiresConfirmation ? "\n\n警告：包含永久删除，确认后无法从配置中恢复。" : plan.destructive ? "\n\n注意：包含替换操作，请核对模型清单。" : "";
-    return `${heading}\n${plan.actions.map((action) => `• ${action.label}`).join("\n")}${warning}`;
-  }
-  return (config?.providers ?? []).map((provider) => {
-    const label = provider.name ? `${provider.name} (${provider.id})` : provider.id;
-    const models = (provider.models ?? []).map((model) => model.name ?? model.id).join(", ") || "\u672A\u5305\u542B";
-    const baseUrl = provider.baseUrl || "\u672A\u5305\u542B";
-    const apiKey = provider.apiKey ? "********\uFF08\u5DF2\u9690\u85CF\uFF09" : "\u672A\u5305\u542B";
-    const requestPolicy = provider.requestPolicy === "json" ? "JSON \u56FA\u5B9A\u53C2\u6570" : "\u517C\u5BB9\u6A21\u5F0F";
-    return `${label}\n  URL: ${baseUrl}\n  API Key: ${apiKey}\n  \u6A21\u578B: ${models}\n  \u8BF7\u6C42\u7B56\u7565: ${requestPolicy}`;
-  }).join("\n\n");
-}
 function providerOptionLabel(provider) {
   const name = provider?.name ?? provider?.id ?? "Provider";
   const models = Array.isArray(provider?.models) ? provider.models.filter((model) => model.disabled !== true) : [];
@@ -24906,6 +24891,49 @@ function providerOptionLabel(provider) {
     return model.testStatus === "passed" ? `${modelName} ✓` : modelName;
   });
   return `${name} · ${results.join(" · ")}`;
+}
+function providerDisplayGroups(providers) {
+  const groups = new Map();
+  for (const provider of Array.isArray(providers) ? providers : []) {
+    const groupId = provider?.ui?.groupId || provider?.id || "default";
+    const label = provider?.ui?.groupName || provider?.name || provider?.id || "服务商";
+    const group = groups.get(groupId) || { id: groupId, label, providers: [] };
+    group.providers.push(provider);
+    groups.set(groupId, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      providers: group.providers.slice().sort((a, b) => (a?.ui?.order ?? 0) - (b?.ui?.order ?? 0))
+    }))
+    .sort((a, b) => Math.min(...a.providers.map((provider) => provider?.ui?.order ?? 0)) - Math.min(...b.providers.map((provider) => provider?.ui?.order ?? 0)));
+}
+function providerDisplayLabel(provider) {
+  return provider?.ui?.modelLabel || providerOptionLabel(provider);
+}
+function providerModelContextLabel(model) {
+  const tokens = model?.capabilities?.maxContextTokens ?? model?.maxContextLength;
+  if (!Number.isFinite(tokens) || tokens <= 0) return "";
+  if (tokens >= 1e6) return `${Math.round(tokens / 1e5) / 10}M`;
+  return `${Math.round(tokens / 1024)}K`;
+}
+function providerModelCapabilityLabels(model) {
+  const labels = [];
+  const modalities = model?.capabilities?.inputModalities ?? (model?.multimodal ? ["text", "image"] : ["text"]);
+  labels.push(modalities.includes("image") ? "图文" : "仅文本");
+  if (model?.capabilities?.roles?.some((role) => /code/i.test(role)) || /code/i.test(`${model?.id || ""} ${model?.name || ""}`)) labels.push("代码");
+  const context = providerModelContextLabel(model);
+  if (context) labels.push(context);
+  return labels;
+}
+function providerModelTestSummary(providers) {
+  const models = (providers ?? []).flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true));
+  return {
+    total: models.length,
+    passed: models.filter((model) => model.testStatus === "passed").length,
+    failed: models.filter((model) => model.testStatus === "failed").length,
+    untested: models.filter((model) => model.testStatus === "untested").length
+  };
 }
 var CHAT_RENDER_STEP = 30;
 var CHAT_MESSAGE_PAGE_SIZE = 60;
@@ -25216,11 +25244,121 @@ function documentJobStatusLabel(status) {
     stopped: "已停止，可继续",
     abandoned: "已放弃",
     source_changed: "来源已变化",
+    awaiting_output: "内容已完成，等待交付",
     completed: "已完成",
     completed_with_warnings: "已完成，需复核",
     failed: "失败",
     cancelled: "已取消"
   }[status] || status || "未知";
+}
+function backgroundJobNeedsAttention(job) {
+  return job?.needsAttention === true
+    || ["waiting_user", "blocked", "paused"].includes(job?.lifecycle)
+    || ["delivered_with_warnings", "partial", "failed"].includes(job?.outcome)
+    || ["queued", "running", "waiting_conversation", "needs_user", "user_paused"].includes(job?.handoff?.state);
+}
+function backgroundJobIsActive(job) {
+  return job?.active === true || job?.running === true;
+}
+function backgroundJobGroup(job) {
+  if (backgroundJobIsActive(job)) return "active";
+  if (backgroundJobNeedsAttention(job)) return "attention";
+  return "completed";
+}
+function backgroundJobGroups(jobs) {
+  const values = Array.isArray(jobs) ? jobs : [];
+  return [
+    { key: "active", label: "运行中" },
+    { key: "attention", label: "需要处理" },
+    { key: "completed", label: "已完成" }
+  ].map((group) => ({ ...group, jobs: values.filter((job) => backgroundJobGroup(job) === group.key) })).filter((group) => group.jobs.length > 0);
+}
+function isGenericBackgroundTask(job) {
+  return String(job?.id ?? "").startsWith("task:");
+}
+function backgroundJobTitle(job) {
+  return job?.goal || job?.command || job?.sourceName || `#${job?.id || "未知任务"}`;
+}
+function genericTaskLifecycleLabel(lifecycle) {
+  return {
+    created: "已创建",
+    queued: "排队中",
+    leased: "已领取",
+    running: "处理中",
+    assembling: "正在装配",
+    paused: "已暂停",
+    waiting_user: "等待用户处理",
+    blocked: "受阻",
+    terminal: "已结束"
+  }[lifecycle] || lifecycle || "未知状态";
+}
+function genericTaskOutcomeLabel(outcome) {
+  return {
+    delivered: "已交付",
+    delivered_with_warnings: "已交付，需复核",
+    partial: "部分交付",
+    failed: "失败",
+    cancelled: "已取消"
+  }[outcome] || outcome || "尚无结果";
+}
+function genericTaskQualityLabel(quality) {
+  return {
+    verified: "已验证",
+    needs_review: "需复核",
+    unknown: "未评估"
+  }[quality] || quality || "未评估";
+}
+function genericTaskProgressLabel(job) {
+  const progress = job?.progress || {};
+  const completed = progress.completedUnits ?? progress.completed;
+  const total = progress.totalUnits ?? progress.total;
+  const unit = progress.unitLabel || "单元";
+  if (Number.isFinite(completed) && Number.isFinite(total) && total > 0) return `${completed}/${total} ${unit}`;
+  if (Number.isFinite(completed)) return `已完成 ${completed} ${unit}`;
+  return progress.label || progress.currentLabel || genericTaskLifecycleLabel(job?.lifecycle);
+}
+function genericTaskProgressPercent(job) {
+  const progress = job?.progress || {};
+  if (Number.isFinite(progress.percent)) return Math.max(0, Math.min(100, progress.percent));
+  const completed = Number(progress.completedUnits ?? progress.completed);
+  const total = Number(progress.totalUnits ?? progress.total);
+  return Number.isFinite(completed) && Number.isFinite(total) && total > 0 ? Math.max(0, Math.min(100, completed / total * 100)) : 0;
+}
+var GENERIC_TASK_ACTION_LABELS = new Map([
+  ["pause", "暂停"],
+  ["resume", "继续"],
+  ["retry", "重试"],
+  ["retry_delivery", "确认后重新交付"],
+  ["cancel", "取消任务"],
+  ["resolve_user_input", "提交处理结果"],
+  ["retarget_output", "更改输出位置"],
+  ["ack_outcome", "确认结果"],
+  ["delete_record", "删除记录"]
+]);
+function genericTaskActionLabel(action) {
+  return GENERIC_TASK_ACTION_LABELS.get(action) || action;
+}
+function genericTaskArtifactLabel(artifact, index) {
+  return artifact?.filename || artifact?.name || artifact?.label || artifact?.path || artifact?.artifactId || `产物 ${index + 1}`;
+}
+function backgroundActionRequestId() {
+  return globalThis.crypto?.randomUUID?.() || `background-action-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+function documentHandoffNotice(job) {
+  const state = job?.handoff?.state;
+  return {
+    queued: { tone: "warn", text: "后台处理已经结束，正在等待 AI 接管并继续交付。" },
+    running: { tone: "warn", text: "AI 已接管后台结果，正在核实产物并继续处理。" },
+    waiting_conversation: { tone: "warn", text: "任务属于另一个会话。返回发起任务的原会话后，AI 会自动继续处理。" },
+    needs_user: { tone: "err", text: `AI 自动接管未完成：${job?.handoff?.lastError || "请检查模型配置后继续处理。"}。确认后可仅重新交付已有结果，不会重新处理文档。` },
+    user_paused: { tone: "warn", text: "任务由用户暂停，点击“继续”后才会恢复。" },
+    legacy_unassigned: { tone: "warn", text: "这是旧版本创建的任务，无法安全关联到原会话；请在后台面板中手动点击“继续”或“重试”。" }
+  }[state] || null;
+}
+function retryDocumentDelivery(job) {
+  return job?.kind === "document"
+    && ["completed", "completed_with_warnings", "failed", "interrupted", "paused", "awaiting_output"].includes(job?.status)
+    && job?.handoff?.state === "needs_user";
 }
 function documentJobStageLabel(stage) {
   return {
@@ -25238,7 +25376,10 @@ function documentJobStageLabel(stage) {
     stopped: "已停止，检查点已保留",
     abandoned: "任务已放弃",
     "source-changed": "来源已变化",
-    "waiting-provider": "等待其他模型任务"
+    "awaiting-output": "最终草稿已保存，等待处理输出路径",
+    "waiting-provider": "等待其他模型任务",
+    "job-timeout": "本次执行总时限已到",
+    "job-call-budget": "本次执行调用预算已用尽"
   }[stage] || "";
 }
 function documentJobProgressLabel(job) {
@@ -25260,9 +25401,15 @@ function documentIssueBatchLabel(issue) {
   const labels = batches.slice(0, 6).map((batch) => batch.label || batch.id).filter(Boolean);
   return `${labels.join("、")}${batches.length > labels.length ? "等" : ""}`;
 }
-var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selectedId, detail, onSelect, onClose, onControl, onStop, onAbandon, onDelete, onPreview }) {
-  const selected = detail || jobs.find((job) => job.id === selectedId) || null;
+var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendingDeliveries, selectedId, detail, onSelect, onClose, onControl, onStop, onAbandon, onDelete, onPreview }) {
+  const deliveries = Array.isArray(pendingDeliveries) ? pendingDeliveries : [];
+  const deliveryTaskIds = new Set(deliveries.map((delivery) => String(delivery?.taskId ?? "")).filter(Boolean));
+  const displayJobs = jobs.map((job) => deliveryTaskIds.has(String(job.id)) ? { ...job, needsAttention: true } : job);
+  const detailMatchesSelection = detail && String(detail.id ?? "") === String(selectedId ?? "");
+  const selected = detailMatchesSelection ? detail : displayJobs.find((job) => job.id === selectedId) || null;
+  const groups = backgroundJobGroups(displayJobs);
   const isDocument = selected?.kind === "document";
+  const isGenericTask = isGenericBackgroundTask(selected);
   const progress = selected?.progress || {};
   const sourcePaths = Array.isArray(selected?.sourcePaths) ? selected.sourcePaths : [];
   const criteria = Array.isArray(selected?.contract?.completionCriteria) ? selected.contract.completionCriteria : [];
@@ -25271,40 +25418,139 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selec
   const preview = selected?.preview?.content ? String(selected.preview.content).slice(0, 120000) : "";
   const modelIssues = Array.isArray(selected?.modelIssues) ? selected.modelIssues : [];
   const reviewWarnings = (Array.isArray(selected?.warnings) ? selected.warnings : []).filter((warning) => warning?.type !== "model-service-issue");
+  const handoffNotice = documentHandoffNotice(selected);
+  const deliveryRetryable = retryDocumentDelivery(selected);
   const showReviewReasons = selected?.status === "completed_with_warnings" || selected?.status === "failed" || selected?.qualityPassed === false;
-  const resumable = ["paused", "interrupted", "stopped"].includes(selected?.status);
+  const resumable = ["paused", "interrupted", "stopped", "source_changed", "awaiting_output"].includes(selected?.status) || ["missing", "modified"].includes(selected?.artifactStatus) && Boolean(selected?.finalDraft);
   const active = selected?.running || ["queued", "waiting_foreground", "pausing"].includes(selected?.status);
+  const handoffActive = ["queued", "running"].includes(selected?.handoff?.state);
   const abandonable = active || ["paused", "interrupted", "stopped", "failed", "source_changed"].includes(selected?.status);
-  const deletable = isDocument && !active && !selected?.running;
+  const deletable = isDocument && !active && !handoffActive && !selected?.running;
+  const genericAllowedActions = Array.isArray(selected?.allowedActions) ? selected.allowedActions.filter((action) => GENERIC_TASK_ACTION_LABELS.has(action)) : [];
+  const genericArtifacts = Array.isArray(selected?.artifactRefs) ? selected.artifactRefs : [];
+  const genericWarnings = [
+    ...(Array.isArray(selected?.warnings) ? selected.warnings : []),
+    ...(Array.isArray(selected?.issues) ? selected.issues : [])
+  ];
+  const genericUserAction = selected?.userAction;
+  const genericUserActionText = typeof genericUserAction === "string"
+    ? genericUserAction
+    : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || "任务需要你的补充信息后才能继续。";
+  const genericOutcomeSummary = typeof selected?.outcomeSummary === "string" ? selected.outcomeSummary.trim() : "";
+  const genericBlockingReason = selected?.blockingReason;
+  const genericBlockingReasonText = typeof genericBlockingReason === "string"
+    ? genericBlockingReason
+    : genericBlockingReason?.message || genericBlockingReason?.reason || genericBlockingReason?.code || "";
+  const genericBlockingReasonCode = typeof genericBlockingReason === "object" && genericBlockingReason?.code
+    ? String(genericBlockingReason.code)
+    : "";
+  const genericUserInputRequestId = genericUserAction?.requestId || selected?.userInputRequest?.requestId || null;
+  const selectedDeliveries = deliveries.filter((delivery) => String(delivery?.taskId ?? "") === String(selected?.id ?? ""));
+  const selectedDelivery = selectedDeliveries.find((delivery) => delivery?.target === "task-center")
+    || selectedDeliveries.find((delivery) => delivery?.target === "conversation")
+    || selectedDeliveries[0]
+    || null;
+  const conversationDelivery = selectedDeliveries.find((delivery) => delivery?.target === "conversation") || null;
+  const genericDeliveryStates = selectedDeliveries.filter((delivery) => delivery?.deliveryState);
+  const runGenericAction = (action) => {
+    if (!selected) return;
+    if (["cancel", "delete_record"].includes(action) && !confirm(action === "cancel" ? "确定取消这个任务？已保存的检查点和产物不会被删除。" : "确定删除这条任务记录？已经交付的产物不会被删除。")) return;
+    let payload = null;
+    if (action === "resolve_user_input") {
+      const options = Array.isArray(genericUserAction?.choices)
+        ? genericUserAction.choices
+        : Array.isArray(genericUserAction?.options) ? genericUserAction.options : [];
+      const optionText = options.map((option, index) => `${index + 1}. ${option?.label || option?.value || option?.id || option}`).join("\n");
+      const value = prompt(`${genericUserActionText}${optionText ? `\n\n${optionText}` : ""}`, "");
+      if (value === null) return;
+      const normalizedValue = value.trim();
+      const indexedOption = /^[1-9]\d*$/.test(normalizedValue) ? options[Number(normalizedValue) - 1] : null;
+      const matchedOption = indexedOption ?? options.find((option) => {
+        const candidates = typeof option === "string"
+          ? [option]
+          : [option?.id, option?.choiceId, option?.value, option?.label];
+        return candidates.some((candidate) => String(candidate ?? "").trim() === normalizedValue);
+      });
+      const choiceId = typeof matchedOption === "string"
+        ? matchedOption.trim()
+        : String(matchedOption?.id ?? matchedOption?.choiceId ?? matchedOption?.value ?? "").trim();
+      payload = {
+        ...(choiceId ? { choiceId } : { value: normalizedValue }),
+        ...(genericUserInputRequestId ? { requestId: genericUserInputRequestId } : {})
+      };
+    }
+    if (action === "retarget_output") {
+      const path = prompt("请输入新的输出文件完整路径", selected.outputPath || "");
+      if (path === null || !path.trim()) return;
+      payload = { path: path.trim(), ...(genericUserInputRequestId ? { requestId: genericUserInputRequestId } : {}) };
+    }
+    if (action === "ack_outcome") {
+      if (!selectedDelivery?.deliveryId || !selectedDelivery?.target) return;
+      payload = { deliveryId: selectedDelivery.deliveryId, consumer: selectedDelivery?.target };
+    }
+    if (action === "retry_delivery") {
+      if (!conversationDelivery?.deliveryId) return;
+      if (!confirm("上一次对话交付结果不确定，重新交付可能产生重复回复。是否确认继续？")) return;
+      payload = { deliveryId: conversationDelivery.deliveryId, consumer: "conversation" };
+    }
+    onControl(selected.id, action, payload);
+  };
   const modelCaption = selected?.model
     ? `${selected.running ? "当前模型" : "最近使用模型"} · ${selected.model}${selected.modelRole === "fallback" ? "（备用候选）" : ""}`
     : "尚未开始模型调用";
   const retryLabel = documentRetryLabel(modelIssues);
   return html4`
     <section class="background-jobs-workbench" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface-default);border-top:1px solid var(--border-default)">
-      <header style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--border-default)">
-        <div style="min-width:0"><strong style="font-size:15px">后台任务</strong><span class="meta" style="margin-left:10px">运行中 ${jobs.filter((job) => job.running).length} · 共 ${jobs.length}</span></div>
-        <button type="button" onClick=${onClose} title="返回对话" aria-label="返回对话">×</button>
+      <header class="background-jobs-header">
+        <div class="background-jobs-heading"><strong>后台任务</strong><span class="meta">运行中 ${displayJobs.filter((job) => backgroundJobGroup(job) === "active").length} · 待处理 ${displayJobs.filter((job) => backgroundJobGroup(job) === "attention").length} · 共 ${displayJobs.length}${deliveries.length > 0 ? ` · 待确认通知 ${deliveries.length}` : ""}</span></div>
+        <button type="button" class="background-jobs-close" onClick=${onClose} title="返回对话（Esc）" aria-label="返回对话"><span aria-hidden="true">←</span><span>返回对话</span></button>
       </header>
-      <div style="flex:1;min-height:0;display:flex;flex-wrap:wrap;overflow:hidden">
-        <nav style="flex:0 1 290px;min-width:220px;max-width:360px;min-height:160px;overflow-y:auto;border-right:1px solid var(--border-default);border-bottom:1px solid var(--border-default)">
-          ${jobs.length === 0 ? html4`<div class="meta" style="padding:18px">当前没有后台任务</div>` : jobs.map((job) => html4`
-            <button type="button" onClick=${() => onSelect(job.id)} style=${`width:100%;display:block;text-align:left;padding:11px 12px;border:0;border-bottom:1px solid var(--border-subtle);border-radius:0;background:${job.id === selected?.id ? "var(--surface-hover)" : "transparent"};color:var(--fg-0)`}>
-              <div style="display:flex;align-items:center;gap:7px"><span class=${`pill ${job.running ? "info" : job.qualityPassed === false ? "warn" : job.status === "completed" ? "ok" : ""}`}>${job.kind === "document" ? "文档" : job.lifecycle === "service" ? "服务" : "任务"}</span><span class="name" style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${job.command || `#${job.id}`}</span></div>
-              <div class="meta" style="display:flex;justify-content:space-between;gap:8px;margin-top:6px"><span>${job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? "运行中" : `exit ${job.exitCode ?? "?"}`}</span><span>${job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
-            </button>
+      <div class="background-jobs-layout">
+        <nav class="background-jobs-list">
+          ${displayJobs.length === 0 ? html4`<div class="meta" style="padding:18px">当前没有后台任务</div>` : groups.map((group) => html4`
+            <section class="background-job-group" aria-label=${group.label}>
+              <div class="background-job-group-title"><span>${group.label}</span><span>${group.jobs.length}</span></div>
+              ${group.jobs.map((job) => html4`
+                <button type="button" class=${`background-job-list-item ${job.id === selected?.id ? "selected" : ""}`} onClick=${() => onSelect(job.id)}>
+                  <div class="background-job-list-heading"><span class=${`pill ${backgroundJobIsActive(job) ? "info" : backgroundJobNeedsAttention(job) ? "warn" : job.status === "completed" || job.outcome === "delivered" ? "ok" : ""}`}>${job.kind === "document" || job.taskType === "document" ? "文档" : job.lifecycle === "service" ? "服务" : "任务"}</span><span class="name">${backgroundJobTitle(job)}</span></div>
+                  <div class="meta background-job-list-meta"><span>${isGenericBackgroundTask(job) ? genericTaskLifecycleLabel(job.lifecycle) : job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? "运行中" : `exit ${job.exitCode ?? "?"}`}</span><span>${isGenericBackgroundTask(job) ? genericTaskProgressLabel(job) : job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
+                </button>
+              `)}
+            </section>
           `)}
         </nav>
-        <main style="flex:1 1 520px;min-width:0;min-height:0;overflow-y:auto;padding:16px 18px">
-          ${!selected ? html4`<div class="meta">选择左侧任务查看详情</div>` : !isDocument ? html4`
+        <main class="background-jobs-detail">
+          ${!selected ? html4`<div class="meta">选择左侧任务查看详情</div>` : isGenericTask ? html4`
+            <div class="background-task-detail-head">
+              <div style="min-width:0;flex:1"><h3>${backgroundJobTitle(selected)}</h3><div class="meta">${selected.id} · ${genericTaskLifecycleLabel(selected.lifecycle)} · ${genericTaskOutcomeLabel(selected.outcome)} · ${genericTaskQualityLabel(selected.quality)}</div></div>
+              <div class="background-task-actions">
+                ${genericAllowedActions.map((action) => html4`<button type="button" class=${action === "resume" ? "primary" : action === "cancel" || action === "delete_record" ? "danger" : ""} onClick=${() => runGenericAction(action)}>${genericTaskActionLabel(action)}</button>`)}
+              </div>
+            </div>
+            <div class="background-task-progress"><div style=${`width:${genericTaskProgressPercent(selected)}%`}></div></div>
+            <div class="meta background-task-facts"><span>${genericTaskProgressLabel(selected)}</span><span>修订 ${selected.revision ?? 0}</span>${selected.executionEpoch ? html4`<span>执行轮次 ${selected.executionEpoch}</span>` : null}</div>
+            ${genericOutcomeSummary ? html4`<div class="notice background-task-outcome-summary"><strong>结果摘要</strong><div>${genericOutcomeSummary}</div></div>` : null}
+            ${genericBlockingReasonText ? html4`<div class="notice warn background-task-blocking-reason"><strong>阻塞原因</strong><div>${genericBlockingReasonText}${genericBlockingReasonCode && genericBlockingReasonCode !== genericBlockingReasonText ? html4` <span class="meta">(${genericBlockingReasonCode})</span>` : null}</div></div>` : null}
+            ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>需要你的处理</strong><div>${genericUserActionText}</div></div>` : null}
+            ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>交付状态</h4>${genericDeliveryStates.map((delivery) => {
+    const deliveryState = delivery.deliveryState || {};
+    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || "等待交付确认";
+    const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? deliveryState.code : "";
+    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? "对话" : "任务中心"}交付 · ${deliveryState.status || "等待中"}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
+  })}</section>` : null}
+            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>需要留意</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
+            <section class="background-task-section"><h4>产物</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">暂未生成产物</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>预览</button>` : null}</li>`)}</ul>`}</section>
+            ${selected.coverage ? html4`<section class="background-task-section"><h4>覆盖情况</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
+          ` : !isDocument ? html4`
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h3 style="margin:0 0 6px;font-size:15px">${selected.command}</h3><div class="meta">${selected.running ? "正在运行" : `已结束 · exit ${selected.exitCode ?? "?"}`}</div></div>${selected.running ? html4`<button type="button" onClick=${() => onStop(selected.id)}>停止</button>` : null}</div>
           ` : html4`
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
               <div style="min-width:0;flex:1"><h3 style="margin:0 0 5px;font-size:16px;overflow-wrap:anywhere">${selected.command}</h3><div class="meta">${documentJobStatusLabel(selected.status)} · ${documentJobStageLabel(progress.stage) || "等待下一步"}</div></div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                 ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>暂停</button>` : null}
-                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>继续</button>` : null}
+                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>${selected.artifactStatus === "modified" ? "另存后台草稿" : selected.artifactStatus === "missing" ? "恢复最终文件" : selected.status === "awaiting_output" ? "提交已保存草稿" : "继续"}</button>` : null}
                 ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" title=${modelIssues.find((issue) => issue.requiresUserAction)?.action || "重试失败部分"} onClick=${() => onControl(selected.id, "retry")}>${retryLabel}</button>` : null}
+                ${deliveryRetryable ? html4`<button type="button" title="只重新交付已有结果，不会重新处理文档" onClick=${() => { if (confirm("只重新交付已有结果，不会重新处理文档。可能产生重复回复，是否继续？")) onControl(selected.id, "retry_delivery"); }}>仅重新交付</button>` : null}
                 ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>立即停止</button>` : null}
                 ${abandonable ? html4`<button type="button" onClick=${() => { if (confirm("放弃任务会终止后续处理，但保留任务记录和已保存草稿。确定继续？")) onAbandon(selected.id); }}>放弃</button>` : null}
                 ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>预览产物</button>` : null}
@@ -25312,7 +25558,11 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, selec
               </div>
             </div>
             <div style="height:6px;background:var(--border-subtle);overflow:hidden;margin:16px 0 8px"><div style=${`height:100%;width:${progress.percent ?? 0}%;background:${selected.qualityPassed === false ? "var(--color-warning)" : "var(--accent-primary)"}`}></div></div>
-            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>累计模型调用 ${progress.taskModelCalls || 0} 次</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>当前区块 · ${progress.currentLabel}</span>` : null}</div>
+            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>累计模型调用 ${progress.taskModelCalls || 0} 次 · 本次执行 ${progress.executionModelCalls || 0} / ${progress.taskModelCallLimit || "—"} 次</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>当前区块 · ${progress.currentLabel}</span>` : null}</div>
+            ${handoffNotice ? html4`<div class=${`notice ${handoffNotice.tone}`} style="margin-top:12px">${handoffNotice.text}</div>` : null}
+            ${selected.status === "awaiting_output" ? html4`<div class="notice warn" style="margin-top:12px"><strong>内容整理和最终草稿已经完成。</strong><div style="margin-top:4px">点击“提交已保存草稿”即可继续；若同名文件仍被占用，程序会自动使用新文件名，且不会再次调用模型。</div></div>` : null}
+            ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>最终输出文件已不存在。</strong><div style="margin-top:4px">任务记录和后台保存的最终草稿仍在，可以点击“继续”尝试恢复交付。</div></div>` : null}
+            ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>最终输出文件已被修改。</strong><div style="margin-top:4px">当前文件与任务完成时保存的草稿不一致。点击“另存后台草稿”会保留当前文件，并把已验证草稿保存为新文件。</div></div>` : null}
             ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>任务已经结束，输出文件已生成。</strong><div style="margin-top:4px">部分区块未通过完整质量审查，请根据下方原因处理后复核或重试。</div></div>` : null}
             ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
             ${showReviewReasons && (reviewWarnings.length > 0 || modelIssues.length > 0) ? html4`
@@ -25661,6 +25911,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [showWsPicker, setShowWsPicker] = d2(false);
   const [showSkillPicker, setShowSkillPicker] = d2(false);
   const [showModelPicker, setShowModelPicker] = d2(false);
+  const [openModelGroupId, setOpenModelGroupId] = d2(null);
+  const modelGroupCloseTimerRef = A2(null);
   const [modelNotice, setModelNotice] = d2(null);
   const modelNoticeTimerRef = A2(null);
   const pushModelNotice = q2((text, kind = "info", ttl = 3e3) => {
@@ -25671,14 +25923,25 @@ const [providerCaps, setProviderCaps] = d2(null);
       setModelNotice(null);
     }, ttl) : null;
   }, []);
+  const cancelModelGroupClose = q2(() => {
+    if (modelGroupCloseTimerRef.current !== null) clearTimeout(modelGroupCloseTimerRef.current);
+    modelGroupCloseTimerRef.current = null;
+  }, []);
+  const openModelGroup = q2((groupId) => {
+    cancelModelGroupClose();
+    setOpenModelGroupId(groupId);
+  }, [cancelModelGroupClose]);
+  const scheduleModelGroupClose = q2(() => {
+    cancelModelGroupClose();
+    modelGroupCloseTimerRef.current = setTimeout(() => setOpenModelGroupId(null), 180);
+  }, [cancelModelGroupClose]);
   y2(() => () => {
     if (modelNoticeTimerRef.current !== null) clearTimeout(modelNoticeTimerRef.current);
+    if (modelGroupCloseTimerRef.current !== null) clearTimeout(modelGroupCloseTimerRef.current);
   }, []);
-  const [providerImportDraft, setProviderImportDraft] = d2(null);
-  const [providerImportPlan, setProviderImportPlan] = d2(null);
-  const [providerImportFileName, setProviderImportFileName] = d2("");
-  const [providerImportError, setProviderImportError] = d2(null);
+  const [providerImporting, setProviderImporting] = d2(false);
   const [providerTesting, setProviderTesting] = d2(false);
+  const [providerCleaning, setProviderCleaning] = d2(false);
   const [skillList, setSkillList] = d2([]);
   const [skillCredentialSetup, setSkillCredentialSetup] = d2(null);
   const [skillCredentialValue, setSkillCredentialValue] = d2("");
@@ -25694,9 +25957,11 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [queuePaused, setQueuePaused] = d2(false);
   const [operation, setOperation] = d2(null);
   const [backgroundJobs, setBackgroundJobs] = d2([]);
+  const [pendingDeliveries, setPendingDeliveries] = d2([]);
   const [showBackgroundJobs, setShowBackgroundJobs] = d2(false);
   const [selectedBackgroundJobId, setSelectedBackgroundJobId] = d2(null);
   const [backgroundJobDetail, setBackgroundJobDetail] = d2(null);
+  const backgroundJobDetailRequestRef = A2(0);
   var fileInputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
@@ -25734,6 +25999,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       const result = await api("/background-jobs");
       const next = Array.isArray(result.jobs) ? result.jobs : [];
       setBackgroundJobs(next);
+      setPendingDeliveries(Array.isArray(result.pendingDeliveries) ? result.pendingDeliveries : []);
       return next;
     } catch {
       return [];
@@ -25771,35 +26037,95 @@ const [providerCaps, setProviderCaps] = d2(null);
       setError(err.message);
     }
   }, [refreshBackgroundJobs, selectedBackgroundJobId]);
-  const controlDocumentJob = q2(async (id, action) => {
+  const controlDocumentJob = q2(async (id, action, payload = null) => {
+    const requestId = backgroundJobDetailRequestRef.current;
     try {
-      await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: { action } });
+      const current = String(backgroundJobDetail?.id ?? "") === String(id) ? backgroundJobDetail : backgroundJobs.find((job) => String(job.id) === String(id));
+      const requestBody = String(id).startsWith("task:") ? {
+        action,
+        expectedRevision: current?.revision,
+        requestId: backgroundActionRequestId(),
+        payload
+      } : { action };
+      await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: requestBody });
       await refreshBackgroundJobs();
+      if (requestId !== backgroundJobDetailRequestRef.current) return;
       const detail = await api(`/background-jobs/${encodeURIComponent(id)}`);
-      setBackgroundJobDetail(detail?.job ?? null);
+      if (requestId !== backgroundJobDetailRequestRef.current) return;
+      const nextDetail = detail?.job ?? null;
+      if (nextDetail && String(nextDetail.id ?? "") !== String(id)) return;
+      setBackgroundJobDetail(nextDetail);
     } catch (err) {
-      setError(err.message);
+      await refreshBackgroundJobs();
+      if (requestId !== backgroundJobDetailRequestRef.current) return;
+      try {
+        const detail = await api(`/background-jobs/${encodeURIComponent(id)}`);
+        if (requestId !== backgroundJobDetailRequestRef.current) return;
+        const nextDetail = detail?.job ?? null;
+        if (!nextDetail || String(nextDetail.id ?? "") === String(id)) setBackgroundJobDetail(nextDetail);
+      } catch {
+        // Keep the original control error visible when the detail refresh also fails.
+      }
+      if (requestId === backgroundJobDetailRequestRef.current) setError(err.message);
     }
-  }, [refreshBackgroundJobs]);
+  }, [refreshBackgroundJobs, backgroundJobDetail, backgroundJobs]);
+  const closeBackgroundWorkbench = q2(() => {
+    backgroundJobDetailRequestRef.current += 1;
+    setShowBackgroundJobs(false);
+    setBackgroundJobDetail(null);
+  }, []);
   const openBackgroundWorkbench = q2(async (id = null) => {
+    const requestId = ++backgroundJobDetailRequestRef.current;
     setShowBackgroundJobs(true);
     setShowSkillPicker(false);
     setShowWsPicker(false);
     setShowModelPicker(false);
+    setBackgroundJobDetail(null);
+    if (id !== null && id !== void 0) setSelectedBackgroundJobId(id);
     const refreshed = await refreshBackgroundJobs();
+    if (requestId !== backgroundJobDetailRequestRef.current) return;
     const nextId = id || selectedBackgroundJobId || refreshed.find((job) => job.kind === "document")?.id || refreshed[0]?.id;
-    if (!nextId) return;
+    if (!nextId) {
+      setSelectedBackgroundJobId(null);
+      return;
+    }
     setSelectedBackgroundJobId(nextId);
     try {
       const detail = await api(`/background-jobs/${encodeURIComponent(nextId)}`);
-      setBackgroundJobDetail(detail?.job ?? null);
+      if (requestId !== backgroundJobDetailRequestRef.current) return;
+      const nextDetail = detail?.job ?? null;
+      if (nextDetail && String(nextDetail.id ?? "") !== String(nextId)) return;
+      setBackgroundJobDetail(nextDetail);
     } catch (err) {
-      setError(err.message);
+      if (requestId === backgroundJobDetailRequestRef.current) setError(err.message);
     }
   }, [refreshBackgroundJobs, selectedBackgroundJobId, backgroundJobs]);
-  const previewDocumentJob = q2(async (job) => {
+  y2(() => {
+    if (!showBackgroundJobs) return;
+    const onEscape = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented || modal) return;
+      event.preventDefault();
+      if (showSkillPicker || showWsPicker || showModelPicker || showRetrievalSources) {
+        setShowSkillPicker(false);
+        setShowWsPicker(false);
+        setShowModelPicker(false);
+        setShowRetrievalSources(false);
+        return;
+      }
+      closeBackgroundWorkbench();
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [showBackgroundJobs, modal, showSkillPicker, showWsPicker, showModelPicker, showRetrievalSources, closeBackgroundWorkbench]);
+  const previewDocumentJob = q2(async (job, artifact = null) => {
     try {
-      if (["completed", "completed_with_warnings"].includes(job?.status) && job?.outputPath) {
+      if (artifact?.path) {
+        const filename = artifact.filename || artifact.name || artifact.path.split(/[\\/]/).pop() || "任务产物";
+        const ext = filename.includes(".") ? filename.split(".").pop() : "";
+        await showFileArtifactPreview({ path: artifact.path, filename, ext });
+        return;
+      }
+      if (["completed", "completed_with_warnings"].includes(job?.status) && job?.outputPath && !["missing", "modified"].includes(job?.artifactStatus)) {
         await showFileArtifactPreview({ path: job.outputPath, filename: job.outputPath.split(/[\\/]/).pop() || "document.md", ext: "md" });
         return;
       }
@@ -25824,12 +26150,27 @@ const [providerCaps, setProviderCaps] = d2(null);
     return () => clearInterval(id);
   }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
   y2(() => {
+    const refreshOnFocus = () => {
+      void refreshBackgroundJobs();
+    };
+    const refreshOnVisibility = () => {
+      if (document.visibilityState === "visible") void refreshBackgroundJobs();
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    document.addEventListener("visibilitychange", refreshOnVisibility);
+    return () => {
+      window.removeEventListener("focus", refreshOnFocus);
+      document.removeEventListener("visibilitychange", refreshOnVisibility);
+    };
+  }, [refreshBackgroundJobs]);
+  y2(() => {
     if (!showBackgroundJobs || !selectedBackgroundJobId) return;
     let cancelled = false;
     const load = async () => {
       try {
         const detail = await api(`/background-jobs/${encodeURIComponent(selectedBackgroundJobId)}`);
-        if (!cancelled) setBackgroundJobDetail(detail?.job ?? null);
+        const nextDetail = detail?.job ?? null;
+        if (!cancelled && (!nextDetail || String(nextDetail.id ?? "") === String(selectedBackgroundJobId))) setBackgroundJobDetail(nextDetail);
       } catch {
       }
     };
@@ -25843,14 +26184,18 @@ const [providerCaps, setProviderCaps] = d2(null);
     setQueueReady(false);
     api(`/prompt-queue?scope=${encodeURIComponent(queueStorageKey)}`).then((res) => {
       if (cancelled) return;
-      const restored = (Array.isArray(res?.items) ? res.items : []).slice(0, CHAT_QUEUE_LIMIT).map((item) => ({
-        id: item.id || `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        text: String(item.text ?? "").trim(),
-        images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
-        status: item.status === "failed" ? "failed" : "queued",
-        error: item.status === "failed" ? String(item.error ?? "") : null,
-        createdAt: Number(item.createdAt ?? Date.now())
-      })).filter((item) => item.text || item.images.length > 0);
+      const restored = (Array.isArray(res?.items) ? res.items : []).slice(0, CHAT_QUEUE_LIMIT).map((item) => {
+        const id = item.id || `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        return {
+          id,
+          requestId: item.requestId || id,
+          text: String(item.text ?? "").trim(),
+          images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
+          status: item.status === "failed" ? "failed" : "queued",
+          error: item.status === "failed" ? String(item.error ?? "") : null,
+          createdAt: Number(item.createdAt ?? Date.now())
+        };
+      }).filter((item) => item.text || item.images.length > 0);
       setQueuedPrompts(restored);
     }).catch((err) => {
       if (!cancelled) setError(t4("chat.queueFailed", { error: err.message }));
@@ -26285,7 +26630,10 @@ const [providerCaps, setProviderCaps] = d2(null);
     const unsubscribe = subscribeSse("*", onDash);
     const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
       setEventStreamConnected(connected);
-      if (connected && reconnected) void refetchCanonicalState();
+      if (connected && reconnected) {
+        void refetchCanonicalState();
+        void refreshBackgroundJobs();
+      }
       if (!connected) {
         setError(t4("chat.eventStreamError"));
         setTimeout(() => setError(null), 3e3);
@@ -26296,7 +26644,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       unsubscribeStatus();
       cancelStreamingRaf();
     };
-  }, [refetchCanonicalState, cancelStreamingRaf, preserveVisibleHistoryOnAppend]);
+  }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend]);
   var handleFileChange = q2(async function(e) {
     var files = e.target.files;
     if (!files || files.length === 0) return;
@@ -26423,13 +26771,28 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (images.length > 0) body.images = images;
       const res = await api("/submit", { method: "POST", body });
       if (!res.accepted) {
-        return { ok: false, reason: res.reason ?? "rejected" };
+        return { ok: false, requiresUserRetry: res.requiresUserRetry === true, code: res.code ?? null, reason: res.reason ?? "rejected" };
+      }
+      if (res.duplicate && res.completed && res.completion?.ok === false) {
+        return {
+          ok: false,
+          requiresUserRetry: true,
+          code: "PROMPT_COMPLETION_FAILED",
+          reason: res.completion.error ?? "上一次执行未成功，请明确重试。"
+        };
       }
       shouldAutoScroll.current = true;
       return { ok: true };
     } catch (err) {
       if (err?.status === 409) {
-        return { ok: false, busy: true, reason: err.body?.reason ?? err.message };
+        const busy = err.body?.busy === true || err.body?.code === "LOOP_BUSY";
+        return {
+          ok: false,
+          busy,
+          requiresUserRetry: err.body?.requiresUserRetry === true,
+          code: err.body?.code ?? null,
+          reason: err.body?.reason ?? err.message
+        };
       }
       return { ok: false, reason: err.message };
     }
@@ -26456,8 +26819,10 @@ const [providerCaps, setProviderCaps] = d2(null);
       setError(t4("chat.queueLimit", { count: CHAT_QUEUE_LIMIT }));
       return false;
     }
+    const id = `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const item = {
-      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id,
+      requestId: id,
       text: trimmed,
       images: imageList,
       status: "queued",
@@ -26482,9 +26847,10 @@ const [providerCaps, setProviderCaps] = d2(null);
     deletePersistedQueuedPrompt().catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
   }, [deletePersistedQueuedPrompt]);
   const retryQueuedPrompt = q2((id) => {
+    const retryRequestId = `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setQueuedPrompts((prev) => prev.map((item) => {
       if (item.id !== id) return item;
-      const next = { ...item, status: "queued", error: null };
+      const next = { ...item, requestId: retryRequestId, status: "queued", error: null };
       persistQueuedPrompt(next).catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
       return next;
     }));
@@ -27274,48 +27640,65 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     }
   }, [pushModelNotice]);
-  const switchProvider = q2(async (id) => {
-    pushModelNotice("正在切换模型服务...", "info", 0);
+  const selectProviderModel = q2(async (providerId, modelId) => {
+    pushModelNotice("正在切换模型...", "info", 0);
     try {
-      const switched = await api("/providers/active", { method: "POST", body: { id } });
-      const o3 = await api("/overview");
-      setPresetLocal(o3.preset ?? null);
-      setEffortLocal(o3.reasoningEffort ?? null);
-      setActiveProviderId(o3.activeProviderId ?? null);
-      setProviderCaps(o3.providerCapabilities ?? null);
-      try {
-        const pr = await api("/providers");
-        setProviders(pr.providers ?? []);
-        setModelVerification(pr.modelVerification ?? null);
-      } catch {}
-      const pn = (providers ?? []).find((p) => p.id === id)?.name ?? id;
+      const switched = await api("/providers/active", { method: "POST", body: { id: providerId, modelId } });
+      const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
+      setProviders(pr.providers ?? []);
+      setModelVerification(pr.modelVerification ?? null);
+      setActiveProviderId(overview.activeProviderId ?? providerId);
+      setProviderCaps(overview.providerCapabilities ?? pr.providerCapabilities ?? null);
+      setPresetLocal(overview.preset ?? switched.preset ?? null);
+      setEffortLocal(overview.reasoningEffort ?? null);
+      setOverviewModel(overview.model ?? modelId);
       const count = switched?.modelSwitch?.messageCount;
-      pushModelNotice(Number.isFinite(count)
-        ? `✓ 已切换到 ${pn}，保留 ${count} 条上下文`
-        : "✓ 已切换到 " + pn, "success");
+      pushModelNotice(Number.isFinite(count) ? `✓ 已切换模型，保留 ${count} 条上下文` : "✓ 模型已切换", "success");
     } catch (err) {
-      pushModelNotice("切换失败：" + err.message, "error", 5e3);
+      pushModelNotice(`切换失败：${err.message}`, "error", 5e3);
     }
-  }, [providers, pushModelNotice]);
+  }, [pushModelNotice]);
+  const confirmProviderImport = q2(async (draft, plan) => {
+    pushModelNotice("正在导入模型配置...", "info", 0);
+    try {
+      await api("/providers/import", {
+        method: "POST",
+        body: { ...draft, confirmDestructive: plan.requiresConfirmation === true }
+      });
+      const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
+      setProviders(pr.providers ?? []);
+      setModelVerification(pr.modelVerification ?? null);
+      setActiveProviderId(overview.activeProviderId ?? null);
+      setProviderCaps(overview.providerCapabilities ?? null);
+      setPresetLocal(overview.preset ?? null);
+      setEffortLocal(overview.reasoningEffort ?? null);
+      setOverviewModel(overview.model ?? null);
+      pushModelNotice("✓ 配置导入成功，请检测模型", "success", 5e3);
+    } catch (err) {
+      pushModelNotice(`导入失败：${err.message}`, "error", 5e3);
+    }
+  }, [pushModelNotice]);
   const loadProviderImportFile = q2(async (event) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file || providerImporting) return;
+    setProviderImporting(true);
+    pushModelNotice("正在检查模型配置...", "info", 0);
     try {
       const draft = parseProviderImportJson(await file.text());
       const plan = await api("/providers/import/preview", { method: "POST", body: draft });
-      setProviderImportDraft(draft);
-      setProviderImportPlan(plan);
-      setProviderImportFileName(file.name);
-      setProviderImportError(null);
+      if (plan.requiresConfirmation === true && !confirm("该配置会永久删除现有模型，确认继续导入吗？")) {
+        pushModelNotice("已取消导入", "info");
+        return;
+      }
+      await confirmProviderImport(draft, plan);
     } catch (err) {
-      setProviderImportDraft(null);
-      setProviderImportPlan(null);
-      setProviderImportFileName(file.name);
-      setProviderImportError(err.message);
+      pushModelNotice(`导入失败：${err.message}`, "error", 5e3);
+    } finally {
+      setProviderImporting(false);
     }
-  }, []);
+  }, [providerImporting, confirmProviderImport, pushModelNotice]);
   const testAllProviders = q2(async () => {
-    if (!(providers ?? []).some((provider) => (provider.models ?? []).some((model) => model.disabled !== true)) || providerTesting) return;
+    if (providerTesting) return;
     setProviderTesting(true);
     pushModelNotice("正在检测全部模型...", "info", 0);
     try {
@@ -27328,39 +27711,37 @@ const [providerCaps, setProviderCaps] = d2(null);
       setPresetLocal(overview.preset ?? null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? null);
-      pushModelNotice(tested.activated ? `✓ 检测完成：${tested.passed}/${tested.total} 可用，已切换到 ${tested.activated.modelId}` : `检测完成：${tested.passed}/${tested.total} 可用`, tested.passed > 0 ? "success" : "error", tested.passed > 0 ? 3e3 : 5e3);
+      const failed = tested.total - tested.passed;
+      pushModelNotice(failed > 0 ? `检测完成：${tested.passed} 个可用，${failed} 个不可用` : `✓ ${tested.passed} 个模型全部可用`, failed > 0 ? "error" : "success", 5e3);
     } catch (err) {
-      pushModelNotice("模型检测失败：" + err.message, "error", 5e3);
+      pushModelNotice(`模型检测失败：${err.message}`, "error", 5e3);
     } finally {
       setProviderTesting(false);
     }
-  }, [providers, providerTesting, pushModelNotice]);
-  const confirmProviderImport = q2(async () => {
-    if (!providerImportDraft) return;
-    pushModelNotice("正在导入模型配置...", "info", 0);
+  }, [providerTesting, pushModelNotice]);
+  const cleanupFailedModels = q2(async () => {
+    const failed = providerModelTestSummary(providers ?? []).failed;
+    if (!failed || !modelVerification?.testedAt || providerCleaning) return;
+    if (!confirm(`将删除 ${failed} 个检测失败模型，不影响可用模型。确认继续吗？`)) return;
+    setProviderCleaning(true);
+    pushModelNotice("正在删除检测失败模型...", "info", 0);
     try {
-      const imported = await api("/providers/import", {
-        method: "POST",
-        body: { ...providerImportDraft, confirmDestructive: providerImportPlan?.requiresConfirmation === true }
-      });
+      const cleaned = await api("/providers/cleanup-failed", { method: "POST", body: { testedAt: modelVerification.testedAt } });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
       setProviders(pr.providers ?? []);
       setModelVerification(pr.modelVerification ?? null);
-      setActiveProviderId(overview.activeProviderId ?? null);
-      setProviderCaps(overview.providerCapabilities ?? null);
+      setActiveProviderId(overview.activeProviderId ?? cleaned.activeProviderId ?? null);
+      setProviderCaps(overview.providerCapabilities ?? pr.providerCapabilities ?? null);
       setPresetLocal(overview.preset ?? null);
       setEffortLocal(overview.reasoningEffort ?? null);
-      setOverviewModel(overview.model ?? null);
-      setProviderImportDraft(null);
-      setProviderImportPlan(null);
-      setProviderImportFileName("");
-      setProviderImportError(null);
-      pushModelNotice("✓ 配置导入成功，请检测全部模型后使用", "success", 5e3);
+      setOverviewModel(overview.model ?? cleaned.activeModelId ?? null);
+      pushModelNotice(`✓ 已删除 ${cleaned.removedModels} 个不可用模型`, "success", 5e3);
     } catch (err) {
-      setProviderImportError(err.message);
-      pushModelNotice("导入失败：" + err.message, "error", 5e3);
+      pushModelNotice(`删除失败：${err.message}`, "error", 5e3);
+    } finally {
+      setProviderCleaning(false);
     }
-  }, [providerImportDraft, providerImportPlan, pushModelNotice]);
+  }, [providers, modelVerification, providerCleaning, pushModelNotice]);
   const pickWorkspace = q2(async (dir) => {
     setShowWsPicker(false);
     try {
@@ -27534,10 +27915,11 @@ const [providerCaps, setProviderCaps] = d2(null);
         <div class="chat-main">
           ${showBackgroundJobs ? html4`<${BackgroundJobsWorkbench}
             jobs=${backgroundJobs}
+            pendingDeliveries=${pendingDeliveries}
             selectedId=${selectedBackgroundJobId}
             detail=${backgroundJobDetail}
             onSelect=${openBackgroundWorkbench}
-            onClose=${() => { setShowBackgroundJobs(false); setBackgroundJobDetail(null); }}
+            onClose=${closeBackgroundWorkbench}
             onControl=${controlDocumentJob}
             onStop=${stopBackgroundJob}
             onAbandon=${abandonBackgroundJob}
@@ -27574,7 +27956,7 @@ const [providerCaps, setProviderCaps] = d2(null);
 
           ${!showBackgroundJobs && todos.length > 0 ? html4`<${TodoBar} todos=${todos} expanded=${todoExpanded} onToggle=${() => setTodoExpanded(!todoExpanded)} />` : null}
 
-          <div class="chat-input-area" style=${showBackgroundJobs ? "position:relative;flex-direction:column;gap:2px;padding-top:6px;flex:0 0 auto" : "position:relative;flex-direction:column;gap:2px;padding-top:6px"}>
+          <div class="chat-input-area" style="position:relative;flex-direction:column;gap:2px;padding-top:6px">
             ${popoverKind && popoverItems.length > 0 ? html4`
                   <div class="popover" style="position:absolute;bottom:calc(100% + 6px);left:0;width:380px;max-height:280px;overflow-y:auto;z-index:10">
                     <div class="popover-h">${popoverKind === "slash" ? t4("chat.slashCommands") : t4("chat.mentionTargets")}</div>
@@ -27704,17 +28086,47 @@ const [providerCaps, setProviderCaps] = d2(null);
                   <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); void browseWorkspace(); }}><span class="name">▤ ${t4("chat.workspaceBrowse")}</span></div>
                 </div>
               ` : null}
-              <button type="button" class="composer-chip" aria-expanded=${showModelPicker} onClick=${() => { setShowModelPicker(!showModelPicker); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</button>
+              <button type="button" class="composer-chip" aria-expanded=${showModelPicker} onClick=${() => { cancelModelGroupClose(); setShowModelPicker(!showModelPicker); setOpenModelGroupId(null); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</button>
               ${showModelPicker ? html4`
-                <div class="popover model-popover" style="position:absolute;bottom:100%;left:0;z-index:10">
+                <div class="popover model-popover" style="position:absolute;bottom:100%;left:0;z-index:10" onMouseLeave=${scheduleModelGroupClose}>
                   <div class="popover-h">选择模型</div>
-                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">服务商</label>
-                    <div style="display:flex;align-items:center;gap:6px;min-width:0;">
-                      <select style="flex:1;min-width:0;font-size:12px;padding:4px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-default);color:var(--text-primary);" onChange=${(e3) => { switchProvider(e3.target.value); }}>
-                        ${(providers ?? []).map((p) => html4`<option value=${p.id} selected=${p.id === activeProviderId}>${providerOptionLabel(p)}</option>`)}
-                      </select>
-                      <button disabled=${!(providers ?? []).some((provider) => (provider.models ?? []).some((model) => model.disabled !== true)) || providerTesting || busy} style="padding:4px 8px;font-size:11px;white-space:nowrap;border:1px solid var(--border-default);border-radius:4px;background:var(--surface-default);color:var(--text-primary);cursor:pointer;" onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+                  <div class="model-picker-browser">
+                    <div class="model-cascade-menu" role="menu" aria-label="模型服务商">
+                      ${providerDisplayGroups(providers ?? []).map((group) => {
+                        const open = openModelGroupId === group.id;
+                        const active = group.providers.some((provider) => provider.id === activeProviderId);
+                        const models = group.providers.flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => ({ provider, model })));
+                        return html4`
+                          <div class=${`model-cascade-provider ${open ? "open" : ""}`} onMouseEnter=${() => openModelGroup(group.id)} onMouseLeave=${scheduleModelGroupClose}>
+                            <button type="button" class=${`model-provider-trigger ${active ? "active" : ""}`} aria-haspopup="menu" aria-expanded=${open} onFocus=${() => openModelGroup(group.id)} onClick=${() => { cancelModelGroupClose(); setOpenModelGroupId(open ? null : group.id); }}>
+                              <span>${group.label}</span>
+                              <span class="model-provider-indicators"><span aria-hidden="true">${active ? "✓" : ""}</span><span class="model-menu-chevron" aria-hidden="true">›</span></span>
+                            </button>
+                            ${open ? html4`
+                              <div class="model-cascade-submenu" role="menu" aria-label=${`${group.label} 模型`} onMouseEnter=${cancelModelGroupClose} onMouseLeave=${scheduleModelGroupClose}>
+                                ${models.length > 0 ? models.map(({ provider, model }) => {
+                                  const selected = provider.id === activeProviderId && model.id === overviewModel;
+                                  const status = model.testStatus || "untested";
+                                  const details = providerModelCapabilityLabels(model).join(" · ");
+                                  const statusText = status === "passed" ? "已验证" : status === "failed" ? model.testError || "不可用" : "未检测";
+                                  return html4`
+                                    <button type="button" class=${`model-cascade-model ${selected ? "active" : ""} ${status}`} role="menuitemradio" aria-checked=${selected} disabled=${busy || status === "failed"} title=${`${details}${details ? " · " : ""}${statusText}`} onClick=${() => selectProviderModel(provider.id, model.id)}>
+                                      <span>${model.name ?? providerDisplayLabel(provider)}</span><span class="model-row-indicators"><span class=${`model-row-status ${status}`}>${status === "passed" ? "可用" : status === "failed" ? "不可用" : "未检测"}</span><span class="model-current-check" aria-hidden="true">${selected ? "✓" : ""}</span></span>
+                                    </button>
+                                  `;
+                                }) : html4`<div class="model-picker-empty">该服务商暂无可用模型</div>`}
+                              </div>
+                            ` : null}
+                          </div>
+                        `;
+                      })}
+                      ${providerDisplayGroups(providers ?? []).length === 0 ? html4`<div class="model-picker-empty">尚未导入模型</div>` : null}
+                    </div>
+                    <div class="model-menu-actions">
+                      <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none" onChange=${loadProviderImportFile} />
+                      <button type="button" class="model-import-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${() => { const input = document.getElementById("provider-import-file"); input.value = ""; input.click(); }}>${providerImporting ? "导入中..." : "导入模型配置"}</button>
+                      <button type="button" class="model-test-link" disabled=${busy || providerImporting || providerTesting || providerCleaning || providerModelTestSummary(providers ?? []).total === 0} onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+                      ${providerModelTestSummary(providers ?? []).failed > 0 && modelVerification?.dirty !== true ? html4`<button type="button" class="model-cleanup-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${cleanupFailedModels}>${providerCleaning ? "删除中..." : `删除检测失败模型（${providerModelTestSummary(providers ?? []).failed}）`}</button>` : null}
                     </div>
                     <div role="status" aria-live="polite" style="min-height:18px;margin-top:5px;font-size:11px;line-height:18px;overflow-wrap:anywhere;color:${modelNotice?.kind === 'error' ? 'var(--c-err)' : modelNotice?.kind === 'success' ? 'var(--c-ok)' : 'var(--fg-3)'};">${modelNotice?.text ?? ""}</div>
                     ${(() => {
@@ -27756,19 +28168,9 @@ const [providerCaps, setProviderCaps] = d2(null);
                       ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
                     </div>
                   `}
-                  <div style="padding:8px;">
-                    <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none;" onChange=${loadProviderImportFile} />
-                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                      <button type="button" class="model-primary-action" onClick=${() => { const inp = document.getElementById('provider-import-file'); inp.value = ''; inp.click(); }}>选择 JSON 文件</button>
-                      <span style="font-size:11px;color:var(--text-secondary);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${providerImportFileName}</span>
-                    </div>
-                    <textarea value=${providerImportDraft ? formatProviderImportPreview(providerImportDraft, providerImportPlan) : ""} placeholder="选择文件后将在这里预览实际变更..." readonly style="width:100%;height:96px;margin-top:6px;font-family:monospace;font-size:11px;border:1px solid var(--border-default);border-radius:4px;padding:6px;background:var(--surface-default);color:var(--text-primary);resize:vertical;box-sizing:border-box;"></textarea>
-                    ${providerImportError ? html4`<div style="font-size:11px;color:var(--c-err);margin-top:5px;overflow-wrap:anywhere;">${providerImportError}</div>` : null}
-                    <button type="button" class=${providerImportPlan?.requiresConfirmation ? "btn danger" : "model-primary-action"} disabled=${!providerImportDraft || !providerImportPlan || busy} style="margin-top:6px" onClick=${confirmProviderImport}>${providerImportPlan?.requiresConfirmation ? "确认永久删除并导入" : "确认导入"}</button>
-                  </div>
                 </div>
               ` : null}
-              <button type="button" class=${`composer-chip ${backgroundJobs.some((job) => job.running) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => showBackgroundJobs ? setShowBackgroundJobs(false) : void openBackgroundWorkbench()}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running).length })}</button>
+              <button type="button" title=${`运行中 ${backgroundJobs.filter((job) => job.running).length}，待处理 ${backgroundJobs.filter(backgroundJobNeedsAttention).length}`} class=${`composer-chip ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench()}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length })}</button>
               <label class="composer-chip composer-index">
                 <span class="composer-index-label" title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。">索引</span>
                 <select title=${globalThis.VisionoxIndexModePolicy.hint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode}>
@@ -32681,6 +33083,9 @@ function SettingsPanel() {
   const [credentialProviderId, setCredentialProviderId] = d2(null);
   const [credentialVerification, setCredentialVerification] = d2(null);
   const [credentialTesting, setCredentialTesting] = d2(false);
+  const [managedProviders, setManagedProviders] = d2([]);
+  const [modelVerification, setModelVerification] = d2(null);
+  const [providerTesting, setProviderTesting] = d2(false);
   const [catalog, setCatalog] = d2(null);
   const [loopStatus, setLoopStatus] = d2(null);
   const [loopAvgCost, setLoopAvgCost] = d2(null);
@@ -32728,8 +33133,10 @@ function SettingsPanel() {
   }, [showDevLog, setDevLogFollow]);
   const load = q2(async () => {
     try {
-      const r3 = await api("/settings");
+      const [r3, providerResult] = await Promise.all([api("/settings"), api("/providers")]);
       setData(r3);
+      setManagedProviders(providerResult.providers ?? []);
+      setModelVerification(providerResult.modelVerification ?? null);
       setDraft({});
       setCredentialProviderId((current) => r3.credentialProviders?.some((provider) => provider.id === current) ? current : r3.credentialTarget?.id ?? r3.credentialProviders?.[0]?.id ?? null);
       setCredentialVerification(null);
@@ -32875,6 +33282,20 @@ function SettingsPanel() {
       setSaving(false);
     }
   }, [data, credentialProviderId, credentialVerification, load]);
+  const testManagedProviders = q2(async () => {
+    if (providerTesting) return;
+    setProviderTesting(true);
+    setError(null);
+    try {
+      const result = await api("/providers/test", { method: "POST", body: {} });
+      await load();
+      setSaved(`模型检测完成：${result.passed}/${result.total} 可用`);
+    } catch (err) {
+      setError(`模型检测失败：${err.message}`);
+    } finally {
+      setProviderTesting(false);
+    }
+  }, [providerTesting, load]);
   if (!data && !error)
     return html4`<div class="card" style="color:var(--fg-3)">${t4("settings.loading")}</div>`;
   if (error && !data) return html4`<div class="card accent-err">${error}</div>`;
@@ -32979,6 +33400,22 @@ function SettingsPanel() {
           <button class="btn" disabled=${saving || credentialTesting || !credentialProvider || !credentialBaseUrl.trim() || (!credentialChanged && !credentialProvider.apiKeySet)} onClick=${testCredentials}>${credentialTesting ? t4("settings.detectingApi") : t4("settings.detectApi")}</button>
           <button class="btn primary" disabled=${saving || credentialTesting || !credentialVerification} onClick=${saveCredentials}>${t4("settings.saveCredentials")}</button>
           <span style="font-size:11px;color:${credentialVerification ? 'var(--c-ok)' : 'var(--fg-3)'}">${credentialVerification ? t4("settings.detectionPassed", { model: credentialVerification.modelId }) : t4("settings.detectionRequired")}</span>
+        </div>
+      </div>
+
+      ${sectionH3("模型管理")}
+      <div class="card model-management-card">
+        <div class="model-management-head">
+          <div>
+            <strong>模型配置与检测</strong>
+            <div class="meta">共 ${managedProviders.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型${modelVerification?.dirty ? " · 配置已更新，等待重新检测" : ""}</div>
+          </div>
+          <button class="btn" disabled=${providerTesting || saving || managedProviders.length === 0} onClick=${testManagedProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+        </div>
+        <div class="model-management-groups">
+          ${providerDisplayGroups(managedProviders).map((group) => html4`
+            <div class="model-management-group"><strong>${group.label}</strong><span>${group.providers.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型</span></div>
+          `)}
         </div>
       </div>
 
@@ -35817,6 +36254,7 @@ function App() {
   const [vhomeOpenFallback, setVhomeOpenFallback] = d2(false);
   const [vhomeCopyStatus, setVhomeCopyStatus] = d2(null);
   const [vhomeRemainingSeconds, setVhomeRemainingSeconds] = d2(null);
+  const vhomeControlRef = A2(null);
   const [activeId, setActiveId] = d2(() => {
     try {
       return localStorage.getItem("rx.activeTab") ?? "chat";
@@ -36024,6 +36462,29 @@ function App() {
     }
     setVhomeMenuOpen((open) => !open);
   }, [vhomeConnected, vhomeLoginActive, startVHomeLogin]);
+  const dismissVHomePopover = q2(() => {
+    setVhomeMenuOpen(false);
+    setVhomeCopyStatus(null);
+  }, []);
+  y2(() => {
+    if (!vhomeMenuOpen) return;
+    const closeOnOutside = (event) => {
+      if (vhomeControlRef.current?.contains(event.target)) return;
+      dismissVHomePopover();
+    };
+    const closeOnEscape = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismissVHomePopover();
+    };
+    document.addEventListener("pointerdown", closeOnOutside, true);
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside, true);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [vhomeMenuOpen, dismissVHomePopover]);
   y2(() => {
     if (active.id !== activeId) setActiveId(active.id);
   }, [active.id, activeId]);
@@ -36095,10 +36556,12 @@ function App() {
             <option value="deep-charcoal">\u6DF1\u70AD\u7070</option>
           </select>
         </div>
-        <div class="vhome-control">
+        <div class="vhome-control" ref=${vhomeControlRef}>
           <button type="button"
             class=${`vhome-control-button ${vhomeConnected ? "connected" : vhomeLoginActive ? "authorizing" : ""}`}
             title=${vhomeConnected ? `${vhomeControlText} · ${vhomeStatus.corpName ?? ""}` : vhomeControlText}
+            aria-expanded=${vhomeMenuOpen}
+            aria-controls="vhome-connection-popover"
             disabled=${vhomeBusy}
             onClick=${toggleVHomeControl}
           >
@@ -36106,11 +36569,14 @@ function App() {
             <span class="vhome-control-label">${vhomeControlText}</span>
           </button>
           ${vhomeMenuOpen ? html7`
-            <div class="vhome-popover" role="dialog" aria-label="V来家连接">
-              <div class="vhome-popover-title">${vhomeConnected ? "V来家已连接" : "登录 V来家"}</div>
+            <div id="vhome-connection-popover" class="vhome-popover" role="dialog" aria-label="V来家连接">
+              <div class="vhome-popover-head">
+                <div class="vhome-popover-title">${vhomeConnected ? "V来家已连接" : "登录 V来家"}</div>
+                <button type="button" class="vhome-popover-close" onClick=${dismissVHomePopover} title="关闭" aria-label="关闭 V来家连接卡片">×</button>
+              </div>
               ${vhomeConnected ? html7`
                 <div class="vhome-popover-meta">${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}</div>
-                <div class="vhome-popover-actions">
+                <div class="vhome-popover-actions vhome-popover-actions-connected">
                   <button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>刷新状态</button>
                   <button type="button" class="danger" disabled=${vhomeBusy} onClick=${logoutVHome}>退出当前组织</button>
                 </div>

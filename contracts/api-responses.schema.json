@@ -40,6 +40,58 @@
       "type": "object",
       "required": ["providers"],
       "properties": { "providers": { "type": "array" } }
+    },
+    "errorResponse": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": { "type": "string" },
+        "code": { "type": "string" },
+        "details": { "type": "object" }
+      }
+    },
+    "backgroundTask": {
+      "type": "object",
+      "required": ["id", "taskType", "lifecycle", "outcome", "quality", "active", "needsAttention", "revision", "progress", "allowedActions", "artifacts", "updatedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "taskType": { "type": "string" },
+        "lifecycle": { "type": "string", "enum": ["created", "queued", "leased", "running", "waiting_user", "blocked", "paused", "assembling", "terminal"] },
+        "outcome": { "type": ["string", "null"], "enum": ["delivered", "delivered_with_warnings", "partial", "failed", "cancelled", "abandoned", null] },
+        "quality": { "type": "string", "enum": ["verified", "needs_review", "unknown"] },
+        "active": { "type": "boolean" },
+        "needsAttention": { "type": "boolean" },
+        "revision": { "type": "integer" },
+        "progress": { "type": "object" },
+        "allowedActions": { "type": "array", "items": { "type": "string" } },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["artifactId", "path"],
+            "properties": {
+              "artifactId": { "type": "string" },
+              "artifactRef": { "type": ["string", "null"] },
+              "revision": { "type": ["integer", "null"] },
+              "sha256": { "type": ["string", "null"] },
+              "role": { "type": "string" },
+              "unitId": { "type": ["string", "null"] },
+              "previewAvailable": { "type": "boolean" },
+              "path": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "updatedAt": { "type": ["string", "null"] },
+        "status": { "type": "string", "enum": ["created", "queued", "leased", "running", "waiting_user", "blocked", "paused", "assembling", "terminal", "completed", "completed_with_warnings", "partial", "failed", "cancelled", "abandoned"] }
+      }
+    },
+    "backgroundJobs": {
+      "type": "object",
+      "required": ["jobs", "pendingDeliveries"],
+      "properties": {
+        "jobs": { "type": "array", "items": { "$ref": "#/$defs/backgroundTask" } },
+        "pendingDeliveries": { "type": "array", "items": { "type": "object", "required": ["deliveryId", "taskId", "target"] } }
+      }
     }
   }
 }

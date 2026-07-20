@@ -51,6 +51,9 @@ import {
   validateRequestDefaults
 } from "../../../lib/model-request-policy.mjs";
 import {
+  assertModelProbeMarker
+} from "../../../lib/model-task-request.mjs";
+import {
   previewProviderImport
 } from "../../../lib/provider-configuration.mjs";
 import {
@@ -335,36 +338,55 @@ async function handleAbort(method, _rest, _body, ctx) {
 
 async function handleBackgroundJobs(method, rest, body, ctx) {
   if (method === "GET" && rest.length === 0) {
-    const jobs = ctx.listBackgroundJobs ? await ctx.listBackgroundJobs() : [];
-    return { status: 200, body: { jobs } };
+    const snapshot = ctx.listBackgroundJobs ? await ctx.listBackgroundJobs() : [];
+    if (Array.isArray(snapshot)) return { status: 200, body: { jobs: snapshot, pendingDeliveries: [] } };
+    return {
+      status: 200,
+      body: {
+        ...snapshot,
+        jobs: Array.isArray(snapshot?.jobs) ? snapshot.jobs : [],
+        pendingDeliveries: Array.isArray(snapshot?.pendingDeliveries) ? snapshot.pendingDeliveries : []
+      }
+    };
   }
   if (method === "GET" && rest.length === 1) {
     if (!ctx.getBackgroundJob) return { status: 503, body: { error: "background job output is not available" } };
     const rawId = decodeURIComponent(rest[0]);
-    const id = rawId.startsWith("document:") ? rawId : Number.parseInt(rawId, 10);
-    if (!(rawId.startsWith("document:") || Number.isInteger(id) && id >= 1)) return { status: 400, body: { error: "invalid background job id" } };
+    if (!rawId.trim()) return { status: 400, body: { error: "invalid background job id" } };
+    const legacyId = /^[1-9]\d*$/.test(rawId) ? Number.parseInt(rawId, 10) : null;
+    const id = Number.isSafeInteger(legacyId) ? legacyId : rawId;
     const job = await ctx.getBackgroundJob(id);
     if (!job) return { status: 404, body: { error: "background job not found" } };
     return { status: 200, body: { job } };
   }
   if (method === "POST" && rest.length === 1) {
     const rawId = decodeURIComponent(rest[0]);
-    if (!rawId.startsWith("document:") || !ctx.controlBackgroundJob) return { status: 400, body: { error: "document background job id required" } };
-    const action = String(parseBody(body).action || "").trim();
-    if (!["pause", "resume", "retry", "stop", "cancel", "abandon"].includes(action)) return { status: 400, body: { error: "invalid document job action" } };
-    const result = await ctx.controlBackgroundJob(rawId, action);
+    if (!rawId.trim()) return { status: 400, body: { error: "invalid background job id" } };
+    if (!ctx.controlBackgroundJob) return { status: 503, body: { error: "background job control is not available" } };
+    const request = parseBody(body);
+    const action = String(request.action || "").trim();
+    if (!action) return { status: 400, body: { error: "background job action is required" } };
+    const legacyId = /^[1-9]\d*$/.test(rawId) ? Number.parseInt(rawId, 10) : null;
+    const id = Number.isSafeInteger(legacyId) ? legacyId : rawId;
+    const result = await ctx.controlBackgroundJob(id, action, {
+      expectedRevision: request.expectedRevision,
+      requestId: request.requestId,
+      payload: request.payload
+    });
     return { status: result?.ok === false ? 409 : 200, body: result };
   }
   if (method === "DELETE" && rest.length === 1) {
     const rawId = decodeURIComponent(rest[0]);
-    const id = rawId.startsWith("document:") ? rawId : Number.parseInt(rawId, 10);
-    if (!(rawId.startsWith("document:") || Number.isInteger(id) && id >= 1)) return { status: 400, body: { error: "invalid background job id" } };
+    if (!rawId.trim()) return { status: 400, body: { error: "invalid background job id" } };
     if (rawId.startsWith("document:")) {
       if (!ctx.controlBackgroundJob) return { status: 503, body: { error: "document background job control is not available" } };
-      const result = await ctx.controlBackgroundJob(rawId, "delete");
-      ctx.audit?.({ ts: Date.now(), action: "background-job-delete-record", payload: { id } });
+      const result = await ctx.controlBackgroundJob(rawId, "delete", {});
+      ctx.audit?.({ ts: Date.now(), action: "background-job-delete-record", payload: { id: rawId } });
       return { status: result?.ok === false ? 409 : 200, body: result };
     }
+    if (!/^[1-9]\d*$/.test(rawId)) return { status: 405, body: { error: "generic background jobs require an explicit POST action" } };
+    const id = Number.parseInt(rawId, 10);
+    if (!Number.isSafeInteger(id)) return { status: 400, body: { error: "invalid background job id" } };
     if (!ctx.stopBackgroundJob) return { status: 503, body: { error: "background job control is not available" } };
     const job = await ctx.stopBackgroundJob(id);
     if (!job) return { status: 404, body: { error: "background job not found" } };
@@ -4206,16 +4228,30 @@ async function handleProviders(method, rest, body, ctx) {
       return { status: 400, body: { error: "id is required" } };
     }
     const cfg = readConfig(ctx.configPath);
-    if (!cfg.providers?.find((p) => p.id === parsed.id)) {
+    const provider = cfg.providers?.find((p) => p.id === parsed.id);
+    if (!provider) {
       return { status: 404, body: { error: `provider "${parsed.id}" not found` } };
     }
-    if (ctx.isBusy?.() && cfg.activeProviderId !== parsed.id) {
+    const requestedModelId = typeof parsed.modelId === "string" ? parsed.modelId.trim() : "";
+    const requestedModel = requestedModelId
+      ? provider.models?.find((model) => model.disabled !== true && model.id === requestedModelId)
+      : null;
+    if (requestedModelId && !requestedModel) {
+      return { status: 404, body: { error: `model "${requestedModelId}" not found in provider "${parsed.id}"` } };
+    }
+    if (ctx.isBusy?.() && (cfg.activeProviderId !== parsed.id || requestedModelId)) {
       return { status: 409, body: { error: "请等待当前回答结束后再切换模型服务" } };
     }
-    const modelSwitch = cfg.activeProviderId === parsed.id
+    if (requestedModel) {
+      cfg.activeProviderId = parsed.id;
+      cfg.model = requestedModel.id;
+      cfg.preset = activationPresetForModel(requestedModel);
+      writeConfig(cfg, ctx.configPath);
+    }
+    const modelSwitch = cfg.activeProviderId === parsed.id && !requestedModel
       ? null
       : await ctx.syncProvider?.(parsed.id);
-    return { status: 200, body: { ok: true, modelSwitch } };
+    return { status: 200, body: { ok: true, activeProviderId: parsed.id, activeModelId: requestedModel?.id ?? null, preset: requestedModel ? cfg.preset : null, modelSwitch } };
   }
   if (method === "POST" && rest[0] === "credentials" && rest[1] === "test") {
     let parsed;
@@ -4336,6 +4372,95 @@ async function handleProviders(method, rest, body, ctx) {
     const modelSwitch = activated ? await ctx.syncProvider?.(activeProvider.id) : null;
     return { status: 200, body: { ok: true, results, passed: results.filter((item) => item.ok).length, total: results.length, activated, modelSwitch } };
   }
+  if (method === "POST" && rest[0] === "cleanup-failed") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
+    if (typeof parsed.testedAt !== "string" || !parsed.testedAt.trim()) {
+      return { status: 400, body: { error: "testedAt is required" } };
+    }
+    if (ctx.isBusy?.()) return { status: 409, body: { error: "请等待当前回答结束后再删除失败模型" } };
+    const cfg = readConfig(ctx.configPath);
+    const verification = cfg.modelVerification;
+    if (!verification || verification.dirty === true || verification.testedAt !== parsed.testedAt) {
+      return { status: 409, body: { error: "模型检测结果已过期，请重新检测后再删除" } };
+    }
+    const removed = [];
+    let removedProviders = 0;
+    const providers = [];
+    for (const provider of cfg.providers ?? []) {
+      const models = [];
+      for (const model of provider.models ?? []) {
+        const current = model.verification?.fingerprint === modelVerificationFingerprint(provider, model);
+        if (model.disabled !== true && current && model.verification?.ok === false) {
+          removed.push({ providerId: provider.id, modelId: model.id, modelName: model.name ?? model.id });
+        } else {
+          models.push(model);
+        }
+      }
+      if (models.length > 0) providers.push({ ...provider, models });
+      else removedProviders++;
+    }
+    if (removed.length === 0) {
+      return { status: 409, body: { error: "没有可删除的当前检测失败模型" } };
+    }
+    cfg.providers = providers;
+    const isCurrentPassed = (provider, model) => model.disabled !== true
+      && model.verification?.ok === true
+      && model.verification?.fingerprint === modelVerificationFingerprint(provider, model);
+    const activeProvider = providers.find((provider) => provider.id === cfg.activeProviderId) ?? null;
+    let selectedProvider = activeProvider;
+    let selectedModel = activeProvider?.models?.find((model) => model.id === cfg.model && isCurrentPassed(activeProvider, model))
+      ?? activeProvider?.models?.find((model) => isCurrentPassed(activeProvider, model))
+      ?? null;
+    if (!selectedModel) {
+      selectedProvider = null;
+      for (const provider of providers) {
+        const model = provider.models?.find((item) => isCurrentPassed(provider, item));
+        if (model) {
+          selectedProvider = provider;
+          selectedModel = model;
+          break;
+        }
+      }
+    }
+    if (selectedProvider && selectedModel) {
+      cfg.activeProviderId = selectedProvider.id;
+      cfg.model = selectedModel.id;
+      cfg.preset = activationPresetForModel(selectedModel);
+      if (selectedProvider.requestPolicy !== "json" && !selectedModel.efforts?.includes(cfg.reasoningEffort)) {
+        cfg.reasoningEffort = selectedModel.efforts?.[0] ?? selectedProvider.defaultEffort ?? "high";
+      }
+    } else {
+      cfg.activeProviderId = null;
+      cfg.model = null;
+    }
+    const enabledModels = providers.flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => ({ provider, model })));
+    const passed = enabledModels.filter(({ provider, model }) => isCurrentPassed(provider, model)).length;
+    cfg.modelVerification = {
+      ...verification,
+      dirty: false,
+      passed,
+      total: enabledModels.length,
+      cleanedAt: new Date().toISOString(),
+      removed: removed.length
+    };
+    writeConfig(cfg, ctx.configPath);
+    const modelSwitch = selectedProvider ? await ctx.syncProvider?.(selectedProvider.id) : null;
+    const refreshed = ctx.refreshContextCap?.() ?? null;
+    ctx.audit?.({ ts: Date.now(), action: "cleanup-failed-provider-models", payload: { removed: removed.length, removedProviders } });
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        removedModels: removed.length,
+        removedProviders,
+        removed,
+        activeProviderId: selectedProvider?.id ?? null,
+        activeModelId: selectedModel?.id ?? null,
+        modelSwitch: modelSwitch ?? refreshed?.modelSwitch ?? null
+      }
+    };
+  }
   if (method === "POST" && rest[0] === "import") {
     let parsed;
     try { parsed = JSON.parse(body || "{}"); } catch { return { status: 400, body: { error: "body must be JSON" } }; }
@@ -4376,11 +4501,14 @@ async function testProviderModelCommunication(provider, model) {
     retry: { maxAttempts: 1 },
     requestConfigForModel: (modelId) => resolveProviderModelRequest(provider, modelId, { purpose: "verification" })
   });
-  await client.chat({
+  const probeMarker = "VISIONOX_PROBE_OK_7F3A";
+  const response = await client.chat({
     model: model.id,
-    messages: [{ role: "user", content: "Reply with OK." }],
-    maxTokens: 8
+    messages: [{ role: "user", content: `Reply with exactly ${probeMarker}.` }],
+    maxTokens: 64,
+    requestPurpose: "verification"
   });
+  assertModelProbeMarker(response, probeMarker, { label: `model communication test ${model.id}` });
 }
 function safeProviderTestError(error, apiKey) {
   const message = error instanceof Error ? error.message : String(error);
@@ -5040,6 +5168,10 @@ async function handleSubmit(method, _rest, body, ctx) {
   if (typeof prompt !== "string" || (!prompt.trim() && !parsedImages && !session)) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
+  const parsedRequestId = typeof requestId === "string" ? requestId.trim().slice(0, 160) : null;
+  if (/^(?:complex-task-delivery|document-handoff)-/.test(parsedRequestId ?? "")) {
+    return { status: 400, body: { error: "requestId uses a reserved internal handoff namespace" } };
+  }
   let parsedSkillInvocation = null;
   if (skillInvocation !== void 0 && skillInvocation !== null) {
     const name = typeof skillInvocation?.name === "string" ? skillInvocation.name.trim() : "";
@@ -5050,13 +5182,19 @@ async function handleSubmit(method, _rest, body, ctx) {
     parsedSkillInvocation = { name, task };
   }
   const result = await ctx.submitPrompt(prompt, session || null, parsedImages, {
-    requestId: typeof requestId === "string" ? requestId : null,
+    requestId: parsedRequestId,
     skillInvocation: parsedSkillInvocation
   });
   if (!result.accepted) {
+    const busy = result.busy === true || result.code === "LOOP_BUSY";
     return {
       status: 409,
-      body: { accepted: false, reason: result.reason ?? "loop is busy" }
+      body: {
+        ...result,
+        accepted: false,
+        ...(busy ? { busy: true, code: "LOOP_BUSY" } : {}),
+        reason: result.reason ?? (busy ? "loop is busy" : "prompt was not accepted")
+      }
     };
   }
   ctx.audit?.({

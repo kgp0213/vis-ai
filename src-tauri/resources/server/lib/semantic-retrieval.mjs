@@ -1,4 +1,48 @@
+import { createHash } from "node:crypto";
+
 export const INDEX_RETRIEVAL_MODES = ["auto", "tool", "off"];
+
+function canonicalJson(value) {
+  if (value === undefined) return null;
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalJson(value[key])]));
+}
+
+function sha256(value) {
+  return createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
+function normalizedEmbeddingBaseUrl(value) {
+  return String(value ?? "").trim().replace(/\/+$/, "");
+}
+
+/**
+ * Build a non-secret fingerprint for the embedding configuration.  The API
+ * key is hashed before the complete configuration is serialized, so neither
+ * this fingerprint nor any cache key derived from it can expose credentials.
+ */
+export function semanticRetrievalConfigFingerprint({ provider = "", model = "", baseUrl = "", extraBody = {}, apiKey = "" } = {}) {
+  const apiKeyHash = sha256(String(apiKey ?? ""));
+  const canonical = canonicalJson({
+    provider: String(provider ?? "").trim(),
+    model: String(model ?? "").trim(),
+    baseUrl: normalizedEmbeddingBaseUrl(baseUrl),
+    extraBody: extraBody && typeof extraBody === "object" ? extraBody : {},
+    apiKeyHash,
+  });
+  return `sha256:${sha256(JSON.stringify(canonical))}`;
+}
+
+/** Build a versioned cache key that changes when query or embedding config changes. */
+export function buildSemanticRetrievalCacheKey({ workspace = "", query = "", ...config } = {}) {
+  const payload = canonicalJson({
+    workspace: String(workspace ?? ""),
+    query: String(query ?? ""),
+    configFingerprint: semanticRetrievalConfigFingerprint(config),
+  });
+  return `semantic-retrieval:v1:${sha256(JSON.stringify(payload))}`;
+}
 
 export function normalizeIndexRetrievalMode(value, fallback = "tool") {
   return INDEX_RETRIEVAL_MODES.includes(value) ? value : fallback;

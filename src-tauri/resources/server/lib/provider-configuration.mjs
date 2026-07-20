@@ -2,7 +2,7 @@ import { validateAgentPolicy, validateModelCapabilities, validateRequestDefaults
 
 const PROVIDER_CHANGE_FIELDS = new Set([
   "name", "baseUrl", "apiKey", "requestPolicy", "requestDefaults",
-  "defaultPreset", "defaultEffort", "autoEscalate", "escalationModel",
+  "defaultPreset", "defaultEffort", "autoEscalate", "escalationModel", "ui",
 ]);
 const MODEL_CHANGE_FIELDS = new Set([
   "id", "name", "presets", "efforts", "thinkingMode", "multimodal",
@@ -40,11 +40,38 @@ function applyAllowedChanges(target, changes, allowed, label) {
   }
 }
 
+function validateProviderUi(ui) {
+  if (ui === undefined) return null;
+  if (!ui || typeof ui !== "object" || Array.isArray(ui)) return "ui must be an object";
+  const allowed = new Set(["groupId", "groupName", "family", "modelLabel", "order", "recommendedFor"]);
+  for (const field of Object.keys(ui)) {
+    if (!allowed.has(field)) return `ui contains unsupported field "${field}"`;
+  }
+  for (const field of ["groupId", "groupName", "family", "modelLabel"]) {
+    if (ui[field] !== undefined && (typeof ui[field] !== "string" || !ui[field].trim() || ui[field].length > 120)) {
+      return `ui.${field} must be a non-empty string no longer than 120 characters`;
+    }
+  }
+  if (ui.order !== undefined && (!Number.isSafeInteger(ui.order) || ui.order < -10000 || ui.order > 10000)) {
+    return "ui.order must be an integer between -10000 and 10000";
+  }
+  if (ui.recommendedFor !== undefined && (
+    !Array.isArray(ui.recommendedFor)
+    || ui.recommendedFor.length > 20
+    || ui.recommendedFor.some((value) => typeof value !== "string" || !value.trim() || value.length > 64)
+  )) {
+    return "ui.recommendedFor must be an array of at most 20 non-empty strings";
+  }
+  return null;
+}
+
 function validateProvider(provider) {
   if (!provider || typeof provider.id !== "string" || !provider.id.trim()) return "each provider must have a non-empty id";
   if (provider.requestPolicy !== undefined && !["legacy", "json"].includes(provider.requestPolicy)) {
     return `provider "${provider.id}" requestPolicy must be legacy | json`;
   }
+  const uiIssue = validateProviderUi(provider.ui);
+  if (uiIssue) return `provider "${provider.id}" ${uiIssue}`;
   if (!Array.isArray(provider.models) || provider.models.length === 0) return `provider "${provider.id}" must include a non-empty models array`;
   const keys = new Set();
   const ids = new Set();

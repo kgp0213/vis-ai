@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import {
   resolveProviderModelAgentPolicy,
   resolveProviderModelCapabilities,
+  resolveDocumentOutputBudget,
   resolveProviderModelRequest,
   resolveProviderModelVisionPolicy,
   validateAgentPolicy,
@@ -17,6 +18,7 @@ import {
 } from "../lib/model-request-policy.mjs";
 
 const { DeepSeekClient } = await import(new URL("../visionox-pkg/dist/cli/chunk-2KDUS647.js", import.meta.url));
+const { DeepSeekClient: PackageDeepSeekClient } = await import(new URL("../visionox-pkg/dist/index.js", import.meta.url));
 const { CacheFirstLoop, ImmutablePrefix, ToolRegistry } = await import(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url));
 const { dispatch } = await import(new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.meta.url));
 const TOKEN = "model-request-policy-test";
@@ -38,6 +40,52 @@ function response(body = { choices: [{ message: { content: "OK" } }], usage: {} 
 }
 
 describe("model request policy", () => {
+  test("document output budget follows purpose defaults and declared model capacity", () => {
+    const provider = {
+      requestPolicy: "json",
+      models: [{
+        id: "doc-model",
+        capabilities: { maxOutputTokens: 16_384 },
+        agentPolicy: {
+          requestProfiles: { documentReview: { max_tokens: 3072 } },
+          documentPolicy: { batchOutputTokens: 12000 },
+        },
+        requestDefaults: { max_tokens: 20_000 },
+        verificationRequestDefaults: { max_tokens: 2048 },
+      }],
+    };
+    assert.equal(resolveDocumentOutputBudget(provider, "doc-model", { purpose: "toolContinuation" }), 12_000);
+    assert.equal(resolveDocumentOutputBudget(provider, "doc-model", { purpose: "verification" }), 2048);
+    assert.equal(resolveDocumentOutputBudget(provider, "doc-model", { purpose: "documentReview" }), 3072);
+    assert.equal(resolveDocumentOutputBudget({ models: [{ id: "fallback" }] }, "fallback"), 8192);
+  });
+
+  test("document and risk purposes inherit safe probe thinking controls from old JSON", () => {
+    const provider = {
+      requestPolicy: "json",
+      models: [{
+        id: "legacy-qwen",
+        requestDefaults: {
+          temperature: 0.6,
+          max_tokens: 8192,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 } },
+        },
+        verificationRequestDefaults: {
+          temperature: 0,
+          max_tokens: 8,
+          extra_body: { chat_template_kwargs: { enable_thinking: false } },
+        },
+        agentPolicy: { documentPolicy: { batchOutputTokens: 12000 } },
+      }],
+    };
+    for (const purpose of ["documentReview", "messageRisk"]) {
+      const resolved = resolveProviderModelRequest(provider, "legacy-qwen", { purpose });
+      assert.equal(resolved.requestDefaults.extra_body.chat_template_kwargs.enable_thinking, false);
+      assert.equal(resolved.requestDefaults.max_tokens, 8192, `${purpose} must not inherit the 8-token probe cap`);
+      assert.equal(resolveDocumentOutputBudget(provider, "legacy-qwen", { purpose }), 8192);
+    }
+  });
+
   test("validates JSON defaults without allowing protocol fields to be replaced", () => {
     assert.equal(validateRequestDefaults({ temperature: 0.6, extra_body: { chat_template_kwargs: { enable_thinking: true } } }), null);
     assert.match(validateRequestDefaults({ model: "other" }), /reserved field.*model/i);
@@ -205,14 +253,18 @@ describe("model request policy", () => {
       foregroundPollMs: 250,
       maxSplitDepth: 2,
       maxModelCallsPerBatch: 24,
+      maxModelCallsPerJob: 1000,
       maxVisualUnitsPerBatch: 5,
       requestTimeoutMs: 300000,
+      jobTimeoutMs: 21_600_000,
     };
     assert.equal(validateAgentPolicy({ documentWorkflow: "guided", documentPolicy }, { requestPolicy: "json" }), null);
     assert.match(validateAgentPolicy({ documentPolicy: { batchInputTokens: 100 } }, { requestPolicy: "json" }), /batchInputTokens/);
     assert.match(validateAgentPolicy({ documentPolicy: { contextOverlapTokens: 32 } }, { requestPolicy: "json" }), /contextOverlapTokens/);
     assert.match(validateAgentPolicy({ documentPolicy: { semanticBatching: "yes" } }, { requestPolicy: "json" }), /semanticBatching/);
     assert.match(validateAgentPolicy({ documentPolicy: { requestTimeoutMs: 1000 } }, { requestPolicy: "json" }), /requestTimeoutMs/);
+    assert.match(validateAgentPolicy({ documentPolicy: { maxModelCallsPerJob: 3 } }, { requestPolicy: "json" }), /maxModelCallsPerJob/);
+    assert.match(validateAgentPolicy({ documentPolicy: { jobTimeoutMs: 999 } }, { requestPolicy: "json" }), /jobTimeoutMs/);
     assert.match(validateAgentPolicy({ documentPolicy: { unknown: true } }, { requestPolicy: "json" }), /unknown field/);
   });
 
@@ -300,6 +352,10 @@ describe("model request policy", () => {
         temperature: 0,
         extra_body: { chat_template_kwargs: { enable_thinking: false } },
       },
+      messageRisk: {
+        temperature: 0,
+        extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      },
     };
     const provider = {
       requestPolicy: "json",
@@ -348,6 +404,15 @@ describe("model request policy", () => {
         keep: true,
       },
     });
+    assert.deepEqual(resolveProviderModelRequest(provider, "task-profile-model", { purpose: "messageRisk" }).requestDefaults, {
+      temperature: 0,
+      top_p: 0.95,
+      max_tokens: 8_192,
+      extra_body: {
+        chat_template_kwargs: { enable_thinking: false, thinking_budget: 8_192 },
+        keep: true,
+      },
+    });
   });
 
   test("JSON policy sends API-native defaults and suppresses software reasoning parameters", async () => {
@@ -379,6 +444,32 @@ describe("model request policy", () => {
     assert.equal(payload.max_tokens, 8);
     assert.equal(Object.hasOwn(payload, "reasoning_effort"), false);
     assert.equal(Object.hasOwn(payload.extra_body, "thinking"), false);
+  });
+
+  test("the public package client applies the same JSON request policy as the CLI client", async () => {
+    let payload;
+    let purpose;
+    const client = new PackageDeepSeekClient({
+      apiKey: "test",
+      baseUrl: "https://model.test/v1",
+      requestConfigForModel: (_model, options) => {
+        purpose = options?.purpose;
+        return { policy: "json", requestDefaults: { temperature: 0.4, top_p: 0.9, extra_body: { thinking_budget: 4096 } } };
+      },
+      fetch: async (_url, init) => { payload = JSON.parse(init.body); return response(); },
+    });
+    await client.chat({
+      model: "qwen",
+      messages: [{ role: "user", content: "test" }],
+      requestPurpose: "summary",
+      thinking: "enabled",
+      reasoningEffort: "max",
+    });
+    assert.equal(purpose, "summary");
+    assert.equal(payload.temperature, 0.4);
+    assert.equal(payload.top_p, 0.9);
+    assert.deepEqual(payload.extra_body, { thinking_budget: 4096 });
+    assert.equal(Object.hasOwn(payload, "reasoning_effort"), false);
   });
 
   test("model client forwards the request phase while legacy DeepSeek payload stays unchanged", async () => {
@@ -489,11 +580,16 @@ describe("model request policy", () => {
     assert.match(launcher, /resolveProviderModelVisionPolicy/);
     assert.match(launcher, /maxContextTokens: capabilities\.maxContextTokens/);
     assert.match(launcher, /maxOutputTokens: capabilities\.maxOutputTokens/);
+    assert.match(launcher, /const requestPurpose = purpose === "verification" \? "documentReview" : purpose/);
+    assert.match(launcher, /maxTokens: resolveDocumentOutputBudget\(provider, modelConfig\.model, \{ purpose: "toolContinuation" \}\)/);
+    assert.match(launcher, /maxTokens: resolveDocumentOutputBudget\(provider, modelConfig\.model, \{ purpose: "documentReview" \}\)/);
     assert.doesNotMatch(launcher, /\/pro\|reason\|vision\/i/);
     assert.match(launcher, /maxToolContinuationWindows/);
     assert.match(launcher, /toolResultBudget/);
     assert.match(launcher, /tools\.setResultAugmenter\(null\)/);
     assert.match(launcher, /sameFailureClassLimit/);
+    assert.match(launcher, /escalationModel/);
+    assert.match(launcher, /activeEscalationModel/);
     assert.doesNotMatch(launcher, /new DeepSeekClient\(\{ apiKey, baseUrl \}\)/);
     assert.match(server, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(provider, modelId, \{ purpose: "verification" \}\)/);
     assert.match(server, /requestConfig: resolveProviderModelRequest\(provider, model\.id, \{ purpose: "verification" \}\)/);
@@ -501,7 +597,7 @@ describe("model request policy", () => {
     assert.match(providerConfiguration, /importMode === "replace"/);
     assert.match(providerConfiguration, /config\.activeProviderId = payload\.activeProviderId/);
     assert.match(server, /await ctx\.syncProvider\?\.\(nextConfig\.activeProviderId\)/);
-    assert.match(dashboard, /provider\.requestPolicy === "json" \? "JSON \\u56FA\\u5B9A\\u53C2\\u6570"/);
+    assert.match(dashboard, /o3\.requestPolicy === "json" \? "JSON \\u53C2\\u6570"/);
     assert.match(dashboard, /由导入 JSON 固定/);
   });
 

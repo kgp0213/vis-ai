@@ -148,3 +148,155 @@ test("projects a persisted complex-task manifest without losing outcome, coverag
   assert.equal(projected.artifacts[0].artifactId, "artifact:final");
   assert.deepEqual(projected.allowedActions, ["retry", "ack_outcome"]);
 });
+
+const TASK_ID = "task:12345678-abcd-abcd-abcd-123456789012";
+
+test("public task projection normalizes compatible quality aliases", () => {
+  assert.equal(projectBackgroundTask({ id: TASK_ID, lifecycle: "terminal", outcome: "delivered", quality: "passed" }).quality, "verified");
+  assert.equal(projectBackgroundTask({ id: TASK_ID, lifecycle: "terminal", outcome: "delivered", quality: "verified" }).quality, "verified");
+  assert.equal(projectBackgroundTask({ id: TASK_ID, lifecycle: "terminal", outcome: "partial", quality: "degraded" }).quality, "needs_review");
+  assert.equal(projectBackgroundTask({ id: TASK_ID, lifecycle: "terminal", outcome: "partial", quality: "needs_review" }).quality, "needs_review");
+});
+
+test("abandoned is a visible terminal outcome and requires attention", () => {
+  const projected = projectBackgroundTask({
+    id: TASK_ID,
+    lifecycle: "terminal",
+    outcome: { outcome: "abandoned", summary: "用户放弃" },
+    quality: "degraded",
+  });
+  assert.equal(projected.outcome, "abandoned");
+  assert.equal(projected.status, "abandoned");
+  assert.equal(projected.needsAttention, true);
+  assert.equal(taskNeedsAttention(projected), true);
+});
+
+test("a pending acknowledgement for either consumer keeps task attention visible", () => {
+  const base = {
+    id: TASK_ID,
+    lifecycle: "terminal",
+    outcome: "delivered",
+    quality: "verified",
+  };
+  assert.equal(taskNeedsAttention({
+    ...base,
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { conversation: true },
+    }],
+  }), true);
+  assert.equal(taskNeedsAttention({
+    ...base,
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { "task-center": true },
+    }],
+  }), true);
+  assert.equal(taskNeedsAttention({
+    ...base,
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { "task-center": true, conversation: true },
+    }],
+  }), false);
+});
+
+test("registry exposes separate pending deliveries without collapsing consumer acknowledgements", async () => {
+  const task = {
+    id: TASK_ID,
+    lifecycle: "terminal",
+    outcome: { outcome: "delivered", summary: "done" },
+    quality: "passed",
+    outbox: [{
+      deliveryId: "delivery-1",
+      consumers: ["task-center", "conversation"],
+      acknowledgements: { conversation: true },
+    }],
+  };
+  const snapshot = await createBackgroundTaskRegistry({
+    listTaskJobs: async () => [task],
+    listPendingDeliveries: async () => [{
+      taskId: TASK_ID,
+      deliveryId: "delivery-1",
+      target: "task-center",
+      pendingConsumers: ["task-center"],
+    }],
+  }).list();
+  assert.equal(snapshot.jobs[0].needsAttention, true);
+  assert.deepEqual(snapshot.pendingDeliveries.map(({ target }) => target), ["task-center"]);
+});
+
+test("projects checkpoint and pending-assembly artifact references without exposing a false output path", () => {
+  const unitRef = `artifact:unit@r2#${"a".repeat(64)}`;
+  const finalRef = `artifact:final@r3#${"b".repeat(64)}`;
+  const waiting = projectBackgroundTask({
+    id: TASK_ID,
+    lifecycle: "waiting_user",
+    revision: 9,
+    contract: { taskType: "document.markdown", output: { requestedPath: "D:/workspace/result.md" } },
+    unitResults: { "unit-1": { unitId: "unit-1", artifactRefs: [unitRef] } },
+    pendingAssembly: { artifactRefs: [unitRef, finalRef] },
+    outcome: null,
+  });
+  assert.equal(waiting.artifacts.length, 2);
+  assert.equal(waiting.artifacts.every((item) => item.artifactRef), true);
+  assert.equal(waiting.artifacts.every((item) => item.path === null), true);
+  assert.equal(waiting.artifacts.every((item) => item.previewAvailable === true), true);
+  assert.equal(waiting.outputPath, null);
+  const unitArtifact = waiting.artifacts.find((item) => item.artifactRef === unitRef);
+  assert.equal(unitArtifact.role, "unit");
+  assert.equal(unitArtifact.unitId, "unit-1");
+  assert.equal(unitArtifact.revision, 2);
+  assert.equal(unitArtifact.sha256, "a".repeat(64));
+  assert.equal(unitArtifact.artifactId, "artifact:unit");
+
+  const terminal = projectBackgroundTask({
+    ...waiting,
+    lifecycle: "terminal",
+    outcome: { outcome: "delivered", artifactRefs: [finalRef] },
+    outputPath: "D:/workspace/result.md",
+  });
+  assert.equal(terminal.artifacts.find((item) => item.artifactRef === finalRef).path, "D:/workspace/result.md");
+  assert.equal(terminal.artifacts.find((item) => item.artifactRef === finalRef).previewAvailable, true);
+});
+
+test("coverage ledger progress is merged with real progress evidence", () => {
+  const projected = projectBackgroundTask({
+    id: TASK_ID,
+    lifecycle: "running",
+    progress: { sequence: 4, lastProgressAt: "2026-07-19T00:00:00.000Z", evidence: { kind: "model-stream" } },
+    coverageLedger: {
+      one: { state: "completed" },
+      two: { state: "degraded" },
+      three: { state: "pending" },
+    },
+  });
+  assert.equal(projected.progress.completedUnits, 2);
+  assert.equal(projected.progress.totalUnits, 3);
+  assert.equal(projected.progress.sequence, 4);
+});
+
+test("coverage-ledger artifact references retain their owning unit", () => {
+  const artifactRef = `artifact:ledger@r5#${"C".repeat(64)}`;
+  const projected = projectBackgroundTask({
+    id: TASK_ID,
+    lifecycle: "running",
+    coverageLedger: {
+      page: { state: "completed", primaryUnitId: "unit-ledger", artifactRefs: [artifactRef] },
+    },
+  });
+
+  assert.deepEqual(projected.artifacts[0], {
+    artifactId: "artifact:ledger",
+    artifactRef,
+    revision: 5,
+    sha256: "c".repeat(64),
+    path: null,
+    role: "unit",
+    unitId: "unit-ledger",
+    previewAvailable: true,
+  });
+});

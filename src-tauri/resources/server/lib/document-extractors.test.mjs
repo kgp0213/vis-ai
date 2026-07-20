@@ -9,6 +9,7 @@ import {
   markdownDocumentUnits,
   officeElementsToUnits,
   processDocumentSourceBatches,
+  runOfficeCliJson,
 } from "./document-extractors.mjs";
 
 test("Markdown extraction keeps heading sections as stable source units", () => {
@@ -42,6 +43,26 @@ test("OfficeCLI structured elements retain paths, tables and visual placeholders
   assert.equal(units[0].location, "/slide[1]/shape[1]");
   assert.match(units[1].text, /Yield/);
   assert.equal(units[2].visualPending, true);
+});
+
+test("OfficeCLI JSON preserves UTF-8 text split across stdout chunks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-office-utf8-"));
+  try {
+    const script = join(root, "split-utf8.mjs");
+    await writeFile(script, `
+const payload = Buffer.from('{"success":true,"data":{"text":"\u4e2d\u6587"}}', "utf8");
+const marker = Buffer.from("\u4e2d", "utf8");
+const splitAt = payload.indexOf(marker) + 1;
+process.stdout.write(payload.subarray(0, splitAt));
+setTimeout(() => process.stdout.end(payload.subarray(splitAt)), 25);
+`, "utf8");
+
+    const payload = await runOfficeCliJson(process.execPath, [script], { timeoutMs: 5_000 });
+
+    assert.equal(payload.data.text, "\u4e2d\u6587");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("cross-format batch processor paginates OfficeCLI instead of trusting one truncated response", async () => {
@@ -123,6 +144,58 @@ test("empty non-visual Office elements remain explicit empty units instead of vi
   assert.ok(units.every((unit) => !/视觉内容/.test(unit.text)));
 });
 
+test("Office extraction warns when all reported non-visual elements are empty", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-office-empty-"));
+  try {
+    const source = join(root, "empty.docx");
+    await writeFile(source, "placeholder");
+    const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "word" }, {
+      policy: { batchInputTokens: 1024, maxUnitsPerBatch: 20 },
+      countTokens: (text) => String(text).length,
+      runOfficeCli: async () => ({
+        success: true,
+        data: { totalElements: 1, elements: [{ path: "/body/table[1]", type: "table", text: "" }] },
+      }),
+      onBatch: async () => {},
+    });
+    const warning = result.warnings.find((item) => item.type === "office-empty-elements");
+    assert.equal(warning?.count, 1);
+    assert.deepEqual(warning?.locations, ["/body/table[1]"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Office extraction warns for one empty structural element among readable content", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-office-partial-empty-"));
+  try {
+    const source = join(root, "partial.docx");
+    await writeFile(source, "placeholder");
+    const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "word" }, {
+      policy: { batchInputTokens: 1024, maxUnitsPerBatch: 20 },
+      countTokens: (text) => String(text).length,
+      runOfficeCli: async () => ({
+        success: true,
+        data: {
+          totalElements: 3,
+          elements: [
+            { path: "/body/p[1]", type: "paragraph", text: "Introduction" },
+            { path: "/body/table[1]", type: "table", text: "" },
+            { path: "/body/p[2]", type: "paragraph", text: "Conclusion" },
+          ],
+        },
+      }),
+      onBatch: async () => {},
+    });
+
+    const warning = result.warnings.find((item) => item.type === "office-empty-elements");
+    assert.equal(warning?.count, 1);
+    assert.deepEqual(warning?.locations, ["/body/table[1]"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an oversized PDF page is split into stable page-internal source units", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-pdf-page-split-"));
   try {
@@ -158,7 +231,150 @@ test("an oversized PDF page is split into stable page-internal source units", as
     assert.deepEqual(firstUnits.map((unit) => unit.id), secondUnits.map((unit) => unit.id));
     assert.deepEqual(firstUnits.map((unit) => unit.text).join(""), pageText);
     assert.ok(firstUnits.every((unit) => unit.id.startsWith("page-1-part-")));
-    assert.ok(firstUnits.every((unit) => unit.text.length <= 922));
+    assert.ok(firstUnits.every((unit) => unit.text.length <= 1024));
+    assert.ok(first.batches.every((batch) => String(batch.text || "").length <= 1024), "every emitted PDF batch must respect the input budget");
+    assert.equal(first.result.batches, first.batches.length, "the extraction summary must count page-internal batches");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PDF page-internal batches respect token, unit, and visual limits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-pdf-policy-batches-"));
+  try {
+    const source = join(root, "large.pdf");
+    await writeFile(source, "placeholder");
+    const pageOne = Array.from({ length: 40 }, (_value, index) => `page-one-line-${index}-${"A".repeat(24)}`).join("\n");
+    const pageTwo = "page-two\n" + "B".repeat(220);
+    const pageThree = "page-three\n" + "C".repeat(220);
+    const batches = [];
+    const countTokens = (text) => Math.ceil(String(text).length / 4);
+    const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "pdf" }, {
+      policy: {
+        batchInputTokens: 300,
+        maxUnitsPerBatch: 2,
+        maxVisualUnitsPerBatch: 1,
+        contextOverlapTokens: 64,
+      },
+      countTokens,
+      processPdfBatches: async (_path, options) => {
+        assert.equal(options.maxTokensPerBatch, 1_024, "the configured value is normalized to the supported minimum");
+        await options.onBatch({
+          pageRange: "1-3",
+          pageNumbers: [1, 2, 3],
+          pageTexts: [
+            { page: 1, text: pageOne, chars: pageOne.length, visualPending: true, visualDataUrl: "data:image/png;base64,one" },
+            { page: 2, text: pageTwo, chars: pageTwo.length, visualPending: true, visualDataUrl: "data:image/png;base64,two" },
+            { page: 3, text: pageThree, chars: pageThree.length, visualPending: true, visualDataUrl: "data:image/png;base64,three" },
+          ],
+          contextPageTexts: [],
+          batches: 1,
+        });
+        return { batches: 1, selectedPages: 3, processedPages: 3, sourceChars: pageOne.length + pageTwo.length + pageThree.length };
+      },
+      onBatch: async (batch) => batches.push(batch),
+    });
+
+    assert.ok(batches.length > 1, "the oversized page should produce multiple policy batches");
+    assert.ok(batches.every((batch) => batch.units.length <= 2));
+    assert.ok(batches.every((batch) => countTokens(batch.text) <= 1_024), "owned source text must fit the effective token budget");
+    assert.ok(batches.every((batch) => batch.units.filter((unit) => unit.visualPending === true).length <= 1));
+    assert.equal(result.batches, batches.length);
+    assert.equal(
+      batches.flatMap((batch) => batch.units).map((unit) => unit.text).join(""),
+      pageOne + pageTwo + pageThree,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PDF policy batches count the separator between complete page units", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-pdf-separator-budget-"));
+  try {
+    const source = join(root, "separator.pdf");
+    await writeFile(source, "placeholder");
+    const pageText = (page, fill) => {
+      const marker = `--- Source unit page-${page} (PDF page ${page}) ---\n\n`;
+      return fill.repeat(2_048 - marker.length);
+    };
+    const firstText = pageText(1, "A");
+    const secondText = pageText(2, "B");
+    const countTokens = (text) => Math.ceil(String(text).length / 4);
+    const batches = [];
+    const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "pdf" }, {
+      policy: {
+        batchInputTokens: 1_024,
+        maxUnitsPerBatch: 20,
+        semanticBatching: false,
+      },
+      countTokens,
+      processPdfBatches: async (_path, options) => {
+        await options.onBatch({
+          pageRange: "1-2",
+          pageNumbers: [1, 2],
+          pageTexts: [
+            { page: 1, text: firstText, chars: firstText.length },
+            { page: 2, text: secondText, chars: secondText.length },
+          ],
+          contextPageTexts: [],
+        });
+        return { batches: 1, selectedPages: 2, processedPages: 2, sourceChars: firstText.length + secondText.length };
+      },
+      onBatch: async (batch) => batches.push(batch),
+    });
+
+    assert.equal(batches.length, 2, "the two-page join separator must force a new PDF policy batch");
+    assert.ok(batches.every((batch) => countTokens(batch.text) <= 1_024));
+    assert.equal(result.batches, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PDF child batches keep global source order when a later parent stays unsplit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-pdf-child-order-"));
+  try {
+    const source = join(root, "order.pdf");
+    await writeFile(source, "placeholder");
+    const pageText = (page, fill) => {
+      const marker = `--- Source unit page-${page} (PDF page ${page}) ---\n\n`;
+      return fill.repeat(2_048 - marker.length);
+    };
+    const first = pageText(1, "A");
+    const second = pageText(2, "B");
+    const third = "final page";
+    const batches = [];
+    const result = await processDocumentSourceBatches({ sourcePath: source, readablePath: source, documentKind: "pdf" }, {
+      policy: { batchInputTokens: 1_024, maxUnitsPerBatch: 20, semanticBatching: false },
+      countTokens: (text) => Math.ceil(String(text).length / 4),
+      processPdfBatches: async (_path, options) => {
+        await options.onBatch({
+          index: 1,
+          pageRange: "1-2",
+          pageTexts: [
+            { page: 1, text: first, chars: first.length },
+            { page: 2, text: second, chars: second.length },
+          ],
+          contextPageTexts: [],
+        });
+        await options.onBatch({
+          index: 2,
+          pageRange: "3",
+          pageTexts: [{ page: 3, text: third, chars: third.length }],
+          contextPageTexts: [],
+        });
+        return { batches: 2, selectedPages: 3, processedPages: 3, sourceChars: first.length + second.length + third.length };
+      },
+      onBatch: async (batch) => batches.push(batch),
+    });
+
+    assert.deepEqual(batches.map((batch) => batch.index), [1, 2, 3]);
+    assert.equal(result.batches, 3);
+    assert.deepEqual(
+      batches.flatMap((batch) => batch.units).map((unit) => unit.text),
+      [first, second, third],
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -214,7 +430,8 @@ test("an oversized single text line is split below the configured token target",
       onBatch: async (batch) => batches.push(batch),
     });
     assert.ok(result.totalUnits > 1);
-    assert.ok(batches.flatMap((batch) => batch.units).every((entry) => entry.text.length <= 922));
+    assert.ok(batches.every((batch) => String(batch.text || "").length <= 1_024));
+    assert.equal(batches.flatMap((batch) => batch.units).map((entry) => entry.text).join(""), "测".repeat(10_000));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -131,3 +131,24 @@ test("does not create a final artifact when deterministic assembly is incomplete
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("does not write output when the final immutable artifact revision conflicts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-task-artifact-conflict-"));
+  try {
+    const outputPath = join(root, "result.md");
+    const artifactStore = createComplexTaskArtifactStore(join(root, "artifacts"));
+    const committer = createComplexTaskArtifactCommitter({
+      artifactStore,
+      writeOutput: async ({ content }) => writeFile(outputPath, content),
+    });
+    const first = await committer.commit({ task: task(outputPath), assembled: assembled("FIRST") });
+    assert.equal(first.ok, true);
+    const conflict = await committer.commit({ task: task(outputPath), assembled: assembled("SECOND") });
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.status, "blocked");
+    assert.equal(conflict.reason, "final-artifact-conflict");
+    assert.equal(await readFile(outputPath, "utf8"), "FIRST");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

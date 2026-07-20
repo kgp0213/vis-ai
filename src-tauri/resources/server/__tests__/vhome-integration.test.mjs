@@ -428,6 +428,14 @@ describe("V来家 integration", () => {
     assert.match(app, /copyVHomeValue\(vhomeLoginUrl, "授权链接"\)/);
     assert.match(app, /openVHomeAuthorization\("edge"\)/);
     assert.match(app, /const vhomeAuthorizationReady = Boolean/);
+    assert.match(app, /const vhomeControlRef = A2\(null\)/);
+    assert.match(app, /const dismissVHomePopover = q2/);
+    assert.match(app, /document\.addEventListener\("pointerdown", closeOnOutside, true\)/);
+    assert.match(app, /document\.addEventListener\("keydown", closeOnEscape, true\)/);
+    assert.match(app, /aria-expanded=\$\{vhomeMenuOpen\}/);
+    assert.match(app, /class="vhome-popover-head"/);
+    assert.match(app, /class="vhome-popover-close"/);
+    assert.match(app, /class="vhome-popover-actions vhome-popover-actions-connected"/);
     assert.match(app, /const vhomeLoginPreparing = vhomeLoginState === "starting" && !vhomeAuthorizationReady/);
     assert.match(app, /正在获取授权链接，请稍候/);
     assert.match(app, /function vhomeLoginFailureMessage/);
@@ -441,6 +449,7 @@ describe("V来家 integration", () => {
     assert.match(launcher, /createVHomeIntegration\(\{ executable: dwsExecutable, logger: console \}\)/);
     assert.match(launcher, /getSendContext: \(\) => \(\{ \.\.\.activeMessageSendContext \}\)/);
     assert.match(launcher, /buildMessageRiskPrompt\(message\)/);
+    assert.match(launcher, /requestPurpose: "messageRisk"/);
     assert.match(launcher, /source: operation\.kind/);
     assert.match(launcher, /clearMessageSendContext\(operation\)/);
     assert.match(launcher, /getVHomeStatus: \(\) => getVHomeStatusAndResumeSchedules\(\)/);
@@ -452,6 +461,9 @@ describe("V来家 integration", () => {
     assert.match(desktop, /\.env\("PATH", runtime_path\)/);
     assert.match(css, /\.side-foot \.label \{[\s\S]*?text-overflow: ellipsis/);
     assert.match(css, /\.vhome-popover \{[\s\S]*?position: fixed/);
+    assert.match(css, /\.vhome-popover-head \{[\s\S]*?justify-content: space-between/);
+    assert.match(css, /\.vhome-popover-close \{[\s\S]*?width: 28px;[\s\S]*?height: 28px/);
+    assert.match(css, /\.vhome-popover-actions-connected \{[\s\S]*?display: grid;[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
     assert.match(css, /\.vhome-popover-actions button\.primary \{[\s\S]*?background: var\(--accent-primary\);[\s\S]*?color: var\(--accent-contrast\)/);
     assert.match(css, /\.vhome-login-link \{[\s\S]*?background: var\(--surface-input\)/);
   });

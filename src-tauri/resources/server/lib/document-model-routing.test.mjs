@@ -5,6 +5,7 @@ import {
   getModelVerificationState,
   modelConfigFingerprint,
   modelSupportsRole,
+  selectUsableDocumentModel,
 } from "./document-model-routing.mjs";
 
 const provider = {
@@ -78,4 +79,53 @@ test("document roles come from explicit capabilities, not model names", () => {
   assert.equal(modelSupportsRole(model, "document-draft"), true);
   assert.equal(modelSupportsRole(model, "vision-review"), true);
   assert.equal(modelSupportsRole({ ...model, name: "Vision Pro", capabilities: undefined, multimodal: false }, "vision-review"), false);
+});
+
+test("vision work never falls back to a text-only model", async () => {
+  let probes = 0;
+  const result = await selectUsableDocumentModel([
+    { providerId: "text-provider", modelId: "text-model", multimodal: false, verificationStatus: "passed" },
+  ], {
+    requiredCapabilities: ["vision"],
+    probe: async () => { probes += 1; return { ok: true }; },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "capability-unavailable");
+  assert.equal(probes, 0);
+});
+
+test("untested document candidates are probed and a healthy fallback is selected", async () => {
+  const probed = [];
+  const candidates = [
+    { providerId: "first", modelId: "untested", multimodal: true, verificationStatus: "untested", requiresProbe: true },
+    { providerId: "blocked", modelId: "failed", multimodal: true, verificationStatus: "failed" },
+    { providerId: "fallback", modelId: "healthy", multimodal: true, verificationStatus: "stale", requiresProbe: true },
+  ];
+  const result = await selectUsableDocumentModel(candidates, {
+    requiredCapabilities: ["vision"],
+    probe: async (candidate) => {
+      probed.push(candidate.modelId);
+      return candidate.modelId === "healthy" ? { ok: true, source: "live-probe" } : { ok: false, error: "offline" };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.candidate.modelId, "healthy");
+  assert.deepEqual(probed, ["untested", "healthy"]);
+  assert.equal(result.verification.source, "live-probe");
+});
+
+test("a recent successful verification does not add another startup probe", async () => {
+  let probes = 0;
+  const candidate = { providerId: "provider", modelId: "verified", multimodal: false, verificationStatus: "passed", requiresProbe: false };
+  const result = await selectUsableDocumentModel([candidate], {
+    requiredCapabilities: ["text"],
+    probe: async () => { probes += 1; return { ok: false }; },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.candidate, candidate);
+  assert.equal(result.verification.source, "persisted-verification");
+  assert.equal(probes, 0);
 });

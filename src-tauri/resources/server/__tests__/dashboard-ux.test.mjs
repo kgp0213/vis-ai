@@ -7,12 +7,32 @@ const dashboardCssUrl = new URL("../visionox-pkg/dashboard/app.css", import.meta
 const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import.meta.url);
 
 describe("Dashboard desktop UX", () => {
+  test("groups providers into a cascading model menu with import on the chat surface", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(app, /function providerDisplayGroups\(providers\)/);
+    assert.match(app, /provider\?\.ui\?\.groupId/);
+    assert.doesNotMatch(app, /const \[modelSearch, setModelSearch\]/);
+    assert.match(app, /const \[openModelGroupId, setOpenModelGroupId\] = d2\(null\)/);
+    assert.match(app, /class=\$\{`model-provider-trigger/);
+    assert.match(app, /class="model-cascade-submenu"/);
+    assert.match(app, /onMouseEnter=\$\{\(\) => openModelGroup\(group\.id\)\}/);
+    assert.match(app, /onMouseLeave=\$\{scheduleModelGroupClose\}/);
+    assert.match(app, /setTimeout\(\(\) => setOpenModelGroupId\(null\), 180\)/);
+    assert.match(app, /selectProviderModel\(provider\.id, model\.id\)/);
+    assert.match(app, /id="provider-import-file"/);
+    assert.doesNotMatch(app, /class="model-search"/);
+    assert.match(app, /检测全部模型/);
+    assert.match(app, /删除检测失败模型/);
+    assert.doesNotMatch(app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed =")), /model-manage-link|>模型管理</);
+  });
+
   test("keeps existing entry points while improving semantics, themes and composer hierarchy", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");
     const chatPanel = app.slice(app.indexOf("function ChatPanel()"), app.indexOf("var ChatFeed ="));
     const sessionsPanel = app.slice(app.indexOf("function SessionsPanel()"), app.indexOf("// dashboard/src/lib/loop-control.ts"));
     const memoryPanel = app.slice(app.indexOf("function MemoryPanel()"), app.indexOf("// dashboard/src/lib/budget.ts"));
+    const settingsPanel = app.slice(app.indexOf("function SettingsPanel()"), app.indexOf("// dashboard/src/panels/skills.ts"));
     const appShell = app.slice(app.indexOf("function App()"));
 
     assert.match(appShell, /localStorage\.getItem\("rx\.openSections"\)/);
@@ -26,7 +46,11 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatPanel, /<div class="composer-controls">/);
     assert.match(chatPanel, /class="composer-chip composer-index"/);
     assert.match(chatPanel, /class=\$\{`model-choice/);
-    assert.match(chatPanel, /class="model-primary-action"/);
+    assert.match(chatPanel, /class="model-cascade-menu"/);
+    assert.match(chatPanel, /class="model-test-link"/);
+    assert.match(chatPanel, /class="model-cleanup-link"/);
+    assert.match(chatPanel, /id="provider-import-file"/);
+    assert.doesNotMatch(settingsPanel, /id="settings-provider-import-file"/);
     assert.doesNotMatch(chatPanel, /rgb\(138,170,122\)/);
     assert.match(sessionsPanel, /<input class="session-select-box" type="checkbox"/);
     assert.match(memoryPanel, /const \[createOpen, setCreateOpen\] = d2\(false\)/);

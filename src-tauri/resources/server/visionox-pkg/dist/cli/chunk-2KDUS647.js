@@ -113,6 +113,13 @@ function pickPrimaryBalance(infos) {
   }
   return best;
 }
+function modelRequestTimeoutError(timeoutMs, cause) {
+  const error = new Error(`model request timed out after ${timeoutMs}ms`);
+  error.name = "ModelRequestTimeoutError";
+  error.code = "MODEL_REQUEST_TIMEOUT";
+  if (cause !== void 0) error.cause = cause;
+  return error;
+}
 var DeepSeekClient = class {
   apiKey;
   baseUrl;
@@ -120,6 +127,7 @@ var DeepSeekClient = class {
   retry;
   _fetch;
   requestConfigForModel;
+  streamOptionsSupport;
   constructor(opts = {}) {
     const apiKey = opts.apiKey ?? process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
@@ -135,6 +143,7 @@ var DeepSeekClient = class {
     this._fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.retry = opts.retry ?? {};
     this.requestConfigForModel = opts.requestConfigForModel ?? (() => ({ policy: "legacy", requestDefaults: {} }));
+    this.streamOptionsSupport = "unknown";
   }
   buildPayload(opts, stream) {
     const requestConfig = this.requestConfigForModel(opts.model, { purpose: opts.requestPurpose }) ?? {};
@@ -148,9 +157,24 @@ var DeepSeekClient = class {
       messages: opts.messages,
       stream
     };
+    if (stream && this.streamOptionsSupport !== "unsupported") {
+      const configuredStreamOptions = payload.stream_options && typeof payload.stream_options === "object" && !Array.isArray(payload.stream_options)
+        ? payload.stream_options
+        : {};
+      payload.stream_options = { include_usage: true, ...configuredStreamOptions };
+    }
+    if (!stream) delete payload.stream_options;
     if (opts.tools?.length) payload.tools = opts.tools;
     if (opts.temperature !== void 0) payload.temperature = opts.temperature;
-    if (opts.maxTokens !== void 0) payload.max_tokens = opts.maxTokens;
+    if (opts.maxTokens !== void 0) {
+      const completionOnly = jsonPolicy && Object.hasOwn(requestDefaults, "max_completion_tokens") && !Object.hasOwn(requestDefaults, "max_tokens");
+      if (completionOnly) {
+        payload.max_completion_tokens = opts.maxTokens;
+        delete payload.max_tokens;
+      } else {
+        payload.max_tokens = opts.maxTokens;
+      }
+    }
     if (opts.responseFormat) payload.response_format = opts.responseFormat;
     if (!jsonPolicy && opts.thinking) {
       payload.extra_body = { thinking: { type: opts.thinking } };
@@ -194,7 +218,11 @@ var DeepSeekClient = class {
   }
   async chat(opts) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, this.timeoutMs);
     const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
     try {
       const resp = await fetchWithRetry(
@@ -224,17 +252,24 @@ var DeepSeekClient = class {
         finishReason: data.choices?.[0]?.finish_reason ?? void 0,
         raw: data
       };
+    } catch (error) {
+      if (timedOut && !opts.signal?.aborted) throw modelRequestTimeoutError(this.timeoutMs, error);
+      throw error;
     } finally {
       clearTimeout(timer);
     }
   }
   async *stream(opts) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, this.timeoutMs);
     const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
     let resp;
     try {
-      resp = await fetchWithRetry(
+      const send = (payload) => fetchWithRetry(
         this._fetch,
         `${this.baseUrl}/chat/completions`,
         {
@@ -244,13 +279,26 @@ var DeepSeekClient = class {
             "Content-Type": "application/json",
             Accept: "text/event-stream"
           },
-          body: JSON.stringify(this.buildPayload(opts, true)),
+          body: JSON.stringify(payload),
           signal
         },
         { ...this.retry, signal }
       );
+      const payload = this.buildPayload(opts, true);
+      resp = await send(payload);
+      if (!resp.ok && payload.stream_options) {
+        const errorText = await resp.text().catch(() => "");
+        const unsupported = (resp.status === 400 || resp.status === 422) && /stream[_ -]?options|include[_ -]?usage/i.test(errorText);
+        if (!unsupported) throw new Error(`DeepSeek ${resp.status}: ${errorText}`);
+        this.streamOptionsSupport = "unsupported";
+        const fallbackPayload = { ...payload };
+        delete fallbackPayload.stream_options;
+        resp = await send(fallbackPayload);
+      }
+      if (resp.ok && payload.stream_options && this.streamOptionsSupport !== "unsupported") this.streamOptionsSupport = "supported";
     } catch (err) {
       clearTimeout(timer);
+      if (timedOut && !opts.signal?.aborted) throw modelRequestTimeoutError(this.timeoutMs, err);
       throw err;
     }
     if (!resp.ok || !resp.body) {
@@ -272,8 +320,8 @@ var DeepSeekClient = class {
         }
         try {
           const json = JSON.parse(ev.data);
-          if (json?.error) {
-            const providerError = json.error;
+          if (ev.event === "error" || json?.error) {
+            const providerError = json?.error ?? json;
             let providerMessage = typeof providerError === "string"
               ? providerError
               : providerError?.message || providerError?.detail || providerError?.error;
@@ -327,7 +375,12 @@ var DeepSeekClient = class {
         if (protocolError) throw protocolError;
         if (done) break;
         const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
+        if (streamDone) {
+          const decoderTail = decoder.decode();
+          if (decoderTail) parser.feed(decoderTail);
+          parser.feed("\n\n");
+          break;
+        }
         parser.feed(decoder.decode(value, { stream: true }));
       }
       while (queue.length > 0) yield queue.shift();
@@ -342,6 +395,9 @@ var DeepSeekClient = class {
         completionSource: receivedDoneMarker ? "done-marker" : "finish-reason",
         finishReason: lastFinishReason
       };
+    } catch (error) {
+      if (timedOut && !opts.signal?.aborted) throw modelRequestTimeoutError(this.timeoutMs, error);
+      throw error;
     } finally {
       clearTimeout(timer);
       reader.releaseLock();

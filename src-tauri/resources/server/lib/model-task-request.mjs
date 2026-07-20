@@ -43,6 +43,24 @@ export function assertUsableModelResponse(response, { label = "model task", allo
   return content;
 }
 
+export function assertModelProbeMarker(response, marker, { label = "model probe" } = {}) {
+  const expected = String(marker || "").trim();
+  if (!expected) throw new TypeError("model probe marker is required");
+  let normalized = assertUsableModelResponse(response, { label }).trim();
+  const fenced = /^```(?:text|txt)?\s*\n?([\s\S]*?)\n?```$/i.exec(normalized);
+  if (fenced) normalized = fenced[1].trim();
+  if (/^"[\s\S]*"$/.test(normalized)) {
+    try {
+      const parsed = JSON.parse(normalized);
+      if (typeof parsed === "string") normalized = parsed.trim();
+    } catch {
+      // A malformed quoted response is handled by the exact comparison below.
+    }
+  }
+  if (normalized !== expected) throw new Error(`${label} did not exactly echo ${expected}`);
+  return expected;
+}
+
 function parseModelJson(content, label) {
   const raw = String(content || "").trim()
     .replace(/^```json\s*/i, "")

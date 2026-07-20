@@ -35,6 +35,17 @@ const REQUEST_PROFILE_NAMES = new Set([
   "knowledge",
   "learn",
   "sessionReview",
+  "messageRisk",
+  "documentReview",
+]);
+const SAFE_VERIFICATION_FALLBACK_PURPOSES = new Set([
+  "summary",
+  "report",
+  "knowledge",
+  "learn",
+  "sessionReview",
+  "messageRisk",
+  "documentReview",
 ]);
 const DOCUMENT_POLICY_FIELDS = new Set([
   "defaultFidelity",
@@ -49,8 +60,20 @@ const DOCUMENT_POLICY_FIELDS = new Set([
   "foregroundPollMs",
   "maxSplitDepth",
   "maxModelCallsPerBatch",
+  "maxModelCallsPerJob",
   "maxVisualUnitsPerBatch",
   "requestTimeoutMs",
+  "jobTimeoutMs",
+  "qualityThresholds",
+]);
+const DOCUMENT_QUALITY_THRESHOLD_FIELDS = new Set([
+  "unitLengthRatio",
+  "lengthRatio",
+  "signalRatio",
+  "commandRatio",
+  "tableRatio",
+  "formulaRatio",
+  "urlRatio",
 ]);
 const MAX_REQUEST_DEFAULTS_BYTES = 32 * 1024;
 const MAX_REQUEST_DEFAULTS_DEPTH = 8;
@@ -185,8 +208,10 @@ export function validateAgentPolicy(value, options = {}) {
       ["foregroundPollMs", 10, 5000],
       ["maxSplitDepth", 0, 6],
       ["maxModelCallsPerBatch", 4, 200],
+      ["maxModelCallsPerJob", 4, 10000],
       ["maxVisualUnitsPerBatch", 1, 20],
       ["requestTimeoutMs", 30000, 1800000],
+      ["jobTimeoutMs", 1000, 172800000],
     ]) {
       const fieldValue = policy[field];
       if (fieldValue !== undefined && (!Number.isSafeInteger(fieldValue) || fieldValue < minimum || fieldValue > maximum)) {
@@ -206,6 +231,18 @@ export function validateAgentPolicy(value, options = {}) {
       for (const id of policy.fallbackProviderIds) {
         if (typeof id !== "string" || !id.trim() || id.length > 120) {
           return "agentPolicy documentPolicy.fallbackProviderIds must contain non-empty provider ids up to 120 characters";
+        }
+      }
+    }
+    if (policy.qualityThresholds !== undefined) {
+      const thresholds = policy.qualityThresholds;
+      if (!thresholds || typeof thresholds !== "object" || Array.isArray(thresholds) || Object.getPrototypeOf(thresholds) !== Object.prototype) {
+        return "agentPolicy documentPolicy.qualityThresholds must be a plain JSON object";
+      }
+      for (const [name, ratio] of Object.entries(thresholds)) {
+        if (!DOCUMENT_QUALITY_THRESHOLD_FIELDS.has(name)) return `agentPolicy documentPolicy.qualityThresholds contains unknown field "${name}"`;
+        if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0 || ratio > 1) {
+          return `agentPolicy documentPolicy.qualityThresholds.${name} must be a number from 0 to 1`;
         }
       }
     }
@@ -357,6 +394,16 @@ function mergeJsonObjects(base, overrides) {
   return merged;
 }
 
+function safeVerificationTaskDefaults(value) {
+  const safe = mergeJsonObjects({}, value && typeof value === "object" && !Array.isArray(value) ? value : {});
+  // Probe configurations commonly use max_tokens: 8. Reusing that value for a
+  // real task would silently starve the result; keep the model's normal output
+  // budget and reuse only the lightweight thinking/sampling controls.
+  delete safe.max_tokens;
+  delete safe.max_completion_tokens;
+  return safe;
+}
+
 export function resolveProviderModelRequest(provider, modelId, options = {}) {
   const policy = provider?.requestPolicy === JSON_REQUEST_POLICY ? JSON_REQUEST_POLICY : "legacy";
   const model = provider?.models?.find((item) => item?.id === modelId);
@@ -373,9 +420,29 @@ export function resolveProviderModelRequest(provider, modelId, options = {}) {
       const profileIssue = validateRequestDefaults(profile);
       if (profileIssue) throw new Error(`invalid ${options.purpose} request configuration for model "${modelId}": ${profileIssue}`);
       requestDefaults = mergeJsonObjects(requestDefaults, profile);
+    } else if (SAFE_VERIFICATION_FALLBACK_PURPOSES.has(options.purpose) && model?.verificationRequestDefaults !== undefined) {
+      const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
+      if (verificationIssue) throw new Error(`invalid verification request configuration for model "${modelId}": ${verificationIssue}`);
+      requestDefaults = mergeJsonObjects(requestDefaults, safeVerificationTaskDefaults(model.verificationRequestDefaults));
     }
   }
   return { policy, requestDefaults };
+}
+
+export function resolveDocumentOutputBudget(provider, modelId, options = {}) {
+  const purpose = String(options.purpose || "toolContinuation");
+  const request = resolveProviderModelRequest(provider, modelId, { purpose });
+  const agentPolicy = resolveProviderModelAgentPolicy(provider, modelId);
+  const requestMaximum = Number(request.requestDefaults?.max_tokens ?? request.requestDefaults?.max_completion_tokens);
+  const policyMaximum = Number(agentPolicy.documentPolicy?.batchOutputTokens);
+  const fallback = Number(options.fallback);
+  const configuredValues = [requestMaximum, policyMaximum, fallback]
+    .filter((value) => Number.isSafeInteger(value) && value > 0);
+  const configured = configuredValues.length > 0 ? Math.min(...configuredValues) : 8_192;
+  const capabilityMaximum = Number(resolveProviderModelCapabilities(provider, modelId).maxOutputTokens);
+  return Number.isSafeInteger(capabilityMaximum) && capabilityMaximum > 0
+    ? Math.min(configured, capabilityMaximum)
+    : configured;
 }
 
 export function resolveProviderModelAgentPolicy(provider, modelId) {

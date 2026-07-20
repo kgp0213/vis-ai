@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { formatArtifactReference } from "./complex-task-artifact-reference.mjs";
+
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
@@ -101,6 +103,12 @@ export function createComplexTaskArtifactCommitter(options = {}) {
       mediaType: text(task.contract?.output?.mediaType, "text/plain"),
       primaryCoverage: requiredCoverage,
       contextRefs: [],
+      owner: {
+        taskId: task.id,
+        unitId: null,
+        epoch: Math.max(1, Number(task?.epoch) || 1),
+        kind: "final",
+      },
       producer: {
         adapterVersion: text(task.contract?.pinned?.adapterVersion, "generic-v1"),
         skillHash: text(task.contract?.pinned?.skillHash, "sha256:unknown"),
@@ -110,8 +118,21 @@ export function createComplexTaskArtifactCommitter(options = {}) {
       },
     };
     const stored = await artifactStore.put({ manifest: manifestInput, content });
+    if (stored?.ok === false && stored.reason === "immutable-conflict") {
+      return {
+        ok: false,
+        status: "blocked",
+        reason: "final-artifact-conflict",
+        report: clone(assembled.report),
+        selectedArtifacts: clone(assembled.selectedArtifacts || []),
+        existingArtifact: clone(stored.manifest || null),
+        content: content.toString("utf8"),
+        warnings: [{ code: "FINAL_ARTIFACT_CONFLICT", message: "最终产物 revision 已存在但内容或归属元数据不同，未覆盖原文件。" }],
+      };
+    }
     if (!stored?.manifest) throw new Error("final artifact store returned no manifest");
     const finalArtifact = { manifest: clone(stored.manifest), content: Buffer.from(content) };
+    const finalArtifactRef = formatArtifactReference(stored.manifest);
     const requestedPath = text(task.contract?.output?.requestedPath);
     let reservation = null;
     let committed = false;
@@ -120,13 +141,13 @@ export function createComplexTaskArtifactCommitter(options = {}) {
         reservation = await reserveOutput({ taskId: task.id, task: clone(task), requestedPath, content: Buffer.from(content), finalArtifact: clone(finalArtifact.manifest) });
         if (!reservation?.ok) {
           const request = userInputRequest(task, reservation?.decision, reservation?.error || "输出路径需要用户确认");
-          request.existingArtifactRefs = [stored.manifest.artifactId];
+          request.existingArtifactRefs = [finalArtifactRef];
           return {
             ok: false,
             waitingUser: true,
             status: "waiting_user",
             finalArtifact,
-            artifactRefs: [stored.manifest.artifactId],
+            artifactRefs: [finalArtifactRef],
             userInputRequest: request,
             reason: reservation?.error || "output-path-conflict",
           };
@@ -139,13 +160,13 @@ export function createComplexTaskArtifactCommitter(options = {}) {
         } catch (error) {
           if (!conflictError(error)) throw error;
           const request = userInputRequest(task, error?.decision, "输出路径在提交时发生冲突，请选择新的输出路径或确认覆盖。");
-          request.existingArtifactRefs = [stored.manifest.artifactId];
+          request.existingArtifactRefs = [finalArtifactRef];
           return {
             ok: false,
             waitingUser: true,
             status: "waiting_user",
             finalArtifact,
-            artifactRefs: [stored.manifest.artifactId],
+            artifactRefs: [finalArtifactRef],
             outputPath: outputPath || null,
             userInputRequest: request,
             reason: error?.code || "output-conflict",
@@ -158,7 +179,7 @@ export function createComplexTaskArtifactCommitter(options = {}) {
         status: "committed",
         outputPath: outputPath || null,
         finalArtifact,
-        artifactRefs: [stored.manifest.artifactId],
+        artifactRefs: [finalArtifactRef],
         report: clone(assembled.report),
         content: content.toString("utf8"),
       };

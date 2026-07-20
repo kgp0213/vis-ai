@@ -8,6 +8,15 @@ const TASK_A = "task:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TASK_B = "task:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const TASK_C = "task:cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
+async function waitFor(predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await delay(5);
+  }
+  assert.equal(predicate(), true, `condition was not met within ${timeoutMs}ms`);
+}
+
 function enginePin(engine = "v2") {
   return {
     schemaVersion: 1,
@@ -230,9 +239,34 @@ test("started orchestrator keeps polling after an attention result so a later us
     pollIntervalMs: 5,
   });
   await orchestrator.start();
-  await delay(25);
+  await waitFor(() => runs >= 3);
   await orchestrator.stop();
   assert.ok(runs >= 3, `expected polling to continue after attention, got ${runs}`);
+});
+
+test("start schedules a recovery poll when the initial reconciliation fails", async () => {
+  const runtime = createFakeRuntime([task(TASK_A)]);
+  let reconcileCalls = 0;
+  const supervisor = {
+    async reconcile() {
+      reconcileCalls += 1;
+      if (reconcileCalls === 1) throw new Error("temporary store read failure");
+      return { scanned: 1, requeued: [], issues: [] };
+    },
+  };
+  const orchestrator = createComplexTaskOrchestrator({
+    store: runtime.store,
+    worker: runtime.worker,
+    supervisor,
+    adapters: { "document.test": {} },
+    assembler: async () => successfulAssembly(task(TASK_A)),
+    pollIntervalMs: 5,
+  });
+
+  await assert.rejects(orchestrator.start(), /temporary store read failure/);
+  await waitFor(() => reconcileCalls >= 2);
+  await orchestrator.stop();
+  assert.ok(reconcileCalls >= 2);
 });
 
 test("ready_for_assembly acquires a fresh lease, fences assembly, and commits a terminal outcome", async () => {
@@ -361,6 +395,25 @@ test("a pinned engine is passed through unchanged even when live configuration c
   });
   await orchestrator.runOnce();
   assert.deepEqual(pins, [enginePin("legacy")]);
+});
+
+test("strict runtime pin enforcement blocks a task before a mismatched adapter can run", async () => {
+  const runtime = createFakeRuntime([task(TASK_A)]);
+  let workerCalls = 0;
+  const orchestrator = createComplexTaskOrchestrator({
+    store: runtime.store,
+    worker: { runOne: async () => { workerCalls += 1; return { status: "unit_completed", task: await runtime.store.read(TASK_A) }; } },
+    supervisor: runtime.supervisor,
+    adapters: { "document.test": { adapterVersion: "adapter-future", skillHash: "skill-v1", toolSchemaVersion: "1" } },
+    assembler: async () => successfulAssembly(task(TASK_A)),
+    requireRuntimePins: true,
+    runtimeToolSchemaVersion: "1",
+  });
+  const report = await orchestrator.runOnce();
+  assert.equal(workerCalls, 0);
+  assert.equal(report.results[0].status, "blocked");
+  assert.match(report.results[0].reason, /adapterVersion/i);
+  assert.equal((await runtime.store.read(TASK_A)).lifecycle, "blocked");
 });
 
 test("stop aborts in-flight work and prevents new claims", async () => {

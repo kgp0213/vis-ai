@@ -9,6 +9,7 @@ const packageIndexUrl = new URL("../visionox-pkg/dist/index.js", import.meta.url
 const learnUrl = new URL("../learn.mjs", import.meta.url);
 const cliProjectMemory = await import(projectMemoryUrl.href);
 const packageIndexMemory = await import(packageIndexUrl.href);
+const learn = await import(learnUrl.href);
 
 describe("runtime project memory candidates", () => {
   let tmpRoot = null;
@@ -72,5 +73,23 @@ describe("runtime project memory candidates", () => {
     const source = readFileSync(learnUrl, "utf8");
     assert.match(source, /return join\(rootDir, "visionox\.md"\)/);
     assert.doesNotMatch(source, /join\(rootDir, "REASONIX\.md"\)/);
+  });
+
+  test("/learn project rejects a short or structurally incomplete model result", () => {
+    assert.equal(learn.validateProjectMemoryMarkdown("## Tech stack\nNode.js").ok, false);
+    assert.equal(learn.validateProjectMemoryMarkdown([
+      "## Tech stack",
+      "Node.js and Tauri are used throughout this project with explicit runtime resource boundaries.",
+      "## Project structure",
+      "The launcher owns orchestration while focused modules own persistence and workflow policy.",
+      "## Build and test commands",
+      "Run the documented release wrapper and the complete quality gate before delivery.",
+      "## Key conventions",
+      "Preserve user data, use atomic writes, and reject incomplete model output before replacement.",
+    ].join("\n\n")).ok, true);
+  });
+
+  test("/learn skill rejects a frontmatter-only generated skill", () => {
+    assert.equal(learn.validateGeneratedSkillMarkdown("---\nname: generated-skill\n---\n").ok, false);
   });
 });

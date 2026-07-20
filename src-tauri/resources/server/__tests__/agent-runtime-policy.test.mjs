@@ -18,11 +18,11 @@ const {
 } = await import(new URL("../visionox-pkg/dist/cli/chunk-PV55UMTO.js", import.meta.url));
 const { Usage } = await import(new URL("../visionox-pkg/dist/cli/chunk-2KDUS647.js", import.meta.url));
 
-function toolCall(id, name = "probe") {
+function toolCall(id, name = "probe", args = {}) {
   return {
     id,
     type: "function",
-    function: { name, arguments: "{}" },
+    function: { name, arguments: typeof args === "string" ? args : JSON.stringify(args) },
   };
 }
 
@@ -59,6 +59,99 @@ describe("agent runtime policy", () => {
     assert.match(notice, /恢复了 1 个未按协议返回的工具调用/);
     assert.doesNotMatch(notice, /do-not-display|secret\.txt|notes/);
     assert.equal(formatToolRepairNotice({ truncationsFixed: 0, scavenged: 0 }), null);
+  });
+
+  test("a repaired unterminated string cannot execute a mutating tool", async () => {
+    let modelCalls = 0;
+    let writes = 0;
+    const client = {
+      chat: async () => {
+        modelCalls++;
+        if (modelCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [toolCall("write-truncated", "write_file", '{"path":"report.md","content":"partial')],
+            usage: {},
+          };
+        }
+        return { content: "write was safely skipped", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "write_file",
+      parameters: { type: "object", properties: {} },
+      readOnly: false,
+      fn: async () => { writes++; return "wrote"; },
+    });
+    const events = [];
+    for await (const event of makeLoop(client, tools).step("write a report")) events.push(event);
+
+    assert.equal(writes, 0);
+    assert.equal(modelCalls, 2);
+    assert.match(events.find((event) => event.role === "tool")?.content ?? "", /TRUNCATED_TOOL_ARGUMENTS|truncated.*blocked/i);
+  });
+
+  test("a structurally repaired partial batch cannot execute a mutating tool", async () => {
+    let modelCalls = 0;
+    let writes = 0;
+    const client = {
+      chat: async () => {
+        modelCalls++;
+        if (modelCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [toolCall("batch-truncated", "multi_edit", '{"operations":[{"path":"a.md","content":"first"}')],
+            usage: {},
+          };
+        }
+        return { content: "partial batch was safely skipped", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "multi_edit",
+      parameters: { type: "object", properties: {} },
+      readOnly: false,
+      fn: async () => { writes++; return "wrote"; },
+    });
+    const events = [];
+    for await (const event of makeLoop(client, tools).step("apply all edits")) events.push(event);
+
+    assert.equal(writes, 0);
+    assert.equal(modelCalls, 2);
+    assert.match(events.find((event) => event.role === "tool")?.content ?? "", /TRUNCATED_TOOL_ARGUMENTS|truncated.*blocked/i);
+  });
+
+  test("a repaired unterminated string may still execute a read-only tool", async () => {
+    let modelCalls = 0;
+    let receivedQuery = null;
+    const client = {
+      chat: async () => {
+        modelCalls++;
+        if (modelCalls === 1) {
+          return {
+            content: "",
+            toolCalls: [toolCall("read-truncated", "search", '{"query":"known prefix')],
+            usage: {},
+          };
+        }
+        return { content: "search completed", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "search",
+      parameters: { type: "object", properties: {} },
+      readOnly: true,
+      fn: async (args) => { receivedQuery = args.query; return "match"; },
+    });
+    for await (const _event of makeLoop(client, tools).step("search")) {
+      // Drain the turn.
+    }
+
+    assert.equal(receivedQuery, "known prefix");
+    assert.equal(modelCalls, 2);
   });
 
   test("configured escalation model replaces the bundled DeepSeek target", async () => {

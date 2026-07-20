@@ -1,5 +1,6 @@
 const MODEL_ROLES = new Set(["system", "user", "assistant", "tool"]);
 const DASHBOARD_ROLES = new Set(["user", "assistant", "tool", "warning", "error", "info"]);
+const INTERNAL_USER_PROMPT_RE = /^\[(?:系统自动续跑\s+\d+\/\d+|系统后台任务接管\s+document:[^\]]+)\]/;
 
 function contentText(content) {
   if (typeof content === "string") return content;
@@ -17,6 +18,13 @@ function normalizeEntry(value) {
   const content = value.content !== undefined ? value.content : value.text;
   if (typeof content !== "string" && !Array.isArray(content)) return null;
   return { ...value, role, content };
+}
+
+function isInternalUserEntry(entry) {
+  if (entry?.role !== "user") return false;
+  if (entry.internal === true) return true;
+  const content = entry.content !== undefined ? entry.content : entry.text;
+  return INTERNAL_USER_PROMPT_RE.test(contentText(content).trim());
 }
 
 export function parseActiveSessionJsonl(raw) {
@@ -39,7 +47,7 @@ export function parseActiveSessionJsonl(raw) {
 
 export function activeEntriesForModel(entries) {
   return (Array.isArray(entries) ? entries : [])
-    .filter((entry) => entry && MODEL_ROLES.has(entry.role))
+    .filter((entry) => entry && MODEL_ROLES.has(entry.role) && !isInternalUserEntry(entry))
     .map((entry) => {
       const modelEntry = {
         role: entry.role,
@@ -90,7 +98,7 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
       continue;
     }
     if (entry.role === "user") {
-      if (/^\[系统自动续跑\s+\d+\/\d+\]/.test(text.trim())) continue;
+      if (isInternalUserEntry(entry)) continue;
       flushAssistant();
       if (text) visible.push(restoredEntry(entry, text));
       continue;

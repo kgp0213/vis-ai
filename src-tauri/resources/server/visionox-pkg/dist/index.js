@@ -116,12 +116,21 @@ function sanitizeJsonTransportValue(v) {
   }
   return v;
 }
+function modelRequestTimeoutError(timeoutMs, cause) {
+  const error = new Error(`model request timed out after ${timeoutMs}ms`);
+  error.name = "ModelRequestTimeoutError";
+  error.code = "MODEL_REQUEST_TIMEOUT";
+  if (cause !== void 0) error.cause = cause;
+  return error;
+}
 var DeepSeekClient = class {
   apiKey;
   baseUrl;
   timeoutMs;
   retry;
   _fetch;
+  requestConfigForModel;
+  streamOptionsSupport;
   constructor(opts = {}) {
     const apiKey = opts.apiKey ?? process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
@@ -136,21 +145,44 @@ var DeepSeekClient = class {
     this.timeoutMs = opts.timeoutMs ?? 66e4;
     this._fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.retry = opts.retry ?? {};
+    this.requestConfigForModel = opts.requestConfigForModel ?? (() => ({ policy: "legacy", requestDefaults: {} }));
+    this.streamOptionsSupport = "unknown";
   }
   buildPayload(opts, stream) {
+    const requestConfig = this.requestConfigForModel(opts.model, { purpose: opts.requestPurpose }) ?? {};
+    const jsonPolicy = requestConfig.policy === "json";
+    const requestDefaults = jsonPolicy && requestConfig.requestDefaults && typeof requestConfig.requestDefaults === "object" && !Array.isArray(requestConfig.requestDefaults)
+      ? requestConfig.requestDefaults
+      : {};
     const payload = {
+      ...requestDefaults,
       model: opts.model,
       messages: opts.messages,
       stream
     };
+    if (stream && this.streamOptionsSupport !== "unsupported") {
+      const configuredStreamOptions = payload.stream_options && typeof payload.stream_options === "object" && !Array.isArray(payload.stream_options)
+        ? payload.stream_options
+        : {};
+      payload.stream_options = { include_usage: true, ...configuredStreamOptions };
+    }
+    if (!stream) delete payload.stream_options;
     if (opts.tools?.length) payload.tools = opts.tools;
     if (opts.temperature !== void 0) payload.temperature = opts.temperature;
-    if (opts.maxTokens !== void 0) payload.max_tokens = opts.maxTokens;
+    if (opts.maxTokens !== void 0) {
+      const completionOnly = jsonPolicy && Object.hasOwn(requestDefaults, "max_completion_tokens") && !Object.hasOwn(requestDefaults, "max_tokens");
+      if (completionOnly) {
+        payload.max_completion_tokens = opts.maxTokens;
+        delete payload.max_tokens;
+      } else {
+        payload.max_tokens = opts.maxTokens;
+      }
+    }
     if (opts.responseFormat) payload.response_format = opts.responseFormat;
-    if (opts.thinking) {
+    if (!jsonPolicy && opts.thinking) {
       payload.extra_body = { thinking: { type: opts.thinking } };
     }
-    if (opts.reasoningEffort) {
+    if (!jsonPolicy && opts.reasoningEffort) {
       payload.reasoning_effort = opts.reasoningEffort;
     }
     return payload;
@@ -189,8 +221,12 @@ var DeepSeekClient = class {
   }
   async chat(opts) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    const signal = opts.signal ?? ctrl.signal;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, this.timeoutMs);
+    const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
     try {
       const resp = await fetchWithRetry(
         this._fetch,
@@ -219,17 +255,24 @@ var DeepSeekClient = class {
         finishReason: data.choices?.[0]?.finish_reason ?? void 0,
         raw: data
       };
+    } catch (error) {
+      if (timedOut && !opts.signal?.aborted) throw modelRequestTimeoutError(this.timeoutMs, error);
+      throw error;
     } finally {
       clearTimeout(timer);
     }
   }
   async *stream(opts) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    const signal = opts.signal ?? ctrl.signal;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, this.timeoutMs);
+    const signal = opts.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
     let resp;
     try {
-      resp = await fetchWithRetry(
+      const send = (payload) => fetchWithRetry(
         this._fetch,
         `${this.baseUrl}/chat/completions`,
         {
@@ -239,13 +282,26 @@ var DeepSeekClient = class {
             "Content-Type": "application/json",
             Accept: "text/event-stream"
           },
-          body: JSON.stringify(sanitizeJsonTransportValue(this.buildPayload(opts, true))),
+          body: JSON.stringify(sanitizeJsonTransportValue(payload)),
           signal
         },
         { ...this.retry, signal }
       );
+      const payload = this.buildPayload(opts, true);
+      resp = await send(payload);
+      if (!resp.ok && payload.stream_options) {
+        const errorText = await resp.text().catch(() => "");
+        const unsupported = (resp.status === 400 || resp.status === 422) && /stream[_ -]?options|include[_ -]?usage/i.test(errorText);
+        if (!unsupported) throw new Error(`DeepSeek ${resp.status}: ${errorText}`);
+        this.streamOptionsSupport = "unsupported";
+        const fallbackPayload = { ...payload };
+        delete fallbackPayload.stream_options;
+        resp = await send(fallbackPayload);
+      }
+      if (resp.ok && payload.stream_options && this.streamOptionsSupport !== "unsupported") this.streamOptionsSupport = "supported";
     } catch (err) {
       clearTimeout(timer);
+      if (timedOut && !opts.signal?.aborted) throw modelRequestTimeoutError(this.timeoutMs, err);
       throw err;
     }
     if (!resp.ok || !resp.body) {
@@ -267,6 +323,20 @@ var DeepSeekClient = class {
         }
         try {
           const json = JSON.parse(ev.data);
+          if (ev.event === "error" || json?.error) {
+            const providerError = json?.error ?? json;
+            let providerMessage = typeof providerError === "string"
+              ? providerError
+              : providerError?.message || providerError?.detail || providerError?.error;
+            if (!providerMessage) {
+              try { providerMessage = JSON.stringify(providerError); } catch { providerMessage = String(providerError); }
+            }
+            const error = new Error(`model provider stream error: ${providerMessage || "unknown provider error"}`);
+            error.name = "ModelProviderStreamError";
+            protocolError = error;
+            done = true;
+            return;
+          }
           const delta = json.choices?.[0]?.delta ?? {};
           const finishReason = json.choices?.[0]?.finish_reason ?? void 0;
           if (typeof finishReason === "string" && finishReason) lastFinishReason = finishReason;
@@ -308,7 +378,12 @@ var DeepSeekClient = class {
         if (protocolError) throw protocolError;
         if (done) break;
         const { value, done: streamDone } = await reader.read();
-        if (streamDone) break;
+        if (streamDone) {
+          const decoderTail = decoder.decode();
+          if (decoderTail) parser.feed(decoderTail);
+          parser.feed("\n\n");
+          break;
+        }
         parser.feed(decoder.decode(value, { stream: true }));
       }
       while (queue.length > 0) yield queue.shift();
@@ -323,6 +398,9 @@ var DeepSeekClient = class {
         completionSource: receivedDoneMarker ? "done-marker" : "finish-reason",
         finishReason: lastFinishReason
       };
+    } catch (error) {
+      if (timedOut && !opts.signal?.aborted) throw modelRequestTimeoutError(this.timeoutMs, error);
+      throw error;
     } finally {
       clearTimeout(timer);
       reader.releaseLock();
@@ -5079,9 +5157,11 @@ ${pinnedBodies.join("\n\n")}` : "";
         model: summaryModel,
         messages,
         signal: this.deps.getAbortSignal(),
+        requestPurpose: "summary",
         thinking: thinkingModeForModel(summaryModel),
         reasoningEffort: "high"
       });
+      assertModelResponseComplete(resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason);
       this.deps.stats.record(this.deps.getCurrentTurn(), summaryModel, resp.usage ?? new Usage());
       return stripHallucinatedToolMarkup((resp.content ?? "").trim());
     } catch {
@@ -5280,9 +5360,11 @@ async function* forceSummaryAfterIterLimit(ctx, opts = { reason: "budget" }) {
       model: summaryModel,
       messages,
       signal: ctx.signal,
+      requestPurpose: "summary",
       thinking: thinkingModeForModel(summaryModel),
       reasoningEffort: summaryEffort
     });
+    assertModelResponseComplete(resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason);
     const rawContent = resp.content?.trim() ?? "";
     const cleaned = stripHallucinatedToolMarkup(rawContent);
     const summary = cleaned || t("summary.hallucinatedFallback");
@@ -5322,9 +5404,11 @@ async function summarizePartialProgress(ctx) {
       model: PAUSE_SUMMARY_MODEL,
       messages,
       signal: ctx.signal,
+      requestPurpose: "summary",
       thinking: thinkingModeForModel(PAUSE_SUMMARY_MODEL),
       reasoningEffort: PAUSE_SUMMARY_EFFORT
     });
+    assertModelResponseComplete(resp.finishReason ?? resp.raw?.choices?.[0]?.finish_reason);
     const cleaned = stripHallucinatedToolMarkup(resp.content?.trim() ?? "");
     if (!cleaned) return null;
     const stats = ctx.recordStats(PAUSE_SUMMARY_MODEL, resp.usage ?? new Usage());
@@ -5796,14 +5880,15 @@ var StormBreaker = class {
 };
 
 // src/repair/truncation.ts
+var TOOL_CALL_REPAIR_META = Symbol("toolCallRepairMeta");
 function repairTruncatedJson(input) {
   const notes = [];
   if (!input || !input.trim()) {
-    return { repaired: "{}", changed: input !== "{}", notes: ["empty input \u2192 {}"] };
+    return { repaired: "{}", changed: input !== "{}", droppedContent: false, notes: ["empty input \u2192 {}"] };
   }
   try {
     JSON.parse(input);
-    return { repaired: input, changed: false, notes: [] };
+    return { repaired: input, changed: false, droppedContent: false, notes: [] };
   } catch {
   }
   const stack = [];
@@ -5841,13 +5926,16 @@ function repairTruncatedJson(input) {
     s = s.replace(/,$/, "");
     notes.push("trimmed trailing comma");
   }
+  let droppedContent = false;
   if (/"\s*:\s*$/.test(s)) {
     s += " null";
+    droppedContent = true;
     notes.push("filled dangling key with null");
   }
   if (inString) {
     s += '"';
     stack.pop();
+    droppedContent = true;
     notes.push("closed unterminated string");
   }
   while (stack.length > 0) {
@@ -5858,10 +5946,10 @@ function repairTruncatedJson(input) {
   }
   try {
     JSON.parse(s);
-    return { repaired: s, changed: true, notes };
+    return { repaired: s, changed: true, droppedContent, notes };
   } catch (err) {
     notes.push(`fallback to {}: ${err.message}`);
-    return { repaired: "{}", changed: true, notes };
+    return { repaired: "{}", changed: true, droppedContent: true, notes };
   }
 }
 
@@ -5909,6 +5997,7 @@ var ToolCallRepair = class {
       const r = repairTruncatedJson(args);
       if (r.changed) {
         call.function.arguments = r.repaired;
+        call[TOOL_CALL_REPAIR_META] = { changed: true, droppedContent: r.droppedContent === true };
         report.truncationsFixed++;
         report.notes.push(...r.notes.map((n) => `[${call.function.name}] ${n}`));
       }
@@ -6216,6 +6305,17 @@ var CacheFirstLoop = class {
     const parsedArgs = safeParseToolArgs(args);
     this._inflight.add(this.inflightIdFor(call));
     try {
+      if (call[TOOL_CALL_REPAIR_META]?.changed === true && this.isMutating(call)) {
+        return {
+          preWarnings: [],
+          postWarnings: [],
+          result: JSON.stringify({
+            error: "TRUNCATED_TOOL_ARGUMENTS",
+            message: "工具参数在传输中被截断，已拦截写入类操作以避免落盘残缺内容。请缩小内容后分段重试。",
+            retryable: true,
+          }),
+        };
+      }
       const preReport = await runHooks({
         hooks: this.hooks,
         payload: {

@@ -165,6 +165,45 @@ test("bounded Store replan preserves completed nodes and replaces only unfinishe
   });
 });
 
+test("replan gives a replacement with the same unit id a fresh attempt-budget generation", async () => {
+  await withStore(async (store) => {
+    const id = `task:${randomUUID()}`;
+    const created = await store.create({ contract: contract(id), workPlan: workPlan(id) });
+    let calls = 0;
+    const worker = createDurableAgentWorker({
+      store,
+      maxAttempts: 3,
+      executeUnit: async ({ unitPlan, attemptId }) => {
+        calls += 1;
+        return calls <= 2 ? "malformed model output" : unitResult(unitPlan, attemptId);
+      },
+    });
+
+    const exhausted = await worker.runOne(created.id);
+    assert.equal(exhausted.status, "blocked");
+    assert.equal(calls, 2);
+    const blocked = await store.read(created.id);
+    assert.equal(blocked.attemptBudget.units["analyze-part-1"].modelAttempts, 2);
+
+    const replanned = await store.replan(created.id, {
+      replaceNodeIds: ["analyze-part-1"],
+      reason: "retry the unfinished node with a revised plan",
+      nodes: [workNode("analyze-part-1", "part:1")],
+    }, { expectedRevision: blocked.revision, expectedEpoch: blocked.epoch });
+
+    assert.equal(replanned.applied, true);
+    assert.equal(replanned.task.attemptBudget.activeGeneration, replanned.task.workPlan.revisionId);
+    assert.deepEqual(replanned.task.attemptBudget.units, {});
+    assert.equal(replanned.task.attemptBudget.archivedGenerations.at(-1).generationId, blocked.workPlan.revisionId);
+    assert.equal(replanned.task.attemptBudget.archivedGenerations.at(-1).units["analyze-part-1"].modelAttempts, 2);
+
+    const resumed = await worker.runOne(created.id);
+    assert.equal(resumed.status, "unit_completed");
+    assert.equal(calls, 3);
+    assert.equal((await store.read(created.id)).attemptBudget.units["analyze-part-1"].modelAttempts, 1);
+  });
+});
+
 test("Store rejects a WorkPlan that exceeds the TaskContract permission boundary", async () => {
   await withStore(async (store) => {
     const id = `task:${randomUUID()}`;

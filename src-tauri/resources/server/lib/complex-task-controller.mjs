@@ -10,6 +10,7 @@ export const TASK_CONTROL_ACTIONS = Object.freeze([
   "pause",
   "resume",
   "retry",
+  "retry_delivery",
   "cancel",
   "resolve_user_input",
   "retarget_output",
@@ -46,6 +47,14 @@ function hasPendingOutbox(task) {
   return (Array.isArray(task?.outbox) ? task.outbox : []).some((entry) => pendingConsumers(entry).length > 0);
 }
 
+function retryableConversationDelivery(task) {
+  return (Array.isArray(task?.outbox) ? task.outbox : []).some((entry) => {
+    if (!pendingConsumers(entry).includes("conversation")) return false;
+    const status = String(entry?.deliveryStates?.conversation?.status ?? "ready");
+    return ["blocked_user_retry", "exhausted"].includes(status);
+  });
+}
+
 function userInputRequest(task) {
   return task?.userInputRequest ?? task?.pendingUserInput ?? task?.request ?? null;
 }
@@ -67,6 +76,7 @@ function derivedAllowedActions(task) {
   }
   if (lifecycle === "terminal") {
     const actions = task.outcome?.resumable === true ? ["retry"] : [];
+    if (retryableConversationDelivery(task)) actions.push("retry_delivery");
     if (hasPendingOutbox(task)) actions.push("ack_outcome");
     else actions.push("delete_record");
     return actions;
@@ -117,8 +127,13 @@ function normalizeAction(value) {
   return text(value).toLowerCase();
 }
 
-function payloadFor(request) {
-  return clone(object(request.payload));
+function payloadFor(request, task) {
+  const payload = clone(object(request.payload));
+  if (request.action === "retarget_output" && !text(payload.requestId)) {
+    const requestId = text(task?.userInputRequest?.requestId);
+    if (requestId) payload.requestId = requestId;
+  }
+  return payload;
 }
 
 function storePayload(action, payload) {
@@ -159,6 +174,14 @@ function validatePayload(action, payload, task) {
     const entry = (Array.isArray(task?.outbox) ? task.outbox : []).find((item) => item.deliveryId === payload.deliveryId);
     if (!entry || !pendingConsumers(entry).includes(payload.consumer)) return "delivery-not-pending";
   }
+  if (action === "retry_delivery") {
+    if (text(payload.consumer) !== "conversation") return "delivery-retry-consumer-required";
+    if (!text(payload.deliveryId)) return "delivery-id-required";
+    const entry = (Array.isArray(task?.outbox) ? task.outbox : []).find((item) => item.deliveryId === payload.deliveryId);
+    if (!entry || !pendingConsumers(entry).includes("conversation")) return "delivery-not-pending";
+    const status = String(entry?.deliveryStates?.conversation?.status ?? "ready");
+    if (!["blocked_user_retry", "exhausted"].includes(status)) return "delivery-not-retryable";
+  }
   return null;
 }
 
@@ -197,7 +220,7 @@ export function createComplexTaskController({ store } = {}) {
     const epochError = validateEpoch(action, task, request);
     if (epochError) return failure(epochError, task, { action });
 
-    const payload = payloadFor(request);
+    const payload = payloadFor(request, task);
     const payloadError = validatePayload(action, payload, task);
     if (payloadError) return failure(payloadError, task, { action });
 

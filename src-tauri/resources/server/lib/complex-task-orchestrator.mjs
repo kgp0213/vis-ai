@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { formatArtifactReference } from "./complex-task-artifact-reference.mjs";
+
 const DEFAULT_MAX_CONCURRENCY = 1;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_ASSEMBLY_LEASE_MS = 60_000;
@@ -23,6 +25,17 @@ function compactError(error) {
   return String(error?.message || error || "unknown task orchestration error").slice(0, 2_000);
 }
 
+function reconciliationTaskIds(report) {
+  const ids = [];
+  for (const field of ["requeued", "stalled", "sourceChanged"]) {
+    for (const value of Array.isArray(report?.[field]) ? report[field] : []) {
+      const id = text(value);
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
 function adapterRegistry(value) {
   if (value instanceof Map) return new Map(value);
   if (value && typeof value === "object" && !Array.isArray(value)) return new Map(Object.entries(value));
@@ -34,6 +47,30 @@ function adapterFor(adapters, task) {
   if (typeof adapters === "function") return adapters(type, task) ?? null;
   if (adapters && typeof adapters.resolve === "function") return adapters.resolve(type, task) ?? null;
   return adapters.get(type) ?? null;
+}
+
+function runtimePinIssue(task, adapter, options = {}) {
+  if (options.requireRuntimePins !== true) return null;
+  const pinned = task?.contract?.pinned;
+  if (!pinned || typeof pinned !== "object") return null;
+  const actual = {
+    adapterVersion: text(adapter?.adapterVersion ?? adapter?.version),
+    skillHash: text(adapter?.skillHash),
+    toolSchemaVersion: text(adapter?.toolSchemaVersion ?? options.runtimeToolSchemaVersion),
+  };
+  for (const field of ["adapterVersion", "skillHash", "toolSchemaVersion"]) {
+    const expected = text(pinned[field]);
+    if (!expected || actual[field] !== expected) {
+      return {
+        code: "RUNTIME_PIN_MISMATCH",
+        field,
+        expected: expected || "<declared pin missing>",
+        actual: actual[field] || "<runtime descriptor missing>",
+        message: `任务固定的运行时 ${field}=${expected || "(missing)"} 与当前加载的 ${actual[field] || "(missing)"} 不一致，已停止继续执行。请使用匹配的 Adapter/Skill/tool schema，或重新创建任务。`,
+      };
+    }
+  }
+  return null;
 }
 
 function pinnedEngine(task) {
@@ -61,6 +98,10 @@ function artifactRefs(task) {
     .filter(Boolean))];
 }
 
+function selectedArtifactRef(item) {
+  try { return formatArtifactReference(item?.manifest); } catch { return item?.manifest?.artifactId ?? null; }
+}
+
 function failedOutcome(task, message, code = "ORCHESTRATION_FAILURE", { forceFailed = false } = {}) {
   const refs = artifactRefs(task);
   return {
@@ -81,7 +122,7 @@ function assemblyOutcome(task, assembled) {
   if (assembled?.outcome && typeof assembled.outcome === "object") return clone(assembled.outcome);
   const report = assembled?.report && typeof assembled.report === "object" ? assembled.report : {};
   const selectedRefs = Array.isArray(assembled?.selectedArtifacts)
-    ? assembled.selectedArtifacts.map((item) => item?.manifest?.artifactId).filter(Boolean)
+    ? assembled.selectedArtifacts.map(selectedArtifactRef).filter(Boolean)
     : [];
   const committedRefs = Array.isArray(assembled?.artifactRefs) ? assembled.artifactRefs.map(String).filter(Boolean) : [];
   const refs = [...new Set([...artifactRefs(task), ...selectedRefs, ...committedRefs])];
@@ -125,7 +166,7 @@ function assemblyOutcome(task, assembled) {
 
 function pendingAssemblySnapshot(task, assembled) {
   const selectedRefs = Array.isArray(assembled?.selectedArtifacts)
-    ? assembled.selectedArtifacts.map((item) => item?.manifest?.artifactId).filter(Boolean)
+    ? assembled.selectedArtifacts.map(selectedArtifactRef).filter(Boolean)
     : [];
   const explicitRefs = Array.isArray(assembled?.artifactRefs) ? assembled.artifactRefs.map(String).filter(Boolean) : [];
   return {
@@ -377,6 +418,11 @@ export function createComplexTaskOrchestrator(options = {}) {
       const issue = { taskId: task.id, operation: "adapter", message: `task adapter is not registered: ${task?.contract?.taskType || "unknown"}` };
       return { result: await moveToBlocked(task, issue.message, "ADAPTER_UNAVAILABLE"), issue };
     }
+    const runtimeIssue = runtimePinIssue(task, adapter, options);
+    if (runtimeIssue) {
+      const issue = { taskId: task.id, operation: "runtime-pin", ...runtimeIssue };
+      return { result: await moveToBlocked(task, runtimeIssue.message, runtimeIssue.code), issue };
+    }
     const enginePin = pinnedEngine(task);
     try {
       const result = await worker.runOne(task.id, { signal, controlSignal: signal, enginePin: clone(enginePin), adapter });
@@ -409,6 +455,29 @@ export function createComplexTaskOrchestrator(options = {}) {
     // recovered without requiring a process restart. The supervisor is
     // idempotent and fences active leases by revision/epoch.
     report.reconcile = await supervisor.reconcile({ now: input.now ?? Date.now() });
+    // Supervisor transitions happen outside the worker result path. Re-read
+    // each changed task and emit the same durable change signal so the task
+    // center and conversation delivery observe recovery/attention transitions.
+    for (const taskId of reconciliationTaskIds(report.reconcile)) {
+      let changedTask;
+      try {
+        changedTask = await store.read(taskId);
+      } catch (error) {
+        report.issues.push({ taskId, operation: "reconcile-read", message: compactError(error) });
+        continue;
+      }
+      if (!changedTask) continue;
+      try {
+        await options.onChange?.(changedTask, {
+          kind: "reconciliation",
+          taskId,
+          status: changedTask.lifecycle,
+          reconciliation: clone(report.reconcile),
+        });
+      } catch (error) {
+        report.issues.push({ taskId, operation: "reconcile-onChange", message: compactError(error) });
+      }
+    }
     if (!initialized) {
       initialized = true;
       report.initialized = true;
@@ -455,9 +524,14 @@ export function createComplexTaskOrchestrator(options = {}) {
   async function start() {
     stopped = false;
     polling = true;
-    const report = await runOnce();
-    if (!stopped) scheduleWake();
-    return report;
+    try {
+      return await runOnce();
+    } finally {
+      // Keep the poll loop alive even when the first reconciliation fails.
+      // The caller still receives the original error, while the next bounded
+      // poll gets a chance to recover the queue.
+      if (!stopped) scheduleWake();
+    }
   }
 
   async function wake() {

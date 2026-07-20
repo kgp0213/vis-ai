@@ -30,6 +30,13 @@ function artifactDraft(id, overrides = {}) {
   };
 }
 
+function ownedArtifactDraft(id, taskId, unitId, overrides = {}) {
+  return artifactDraft(id, {
+    owner: { taskId, unitId, epoch: 1, attemptId: "attempt-1", kind: "unit" },
+    ...overrides,
+  });
+}
+
 function taskFixture(overrides = {}) {
   const taskId = `task:${randomUUID()}`;
   const unitPlans = [
@@ -47,6 +54,20 @@ function taskFixture(overrides = {}) {
     unitResults: {},
     ...overrides,
   };
+}
+
+function pinnedTask(taskId, overrides = {}) {
+  return taskFixture({
+    id: taskId,
+    contract: {
+      taskId,
+      taskType: "document.markdown",
+      pinned: { adapterVersion: "document-v1", skillHash: "sha256:skill", toolSchemaVersion: "1", initialModelConfigFingerprints: ["model-config-1"] },
+      completion: { requiredCoverage: ["page:1"], requiredArtifacts: ["final-markdown"] },
+    },
+    unitPlans: [taskFixture().unitPlans[0]],
+    ...overrides,
+  });
 }
 
 async function withStore(fn) {
@@ -98,6 +119,17 @@ test("Artifact Store verifies content hashes, rejects malformed manifests, and l
     assert.deepEqual(files.filter((name) => name.endsWith(".tmp")), []);
     assert.equal(createHash("sha256").update("stable").digest("hex"), saved.manifest.sha256);
     await readFile(paths.manifestPath, "utf8");
+  });
+});
+
+test("Artifact Store treats immutable metadata drift as a conflict even when bytes are unchanged", async () => {
+  await withStore(async (store) => {
+    const id = artifactId("metadata-conflict");
+    const first = await store.put({ manifest: artifactDraft(id, { primaryCoverage: ["page:1"] }), content: "stable" });
+    assert.equal(first.ok, true);
+    const conflict = await store.put({ manifest: artifactDraft(id, { primaryCoverage: ["page:2"] }), content: "stable" });
+    assert.equal(conflict.ok, false);
+    assert.equal(conflict.reason, "immutable-conflict");
   });
 });
 
@@ -189,5 +221,49 @@ test("Assembler turns invalid coverage contracts and Adapter failures into expla
     const invalidContract = await assembleComplexTask({ task: taskFixture({ contract: { completion: { requiredCoverage: [], requiredArtifacts: [] } } }), artifactStore: store });
     assert.equal(invalidContract.ok, false);
     assert.ok(invalidContract.report.invalid.some((item) => item.code === "invalid-contract"));
+  });
+});
+
+test("Assembler rejects foreign task/unit artifacts and producer pin mismatches", async () => {
+  await withStore(async (store) => {
+    const taskA = `task:${randomUUID()}`;
+    const taskB = `task:${randomUUID()}`;
+    const foreignId = artifactId("foreign");
+    await store.put({ manifest: ownedArtifactDraft(foreignId, taskA, "unit-1", { primaryCoverage: ["page:1"] }), content: "FOREIGN" });
+    const foreign = await assembleComplexTask({
+      task: pinnedTask(taskB, { unitResults: { "unit-1": { unitId: "unit-1", artifactRefs: [foreignId] } } }),
+      artifactStore: store,
+    });
+    assert.equal(foreign.ok, false);
+    assert.ok(foreign.report.invalid.some((item) => item.code === "foreign-task-artifact"));
+
+    const wrongUnitId = artifactId("wrong-unit");
+    await store.put({ manifest: ownedArtifactDraft(wrongUnitId, taskB, "unit-2", { primaryCoverage: ["page:1"] }), content: "WRONG UNIT" });
+    const wrongUnit = await assembleComplexTask({
+      task: pinnedTask(taskB, { unitResults: { "unit-1": { unitId: "unit-1", artifactRefs: [wrongUnitId] } } }),
+      artifactStore: store,
+    });
+    assert.ok(wrongUnit.report.invalid.some((item) => item.code === "foreign-unit-artifact"));
+
+    const wrongProducerId = artifactId("wrong-producer");
+    await store.put({ manifest: ownedArtifactDraft(wrongProducerId, taskB, "unit-1", { primaryCoverage: ["page:1"], producer: { adapterVersion: "old-adapter", skillHash: "sha256:skill", modelConfigFingerprint: "model-config-1", toolSchemaVersion: "1" } }), content: "OLD" });
+    const wrongProducer = await assembleComplexTask({
+      task: pinnedTask(taskB, { unitResults: { "unit-1": { unitId: "unit-1", artifactRefs: [wrongProducerId] } } }),
+      artifactStore: store,
+    });
+    assert.ok(wrongProducer.report.invalid.some((item) => item.code === "producer-mismatch"));
+  });
+});
+
+test("Assembler honors an exact artifact revision pin instead of silently reading latest", async () => {
+  await withStore(async (store) => {
+    const taskId = `task:${randomUUID()}`;
+    const id = artifactId("revision-pin");
+    const first = await store.put({ manifest: ownedArtifactDraft(id, taskId, "unit-1", { primaryCoverage: ["page:1"] }), content: "FIRST" });
+    await store.put({ manifest: ownedArtifactDraft(id, taskId, "unit-1", { revision: 2, primaryCoverage: ["page:1"] }), content: "SECOND" });
+    const ref = `${id}@r${first.manifest.revision}#${first.manifest.sha256}`;
+    const result = await assembleComplexTask({ task: pinnedTask(taskId, { unitResults: { "unit-1": { unitId: "unit-1", artifactRefs: [ref] } } }), artifactStore: store });
+    assert.equal(result.ok, true);
+    assert.equal(result.content, "FIRST");
   });
 });
