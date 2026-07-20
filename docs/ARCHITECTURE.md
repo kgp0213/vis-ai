@@ -124,20 +124,21 @@ Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle
 模块化的验收标准不是减少行数，而是模块具有明确输入、无隐藏全局状态、具备独立测试，
 并且完整质量门禁保持通过。
 
-## 复杂任务执行引擎的灰度边界
+## 复杂任务的统一执行内核
 
-复杂任务执行引擎当前仍以 `legacy` 为生产默认。`VISIONOX_COMPLEX_TASK_ENGINE` 环境变量优先于
-`config.json` 中的 `complexTaskEngine`；只有显式设置 `v2-canary` 或 `v2-default` 才运行 v2，
-`shadow` 仍执行兼容路径。缺省值或无法识别的值必须收敛到 `legacy`，不得因拼写错误意外启用实验路径。
-启动诊断通过 `lib/complex-task-engine-routing.mjs` 的纯函数提供稳定的来源、有效性、实验状态和风险码，
-不读取 Provider 凭据，也不把配置正文写入日志。
+复杂任务的最终目标不是建立文档后台引擎，而是让通用状态机监督普通模型工具执行内核。简单任务继续直接
+使用普通循环；复杂任务增加持久 TaskContract、步骤、证据、检查点、健康监测、用户干预和完成守卫，但
+不另建一套按 PDF、Word 或代码类型分裂的模型循环。Skill、格式解析器和 Adapter 只能提供当前步骤能力。
 
-当前 v2 文档路径仍在完整提取并形成可审计来源清单之后创建 durable Task。因此，提取阶段尚不具备
-Task lease、heartbeat、Outbox 和进程恢复能力；显式启用 v2 时诊断必须标记
-`COMPLEX_TASK_V2_PRE_INTAKE_NOT_DURABLE`。在加入受校验的 planning draft、分批提取 checkpoint 和
-原子 finalize 之前，不得把 v2 改成默认，也不得用空 `requiredCoverage`、虚构 source unit 或降低覆盖要求
-绕过 `TaskContract`。该 intake 改造需要同时覆盖 Store、Supervisor、取消/恢复、来源变化和 UI 状态，
-应作为独立纵向切片实施；旧文档流程继续作为生产兼容路径。
+交互式请求由 `lib/foreground-task-supervisor.mjs` 做确定性轻量准入。简单任务直接调用现有
+`CacheFirstLoop.step()`；复杂任务先形成计划，再由宿主每次调度一个步骤到同一个 `CacheFirstLoop`。
+运行中出现大输入、工具窗口耗尽、长工具链、重复无进展或新计划时，简单任务在原 loop 上升级，
+保留 `loop.log`、活动 JSONL、上下文输入缓存、Plan Store、工具结果和已有文件。
+
+旧 `complexTaskEngine` 灰度路由不再控制 Launcher 的模型执行。历史 Durable Store、Outbox、任务中心投影
+和结果重新交付继续保留用于兼容；旧非终态任务启动时转为可见 `blocked`，`resume/retry` 不再进入旧
+Worker。历史文档任务同样只允许查看、停止、删除或重新交付已有结果，需要继续处理时必须回到主对话，
+由统一前台状态机接管。
 
 通用 Task Store 的 revision、lease 和 epoch CAS 当前以单 Node sidecar 为可靠边界。桌面端通过 Tauri
 单实例插件和服务监控器在启动替代 sidecar 前回收并等待旧进程，满足现有产品路径的单写者假设。
@@ -289,17 +290,21 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 判断只是当前环境的兼容策略，不是通用加密标准；输出不得覆盖原文件，新增特征必须用测试证明普通文件不会
 被误判。
 
-现有 PDF 的文本读取由 `lib/pdf-text.mjs` 使用随包 PDF.js 延迟执行，不经过 OfficeCLI，也不依赖系统 Python。
-复杂 PDF 编辑继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。PDF.js 判断文本极少时向上层
-报告可能为扫描件，再由用户决定是否使用 OCR，避免无意义地轮换文本解析器。
+内部 PDF 文本解码由 `lib/pdf-text.mjs` 使用随包 PDF.js 延迟执行，不经过 OfficeCLI，也不依赖系统 Python；
+它供文档 Adapter 和兼容路径使用，不再注册为模型可见的 `extract_pdf_text` 任务工具。复杂 PDF 创建、编辑、
+合并、拆分、表单和校验继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。格式能力必须把
+页范围、来源和异常作为步骤证据返回，不能决定任务是否自动继续或已经完成。
 
-单文档保存型整理使用通用前台工具循环：先 `prepare_local_document`，按格式通过 `extract_pdf_text`、
-OfficeCLI 文本视图或 `read_file` 分批读取，每批必须先由 `write_file`/`append_file` 持久化，再请求下一批。
+2026-07-20 已删除 Launcher 中的 PDF 自动续读状态、次数预算、专用提示和专用进度分支；系统提示、办公模式、
+DLP 建议及内置 Skill 也不再定义 PDF→Markdown 生命周期。单文档、Word、代码仓库或研究任务后续都必须由
+同一通用状态机决定是否分批、何时检查点、何时干预和何时完成。当前生产默认仍为 `legacy`，因此这次清理是
+统一状态机的前置条件，不代表通用准入和统一执行监督已经完成。
+
 `lib/context-input-transaction.mjs` 将大段只读结果按 SHA-256 无损缓存到用户数据目录，记录
 `pending -> materialized -> foldable` 状态；普通上下文压缩必须等待 pending 输入处理完成，紧急压缩保留
 `read_context_input` 引用。重复阻塞、缓存失败或未完整处理便声称完成时，Launcher 通过一次一问卡片让用户
-选择继续、调整要求、接受部分结果或停止。该机制与文档格式和模型无关，Skill 只负责提示策略，不是可靠性
-前提。
+选择继续、调整要求、接受部分结果或停止。该机制只是通用状态机的输入接纳子机制，不等于任务计划、步骤
+进度、验收或最终 Outcome；Skill 只负责提示策略，不是可靠性前提。
 
 `lib/document-extractors.mjs` 与 `lib/document-markdown-workflow.mjs` 继续服务多文档报告及历史后台任务。
 页或元素仍是覆盖、哈希、恢复和重试单位；旧任务的清单、检查点、审校结果与状态查询保持兼容。

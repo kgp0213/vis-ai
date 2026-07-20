@@ -126,6 +126,10 @@ describe("active session recovery", () => {
       { role: "assistant", content: "计划已继续。" },
       { role: "user", content: "[系统后台任务接管 document:job-123]\n后台任务已完成，请继续交付" },
       { role: "assistant", content: "后台结果已核实，文件已交付。" },
+      { role: "user", content: "[系统通用复杂任务调度]\n只执行当前步骤" },
+      { role: "assistant", content: "当前步骤已执行。" },
+      { role: "user", content: "[系统步骤检查点] step-1 已记录" },
+      { role: "assistant", content: "正在进入最终验收。" },
     ];
 
     const restored = activeEntriesForModel(entries);
@@ -135,6 +139,8 @@ describe("active session recovery", () => {
       ["assistant", "正在核实后台结果。"],
       ["assistant", "计划已继续。"],
       ["assistant", "后台结果已核实，文件已交付。"],
+      ["assistant", "当前步骤已执行。"],
+      ["assistant", "正在进入最终验收。"],
     ]);
   });
 

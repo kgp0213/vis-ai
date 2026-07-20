@@ -257,15 +257,22 @@ test("managed documents recover a missing readable copy across tools and registr
 
 test("launcher shares managed document references without exposing the retired PDF organizer", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
+  const pdfText = readFileSync(new URL("../lib/pdf-text.mjs", import.meta.url), "utf8");
+  const dlp = readFileSync(new URL("../lib/dlp-file.mjs", import.meta.url), "utf8");
+  const bundledLoop = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
+  const bundledIndex = readFileSync(new URL("../visionox-pkg/dist/index.js", import.meta.url), "utf8");
   assert.match(launcher, /createPreparedDocumentRegistry\(\{[\s\S]*?writeActiveSessionMeta\(\{ preparedDocuments \}\)/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(meta\.preparedDocuments/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(sessionMeta\.preparedDocuments/);
-  assert.match(launcher, /name: "extract_pdf_text"[\s\S]*?extractPdfText\(prepared\.readablePath/);
+  assert.doesNotMatch(launcher, /name:\s*"extract_pdf_text"/);
+  assert.doesNotMatch(launcher, /MAX_DOCUMENT_AUTO_CONTINUATIONS|parsePdfDeliveryResult|updatePdfContinuationState|documentAutoContinuationPrompt|pdfContinuationStates/);
+  assert.match(pdfText, /export async function extractPdfText\(/);
+  assert.doesNotMatch(dlp, /extract_pdf_text/);
+  assert.doesNotMatch(bundledLoop, /extract_pdf_text/);
+  assert.doesNotMatch(bundledIndex, /extract_pdf_text/);
   assert.doesNotMatch(launcher, /registerPdfMarkdownWorkflowTool\(tools/);
   assert.doesNotMatch(launcher, /name:\s*"organize_pdf_to_markdown"/);
   assert.match(launcher, /name: "read_context_input"[\s\S]*?contextInputTransactions\.readInput/);
-  assert.match(launcher, /const deliveryBudget[\s\S]*?buildPdfDeliveryResult\([\s\S]*?maxTokens: deliveryBudget/);
-  assert.match(launcher, /parsePdfDeliveryResult\(ev\)[\s\S]*?documentAutoContinuationPrompt/);
   assert.match(launcher, /kind: "document-progress"/);
   assert.match(launcher, /wrapReadFileToolWithDlp[\s\S]*?registry: preparedDocumentRegistry/);
   assert.match(launcher, /wrapToolsPathArgsWithDlp\(tools, registeredNames[\s\S]*?registry: preparedDocumentRegistry/);

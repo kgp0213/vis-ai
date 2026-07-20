@@ -6209,6 +6209,39 @@ async function dispatch(req, res, ctx, expectedToken) {
     handleEvents(req, res, ctx, url.searchParams);
     return;
   }
+  if (path === "/api/vhome/avatar") {
+    const fail = checkAuth(req, expectedToken, false);
+    if (fail) {
+      res.writeHead(fail.status, { "content-type": "application/json" });
+      res.end(fail.body);
+      return;
+    }
+    if (method !== "GET") {
+      res.writeHead(405, { "content-type": "application/json", allow: "GET" });
+      res.end(JSON.stringify({ error: "GET only" }));
+      return;
+    }
+    const avatar = typeof ctx.getVHomeAvatar === "function" ? await ctx.getVHomeAvatar() : null;
+    if (!avatar?.body || !Buffer.isBuffer(avatar.body) || avatar.body.length > 2 * 1024 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(avatar.contentType)) {
+      res.writeHead(404, { "content-type": "application/json", "cache-control": "private, max-age=60" });
+      res.end(JSON.stringify({ error: "V来家头像暂不可用" }));
+      return;
+    }
+    const headers = {
+      "content-type": avatar.contentType,
+      "content-length": avatar.body.length,
+      "cache-control": "private, max-age=300"
+    };
+    if (avatar.etag) headers.etag = avatar.etag;
+    if (avatar.etag && req.headers["if-none-match"] === avatar.etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end(avatar.body);
+    return;
+  }
   if (path.startsWith("/api/")) {
     const fail = checkAuth(req, expectedToken, isMutation);
     if (fail) {

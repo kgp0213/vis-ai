@@ -6122,7 +6122,7 @@ var CacheFirstLoop = class {
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
-        if (["extract_pdf_text", "organize_document_to_markdown", "organize_documents_to_report"].includes(String(_name).toLowerCase())) return result;
+        if (["organize_document_to_markdown", "organize_documents_to_report"].includes(String(_name).toLowerCase())) return result;
         const remaining = this.maxToolIters - this._toolDispatchesThisStep;
         if (remaining <= 0) {
           return `${result}
@@ -9009,7 +9009,7 @@ function registerFilesystemTools(registry, opts) {
   registry.register({
     name: "read_file",
     parallelSafe: true,
-    description: `Read a UTF-8 text file under the sandbox root. Do not use this for PDF or Office binary content; use prepare_local_document plus extract_pdf_text, OfficeCLI, or the managed document workflow. To save context, PREFER to scope the read instead of pulling the whole file:
+    description: `Read a UTF-8 text file under the sandbox root. Do not use this for PDF or Office binary content; use prepare_local_document plus an available format reader or Skill. To save context, PREFER to scope the read instead of pulling the whole file:
   - head: N  \u2192 first N lines (imports, public API, small configs)
   - tail: N  \u2192 last N lines (recently-added code, log tails)
   - range: "A-B"  \u2192 inclusive line range A..B, 1-indexed (e.g. "120-180" around an edit site)

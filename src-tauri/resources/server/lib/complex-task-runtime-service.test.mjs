@@ -140,6 +140,44 @@ test("runtime task detail retains pending assembly checkpoints for user recovery
   assert.deepEqual(detail.pendingAssembly, pendingAssembly);
 });
 
+test("retired execution mode blocks legacy tasks instead of requeueing a second model loop", async () => {
+  let task = genericTask({ lifecycle: "queued", status: "queued", lease: null });
+  const transitions = [];
+  const controls = [];
+  const service = createComplexTaskRuntimeService({
+    executionRetired: true,
+    store: {
+      list: async () => [structuredClone(task)],
+      listPendingOutbox: async () => [],
+      read: async () => structuredClone(task),
+      transition: async (id, input) => {
+        transitions.push([id, input]);
+        task = { ...task, lifecycle: input.lifecycle, status: input.lifecycle, blockingReason: input.blockingReason, revision: task.revision + 1 };
+        return { applied: true, task: structuredClone(task) };
+      },
+    },
+    supervisor: { reconcile: async () => { throw new Error("retired supervisor must not run"); } },
+    controller: {
+      allowedTaskActions: () => ["retry", "cancel"],
+      control: async (id, request) => { controls.push([id, request]); return { ok: true, applied: true, task }; },
+    },
+  });
+
+  const startup = await service.initialize({ now: 321 });
+  assert.deepEqual(startup.reconcile.requeued, []);
+  assert.deepEqual(startup.reconcile.retired, [TASK_ID]);
+  assert.equal(transitions[0][1].lifecycle, "blocked");
+  assert.equal(transitions[0][1].userControlled, true);
+  assert.match(transitions[0][1].blockingReason.message, /普通模型工具循环/);
+
+  const detail = await service.getBackgroundJob(TASK_ID);
+  assert.equal(detail.lifecycle, "blocked");
+  assert.equal(detail.allowedActions.includes("retry"), false);
+  const rejected = await service.controlBackgroundJob(TASK_ID, "retry", { expectedRevision: task.revision });
+  assert.equal(rejected.reason, "execution-path-retired");
+  assert.equal(controls.length, 0);
+});
+
 test("runtime initialization repairs outbox before supervision and pruning", async () => {
   const calls = [];
   const outboxRepair = { scanned: 2, repaired: [TASK_ID], auditEvents: 1 };

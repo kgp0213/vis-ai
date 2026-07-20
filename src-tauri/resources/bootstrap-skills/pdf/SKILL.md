@@ -4,9 +4,8 @@ metadata:
   author: Z.AI
   version: "1.1"
 description: >
-  Route PDF creation, extraction, conversion, merge, split, forms, and validation.
-  Saved Markdown conversion uses Visionox's resumable document organizer; detailed
-  production rules stay in briefs and references and are loaded only when needed.
+  Route PDF creation, conversion, merge, split, forms, repair, and validation.
+  Detailed production rules stay in briefs and references and are loaded only when needed.
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
@@ -39,38 +38,16 @@ Do not run `setup.sh` directly on Windows. Never install dependencies automatica
 
 ## Route Existing PDFs
 
-### Saved Markdown
-
-For an actual saved Markdown artifact, read `references/pdf-to-markdown.md`. Use the
-generic foreground flow: prepare once, retain `documentRef`, read one bounded batch with
-`extract_pdf_text`, and persist it with `write_file` or `append_file` before reading the
-next batch. A context-input memo is a checkpoint: recover it with `read_context_input`
-and materialize one segment at a time.
-
-Use complete body plus a separate summary unless the user explicitly requests a brief,
-lossy summary. Verify page coverage and the actual output file before claiming success.
-For PDFs above 3000 pages or a host segmentation response, also read
-`references/large-document.md`.
-
-### Read Or Discuss
-
-When no saved Markdown file is requested:
-
-1. Call `prepare_local_document` with the original user path or wording.
-2. Call `extract_pdf_text` with the returned `documentRef`.
-3. If `complete=false`, continue with the same `documentRef` and `nextPageRange` before
-   summarizing.
-4. If the file is scanned or image-only, use a vision/OCR-capable path or explain the
-   limitation. Do not repeatedly run text parsers.
-
-Do not use OfficeCLI for PDF files.
-
 ### Manipulate Or Repair
 
 For merge, split, contiguous chunking, rotation, crop, forms, encryption, image export,
 raw text fallback, or format conversion, read `briefs/process.md`. Use
 `pages.chunk` rather than one-file-per-page splitting for very large documents so the
 generated `manifest.json` preserves page ranges.
+
+For large-file manipulation constraints, read `references/large-document.md`. These
+commands are format operations only: return their evidence and artifacts to the active
+task. They must not decide task continuation, completion, or user intervention.
 
 ## Route New PDF Creation
 

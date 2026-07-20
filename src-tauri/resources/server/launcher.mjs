@@ -72,6 +72,7 @@ const {
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage } = await importEarly("./lib/context-input-transaction.mjs");
+const { applyForegroundIntervention, assessTaskComplexity, beginForegroundDispatch, buildForegroundIntervention, buildForegroundTaskPrompt, evaluateForegroundTask, finishForegroundTask, foregroundStepBoundaryMessage, pauseForegroundTask, recordForegroundArtifacts, recordForegroundPlan, recordForegroundStepCompletion, recordForegroundToolEvent, restoreForegroundTask, resumeForegroundTask, startForegroundTask } = await importEarly("./lib/foreground-task-supervisor.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
@@ -97,21 +98,10 @@ const { canAcceptScheduleCompletion, classifyScheduledSkillCompletion, classifyS
 const { createScheduleReportStore } = await importEarly("./lib/schedule-report-store.mjs");
 const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, normalizeScheduledKnowledgeReview } = await importEarly("./lib/scheduled-knowledge-store.mjs");
 const { createComplexTaskStore } = await importEarly("./lib/complex-task-store.mjs");
-const { classifyComplexTaskReuse } = await importEarly("./lib/complex-task-reuse-policy.mjs");
-const { createComplexTaskSupervisor } = await importEarly("./lib/complex-task-supervisor.mjs");
 const { createComplexTaskController } = await importEarly("./lib/complex-task-controller.mjs");
 const { createComplexTaskRuntimeService } = await importEarly("./lib/complex-task-runtime-service.mjs");
-const { pinComplexTaskEngine, resolveComplexTaskEngineRollout, shouldFallbackToLegacyOnExtractionFailure } = await importEarly("./lib/complex-task-engine-routing.mjs");
 const { createComplexTaskArtifactStore } = await importEarly("./lib/complex-task-artifact-store.mjs");
-const { assembleComplexTask } = await importEarly("./lib/complex-task-assembler.mjs");
-const { createComplexTaskArtifactCommitter } = await importEarly("./lib/complex-task-artifact-committer.mjs");
-const { buildDocumentTaskDraft, buildDocumentSourceInventories, createComplexDocumentAdapter } = await importEarly("./lib/complex-task-document-adapter.mjs");
-const { createDurableAgentWorker } = await importEarly("./lib/complex-task-worker.mjs");
-const { createComplexTaskOrchestrator } = await importEarly("./lib/complex-task-orchestrator.mjs");
 const { createComplexTaskConversationDelivery } = await importEarly("./lib/complex-task-conversation-delivery.mjs");
-const { createHostToolBroker } = await importEarly("./lib/host-tool-broker.mjs");
-const { createComplexTaskHostToolAccess } = await importEarly("./lib/complex-task-host-operations.mjs");
-const { createFileEffectStore } = await importEarly("./lib/complex-task-effect-store.mjs");
 const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
 const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
 const { buildMessageRiskPrompt, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
@@ -121,11 +111,10 @@ const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, res
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
-const { createPreparedDocumentRegistry, getDlpConfig, latestPreparedDocumentRef, prepareLocalDocument, prepareLocalDocuments, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
-const { extractPdfText, inspectPdfText, processPdfTextBatches, LARGE_PDF_PAGE_THRESHOLD } = await importEarly("./lib/pdf-text.mjs");
-const { buildPdfDeliveryResult, formatPageRange, parsePageRange } = await importEarly("./lib/document-delivery.mjs");
+const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, prepareLocalDocuments, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { processPdfTextBatches } = await importEarly("./lib/pdf-text.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, detectArtifactRequest, documentArtifactStateFromJob, documentJobToolMismatch, latestAssistantResponse, pendingDocumentArtifactFromToolEvent, pendingDocumentWriteConflict, registerSaveLastAssistantResponseTool, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
-const { generatePdfSectionWithModel, largePdfChoiceResult } = await importEarly("./lib/pdf-markdown-workflow.mjs");
+const { generatePdfSectionWithModel } = await importEarly("./lib/pdf-markdown-workflow.mjs");
 const { buildDocumentContract, buildDocumentSectionMessages, buildDocumentSummaryMessages, documentTaskFingerprint, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
@@ -434,6 +423,7 @@ const documentJobStore = createDocumentJobStore(resolve(visionoxDataDir, "docume
     console.error(`[document] manifest snapshot fallback job=${jobId} code=${error?.code || "UNKNOWN"} snapshot=${snapshotPath}`);
   },
 });
+const LEGACY_DOCUMENT_EXECUTION_RETIRED = "旧版文档后台执行流程已停用。历史结果仍可查看、停止、删除或重新交付；需要继续处理时，请回到主对话重新发起，任务将由通用复杂任务状态机监督同一个普通模型工具循环。";
 const documentOutputReservation = createDocumentOutputReservation({
   workspaceRoot: home,
   listJobs: async () => [
@@ -464,9 +454,8 @@ const documentJobMaintenance = await runDocumentJobStartupMaintenance(documentJo
     console.error(`[launcher] document job ${issue.operation} maintenance degraded (${issue.code}): ${issue.message}`);
   },
 });
-// Generic complex tasks live in their own durable store.  The legacy
-// document-jobs store remains untouched while the v2 adapter is rolled out;
-// this split prevents a failed migration from hiding existing user work.
+// Retain the durable v2 store for compatibility, inspection, and outcome
+// delivery. New complex work is supervised in the foreground CacheFirstLoop.
 const complexTaskArtifactStore = createComplexTaskArtifactStore(resolve(visionoxDataDir, "task-artifacts"));
 const complexTaskStore = createComplexTaskStore(resolve(visionoxDataDir, "tasks"), {
   leaseMs: 60_000,
@@ -475,46 +464,8 @@ const complexTaskStore = createComplexTaskStore(resolve(visionoxDataDir, "tasks"
     console.error(`[complex-task] manifest snapshot fallback task=${taskId} snapshot=${snapshotPath}: ${error?.message || error}`);
   },
 });
-const complexTaskEffectStore = createFileEffectStore(resolve(visionoxDataDir, "task-effects"));
-async function verifyComplexTaskSources(task) {
-  const changed = [];
-  for (const source of Array.isArray(task?.contract?.sources) ? task.contract.sources : []) {
-    const expected = /^sha256:([a-f0-9]{64})$/i.exec(String(source?.fingerprint || "").trim())?.[1]?.toLowerCase();
-    if (!expected) continue;
-    const uri = String(source?.uri || "").trim();
-    if (!uri) continue;
-    let sourcePath = uri;
-    try { if (/^file:/i.test(uri)) sourcePath = fileURLToPath(uri); } catch { /* Invalid file URI is reported as unavailable below. */ }
-    try {
-      const [current] = await fingerprintPaths([sourcePath]);
-      if (current.sha256.toLowerCase() !== expected) changed.push({ sourceId: source.sourceId, uri, expected: `sha256:${expected}`, actual: `sha256:${current.sha256}` });
-    } catch (error) {
-      changed.push({ sourceId: source.sourceId, uri, expected: `sha256:${expected}`, actual: "unavailable", error: String(error?.message || error) });
-    }
-  }
-  return changed.length > 0
-    ? { ok: false, changed, message: "任务来源文件已变化或暂时不可读取，旧检查点不能直接继续。" }
-    : { ok: true };
-}
-const complexTaskSupervisor = createComplexTaskSupervisor({
-  store: complexTaskStore,
-  verifySources: verifyComplexTaskSources,
-  sourceCheckIntervalMs: 60_000,
-  onIssue: (issue) => {
-    console.error(`[complex-task] startup recovery issue task=${issue.taskId || "?"}: ${issue.message}`);
-    runtimeIssues?.report?.("warning", {
-      key: `complex-task-${issue.taskId || "startup"}-${issue.operation || "reconcile"}`,
-      message: `后台复杂任务恢复降级：${issue.message}`,
-    });
-  },
-});
 const complexTaskController = createComplexTaskController({ store: complexTaskStore });
 let complexTaskRuntimeService = null;
-let complexDocumentAdapter = null;
-let complexTaskWorker = null;
-let complexTaskOrchestrator = null;
-let complexTaskArtifactCommitter = null;
-let complexTaskHostToolBroker = null;
 let complexTaskConversationDelivery = null;
 
 function scheduleComplexTaskConversationDelivery(task) {
@@ -739,12 +690,6 @@ if (configMigration.backupSanitization?.sanitized || configMigration.backupSanit
   console.error(`[launcher] config backups sanitized=${configMigration.backupSanitization.sanitized}, skipped=${configMigration.backupSanitization.skipped}`);
 }
 const config = readConfig(configPath);
-const rolloutResolution = resolveComplexTaskEngineRollout({
-  envValue: process.env.VISIONOX_COMPLEX_TASK_ENGINE,
-  configValue: config.complexTaskEngine,
-});
-console.error(`[complex-task] ${rolloutResolution.diagnostic.code}: ${rolloutResolution.diagnostic.message}`);
-
 // ── Provider migration & helpers ───────────────────────────────
 // Migrate legacy single-provider config (apiKey/baseUrl) to providers[] on first run.
 {
@@ -1490,91 +1435,6 @@ async function generateDocumentContent({ candidate, batch, messages: requestMess
   });
 }
 
-// The v2 document adapter deliberately receives a bounded batch and chooses a
-// candidate from capability evidence.  It does not branch on provider/model
-// names; a later configuration update can therefore add or replace models
-// without changing this worker path.
-async function generateComplexDocumentUnit({ task, unitPlan, sourceUnits, contextUnits, attempt, attemptId, signal, reportProgress, pinnedSkill }) {
-  const policy = task?.metadata?.documentPolicy ?? {};
-  const candidates = documentModelCandidates(policy);
-  const requiredCapabilities = Array.isArray(unitPlan?.requiredCapabilities) ? unitPlan.requiredCapabilities : [];
-  const selection = await selectUsableDocumentModel(candidates, {
-    requiredCapabilities,
-    attempt,
-    probe: probeDocumentModel,
-    signal,
-  });
-  if (!selection.ok) {
-    const needsVision = requiredCapabilities.includes("vision");
-    const detail = (selection.failures ?? []).map((failure) => `${failure.candidate}: ${failure.reason}`).join("；");
-    const error = new Error(selection.reason === "capability-unavailable"
-      ? "当前没有可用的视觉模型，已停止将视觉内容误交给纯文本模型"
-      : detail || (needsVision ? "视觉模型探测未通过" : "文档模型探测未通过"));
-    error.code = selection.reason === "capability-unavailable" ? "MODEL_CAPABILITY_UNAVAILABLE" : "MODEL_PROBE_FAILED";
-    error.modelProbeFailures = selection.failures ?? [];
-    throw error;
-  }
-  const candidate = selection.candidate;
-  const batch = {
-    id: unitPlan.unitId,
-    label: unitPlan.unitId,
-    units: Array.isArray(sourceUnits) ? sourceUnits : [],
-    contextUnits: Array.isArray(contextUnits) ? contextUnits : [],
-  };
-  const baseContract = task?.metadata?.legacyDocumentContract ?? {
-    goal: task?.contract?.goal || "将文档整理为完整 Markdown",
-    fidelity: task?.contract?.quality?.requestedFidelity || "complete-with-summary",
-    instructions: task?.metadata?.instructions || "",
-  };
-  const contract = {
-    ...baseContract,
-    instructions: [pinnedSkill?.content, baseContract.instructions].filter(Boolean).join("\n\n"),
-  };
-  const messages = buildDocumentSectionMessages({ batch, contract, retry: Number(attempt) > 1 });
-  let lastReportedChars = 0;
-  let lastReportedReasoningChars = 0;
-  let lastReportedToolCalls = 0;
-  const onProgress = (progress = {}) => {
-    const generatedChars = Number(progress.generatedChars) || 0;
-    const reasoningChars = Number(progress.reasoningChars) || 0;
-    const toolCallDeltaCount = Number(progress.toolCallDeltaCount) || 0;
-    if (generatedChars <= lastReportedChars && reasoningChars <= lastReportedReasoningChars && toolCallDeltaCount <= lastReportedToolCalls) return;
-    lastReportedChars = generatedChars;
-    lastReportedReasoningChars = reasoningChars;
-    lastReportedToolCalls = toolCallDeltaCount;
-    const evidence = {
-      kind: "model-stream",
-      unitId: unitPlan.unitId,
-      attemptId,
-      coverage: unitPlan.primaryCoverage,
-      message: `${progress.stage || "model"}: content=${generatedChars}, reasoning=${reasoningChars}, toolDeltas=${toolCallDeltaCount}`,
-    };
-    try {
-      const pending = reportProgress?.(evidence);
-      if (pending && typeof pending.catch === "function") pending.catch(() => {});
-    } catch {
-      // Progress is observational; a persistence failure must not fail model work.
-    }
-  };
-  const content = await generateDocumentContent({
-    candidate,
-    batch,
-    messages,
-    purpose: "draft",
-    maxTokens: candidate.maxOutputTokens,
-    requestTimeoutMs: Number(candidate.documentPolicy?.requestTimeoutMs) || 600_000,
-    signal,
-    retry: Number(attempt) > 1,
-    onProgress,
-  });
-  return {
-    markdown: content,
-    confidence: selection.verification?.ok === true ? 0.85 : 0.65,
-    modelConfigFingerprint: candidate.configFingerprint,
-    warnings: [],
-  };
-}
-
 async function generateDocumentSummary({ title, sectionSummaries, contract, candidate, requestTimeoutMs, onProgress, signal }) {
   return generatePdfSectionWithModel({
     client: documentClient(candidate),
@@ -1663,87 +1523,6 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     })),
   });
 
-  tools.register({
-    name: "extract_pdf_text",
-    description: "Read an existing local PDF with the bundled PDF.js runtime. Results contain complete pages only. For a saved Markdown task, persist each delivered batch with write_file or append_file before requesting the next page range. When complete is false, continue with the returned documentRef and nextPageRange only after the current batch is materialized. Input may be omitted only immediately after prepare_local_document, when the host can recover the latest PDF reference.",
-    parameters: {
-      type: "object",
-      properties: {
-        input: { type: "string", description: "Original PDF path, prepared readablePath, or visionox-document reference." },
-        pages: { type: "string", description: "Optional 1-based page selection such as 1-3 or 1,4,7." },
-        maxChars: { type: "integer", minimum: 10000, maximum: 8000000, description: "Maximum extracted characters; default 1000000." },
-      },
-    },
-    fn: async (args, toolCtx) => {
-      const input = String(args?.input ?? "").trim() || latestPreparedDocumentRef(preparedDocumentRegistry, "pdf");
-      if (!input) {
-        return JSON.stringify({ ok: false, error: "extract_pdf_text needs input because no prepared PDF is available" });
-      }
-      const prepared = await prepareLocalDocument(input, {
-        cfg: readConfig(configPath),
-        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
-        logger: console,
-        signal: toolCtx?.signal,
-        registry: preparedDocumentRegistry,
-      });
-      if (!prepared.ok) return JSON.stringify(prepared);
-      if (prepared.documentKind !== "pdf") {
-        return JSON.stringify({ ok: false, error: "extract_pdf_text only accepts PDF documents", documentKind: prepared.documentKind });
-      }
-      let extracted;
-      try {
-        extracted = await extractPdfText(prepared.readablePath, {
-          pages: args?.pages,
-          maxChars: args?.maxChars,
-          signal: toolCtx?.signal,
-        });
-      } catch (error) {
-        if (error instanceof RangeError && /PDF exceeds \d+ (?:bytes|pages)/.test(error.message)) {
-          const inspection = /pages/.test(error.message)
-            ? await inspectPdfText(prepared.readablePath, { signal: toolCtx?.signal })
-            : {
-                totalPages: null,
-                fileBytes: (await fsStat(prepared.readablePath)).size,
-                requiresPhysicalSplit: true,
-              };
-          return JSON.stringify(largePdfChoiceResult({
-            prepared,
-            inspection,
-            threshold: LARGE_PDF_PAGE_THRESHOLD,
-          }));
-        }
-        throw error;
-      }
-      if (extracted.requiresSegmentation) {
-        return JSON.stringify(largePdfChoiceResult({
-          prepared,
-          inspection: extracted,
-          threshold: LARGE_PDF_PAGE_THRESHOLD,
-        }));
-      }
-      const deliveryBudget = Number.isSafeInteger(toolCtx?.maxResultTokens) && toolCtx.maxResultTokens > 0
-        ? toolCtx.maxResultTokens
-        : 7000;
-      const { pages, requestedPageNumbers, ...extractionSummary } = extracted;
-      const delivery = buildPdfDeliveryResult({
-        base: {
-          ok: true,
-          documentId: prepared.documentId,
-          documentRef: prepared.documentRef,
-          sourcePath: prepared.sourcePath,
-          ...extractionSummary,
-        },
-        pages,
-        requestedPageNumbers,
-        sourceTruncated: extracted.truncated,
-        maxTokens: deliveryBudget,
-        countTokens,
-      });
-      console.error(`[document] extract_pdf_text document=${prepared.documentId} delivered=${delivery.deliveredPageRange || "none"} remaining=${delivery.remainingPageRange || "none"} complete=${delivery.complete} budget=${deliveryBudget}`);
-      return JSON.stringify(delivery);
-    },
-  });
-
   if (!documentMarkdownManager) {
     documentMarkdownManager = createDocumentMarkdownManager({
       store: documentJobStore,
@@ -1811,418 +1590,6 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       },
     });
   }
-
-  if (!complexTaskOrchestrator) {
-    complexDocumentAdapter = createComplexDocumentAdapter({
-      artifactStore: complexTaskArtifactStore,
-      generateUnit: generateComplexDocumentUnit,
-    });
-    const complexTaskHostAccess = createComplexTaskHostToolAccess({
-      store: complexTaskStore,
-      artifactStore: complexTaskArtifactStore,
-    });
-    complexTaskHostToolBroker = createHostToolBroker({
-      operations: complexTaskHostAccess.operations,
-      authorize: complexTaskHostAccess.authorize,
-      effectStore: complexTaskEffectStore,
-    });
-    complexTaskWorker = createDurableAgentWorker({
-      store: complexTaskStore,
-      toolBroker: complexTaskHostToolBroker,
-      executeUnit: (input) => complexDocumentAdapter.executeUnit(input),
-    });
-    complexTaskArtifactCommitter = createComplexTaskArtifactCommitter({
-      artifactStore: complexTaskArtifactStore,
-      reserveOutput: ({ task, taskId, requestedPath }) => documentOutputReservation.reserve({
-        outputPath: requestedPath,
-        reservationId: taskId,
-        allowOverwrite: task.contract?.output?.conflictPolicy === "replace",
-        taskFingerprint: task.metadata?.taskFingerprint,
-        allowExistingOutputForDuplicate: true,
-        workspaceRoot: task.contract?.workspace || rootDir,
-      }),
-      writeOutput: ({ task, outputPath, content }) => writeDocumentOutput({
-        outputPath,
-        content,
-        workspaceRoot: task.contract?.workspace || rootDir,
-        allowOutsideWorkspace: task.metadata?.allowOutsideWorkspace === true,
-        allowOutputOverwrite: task.contract?.output?.conflictPolicy === "replace",
-      }),
-      releaseOutput: ({ reservationId, taskId }) => Promise.resolve(documentOutputReservation.release(reservationId || taskId)),
-    });
-    complexTaskOrchestrator = createComplexTaskOrchestrator({
-      store: complexTaskStore,
-      supervisor: complexTaskSupervisor,
-      worker: complexTaskWorker,
-      adapters: new Map([["document.markdown", complexDocumentAdapter]]),
-      requireRuntimePins: true,
-      runtimeToolSchemaVersion: "1",
-      assembler: async ({ task, adapter }) => {
-        const assembled = await assembleComplexTask({ task, artifactStore: complexTaskArtifactStore, adapter });
-        if (!assembled.ok) return assembled;
-        const committed = await complexTaskArtifactCommitter.commit({ task, assembled });
-        return {
-          ...assembled,
-          ...committed,
-          report: assembled.report,
-          selectedArtifacts: assembled.selectedArtifacts,
-          content: committed.content ?? assembled.content,
-          artifactRefs: committed.artifactRefs ?? [],
-        };
-      },
-      onChange: (task, result) => {
-        releaseComplexTaskOutputReservation(task);
-        broadcastDashboardEvent({ kind: "background-job-change", id: task?.id, status: task?.lifecycle, result: result?.status || null });
-        scheduleComplexTaskConversationDelivery(task);
-      },
-      onError: (error, context) => {
-        runtimeIssues.report("warning", { key: `complex-task-${context?.operation || "poll"}`, message: `后台复杂任务调度失败：${error.message}` });
-        console.error(`[complex-task] orchestrator ${context?.operation || "poll"} failed: ${error.stack || error.message}`);
-      },
-    });
-  }
-
-  async function startManagedDocumentJob(prepared, args, toolContext, { report = false } = {}) {
-    const sources = Array.isArray(prepared?.sources) && prepared.sources.length > 0 ? prepared.sources : [prepared];
-    const sourcePaths = sources.map((source) => resolve(source.sourcePath)).filter(Boolean);
-    if (sourcePaths.length === 0) return { ok: false, error: "没有可处理的来源文件" };
-    const sourceTitle = report
-      ? String(args?.title ?? "").trim() || `${sourcePaths.length} 份文档汇总`
-      : basename(sourcePaths[0]).replace(/\.[^.]+$/, "") || "document";
-    const requestedOutputPath = String(args?.outputPath ?? "").trim();
-    if (requestedOutputPath && !/\.(?:md|markdown)$/i.test(requestedOutputPath)) {
-      return { ok: false, error: "outputPath must end in .md or .markdown" };
-    }
-
-    for (const source of sources) {
-      if (source.documentKind !== "pdf") continue;
-      const inspection = await inspectPdfText(source.readablePath, { signal: toolContext?.signal });
-      const pages = sources.length === 1 ? String(args?.pages ?? "").trim() : "";
-      if (inspection.requiresPhysicalSplit || (inspection.totalPages > LARGE_PDF_PAGE_THRESHOLD && !pages)) {
-        return largePdfChoiceResult({ prepared: source, inspection, threshold: LARGE_PDF_PAGE_THRESHOLD });
-      }
-    }
-
-    const sourceFingerprints = await fingerprintPaths(sourcePaths, { signal: toolContext?.signal });
-    let outputIdentity = requestedOutputPath ? resolve(rootDir, requestedOutputPath) : "<auto>";
-    let contract = buildDocumentContract({
-      sourcePath: sourcePaths[0],
-      sourcePaths,
-      outputPath: requestedOutputPath ? outputIdentity : "",
-      fidelity: args?.fidelity,
-      summaryOnlyConfirmed: args?.summaryOnlyConfirmed === true,
-      overwriteConfirmed: args?.overwriteConfirmed === true,
-      outputExists: Boolean(requestedOutputPath && existsSync(outputIdentity)),
-      instructions: args?.instructions,
-      title: report ? sourceTitle : "",
-    });
-    const taskFingerprint = documentTaskFingerprint({
-      sourcePaths,
-      sourceFingerprints,
-      outputPath: outputIdentity,
-      outputIdentity,
-      taskType: report ? "document-report" : "document",
-      pages: sources.length === 1 ? args?.pages : "",
-      contract,
-    });
-
-    const outputReservation = await documentOutputReservation.reserve({
-      outputPath: requestedOutputPath || undefined,
-      sourceTitle,
-      reservationId: randomUUID(),
-      allowOverwrite: args?.overwriteConfirmed === true,
-      taskFingerprint,
-      coalesceSemanticTask: true,
-      allowExistingOutputForDuplicate: Boolean(requestedOutputPath && taskFingerprint),
-      workspaceRoot: rootDir,
-    });
-    if (!outputReservation.ok) {
-      return {
-        ...outputReservation,
-        choices: outputReservation.decision?.choices ?? [],
-      };
-    }
-    const outputPath = outputReservation.outputPath;
-    outputIdentity = requestedOutputPath ? resolve(outputPath) : "<auto>";
-    let keepOutputReservation = false;
-    try {
-      if (!requestedOutputPath) contract = buildDocumentContract({
-          sourcePath: sourcePaths[0],
-          sourcePaths,
-          outputPath,
-          fidelity: args?.fidelity,
-          summaryOnlyConfirmed: args?.summaryOnlyConfirmed === true,
-          overwriteConfirmed: args?.overwriteConfirmed === true,
-          outputExists: Boolean(requestedOutputPath && existsSync(resolve(outputPath))),
-          instructions: args?.instructions,
-          title: report ? sourceTitle : "",
-        });
-
-      const activeProvider = getActiveProvider(config);
-      const activeModel = effectiveModelConfig(config).model;
-      const agentPolicy = resolveProviderModelAgentPolicy(activeProvider, activeModel);
-      if (activeMessageSendContext.autoHandoff) {
-        const identityPersisted = await persistActiveConversationIdentity();
-        if (!identityPersisted) {
-          return { ok: false, error: "当前会话身份未能保存，文档任务尚未启动；请检查用户数据目录后重试。" };
-        }
-      }
-      const configuredMode = rolloutResolution.mode;
-      const shouldPrepareV2 = configuredMode === "v2-default" || (configuredMode === "v2-canary" && sources.length === 1);
-      let extractedBatches = [];
-      let extractionResult = null;
-      if (shouldPrepareV2) {
-        try {
-          extractionResult = await processDocumentSourceBatches(prepared, {
-            policy: agentPolicy.documentPolicy,
-            pages: sources.length === 1 ? args?.pages : undefined,
-            countTokens,
-            captureVisuals: true,
-            signal: toolContext?.signal,
-            onBatch: async (batch) => { extractedBatches.push(batch); },
-            processPdfBatches: (path, pdfOptions) => processPdfTextBatches(path, pdfOptions),
-            runOfficeCli: (officeArgs, officeOptions) => {
-              const executable = resolveBundledOfficecli();
-              if (!executable) throw new Error("bundled OfficeCLI is unavailable");
-              return runOfficeCliJson(executable, officeArgs, officeOptions);
-            },
-          });
-        } catch (error) {
-          if (!shouldFallbackToLegacyOnExtractionFailure(configuredMode)) throw error;
-          const message = String(error?.message || error);
-          runtimeIssues.report("warning", {
-            key: `complex-task-canary-extraction-${taskFingerprint}`,
-            message: `复杂任务 canary 预提取失败，已回退到兼容文档流程：${message}`,
-          });
-          console.error(`[complex-task] canary extraction failed; falling back to legacy: ${error?.stack || message}`);
-          extractedBatches = [];
-          extractionResult = null;
-        }
-      }
-      const extractedUnitIds = extractedBatches.flatMap((batch) => (batch.units ?? []).map((unit) => String(unit.id || "")).filter(Boolean));
-      const sourceInventories = buildDocumentSourceInventories({ prepared, batches: extractedBatches, extractionResult });
-      const routeSources = sources.map((source, index) => {
-        const sourcePath = resolve(source.sourcePath || source.readablePath);
-        return {
-          kind: "local-file",
-          uri: sourcePath,
-          extractionInventory: sourceInventories[index]?.inventory ?? {
-            complete: false,
-            extractedUnitIds: [],
-            totalUnits: null,
-            extractedUnitCount: 0,
-          },
-        };
-      });
-      const pinnedMetadata = pinComplexTaskEngine({}, {
-        configuredMode,
-        sources: routeSources,
-      });
-      const executionEngine = pinnedMetadata.complexTaskEngine.executionEngine;
-      if (executionEngine === "v2") {
-        if (!complexDocumentAdapter || !complexTaskOrchestrator || !complexTaskArtifactCommitter) {
-          throw new Error("durable complex task runtime is unavailable");
-        }
-        if (!extractionResult || extractedBatches.length === 0 || extractedUnitIds.length === 0) {
-          throw new Error("文档提取没有形成可审计的来源清单，v2 任务尚未启动");
-        }
-        const candidates = documentModelCandidates(agentPolicy.documentPolicy);
-        const modelConfigFingerprints = candidates.map((candidate) => candidate.configFingerprint).filter(Boolean);
-        const preparedForV2 = {
-          ...prepared,
-          ...(sources.length === 1 && sourceFingerprints[0]?.sha256 ? { fingerprint: `sha256:${sourceFingerprints[0].sha256}`, sourceFingerprint: `sha256:${sourceFingerprints[0].sha256}` } : {}),
-          sources: sources.map((source, index) => ({
-            ...source,
-            ...(sourceFingerprints[index]?.sha256 ? { fingerprint: `sha256:${sourceFingerprints[index].sha256}`, sourceFingerprint: `sha256:${sourceFingerprints[index].sha256}` } : {}),
-          })),
-        };
-        const draft = buildDocumentTaskDraft({
-          prepared: preparedForV2,
-          batches: extractedBatches,
-          extractionResult,
-          outputPath,
-          workspace: rootDir,
-          goal: String(args?.instructions || (report ? `汇总 ${sourceTitle}` : `完整整理 ${sourceTitle}`)),
-          instructions: args?.instructions,
-          fidelity: args?.fidelity,
-          modelConfigFingerprints,
-          enginePin: pinnedMetadata.complexTaskEngine,
-        });
-        draft.contract.output.conflictPolicy = args?.overwriteConfirmed === true ? "replace" : "ask";
-        draft.metadata = {
-          ...draft.metadata,
-          ...pinnedMetadata,
-          taskFingerprint,
-          sourceFingerprint: sourceFingerprints,
-          extractionResult,
-          documentPolicy: agentPolicy.documentPolicy,
-          legacyDocumentContract: contract,
-          currentModelConfigFingerprint: modelConfigFingerprints[0] || "host:source-fallback",
-          allowOutsideWorkspace: ["admin", "yolo"].includes(loadEditMode(configPath)),
-          origin: {
-            conversationId: activeConversationId,
-            userPrompt: String(activeMessageSendContext.userPrompt || args?.instructions || "").slice(0, 12_000),
-            mode: config.mode || "general",
-            workspace: rootDir,
-            operationId: activeMessageSendContext.operationId,
-            autoHandoff: activeMessageSendContext.autoHandoff,
-            conversationScope: activeMessageSendContext.conversationScope,
-            requestedAt: new Date().toISOString(),
-          },
-        };
-        const existing = (await complexTaskStore.list()).find((task) => task.metadata?.taskFingerprint === taskFingerprint);
-        const reuseDecision = existing
-          ? classifyComplexTaskReuse(existing, {
-            outputPath: existing.contract?.output?.requestedPath,
-            pathExists: (candidatePath) => existsSync(resolve(existing.contract?.workspace || rootDir, candidatePath)),
-          })
-          : null;
-        if (existing && reuseDecision?.reusable === true) {
-          return {
-            ok: true,
-            accepted: existing.lifecycle !== "terminal",
-            completed: existing.lifecycle === "terminal",
-            reused: true,
-            id: existing.id,
-            backgroundJobId: existing.id,
-            artifactStatus: existing.lifecycle === "terminal" ? "completed" : "pending",
-            outputPath: existing.contract?.output?.requestedPath,
-            sourcePath: sourcePaths[0],
-            sourcePaths,
-            sourceCount: sourcePaths.length,
-            executionEngine,
-            message: existing.lifecycle === "terminal"
-              ? `相同任务已经形成结果：${existing.contract?.output?.requestedPath || existing.id}`
-              : `检测到相同的持久任务，继续使用 ${existing.id}；点击输入框下方“后台”查看进度。`,
-          };
-        }
-        if (existing && reuseDecision) {
-          console.error(`[complex-task] terminal task ${existing.id} is not reusable (${reuseDecision.reason}); creating a fresh execution`);
-        }
-        const created = await complexTaskStore.create(draft);
-        documentOutputReservation.bind(outputReservation.reservationId, created.id);
-        keepOutputReservation = true;
-        void complexTaskOrchestrator.runOnce().catch((error) => {
-          runtimeIssues.report("warning", { key: `complex-task-run-${created.id}`, message: `复杂任务执行器未能启动：${error.message}` });
-          console.error(`[complex-task] wake failed task=${created.id}: ${error.stack || error.message}`);
-        });
-        const taskLabel = report ? "多文档汇总" : "文档整理";
-        return {
-          ok: true,
-          accepted: true,
-          reused: false,
-          id: created.id,
-          backgroundJobId: created.id,
-          artifactStatus: "pending",
-          outputPath,
-          sourcePath: sourcePaths[0],
-          sourcePaths,
-          sourceCount: sourcePaths.length,
-          executionEngine,
-          message: `${taskLabel}任务 ${created.id} 已进入持久队列。当前回复结束后任务会继续运行；点击输入框下方“后台”查看进度、结果或需要处理的事项。`,
-        };
-      }
-      const accepted = await documentMarkdownManager.start({
-      sourcePath: sourcePaths[0],
-      sourcePaths,
-      sourceName: report ? sourceTitle : basename(sourcePaths[0]),
-      title: report ? sourceTitle : "",
-      outputPath,
-      outputIdentity,
-      taskType: report ? "document-report" : "document",
-      taskFingerprint,
-      sourceFingerprint: sourceFingerprints,
-      contract,
-      policy: agentPolicy.documentPolicy,
-      pages: sources.length === 1 ? args?.pages : undefined,
-      workspaceRoot: rootDir,
-      allowOutsideWorkspace: ["admin", "yolo"].includes(loadEditMode(configPath)),
-      allowOutputOverwrite: args?.overwriteConfirmed === true,
-      origin: {
-        conversationId: activeConversationId,
-        userPrompt: String(activeMessageSendContext.userPrompt || args?.instructions || "").slice(0, 12_000),
-        mode: config.mode || "general",
-        workspace: rootDir,
-        operationId: activeMessageSendContext.operationId,
-        autoHandoff: activeMessageSendContext.autoHandoff,
-        conversationScope: activeMessageSendContext.conversationScope,
-        requestedAt: new Date().toISOString(),
-      },
-      });
-      if (!accepted.reused && accepted.accepted && accepted.id) {
-        documentOutputReservation.bind(outputReservation.reservationId, String(accepted.id).replace(/^document:/, ""));
-        keepOutputReservation = true;
-      }
-      const backgroundJobId = accepted.id ? `document:${String(accepted.id).replace(/^document:/, "")}` : null;
-      const taskLabel = report ? "多文档汇总" : "文档整理";
-      return {
-      ...accepted,
-      id: backgroundJobId ?? accepted.id,
-      documentJobId: accepted.id ?? null,
-      backgroundJobId,
-      artifactStatus: accepted.artifactStatus ?? (accepted.accepted ? "pending" : accepted.completed ? "completed" : "failed"),
-      sourcePath: sourcePaths[0],
-      sourcePaths,
-      sourceCount: sourcePaths.length,
-      message: accepted.accepted
-        ? accepted.reused
-          ? `检测到相同的后台${taskLabel}任务，已继续使用原任务 ${backgroundJobId ?? accepted.id}。当前回复结束后任务仍会继续运行；点击输入框下方“后台”查看进度。`
-          : `${taskLabel}任务 ${backgroundJobId ?? accepted.id} 已进入后台队列。当前回复在任务交接后结束，但任务仍会继续运行；点击输入框下方“后台”查看进度、预览草稿或暂停任务。`
-        : accepted.reused && accepted.completed
-          ? `相同来源和要求的${taskLabel}任务已经完成：${accepted.outputPath}`
-          : accepted.requiresUserChoice
-            ? `${accepted.error || `相同来源和要求的${taskLabel}任务需要确认后才能继续`} 请根据 decision 选择使用新文件名，或确认覆盖后重新执行。`
-          : undefined,
-      };
-    } catch (error) {
-      return { ok: false, error: error.message };
-    } finally {
-      if (!keepOutputReservation) documentOutputReservation.release(outputReservation.reservationId);
-    }
-  }
-
-  tools.register({
-    name: "organize_documents_to_report",
-    description: "Start one host-managed, resumable report job over multiple local PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text sources. Use this when the requested artifact must compare, merge, reconcile, or summarize two or more documents. Every source receives a stable identity; all source units remain traceable; the report includes a source list, independent summary, complete reviewed body, checkpoints, and whole-collection change detection. A successful acceptance ends the current turn while the background worker continues.",
-    parameters: {
-      type: "object",
-      properties: {
-        inputs: {
-          type: "array",
-          items: { type: "string" },
-          minItems: 1,
-          maxItems: 50,
-          description: "Local source paths or stable documentRefs. Put each source in a separate array item.",
-        },
-        outputPath: { type: "string", description: "Destination Markdown path. If omitted, a new report file is created in the current workspace." },
-        title: { type: "string", description: "Optional report title. Defaults to '<count> 份文档汇总'." },
-        instructions: { type: "string", description: "Optional comparison, reconciliation, or organization requirements. Complete source coverage remains mandatory by default." },
-        fidelity: { type: "string", enum: ["complete-with-summary", "summary-only"], description: "Defaults to complete-with-summary. Use summary-only only after an explicit user request." },
-        summaryOnlyConfirmed: { type: "boolean", description: "Set true only when the user explicitly requested a brief, lossy summary." },
-        overwriteConfirmed: { type: "boolean", description: "Set true only after explicit confirmation to replace an existing output." },
-      },
-      required: ["inputs"],
-    },
-    fn: async (args, toolContext) => {
-      const inputs = Array.isArray(args?.inputs) ? args.inputs.map((value) => String(value ?? "").trim()).filter(Boolean) : [];
-      if (inputs.length === 0) return JSON.stringify({ ok: false, error: "organize_documents_to_report needs at least one source path" });
-      const prepared = await prepareLocalDocuments(inputs, {
-        cfg: readConfig(configPath),
-        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
-        logger: console,
-        signal: toolContext?.signal,
-        registry: preparedDocumentRegistry,
-      });
-      if (!prepared.ok) return JSON.stringify(prepared);
-      return JSON.stringify(await startManagedDocumentJob(prepared, args, toolContext, { report: true }));
-    },
-    finishTurnOnResult: (value) => {
-      const result = parseMaybeJsonObject(value);
-      return result?.ok === true && result?.accepted === true && result?.artifactStatus === "pending"
-        ? result.message
-        : null;
-    },
-  });
 
   tools.register({
     name: "get_document_job_status",
@@ -2328,14 +1695,10 @@ const preparedDocumentRegistry = createPreparedDocumentRegistry({
 });
 complexTaskRuntimeService = createComplexTaskRuntimeService({
   store: complexTaskStore,
-  supervisor: complexTaskSupervisor,
   controller: complexTaskController,
+  executionRetired: true,
   listProcessJobs: () => jobs.listMetadata(),
   listLegacyDocumentJobs: () => documentMarkdownManager?.listMetadata?.() ?? [],
-  wake: () => complexTaskOrchestrator?.wake?.(),
-  onWakeError: (error, task) => {
-    runtimeIssues.report("warning", { key: `complex-task-wake-${task?.id || "unknown"}`, message: `后台任务已恢复排队，但执行器唤醒失败：${error.message}` });
-  },
   onChange: (task, detail) => {
     releaseComplexTaskOutputReservation(task);
     broadcastDashboardEvent({ kind: "background-job-change", id: task?.id, action: detail?.action || null });
@@ -2348,7 +1711,7 @@ tools.setToolInterceptor(async (name, args) => {
     ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable })
     ?? documentJobToolMismatch(name, args);
   if (issue) return JSON.stringify(issue);
-  if (/^(?:append_file|edit|edit_file|multi_edit|move_file|delete_file|organize_documents_to_report|run_background|run_command|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
+  if (/^(?:append_file|edit|edit_file|multi_edit|move_file|delete_file|run_background|run_command|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
     const conflict = pendingDocumentWriteConflict(
       name,
       args,
@@ -2441,7 +1804,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。生成单文档 Markdown 时走通用前台流程：先做只读检查；遇到会改变范围、保真度、覆盖或输出位置的关键歧义时，只用 ask_choice 问一个问题，并把推荐选项及理由放在第一项；随后按格式分批读取，PDF 用 extract_pdf_text，Word/Excel/PPT 用 OfficeCLI 文本视图，文本格式用 read_file。每批内容必须先用 write_file 或 append_file 持久化，再读取下一批；压缩后用 read_context_input 恢复缓存块。多个来源需要比较、合并或形成报告时仍调用 organize_documents_to_report。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。PDF.js 显示 likelyScanned 时再说明需要 OCR。OfficeCLI 不得用于 PDF；交付前验证文件存在、覆盖完整且无虚假完成声明。复杂 PDF 编辑或生成使用 pdf Skill；md-to-pdf-cjk 只用于 Markdown 生成 PDF。",
+    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。文档任务与代码、研究和批处理任务使用同一套任务评估、澄清、执行、监控和验收协议：先只读调查；遇到会改变范围、保真度、覆盖或输出位置的关键歧义时，只用 ask_choice 问一个问题，并把推荐选项及理由放在第一项。格式读取器或 Skill 只完成当前步骤，不拥有任务生命周期；需要分批处理时，每批内容先持久化或形成检查点，再接纳下一批输入。多来源任务也必须保留在同一个普通模型工具循环和同一份批准计划中。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。交付前验证实际文件、来源覆盖和任务契约，不得把工具成功或部分结果宣称为完整完成。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -2471,8 +1834,13 @@ registerPlanTool(tools, {
     // mark_step_complete call (i.e., after the user approves and AI
     // starts executing). If the user cancels, onStepCompleted is never
     // called so nothing hits disk — matching TUI behaviour.
+    const structuredSteps = Array.isArray(steps) && steps.length > 0
+      ? steps
+      : activeForegroundTask?.classification === "complex"
+        ? [{ id: "task-execution", title: "执行并验证任务", action: String(plan || "").slice(0, 4_000) }]
+        : [];
     pendingPlan = {
-      steps: Array.isArray(steps) ? steps : [],
+      steps: structuredSteps,
       summary,
       body: plan,
     };
@@ -2480,7 +1848,19 @@ registerPlanTool(tools, {
   onStepCompleted: (update) => {
     // Non-dashboard confirmation gates can approve plans without passing
     // through resolvePlanConfirm, so keep this activation fallback.
-    if (pendingPlan) activatePendingPlan();
+    if (pendingPlan) {
+      const approvedPlan = pendingPlan;
+      if (!activatePendingPlan()) {
+        if (activeForegroundTask?.classification === "complex") {
+          activeForegroundTask = pauseForegroundTask(activeForegroundTask, "plan-persistence-failed");
+          void persistForegroundTaskState();
+        }
+        throw new Error("mark_step_complete: the approved plan could not be persisted; execution is paused.");
+      }
+      if (activeForegroundTask?.classification === "complex") {
+        activeForegroundTask = recordForegroundPlan(activeForegroundTask, approvedPlan);
+      }
+    }
     if (!isKnownPlanStep(activePlanSteps, update?.stepId)) {
       throw new Error(`mark_step_complete: stepId "${update?.stepId ?? ""}" is not in the active plan.`);
     }
@@ -2491,6 +1871,10 @@ registerPlanTool(tools, {
       : completedIds.length + 1;
     if (update?.stepId && activeCompletedIds) {
       markStepDone(update.stepId);
+    }
+    if (update?.stepId && activeForegroundTask?.classification === "complex") {
+      activeForegroundTask = recordForegroundStepCompletion(activeForegroundTask, update);
+      void persistForegroundTaskState();
     }
     // Notify dashboard that a step was completed (for live UI updates).
     if (update?.stepId) {
@@ -2509,6 +1893,27 @@ registerPlanTool(tools, {
     pendingPlanRevision = { reason, remainingSteps, summary };
   },
 });
+const markStepCompleteTool = tools.get("mark_step_complete");
+if (markStepCompleteTool) {
+  markStepCompleteTool.finishTurnOnResult = (result, args) => foregroundStepBoundaryMessage(activeForegroundTask, result, args);
+}
+const submitPlanTool = tools.get("submit_plan");
+if (submitPlanTool) {
+  submitPlanTool.finishTurnOnResult = (result) => {
+    if (activeForegroundTask?.classification !== "complex" || !/^plan approved\b/i.test(String(result || ""))) return null;
+    if (pendingPlan) {
+      const approvedPlan = pendingPlan;
+      if (!activatePendingPlan()) {
+        activeForegroundTask = pauseForegroundTask(activeForegroundTask, "plan-persistence-failed");
+        void persistForegroundTaskState();
+        return "[系统通用复杂任务调度] 批准的计划未能可靠保存，任务已暂停且尚未执行任何计划步骤；请检查存储状态后重试。";
+      }
+      activeForegroundTask = recordForegroundPlan(activeForegroundTask, approvedPlan);
+      void persistForegroundTaskState();
+    }
+    return "[系统通用复杂任务调度] 计划已批准，当前规划窗口结束；宿主将调度第一个步骤。";
+  };
+}
 registerChoiceTool(tools);
 registerTodoTool(tools, {
   onTodosUpdated: (todos) => broadcastDashboardEvent({ kind: "todo-update", todos })
@@ -4796,7 +4201,7 @@ function buildLoop(client, rootDir) {
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
   const systemWithAgentPolicy = agentPolicy.documentWorkflow === "guided"
-    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. Start document tasks with read-only investigation: call prepare_local_document once, retain documentRef, and identify the format and requested artifact. If one unresolved high-impact ambiguity would change scope, fidelity, overwrite behavior, or output shape, call ask_choice with exactly one question; put the recommended option first and explain why. Otherwise proceed without asking. For a single saved Markdown artifact, read one bounded batch at a time: use extract_pdf_text for PDF, an OfficeCLI text view for Word/Excel/PowerPoint, and read_file for text formats. Persist the first delivered batch with write_file and each later batch with append_file before requesting more source input. If extract_pdf_text returns complete=false, materialize the delivered pages before continuing with the same documentRef and nextPageRange. If a context-input memo appears, recover its referenced content through read_context_input in bounded segments and materialize each segment before reading another. Verify the output file and source coverage before claiming completion. When one report must compare, merge, reconcile, or summarize multiple source documents, call organize_documents_to_report once with every source in inputs. Do not start with annotated/query/html or cell-by-cell extraction unless layout details are requested or plain text is insufficient. Never rewrite or guess a prepared path; the host can recreate a missing readable copy from documentRef. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. A continuation-window notice means the current turn has fresh tool rounds; continue the task without asking the user to send another message.`
+    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. Apply the same task assessment, clarification, execution, monitoring, and verification protocol to document work as to every other task. Start with read-only investigation: call prepare_local_document once, retain documentRef, and identify the requested artifact and acceptance conditions. If one unresolved high-impact ambiguity would change scope, fidelity, overwrite behavior, or output shape, call ask_choice with exactly one question; put the recommended option first and explain why. Otherwise proceed without asking. A format reader, parser, or Skill performs only the current step and never owns the task lifecycle. For bounded input, persist or checkpoint the processed result before accepting another batch. If a context-input memo appears, recover its referenced content through read_context_input in bounded segments and materialize each segment before reading another. Verify the output file, source coverage, and approved task requirements before claiming completion. Keep multi-source work in the same approved plan and ordinary tool loop; do not start a separate model worker. Never rewrite or guess a prepared path; the host can recreate a missing readable copy from documentRef. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. A continuation-window notice means the current turn has fresh tool rounds; continue the approved task without asking the user to send another message.`
     : systemWithLearning;
   const prefix = new ImmutablePrefix({
     system: systemWithAgentPolicy,
@@ -4907,6 +4312,16 @@ let activePlanSummary = null; // string
 let activePlanBody = null;    // string (markdown)
 let activePlanUpdatedAt = null;// ISO timestamp from the persisted plan file
 let pendingPlanRevision = null;// committed only after the user accepts the revision card
+let activeForegroundTask = null;// lightweight contract supervising the ordinary CacheFirstLoop
+
+async function persistForegroundTaskState() {
+  return writeActiveSessionMeta({ foregroundTask: activeForegroundTask });
+}
+
+function restoreForegroundTaskFromMeta(meta) {
+  activeForegroundTask = restoreForegroundTask(meta?.foregroundTask);
+  return activeForegroundTask;
+}
 
 /** Get the current session name for plan file paths. */
 function currentSessionName() {
@@ -4976,20 +4391,7 @@ function getActivePlanSnapshot() {
 }
 
 const MAX_PLAN_AUTO_CONTINUATIONS = 2;
-const MAX_DOCUMENT_AUTO_CONTINUATIONS = 16;
 const MAX_ARTIFACT_AUTO_CONTINUATIONS = 1;
-
-function parsePdfDeliveryResult(event) {
-  if (event?.role !== "tool" || event?.toolName !== "extract_pdf_text" || typeof event.content !== "string") return null;
-  try {
-    const result = JSON.parse(event.content);
-    if (!result?.ok || result.requiresUserChoice || typeof result.documentRef !== "string") return null;
-    return result;
-  } catch {
-    console.error("[document] extract_pdf_text returned non-JSON output after delivery budgeting");
-    return null;
-  }
-}
 
 function rememberPendingDocumentArtifact(artifact, { assistantId, operationId } = {}) {
   if (!artifact?.jobId) return null;
@@ -5101,49 +4503,15 @@ async function drainDocumentHandoffs() {
   }
 }
 
-function updatePdfContinuationState(states, result) {
-  const key = result.documentRef;
-  let state = states.get(key);
-  const delivered = parsePageRange(result.deliveredPageRange);
-  const remaining = parsePageRange(result.remainingPageRange || result.nextPageRange);
-  if (!state && remaining.length === 0) return null;
-  state ??= {
-    documentRef: key,
-    documentId: result.documentId ?? null,
-    totalPages: Number(result.totalPages) || null,
-    delivered: new Set(),
-    remaining: new Set(),
-  };
-  for (const page of delivered) {
-    state.delivered.add(page);
-    state.remaining.delete(page);
-  }
-  for (const page of remaining) {
-    if (!state.delivered.has(page)) state.remaining.add(page);
-  }
-  if (state.remaining.size === 0) {
-    states.delete(key);
-    return null;
-  }
-  states.set(key, state);
-  return state;
-}
-
-function documentAutoContinuationPrompt(state, attempt) {
-  const nextPageRange = formatPageRange([...state.remaining]);
-  return [
-    `[系统自动续读 ${attempt}/${MAX_DOCUMENT_AUTO_CONTINUATIONS}]`,
-    `文档 ${state.documentRef} 仍有未读取页面：${nextPageRange}。`,
-    "先确认上一批内容已经通过 write_file 或 append_file 持久化；若尚未写入，先处理上一批，不得继续拉取新内容。",
-    `上一批已持久化后，再调用 extract_pdf_text，input 使用 ${state.documentRef}，pages 使用 ${nextPageRange}。`,
-    "继续沿用用户要求的整理粒度；长篇 Markdown 分段追加，最后确认产物存在且覆盖范围完整。",
-  ].join("\n");
-}
-
 function incompleteActivePlanSnapshot() {
   const plan = getActivePlanSnapshot();
   if (!plan || plan.totalSteps <= 0 || plan.completedSteps >= plan.totalSteps) return null;
   return plan;
+}
+
+function approvedActivePlanSnapshot() {
+  const plan = incompleteActivePlanSnapshot();
+  return plan?.status === "active" ? plan : null;
 }
 
 function planAutoContinuationPrompt(plan, attempt, reason = "budget") {
@@ -7856,6 +7224,7 @@ async function loadActiveSession() {
     const storedMeta = activeSessionMetaStore.read();
     if (storedMeta.ok && storedMeta.value) {
       const meta = storedMeta.value;
+      restoreForegroundTaskFromMeta(meta);
       activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
         ? meta.conversationId.trim()
         : activeConversationId;
@@ -7884,6 +7253,7 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   clearTutorMode();
   clearLearningMode();
   resetPlanRefs();
+  activeForegroundTask = null;
   generatedArtifactPaths.clear();
   const planSession = currentSessionName();
   try {
@@ -8732,6 +8102,7 @@ const ctx = {
   getPersistentStorageIssues: () => runtimeIssues.listUserActionable(),
   openExternalUrl,
   getVHomeStatus: () => getVHomeStatusAndResumeSchedules(),
+  getVHomeAvatar: () => vhomeIntegration.getAvatar(),
   refreshVHomeStatus: () => getVHomeStatusAndResumeSchedules({ force: true }),
   startVHomeLogin: () => vhomeIntegration.startLogin(),
   cancelVHomeLogin: () => vhomeIntegration.cancelLogin(),
@@ -8932,7 +8303,13 @@ const ctx = {
       : choice === "refine" ? { type: "refine", feedback }
       : { type: "cancel", feedback };
     const resolved = resolveActiveGate("plan", gateId, verdict);
-    if (resolved && choice === "approve") activatePendingPlan();
+    if (resolved && choice === "approve") {
+      if (pendingPlan && activeForegroundTask?.classification === "complex") {
+        activeForegroundTask = recordForegroundPlan(activeForegroundTask, pendingPlan);
+      }
+      activatePendingPlan();
+      void persistForegroundTaskState();
+    }
     if (resolved && choice !== "approve") pendingPlan = null;
     return resolved;
   },
@@ -9205,53 +8582,7 @@ const ctx = {
     }
     if (!documentMarkdownManager) return { ok: false, error: "document manager unavailable" };
     if (String(id).startsWith("document:") && ["resume", "retry"].includes(action)) {
-      const rawId = String(id).replace(/^document:/, "");
-      let job = await documentJobStore.read(rawId);
-      let reservation = await documentOutputReservation.reserve({
-        outputPath: job.outputPath,
-        reservationId: rawId,
-        allowOverwrite: job.allowOutputOverwrite === true,
-        workspaceRoot: job.workspaceRoot || workspaceDir,
-      });
-      let retargetedFrom = null;
-      if (!reservation.ok && reservation.code === "output-path-conflict") {
-        retargetedFrom = job.outputPath;
-        documentOutputReservation.release(rawId);
-        const sourceLabel = job.sourceName || basename(job.sourcePath || "document");
-        reservation = await documentOutputReservation.reserve({
-          sourceTitle: basename(sourceLabel, extname(sourceLabel)),
-          reservationId: rawId,
-          workspaceRoot: job.workspaceRoot || workspaceDir,
-        });
-        if (!reservation.ok) return reservation;
-        try {
-          job = await documentJobStore.update(rawId, {
-            outputPath: reservation.outputPath,
-            allowOutputOverwrite: false,
-            outputSignature: null,
-            contract: job.contract ? { ...job.contract, outputPath: reservation.outputPath } : job.contract,
-          });
-          await documentJobStore.appendEvent(rawId, {
-            type: "output-retargeted",
-            from: retargetedFrom,
-            to: reservation.outputPath,
-            reason: "output-path-conflict",
-          }).catch(() => {});
-        } catch (error) {
-          documentOutputReservation.release(rawId);
-          throw error;
-        }
-      }
-      if (!reservation.ok) return reservation;
-      documentOutputReservation.bind(reservation.reservationId, rawId);
-      try {
-        const result = await documentMarkdownManager.control(id, action);
-        if (!result?.ok) documentOutputReservation.release(rawId);
-        return retargetedFrom ? { ...result, outputRetargeted: true, previousOutputPath: retargetedFrom, outputPath: job.outputPath } : result;
-      } catch (error) {
-        documentOutputReservation.release(rawId);
-        throw error;
-      }
+      return { ok: false, reason: "legacy-execution-retired", error: LEGACY_DOCUMENT_EXECUTION_RETIRED };
     }
     const result = await documentMarkdownManager.control(id, action);
     if (String(id).startsWith("document:") && ["abandon", "delete"].includes(action) && result?.ok !== false) {
@@ -9429,6 +8760,7 @@ ${modeList}
         try {
           const sessionFile = sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
+          restoreForegroundTaskFromMeta(sessionMeta);
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
@@ -9963,7 +9295,6 @@ ${modeList}
         let assistantText = "";
         let turnError = null;
         let continuationAttempts = 0;
-        let documentContinuationAttempts = 0;
         let artifactContinuationAttempts = 0;
         let continuationNeeded = false;
         let artifactIncomplete = false;
@@ -9971,16 +9302,47 @@ ${modeList}
         let pendingDocumentArtifact = null;
         let loopInput = text;
         let augmentedLoopInput = null;
+        let foregroundDecision = null;
+        let foregroundChangedPlanMode = false;
+        const foregroundEnabled = opts.isolated !== true && opts.internalHandoff !== true;
         const artifactRequest = opts.internalHandoff === true
           ? { required: false, savePreviousResponse: false }
           : detectArtifactRequest(text);
+        const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
         contextInputTransactions.beginTurn({
           turnId: requestId || operation.id || assistantId,
           requiresArtifact: artifactRequest.required,
-          requiresCompleteCoverage: requiresCompleteContextCoverage(text, artifactRequest),
+          requiresCompleteCoverage: completeCoverageRequired,
         });
         const turnArtifactPaths = new Set();
-        const pdfContinuationStates = new Map();
+        const dispatchForeground = (decision, { appendToInput = false, userUpdate = "" } = {}) => {
+          activeForegroundTask = beginForegroundDispatch(activeForegroundTask, decision);
+          const prompt = buildForegroundTaskPrompt(activeForegroundTask, decision, { userUpdate });
+          loopInput = appendToInput ? `${loopInput}\n\n${prompt}` : prompt;
+          if (appendToInput) augmentedLoopInput = loopInput;
+          assistantText = "";
+          tools.setPlanMode(decision.type === "plan" || opts.readonly === true);
+          foregroundChangedPlanMode = true;
+        };
+        if (foregroundEnabled) {
+          const activePlan = approvedActivePlanSnapshot();
+          const restored = restoreForegroundTask(activeForegroundTask);
+          const resumeRequested = /^(?:继续|恢复|接着|按原计划|continue|resume)\b/i.test(text.trim());
+          const canResume = restored?.classification === "complex"
+            && !new Set(["completed", "partial", "stopped"]).has(restored.lifecycle)
+            && (Boolean(activePlan) || resumeRequested);
+          const taskInput = {
+            turnId: requestId || operation.id || assistantId,
+            prompt: canResume ? restored.goal : text,
+            activePlan,
+            artifactRequired: canResume ? restored.acceptance?.artifactRequired === true : artifactRequest.required,
+            completeCoverage: canResume ? restored.acceptance?.completeCoverage === true : completeCoverageRequired,
+            history: loop?.log?.toMessages?.() ?? [],
+          };
+          activeForegroundTask = canResume
+            ? resumeForegroundTask(restored, taskInput)
+            : startForegroundTask({ ...taskInput, assessment: assessTaskComplexity(taskInput) });
+        }
         try {
           const retrievalText = manualSkillTask ?? text;
           const retrieval = opts.disableSemanticRetrieval || opts.internalHandoff === true
@@ -9999,6 +9361,20 @@ ${modeList}
             content: loopInput,
             metadata: { requestId: requestId || null, semanticSources: retrieval.sources.length },
           });
+          if (foregroundEnabled && activeForegroundTask) {
+            const evaluated = evaluateForegroundTask(activeForegroundTask, {
+              plan: approvedActivePlanSnapshot(),
+              contextStatus: contextInputTransactions.status(),
+              artifactCount: turnArtifactPaths.size,
+              aborted: operation.controller.signal.aborted,
+            });
+            activeForegroundTask = evaluated.state;
+            foregroundDecision = evaluated.decision;
+            if (["plan", "step", "verify"].includes(foregroundDecision.type)) {
+              dispatchForeground(foregroundDecision, { appendToInput: true });
+            }
+            if (activeForegroundTask.classification === "complex") await persistForegroundTaskState();
+          }
           if (indexRetrievalMode === "auto") {
             broadcastDashboardEvent({
               kind: "semantic-retrieval",
@@ -10016,6 +9392,34 @@ ${modeList}
             for await (const ev of loop.step(loopInput)) {
               if (ev.role === "tool") {
                 sawToolActivity = true;
+                const foregroundToolSucceeded = toolResultSucceeded(ev.content);
+                const foregroundToolResult = String(ev.content || "");
+                if (ev.toolName === "submit_plan" && !foregroundToolSucceeded) {
+                  pendingPlan = null;
+                  if (/plan cancelled/i.test(foregroundToolResult) && activeForegroundTask?.classification === "complex") {
+                    activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
+                  }
+                }
+                if (ev.toolName === "mark_step_complete" && !foregroundToolSucceeded && activeForegroundTask?.classification === "complex") {
+                  if (/user stopped at checkpoint/i.test(foregroundToolResult)) {
+                    activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
+                  } else if (/revision requested|user requested revision/i.test(foregroundToolResult)) {
+                    activeForegroundTask = pauseForegroundTask(activeForegroundTask, "plan-revision-requested");
+                  }
+                }
+                if (foregroundEnabled && activeForegroundTask) {
+                  const foregroundTool = tools.get(ev.toolName);
+                  const verificationEvidence = !/^(?:ask_choice|submit_plan|mark_step_complete|revise_plan|todo_write|append_file|write_file|save_file|save_last_assistant_response|edit|edit_file|multi_edit|move_file|delete_file)$/i.test(String(ev.toolName || ""))
+                    && (foregroundTool?.readOnly === true || /^(?:run_command|officecli|dws)$/i.test(String(ev.toolName || "")));
+                  activeForegroundTask = recordForegroundToolEvent(activeForegroundTask, {
+                    toolName: ev.toolName,
+                    toolArgs: ev.toolArgs,
+                    content: ev.content,
+                    readOnly: foregroundTool?.readOnly === true,
+                    verificationEvidence,
+                    succeeded: foregroundToolSucceeded,
+                  });
+                }
                 const acceptedDocumentArtifact = pendingDocumentArtifactFromToolEvent(ev.toolName, ev.toolArgs, ev.content);
                 if (acceptedDocumentArtifact) {
                   pendingDocumentArtifact = rememberPendingDocumentArtifact(acceptedDocumentArtifact, {
@@ -10027,32 +9431,7 @@ ${modeList}
                     text: `文档整理已进入后台队列（${acceptedDocumentArtifact.jobId}）`,
                   });
                 }
-                const pdfResult = parsePdfDeliveryResult(ev);
-                if (pdfResult) {
-                  const pdfState = updatePdfContinuationState(pdfContinuationStates, pdfResult);
-                  if (pdfState) {
-                    broadcastDashboardEvent({
-                      kind: "document-progress",
-                      documentRef: pdfState.documentRef,
-                      documentId: pdfState.documentId,
-                      totalPages: pdfState.totalPages,
-                      deliveredPages: pdfState.delivered.size,
-                      remainingPages: pdfState.remaining.size,
-                      complete: false,
-                    });
-                  } else {
-                    broadcastDashboardEvent({
-                      kind: "document-progress",
-                      documentRef: pdfResult.documentRef,
-                      documentId: pdfResult.documentId ?? null,
-                      totalPages: Number(pdfResult.totalPages) || null,
-                      deliveredPages: parsePageRange(pdfResult.deliveredPageRange).length,
-                      remainingPages: 0,
-                      complete: pdfResult.complete === true,
-                    });
-                  }
-                }
-                const artifactPaths = toolResultSucceeded(ev.content)
+                const artifactPaths = foregroundToolSucceeded
                   ? rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs)
                   : [];
                 const newFiles = [];
@@ -10065,12 +9444,16 @@ ${modeList}
                   newFiles.push(info);
                 }
                 if (newFiles.length > 0) {
+                  if (foregroundEnabled && activeForegroundTask) {
+                    activeForegroundTask = recordForegroundArtifacts(activeForegroundTask, newFiles.map((file) => file.path));
+                  }
                   broadcastDashboardEvent({
                     kind: "artifact-created",
                     assistantId,
                     files: newFiles,
                   });
                 }
+                if (activeForegroundTask?.classification === "complex") await persistForegroundTaskState();
               }
               // Write event to .events.jsonl for cockpit tool activity
               if (eventSink && eventizer) {
@@ -10149,40 +9532,126 @@ ${modeList}
               }
               if (choice === "accept-partial") {
                 assistantText = `${assistantText}\n\n> 已按你的选择保留当前部分结果；尚未处理的输入未计入完整交付。`.trim();
+                if (activeForegroundTask?.classification === "complex") {
+                  activeForegroundTask = applyForegroundIntervention(
+                    activeForegroundTask,
+                    "accept-partial",
+                    { reason: "source-coverage-pending" },
+                  );
+                  const partialVerification = evaluateForegroundTask(activeForegroundTask, {
+                    contextStatus: contextInputTransactions.status(),
+                    artifactCount: turnArtifactPaths.size,
+                    aborted: operation.controller.signal.aborted,
+                  });
+                  activeForegroundTask = partialVerification.state;
+                  if (partialVerification.decision.type === "verify") {
+                    dispatchForeground(partialVerification.decision);
+                    await persistForegroundTaskState();
+                    continue;
+                  }
+                  await persistForegroundTaskState();
+                  continuationNeeded = true;
+                  break;
+                }
               } else if (choice === "revise") {
                 continuationNeeded = true;
                 assistantText = "任务已暂停。请先说明你最希望调整的一个方面：处理范围、输出格式或内容优先级。";
+                if (activeForegroundTask?.classification === "complex") {
+                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "waiting_user");
+                  await persistForegroundTaskState();
+                }
                 break;
               } else {
                 continuationNeeded = true;
                 assistantText = "任务已按你的选择停止；已缓存的输入仍可在后续恢复。";
+                if (activeForegroundTask?.classification === "complex") {
+                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
+                  await persistForegroundTaskState();
+                }
                 break;
               }
             }
 
             if (pendingDocumentArtifact) break;
 
-            const pendingPdfState = pdfContinuationStates.values().next().value ?? null;
-            if (pendingPdfState && !operation.controller.signal.aborted) {
-              if (documentContinuationAttempts < MAX_DOCUMENT_AUTO_CONTINUATIONS) {
-                documentContinuationAttempts++;
-                broadcastDashboardEvent({
-                  kind: "status",
-                  text: `文档仍有 ${pendingPdfState.remaining.size} 页未读取，正在自动继续（${documentContinuationAttempts}/${MAX_DOCUMENT_AUTO_CONTINUATIONS}）`,
-                });
-                console.error(`[document] automatic continuation attempt=${documentContinuationAttempts} remaining=${formatPageRange([...pendingPdfState.remaining])}`);
-                assistantText = "";
-                loopInput = documentAutoContinuationPrompt(pendingPdfState, documentContinuationAttempts);
-                continue;
-              }
-              continuationNeeded = true;
-              broadcastDashboardEvent({
-                kind: "document-continuation-needed",
-                documentRef: pendingPdfState.documentRef,
-                remainingPages: formatPageRange([...pendingPdfState.remaining]),
-                attempts: documentContinuationAttempts,
-                maxAttempts: MAX_DOCUMENT_AUTO_CONTINUATIONS,
+            if (foregroundEnabled && activeForegroundTask) {
+              const evaluated = evaluateForegroundTask(activeForegroundTask, {
+                plan: approvedActivePlanSnapshot(),
+                contextStatus: contextInputStatus ?? contextInputTransactions.status(),
+                budgetForcedSummary,
+                sawToolActivity,
+                artifactCount: turnArtifactPaths.size,
+                aborted: operation.controller.signal.aborted,
               });
+              activeForegroundTask = evaluated.state;
+              foregroundDecision = evaluated.decision;
+              if (activeForegroundTask.classification === "complex") {
+                await persistForegroundTaskState();
+                if (["plan", "step", "verify"].includes(foregroundDecision.type)) {
+                  const statusText = foregroundDecision.type === "plan"
+                    ? "任务已进入复杂任务监督，正在完成只读调查和计划确认"
+                    : foregroundDecision.type === "verify"
+                      ? "计划步骤已完成，正在使用同一模型循环验证交付"
+                      : `正在执行计划步骤：${foregroundDecision.step?.title || foregroundDecision.step?.id || "当前步骤"}`;
+                  broadcastDashboardEvent({ kind: "status", text: statusText });
+                  dispatchForeground(foregroundDecision);
+                  await persistForegroundTaskState();
+                  continue;
+                }
+                if (foregroundDecision.type === "intervene") {
+                  const card = buildForegroundIntervention(activeForegroundTask, foregroundDecision);
+                  broadcastDashboardEvent({ kind: "warning", text: card.question });
+                  const verdict = await pauseGate.ask(card);
+                  const userUpdate = verdict?.type === "text" ? String(verdict.text || "").trim() : "";
+                  const choice = userUpdate
+                    ? "revise"
+                    : verdict?.type === "pick" ? String(verdict.optionId || "") : "stop";
+                  activeForegroundTask = applyForegroundIntervention(activeForegroundTask, choice, foregroundDecision);
+                  if (choice === "revise") cancelActivePlan();
+                  await persistForegroundTaskState();
+                  if (choice === "continue" || choice === "revise" || choice === "accept-partial") {
+                    const resumed = evaluateForegroundTask(activeForegroundTask, {
+                      plan: approvedActivePlanSnapshot(),
+                      contextStatus: contextInputTransactions.status(),
+                      artifactCount: turnArtifactPaths.size,
+                      aborted: operation.controller.signal.aborted,
+                    });
+                    activeForegroundTask = resumed.state;
+                    foregroundDecision = resumed.decision;
+                    if (["plan", "step", "verify"].includes(foregroundDecision.type)) {
+                      dispatchForeground(foregroundDecision, { userUpdate });
+                      await persistForegroundTaskState();
+                      continue;
+                    }
+                  }
+                  continuationNeeded = true;
+                  if (choice === "accept-partial") {
+                    assistantText = `${assistantText}\n\n> 已按你的选择保留并标记当前部分结果；未完成范围仍保留在任务记录中。`.trim();
+                  } else if (choice === "stop") {
+                    assistantText = "任务已停止，现有上下文、工具结果、计划进度和产物均已保留。";
+                  } else {
+                    assistantText = "任务仍处于暂停状态，现有进度已保留。";
+                  }
+                  break;
+                }
+                if (foregroundDecision.type === "complete") {
+                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "completed");
+                  await persistForegroundTaskState();
+                  break;
+                }
+                if (foregroundDecision.type === "partial") {
+                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "partial");
+                  await persistForegroundTaskState();
+                  assistantText = `${assistantText}\n\n> 已按你的选择交付经过验证的部分结果；未完成范围保留在任务记录中。`.trim();
+                  continuationNeeded = true;
+                  break;
+                }
+                if (foregroundDecision.type === "stopped") {
+                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
+                  await persistForegroundTaskState();
+                  break;
+                }
+              }
             }
 
             const continuation = decidePlanContinuation({
@@ -10219,7 +9688,6 @@ ${modeList}
             }
             if (
               continuation.action === "none" &&
-              !pendingPdfState &&
               !pendingDocumentArtifact &&
               artifactRequest.required &&
               turnArtifactPaths.size === 0 &&
@@ -10323,8 +9791,13 @@ ${modeList}
               console.error(`[launcher] ${isolationRestoreError}`);
             }
 
-            if (opts.readonly === true) {
+            if (opts.readonly === true || foregroundChangedPlanMode) {
               try { tools.setPlanMode(previousPlanMode); } catch (error) { console.error(`[launcher] failed to restore plan mode: ${error.message}`); }
+            }
+
+            if (foregroundEnabled && activeForegroundTask?.classification === "simple") {
+              activeForegroundTask = null;
+              await persistForegroundTaskState();
             }
 
             try {
@@ -10535,11 +10008,7 @@ documentHandoffCoordinator = createLongTaskHandoffCoordinator({
       return { ok: true, artifactStatus: null };
     }
     const id = String(job?.id ?? job?.documentJobId ?? "").replace(/^document:/i, "");
-    let metadata = await documentMarkdownManager.getMetadata(id);
-    if (metadata?.artifactStatus === "missing") {
-      const restored = await documentMarkdownManager.resume(id);
-      if (restored?.ok) metadata = await documentMarkdownManager.getMetadata(id);
-    }
+    const metadata = await documentMarkdownManager.getMetadata(id);
     const artifactStatus = metadata?.artifactStatus ?? "unavailable";
     if (artifactStatus === "verified") return { ok: true, artifactStatus };
     return {
@@ -10619,24 +10088,17 @@ try {
           const message = String(issue?.message || "未知错误");
           runtimeIssues.report("warning", {
             key: `complex-task-startup-${operation}`,
-            message: `后台复杂任务的 ${operation} 启动维护失败，但任务执行器已继续启动：${message}`,
+            message: `历史复杂任务的 ${operation} 兼容维护失败；任务记录仍保留，但旧执行流程不会重新启动：${message}`,
           });
           console.error(`[complex-task] startup ${operation} degraded: ${message}`);
         }
         if ((report?.reconcile?.requeued?.length ?? 0) > 0 || (report?.reconcile?.needsAttention?.length ?? 0) > 0 || (report?.reconcile?.sourceChanged?.length ?? 0) > 0) {
           broadcastDashboardEvent({ kind: "background-job-change", reason: "complex-task-startup-reconcile" });
         }
-        console.error(`[complex-task] startup reconcile scanned=${report?.reconcile?.scanned ?? 0} requeued=${report?.reconcile?.requeued?.length ?? 0} pruned=${report?.pruned?.deleted?.length ?? 0}`);
+        console.error(`[complex-task] startup compatibility scanned=${report?.reconcile?.scanned ?? 0} retired=${report?.reconcile?.retired?.length ?? 0} requeued=${report?.reconcile?.requeued?.length ?? 0} pruned=${report?.pruned?.deleted?.length ?? 0}`);
       } catch (error) {
         runtimeIssues.report("warning", { key: "complex-task-startup-maintenance", message: `后台复杂任务启动维护失败：${error.message}` });
         console.error(`[complex-task] startup maintenance failed: ${error.stack || error.message}`);
-      }
-
-      try {
-        await complexTaskOrchestrator?.start?.();
-      } catch (error) {
-        runtimeIssues.report("warning", { key: "complex-task-startup-orchestrator", message: `后台复杂任务执行器启动失败，后续轮询仍会尝试恢复：${error.message}` });
-        console.error(`[complex-task] orchestrator startup failed: ${error.stack || error.message}`);
       }
 
       try {

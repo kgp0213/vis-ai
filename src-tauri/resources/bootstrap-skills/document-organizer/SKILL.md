@@ -16,19 +16,17 @@ would materially change scope, fidelity, overwrite behavior, or output structure
 `ask_choice` with exactly one question. Put the recommended option first and state its
 reason. Do not ask a list of questions or repeat facts already present in context.
 
-## Single-Document Flow
+## Single-Document Guidance
 
 1. Call `prepare_local_document` once with the original path and keep its `documentRef`.
-2. Read one bounded batch with the format-appropriate reader:
-   - PDF: `extract_pdf_text`.
-   - Word/Excel/PowerPoint: an OfficeCLI text view.
-   - HTML/Markdown/CSV/text: `read_file` with a bounded range when needed.
+2. Use an available format reader or Skill for one bounded input step. The reader is an
+   execution capability and does not own task planning, continuation, or completion.
 3. Immediately write the first processed batch with `write_file`; use `append_file` for
    every later batch.
 4. Verify a successful write before reading more source content.
-5. Continue with the next source range. For PDF, reuse `documentRef` and
-   `nextPageRange` until `complete=true`.
-6. Verify the actual file and requested source coverage before reporting completion.
+5. Continue only while the active task still has an approved incomplete step.
+6. Verify the actual file, requested source coverage, and task acceptance conditions
+   before proposing completion.
 
 When the runtime reports a cached context input, use `read_context_input` in bounded
 segments. Materialize one segment before requesting the next. Never replace missing
@@ -48,6 +46,7 @@ source content with a context summary.
 
 ## Multiple Sources
 
-When one result depends on relationships between multiple source documents, call
-`organize_documents_to_report` once with all source paths. Keep that specialized
-collection workflow; do not start unrelated single-file chains.
+Keep all sources in one approved task plan. Give each bounded source-processing unit a
+stable step or checkpoint, retain its source identity in the evidence, and use the same
+ordinary tool loop to assemble and verify the combined result. Do not start a separate
+document worker or format-specific continuation lifecycle.

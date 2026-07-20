@@ -7,11 +7,14 @@ const TOKEN = "vhome-api-test-token";
 
 function mockResponse() {
   let status = null;
+  let headers = null;
   let body = null;
   return {
-    writeHead(value) { status = value; },
+    writeHead(value, valueHeaders = {}) { status = value; headers = valueHeaders; },
     end(value) { body = value; },
     get status() { return status; },
+    get headers() { return headers; },
+    get body() { return body; },
     get json() { return body ? JSON.parse(body) : null; },
   };
 }
@@ -43,6 +46,27 @@ test("V来家 status API exposes only the sanitized identity", async () => {
   assert.equal(Object.hasOwn(res.json, "token"), false);
   assert.equal(Object.hasOwn(res.json, "userId"), false);
   assert.equal(Object.hasOwn(res.json, "corpId"), false);
+});
+
+test("V来家 avatar API returns only authenticated image bytes", async () => {
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  const ctx = {
+    getVHomeAvatar: async () => ({ body: bytes, contentType: "image/png", etag: '"avatar-etag"' }),
+  };
+  const res = await request("GET", "/api/vhome/avatar", ctx);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers["content-type"], "image/png");
+  assert.equal(res.headers.etag, '"avatar-etag"');
+  assert.deepEqual(res.body, bytes);
+
+  const unavailable = await request("GET", "/api/vhome/avatar", { getVHomeAvatar: async () => null });
+  assert.equal(unavailable.status, 404);
+  assert.equal(unavailable.headers["cache-control"], "private, max-age=60");
+
+  const invalid = await request("GET", "/api/vhome/avatar", {
+    getVHomeAvatar: async () => ({ body: Buffer.from("not-an-image"), contentType: "text/plain" }),
+  });
+  assert.equal(invalid.status, 404);
 });
 
 test("V来家 lifecycle API starts, cancels, refreshes, and logs out", async () => {

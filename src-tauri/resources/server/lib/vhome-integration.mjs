@@ -1,5 +1,9 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -12,6 +16,9 @@ const DEFAULT_LOGIN_CONFIRM_INTERVAL_MS = 1_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const MAX_LOGIN_OUTPUT_CHARS = 64 * 1024;
 const MAX_PUBLIC_LOGIN_DETAIL_CHARS = 240;
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+const AVATAR_TIMEOUT_MS = 30_000;
+const AVATAR_RETRY_DELAY_MS = 60_000;
 
 function parseJsonObject(output) {
   const text = String(output ?? "").replace(/^\uFEFF/, "").trim();
@@ -142,6 +149,47 @@ async function executeDws(executable, args, timeoutMs) {
   return result.stdout;
 }
 
+function avatarContentType(bytes) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 12) return null;
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9) return "image/jpeg";
+  if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  return null;
+}
+
+async function downloadDwsAvatar(executable, mediaId, timeoutMs = AVATAR_TIMEOUT_MS) {
+  const tempRoot = await mkdtemp(join(tmpdir(), "visionox-vhome-avatar-"));
+  const output = join(tempRoot, "avatar.download");
+  try {
+    await execFileAsync(executable, [
+      "chat", "message", "download-media",
+      "--type", "mediaId",
+      "--resource-id", mediaId,
+      "--message-id", "avatar-self",
+      "--open-conversation-id", "self",
+      "--output", output,
+      "--yes",
+      "--format", "json",
+    ], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: timeoutMs,
+      maxBuffer: MAX_OUTPUT_BYTES,
+      env: process.env,
+    });
+    const fileStat = await stat(output);
+    if (!fileStat.isFile() || fileStat.size <= 0 || fileStat.size > MAX_AVATAR_BYTES) {
+      throw new Error(`avatar file size is invalid: ${fileStat.size}`);
+    }
+    const bytes = await readFile(output);
+    const contentType = avatarContentType(bytes);
+    if (!contentType) throw new Error("avatar file is not a supported PNG, JPEG, or WebP image");
+    return { bytes, contentType };
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 function unavailable(reason, checkedAt, available = false, authenticated = false) {
   return { available, connected: false, authenticated, userName: null, corpName: null, reason, checkedAt };
 }
@@ -166,11 +214,17 @@ export function createVHomeIntegration(options = {}) {
   const setTimer = options.setTimer ?? setTimeout;
   const clearTimer = options.clearTimer ?? clearTimeout;
   const logger = options.logger ?? null;
+  const downloadAvatarFile = options.downloadAvatarFile ?? downloadDwsAvatar;
   let cached = null;
   let expiresAt = 0;
   let inFlight = null;
   let lastProbeFailure = null;
   let currentProfileId = null;
+  let currentUserId = null;
+  let avatarAttemptedKey = null;
+  let avatarAttemptedAt = 0;
+  let avatarCache = null;
+  let avatarInFlight = null;
   let loginState = initialLoginState();
   let loginProcess = null;
   let loginTimer = null;
@@ -207,6 +261,66 @@ export function createVHomeIntegration(options = {}) {
     expiresAt = 0;
   }
 
+  function clearAvatar() {
+    currentUserId = null;
+    avatarAttemptedKey = null;
+    avatarAttemptedAt = 0;
+    avatarCache = null;
+    avatarInFlight = null;
+  }
+
+  function avatarKey() {
+    return currentProfileId && currentUserId ? `${currentProfileId}:${currentUserId}` : null;
+  }
+
+  function ensureAvatar() {
+    const key = avatarKey();
+    if (!key) return Promise.resolve(null);
+    if (avatarCache?.key === key) return Promise.resolve(avatarCache);
+    if (avatarInFlight?.key === key) return avatarInFlight.promise;
+    if (avatarAttemptedKey === key && now() - avatarAttemptedAt < AVATAR_RETRY_DELAY_MS) return Promise.resolve(null);
+    avatarAttemptedKey = key;
+    avatarAttemptedAt = now();
+    const userId = currentUserId;
+    const profileId = currentProfileId;
+    const promise = (async () => {
+      const search = parseJsonObject(await execute(executable, [
+        "aisearch", "person",
+        "--keyword", userId,
+        "--dimension", "jobNumber",
+        "--format", "json",
+      ], timeoutMs));
+      const person = Array.isArray(search.result)
+        ? search.result.find((item) => safeLabel(item?.userId ?? item?.meta?.staffId, 128) === userId)
+        : null;
+      const mediaId = safeLabel(person?.authorAvatar ?? person?.sourceIcon, 512);
+      if (search.success !== true || !person || !/^@[A-Za-z0-9_-]{8,511}$/.test(mediaId)) {
+        throw new Error("current V来家 user did not return a usable avatar media id");
+      }
+      const downloaded = await downloadAvatarFile(executable, mediaId, AVATAR_TIMEOUT_MS);
+      const bytes = Buffer.isBuffer(downloaded?.bytes) ? downloaded.bytes : null;
+      const contentType = downloaded?.contentType ?? avatarContentType(bytes);
+      if (!bytes || bytes.length <= 0 || bytes.length > MAX_AVATAR_BYTES || !["image/png", "image/jpeg", "image/webp"].includes(contentType)) {
+        throw new Error("downloaded V来家 avatar failed image validation");
+      }
+      const result = {
+        key,
+        body: bytes,
+        contentType,
+        etag: `"${createHash("sha256").update(bytes).digest("hex")}"`,
+      };
+      if (avatarKey() === key) avatarCache = result;
+      return avatarKey() === key ? result : null;
+    })().catch((error) => {
+      log(`avatar fetch failed: profile=${JSON.stringify(profileId)}, user=${JSON.stringify(userId)}, error=${JSON.stringify(error?.message ?? String(error))}`);
+      return null;
+    }).finally(() => {
+      if (avatarInFlight?.key === key) avatarInFlight = null;
+    });
+    avatarInFlight = { key, promise };
+    return promise;
+  }
+
   async function probe() {
     const checkedAt = new Date(now()).toISOString();
     lastProbeFailure = null;
@@ -216,6 +330,7 @@ export function createVHomeIntegration(options = {}) {
       const renewable = auth.token_valid === true || auth.refresh_token_valid === true;
       if (auth.success !== true || auth.authenticated !== true || !renewable) {
         currentProfileId = null;
+        clearAvatar();
         return unavailable("authentication-required", checkedAt, true, false);
       }
 
@@ -225,8 +340,22 @@ export function createVHomeIntegration(options = {}) {
       const userName = safeLabel(employee?.orgUserName ?? auth.user_name);
       const corpName = safeLabel(employee?.orgName ?? auth.corp_name);
       if (self.success !== true || !userName) return unavailable("identity-unavailable", checkedAt, true, true);
+      const nextUserId = safeLabel(auth.user_id ?? employee?.orgUserId, 128) || null;
+      const nextAvatarKey = currentProfileId && nextUserId ? `${currentProfileId}:${nextUserId}` : null;
+      if (avatarKey() !== nextAvatarKey) {
+        currentUserId = nextUserId;
+        avatarAttemptedKey = null;
+        avatarAttemptedAt = 0;
+        avatarCache = null;
+        avatarInFlight = null;
+      } else {
+        currentUserId = nextUserId;
+      }
+      void ensureAvatar();
       return { available: true, connected: true, authenticated: true, userName, corpName: corpName || null, reason: null, checkedAt };
     } catch (error) {
+      currentProfileId = null;
+      clearAvatar();
       const reason = error?.killed || error?.signal ? "timeout" : error?.code === "ENOENT" ? "dws-not-found" : "communication-failed";
       log(`status probe failed: reason=${reason}, executable=${JSON.stringify(executable)}, error=${JSON.stringify(error?.message ?? String(error))}`);
       const stdout = String(error?.stdout ?? "");
@@ -254,6 +383,12 @@ export function createVHomeIntegration(options = {}) {
 
   async function getStatus(options = {}) {
     return publicStatus(await getCoreStatus(options));
+  }
+
+  async function getAvatar() {
+    const status = await getCoreStatus();
+    if (!status.connected) return null;
+    return avatarCache?.key === avatarKey() ? avatarCache : ensureAvatar();
   }
 
   function updateLoginHints(source, chunk) {
@@ -407,10 +542,11 @@ export function createVHomeIntegration(options = {}) {
     args.push("--yes", "--format", "json");
     parseJsonObject(await execute(executable, args, timeoutMs));
     currentProfileId = null;
+    clearAvatar();
     setLoginState({ state: "idle" });
     invalidateStatus();
     return getStatus({ force: true });
   }
 
-  return { getStatus, startLogin, cancelLogin, logout };
+  return { getStatus, getAvatar, startLogin, cancelLogin, logout };
 }

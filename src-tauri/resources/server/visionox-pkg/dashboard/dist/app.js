@@ -24259,10 +24259,15 @@ function ToolCard({ msg }) {
     </div>
   `;
 }
-var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, selectedForArtifacts = false, onSelectForArtifacts }) {
+var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
   useLang();
   const role = msg.role;
-  const avatar = ROLE_AVATAR[role];
+  const avatar = role === "user" ? userAvatar || ROLE_AVATAR.user : ROLE_AVATAR[role];
+  const onAvatarError = (event) => {
+    if (role !== "user" || avatar === ROLE_AVATAR.user || event.currentTarget.dataset.avatarFallback === "1") return;
+    event.currentTarget.dataset.avatarFallback = "1";
+    event.currentTarget.src = ROLE_AVATAR.user;
+  };
   const canCopy = Boolean((msg.text || "").trim());
   const showCopy = role !== "user" && onCopy && canCopy;
   const showFillInput = role === "user" && onFillInput && canCopy;
@@ -24307,7 +24312,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       tabIndex=${selectableForArtifacts ? 0 : void 0}
       title=${selectableForArtifacts ? "点击查看这条回复相关文件" : void 0}
     >
-      ${avatar ? html4`<img class="avatar" src=${avatar} width="28" height="28" alt="" />`
+      ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
@@ -25829,7 +25834,7 @@ function FilesPanel() {
     </div>
   `;
 }
-function ChatPanel() {
+function ChatPanel({ userAvatar = null } = {}) {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
@@ -27949,6 +27954,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             highlightMessageId=${highlightMessageId}
             onCopyMessage=${copyMessage}
             onFillInput=${fillInputFromMessage}
+            userAvatar=${userAvatar}
             selectedArtifactMessageId=${fileArtifactsSelectedMessageId}
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
@@ -28246,7 +28252,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -28280,6 +28286,7 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
                   streaming=${Boolean(streaming && streaming.id === m3.id)}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
+                  userAvatar=${userAvatar}
                   selectedForArtifacts=${Boolean(selectedArtifactMessageId && String(m3.id || "") === String(selectedArtifactMessageId))}
                   onSelectForArtifacts=${onSelectArtifactMessage}
                 />
@@ -32282,7 +32289,7 @@ function isPlainObject(value) {
 }
 
 // dashboard/src/panels/sessions.ts
-function SessionsPanel() {
+function SessionsPanel({ userAvatar = null } = {}) {
   useLang();
   const { data, error, loading, refresh } = usePoll("/sessions", 3e4);
   const [open, setOpen] = d2(null);
@@ -32674,7 +32681,7 @@ function SessionsPanel() {
               </div>` : open.kind === "trash" ? html4`
                 <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">回收站预览 · ${fmtNum(open.totalMessages ?? open.messages?.length ?? 0)} 条消息</span><span class="actions"><button class="btn ghost" onClick=${() => setOpen(null)}>返回</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>永久删除</button></span></div>
                 <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">确认内容后恢复</span></div><div class="card-b"><label>恢复后的会话名称</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>恢复会话</button></div><span>如果原名称已被使用，可以修改名称后恢复，不会覆盖现有会话。</span></div></div>
-                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
+                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} userAvatar=${userAvatar} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
               ` : html4`
                 <div class="sessions-detail-h">
                   ${renaming ? html4`
@@ -32750,6 +32757,7 @@ function SessionsPanel() {
                                   index=${i3}
                                   searchMatch=${transcriptMatches.length ? i3 === transcriptMatches[Math.min(transcriptSearchIndex, transcriptMatches.length - 1)]?.index : false}
                                   streaming=${false}
+                                  userAvatar=${userAvatar}
                                 />
                               `
   )}
@@ -36198,13 +36206,13 @@ ${commentRefs}` : commentRefs;
 
 // dashboard/app.js
 var html7 = htm_module_default.bind(k);
-function tabSections() {
+function tabSections(userAvatar = null) {
   return [
     {
       label: t4("app.sectionWorkspace"),
       tabs: [
-        { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} />` },
-        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} />` },
+        { id: "chat", name: t4("app.tabChat"), glyph: "\u25C6", panel: () => html7`<${ChatPanel} userAvatar=${userAvatar} />` },
+        { id: "sessions", name: t4("app.tabSessions"), glyph: "\u203A", panel: () => html7`<${SessionsPanel} userAvatar=${userAvatar} />` },
         { id: "files", name: t4("app.tabFiles"), glyph: "F", panel: () => html7`<${FilesPanel} />` },
         { id: "tasks", name: t4("app.tabTasks"), glyph: "T", panel: () => html7`<${ScheduledTasksPanel} />` },
         { id: "overview", name: t4("app.tabOverview"), glyph: "\u25C8", panel: () => html7`<${OverviewPanel} />` }
@@ -36289,7 +36297,10 @@ function App() {
     } catch {
     }
   }, [activeId]);
-  const TAB_SECTIONS = tabSections();
+  const vhomeAvatarUrl = vhomeStatus?.connected === true
+    ? `/api/vhome/avatar?token=${encodeURIComponent(TOKEN)}&v=${encodeURIComponent(vhomeStatus.checkedAt ?? "")}`
+    : null;
+  const TAB_SECTIONS = tabSections(vhomeAvatarUrl);
   const [openSections, setOpenSections] = d2(() => {
     let stored = [0];
     try {

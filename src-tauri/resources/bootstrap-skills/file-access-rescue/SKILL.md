@@ -17,10 +17,11 @@ First call:
 prepare_local_document({ "input": "<the user's raw path or full sentence>" })
 ```
 
-Then use the returned stable `documentRef` with the appropriate parser. The host resolves it to the current readable copy before the tool runs:
+Then use the returned stable `documentRef` with an available format reader or Skill. The
+host resolves it to the current readable copy before the tool runs. File access recovery
+only restores a readable input; it does not decide the task plan, continuation, or completion:
 
 - Saved Markdown from PDF/Word/Excel/PPT/HTML/MD/CSV/text: use the same prepared `documentRef`, read one bounded batch with the format-appropriate reader, and persist it with `write_file` or `append_file` before reading more.
-- PDF: call `extract_pdf_text` with `documentRef`; use the `pdf` skill only for advanced processing. Never use OfficeCLI for PDF.
 - Word/Excel/PPT: use officecli against `documentRef`.
 - XML/DSN/TXT/MD/JSON/YAML/CSV/INI/config/log: use read_file against `documentRef`.
 - Images: use image-capable reading tools against `documentRef`.

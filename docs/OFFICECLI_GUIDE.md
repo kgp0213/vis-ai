@@ -62,18 +62,16 @@ PDF 相关技能在办公模式中继续保留：
 
 | 技能 | 用途 |
 |------|------|
-| 内置 `extract_pdf_text` | 使用 PDF.js 读取、提取和总结现有 PDF，不依赖 Python |
-| `pdf` | PDF 深度处理、创建与编辑 |
+| 内部 PDF.js Adapter | 为受管任务提供 PDF 格式解码和页范围证据，不作为模型任务入口 |
+| `pdf` | PDF 创建、编辑、合并、拆分、表单与校验 |
 | `md-to-pdf-cjk` | Markdown 转 PDF（支持中文） |
 
-OfficeCLI 不处理 PDF。现有 PDF 会先获得稳定的文档引用，再交给 `extract_pdf_text`；切换工具时继续使用
-同一引用。`md-to-pdf-cjk` 是单向生成工具，不能作为现有 PDF 读取失败后的备用解析器。
+OfficeCLI 不处理 PDF。`prepare_local_document` 仍为本地文档生成稳定引用；后续格式能力只完成当前任务步骤，
+不负责自动续读、检查点、用户干预或完成判定。`md-to-pdf-cjk` 是单向生成工具，不能作为现有 PDF 读取失败后的备用解析器。
 
-需要把现有 PDF、Word、Excel、PowerPoint、HTML 或文本保存为 Markdown 时，使用通用前台增量流程。
-先通过 `prepare_local_document` 获得稳定 `documentRef`，Office 文件用 OfficeCLI 文本视图分批读取；每批先用
-`write_file` 或 `append_file` 写入目标文件并确认成功，再读取下一批。大段输入会由上下文事务缓存，压缩后可用
-`read_context_input` 按段恢复。直接 OfficeCLI 命令仍用于阅读、编辑、验证或布局检查；多个来源形成同一报告时
-使用 `organize_documents_to_report`。
+需要把现有 PDF、Word、Excel、PowerPoint、HTML 或文本保存为 Markdown 时，应由通用复杂任务协议管理
+目标、范围、分批、证据和验收。OfficeCLI、PDF.js、`read_file`、`write_file` 和 `append_file` 都只是步骤能力；
+不得让任一格式工具形成独立任务循环。当前统一状态机仍在迁移，不能把旧文档专用后台流程描述为最终架构。
 
 ---
 

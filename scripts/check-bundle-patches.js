@@ -76,7 +76,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/runtime-manifest.json",
-    markers: ["server/node.exe", "server/officecli.exe", "server/dws.exe", "cdab71518a3107ebcf1430d704dfd063b104285a4b5f4402dd8eb5c0e6c09797"],
+    markers: ["server/node.exe", "server/officecli.exe", "server/dws.exe", "70e3cd3874e5416f575738ed77c6f3cc4c249a16b100d58ef466f9d81607b2a1"],
   },
   {
     file: "scripts/verify-nsis-bundle.js",
@@ -113,13 +113,9 @@ const required = [
       "contextCapacitySource",
       "beginActiveOperation",
       "preparedDocumentRegistry",
-      "extract_pdf_text",
-      "buildPdfDeliveryResult",
-      "MAX_DOCUMENT_AUTO_CONTINUATIONS",
       'kind: "document-progress"',
       "append_file",
       "save_last_assistant_response",
-      "organize_documents_to_report",
       "contextInputTransactions",
       'name: "read_context_input"',
       "pauseGate.ask(intervention)",
@@ -173,6 +169,7 @@ const required = [
       "getWorkspaceState",
       "selectWorkspace: selectWorkspaceDir",
       "removeWorkspaceHistory",
+      "getVHomeAvatar: () => vhomeIntegration.getAvatar()",
     ],
   },
   {
@@ -375,6 +372,10 @@ const required = [
       'purpose: "verification"',
       'case "vhome"',
       "handleVHome",
+      "path === \"/api/vhome/avatar\"",
+      "ctx.getVHomeAvatar",
+      "V来家头像暂不可用",
+      "private, max-age=60",
       "startVHomeLogin",
       "cancelVHomeLogin",
       "refreshVHomeStatus",
@@ -514,6 +515,11 @@ const required = [
       'api("/vhome/login"',
       'api("/vhome/refresh"',
       'api("/vhome/logout"',
+      "/api/vhome/avatar?token=",
+      "userAvatar = null",
+      "onAvatarError",
+      "class=\"avatar\"",
+      "loading=\"lazy\"",
       "finishVHomeLogin(vhomeStatus)",
       "copyVHomeValue(vhomeLoginUrl, \"授权链接\")",
       'openVHomeAuthorization("edge")',
@@ -604,6 +610,8 @@ const required = [
       ".file-artifact-card",
       ".files-panel",
       ".chat-msg-actions",
+      ".chat-msg .avatar",
+      ".chat-msg.user .avatar",
       "position: static",
       ".top-action",
       ".chat-queue-paused",
@@ -654,7 +662,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/vhome-integration.mjs",
-    markers: ["createVHomeIntegration", "contact", "get-self", "authentication-required", "communication-failed", "startLogin", "cancelLogin", "logout", "--device", "login process closed", "login-network-failed", "safePublicLoginDetail"],
+    markers: ["createVHomeIntegration", "contact", "get-self", "authentication-required", "communication-failed", "startLogin", "cancelLogin", "logout", "--device", "login process closed", "login-network-failed", "safePublicLoginDetail", "authorAvatar", "downloadDwsAvatar", "MAX_AVATAR_BYTES", "getAvatar"],
   },
   {
     file: "src-tauri/resources/server/lib/skill-routing.mjs",
@@ -698,7 +706,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/SKILL.md",
-    markers: ["PDF Workbench Router", "path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows", "references/pdf-to-markdown.md", "extract_pdf_text", "read_context_input"],
+    markers: ["PDF Workbench Router", "path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows", "format operations only", "references/large-document.md"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/subagent-driven-development/SKILL.md",
@@ -841,24 +849,16 @@ const required = [
     markers: ["registerPdfMarkdownWorkflowTool", "organize_pdf_to_markdown", "generatePdfSectionWithModel", "PdfModelTimeoutError", "resolveInput", "requiresUserChoice", "evaluateTechnicalRetention", "evaluatePdfPageCoverage", "buildPdfSectionReviewMessages", "parsePdfSectionReview", "quality-review", "quality-repair", "qualityPassed", "coverage-retry", "source-page: N"],
   },
   {
-    file: "src-tauri/resources/bootstrap-skills/pdf/references/pdf-to-markdown.md",
-    markers: ["ordinary foreground model", "extract_pdf_text", "append_file", "read_context_input", "recommended option"],
-  },
-  {
     file: "src-tauri/resources/bootstrap-skills/pdf/references/large-document.md",
-    markers: ["pages.chunk", "extract_pdf_text", "append_file", "manifest.json"],
+    markers: ["pages.chunk", "PDF format operation", "general task", "manifest.json"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/SKILL.md",
-    markers: ["name: document-organizer", "ordinary foreground tool loop", "organize_documents_to_report", "prepare_local_document", "read_context_input", "recommended option"],
+    markers: ["name: document-organizer", "ordinary foreground tool loop", "stable step", "document worker", "prepare_local_document", "read_context_input", "recommended option"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/integration.json",
     markers: ['"id": "document-organizer"', '"version": "1.1.0"', '"resumable-jobs"'],
-  },
-  {
-    file: "src-tauri/resources/bootstrap-skills/document-organizer/task-recipes.json",
-    markers: ['"multi-document-report"', '"hostManaged": true', '"resumable": true'],
   },
   {
     file: "src-tauri/resources/server/lib/tool-repair-notice.mjs",

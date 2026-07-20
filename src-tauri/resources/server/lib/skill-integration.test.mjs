@@ -7,7 +7,6 @@ import {
   compareVersions,
   loadSkillIntegrations,
   renderSkillScheduleTask,
-  resolveSkillTaskRecipe,
   resolveSkillScheduleTemplate,
   validateSkillIntegration,
 } from "./skill-integration.mjs";
@@ -68,7 +67,7 @@ test("installed integration templates are version-gated and resolved at run time
   }
 });
 
-test("versioned task recipes keep long-task execution under host control", () => {
+test("skill integrations do not expose task recipes as separate execution entry points", () => {
   const root = mkdtempSync(join(tmpdir(), "skill-task-recipe-"));
   const skillDir = join(root, "document-organizer");
   const recipeFile = {
@@ -103,12 +102,7 @@ test("versioned task recipes keep long-task execution under host control", () =>
     writeFileSync(join(skillDir, "schedule-templates.json"), `${JSON.stringify({ schemaVersion: 1, integration: "document-organizer", templates: [] })}\n`);
     writeFileSync(join(skillDir, "task-recipes.json"), `${JSON.stringify(recipeFile)}\n`);
     const loaded = loadSkillIntegrations(root);
-    assert.equal(loaded[0].recipes[0].tool, "organize_documents_to_report");
-    const resolved = resolveSkillTaskRecipe(root, "document-organizer", "multi-document-report");
-    assert.equal(resolved.recipe.resumable, true);
-    assert.throws(() => validateSkillIntegration(recipeManifest, { schemaVersion: 1, integration: "document-organizer", templates: [] }, {
-      recipesFile: { ...recipeFile, recipes: [{ ...recipeFile.recipes[0], hostManaged: false }] },
-    }), /hostManaged and resumable/);
+    assert.equal(Object.hasOwn(loaded[0], "recipes"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

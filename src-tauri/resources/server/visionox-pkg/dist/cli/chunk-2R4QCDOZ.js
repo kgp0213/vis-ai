@@ -6013,7 +6013,7 @@ var DEFAULT_MAX_RESULT_CHARS = 32e3;
 var DEFAULT_MAX_RESULT_TOKENS = 8e3;
 var MAX_CONFIGURED_RESULT_TOKENS = 32 * 1024;
 var DEFAULT_READY_TIMEOUT_MS = 3e4;
-var DOCUMENT_RESULT_TOOLS = /* @__PURE__ */ new Set(["extract_pdf_text", "officecli", "read_file"]);
+var DOCUMENT_RESULT_TOOLS = /* @__PURE__ */ new Set(["officecli", "read_file"]);
 function normalizeToolResultBudget(value) {
   const fallback = {
     defaultTokens: DEFAULT_MAX_RESULT_TOKENS,
@@ -7837,7 +7837,7 @@ var CacheFirstLoop = class {
     if (!this.tools.hasResultAugmenter) {
       this.tools.setResultAugmenter((_name, _args, result) => {
         this._toolDispatchesThisStep++;
-        if (["extract_pdf_text", "organize_document_to_markdown", "organize_documents_to_report"].includes(String(_name).toLowerCase())) return result;
+        if (["organize_document_to_markdown", "organize_documents_to_report"].includes(String(_name).toLowerCase())) return result;
         const officeCommand = String(_name).toLowerCase() === "officecli" ? String(_args?.command ?? "").trim() : "";
         if (/^(?:add|set|remove|move|swap)(?:\s|$)/i.test(officeCommand)) {
           this._officeCliElementCallsThisStep++;
@@ -10937,7 +10937,7 @@ function registerFilesystemTools(registry, opts) {
   registry.register({
     name: "read_file",
     parallelSafe: true,
-    description: `Read a UTF-8 text file under the sandbox root. Supports head/tail/range scoping and returns text with line-oriented boundaries. Do not use this for PDF or Office binary content; use prepare_local_document plus extract_pdf_text, OfficeCLI, or the managed document workflow. Do NOT re-read just-edited files.`,
+    description: `Read a UTF-8 text file under the sandbox root. Supports head/tail/range scoping and returns text with line-oriented boundaries. Do not use this for PDF or Office binary content; use prepare_local_document plus an available format reader or Skill. Do NOT re-read just-edited files.`,
     readOnly: true,
     stormExempt: true,
     parameters: {

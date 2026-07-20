@@ -25,25 +25,22 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /"command":"add"/);
   });
 
-  test("保存型文档使用通用增量流程并在高影响歧义时一次一问", () => {
+  test("保存型文档使用通用任务协议且不注入 PDF 专用生命周期", () => {
     const prompt = buildSystemPrompt([], "/root", false);
     assert.doesNotMatch(prompt, /organize_document_to_markdown/);
     assert.doesNotMatch(launcherSource, /name:\s*"organize_document_to_markdown"/);
+    assert.doesNotMatch(launcherSource, /name:\s*"extract_pdf_text"/);
+    assert.doesNotMatch(launcherSource, /MAX_DOCUMENT_AUTO_CONTINUATIONS|documentAutoContinuationPrompt|pdfContinuationStates/);
     assert.match(prompt, /keep its stable `documentRef`/);
-    assert.match(prompt, /PDF.*`extract_pdf_text`/);
-    assert.match(prompt, /returns `complete=false`/);
-    assert.match(prompt, /`nextPageRange`/);
+    assert.doesNotMatch(prompt, /extract_pdf_text|nextPageRange/);
     assert.match(prompt, /append_file/);
     assert.match(prompt, /persist|materialize/i);
     assert.match(prompt, /one.*question|one question/i);
     assert.match(prompt, /recommended option/i);
     assert.match(prompt, /read-only investigation/i);
-    assert.match(prompt, /create one report from multiple existing documents/);
-    assert.match(prompt, /organize_documents_to_report/);
-    assert.match(prompt, /verifies that none of the sources changed/);
+    assert.doesNotMatch(prompt, /organize_documents_to_report/);
     assert.match(prompt, /save_last_assistant_response/);
     assert.match(prompt, /retain its tables, parameters, commands, and code/);
-    assert.match(prompt, /Never use OfficeCLI for PDF/);
     assert.match(prompt, /host will recreate a missing readable copy automatically/);
   });
 
@@ -54,9 +51,11 @@ describe("buildSystemPrompt", () => {
       launcherSource.indexOf("design: {"),
     );
     assert.doesNotMatch(officeMode, /organize_document_to_markdown/);
+    assert.doesNotMatch(officeMode, /extract_pdf_text|nextPageRange/);
     assert.match(officeMode, /prepare_local_document/);
-    assert.match(officeMode, /append_file/);
-    assert.match(officeMode, /organize_documents_to_report/);
+    assert.match(officeMode, /任务评估、澄清、执行、监控和验收协议/);
+    assert.match(officeMode, /不拥有任务生命周期/);
+    assert.doesNotMatch(officeMode, /organize_documents_to_report/);
     assert.doesNotMatch(officeMode, /直接调用 organize_pdf_to_markdown/);
   });
 

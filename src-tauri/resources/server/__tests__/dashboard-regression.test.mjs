@@ -828,7 +828,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /const queuedModals = \[\]/);
     assert.match(launcher, /activeGateId !== gateId/);
     assert.match(launcher, /pendingPlanRevision = \{ reason, remainingSteps, summary \}/);
-    assert.match(launcher, /if \(resolved && choice === "approve"\) activatePendingPlan\(\)/);
+    assert.match(launcher, /if \(resolved && choice === "approve"\) \{[\s\S]{0,500}recordForegroundPlan[\s\S]{0,300}activatePendingPlan\(\)/);
     assert.match(launcher, /if \(resolved && choice !== "approve"\) pendingPlan = null/);
     assert.match(launcher, /stepId .* is not in the active plan/);
     assert.match(app, /dash\.kind === "plan-activated"/);

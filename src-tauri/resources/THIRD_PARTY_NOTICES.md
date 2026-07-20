@@ -21,7 +21,7 @@ the inventory and build record, not execute the binary during packaging.
 
 ## DingTalk Workspace CLI (DWS)
 
-- Version: 1.0.51 open edition
+- Version: 1.0.52 open edition
 - Purpose: V来家 / enterprise DingTalk collaboration integration
 - Source: <https://github.com/open-dingtalk/dingtalk-workspace-cli>
 - License: Apache-2.0, included at `DWS_LICENSE.txt`

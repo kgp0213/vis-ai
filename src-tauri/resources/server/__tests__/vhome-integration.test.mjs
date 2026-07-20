@@ -82,6 +82,58 @@ describe("V来家 integration", () => {
     assert.equal(status.userName, null);
   });
 
+  test("fetches the current user's avatar by exact job number and validates the image", async () => {
+    const calls = [];
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from("test-avatar"),
+    ]);
+    const integration = createVHomeIntegration({
+      executable: "dws-test.exe",
+      executableExists: () => true,
+      execute: async (_executable, args) => {
+        calls.push(args);
+        if (args[0] === "auth") {
+          return JSON.stringify({ success: true, authenticated: true, token_valid: true, refresh_token_valid: true, corp_id: "corp-1", user_id: "V001" });
+        }
+        if (args[0] === "contact") {
+          return JSON.stringify({ success: true, result: [{ orgEmployeeModel: { orgUserName: "Current User", orgName: "Corp" } }] });
+        }
+        return JSON.stringify({ success: true, result: [{ userId: "V001", authorAvatar: "@lQL-avatar-1" }] });
+      },
+      downloadAvatarFile: async (_executable, mediaId) => {
+        assert.equal(mediaId, "@lQL-avatar-1");
+        return { bytes: png, contentType: "image/png" };
+      },
+    });
+
+    assert.equal((await integration.getStatus()).connected, true);
+    const avatar = await integration.getAvatar();
+    assert.equal(avatar.contentType, "image/png");
+    assert.deepEqual(avatar.body, png);
+    assert.ok(avatar.etag.startsWith('"'));
+    assert.deepEqual(calls, [
+      ["auth", "status", "--format", "json"],
+      ["contact", "user", "get-self", "--format", "json"],
+      ["aisearch", "person", "--keyword", "V001", "--dimension", "jobNumber", "--format", "json"],
+    ]);
+  });
+
+  test("does not expose an avatar returned for another user", async () => {
+    const integration = createVHomeIntegration({
+      executable: "dws-test.exe",
+      executableExists: () => true,
+      execute: async (_executable, args) => {
+        if (args[0] === "auth") return JSON.stringify({ success: true, authenticated: true, token_valid: true, corp_id: "corp-1", user_id: "V001" });
+        if (args[0] === "contact") return JSON.stringify({ success: true, result: [{ orgEmployeeModel: { orgUserName: "Current User", orgName: "Corp" } }] });
+        return JSON.stringify({ success: true, result: [{ userId: "V999", authorAvatar: "@lQL-other-user" }] });
+      },
+      downloadAvatarFile: async () => { throw new Error("must not download another user's avatar"); },
+    });
+    assert.equal((await integration.getStatus()).connected, true);
+    assert.equal(await integration.getAvatar(), null);
+  });
+
   test("uses get-self to refresh a renewable login before declaring it unavailable", async () => {
     let calls = 0;
     const integration = createVHomeIntegration({
@@ -411,6 +463,9 @@ describe("V来家 integration", () => {
     const desktop = readFileSync(new URL("../../../src/lib.rs", import.meta.url), "utf8");
     assert.match(app, /usePoll\("\/vhome\/status", 3e5\)/);
     assert.match(app, /vhomeStatus\?\.connected === true/);
+    assert.match(app, /\/api\/vhome\/avatar\?token=/);
+    assert.match(app, /role === "user" \? userAvatar \|\| ROLE_AVATAR\.user/);
+    assert.match(app, /event\.currentTarget\.src = ROLE_AVATAR\.user/);
     assert.match(app, /sidebarIdentity = vhomeConnected \? vhomeStatus\.userName : "127\.0\.0\.1"/);
     assert.match(app, /api\("\/vhome\/login", \{ method: "POST"/);
     assert.match(app, /api\("\/vhome\/logout", \{ method: "POST"/);
@@ -453,6 +508,7 @@ describe("V来家 integration", () => {
     assert.match(launcher, /source: operation\.kind/);
     assert.match(launcher, /clearMessageSendContext\(operation\)/);
     assert.match(launcher, /getVHomeStatus: \(\) => getVHomeStatusAndResumeSchedules\(\)/);
+    assert.match(launcher, /getVHomeAvatar: \(\) => vhomeIntegration\.getAvatar\(\)/);
     assert.match(launcher, /startVHomeLogin: \(\) => vhomeIntegration\.startLogin\(\)/);
     assert.match(launcher, /marker\.version === sourceVersion/);
     assert.ok(launcher.indexOf("startDashboardServer(ctx") > launcher.indexOf("getVHomeStatus: () => getVHomeStatusAndResumeSchedules()"));
@@ -460,6 +516,8 @@ describe("V来家 integration", () => {
     assert.match(desktop, /std::iter::once\(server_dir\.clone\(\)\)/);
     assert.match(desktop, /\.env\("PATH", runtime_path\)/);
     assert.match(css, /\.side-foot \.label \{[\s\S]*?text-overflow: ellipsis/);
+    assert.match(css, /\.chat-msg \.avatar \{[\s\S]*?object-fit: cover;[\s\S]*?border-radius: 50%/);
+    assert.match(css, /\.chat-msg\.user \.avatar \{[\s\S]*?width: 32px;[\s\S]*?height: 32px/);
     assert.match(css, /\.vhome-popover \{[\s\S]*?position: fixed/);
     assert.match(css, /\.vhome-popover-head \{[\s\S]*?justify-content: space-between/);
     assert.match(css, /\.vhome-popover-close \{[\s\S]*?width: 28px;[\s\S]*?height: 28px/);

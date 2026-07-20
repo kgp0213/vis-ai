@@ -396,7 +396,7 @@ function publicDocumentKind(path) {
 
 function suggestedToolsForPath(path) {
   const kind = publicDocumentKind(path);
-  if (kind === "pdf") return ["extract_pdf_text", "pdf skill"];
+  if (kind === "pdf") return ["pdf skill", "available PDF reader"];
   if (kind === "word" || kind === "spreadsheet" || kind === "presentation") return ["officecli"];
   if (kind === "image") return ["image-capable document tools", "read_file metadata fallback"];
   if (kind === "text") return ["read_file"];
@@ -418,9 +418,7 @@ function buildPreparedDocumentResult({ input, sourcePath, readable, candidates =
     documentKind: publicDocumentKind(sourcePath),
     suggestedTools: suggestedToolsForPath(sourcePath),
     candidateCount: candidates.length || 1,
-    note: publicDocumentKind(sourcePath) === "pdf"
-      ? "Use extract_pdf_text with documentRef first. Use the pdf skill for advanced PDF processing; do not use OfficeCLI for PDF."
-      : "Use documentRef or readablePath for the next document tool. The host will restore the readable copy if needed.",
+    note: "Use documentRef or readablePath with an available format reader or Skill for the current task step. The host will restore the readable copy if needed.",
   };
 }
 

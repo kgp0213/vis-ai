@@ -143,7 +143,7 @@ test("background task list keeps legacy array providers compatible", async () =>
   assert.deepEqual(listed.body, { jobs: [{ id: 3, running: true }], pendingDeliveries: [] });
 });
 
-test("background task panel controls and previews resumable document jobs", () => {
+test("background task panel keeps historical document results visible without resuming the retired worker", () => {
   const app = readFileSync(dashboardUrl, "utf8");
   const css = readFileSync(dashboardCssUrl, "utf8");
   const server = readFileSync(serverUrl, "utf8");
@@ -163,7 +163,6 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(app, /documentRetryLabel/);
   assert.match(app, /retryDocumentDelivery/);
   assert.match(app, /只重新交付已有结果，不会重新处理文档/);
-  assert.match(app, /余额\/额度处理后重试/);
   assert.match(app, /需要复核的原因/);
   assert.match(app, /modelIssues/);
   assert.match(app, /background-jobs-workbench/);
@@ -187,7 +186,6 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(css, /\.background-jobs-detail\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?padding:\s*16px 18px;/);
   assert.match(css, /@media\s*\(max-width:\s*720px\) and \(min-height:\s*760px\)[\s\S]*?\.background-jobs-layout\s*\{[\s\S]*?grid-template-rows:\s*minmax\(72px, 32%\) minmax\(0, 1fr\);/);
   assert.match(app, /onControl\(selected\.id, "pause"\)/);
-  assert.match(app, /onControl\(selected\.id, "resume"\)/);
   assert.match(
     app,
     /catch \(err\) \{[\s\S]{0,500}await refreshBackgroundJobs\(\);[\s\S]{0,700}api\(`\/background-jobs\/\$\{encodeURIComponent\(id\)\}`\)[\s\S]{0,500}setError\(err\.message\)/,
@@ -197,7 +195,6 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(app, /"source_changed", "awaiting_output"/);
   assert.match(app, /另存后台草稿/);
   assert.match(app, /自动使用新文件名/);
-  assert.match(app, /onControl\(selected\.id, "retry"\)/);
   assert.match(app, /立即停止/);
   assert.match(app, /放弃任务会终止后续处理/);
   assert.match(app, /仅删除任务记录和中间草稿/);
@@ -216,25 +213,18 @@ test("background task panel controls and previews resumable document jobs", () =
   assert.match(server, /generic background jobs require an explicit POST action/);
   assert.match(launcher, /documentMarkdownManager\.listMetadata/);
   assert.match(launcher, /documentMarkdownManager\.control\(id, action\)/);
+  assert.match(launcher, /LEGACY_DOCUMENT_EXECUTION_RETIRED/);
+  assert.match(launcher, /\["resume", "retry"\]\.includes\(action\)[\s\S]{0,300}legacy-execution-retired/);
+  assert.doesNotMatch(launcher, /documentMarkdownManager\.resume\(/);
   assert.match(launcher, /后台文档已生成但需要复核/);
   assert.match(launcher, /job\.modelIssues/);
   assert.match(launcher, /createLongTaskHandoffCoordinator/);
   assert.match(launcher, /internalHandoff: true/);
   assert.match(launcher, /verifyDelivery: async/);
   assert.match(launcher, /artifactStatus === "verified"/);
-  assert.match(launcher, /await persistActiveConversationIdentity\(\)/);
-  assert.match(launcher, /autoHandoff: activeMessageSendContext\.autoHandoff/);
-  assert.match(launcher, /conversationScope: activeMessageSendContext\.conversationScope/);
-  assert.match(launcher, /observeDocumentHandoff\(handoffJob\)/);
-  assert.doesNotMatch(launcher, /void documentHandoffCoordinator\?\.observe\(handoffJob\)/);
   assert.match(launcher, /rehydrateDocumentHandoffs/);
   assert.match(launcher, /runDocumentJobStartupMaintenance\(documentJobStore/);
   assert.match(launcher, /createDocumentOutputReservation/);
-  assert.match(launcher, /documentOutputReservation\.reserve/);
-  assert.doesNotMatch(launcher, /if \(accepted\.reused\)\s*\{\s*documentOutputReservation\.release/);
-  assert.match(launcher, /artifactStatus: accepted\.artifactStatus \?\?/);
-  assert.match(launcher, /type: "output-retargeted"/);
-  assert.match(launcher, /allowOverwrite: job\.allowOutputOverwrite === true/);
   assert.match(launcher, /documentOutputReservation\.releaseTerminal/);
   assert.match(launcher, /run_background\|run_command/);
   assert.match(launcher, /当前会话上下文清理失败/);

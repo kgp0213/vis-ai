@@ -1,6 +1,6 @@
 const MODEL_ROLES = new Set(["system", "user", "assistant", "tool"]);
 const DASHBOARD_ROLES = new Set(["user", "assistant", "tool", "warning", "error", "info"]);
-const INTERNAL_USER_PROMPT_RE = /^\[(?:系统自动续跑\s+\d+\/\d+|系统后台任务接管\s+document:[^\]]+)\]/;
+const INTERNAL_USER_PROMPT_RE = /^\[(?:系统自动续跑\s+\d+\/\d+|系统后台任务接管\s+document:[^\]]+|系统通用复杂任务调度|系统步骤检查点)\]/;
 
 function contentText(content) {
   if (typeof content === "string") return content;

@@ -2,16 +2,6 @@
 
 Work with existing PDFs: extract, merge, split, fill forms, convert formats, or **reformat** with a new design. Usually a Light triage path — except reformat, which escalates to Standard.
 
-## Saved Markdown Conversion
-
-When the user asks for an actual Markdown file from an existing PDF, read
-`../references/pdf-to-markdown.md` first. Prepare the source once, read bounded complete
-page batches with `extract_pdf_text`, and persist each batch before reading the next. Do
-not run `pdf.py extract.text` or write a custom parser for this workflow. Use the commands
-below only when the user asks for raw extraction or a PDF manipulation operation.
-
----
-
 ## Decision Tree
 
 ```
@@ -45,6 +35,9 @@ Exit codes: 0 = success, 1 = bad args, 2 = file not found, 3 = parse error, 4 = 
 ---
 
 ## §Extract
+
+These commands expose bounded PDF format data to the active task. They do not own
+iteration, checkpoints, completion, or delivery.
 
 ```bash
 # Text (full or page range)

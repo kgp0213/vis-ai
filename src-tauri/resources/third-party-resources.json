@@ -20,12 +20,12 @@
     {
       "id": "dws",
       "path": "server/dws.exe",
-      "version": "1.0.51",
+      "version": "1.0.52",
       "source": "https://github.com/open-dingtalk/dingtalk-workspace-cli",
       "license": "Apache-2.0",
       "licenseFile": "DWS_LICENSE.txt",
       "noticeFile": "DWS_NOTICE.txt",
-      "sha256": "cdab71518a3107ebcf1430d704dfd063b104285a4b5f4402dd8eb5c0e6c09797"
+      "sha256": "70e3cd3874e5416f575738ed77c6f3cc4c249a16b100d58ef466f9d81607b2a1"
     },
     {
       "id": "reasonix",
