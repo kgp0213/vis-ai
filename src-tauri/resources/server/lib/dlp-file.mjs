@@ -396,7 +396,8 @@ function publicDocumentKind(path) {
 
 function suggestedToolsForPath(path) {
   const kind = publicDocumentKind(path);
-  if (["pdf", "word", "spreadsheet", "presentation", "text"].includes(kind)) return ["read_prepared_document"];
+  if (kind === "pdf") return ["pdf skill", "available PDF reader"];
+  if (kind === "word" || kind === "spreadsheet" || kind === "presentation") return ["officecli"];
   if (kind === "image") return ["image-capable document tools", "read_file metadata fallback"];
   if (kind === "text") return ["read_file"];
   return ["read_file", "domain-specific tool if available"];
@@ -417,7 +418,7 @@ function buildPreparedDocumentResult({ input, sourcePath, readable, candidates =
     documentKind: publicDocumentKind(sourcePath),
     suggestedTools: suggestedToolsForPath(sourcePath),
     candidateCount: candidates.length || 1,
-    note: "Use documentRef with read_prepared_document for one bounded task-step batch. The host will restore the readable copy if needed.",
+    note: "Use documentRef or readablePath with an available format reader or Skill for the current task step. The host will restore the readable copy if needed.",
   };
 }
 

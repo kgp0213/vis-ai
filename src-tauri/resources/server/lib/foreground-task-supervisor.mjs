@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 
 const SCHEMA_VERSION = 1;
-const MAX_STEP_ATTEMPTS = 3;
+const MAX_STEP_NO_PROGRESS = 3;
 const MAX_PLAN_ATTEMPTS = 3;
 const LARGE_CONTEXT_CHARS = 24_000;
 const LARGE_TOOL_RESULT_CHARS = 64_000;
 const MAX_EVIDENCE_CALLS = 60;
+const MAX_PROGRESS_KEYS = 200;
+const CONTROL_TOOL_RE = /^(?:ask_choice|submit_plan|mark_step_complete|revise_plan|todo_write)$/i;
 
 const DISCUSSION_RE = /(?:如何|怎么|怎样|是否|能否|可否|评估|分析|讨论|建议|方案|为什么|how|why|discuss|evaluate|suggest)/i;
 const EXECUTION_RE = /(?:修改|实现|创建|生成|保存|转换|提取|重构|迁移|整理|处理|运行|测试|构建|提交|推送|发送|部署|安装|删除|覆盖|写入|落地|fix|implement|create|generate|save|convert|extract|refactor|migrate|run|test|build|commit|push|send|deploy|install|delete|write)/i;
@@ -144,6 +146,7 @@ export function startForegroundTask(input = {}) {
     },
     inherited: summarizeHistory(input.history),
     workPlan,
+    checkpoints: { steps: {} },
     evidence: {
       calls: [],
       totalToolCalls: 0,
@@ -151,16 +154,21 @@ export function startForegroundTask(input = {}) {
       successfulToolCalls: 0,
       mutatingToolCalls: 0,
       verificationToolCalls: 0,
+      novelProgressCount: 0,
       artifacts: [],
-      documentSources: {},
+      progressKeys: [],
     },
     dispatch: {
       currentPhase: assessment.classification === "complex" ? "assessment" : "ordinary",
       currentStepId: null,
       planningAttempts: 0,
       verificationAttempts: 0,
-      stepAttempts: {},
+      stepNoProgressStreak: {},
       baselineToolCalls: 0,
+      baselineArtifactCount: 0,
+      baselineVerificationToolCalls: 0,
+      baselineNovelProgressCount: 0,
+      windowOpen: false,
     },
     upgrade: assessment.classification === "complex" ? null : { upgraded: false, reasons: [] },
     createdAt,
@@ -179,13 +187,23 @@ export function restoreForegroundTask(value) {
   restored.evidence ??= {};
   restored.evidence.calls = (Array.isArray(restored.evidence.calls) ? restored.evidence.calls : []).slice(-MAX_EVIDENCE_CALLS);
   restored.evidence.artifacts = [...new Set(Array.isArray(restored.evidence.artifacts) ? restored.evidence.artifacts.map(String) : [])].slice(-100);
-  restored.evidence.documentSources = restored.evidence.documentSources && typeof restored.evidence.documentSources === "object"
-    ? restored.evidence.documentSources
+  restored.evidence.progressKeys = [...new Set(Array.isArray(restored.evidence.progressKeys) ? restored.evidence.progressKeys.map(String) : [])]
+    .slice(-MAX_PROGRESS_KEYS);
+  restored.evidence.novelProgressCount = Number(restored.evidence.novelProgressCount || 0);
+  restored.checkpoints = restored.checkpoints && typeof restored.checkpoints === "object" ? restored.checkpoints : { steps: {} };
+  restored.checkpoints.steps = restored.checkpoints.steps && typeof restored.checkpoints.steps === "object"
+    ? restored.checkpoints.steps
     : {};
-  restored.dispatch ??= { planningAttempts: 0, verificationAttempts: 0, stepAttempts: {} };
-  restored.dispatch.stepAttempts = restored.dispatch.stepAttempts && typeof restored.dispatch.stepAttempts === "object"
-    ? restored.dispatch.stepAttempts
+  restored.dispatch ??= { planningAttempts: 0, verificationAttempts: 0, stepNoProgressStreak: {} };
+  restored.dispatch.stepNoProgressStreak = restored.dispatch.stepNoProgressStreak && typeof restored.dispatch.stepNoProgressStreak === "object"
+    ? restored.dispatch.stepNoProgressStreak
     : {};
+  restored.dispatch.baselineToolCalls = Number(restored.dispatch.baselineToolCalls || 0);
+  restored.dispatch.baselineArtifactCount = Number(restored.dispatch.baselineArtifactCount || 0);
+  restored.dispatch.baselineVerificationToolCalls = Number(restored.dispatch.baselineVerificationToolCalls || 0);
+  restored.dispatch.baselineNovelProgressCount = Number(restored.dispatch.baselineNovelProgressCount || 0);
+  restored.dispatch.windowOpen = restored.dispatch.windowOpen === true;
+  delete restored.dispatch.stepAttempts;
   return restored;
 }
 
@@ -195,6 +213,17 @@ export function resumeForegroundTask(state, input = {}) {
   next.turnId = String(input.turnId || next.turnId);
   next.inherited = summarizeHistory(input.history);
   next.workPlan = normalizePlan(input.activePlan) ?? next.workPlan;
+  if (next.lifecycle === "waiting_user" && input.resumeWaitingUser !== true) {
+    next.updatedAt = nowIso(input.now);
+    return next;
+  }
+  if (next.lifecycle === "waiting_user") {
+    if (next.blockingReason === "step-no-progress" && next.dispatch.currentStepId) {
+      next.dispatch.stepNoProgressStreak[next.dispatch.currentStepId] = 0;
+    }
+    delete next.blockingReason;
+    delete next.blockingFailure;
+  }
   next.lifecycle = "running";
   next.updatedAt = nowIso(input.now);
   return next;
@@ -205,12 +234,16 @@ export function recordForegroundPlan(state, plan, now = Date.now()) {
   if (!next) return state;
   const normalized = normalizePlan(plan);
   if (!normalized) return next;
-  const priorCompleted = new Set(next.workPlan?.completedStepIds ?? []);
+  const priorCompleted = new Set([
+    ...(next.workPlan?.completedStepIds ?? []),
+    ...(next.revision?.previousPlan?.completedStepIds ?? []),
+  ]);
   normalized.completedStepIds = [...new Set([...normalized.completedStepIds, ...priorCompleted])]
     .filter((stepId) => normalized.steps.some((step) => step.id === stepId));
   next.classification = "complex";
   next.lifecycle = "running";
   next.workPlan = normalized;
+  delete next.revision;
   next.updatedAt = nowIso(now);
   return next;
 }
@@ -219,9 +252,37 @@ export function recordForegroundStepCompletion(state, update = {}, now = Date.no
   const next = restoreForegroundTask(state);
   const stepId = String(update.stepId || "").trim();
   if (!next?.workPlan || !stepId || !next.workPlan.steps.some((step) => step.id === stepId)) return next ?? state;
+  if (next.workPlan.completedStepIds.includes(stepId)) return next;
+  if (next.dispatch.currentPhase !== "step" || next.dispatch.currentStepId !== stepId) {
+    throw new Error(`mark_step_complete: "${stepId}" is not the current supervised step.`);
+  }
+  const toolCalls = next.evidence.calls.filter((call) => (
+    call.stepId === stepId
+    && call.index > next.dispatch.baselineToolCalls
+    && call.progressEvidence === true
+    && call.novel === true
+  ));
+  const novelProgressCount = Math.max(
+    0,
+    next.evidence.novelProgressCount - next.dispatch.baselineNovelProgressCount,
+  );
+  const artifacts = next.evidence.artifacts.slice(next.dispatch.baselineArtifactCount);
+  if (novelProgressCount === 0 && artifacts.length === 0) {
+    throw new Error("mark_step_complete requires new host evidence from the current supervised step.");
+  }
+  next.checkpoints.steps[stepId] = {
+    stepId,
+    result: String(update.result || "").trim().slice(0, 4_000),
+    toolCallIndexes: toolCalls.map((call) => call.index),
+    novelProgressCount,
+    artifacts,
+    completedAt: nowIso(now),
+  };
   next.workPlan.completedStepIds = [...new Set([...next.workPlan.completedStepIds, stepId])];
   next.lifecycle = next.workPlan.completedStepIds.length === next.workPlan.steps.length ? "verifying" : "running";
+  next.dispatch.stepNoProgressStreak[stepId] = 0;
   next.dispatch.currentStepId = null;
+  next.dispatch.windowOpen = false;
   next.updatedAt = nowIso(now);
   return next;
 }
@@ -234,6 +295,9 @@ export function recordForegroundToolEvent(state, event = {}, now = Date.now()) {
   const content = typeof event.content === "string" ? event.content : JSON.stringify(event.content ?? "");
   const succeeded = event.succeeded === true;
   const phase = String(next.dispatch.currentPhase || "ordinary");
+  const progressEvidence = succeeded && event.progressEvidence !== false && !CONTROL_TOOL_RE.test(toolName);
+  const progressKey = progressEvidence ? `${toolName}:${hash(toolArgs)}:${hash(content)}` : null;
+  const novel = progressEvidence && !next.evidence.progressKeys.includes(progressKey);
   const call = {
     index: next.evidence.totalToolCalls + 1,
     toolName,
@@ -242,6 +306,8 @@ export function recordForegroundToolEvent(state, event = {}, now = Date.now()) {
     resultChars: content.length,
     readOnly: event.readOnly === true,
     succeeded,
+    progressEvidence,
+    novel,
     phase,
     ...(next.dispatch.currentStepId ? { stepId: next.dispatch.currentStepId } : {}),
   };
@@ -249,32 +315,15 @@ export function recordForegroundToolEvent(state, event = {}, now = Date.now()) {
   next.evidence.totalToolCalls += 1;
   next.evidence.totalToolResultChars += content.length;
   if (succeeded) next.evidence.successfulToolCalls += 1;
-  if (!event.readOnly) next.evidence.mutatingToolCalls += 1;
+  if (succeeded && !event.readOnly) next.evidence.mutatingToolCalls += 1;
+  if (novel) {
+    next.evidence.progressKeys = [...next.evidence.progressKeys, progressKey].slice(-MAX_PROGRESS_KEYS);
+    next.evidence.novelProgressCount += 1;
+  }
   const verificationEvidence = event.verificationEvidence === undefined
     ? event.readOnly === true
     : event.verificationEvidence === true;
   if (phase === "verification" && verificationEvidence && succeeded) next.evidence.verificationToolCalls += 1;
-  if (succeeded && /^(?:prepare_local_document|read_prepared_document)$/i.test(toolName)) {
-    try {
-      const result = typeof event.content === "string" ? JSON.parse(event.content) : event.content;
-      const documentRef = String(result?.documentRef || "").trim();
-      if (documentRef) {
-        const prior = next.evidence.documentSources[documentRef] ?? {};
-        const isRead = toolName === "read_prepared_document";
-        next.evidence.documentSources[documentRef] = {
-          documentRef,
-          documentKind: String(result?.documentKind || prior.documentKind || "unknown"),
-          complete: isRead ? result?.complete === true : prior.complete === true,
-          truncated: isRead ? result?.truncated === true : prior.truncated === true,
-          nextCursor: isRead ? clone(result?.nextCursor ?? null) : clone(prior.nextCursor ?? null),
-          coverage: isRead ? clone(result?.coverage ?? null) : clone(prior.coverage ?? null),
-          updatedAt: nowIso(now),
-        };
-      }
-    } catch {
-      // Coverage remains pending when a document tool does not return structured evidence.
-    }
-  }
   next.updatedAt = nowIso(now);
   return next;
 }
@@ -322,6 +371,43 @@ function nextStep(state) {
   return state.workPlan.steps.find((step) => !completed.has(step.id)) ?? null;
 }
 
+function settleStepWindow(state, now = Date.now()) {
+  if (
+    state.dispatch.currentPhase !== "step"
+    || !state.dispatch.currentStepId
+    || state.dispatch.windowOpen !== true
+  ) return state;
+  const stepId = state.dispatch.currentStepId;
+  const novelCallCount = Math.max(
+    0,
+    state.evidence.novelProgressCount - state.dispatch.baselineNovelProgressCount,
+  );
+  const artifactCount = Math.max(0, state.evidence.artifacts.length - state.dispatch.baselineArtifactCount);
+  const madeProgress = novelCallCount > 0 || artifactCount > 0;
+  state.dispatch.stepNoProgressStreak[stepId] = madeProgress
+    ? 0
+    : Number(state.dispatch.stepNoProgressStreak[stepId] || 0) + 1;
+  state.dispatch.lastWindow = {
+    stepId,
+    madeProgress,
+    novelCallCount,
+    artifactCount,
+    settledAt: nowIso(now),
+  };
+  state.dispatch.windowOpen = false;
+  return state;
+}
+
+function closeStepWindowWithoutPenalty(state) {
+  if (state.dispatch.currentPhase === "step") state.dispatch.windowOpen = false;
+  return state;
+}
+
+function missingStepCheckpointIds(state) {
+  return (state.workPlan?.completedStepIds ?? [])
+    .filter((stepId) => !state.checkpoints.steps[stepId]);
+}
+
 export function evaluateForegroundTask(state, runtime = {}) {
   let next = restoreForegroundTask(state);
   if (!next) return { state, decision: { type: "none", reason: "missing-state" } };
@@ -345,6 +431,7 @@ export function evaluateForegroundTask(state, runtime = {}) {
 
   const modelFailure = normalizeForegroundModelFailure(runtime.modelFailure);
   if (modelFailure?.recoverable === false) {
+    closeStepWindowWithoutPenalty(next);
     next.lifecycle = "waiting_user";
     next.blockingReason = "provider-blocked";
     next.blockingFailure = modelFailure;
@@ -361,7 +448,7 @@ export function evaluateForegroundTask(state, runtime = {}) {
     next.upgrade = {
       upgraded: true,
       reasons,
-      planningRequired: reasons.some((reason) => reason !== "long-tool-chain"),
+      planningRequired: true,
       inheritedMessageCount: next.inherited.messageCount,
       inheritedToolResultCount: next.inherited.toolResultCount + next.evidence.totalToolCalls,
       at: nowIso(runtime.now),
@@ -371,16 +458,22 @@ export function evaluateForegroundTask(state, runtime = {}) {
   const contextNeedsAttention = Number(runtime.contextStatus?.cacheFailureCount || 0) > 0
     || runtime.contextStatus?.requiresIntervention === true;
   if (contextNeedsAttention) {
+    closeStepWindowWithoutPenalty(next);
     next.lifecycle = "waiting_user";
     return { state: next, decision: { type: "intervene", reason: "context-input-risk" } };
   }
+
+  next = settleStepWindow(next, runtime.now);
 
   if (next.acceptance.partialAccepted) {
     if (next.dispatch.verificationAttempts === 0) {
       next.lifecycle = "verifying";
       return { state: next, decision: { type: "verify", reason: "user-accepted-partial" } };
     }
-    if (next.evidence.mutatingToolCalls > 0 && next.evidence.verificationToolCalls <= 0) {
+    if (
+      (next.acceptance.verificationRequired || next.evidence.mutatingToolCalls > 0)
+      && next.evidence.verificationToolCalls <= next.dispatch.baselineVerificationToolCalls
+    ) {
       next.lifecycle = "waiting_user";
       return { state: next, decision: { type: "intervene", reason: "verification-evidence-missing" } };
     }
@@ -391,23 +484,16 @@ export function evaluateForegroundTask(state, runtime = {}) {
 
   const step = nextStep(next);
   if (step) {
-    const attempts = Number(next.dispatch.stepAttempts[step.id] || 0);
-    if (attempts >= MAX_STEP_ATTEMPTS) {
+    const noProgressStreak = Number(next.dispatch.stepNoProgressStreak[step.id] || 0);
+    if (noProgressStreak >= MAX_STEP_NO_PROGRESS) {
       next.lifecycle = "waiting_user";
-      return { state: next, decision: { type: "intervene", reason: "step-attempts-exhausted", step } };
+      next.blockingReason = "step-no-progress";
+      return { state: next, decision: { type: "intervene", reason: "step-no-progress", step } };
     }
     return { state: next, decision: { type: "step", reason: "next-plan-step", step } };
   }
 
   if (!next.workPlan) {
-    if (next.upgrade?.upgraded && next.upgrade.planningRequired === false) {
-      if (next.dispatch.verificationAttempts === 0) {
-        next.lifecycle = "verifying";
-        return { state: next, decision: { type: "verify", reason: "runtime-upgrade-verification" } };
-      }
-      next.lifecycle = "completed";
-      return { state: next, decision: { type: "complete", reason: "runtime-upgrade-verified" } };
-    }
     if (next.dispatch.planningAttempts >= MAX_PLAN_ATTEMPTS) {
       next.lifecycle = "waiting_user";
       return { state: next, decision: { type: "intervene", reason: "plan-attempts-exhausted" } };
@@ -420,33 +506,31 @@ export function evaluateForegroundTask(state, runtime = {}) {
     return { state: next, decision: { type: "verify", reason: "plan-complete" } };
   }
 
-  const artifactCount = Number.isFinite(runtime.artifactCount)
-    ? Number(runtime.artifactCount)
-    : next.evidence.artifacts.length;
+  const missingCheckpoints = missingStepCheckpointIds(next);
+  if (!next.acceptance.partialAccepted && missingCheckpoints.length > 0) {
+    next.lifecycle = "waiting_user";
+    next.blockingReason = "step-evidence-missing";
+    return { state: next, decision: { type: "intervene", reason: "step-evidence-missing", missingStepIds: missingCheckpoints } };
+  }
+
+  const artifactCount = Math.max(
+    next.evidence.artifacts.length,
+    Number.isFinite(runtime.artifactCount) ? Number(runtime.artifactCount) : 0,
+  );
   if (!next.acceptance.partialAccepted && next.acceptance.artifactRequired && artifactCount <= 0) {
     next.lifecycle = "waiting_user";
     return { state: next, decision: { type: "intervene", reason: "artifact-missing" } };
   }
-  if (next.evidence.mutatingToolCalls > 0 && next.evidence.verificationToolCalls <= 0) {
+  if (
+    (next.acceptance.verificationRequired || next.evidence.mutatingToolCalls > 0)
+    && next.evidence.verificationToolCalls <= next.dispatch.baselineVerificationToolCalls
+  ) {
     next.lifecycle = "waiting_user";
     return { state: next, decision: { type: "intervene", reason: "verification-evidence-missing" } };
   }
   if (!next.acceptance.partialAccepted && Number(runtime.contextStatus?.pendingCount || 0) > 0 && next.acceptance.completeCoverage) {
     next.lifecycle = "waiting_user";
     return { state: next, decision: { type: "intervene", reason: "source-coverage-pending" } };
-  }
-  const pendingDocumentSources = Object.values(next.evidence.documentSources ?? {})
-    .filter((source) => source?.complete !== true);
-  if (!next.acceptance.partialAccepted && next.acceptance.completeCoverage && pendingDocumentSources.length > 0) {
-    next.lifecycle = "waiting_user";
-    return {
-      state: next,
-      decision: {
-        type: "intervene",
-        reason: "source-coverage-pending",
-        pendingSources: pendingDocumentSources.map((source) => source.documentRef),
-      },
-    };
   }
   next.lifecycle = "completed";
   next.updatedAt = nowIso(runtime.now);
@@ -462,7 +546,7 @@ export function beginForegroundDispatch(state, decision = {}, now = Date.now()) 
     next.dispatch.currentStepId = null;
   } else if (decision.type === "step" && decision.step?.id) {
     const stepId = String(decision.step.id);
-    next.dispatch.stepAttempts[stepId] = Number(next.dispatch.stepAttempts[stepId] || 0) + 1;
+    next.dispatch.stepNoProgressStreak[stepId] = Number(next.dispatch.stepNoProgressStreak[stepId] || 0);
     next.dispatch.currentPhase = "step";
     next.dispatch.currentStepId = stepId;
   } else if (decision.type === "verify") {
@@ -471,6 +555,10 @@ export function beginForegroundDispatch(state, decision = {}, now = Date.now()) 
     next.dispatch.currentStepId = null;
   }
   next.dispatch.baselineToolCalls = next.evidence.totalToolCalls;
+  next.dispatch.baselineArtifactCount = next.evidence.artifacts.length;
+  next.dispatch.baselineVerificationToolCalls = next.evidence.verificationToolCalls;
+  next.dispatch.baselineNovelProgressCount = next.evidence.novelProgressCount;
+  next.dispatch.windowOpen = true;
   next.lifecycle = decision.type === "verify" ? "verifying" : "running";
   next.updatedAt = nowIso(now);
   return next;
@@ -489,11 +577,15 @@ export function buildForegroundTaskPrompt(state, decision = {}, options = {}) {
     evidenceSummary(state),
   ];
   if (decision.type === "plan") {
+    const retained = Object.values(state.checkpoints.steps)
+      .map((checkpoint) => `${checkpoint.stepId}: ${checkpoint.result}`)
+      .join("；");
     common.push(
       `任务目标：${state.goal}`,
       "先利用已有上下文完成必要的只读调查。只有高影响歧义才用 ask_choice 一次询问一个问题。",
       "条件明确后调用 submit_plan，提供稳定步骤 id；不要在计划批准前执行有副作用的操作。",
     );
+    if (retained) common.push(`重新规划必须继承的已确认事实：${retained}`);
   } else if (decision.type === "step") {
     const completed = state.workPlan?.completedStepIds?.join(", ") || "无";
     common.push(
@@ -515,11 +607,12 @@ export function buildForegroundTaskPrompt(state, decision = {}, options = {}) {
 export function buildForegroundIntervention(state, decision = {}) {
   const step = decision.step ? `当前步骤“${decision.step.title}”` : "当前复杂任务";
   const reasonText = {
-    "step-attempts-exhausted": `${step}连续执行但没有形成可确认的步骤完成记录。`,
+    "step-no-progress": `${step}连续多个执行窗口没有形成新的成功工具证据、产物或检查点。`,
     "plan-attempts-exhausted": "模型多次未能形成可执行计划。",
     "context-input-risk": "输入缓存或未处理输入需要先由用户决定如何处置。",
     "artifact-missing": "计划步骤已经结束，但没有检测到用户要求的实际文件。",
     "verification-evidence-missing": "任务包含写入或外部操作，但最终验收没有产生新的验证证据。",
+    "step-evidence-missing": "已有步骤被标记完成，但缺少宿主可确认的步骤检查点，不能进入最终交付。",
     "source-coverage-pending": "仍有来源输入未完成处理，不能按完整结果交付。",
     "plan-persistence-failed": "批准的计划未能可靠保存，因此尚未开始执行步骤。",
     "plan-revision-requested": "当前步骤请求调整计划，需要先确认剩余范围。",
@@ -553,7 +646,10 @@ export function applyForegroundIntervention(state, choice, decision = {}, now = 
   if (!next) return state;
   const selected = String(choice || "stop");
   if (selected === "continue") {
-    if (decision.step?.id) next.dispatch.stepAttempts[decision.step.id] = 0;
+    if (decision.step?.id) next.dispatch.stepNoProgressStreak[decision.step.id] = 0;
+    else if (decision.reason === "step-no-progress" && next.dispatch.currentStepId) {
+      next.dispatch.stepNoProgressStreak[next.dispatch.currentStepId] = 0;
+    }
     else if (decision.reason === "plan-attempts-exhausted") next.dispatch.planningAttempts = 0;
     else next.dispatch.verificationAttempts = 0;
     next.lifecycle = "running";
@@ -561,6 +657,10 @@ export function applyForegroundIntervention(state, choice, decision = {}, now = 
     next.lifecycle = "waiting_user";
   } else if (selected === "revise") {
     next.dispatch.planningAttempts = 0;
+    next.revision = {
+      previousPlan: clone(next.workPlan),
+      requestedAt: nowIso(now),
+    };
     next.workPlan = null;
     next.lifecycle = "assessing";
   } else if (selected === "accept-partial") {
