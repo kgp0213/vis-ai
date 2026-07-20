@@ -45,7 +45,9 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   assert.match(pdf, /path.*run_skill result header/i);
   assert.match(pdf, /Do not run `setup\.sh` directly on Windows/);
   assert.match(pdf, /Call `extract_pdf_text` with the returned `documentRef`/);
-  assert.match(pdf, /organize_document_to_markdown/);
+  assert.doesNotMatch(pdf, /organize_document_to_markdown/);
+  assert.match(pdf, /write_file|append_file/);
+  assert.match(pdf, /context|checkpoint|persist/i);
   assert.match(pdf, /references\/pdf-to-markdown\.md/);
   assert.match(pdf, /references\/large-document\.md/);
   assert.match(pdf, /Do not use OfficeCLI for PDF files/);
@@ -59,10 +61,10 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   const statsFunction = pdfScript.slice(pdfScript.indexOf("def _pdf_stats"), pdfScript.indexOf("def _classify_lines"));
   assert.doesNotMatch(statsFunction, /pip[\s\S]{0,40}install|subprocess\.run/);
   const markdownWorkflow = readFileSync(skillFile("pdf", "references/pdf-to-markdown.md"), "utf8");
-  assert.match(markdownWorkflow, /Skill.*strategy[\s\S]*host.*execution/i);
-  assert.match(markdownWorkflow, /organize_document_to_markdown/);
-  assert.match(markdownWorkflow, /independent model review/i);
-  assert.match(markdownWorkflow, /Do not replace the host workflow/i);
+  assert.doesNotMatch(markdownWorkflow, /organize_document_to_markdown/);
+  assert.match(markdownWorkflow, /extract_pdf_text/);
+  assert.match(markdownWorkflow, /append_file/);
+  assert.match(markdownWorkflow, /before.*next|下一.*之前/i);
 
   const cjk = readFileSync(skillFile("md-to-pdf-cjk"), "utf8");
   assert.match(cjk, /python -m pip install reportlab/);

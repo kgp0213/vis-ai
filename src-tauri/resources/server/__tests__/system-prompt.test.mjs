@@ -25,21 +25,19 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /"command":"add"/);
   });
 
-  test("保存型文档使用统一后台流程，纯阅读 PDF 仍使用稳定引用", () => {
+  test("保存型文档使用通用增量流程并在高影响歧义时一次一问", () => {
     const prompt = buildSystemPrompt([], "/root", false);
-    assert.match(prompt, /saved Markdown document from an existing PDF, Word, Excel, PowerPoint, HTML, Markdown, CSV, or text file.*organize_document_to_markdown/);
-    assert.match(prompt, /Except for the saved-Markdown workflow above/);
+    assert.doesNotMatch(prompt, /organize_document_to_markdown/);
+    assert.doesNotMatch(launcherSource, /name:\s*"organize_document_to_markdown"/);
     assert.match(prompt, /keep its stable `documentRef`/);
-    assert.match(prompt, /existing PDF that is only being read or discussed, call `extract_pdf_text`/);
+    assert.match(prompt, /PDF.*`extract_pdf_text`/);
     assert.match(prompt, /returns `complete=false`/);
     assert.match(prompt, /`nextPageRange`/);
     assert.match(prompt, /append_file/);
-    assert.match(prompt, /organize_document_to_markdown/);
-    assert.match(prompt, /independent quality review/);
-    assert.match(prompt, /Acceptance means the artifact is pending/);
-    assert.match(prompt, /get_document_job_status/);
-    assert.match(prompt, /Do not call wait_for_job, list_jobs/);
-    assert.match(prompt, /qualityPassed is false/);
+    assert.match(prompt, /persist|materialize/i);
+    assert.match(prompt, /one.*question|one question/i);
+    assert.match(prompt, /recommended option/i);
+    assert.match(prompt, /read-only investigation/i);
     assert.match(prompt, /create one report from multiple existing documents/);
     assert.match(prompt, /organize_documents_to_report/);
     assert.match(prompt, /verifies that none of the sources changed/);
@@ -49,13 +47,15 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /host will recreate a missing readable copy automatically/);
   });
 
-  test("办公模式升级后统一使用跨格式后台文档流程", () => {
-    assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*8/);
+  test("办公模式使用通用增量文档流程", () => {
+    assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*9/);
     const officeMode = launcherSource.slice(
       launcherSource.indexOf("office: {"),
       launcherSource.indexOf("design: {"),
     );
-    assert.match(officeMode, /organize_document_to_markdown/);
+    assert.doesNotMatch(officeMode, /organize_document_to_markdown/);
+    assert.match(officeMode, /prepare_local_document/);
+    assert.match(officeMode, /append_file/);
     assert.match(officeMode, /organize_documents_to_report/);
     assert.doesNotMatch(officeMode, /直接调用 organize_pdf_to_markdown/);
   });
