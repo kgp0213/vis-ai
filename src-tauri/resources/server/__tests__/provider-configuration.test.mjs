@@ -69,6 +69,37 @@ beforeEach(() => writeFileSync(configPath, JSON.stringify(baseConfig(), null, 2)
 after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
 describe("Provider schema v3 maintenance", () => {
+  test("accepts model effort parameter maps and rejects options that are not declared", () => {
+    const valid = previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateModel",
+        providerId: "company",
+        modelKey: "company-primary",
+        changes: {
+          efforts: ["high", "max"],
+          effortParams: {
+            high: { reasoning_effort: "high" },
+            max: { reasoning_effort: "max" },
+          },
+        },
+      }],
+    });
+    assert.deepEqual(valid.config.providers[0].models[0].effortParams.max, { reasoning_effort: "max" });
+
+    assert.throws(() => previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateModel",
+        providerId: "company",
+        modelKey: "company-primary",
+        changes: {
+          efforts: ["high"],
+          effortParams: { max: { reasoning_effort: "max" } },
+        },
+      }],
+    }), /effortParams.*max.*efforts/i);
+  });
   test("accepts validated provider UI grouping metadata", () => {
     const result = previewProviderImport(baseConfig(), {
       schemaVersion: 3,
@@ -416,6 +447,44 @@ describe("Provider credential rotation API", () => {
     const rejected = await post("/api/settings", { contextCapTokens: 300000 });
     assert.equal(rejected.status, 400);
     assert.match(rejected.json.error, /262144/);
+  });
+
+  test("settings accepts only the active model's reasoning efforts", async () => {
+    writeFileSync(configPath, JSON.stringify({
+      preset: "flash",
+      model: "fast-model",
+      reasoningEffort: "high",
+      providers: [{
+        id: "mixed-provider",
+        requestPolicy: "json",
+        defaultEffort: "high",
+        models: [
+          {
+            id: "fast-model",
+            presets: ["flash"],
+            efforts: ["low", "high"],
+            maxContextLength: 32768,
+            requestDefaults: {},
+            effortParams: { low: { reasoning_effort: "low" }, high: { reasoning_effort: "high" } },
+          },
+          {
+            id: "strong-model",
+            presets: ["pro"],
+            efforts: ["max"],
+            maxContextLength: 32768,
+            requestDefaults: {},
+            effortParams: { max: { reasoning_effort: "max" } },
+          },
+        ],
+      }],
+      activeProviderId: "mixed-provider",
+    }, null, 2));
+
+    const accepted = await post("/api/settings", { reasoningEffort: "low" });
+    assert.equal(accepted.status, 200);
+    const rejected = await post("/api/settings", { reasoningEffort: "max" });
+    assert.equal(rejected.status, 400);
+    assert.match(rejected.json.error, /fast-model/);
   });
 
   test("requires a matching successful test before credentials can be saved", async () => {

@@ -321,6 +321,53 @@ describe("model request policy", () => {
     assert.deepEqual(resolveProviderModelRequest(provider, "internal-model", { purpose: "unconfigured" }).requestDefaults, provider.models[0].requestDefaults);
   });
 
+  test("selected model effort parameters override normal profiles but never the verification probe", () => {
+    const provider = {
+      requestPolicy: "json",
+      defaultEffort: "high",
+      models: [{
+        id: "reasoning-model",
+        efforts: ["low", "high"],
+        requestDefaults: {
+          max_tokens: 8192,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 } },
+        },
+        effortParams: {
+          low: { extra_body: { chat_template_kwargs: { thinking_budget: 2048 } } },
+          high: { extra_body: { chat_template_kwargs: { thinking_budget: 8192 } } },
+        },
+        verificationRequestDefaults: {
+          max_tokens: 8,
+          extra_body: { chat_template_kwargs: { enable_thinking: false } },
+        },
+        agentPolicy: {
+          requestProfiles: {
+            toolContinuation: { extra_body: { chat_template_kwargs: { thinking_budget: 4096 } } },
+          },
+        },
+      }],
+    };
+
+    assert.deepEqual(
+      resolveProviderModelRequest(provider, "reasoning-model", { purpose: "toolContinuation", reasoningEffort: "low" }).requestDefaults,
+      {
+        max_tokens: 8192,
+        extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 2048 } },
+      },
+    );
+    assert.deepEqual(
+      resolveProviderModelRequest(provider, "reasoning-model", { purpose: "chat", reasoningEffort: "unsupported" }).requestDefaults,
+      provider.models[0].requestDefaults,
+    );
+    assert.deepEqual(
+      resolveProviderModelRequest(provider, "reasoning-model", { purpose: "verification", reasoningEffort: "low" }).requestDefaults,
+      {
+        max_tokens: 8,
+        extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 8192 } },
+      },
+    );
+  });
+
   test("JSON providers accept and merge task-specific request profiles", () => {
     const requestDefaults = {
       temperature: 0.6,

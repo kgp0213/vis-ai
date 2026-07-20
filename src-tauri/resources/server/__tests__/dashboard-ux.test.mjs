@@ -19,6 +19,9 @@ describe("Dashboard desktop UX", () => {
     assert.match(app, /onMouseLeave=\$\{scheduleModelGroupClose\}/);
     assert.match(app, /setTimeout\(\(\) => setOpenModelGroupId\(null\), 180\)/);
     assert.match(app, /selectProviderModel\(provider\.id, model\.id\)/);
+    assert.match(app, /activeModelEfforts/);
+    assert.match(app, /reasoningEffortLabel/);
+    assert.doesNotMatch(app, /由导入 JSON 固定/);
     assert.match(app, /id="provider-import-file"/);
     assert.doesNotMatch(app, /class="model-search"/);
     assert.match(app, /检测全部模型/);
