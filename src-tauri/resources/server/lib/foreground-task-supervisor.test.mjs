@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import {
   applyForegroundIntervention,
@@ -159,10 +159,33 @@ describe("foreground task step supervision", () => {
     const completed = evaluateForegroundTask(state, {});
     assert.equal(completed.decision.type, "complete");
     assert.equal(completed.state.workPlan.completedStepIds.length, 4);
-    assert.equal(Object.keys(completed.state.dispatch.stepAttempts).length, 4);
+    assert.equal(Object.keys(completed.state.checkpoints.steps).length, 4);
   });
 
-  test("pauses a repeatedly uncompleted step and exposes one intervention question", () => {
+  test("keeps a long step running while every dispatch window adds novel evidence", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [{ id: "s1", title: "调查", action: "inspect every source" }],
+      completedStepIds: [],
+    });
+    for (let window = 1; window <= 5; window += 1) {
+      const evaluated = evaluateForegroundTask(state, {});
+      assert.equal(evaluated.decision.type, "step");
+      state = beginForegroundDispatch(evaluated.state, evaluated.decision);
+      state = recordForegroundToolEvent(state, {
+        toolName: "read_file",
+        toolArgs: JSON.stringify({ path: `source-${window}.txt` }),
+        content: `new evidence ${window}`,
+        readOnly: true,
+        succeeded: true,
+      });
+      const continued = evaluateForegroundTask(state, {});
+      assert.equal(continued.decision.type, "step");
+      assert.equal(continued.state.dispatch.stepNoProgressStreak.s1, 0);
+      state = continued.state;
+    }
+  });
+
+  test("pauses only after consecutive dispatch windows add no evidence", () => {
     let state = recordForegroundPlan(complexState(), {
       steps: [{ id: "s1", title: "修改", action: "edit" }],
       completedStepIds: [],
@@ -170,14 +193,43 @@ describe("foreground task step supervision", () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const evaluated = evaluateForegroundTask(state, {});
       state = beginForegroundDispatch(evaluated.state, evaluated.decision);
+      state = evaluateForegroundTask(state, {}).state;
     }
     const stalled = evaluateForegroundTask(state, {});
     assert.equal(stalled.decision.type, "intervene");
-    assert.equal(stalled.decision.reason, "step-attempts-exhausted");
+    assert.equal(stalled.decision.reason, "step-no-progress");
+    assert.equal(stalled.state.dispatch.stepNoProgressStreak.s1, 3);
     const card = buildForegroundIntervention(stalled.state, stalled.decision);
     assert.equal(card.kind, "choice");
     assert.equal(card.options[0].id, "continue");
     assert.ok(card.options.some((option) => option.id === "accept-partial"));
+  });
+
+  test("rejects model-declared step completion without new host evidence", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [{ id: "s1", title: "修改", action: "edit" }],
+      completedStepIds: [],
+    });
+    const decision = evaluateForegroundTask(state, {}).decision;
+    state = beginForegroundDispatch(state, decision);
+
+    assert.throws(
+      () => recordForegroundStepCompletion(state, { stepId: "s1", result: "done" }),
+      /new host evidence/i,
+    );
+    assert.deepEqual(state.workPlan.completedStepIds, []);
+
+    state = recordForegroundToolEvent(state, {
+      toolName: "write_file",
+      toolArgs: '{"path":"result.txt"}',
+      content: "written",
+      readOnly: false,
+      succeeded: true,
+    });
+    state = recordForegroundStepCompletion(state, { stepId: "s1", result: "wrote result.txt" });
+    assert.deepEqual(state.workPlan.completedStepIds, ["s1"]);
+    assert.equal(state.checkpoints.steps.s1.result, "wrote result.txt");
+    assert.deepEqual(state.checkpoints.steps.s1.toolCallIndexes, [1]);
   });
 
   test("non-recoverable provider failures pause immediately without consuming another step attempt", () => {
@@ -190,7 +242,7 @@ describe("foreground task step supervision", () => {
     });
     const dispatched = evaluateForegroundTask(state, {});
     state = beginForegroundDispatch(dispatched.state, dispatched.decision);
-    assert.equal(state.dispatch.stepAttempts.s2, 1);
+    assert.equal(state.dispatch.stepNoProgressStreak.s2, 0);
 
     const failure = normalizeForegroundModelFailure({
       error: 'OpenAI 429: {"error":{"code":"AccountQuotaExceeded","message":"quota resets at 2026-07-21T01:00:28+08:00"}}',
@@ -200,7 +252,7 @@ describe("foreground task step supervision", () => {
     assert.equal(evaluated.decision.type, "intervene");
     assert.equal(evaluated.decision.reason, "provider-blocked");
     assert.equal(evaluated.state.lifecycle, "waiting_user");
-    assert.equal(evaluated.state.dispatch.stepAttempts.s2, 1);
+    assert.equal(evaluated.state.dispatch.stepNoProgressStreak.s2, 0);
     assert.deepEqual(evaluated.state.workPlan.completedStepIds, ["s1"]);
     assert.equal(evaluated.state.workPlan.steps.length, 2);
     assert.equal(evaluated.state.blockingFailure.code, "AccountQuotaExceeded");
@@ -263,52 +315,18 @@ describe("foreground task step supervision", () => {
     assert.equal(evaluateForegroundTask(state, {}).decision.type, "complete");
   });
 
-  test("complete-coverage tasks cannot finish while a prepared document has a next cursor", () => {
-    let state = startForegroundTask({
-      turnId: "turn-coverage",
-      prompt: "完整提取文档并保存",
-      assessment: assessTaskComplexity({ prompt: "完整提取文档并保存", completeCoverage: true }),
-      completeCoverage: true,
-    });
-    state = recordForegroundPlan(state, {
-      steps: [{ id: "s1", title: "提取", action: "extract all content" }],
-      completedStepIds: ["s1"],
-    });
-    state = recordForegroundToolEvent(state, {
-      toolName: "prepare_local_document",
-      content: '{"ok":true,"documentRef":"visionox-document:doc_11111111111111111111","documentKind":"word"}',
-      readOnly: true,
-      succeeded: true,
-    });
-    state = recordForegroundToolEvent(state, {
-      toolName: "read_prepared_document",
-      content: '{"ok":true,"documentRef":"visionox-document:doc_11111111111111111111","documentKind":"word","complete":false,"nextCursor":{"unit":9},"coverage":{"totalUnits":20,"deliveredRange":[1,8]}}',
-      readOnly: true,
-      succeeded: true,
-    });
-    const verification = evaluateForegroundTask(state, {});
-    state = beginForegroundDispatch(verification.state, verification.decision);
-    state = recordForegroundToolEvent(state, {
-      toolName: "read_file",
-      content: "artifact exists",
-      readOnly: true,
-      succeeded: true,
-    });
-
-    const evaluated = evaluateForegroundTask(state, {});
-    assert.equal(evaluated.decision.type, "intervene");
-    assert.equal(evaluated.decision.reason, "source-coverage-pending");
-    assert.deepEqual(evaluated.decision.pendingSources, ["visionox-document:doc_11111111111111111111"]);
-    assert.deepEqual(
-      evaluated.state.evidence.documentSources["visionox-document:doc_11111111111111111111"].nextCursor,
-      { unit: 9 },
-    );
-  });
-
   test("verifies user-accepted partial results before settling the outcome", () => {
     let state = recordForegroundPlan(complexState(), {
       steps: [{ id: "s1", title: "处理", action: "process" }],
       completedStepIds: [],
+    });
+    state = beginForegroundDispatch(state, evaluateForegroundTask(state, {}).decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "write_file",
+      toolArgs: '{"path":"partial.md"}',
+      content: "partial result",
+      readOnly: false,
+      succeeded: true,
     });
     state = recordForegroundStepCompletion(state, { stepId: "s1", result: "partial result" });
     state.acceptance.completeCoverage = true;
@@ -360,10 +378,45 @@ describe("foreground task step supervision", () => {
     const paused = evaluateForegroundTask(state, {});
     assert.equal(paused.decision.type, "intervene");
     assert.equal(paused.decision.reason, "plan-revision-requested");
-    assert.equal(paused.state.dispatch.stepAttempts.s1, undefined);
+    assert.equal(paused.state.dispatch.stepNoProgressStreak.s1, undefined);
 
     state = applyForegroundIntervention(paused.state, "continue", paused.decision);
     assert.equal(evaluateForegroundTask(state, {}).decision.type, "step");
+  });
+
+  test("replanning retains completed checkpoints and their confirmed facts", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [
+        { id: "s1", title: "调查", action: "inspect" },
+        { id: "s2", title: "修改", action: "edit" },
+      ],
+      completedStepIds: [],
+    });
+    state = beginForegroundDispatch(state, evaluateForegroundTask(state, {}).decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "read_file",
+      toolArgs: '{"path":"config.json"}',
+      content: "confirmed setting",
+      readOnly: true,
+      succeeded: true,
+    });
+    state = recordForegroundStepCompletion(state, { stepId: "s1", result: "confirmed current setting" });
+    state = applyForegroundIntervention(state, "revise", { reason: "plan-revision-requested" });
+
+    assert.equal(state.workPlan, null);
+    assert.equal(state.checkpoints.steps.s1.result, "confirmed current setting");
+    assert.deepEqual(state.revision.previousPlan.completedStepIds, ["s1"]);
+    assert.match(buildForegroundTaskPrompt(state, evaluateForegroundTask(state, {}).decision), /confirmed current setting/);
+
+    state = recordForegroundPlan(state, {
+      steps: [
+        { id: "s1", title: "调查", action: "inspect" },
+        { id: "s3", title: "调整", action: "adjust" },
+      ],
+      completedStepIds: [],
+    });
+    assert.deepEqual(state.workPlan.completedStepIds, ["s1"]);
+    assert.equal(state.checkpoints.steps.s1.result, "confirmed current setting");
   });
 
   test("only treats consecutive identical calls as repeated no-progress evidence", () => {
@@ -401,9 +454,16 @@ test("launcher reaches complex work only through the ordinary CacheFirstLoop", (
   assert.doesNotMatch(launcherSource, /name:\s*"organize_documents_to_report"/);
   assert.doesNotMatch(launcherSource, /pendingPdfState/);
   assert.doesNotMatch(launcherSource, /documentMarkdownManager\.resume\(/);
+  assert.doesNotMatch(launcherSource, /name:\s*"read_prepared_document"/);
+  assert.equal(existsSync(new URL("./prepared-document-reader.mjs", import.meta.url)), false);
   assert.match(launcherSource, /LEGACY_DOCUMENT_EXECUTION_RETIRED/);
   assert.match(launcherSource, /approvedActivePlanSnapshot/);
   assert.match(launcherSource, /plan cancelled|user stopped at checkpoint/);
   assert.match(launcherSource, /const approvedPlan = pendingPlan;[\s\S]*?if \(!activatePendingPlan\(\)\)[\s\S]*?recordForegroundPlan\(activeForegroundTask, approvedPlan\)/);
   assert.match(launcherSource, /const foregroundTool = tools\.get\(ev\.toolName\)[\s\S]*?recordForegroundToolEvent\([\s\S]*?verificationEvidence/);
+});
+
+test("the generic supervisor has no document-format tool or cursor protocol", () => {
+  const source = readFileSync(new URL("./foreground-task-supervisor.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /prepare_local_document|read_prepared_document|documentSources|nextCursor|PDF page|Office unit/i);
 });

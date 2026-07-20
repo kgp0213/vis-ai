@@ -32,8 +32,7 @@ describe("buildSystemPrompt", () => {
     assert.doesNotMatch(launcherSource, /name:\s*"extract_pdf_text"/);
     assert.doesNotMatch(launcherSource, /MAX_DOCUMENT_AUTO_CONTINUATIONS|documentAutoContinuationPrompt|pdfContinuationStates/);
     assert.match(prompt, /keep its stable `documentRef`/);
-    assert.match(prompt, /`read_prepared_document` for exactly one bounded batch/);
-    assert.doesNotMatch(prompt, /extract_pdf_text|nextPageRange/);
+    assert.doesNotMatch(prompt, /read_prepared_document|extract_pdf_text|nextPageRange/);
     assert.match(prompt, /append_file/);
     assert.match(prompt, /persist|materialize/i);
     assert.match(prompt, /one.*question|one question/i);
@@ -46,7 +45,7 @@ describe("buildSystemPrompt", () => {
   });
 
   test("办公模式使用通用增量文档流程", () => {
-    assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*10/);
+    assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*11/);
     const officeMode = launcherSource.slice(
       launcherSource.indexOf("office: {"),
       launcherSource.indexOf("design: {"),
@@ -54,7 +53,7 @@ describe("buildSystemPrompt", () => {
     assert.doesNotMatch(officeMode, /organize_document_to_markdown/);
     assert.doesNotMatch(officeMode, /extract_pdf_text|nextPageRange/);
     assert.match(officeMode, /prepare_local_document/);
-    assert.match(officeMode, /read_prepared_document/);
+    assert.doesNotMatch(officeMode, /read_prepared_document/);
     assert.match(officeMode, /任务评估、澄清、执行、监控和验收协议/);
     assert.match(officeMode, /不拥有任务生命周期/);
     assert.doesNotMatch(officeMode, /organize_documents_to_report/);
