@@ -621,7 +621,7 @@ describe("model request policy", () => {
     const providerConfiguration = readFileSync(new URL("../lib/provider-configuration.mjs", import.meta.url), "utf8");
     const dashboard = readFileSync(new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url), "utf8");
     assert.match(launcher, /function createConfiguredModelClient/);
-    assert.match(launcher, /requestConfigForModel: \(modelId, options\) => resolveProviderModelRequest\(getActiveProvider\(config\), modelId, options\)/);
+    assert.match(launcher, /requestConfigForModel: \(modelId, options\) => resolveProviderModelRequest\(getActiveProvider\(config\), modelId, \{[\s\S]*?reasoningEffort: config\.reasoningEffort/);
     assert.match(launcher, /resolveProviderModelAgentPolicy/);
     assert.match(launcher, /resolveProviderModelCapabilities/);
     assert.match(launcher, /resolveProviderModelVisionPolicy/);
@@ -645,7 +645,8 @@ describe("model request policy", () => {
     assert.match(providerConfiguration, /config\.activeProviderId = payload\.activeProviderId/);
     assert.match(server, /await ctx\.syncProvider\?\.\(nextConfig\.activeProviderId\)/);
     assert.match(dashboard, /o3\.requestPolicy === "json" \? "JSON \\u53C2\\u6570"/);
-    assert.match(dashboard, /由导入 JSON 固定/);
+    assert.match(dashboard, /activeModelEfforts/);
+    assert.doesNotMatch(dashboard, /由导入 JSON 固定/);
   });
 
   test("provider import replaces JSON policy configuration and synchronizes the selected provider", async () => {

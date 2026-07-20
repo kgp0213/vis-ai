@@ -70,7 +70,10 @@ after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
 describe("Provider schema v3 maintenance", () => {
   test("accepts model effort parameter maps and rejects options that are not declared", () => {
-    const valid = previewProviderImport(baseConfig(), {
+    const source = baseConfig();
+    source.providers[0].requestPolicy = "json";
+    for (const model of source.providers[0].models) model.requestDefaults = {};
+    const valid = previewProviderImport(source, {
       schemaVersion: 3,
       operations: [{
         op: "updateModel",
@@ -87,7 +90,7 @@ describe("Provider schema v3 maintenance", () => {
     });
     assert.deepEqual(valid.config.providers[0].models[0].effortParams.max, { reasoning_effort: "max" });
 
-    assert.throws(() => previewProviderImport(baseConfig(), {
+    assert.throws(() => previewProviderImport(source, {
       schemaVersion: 3,
       operations: [{
         op: "updateModel",

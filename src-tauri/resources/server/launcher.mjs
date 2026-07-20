@@ -64,7 +64,7 @@ const {
 const {
   getActiveProvider,
   resolvePresetForProvider,
-  resolveEffortForProvider,
+  resolveEffortForModel,
   effectiveModelConfig,
   pickSummaryModel,
   buildLegacyProvider,
@@ -4942,7 +4942,10 @@ function createConfiguredModelClient(clientApiKey = apiKey, clientBaseUrl = base
   return new DeepSeekClient({
     apiKey: clientApiKey,
     baseUrl: clientBaseUrl,
-    requestConfigForModel: (modelId, options) => resolveProviderModelRequest(getActiveProvider(config), modelId, options),
+    requestConfigForModel: (modelId, options) => resolveProviderModelRequest(getActiveProvider(config), modelId, {
+      ...options,
+      reasoningEffort: config.reasoningEffort,
+    }),
   });
 }
 
@@ -9145,7 +9148,8 @@ const ctx = {
 
     // Resolve preset/effort for new provider — fallback if unsupported
     const newPreset = resolvePresetForProvider(cfg.preset ?? "auto", provider);
-    const newEffort = resolveEffortForProvider(cfg.reasoningEffort ?? "max", provider);
+    const selectedModel = effectiveModelConfig(cfg).model;
+    const newEffort = resolveEffortForModel(cfg.reasoningEffort ?? "max", provider, selectedModel);
     if (newPreset !== cfg.preset) cfg.preset = newPreset;
     if (newEffort !== cfg.reasoningEffort) cfg.reasoningEffort = newEffort;
     writeConfig(cfg, configPath);

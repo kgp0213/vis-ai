@@ -61,6 +61,16 @@ export function resolveEffortForProvider(effort, provider) {
   return provider?.defaultEffort ?? "high";
 }
 
+/** Resolve an effort against one concrete model instead of the provider union. */
+export function resolveEffortForModel(effort, provider, modelId) {
+  const model = provider?.models?.find((item) => item.disabled !== true && item.id === modelId);
+  const efforts = Array.isArray(model?.efforts) ? model.efforts : [];
+  if (efforts.length === 0) return effort ?? provider?.defaultEffort ?? "high";
+  if (efforts.includes(effort)) return effort;
+  if (efforts.includes(provider?.defaultEffort)) return provider.defaultEffort;
+  return efforts[0];
+}
+
 /**
  * Find the model ID that supports a given preset within a provider.
  * @returns {string} model id, falling back to first model or DEFAULT_MODEL

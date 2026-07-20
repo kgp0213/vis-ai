@@ -18,7 +18,7 @@ const root = join(__dirname, "..");
 const required = [
   {
     file: "src-tauri/resources/server/lib/provider-configuration.mjs",
-    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults", "validateProviderUi", '"groupId"', '"recommendedFor"'],
+    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults", "validateEffortParams", "effortParams", "validateProviderUi", '"groupId"', '"recommendedFor"'],
   },
   {
     file: "scripts/prepare-runtime-package.js",
@@ -366,6 +366,8 @@ const required = [
       "__VISIONOX_BUILD_STAMP__",
       "resolveProviderModelRequest",
       "validateRequestDefaults",
+      "resolveModelEffort",
+      "not supported by active model",
       "assertModelProbeMarker",
       'purpose: "verification"',
       'case "vhome"',
@@ -418,6 +420,8 @@ const required = [
       "providerDisplayGroups",
       "providerDisplayLabel",
       "providerModelCapabilityLabels",
+      "reasoningEffortLabel",
+      "activeModelEfforts",
       "selectProviderModel",
       "openModelGroupId",
       "model-provider-trigger",

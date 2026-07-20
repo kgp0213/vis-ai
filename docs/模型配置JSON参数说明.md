@@ -182,6 +182,7 @@
 | `name` | 推荐 | UI 显示名称，可写成“模型名（仅文本）”等明确能力说明 |
 | `presets` | 推荐 | 模型可响应的 UI 档位，例如 `flash`、`pro`、`auto` |
 | `efforts` | 否 | 可显示的推理强度选项；不要给不支持推理强度的模型填写 |
+| `effortParams` | JSON 策略可选 | `efforts` 中每个选项对应的原生请求参数；用户选择后递归合并到 `requestDefaults` |
 | `thinkingMode` | 否 | 通用兼容模式可用 `enabled` / `disabled`；厂商专用思考参数应放入 `requestDefaults` |
 | `multimodal` | 推荐 | 只有接口经过图片请求实测成功时才设为 `true`；`false` 表示绝不发送 `image_url` |
 | `maxContextLength` | 旧版兼容 | 正整数，表示模型上下文上限。旧版程序依赖此字段；新版若已提供合法的 `capabilities.maxContextTokens`，可以不重复填写 |
@@ -300,6 +301,30 @@ JSON 配置不准确时，程序应有界降级：减小输入批次、降低图
 - `capabilities.maxOutputTokens` 是能力元数据，不会作为请求参数发送；`requestDefaults.max_tokens` 是正式请求值，文档任务还会同时受 `documentPolicy.batchOutputTokens`、用途 profile 和模型能力上限约束，最终取所有已声明上限中的最小值。
 - 不要在 `requestDefaults` 中使用程序或服务商未读取的自造字段。模型能力声明只能放在 `capabilities`，厂商原生请求参数只能按其接口文档放在 `requestDefaults`。
 - `thinking_budget` 控制厂商思考预算，不等于最终可见输出上限，也不能代替 `max_tokens` 或 `capabilities.maxOutputTokens`。
+
+### 推理强度
+
+`effortParams` 的键必须与 `efforts` 完全对应，值使用服务商实际接收的原生 JSON。程序不会根据模型名称转换参数。当前模型检测仍使用 `verificationRequestDefaults`，不会叠加用户选择的正式推理强度。
+
+DeepSeek 的 `thinking` 和 `reasoning_effort` 都是 HTTP 请求顶层字段：
+
+```json
+{
+  "requestDefaults": {
+    "thinking": { "type": "enabled" },
+    "max_tokens": 8192
+  },
+  "efforts": ["high", "max"],
+  "effortParams": {
+    "high": { "reasoning_effort": "high" },
+    "max": { "reasoning_effort": "max" }
+  }
+}
+```
+
+Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此配置单个固定档位。后续官方开放新值时，只需扩充 `efforts` 和 `effortParams`。Kimi 工具调用和多轮对话还必须保留并回传完整 assistant message，包括 `reasoning_content` 和 `tool_calls`。
+
+本地 Qwen3.5 使用本机接口已经验证的 `thinking_budget`。ModelScope 只声明 Qwen3.5 默认思考和 `enable_thinking`，未把 `thinking_budget` 定义为通用标准，因此不要添加未经当前接口验证的预算档位。
 
 ## 8. Agent 与长文档策略
 

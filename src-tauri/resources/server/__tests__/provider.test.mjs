@@ -8,6 +8,7 @@ import {
   getProviderCapabilities,
   resolvePresetForProvider,
   resolveEffortForProvider,
+  resolveEffortForModel,
   resolveModelForProvider,
   effectiveModelConfig,
   pickSummaryModel,
@@ -143,6 +144,20 @@ describe("resolveEffortForProvider", () => {
 
   test("provider 为 null → 回退 high", () => {
     assert.equal(resolveEffortForProvider("max", null), "high");
+  });
+});
+
+describe("resolveEffortForModel", () => {
+  test("uses only the selected model's effort options", () => {
+    const provider = {
+      defaultEffort: "high",
+      models: [
+        { id: "fast", efforts: ["low", "high"] },
+        { id: "strong", efforts: ["max"] },
+      ],
+    };
+    assert.equal(resolveEffortForModel("max", provider, "fast"), "high");
+    assert.equal(resolveEffortForModel("high", provider, "strong"), "max");
   });
 });
 

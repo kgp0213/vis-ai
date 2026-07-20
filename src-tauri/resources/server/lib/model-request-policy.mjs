@@ -121,6 +121,32 @@ export function validateRequestDefaults(value) {
   return null;
 }
 
+export function validateEffortParams(value, efforts) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    return "effortParams must be a plain JSON object";
+  }
+  if (!Array.isArray(efforts) || efforts.length === 0) {
+    return "effortParams requires a non-empty efforts array";
+  }
+  const declared = new Set();
+  for (const effort of efforts) {
+    if (typeof effort !== "string" || !effort.trim() || effort.length > 64) {
+      return "efforts must contain non-empty strings no longer than 64 characters";
+    }
+    if (declared.has(effort)) return `efforts contains duplicate option "${effort}"`;
+    declared.add(effort);
+  }
+  for (const effort of Object.keys(value)) {
+    if (!declared.has(effort)) return `effortParams option "${effort}" is not declared in efforts`;
+    const issue = validateRequestDefaults(value[effort]);
+    if (issue) return `effortParams.${effort} ${issue}`;
+  }
+  for (const effort of declared) {
+    if (!Object.hasOwn(value, effort)) return `effortParams is missing declared effort "${effort}"`;
+  }
+  return null;
+}
+
 export function validateAgentPolicy(value, options = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     return "agentPolicy must be a plain JSON object";
@@ -424,6 +450,14 @@ export function resolveProviderModelRequest(provider, modelId, options = {}) {
       const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
       if (verificationIssue) throw new Error(`invalid verification request configuration for model "${modelId}": ${verificationIssue}`);
       requestDefaults = mergeJsonObjects(requestDefaults, safeVerificationTaskDefaults(model.verificationRequestDefaults));
+    }
+    if (options.purpose !== "verification" && model?.effortParams !== undefined) {
+      const effortIssue = validateEffortParams(model.effortParams, model.efforts);
+      if (effortIssue) throw new Error(`invalid reasoning effort configuration for model "${modelId}": ${effortIssue}`);
+      const efforts = model.efforts;
+      const fallbackEffort = efforts.includes(provider?.defaultEffort) ? provider.defaultEffort : efforts[0];
+      const selectedEffort = efforts.includes(options.reasoningEffort) ? options.reasoningEffort : fallbackEffort;
+      requestDefaults = mergeJsonObjects(requestDefaults, model.effortParams[selectedEffort]);
     }
   }
   return { policy, requestDefaults };

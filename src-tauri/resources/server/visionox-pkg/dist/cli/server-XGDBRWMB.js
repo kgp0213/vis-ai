@@ -4101,7 +4101,6 @@ function parseBody9(raw) {
   }
 }
 var VALID_PRESETS = /* @__PURE__ */ new Set(["auto", "flash", "pro", "fast", "smart", "max"]);
-var VALID_EFFORTS = /* @__PURE__ */ new Set(["high", "max"]);
 var DEFAULT_MODEL = "deepseek-v4-flash";
 var PRESET_MODELS = {
   flash: "deepseek-v4-flash",
@@ -4157,6 +4156,13 @@ function modelState(ctx, cfg) {
     displayModel,
     modelDrift
   };
+}
+function resolveModelEffort(effort, provider, model) {
+  const efforts = Array.isArray(model?.efforts) ? model.efforts : [];
+  if (efforts.length === 0) return effort;
+  if (efforts.includes(effort)) return effort;
+  if (efforts.includes(provider?.defaultEffort)) return provider.defaultEffort;
+  return efforts[0];
 }
 var credentialVerificationTokens = /* @__PURE__ */ new Map();
 function credentialCandidate(cfg, fields) {
@@ -4246,6 +4252,7 @@ async function handleProviders(method, rest, body, ctx) {
       cfg.activeProviderId = parsed.id;
       cfg.model = requestedModel.id;
       cfg.preset = activationPresetForModel(requestedModel);
+      cfg.reasoningEffort = resolveModelEffort(cfg.reasoningEffort, provider, requestedModel);
       writeConfig(cfg, ctx.configPath);
     }
     const modelSwitch = cfg.activeProviderId === parsed.id && !requestedModel
@@ -4357,9 +4364,7 @@ async function handleProviders(method, rest, body, ctx) {
       const preset = activationPresetForModel(firstPassed);
       cfg.activeProviderId = activeProvider.id;
       cfg.preset = preset;
-      if (activeProvider.requestPolicy !== "json" && !firstPassed.efforts?.includes(cfg.reasoningEffort)) {
-        cfg.reasoningEffort = firstPassed.efforts?.[0] ?? activeProvider.defaultEffort ?? "high";
-      }
+      cfg.reasoningEffort = resolveModelEffort(cfg.reasoningEffort, activeProvider, firstPassed);
       activated = { providerId: activeProvider.id, modelId: firstPassed.id, preset };
     }
     cfg.modelVerification = {
@@ -4427,9 +4432,7 @@ async function handleProviders(method, rest, body, ctx) {
       cfg.activeProviderId = selectedProvider.id;
       cfg.model = selectedModel.id;
       cfg.preset = activationPresetForModel(selectedModel);
-      if (selectedProvider.requestPolicy !== "json" && !selectedModel.efforts?.includes(cfg.reasoningEffort)) {
-        cfg.reasoningEffort = selectedModel.efforts?.[0] ?? selectedProvider.defaultEffort ?? "high";
-      }
+      cfg.reasoningEffort = resolveModelEffort(cfg.reasoningEffort, selectedProvider, selectedModel);
     } else {
       cfg.activeProviderId = null;
       cfg.model = null;
@@ -4660,15 +4663,15 @@ async function handleSettings(method, _rest, body, ctx) {
       changed.push("preset");
     }
     if (fields.reasoningEffort !== void 0) {
-      if (typeof fields.reasoningEffort !== "string" || !VALID_EFFORTS.has(fields.reasoningEffort)) {
-        return { status: 400, body: { error: "reasoningEffort must be high | max" } };
+      if (typeof fields.reasoningEffort !== "string" || !fields.reasoningEffort.trim() || fields.reasoningEffort.length > 64) {
+        return { status: 400, body: { error: "reasoningEffort must be a non-empty string no longer than 64 characters" } };
       }
       const provider = (cfg.providers ?? []).find((p) => p.id === cfg.activeProviderId) ?? cfg.providers?.[0];
       if (provider) {
-        const capsEfforts = new Set();
-        for (const m of provider.models?.filter((model) => model.disabled !== true) ?? []) for (const ef of m.efforts ?? []) capsEfforts.add(ef);
-        if (!capsEfforts.has(fields.reasoningEffort)) {
-          return { status: 400, body: { error: `effort "${fields.reasoningEffort}" not supported by active provider "${provider.id}"` } };
+        const activeModelId = effectiveModelConfig(cfg).model;
+        const activeModel = provider.models?.find((model) => model.disabled !== true && model.id === activeModelId);
+        if (!activeModel?.efforts?.includes(fields.reasoningEffort)) {
+          return { status: 400, body: { error: `effort "${fields.reasoningEffort}" not supported by active model "${activeModel?.id ?? activeModelId}"` } };
         }
       }
       cfg.reasoningEffort = fields.reasoningEffort;

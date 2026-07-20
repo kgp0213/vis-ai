@@ -1,11 +1,11 @@
-import { validateAgentPolicy, validateModelCapabilities, validateRequestDefaults, validateVisionPolicy } from "./model-request-policy.mjs";
+import { validateAgentPolicy, validateEffortParams, validateModelCapabilities, validateRequestDefaults, validateVisionPolicy } from "./model-request-policy.mjs";
 
 const PROVIDER_CHANGE_FIELDS = new Set([
   "name", "baseUrl", "apiKey", "requestPolicy", "requestDefaults",
   "defaultPreset", "defaultEffort", "autoEscalate", "escalationModel", "ui",
 ]);
 const MODEL_CHANGE_FIELDS = new Set([
-  "id", "name", "presets", "efforts", "thinkingMode", "multimodal",
+  "id", "name", "presets", "efforts", "effortParams", "thinkingMode", "multimodal",
   "maxContextLength", "capabilities", "requestDefaults", "verificationRequestDefaults", "agentPolicy", "visionPolicy", "disabled",
 ]);
 const V3_OPERATIONS = new Set([
@@ -102,8 +102,14 @@ function validateProvider(provider) {
         const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
         if (verificationIssue) return `model "${model.id}" verification ${verificationIssue}`;
       }
+      if (model.effortParams !== undefined) {
+        const effortIssue = validateEffortParams(model.effortParams, model.efforts);
+        if (effortIssue) return `model "${model.id}" ${effortIssue}`;
+      }
     } else if (model.verificationRequestDefaults !== undefined) {
       return `model "${model.id}" verificationRequestDefaults requires provider requestPolicy "json"`;
+    } else if (model.effortParams !== undefined) {
+      return `model "${model.id}" effortParams requires provider requestPolicy "json"`;
     }
     if (model.agentPolicy !== undefined) {
       const agentPolicyIssue = validateAgentPolicy(model.agentPolicy, { requestPolicy: provider.requestPolicy });

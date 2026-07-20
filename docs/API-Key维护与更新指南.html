@@ -281,7 +281,7 @@
     <ol class="steps">
       <li>
         <h3>取得完整配置文件</h3>
-        <p>当前完整配置文件是 <span class="path">providers-ful-new-0713.json</span>。它包含可直接使用的服务商、模型、地址、Key 和模型参数，不需要普通用户手工修改。</p>
+        <p>当前完整配置文件是 <span class="path">providers-combined-0720.json</span>。它合并了本机现有 DeepSeek、Qwen 和火山云服务商，包含可直接使用的地址、Key、模型参数和已验证的推理强度选项，不需要普通用户手工修改。</p>
       </li>
       <li>
         <h3>选择 JSON</h3>
@@ -297,23 +297,23 @@
       </li>
     </ol>
 
-    <h3>0713 完整配置导入后会发生什么</h3>
+    <h3>0720 合并配置导入后会发生什么</h3>
     <table>
       <thead>
         <tr><th>配置内容</th><th>导入结果</th></tr>
       </thead>
       <tbody>
-        <tr><td>外部 DeepSeek</td><td>新增或完整更新 <code>deepseek-official</code>，保留 auto / flash / pro 切换和自动升级逻辑。</td></tr>
-        <tr><td>公司 Qwen</td><td>新增或完整更新 <code>local-qwen</code>，使用唯一的 Qwen3.5-397B 模型，不显示 DeepSeek 的推理强度选择。</td></tr>
+        <tr><td>外部 DeepSeek</td><td>新增或完整更新 <code>deepseek-official</code>，保留 auto / flash / pro，并提供“深入（high）/ 极致（max）”思考强度。</td></tr>
+        <tr><td>公司 Qwen</td><td>新增或完整更新 <code>local-qwen</code>，使用唯一的 Qwen3.5-397B 模型，并提供本机已验证的 2048 / 8192 思考预算档位。</td></tr>
         <tr><td>旧 local-deepseek</td><td>通过 <code>removeProviderIds</code> 永久删除；预览中必须明确显示这项删除。</td></tr>
-        <tr><td>默认使用模型</td><td>导入后选择 <code>deepseek-official</code>；完成“检测全部模型”后自动启用该服务商中第一个检测成功的模型。</td></tr>
-        <tr><td>Qwen 正式对话</td><td>开启隐藏思考，固定传入 <code>thinking_budget: 8192</code>；程序不会按问题难度自动改值。</td></tr>
+        <tr><td>默认使用模型</td><td>导入后选择 <code>volcengine-ark-deepseek</code>；完成“检测全部模型”后自动启用该服务商中第一个检测成功的模型。</td></tr>
+        <tr><td>Qwen 正式对话</td><td>默认开启隐藏思考并使用 <code>thinking_budget: 8192</code>；用户可在模型菜单切换到 2048。</td></tr>
         <tr><td>Qwen 通信检测</td><td>通过 <code>verificationRequestDefaults</code> 临时关闭思考，只验证连接、Key 和模型 ID，不改变正式对话参数。</td></tr>
       </tbody>
     </table>
 
     <div class="tip">
-      0713 文件使用 schema v2、<code>importMode: "replace"</code>。这里的 replace 是完整替换 JSON 中同 ID 的服务商，不会删除未列出的其他服务商；只有 <code>removeProviderIds</code> 明确列出的服务商会被删除。
+      0720 文件使用 schema v2、<code>importMode: "replace"</code>。这里的 replace 是完整替换 JSON 中同 ID 的服务商，不会删除未列出的其他服务商；只有 <code>removeProviderIds</code> 明确列出的服务商会被删除。该文件包含凭据并已被 Git 忽略。
     </div>
 
     <div class="tip">

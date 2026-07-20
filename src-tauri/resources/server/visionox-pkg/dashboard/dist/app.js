@@ -24911,6 +24911,15 @@ function providerDisplayGroups(providers) {
 function providerDisplayLabel(provider) {
   return provider?.ui?.modelLabel || providerOptionLabel(provider);
 }
+function reasoningEffortLabel(effort) {
+  return {
+    low: "快速",
+    medium: "均衡",
+    high: "深入",
+    xhigh: "极致",
+    max: "极致"
+  }[effort] ?? effort;
+}
 function providerModelContextLabel(model) {
   const tokens = model?.capabilities?.maxContextTokens ?? model?.maxContextLength;
   if (!Number.isFinite(tokens) || tokens <= 0) return "";
@@ -27616,7 +27625,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       } else if (key === "preset") {
         pushModelNotice(`✓ 已选择 ${value} 模式`, "success");
       } else if (key === "reasoningEffort") {
-        pushModelNotice(`✓ 推理强度已设为 ${value}`, "success");
+        pushModelNotice(`✓ 推理强度已设为 ${reasoningEffortLabel(value)}`, "success");
       }
       try {
         const o3 = await api("/overview");
@@ -27849,6 +27858,10 @@ const [providerCaps, setProviderCaps] = d2(null);
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
+  const activeModel = (providers ?? [])
+    .find((provider) => provider.id === activeProviderId)
+    ?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
+  const activeModelEfforts = Array.isArray(activeModel?.efforts) ? activeModel.efforts : [];
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -28153,21 +28166,16 @@ const [providerCaps, setProviderCaps] = d2(null);
                       </div>
                     ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}（固定）</div>`}
                   </div>
-                  ${(providers ?? []).find((provider) => provider.id === activeProviderId)?.requestPolicy === "json" ? html4`
+                  ${activeModelEfforts.length > 0 ? html4`
                     <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模型参数</label>
-                      <div style="font-size:12px;color:var(--text-primary);">由导入 JSON 固定</div>
-                    </div>
-                  ` : html4`
-                    <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">强度</label>
-                      ${(providerCaps?.efforts?.length ?? 0) > 1 ? html4`
+                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">思考强度</label>
+                      ${activeModelEfforts.length > 1 ? html4`
                         <div class="model-choice-row">
-                          ${providerCaps.efforts.map((e3) => html4`<button type="button" key=${e3} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => { setSetting('reasoningEffort', e3); }}>${e3}</button>`)}
+                          ${activeModelEfforts.map((e3) => html4`<button type="button" key=${e3} title=${e3} disabled=${busy} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => { setSetting('reasoningEffort', e3); }}>${reasoningEffortLabel(e3)}</button>`)}
                         </div>
-                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${effort}（固定）</div>`}
+                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${reasoningEffortLabel(activeModelEfforts[0])}（固定）</div>`}
                     </div>
-                  `}
+                  ` : null}
                 </div>
               ` : null}
               <button type="button" title=${`运行中 ${backgroundJobs.filter((job) => job.running).length}，待处理 ${backgroundJobs.filter(backgroundJobNeedsAttention).length}`} class=${`composer-chip ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench()}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length })}</button>
