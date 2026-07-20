@@ -158,7 +158,7 @@ export function renderVHomeSkillFiles(rawDraft) {
       displayName: draft.displayName,
       version: "1.0.0",
       integrationApiVersion: 1,
-      runtimeRequirements: { dws: { minVersion: "1.0.51" } },
+      runtimeRequirements: { dws: { minVersion: "1.0.52" } },
       capabilities: draft.capabilities,
     }, null, 2)}\n`);
     files.set("schedule-templates.json", `${JSON.stringify({

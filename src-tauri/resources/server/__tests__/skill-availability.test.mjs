@@ -158,7 +158,7 @@ test("bundled DWS skill keeps V来家 operations discoverable and side effects c
   const integration = JSON.parse(readFileSync(skillFile("dws", "integration.json"), "utf8"));
   const templates = JSON.parse(readFileSync(skillFile("dws", "schedule-templates.json"), "utf8"));
   assert.match(skill, /name: dws/);
-  assert.equal(integration.version, "1.0.51.10");
+  assert.equal(integration.version, "1.0.52.1");
   assert.match(skill, /查钉钉消息\/未读\/@我\/群聊/);
   assert.match(skill, /equivalent English requests/);
   assert.equal(integration.license, "Apache-2.0");

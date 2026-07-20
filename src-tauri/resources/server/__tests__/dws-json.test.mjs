@@ -16,6 +16,10 @@ describe("DWS JSON read adapter", () => {
     ]);
     assert.deepEqual(validateDwsReadArgs(["calendar", "event", "list", "--calendar-id", "primary", "--limit", "50"]), ["calendar", "event", "list", "--calendar-id", "primary", "--limit", "50"]);
     assert.deepEqual(validateDwsReadArgs(["chat", "message", "list-unread-conversations", "--exclude-muted", "--count", "20"]), ["chat", "message", "list-unread-conversations", "--exclude-muted", "--count", "20"]);
+    assert.deepEqual(validateDwsReadArgs(["chat", "message", "list-favorites", "--cursor", "20", "--size", "50"]), ["chat", "message", "list-favorites", "--cursor", "20", "--size", "50"]);
+    assert.deepEqual(validateDwsReadArgs(["drive", "stats", "--node", "dentry-uuid-1"]), ["drive", "stats", "--node", "dentry-uuid-1"]);
+    assert.deepEqual(validateDwsReadArgs(["sheet", "table-get", "--node", "node-1", "--sheet-id", "Sheet1", "--range", "A1:D20", "--no-header"]), ["sheet", "table-get", "--node", "node-1", "--sheet-id", "Sheet1", "--range", "A1:D20", "--no-header"]);
+    assert.deepEqual(validateDwsReadArgs(["sheet", "pivot-table", "list", "--node", "node-1", "--sheet-id", "Sheet1", "--pivot-table-id", "pt-1"]), ["sheet", "pivot-table", "list", "--node", "node-1", "--sheet-id", "Sheet1", "--pivot-table-id", "pt-1"]);
   });
 
   test("rejects writes, unknown flags and excessive reads", () => {

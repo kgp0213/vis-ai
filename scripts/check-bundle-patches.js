@@ -779,7 +779,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/dws/integration.json",
-    markers: ['"version": "1.0.51.10"', '"license": "Apache-2.0"', '"integrationApiVersion": 1'],
+    markers: ['"version": "1.0.52.1"', '"license": "Apache-2.0"', '"integrationApiVersion": 1'],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/dws/schedule-templates.json",

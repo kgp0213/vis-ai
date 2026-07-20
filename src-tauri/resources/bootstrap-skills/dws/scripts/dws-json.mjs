@@ -15,6 +15,7 @@ const READ_COMMANDS = new Set([
   "chat message list-mentions",
   "chat message list-by-sender",
   "chat message search",
+  "chat message list-favorites",
   "calendar event list",
   "todo task list",
   "oa approval list-pending",
@@ -27,6 +28,9 @@ const READ_COMMANDS = new Set([
   "aisearch behavior",
   "drive recent",
   "drive search",
+  "drive stats",
+  "sheet table-get",
+  "sheet pivot-table list",
   "wiki space list",
   "wiki space search",
   "wiki node search",
@@ -42,13 +46,13 @@ const READ_COMMANDS = new Set([
 const VALUE_FLAGS = new Set([
   "--behavior-type", "--calendar-id", "--chat-scope", "--count", "--created-from", "--created-to", "--creator-type", "--cursor",
   "--depts", "--dimension", "--direction", "--end", "--extensions", "--file-types", "--group",
-  "--id", "--keyword", "--limit", "--modified-end", "--modified-from", "--modified-start", "--modified-to", "--open-dingtalk-id",
-  "--operate-type", "--org-ids", "--page", "--plan-finish-date-end", "--plan-finish-date-start", "--priority", "--profile", "--queries", "--query", "--role-types", "--sender-open-dingtalk-id", "--sender-user-id",
-  "--sender-user-ids", "--size", "--start", "--status", "--target", "--template-name", "--time", "--time-range", "--topic-id",
+  "--id", "--keyword", "--limit", "--modified-end", "--modified-from", "--modified-start", "--modified-to", "--node", "--open-dingtalk-id",
+  "--operate-type", "--org-ids", "--page", "--pivot-table-id", "--plan-finish-date-end", "--plan-finish-date-start", "--priority", "--profile", "--queries", "--query", "--range", "--role-types", "--sender-open-dingtalk-id", "--sender-user-id",
+  "--sender-user-ids", "--sheet-id", "--size", "--start", "--status", "--target", "--template-name", "--time", "--time-range", "--topic-id",
   "--types", "--user", "--workspace",
 ]);
 
-const BOOLEAN_FLAGS = new Set(["--exclude-muted", "--mock"]);
+const BOOLEAN_FLAGS = new Set(["--exclude-muted", "--mock", "--no-header"]);
 export const DWS_READ_LIMIT = 200;
 const LIMIT_FLAGS = new Map([["--count", DWS_READ_LIMIT], ["--limit", DWS_READ_LIMIT], ["--size", DWS_READ_LIMIT]]);
 const WRITE_COMMANDS = new Set(["chat message send"]);
