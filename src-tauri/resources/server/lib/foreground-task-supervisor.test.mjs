@@ -233,6 +233,34 @@ describe("foreground task step supervision", () => {
     assert.deepEqual(state.checkpoints.steps.s1.toolCallIndexes, [1]);
   });
 
+  test("retains window progress after bounded evidence details roll over", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [{ id: "s1", title: "调查", action: "inspect a large source set" }],
+      completedStepIds: [],
+    });
+    state = beginForegroundDispatch(state, evaluateForegroundTask(state, {}).decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "read_file",
+      toolArgs: '{"path":"source-1.txt"}',
+      content: "confirmed source evidence",
+      readOnly: true,
+      succeeded: true,
+    });
+    for (let index = 0; index < 70; index += 1) {
+      state = recordForegroundToolEvent(state, {
+        toolName: "run_command",
+        toolArgs: JSON.stringify({ command: `missing-command-${index}` }),
+        content: `[exit 1]`,
+        readOnly: false,
+        succeeded: false,
+      });
+    }
+
+    state = recordForegroundStepCompletion(state, { stepId: "s1", result: "inspected available sources" });
+    assert.equal(state.checkpoints.steps.s1.novelProgressCount, 1);
+    assert.deepEqual(state.workPlan.completedStepIds, ["s1"]);
+  });
+
   test("non-recoverable provider failures pause immediately without consuming another step attempt", () => {
     let state = recordForegroundPlan(complexState(), {
       steps: [
