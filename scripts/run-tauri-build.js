@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const defaultRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const RETIRED_RELEASE_RESOURCES = [
+  "bootstrap-skills/document-organizer/task-recipes.json",
+  "bootstrap-skills/pdf/references/pdf-to-markdown.md",
+];
 
 function runProcess(root, env, label, script, args = []) {
   console.log(`[tauri-build] ${label}`);
@@ -43,11 +47,24 @@ export function createOfflineBuildEnv(root, runtimePackage, base = process.env) 
   };
 }
 
+export function pruneRetiredReleaseResources(root) {
+  const resourcesRoot = resolve(root, "src-tauri", "target", "release", "resources");
+  for (const resourcePath of RETIRED_RELEASE_RESOURCES) {
+    const target = resolve(resourcesRoot, resourcePath);
+    const targetRelative = relative(resourcesRoot, target);
+    if (!targetRelative || targetRelative.startsWith("..") || targetRelative.includes(`..${sep}`)) {
+      throw new Error(`retired release resource escapes canonical tree: ${resourcePath}`);
+    }
+    rmSync(target, { force: true });
+  }
+}
+
 export function runTauriBuild(options = {}) {
   const root = resolve(options.root ?? defaultRoot);
   const args = options.args ?? [];
   validateBuildArgs(args);
   rmSync(join(root, "src-tauri", "target", "release", "release-manifest.json"), { force: true });
+  pruneRetiredReleaseResources(root);
   const stagingRoot = (options.makeStaging ?? (() => mkdtempSync(join(tmpdir(), "visionox-release-"))))();
   const runtimePackage = join(stagingRoot, "visionox-pkg");
   const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
