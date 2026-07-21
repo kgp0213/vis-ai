@@ -1756,6 +1756,23 @@ tools.register({
   })),
 });
 
+tools.register({
+  name: "mark_context_input_invalid",
+  description: "Mark a cached input as invalid or unusable so it no longer blocks the task. Use only after a recovery read fails or the input is confirmed to be non-text.",
+  readOnly: true,
+  contextControl: true,
+  parallelSafe: true,
+  stormExempt: true,
+  parameters: {
+    type: "object",
+    properties: {
+      contextId: { type: "string", description: "The context:<sha256> reference to discard. Omit to discard all pending cached inputs." },
+      reason: { type: "string", description: "Short reason for marking the input invalid." },
+    },
+  },
+  fn: async (args) => JSON.stringify(contextInputTransactions.invalidateInput(args?.contextId, args?.reason)),
+});
+
 // Shell edit mode — default to admin on first run
 if (!config.editMode) {
   config.editMode = "admin";
@@ -9322,11 +9339,6 @@ ${modeList}
           ? { required: false, savePreviousResponse: false }
           : detectArtifactRequest(text);
         const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
-        contextInputTransactions.beginTurn({
-          turnId: requestId || operation.id || assistantId,
-          requiresArtifact: artifactRequest.required,
-          requiresCompleteCoverage: completeCoverageRequired,
-        });
         const turnArtifactPaths = new Set();
         const dispatchForeground = (decision, { appendToInput = false, userUpdate = "" } = {}) => {
           activeForegroundTask = beginForegroundDispatch(activeForegroundTask, decision);
@@ -9357,6 +9369,14 @@ ${modeList}
             ? resumeForegroundTask(restored, taskInput)
             : startForegroundTask({ ...taskInput, assessment: assessTaskComplexity(taskInput) });
         }
+        contextInputTransactions.beginTurn({
+          transactionId: activeForegroundTask?.classification === "complex"
+            ? activeForegroundTask.id
+            : `turn:${requestId || operation.id || assistantId}`,
+          turnId: requestId || operation.id || assistantId,
+          requiresArtifact: artifactRequest.required,
+          requiresCompleteCoverage: completeCoverageRequired,
+        });
         try {
           const retrievalText = manualSkillTask ?? text;
           const retrieval = opts.disableSemanticRetrieval || opts.internalHandoff === true

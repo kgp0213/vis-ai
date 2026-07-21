@@ -56,6 +56,33 @@ test("large context inputs are cached losslessly and survive a store restart", a
   });
 });
 
+test("cached input survives a new user turn when the transaction identity is stable", async () => {
+  await withStore(async (store, root) => {
+    store.beginTurn({ transactionId: "task:stable", turnId: "turn-1", requiresArtifact: true });
+    const content = "source evidence\n".repeat(80);
+    const captured = store.captureInput({ source: "tool:reader", content });
+    assert.equal(captured.cached, true);
+
+    const resumed = createContextInputTransactionStore(root, {
+      inputThresholdChars: 100,
+      pendingLimitChars: 500,
+    });
+    resumed.beginTurn({ transactionId: "task:stable", turnId: "turn-2", requiresArtifact: true });
+    assert.equal(resumed.readInput(captured.contextId).content, content);
+  });
+});
+
+test("unknown context input becomes an explicit cache failure", async () => {
+  await withStore(async (store) => {
+    store.beginTurn({ transactionId: "task:missing", turnId: "turn-1", requiresArtifact: true });
+    const result = store.readInput("context:missing");
+    assert.equal(result.ok, false);
+    assert.match(result.error, /unknown context input/);
+    assert.equal(store.status().cacheFailureCount, 1);
+    assert.equal(store.status().requiresIntervention, true);
+  });
+});
+
 test("successive bounded reads are cached together once their cumulative input crosses the threshold", async () => {
   await withStore(async (store) => {
     store.beginTurn({ turnId: "turn-batches", requiresArtifact: true, requiresCompleteCoverage: true });
@@ -128,7 +155,7 @@ test("cache failures and repeated blocked reads produce a one-question intervent
     assert.match(intervention.question, /任务|内容/);
     assert.equal(intervention.options[0].id, "continue");
     assert.match(intervention.options[0].title, /推荐/);
-    assert.deepEqual(intervention.options.map((option) => option.id), ["continue", "revise", "accept-partial", "stop"]);
+    assert.deepEqual(intervention.options.map((option) => option.id), ["continue", "discard-invalid", "revise", "accept-partial", "stop"]);
     assert.match(buildContextInputFlushPrompt(store.status()), /一次只处理一个待处理输入/);
   });
 

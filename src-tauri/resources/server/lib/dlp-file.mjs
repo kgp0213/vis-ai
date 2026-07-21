@@ -403,6 +403,29 @@ function suggestedToolsForPath(path) {
   return ["read_file", "domain-specific tool if available"];
 }
 
+async function binaryDocumentKind(path) {
+  const kind = publicDocumentKind(path);
+  if (kind !== "file" && kind !== "text") return kind;
+  const header = await readFileHeader(path, 8);
+  if (header.subarray(0, 5).toString("ascii") === "%PDF-") return "pdf";
+  if (header.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))) return "office-package";
+  if (header.subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0]))) return "office-compound";
+  if (header.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image";
+  if (header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image";
+  return null;
+}
+
+function binaryReadError(path, kind) {
+  return JSON.stringify({
+    ok: false,
+    code: "BINARY_INPUT_NOT_READ_AS_TEXT",
+    error: `read_file only accepts UTF-8 text; detected ${kind || "binary"} input`,
+    path,
+    documentKind: kind || "binary",
+    useTool: "prepare_local_document",
+  });
+}
+
 function buildPreparedDocumentResult({ input, sourcePath, readable, candidates = [] }) {
   const changed = Boolean(readable?.path && resolve(readable.path) !== resolve(sourcePath));
   return {
@@ -692,6 +715,8 @@ export function wrapReadFileToolWithDlp(tools, options = {}) {
         signal: ctx?.signal,
         registry: options.registry,
       });
+      const detectedKind = await binaryDocumentKind(resolved.path);
+      if (detectedKind) return binaryReadError(args.path, detectedKind);
       return await original.fn({ ...args, path: resolved.path }, ctx);
     },
   });

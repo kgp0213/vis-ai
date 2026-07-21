@@ -7720,6 +7720,9 @@ function assertModelResponseComplete(finishReason) {
 function contextToolResultSucceeded(result) {
   const text = String(result ?? "").trim();
   if (!text || /^\[hook block\]/i.test(text)) return false;
+  // CONTEXT_EXIT_STATUS_RECORDED: run_command places [exit N] before stdout/stderr.
+  const exitMatch = text.match(/\[exit\s+(-?\d+)\]/i);
+  if (exitMatch) return Number(exitMatch[1]) === 0;
   try {
     const value = JSON.parse(text);
     return !(value?.ok === false || value?.success === false || typeof value?.error === "string");
@@ -8199,7 +8202,7 @@ ${reason}`
                 return `[CONTEXT_INPUT_CACHE_FAILED] ${captured.error || "input cache unavailable"}. Do not continue reading; ask the user how to proceed.`;
               }
               return captured?.cached
-                ? `[CONTEXT_INPUT_CACHED] Full result saved as ${captured.contextId} (${captured.chars} chars). Use read_context_input for lossless recovery after compaction.`
+                ? `[CONTEXT_INPUT_CACHED] Tool result saved as ${captured.contextId} (${captured.chars} chars). Use read_context_input to recover the cached segment; source coverage still requires separate verification.`
                 : "";
             }
           : void 0

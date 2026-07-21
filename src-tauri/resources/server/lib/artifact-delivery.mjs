@@ -267,7 +267,7 @@ export function toolResultSucceeded(value) {
   const text = String(value ?? "").trim();
   if (!text) return false;
   if (/^(?:error|failed|failure)\s*:/i.test(text)) return false;
-  const exitMatch = text.match(/\[exit\s+(-?\d+)\]\s*$/i);
+  const exitMatch = text.match(/\[exit\s+(-?\d+)\]/i);
   if (exitMatch) return Number(exitMatch[1]) === 0;
   if (!text.startsWith("{")) return true;
   try {

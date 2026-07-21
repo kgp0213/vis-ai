@@ -14,6 +14,7 @@ import {
   prepareLocalDocuments,
   resolveDlpScriptPath,
   resolveReadablePathForDlp,
+  wrapReadFileToolWithDlp,
   wrapToolsPathArgsWithDlp,
 } from "../lib/dlp-file.mjs";
 
@@ -370,6 +371,30 @@ test("wrapToolsPathArgsWithDlp keeps plaintext MCP path arguments unchanged", as
     assert.equal(wrapped, 1);
     assert.equal(await defs.get("officecli").fn({ path: "plain.txt" }), "ok");
     assert.deepEqual(receivedArgs, { path: "plain.txt" });
+  });
+});
+
+test("read_file wrapper rejects binary content after DLP path resolution", async () => {
+  await withTempDir(async (dir) => {
+    const pdf = join(dir, "manual.pdf");
+    await writeFile(pdf, Buffer.from("%PDF-1.7\n"));
+    let called = false;
+    const { defs, tools } = createToolRegistry([["read_file", {
+      name: "read_file",
+      fn: async () => {
+        called = true;
+        return "should not be called";
+      },
+    }]]);
+    wrapReadFileToolWithDlp(tools, {
+      readConfig: () => ({ dlp: { mode: "off" } }),
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+    });
+
+    const result = await defs.get("read_file").fn({ path: pdf });
+    assert.equal(called, false);
+    assert.match(result, /binary|PDF|prepare_local_document/i);
   });
 });
 

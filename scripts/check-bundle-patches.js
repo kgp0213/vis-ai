@@ -554,6 +554,7 @@ const required = [
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
     markers: [
       "fallbackSummaryForFold",
+      "CONTEXT_EXIT_STATUS_RECORDED",
       "const decision = this.context.decideAfterUsage",
       "if (repairedCalls.length === 0)",
       "normalizeHistoryForModel",

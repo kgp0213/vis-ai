@@ -13,6 +13,7 @@ import {
   normalizeForegroundModelFailure,
   pauseForegroundTask,
   recordForegroundPlan,
+  recordForegroundArtifacts,
   recordForegroundStepCompletion,
   recordForegroundToolEvent,
   restoreForegroundTask,
@@ -294,6 +295,27 @@ describe("foreground task step supervision", () => {
     assert.ok(card.options.some((option) => option.id === "stop"));
   });
 
+  test("structural tool failures pause without spending no-progress windows", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [{ id: "s1", title: "探测能力", action: "probe" }],
+      completedStepIds: [],
+    });
+    state = beginForegroundDispatch(state, evaluateForegroundTask(state, {}).decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "run_command",
+      toolArgs: '{"command":"missing-tool --version"}',
+      content: "$ missing-tool --version\n[exit 9009]\n'missing-tool' is not recognized",
+      readOnly: false,
+      succeeded: false,
+    });
+
+    const evaluated = evaluateForegroundTask(state, {});
+    assert.equal(evaluated.decision.type, "intervene");
+    assert.equal(evaluated.decision.reason, "tool-structural-failure");
+    assert.equal(evaluated.state.lifecycle, "waiting_user");
+    assert.equal(evaluated.state.dispatch.stepNoProgressStreak.s1, 0);
+  });
+
   test("requires successful read-only evidence during final verification", () => {
     let state = recordForegroundPlan(complexState(), {
       steps: [{ id: "s1", title: "修改", action: "edit" }],
@@ -342,6 +364,52 @@ describe("foreground task step supervision", () => {
       succeeded: true,
     });
     assert.equal(evaluateForegroundTask(state, {}).decision.type, "complete");
+  });
+
+  test("bounds repeated verification-evidence interventions", () => {
+    let state = recordForegroundPlan(complexState(), {
+      steps: [{ id: "s1", title: "修改", action: "edit" }],
+      completedStepIds: [],
+    });
+    state = beginForegroundDispatch(state, evaluateForegroundTask(state, {}).decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "write_file",
+      toolArgs: '{"path":"result.md"}',
+      content: "written",
+      readOnly: false,
+      succeeded: true,
+    });
+    state = recordForegroundStepCompletion(state, { stepId: "s1", result: "written" });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const verify = evaluateForegroundTask(state, {});
+      state = beginForegroundDispatch(verify.state, verify.decision);
+      state = recordForegroundToolEvent(state, {
+        toolName: "ask_choice",
+        toolArgs: "{}",
+        content: "still no verification",
+        readOnly: true,
+        verificationEvidence: false,
+        succeeded: true,
+      });
+      const missing = evaluateForegroundTask(state, {});
+      assert.equal(missing.decision.reason, "verification-evidence-missing");
+      state = applyForegroundIntervention(missing.state, "continue", missing.decision);
+    }
+
+    const verify = evaluateForegroundTask(state, {});
+    state = beginForegroundDispatch(verify.state, verify.decision);
+    state = recordForegroundToolEvent(state, {
+      toolName: "ask_choice",
+      toolArgs: "{}",
+      content: "still no verification",
+      readOnly: true,
+      verificationEvidence: false,
+      succeeded: true,
+    });
+    const exhausted = evaluateForegroundTask(state, {});
+    assert.notEqual(exhausted.decision.reason, "verification-evidence-missing");
+    assert.ok(["partial", "intervene"].includes(exhausted.decision.type));
   });
 
   test("verifies user-accepted partial results before settling the outcome", () => {
@@ -395,6 +463,17 @@ describe("foreground task step supervision", () => {
     assert.equal(evaluateForegroundTask(stopped, {}).decision.type, "stopped");
     assert.equal(evaluateForegroundTask(partial, {}).decision.type, "partial");
     assert.equal(evaluateForegroundTask(completed, {}).decision.type, "complete");
+  });
+
+  test("persists an outcome envelope for every foreground terminal state", () => {
+    const state = recordForegroundArtifacts(complexState(), ["result.md"]);
+    for (const lifecycle of ["completed", "partial", "stopped", "waiting_user"]) {
+      const finished = finishForegroundTask(state, lifecycle);
+      assert.equal(finished.outcome.taskId, finished.id);
+      assert.equal(finished.outcome.outcome, lifecycle);
+      assert.deepEqual(finished.outcome.artifactRefs, ["result.md"]);
+      assert.equal(typeof finished.outcome.resumable, "boolean");
+    }
   });
 
   test("keeps a waiting-user task paused until an explicit intervention choice", () => {

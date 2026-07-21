@@ -14,9 +14,10 @@ function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function freshState(turnId, turn = {}) {
+function freshState(transactionId, turnId, turn = {}) {
   return {
     schemaVersion: SCHEMA_VERSION,
+    transactionId,
     turnId,
     requiresArtifact: turn.requiresArtifact === true,
     requiresCompleteCoverage: turn.requiresCompleteCoverage === true,
@@ -30,13 +31,19 @@ function freshState(turnId, turn = {}) {
   };
 }
 
-function normalizeState(value, turnId, turn) {
-  if (!value || value.schemaVersion !== SCHEMA_VERSION || value.turnId !== turnId || !Array.isArray(value.inputs)) {
-    return freshState(turnId, turn);
+function normalizeState(value, transactionId, turnId, turn) {
+  if (!value || value.schemaVersion !== SCHEMA_VERSION || !Array.isArray(value.inputs)) {
+    return freshState(transactionId, turnId, turn);
+  }
+  const savedTransactionId = String(value.transactionId || value.turnId || "");
+  if (savedTransactionId !== transactionId) {
+    return freshState(transactionId, turnId, turn);
   }
   return {
-    ...freshState(turnId, turn),
+    ...freshState(transactionId, turnId, turn),
     ...value,
+    transactionId,
+    turnId,
     requiresArtifact: turn.requiresArtifact === true || value.requiresArtifact === true,
     requiresCompleteCoverage: turn.requiresCompleteCoverage === true || value.requiresCompleteCoverage === true,
     inputs: value.inputs.filter((entry) => entry && typeof entry.contextId === "string" && typeof entry.hash === "string"),
@@ -45,7 +52,7 @@ function normalizeState(value, turnId, turn) {
 }
 
 function pendingInputs(state) {
-  return state.inputs.filter((entry) => entry.state !== "foldable");
+  return state.inputs.filter((entry) => !["foldable", "invalid", "discarded"].includes(entry.state));
 }
 
 function completionClaim(text) {
@@ -71,6 +78,7 @@ function writtenChars(args) {
 function interventionOptions() {
   return [
     { id: "continue", title: "继续处理（推荐）", summary: "按缓存顺序逐项写入或消化，再继续读取新内容。" },
+    { id: "discard-invalid", title: "丢弃无效缓存", summary: "移除无法恢复或不可读的缓存输入，释放阻塞后继续任务。" },
     { id: "revise", title: "调整任务要求", summary: "先补充范围、格式或优先级，再继续执行。" },
     { id: "accept-partial", title: "接受当前部分结果", summary: "保留现有结果，并明确标记尚未覆盖的内容。" },
     { id: "stop", title: "停止任务", summary: "停止本轮处理，缓存仍保留用于后续恢复。" },
@@ -133,7 +141,9 @@ export function createContextInputTransactionStore(root, options = {}) {
   function beginTurn(turn = {}) {
     const turnId = String(turn.turnId ?? "").trim();
     if (!turnId) throw new Error("context input transaction requires turnId");
-    statePath = resolve(transactionRoot, `${sha256(turnId)}.json`);
+    const transactionId = String(turn.transactionId ?? turnId).trim();
+    if (!transactionId) throw new Error("context input transaction requires transactionId");
+    statePath = resolve(transactionRoot, `${sha256(transactionId)}.json`);
     let saved = null;
     if (existsSync(statePath)) {
       try {
@@ -142,7 +152,7 @@ export function createContextInputTransactionStore(root, options = {}) {
         saved = null;
       }
     }
-    state = normalizeState(saved, turnId, turn);
+    state = normalizeState(saved, transactionId, turnId, turn);
     deferredInputs = [];
     deferredChars = 0;
     return status();
@@ -208,7 +218,14 @@ export function createContextInputTransactionStore(root, options = {}) {
   function readInput(contextId, readOptions = {}) {
     if (!state) throw new Error("beginTurn must be called before readInput");
     const entry = state.inputs.find((item) => item.contextId === String(contextId));
-    if (!entry) return { ok: false, error: "unknown context input", contextId: String(contextId) };
+    if (!entry) {
+      state.cacheFailures.push(`unknown context input: ${String(contextId)}`.slice(0, 500));
+      try { persist(); } catch {}
+      return { ok: false, error: "unknown context input", contextId: String(contextId) };
+    }
+    if (["invalid", "discarded"].includes(entry.state)) {
+      return { ok: false, error: "context input was discarded as invalid", contextId: entry.contextId };
+    }
     try {
       const full = readFileSync(resolve(blobRoot, `${entry.hash}.txt`), "utf8");
       const offset = Math.max(0, Math.min(full.length, Number(readOptions.offset) || 0));
@@ -234,8 +251,30 @@ export function createContextInputTransactionStore(root, options = {}) {
     }
   }
 
+  function invalidateInput(contextId, reason = "marked-invalid") {
+    if (!state) throw new Error("beginTurn must be called before invalidateInput");
+    const target = String(contextId ?? "").trim();
+    const entries = target
+      ? state.inputs.filter((entry) => entry.contextId === target)
+      : pendingInputs(state);
+    if (entries.length === 0) return { ok: false, error: "unknown context input", contextId: target || null };
+    for (const entry of entries) {
+      entry.state = "invalid";
+      entry.invalidReason = String(reason || "marked-invalid").slice(0, 500);
+    }
+    state.blockedReadCount = 0;
+    state.cacheFailures = [];
+    state.finalWithPending = false;
+    state.completionClaimWithPending = false;
+    try { persist(); } catch (error) {
+      state.cacheFailures.push(String(error?.message || error).slice(0, 500));
+      return { ok: false, error: String(error?.message || error) };
+    }
+    return { ok: true, invalidated: entries.map((entry) => entry.contextId) };
+  }
+
   function beforeToolCall(tool = {}) {
-    if (!state || tool.contextControl === true || tool.readOnly !== true) return { blocked: false };
+    if (!state || tool.contextControl === true || tool.contextProbe === true || tool.readOnly !== true) return { blocked: false };
     const current = status();
     if (current.cacheFailureCount === 0 && current.backpressureChars <= pendingLimitChars) return { blocked: false };
     state.blockedReadCount += 1;
@@ -315,6 +354,9 @@ export function createContextInputTransactionStore(root, options = {}) {
       state.blockedReadCount = 0;
       state.cacheFailures = [];
     }
+    if (selected === "discard-invalid") {
+      invalidateInput(null, "user-discarded");
+    }
     if (selected === "accept-partial") {
       for (const entry of pendingInputs(state)) entry.state = "foldable";
     }
@@ -351,6 +393,7 @@ export function createContextInputTransactionStore(root, options = {}) {
       || state.blockedReadCount >= 2
       || (state.requiresArtifact && state.finalWithPending && pending.length > 0);
     return {
+      transactionId: state.transactionId,
       turnId: state.turnId,
       requiresArtifact: state.requiresArtifact,
       requiresCompleteCoverage: state.requiresCompleteCoverage,
@@ -374,12 +417,13 @@ export function createContextInputTransactionStore(root, options = {}) {
     const current = status();
     if (current.pendingCount === 0 && current.cacheFailureCount === 0) return "";
     const refs = current.pendingInputs.map((entry) => `${entry.contextId} (${entry.chars} chars, ${entry.state})`).join(", ");
-    return `[Context input transaction]\nLossless source input is cached outside conversation history. Pending: ${refs || "cache write failed"}. Use read_context_input to recover one bounded segment, then materialize it before requesting more read-only input. These references must survive emergency compaction.`;
+    return `[Context input transaction]\nSource input is cached outside conversation history. Pending: ${refs || "cache write failed"}. Use read_context_input to recover one bounded segment, then materialize it before requesting more read-only input. Source coverage must be verified separately.`;
   }
 
   return {
     beginTurn,
     captureInput,
+    invalidateInput,
     readInput,
     status,
     beforeToolCall,

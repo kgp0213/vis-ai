@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 const SCHEMA_VERSION = 1;
 const MAX_STEP_NO_PROGRESS = 3;
 const MAX_PLAN_ATTEMPTS = 3;
+const MAX_VERIFICATION_INTERVENTIONS = 2;
 const LARGE_CONTEXT_CHARS = 24_000;
 const LARGE_TOOL_RESULT_CHARS = 64_000;
 const MAX_EVIDENCE_CALLS = 60;
@@ -27,6 +28,22 @@ function nowIso(now = Date.now()) {
 
 function hash(value) {
   return createHash("sha256").update(String(value ?? ""), "utf8").digest("hex");
+}
+
+function classifyStructuralToolFailure(content) {
+  const text = String(content ?? "").trim();
+  if (!text) return null;
+  const exitCode = Number(text.match(/\[exit\s+(-?\d+)\]/i)?.[1] ?? NaN);
+  if (exitCode === 9009 || /(?:not recognized|command not found|cannot find the path|no such file or directory)/i.test(text)) {
+    return { code: "COMMAND_UNAVAILABLE", message: text.slice(0, 1_000), exitCode: Number.isFinite(exitCode) ? exitCode : null };
+  }
+  if (/(?:access is denied|permission denied|unauthorized|forbidden)/i.test(text)) {
+    return { code: "PERMISSION_DENIED", message: text.slice(0, 1_000), exitCode: Number.isFinite(exitCode) ? exitCode : null };
+  }
+  if (/(?:killed after timeout|timed out|timeout)/i.test(text)) {
+    return { code: "TOOL_TIMEOUT", message: text.slice(0, 1_000), exitCode: Number.isFinite(exitCode) ? exitCode : null };
+  }
+  return null;
 }
 
 export function normalizeForegroundModelFailure(value = {}) {
@@ -157,17 +174,20 @@ export function startForegroundTask(input = {}) {
       novelProgressCount: 0,
       artifacts: [],
       progressKeys: [],
+      structuralFailures: [],
     },
     dispatch: {
       currentPhase: assessment.classification === "complex" ? "assessment" : "ordinary",
       currentStepId: null,
       planningAttempts: 0,
       verificationAttempts: 0,
+      verificationInterventions: 0,
       stepNoProgressStreak: {},
       baselineToolCalls: 0,
       baselineArtifactCount: 0,
       baselineVerificationToolCalls: 0,
       baselineNovelProgressCount: 0,
+      baselineStructuralFailureCount: 0,
       windowOpen: false,
     },
     upgrade: assessment.classification === "complex" ? null : { upgraded: false, reasons: [] },
@@ -190,17 +210,22 @@ export function restoreForegroundTask(value) {
   restored.evidence.progressKeys = [...new Set(Array.isArray(restored.evidence.progressKeys) ? restored.evidence.progressKeys.map(String) : [])]
     .slice(-MAX_PROGRESS_KEYS);
   restored.evidence.novelProgressCount = Number(restored.evidence.novelProgressCount || 0);
+  restored.evidence.structuralFailures = Array.isArray(restored.evidence.structuralFailures)
+    ? restored.evidence.structuralFailures.slice(-20)
+    : [];
   restored.checkpoints = restored.checkpoints && typeof restored.checkpoints === "object" ? restored.checkpoints : { steps: {} };
   restored.checkpoints.steps = restored.checkpoints.steps && typeof restored.checkpoints.steps === "object"
     ? restored.checkpoints.steps
     : {};
-  restored.dispatch ??= { planningAttempts: 0, verificationAttempts: 0, stepNoProgressStreak: {} };
+  restored.dispatch ??= { planningAttempts: 0, verificationAttempts: 0, verificationInterventions: 0, stepNoProgressStreak: {} };
   restored.dispatch.stepNoProgressStreak = restored.dispatch.stepNoProgressStreak && typeof restored.dispatch.stepNoProgressStreak === "object"
     ? restored.dispatch.stepNoProgressStreak
     : {};
   restored.dispatch.baselineToolCalls = Number(restored.dispatch.baselineToolCalls || 0);
   restored.dispatch.baselineArtifactCount = Number(restored.dispatch.baselineArtifactCount || 0);
   restored.dispatch.baselineVerificationToolCalls = Number(restored.dispatch.baselineVerificationToolCalls || 0);
+  restored.dispatch.verificationInterventions = Number(restored.dispatch.verificationInterventions || 0);
+  restored.dispatch.baselineStructuralFailureCount = Number(restored.dispatch.baselineStructuralFailureCount || 0);
   restored.dispatch.baselineNovelProgressCount = Number(restored.dispatch.baselineNovelProgressCount || 0);
   restored.dispatch.windowOpen = restored.dispatch.windowOpen === true;
   delete restored.dispatch.stepAttempts;
@@ -316,6 +341,17 @@ export function recordForegroundToolEvent(state, event = {}, now = Date.now()) {
   next.evidence.totalToolResultChars += content.length;
   if (succeeded) next.evidence.successfulToolCalls += 1;
   if (succeeded && !event.readOnly) next.evidence.mutatingToolCalls += 1;
+  if (!succeeded) {
+    const structuralFailure = classifyStructuralToolFailure(content);
+    if (structuralFailure) {
+      next.evidence.structuralFailures.push({
+        ...structuralFailure,
+        index: call.index,
+        toolName,
+      });
+      next.evidence.structuralFailures = next.evidence.structuralFailures.slice(-20);
+    }
+  }
   if (novel) {
     next.evidence.progressKeys = [...next.evidence.progressKeys, progressKey].slice(-MAX_PROGRESS_KEYS);
     next.evidence.novelProgressCount += 1;
@@ -324,6 +360,7 @@ export function recordForegroundToolEvent(state, event = {}, now = Date.now()) {
     ? event.readOnly === true
     : event.verificationEvidence === true;
   if (phase === "verification" && verificationEvidence && succeeded) next.evidence.verificationToolCalls += 1;
+  if (phase === "verification" && verificationEvidence && succeeded) next.dispatch.verificationInterventions = 0;
   next.updatedAt = nowIso(now);
   return next;
 }
@@ -463,6 +500,19 @@ export function evaluateForegroundTask(state, runtime = {}) {
     return { state: next, decision: { type: "intervene", reason: "context-input-risk" } };
   }
 
+  const structuralFailures = next.evidence.structuralFailures || [];
+  const newStructuralFailures = structuralFailures.slice(next.dispatch.baselineStructuralFailureCount || 0);
+  if (newStructuralFailures.length > 0) {
+    closeStepWindowWithoutPenalty(next);
+    next.lifecycle = "waiting_user";
+    next.blockingReason = "tool-structural-failure";
+    next.blockingFailure = newStructuralFailures.at(-1);
+    return {
+      state: next,
+      decision: { type: "intervene", reason: "tool-structural-failure", failure: newStructuralFailures.at(-1) },
+    };
+  }
+
   next = settleStepWindow(next, runtime.now);
 
   if (next.acceptance.partialAccepted) {
@@ -474,6 +524,13 @@ export function evaluateForegroundTask(state, runtime = {}) {
       (next.acceptance.verificationRequired || next.evidence.mutatingToolCalls > 0)
       && next.evidence.verificationToolCalls <= next.dispatch.baselineVerificationToolCalls
     ) {
+      next.dispatch.verificationInterventions = Number(next.dispatch.verificationInterventions || 0) + 1;
+      if (next.dispatch.verificationInterventions > MAX_VERIFICATION_INTERVENTIONS) {
+        next.lifecycle = "partial";
+        next.blockingReason = "verification-evidence-exhausted";
+        next.acceptance.partialReason = "verification-evidence-missing";
+        return { state: next, decision: { type: "partial", reason: "verification-evidence-exhausted" } };
+      }
       next.lifecycle = "waiting_user";
       return { state: next, decision: { type: "intervene", reason: "verification-evidence-missing" } };
     }
@@ -525,6 +582,13 @@ export function evaluateForegroundTask(state, runtime = {}) {
     (next.acceptance.verificationRequired || next.evidence.mutatingToolCalls > 0)
     && next.evidence.verificationToolCalls <= next.dispatch.baselineVerificationToolCalls
   ) {
+    next.dispatch.verificationInterventions = Number(next.dispatch.verificationInterventions || 0) + 1;
+    if (next.dispatch.verificationInterventions > MAX_VERIFICATION_INTERVENTIONS) {
+      next.lifecycle = "partial";
+      next.blockingReason = "verification-evidence-exhausted";
+      next.acceptance.partialReason = "verification-evidence-missing";
+      return { state: next, decision: { type: "partial", reason: "verification-evidence-exhausted" } };
+    }
     next.lifecycle = "waiting_user";
     return { state: next, decision: { type: "intervene", reason: "verification-evidence-missing" } };
   }
@@ -558,6 +622,7 @@ export function beginForegroundDispatch(state, decision = {}, now = Date.now()) 
   next.dispatch.baselineArtifactCount = next.evidence.artifacts.length;
   next.dispatch.baselineVerificationToolCalls = next.evidence.verificationToolCalls;
   next.dispatch.baselineNovelProgressCount = next.evidence.novelProgressCount;
+  next.dispatch.baselineStructuralFailureCount = next.evidence.structuralFailures?.length || 0;
   next.dispatch.windowOpen = true;
   next.lifecycle = decision.type === "verify" ? "verifying" : "running";
   next.updatedAt = nowIso(now);
@@ -572,7 +637,7 @@ export function buildForegroundTaskPrompt(state, decision = {}, options = {}) {
   const update = String(options.userUpdate || "").trim();
   const common = [
     "[系统通用复杂任务调度]",
-    "继续使用同一个普通模型工具循环；当前对话、工具结果、上下文缓存和已生成文件均已原地继承。",
+    "继续使用同一个普通模型工具循环；宿主会保留可验证的对话、工具结果、上下文引用和已生成文件。",
     "不要重建另一套执行流程，不要重复已经取得的工具结果。",
     evidenceSummary(state),
   ];
@@ -612,6 +677,8 @@ export function buildForegroundIntervention(state, decision = {}) {
     "context-input-risk": "输入缓存或未处理输入需要先由用户决定如何处置。",
     "artifact-missing": "计划步骤已经结束，但没有检测到用户要求的实际文件。",
     "verification-evidence-missing": "任务包含写入或外部操作，但最终验收没有产生新的验证证据。",
+    "verification-evidence-exhausted": "任务已多次尝试验收，但仍没有形成可确认的验证证据；结果只能按部分完成交付。",
+    "tool-structural-failure": "当前步骤遇到命令不可用、权限不足或工具超时等外部条件，继续重复尝试没有意义。",
     "step-evidence-missing": "已有步骤被标记完成，但缺少宿主可确认的步骤检查点，不能进入最终交付。",
     "source-coverage-pending": "仍有来源输入未完成处理，不能按完整结果交付。",
     "plan-persistence-failed": "批准的计划未能可靠保存，因此尚未开始执行步骤。",
@@ -690,7 +757,36 @@ export function pauseForegroundTask(state, reason = "waiting-user", now = Date.n
 export function finishForegroundTask(state, lifecycle = "completed", now = Date.now()) {
   const next = restoreForegroundTask(state);
   if (!next) return state;
-  next.lifecycle = new Set(["completed", "partial", "stopped", "waiting_user"]).has(lifecycle) ? lifecycle : "completed";
+  const outcome = new Set(["completed", "partial", "stopped", "waiting_user"]).has(lifecycle) ? lifecycle : "completed";
+  next.lifecycle = outcome;
+  const totalSteps = next.workPlan?.steps?.length || 0;
+  const completedSteps = next.workPlan?.completedStepIds?.length || 0;
+  next.outcome = {
+    schemaVersion: 1,
+    taskId: next.id,
+    outcome,
+    summary: outcome === "completed"
+      ? "任务已通过当前宿主验收。"
+      : outcome === "partial"
+        ? "任务仅完成部分范围，未完成内容已保留并标记。"
+        : outcome === "waiting_user"
+          ? "任务已暂停，等待用户选择后继续。"
+          : "任务已停止，现有进度和产物已保留。",
+    artifactRefs: [...next.evidence.artifacts],
+    coverage: {
+      totalSteps,
+      completedSteps,
+      completionRatio: totalSteps > 0 ? completedSteps / totalSteps : 0,
+    },
+    warnings: [
+      ...(next.acceptance.partialReason ? [String(next.acceptance.partialReason)] : []),
+      ...(next.blockingReason ? [String(next.blockingReason)] : []),
+    ],
+    blockingReason: next.blockingReason || null,
+    userAction: outcome === "waiting_user" ? "continue_or_revise" : null,
+    resumable: outcome === "partial" || outcome === "waiting_user",
+    createdAt: nowIso(now),
+  };
   next.updatedAt = nowIso(now);
   return next;
 }
