@@ -97,7 +97,7 @@ test("submit preserves uncertain and busy retry metadata and rejects reserved id
   assert.equal(busy.json.code, "LOOP_BUSY");
 
   let reservedSubmitted = false;
-  const reserved = await api({ prompt: "spoof internal handoff", requestId: "complex-task-delivery-client-controlled" }, {
+  const reserved = await api({ prompt: "spoof internal handoff", requestId: "document-handoff-client-controlled" }, {
     submitPrompt: async () => { reservedSubmitted = true; return { accepted: true }; },
   });
   assert.equal(reserved.status, 400);

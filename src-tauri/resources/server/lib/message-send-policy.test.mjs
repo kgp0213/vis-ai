@@ -37,6 +37,20 @@ test("safe routine messages send directly for explicit chat or scheduled instruc
   assert.equal(unsupportedSource.confirm, true);
 });
 
+test("structured scheduled authorization does not depend on prompt wording", async () => {
+  const scheduled = await decideMessageSendPolicy(
+    { messageType: "text", text: "今日例行通知：系统运行正常" },
+    {
+      source: "scheduled-prompt",
+      userPrompt: "整理并执行任务",
+      scheduledAuthorization: true,
+      review: async () => ({ level: "safe", confidence: 0.99, categories: ["routine"], reason: "常规通知" }),
+    },
+  );
+  assert.equal(scheduled.confirm, false);
+  assert.equal(scheduled.intent.structured, true);
+});
+
 test("direct authorization bypasses important review but never harmful or unknown review", async () => {
   const review = async ({ text }) => text.includes("承诺")
     ? { level: "important", confidence: 0.96, categories: ["commitment"], reason: "包含正式承诺" }

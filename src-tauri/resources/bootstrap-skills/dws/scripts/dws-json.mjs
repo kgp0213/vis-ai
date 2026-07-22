@@ -219,6 +219,19 @@ function runDwsProcess(args, options = {}) {
   const executable = options.executable || process.env.VISIONOX_DWS_EXECUTABLE || "dws";
   const maximumTimeoutMs = Math.max(1_000, Math.min(300_000, Number(options.maximumTimeoutMs) || 60_000));
   const timeoutMs = Math.max(1_000, Math.min(maximumTimeoutMs, Number(options.timeoutMs) || 30_000));
+  // Test runners may discover untracked integration tests. Keep every command
+  // that can mutate DWS state local to the test process instead of relying on
+  // each test to opt out. Read/help commands remain available for fixtures.
+  const sideEffectDisabled = process.env.VISIONOX_TEST_MODE === "1" || process.env.DWS_SKIP_REAL_SEND === "1";
+  if (sideEffectDisabled && options.sideEffect === true) {
+    return Promise.resolve({
+      ok: false,
+      data: null,
+      error: "DWS side effects are disabled in test mode",
+      skipped: true,
+      meta: { status: null, testMode: true, skipped: true },
+    });
+  }
   return new Promise((resolve) => {
     let timer;
     const outputMode = options.outputMode || "json";
@@ -278,7 +291,7 @@ export function runDwsRead(rawArgs, options = {}) {
 
 export function runDwsWrite(rawArgs, options = {}) {
   const args = validateDwsWriteArgs(rawArgs);
-  return runDwsProcess(args, { ...options, confirmed: true, timeoutMs: options.timeoutMs || 60_000, maximumTimeoutMs: 120_000 });
+  return runDwsProcess(args, { ...options, confirmed: true, sideEffect: true, timeoutMs: options.timeoutMs || 60_000, maximumTimeoutMs: 120_000 });
 }
 
 export function runDwsHelp(rawArgs, options = {}) {
@@ -295,6 +308,7 @@ export function runDwsExec(rawArgs, options = {}) {
     ...options,
     outputMode: "flexible",
     confirmed: true,
+    sideEffect: true,
     timeoutMs: options.timeoutMs || 60_000,
     maximumTimeoutMs: 300_000,
   });

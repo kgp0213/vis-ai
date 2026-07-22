@@ -3,6 +3,8 @@ import { describe, test } from "node:test";
 
 import {
   normalizeDwsResponse,
+  runDwsExec,
+  runDwsWrite,
   validateDwsExecArgs,
   validateDwsHelpArgs,
   validateDwsReadArgs,
@@ -45,6 +47,29 @@ describe("DWS JSON read adapter", () => {
 });
 
 describe("DWS JSON write adapter", () => {
+  test("never starts a real write process in test mode", async () => {
+    const previous = process.env.VISIONOX_TEST_MODE;
+    process.env.VISIONOX_TEST_MODE = "1";
+    try {
+      const result = await runDwsWrite([
+        "chat", "message", "send", "--user", "self", "--text", "test", "--uuid", "test-mode",
+      ], { executable: "this-executable-must-not-start" });
+      assert.equal(result.ok, false);
+      assert.equal(result.meta?.testMode, true);
+      assert.equal(result.skipped, true);
+
+      const future = await runDwsExec([
+        "future-product", "record", "create", "--name", "test",
+      ], { executable: "this-executable-must-not-start" });
+      assert.equal(future.ok, false);
+      assert.equal(future.meta?.testMode, true);
+      assert.equal(future.skipped, true);
+    } finally {
+      if (previous === undefined) delete process.env.VISIONOX_TEST_MODE;
+      else process.env.VISIONOX_TEST_MODE = previous;
+    }
+  });
+
   test("allows only a bounded message send shape", () => {
     assert.deepEqual(validateDwsWriteArgs([
       "chat", "message", "send", "--user", "user-1", "--text", "hello", "--title", "notice", "--uuid", "request-1",

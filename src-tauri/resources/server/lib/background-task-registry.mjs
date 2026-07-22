@@ -1,4 +1,4 @@
-import { parseArtifactReference } from "./complex-task-artifact-reference.mjs";
+import { parseArtifactReference } from "./artifact-reference.mjs";
 
 const ACTIVE_LIFECYCLES = new Set(["created", "queued", "leased", "running", "assembling"]);
 const ATTENTION_LIFECYCLES = new Set(["waiting_user", "blocked", "paused"]);

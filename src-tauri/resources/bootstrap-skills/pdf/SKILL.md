@@ -4,7 +4,7 @@ metadata:
   author: Z.AI
   version: "1.1"
 description: >
-  Route PDF creation, conversion, merge, split, forms, repair, and validation.
+  Route PDF reading, creation, conversion, merge, split, forms, repair, and validation.
   Detailed production rules stay in briefs and references and are loaded only when needed.
 license: Proprietary. LICENSE.txt has complete terms
 ---
@@ -48,6 +48,30 @@ generated `manifest.json` preserves page ranges.
 For large-file manipulation constraints, read `references/large-document.md`. These
 commands are format operations only: return their evidence and artifacts to the active
 task. They must not decide task continuation, completion, or user intervention.
+
+### Read, Extract, or Save Existing PDFs
+
+Use the normal foreground model tool loop for PDF content work. This Skill does not
+create a worker, queue, resumable conversion job, or PDF-specific continuation path.
+
+1. Call `prepare_local_document` once and keep the returned `documentRef` and readable
+   path for the active turn.
+2. Probe the actually available reader before processing. Use a bounded range or page
+   segment that fits the current model context; the host may provide a context-input
+   memo when a segment must be recovered after compaction.
+3. Write or append each verified segment immediately with the ordinary file tools before
+   reading another segment. Keep source order and record page or section coverage.
+   If an available command writes the target file directly, verify that file in place
+   instead of reading the long output back into chat and recreating it manually.
+4. Continue through the same ordinary tool loop until the requested source range is
+   covered. Do not claim completeness from a partial read or from a summary alone.
+5. Before reporting success, verify that the output file exists, is non-empty, and that
+   its recorded coverage matches the requested source. State OCR, layout, table, image,
+   or reader limitations explicitly.
+
+For Word, Excel, PowerPoint, HTML, and text files, use the same generic sequence through
+`prepare_local_document` and the available reader. Do not switch to a format-specific
+background workflow.
 
 ## Route New PDF Creation
 

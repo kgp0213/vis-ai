@@ -625,10 +625,7 @@ describe("model request policy", () => {
     assert.match(launcher, /resolveProviderModelAgentPolicy/);
     assert.match(launcher, /resolveProviderModelCapabilities/);
     assert.match(launcher, /resolveProviderModelVisionPolicy/);
-    assert.match(launcher, /maxContextTokens: capabilities\.maxContextTokens/);
     assert.match(launcher, /maxOutputTokens: capabilities\.maxOutputTokens/);
-    assert.match(launcher, /const requestPurpose = purpose === "verification" \? "documentReview" : purpose/);
-    assert.match(launcher, /maxTokens: resolveDocumentOutputBudget\(candidate\.provider, candidate\.modelId, \{ purpose: requestPurpose/);
     assert.match(launcher, /return resolveDocumentOutputBudget\(provider, model, \{ purpose: "report", fallback \}\)/);
     assert.match(launcher, /contextInputGuard: contextInputTransactions/);
     assert.doesNotMatch(launcher, /name:\s*"organize_document_to_markdown"/);
@@ -638,7 +635,6 @@ describe("model request policy", () => {
     assert.match(launcher, /tools\.setResultAugmenter\(null\)/);
     assert.match(launcher, /sameFailureClassLimit/);
     assert.match(launcher, /escalationModel/);
-    assert.match(launcher, /activeEscalationModel/);
     assert.doesNotMatch(launcher, /new DeepSeekClient\(\{ apiKey, baseUrl \}\)/);
     assert.match(server, /requestConfigForModel: \(modelId\) => resolveProviderModelRequest\(provider, modelId, \{ purpose: "verification" \}\)/);
     assert.match(server, /requestConfig: resolveProviderModelRequest\(provider, model\.id, \{ purpose: "verification" \}\)/);

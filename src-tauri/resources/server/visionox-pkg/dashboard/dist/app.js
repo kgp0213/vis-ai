@@ -23664,7 +23664,8 @@ var ARTIFACT_EXT_BY_LANG = {
   txt: "txt"
 };
 var ARTIFACT_PREVIEW_LANGS = /* @__PURE__ */ new Set(["markdown", "md", "html", "htm"]);
-var ARTIFACT_OPEN_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "json", "xml", "yaml", "yml", "csv", "css", "sql", "ini", "toml"]);
+// Markdown artifacts are preview-only; external opening is reserved for an explicit file action.
+var ARTIFACT_OPEN_EXTS = /* @__PURE__ */ new Set(["html", "htm", "txt", "json", "xml", "yaml", "yml", "csv", "css", "sql", "ini", "toml"]);
 function normalizeArtifactLang(raw) {
   return String(raw || "").trim().split(/\s+/)[0].replace(/^language-/, "").toLowerCase();
 }
@@ -24361,8 +24362,21 @@ function ChoiceModal({ modal, onResolve }) {
   useLang();
   const [custom, setCustom] = d2("");
   const [showCustom, setShowCustom] = d2(false);
+  const contextInput = modal.contextInput;
   return html4`
-    <${ModalCard} accent="#f0abfc" icon="🔀" title=${t4("modal.choiceTitle")} subtitle=${modal.question}>
+    <${ModalCard} accent=${contextInput ? "#f59e0b" : "#f0abfc"} icon=${contextInput ? "!" : "🔀"} title=${contextInput?.title || t4("modal.choiceTitle")} subtitle=${contextInput ? null : modal.question}>
+      ${contextInput ? html4`
+        <div class="modal-context-alert">
+          <div class="modal-context-alert-title">当前任务已暂停</div>
+          <div class="modal-context-alert-reason">${contextInput.reason}</div>
+        </div>
+        <div class="modal-context-status">
+          <div class="modal-context-status-label">当前状态</div>
+          <div>${contextInput.statusSummary}</div>
+        </div>
+        <div class="modal-context-recommendation"><strong>建议：</strong>${contextInput.recommendation}</div>
+        <div class="modal-context-question">${modal.question}</div>
+      ` : null}
       ${modal.options.map(
     (opt) => html4`
         <button

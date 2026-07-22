@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,9 @@ const defaultRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RETIRED_RELEASE_RESOURCES = [
   "bootstrap-skills/document-organizer/task-recipes.json",
   "bootstrap-skills/pdf/references/pdf-to-markdown.md",
+  "server/lib/complex-task-launcher-wiring.test.mjs",
+  "server/lib/foreground-task-supervisor.mjs",
+  "server/lib/foreground-task-supervisor.test.mjs",
 ];
 
 function runProcess(root, env, label, script, args = []) {
@@ -56,6 +59,18 @@ export function pruneRetiredReleaseResources(root) {
       throw new Error(`retired release resource escapes canonical tree: ${resourcePath}`);
     }
     rmSync(target, { force: true });
+  }
+  const legacyLib = resolve(resourcesRoot, "server", "lib");
+  if (existsSync(legacyLib)) {
+    for (const entry of readdirSync(legacyLib, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^complex-task-.*\.mjs$/i.test(entry.name)) continue;
+      const target = resolve(legacyLib, entry.name);
+      const targetRelative = relative(resourcesRoot, target);
+      if (!targetRelative || targetRelative.startsWith("..") || targetRelative.includes(`..${sep}`)) {
+        throw new Error(`retired release resource escapes canonical tree: ${entry.name}`);
+      }
+      rmSync(target, { force: true });
+    }
   }
 }
 

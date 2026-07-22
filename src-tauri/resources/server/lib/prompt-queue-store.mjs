@@ -3,6 +3,8 @@ import { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonF
 const VERSION = 1;
 const MAX_COMPLETION_TEXT = 32_000;
 const MAX_COMPLETION_ERROR = 2_000;
+const MAX_COMPLETION_WARNINGS = 10;
+const MAX_COMPLETION_ARTIFACTS = 50;
 
 function cloneMapOfArrays(map) {
   return new Map([...map].map(([key, items]) => [key, [...items]]));
@@ -14,6 +16,34 @@ function text(value, maxLength) {
   return Number.isFinite(maxLength) ? result.slice(0, maxLength) : result;
 }
 
+function normalizeWarnings(value) {
+  if (!Array.isArray(value)) return undefined;
+  const warnings = value
+    .map((item) => text(typeof item === "string" ? item : item?.message, 500))
+    .filter(Boolean)
+    .slice(0, MAX_COMPLETION_WARNINGS);
+  return warnings.length > 0 ? warnings : undefined;
+}
+
+function normalizeArtifactFiles(value) {
+  if (!Array.isArray(value)) return undefined;
+  const files = value
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => Object.fromEntries(Object.entries({
+      path: text(item.path, 1_000),
+      filename: text(item.filename, 300) || undefined,
+      ext: text(item.ext, 40) || undefined,
+      size: Number.isFinite(item.size) && item.size >= 0 ? Number(item.size) : undefined,
+      mtimeMs: Number.isFinite(item.mtimeMs) ? Number(item.mtimeMs) : undefined,
+      previewable: typeof item.previewable === "boolean" ? item.previewable : undefined,
+      openable: typeof item.openable === "boolean" ? item.openable : undefined,
+      retention: text(item.retention, 40) || undefined,
+    }).filter(([, field]) => field !== undefined && field !== null)))
+    .filter((item) => item.path)
+    .slice(0, MAX_COMPLETION_ARTIFACTS);
+  return files.length > 0 ? files : undefined;
+}
+
 function normalizeCompletion(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return Object.fromEntries(Object.entries({
@@ -23,6 +53,11 @@ function normalizeCompletion(value) {
     assistantText: text(value.assistantText, MAX_COMPLETION_TEXT) || undefined,
     assistantMessageId: text(value.assistantMessageId, 200) || undefined,
     userMessageId: text(value.userMessageId, 200) || undefined,
+    taskState: text(value.taskState, 80) || undefined,
+    warnings: normalizeWarnings(value.warnings),
+    artifactFiles: normalizeArtifactFiles(value.artifactFiles),
+    interventionChoice: text(value.interventionChoice, 100) || undefined,
+    recoveryHandle: text(value.recoveryHandle, 500) || undefined,
   }).filter(([, item]) => item !== undefined));
 }
 

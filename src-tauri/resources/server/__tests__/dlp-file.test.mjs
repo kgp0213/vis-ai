@@ -276,7 +276,7 @@ test("launcher shares managed document references without exposing the retired P
   assert.doesNotMatch(launcher, /registerPdfMarkdownWorkflowTool\(tools/);
   assert.doesNotMatch(launcher, /name:\s*"organize_pdf_to_markdown"/);
   assert.match(launcher, /name: "read_context_input"[\s\S]*?contextInputTransactions\.readInput/);
-  assert.match(launcher, /kind: "document-progress"/);
+  assert.doesNotMatch(launcher, /kind: "document-progress"|documentMarkdownManager|documentHandoffCoordinator/);
   assert.match(launcher, /wrapReadFileToolWithDlp[\s\S]*?registry: preparedDocumentRegistry/);
   assert.match(launcher, /wrapToolsPathArgsWithDlp\(tools, registeredNames[\s\S]*?registry: preparedDocumentRegistry/);
 });

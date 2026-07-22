@@ -81,6 +81,15 @@ function commandPreview(args) {
   return preview.length > 800 ? `${preview.slice(0, 797)}...` : preview;
 }
 
+function dwsCommandScope(args) {
+  const commandPath = [];
+  for (const arg of args) {
+    if (String(arg).startsWith("--")) break;
+    commandPath.push(String(arg));
+  }
+  return commandPath.join("\u0000");
+}
+
 export function prepareDwsWrite(input, options = {}) {
   if (input?.action !== "send_message") throw new Error("dws_write currently supports action=send_message");
   const targetType = String(input?.targetType ?? "");
@@ -140,6 +149,8 @@ export function registerVHomeSkillTools(registry, options) {
     getSendContext = () => ({}),
     reviewMessageRisk,
   } = options;
+  let authorizedOperationId = null;
+  const authorizedDwsScopes = new Set();
 
   registry.register({
     name: "dws_help",
@@ -212,6 +223,7 @@ export function registerVHomeSkillTools(registry, options) {
       }, {
         source: sendContext.source,
         userPrompt: sendContext.userPrompt,
+        scheduledAuthorization: sendContext.scheduledAuthorization === true,
         review: reviewMessageRisk,
         signal: ctx?.signal,
       });
@@ -242,7 +254,7 @@ export function registerVHomeSkillTools(registry, options) {
 
   registry.register({
     name: "dws_exec",
-    description: "Execute any current or future packaged DWS business command that is not covered by dws_read or dws_write. There is no business-command allowlist. Verify syntax with dws_help first. The tool always presents its own confirmation card and runs only after the user confirms; never call shell, add --yes/--format/--timeout, or ask for duplicate confirmation.",
+    description: "Execute any current or future packaged DWS business command that is not covered by dws_read or dws_write. There is no business-command allowlist. Verify syntax with dws_help first. The host presents a confirmation card unless the user already allowed the same command scope for the current task; never call shell, add --yes/--format/--timeout, or ask for duplicate confirmation.",
     readOnly: false,
     parameters: {
       type: "object",
@@ -257,6 +269,15 @@ export function registerVHomeSkillTools(registry, options) {
       const args = validateDwsExecArgs(input?.args);
       const purpose = requiredText(input?.purpose, "purpose", 200);
       const impact = requiredText(input?.impact, "impact", 500);
+      const operationId = String((getSendContext() ?? {}).operationId ?? "");
+      if (operationId !== authorizedOperationId) {
+        authorizedOperationId = operationId;
+        authorizedDwsScopes.clear();
+      }
+      const authorizationScope = dwsCommandScope(args);
+      if (operationId && authorizedDwsScopes.has(authorizationScope)) {
+        return json(await runDwsExec(args, { executable: dwsExecutable, signal: ctx?.signal }));
+      }
       if (!ctx?.confirmationGate) return json({ ok: false, error: "interactive confirmation is unavailable" });
       const preview = commandPreview(args);
       const verdict = await ctx.confirmationGate.ask({
@@ -264,13 +285,15 @@ export function registerVHomeSkillTools(registry, options) {
         payload: {
           question: `允许 V来家执行“${purpose}”？`,
           options: [
-            { id: "A", title: "确认执行", summary: `${impact} · ${preview}` },
+            { id: "A", title: "仅执行本次", summary: `${impact} · ${preview}` },
+            { id: "S", title: "本任务允许同类操作", summary: "仅在当前任务内复用相同 DWS 命令范围的授权" },
             { id: "B", title: "取消执行", summary: "不调用 DWS，不产生任何操作" },
           ],
           allowCustom: false,
         },
       });
-      if (verdict?.type !== "pick" || verdict.optionId !== "A") return json({ ok: false, cancelled: true });
+      if (verdict?.type !== "pick" || !new Set(["A", "S"]).has(verdict.optionId)) return json({ ok: false, cancelled: true });
+      if (verdict.optionId === "S" && operationId) authorizedDwsScopes.add(authorizationScope);
       return json(await runDwsExec(args, { executable: dwsExecutable, signal: ctx?.signal }));
     },
   });

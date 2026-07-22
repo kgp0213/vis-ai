@@ -6525,6 +6525,53 @@ button.side-tab.active {
   color: var(--text-secondary);
   margin-top: 2px;
 }
+.modal-context-alert,
+.modal-context-status,
+.modal-context-recommendation,
+.modal-context-question {
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  overflow-wrap: anywhere;
+}
+.modal-context-alert {
+  background: color-mix(in srgb, #f59e0b 10%, var(--surface-overlay));
+  border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--border-default));
+}
+.modal-context-alert-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.modal-context-alert-reason {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+.modal-context-status {
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.modal-context-status-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+.modal-context-recommendation {
+  background: color-mix(in srgb, var(--accent-primary) 8%, var(--surface-overlay));
+  border-left: 3px solid var(--accent-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.modal-context-question {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .modal-cmd {
   background: var(--surface-overlay);
   border-radius: var(--radius-sm);

@@ -437,7 +437,7 @@
     </div>
 
     <div class="tip">
-      <code>agentPolicy</code> 控制长文档的工具轮次、分页读取、工具结果预算和后台分批策略。Qwen 建议保留 <code>documentPolicy</code> 的 <code>3000 / 8192 / 8 / 2 / true</code> 配置；它适用于 PDF、Word、Excel、PPT、HTML、Markdown 等保存型整理任务。<code>max_tokens</code> 只控制单次模型输出，完整正文由宿主分批校验、失败块重试并最终组装，不要求模型一次生成全文。
+      <code>agentPolicy</code> 中的工具轮次、延续窗口和工具结果预算会影响普通模型循环。<code>documentWorkflow</code> 仅注入文档访问提示，<code>documentPolicy</code> 作为旧配置兼容字段保留；二者都不会启动文档后台 Worker、检查点恢复或备用模型接管。<code>max_tokens</code> 只控制单次模型输出，长任务需要模型在当前会话中分步读取、保存并核验结果。
     </div>
 
     <h2>五、如何判断操作是否成功</h2>

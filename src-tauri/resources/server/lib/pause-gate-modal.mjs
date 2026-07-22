@@ -23,9 +23,11 @@ export function requestToModal(request) {
     case "choice":
       return {
         kind: "choice", _gateId: id,
+        title: payload.title,
         question: payload.question,
         options: payload.options,
         allowCustom: payload.allowCustom,
+        contextInput: payload.contextInput,
       };
 
     case "plan_proposed":

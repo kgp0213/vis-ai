@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ const {
   ToolRegistry,
   registerFilesystemTools,
 } = await import(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url));
+const { registerShellTools } = await import(new URL("../visionox-pkg/dist/cli/chunk-O52OLQL3.js", import.meta.url));
 const {
   countTokens,
   estimateConversationTokens,
@@ -205,7 +206,30 @@ describe("agent runtime policy", () => {
     }
   });
 
-  test("the runtime caches a large read before truncation and credits a successful file write", async () => {
+  test("large shell output is retained as a bounded-read resource", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "visionox-shell-resource-"));
+    try {
+      const tools = new ToolRegistry();
+      registerShellTools(tools, {
+        rootDir,
+        outputResourceDir: join(rootDir, "tool-results"),
+        allowAll: true,
+        timeoutSec: 30,
+      });
+      const result = await tools.dispatch("run_command", {
+        command: 'node -e "process.stdout.write(\'x\'.repeat(70000))"',
+      });
+      assert.match(result, /^\[TOOL_OUTPUT_RESOURCE\]/);
+      const descriptor = JSON.parse(result.split("\n", 1)[0].slice("[TOOL_OUTPUT_RESOURCE]".length).trim());
+      assert.equal(descriptor.bytes, 70000);
+      assert.equal((await readFile(descriptor.path, "utf8")).length, 70000);
+      assert.match(result, /output truncated/);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the runtime caches a large read before truncation without crediting an unrelated file write", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "visionox-context-runtime-"));
     try {
       let modelCalls = 0;
@@ -238,8 +262,53 @@ describe("agent runtime policy", () => {
 
       assert.equal(modelCalls, 3);
       assert.match(events.find((event) => event.role === "tool" && event.toolName === "large_reader")?.content ?? "", /CONTEXT_INPUT_CACHED/);
-      assert.equal(contextInputGuard.status().pendingCount, 0);
+      assert.equal(contextInputGuard.status().pendingCount, 1);
+      assert.equal(contextInputGuard.status().materializedChars, 0);
       assert.equal((await readFile(join(rootDir, "result.md"), "utf8")).length, 320);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("resource reads participate in the same context coverage lease", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "visionox-resource-lease-"));
+    try {
+      const contextRoot = join(rootDir, "context-inputs");
+      const resourceDir = join(contextRoot, "tool-results");
+      await mkdir(resourceDir, { recursive: true });
+      const resourcePath = join(resourceDir, "resource.txt");
+      await writeFile(resourcePath, "x".repeat(100), "utf8");
+      let modelCalls = 0;
+      const client = {
+        chat: async () => {
+          modelCalls++;
+          if (modelCalls === 1) return { content: "", toolCalls: [toolCall("resource-read", "read_tool_output", { resourceId: "tool-output-resource-1.txt", offsetBytes: 0 })], usage: {} };
+          if (modelCalls === 2) return { content: "", toolCalls: [toolCall("resource-write", "append_file", { path: "result.md", content: "x" })], usage: {} };
+          return { content: "已完成", toolCalls: [], usage: {} };
+        },
+      };
+      const tools = new ToolRegistry();
+      tools.register({
+        name: "read_tool_output",
+        readOnly: true,
+        contextControl: true,
+        contextResourceReader: true,
+        parameters: { type: "object", properties: { resourceId: { type: "string" }, offsetBytes: { type: "integer" } } },
+        fn: async () => JSON.stringify({ ok: true, resourceId: "tool-output-resource-1.txt", offsetBytes: 0, nextOffsetBytes: 100, totalBytes: 100, complete: true, content: "x".repeat(100) }),
+      });
+      registerFilesystemTools(tools, { rootDir, allowWriting: true });
+      const contextInputGuard = createContextInputTransactionStore(contextRoot, { inputThresholdChars: 10, pendingLimitChars: 50 });
+      contextInputGuard.beginTurn({ turnId: "resource-runtime-turn", requiresArtifact: true, requiresCompleteCoverage: true });
+      const descriptor = JSON.stringify({ resourceId: "tool-output-resource-1.txt", path: resourcePath, bytes: 100 });
+      contextInputGuard.captureInput({ source: "tool:run_command", content: `[TOOL_OUTPUT_RESOURCE] ${descriptor}\npreview`, metadata: { tool: "run_command" } });
+
+      const events = [];
+      for await (const event of makeLoop(client, tools, { contextInputGuard }).step("create result.md")) events.push(event);
+
+      assert.equal(modelCalls, 3);
+      assert.equal(contextInputGuard.status().pendingCount, 0);
+      assert.equal((await readFile(join(rootDir, "result.md"), "utf8")).length, 1);
+      assert.equal(events.some((event) => event.role === "error"), false);
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

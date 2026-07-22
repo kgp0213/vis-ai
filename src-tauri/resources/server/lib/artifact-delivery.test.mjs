@@ -1,18 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 
 import {
   artifactDeliveryRetryPrompt,
   artifactMissingNotice,
+  artifactPathsFromToolOutput,
   detectArtifactRequest,
-  documentArtifactStateFromJob,
-  documentJobToolMismatch,
+  isPlanOnlyRequest,
   latestAssistantResponse,
-  pendingDocumentArtifactFromToolEvent,
-  pendingDocumentWriteConflict,
   registerSaveLastAssistantResponseTool,
+  requestedArtifactPaths,
+  requestedOutputArtifactPaths,
+  shouldEnforceArtifactDelivery,
   toolResultSucceeded,
 } from "./artifact-delivery.mjs";
 
@@ -34,11 +34,54 @@ test("artifact intent distinguishes commands from design discussions", () => {
   assert.equal(detectArtifactRequest("总结一下这段内容").required, false);
 });
 
+test("plan-first requests are recognized without changing artifact intent", () => {
+  assert.equal(isPlanOnlyRequest("这个任务请先给我一个计划，我确认后再执行"), true);
+  assert.equal(isPlanOnlyRequest("请先给我方案，我确认后再生成 report.md"), true);
+  assert.equal(isPlanOnlyRequest("制定执行方案，等我确认后再保存结果"), true);
+  assert.equal(isPlanOnlyRequest("请给我一个计划，我确认后再执行"), true);
+  assert.equal(isPlanOnlyRequest("请给计划，确认后执行"), true);
+  assert.equal(isPlanOnlyRequest("给我方案，确认后生成 report.md"), true);
+  assert.equal(isPlanOnlyRequest("请直接保存为 reports/manual.md"), false);
+  assert.equal(shouldEnforceArtifactDelivery({ required: true, planningOnly: true }), false);
+  assert.equal(shouldEnforceArtifactDelivery({ required: true, planningOnly: true, executionStarted: true }), true);
+  assert.equal(shouldEnforceArtifactDelivery({ required: true, planningOnly: true, planApproved: true }), true);
+});
+
+test("requested artifact paths include Windows and workspace-relative outputs", () => {
+  assert.deepEqual(
+    requestedArtifactPaths("读取 C:\\docs\\source.pdf 并保存为 C:\\docs\\result.md；另存 reports/backup.md"),
+    ["C:\\docs\\source.pdf", "C:\\docs\\result.md", "reports/backup.md"],
+  );
+});
+
+test("requested output paths do not treat the source document as the deliverable", () => {
+  assert.deepEqual(
+    requestedOutputArtifactPaths("读取 C:\\docs\\source.pdf 并保存为 C:\\docs\\result.md"),
+    ["C:\\docs\\result.md"],
+  );
+  assert.deepEqual(requestedArtifactPaths("/tmp/source.pdf 并保存为 /tmp/result.md"), ["/tmp/source.pdf", "/tmp/result.md"]);
+  assert.deepEqual(requestedOutputArtifactPaths("/tmp/source.pdf 并保存为 /tmp/result.md"), ["/tmp/result.md"]);
+  assert.deepEqual(requestedOutputArtifactPaths("保存为 https://example.com/result.md"), []);
+  assert.deepEqual(requestedOutputArtifactPaths("请保存为 report.md"), ["report.md"]);
+});
+
+test("artifact delivery recovers paths reported by a command result", () => {
+  assert.deepEqual(
+    artifactPathsFromToolOutput("Wrote Markdown to: C:\\Users\\Lenovo\\visionox-workspace\\report.md\r\nOutput size: 12 bytes"),
+    ["C:\\Users\\Lenovo\\visionox-workspace\\report.md"],
+  );
+  assert.deepEqual(artifactPathsFromToolOutput("Output: /tmp/report.md"), ["/tmp/report.md"]);
+  assert.deepEqual(artifactPathsFromToolOutput("Output: https://example.com/report.md"), []);
+  assert.deepEqual(artifactPathsFromToolOutput("pdftotext completed successfully"), []);
+});
+
 test("artifact retry guidance selects the deterministic previous-response tool", () => {
   const prompt = artifactDeliveryRetryPrompt({ savePreviousResponse: true }, "把刚才内容保存成文档");
   assert.match(prompt, /save_last_assistant_response/);
   assert.match(prompt, /不要重新发送上一条回答作为 content/);
-  assert.match(artifactMissingNotice(), /不能标记为完成/);
+  const filePrompt = artifactDeliveryRetryPrompt({ savePreviousResponse: false }, "提取 PDF 并保存为 result.md");
+  assert.match(filePrompt, /若已存在，先验证并保留它/);
+  assert.match(artifactMissingNotice(), /不能确认交付完成/);
 });
 
 test("save-last tool forwards the stable response through the existing write boundary", async () => {
@@ -83,15 +126,24 @@ test("save-last tool propagates a failed nested write", async () => {
 test("launcher retries explicit file delivery and fails completion when no artifact exists", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
   assert.match(launcher, /registerSaveLastAssistantResponseTool/);
-  assert.match(launcher, /pendingDocumentArtifactFromToolEvent/);
-  assert.match(launcher, /!pendingDocumentArtifact/);
-  assert.match(launcher, /if \(pendingDocumentArtifact\) break/);
-  assert.match(launcher, /name: "get_document_job_status"/);
+  assert.doesNotMatch(launcher, /pendingDocumentArtifactFromToolEvent/);
+  assert.doesNotMatch(launcher, /get_document_job_status/);
+  assert.doesNotMatch(launcher, /documentMarkdownManager|documentHandoffCoordinator/);
   assert.match(launcher, /finishTurnOnResult/);
   assert.match(launcher, /artifactContinuationAttempts < MAX_ARTIFACT_AUTO_CONTINUATIONS/);
-  assert.match(launcher, /if \(!info \|\| info\.size <= 0 \|\| info\.mtimeMs < turnStartedAt/);
+  assert.match(launcher, /if \(!info \|\| info\.size <= 0 \|\| \(!isRequestedExistingOutput && info\.mtimeMs < turnStartedAt/);
   assert.match(launcher, /toolResultSucceeded\(ev\.content\)/);
+  assert.match(launcher, /rememberToolGeneratedArtifacts\(ev\.toolName, ev\.toolArgs, ev\.content\)/);
+  assert.match(launcher, /edit_file\|multi_edit/);
+  assert.match(launcher, /Array\.isArray\(args\.edits\)/);
+  assert.match(launcher, /requestedOutputArtifactPaths\(text\)/);
+  assert.match(launcher, /isRequestedExistingOutput/);
   assert.match(launcher, /artifactIncomplete \? "requested artifact was not created"/);
+  assert.match(launcher, /const planningOnlyRequest = isPlanOnlyRequest\(text\)/);
+  assert.match(launcher, /shouldEnforceArtifactDelivery\(/);
+  assert.match(launcher, /planApproved: !planningOnlyRequest && Boolean\(activePlanSteps\)/);
+  assert.match(launcher, /taskWarnings = detectTaskWarnings\(assistantText\)/);
+  assert.match(launcher, /artifactFiles/);
 });
 
 test("artifact completion rejects failed tool results", () => {
@@ -109,147 +161,4 @@ test("artifact completion rejects failed tool results", () => {
   assert.equal(toolResultSucceeded('{"ok":true,"exitCode":1,"stdout":"failed"}'), false);
   assert.equal(toolResultSucceeded('{"ok":false,"exitCode":0,"error":"dispatch failed"}'), false);
   assert.equal(toolResultSucceeded('{"ok":true,"exitCode":null}'), true);
-});
-
-test("accepted document jobs are pending artifacts rather than missing files", () => {
-  const artifact = pendingDocumentArtifactFromToolEvent(
-    "organize_document_to_markdown",
-    { input: "manual.pdf", outputPath: "manual.md" },
-    JSON.stringify({
-      ok: true,
-      accepted: true,
-      artifactStatus: "pending",
-      backgroundJobId: "document:12345678-abcd-abcd-abcd-123456789012",
-      documentJobId: "12345678-abcd-abcd-abcd-123456789012",
-      outputPath: "manual.md",
-    }),
-  );
-  assert.deepEqual(artifact, {
-    state: "pending",
-    jobId: "document:12345678-abcd-abcd-abcd-123456789012",
-    documentJobId: "12345678-abcd-abcd-abcd-123456789012",
-    outputPath: "manual.md",
-    sourcePath: "manual.pdf",
-  });
-  assert.equal(documentArtifactStateFromJob({ status: "waiting_foreground" }), "pending");
-  assert.equal(documentArtifactStateFromJob({ status: "completed_with_warnings" }), "created");
-  assert.equal(documentArtifactStateFromJob({ status: "failed" }), "failed");
-});
-
-test("legacy PDF document jobs are also tracked as pending artifacts", () => {
-  const artifact = pendingDocumentArtifactFromToolEvent(
-    "organize_pdf_to_markdown",
-    { input: "manual.pdf", outputPath: "manual.md" },
-    JSON.stringify({
-      ok: true,
-      accepted: true,
-      artifactStatus: "pending",
-      backgroundJobId: "document:12345678-abcd-abcd-abcd-123456789012",
-      documentJobId: "12345678-abcd-abcd-abcd-123456789012",
-      outputPath: "manual.md",
-    }),
-  );
-  assert.equal(artifact?.jobId, "document:12345678-abcd-abcd-abcd-123456789012");
-  assert.equal(artifact?.sourcePath, "manual.pdf");
-});
-
-test("pending document outputs reject competing writers but allow unrelated files", () => {
-  const jobs = [{
-    id: "document:12345678-abcd-abcd-abcd-123456789012",
-    status: "waiting_foreground",
-    outputPath: "reports/manual.md",
-  }];
-  const conflict = pendingDocumentWriteConflict("write_file", {
-    path: "reports/manual.md",
-    content: "replacement",
-  }, jobs);
-  assert.equal(conflict?.code, "artifact-pending");
-  assert.equal(conflict?.backgroundJobId, jobs[0].id);
-  assert.equal(pendingDocumentWriteConflict("edit_file", { path: "reports/manual.md", search: "old", replace: "new" }, jobs)?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, jobs)?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("move_file", { source: "reports/manual.md", destination: "reports/archive.md" }, jobs)?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("append_file", { path: "reports/other.md", content: "ok" }, jobs), null);
-  assert.equal(pendingDocumentWriteConflict("read_file", { path: "reports/manual.md" }, jobs), null);
-});
-
-test("relative edit and delete paths are resolved from the active workspace", () => {
-  const workspaceRoot = resolve(process.cwd(), "artifact-delivery-workspace");
-  const jobs = [{
-    id: "document:12345678-abcd-abcd-abcd-123456789012",
-    status: "running",
-    outputPath: resolve(workspaceRoot, "reports/manual.md"),
-  }];
-  const options = { workspaceRoot };
-
-  assert.equal(
-    pendingDocumentWriteConflict("edit_file", { path: "reports/manual.md", search: "old", replace: "new" }, jobs, options)?.code,
-    "artifact-pending",
-  );
-  assert.equal(
-    pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, jobs, options)?.code,
-    "artifact-pending",
-  );
-  assert.equal(
-    pendingDocumentWriteConflict("delete_file", { path: "reports/other.md" }, jobs, options),
-    null,
-  );
-});
-
-test("failed or awaiting-output jobs keep their output protected until handoff is finished", () => {
-  for (const status of ["failed", "awaiting_output", "needs_review"]) {
-    const conflict = pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, [{
-      id: "document:12345678-abcd-abcd-abcd-123456789012",
-      status,
-      outputPath: "reports/manual.md",
-    }]);
-    assert.equal(conflict?.code, "artifact-pending", status);
-  }
-  const handoffConflict = pendingDocumentWriteConflict("write_file", { path: "reports/manual.md", content: "replacement" }, [{
-    id: "document:12345678-abcd-abcd-abcd-123456789012",
-    status: "completed_with_warnings",
-    outputPath: "reports/manual.md",
-    handoff: { state: "running" },
-  }]);
-  assert.equal(handoffConflict?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("delete_file", { path: "reports/manual.md" }, [{
-    id: "document:12345678-abcd-abcd-abcd-123456789012",
-    status: "completed_with_warnings",
-    outputPath: "reports/manual.md",
-    handoff: { state: "delivered" },
-  }]), null);
-});
-
-test("shell commands and helper scripts cannot bypass a pending document output lock", () => {
-  const workspaceRoot = resolve(process.cwd(), "artifact-shell-guard");
-  const outputPath = resolve(workspaceRoot, "reports", "manual.md");
-  const jobs = [{
-    id: "document:12345678-abcd-abcd-abcd-123456789012",
-    status: "completed_with_warnings",
-    outputPath,
-    handoff: { state: "running" },
-  }];
-  const options = { workspaceRoot };
-
-  assert.equal(pendingDocumentWriteConflict("run_command", {
-    command: `Set-Content -LiteralPath '${outputPath}' -Value 'replacement'`,
-  }, jobs, options)?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("run_background", {
-    command: `node cleanup.js "${outputPath}"`,
-  }, jobs, options)?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("write_file", {
-    path: "fix-output.ps1",
-    content: `$target = '${outputPath}'\nRemove-Item -LiteralPath $target`,
-  }, jobs, options)?.code, "artifact-pending");
-  assert.equal(pendingDocumentWriteConflict("run_command", {
-    command: "Get-ChildItem reports",
-  }, jobs, options), null);
-});
-
-test("process job tools redirect document UUIDs to the non-blocking status tool", () => {
-  const mismatch = documentJobToolMismatch("wait_for_job", {
-    jobId: "12345678-abcd-abcd-abcd-123456789012",
-  });
-  assert.equal(mismatch?.code, "wrong-job-system");
-  assert.equal(mismatch?.useTool, "get_document_job_status");
-  assert.equal(documentJobToolMismatch("wait_for_job", { jobId: 7 }), null);
 });

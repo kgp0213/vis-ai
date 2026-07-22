@@ -29,6 +29,24 @@ describe("Dashboard desktop UX", () => {
     assert.doesNotMatch(app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed =")), /model-manage-link|>模型管理</);
   });
 
+  test("keeps generated Markdown inside the app preview instead of launching a system reader", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(app, /Markdown artifacts are preview-only/);
+    assert.match(app, /var ARTIFACT_OPEN_EXTS = .*"html"/);
+    assert.doesNotMatch(app, /var ARTIFACT_OPEN_EXTS = .*"md"/);
+  });
+
+  test("renders context-input intervention cards with an explicit status and recommendation", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(dashboardCssUrl, "utf8");
+    assert.match(app, /const contextInput = modal\.contextInput/);
+    assert.match(app, /当前任务已暂停/);
+    assert.match(app, /contextInput\.recommendation/);
+    assert.match(app, /modal-context-status/);
+    assert.match(css, /\.modal-context-alert/);
+    assert.match(css, /\.modal-context-recommendation/);
+  });
+
   test("keeps existing entry points while improving semantics, themes and composer hierarchy", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");

@@ -189,7 +189,7 @@
 | `capabilities` | 推荐 | 显式能力契约，供新版程序做协议适配、角色路由和保守限流；真实配置文件仍建议保留旧字段以兼容旧版程序 |
 | `requestDefaults` | JSON 策略必填 | 正式请求原生参数；按服务商规定的字段和层级透传 |
 | `verificationRequestDefaults` | 否 | 仅在模型/API 检测时递归覆盖正式参数，常用于关闭耗时思考 |
-| `agentPolicy` | 否 | 工具轮次、工具结果预算和长文档后台策略 |
+| `agentPolicy` | 否 | 普通模型工具循环的轮次、延续窗口、工具结果预算，以及历史文档配置兼容字段 |
 | `visionPolicy` | 图片模型可选 | 图片数量、清晰度和上下文预留；文本模型不要配置 |
 | `disabled` | 否 | `true` 时保留配置但不参与选择、检测或回退 |
 
@@ -253,7 +253,7 @@ DeepSeek 当前只声明文本输入，不包含 `vision-review`。Qwen 和 Kimi
 - 模型必须至少在旧字段 `maxContextLength` 或新字段 `capabilities.maxContextTokens` 中声明一个合法的正整数上下文上限；两者都缺失时，导入预览应拒绝该模型。
 - 新版程序优先采用合法的显式 `capabilities` 字段；字段缺失时，才回退到 `multimodal`、`maxContextLength` 和 `visionPolicy`。
 - 类型、枚举或结构非法（例如 `maxOutputTokens` 写成字符串、`roles` 包含未知值）应在导入预览阶段给出明确错误并拒绝写入。历史磁盘配置中的非法字段则由运行时忽略并回退，不能因此崩溃。
-- 新旧字段数值冲突，或数值语法合法但与真实模型能力不一致，不应让后台任务死循环。运行时采用可解析的保守值、缩小批次或降级对应角色，并在检测结果或任务诊断中提示维护人员修正配置。
+- 新旧字段数值冲突，或数值语法合法但与真实模型能力不一致，不应让普通模型工具循环无限重试。运行时采用可解析的保守值，并在检测结果或任务诊断中提示维护人员修正配置。
 - `capabilities` 没有声明的能力按“未知”处理，不能因为模型名称包含 `Vision`、`Pro` 或特定厂商名称就自动开启。
 
 ### 6.2 declared、observed 与 effective
@@ -297,8 +297,8 @@ JSON 配置不准确时，程序应有界降级：减小输入批次、降低图
 - `model`、`messages`、`stream`、`tools` 由程序维护，禁止放入 `requestDefaults`。
 - 其他字段是否有效由服务商接口决定；程序负责保持 JSON 层级并透传，不替模型猜参数。
 - `requestDefaults` 最大 32 KB、最大嵌套深度 8，只能包含标准 JSON 值。
-- 单次可见输出使用服务商实际支持的 `max_tokens`。长文档完整输出由后台分批组装，不依赖一次生成全文。
-- `capabilities.maxOutputTokens` 是能力元数据，不会作为请求参数发送；`requestDefaults.max_tokens` 是正式请求值，文档任务还会同时受 `documentPolicy.batchOutputTokens`、用途 profile 和模型能力上限约束，最终取所有已声明上限中的最小值。
+- 单次可见输出使用服务商实际支持的 `max_tokens`。较长任务由普通模型工具循环按步骤读取和保存，不应假设一次回答可以容纳全部结果。
+- `capabilities.maxOutputTokens` 是能力元数据，不会作为请求参数发送；`requestDefaults.max_tokens` 是正式请求值。用途 profile 只在对应调用明确选用时覆盖它，当前主对话不会启动独立文档 Worker。
 - 不要在 `requestDefaults` 中使用程序或服务商未读取的自造字段。模型能力声明只能放在 `capabilities`，厂商原生请求参数只能按其接口文档放在 `requestDefaults`。
 - `thinking_budget` 控制厂商思考预算，不等于最终可见输出上限，也不能代替 `max_tokens` 或 `capabilities.maxOutputTokens`。
 
@@ -326,13 +326,13 @@ Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此�
 
 本地 Qwen3.5 使用本机接口已经验证的 `thinking_budget`。ModelScope 只声明 Qwen3.5 默认思考和 `enable_thinking`，未把 `thinking_budget` 定义为通用标准，因此不要添加未经当前接口验证的预算档位。
 
-## 8. Agent 与长文档策略
+## 8. Agent 策略与历史文档兼容字段
 
 ### `agentPolicy`
 
 | 字段 | 范围 | 说明 |
 |---|---|---|
-| `documentWorkflow` | 仅 `guided` | 保存型文档统一进入宿主管理的后台工作流 |
+| `documentWorkflow` | 仅 `guided` | 兼容字段；`guided` 只向普通模型循环注入文档访问提示，不会启动文档后台 Worker |
 | `maxToolIterations` | 4–64 | 单轮最多工具迭代数 |
 | `maxToolContinuationWindows` | 0–2 | 工具轮次到顶后允许的延续窗口数 |
 | `sameFailureClassLimit` | 2–10 | 同类错误连续出现后的停止阈值 |
@@ -347,14 +347,16 @@ Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此�
 | `requestProfiles.learn` | JSON 对象 | `/learn` 相关提炼请求的参数覆盖 |
 | `requestProfiles.sessionReview` | JSON 对象 | 会话质量评估请求的参数覆盖 |
 | `requestProfiles.messageRisk` | JSON 对象 | V来家外发消息风险审查请求的参数覆盖；弱模型建议在此关闭思考并保留足够的可见输出预算 |
-| `requestProfiles.documentReview` | JSON 对象 | PDF、Office、HTML 等后台文档质量审校请求的参数覆盖 |
-| `documentPolicy` | 见下表 | PDF、Office、HTML、Markdown 等后台整理策略 |
+| `requestProfiles.documentReview` | JSON 对象 | 历史文档审校调用的兼容参数；当前主对话不会因此创建后台任务 |
+| `documentPolicy` | 见下表 | 历史文档工作流的兼容配置；当前 Launcher 不用它调度主对话 |
 
 `toolResultBudget` 一旦配置，三个字段都必须填写。
 
-`requestProfiles` 只覆盖对应用途的请求，不会改变模型能力声明。文档质量审校使用 `requestProfiles.documentReview`；模型/API 通信检测继续使用独立的 `verificationRequestDefaults`。两者不能混用，也不要在 `requestProfiles` 中添加 `verification`。
+`requestProfiles` 只覆盖明确选用该用途的请求，不会改变模型能力声明。模型/API 通信检测继续使用独立的 `verificationRequestDefaults`，不要在 `requestProfiles` 中添加 `verification`。`documentReview` 仅为旧配置和显式兼容调用保留，不代表当前应用存在文档后台执行流程。
 
-### `agentPolicy.documentPolicy`
+### `agentPolicy.documentPolicy`（历史兼容）
+
+下列字段继续接受导入和校验，避免旧 JSON 失效，也可供离线调用旧文档模块时使用。当前交互任务统一由 `CacheFirstLoop` 执行；这些字段不会创建文档后台任务、检查点、自动恢复、模型切换或“继续”执行窗口。
 
 | 字段 | 范围/取值 | 说明 |
 |---|---|---|
@@ -390,17 +392,9 @@ Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此�
 
 降低这些阈值只会减少“需要复核”提示，不会提高模型的真实处理能力；不要为了让任务显示成功而调低阈值。`summary-only` 任务不使用完整文档保真比例。
 
-`documentPolicy` 是任务执行建议和安全预算，不是模型固有能力。模型升级后可以通过 JSON 调整这些建议，但程序仍需根据实际失败自适应缩小，并保证每次重试都有参数、批次、模型或降级状态上的变化。
+`documentPolicy` 不是模型固有能力，也不是当前普通模型循环的复杂任务开关。`maxModelCallsPerJob`、`jobTimeoutMs`、分批、重试、备用模型和质量阈值只描述旧文档工作流的兼容语义；Launcher 不再读取旧 `document-jobs` 记录，也不会在后台任务页面提供文档暂停、继续、预览或恢复。
 
-`maxModelCallsPerJob` 和 `jobTimeoutMs` 约束的是一次后台执行窗口，不是永久封禁任务。达到任一上限时，程序会暂停任务、保留已经写入的区块检查点和中间预览，并在后台任务页面显示原因；用户点击“继续”会开启新的执行窗口。模型探测、普通前台聊天不计入这个文档窗口预算。若同一窗口内某模型连续耗尽超时、限流或网络重试，程序会暂时跳过该模型，把后续区块交给备用候选；继续任务时会重新尝试。
-
-后台文档任务还遵循以下恢复规则：
-
-- 每次连续执行使用同一组候选模型和配置指纹，避免处理中途悄然更换模型。
-- 用户暂停、程序重启或显式重试后，会在新的执行纪元重新读取当前模型配置与检测状态；近期检测失败的模型会跳过，未检测或检测已过期的模型只探测一次。
-- 来源切分计划与模型执行状态分离。恢复时可以换成能力不同的模型，但来源单元顺序、哈希和已经完成的检查点不随模型变化而重写。
-- 输出截断或上下文窗口过小时，程序缩小区块继续；认证、欠费、模型下架等不可恢复错误只熔断当前配置指纹对应的模型。
-- 确定性检查或模型审校能定位到具体来源单元时，只生成这些单元的补丁；未被点名的已接受正文保持不变，合并后再复核完整批次。
+当前长任务的有效约束来自模型上下文/输出能力、`maxToolIterations`、`maxToolContinuationWindows`、通用工具结果预算和 `context-input-transaction`。如果普通循环无法继续、输入尚未物化或未生成用户要求的文件，系统应在当前会话中报告不完整状态并请求用户干预，而不是套用上述历史文档恢复规则。
 
 ## 9. 图片策略
 
@@ -473,5 +467,5 @@ Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此�
 7. 如果导入触发永久删除确认，确认删除范围是否符合预期。
 8. 导入后是否执行“检测全部模型”；“未检测”和“不可用”是不同状态。
 9. 只有本轮检测结果仍有效时才能删除失败模型；网络波动时应先重新检测。
-10. 一次连续执行使用稳定的模型快照；暂停、重启或显式重试会在新的执行纪元读取当前配置。恢复后应查看后台任务显示的实际模型与诊断，不能只按任务最初使用的模型判断新配置。
+10. 历史 `documentPolicy` 字段不会创建后台文档任务；长任务应在当前会话中核对实际模型、工具进度和最终文件，不能只根据 JSON 声明判断已经完成。
 11. `protocol` 是否与当前服务商接口兼容；模型名称和宣传能力不能代替协议与模态实测。

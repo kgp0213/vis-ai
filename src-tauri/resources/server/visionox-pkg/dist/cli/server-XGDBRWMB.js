@@ -5172,7 +5172,7 @@ async function handleSubmit(method, _rest, body, ctx) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
   const parsedRequestId = typeof requestId === "string" ? requestId.trim().slice(0, 160) : null;
-  if (/^(?:complex-task-delivery|document-handoff)-/.test(parsedRequestId ?? "")) {
+  if (/^document-handoff-/.test(parsedRequestId ?? "")) {
     return { status: 400, body: { error: "requestId uses a reserved internal handoff namespace" } };
   }
   let parsedSkillInvocation = null;
@@ -5489,6 +5489,9 @@ async function openArtifactLocation(target) {
   }
 }
 async function openArtifactFile(filePath) {
+  if (EXTERNAL_OPEN_BLOCKED_EXTS.has(extname(filePath).toLowerCase())) {
+    throw new Error("external opening of Markdown files is disabled; use the in-app preview");
+  }
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
   const execFileAsync = promisify(execFile);
@@ -5500,6 +5503,7 @@ async function openArtifactFile(filePath) {
     await execFileAsync("xdg-open", [filePath]);
   }
 }
+var EXTERNAL_OPEN_BLOCKED_EXTS = /* @__PURE__ */ new Set([".md", ".markdown"]);
 var ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set([
   ".md",
   ".markdown",
@@ -5563,7 +5567,7 @@ function recentArtifactInfo(path, source = "generated") {
       size: st.size,
       mtimeMs: st.mtimeMs,
       previewable: ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= MAX_FILE_SIZE,
-      openable: ![".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"].includes(ext),
+      openable: !EXTERNAL_OPEN_BLOCKED_EXTS.has(ext) && ![".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"].includes(ext),
       source
     };
   } catch {
@@ -5715,7 +5719,7 @@ async function handleArtifacts(method, rest, body, ctx) {
         size: st.size,
         mtimeMs: st.mtimeMs,
         previewable: true,
-        openable: true
+        openable: false
       }
     };
   }
@@ -5742,7 +5746,7 @@ async function handleArtifacts(method, rest, body, ctx) {
           size: st.size,
           mtimeMs: st.mtimeMs,
           previewable: ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= MAX_FILE_SIZE,
-          openable: ![".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"].includes(ext)
+          openable: !EXTERNAL_OPEN_BLOCKED_EXTS.has(ext) && ![".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"].includes(ext)
         });
       } catch {
       }
@@ -5819,6 +5823,9 @@ async function handleArtifacts(method, rest, body, ctx) {
     }
     if (!existsSync8(target)) {
       return { status: 404, body: { error: "artifact file does not exist" } };
+    }
+    if (EXTERNAL_OPEN_BLOCKED_EXTS.has(extname(target).toLowerCase())) {
+      return { status: 403, body: { error: "external opening of Markdown files is disabled; use the in-app preview" } };
     }
     try {
       await openArtifactFile(target);

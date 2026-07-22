@@ -50,6 +50,8 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   assert.match(pdf, /references\/large-document\.md/);
   assert.match(pdf, /format operations only/);
   assert.match(pdf, /must not decide task continuation, completion, or user intervention/);
+  assert.match(pdf, /normal foreground model tool loop/);
+  assert.match(pdf, /Do not switch to a format-specific\s+background workflow/);
   assert.match(pdf, /Never install dependencies automatically/);
   const pdfScript = readFileSync(skillFile("pdf", "scripts/pdf.py"), "utf8");
   assert.match(pdfScript, /PermissionRequired/);

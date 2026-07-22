@@ -66,12 +66,12 @@ PDF 相关技能在办公模式中继续保留：
 | `pdf` | PDF 创建、编辑、合并、拆分、表单与校验 |
 | `md-to-pdf-cjk` | Markdown 转 PDF（支持中文） |
 
-OfficeCLI 不处理 PDF。`prepare_local_document` 仍为本地文档生成稳定引用；后续格式能力只完成当前任务步骤，
-不负责自动续读、检查点、用户干预或完成判定。`md-to-pdf-cjk` 是单向生成工具，不能作为现有 PDF 读取失败后的备用解析器。
+OfficeCLI 不处理 PDF。`prepare_local_document` 为本地文档生成稳定引用，跨工具切换时复用同一 documentRef；
+长输出由宿主通过 `context-input-transaction` 分段回收。`md-to-pdf-cjk` 是单向生成工具，不能作为现有 PDF 读取失败后的备用解析器。
 
-需要把现有 PDF、Word、Excel、PowerPoint、HTML 或文本保存为 Markdown 时，应由通用复杂任务协议管理
-目标、范围、分批、证据和验收。OfficeCLI、PDF.js、`read_file`、`write_file` 和 `append_file` 都只是步骤能力；
-不得让任一格式工具形成独立任务循环。当前统一状态机仍在迁移，不能把旧文档专用后台流程描述为最终架构。
+需要把现有 PDF、Word、Excel、PowerPoint、HTML 或文本保存为 Markdown 时，先用 `prepare_local_document`
+取得 documentRef，再用对应格式读取器或 Skill 提取内容，最后用 `write_file`/`append_file` 写入目标。
+OfficeCLI、PDF.js、`read_file`、`write_file` 和 `append_file` 都只是当前步骤的工具，不形成独立任务循环。
 
 ---
 

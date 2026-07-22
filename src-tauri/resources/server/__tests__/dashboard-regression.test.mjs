@@ -359,11 +359,16 @@ describe("Dashboard 回归护栏", () => {
     assert.equal(registered.json.path, docPath);
     assert.equal(registered.json.filename, "阅读 测试.md");
     assert.equal(registered.json.previewable, true);
+    assert.equal(registered.json.openable, false);
 
     const preview = await api("POST", "/api/artifacts/preview", { path: docPath });
     assert.equal(preview.status, 200);
     assert.equal(preview.json.filename, "阅读 测试.md");
     assert.match(preview.json.content, /外部文档/);
+
+    const externalOpen = await api("POST", "/api/artifacts/open-file", { path: docPath });
+    assert.equal(externalOpen.status, 403);
+    assert.match(externalOpen.json.error, /external opening of Markdown files is disabled/i);
 
     const recent = await api("POST", "/api/artifacts/recent", { limit: 20 });
     assert.equal(recent.status, 200);
@@ -828,7 +833,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /const queuedModals = \[\]/);
     assert.match(launcher, /activeGateId !== gateId/);
     assert.match(launcher, /pendingPlanRevision = \{ reason, remainingSteps, summary \}/);
-    assert.match(launcher, /if \(resolved && choice === "approve"\) \{[\s\S]{0,500}recordForegroundPlan[\s\S]{0,300}activatePendingPlan\(\)/);
+    assert.match(launcher, /if \(resolved && choice === "approve"\) \{[\s\S]{0,300}activatePendingPlan\(\)/);
     assert.match(launcher, /if \(resolved && choice !== "approve"\) pendingPlan = null/);
     assert.match(launcher, /stepId .* is not in the active plan/);
     assert.match(app, /dash\.kind === "plan-activated"/);

@@ -61,6 +61,9 @@ node_modules/
 /docs/providers-volcengine-0718.json
 /docs/providers-combined-0720.json
 
+# Exported HTML preview from Markdown docs (kept locally, not tracked)
+/docs/*.html
+
 # Operating system and editor state
 .DS_Store
 Thumbs.db

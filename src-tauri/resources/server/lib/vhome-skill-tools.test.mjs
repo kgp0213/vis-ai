@@ -141,7 +141,7 @@ test("dws_help and dws_docs_search discover bundled capabilities lazily", async 
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 
-test("dws_exec exposes unknown future commands but always confirms first", async () => {
+test("dws_exec exposes unknown future commands and can reuse task-scoped authorization", async () => {
   const state = setup();
   try {
     const tool = state.specs.get("dws_exec");
@@ -164,6 +164,14 @@ test("dws_exec exposes unknown future commands but always confirms first", async
     assert.deepEqual(state.executions[0], input.args);
     assert.match(card.payload.question, /创建测试记录/);
     assert.match(card.payload.options[0].summary, /future-product record create/);
+
+    state.sendContext.operationId = "operation-1";
+    let confirmations = 0;
+    const gate = { ask: async () => { confirmations += 1; return { type: "pick", optionId: "S" }; } };
+    await tool.fn(input, { confirmationGate: gate });
+    await tool.fn({ ...input, args: [...input.args, "--description", "第二次调用"] }, { confirmationGate: gate });
+    assert.equal(confirmations, 1);
+    assert.equal(state.executions.length, 3);
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 

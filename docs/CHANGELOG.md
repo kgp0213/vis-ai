@@ -4,6 +4,18 @@
 
 ---
 
+## v1.28.1（开发中）
+
+### 架构
+
+- **回退通用复杂任务状态机**：移除 `foreground-task-supervisor.mjs` 及前台监督接线，模型工具循环（`CacheFirstLoop`）重新成为唯一执行内核。多步骤任务通过轻量 `submit_plan` / `mark_step_complete` / `todo_write` 处理，不再维护独立的任务状态机、步骤调度器或完成守卫。约 40 个 `complex-task-*.mjs` 历史文件已归档到 `legacy/complex-task/`，不再进入运行时或默认测试。
+- **上下文输入缓存跨回合保留**：`context-input-transaction.mjs` 状态主键从 `turnId` 改为 `transactionId`，用户插话或切换工具不再丢失已缓存的大段工具结果引用。
+- **二进制文件不再误读为文本**：`read_file` 经 DLP 包装层嗅探文件 magic number（PDF / Office 容器 / 图片等），命中二进制类型时直接拒绝并引导改用 `prepare_local_document`，避免二进制内容污染上下文。
+- **工具退出码判定修正**：`toolResultSucceeded` 正则去掉末尾锚定，正确识别 `run_command` 输出中位于中间位置的 `[exit N]` 标记，失败命令不再被误计为成功。
+- **plan 模式放行文档准备**：`prepare_local_document` 标记为只读工具，可在 plan 阶段执行，模型不再需要绕道 `read_file` 直接读 PDF。
+
+---
+
 ## v1.28.0
 
 ### 普通用户最值得更新的变化

@@ -29,11 +29,10 @@ describe("model task request policy", () => {
   test("launcher and /learn wire task-specific request purposes", () => {
     const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
     const learn = readFileSync(new URL("../learn.mjs", import.meta.url), "utf8");
-    assert.match(launcher, /requestPurpose: "summary"/);
     assert.match(launcher, /requestPurpose: "report"/);
     assert.match(launcher, /requestPurpose: "knowledge"/);
     assert.match(launcher, /requestPurpose: "sessionReview"/);
-    assert.match(launcher, /VISIONOX_PROBE_OK_7F3A/);
+    assert.doesNotMatch(launcher, /VISIONOX_PROBE_OK_7F3A|probeDocumentModel/);
     assert.match(learn, /requestPurpose: "learn"/);
     assert.match(launcher, /capabilities: resolveProviderModelCapabilities\(getActiveProvider\(config\), modelConfig\.model\)/);
   });

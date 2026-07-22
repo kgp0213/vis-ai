@@ -1,110 +1,69 @@
-import { relative, resolve } from "node:path";
-
 const ARTIFACT_EXTENSION_RE = /\.(?:md|markdown|html?|txt|pdf|docx?|pptx?|xlsx?|csv|json|xml|ya?ml)(?:\s|$|["'`，。；;、)）（\]])/i;
+const ARTIFACT_PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\|\/(?!\/)|(?:\.{1,2}[\\/])|(?:[\p{L}\p{N}_-]+[\\/]))[^"'`<>\r\n]+?\.(?:md|markdown|html?|txt|pdf|docx?|pptx?|xlsx?|csv|json|xml|ya?ml)(?=$|[\s"'“”‘’),;，。；、）\]}：:])/giu;
+const BARE_ARTIFACT_PATH_RE = /(?<![\p{L}\p{N}_./\\-])([\p{L}\p{N}_-]+\.(?:md|markdown|html?|txt|pdf|docx?|pptx?|xlsx?|csv|json|xml|ya?ml))(?=$|[\s"'“”‘’),;，。；、）\]}：:])/giu;
 const ARTIFACT_TARGET_RE = /(?:文件|文档|报告|markdown|html|pdf|word|excel|ppt)/i;
 const ARTIFACT_WRITE_RE = /(?:保存|另存|写入|导出|生成|创建|制作|落盘)/i;
 const PREVIOUS_RESPONSE_RE = /(?:刚才|上一条|上面|前面|此前|先前|这份|这个).{0,18}(?:回答|回复|内容|总结|报告|文档)/i;
 const DISCUSSION_RE = /(?:如何|怎么|怎样|是否|能否|可否|评估|分析|讨论|建议|方案|为什么)/i;
 const DIRECT_REQUEST_RE = /(?:请|帮我|把|将|直接|现在|立即)/i;
-const DOCUMENT_JOB_ID_RE = /^(?:document:)?[0-9a-f]{8}-[0-9a-f-]{27,}$/i;
-const DOCUMENT_WRITER_NAMES = new Set([
-  "append_file",
-  "edit",
-  "edit_file",
-  "multi_edit",
-  "move_file",
-  "delete_file",
-  "organize_document_to_markdown",
-  "organize_documents_to_report",
-  "organize_pdf_to_markdown",
-  "run_background",
-  "run_command",
-  "save_file",
-  "save_last_assistant_response",
-  "write_file",
-]);
-const PENDING_DOCUMENT_STATUSES = new Set([
-  "accepted",
-  "planning",
-  "interrupted",
-  "paused",
-  "pausing",
-  "preparing",
-  "queued",
-  "running",
-  "waiting_foreground",
-  "waiting_provider",
-  "stopped",
-  "source_changed",
-  "failed",
-  "awaiting_output",
-  "needs_review",
-]);
-
-function parseMaybeObject(value) {
-  if (value && typeof value === "object") return value;
-  if (typeof value !== "string" || !value.trim()) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
+const PLAN_ONLY_REQUEST_RE = /(?:先|首先).{0,32}(?:计划|方案).{0,36}(?:确认|审批|同意).{0,20}(?:后|再).{0,24}(?:执行|开始|落地|生成|写入|保存|导出|创建|制作|处理)|(?:制定|给出|提供|生成|给我|给).{0,24}(?:计划|方案).{0,40}(?:等|待|确认|审批|同意).{0,20}(?:后|再).{0,24}(?:执行|开始|落地|生成|写入|保存|导出|创建|制作|处理)|(?:plan|proposal).{0,48}(?:confirm|approve).{0,24}(?:before|then).{0,24}(?:execute|start|generate|write|save|export)/iu;
+const ARTIFACT_OUTPUT_MARKER_RE = /(?:wrote|written|saved|created|generated|exported|moved|copied|output(?:\s+file)?|artifact|destination|target|输出|写入|保存|生成|创建|导出|目标文件)/iu;
+const ARTIFACT_OUTPUT_CONTEXT_RE = /(?:保存|另存|写入|导出|生成|创建|落盘|save|write|export|output|target|destination)/iu;
+function isUrlLikePath(value) {
+  return String(value ?? "").includes("://");
+}
+export function requestedArtifactPaths(value) {
+  const text = String(value ?? "");
+  if (!text) return [];
+  const paths = [];
+  for (const match of text.matchAll(ARTIFACT_PATH_RE)) {
+    const path = String(match[0] ?? "").trim();
+    if (path && !isUrlLikePath(path)) paths.push(path);
   }
-}
-
-function publicDocumentJobId(value) {
-  const raw = String(value ?? "").trim().replace(/^document:/i, "");
-  return raw ? `document:${raw}` : "";
-}
-
-function comparablePath(value, workspaceRoot = process.cwd()) {
-  const raw = String(value ?? "").trim();
-  if (!raw || /^visionox-document:/i.test(raw)) return "";
-  try {
-    const absolute = resolve(String(workspaceRoot || process.cwd()), raw);
-    return process.platform === "win32" ? absolute.toLowerCase() : absolute;
-  } catch {
-    return process.platform === "win32" ? raw.toLowerCase() : raw;
+  for (const match of text.matchAll(BARE_ARTIFACT_PATH_RE)) {
+    const path = String(match[1] ?? "").trim();
+    if (path && !isUrlLikePath(path)) paths.push(path);
   }
+  return Array.from(new Set(paths));
 }
 
-function collectPathValues(value, paths = [], depth = 0) {
-  if (!value || typeof value !== "object" || depth > 3) return paths;
-  for (const [key, nested] of Object.entries(value)) {
-    if (["file", "filePath", "file_path", "filename", "output", "outputPath", "path", "reportPath", "source", "destination"].includes(key) && typeof nested === "string") {
-      paths.push(nested);
-    } else if (nested && typeof nested === "object") {
-      collectPathValues(nested, paths, depth + 1);
-    }
+export function requestedOutputArtifactPaths(value) {
+  const text = String(value ?? "");
+  const paths = [];
+  for (const match of text.matchAll(ARTIFACT_PATH_RE)) {
+    const prefix = text.slice(Math.max(0, match.index ?? 0) - 96, match.index ?? 0);
+    if (!ARTIFACT_OUTPUT_CONTEXT_RE.test(prefix)) continue;
+    const path = String(match[0] ?? "").trim();
+    if (path && !isUrlLikePath(path) && !paths.includes(path)) paths.push(path);
+  }
+  for (const match of text.matchAll(BARE_ARTIFACT_PATH_RE)) {
+    const prefix = text.slice(Math.max(0, match.index ?? 0) - 96, match.index ?? 0);
+    if (!ARTIFACT_OUTPUT_CONTEXT_RE.test(prefix)) continue;
+    const path = String(match[1] ?? "").trim();
+    if (path && !isUrlLikePath(path) && !paths.includes(path)) paths.push(path);
   }
   return paths;
 }
 
-function collectStringValues(value, values = [], depth = 0) {
-  if (depth > 3) return values;
-  if (typeof value === "string") {
-    values.push(value);
-    return values;
+/**
+ * Recover artifact paths reported by a command itself, such as
+ * "Wrote Markdown to: C:\\work\\report.md". The caller still verifies that
+ * the path exists and was changed during the current turn before accepting it.
+ */
+export function artifactPathsFromToolOutput(value) {
+  const paths = [];
+  for (const line of String(value ?? "").split(/\r?\n/u)) {
+    if (!ARTIFACT_OUTPUT_MARKER_RE.test(line)) continue;
+    for (const match of line.matchAll(ARTIFACT_PATH_RE)) {
+      const path = String(match[0] ?? "").trim().replace(/[.,;:：，。；、)）\]}]+$/u, "");
+      if (path && !isUrlLikePath(path) && !paths.includes(path)) paths.push(path);
+    }
+    for (const match of line.matchAll(BARE_ARTIFACT_PATH_RE)) {
+      const path = String(match[1] ?? "").trim();
+      if (path && !isUrlLikePath(path) && !paths.includes(path)) paths.push(path);
+    }
   }
-  if (!value || typeof value !== "object") return values;
-  for (const nested of Object.values(value)) collectStringValues(nested, values, depth + 1);
-  return values;
-}
-
-function comparableText(value) {
-  const text = String(value ?? "");
-  return process.platform === "win32" ? text.replace(/\//g, "\\").toLowerCase() : text;
-}
-
-function protectedPathNeedles(job, workspaceRoot) {
-  const raw = String(job?.outputPath ?? "").trim();
-  if (!raw) return [];
-  const jobRoot = String(job?.workspaceRoot || workspaceRoot || process.cwd());
-  const absolute = resolve(jobRoot, raw);
-  const workspaceRelative = relative(String(workspaceRoot || process.cwd()), absolute);
-  return Array.from(new Set([absolute, raw, workspaceRelative]
-    .map(comparableText)
-    .filter((value) => value.length >= 5 && value !== ".")));
+  return paths;
 }
 
 export function latestAssistantResponse(messages) {
@@ -175,6 +134,14 @@ export function detectArtifactRequest(value) {
   };
 }
 
+export function isPlanOnlyRequest(value) {
+  return PLAN_ONLY_REQUEST_RE.test(String(value ?? "").trim());
+}
+
+export function shouldEnforceArtifactDelivery({ required = false, planningOnly = false, executionStarted = false, planApproved = false } = {}) {
+  return required && (!planningOnly || executionStarted || planApproved);
+}
+
 export function artifactDeliveryRetryPrompt(request, originalText) {
   const lines = [
     "[系统文件交付校验]",
@@ -183,7 +150,7 @@ export function artifactDeliveryRetryPrompt(request, originalText) {
   if (request?.savePreviousResponse) {
     lines.push("立即调用 save_last_assistant_response；只需提供输出路径，不要重新发送上一条回答作为 content。");
   } else {
-    lines.push("立即使用 write_file 创建文件；长文档先写第一部分，再用 append_file 追加其余部分。");
+    lines.push("先检查原始任务中指定的目标路径是否已经存在；若已存在，先验证并保留它，不要用当前上下文的截断预览覆盖长文档。仅在目标不存在时，才使用 write_file 创建文件；长文档先写第一部分，再用 append_file 追加其余部分。");
   }
   lines.push(
     "不要只在聊天中展示内容，也不要在文件真实存在前声称已经完成。",
@@ -193,74 +160,7 @@ export function artifactDeliveryRetryPrompt(request, originalText) {
 }
 
 export function artifactMissingNotice() {
-  return "\n\n> 文件交付未完成：系统没有检测到实际生成的文件，本次结果不能标记为完成。";
-}
-
-export function pendingDocumentArtifactFromToolEvent(toolName, toolArgs, toolResult) {
-  if (!["organize_document_to_markdown", "organize_documents_to_report", "organize_pdf_to_markdown"].includes(String(toolName ?? "").toLowerCase())) return null;
-  const result = parseMaybeObject(toolResult);
-  if (result?.ok !== true || result?.accepted !== true || result?.artifactStatus !== "pending") return null;
-  const args = parseMaybeObject(toolArgs) ?? {};
-  const jobId = publicDocumentJobId(result.backgroundJobId ?? result.id ?? result.documentJobId);
-  if (!jobId) return null;
-  return {
-    state: "pending",
-    jobId,
-    documentJobId: String(result.documentJobId ?? jobId.replace(/^document:/, "")),
-    outputPath: String(result.outputPath ?? args.outputPath ?? "").trim(),
-    sourcePath: String(result.sourcePath ?? args.input ?? args.inputs?.[0] ?? "").trim(),
-  };
-}
-
-export function documentArtifactStateFromJob(job) {
-  const status = String(job?.status ?? "").toLowerCase();
-  if (status === "completed" || status === "completed_with_warnings") return "created";
-  if (status === "failed" || status === "cancelled" || status === "abandoned") return "failed";
-  return "pending";
-}
-
-export function pendingDocumentWriteConflict(toolName, toolArgs, jobs, { workspaceRoot = process.cwd() } = {}) {
-  const name = String(toolName ?? "").toLowerCase();
-  if (!DOCUMENT_WRITER_NAMES.has(name)) return null;
-  const args = parseMaybeObject(toolArgs) ?? {};
-  const requestedPaths = collectPathValues(args)
-    .map((value) => comparablePath(value, workspaceRoot))
-    .filter(Boolean);
-  const referencedText = collectStringValues(args).map(comparableText);
-  const pending = (Array.isArray(jobs) ? jobs : []).find((job) => {
-    const status = String(job?.status ?? "").toLowerCase();
-    const outputPath = comparablePath(job?.outputPath, job?.workspaceRoot || workspaceRoot);
-    const handoffActive = ["queued", "running"].includes(String(job?.handoff?.state ?? "").toLowerCase());
-    if (!(PENDING_DOCUMENT_STATUSES.has(status) || handoffActive) || !outputPath) return false;
-    if (requestedPaths.includes(outputPath)) return true;
-    const needles = protectedPathNeedles(job, workspaceRoot);
-    return needles.some((needle) => referencedText.some((value) => value.includes(needle)));
-  });
-  if (!pending) return null;
-  return {
-    ok: false,
-    error: `${name}: the target file belongs to a pending background document job; wait for completion or cancel that job before writing the same path`,
-    code: "artifact-pending",
-    artifactStatus: "pending",
-    backgroundJobId: publicDocumentJobId(pending.id ?? pending.documentJobId),
-    outputPath: pending.outputPath,
-    useTool: "get_document_job_status",
-  };
-}
-
-export function documentJobToolMismatch(toolName, toolArgs) {
-  const name = String(toolName ?? "").toLowerCase();
-  if (!["job_output", "stop_job", "wait_for_job"].includes(name)) return null;
-  const args = parseMaybeObject(toolArgs) ?? {};
-  const jobId = String(args.jobId ?? "").trim();
-  if (!DOCUMENT_JOB_ID_RE.test(jobId)) return null;
-  return {
-    ok: false,
-    error: `${name} only handles process jobs created by run_background; use get_document_job_status for document jobs`,
-    code: "wrong-job-system",
-    backgroundJobId: publicDocumentJobId(jobId),
-    useTool: "get_document_job_status",
-  };
+  return "\n\n> 文件交付未确认：当前轮没有获得目标文件的可验证证据，因此暂不能确认交付完成。文件可能已经生成但未被当前工具结果识别，请检查目标路径或重新执行文件校验。";
 }
 
 export function toolResultSucceeded(value) {

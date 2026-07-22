@@ -67,18 +67,34 @@ describe("release build contract", () => {
     const resources = join(root, "src-tauri", "target", "release", "resources");
     const retiredRecipe = join(resources, "bootstrap-skills", "document-organizer", "task-recipes.json");
     const retiredPdfGuide = join(resources, "bootstrap-skills", "pdf", "references", "pdf-to-markdown.md");
+    const retiredForegroundSupervisor = join(resources, "server", "lib", "foreground-task-supervisor.mjs");
+    const retiredForegroundSupervisorTest = join(resources, "server", "lib", "foreground-task-supervisor.test.mjs");
+    const retiredForegroundWiringTest = join(resources, "server", "lib", "complex-task-launcher-wiring.test.mjs");
+    const retiredComplexTaskStore = join(resources, "server", "lib", "complex-task-store.mjs");
+    const retiredComplexTaskRuntimeTest = join(resources, "server", "lib", "complex-task-runtime.test.mjs");
     const retainedResource = join(resources, "bootstrap-skills", "pdf", "SKILL.md");
     try {
       mkdirSync(join(resources, "bootstrap-skills", "document-organizer"), { recursive: true });
       mkdirSync(join(resources, "bootstrap-skills", "pdf", "references"), { recursive: true });
+      mkdirSync(join(resources, "server", "lib"), { recursive: true });
       writeFileSync(retiredRecipe, "retired");
       writeFileSync(retiredPdfGuide, "retired");
+      writeFileSync(retiredForegroundSupervisor, "retired");
+      writeFileSync(retiredForegroundSupervisorTest, "retired");
+      writeFileSync(retiredForegroundWiringTest, "retired");
+      writeFileSync(retiredComplexTaskStore, "retired");
+      writeFileSync(retiredComplexTaskRuntimeTest, "retired");
       writeFileSync(retainedResource, "keep");
 
       pruneRetiredReleaseResources(root);
 
       assert.equal(existsSync(retiredRecipe), false);
       assert.equal(existsSync(retiredPdfGuide), false);
+      assert.equal(existsSync(retiredForegroundSupervisor), false);
+      assert.equal(existsSync(retiredForegroundSupervisorTest), false);
+      assert.equal(existsSync(retiredForegroundWiringTest), false);
+      assert.equal(existsSync(retiredComplexTaskStore), false);
+      assert.equal(existsSync(retiredComplexTaskRuntimeTest), false);
       assert.equal(existsSync(retainedResource), true);
     } finally {
       rmSync(root, { recursive: true, force: true });

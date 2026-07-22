@@ -67,7 +67,9 @@ export function normalizeMessageRiskReview(raw) {
 
 export async function decideMessageSendPolicy(input, options = {}) {
   const source = String(options.source ?? "unknown");
-  const intent = classifyUserSendIntent(options.userPrompt);
+  const intent = options.scheduledAuthorization === true
+    ? { explicit: true, direct: true, structured: true }
+    : classifyUserSendIntent(options.userPrompt);
   const authorizedSource = source === "chat" || source === "scheduled-prompt";
   if (!authorizedSource || !intent.explicit) {
     return { confirm: true, level: "unknown", reason: authorizedSource ? "当前请求没有明确要求发送" : "当前操作来源尚未获得发送授权", intent };

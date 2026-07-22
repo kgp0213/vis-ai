@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "../lib/system-prompt.mjs";
+import { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } from "../lib/system-prompt.mjs";
 
 const launcherSource = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
 
@@ -25,7 +25,7 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /"command":"add"/);
   });
 
-  test("保存型文档使用通用任务协议且不注入 PDF 专用生命周期", () => {
+  test("保存型文档使用普通工具循环且不注入 PDF 专用生命周期", () => {
     const prompt = buildSystemPrompt([], "/root", false);
     assert.doesNotMatch(prompt, /organize_document_to_markdown/);
     assert.doesNotMatch(launcherSource, /name:\s*"organize_document_to_markdown"/);
@@ -34,17 +34,24 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /keep its stable `documentRef`/);
     assert.doesNotMatch(prompt, /read_prepared_document|extract_pdf_text|nextPageRange/);
     assert.match(prompt, /append_file/);
-    assert.match(prompt, /persist|materialize/i);
-    assert.match(prompt, /one.*question|one question/i);
-    assert.match(prompt, /recommended option/i);
-    assert.match(prompt, /read-only investigation/i);
+    assert.match(prompt, /12000 characters is recovery guidance, not a normal host limit/);
+    assert.match(prompt, /Always pass content as a string/);
+    assert.match(prompt, /never substitute read_context_input/);
+    assert.doesNotMatch(prompt, /task assessment|approved task plan|task lifecycle/i);
     assert.doesNotMatch(prompt, /organize_documents_to_report/);
     assert.match(prompt, /save_last_assistant_response/);
     assert.match(prompt, /retain its tables, parameters, commands, and code/);
     assert.match(prompt, /host will recreate a missing readable copy automatically/);
+    assert.match(prompt, /host controls context size/);
+    assert.match(prompt, /large source or an exact whole-document conversion/);
+    assert.match(prompt, /concise deterministic converter/);
+    assert.match(prompt, /Keep the bulk source and generated body out of the chat context/);
+    assert.match(prompt, /resumable when practical/);
+    assert.match(prompt, /Before claiming a requested artifact is complete/);
+    assert.match(prompt, /verify the available source coverage/);
   });
 
-  test("办公模式使用通用增量文档流程", () => {
+  test("办公模式把文档步骤交给普通工具循环", () => {
     assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*11/);
     const officeMode = launcherSource.slice(
       launcherSource.indexOf("office: {"),
@@ -54,10 +61,26 @@ describe("buildSystemPrompt", () => {
     assert.doesNotMatch(officeMode, /extract_pdf_text|nextPageRange/);
     assert.match(officeMode, /prepare_local_document/);
     assert.doesNotMatch(officeMode, /read_prepared_document/);
-    assert.match(officeMode, /任务评估、澄清、执行、监控和验收协议/);
-    assert.match(officeMode, /不拥有任务生命周期/);
+    assert.match(officeMode, /按用户目标选择合适的格式读取器或 Skill/);
+    assert.match(officeMode, /可以在临时目录编写一次性解析\/转换脚本/);
+    assert.match(officeMode, /通过普通 run_command 执行/);
+    assert.match(officeMode, /脚本应直接写入目标文件/);
+    assert.match(officeMode, /大型、结构化或需要完整转换的文档/);
+    assert.match(officeMode, /输出简短的进度与校验结果/);
+    assert.doesNotMatch(officeMode, /不要安装解析依赖、写临时解析脚本/);
+    assert.doesNotMatch(officeMode, /任务评估、澄清、执行、监控和验收协议|任务生命周期/);
     assert.doesNotMatch(officeMode, /organize_documents_to_report/);
     assert.doesNotMatch(officeMode, /直接调用 organize_pdf_to_markdown/);
+  });
+
+  test("guided 文档策略对大型转换优先使用普通前台工具循环", () => {
+    const guidedPrompt = buildGuidedDocumentPrompt();
+    assert.match(guidedPrompt, /For a large source or an exact whole-document conversion/);
+    assert.match(guidedPrompt, /concise deterministic converter in a temporary directory/);
+    assert.match(guidedPrompt, /ordinary run_command loop/);
+    assert.match(guidedPrompt, /keep the bulk body out of chat context/);
+    assert.match(launcherSource, /buildGuidedDocumentPrompt\(\)/);
+    assert.doesNotMatch(launcherSource, /documentWorkflow === "guided"[\s\S]{0,1200}run_background/);
   });
 
   test("结构化选择必须使用交互卡片而不是正文菜单", () => {

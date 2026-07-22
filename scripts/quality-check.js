@@ -29,6 +29,8 @@ run("third-party resources", "node", ["scripts/check-third-party-resources.js"])
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
 run("repository hygiene", "node", ["scripts/check-repository-hygiene.js"]);
 run("node tests and core coverage", "node", [
+  "--import",
+  "./scripts/test-safety.mjs",
   "--test",
   "--experimental-test-coverage",
   "--test-coverage-include=src-tauri/resources/server/lib/*.mjs",

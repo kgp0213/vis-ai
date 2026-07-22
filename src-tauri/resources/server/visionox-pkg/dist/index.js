@@ -10935,7 +10935,7 @@ function latestOutputSince(before, after) {
 
 // src/tools/shell/exec.ts
 import { spawn as spawn4, spawnSync } from "child_process";
-import { existsSync as existsSync8, statSync as statSync5 } from "fs";
+import { appendFileSync as appendFileSync8, existsSync as existsSync8, mkdirSync as mkdirSync8, statSync as statSync5, writeFileSync as writeFileSync8 } from "fs";
 import * as pathMod8 from "path";
 
 // src/tools/shell-chain.ts
@@ -11170,7 +11170,7 @@ function groupChain(chain) {
 }
 async function runChain(chain, opts) {
   const groups = groupChain(chain);
-  const buf = new OutputBuffer(opts.maxOutputChars * 2 * 4);
+  const buf = new OutputBuffer(opts.maxOutputChars * 2 * 4, { outputResourceDir: opts.outputResourceDir, spillThresholdBytes: opts.maxOutputChars });
   const deadline = Date.now() + opts.timeoutSec * 1e3;
   let lastExit = 0;
   let timedOut = false;
@@ -11197,7 +11197,7 @@ async function runChain(chain, opts) {
   }
   const output = buf.toString();
   const truncated = truncateCommandOutput(output, opts.maxOutputChars);
-  return { exitCode: lastExit, output: truncated, timedOut };
+  return { exitCode: lastExit, output: truncated, timedOut, outputResource: buf.outputResource() };
 }
 function isNullDeviceAlias(target) {
   const lower = target.toLowerCase();
@@ -11339,11 +11339,16 @@ function tryClose(fd) {
 function toBuf(chunk) {
   return typeof chunk === "string" ? Buffer.from(chunk) : chunk;
 }
+var outputResourceCounter = 0;
 var OutputBuffer = class {
-  constructor(cap) {
+  constructor(cap, options = {}) {
     this.cap = cap;
     this.headCap = Math.ceil(cap * 0.65);
     this.tailCap = Math.max(0, cap - this.headCap);
+    this.outputResourceDir = options.outputResourceDir ? pathMod8.resolve(options.outputResourceDir) : null;
+    this.spillThresholdBytes = Math.max(1, Number(options.spillThresholdBytes) || Math.floor(cap / 8));
+    this.resourcePath = null;
+    this.resourceId = null;
   }
   cap;
   headCap;
@@ -11353,7 +11358,16 @@ var OutputBuffer = class {
   tail = Buffer.alloc(0);
   totalBytes = 0;
   push(b) {
+    const previousBytes = this.totalBytes;
     this.totalBytes += b.length;
+    if (!this.resourcePath && this.outputResourceDir && this.totalBytes > this.spillThresholdBytes) {
+      this.resourceId = `tool-output-${Date.now()}-${process.pid}-${++outputResourceCounter}.txt`;
+      this.resourcePath = pathMod8.resolve(this.outputResourceDir, this.resourceId);
+      mkdirSync8(this.outputResourceDir, { recursive: true });
+      const prior = previousBytes > 0 ? Buffer.concat([...this.headChunks, this.tail]) : Buffer.alloc(0);
+      writeFileSync8(this.resourcePath, prior);
+    }
+    if (this.resourcePath) appendFileSync8(this.resourcePath, b);
     let remaining = b;
     if (this.headBytes < this.headCap) {
       const take = Math.min(this.headCap - this.headBytes, remaining.length);
@@ -11377,6 +11391,10 @@ var OutputBuffer = class {
       return smartDecodeOutput(Buffer.concat([head, this.tail]));
     }
     return `${decodeTruncatedOutputPart(head, false)}${decodeTruncatedOutputPart(this.tail, true)}`;
+  }
+  outputResource() {
+    if (!this.resourcePath) return null;
+    return { resourceId: this.resourceId, path: this.resourcePath, bytes: this.totalBytes };
   }
 };
 function decodeTruncatedOutputPart(buffer, trimStart) {
@@ -11650,6 +11668,7 @@ async function runCommand(cmd, opts) {
       cwd: opts.cwd,
       timeoutSec,
       maxOutputChars: maxChars,
+      outputResourceDir: opts.outputResourceDir,
       signal: opts.signal
     });
   }
@@ -11681,7 +11700,7 @@ async function runCommand(cmd, opts) {
       return;
     }
     const byteCap = maxChars * 2 * 4;
-    const outputBuffer = new OutputBuffer(byteCap);
+    const outputBuffer = new OutputBuffer(byteCap, { outputResourceDir: opts.outputResourceDir, spillThresholdBytes: maxChars });
     let timedOut = false;
     let aborted = false;
     const killChildTree = () => killProcessTree2(child);
@@ -11714,7 +11733,7 @@ async function runCommand(cmd, opts) {
       opts.signal?.removeEventListener("abort", onAbort);
       const buf = outputBuffer.toString();
       const output = truncateCommandOutput(buf, maxChars);
-      resolve10({ exitCode: code, output, timedOut });
+      resolve10({ exitCode: code, output, timedOut, outputResource: outputBuffer.outputResource() });
     });
   });
 }
@@ -11886,6 +11905,7 @@ function registerShellTools(registry, opts) {
   const rootDir = pathMod9.resolve(opts.rootDir);
   const timeoutSec = opts.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
   const maxOutputChars = opts.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
+  const outputResourceDir = opts.outputResourceDir ? pathMod9.resolve(opts.outputResourceDir) : null;
   const jobs = opts.jobs ?? new JobRegistry();
   const getExtraAllowed = typeof opts.extraAllowed === "function" ? opts.extraAllowed : (() => {
     const snapshot2 = opts.extraAllowed ?? [];
@@ -11942,6 +11962,7 @@ function registerShellTools(registry, opts) {
         cwd: rootDir,
         timeoutSec: effectiveTimeout,
         maxOutputChars,
+        outputResourceDir,
         signal: ctx?.signal
       });
       return formatCommandResult(cmd, result);
@@ -12123,8 +12144,10 @@ function formatCommandResult(cmd, r) {
   const header = r.timedOut ? `$ ${cmd}
 [killed after timeout]` : `$ ${cmd}
 [exit ${r.exitCode ?? "?"}]`;
-  return r.output ? `${header}
-${r.output}` : header;
+  const resource = r.outputResource
+    ? `[TOOL_OUTPUT_RESOURCE] ${JSON.stringify(r.outputResource)}\n`
+    : "";
+  return r.output ? `${resource}${header}\n${r.output}` : `${resource}${header}`;
 }
 
 // src/tools/web.ts

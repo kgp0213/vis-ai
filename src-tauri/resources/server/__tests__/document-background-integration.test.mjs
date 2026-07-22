@@ -7,7 +7,6 @@ const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.
 const dashboardUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
 const dashboardCssUrl = new URL("../visionox-pkg/dashboard/app.css", import.meta.url);
 const launcherUrl = new URL("../launcher.mjs", import.meta.url);
-const workflowUrl = new URL("../lib/document-markdown-workflow.mjs", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
 const TOKEN = "document-background-test";
 
@@ -143,12 +142,11 @@ test("background task list keeps legacy array providers compatible", async () =>
   assert.deepEqual(listed.body, { jobs: [{ id: 3, running: true }], pendingDeliveries: [] });
 });
 
-test("background task panel keeps historical document results visible without resuming the retired worker", () => {
+test("background task panel does not reactivate the retired document worker", () => {
   const app = readFileSync(dashboardUrl, "utf8");
   const css = readFileSync(dashboardCssUrl, "utf8");
   const server = readFileSync(serverUrl, "utf8");
   const launcher = readFileSync(launcherUrl, "utf8");
-  const workflow = readFileSync(workflowUrl, "utf8");
   assert.match(app, /function documentJobStatusLabel/);
   assert.match(app, /function backgroundJobNeedsAttention/);
   assert.match(app, /function documentHandoffNotice/);
@@ -211,26 +209,11 @@ test("background task panel keeps historical document results visible without re
   assert.match(app, /当前还没有可预览的已完成区块/);
   assert.match(server, /request\.expectedRevision/);
   assert.match(server, /generic background jobs require an explicit POST action/);
-  assert.match(launcher, /documentMarkdownManager\.listMetadata/);
-  assert.match(launcher, /documentMarkdownManager\.control\(id, action\)/);
-  assert.match(launcher, /LEGACY_DOCUMENT_EXECUTION_RETIRED/);
-  assert.match(launcher, /\["resume", "retry"\]\.includes\(action\)[\s\S]{0,300}legacy-execution-retired/);
-  assert.doesNotMatch(launcher, /documentMarkdownManager\.resume\(/);
-  assert.match(launcher, /后台文档已生成但需要复核/);
-  assert.match(launcher, /job\.modelIssues/);
-  assert.match(launcher, /createLongTaskHandoffCoordinator/);
-  assert.match(launcher, /internalHandoff: true/);
-  assert.match(launcher, /verifyDelivery: async/);
-  assert.match(launcher, /artifactStatus === "verified"/);
-  assert.match(launcher, /rehydrateDocumentHandoffs/);
-  assert.match(launcher, /runDocumentJobStartupMaintenance\(documentJobStore/);
-  assert.match(launcher, /createDocumentOutputReservation/);
-  assert.match(launcher, /documentOutputReservation\.releaseTerminal/);
-  assert.match(launcher, /run_background\|run_command/);
+  assert.match(launcher, /listBackgroundJobs: async \(\) => \(\{ jobs: jobs\.listMetadata\(\), pendingDeliveries: \[\] \}\)/);
+  assert.doesNotMatch(launcher, /documentMarkdownManager|documentHandoffCoordinator|createDocumentMarkdownManager/);
+  assert.doesNotMatch(launcher, /get_document_job_status|organize_document_to_markdown|organize_pdf_to_markdown/);
+  assert.match(launcher, /registerShellTools\(tools/);
   assert.match(launcher, /当前会话上下文清理失败/);
-  assert.match(workflow, /office-empty-elements/);
-  assert.match(workflow, /可能存在未支持或隐藏内容/);
-  assert.match(workflow, /writeFinalDraft/);
-  assert.match(workflow, /overwrite-rerun/);
-  assert.match(workflow, /awaiting_output/);
+  assert.match(launcher, /new CacheFirstLoop\(/);
+  assert.match(launcher, /for await \(const ev of loop\.step\(loopInput\)\)/);
 });

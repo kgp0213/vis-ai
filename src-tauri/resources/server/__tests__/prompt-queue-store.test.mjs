@@ -34,6 +34,11 @@ describe("prompt queue store", () => {
       ok: true,
       assistantText: "后台任务已完成。",
       assistantMessageId: "assistant-1",
+      taskState: "completed_with_warnings",
+      warnings: ["需要人工复核"],
+      artifactFiles: [{ path: "C:\\work\\report.md", filename: "report.md", size: 42, retention: "preserve" }],
+      interventionChoice: "accept-partial",
+      recoveryHandle: "turn:delivery-request",
     }, { ownerBootId: "boot-1" });
 
     const restarted = createPromptQueueStore({ path, normalizeScope, normalizeItem, clock: () => now });
@@ -44,6 +49,11 @@ describe("prompt queue store", () => {
       ok: true,
       assistantText: "后台任务已完成。",
       assistantMessageId: "assistant-1",
+      taskState: "completed_with_warnings",
+      warnings: ["需要人工复核"],
+      artifactFiles: [{ path: "C:\\work\\report.md", filename: "report.md", size: 42, retention: "preserve" }],
+      interventionChoice: "accept-partial",
+      recoveryHandle: "turn:delivery-request",
     });
   });
 
@@ -89,11 +99,11 @@ describe("prompt queue store", () => {
       normalizeItem,
       clock: () => now,
       acceptedTtlMs: 50,
-      isDurableReceiptId: (id) => id.startsWith("complex-task-delivery-") || id.startsWith("document-handoff-"),
+      isDurableReceiptId: (id) => id.startsWith("document-handoff-"),
     };
     const first = createPromptQueueStore(options);
-    first.rememberAccepted("complex-task-delivery-1", { turnId: "turn-1", ownerBootId: "boot-1" });
-    first.rememberCompleted("complex-task-delivery-1", {
+    first.rememberAccepted("document-handoff-1", { turnId: "turn-1", ownerBootId: "boot-1" });
+    first.rememberCompleted("document-handoff-1", {
       ok: true,
       assistantText: "durable completion",
       assistantMessageId: "assistant-1",
@@ -101,7 +111,7 @@ describe("prompt queue store", () => {
     first.rememberAccepted("ordinary-1", { turnId: "turn-2", ownerBootId: "boot-1" });
     now = 151;
     const restarted = createPromptQueueStore(options);
-    const durable = restarted.acceptedRequest("complex-task-delivery-1");
+    const durable = restarted.acceptedRequest("document-handoff-1");
     assert.equal(durable?.state, "completed");
     assert.deepEqual(promptRequestReceiptDecision(durable, "boot-2"), {
       action: "reuse-completion",
@@ -143,19 +153,19 @@ describe("prompt queue store", () => {
       normalizeItem,
       acceptedTtlMs: 50,
       clock: () => now,
-      isDurableReceiptId: (id) => id.startsWith("complex-task-delivery-"),
+      isDurableReceiptId: (id) => id.startsWith("document-handoff-"),
     };
     const first = createPromptQueueStore(options);
-    first.rememberAccepted("complex-task-delivery-1", { ownerBootId: "boot-1" });
-    first.rememberCompleted("complex-task-delivery-1", { ok: true, assistantText: "done" });
+    first.rememberAccepted("document-handoff-1", { ownerBootId: "boot-1" });
+    first.rememberCompleted("document-handoff-1", { ok: true, assistantText: "done" });
 
     now = 200;
-    assert.equal(first.releaseReceipt("complex-task-delivery-1").ok, true);
+    assert.equal(first.releaseReceipt("document-handoff-1").ok, true);
     const restarted = createPromptQueueStore(options);
-    assert.equal(restarted.acceptedRequest("complex-task-delivery-1")?.state, "completed");
+    assert.equal(restarted.acceptedRequest("document-handoff-1")?.state, "completed");
     now = 251;
     const expired = createPromptQueueStore(options);
-    assert.equal(expired.acceptedRequest("complex-task-delivery-1"), null);
+    assert.equal(expired.acceptedRequest("document-handoff-1"), null);
   });
 
   test("reusing a released internal receipt id does not make it durable again", () => {
@@ -166,20 +176,20 @@ describe("prompt queue store", () => {
       normalizeItem,
       acceptedTtlMs: 50,
       clock: () => now,
-      isDurableReceiptId: (id) => id.startsWith("complex-task-delivery-"),
+      isDurableReceiptId: (id) => id.startsWith("document-handoff-"),
     };
     const first = createPromptQueueStore(options);
-    first.rememberAccepted("complex-task-delivery-1", { ownerBootId: "boot-1" });
-    first.rememberCompleted("complex-task-delivery-1", { ok: true, assistantText: "done" });
-    assert.equal(first.releaseReceipt("complex-task-delivery-1").ok, true);
+    first.rememberAccepted("document-handoff-1", { ownerBootId: "boot-1" });
+    first.rememberCompleted("document-handoff-1", { ok: true, assistantText: "done" });
+    assert.equal(first.releaseReceipt("document-handoff-1").ok, true);
 
     now = 110;
-    first.rememberAccepted("complex-task-delivery-1", { ownerBootId: "boot-2" });
-    assert.equal(first.acceptedRequest("complex-task-delivery-1").durable, false);
-    first.rememberCompleted("complex-task-delivery-1", { ok: true, assistantText: "second attempt" });
-    assert.equal(first.acceptedRequest("complex-task-delivery-1").durable, false);
+    first.rememberAccepted("document-handoff-1", { ownerBootId: "boot-2" });
+    assert.equal(first.acceptedRequest("document-handoff-1").durable, false);
+    first.rememberCompleted("document-handoff-1", { ok: true, assistantText: "second attempt" });
+    assert.equal(first.acceptedRequest("document-handoff-1").durable, false);
     now = 161;
-    assert.equal(createPromptQueueStore(options).acceptedRequest("complex-task-delivery-1"), null);
+    assert.equal(createPromptQueueStore(options).acceptedRequest("document-handoff-1"), null);
   });
 
   test("a failed completion receipt remains visible and is never auto-replayed", () => {

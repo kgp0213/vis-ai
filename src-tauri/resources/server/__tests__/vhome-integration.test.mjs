@@ -510,7 +510,7 @@ describe("V来家 integration", () => {
     assert.match(launcher, /getVHomeStatus: \(\) => getVHomeStatusAndResumeSchedules\(\)/);
     assert.match(launcher, /getVHomeAvatar: \(\) => vhomeIntegration\.getAvatar\(\)/);
     assert.match(launcher, /startVHomeLogin: \(\) => vhomeIntegration\.startLogin\(\)/);
-    assert.match(launcher, /marker\.version === sourceVersion/);
+    assert.match(launcher, /marker\.sourceFingerprint === sourceFingerprint/);
     assert.ok(launcher.indexOf("startDashboardServer(ctx") > launcher.indexOf("getVHomeStatus: () => getVHomeStatusAndResumeSchedules()"));
     assert.match(launcher, /if \(skill\.name === "dws"\) \{[\s\S]*?await vhomeIntegration\.getStatus\(\)/);
     assert.match(desktop, /std::iter::once\(server_dir\.clone\(\)\)/);

@@ -8136,6 +8136,7 @@ var CacheFirstLoop = class {
       name,
       readOnly: contextReadOnly,
       contextControl: toolDefinition?.contextControl === true,
+      contextResourceReader: toolDefinition?.contextResourceReader === true,
       contextMaterializer: toolDefinition?.contextMaterializer === true,
     };
     this._inflight.add(this.inflightIdFor(call));
@@ -8201,6 +8202,9 @@ ${reason}`
               if (captured?.ok === false) {
                 return `[CONTEXT_INPUT_CACHE_FAILED] ${captured.error || "input cache unavailable"}. Do not continue reading; ask the user how to proceed.`;
               }
+              if (captured?.resourceBacked) {
+                return `[TOOL_OUTPUT_RESOURCE_READY] Full command output is available through read_tool_output (resourceId=${captured.resourceId || "unknown"}); keep using bounded ranges instead of rerunning the command.`;
+              }
               return captured?.cached
                 ? `[CONTEXT_INPUT_CACHED] Tool result saved as ${captured.contextId} (${captured.chars} chars). Use read_context_input to recover the cached segment; source coverage still requires separate verification.`
                 : "";
@@ -8216,6 +8220,21 @@ ${reason}`
             contextMaterializer: true,
             succeeded: contextToolResultSucceeded(result),
           });
+        } catch {
+        }
+      }
+      if (this.contextInputGuard && contextTool.contextResourceReader && contextToolResultSucceeded(result)) {
+        try {
+          const resourceResult = typeof result === "string" ? JSON.parse(result) : result;
+          if (resourceResult?.ok !== false) {
+            this.contextInputGuard.noteResourceRead({
+              resourceId: parsedArgs?.resourceId,
+              offsetBytes: resourceResult?.offsetBytes ?? parsedArgs?.offsetBytes,
+              nextOffsetBytes: resourceResult?.nextOffsetBytes,
+              totalBytes: resourceResult?.totalBytes,
+              complete: resourceResult?.complete === true,
+            });
+          }
         } catch {
         }
       }

@@ -39,12 +39,11 @@ const { resolve, dirname, join, basename, sep, extname } = await importEarly("no
 const { fileURLToPath, pathToFileURL } = await importEarly("node:url");
 const { homedir, tmpdir } = await importEarly("node:os");
 const { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
-const { access, appendFile, copyFile, cp, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
+const { access, appendFile, copyFile, cp, open: openFile, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
 const launcherBootId = randomUUID();
 const { spawnSync } = await importEarly("node:child_process");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
-const { fingerprintPaths } = await importEarly("./lib/source-fingerprint.mjs");
 const { commitScheduleMutation, readScheduleStore, writeScheduleStore } = await importEarly("./lib/schedule-store.mjs");
 const { replacePathTransactional, restoreLatestPathHistory } = await importEarly("./lib/transactional-path.mjs");
 const { runIsolatedSkillDirectoryCopy } = await importEarly("./lib/skill-directory-copy.mjs");
@@ -71,10 +70,10 @@ const {
 } = await importEarly("./lib/provider.mjs");
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
-const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage } = await importEarly("./lib/context-input-transaction.mjs");
-const { applyForegroundIntervention, assessTaskComplexity, beginForegroundDispatch, buildForegroundIntervention, buildForegroundTaskPrompt, evaluateForegroundTask, finishForegroundTask, foregroundStepBoundaryMessage, normalizeForegroundModelFailure, pauseForegroundTask, recordForegroundArtifacts, recordForegroundPlan, recordForegroundStepCompletion, recordForegroundToolEvent, restoreForegroundTask, resumeForegroundTask, startForegroundTask } = await importEarly("./lib/foreground-task-supervisor.mjs");
+const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage, startsFreshContextTransaction } = await importEarly("./lib/context-input-transaction.mjs");
+const { utf8SafePrefixLength } = await importEarly("./lib/utf8-range.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
-const { buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
+const { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
@@ -97,33 +96,23 @@ const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, nor
 const { canAcceptScheduleCompletion, classifyScheduledSkillCompletion, classifyScheduleRunError, createScheduleRunRegistry, createScheduleTriggerQueue, DEFAULT_SCHEDULE_RUN_TIMEOUT_MS, decideRejectedScheduleSubmission, decideScheduleAdmission, guardSessionCleanupDeletion, markScheduleCancellationRequested, normalizeScheduleRunTimeoutMs, orderMissedSchedules, repairInterruptedSchedule, resolvePreviousSuccessfulSkillRunAt, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } = await importEarly("./lib/schedule-execution.mjs");
 const { createScheduleReportStore } = await importEarly("./lib/schedule-report-store.mjs");
 const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, normalizeScheduledKnowledgeReview } = await importEarly("./lib/scheduled-knowledge-store.mjs");
-const { createComplexTaskStore } = await importEarly("./lib/complex-task-store.mjs");
-const { createComplexTaskController } = await importEarly("./lib/complex-task-controller.mjs");
-const { createComplexTaskRuntimeService } = await importEarly("./lib/complex-task-runtime-service.mjs");
-const { createComplexTaskArtifactStore } = await importEarly("./lib/complex-task-artifact-store.mjs");
-const { createComplexTaskConversationDelivery } = await importEarly("./lib/complex-task-conversation-delivery.mjs");
 const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
 const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
 const { buildMessageRiskPrompt, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
-const { assertModelProbeMarker, assertUsableModelResponse, requestModelJson: requestTaskModelJson, requestModelText: requestTaskModelText } = await importEarly("./lib/model-task-request.mjs");
+const { requestModelJson: requestTaskModelJson, requestModelText: requestTaskModelText } = await importEarly("./lib/model-task-request.mjs");
 const { formatToolRepairNotice } = await importEarly("./lib/tool-repair-notice.mjs");
+const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs");
+const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEarly("./lib/shell-side-effect-policy.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
-const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, prepareLocalDocuments, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
-const { processPdfTextBatches } = await importEarly("./lib/pdf-text.mjs");
-const { artifactDeliveryRetryPrompt, artifactMissingNotice, detectArtifactRequest, documentArtifactStateFromJob, documentJobToolMismatch, latestAssistantResponse, pendingDocumentArtifactFromToolEvent, pendingDocumentWriteConflict, registerSaveLastAssistantResponseTool, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
-const { generatePdfSectionWithModel } = await importEarly("./lib/pdf-markdown-workflow.mjs");
-const { buildDocumentContract, buildDocumentSectionMessages, buildDocumentSummaryMessages, documentTaskFingerprint, normalizeDocumentPolicy } = await importEarly("./lib/document-intelligence.mjs");
+const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
+const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
-const { processDocumentSourceBatches, runOfficeCliJson } = await importEarly("./lib/document-extractors.mjs");
-const { createDocumentJobStore, runDocumentJobStartupMaintenance } = await importEarly("./lib/document-job-store.mjs");
-const { createDocumentOutputReservation } = await importEarly("./lib/document-output-reservation.mjs");
-const { createDocumentMarkdownManager } = await importEarly("./lib/document-markdown-workflow.mjs");
-const { createLongTaskHandoffCoordinator, longTaskTerminalKey } = await importEarly("./lib/long-task-handoff.mjs");
-const { getModelVerificationState, modelConfigFingerprint, selectUsableDocumentModel } = await importEarly("./lib/document-model-routing.mjs");
+const { modelConfigFingerprint } = await importEarly("./lib/document-model-routing.mjs");
 const { archiveRejectedKnowledgeTopic } = await importEarly("./lib/knowledge-topic-archive.mjs");
 const {
   buildTopicDocumentPrompt,
@@ -273,6 +262,9 @@ let activeMessageSendContext = {
 // must never inject a result into a different conversation after /new or a
 // session switch.
 let activeConversationId = randomUUID();
+// A paused context-input transaction is scoped to the visible conversation so
+// a later turn (or a restart) can explicitly recover the same cached input.
+let activeContextRecoveryHandle = null;
 
 // ── Centralized constants ───────────────────────────────────────
 const CONSTANTS = {
@@ -400,6 +392,27 @@ if (!existsSync(visionoxDataDir)) {
   mkdirSync(visionoxDataDir, { recursive: true });
 }
 const contextInputTransactions = createContextInputTransactionStore(resolve(visionoxDataDir, "context-inputs"));
+const toolOutputResourceRoot = resolve(visionoxDataDir, "context-inputs", "tool-results");
+mkdirSync(toolOutputResourceRoot, { recursive: true });
+function pruneToolOutputResources() {
+  const retentionMs = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const entries = [];
+  for (const name of readdirSync(toolOutputResourceRoot)) {
+    if (!/^tool-output-[A-Za-z0-9-]+\.txt$/.test(name)) continue;
+    const path = resolve(toolOutputResourceRoot, name);
+    try {
+      const info = statSync(path);
+      if (!info.isFile()) continue;
+      if (now - info.mtimeMs > retentionMs) rmSync(path, { force: true });
+      else entries.push({ path, mtimeMs: info.mtimeMs });
+    } catch {}
+  }
+  for (const entry of entries.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(100)) {
+    try { rmSync(entry.path, { force: true }); } catch {}
+  }
+}
+try { pruneToolOutputResources(); } catch (error) { console.error(`[launcher] tool output resource cleanup skipped: ${error.message}`); }
 const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
@@ -417,81 +430,10 @@ if (!existsSync(modeMemoryDir)) {
 
 const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
-const documentJobStore = createDocumentJobStore(resolve(visionoxDataDir, "document-jobs"), {
-  retentionDays: 30,
-  onManifestFallback: (error, jobId, snapshotPath) => {
-    console.error(`[document] manifest snapshot fallback job=${jobId} code=${error?.code || "UNKNOWN"} snapshot=${snapshotPath}`);
-  },
-});
-const LEGACY_DOCUMENT_EXECUTION_RETIRED = "旧版文档后台执行流程已停用。历史结果仍可查看、停止、删除或重新交付；需要继续处理时，请回到主对话重新发起，任务将由通用复杂任务状态机监督同一个普通模型工具循环。";
-const documentOutputReservation = createDocumentOutputReservation({
-  workspaceRoot: home,
-  listJobs: async () => [
-    ...await documentJobStore.list(),
-    ...(await complexTaskStore.list()).map((task) => ({
-      id: task.id,
-      status: task.lifecycle,
-      outputPath: task.contract?.output?.requestedPath,
-      workspaceRoot: task.contract?.workspace,
-      taskFingerprint: task.metadata?.taskFingerprint,
-      running: ["queued", "leased", "running", "assembling", "waiting_user", "blocked", "paused"].includes(task.lifecycle),
-    })),
-  ],
-});
-
-// Generic v2 tasks own an output reservation through their durable task id.
-// Legacy document jobs release through their handoff path; the generic path
-// must also release reservations when it reaches any terminal outcome,
-// including failed or cancelled host outcomes that never enter the committer.
-function releaseComplexTaskOutputReservation(task) {
-  if (!task || !String(task.id ?? "").startsWith("task:")) return;
-  if (task.lifecycle !== "terminal") return;
-  documentOutputReservation.release(task.id, { force: true });
-}
-
-const documentJobMaintenance = await runDocumentJobStartupMaintenance(documentJobStore, {
-  onIssue: (issue) => {
-    console.error(`[launcher] document job ${issue.operation} maintenance degraded (${issue.code}): ${issue.message}`);
-  },
-});
-// Retain the durable v2 store for compatibility, inspection, and outcome
-// delivery. New complex work is supervised in the foreground CacheFirstLoop.
-const complexTaskArtifactStore = createComplexTaskArtifactStore(resolve(visionoxDataDir, "task-artifacts"));
-const complexTaskStore = createComplexTaskStore(resolve(visionoxDataDir, "tasks"), {
-  leaseMs: 60_000,
-  artifactStore: complexTaskArtifactStore,
-  onManifestFallback: (error, taskId, snapshotPath) => {
-    console.error(`[complex-task] manifest snapshot fallback task=${taskId} snapshot=${snapshotPath}: ${error?.message || error}`);
-  },
-});
-const complexTaskController = createComplexTaskController({ store: complexTaskStore });
-let complexTaskRuntimeService = null;
-let complexTaskConversationDelivery = null;
-
-function scheduleComplexTaskConversationDelivery(task) {
-  if (!task || !complexTaskConversationDelivery) return;
-  void complexTaskConversationDelivery.observe(task)
-    .then(() => complexTaskConversationDelivery.drain())
-    .catch((error) => {
-      console.error(`[complex-task] conversation delivery scheduling failed: ${error.message}`);
-    });
-}
-
-const repairedDocumentJobs = documentJobMaintenance.repaired;
-const prunedDocumentJobs = documentJobMaintenance.pruned;
-if (repairedDocumentJobs.length > 0 || prunedDocumentJobs.deleted.length > 0) {
-  console.error(`[launcher] document jobs recovered=${repairedDocumentJobs.length} pruned=${prunedDocumentJobs.deleted.length}`);
-}
 const runtimeIssues = createRuntimeIssueRegistry({
   debug: process.env.VISIONOX_DEBUG_DIAGNOSTICS === "1",
   log: ({ level, message }) => console.error(`[launcher] ${level}: ${message}`),
 });
-for (const issue of documentJobMaintenance.issues ?? []) {
-  runtimeIssues.report("warning", {
-    key: `document-job-maintenance-${issue.operation}-${issue.jobId ?? "startup"}`,
-    message: `后台文档任务启动维护降级（${issue.operation}）：${issue.message}`,
-  });
-}
 
 function trackPersistentStorageIssue(key, path, error, level = "error") {
   if (error) runtimeIssues.report(level, { key, path, message: String(error) });
@@ -952,23 +894,46 @@ function enableBootstrapSkill(name) {
   rmSync(bootstrapSkillDisabledMarker(name), { force: true });
 }
 
-async function writeBuiltinMarker(skillDir, name, sourceHash, sourceMtime) {
+async function writeBuiltinMarker(skillDir, name, sourceHash, sourceMtime, sourceFingerprint = null) {
   const marker = {
     owner: "visionox-bootstrap",
     name,
     version: await readSkillVersion(skillDir),
     sourceHash,
     sourceMtime,
+    sourceFingerprint,
     installedAt: new Date().toISOString(),
   };
   writeFileSync(resolve(skillDir, "_visionox_builtin.json"), `${JSON.stringify(marker, null, 2)}\n`, "utf8");
 }
 
-// Source skill directories are build-time artifacts — their mtime doesn't change
-// after install. Cache the hash in the marker keyed by source dir mtime so we
-// can skip reading all source files on steady-state startup.
+// Source skill directories are build-time artifacts. Their directory mtime can
+// remain unchanged when a nested file is patched, so the deployment fast path
+// uses a recursive file-set fingerprint instead of trusting the directory mtime.
 function sourceDirMtime(sourceDir) {
   try { return statSync(sourceDir).mtimeMs; } catch { return null; }
+}
+
+async function sourceSkillFingerprint(rootDir) {
+  const parts = [];
+  const visit = async (dir, rel = "") => {
+    const entries = (await readdir(dir, { withFileTypes: true }))
+      .filter((entry) => entry.name !== "_visionox_builtin.json")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      const abs = resolve(dir, entry.name);
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        parts.push(`${childRel}/`);
+        await visit(abs, childRel);
+      } else if (entry.isFile()) {
+        const info = await fsStat(abs);
+        parts.push(`${childRel}:${info.size}:${info.mtimeMs}`);
+      }
+    }
+  };
+  await visit(rootDir);
+  return hashBuffer(parts.join("\n"));
 }
 
 async function installBootstrapSkill(name, { force = false } = {}) {
@@ -979,14 +944,14 @@ async function installBootstrapSkill(name, { force = false } = {}) {
     return { name, installed: false, reason: "missing bootstrap SKILL.md" };
   }
   const srcMtime = sourceDirMtime(sourceDir);
+  const sourceFingerprint = await sourceSkillFingerprint(sourceDir);
   if (existsSync(targetDir)) {
     let marker = await readBuiltinMarker(targetDir);
     if (
       !force
       && marker?.name === name
       && marker.sourceHash
-      && srcMtime !== null
-      && marker.sourceMtime === srcMtime
+      && marker.sourceFingerprint === sourceFingerprint
       && existsSync(resolve(targetDir, "SKILL.md"))
     ) {
       return { name, installed: false, skipped: true, reason: "already up to date (fast path)" };
@@ -1009,22 +974,21 @@ async function installBootstrapSkill(name, { force = false } = {}) {
       };
       console.error(`[launcher] adopting known legacy bootstrap skill before upgrade: ${name}`);
     }
-    // Fast path: source dir unchanged since last install → reuse cached hash.
-    const sourceVersion = await readSkillVersion(sourceDir);
-    let sourceHash;
-    if (!force && marker.version === sourceVersion && srcMtime !== null && marker.sourceMtime === srcMtime && marker.sourceHash) {
-      sourceHash = marker.sourceHash;
-    } else {
-      sourceHash = await hashDirectory(sourceDir);
-    }
+    // A changed file-set fingerprint requires a content comparison. If the
+    // source content is unchanged, refresh only the marker; otherwise replace
+    // the whole managed directory so retired files cannot survive an upgrade.
+    const sourceHash = await hashDirectory(sourceDir);
     const currentHash = marker.sourceHash || await hashDirectory(targetDir);
     if (!force && currentHash === sourceHash) {
+      if (marker.sourceFingerprint !== sourceFingerprint) {
+        await writeBuiltinMarker(targetDir, name, sourceHash, srcMtime, sourceFingerprint);
+      }
       return { name, installed: false, skipped: true, reason: "already up to date" };
     }
     const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
     try {
       await cp(sourceDir, stagingDir, { recursive: true });
-      await writeBuiltinMarker(stagingDir, name, sourceHash, srcMtime);
+      await writeBuiltinMarker(stagingDir, name, sourceHash, srcMtime, sourceFingerprint);
       const replaced = replacePathTransactional(targetDir, stagingDir, { retain: 3 });
       return { name, installed: true, upgraded: true, backup: replaced.history, path: targetDir, cleanupError: replaced.cleanupError };
     } finally {
@@ -1039,7 +1003,7 @@ async function installBootstrapSkill(name, { force = false } = {}) {
   const stagingDir = resolve(skillsRoot, `.${name}-stage-${randomUUID()}`);
   try {
     await cp(sourceDir, stagingDir, { recursive: true });
-    await writeBuiltinMarker(stagingDir, name, sourceHash, srcMtime);
+    await writeBuiltinMarker(stagingDir, name, sourceHash, srcMtime, sourceFingerprint);
     replacePathTransactional(targetDir, stagingDir, { retain: 3 });
     return { name, installed: true, path: targetDir };
   } finally {
@@ -1285,197 +1249,6 @@ async function retrieveSemanticContext(text, recentMessages, signal) {
   }
 }
 
-let documentMarkdownManager = null;
-const documentClientCache = new Map();
-const documentModelHealth = new Map();
-
-function documentModelCandidates(policyValue) {
-  const policy = normalizeDocumentPolicy(policyValue);
-  const providers = (config.providers ?? []).filter((provider) => provider && provider.disabled !== true);
-  const activeProvider = getActiveProvider(config);
-  const activeModelId = effectiveModelConfig(config).model;
-  const candidates = [];
-  const supportsRole = (provider, model, role) => (
-    provider && model && resolveProviderModelCapabilities(provider, model.id).roles?.includes(role) === true
-  );
-  const append = (provider, model, role) => {
-    if (!provider || !model || model.disabled === true || !String(provider.apiKey || "").trim() || !String(provider.baseUrl || "").trim()) return;
-    const key = `${provider.id}\0${model.id}`;
-    if (candidates.some((item) => item.key === key)) return;
-    const agentPolicy = resolveProviderModelAgentPolicy(provider, model.id);
-    const visionPolicy = resolveProviderModelVisionPolicy(provider, model.id);
-    const verificationRequest = resolveProviderModelRequest(provider, model.id, { purpose: "verification" });
-    const verification = getModelVerificationState(provider, model, { requestConfig: verificationRequest });
-    const capabilities = resolveProviderModelCapabilities(provider, model.id);
-    const inputModalities = capabilities.inputModalities ?? ["text"];
-    const configFingerprint = modelConfigFingerprint(provider, model, verificationRequest);
-    candidates.push({
-      key,
-      configFingerprint,
-      providerId: provider.id,
-      modelId: model.id,
-      provider,
-      model,
-      role,
-      multimodal: inputModalities.includes("image"),
-      maxImages: inputModalities.includes("image")
-        ? Number(capabilities.maxImagesPerRequest) || Number(visionPolicy.maxImages) || 5
-        : 0,
-      maxContextTokens: capabilities.maxContextTokens,
-      maxOutputTokens: capabilities.maxOutputTokens,
-      contextReserveTokens: Number(visionPolicy.contextReserveTokens) || null,
-      verificationStatus: verification.status,
-      verificationReason: verification.reason,
-      verificationError: verification.error,
-      verificationCheckedAt: verification.checkedAt,
-      requiresProbe: verification.requiresProbe,
-      documentPolicy: agentPolicy.documentPolicy ?? null,
-    });
-  };
-  const activeModels = activeProvider?.models?.filter((model) => model.disabled !== true) ?? [];
-  const activeDocumentModel = activeModels.find((model) => model.id === activeModelId && supportsRole(activeProvider, model, "document-draft"))
-    ?? activeModels.find((model) => supportsRole(activeProvider, model, "document-draft"));
-  append(activeProvider, activeDocumentModel, "primary");
-  if (policy.autoFallback) {
-    const activeEscalationModel = activeModels.find((model) => (
-      model.id === activeProvider?.escalationModel && supportsRole(activeProvider, model, "document-draft")
-    ));
-    append(activeProvider, activeEscalationModel, "fallback");
-    append(activeProvider, activeModels.find((model) => supportsRole(activeProvider, model, "vision-review")), "fallback");
-  }
-  const fallbackProviders = policy.fallbackProviderIds.length > 0
-    ? policy.fallbackProviderIds.map((id) => providers.find((provider) => provider.id === id)).filter(Boolean)
-    : providers.filter((provider) => provider.id !== activeProvider?.id);
-  for (const provider of fallbackProviders) {
-    const enabled = provider.models?.filter((model) => model.disabled !== true) ?? [];
-    const documentModels = enabled.filter((model) => supportsRole(provider, model, "document-draft"));
-    const preferred = documentModels.find((model) => model.presets?.includes(provider.defaultPreset))
-      ?? documentModels[0];
-    append(provider, preferred, "fallback");
-    append(provider, documentModels.find((model) => model.id === provider.escalationModel), "fallback");
-    append(provider, enabled.find((model) => supportsRole(provider, model, "vision-review")), "fallback");
-  }
-  return candidates;
-}
-
-function documentClient(candidate) {
-  const fingerprint = candidate.configFingerprint || modelConfigFingerprint(
-    candidate.provider,
-    candidate.model,
-    resolveProviderModelRequest(candidate.provider, candidate.modelId, { purpose: "verification" }),
-  );
-  const cached = documentClientCache.get(candidate.key);
-  if (cached?.fingerprint === fingerprint) return cached.client;
-  const next = new DeepSeekClient({
-    apiKey: candidate.provider.apiKey,
-    baseUrl: candidate.provider.baseUrl,
-    requestConfigForModel: (modelId, requestOptions) => resolveProviderModelRequest(candidate.provider, modelId, requestOptions),
-  });
-  documentClientCache.set(candidate.key, { fingerprint, client: next });
-  return next;
-}
-
-async function probeDocumentModel(candidate, signal) {
-  if (candidate.verificationStatus === "failed") {
-    return {
-      ok: false,
-      error: candidate.verificationError || "recent model verification failed",
-      errorName: "ModelVerificationFailed",
-      reason: candidate.verificationReason,
-    };
-  }
-  if (candidate.verificationStatus === "passed") return { ok: true, source: "persisted-verification" };
-  const healthKey = candidate.configFingerprint || candidate.key;
-  const cached = documentModelHealth.get(healthKey);
-  if (cached && Date.now() - cached.checkedAt < 5 * 60_000) {
-    return {
-      ok: cached.ok === true,
-      error: cached.error ?? null,
-      errorName: cached.errorName ?? null,
-    };
-  }
-  const timeoutSignal = AbortSignal.timeout(10_000);
-  const combined = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-  const probeMarker = "VISIONOX_PROBE_OK_7F3A";
-  try {
-    const response = await documentClient(candidate).chat({
-      model: candidate.modelId,
-      messages: [{ role: "user", content: `Reply with exactly ${probeMarker}.` }],
-      temperature: 0,
-      maxTokens: 64,
-      requestPurpose: "verification",
-      signal: combined,
-    });
-    assertModelProbeMarker(response, probeMarker, { label: `model probe ${candidate.modelId}` });
-    const ok = true;
-    documentModelHealth.set(healthKey, { ok, checkedAt: Date.now() });
-    return { ok };
-  } catch (error) {
-    const message = String(error?.message || error);
-    documentModelHealth.set(healthKey, { ok: false, checkedAt: Date.now(), error: message, errorName: String(error?.name || "Error") });
-    console.error(`[document] fallback probe failed provider=${candidate.providerId} model=${candidate.modelId}: ${error.message}`);
-    return { ok: false, error: message, errorName: String(error?.name || "Error") };
-  }
-}
-
-async function generateDocumentContent({ candidate, batch, messages: requestMessages, purpose, maxTokens, requestTimeoutMs, onProgress, signal, retry }) {
-  const requestPurpose = purpose === "verification" ? "documentReview" : purpose;
-  return generatePdfSectionWithModel({
-    client: documentClient(candidate),
-    model: candidate.modelId,
-    messages: requestMessages,
-    pageRange: batch.label || batch.id,
-    stage: purpose === "verification" ? "quality-review" : retry ? "quality-repair" : "draft",
-    requestPurpose,
-    temperature: purpose === "verification" ? 0 : 0.1,
-    maxTokens: resolveDocumentOutputBudget(candidate.provider, candidate.modelId, { purpose: requestPurpose, fallback: maxTokens }),
-    hardTimeoutMs: requestTimeoutMs,
-    onProgress,
-    signal,
-  });
-}
-
-async function generateDocumentSummary({ title, sectionSummaries, contract, candidate, requestTimeoutMs, onProgress, signal }) {
-  return generatePdfSectionWithModel({
-    client: documentClient(candidate),
-    model: candidate.modelId,
-    messages: buildDocumentSummaryMessages({ title, sectionSummaries, contract }),
-    pageRange: "summary",
-    stage: "summary",
-    requestPurpose: "summary",
-    temperature: 0.1,
-    maxTokens: resolveDocumentOutputBudget(candidate.provider, candidate.modelId, {
-      purpose: "summary",
-      fallback: candidate.documentPolicy?.batchOutputTokens,
-    }),
-    hardTimeoutMs: requestTimeoutMs,
-    onProgress,
-    signal,
-  });
-}
-
-function isPathWithinRoot(targetPath, rootPath) {
-  const target = resolve(String(targetPath ?? ""));
-  const root = resolve(String(rootPath ?? ""));
-  const normalize = process.platform === "win32" ? (value) => value.toLowerCase() : (value) => value;
-  const normalizedTarget = normalize(target);
-  const normalizedRoot = normalize(root);
-  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
-}
-
-async function writeDocumentOutput({ outputPath, content, signal, workspaceRoot, allowOutsideWorkspace, allowOutputOverwrite }) {
-  if (signal?.aborted) throw new DOMException("document task cancelled", "AbortError");
-  if (!allowOutsideWorkspace && !isPathWithinRoot(outputPath, workspaceRoot)) {
-    throw new Error("document output path is outside the task's original workspace");
-  }
-  if (!allowOutputOverwrite && existsSync(resolve(outputPath))) {
-    const error = new Error("document output file appeared after the task started; choose a new filename or explicitly confirm overwrite");
-    error.code = "DOCUMENT_OUTPUT_CONFLICT";
-    throw error;
-  }
-  await atomicWriteFile(resolve(outputPath), String(content ?? ""), "utf8");
-}
-
 async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   const before = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
   const { jobs } = opts;
@@ -1524,124 +1297,9 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     })),
   });
 
-  if (!documentMarkdownManager) {
-    documentMarkdownManager = createDocumentMarkdownManager({
-      store: documentJobStore,
-      countTokens,
-      isForegroundBusy: () => busy,
-      isProviderBusy: () => scheduleRunRegistry.size() > 0,
-      onIdle: () => {
-        requestScheduleQueueDrain();
-        void drainDocumentHandoffs();
-      },
-      prepareDocument: async (input, signal) => prepareLocalDocuments(input, {
-        cfg: readConfig(configPath),
-        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir: workspaceDir },
-        logger: console,
-        signal,
-        registry: preparedDocumentRegistry,
-      }),
-      fingerprintSource: async (prepared, signal) => {
-        const paths = Array.isArray(prepared?.sources) && prepared.sources.length > 0
-          ? prepared.sources.map((source) => source.sourcePath || source.readablePath).filter(Boolean)
-          : [prepared?.sourcePath || prepared?.readablePath].filter(Boolean);
-        return fingerprintPaths(paths, { signal });
-      },
-      refreshTaskFingerprint: ({ input, contract, sourceFingerprint }) => documentTaskFingerprint({
-        sourcePaths: Array.isArray(input.sourcePaths) && input.sourcePaths.length > 0 ? input.sourcePaths : [input.sourcePath],
-        sourceFingerprints: sourceFingerprint,
-        outputPath: resolve(input.outputPath),
-        outputIdentity: input.outputIdentity ?? resolve(input.outputPath),
-        taskType: input.taskType,
-        pages: input.pages,
-        contract,
-      }),
-      processSourceBatches: (prepared, batchOptions) => processDocumentSourceBatches(prepared, {
-        ...batchOptions,
-        processPdfBatches: (path, pdfOptions) => processPdfTextBatches(path, pdfOptions),
-        runOfficeCli: (args, officeOptions) => {
-          const executable = resolveBundledOfficecli();
-          if (!executable) throw new Error("bundled OfficeCLI is unavailable");
-          return runOfficeCliJson(executable, args, officeOptions);
-        },
-      }),
-      modelCandidates: documentModelCandidates,
-      probeModel: probeDocumentModel,
-      generate: generateDocumentContent,
-      generateSummary: generateDocumentSummary,
-      writeOutput: writeDocumentOutput,
-      onChange: (job, rawJob) => {
-        broadcastDashboardEvent({ kind: "background-job-change", job });
-        broadcastDashboardEvent({ kind: "document-progress", jobId: job.documentJobId, status: job.status, progress: job.progress, model: job.model, modelRole: job.modelRole, outputPath: job.outputPath, qualityPassed: job.qualityPassed });
-        handleDocumentArtifactJobChange(job, rawJob);
-      },
-      onPolicy: (jobId, trace) => {
-        const policy = trace?.effective ?? {};
-        const candidates = (trace?.candidates ?? []).map((candidate) => `${candidate.role}:${candidate.providerId}/${candidate.modelId}${candidate.hasDocumentPolicy ? ":configured" : ":default"}`).join(",");
-        console.error(`[document] policy job=${jobId} inputTokens=${policy.batchInputTokens ?? "?"} outputTokens=${policy.batchOutputTokens ?? "?"} units=${policy.maxUnitsPerBatch ?? "?"} visuals=${policy.maxVisualUnitsPerBatch ?? "?"} timeoutMs=${policy.requestTimeoutMs ?? "?"} candidates=${candidates}`);
-      },
-      onPersistenceError: (error, jobId, context) => {
-        const code = String(error?.code || "UNKNOWN");
-        runtimeIssues.report("warning", { key: `document-storage-${jobId}`, message: `文档任务状态保存失败（${context}/${code}），程序将继续运行并保留批次检查点。` });
-        console.error(`[document] persistence warning job=${jobId} context=${context} code=${code}: ${error.message}`);
-      },
-      onError: (error, jobId) => {
-        runtimeIssues.report("warning", { key: `document-job-${jobId}`, message: error.message });
-        console.error(`[document] job ${jobId} failed: ${error.stack || error.message}`);
-      },
-    });
-  }
-
-  tools.register({
-    name: "get_document_job_status",
-    description: "Read status for an existing legacy document-conversion background task without waiting or polling. Pass its document:<UUID>, or omit jobId to list recent document jobs. Never use wait_for_job or list_jobs for document jobs.",
-    readOnly: true,
-    parallelSafe: true,
-    stormExempt: true,
-    parameters: {
-      type: "object",
-      properties: {
-        jobId: { type: "string", description: "Optional document:<UUID> background job id." },
-      },
-    },
-    fn: async (args) => {
-      const jobId = String(args?.jobId ?? "").trim();
-      if (jobId) {
-        const job = await documentMarkdownManager?.getMetadata(jobId);
-        return JSON.stringify(job ? { ok: true, job } : { ok: false, error: `document job not found: ${jobId}` });
-      }
-      const jobs = (await documentMarkdownManager?.listMetadata() ?? [])
-        .sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")))
-        .slice(0, 20);
-      return JSON.stringify({ ok: true, jobs });
-    },
-  });
-
-  tools.register({
-    name: "get_background_task_status",
-    description: "Read the canonical status of a durable background task. Pass task:<UUID> for one task, or omit taskId to list active and attention tasks. This status is persisted and remains available after the originating conversation or window changes.",
-    readOnly: true,
-    parallelSafe: true,
-    stormExempt: true,
-    parameters: {
-      type: "object",
-      properties: {
-        taskId: { type: "string", description: "Optional task:<UUID> identifier returned when the durable task was accepted." },
-      },
-    },
-    fn: async (args) => {
-      const taskId = String(args?.taskId ?? "").trim();
-      if (taskId) {
-        const job = await complexTaskRuntimeService?.getBackgroundJob(taskId);
-        return JSON.stringify(job ? { ok: true, job } : { ok: false, error: `background task not found: ${taskId}` });
-      }
-      const snapshot = await complexTaskRuntimeService?.listBackgroundJobs?.() ?? { jobs: [], pendingDeliveries: [] };
-      return JSON.stringify({ ok: true, ...snapshot });
-    },
-  });
-
   registerShellTools(tools, {
     rootDir,
+    outputResourceDir: toolOutputResourceRoot,
     extraAllowed: () => loadProjectShellAllowed(rootDir, configPath),
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
@@ -1691,36 +1349,52 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 // ── Create registry & register all tools ────────────────────────
 const tools = new ToolRegistry();
 const jobs = new JobRegistry();
+async function readToolOutputResource(args = {}) {
+  const resourceId = String(args.resourceId ?? "").trim();
+  if (!resourceId || basename(resourceId) !== resourceId || !/^tool-output-[A-Za-z0-9-]+\.txt$/.test(resourceId)) {
+    return { ok: false, error: "invalid tool output resource id" };
+  }
+  const resourcePath = resolve(toolOutputResourceRoot, resourceId);
+  const rootPrefix = `${resolve(toolOutputResourceRoot)}${sep}`;
+  if (!(resourcePath === resolve(toolOutputResourceRoot) || resourcePath.startsWith(rootPrefix)) || !existsSync(resourcePath)) {
+    return { ok: false, error: "tool output resource not found" };
+  }
+  const offset = Math.max(0, Number(args.offsetBytes) || 0);
+  const maxBytes = Math.max(1, Math.min(64_000, Number(args.maxBytes) || 24_000));
+  let handle;
+  try {
+    handle = await openFile(resourcePath, "r");
+    const info = await handle.stat();
+    const buffer = Buffer.alloc(Math.min(maxBytes + 3, Math.max(0, info.size - offset)));
+    const result = buffer.length > 0 ? await handle.read(buffer, 0, buffer.length, offset) : { bytesRead: 0 };
+    const bytesRead = result.bytesRead ?? 0;
+    const safeBytes = bytesRead > 0
+      ? Math.min(bytesRead, Math.max(1, utf8SafePrefixLength(buffer.subarray(0, bytesRead), maxBytes)))
+      : 0;
+    const nextOffsetBytes = offset + safeBytes;
+    return {
+      ok: true,
+      resourceId,
+      offsetBytes: offset,
+      nextOffsetBytes,
+      totalBytes: info.size,
+      complete: nextOffsetBytes >= info.size,
+      content: buffer.subarray(0, safeBytes).toString("utf8"),
+    };
+  } catch (error) {
+    return { ok: false, resourceId, error: String(error?.message || error) };
+  } finally {
+    try { await handle?.close(); } catch {}
+  }
+}
 const preparedDocumentRegistry = createPreparedDocumentRegistry({
   onChange: (preparedDocuments) => { void writeActiveSessionMeta({ preparedDocuments }); },
 });
-complexTaskRuntimeService = createComplexTaskRuntimeService({
-  store: complexTaskStore,
-  controller: complexTaskController,
-  executionRetired: true,
-  listProcessJobs: () => jobs.listMetadata(),
-  listLegacyDocumentJobs: () => documentMarkdownManager?.listMetadata?.() ?? [],
-  onChange: (task, detail) => {
-    releaseComplexTaskOutputReservation(task);
-    broadcastDashboardEvent({ kind: "background-job-change", id: task?.id, action: detail?.action || null });
-    scheduleComplexTaskConversationDelivery(task);
-  },
-});
-
 tools.setToolInterceptor(async (name, args) => {
-  const issue = validateOfficecliInvocation(name, args)
-    ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable })
-    ?? documentJobToolMismatch(name, args);
+  const issue = validateFileWriteArgs(name, args)
+    ?? validateOfficecliInvocation(name, args)
+    ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable });
   if (issue) return JSON.stringify(issue);
-  if (/^(?:append_file|edit|edit_file|multi_edit|move_file|delete_file|run_background|run_command|save_file|save_last_assistant_response|write_file)$/i.test(String(name ?? ""))) {
-    const conflict = pendingDocumentWriteConflict(
-      name,
-      args,
-      await documentMarkdownManager?.listMetadata() ?? [],
-      { workspaceRoot: workspaceDir },
-    );
-    if (conflict) return JSON.stringify(conflict);
-  }
   return undefined;
 });
 
@@ -1733,12 +1407,19 @@ const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
 });
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
+const runCommandDefinition = tools.get("run_command");
+if (runCommandDefinition?.readOnlyCheck) {
+  const originalReadOnlyCheck = runCommandDefinition.readOnlyCheck;
+  runCommandDefinition.readOnlyCheck = (args) => {
+    if (shellCommandHasSideEffects(args?.command)) return false;
+    return originalReadOnlyCheck(args);
+  };
+}
 
 tools.register({
   name: "read_context_input",
   description: "Recover one bounded segment from a lossless context-input cache after compaction or a context-input flush notice. Read one segment, materialize it into the requested artifact, then request the next segment. This is a recovery/control tool and remains available while new read-only tools are paused.",
   readOnly: true,
-  parallelSafe: true,
   stormExempt: true,
   contextControl: true,
   parameters: {
@@ -1754,6 +1435,25 @@ tools.register({
     offset: args?.offset,
     maxChars: args?.maxChars ?? 24_000,
   })),
+});
+
+tools.register({
+  name: "read_tool_output",
+  description: "Read one bounded byte range from a large command result saved as a tool output resource. Use the exact resourceId and nextOffsetBytes returned by the host, write this segment before reading another, and do not rerun the command or load the entire result into the conversation. Defaults to 24000 bytes and allows up to 64000 bytes for models with sufficient context.",
+  readOnly: true,
+  contextControl: true,
+  contextResourceReader: true,
+  stormExempt: true,
+  parameters: {
+    type: "object",
+    properties: {
+      resourceId: { type: "string", description: "The exact tool-output resource id shown in the command result." },
+      offsetBytes: { type: "integer", minimum: 0, description: "Byte offset returned by the previous read. Start at 0." },
+      maxBytes: { type: "integer", minimum: 1, maximum: 64000, description: "Maximum bytes to return. Defaults to 24000; request a larger segment only when it can be processed and materialized before the next read." },
+    },
+    required: ["resourceId"],
+  },
+  fn: async (args) => JSON.stringify(await readToolOutputResource(args)),
 });
 
 tools.register({
@@ -1822,7 +1522,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。文档任务与代码、研究和批处理任务使用同一套任务评估、澄清、执行、监控和验收协议：先只读调查；遇到会改变范围、保真度、覆盖或输出位置的关键歧义时，只用 ask_choice 问一个问题，并把推荐选项及理由放在第一项。格式读取器或 Skill 只完成当前步骤，不拥有任务生命周期；需要分批处理时，每批内容先持久化或形成检查点，再接纳下一批输入。多来源任务也必须保留在同一个普通模型工具循环和同一份批准计划中。不要安装解析依赖、写临时解析脚本、复制源文件到工作区或搜索旧提取产物。交付前验证实际文件、来源覆盖和任务契约，不得把工具成功或部分结果宣称为完整完成。",
+    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。按用户目标选择合适的格式读取器或 Skill；需要分批处理时，先把已处理内容写入目标文件或明确记录进度，再继续下一批。对于大型、结构化或需要完整转换的文档，可以在临时目录编写一次性解析/转换脚本，并通过普通 run_command 执行；优先复用现有依赖，不要在没有必要时安装依赖，不要复制源文件到工作区或搜索旧提取产物。脚本应直接写入目标文件，输出简短的进度与校验结果，并在完成后清理临时文件。交付前检查实际文件，不得把部分结果宣称为完整完成。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -1852,11 +1552,7 @@ registerPlanTool(tools, {
     // mark_step_complete call (i.e., after the user approves and AI
     // starts executing). If the user cancels, onStepCompleted is never
     // called so nothing hits disk — matching TUI behaviour.
-    const structuredSteps = Array.isArray(steps) && steps.length > 0
-      ? steps
-      : activeForegroundTask?.classification === "complex"
-        ? [{ id: "task-execution", title: "执行并验证任务", action: String(plan || "").slice(0, 4_000) }]
-        : [];
+    const structuredSteps = Array.isArray(steps) && steps.length > 0 ? steps : [];
     pendingPlan = {
       steps: structuredSteps,
       summary,
@@ -1868,16 +1564,7 @@ registerPlanTool(tools, {
     // through resolvePlanConfirm, so keep this activation fallback.
     if (pendingPlan) {
       const approvedPlan = pendingPlan;
-      if (!activatePendingPlan()) {
-        if (activeForegroundTask?.classification === "complex") {
-          activeForegroundTask = pauseForegroundTask(activeForegroundTask, "plan-persistence-failed");
-          void persistForegroundTaskState();
-        }
-        throw new Error("mark_step_complete: the approved plan could not be persisted; execution is paused.");
-      }
-      if (activeForegroundTask?.classification === "complex") {
-        activeForegroundTask = recordForegroundPlan(activeForegroundTask, approvedPlan);
-      }
+      if (!activatePendingPlan()) throw new Error("mark_step_complete: the approved plan could not be persisted.");
     }
     if (!isKnownPlanStep(activePlanSteps, update?.stepId)) {
       throw new Error(`mark_step_complete: stepId "${update?.stepId ?? ""}" is not in the active plan.`);
@@ -1887,16 +1574,7 @@ registerPlanTool(tools, {
     const checkpointCompleted = completedIds.includes(update.stepId)
       ? completedIds.length
       : completedIds.length + 1;
-    if (update?.stepId && activeForegroundTask?.classification === "complex") {
-      const checkpointedTask = recordForegroundStepCompletion(activeForegroundTask, update);
-      if (activeCompletedIds) {
-        if (!markStepDone(update.stepId)) {
-          throw new Error("mark_step_complete: plan progress could not be persisted; the step remains incomplete.");
-        }
-      }
-      activeForegroundTask = checkpointedTask;
-      void persistForegroundTaskState();
-    } else if (update?.stepId && activeCompletedIds && !markStepDone(update.stepId)) {
+    if (update?.stepId && activeCompletedIds && !markStepDone(update.stepId)) {
       throw new Error("mark_step_complete: plan progress could not be persisted; the step remains incomplete.");
     }
     // Notify dashboard that a step was completed (for live UI updates).
@@ -1918,31 +1596,11 @@ registerPlanTool(tools, {
 });
 const markStepCompleteTool = tools.get("mark_step_complete");
 if (markStepCompleteTool) {
-  markStepCompleteTool.finishTurnOnResult = (result, args) => {
-    const boundary = foregroundStepBoundaryMessage(activeForegroundTask, result, args);
-    if (boundary) return boundary;
-    if (/revision requested|user requested revision/i.test(String(result || ""))) {
-      return "[系统通用复杂任务调度] 用户要求调整剩余计划，当前执行窗口结束；宿主将保留已确认检查点并进入重新规划。";
-    }
-    return null;
-  };
+  markStepCompleteTool.finishTurnOnResult = null;
 }
 const submitPlanTool = tools.get("submit_plan");
 if (submitPlanTool) {
-  submitPlanTool.finishTurnOnResult = (result) => {
-    if (activeForegroundTask?.classification !== "complex" || !/^plan approved\b/i.test(String(result || ""))) return null;
-    if (pendingPlan) {
-      const approvedPlan = pendingPlan;
-      if (!activatePendingPlan()) {
-        activeForegroundTask = pauseForegroundTask(activeForegroundTask, "plan-persistence-failed");
-        void persistForegroundTaskState();
-        return "[系统通用复杂任务调度] 批准的计划未能可靠保存，任务已暂停且尚未执行任何计划步骤；请检查存储状态后重试。";
-      }
-      activeForegroundTask = recordForegroundPlan(activeForegroundTask, approvedPlan);
-      void persistForegroundTaskState();
-    }
-    return "[系统通用复杂任务调度] 计划已批准，当前规划窗口结束；宿主将调度第一个步骤。";
-  };
+  submitPlanTool.finishTurnOnResult = null;
 }
 registerChoiceTool(tools);
 registerTodoTool(tools, {
@@ -3922,10 +3580,8 @@ const GENERATED_ARTIFACT_PREVIEW_EXTS = new Set([
 ]);
 const GENERATED_ARTIFACT_SCRIPT_EXTS = new Set([".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"]);
 const GENERATED_ARTIFACT_PREVIEW_MAX_BYTES = 512 * 1024;
+const GENERATED_ARTIFACT_EXTERNAL_OPEN_BLOCKED_EXTS = new Set([".md", ".markdown"]);
 const generatedArtifactPaths = new Map();
-const pendingDocumentArtifacts = new Map();
-const notifiedDocumentArtifacts = new Set();
-let documentHandoffCoordinator = null;
 
 function rememberGeneratedArtifactPath(value) {
   let raw = String(value || "").trim();
@@ -3979,7 +3635,7 @@ function generatedArtifactFileInfo(abs) {
       size: st.size,
       mtimeMs: st.mtimeMs,
       previewable: GENERATED_ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= GENERATED_ARTIFACT_PREVIEW_MAX_BYTES,
-      openable: !GENERATED_ARTIFACT_SCRIPT_EXTS.has(ext),
+      openable: !GENERATED_ARTIFACT_EXTERNAL_OPEN_BLOCKED_EXTS.has(ext) && !GENERATED_ARTIFACT_SCRIPT_EXTS.has(ext),
     };
   } catch {
     return null;
@@ -3997,8 +3653,14 @@ function parseMaybeJsonObject(value) {
   }
 }
 
-function rememberToolGeneratedArtifacts(toolName, toolArgs) {
-  if (!/^(write_file|append_file|save_last_assistant_response|edit|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
+function rememberToolGeneratedArtifacts(toolName, toolArgs, toolResult) {
+  if (String(toolName || "") === "run_command") {
+    const args = parseMaybeJsonObject(toolArgs);
+    return [...shellCommandArtifactPaths(args?.command), ...artifactPathsFromToolOutput(toolResult)]
+      .map((path) => rememberGeneratedArtifactPath(path))
+      .filter(Boolean);
+  }
+  if (!/^(write_file|append_file|save_last_assistant_response|edit|edit_file|multi_edit|save_file)$/i.test(String(toolName || ""))) return [];
   const args = parseMaybeJsonObject(toolArgs);
   if (!args) return [];
   const paths = [];
@@ -4008,7 +3670,36 @@ function rememberToolGeneratedArtifacts(toolName, toolArgs) {
       if (remembered) paths.push(remembered);
     }
   }
+  if (String(toolName || "").toLowerCase() === "multi_edit" && Array.isArray(args.edits)) {
+    for (const edit of args.edits) {
+      if (typeof edit?.path !== "string") continue;
+      const remembered = rememberGeneratedArtifactPath(edit.path);
+      if (remembered) paths.push(remembered);
+    }
+  }
   return Array.from(new Set(paths));
+}
+
+function explicitlyVerifiedRequestedArtifacts(toolName, toolArgs, requestedPaths) {
+  if (!/^(?:read_file|get_file_info|file_info|stat_file)$/i.test(String(toolName || ""))) return [];
+  const args = parseMaybeJsonObject(toolArgs);
+  if (!args || !Array.isArray(requestedPaths) || requestedPaths.length === 0) return [];
+  const requestedByKey = new Map();
+  for (const path of requestedPaths) {
+    const absolute = rememberGeneratedArtifactPath(path);
+    if (!absolute) continue;
+    const key = process.platform === "win32" ? absolute.toLowerCase() : absolute;
+    requestedByKey.set(key, absolute);
+  }
+  const matches = [];
+  for (const key of ["path", "filePath", "file_path", "filename"]) {
+    if (typeof args[key] !== "string") continue;
+    const absolute = rememberGeneratedArtifactPath(args[key]);
+    if (!absolute) continue;
+    const normalized = process.platform === "win32" ? absolute.toLowerCase() : absolute;
+    if (requestedByKey.has(normalized)) matches.push(requestedByKey.get(normalized));
+  }
+  return Array.from(new Set(matches));
 }
 // buildSystemPrompt — imported from ./lib/system-prompt.mjs
 
@@ -4231,7 +3922,7 @@ function buildLoop(client, rootDir) {
     ? systemWithTutor + "\n\n" + formatLearningPrompt(sessionLearningMode.style, rootDir)
     : systemWithTutor;
   const systemWithAgentPolicy = agentPolicy.documentWorkflow === "guided"
-    ? `${systemWithLearning}\n\n# Guided document workflow\n\nThis model has an explicit JSON execution policy. Apply the same task assessment, clarification, execution, monitoring, and verification protocol to document work as to every other task. Start with read-only investigation: call prepare_local_document once, retain documentRef, and identify the requested artifact and acceptance conditions. If one unresolved high-impact ambiguity would change scope, fidelity, overwrite behavior, or output shape, call ask_choice with exactly one question; put the recommended option first and explain why. Otherwise proceed without asking. A format reader, parser, or Skill performs only the current step and never owns the task lifecycle. For bounded input, persist or checkpoint the processed result before accepting another batch. If a context-input memo appears, recover its referenced content through read_context_input in bounded segments and materialize each segment before reading another. Verify the output file, source coverage, and approved task requirements before claiming completion. Keep multi-source work in the same approved plan and ordinary tool loop; do not start a separate model worker. Never rewrite or guess a prepared path; the host can recreate a missing readable copy from documentRef. When the user asks to save the answer just shown in chat, call save_last_assistant_response with only the output path. For technical documents, preserve tables, parameters, commands, and code unless the user explicitly requests a brief overview. A continuation-window notice means the current turn has fresh tool rounds; continue the approved task without asking the user to send another message.`
+    ? `${systemWithLearning}\n\n${buildGuidedDocumentPrompt()}`
     : systemWithLearning;
   const prefix = new ImmutablePrefix({
     system: systemWithAgentPolicy,
@@ -4342,16 +4033,6 @@ let activePlanSummary = null; // string
 let activePlanBody = null;    // string (markdown)
 let activePlanUpdatedAt = null;// ISO timestamp from the persisted plan file
 let pendingPlanRevision = null;// committed only after the user accepts the revision card
-let activeForegroundTask = null;// lightweight contract supervising the ordinary CacheFirstLoop
-
-async function persistForegroundTaskState() {
-  return writeActiveSessionMeta({ foregroundTask: activeForegroundTask });
-}
-
-function restoreForegroundTaskFromMeta(meta) {
-  activeForegroundTask = restoreForegroundTask(meta?.foregroundTask);
-  return activeForegroundTask;
-}
 
 /** Get the current session name for plan file paths. */
 function currentSessionName() {
@@ -4422,116 +4103,6 @@ function getActivePlanSnapshot() {
 
 const MAX_PLAN_AUTO_CONTINUATIONS = 2;
 const MAX_ARTIFACT_AUTO_CONTINUATIONS = 1;
-
-function rememberPendingDocumentArtifact(artifact, { assistantId, operationId } = {}) {
-  if (!artifact?.jobId) return null;
-  const remembered = {
-    ...artifact,
-    assistantId: String(assistantId || artifact.assistantId || "").trim(),
-    operationId: String(operationId || artifact.operationId || "").trim(),
-  };
-  pendingDocumentArtifacts.set(artifact.jobId, remembered);
-  return remembered;
-}
-
-function handleDocumentArtifactJobChange(job, rawJob = job) {
-  const rawId = String(job?.documentJobId ?? job?.id ?? "").replace(/^document:/, "");
-  if (!rawId) return;
-  const jobId = `document:${rawId}`;
-  const state = documentArtifactStateFromJob(job);
-  const handoffJob = {
-    ...rawJob,
-    id: rawId,
-    documentJobId: rawId,
-    status: job.status,
-    outputPath: job.outputPath ?? rawJob?.outputPath,
-    qualityPassed: job.qualityPassed ?? rawJob?.qualityPassed,
-    warnings: job.warnings ?? rawJob?.warnings,
-    modelIssues: job.modelIssues ?? rawJob?.modelIssues,
-    progress: job.progress ?? rawJob?.progress,
-    error: job.error ?? rawJob?.error,
-  };
-  void observeDocumentHandoff(handoffJob);
-  if (longTaskTerminalKey(handoffJob)) documentOutputReservation.releaseTerminal(rawJob);
-  if (state === "pending") return;
-
-  const notificationKey = longTaskTerminalKey(handoffJob)
-    ?? `${jobId}:${job.status ?? state}:${job.updatedAt ?? rawJob?.updatedAt ?? "unknown"}`;
-  if (notifiedDocumentArtifacts.has(notificationKey)) return;
-
-  const remembered = pendingDocumentArtifacts.get(jobId);
-  pendingDocumentArtifacts.delete(jobId);
-  notifiedDocumentArtifacts.add(notificationKey);
-  while (notifiedDocumentArtifacts.size > 500) {
-    notifiedDocumentArtifacts.delete(notifiedDocumentArtifacts.values().next().value);
-  }
-  if (state === "created") {
-    const outputPath = resolve(String(job.outputPath || remembered?.outputPath || ""));
-    const info = generatedArtifactFileInfo(outputPath);
-    if (info) {
-      rememberGeneratedArtifactPath(info.path);
-      broadcastDashboardEvent({
-        kind: "artifact-created",
-        assistantId: remembered?.assistantId || `document-job-${rawId}`,
-        files: [info],
-      });
-      if (job.status === "completed_with_warnings") {
-        const modelIssue = (job.modelIssues ?? []).find((issue) => issue.requiresUserAction) ?? job.modelIssues?.[0];
-        const qualityWarning = (job.warnings ?? []).find((warning) => warning.type !== "model-service-issue");
-        const reason = modelIssue
-          ? `${modelIssue.providerId || "未知服务商"}/${modelIssue.modelId || "未知模型"}：${modelIssue.message}`
-          : qualityWarning?.message || "部分区块未通过完整质量审查";
-        broadcastDashboardEvent({ kind: "warning", text: `后台文档已生成但需要复核：${info.filename}。${reason}` });
-      } else {
-        broadcastDashboardEvent({ kind: "status", text: `后台文档整理完成：${info.filename}` });
-      }
-      return;
-    }
-    const message = `后台文档任务 ${jobId} 报告完成，但未找到输出文件：${job.outputPath || remembered?.outputPath || "未提供路径"}`;
-    runtimeIssues.report("warning", { key: `document-artifact-${rawId}`, message });
-    broadcastDashboardEvent({ kind: "warning", text: message });
-    return;
-  }
-
-  const reason = String(job?.error || "任务已取消");
-  if (String(job?.status).toLowerCase() === "cancelled") {
-    broadcastDashboardEvent({ kind: "status", text: `后台文档整理已取消（${jobId}）` });
-  } else {
-    broadcastDashboardEvent({ kind: "warning", text: `后台文档整理未完成（${jobId}）：${reason}` });
-  }
-}
-
-async function rehydrateDocumentHandoffs() {
-  if (!documentHandoffCoordinator) return { processed: 0, pending: 0 };
-  try {
-    return await documentHandoffCoordinator.rehydrate(await documentJobStore.list());
-  } catch (error) {
-    console.error(`[document-handoff] recovery failed: ${error.message}`);
-    return { processed: 0, pending: documentHandoffCoordinator.pendingCount?.() ?? 0, error: error.message };
-  }
-}
-
-async function observeDocumentHandoff(job) {
-  if (!documentHandoffCoordinator) return { accepted: false, reason: "coordinator-unavailable" };
-  try {
-    return await documentHandoffCoordinator.observe(job);
-  } catch (error) {
-    console.error(`[document-handoff] observe failed: ${error.message}`);
-    runtimeIssues.report("warning", { key: "document-handoff-observe", message: `后台任务交接状态保存失败：${error.message}` });
-    return { accepted: false, reason: "observe-failed", error: error.message };
-  }
-}
-
-async function drainDocumentHandoffs() {
-  if (!documentHandoffCoordinator) return { processed: 0, pending: 0 };
-  try {
-    return await documentHandoffCoordinator.drain();
-  } catch (error) {
-    console.error(`[document-handoff] drain failed: ${error.message}`);
-    runtimeIssues.report("warning", { key: "document-handoff-drain", message: `后台任务自动接管失败：${error.message}` });
-    return { processed: 0, pending: documentHandoffCoordinator.pendingCount?.() ?? 0, error: error.message };
-  }
-}
 
 function incompleteActivePlanSnapshot() {
   const plan = getActivePlanSnapshot();
@@ -4659,13 +4230,6 @@ const PROMPT_QUEUE_LIMIT = 5;
 const ACCEPTED_PROMPT_LIMIT = 200;
 const ACCEPTED_PROMPT_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Internal handoff prompts are idempotency fences for durable Outbox work.
-// Keep their receipts beyond the ordinary chat-request TTL/LRU window so a
-// restart cannot run the same delivery a second time while its Outbox entry
-// is still awaiting acknowledgement.
-const isDurablePromptReceiptId = (id) => typeof id === "string"
-  && /^(?:complex-task-delivery|document-handoff)-/.test(id);
-
 function normalizePromptQueueScope(value) {
   const scope = typeof value === "string" ? value.trim() : "";
   return scope && scope.length <= 800 ? scope : "default";
@@ -4700,7 +4264,7 @@ const promptQueueStore = createPromptQueueStore({
   queueLimit: PROMPT_QUEUE_LIMIT,
   acceptedLimit: ACCEPTED_PROMPT_LIMIT,
   acceptedTtlMs: ACCEPTED_PROMPT_TTL_MS,
-  isDurableReceiptId: isDurablePromptReceiptId,
+  isDurableReceiptId: () => false,
   onIssue: (error) => trackPersistentStorageIssue("prompt-queue", promptQueueFile, error),
 });
 
@@ -4730,33 +4294,6 @@ function rememberCompletedPromptRequest(id, completion) {
 
 function rememberFailedPromptRequest(id, reason) {
   promptQueueStore.rememberFailed(id, reason, { ownerBootId: launcherBootId });
-}
-
-function releasePromptRequestReceipt(id) {
-  if (!id) return;
-  try {
-    const result = promptQueueStore.releaseReceipt(id);
-    if (result?.ok === false) {
-      console.error(`[launcher] durable prompt receipt was not released id=${id}: ${result.error || "unknown reason"}`);
-    }
-  } catch (error) {
-    console.error(`[launcher] durable prompt receipt release failed id=${id}: ${error.message}`);
-  }
-}
-
-function complexTaskDeliveryPromptRequestId(deliveryId, attemptId = null) {
-  // Keep the original initial-delivery identity for upgrade compatibility.
-  // A user-approved retry receives a new attempt id and therefore a new
-  // receipt fence without replaying or deleting the uncertain old receipt.
-  const identity = attemptId ? `${deliveryId}:${attemptId}` : deliveryId;
-  return `complex-task-delivery-${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
-}
-
-function documentHandoffPromptRequestId(terminalKey, attemptId = null) {
-  // Preserve the legacy initial identity while fencing every explicit retry
-  // with its own durable receipt. The old uncertain receipt remains intact.
-  const identity = attemptId ? `${terminalKey}:${attemptId}` : terminalKey;
-  return `document-handoff-${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
 
 const schedulesFile = resolve(visionoxDataDir, "schedules.json");
@@ -4820,10 +4357,6 @@ const scheduleRunRegistry = createScheduleRunRegistry({
 const scheduleTriggerQueue = createScheduleTriggerQueue();
 let scheduleQueueDrainTimer = null;
 let scheduleQueueDraining = false;
-
-function documentProviderLaneBusy() {
-  return documentMarkdownManager?.isProviderBusy?.() === true;
-}
 
 function scheduleAbortError() {
   return new DOMException("scheduled task cancelled", "AbortError");
@@ -5187,13 +4720,13 @@ function queueScheduleTrigger(task, { manual = false, catchUp = false, requested
 
 async function drainScheduleQueue() {
   if (scheduleQueueDraining || scheduleTriggerQueue.size() === 0) return;
-  if (scheduleRunRegistry.size() >= MAX_CONCURRENT_SCHEDULE_RUNS || busy || documentProviderLaneBusy()) {
+  if (scheduleRunRegistry.size() >= MAX_CONCURRENT_SCHEDULE_RUNS || busy) {
     requestScheduleQueueDrain(SCHEDULE_QUEUE_RECHECK_MS);
     return;
   }
   scheduleQueueDraining = true;
   try {
-    while (scheduleTriggerQueue.size() > 0 && scheduleRunRegistry.size() < MAX_CONCURRENT_SCHEDULE_RUNS && !busy && !documentProviderLaneBusy()) {
+    while (scheduleTriggerQueue.size() > 0 && scheduleRunRegistry.size() < MAX_CONCURRENT_SCHEDULE_RUNS && !busy) {
       const entry = scheduleTriggerQueue.shift();
       if (!entry) break;
       const task = schedules.find((item) => item.id === entry.taskId);
@@ -6561,14 +6094,12 @@ async function triggerSchedule(id, { manual = false, catchUp = false, fromQueue 
   if (!fromQueue && scheduleTriggerQueue.has(id)) {
     return queueScheduleTrigger(task, { manual, catchUp, requestedAt: startedAt });
   }
-  if ((busy || documentProviderLaneBusy()) && !scheduleRunRegistry.isRunning(id)) {
+  if (busy && !scheduleRunRegistry.isRunning(id)) {
     return queueScheduleTrigger(task, {
       manual,
       catchUp: catchUp || fromQueue,
       requestedAt: startedAt,
-      reason: documentProviderLaneBusy()
-        ? "waiting for the active document task to release the model provider"
-        : "waiting for the active conversation or task to finish",
+      reason: "waiting for the active conversation or task to finish",
     });
   }
   const startedMs = Date.parse(startedAt);
@@ -6937,7 +6468,6 @@ function finishActiveOperation(operation) {
   });
   activeOperation = null;
   requestScheduleQueueDrain();
-  void drainDocumentHandoffs();
 }
 
 function operationKindForPrompt(text, opts = {}) {
@@ -7112,6 +6642,7 @@ function clearMessageSendContext(operation) {
       operationId: null,
       autoHandoff: false,
       conversationScope: "none",
+      scheduledAuthorization: false,
     };
   }
 }
@@ -7254,10 +6785,12 @@ async function loadActiveSession() {
     const storedMeta = activeSessionMetaStore.read();
     if (storedMeta.ok && storedMeta.value) {
       const meta = storedMeta.value;
-      restoreForegroundTaskFromMeta(meta);
       activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
         ? meta.conversationId.trim()
         : activeConversationId;
+      activeContextRecoveryHandle = typeof meta.contextRecoveryHandle === "string" && meta.contextRecoveryHandle.trim()
+        ? meta.contextRecoveryHandle.trim()
+        : null;
       restoreSessionMemories(meta.sessionMemories);
       preparedDocumentRegistry.restore(meta.preparedDocuments, { replace: true, notifyChange: false });
       const modeRestore = applyModeForSessionMeta(meta);
@@ -7276,14 +6809,13 @@ async function loadActiveSession() {
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
   await finalizeActiveSession();
   activeConversationId = randomUUID();
-  void rehydrateDocumentHandoffs();
+  activeContextRecoveryHandle = null;
   preparedDocumentRegistry.clear({ notifyChange: false });
   if (loop) loop.clearLog();
   clearSessionMemories();
   clearTutorMode();
   clearLearningMode();
   resetPlanRefs();
-  activeForegroundTask = null;
   generatedArtifactPaths.clear();
   const planSession = currentSessionName();
   try {
@@ -8334,11 +7866,7 @@ const ctx = {
       : { type: "cancel", feedback };
     const resolved = resolveActiveGate("plan", gateId, verdict);
     if (resolved && choice === "approve") {
-      if (pendingPlan && activeForegroundTask?.classification === "complex") {
-        activeForegroundTask = recordForegroundPlan(activeForegroundTask, pendingPlan);
-      }
       activatePendingPlan();
-      void persistForegroundTaskState();
     }
     if (resolved && choice !== "approve") pendingPlan = null;
     return resolved;
@@ -8572,53 +8100,18 @@ const ctx = {
     await reloadMcp();
 
     console.error(`[launcher] workspace synced: ${workspaceDir}`);
-    void rehydrateDocumentHandoffs();
   },
 
   // ── Chat bridge ────────────────────────────────────────────
   getMessages: () => messages,
   getActiveOperation: () => publicActiveOperation(),
-  listBackgroundJobs: async () => complexTaskRuntimeService
-    ? complexTaskRuntimeService.listBackgroundJobs()
-    : { jobs: [...jobs.listMetadata(), ...(documentMarkdownManager ? await documentMarkdownManager.listMetadata() : [])], pendingDeliveries: [] },
-  getBackgroundJob: async (id) => String(id).startsWith("task:")
-    ? complexTaskRuntimeService?.getBackgroundJob(id)
-    : String(id).startsWith("document:")
-      ? documentMarkdownManager?.getMetadata(id)
-      : jobs.read(Number(id)),
-  stopBackgroundJob: async (id) => String(id).startsWith("document:")
-    ? documentMarkdownManager?.control(id, "stop")
-    : jobs.stop(Number(id)),
+  // The dashboard exposes only the ordinary process/schedule job registry.
+  listBackgroundJobs: async () => ({ jobs: jobs.listMetadata(), pendingDeliveries: [] }),
+  getBackgroundJob: async (id) => jobs.read(Number(id)),
+  stopBackgroundJob: async (id) => jobs.stop(Number(id)),
   controlBackgroundJob: async (id, action, controlOptions = {}) => {
-    if (String(id).startsWith("task:")) {
-      return complexTaskRuntimeService?.controlBackgroundJob(id, action, controlOptions)
-        ?? { ok: false, error: "complex task runtime unavailable" };
-    }
-    if (String(id).startsWith("document:") && action === "retry_delivery") {
-      const rawId = String(id).replace(/^document:/, "");
-      const job = await documentJobStore.read(rawId);
-      const retried = await documentHandoffCoordinator?.retryDelivery(job);
-      if (!retried) return { ok: false, error: "document handoff coordinator unavailable" };
-      if (retried.accepted === false) {
-        const messages = {
-          "delivery-not-retryable": "当前文档结果没有可重新交付的失败交接，请勿重新处理文档。",
-          "missing-conversation-origin": "任务没有可关联的原始会话，不能安全重新交付。",
-          "different-conversation": "请返回发起任务的原始会话后再重新交付。",
-          "external-delivery-channel": "该任务使用外部交付通道，不能从当前对话重新交付。",
-        };
-        return { ok: false, error: messages[retried.reason] || retried.error || `文档结果重新交付未开始：${retried.reason || "未知原因"}`, reason: retried.reason };
-      }
-      return { ok: true, id, deliveryRetry: true, ...retried };
-    }
-    if (!documentMarkdownManager) return { ok: false, error: "document manager unavailable" };
-    if (String(id).startsWith("document:") && ["resume", "retry"].includes(action)) {
-      return { ok: false, reason: "legacy-execution-retired", error: LEGACY_DOCUMENT_EXECUTION_RETIRED };
-    }
-    const result = await documentMarkdownManager.control(id, action);
-    if (String(id).startsWith("document:") && ["abandon", "delete"].includes(action) && result?.ok !== false) {
-      documentOutputReservation.release(String(id).replace(/^document:/, ""));
-    }
-    return result;
+    if (action === "stop" || action === "cancel") return jobs.stop(Number(id));
+    return { ok: false, error: `unsupported generic background action: ${action}` };
   },
 
   subscribeEvents: (handler) => {
@@ -8746,6 +8239,7 @@ ${modeList}
         : operation.kind === "scheduled-prompt"
           ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
           : "",
+      scheduledAuthorization: operation.kind === "scheduled-prompt",
       operationId: operation.id,
       autoHandoff: opts.isolated !== true && opts.internalHandoff !== true,
       conversationScope: opts.isolated === true ? "isolated" : opts.internalHandoff === true ? "internal" : "chat",
@@ -8790,10 +8284,12 @@ ${modeList}
         try {
           const sessionFile = sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
-          restoreForegroundTaskFromMeta(sessionMeta);
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
+          activeContextRecoveryHandle = typeof sessionMeta.contextRecoveryHandle === "string" && sessionMeta.contextRecoveryHandle.trim()
+            ? sessionMeta.contextRecoveryHandle.trim()
+            : null;
           restoreSessionMemories(sessionMeta.sessionMemories);
           preparedDocumentRegistry.restore(sessionMeta.preparedDocuments, { replace: true, notifyChange: false });
           const modeRestore = applyModeForSessionMeta(sessionMeta);
@@ -8828,10 +8324,6 @@ ${modeList}
             modeChanged: modeRestore.changed,
           });
           console.error(`[launcher] session loaded: ${sessionName} (ui=${dashboardEntries.length}, model=${modelEntries.length}, mode: ${modeRestore.mode}${modeRestore.changed ? `, restored from ${modeRestore.previous}` : ""})`);
-          void rehydrateDocumentHandoffs();
-          void complexTaskConversationDelivery?.rehydrate?.().catch((error) => {
-            console.error(`[complex-task] conversation delivery rehydrate after session load failed: ${error.message}`);
-          });
           if (!text || !text.trim()) {
             return { accepted: true, loaded: true, session: sessionName, mode: modeRestore.mode, modeChanged: modeRestore.changed };
           }
@@ -9091,6 +8583,8 @@ ${modeList}
           totalMessages: messages.length,
         });
         text = modelRetryText || lastUserText;
+        activeContextRecoveryHandle = null;
+        void writeActiveSessionMeta({ contextRecoveryHandle: null });
         // Fall through to AI loop with the retried text
       }
 
@@ -9328,55 +8822,49 @@ ${modeList}
         let artifactContinuationAttempts = 0;
         let continuationNeeded = false;
         let artifactIncomplete = false;
+        let interventionPaused = false;
+        let interventionChoice = null;
+        let contextRecoveryHandle = null;
         let isolationRestoreError = null;
-        let pendingDocumentArtifact = null;
+        let executionStarted = false;
+        let taskWarnings = [];
+        let taskState = null;
+        let artifactFiles = [];
         let loopInput = text;
         let augmentedLoopInput = null;
-        let foregroundDecision = null;
-        let foregroundChangedPlanMode = false;
-        const foregroundEnabled = opts.isolated !== true && opts.internalHandoff !== true;
         const artifactRequest = opts.internalHandoff === true
           ? { required: false, savePreviousResponse: false }
           : detectArtifactRequest(text);
+        const planningOnlyRequest = isPlanOnlyRequest(text);
+        const requestedOutputPaths = artifactRequest.required ? requestedOutputArtifactPaths(text) : [];
+        const requestedExistingOutputKeys = new Set();
         const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
         const turnArtifactPaths = new Set();
-        const dispatchForeground = (decision, { appendToInput = false, userUpdate = "" } = {}) => {
-          activeForegroundTask = beginForegroundDispatch(activeForegroundTask, decision);
-          const prompt = buildForegroundTaskPrompt(activeForegroundTask, decision, { userUpdate });
-          loopInput = appendToInput ? `${loopInput}\n\n${prompt}` : prompt;
-          if (appendToInput) augmentedLoopInput = loopInput;
-          assistantText = "";
-          tools.setPlanMode(decision.type === "plan" || opts.readonly === true);
-          foregroundChangedPlanMode = true;
-        };
-        if (foregroundEnabled) {
-          const activePlan = approvedActivePlanSnapshot();
-          const restored = restoreForegroundTask(activeForegroundTask);
-          const resumeRequested = /^(?:继续|恢复|接着|按原计划|continue|resume)\b/i.test(text.trim());
-          const canResume = restored?.classification === "complex"
-            && !new Set(["completed", "partial", "stopped"]).has(restored.lifecycle)
-            && (Boolean(activePlan) || resumeRequested);
-          const taskInput = {
-            turnId: requestId || operation.id || assistantId,
-            prompt: canResume ? restored.goal : text,
-            activePlan,
-            artifactRequired: canResume ? restored.acceptance?.artifactRequired === true : artifactRequest.required,
-            completeCoverage: canResume ? restored.acceptance?.completeCoverage === true : completeCoverageRequired,
-            history: loop?.log?.toMessages?.() ?? [],
-            resumeWaitingUser: resumeRequested,
-          };
-          activeForegroundTask = canResume
-            ? resumeForegroundTask(restored, taskInput)
-            : startForegroundTask({ ...taskInput, assessment: assessTaskComplexity(taskInput) });
+        const turnArtifactFiles = new Map();
+        const freshContextRequested = startsFreshContextTransaction(text);
+        if (freshContextRequested && activeContextRecoveryHandle) {
+          activeContextRecoveryHandle = null;
+          void writeActiveSessionMeta({ contextRecoveryHandle: null });
         }
-        contextInputTransactions.beginTurn({
-          transactionId: activeForegroundTask?.classification === "complex"
-            ? activeForegroundTask.id
-            : `turn:${requestId || operation.id || assistantId}`,
+        const recoverableContextTransactionId = opts.isolated !== true && opts.internalHandoff !== true
+          && !freshContextRequested
+          ? activeContextRecoveryHandle
+          : null;
+        const contextTransactionId = recoverableContextTransactionId
+          || `turn:${requestId || operation.id || assistantId}`;
+        const contextStatusAtBegin = contextInputTransactions.beginTurn({
+          transactionId: contextTransactionId,
           turnId: requestId || operation.id || assistantId,
           requiresArtifact: artifactRequest.required,
           requiresCompleteCoverage: completeCoverageRequired,
+          referenceRoots: [skillsRoot],
         });
+        if (recoverableContextTransactionId
+          && contextStatusAtBegin.pendingCount === 0
+          && contextStatusAtBegin.cacheFailureCount === 0) {
+          activeContextRecoveryHandle = null;
+          void writeActiveSessionMeta({ contextRecoveryHandle: null });
+        }
         try {
           const retrievalText = manualSkillTask ?? text;
           const retrieval = opts.disableSemanticRetrieval || opts.internalHandoff === true
@@ -9395,20 +8883,6 @@ ${modeList}
             content: loopInput,
             metadata: { requestId: requestId || null, semanticSources: retrieval.sources.length },
           });
-          if (foregroundEnabled && activeForegroundTask) {
-            const evaluated = evaluateForegroundTask(activeForegroundTask, {
-              plan: approvedActivePlanSnapshot(),
-              contextStatus: contextInputTransactions.status(),
-              artifactCount: turnArtifactPaths.size,
-              aborted: operation.controller.signal.aborted,
-            });
-            activeForegroundTask = evaluated.state;
-            foregroundDecision = evaluated.decision;
-            if (["plan", "step", "verify"].includes(foregroundDecision.type)) {
-              dispatchForeground(foregroundDecision, { appendToInput: true });
-            }
-            if (activeForegroundTask.classification === "complex") await persistForegroundTaskState();
-          }
           if (indexRetrievalMode === "auto") {
             broadcastDashboardEvent({
               kind: "semantic-retrieval",
@@ -9423,72 +8897,53 @@ ${modeList}
           while (true) {
             let budgetForcedSummary = false;
             let sawToolActivity = false;
-            let foregroundModelFailure = null;
             for await (const ev of loop.step(loopInput)) {
               if (ev.role === "tool") {
                 sawToolActivity = true;
-                const foregroundToolSucceeded = toolResultSucceeded(ev.content);
-                const foregroundToolResult = String(ev.content || "");
-                if (ev.toolName === "submit_plan" && !foregroundToolSucceeded) {
-                  pendingPlan = null;
-                  if (/plan cancelled/i.test(foregroundToolResult) && activeForegroundTask?.classification === "complex") {
-                    activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
-                  }
+                const toolSucceeded = toolResultSucceeded(ev.content);
+                if (ev.toolName === "submit_plan" && !toolSucceeded) pendingPlan = null;
+                const toolArgs = parseMaybeJsonObject(ev.toolArgs);
+                const mutatingTool = /^(?:write_file|append_file|edit_file|multi_edit|save_file|save_last_assistant_response|mark_step_complete)$/i.test(String(ev.toolName || ""))
+                  || (String(ev.toolName || "") === "run_command" && shellCommandHasSideEffects(toolArgs?.command));
+                if (toolSucceeded && mutatingTool) executionStarted = true;
+                const explicitlyVerifiedPaths = toolSucceeded
+                  ? explicitlyVerifiedRequestedArtifacts(ev.toolName, ev.toolArgs, requestedOutputPaths)
+                  : [];
+                for (const path of explicitlyVerifiedPaths) {
+                  requestedExistingOutputKeys.add(process.platform === "win32" ? path.toLowerCase() : path);
                 }
-                if (ev.toolName === "mark_step_complete" && activeForegroundTask?.classification === "complex") {
-                  if (!foregroundToolSucceeded && /user stopped at checkpoint/i.test(foregroundToolResult)) {
-                    activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
-                  } else if (/revision requested|user requested revision/i.test(foregroundToolResult)) {
-                    activeForegroundTask = pauseForegroundTask(activeForegroundTask, "plan-revision-requested");
-                  }
-                }
-                if (foregroundEnabled && activeForegroundTask) {
-                  const foregroundTool = tools.get(ev.toolName);
-                  const verificationEvidence = !/^(?:ask_choice|submit_plan|mark_step_complete|revise_plan|todo_write|append_file|write_file|save_file|save_last_assistant_response|edit|edit_file|multi_edit|move_file|delete_file)$/i.test(String(ev.toolName || ""))
-                    && (foregroundTool?.readOnly === true || /^(?:run_command|officecli|dws)$/i.test(String(ev.toolName || "")));
-                  activeForegroundTask = recordForegroundToolEvent(activeForegroundTask, {
-                    toolName: ev.toolName,
-                    toolArgs: ev.toolArgs,
-                    content: ev.content,
-                    readOnly: foregroundTool?.readOnly === true,
-                    verificationEvidence,
-                    succeeded: foregroundToolSucceeded,
-                  });
-                }
-                const acceptedDocumentArtifact = pendingDocumentArtifactFromToolEvent(ev.toolName, ev.toolArgs, ev.content);
-                if (acceptedDocumentArtifact) {
-                  pendingDocumentArtifact = rememberPendingDocumentArtifact(acceptedDocumentArtifact, {
-                    assistantId,
-                    operationId: operation.id,
-                  });
-                  broadcastDashboardEvent({
-                    kind: "status",
-                    text: `文档整理已进入后台队列（${acceptedDocumentArtifact.jobId}）`,
-                  });
-                }
-                const artifactPaths = foregroundToolSucceeded
-                  ? rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs)
+                const artifactPaths = toolSucceeded
+                  ? [...rememberToolGeneratedArtifacts(ev.toolName, ev.toolArgs, ev.content), ...explicitlyVerifiedPaths]
                   : [];
                 const newFiles = [];
                 for (const artifactPath of artifactPaths) {
                   const info = generatedArtifactFileInfo(artifactPath);
-                  if (!info || info.size <= 0 || info.mtimeMs < turnStartedAt - 2000) continue;
                   const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
+                  const isRequestedExistingOutput = requestedExistingOutputKeys.has(key);
+                  if (!info || info.size <= 0 || (!isRequestedExistingOutput && info.mtimeMs < turnStartedAt - 2000)) continue;
                   if (turnArtifactPaths.has(key)) continue;
                   turnArtifactPaths.add(key);
+                  turnArtifactFiles.set(key, { ...info, retention: "preserve" });
                   newFiles.push(info);
                 }
                 if (newFiles.length > 0) {
-                  if (foregroundEnabled && activeForegroundTask) {
-                    activeForegroundTask = recordForegroundArtifacts(activeForegroundTask, newFiles.map((file) => file.path));
-                  }
+                  try {
+                    contextInputTransactions.noteArtifactEvidence({
+                      paths: newFiles.map((file) => file.path),
+                      producer: ev.toolName || "unknown",
+                      verified: true,
+                      reason: "non-empty artifact created during the current turn",
+                      sourceReferences: ev.toolName === "run_command"
+                        ? [String(parseMaybeJsonObject(ev.toolArgs)?.command || "")]
+                        : [],
+                    });
+                  } catch {}
                   broadcastDashboardEvent({
                     kind: "artifact-created",
                     assistantId,
                     files: newFiles,
                   });
                 }
-                if (activeForegroundTask?.classification === "complex") await persistForegroundTaskState();
               }
               // Write event to .events.jsonl for cockpit tool activity
               if (eventSink && eventizer) {
@@ -9524,7 +8979,6 @@ ${modeList}
               if (ev.role === "error") {
                 // A protocol or transport failure invalidates streamed partial text.
                 assistantText = "";
-                foregroundModelFailure = normalizeForegroundModelFailure(ev);
               }
               if (ev.role === "assistant_final") {
                 const repairNotice = formatToolRepairNotice(ev.repair);
@@ -9550,17 +9004,39 @@ ${modeList}
             let contextInputStatus = null;
             try { contextInputStatus = contextInputTransactions.noteAssistantFinal(assistantText); } catch {}
             const intervention = decideContextInputIntervention(contextInputStatus);
-            if (intervention && !operation.controller.signal.aborted) {
+            let showContextIntervention = true;
+            if (intervention) {
+              try { showContextIntervention = contextInputTransactions.claimIntervention(); } catch {}
+            }
+            if (intervention && !showContextIntervention && !operation.controller.signal.aborted) {
+              interventionPaused = true;
+              continuationNeeded = true;
+              assistantText = "继续后没有检测到新的来源覆盖或文件写入，任务已暂停。请先检查当前结果，或在下一条消息中明确调整范围后再继续。";
+              break;
+            }
+            if (intervention && showContextIntervention && !operation.controller.signal.aborted) {
+              contextRecoveryHandle = contextInputStatus?.transactionId ?? null;
+              if (opts.isolated !== true && opts.internalHandoff !== true && contextRecoveryHandle) {
+                activeContextRecoveryHandle = contextRecoveryHandle;
+                await writeActiveSessionMeta({ contextRecoveryHandle });
+              }
               broadcastDashboardEvent({ kind: "warning", text: intervention.question });
               const verdict = await pauseGate.ask(intervention);
               if (verdict?.type === "text" && String(verdict.text || "").trim()) {
                 contextInputTransactions.resolveIntervention("continue");
+                interventionChoice = "continue";
                 assistantText = "";
                 loopInput = `${buildContextInputFlushPrompt(contextInputTransactions.status())}\n\n用户补充：${String(verdict.text).trim()}`;
                 continue;
               }
               const choice = verdict?.type === "pick" ? String(verdict.optionId || "") : "stop";
+              interventionChoice = choice;
               contextInputTransactions.resolveIntervention(choice);
+              if (choice === "accept-partial") {
+                activeContextRecoveryHandle = null;
+                contextRecoveryHandle = null;
+                await writeActiveSessionMeta({ contextRecoveryHandle: null });
+              }
               if (choice === "continue") {
                 assistantText = "";
                 loopInput = buildContextInputFlushPrompt(contextInputTransactions.status());
@@ -9568,126 +9044,16 @@ ${modeList}
               }
               if (choice === "accept-partial") {
                 assistantText = `${assistantText}\n\n> 已按你的选择保留当前部分结果；尚未处理的输入未计入完整交付。`.trim();
-                if (activeForegroundTask?.classification === "complex") {
-                  activeForegroundTask = applyForegroundIntervention(
-                    activeForegroundTask,
-                    "accept-partial",
-                    { reason: "source-coverage-pending" },
-                  );
-                  const partialVerification = evaluateForegroundTask(activeForegroundTask, {
-                    contextStatus: contextInputTransactions.status(),
-                    artifactCount: turnArtifactPaths.size,
-                    aborted: operation.controller.signal.aborted,
-                  });
-                  activeForegroundTask = partialVerification.state;
-                  if (partialVerification.decision.type === "verify") {
-                    dispatchForeground(partialVerification.decision);
-                    await persistForegroundTaskState();
-                    continue;
-                  }
-                  await persistForegroundTaskState();
-                  continuationNeeded = true;
-                  break;
-                }
               } else if (choice === "revise") {
+                interventionPaused = true;
                 continuationNeeded = true;
                 assistantText = "任务已暂停。请先说明你最希望调整的一个方面：处理范围、输出格式或内容优先级。";
-                if (activeForegroundTask?.classification === "complex") {
-                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "waiting_user");
-                  await persistForegroundTaskState();
-                }
                 break;
               } else {
+                interventionPaused = true;
                 continuationNeeded = true;
                 assistantText = "任务已按你的选择停止；已缓存的输入仍可在后续恢复。";
-                if (activeForegroundTask?.classification === "complex") {
-                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
-                  await persistForegroundTaskState();
-                }
                 break;
-              }
-            }
-
-            if (pendingDocumentArtifact) break;
-
-            if (foregroundEnabled && activeForegroundTask) {
-              const evaluated = evaluateForegroundTask(activeForegroundTask, {
-                plan: approvedActivePlanSnapshot(),
-                contextStatus: contextInputStatus ?? contextInputTransactions.status(),
-                budgetForcedSummary,
-                sawToolActivity,
-                artifactCount: turnArtifactPaths.size,
-                modelFailure: foregroundModelFailure,
-                aborted: operation.controller.signal.aborted,
-              });
-              activeForegroundTask = evaluated.state;
-              foregroundDecision = evaluated.decision;
-              if (activeForegroundTask.classification === "complex") {
-                await persistForegroundTaskState();
-                if (["plan", "step", "verify"].includes(foregroundDecision.type)) {
-                  const statusText = foregroundDecision.type === "plan"
-                    ? "任务已进入复杂任务监督，正在完成只读调查和计划确认"
-                    : foregroundDecision.type === "verify"
-                      ? "计划步骤已完成，正在使用同一模型循环验证交付"
-                      : `正在执行计划步骤：${foregroundDecision.step?.title || foregroundDecision.step?.id || "当前步骤"}`;
-                  broadcastDashboardEvent({ kind: "status", text: statusText });
-                  dispatchForeground(foregroundDecision);
-                  await persistForegroundTaskState();
-                  continue;
-                }
-                if (foregroundDecision.type === "intervene") {
-                  const card = buildForegroundIntervention(activeForegroundTask, foregroundDecision);
-                  broadcastDashboardEvent({ kind: "warning", text: card.question });
-                  const verdict = await pauseGate.ask(card);
-                  const userUpdate = verdict?.type === "text" ? String(verdict.text || "").trim() : "";
-                  const choice = userUpdate
-                    ? "revise"
-                    : verdict?.type === "pick" ? String(verdict.optionId || "") : "stop";
-                  activeForegroundTask = applyForegroundIntervention(activeForegroundTask, choice, foregroundDecision);
-                  if (choice === "revise") cancelActivePlan();
-                  await persistForegroundTaskState();
-                  if (choice === "continue" || choice === "revise" || choice === "accept-partial") {
-                    const resumed = evaluateForegroundTask(activeForegroundTask, {
-                      plan: approvedActivePlanSnapshot(),
-                      contextStatus: contextInputTransactions.status(),
-                      artifactCount: turnArtifactPaths.size,
-                      aborted: operation.controller.signal.aborted,
-                    });
-                    activeForegroundTask = resumed.state;
-                    foregroundDecision = resumed.decision;
-                    if (["plan", "step", "verify"].includes(foregroundDecision.type)) {
-                      dispatchForeground(foregroundDecision, { userUpdate });
-                      await persistForegroundTaskState();
-                      continue;
-                    }
-                  }
-                  continuationNeeded = true;
-                  if (choice === "accept-partial") {
-                    assistantText = `${assistantText}\n\n> 已按你的选择保留并标记当前部分结果；未完成范围仍保留在任务记录中。`.trim();
-                  } else if (choice === "stop") {
-                    assistantText = "任务已停止，现有上下文、工具结果、计划进度和产物均已保留。";
-                  } else {
-                    assistantText = "任务仍处于暂停状态，现有进度已保留。";
-                  }
-                  break;
-                }
-                if (foregroundDecision.type === "complete") {
-                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "completed");
-                  await persistForegroundTaskState();
-                  break;
-                }
-                if (foregroundDecision.type === "partial") {
-                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "partial");
-                  await persistForegroundTaskState();
-                  assistantText = `${assistantText}\n\n> 已按你的选择交付经过验证的部分结果；未完成范围保留在任务记录中。`.trim();
-                  continuationNeeded = true;
-                  break;
-                }
-                if (foregroundDecision.type === "stopped") {
-                  activeForegroundTask = finishForegroundTask(activeForegroundTask, "stopped");
-                  await persistForegroundTaskState();
-                  break;
-                }
               }
             }
 
@@ -9725,8 +9091,8 @@ ${modeList}
             }
             if (
               continuation.action === "none" &&
-              !pendingDocumentArtifact &&
               artifactRequest.required &&
+              shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && Boolean(activePlanSteps) }) &&
               turnArtifactPaths.size === 0 &&
               !operation.controller.signal.aborted &&
               artifactContinuationAttempts < MAX_ARTIFACT_AUTO_CONTINUATIONS
@@ -9743,7 +9109,8 @@ ${modeList}
             }
             break;
           }
-          if (artifactRequest.required && turnArtifactPaths.size === 0 && !pendingDocumentArtifact && !operation.controller.signal.aborted) {
+          const artifactDeliveryActive = shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && Boolean(activePlanSteps) });
+          if (artifactRequest.required && artifactDeliveryActive && turnArtifactPaths.size === 0 && !operation.controller.signal.aborted) {
             artifactIncomplete = true;
             assistantText = `${assistantText}${artifactMissingNotice()}`;
             broadcastDashboardEvent({
@@ -9752,6 +9119,28 @@ ${modeList}
               savePreviousResponse: artifactRequest.savePreviousResponse,
             });
           }
+          const finalContextInputStatus = contextInputTransactions.status();
+          if (finalContextInputStatus.pendingCount === 0 && finalContextInputStatus.cacheFailureCount === 0) {
+            activeContextRecoveryHandle = null;
+            contextRecoveryHandle = null;
+          }
+          taskWarnings = detectTaskWarnings(assistantText);
+          taskState = deriveTaskState({
+            planningOnly: planningOnlyRequest,
+            executionStarted,
+            interventionPaused,
+            continuationNeeded,
+            artifactIncomplete,
+            warnings: taskWarnings,
+          });
+          if (taskWarnings.length > 0 && !interventionPaused && !artifactIncomplete) {
+            broadcastDashboardEvent({
+              kind: "warning",
+              id: `${assistantId}-task-outcome-warning`,
+              text: `结果已生成，但存在能力或验证限制：${taskWarnings.join("；")}`,
+            });
+          }
+          artifactFiles = Array.from(turnArtifactFiles.values());
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
           if (assistantText && opts.isolated !== true) {
@@ -9768,6 +9157,11 @@ ${modeList}
               forcedSummary: continuationNeeded,
               planIncomplete: continuationNeeded,
               artifactIncomplete,
+              taskState,
+              warnings: taskWarnings,
+              artifactFiles,
+              interventionChoice,
+              recoveryHandle: contextRecoveryHandle,
             });
           }
         } catch (err) {
@@ -9822,19 +9216,17 @@ ${modeList}
               } else {
                 await syncActiveSessionFromLoop({ text, images });
               }
+              if (opts.isolated !== true && opts.internalHandoff !== true) {
+                await writeActiveSessionMeta({ contextRecoveryHandle: activeContextRecoveryHandle });
+              }
             } catch (cleanupError) {
               isolationRestoreError ??= `后台任务清理失败：${cleanupError.message}`;
               trackPersistentStorageIssue("active-session", activeSessionFile, isolationRestoreError, "error");
               console.error(`[launcher] ${isolationRestoreError}`);
             }
 
-            if (opts.readonly === true || foregroundChangedPlanMode) {
+            if (opts.readonly === true) {
               try { tools.setPlanMode(previousPlanMode); } catch (error) { console.error(`[launcher] failed to restore plan mode: ${error.message}`); }
-            }
-
-            if (foregroundEnabled && activeForegroundTask?.classification === "simple") {
-              activeForegroundTask = null;
-              await persistForegroundTaskState();
             }
 
             try {
@@ -9852,14 +9244,28 @@ ${modeList}
           } finally {
             const completionError = turnError?.message
               ?? (artifactIncomplete ? "requested artifact was not created" : null)
+              ?? (interventionPaused ? "task paused for user intervention" : null)
+              ?? (continuationNeeded ? "task requires continuation" : null)
               ?? isolationRestoreError;
             const completion = {
-              ok: !turnError && !artifactIncomplete && !isolationRestoreError && !operation.controller.signal.aborted,
+              ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
               cancelled: operation.controller.signal.aborted,
               error: completionError,
               assistantText,
               assistantMessageId: assistantId,
               userMessageId: userMsgId,
+              taskState: taskState || deriveTaskState({
+                planningOnly: planningOnlyRequest,
+                executionStarted,
+                interventionPaused,
+                continuationNeeded,
+                artifactIncomplete,
+                warnings: taskWarnings,
+              }),
+              warnings: taskWarnings,
+              artifactFiles,
+              interventionChoice,
+              recoveryHandle: contextRecoveryHandle,
               stats: loop?.stats?.summary?.() ?? null,
             };
             let completionReceiptError = null;
@@ -9885,9 +9291,6 @@ ${modeList}
             try { detachExternalSignal(); } catch { /* Cleanup must not keep the UI busy. */ }
             try { clearMessageSendContext(operation); } catch { /* Cleanup must continue. */ }
             try { finishActiveOperation(operation); } catch (error) { console.error(`[launcher] active operation cleanup failed: ${error.message}`); }
-            if (complexTaskConversationDelivery) {
-              void complexTaskConversationDelivery.drain().catch((error) => console.error(`[complex-task] conversation delivery drain failed: ${error.message}`));
-            }
           }
         }
       })();
@@ -9902,11 +9305,6 @@ ${modeList}
         broadcastDashboardEvent({ kind: "busy-change", busy: false });
         clearMessageSendContext(operation);
         finishActiveOperation(operation);
-        if (complexTaskConversationDelivery) {
-          void complexTaskConversationDelivery.drain().catch((error) => {
-            console.error(`[complex-task] conversation delivery drain after foreground release failed: ${error.message}`);
-          });
-        }
       }
     }
   },
@@ -9963,118 +9361,6 @@ ${modeList}
   registerHook: (event, pattern, handler) => registerHook(event, pattern, handler),
 };
 
-complexTaskConversationDelivery = createComplexTaskConversationDelivery({
-  store: complexTaskStore,
-  isBusy: () => busy,
-  getConversationId: () => activeConversationId,
-  getWorkspace: () => workspaceDir,
-  dispatch: ({ deliveryId, attemptId, prompt, signal }) => new Promise((resolveDispatch) => {
-    let settled = false;
-    const settle = (value) => {
-      if (settled || signal?.aborted) return;
-      settled = true;
-      resolveDispatch(value);
-    };
-    const requestId = complexTaskDeliveryPromptRequestId(deliveryId, attemptId);
-    void ctx.submitPrompt(prompt, null, null, {
-      requestId,
-      internalHandoff: true,
-      disableSemanticRetrieval: true,
-      signal,
-      onComplete: (done) => settle({ accepted: true, completed: true, ...done }),
-    }).then((accepted) => {
-      if (accepted?.accepted === false) settle({ ...accepted, accepted: false, completed: false, reason: accepted.reason || "delivery submission rejected" });
-      else if (accepted?.duplicate && accepted?.completed && accepted?.completion) {
-        settle({ accepted: true, completed: true, ...accepted.completion });
-      } else if (accepted?.duplicate) {
-        settle({ accepted: false, completed: false, reason: "delivery is already running in this application instance" });
-      }
-    }).catch((error) => settle({ accepted: false, completed: true, ok: false, error: error.message }));
-  }),
-  notify: (notice) => {
-    if (notice.kind === "delivered") {
-      const requestId = complexTaskDeliveryPromptRequestId(notice.deliveryId, notice.attemptId);
-      releasePromptRequestReceipt(requestId);
-      broadcastDashboardEvent({ kind: "background-job-change", id: notice.taskId, reason: "conversation-delivered" });
-    } else if (notice.kind === "delivery-failed" || notice.kind === "delivery-error") {
-      console.error(`[complex-task] conversation delivery failed task=${notice.taskId}: ${notice.error || "unknown error"}`);
-      broadcastDashboardEvent({ kind: "warning", text: `后台任务 ${notice.taskId} 已形成结果，但对话交付未完成；请在“后台”中查看。` });
-    }
-  },
-});
-
-documentHandoffCoordinator = createLongTaskHandoffCoordinator({
-  isBusy: () => busy,
-  getConversationId: () => activeConversationId,
-  getWorkspace: () => workspaceDir,
-  loadJob: (id) => documentJobStore.read(id),
-  persist: async (id, handoff, guard = {}) => {
-    const persisted = guard.expected
-      ? await documentJobStore.compareAndUpdateHandoff(id, guard.expected, handoff)
-      : { applied: true, job: await documentJobStore.update(id, { handoff }) };
-    if (persisted.applied === false) return persisted;
-    broadcastDashboardEvent({ kind: "background-job-change", id: `document:${id}` });
-    return persisted;
-  },
-  dispatch: ({ dispatchId, terminalKey, attemptId, prompt, signal }) => new Promise((resolveDispatch) => {
-    let settled = false;
-    const settle = (value) => {
-      if (settled) return;
-      settled = true;
-      resolveDispatch(value);
-    };
-    const requestId = documentHandoffPromptRequestId(terminalKey, attemptId);
-    void ctx.submitPrompt(prompt, null, null, {
-      requestId,
-      internalHandoff: true,
-      disableSemanticRetrieval: true,
-      signal,
-      onComplete: (done) => settle({ accepted: true, completed: true, ...done }),
-    }).then((accepted) => {
-      if (accepted?.accepted === false) settle({ ...accepted, accepted: false, completed: false, reason: accepted.reason || "handoff submission rejected" });
-      else if (accepted?.duplicate && accepted?.completed && accepted?.completion) {
-        settle({ accepted: true, completed: true, ...accepted.completion });
-      } else if (accepted?.duplicate) {
-        settle({ accepted: false, completed: false, reason: "handoff is already running in this application instance" });
-      }
-    }).catch((error) => settle({ accepted: false, completed: true, ok: false, error: error.message }));
-  }),
-  verifyDelivery: async ({ job }) => {
-    const status = String(job?.status ?? "").toLowerCase();
-    if (!["completed", "completed_with_warnings"].includes(status)) {
-      return { ok: true, artifactStatus: null };
-    }
-    const id = String(job?.id ?? job?.documentJobId ?? "").replace(/^document:/i, "");
-    const metadata = await documentMarkdownManager.getMetadata(id);
-    const artifactStatus = metadata?.artifactStatus ?? "unavailable";
-    if (artifactStatus === "verified") return { ok: true, artifactStatus };
-    return {
-      ok: false,
-      artifactStatus,
-      error: metadata?.previewError
-        || metadata?.error
-        || `最终输出文件未通过宿主完整性校验（${artifactStatus}），已停止自动交付，请在后台任务中预览或恢复草稿。`,
-    };
-  },
-  notify: (notice) => {
-    const jobId = notice.jobId ? `document:${notice.jobId}` : "后台文档任务";
-    if (notice.kind === "handoff-delivered") {
-      const requestId = documentHandoffPromptRequestId(notice.terminalKey, notice.attemptId);
-      releasePromptRequestReceipt(requestId);
-    } else if (notice.kind === "handoff-queued" || notice.kind === "handoff-retry-queued") {
-      broadcastDashboardEvent({ kind: "status", text: `${jobId} 已结束后台处理，等待 AI 接管后续交付` });
-    } else if (notice.kind === "handoff-running") {
-      broadcastDashboardEvent({ kind: "status", text: `${jobId} 已由 AI 接管，正在核实结果并继续处理` });
-    } else if (notice.kind === "handoff-failed") {
-      broadcastDashboardEvent({ kind: "warning", text: `${jobId} 自动接管未完成：${notice.error || "模型暂不可用"}` });
-    } else if (notice.kind === "waiting-conversation") {
-      console.error(`[document-handoff] ${jobId} is waiting for its originating conversation`);
-    } else if (notice.kind === "coordinator-error") {
-      console.error(`[document-handoff] coordinator error: ${notice.error}`);
-    }
-  },
-});
-
 // Sync preset → loop model on startup so the dashboard /overview
 // returns consistent preset and model fields from the first poll
 if (config.preset && config.preset !== "auto") {
@@ -10115,44 +9401,12 @@ try {
   process.stdout.write(msg + "\n");
 
   setImmediate(() => {
-    void (async () => {
-      let report = null;
-      try {
-        report = await complexTaskRuntimeService?.initialize?.();
-        const startupIssues = Array.isArray(report?.issues) ? report.issues : [];
-        for (const issue of startupIssues) {
-          const operation = String(issue?.operation || "maintenance");
-          const message = String(issue?.message || "未知错误");
-          runtimeIssues.report("warning", {
-            key: `complex-task-startup-${operation}`,
-            message: `历史复杂任务的 ${operation} 兼容维护失败；任务记录仍保留，但旧执行流程不会重新启动：${message}`,
-          });
-          console.error(`[complex-task] startup ${operation} degraded: ${message}`);
-        }
-        if ((report?.reconcile?.requeued?.length ?? 0) > 0 || (report?.reconcile?.needsAttention?.length ?? 0) > 0 || (report?.reconcile?.sourceChanged?.length ?? 0) > 0) {
-          broadcastDashboardEvent({ kind: "background-job-change", reason: "complex-task-startup-reconcile" });
-        }
-        console.error(`[complex-task] startup compatibility scanned=${report?.reconcile?.scanned ?? 0} retired=${report?.reconcile?.retired?.length ?? 0} requeued=${report?.reconcile?.requeued?.length ?? 0} pruned=${report?.pruned?.deleted?.length ?? 0}`);
-      } catch (error) {
-        runtimeIssues.report("warning", { key: "complex-task-startup-maintenance", message: `后台复杂任务启动维护失败：${error.message}` });
-        console.error(`[complex-task] startup maintenance failed: ${error.stack || error.message}`);
-      }
-
-      try {
-        await complexTaskConversationDelivery?.rehydrate?.();
-      } catch (error) {
-        runtimeIssues.report("warning", { key: "complex-task-startup-delivery", message: `后台任务结果交付恢复失败，任务结果仍保留在后台队列：${error.message}` });
-        console.error(`[complex-task] conversation delivery rehydrate failed: ${error.stack || error.message}`);
-      }
-    })();
     startMcpInBackground();
-    void rehydrateDocumentHandoffs();
   });
 
   // ── Keep running until terminated ──────────────────────────
   const cleanup = () => {
     console.error("[launcher] shutting down...");
-    complexTaskConversationDelivery?.stop?.();
     try { eventSink?.close(); } catch {}
     for (const timer of scheduleTimers.values()) clearTimeout(timer);
     scheduleTimers.clear();
