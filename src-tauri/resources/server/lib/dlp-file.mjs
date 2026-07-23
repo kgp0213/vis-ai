@@ -975,6 +975,45 @@ function hasPathWildcard(value) {
   return /[*?]/.test(String(value ?? ""));
 }
 
+function normalizedPathSegment(value) {
+  const normalized = String(value ?? "").replace(/\s/gu, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function expandWhitespaceNormalizedPath(value, rootDir) {
+  const raw = normalizeDrivePathInput(value);
+  if (!looksLikePathString(raw) || hasPathWildcard(raw) || /[\r\n]/.test(raw)) return [];
+  const absolute = resolveInputPath(raw, rootDir);
+  const parsed = parse(absolute);
+  const parts = absolute.slice(parsed.root.length).split(/[\\/]+/).filter(Boolean);
+  if (parts.length === 0) return [];
+
+  let states = [{ path: parsed.root }];
+  for (let index = 0; index < parts.length && states.length > 0; index++) {
+    const segment = parts[index];
+    const last = index === parts.length - 1;
+    const next = [];
+    for (const state of states) {
+      const entries = safeReadDir(state.path);
+      const exact = entries.filter((entry) => entry.name === segment);
+      const matches = exact.length > 0
+        ? exact
+        : entries.filter((entry) => normalizedPathSegment(entry.name) === normalizedPathSegment(segment));
+      for (const entry of matches) {
+        if (last) {
+          if (entry.isFile() || entry.isSymbolicLink()) next.push({ path: join(state.path, entry.name) });
+        } else if (entry.isDirectory()) {
+          next.push({ path: join(state.path, entry.name) });
+        }
+        if (next.length >= 50) break;
+      }
+      if (next.length >= 50) break;
+    }
+    states = next;
+  }
+  return Array.from(new Set(states.map((state) => resolve(state.path))));
+}
+
 function wildcardSegmentToRegExp(segment) {
   let pattern = "^";
   for (const ch of String(segment)) {
@@ -1046,7 +1085,11 @@ function pathCandidatesFromString(value, rootDir) {
       continue;
     }
     const abs = resolveInputPath(s, rootDir);
-    if (existsSync(abs)) out.push({ abs, fromPattern: false });
+    if (existsSync(abs)) {
+      out.push({ abs, fromPattern: false });
+    } else {
+      out.push(...expandWhitespaceNormalizedPath(s, rootDir).map((corrected) => ({ abs: corrected, fromPattern: false, corrected: true })));
+    }
   }
   const seen = new Set();
   return out.filter((item) => {
@@ -1270,11 +1313,65 @@ async function resolveEmbeddedDocumentPaths(command, options) {
   return { command: out, changed: true };
 }
 
+function preparedTempAliasTokens(value) {
+  const tokens = splitCommandLine(String(value ?? ""));
+  return tokens.filter((token) => {
+    const normalized = token.replace(/\//gu, "\\").toLowerCase();
+    const tempRoot = resolve(tmpdir(), "visionox_decrypted");
+    const candidate = resolve(token);
+    const relativeToTempRoot = relative(tempRoot, candidate);
+    const insideTempRoot = relativeToTempRoot === "" ||
+      (!relativeToTempRoot.startsWith("..") && !isAbsolute(relativeToTempRoot));
+    if (!insideTempRoot || !normalized.includes("\\visionox_decrypted\\")) return false;
+    return DOCUMENT_PATH_EXTENSIONS.includes(extname(token).toLowerCase());
+  });
+}
+
+async function resolvePreparedTempAliases(value, options) {
+  const original = String(value ?? "");
+  const entries = options.registry?.snapshot?.() ?? [];
+  if (!original || entries.length === 0) return { value, changed: false };
+  let text = original;
+  let changed = false;
+  for (const token of preparedTempAliasTokens(original)) {
+    // A real file under the managed temporary root is authoritative. Only
+    // recover paths that are stale, otherwise a coincidental basename could
+    // silently redirect a user's explicit path to another document.
+    if (await pathExists(resolve(token))) continue;
+    const key = normalizedPathSegment(basename(token));
+    const matches = entries.filter((entry) => (
+      [entry.sourcePath, entry.readablePath]
+        .filter(Boolean)
+        .some((path) => normalizedPathSegment(basename(path)) === key)
+    ));
+    const unique = new Map(matches.map((entry) => [entry.documentId, entry]));
+    if (unique.size !== 1) {
+      throw new DlpDecryptError(
+        unique.size === 0
+          ? "命令使用了无法识别的临时文档路径，无法恢复当前明文文件。请重新准备原始文件并传入 documentRef。"
+          : "命令使用了存在歧义的临时文档路径，无法确定当前明文文件。请传入 documentRef。",
+        {
+          code: "DOCUMENT_REF_REQUIRED",
+          documentRefs: [...unique.values()].map((entry) => entry.documentRef).filter(Boolean),
+          hint: "请在工具的 documentRef 字段中传入 prepare_local_document 返回的引用，不要拼接临时目录。",
+        },
+      );
+    }
+    const entry = unique.values().next().value;
+    const resolved = await resolveDlpPathToken(entry.documentRef, options);
+    if (!resolved.value || resolved.value === token) continue;
+    text = text.split(token).join(resolved.value);
+    changed = true;
+  }
+  return { value: changed ? text : value, changed };
+}
+
 async function resolveRegisteredDocumentString(value, options) {
   const original = String(value ?? "");
   if (!original || !options.registry) return { value, changed: false };
-  let text = original;
-  let changed = false;
+  const tempAliases = await resolvePreparedTempAliases(original, options);
+  let text = String(tempAliases.value ?? original);
+  let changed = tempAliases.changed;
   const entries = options.registry.snapshot?.() ?? [];
   const uniqueRelativeNames = new Map();
   for (const entry of entries) {

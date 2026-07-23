@@ -53,26 +53,24 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /verify the available source coverage/);
   });
 
-  test("办公模式把文档步骤交给普通工具循环", () => {
-    assert.match(launcherSource, /OFFICE_MODE_VERSION:\s*11/);
-    const officeMode = launcherSource.slice(
-      launcherSource.indexOf("office: {"),
-      launcherSource.indexOf("design: {"),
+  test("运行模式收敛为通用和编程，办公与设计能力归入通用", () => {
+    const modesBlock = launcherSource.slice(
+      launcherSource.indexOf("const DEFAULT_MODES = {"),
+      launcherSource.indexOf("const LEGACY_MODE_ALIASES"),
     );
-    assert.doesNotMatch(officeMode, /organize_document_to_markdown/);
-    assert.doesNotMatch(officeMode, /extract_pdf_text|nextPageRange/);
-    assert.match(officeMode, /prepare_local_document/);
-    assert.doesNotMatch(officeMode, /read_prepared_document/);
-    assert.match(officeMode, /按用户目标选择合适的格式读取器或 Skill/);
-    assert.match(officeMode, /可以在临时目录编写一次性解析\/转换脚本/);
-    assert.match(officeMode, /通过普通 run_command 执行/);
-    assert.match(officeMode, /脚本应直接写入目标文件/);
-    assert.match(officeMode, /大型、结构化或需要完整转换的文档/);
-    assert.match(officeMode, /输出简短的进度与校验结果/);
-    assert.doesNotMatch(officeMode, /不要安装解析依赖、写临时解析脚本/);
-    assert.doesNotMatch(officeMode, /任务评估、澄清、执行、监控和验收协议|任务生命周期/);
-    assert.doesNotMatch(officeMode, /organize_documents_to_report/);
-    assert.doesNotMatch(officeMode, /直接调用 organize_pdf_to_markdown/);
+    const generalMode = modesBlock.slice(modesBlock.indexOf("general: {"), modesBlock.indexOf("coding: {"));
+    assert.doesNotMatch(modesBlock, /\n\s{2}(office|design):\s*\{/);
+    assert.match(launcherSource, /LEGACY_MODE_ALIASES = Object\.freeze\(\{ office: "general", design: "general" \}\)/);
+    assert.match(launcherSource, /function migrateLegacyModeMemoriesToGeneral\(\)/);
+    assert.match(launcherSource, /source: `legacy-mode:\$\{id\}`/);
+    assert.match(launcherSource, /migrateLegacyModeMemoriesToGeneral\(\);/);
+    assert.match(generalMode, /"officecli", "pdf", "md-to-pdf-cjk"/);
+    assert.match(generalMode, /"frontend-patterns", "e2e-testing", "react-patterns"/);
+    assert.match(generalMode, /prepare_local_document/);
+    assert.match(generalMode, /普通工具循环/);
+    assert.match(generalMode, /办公任务关注来源覆盖/);
+    assert.match(generalMode, /设计任务先明确目标用户/);
+    assert.doesNotMatch(generalMode, /organize_document_to_markdown|extract_pdf_text|read_prepared_document/);
   });
 
   test("guided 文档策略对大型转换优先使用普通前台工具循环", () => {

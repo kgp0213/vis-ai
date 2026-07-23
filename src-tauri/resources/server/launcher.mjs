@@ -310,8 +310,7 @@ const CONSTANTS = {
   RULES_MAX_CHARS: 12000,
 
   // Mode versions
-  DEFAULT_MODE_VERSION: 5,
-  OFFICE_MODE_VERSION: 11,
+  DEFAULT_MODE_VERSION: 6,
 };
 const DEFAULT_SOUL_FALLBACK = `# Visionox-Whale Core Identity
 
@@ -1493,9 +1492,9 @@ const DEFAULT_MODES = {
   general: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
     label: "通用",
-    description: "日常问答、资料梳理、轻量排查和跨领域任务。",
-    hint: "平衡准确性和简洁度，必要时再切换到专业模式。",
-    eccRules: ["common"],
+    description: "日常问答、文档办公、资料梳理、界面设计和跨领域任务。",
+    hint: "先识别任务子场景，再补全目标、交付物和验收边界。",
+    eccRules: ["common", "web"],
     skills: [
       "coding-standards", "verification-loop", "andrej-karpathy-guidelines",
       "brainstorming", "writing-plans", "executing-plans", "search-first",
@@ -1503,9 +1502,10 @@ const DEFAULT_MODES = {
       "dispatching-parallel-agents", "subagent-driven-development",
       "requesting-code-review", "receiving-code-review",
       "finishing-a-development-branch", "using-git-worktrees",
-      "production-audit", "file-access-rescue", "basic-skill-example", "skill-creation-guide", "writing-skills",
+      "production-audit", "file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk",
+      "frontend-patterns", "e2e-testing", "react-patterns", "basic-skill-example", "skill-creation-guide", "writing-skills",
     ],
-    prompt: "你处于通用模式。先判断用户目标属于问答、代码、办公还是设计；若任务明显属于专业场景，按该场景的工作习惯组织答案，但不要擅自切换模式。保持回答直接、可执行，必要时指出下一步。系统内置 22 种语言的 ECC 编码规范（angular/cpp/go/java/swift/vue 等），可在工作模式配置中按需启用。",
+    prompt: "你处于通用模式。先根据用户文字、附件、当前对话和工作区事实识别任务子场景（问答、办公文档、数据整理、研究、界面设计或其他），再补全目标、范围、交付物和验收条件。只自动补全有证据支持的信息；会显著改变结果的歧义先一次一问确认，不要擅自切换工作模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef，使用普通工具循环完成读取、转换和验证；大型文档可以在临时目录编写一次性解析脚本，但不得把大段正文塞入对话。办公任务关注来源覆盖、表格/参数/页码、输出文件和完整性验证；设计任务先明确目标用户、主要流程、布局层级、响应式和空错加载状态，再处理视觉细节。输出保持直接、可执行，未验证不得宣称完成。系统内置 22 种语言编码规范，可按需启用。",
   },
   coding: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,
@@ -1523,25 +1523,8 @@ const DEFAULT_MODES = {
     ],
     prompt: "你处于编程模式。修改前先阅读相关上下文，优先沿用项目既有模式；代码注释优先英文且只解释非显然逻辑。实现后运行与风险匹配的验证，清楚报告改动、验证结果和残余风险。",
   },
-  office: {
-    version: CONSTANTS.OFFICE_MODE_VERSION,
-    label: "办公",
-    description: "文档、表格、PDF、PPT、报告、数据整理和格式转换。",
-    hint: "关注结构、准确性、可交付文件和中文排版质量。",
-    eccRules: ["common"],
-    skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。宿主会在支持的工具和命令执行前自动绑定当前可读文件；脚本不要硬编码原始路径或临时路径，应读取宿主注入的 VISIONOX_DOCUMENT_READABLE_PATH / VISIONOX_DOCUMENT_ROOT，并在 run_command/run_background 的 documentRef 字段中传入对应引用。准备过多个文档时不得省略 documentRef。若脚本无法接受任务绑定的输入，应明确报告并暂停，不要静默读取原始文件。按用户目标选择合适的格式读取器或 Skill；需要分批处理时，先把已处理内容写入目标文件或明确记录进度，再继续下一批。对于大型、结构化或需要完整转换的文档，可以在临时目录编写一次性解析/转换脚本，并通过普通 run_command 执行；优先复用现有依赖，不要在没有必要时安装依赖，不要复制源文件到工作区或搜索旧提取产物。脚本应直接写入目标文件，输出简短的进度与校验结果，并在完成后清理临时文件。交付前检查实际文件，不得把部分结果宣称为完整完成。",
-  },
-  design: {
-    version: CONSTANTS.DEFAULT_MODE_VERSION,
-    label: "设计",
-    description: "界面体验、前端布局、视觉风格、交互状态和可用性优化。",
-    hint: "先服务真实工作流，再处理视觉细节和状态反馈。",
-    eccRules: ["common", "web"],
-    skills: ["frontend-patterns", "e2e-testing", "react-patterns", "context-budget"],
-    prompt: "你处于设计模式。先理解用户场景、目标用户和主要任务流；界面应清晰、克制、可扫描，控件行为符合用户直觉。涉及前端实现时同时考虑响应式布局、空/错/加载状态和可验证的交互结果。",
-  },
 };
+const LEGACY_MODE_ALIASES = Object.freeze({ office: "general", design: "general" });
 
 // Modes & ECC rules — initialize on first run
 initModesConfig();
@@ -2778,9 +2761,6 @@ function mergeDefaultModes(modes) {
       return [id, normalizeModeConfig(source, id)];
     })
   );
-  for (const [id, mode] of Object.entries(modes ?? {})) {
-    if (!merged[id]) merged[id] = normalizeModeConfig(mode, id);
-  }
   return merged;
 }
 
@@ -2840,6 +2820,32 @@ function syncRuntimeConfig(next) {
   Object.assign(config, next);
 }
 
+function migrateLegacyModeMemoriesToGeneral() {
+  const legacyModes = Object.keys(LEGACY_MODE_ALIASES);
+  if (!legacyModes.some((id) => existsSync(modeMemoryPath(id)))) return { imported: 0 };
+  const general = readModeMemory("general");
+  const knownTexts = new Set(general.items.map((item) => item.text));
+  const imported = [];
+  for (const id of legacyModes) {
+    if (!existsSync(modeMemoryPath(id))) continue;
+    for (const item of readModeMemory(id).items) {
+      if (knownTexts.has(item.text)) continue;
+      knownTexts.add(item.text);
+      imported.push({
+        ...item,
+        id: randomUUID(),
+        source: `legacy-mode:${id}`,
+        keywords: [...new Set([...(item.keywords || []), id])].slice(0, CONSTANTS.MODE_MEMORY_KEYWORD_LIMIT),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
+  if (imported.length === 0) return { imported: 0 };
+  const written = writeModeMemory("general", { items: [...imported, ...general.items] });
+  console.error(`[launcher] merged ${imported.length} legacy office/design mode memories into general mode`);
+  return { imported: imported.length, path: written.path };
+}
+
 function initModesConfig() {
   let changed = false;
   const migration = collectModePromptMigration(config.modes);
@@ -2853,6 +2859,7 @@ function initModesConfig() {
     config.mode = "general";
     changed = true;
   }
+  migrateLegacyModeMemoriesToGeneral();
   if (changed) {
     writeConfig(config, configPath);
     const suffix = migration ? `; migrated legacy prompts: ${migration.migrated.join(", ")}` : "";
@@ -2966,6 +2973,11 @@ function restoreModeMemoryAfterFailure(mode, items, failures) {
     const message = `mode memory rollback failed: ${error.message}`;
     trackPersistentStorageIssue(`mode-memory:${safeModeId(mode)}`, path, message);
     failures.push(`${safeModeId(mode)}: ${error.message}`);
+  }
+  for (const [id, existing] of Object.entries(modes ?? {})) {
+    if (DEFAULT_MODES[id]) continue;
+    migrated.push(id);
+    backup[id] = existing;
   }
 }
 
@@ -6944,8 +6956,9 @@ function writeSessionMeta(name, patch = {}) {
 }
 
 function applyModeForSessionMeta(meta) {
-  const modeId = typeof meta?.mode === "string" ? meta.mode : "";
-  if (!modeId) return { changed: false, mode: config.mode || "general", skipped: "no mode metadata" };
+  const storedModeId = typeof meta?.mode === "string" ? meta.mode : "";
+  if (!storedModeId) return { changed: false, mode: config.mode || "general", skipped: "no mode metadata" };
+  const modeId = LEGACY_MODE_ALIASES[storedModeId] || storedModeId;
   const modes = config.modes || DEFAULT_MODES;
   if (!modes[modeId]) return { changed: false, mode: config.mode || "general", skipped: `unknown mode: ${modeId}` };
   const previous = config.mode || "general";
@@ -7941,13 +7954,14 @@ const ctx = {
     return setActiveModeEccRules(rules);
   },
   setMode: (modeId) => {
+    const resolvedModeId = LEGACY_MODE_ALIASES[modeId] || modeId;
     const cfg = readConfig(configPath);
     cfg.modes = mergeDefaultModes(cfg.modes);
-    if (!cfg.modes[modeId]) return false;
-    cfg.mode = modeId;
+    if (!cfg.modes[resolvedModeId]) return false;
+    cfg.mode = resolvedModeId;
     writeConfig(cfg, configPath);
     syncRuntimeConfig(cfg);
-    console.error(`[launcher] mode: ${modeId} (${cfg.modes[modeId].label})`);
+    console.error(`[launcher] mode: ${resolvedModeId} (${cfg.modes[resolvedModeId].label})`);
     // Rebuild the loop immediately so the new mode's prompt, memory, rules,
     // and skills catalogue take effect on the very next turn — not deferred
     // until /new. Without this, /status would report the new mode while the
@@ -8165,6 +8179,50 @@ const ctx = {
     name, aliases: aliases ?? [], desc, usage, group: group ?? "system",
   })),
 
+  optimizePrompt: async (prompt) => {
+    if (!client) throw new Error("model client is not configured");
+    const source = String(prompt ?? "").trim();
+    if (!source) throw new Error("prompt is empty");
+    const activeModeId = LEGACY_MODE_ALIASES[config.mode] || config.mode || "general";
+    const intentGuidance = activeModeId === "coding"
+      ? [
+          "当前为编程模式。先判断用户是在咨询、排查、修改、构建还是审查代码。",
+          "在不改变原意的前提下，明确技术目标、影响范围、已有上下文、兼容性约束、验证方式和交付结果。",
+          "不要把讨论或诊断请求擅自改成实施请求，也不要虚构技术栈、文件名或测试命令。",
+        ].join("\n")
+      : [
+          "当前为通用模式。结合文字、已提及附件和对话线索，判断问答、办公文档、数据整理、研究或界面设计等子场景。",
+          "办公类重点明确来源范围、完整度、结构保留、输出格式/路径和验收；设计类重点明确目标用户、核心流程、布局、交互状态和响应式要求。",
+          "其他任务重点明确目标、对象、范围、期望交付物和成功标准。无法从原文确定的高影响条件保持为待确认项，不要替用户编造答案。",
+        ].join("\n");
+    const response = await client.chat({
+      model: effectiveModelConfig(config).model,
+      requestPurpose: "prompt-optimization",
+      signal: AbortSignal.timeout(120_000),
+      maxTokens: Math.min(4096, Math.max(1024, Math.ceil(source.length * 1.5))),
+      messages: [
+        {
+          role: "system",
+          content: [
+            "你是提示词编辑器，只改写用户的任务描述，不回答问题，也不执行任务。",
+            "保留原始意图、事实、文件路径、专有名称、范围、限制条件和交付要求。",
+            "补足有助于执行的目标、步骤边界和验收表述，但不得凭空添加用户未提出的需求。",
+            "保持原文语言；原文已经清晰时只做最小修改。",
+            intentGuidance,
+            "只输出优化后的提示词正文，不要解释，不要加引号、标题或代码围栏。",
+          ].join("\n"),
+        },
+        { role: "user", content: source },
+      ],
+    });
+    const optimized = String(response?.content ?? "").trim()
+      .replace(/^```(?:text|markdown)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    if (!optimized) throw new Error("model returned an empty optimized prompt");
+    return { prompt: optimized };
+  },
+
   // P0-1: busy guard must be checked and set BEFORE any await to prevent
   // race conditions where two rapid calls both pass the busy check.
   submitPrompt: async (text, sessionName, images, opts = {}) => {
@@ -8221,7 +8279,7 @@ const ctx = {
       try { skillCount = (await readdir(bootstrapSkillsRoot)).filter(e => statSync(resolve(bootstrapSkillsRoot, e)).isDirectory()).length; } catch {}
       const helpText = `## Visionox-Whale 能力概览
 
-### 🎯 四种工作模式
+### 🎯 两种工作模式
 
 ${modeList}
 

@@ -597,6 +597,129 @@ describe("model request policy", () => {
     assert.equal(defaultLoop._sameFailureClassTracker.limit, null);
   });
 
+  test("same-failure fuse blocks a third unrecovered tool call", async () => {
+    let responseIndex = 0;
+    let toolRuns = 0;
+    const equivalentArgs = [
+      '{"command":"view D:/archive/missing.pptx text","metadata":{"a":1,"b":2}}',
+      '{"metadata":{"b":2,"a":1},"command":"view D:/archive/missing.pptx text"}',
+      '{"metadata":{"a":1,"b":2},"command":"view D:/archive/missing.pptx text"}',
+    ];
+    const client = {
+      chat: async () => {
+        if (responseIndex++ < 3) {
+          return {
+            content: "",
+            toolCalls: [{
+              id: `call-${responseIndex}`,
+              type: "function",
+              function: {
+                name: "officecli",
+                arguments: equivalentArgs[responseIndex - 1],
+              },
+            }],
+            usage: {},
+          };
+        }
+        return { content: "stopped retrying", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "officecli",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string" }, metadata: { type: "object" } },
+        required: ["command"],
+      },
+      readOnly: true,
+      fn: async () => {
+        toolRuns++;
+        return JSON.stringify({ error: "local file not found" });
+      },
+    });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "test", toolSpecs: tools.specs() }),
+      tools,
+      model: "internal-model",
+      stream: false,
+      autoEscalate: false,
+      maxToolIters: 12,
+      sameFailureClassLimit: 2,
+    });
+    const events = [];
+    for await (const event of loop.step("read the presentation")) events.push(event);
+
+    assert.equal(toolRuns, 2);
+    assert.ok(events.some((event) => event.role === "tool" && /REPEATED_TOOL_FAILURE_BLOCKED/.test(event.content)));
+  });
+
+  test("same-failure fuse allows a materially changed recovery call", async () => {
+    let responseIndex = 0;
+    let toolRuns = 0;
+    const client = {
+      chat: async () => {
+        responseIndex++;
+        if (responseIndex <= 2) {
+          return {
+            content: "",
+            toolCalls: [{
+              id: `call-${responseIndex}`,
+              type: "function",
+              function: {
+                name: "officecli",
+                arguments: JSON.stringify({ command: "view D:/archive/missing.pptx text" }),
+              },
+            }],
+            usage: {},
+          };
+        }
+        if (responseIndex === 3) {
+          return {
+            content: "",
+            toolCalls: [{
+              id: `call-${responseIndex}`,
+              type: "function",
+              function: {
+                name: "officecli",
+                arguments: JSON.stringify({ command: "view D:/archive/corrected.pptx text" }),
+              },
+            }],
+            usage: {},
+          };
+        }
+        return { content: "recovered", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    tools.register({
+      name: "officecli",
+      parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] },
+      readOnly: true,
+      fn: async (args) => {
+        toolRuns++;
+        return args.command.includes("corrected") ? "ok" : JSON.stringify({ error: "local file not found" });
+      },
+    });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "test", toolSpecs: tools.specs() }),
+      tools,
+      model: "internal-model",
+      stream: false,
+      autoEscalate: false,
+      maxToolIters: 12,
+      sameFailureClassLimit: 2,
+    });
+    const events = [];
+    for await (const event of loop.step("recover the presentation")) events.push(event);
+
+    assert.equal(toolRuns, 3);
+    assert.equal(events.some((event) => /REPEATED_TOOL_FAILURE_BLOCKED/.test(event.content ?? "")), false);
+    assert.equal(events.at(-1)?.role, "done");
+  });
+
   test("legacy policy preserves existing DeepSeek thinking and effort fields", async () => {
     let payload;
     const client = new DeepSeekClient({

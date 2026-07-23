@@ -29,6 +29,17 @@ async function withTempDir(fn) {
   }
 }
 
+async function withManagedDecryptedTempDir(fn) {
+  const root = join(tmpdir(), "visionox_decrypted");
+  mkdirSync(root, { recursive: true });
+  const dir = await mkdtemp(join(root, "visionox-dlp-test-"));
+  try {
+    return await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 function createToolRegistry(defs) {
   const map = new Map(defs);
   return {
@@ -179,6 +190,45 @@ test("prepareLocalDocument extracts a malformed Windows drive path from a full p
   });
 });
 
+test("prepareLocalDocument resolves unique whitespace-only path drift across directory segments", async () => {
+  await withTempDir(async (dir) => {
+    const folder = join(dir, "PDF文档");
+    mkdirSync(folder, { recursive: true });
+    const source = join(folder, "DBI效果.pdf");
+    await writeFile(source, Buffer.from("%PDF-1.7"));
+
+    const result = await prepareLocalDocument(join(dir, "PDF 文档", "DBI 效果.pdf"), {
+      cfg: { dlp: { mode: "off" } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry: createPreparedDocumentRegistry(),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(resolve(result.sourcePath), resolve(source));
+  });
+});
+
+test("prepareLocalDocument refuses ambiguous whitespace-normalized paths", async () => {
+  await withTempDir(async (dir) => {
+    const first = join(dir, "AI入门培训.pptx");
+    const second = join(dir, "AI 入门培训.pptx");
+    await writeFile(first, Buffer.from("first"));
+    await writeFile(second, Buffer.from("second"));
+
+    const result = await prepareLocalDocument(join(dir, "AI  入门培训.pptx"), {
+      cfg: { dlp: { mode: "off" } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry: createPreparedDocumentRegistry(),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.candidateCount, 2);
+    assert.deepEqual(new Set(result.candidates.map((path) => resolve(path))), new Set([resolve(first), resolve(second)]));
+  });
+});
+
 test("prepareLocalDocuments prepares a deduplicated source collection without changing single-document behavior", async () => {
   await withTempDir(async (dir) => {
     const first = join(dir, "first.md");
@@ -255,6 +305,102 @@ test("managed documents recover a missing readable copy across tools and registr
     assert.equal(resolve(resumed.sourcePath), resolve(source));
     assert.equal(resolve(resumed.readablePath), resolve(readable));
     assert.equal(existsSync(readable), true);
+  });
+});
+
+test("managed document commands recover a stale prepared temp timestamp by unique basename", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    await withManagedDecryptedTempDir(async (readableDir) => {
+      const source = join(dir, "SV1-11.xls");
+      const readable = join(readableDir, "SV1-11.xls");
+      await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+      await writeFile(readable, Buffer.from("prepared"));
+      const scriptPath = await createFakeDlpScript(dir, readable);
+      const registry = createPreparedDocumentRegistry();
+      const options = {
+        cfg: { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } },
+        env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+        logger: null,
+        registry,
+      };
+      await prepareLocalDocument(source, options);
+
+      let receivedArgs = null;
+      const { defs, tools } = createToolRegistry([["run_command", {
+        name: "run_command",
+        fn: async (args) => {
+          receivedArgs = args;
+          return "ok";
+        },
+      }]]);
+      wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+        ...options,
+        readConfig: () => options.cfg,
+      });
+
+      const stale = join(resolve(tmpdir(), "visionox_decrypted"), "stale-session", "SV1-11.xls");
+      await defs.get("run_command").fn({ command: `officecli view "${stale}" text` });
+      assert.equal(receivedArgs.command.includes(readable), true);
+      assert.equal(receivedArgs.command.includes("stale-session"), false);
+    });
+  });
+});
+
+test("managed document commands require documentRef for an ambiguous stale temp basename", async () => {
+  await withTempDir(async (dir) => {
+    const first = join(dir, "first", "report.xlsx");
+    const second = join(dir, "second", "report.xlsx");
+    mkdirSync(resolve(first, ".."), { recursive: true });
+    mkdirSync(resolve(second, ".."), { recursive: true });
+    await writeFile(first, Buffer.from("first"));
+    await writeFile(second, Buffer.from("second"));
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: first, readablePath: first, encrypted: false });
+    registry.register({ sourcePath: second, readablePath: second, encrypted: false });
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async () => "unexpected",
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      cfg: { dlp: { mode: "off" } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      registry,
+    });
+
+    const stale = join(resolve(tmpdir(), "visionox_decrypted"), "stale", "report.xlsx");
+    await assert.rejects(
+      defs.get("run_command").fn({ command: `officecli view "${stale}" text` }),
+      (error) => error instanceof DlpDecryptError && error.details?.code === "DOCUMENT_REF_REQUIRED",
+    );
+  });
+});
+
+test("managed document commands preserve an existing explicit path inside the temp root", async () => {
+  await withTempDir(async (dir) => {
+    await withManagedDecryptedTempDir(async (actualDir) => {
+      const actual = join(actualDir, "report.xlsx");
+      const registered = join(dir, "prepared", "report.xlsx");
+      mkdirSync(resolve(registered, ".."), { recursive: true });
+      await writeFile(actual, Buffer.from("explicit"));
+      await writeFile(registered, Buffer.from("registered"));
+      const registry = createPreparedDocumentRegistry();
+      registry.register({ sourcePath: registered, readablePath: registered, encrypted: false });
+      let receivedArgs = null;
+      const { defs, tools } = createToolRegistry([["run_command", {
+        name: "run_command",
+        fn: async (args) => { receivedArgs = args; return "ok"; },
+      }]]);
+      wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+        cfg: { dlp: { mode: "off" } },
+        env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+        registry,
+      });
+
+      await defs.get("run_command").fn({ command: `officecli view "${actual}" text` });
+      assert.equal(receivedArgs.command.includes(actual), true);
+      assert.equal(receivedArgs.command.includes(registered), false);
+    });
   });
 });
 

@@ -61,6 +61,7 @@ node_modules/
 /docs/providers-volcengine-0718.json
 /docs/providers-combined-0720.json
 /docs/providers-merged.json
+/docs/providers-merged-*.json
 
 # Exported HTML preview from Markdown docs (kept locally, not tracked)
 /docs/*.html

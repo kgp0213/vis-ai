@@ -24304,7 +24304,7 @@ function ToolCard({ msg }) {
     </div>
   `;
 }
-var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, reasoningHidden = false, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
+var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, reasoningExpanded = false, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
   useLang();
   const role = msg.role;
   const avatar = role === "user" ? userAvatar || ROLE_AVATAR.user : ROLE_AVATAR[role];
@@ -24319,10 +24319,19 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
   const showActions = !streaming && (showCopy || showFillInput);
   const reasoningRef = A2(null);
   const reasoningLive = Boolean(streaming && msg.reasoning);
+  const [reasoningOpen, setReasoningOpen] = d2(Boolean(reasoningExpanded));
+  const reasoningLength = String(msg.reasoning || "").length;
   y2(() => {
     const node = reasoningRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [msg.reasoning, reasoningLive]);
+  y2(() => {
+    if (!reasoningLive) setReasoningOpen(Boolean(reasoningExpanded));
+  }, [reasoningExpanded, reasoningLive]);
+  const onReasoningToggle = (event) => {
+    const next = Boolean(event.currentTarget.open);
+    setReasoningOpen((current) => current === next ? current : next);
+  };
   const actions = showActions ? html4`
     <div class="chat-msg-actions">
       ${showCopy ? html4`<button type="button" onClick=${() => onCopy(msg)}>${t4("chat.copyMessage")}</button>` : null}
@@ -24366,7 +24375,17 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
-        ${msg.reasoning && !reasoningHidden ? html4`<div class=${reasoningLive ? "reasoning reasoning-live-tail" : "reasoning"} ref=${reasoningLive ? reasoningRef : null}>${msg.reasoning}</div>` : null}
+        ${msg.reasoning ? reasoningLive ? html4`
+          <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${msg.reasoning}</div>
+        ` : html4`
+          <details class="reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
+            <summary class="reasoning-summary">
+              <span class="reasoning-summary-label">思考过程</span>
+              <span class="reasoning-summary-meta">约 ${reasoningLength.toLocaleString()} 字</span>
+            </summary>
+            <div class="reasoning">${msg.reasoning}</div>
+          </details>
+        ` : null}
         ${renderMessageBody(msg.text, role)}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
@@ -25904,7 +25923,13 @@ function ChatPanel({ userAvatar = null } = {}) {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
-  const [reasoningCleaned, setReasoningCleaned] = d2(false);
+  const [reasoningExpanded] = d2(() => {
+    try {
+      return localStorage.getItem("visionox-reasoning-display") === "expanded";
+    } catch (e) {
+      return false;
+    }
+  });
   const [activeTool, setActiveTool] = d2(null);
   const [busy, setBusy] = d2(false);
   const initialInputRef = A2(null);
@@ -25920,6 +25945,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   const draftSaveTimerRef = A2(null);
   const [inputHasContent, setInputHasContent] = d2(Boolean(initialInputRef.current.trim()));
   const inputHasContentRef = A2(inputHasContent);
+  const [promptOptimizing, setPromptOptimizing] = d2(false);
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
   const [draftReady, setDraftReady] = d2(false);
@@ -26072,6 +26098,34 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
     if (options.persist !== false) persistDraftSoon(text);
   }, [persistDraftSoon]);
+  const optimizeCurrentPrompt = q2(async () => {
+    const source = inputValueRef.current.trim();
+    if (!source || promptOptimizing) return;
+    setPromptOptimizing(true);
+    setError(null);
+    try {
+      const result = await api("/optimize-prompt", { method: "POST", body: { prompt: source } });
+      if (inputValueRef.current.trim() !== source) {
+        showToast("输入内容已变化，未覆盖你刚才的修改", "info");
+        return;
+      }
+      const optimized = String(result?.prompt ?? "").trim();
+      if (!optimized) throw new Error("模型没有返回可用的优化结果");
+      setChatInput(optimized);
+      setTimeout(() => {
+        inputRef.current?.focus();
+        try {
+          inputRef.current.selectionStart = inputRef.current.selectionEnd = optimized.length;
+        } catch {
+        }
+      }, 0);
+      showToast("提示词已优化，请确认后发送", "success");
+    } catch (err) {
+      setError(`提示词优化失败：${err.message}`);
+    } finally {
+      setPromptOptimizing(false);
+    }
+  }, [promptOptimizing, setChatInput]);
   y2(() => {
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
@@ -27102,7 +27156,6 @@ const [providerCaps, setProviderCaps] = d2(null);
       setSemanticRetrievalSources([]);
       setSemanticRetrievalStatus("idle");
       setMessages([]);
-      setReasoningCleaned(false);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = true;
@@ -27159,7 +27212,6 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
       setMessages([]);
-      setReasoningCleaned(false);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = true;
@@ -27937,7 +27989,6 @@ const [providerCaps, setProviderCaps] = d2(null);
     .find((provider) => provider.id === activeProviderId)
     ?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
   const activeModelEfforts = Array.isArray(activeModel?.efforts) ? activeModel.efforts : [];
-  const hasCompletedReasoning = messages.some((message) => Boolean(message.reasoning));
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -28018,7 +28069,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             messages=${messages}
             totalMessages=${totalMessages}
             streaming=${streaming}
-            reasoningCleaned=${reasoningCleaned}
+            reasoningExpanded=${reasoningExpanded}
             innerRef=${feedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
@@ -28288,19 +28339,19 @@ const [providerCaps, setProviderCaps] = d2(null);
               <div style="flex:1"></div>
               <button
                 type="button"
-                class="composer-chip reasoning-cleanup-chip"
-                aria-pressed=${reasoningCleaned}
-                disabled=${!reasoningCleaned && !hasCompletedReasoning}
-                onClick=${() => setReasoningCleaned((cleaned) => !cleaned)}
-                title=${reasoningCleaned ? "显示已完成消息的思考内容" : hasCompletedReasoning ? "刷新对话展示并隐藏已完成消息的思考内容" : "当前对话没有可刷新的思考内容"}
-              >${reasoningCleaned ? "显示思考" : "刷新"}</button>
-              <button
-                type="button"
                 class="image-upload-btn"
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
                 title="添加图片"
                 aria-label="添加图片"
               >📎</button>
+              <button
+                type="button"
+                class="composer-chip prompt-optimize-chip"
+                disabled=${!inputHasContent || promptOptimizing}
+                onClick=${optimizeCurrentPrompt}
+                title="优化当前输入，不会自动发送"
+                aria-label="优化当前提示词"
+              >${promptOptimizing ? "优化中…" : "优化提示词"}</button>
             </div>
             </div>
             <div class="chat-input-actions">
@@ -28332,7 +28383,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, reasoningCleaned = false, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, reasoningExpanded = false, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -28366,7 +28417,7 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
                   streaming=${Boolean(streaming && streaming.id === m3.id)}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
-                  reasoningHidden=${reasoningCleaned && !Boolean(streaming && streaming.id === m3.id)}
+                  reasoningExpanded=${reasoningExpanded}
                   userAvatar=${userAvatar}
                   selectedForArtifacts=${Boolean(selectedArtifactMessageId && String(m3.id || "") === String(selectedArtifactMessageId))}
                   onSelectForArtifacts=${onSelectArtifactMessage}

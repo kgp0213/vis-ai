@@ -52,7 +52,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(css, /\.artifact-preview-close[\s\S]*?min-width:\s*96px/);
   });
 
-  test("cleans completed reasoning locally while keeping a compact live tail", () => {
+  test("collapses completed reasoning while keeping a compact live tail", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");
     const chatMessage = app.slice(app.indexOf("var ChatMessage ="), app.indexOf("function ModalCard("));
@@ -61,21 +61,31 @@ describe("Dashboard desktop UX", () => {
     const composerControls = chatPanel.slice(chatPanel.indexOf('<div class="composer-controls">'), chatPanel.indexOf('<div class="chat-input-actions">'));
     const inputActions = chatPanel.slice(chatPanel.indexOf('<div class="chat-input-actions">'), chatPanel.indexOf('<${InFlightRow}'));
 
-    assert.match(chatMessage, /reasoningHidden = false/);
+    assert.match(chatMessage, /reasoningExpanded = false/);
     assert.match(chatMessage, /reasoning-live-tail/);
     assert.match(chatMessage, /node\.scrollTop = node\.scrollHeight/);
-    assert.match(chatPanel, /const \[reasoningCleaned, setReasoningCleaned\] = d2\(false\)/);
+    assert.match(chatMessage, /reasoning-details/);
+    assert.match(chatMessage, /reasoning-summary/);
+    assert.match(chatMessage, /setReasoningOpen/);
+    assert.doesNotMatch(chatMessage, /reasoningHidden/);
+    assert.match(chatPanel, /const \[reasoningExpanded\] = d2\(\(\) =>/);
+    assert.match(chatPanel, /visionox-reasoning-display/);
     assert.match(chatPanel, /const completedStream = streamBufRef\.current/);
     assert.match(chatPanel, /reasoning: dash\.reasoning \?\? completedStream\?\.reasoning/);
-    assert.match(composerControls, /class="composer-chip reasoning-cleanup-chip"/);
-    assert.match(composerControls, /<div style="flex:1"><\/div>[\s\S]*?reasoning-cleanup-chip[\s\S]*?image-upload-btn/);
-    assert.match(composerControls, />\$\{reasoningCleaned \? "显示思考" : "刷新"\}<\/button>/);
-    assert.doesNotMatch(inputActions, /reasoningCleaned|显示思考|reasoning-cleanup-chip/);
-    assert.match(chatPanel, /setReasoningCleaned\(\(cleaned\) => !cleaned\)/);
+    assert.match(composerControls, /class="image-upload-btn"[\s\S]*?class="composer-chip prompt-optimize-chip"/);
+    assert.match(composerControls, /promptOptimizing/);
+    assert.match(composerControls, /优化提示词/);
+    assert.match(composerControls, /不会自动发送/);
+    assert.doesNotMatch(inputActions, /reasoningExpanded|折叠思考|展开思考|reasoning-cleanup-chip|prompt-optimize-chip/);
+    assert.doesNotMatch(chatPanel, /toggleReasoningDisplay|setReasoningExpanded/);
+    assert.doesNotMatch(chatPanel, /reasoningCleaned|setReasoningCleaned/);
     assert.doesNotMatch(chatPanel, /整理对话[\s\S]{0,300}refetchCanonicalState/);
-    assert.match(chatFeed, /reasoningHidden=\$\{reasoningCleaned && !Boolean\(streaming/);
+    assert.match(chatFeed, /reasoningExpanded=\$\{reasoningExpanded\}/);
     assert.match(css, /\.reasoning-live-tail\s*\{[\s\S]*?max-height:/);
     assert.match(css, /\.reasoning-live-tail\s*\{[\s\S]*?overflow-y:\s*auto/);
+    assert.match(css, /\.reasoning-details\s*\{/);
+    assert.match(css, /\.reasoning-summary\s*\{/);
+    assert.match(css, /\.reasoning-summary:focus-visible\s*\{/);
   });
 
   test("renders context-input intervention cards with an explicit status and recommendation", () => {

@@ -5208,6 +5208,29 @@ async function handleSubmit(method, _rest, body, ctx) {
   return { status: 202, body: { accepted: true, ...result } };
 }
 
+// Prompt optimization is an editor operation: it never enters the session
+// transcript or the ordinary tool loop.
+async function handleOptimizePrompt(method, _rest, body, ctx) {
+  if (method !== "POST") return { status: 405, body: { error: "POST only" } };
+  if (typeof ctx.optimizePrompt !== "function") {
+    return { status: 503, body: { error: "prompt optimization is unavailable" } };
+  }
+  const { prompt } = parseBody11(body);
+  if (typeof prompt !== "string" || !prompt.trim()) {
+    return { status: 400, body: { error: "prompt (non-empty string) required" } };
+  }
+  if (prompt.length > 2e4) {
+    return { status: 400, body: { error: "prompt is too long to optimize (maximum 20000 characters)" } };
+  }
+  const result = await ctx.optimizePrompt(prompt.trim());
+  const optimizedPrompt = typeof result?.prompt === "string" ? result.prompt.trim() : "";
+  if (!optimizedPrompt) {
+    return { status: 502, body: { error: result?.error || "model returned an empty optimized prompt" } };
+  }
+  ctx.audit?.({ ts: Date.now(), action: "optimize-prompt", payload: { inputLength: prompt.length, outputLength: optimizedPrompt.length } });
+  return { status: 200, body: { prompt: optimizedPrompt } };
+}
+
 // src/server/api/tools.ts
 async function handleTools(method, _rest, _body, ctx) {
   if (method !== "GET") {
@@ -6018,6 +6041,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleMessages(method, rest, body, ctx, query);
       case "submit":
         return await handleSubmit(method, rest, body, ctx);
+      case "optimize-prompt":
+        return await handleOptimizePrompt(method, rest, body, ctx);
       case "prompt-queue":
         return await handlePromptQueue(method, rest, body, ctx, query);
       case "abort":

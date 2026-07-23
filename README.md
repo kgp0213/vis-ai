@@ -7,7 +7,7 @@ Visionox-Whale 是基于 Tauri 2、Node.js 和本地 Dashboard 的桌面 AI 助�
 - 多模型与 OpenAI-compatible Provider 配置
 - Provider JSON 导入、全模型通信检测和检测状态提示
 - 文件、Shell、Web、Memory、MCP、Skill 和 Plan 工具
-- 通用、编程、办公、设计四种工作模式
+- 通用、编程两种工作模式；办公、数据整理、研究和界面设计作为通用模式的任务子场景
 - 会话搜索、长会话分页恢复、批量回收、预览、恢复和自动过期清理
 - 对话中连续输入与持久队列
 - Soul、长期、项目、工作场景和会话记忆的统一管理
@@ -261,7 +261,7 @@ docs/                        使用、架构与开发文档
 
 | 组件 | 上游仓库 | License | 说明 |
 |------|----------|---------|------|
-| OfficeCLI | [github.com/iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) | Apache-2.0 | C# 编写的 AI Agent Office 文档 CLI，支持 Word/Excel/PowerPoint。二进制 `officecli.exe` 打包在 `resources/server/` 下，办公模式自动通过 MCP 接入。 |
+| OfficeCLI | [github.com/iOfficeAI/OfficeCLI](https://github.com/iOfficeAI/OfficeCLI) | Apache-2.0 | C# 编写的 AI Agent Office 文档 CLI，支持 Word/Excel/PowerPoint。二进制 `officecli.exe` 打包在 `resources/server/` 下，并在 Dashboard 就绪后自动通过 MCP 接入。 |
 | PDF.js | [github.com/mozilla/pdf.js](https://github.com/mozilla/pdf.js) | Apache-2.0 | 使用内置 Node.js 提取本地 PDF 文本，并在多模态文档任务需要时按页离线渲染图像；不依赖用户电脑的 Python，且仅在处理 PDF 时延迟加载。 |
 | DingTalk Workspace CLI | [github.com/open-dingtalk/dingtalk-workspace-cli](https://github.com/open-dingtalk/dingtalk-workspace-cli) | Apache-2.0 | `dws.exe` 提供 V来家/企业钉钉 OAuth 互通。程序打包二进制、许可证和内置 Skill 的精选命令参考，不打包用户 `~/.dws/` 中的 Token、身份、日志或上游脚本。 |
 | KaTeX | [github.com/KaTeX/KaTeX](https://github.com/KaTeX/KaTeX) | MIT | 数学公式渲染库。`katex.min.js`、`katex.min.css` 及字体文件打包在 `resources/server/visionox-pkg/dashboard/vendor/katex/` 下，Dashboard 通过 `katex-support.js` 接入 marked 扩展，支持行内与块级公式。 |

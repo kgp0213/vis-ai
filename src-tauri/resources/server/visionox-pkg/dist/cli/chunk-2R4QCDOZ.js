@@ -7361,6 +7361,13 @@ function classifyToolFailure(result) {
   if (/path parsing failed|invalid path argument|unexpected argument/.test(text)) return "command-path-arguments";
   return null;
 }
+function failureArgsSignature(value) {
+  if (Array.isArray(value)) return `[${value.map(failureArgsSignature).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${failureArgsSignature(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 var SameFailureClassTracker = class {
   limit;
   counts = /* @__PURE__ */ new Map();
@@ -7370,14 +7377,43 @@ var SameFailureClassTracker = class {
   reset() {
     this.counts.clear();
   }
-  note(toolName, result) {
+  note(toolName, result, args) {
     if (this.limit === null) return null;
     const kind = classifyToolFailure(result);
     if (!kind) return null;
     const key = `${toolName}:${kind}`;
-    const count = (this.counts.get(key) ?? 0) + 1;
-    this.counts.set(key, count);
+    const state = this.counts.get(key) ?? { count: 0, failedArgs: /* @__PURE__ */ new Set() };
+    const count = state.count + 1;
+    state.count = count;
+    state.failedArgs.add(failureArgsSignature(args ?? {}));
+    this.counts.set(key, state);
     return count >= this.limit ? { kind, count, limit: this.limit } : null;
+  }
+  blocked(toolName, args) {
+    if (this.limit === null) return null;
+    const recovery = JSON.stringify(args ?? {});
+    if (/visionox-document:|documentRef|[?*]/i.test(recovery)) {
+      for (const key of this.counts.keys()) {
+        if (key.startsWith(`${toolName}:`)) this.counts.delete(key);
+      }
+      return null;
+    }
+    const signature = failureArgsSignature(args ?? {});
+    for (const [key, state] of this.counts.entries()) {
+      if (key.startsWith(`${toolName}:`) && state.count >= this.limit && state.failedArgs.has(signature)) {
+        return { kind: key.slice(toolName.length + 1), count: state.count, limit: this.limit };
+      }
+    }
+    return null;
+  }
+  noteSuccessfulDiscovery(toolName, result) {
+    if (this.limit === null || classifyToolFailure(result) || /no matches/i.test(String(result ?? ""))) return;
+    const discovery = new Set(["prepare_local_document", "search_files", "glob", "directory_tree", "list_directory"]);
+    if (discovery.has(toolName)) {
+      for (const key of this.counts.keys()) {
+        if (key.endsWith(":local-file-not-found")) this.counts.delete(key);
+      }
+    }
   }
 };
 
@@ -8141,6 +8177,19 @@ var CacheFirstLoop = class {
     };
     this._inflight.add(this.inflightIdFor(call));
     try {
+      const blockedFailure = this._sameFailureClassTracker.blocked(name, parsedArgs);
+      if (blockedFailure) {
+        return {
+          preWarnings: [],
+          postWarnings: [],
+          result: JSON.stringify({
+            code: "REPEATED_TOOL_FAILURE_BLOCKED",
+            error: "同类工具失败已达到限制，本次调用未执行。",
+            failureClass: blockedFailure.kind,
+            requiredAction: "先使用搜索或目录工具获取准确路径，或传入 prepare_local_document 返回的 documentRef 后再重试。",
+          }),
+        };
+      }
       if (call[TOOL_CALL_REPAIR_META]?.changed === true && this.isMutating(call)) {
         return {
           preWarnings: [],
@@ -8953,7 +9002,8 @@ ${reason}`
             const err = s.reason instanceof Error ? s.reason : new Error(String(s.reason));
             result = JSON.stringify({ error: `${err.name}: ${err.message}` });
           }
-          const repeatedFailure = this._sameFailureClassTracker.note(name, result);
+          this._sameFailureClassTracker.noteSuccessfulDiscovery(name, result);
+          const repeatedFailure = this._sameFailureClassTracker.note(name, result, safeParseToolArgs(args));
           if (repeatedFailure) {
             result = `${result}\n\n[same failure class guard: ${name} returned ${repeatedFailure.kind} ${repeatedFailure.count} times this turn. Do not retry another spelling of the same failing call. Correct the missing argument, use the prepared documentRef, or switch to a meaningfully different strategy.]`;
           }
@@ -10445,7 +10495,7 @@ async function globFiles(ctx, startAbs, args) {
         continue;
       }
       if (!e.isFile() && !e.isSymbolicLink()) continue;
-      const rel = displayRel(ctx.rootDir, full);
+      const rel = displayRel(startAbs, full);
       if (!isMatch(rel)) continue;
       let mtimeMs = 0;
       if (sortBy === "mtime") {

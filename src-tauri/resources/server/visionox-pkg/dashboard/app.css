@@ -3024,6 +3024,73 @@ textarea {
 }
 
 /* Reasoning block */
+.chat-msg .reasoning-details {
+  margin-top: var(--space-2);
+}
+
+.chat-msg .reasoning-summary {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border-left: 2px solid var(--color-info);
+  border-radius: var(--radius-sm);
+  background: rgba(96, 165, 250, 0.05);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  list-style: none;
+  transition-property: background-color, color;
+  transition-duration: var(--duration-fast);
+}
+
+.chat-msg .reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-msg .reasoning-summary::before {
+  content: "›";
+  flex: 0 0 auto;
+  color: var(--color-info);
+  font-size: 16px;
+  font-style: normal;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform var(--duration-fast) ease-out;
+}
+
+.chat-msg .reasoning-details[open] .reasoning-summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-msg .reasoning-summary:hover {
+  background: rgba(96, 165, 250, 0.09);
+  color: var(--text-primary);
+}
+
+.chat-msg .reasoning-summary:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.chat-msg .reasoning-summary-label {
+  font-weight: 600;
+  font-style: normal;
+}
+
+.chat-msg .reasoning-summary-meta {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-msg .reasoning-details .reasoning {
+  margin-top: var(--space-1);
+}
+
 .chat-msg .reasoning {
   margin-top: var(--space-2);
   padding: var(--space-2) var(--space-3);
@@ -6100,23 +6167,28 @@ textarea {
 }
 
 /* ── Image upload ────────────────────────────────────────── */
+/* Sits in .composer-controls next to .composer-chip buttons, so it shares
+   their 30px geometry, surface and colors to keep the row aligned. */
 .image-upload-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 10px;
+  min-height: 30px;
+  padding: 0 10px;
   border-radius: var(--radius-md);
-  background: var(--surface-input);
+  background: var(--surface-raised);
   border: 1px solid var(--border-default);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 1;
   transition: all var(--duration-fast);
   flex-shrink: 0;
 }
 .image-upload-btn:hover:not(:disabled) {
   background: var(--surface-overlay);
-  border-color: var(--accent-primary);
+  color: var(--text-primary);
+  border-color: var(--border-default);
 }
 .image-upload-btn:disabled {
   opacity: 0.4;

@@ -8538,7 +8538,7 @@ async function globFiles(ctx, startAbs, args) {
         continue;
       }
       if (!e.isFile() && !e.isSymbolicLink()) continue;
-      const rel = displayRel2(ctx.rootDir, full);
+      const rel = displayRel2(startAbs, full);
       if (!isMatch(rel)) continue;
       let mtimeMs = 0;
       if (sortBy === "mtime") {

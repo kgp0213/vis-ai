@@ -167,7 +167,7 @@
         box-sizing: border-box;
         background: var(--startup-bg);
         color: var(--startup-fg);
-        font-family: "Segoe UI", system-ui, sans-serif;
+        font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
         user-select: none;
         -webkit-user-select: none;
         /* Borderless windows render without a frame shadow on Windows; a
@@ -176,109 +176,201 @@
         box-shadow: inset 0 0 0 1px var(--startup-border);
       }
 
+      /* Ambient accent wash behind the splash content; purely decorative and
+         clipped by the window, so it never fights the native background
+         color Rust paints before JavaScript runs. The rgba() fallback keeps
+         a faint tint on WebView2 builds without color-mix support. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background: radial-gradient(430px 320px at 50% 36%, rgba(23, 105, 170, 0.07), transparent 72%);
+        background: radial-gradient(430px 320px at 50% 36%, color-mix(in srgb, var(--startup-accent) 7%, transparent), transparent 72%);
+      }
+
       #vis-app-frame {
         transition: opacity 0.15s ease;
       }
 
       .wrap {
-        width: min(560px, calc(100vw - 96px));
+        width: min(360px, calc(100vw - 96px));
         text-align: center;
         opacity: 0;
-        transform: translateY(4px);
-        transition: opacity 0.2s ease, transform 0.2s ease;
+        transform: translateY(6px);
+        transition: opacity 0.24s ease, transform 0.24s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
-      .wrap.is-visible {
+      /* Staggered entrance: children rise and fade in sequence once the wrap
+         becomes visible. Delays are capped at 0.27s so the whole sequence
+         lands well under 500ms. Exit clears the delays so the splash never
+         lingers when the dashboard is ready. */
+      .wrap > * {
+        opacity: 0;
+        transform: translateY(8px);
+        transition: opacity 0.34s ease, transform 0.34s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .wrap.is-visible > *:nth-child(1) { transition-delay: 0.04s; }
+      .wrap.is-visible > *:nth-child(2) { transition-delay: 0.10s; }
+      .wrap.is-visible > *:nth-child(3) { transition-delay: 0.16s; }
+      .wrap.is-visible > *:nth-child(4) { transition-delay: 0.22s; }
+      .wrap.is-visible > *:nth-child(5) { transition-delay: 0.27s; }
+
+      .wrap.is-visible,
+      .wrap.is-visible > * {
         opacity: 1;
         transform: none;
       }
 
-      .wrap.is-done {
+      .wrap.is-done,
+      .wrap.is-done > * {
         opacity: 0;
         transform: none;
+        transition-delay: 0s;
+      }
+
+      .wrap.is-done {
         transition: opacity 0.18s ease;
       }
 
+      /* Brand tile: a 145° accent gradient with a top inner highlight and a
+         tinted ambient shadow gives the flat token a physical, lit-from-
+         above quality. Each declaration is doubled so WebView2 builds
+         without color-mix fall back to the solid accent + plain shadow. */
       .brand-mark {
-        width: 81px;
-        height: 81px;
-        margin: 0 auto 31.5px;
-        border-radius: 21px;
+        width: 76px;
+        height: 76px;
+        margin: 0 auto 28px;
+        border-radius: 22px;
         background: var(--startup-accent);
+        background: linear-gradient(145deg,
+          color-mix(in srgb, var(--startup-accent) 86%, white) 0%,
+          var(--startup-accent) 52%,
+          color-mix(in srgb, var(--startup-accent) 84%, black) 100%);
         display: flex;
         align-items: center;
         justify-content: center;
+        box-shadow:
+          0 16px 36px -14px rgba(23, 105, 170, 0.5),
+          0 2px 6px rgba(16, 24, 40, 0.08),
+          inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        box-shadow:
+          0 16px 36px -14px color-mix(in srgb, var(--startup-accent) 52%, transparent),
+          0 2px 6px rgba(16, 24, 40, 0.08),
+          inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        transition:
+          box-shadow 0.3s ease,
+          opacity 0.34s ease,
+          transform 0.34s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
       .signal {
         display: flex;
         align-items: flex-end;
-        gap: 6px;
-        height: 36px;
+        gap: 5px;
+        height: 34px;
       }
 
       .signal span {
         display: block;
         width: 6px;
-        height: 18px;
+        height: 16px;
         border-radius: 3px;
         background: var(--startup-bg);
         transform-origin: center bottom;
-        animation: signal 1.15s ease-in-out infinite;
+        animation: signal 1.2s cubic-bezier(0.45, 0, 0.2, 1) infinite;
       }
 
       .signal span:nth-child(2) {
-        height: 31.5px;
-        animation-delay: 0.12s;
+        height: 30px;
+        animation-delay: 0.14s;
       }
 
       .signal span:nth-child(3) {
-        height: 13.5px;
-        animation-delay: 0.24s;
+        height: 13px;
+        animation-delay: 0.28s;
       }
 
       @keyframes signal {
-        0%, 100% { transform: scaleY(0.45); opacity: 0.5; }
+        0%, 100% { transform: scaleY(0.42); opacity: 0.55; }
         50% { transform: scaleY(1); opacity: 1; }
       }
 
       h1 {
-        font-size: 26px;
-        font-weight: 500;
-        letter-spacing: 0;
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
         color: var(--startup-fg);
-        margin: 0 0 6px;
+        margin: 0 0 8px;
       }
 
       #status {
         font-size: 13px;
         color: var(--startup-muted);
-        margin: 0 0 14px;
-        min-height: 18px;
-        line-height: 18px;
+        margin: 0 0 18px;
+        min-height: 20px;
+        line-height: 20px;
         overflow-wrap: anywhere;
+        transition: color 0.2s ease, opacity 0.34s ease, transform 0.34s cubic-bezier(0.16, 1, 0.3, 1);
       }
 
       .startup-progress {
         width: 100%;
         height: 4px;
         overflow: hidden;
-        border-radius: 2px;
+        border-radius: 999px;
         background: var(--startup-track);
       }
 
       .startup-progress span {
+        position: relative;
         display: block;
         width: 8%;
         height: 100%;
-        border-radius: 2px;
+        overflow: hidden;
+        border-radius: 999px;
         background: var(--startup-accent);
-        transition: width 0.3s ease;
+        transition: width 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      /* A soft sheen sweeps across the fill so the bar feels alive between
+         stage jumps; transform-only, so it costs no layout work. */
+      .startup-progress span::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.45) 50%, transparent 100%);
+        transform: translateX(-100%);
+        animation: progress-sheen 1.8s ease-in-out infinite;
+      }
+
+      @keyframes progress-sheen {
+        0% { transform: translateX(-100%); opacity: 0; }
+        25% { opacity: 1; }
+        60% { transform: translateX(100%); opacity: 1; }
+        100% { transform: translateX(100%); opacity: 0; }
       }
 
       .wrap.is-error .signal span {
         animation: none;
         background: var(--startup-danger);
+      }
+
+      /* Error state: the tile keeps its accent fill but gains a danger halo,
+         so the failure reads as a state change rather than a different app. */
+      .wrap.is-error .brand-mark {
+        box-shadow:
+          0 0 0 5px rgba(192, 54, 44, 0.16),
+          0 16px 36px -14px rgba(192, 54, 44, 0.5),
+          0 2px 6px rgba(16, 24, 40, 0.08),
+          inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        box-shadow:
+          0 0 0 5px color-mix(in srgb, var(--startup-danger) 16%, transparent),
+          0 16px 36px -14px color-mix(in srgb, var(--startup-danger) 50%, transparent),
+          0 2px 6px rgba(16, 24, 40, 0.08),
+          inset 0 1px 0 rgba(255, 255, 255, 0.22);
       }
 
       .wrap.is-error .startup-progress span {
@@ -287,39 +379,69 @@
         transition: none;
       }
 
-      .retry {
+      .wrap.is-error .startup-progress span::after {
         display: none;
-        margin-top: 16px;
-        font-size: 12px;
-        color: var(--startup-accent);
-        text-decoration: underline;
-        text-underline-offset: 2px;
-        cursor: pointer;
-        border-radius: 4px;
-        padding: 2px 4px;
       }
 
-      .retry:hover { color: var(--startup-accent-hover); background: var(--startup-button-hover); }
+      /* Recovery action as a quiet pill button: a bordered control matches
+         the "fix it" affordance users expect better than a naked link. */
+      .retry {
+        display: none;
+        margin-top: 20px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--startup-accent);
+        text-decoration: none;
+        cursor: pointer;
+        border: 1px solid var(--startup-border);
+        border-radius: 999px;
+        padding: 7px 18px;
+        background: transparent;
+        transition:
+          color 0.15s ease,
+          background-color 0.15s ease,
+          border-color 0.15s ease,
+          opacity 0.34s ease,
+          transform 0.34s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      .retry:hover {
+        color: var(--startup-accent-hover);
+        background: var(--startup-button-hover);
+        border-color: var(--startup-accent);
+      }
       .retry:active { color: var(--startup-accent-active); }
       .retry:focus-visible { outline: 2px solid var(--startup-focus); outline-offset: 2px; }
       .retry:disabled, .retry[aria-disabled="true"] {
         color: var(--startup-disabled);
+        border-color: var(--startup-border);
+        background: transparent;
         cursor: not-allowed;
-        text-decoration: none;
       }
 
-      .wrap.is-error .retry { display: inline-block; }
+      .wrap.is-error .retry { display: inline-flex; align-items: center; gap: 6px; }
 
       @media (prefers-reduced-motion: reduce) {
         .signal span,
-        .startup-progress span,
+        .startup-progress span::after,
+        .brand-mark,
+        #status,
         .wrap,
+        .wrap > *,
         #vis-app-frame {
           animation: none;
           transition: none;
         }
 
+        .wrap > * { opacity: 1; transform: none; }
         .signal span { opacity: 0.85; transform: none; }
+
+        /* Progress changes are functional feedback rather than decorative
+           motion, so the fill keeps a short, spatially static transition. */
+        .startup-progress span {
+          animation: none;
+          transition: width 0.2s ease;
+        }
       }
     </style>
   </head>

@@ -9,7 +9,7 @@
 - Windows 10/11
 - Node.js v22+
 - Rust 工具链（`rustup` + `cargo`）
-- DeepSeek API Key（或其他兼容 OpenAI 接口的 Key）
+- 可用的 OpenAI-compatible 模型凭据（仅运行对话或模型检测时需要，构建不需要）
 
 ---
 
@@ -31,6 +31,38 @@ npm run tauri:build -- --no-bundle
 npm run bundle:nsis
 # → src-tauri/target/release/bundle/nsis/Visionox-Whale_x.x.x_x64-setup.exe
 ```
+
+### npm 脚本参考
+
+<!-- AUTO-GENERATED: package.json scripts -->
+| 命令 | 用途 |
+|---|---|
+| `npm run tauri -- <args>` | 直接调用 Tauri CLI；交付构建不得用它绕过包装器 |
+| `pretauri:dev` | `tauri:dev` 的自动前置步骤，准备调试运行时，不单独调用 |
+| `npm run tauri:dev` | 准备运行时后启动 UI 调试；不能替代 release 验证 |
+| `npm run tauri:build -- --no-bundle` | 规范 release exe 构建 |
+| `npm run bundle:nsis` | 构建并校验 NSIS 安装包，仅在明确需要时运行 |
+| `npm test` | 串行运行全部 Node 测试 |
+| `npm run test:coverage` | 运行 Node 测试并生成覆盖率 |
+| `npm run test:coverage:core` | 校验项目核心模块覆盖率门槛 |
+| `npm run test:ui:smoke` | 使用真实 Edge 做 Dashboard 冒烟检查 |
+| `npm run quality:check` | 运行提交前统一质量门禁 |
+| `npm run release:check` | 运行发布门禁并生成规范 release |
+| `npm run check:bundle-patches` | 校验受保护的本地 bundle 补丁 |
+| `npm run check:runtime-secrets` | 扫描运行资源中的部署密钥和内部标识 |
+| `npm run check:hygiene` | 检查仓库和 release 临时/冗余文件 |
+| `npm run check:runtime-paths` | 检查运行时资源路径契约 |
+| `npm run check:runtime-manifest` | 校验内置二进制版本、大小和 SHA-256 |
+| `npm run check:versions` | 校验产品版本一致性 |
+| `npm run check:entrypoints` | 防止绕过规范构建入口 |
+| `npm run check:test-structure` | 校验测试文件职责和规模 |
+| `npm run check:third-party` | 校验第三方资源、来源和许可证 |
+| `npm run verify:nsis` | 解包并校验已生成的 NSIS |
+| `npm run restore:pkg` | 禁用的保护入口；只输出危险操作说明 |
+| `npm run restore:pkg:danger -- --force` | 覆盖上游 bundle，必须先获授权并准备重做本地补丁 |
+| `npm run fetch:binaries` | 禁用的保护入口；不会下载资源 |
+| `npm run fetch:binaries:danger` | 联网更新内置二进制，必须先获得明确授权 |
+<!-- END AUTO-GENERATED -->
 
 ### 构建注意事项
 
@@ -98,7 +130,7 @@ type %USERPROFILE%\.visionox\logs\visionox-server-stderr.log
 
 实际生效的 Design Tokens 和主题覆盖以
 `src-tauri/resources/server/visionox-pkg/dashboard/app.css` 为唯一事实来源，不在文档中复制整套变量值。
-当前 UI 提供 8 套主题；7 套主题源文件位于 `src-tauri/theme/`，light 主题直接定义在 `app.css` 中。
+当前 UI 提供 9 套主题；8 套非默认主题的覆盖样式位于 `src-tauri/theme/`，light 主题直接定义在 `app.css` 中。
 
 新增或调整样式时应复用现有 surface、text、accent、semantic、border、spacing、radius 和 motion 变量，
 并保留 bundle 中仍在使用的 legacy alias。组件尺寸、焦点、禁用、加载和错误状态必须在真实 Edge 中验证；

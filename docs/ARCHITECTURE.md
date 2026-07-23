@@ -281,46 +281,21 @@ Dashboard。实现位于 `src-tauri/src/lib.rs` 的 `get_clipboard_files_blockin
 `FileGroupDescriptorW` 或 Unix 剪贴板行为；修改时需验证单/多文件、文件夹、Unicode、长路径、纯文本和截图。
 PowerShell 只能作为排障工具，不能加入产品启动依赖。
 
-本地文档在交给解析器前由 `prepare_local_document` 统一准备，默认 `dlp.mode=auto`。普通文件保持原路径；
-只有命中文件头特征时才调用 `resources/server/visionox-file/visionox_file.py`。`lib/dlp-file.mjs` 为每个已准备
-文档生成稳定 `documentRef`，双向记录原始路径和当前可读路径，并将活动引用写入会话元数据。`prepare_local_document`
-注册为只读工具，可在 plan 阶段执行。切换 Skill、恢复会话或临时明文缺失时，所有文档工具都可通过原始路径
-重新准备；任务结束不自动删除明文副本，也不得把特定工作区路径写死到源码。运行时只从 exe 同级资源发现脚本，
-不读取源码目录或机器专用路径。该文件头判断只是当前环境的兼容策略，不是通用加密标准；输出不得覆盖原文件，
-新增特征必须用测试证明普通文件不会被误判。
+本地文档先由只读工具 `prepare_local_document` 统一准备。`lib/dlp-file.mjs` 为当前会话保存原始路径、可读路径
+和稳定的 `documentRef`；后续工具和脚本继续使用该引用，临时明文缺失时由宿主重新准备。普通文件保持原路径，
+只有命中文件头特征时才调用 exe 同级的 `resources/server/visionox-file/visionox_file.py`。明文副本允许保留，
+但不得覆盖原文件，也不得把机器专用临时路径写入模型脚本。
 
-`read_file` 由 `wrapReadFileToolWithDlp` 包装：解析路径后调用 `binaryDocumentKind` 嗅探扩展名和 magic number
-（`%PDF-`、`PK\x03\x04`、`D0CF11E0`、JPEG、PNG 等），命中二进制类型时返回 `BINARY_INPUT_NOT_READ_AS_TEXT`
-错误并引导改用 `prepare_local_document`，避免把二进制内容当作 UTF-8 文本读入上下文。嗅探在 DLP 解密后的
-可读副本上进行，因此对 DLP 加密文件（文件头为 `00000000`）同样有效。
+`read_file` 会嗅探 PDF、Office 和图片等二进制格式，返回 `BINARY_INPUT_NOT_READ_AS_TEXT` 并引导模型先准备文档，
+避免把二进制误当 UTF-8 文本。Office 文件使用 OfficeCLI，复杂 PDF 操作使用 `pdf` Skill，Markdown 生成 PDF
+使用 `md-to-pdf-cjk`。`pdf-text.mjs`、`document-extractors.mjs`、`document-markdown-workflow.mjs`、
+`long-task-handoff.mjs` 和 `document-output-reservation.mjs` 只作为离线兼容与测试材料，构建时不会进入运行资源。
 
-PDF/Office/图片等二进制文件的拦截由 `lib/dlp-file.mjs` 的 `binaryDocumentKind` 完成（嗅探 `%PDF-`、`PK\x03\x04`、
-`D0CF11E0`、JPEG、PNG 等 magic number），命中后返回 `BINARY_INPUT_NOT_READ_AS_TEXT` 并引导改用
-`prepare_local_document`。`lib/pdf-text.mjs` 已退出运行时资源（构建时排除），仅保留为离线测试材料。
-复杂 PDF 创建、编辑、合并、拆分、表单和校验继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。
-格式能力必须把页范围、来源和异常作为步骤证据返回，不能决定任务是否自动继续或已经完成。
-
-2026-07-20 已删除 Launcher 中的 PDF 自动续读状态、次数预算、专用提示和专用进度分支；系统提示、办公模式、
-DLP 建议及内置 Skill 也不再定义 PDF->Markdown 生命周期。2026-07-21 起，前台放弃通用复杂任务状态机重型
-路线（删除 `foreground-task-supervisor.mjs`），回归单一 `CacheFirstLoop` + 轻量 plan +
-`context-input-transaction` 输入接纳；单文档、Word、代码仓库或研究任务都由当前模型工具循环处理。
-旧 `legacy` 文档 Worker 及其持久任务记录不再由 Launcher 读取、恢复、交接或展示为可控后台任务；需要继续处理历史需求时，用户应回到主对话，由当前普通模型工具循环重新执行。
-
-`lib/context-input-transaction.mjs` 将大段只读结果按 SHA-256 无损缓存到用户数据目录，记录
-`pending -> materialized -> foldable` 状态；普通上下文压缩必须等待 pending 输入处理完成，紧急压缩保留
-`read_context_input` 引用。缓存状态以 `transactionId` 为主键（早期版本为 `turnId`，已改为跨 turn 保留）。
-重复阻塞、缓存失败或未完整处理便声称完成时，Launcher 通过一次一问卡片让用户选择继续、调整要求、接受
-部分结果、丢弃无效缓存或停止。该机制只是输入接纳子机制，不等于任务计划或最终交付；Skill 只负责提示
-策略，不是可靠性前提。
-
-`lib/document-extractors.mjs`、`lib/document-markdown-workflow.mjs`、`lib/long-task-handoff.mjs` 和
-`lib/document-output-reservation.mjs` 仍保留为历史兼容代码及离线测试材料，但不属于当前 Launcher 的任务调度契约。
-Launcher 不会调用这些模块来创建文档后台任务、检查点、自动交接或专用输出锁；旧的 `document-jobs` 数据也不会被当前运行时自动恢复。
-
-当前文档、代码仓库和研究任务都走同一个 `CacheFirstLoop`：模型先使用普通工具取得下一批输入，再根据工具结果决定继续读取、生成中间结果、保存文件或向用户请求干预。
-`context-input-transaction` 只负责大段输入的无损缓存、物化和压缩前背压，不负责规划任务或判断完成。工具结果、生成文件和用户确认均在同一会话上下文中记录；
-当缓存无法物化、循环没有进展、输出明显不完整或用户要求存在高影响歧义时，Launcher 暂停当前循环并显示会话内干预卡片。
-因此复杂任务不会进入第二套模型执行流程，简单任务也不会被强制升级到文档专用流程。
+文档、代码仓库和研究任务都走同一个 `CacheFirstLoop`。模型负责取得下一批输入、保存中间结果和决定继续、暂停
+或请求用户确认；轻量 plan 只记录需要批准的步骤。`context-input-transaction` 只把过大的只读工具结果按
+SHA-256 缓存为 `pending -> materialized -> foldable`，并在压缩前提供背压与 `read_context_input` 引用，不负责
+规划或验收任务。缓存失败、连续无进展或结果不完整时，当前会话显示干预卡片。系统没有 PDF 自动续读、文档
+后台 Worker 或另一套复杂任务状态机。
 
 模型 JSON 中的文档能力和预算是初始提示，不是任务能否完成的唯一真相。宿主按实际探测和本次任务观测到的
 超时、输出截断、上下文错误、非重试错误及多模态可用性做分批、缩小、熔断和备用候选切换；这些决策按能力与
@@ -371,10 +346,10 @@ iframe 方案下按 F5 刷新壳页面时，依赖三层恢复：
 | 进程管理 | 无 | JobObject + 崩溃监控 + 启动超时 |
 | 诊断 | stdout/stderr | 全局 `.visionox/logs/` 诊断日志 + 日志面板 |
 | 编辑模式 | review/auto/yolo | auto/yolo/admin（review 仅作历史配置别名） |
-| 配色 | dark/light | 8 套 |
+| 配色 | dark/light | 9 套 |
 | 搜索 | Mojeek only | 4 引擎热切换 |
 | 记忆 | 2 层 | 9 层（含会话短期记忆） |
-| 工作模式 | 无 | 4 模式切换 |
+| 工作模式 | 无 | 通用、编程 2 种；办公和设计归入通用任务子场景 |
 | 部署 | npm 包 | Windows release exe / NSIS |
 
 > 仓库保留的 Unix 条件代码和 Linux 配置属于实验性兼容基础；当前没有经过持续验证的 Linux 交付承诺。

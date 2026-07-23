@@ -326,75 +326,23 @@ Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此�
 
 本地 Qwen3.5 使用本机接口已经验证的 `thinking_budget`。ModelScope 只声明 Qwen3.5 默认思考和 `enable_thinking`，未把 `thinking_budget` 定义为通用标准，因此不要添加未经当前接口验证的预算档位。
 
-## 8. Agent 策略与历史文档兼容字段
+## 8. Agent 策略
 
-### `agentPolicy`
+`agentPolicy` 调整同一个普通模型工具循环，不会创建第二套文档执行流程。
 
-| 字段 | 范围 | 说明 |
+| 字段 | 范围 | 当前作用 |
 |---|---|---|
-| `documentWorkflow` | 仅 `guided` | 兼容字段；`guided` 只向普通模型循环注入文档访问提示，不会启动文档后台 Worker |
+| `documentWorkflow` | 仅 `guided` | 增加本地文档访问提示 |
 | `maxToolIterations` | 4–64 | 单轮最多工具迭代数 |
-| `maxToolContinuationWindows` | 0–2 | 工具轮次到顶后允许的延续窗口数 |
-| `sameFailureClassLimit` | 2–10 | 同类错误连续出现后的停止阈值 |
-| `toolResultBudget.defaultTokens` | 1024–32768 | 普通工具结果预算 |
-| `toolResultBudget.documentTokens` | 1024–32768 | 文档工具结果预算 |
-| `toolResultBudget.absoluteMaxTokens` | 1024–32768 | 绝对上限，不能小于前两项 |
-| `requestProfiles.toolContinuation` | JSON 对象 | 工具继续执行请求的参数覆盖 |
-| `requestProfiles.finalAnswer` | JSON 对象 | 最终回答请求的参数覆盖 |
-| `requestProfiles.summary` | JSON 对象 | 对话或文档摘要请求的参数覆盖 |
-| `requestProfiles.report` | JSON 对象 | 定时报告生成请求的参数覆盖 |
-| `requestProfiles.knowledge` | JSON 对象 | 会话知识评估、整理和复核请求的参数覆盖 |
-| `requestProfiles.learn` | JSON 对象 | `/learn` 相关提炼请求的参数覆盖 |
-| `requestProfiles.sessionReview` | JSON 对象 | 会话质量评估请求的参数覆盖 |
-| `requestProfiles.messageRisk` | JSON 对象 | V来家外发消息风险审查请求的参数覆盖；弱模型建议在此关闭思考并保留足够的可见输出预算 |
-| `requestProfiles.documentReview` | JSON 对象 | 历史文档审校调用的兼容参数；当前主对话不会因此创建后台任务 |
-| `documentPolicy` | 见下表 | 历史文档工作流的兼容配置；当前 Launcher 不用它调度主对话 |
+| `maxToolContinuationWindows` | 0–2 | 工具轮次到顶后的延续窗口数 |
+| `sameFailureClassLimit` | 2–10 | 同类失败的熔断阈值；修正后的不同参数仍允许执行 |
+| `toolResultBudget` | 三个字段均为 1024–32768 | 普通、文档工具结果预算和绝对上限；前两者不能超过绝对上限 |
+| `requestProfiles` | JSON 对象 | 按 `toolContinuation`、`finalAnswer`、`summary`、`report`、`knowledge`、`learn`、`sessionReview`、`messageRisk` 或 `documentReview` 覆盖请求参数 |
+| `documentPolicy` | 兼容对象 | 保留旧 JSON 校验；其中 `batchOutputTokens` 仍可限制报告等文档用途的输出预算，但不会启动后台 Worker、检查点或备用模型接管 |
 
-`toolResultBudget` 一旦配置，三个字段都必须填写。
-
-`requestProfiles` 只覆盖明确选用该用途的请求，不会改变模型能力声明。模型/API 通信检测继续使用独立的 `verificationRequestDefaults`，不要在 `requestProfiles` 中添加 `verification`。`documentReview` 仅为旧配置和显式兼容调用保留，不代表当前应用存在文档后台执行流程。
-
-### `agentPolicy.documentPolicy`（历史兼容）
-
-下列字段继续接受导入和校验，避免旧 JSON 失效，也可供离线调用旧文档模块时使用。当前交互任务统一由 `CacheFirstLoop` 执行；这些字段不会创建文档后台任务、检查点、自动恢复、模型切换或“继续”执行窗口。
-
-| 字段 | 范围/取值 | 说明 |
-|---|---|---|
-| `defaultFidelity` | `complete-with-summary` / `summary-only` | 默认保真策略 |
-| `batchInputTokens` | 1024–32000 | 单批输入预算 |
-| `batchOutputTokens` | 1024–32768 | 单批期望输出预算；还会受 `capabilities.maxOutputTokens` 和运行时实测能力限制 |
-| `maxUnitsPerBatch` | 1–100 | 初始单批最大页、元素或段落单元数；截断、超时或上下文不足时应自动缩小 |
-| `maxRetries` | 0–4 | 单候选模型重试次数 |
-| `autoFallback` | 布尔值 | 主模型失败后是否探测备用模型 |
-| `semanticBatching` | 布尔值 | 是否按跨页、跨段语义边界分批 |
-| `contextOverlapTokens` | 128–4096 | 相邻分批只读上下文预算 |
-| `fallbackProviderIds` | 最多 32 个 ID | 指定允许接管的服务商；省略时使用其他可用服务商 |
-| `foregroundPollMs` | 10–5000 | 前台忙碌状态轮询间隔 |
-| `maxSplitDepth` | 0–6 | 失败区块递归缩小的最大深度 |
-| `maxModelCallsPerBatch` | 4–200 | 单批所有重试、审校和回退的总调用上限 |
-| `maxModelCallsPerJob` | 4–10000 | 单次执行窗口的模型调用上限；达到后暂停并保留已完成检查点 |
-| `maxVisualUnitsPerBatch` | 1–20 | 单批最多视觉来源单元，仍受 `visionPolicy.maxImages` 限制 |
-| `requestTimeoutMs` | 30000–1800000 | 单次文档模型请求总时长上限，单位毫秒 |
-| `jobTimeoutMs` | 1000–172800000 | 单次执行窗口的总时限，单位毫秒；达到后暂停而不是伪装成功 |
-| `qualityThresholds` | JSON 对象 | 完整整理任务的确定性保真阈值；仅在确有模型实测依据时调整 |
-
-`qualityThresholds` 可包含以下 0–1 比例。字段可以省略，省略时使用程序的保守默认值：
-
-| 字段 | 默认值 | 说明 |
-|---|---:|---|
-| `unitLengthRatio` | 0.70 | 每个来源单元至少保留的有效文字比例 |
-| `lengthRatio` | 0.85 | 整个批次至少保留的有效文字比例 |
-| `signalRatio` | 0.55 | 技术数值等关键信号保留比例 |
-| `commandRatio` | 0.60 | 命令和寄存器操作保留比例 |
-| `tableRatio` | 0.60 | 表格行保留比例 |
-| `formulaRatio` | 0.60 | 公式保留比例 |
-| `urlRatio` | 0.60 | URL 保留比例 |
-
-降低这些阈值只会减少“需要复核”提示，不会提高模型的真实处理能力；不要为了让任务显示成功而调低阈值。`summary-only` 任务不使用完整文档保真比例。
-
-`documentPolicy` 不是模型固有能力，也不是当前普通模型循环的复杂任务开关。`maxModelCallsPerJob`、`jobTimeoutMs`、分批、重试、备用模型和质量阈值只描述旧文档工作流的兼容语义；Launcher 不再读取旧 `document-jobs` 记录，也不会在后台任务页面提供文档暂停、继续、预览或恢复。
-
-当前长任务的有效约束来自模型上下文/输出能力、`maxToolIterations`、`maxToolContinuationWindows`、通用工具结果预算和 `context-input-transaction`。如果普通循环无法继续、输入尚未物化或未生成用户要求的文件，系统应在当前会话中报告不完整状态并请求用户干预，而不是套用上述历史文档恢复规则。
+`requestProfiles` 只适用于 `requestPolicy: "json"`，且只在程序明确选择对应用途时覆盖 `requestDefaults`。
+通信检测始终使用独立的 `verificationRequestDefaults`。长任务实际还受模型上下文与输出能力、工具结果预算和
+`context-input-transaction` 约束；不要通过旧 `documentPolicy` 猜测任务已经完成。
 
 ## 9. 图片策略
 

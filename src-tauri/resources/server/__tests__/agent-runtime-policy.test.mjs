@@ -206,6 +206,24 @@ describe("agent runtime policy", () => {
     }
   });
 
+  test("glob matches files relative to an approved external search directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "visionox-glob-external-"));
+    const rootDir = join(root, "workspace");
+    const archiveDir = join(root, "archive");
+    try {
+      await mkdir(rootDir, { recursive: true });
+      await mkdir(join(archiveDir, "PDF文档"), { recursive: true });
+      await writeFile(join(archiveDir, "PDF文档", "DBI效果.pdf"), "%PDF-1.7", "utf8");
+      const tools = new ToolRegistry();
+      registerFilesystemTools(tools, { rootDir, allowWriting: true, allowAllPaths: () => true });
+
+      const result = await tools.dispatch("glob", { path: archiveDir, pattern: "**/*.pdf", sort_by: "name" });
+      assert.equal(result, "PDF文档/DBI效果.pdf");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("large shell output is retained as a bounded-read resource", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "visionox-shell-resource-"));
     try {
