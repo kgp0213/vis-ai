@@ -229,6 +229,27 @@ describe("agent runtime policy", () => {
     }
   });
 
+  test("shell tools pass the task document environment to foreground processes", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "visionox-document-env-"));
+    try {
+      const tools = new ToolRegistry();
+      registerShellTools(tools, {
+        rootDir,
+        allowAll: true,
+        getEnvironment: () => ({
+          VISIONOX_DOCUMENT_REF: "visionox-document:doc_test",
+          VISIONOX_DOCUMENT_READABLE_PATH: "C:\\Temp\\prepared\\manual.pdf",
+          VISIONOX_DOCUMENT_ROOT: "C:\\Temp\\prepared",
+        }),
+      });
+      const command = 'node -e "process.stdout.write(process.env.VISIONOX_DOCUMENT_READABLE_PATH)"';
+      const result = await tools.dispatch("run_command", { command });
+      assert.match(result, /C:\\Temp\\prepared\\manual\.pdf/);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   test("the runtime caches a large read before truncation without crediting an unrelated file write", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "visionox-context-runtime-"));
     try {

@@ -12,6 +12,7 @@ import {
   latestPreparedDocumentRef,
   prepareLocalDocument,
   prepareLocalDocuments,
+  preparedDocumentEnvironment,
   resolveDlpScriptPath,
   resolveReadablePathForDlp,
   wrapReadFileToolWithDlp,
@@ -253,6 +254,156 @@ test("managed documents recover a missing readable copy across tools and registr
     assert.equal(resolve(resumed.sourcePath), resolve(source));
     assert.equal(resolve(resumed.readablePath), resolve(readable));
     assert.equal(existsSync(readable), true);
+  });
+});
+
+test("prepared document bindings rewrite relative paths, refs, and expose runtime-only script env", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "manual.pdf");
+    const readable = join(dir, "prepared", "manual.pdf");
+    mkdirSync(join(dir, "prepared"), { recursive: true });
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    const scriptPath = await createRegeneratingDlpScript(dir, readable);
+    const registry = createPreparedDocumentRegistry();
+    const options = {
+      cfg: { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry,
+    };
+    const prepared = await prepareLocalDocument(source, options);
+    let receivedArgs = null;
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async (args) => { receivedArgs = args; return "ok"; },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], { ...options, readConfig: () => options.cfg });
+
+    await defs.get("run_command").fn({ command: `python parse.py "${prepared.documentRef}"` });
+    assert.equal(receivedArgs.command, `python parse.py "${readable}"`);
+    assert.equal(receivedArgs.command.includes(source), false);
+    await defs.get("run_command").fn({ command: 'python parse.py "manual.pdf"' });
+    assert.equal(receivedArgs.command, `python parse.py "${readable}"`);
+
+    const environment = await preparedDocumentEnvironment(registry, prepared.documentRef, dir);
+    assert.equal(environment.VISIONOX_DOCUMENT_REF, prepared.documentRef);
+    assert.equal(resolve(environment.VISIONOX_DOCUMENT_READABLE_PATH), resolve(readable));
+    assert.equal(resolve(environment.VISIONOX_DOCUMENT_ROOT), resolve(join(dir, "prepared")));
+    assert.equal(resolve(environment.VISIONOX_WORKSPACE_ROOT), resolve(dir));
+    assert.equal(environment.VISIONOX_DOCUMENT_SOURCE_PATH, undefined);
+    assert.equal(environment.VISIONOX_DOCUMENT_PATH, undefined);
+  });
+});
+
+test("prepared document environment binds the document referenced by the command", async () => {
+  const registry = createPreparedDocumentRegistry();
+  const first = registry.register({
+    sourcePath: "C:\\docs\\first.pdf",
+    readablePath: "C:\\prepared\\first.pdf",
+    encrypted: true,
+  });
+  const second = registry.register({
+    sourcePath: "C:\\docs\\second.pdf",
+    readablePath: "C:\\prepared\\second.pdf",
+    encrypted: true,
+  });
+
+  const selected = await preparedDocumentEnvironment(
+    registry,
+    { command: `python parse.py "${first.documentRef}"` },
+    process.cwd(),
+  );
+  assert.equal(selected.VISIONOX_DOCUMENT_REF, first.documentRef);
+  assert.notEqual(selected.VISIONOX_DOCUMENT_REF, second.documentRef);
+
+  const ambiguous = await preparedDocumentEnvironment(
+    registry,
+    { command: "python parse.py" },
+    process.cwd(),
+  );
+  assert.deepEqual(ambiguous, {});
+});
+
+test("prepared document environment recreates a missing readable file before script execution", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "protected.pdf");
+    const readable = join(dir, "prepared", "protected.pdf");
+    mkdirSync(join(dir, "prepared"), { recursive: true });
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    const scriptPath = await createRegeneratingDlpScript(dir, readable);
+    const registry = createPreparedDocumentRegistry();
+    const cfg = { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } };
+    const env = { homeDir: dir, projectRoot: dir, rootDir: dir };
+    const prepared = await prepareLocalDocument(source, { cfg, env, logger: null, registry });
+    await rm(readable, { force: true });
+
+    const environment = await preparedDocumentEnvironment(
+      registry,
+      { command: "python parse.py", documentRef: prepared.documentRef },
+      dir,
+      { readConfig: () => cfg, env, logger: null },
+    );
+
+    assert.equal(existsSync(readable), true);
+    assert.equal(resolve(environment.VISIONOX_DOCUMENT_READABLE_PATH), resolve(readable));
+  });
+});
+
+test("shell binding keeps documentRef as a control field while rewriting command paths", async () => {
+  const registry = createPreparedDocumentRegistry();
+  const prepared = registry.register({
+    sourcePath: "C:\\docs\\manual.pdf",
+    readablePath: "C:\\prepared\\manual.pdf",
+    encrypted: true,
+  });
+  let receivedArgs = null;
+  const { defs, tools } = createToolRegistry([["run_command", {
+    name: "run_command",
+    fn: async (args) => { receivedArgs = args; return "ok"; },
+  }]]);
+  wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+    readConfig: () => ({ dlp: { mode: "off" } }),
+    env: { rootDir: process.cwd() },
+    registry,
+  });
+
+  await defs.get("run_command").fn({
+    command: `python parse.py "${prepared.documentRef}"`,
+    documentRef: prepared.documentRef,
+  });
+
+  assert.equal(receivedArgs.documentRef, prepared.documentRef);
+  assert.match(receivedArgs.command, /C:\\prepared\\manual\.pdf/);
+});
+
+test("shell execution blocks generated scripts that hard-code a prepared document path", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "manual.pdf");
+    const readable = join(dir, "manual.decrypted.pdf");
+    const script = join(dir, "parse.py");
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    await writeFile(readable, Buffer.from("%PDF-1.7"));
+    await writeFile(script, `open(${JSON.stringify(source)}, "rb")`, "utf8");
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: source, readablePath: readable, encrypted: true });
+    let called = false;
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async () => { called = true; return "unexpected"; },
+    }]]);
+    const cfg = { dlp: { mode: "on" } };
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => cfg,
+      env: { rootDir: dir },
+      registry,
+    });
+    const result = JSON.parse(await defs.get("run_command").fn({ command: `python "${script}"` }));
+    assert.equal(result.code, "UNBOUND_DOCUMENT_SCRIPT_INPUT");
+    assert.equal(result.documentRef, registry.latest().documentRef);
+    assert.equal(called, false);
   });
 });
 
