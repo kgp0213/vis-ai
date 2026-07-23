@@ -76,6 +76,7 @@ npm run bundle:nsis
 - `npm run release:check` 的 Rust 测试产物写入系统临时目录并自动删除，不会生成或使用项目内的 `target/debug`。
 - 实际交付 exe 或 NSIS 时填写 [发布验收清单](RELEASE_CHECKLIST.md)，记录 commit、版本、功能抽查和产物 SHA-256。
 - `scripts/restore-visionox-pkg.js` 是维护/重拉上游 reasonix 包的工具，不是常规构建步骤。普通 `npm run restore:pkg` 已禁用；必须在备份并准备重新迁移补丁后，才使用 `npm run restore:pkg:danger -- --force`。
+- `scripts/bundle-source-ownership.json` 登记当前直接维护的上游 bundle、负责人边界和验证命令；修改 bundle 前先更新对应的可读说明与回归测试，并通过 `npm run check:bundle-patches`。
 - Node.js、OfficeCLI 和 DWS 都有公开上游来源。普通构建不联网；缺少已批准的本地二进制时应停止并说明。只有用户明确授权联网更新后，才可运行危险维护入口，下载到系统临时目录并通过 manifest 校验后更新源码资源。
 
 ---

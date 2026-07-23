@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import {
   buildMessageRiskPrompt,
   classifyUserSendIntent,
+  consumeSendAuthorization,
+  createSendAuthorization,
   decideMessageSendPolicy,
+  inspectSendAuthorization,
   normalizeMessageRiskReview,
 } from "./message-send-policy.mjs";
 
@@ -29,26 +32,53 @@ test("safe routine messages send directly for explicit chat or scheduled instruc
 
   const implicit = await decideMessageSendPolicy({ messageType: "text", text: "收到" }, { source: "chat", userPrompt: "帮我看看张三的消息" });
   assert.equal(implicit.confirm, true);
-  const scheduled = await decideMessageSendPolicy({ messageType: "text", text: "收到" }, { source: "scheduled-prompt", userPrompt: "每天九点给张三发送：收到" });
+  const scheduledAuthorization = createSendAuthorization({ operationId: "scheduled-op-1", source: "scheduled-prompt", userPrompt: "每天九点给张三发送：收到", scheduledAuthorization: true });
+  const scheduled = await decideMessageSendPolicy({ messageType: "text", text: "收到", targetType: "user", targetId: "user-1" }, { source: "scheduled-prompt", operationId: "scheduled-op-1", sendAuthorization: scheduledAuthorization, userPrompt: "每天九点给张三发送：收到" });
   assert.equal(scheduled.confirm, false);
   const unrelatedSchedule = await decideMessageSendPolicy({ messageType: "text", text: "收到" }, { source: "scheduled-prompt", userPrompt: "每天九点整理未读消息" });
   assert.equal(unrelatedSchedule.confirm, true);
+  const unstructuredScheduled = await decideMessageSendPolicy({ messageType: "text", text: "收到" }, { source: "scheduled-prompt", userPrompt: "每天九点给张三发送：收到", scheduledAuthorization: true });
+  assert.equal(unstructuredScheduled.confirm, true);
   const unsupportedSource = await decideMessageSendPolicy({ messageType: "text", text: "收到" }, { source: "report", userPrompt: "给张三发送：收到" });
   assert.equal(unsupportedSource.confirm, true);
 });
 
-test("structured scheduled authorization does not depend on prompt wording", async () => {
+test("structured scheduled authorization does not depend on runtime prompt wording", async () => {
+  const authorization = createSendAuthorization({ operationId: "scheduled-op-2", source: "scheduled-prompt", userPrompt: "每天发送运行通知", scheduledAuthorization: true });
   const scheduled = await decideMessageSendPolicy(
     { messageType: "text", text: "今日例行通知：系统运行正常" },
     {
       source: "scheduled-prompt",
       userPrompt: "整理并执行任务",
-      scheduledAuthorization: true,
+      operationId: "scheduled-op-2",
+      sendAuthorization: authorization,
       review: async () => ({ level: "safe", confidence: 0.99, categories: ["routine"], reason: "常规通知" }),
     },
   );
   assert.equal(scheduled.confirm, false);
   assert.equal(scheduled.intent.structured, true);
+});
+
+test("ordinary scheduled analysis is not treated as send authorization", async () => {
+  const result = await decideMessageSendPolicy(
+    { messageType: "text", text: "分析结果" },
+    {
+      source: "scheduled-prompt",
+      userPrompt: "每天整理未读消息并生成摘要",
+      review: async () => ({ level: "safe", confidence: 0.99, categories: ["routine"], reason: "摘要" }),
+    },
+  );
+  assert.equal(result.confirm, true);
+  assert.equal(result.intent.explicit, false);
+});
+
+test("an active operation without structured authorization fails closed", async () => {
+  const result = await decideMessageSendPolicy(
+    { messageType: "text", text: "收到" },
+    { source: "chat", operationId: "op-missing-auth", userPrompt: "给张三发送：收到", requireStructuredAuthorization: true },
+  );
+  assert.equal(result.confirm, true);
+  assert.match(result.reason, /结构化发送授权/);
 });
 
 test("direct authorization bypasses important review but never harmful or unknown review", async () => {
@@ -65,13 +95,85 @@ test("direct authorization bypasses important review but never harmful or unknow
   assert.equal(failed.level, "unknown");
 });
 
-test("local harmful rules override direct-send requests and attachments remain review-required", async () => {
+test("explicit chat sends do not require a second confirmation for important text", async () => {
+  const important = await decideMessageSendPolicy(
+    { messageType: "text", text: "项目进度更新：预计周五完成" },
+    {
+      source: "chat",
+      userPrompt: "给项目群发送项目进度更新",
+      review: async () => ({ level: "important", confidence: 0.8, categories: ["deadline"], reason: "包含时间承诺" }),
+    },
+  );
+  assert.equal(important.confirm, false);
+  assert.equal(important.intent.explicit, true);
+  assert.equal(important.intent.direct, false);
+});
+
+test("safe review with moderate confidence is allowed after explicit authorization", async () => {
+  const result = await decideMessageSendPolicy(
+    { messageType: "text", text: "今天下午三点开会，请准时参加" },
+    {
+      source: "chat",
+      userPrompt: "通知项目群今天下午三点开会",
+      review: async () => ({ level: "safe", confidence: 0.6, categories: ["coordination"], reason: "普通工作通知" }),
+    },
+  );
+  assert.equal(result.confirm, false);
+  assert.equal(result.level, "safe");
+});
+
+test("local harmful rules override direct-send requests and unauthorized attachments remain review-required", async () => {
   const harmful = await decideMessageSendPolicy({ messageType: "text", text: "API key: sk-abcdefghijklmnop1234" }, { source: "chat", userPrompt: "直接给他发送，不用确认", review: async () => ({ level: "safe", confidence: 1 }) });
   assert.equal(harmful.confirm, true);
   assert.equal(harmful.level, "harmful");
-  const attachment = await decideMessageSendPolicy({ messageType: "file" }, { source: "chat", userPrompt: "直接发送文件，不用确认" });
+  const attachment = await decideMessageSendPolicy({ messageType: "file" }, { source: "chat", userPrompt: "查看这个文件" });
   assert.equal(attachment.confirm, true);
   assert.equal(attachment.level, "unknown");
+});
+
+test("explicit attachment sends do not require a duplicate confirmation", async () => {
+  const attachment = await decideMessageSendPolicy(
+    { messageType: "file", text: "" },
+    { source: "chat", userPrompt: "把这个文件直接发送给项目群" },
+  );
+  assert.equal(attachment.confirm, false);
+  assert.equal(attachment.level, "important");
+  assert.deepEqual(attachment.categories, ["user-authorized-attachment"]);
+});
+
+test("structured send authorization is operation-scoped, target-bound, and consumable", async () => {
+  const authorization = createSendAuthorization({ operationId: "op-1", source: "chat", userPrompt: "给项目群发送文件和通知" });
+  assert.equal(authorization.version, 1);
+  assert.equal(authorization.maxSends, 1);
+  const first = await decideMessageSendPolicy(
+    { messageType: "file", targetType: "group", targetId: "group-1", targetLabel: "项目群" },
+    { source: "chat", operationId: "op-1", sendAuthorization: authorization, review: async () => ({ level: "safe", confidence: 1 }) },
+  );
+  assert.equal(first.confirm, false);
+  assert.equal(first.authorization.valid, true);
+  assert.deepEqual(consumeSendAuthorization(authorization, { operationId: "op-1", source: "chat", messageType: "file", targetType: "group", targetId: "group-1", attachmentKey: "file-a" }), { ok: true, remaining: 0 });
+  assert.equal(inspectSendAuthorization(authorization, { operationId: "op-1", source: "chat", messageType: "text", targetType: "group", targetId: "group-2" }).valid, false);
+  assert.equal(inspectSendAuthorization(authorization, { operationId: "op-2", source: "chat", messageType: "text", targetType: "group", targetId: "group-1" }).valid, false);
+});
+
+test("structured authorization refuses exhausted sends and unsupported attachments", () => {
+  const authorization = createSendAuthorization({ operationId: "op-2", source: "chat", userPrompt: "给张三发送消息", maxSends: 1 });
+  assert.deepEqual(consumeSendAuthorization(authorization, { operationId: "op-2", source: "chat", messageType: "text", targetType: "user", targetId: "u-1" }), { ok: true, remaining: 0 });
+  assert.equal(inspectSendAuthorization(authorization, { operationId: "op-2", source: "chat", messageType: "text", targetType: "user", targetId: "u-1" }).reason, "本任务的发送次数授权已用尽");
+  const attachment = createSendAuthorization({ operationId: "op-3", source: "chat", userPrompt: "给张三发送消息" });
+  attachment.attachmentTypes = ["file"];
+  assert.equal(inspectSendAuthorization(attachment, { operationId: "op-3", source: "chat", messageType: "video", targetType: "user", targetId: "u-1" }).valid, false);
+});
+
+test("structured authorization does not grant arbitrary attachments and binds the first file", () => {
+  const textOnly = createSendAuthorization({ operationId: "op-4", source: "chat", userPrompt: "给张三发送消息" });
+  assert.equal(textOnly.allowAttachments, false);
+  assert.equal(inspectSendAuthorization(textOnly, { operationId: "op-4", source: "chat", messageType: "file", targetType: "user", targetId: "u-1", attachmentKey: "file-a" }).valid, false);
+  const attachment = createSendAuthorization({ operationId: "op-5", source: "chat", userPrompt: "给张三发送这个文件" });
+  assert.deepEqual(consumeSendAuthorization(attachment, { operationId: "op-5", source: "chat", messageType: "file", targetType: "user", targetId: "u-1", attachmentKey: "file-a" }), { ok: true, remaining: 0 });
+  assert.equal(inspectSendAuthorization(attachment, { operationId: "op-5", source: "chat", messageType: "file", targetType: "user", targetId: "u-1", attachmentKey: "file-b" }).valid, false);
+  const negated = createSendAuthorization({ operationId: "op-6", source: "chat", userPrompt: "给张三发送消息，但不要发送附件" });
+  assert.equal(negated, null);
 });
 
 test("risk review prompt treats message as data and normalization is strict", () => {

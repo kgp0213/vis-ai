@@ -69,6 +69,8 @@ function publicPreparedDocument(entry) {
     encrypted: entry.encrypted,
     sourceSize: entry.sourceSize,
     sourceMtimeMs: entry.sourceMtimeMs,
+    sourceRevision: entry.sourceRevision,
+    lastUsedAt: entry.lastUsedAt,
     updatedAt: entry.updatedAt,
   };
 }
@@ -108,6 +110,10 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
       encrypted: value.encrypted === true,
       sourceSize: stat?.size ?? (Number.isFinite(value.sourceSize) ? Number(value.sourceSize) : null),
       sourceMtimeMs: stat?.mtimeMs ?? (Number.isFinite(value.sourceMtimeMs) ? Number(value.sourceMtimeMs) : null),
+      sourceRevision: sourceRevision(sourcePath, stat, value.sourceRevision),
+      lastUsedAt: typeof value.lastUsedAt === "string" && value.lastUsedAt.trim()
+        ? value.lastUsedAt
+        : previous?.lastUsedAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     byId.set(documentId, entry);
@@ -142,6 +148,24 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     return entries.length > 0 ? entries.at(-1) : null;
   }
 
+  function touch(value, { notifyChange = true, minIntervalMs = 15_000 } = {}) {
+    const raw = typeof value === "object" && value
+      ? String(value.documentRef ?? value.documentId ?? value.path ?? "").trim()
+      : String(value ?? "").trim();
+    const unquoted = raw.replace(/^['"]|['"]$/g, "");
+    const id = unquoted.startsWith(DOCUMENT_REF_PREFIX) ? unquoted.slice(DOCUMENT_REF_PREFIX.length) : unquoted;
+    const entry = byId.get(id) ?? byId.get(byPath.get(preparedPathKey(unquoted)));
+    if (!entry) return null;
+    const now = Date.now();
+    const previousMs = Date.parse(entry.lastUsedAt || "");
+    if (Number.isFinite(previousMs) && now - previousMs < Math.max(0, Number(minIntervalMs) || 0)) {
+      return publicPreparedDocument(entry);
+    }
+    entry.lastUsedAt = new Date(now).toISOString();
+    if (notifyChange) notify();
+    return publicPreparedDocument(entry);
+  }
+
   function restore(entries, { replace = true, notifyChange = false } = {}) {
     if (replace) {
       byId.clear();
@@ -164,7 +188,7 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     if (notifyChange) notify();
   }
 
-  return { register, find, latest, snapshot, restore, clear };
+  return { register, find, latest, touch, snapshot, restore, clear };
 }
 
 function collectPreparedDocumentInputStrings(value, output = [], seen = new Set()) {
@@ -477,6 +501,13 @@ export async function isDlpEncryptedFile(path) {
 
 function cacheKey(path, stat) {
   return `${path}|${stat.size}|${stat.mtimeMs}`;
+}
+
+function sourceRevision(path, stat, fallback = null) {
+  if (!stat && typeof fallback === "string" && /^[a-f0-9]{24}$/i.test(fallback)) return fallback.toLowerCase();
+  const size = Number.isFinite(stat?.size) ? stat.size : Number.isFinite(fallback?.size) ? fallback.size : "unknown";
+  const mtime = Number.isFinite(stat?.mtimeMs) ? stat.mtimeMs : Number.isFinite(fallback?.mtimeMs) ? fallback.mtimeMs : "unknown";
+  return createHash("sha256").update(`${preparedPathKey(path) ?? path}|${size}|${mtime}`).digest("hex").slice(0, 24);
 }
 
 async function pathExists(path) {
@@ -836,6 +867,7 @@ export async function prepareLocalDocuments(inputs, options = {}) {
 export async function resolveReadablePathForDlp(path, { cfg = {}, env = {}, logger = console, signal, registry } = {}) {
   if (signal?.aborted) throw new DOMException("document preparation cancelled", "AbortError");
   const managed = registry?.find(path);
+  if (managed) registry?.touch?.(managed.documentRef);
   const rawPath = String(path ?? "").trim();
   if (rawPath.startsWith(DOCUMENT_REF_PREFIX) && !managed) {
     throw new DlpDecryptError("文档引用已失效，无法恢复原始文件路径", { documentRef: rawPath });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { consumeSendAuthorization, createSendAuthorization } from "./message-send-policy.mjs";
 import { createVHomeSkillDraftStore } from "./vhome-skill-drafts.mjs";
 import { registerVHomeSkillTools } from "./vhome-skill-tools.mjs";
 
@@ -40,6 +41,7 @@ function setup(options = {}) {
     installSkillDir: (name, dir, options) => { installed.push({ name, dir, options }); return { installed: true, name }; },
     skillExists: () => false,
     getSendContext: () => ({ ...sendContext }),
+    consumeSendAuthorization: options.consumeSendAuthorization ?? ((authorization, request) => consumeSendAuthorization(authorization, request)),
     reviewMessageRisk: options.reviewMessageRisk ?? (async () => ({ level: "safe", confidence: 0.99, categories: ["routine"], reason: "普通工作消息" })),
   });
   return { root, specs, store, installed, writes, executions, sendContext };
@@ -94,7 +96,7 @@ test("dws_write sends safe explicit messages directly but confirms harmful conte
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 
-test("dws_write honors direct-send authorization for important content but not implicit sends", async () => {
+test("dws_write honors explicit authorization for important content but not implicit sends", async () => {
   const state = setup({
     sendContext: { userPrompt: "给测试联系人发送正式承诺" },
     reviewMessageRisk: async () => ({ level: "important", confidence: 0.98, categories: ["commitment"], reason: "包含正式承诺" }),
@@ -102,8 +104,9 @@ test("dws_write honors direct-send authorization for important content but not i
   const tool = state.specs.get("dws_write");
   const input = { action: "send_message", targetType: "user", targetId: "user-1", targetLabel: "测试联系人", text: "我承诺周五完成" };
   try {
-    const needsConfirmation = JSON.parse(await tool.fn(input, {}));
-    assert.equal(needsConfirmation.pendingConfirmation, true);
+    const explicit = JSON.parse(await tool.fn(input, {}));
+    assert.equal(explicit.sent, true);
+    assert.equal(explicit.confirmation, "not-required");
     state.sendContext.userPrompt = "直接发送这条承诺，不用确认";
     const direct = JSON.parse(await tool.fn(input, {}));
     assert.equal(direct.sent, true);
@@ -112,6 +115,59 @@ test("dws_write honors direct-send authorization for important content but not i
     state.sendContext.userPrompt = "查看测试联系人的资料";
     const implicit = JSON.parse(await tool.fn({ ...input, text: "普通工作更新" }, {}));
     assert.equal(implicit.pendingConfirmation, true);
+
+    state.sendContext.userPrompt = "把这个文件直接发送给测试联系人";
+    const attachmentPath = join(state.root, "attachment.txt");
+    writeFileSync(attachmentPath, "attachment", "utf8");
+    const attachment = JSON.parse(await tool.fn({
+      action: "send_message", targetType: "user", targetId: "user-1", targetLabel: "测试联系人",
+      messageType: "file", filePath: attachmentPath,
+    }, {}));
+    assert.equal(attachment.sent, true);
+    assert.equal(attachment.confirmation, "not-required");
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("dws_write consumes structured authorization and refuses a changed target after the first send", async () => {
+  const authorization = createSendAuthorization({ operationId: "operation-structured", source: "chat", userPrompt: "给测试联系人发送通知和附件" });
+  const state = setup({ sendContext: { operationId: "operation-structured", sendAuthorization: authorization, userPrompt: "不需要重复确认" } });
+  try {
+    const tool = state.specs.get("dws_write");
+    const input = { action: "send_message", targetType: "user", targetId: "user-1", targetLabel: "测试联系人", text: "通知一" };
+    const first = JSON.parse(await tool.fn(input, {}));
+    assert.equal(first.sent, true);
+    assert.equal(authorization.sendsUsed, 1);
+    const changedTarget = JSON.parse(await tool.fn({ ...input, targetId: "user-2", targetLabel: "另一个联系人", text: "通知二" }, {}));
+    assert.equal(changedTarget.pendingConfirmation, true);
+    assert.equal(state.writes.length, 1);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("dws_write stops after structured authorization send limit", async () => {
+  const authorization = createSendAuthorization({ operationId: "operation-limited", source: "chat", userPrompt: "给测试联系人发送通知", maxSends: 1 });
+  const state = setup({ sendContext: { operationId: "operation-limited", sendAuthorization: authorization, userPrompt: "明确发送" } });
+  try {
+    const tool = state.specs.get("dws_write");
+    const input = { action: "send_message", targetType: "user", targetId: "user-1", targetLabel: "测试联系人", text: "通知一" };
+    assert.equal(JSON.parse(await tool.fn(input, {})).sent, true);
+    const second = JSON.parse(await tool.fn({ ...input, text: "通知二" }, {}));
+    assert.equal(second.pendingConfirmation, true);
+    assert.equal(state.writes.length, 1);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("dws_write refuses a cancelled operation before calling DWS", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const authorization = createSendAuthorization({ operationId: "operation-cancelled", source: "chat", userPrompt: "给测试联系人发送通知" });
+  const state = setup({ sendContext: { operationId: "operation-cancelled", sendAuthorization: authorization, signal: controller.signal } });
+  try {
+    const result = JSON.parse(await state.specs.get("dws_write").fn({
+      action: "send_message", targetType: "user", targetId: "user-1", targetLabel: "测试联系人", text: "通知",
+    }, {}));
+    assert.equal(result.cancelled, true);
+    assert.equal(state.writes.length, 0);
+    assert.equal(authorization.sendsUsed, 0);
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 

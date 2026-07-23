@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "policy": "vendored bundle files are directly maintained until a reproducible source build is available",
+  "entries": [
+    {
+      "path": "src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js",
+      "owner": "dashboard",
+      "sourceOfTruth": "bundle",
+      "verification": "scripts/check-bundle-patches.js + scripts/ui-smoke.js"
+    },
+    {
+      "path": "src-tauri/resources/server/visionox-pkg/dashboard/app.css",
+      "owner": "dashboard",
+      "sourceOfTruth": "bundle",
+      "verification": "scripts/check-bundle-patches.js + scripts/ui-smoke.js"
+    },
+    {
+      "path": "src-tauri/resources/server/visionox-pkg/dist/index.js",
+      "owner": "agent-runtime",
+      "sourceOfTruth": "bundle",
+      "verification": "scripts/check-bundle-patches.js + npm test"
+    },
+    {
+      "path": "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
+      "owner": "agent-runtime",
+      "sourceOfTruth": "bundle",
+      "verification": "scripts/check-bundle-patches.js + npm test"
+    },
+    {
+      "path": "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js",
+      "owner": "dashboard-server",
+      "sourceOfTruth": "bundle",
+      "verification": "scripts/check-bundle-patches.js + npm test + scripts/ui-smoke.js"
+    }
+  ]
+}

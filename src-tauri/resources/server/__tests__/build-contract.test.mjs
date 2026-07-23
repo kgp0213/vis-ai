@@ -115,11 +115,15 @@ describe("release build contract", () => {
       writeFileSync(join(source, "active.test.mjs"), "throw new Error('not runtime');");
       writeFileSync(join(source, "document-markdown-workflow.mjs"), "retired");
       writeFileSync(join(source, "document-extractors.mjs"), "retired");
+      writeFileSync(join(source, "document-delivery.mjs"), "retired");
+      writeFileSync(join(source, "long-task-handoff.mjs"), "retired");
       const runtimeLib = prepareRuntimeLibResources(root, staging);
       assert.equal(existsSync(join(runtimeLib, "active.mjs")), true);
       assert.equal(existsSync(join(runtimeLib, "active.test.mjs")), false);
       assert.equal(existsSync(join(runtimeLib, "document-markdown-workflow.mjs")), false);
       assert.equal(existsSync(join(runtimeLib, "document-extractors.mjs")), false);
+      assert.equal(existsSync(join(runtimeLib, "document-delivery.mjs")), false);
+      assert.equal(existsSync(join(runtimeLib, "long-task-handoff.mjs")), false);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(staging, { recursive: true, force: true });

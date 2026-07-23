@@ -100,6 +100,32 @@ test("latestPreparedDocumentRef returns the newest prepared document of the requ
   assert.equal(latestPreparedDocumentRef(registry, "spreadsheet"), null);
 });
 
+test("prepared document metadata preserves a source revision and recent-use timestamp across restore", async () => {
+  await withTempDir(async (dir) => {
+    const source = join(dir, "source.pdf");
+    const readable = join(dir, "readable.pdf");
+    await writeFile(source, Buffer.from("%PDF-1.7 source"));
+    await writeFile(readable, Buffer.from("%PDF-1.7 readable"));
+    const registry = createPreparedDocumentRegistry();
+    const registered = registry.register({
+      sourcePath: source,
+      readablePath: readable,
+      encrypted: true,
+      lastUsedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.match(registered.sourceRevision, /^[a-f0-9]{24}$/);
+    assert.equal(registered.lastUsedAt, "2026-01-01T00:00:00.000Z");
+
+    const touched = registry.touch(registered.documentRef, { notifyChange: false, minIntervalMs: 0 });
+    assert.ok(Date.parse(touched.lastUsedAt) > Date.parse(registered.lastUsedAt));
+    const restored = createPreparedDocumentRegistry();
+    restored.restore(registry.snapshot());
+    const resumed = restored.find(registered.documentRef);
+    assert.equal(resumed.sourceRevision, registered.sourceRevision);
+    assert.equal(resumed.lastUsedAt, touched.lastUsedAt);
+  });
+});
+
 test("resolveDlpScriptPath returns null when configured script does not exist", () => {
   const script = resolveDlpScriptPath(
     { dlp: { scriptPath: "Z:\\missing\\visionox_file.py" } },
@@ -305,6 +331,31 @@ test("managed documents recover a missing readable copy across tools and registr
     assert.equal(resolve(resumed.sourcePath), resolve(source));
     assert.equal(resolve(resumed.readablePath), resolve(readable));
     assert.equal(existsSync(readable), true);
+  });
+});
+
+test("managed encrypted documents are re-prepared when the source revision changes", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "revisioned.pdf");
+    const readable = join(dir, "revisioned-readable.pdf");
+    const scriptPath = await createRegeneratingDlpScript(dir, readable);
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1]));
+    const registry = createPreparedDocumentRegistry();
+    const options = {
+      cfg: { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } },
+      env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+      logger: null,
+      registry,
+    };
+
+    const first = await prepareLocalDocument(source, options);
+    const second = await prepareLocalDocument(first.documentRef, options);
+    assert.equal(second.cached, true);
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3]));
+    const third = await prepareLocalDocument(first.documentRef, options);
+    assert.equal(third.cached, false);
+    assert.notEqual(third.documentRef, undefined);
   });
 });
 

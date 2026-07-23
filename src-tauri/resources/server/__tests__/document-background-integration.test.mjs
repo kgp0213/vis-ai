@@ -25,12 +25,12 @@ async function request(method, path, body, ctx) {
   return { status, body: raw ? JSON.parse(raw) : null };
 }
 
-test("document background API supports string ids and lifecycle actions", async () => {
-  const id = "document:12345678-abcd-abcd-abcd-123456789012";
+test("background API treats string ids as generic tasks and requires explicit actions", async () => {
+  const id = "task:12345678-abcd-abcd-abcd-123456789012";
   const actions = [];
   const ctx = {
-    listBackgroundJobs: async () => [{ id, kind: "document", running: true, status: "running" }],
-    getBackgroundJob: async (value) => value === id ? { id, kind: "document" } : null,
+    listBackgroundJobs: async () => [{ id, kind: "task", running: true, status: "running" }],
+    getBackgroundJob: async (value) => value === id ? { id, kind: "task" } : null,
     controlBackgroundJob: async (value, action) => {
       actions.push([value, action]);
       return { ok: true, id: value, action };
@@ -40,7 +40,7 @@ test("document background API supports string ids and lifecycle actions", async 
 
   const listed = await request("GET", "/api/background-jobs", undefined, ctx);
   assert.equal(listed.status, 200);
-  assert.equal(listed.body.jobs[0].kind, "document");
+  assert.equal(listed.body.jobs[0].kind, "task");
   const detail = await request("GET", `/api/background-jobs/${encodeURIComponent(id)}`, undefined, ctx);
   assert.equal(detail.status, 200);
   for (const action of ["pause", "resume", "retry", "retry_delivery", "stop", "abandon"]) {
@@ -48,9 +48,8 @@ test("document background API supports string ids and lifecycle actions", async 
     assert.equal(response.status, 200);
   }
   const deleted = await request("DELETE", `/api/background-jobs/${encodeURIComponent(id)}`, undefined, ctx);
-  assert.equal(deleted.status, 200);
-  assert.equal(deleted.body.action, "delete");
-  assert.deepEqual(actions, [[id, "pause"], [id, "resume"], [id, "retry"], [id, "retry_delivery"], [id, "stop"], [id, "abandon"], [id, "delete"]]);
+  assert.equal(deleted.status, 405);
+  assert.deepEqual(actions, [[id, "pause"], [id, "resume"], [id, "retry"], [id, "retry_delivery"], [id, "stop"], [id, "abandon"]]);
 });
 
 test("background task list includes pending deliveries from a generic snapshot", async () => {

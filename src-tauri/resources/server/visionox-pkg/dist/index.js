@@ -4829,18 +4829,31 @@ function renameSession(oldName, newName) {
   const oldJsonl = sessionPath(oldName);
   const newJsonl = sessionPath(newName);
   if (!existsSync3(oldJsonl) || existsSync3(newJsonl)) return false;
-  renameSync(oldJsonl, newJsonl);
+  const pairs = [{ source: oldJsonl, target: newJsonl }];
   for (const ext of [".events.jsonl", ".meta.json", ".pending.json", ".plan.json"]) {
-    const oldP = oldJsonl.replace(/\.jsonl$/, ext);
-    const newP = newJsonl.replace(/\.jsonl$/, ext);
-    if (existsSync3(oldP)) {
+    const source = oldJsonl.replace(/\.jsonl$/, ext);
+    const target = newJsonl.replace(/\.jsonl$/, ext);
+    if (!existsSync3(source)) continue;
+    if (existsSync3(target)) return false;
+    pairs.push({ source, target });
+  }
+  const moved = [];
+  try {
+    for (const pair of pairs) {
+      renameSync(pair.source, pair.target);
+      moved.push(pair);
+    }
+    return true;
+  } catch {
+    for (const pair of moved.reverse()) {
       try {
-        renameSync(oldP, newP);
+        if (existsSync3(pair.target) && !existsSync3(pair.source)) renameSync(pair.target, pair.source);
       } catch {
+        // Preserve the original failure; callers will report the rename as unsuccessful.
       }
     }
+    return false;
   }
-  return true;
 }
 function deleteSession(name) {
   const path2 = sessionPath(name);

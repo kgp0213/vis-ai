@@ -32442,6 +32442,12 @@ function SessionsPanel({ userAvatar = null } = {}) {
   const [transcriptSearch, setTranscriptSearch] = d2("");
   const [transcriptSearchIndex, setTranscriptSearchIndex] = d2(0);
   const transcriptFeedRef = A2(null);
+  const detailRequestRef = A2(0);
+  const closeDetail = q2(() => {
+    detailRequestRef.current++;
+    setOpen(null);
+    setOpenLoading(false);
+  }, []);
   y2(() => {
     if (!trashConfirm) return;
     const onKeyDown = (event) => { if (event.key === "Escape" && !deleting) setTrashConfirm(null); };
@@ -32460,6 +32466,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setSelectedTrashIds((current) => new Set([...current].filter((id) => trashIds.has(id))));
   }, [data]);
   const view = q2(async (name) => {
+    const requestId = ++detailRequestRef.current;
     setInfo(null);
     setTranscriptSearch("");
     setTranscriptSearchIndex(0);
@@ -32467,6 +32474,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setOpenLoading(true);
     try {
       const detail = await api(`/sessions/${encodeURIComponent(name)}?limit=200`);
+      if (requestId !== detailRequestRef.current) return;
       setOpen({
         kind: "session",
         name,
@@ -32476,12 +32484,16 @@ function SessionsPanel({ userAvatar = null } = {}) {
         mode: detail.mode ?? null,
         modeLabel: detail.modeLabel ?? null,
         modeDescription: detail.modeDescription ?? "",
-        meta: detail.meta ?? {}
+        meta: detail.meta ?? {},
+        invalidRecords: detail.invalidRecords ?? 0,
+        invalidLines: detail.invalidLines ?? [],
+        integrityWarning: detail.integrityWarning ?? null
       });
     } catch (err) {
+      if (requestId !== detailRequestRef.current) return;
       setOpen({ kind: "session", name, messages: null, error: err.message });
     } finally {
-      setOpenLoading(false);
+      if (requestId === detailRequestRef.current) setOpenLoading(false);
     }
   }, []);
   const executeTrash = q2(async (names) => {
@@ -32496,7 +32508,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
         result.failedCount += part.failedCount || 0;
       }
       setSelectedNames(/* @__PURE__ */ new Set());
-      if (open && names.includes(open.name)) setOpen(null);
+      if (open && names.includes(open.name)) closeDetail();
       setInfo(`已移入回收站 ${result.movedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
       await refresh();
     } catch (err) {
@@ -32504,7 +32516,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     } finally {
       setDeleting(false);
     }
-  }, [open, refresh]);
+  }, [open, refresh, closeDetail]);
   const requestTrash = q2((names) => {
     if (names.length === 0) return;
     if (skipTrashConfirm) { void executeTrash(names); return; }
@@ -32543,18 +32555,21 @@ function SessionsPanel({ userAvatar = null } = {}) {
     });
   }, []);
   const viewTrash = q2(async (item) => {
+    const requestId = ++detailRequestRef.current;
     setInfo(null);
     setRestoreName(item.name);
     setOpen({ kind: "trash", id: item.id, name: item.name, messages: null });
     setOpenLoading(true);
     try {
       const detail = await api(`/sessions/trash/${encodeURIComponent(item.id)}?limit=200`);
+      if (requestId !== detailRequestRef.current) return;
       setOpen({ kind: "trash", ...detail, id: item.id, name: detail.name ?? item.name });
       setRestoreName(detail.name ?? item.name);
     } catch (err) {
+      if (requestId !== detailRequestRef.current) return;
       setOpen({ kind: "trash", id: item.id, name: item.name, messages: null, error: err.message });
     } finally {
-      setOpenLoading(false);
+      if (requestId === detailRequestRef.current) setOpenLoading(false);
     }
   }, []);
   const batchTrash = q2(async () => {
@@ -32568,14 +32583,14 @@ function SessionsPanel({ userAvatar = null } = {}) {
       await api(`/sessions/trash/${encodeURIComponent(id)}/restore`, { method: "POST", body: { newName } });
       setInfo("会话已从回收站恢复。");
       setSelectedTrashIds((current) => { const next = new Set(current); next.delete(id); return next; });
-      if (open?.kind === "trash" && open.id === id) setOpen(null);
+      if (open?.kind === "trash" && open.id === id) closeDetail();
       await refresh();
     } catch (err) {
       setInfo(err.message);
     } finally {
       setDeleting(false);
     }
-  }, [open, refresh]);
+  }, [open, refresh, closeDetail]);
   const batchRestoreTrash = q2(async () => {
     const ids = [...selectedTrashIds];
     if (ids.length === 0) return;
@@ -32589,12 +32604,12 @@ function SessionsPanel({ userAvatar = null } = {}) {
         result.failedCount += part.failedCount || 0;
       }
       setSelectedTrashIds(/* @__PURE__ */ new Set());
-      if (open?.kind === "trash" && ids.includes(open.id)) setOpen(null);
+      if (open?.kind === "trash" && ids.includes(open.id)) closeDetail();
       setInfo(`已恢复 ${result.restoredCount || 0} 个，失败 ${result.failedCount || 0} 个。名称冲突的会话可打开预览后改名恢复。`);
       await refresh();
     } catch (err) { setInfo(err.message); }
     finally { setDeleting(false); }
-  }, [selectedTrashIds, open, refresh]);
+  }, [selectedTrashIds, open, refresh, closeDetail]);
   const permanentlyDeleteTrash = q2(async (ids) => {
     if (ids.length === 0 || !confirm(`永久删除 ${ids.length} 个回收站会话？此操作无法撤销。`)) return;
     setDeleting(true);
@@ -32602,12 +32617,12 @@ function SessionsPanel({ userAvatar = null } = {}) {
     try {
       const result = await api("/sessions/trash/batch", { method: "DELETE", body: { ids } });
       setSelectedTrashIds(/* @__PURE__ */ new Set());
-      if (open?.kind === "trash" && ids.includes(open.id)) setOpen(null);
+      if (open?.kind === "trash" && ids.includes(open.id)) closeDetail();
       setInfo(`已永久删除 ${result.deletedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
       await refresh();
     } catch (err) { setInfo(err.message); }
     finally { setDeleting(false); }
-  }, [open, refresh]);
+  }, [open, refresh, closeDetail]);
   const saveTrashRetention = q2(async () => {
     const retentionDays = Math.max(1, Math.min(365, Number(retentionDraft) || 30));
     setDeleting(true);
@@ -32626,7 +32641,9 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setInfo(null);
     try {
       const res = await api(`/sessions/${encodeURIComponent(name)}/export`, { method: "POST", body: {} });
-      setInfo(t4("sessions.exported", { path: res.path || res.filename || name }));
+      setInfo(res.invalidRecords > 0
+        ? `${t4("sessions.exported", { path: res.path || res.filename || name })} ${res.integrityWarning || `已跳过 ${res.invalidRecords} 条无法解析的记录。`}`
+        : t4("sessions.exported", { path: res.path || res.filename || name }));
     } catch (err) {
       setInfo(t4("sessions.exportFailed", { error: err.message }));
     }
@@ -32643,6 +32660,9 @@ function SessionsPanel({ userAvatar = null } = {}) {
         messages: [...(detail.messages ?? []), ...(current.messages ?? [])],
         totalMessages: detail.totalMessages ?? current.totalMessages,
         hasMore: Boolean(detail.hasMore),
+        invalidRecords: detail.invalidRecords ?? current.invalidRecords ?? 0,
+        invalidLines: detail.invalidLines ?? current.invalidLines ?? [],
+        integrityWarning: detail.integrityWarning ?? current.integrityWarning ?? null,
         error: null
       } : current);
     } catch (err) {
@@ -32681,13 +32701,13 @@ function SessionsPanel({ userAvatar = null } = {}) {
       }
       await api("/submit", { method: "POST", body: { prompt: "", session: name } });
       appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "chat" } }));
-      setOpen(null);
+      closeDetail();
     } catch (err) {
       if (open) setOpen({ ...open, error: err.message });
     } finally {
       setResuming(false);
     }
-  }, [open]);
+  }, [open, closeDetail]);
   const [renaming, setRenaming] = d2(false);
   const [renameText, setRenameText] = d2("");
   const [renameBusy, setRenameBusy] = d2(false);
@@ -32762,8 +32782,8 @@ function SessionsPanel({ userAvatar = null } = {}) {
       ${info ? html4`<div class="card accent-brand session-page-feedback" role="status">${info}</div>` : null}
       <div class="sessions-list">
         <div class="session-list-tabs">
-          <button class=${listMode === "sessions" ? "active" : ""} onClick=${() => { setListMode("sessions"); setSelectionMode(false); setOpen(null); }}>会话 <span>${sessions.length}</span></button>
-          <button class=${listMode === "trash" ? "active" : ""} onClick=${() => { setListMode("trash"); setSelectionMode(false); setOpen(null); }}>回收站 <span>${trashItems.length}</span></button>
+          <button class=${listMode === "sessions" ? "active" : ""} onClick=${() => { setListMode("sessions"); setSelectionMode(false); closeDetail(); }}>会话 <span>${sessions.length}</span></button>
+          <button class=${listMode === "trash" ? "active" : ""} onClick=${() => { setListMode("trash"); setSelectionMode(false); closeDetail(); }}>回收站 <span>${trashItems.length}</span></button>
         </div>
         <div class="ssl-h">
           <input
@@ -32811,8 +32831,9 @@ function SessionsPanel({ userAvatar = null } = {}) {
         ${open == null ? html4`<div style="color:var(--fg-3);font-size:13px;text-align:center;padding:60px 20px">
                 ${t4("sessions.pickHint")}
               </div>` : open.kind === "trash" ? html4`
-                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">回收站预览 · ${fmtNum(open.totalMessages ?? open.messages?.length ?? 0)} 条消息</span><span class="actions"><button class="btn ghost" onClick=${() => setOpen(null)}>返回</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>永久删除</button></span></div>
+                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">回收站预览 · ${fmtNum(open.totalMessages ?? open.messages?.length ?? 0)} 条消息</span><span class="actions"><button class="btn ghost" onClick=${closeDetail}>返回</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>永久删除</button></span></div>
                 <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">确认内容后恢复</span></div><div class="card-b"><label>恢复后的会话名称</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>恢复会话</button></div><span>如果原名称已被使用，可以修改名称后恢复，不会覆盖现有会话。</span></div></div>
+                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>受影响行：${open.invalidLines.join(", ")}${open.invalidRecords > open.invalidLines.length ? " 等" : ""}</span>` : null}</div>` : null}
                 ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} userAvatar=${userAvatar} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
               ` : html4`
                 <div class="sessions-detail-h">
@@ -32838,7 +32859,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
                     <span class="actions">
                       <button class="btn ghost" onClick=${startRename} disabled=${renameBusy}>${t4("sessions.rename")}</button>
                       <button class="btn ghost" onClick=${() => exportSession(open.name)}>${t4("sessions.exportMarkdown")}</button>
-                      <button class="btn ghost" onClick=${() => setOpen(null)}>${t4("common.back")}</button>
+                      <button class="btn ghost" onClick=${closeDetail}>${t4("common.back")}</button>
                       <button class="btn ghost danger" disabled=${deleting} onClick=${() => remove(open.name)}>${deleting ? "..." : t4("common.delete")}</button>
                     </span>
                   `}
@@ -32854,6 +32875,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
                     </button>
                   </div>
                 </div>
+                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>受影响行：${open.invalidLines.join(", ")}${open.invalidRecords > open.invalidLines.length ? " 等" : ""}</span>` : null}</div>` : null}
                 ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`
                           <div class="chat-searchbar session-transcript-search">
                             <span class="chat-search-icon">⌕</span>

@@ -134,6 +134,7 @@ describe("Dashboard 回归护栏", () => {
     assert.deepEqual(submitted, { prompt: "", session: newName, images: null });
   });
 
+
   test("会话列表发现旧计数元数据后按 JSONL 重新计数并修复文件签名", () => {
     const name = "stale-message-count";
     const path = sessionPath(name);

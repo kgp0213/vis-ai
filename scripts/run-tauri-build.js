@@ -15,10 +15,12 @@ const RETIRED_RELEASE_RESOURCES = [
   "server/lib/foreground-task-supervisor.test.mjs",
 ];
 const RETIRED_RUNTIME_LIB_FILES = new Set([
+  "document-delivery.mjs",
   "document-markdown-workflow.mjs",
   "document-extractors.mjs",
   "document-intelligence.mjs",
   "document-output-reservation.mjs",
+  "long-task-handoff.mjs",
   "pdf-markdown-workflow.mjs",
   "pdf-text.mjs",
 ]);

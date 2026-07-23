@@ -378,12 +378,6 @@ async function handleBackgroundJobs(method, rest, body, ctx) {
   if (method === "DELETE" && rest.length === 1) {
     const rawId = decodeURIComponent(rest[0]);
     if (!rawId.trim()) return { status: 400, body: { error: "invalid background job id" } };
-    if (rawId.startsWith("document:")) {
-      if (!ctx.controlBackgroundJob) return { status: 503, body: { error: "document background job control is not available" } };
-      const result = await ctx.controlBackgroundJob(rawId, "delete", {});
-      ctx.audit?.({ ts: Date.now(), action: "background-job-delete-record", payload: { id: rawId } });
-      return { status: result?.ok === false ? 409 : 200, body: result };
-    }
     if (!/^[1-9]\d*$/.test(rawId)) return { status: 405, body: { error: "generic background jobs require an explicit POST action" } };
     const id = Number.parseInt(rawId, 10);
     if (!Number.isSafeInteger(id)) return { status: 400, body: { error: "invalid background job id" } };
@@ -3683,13 +3677,19 @@ function parseTranscript(path, maxBytes = 4 * 1024 * 1024) {
       if (lastNewline >= 0) raw = raw.slice(0, lastNewline + 1);
     }
     const out = [];
-    for (const line of raw.split(/\r?\n/)) {
+    let invalidRecords = 0;
+    const invalidLines = [];
+    for (const [index, line] of raw.split(/\r?\n/).entries()) {
       const msg = parseTranscriptRecord(line);
       if (msg) out.push(msg);
+      else if (line.trim()) {
+        invalidRecords++;
+        if (invalidLines.length < 20) invalidLines.push(index + 1);
+      }
     }
-    return out;
+    return { messages: out, invalidRecords, invalidLines };
   } catch {
-    return [];
+    return { messages: [], invalidRecords: 0, invalidLines: [] };
   } finally {
     if (fd !== void 0) {
       try {
@@ -3705,11 +3705,21 @@ async function readTranscriptPage(path, { limit = 200, offset = 0 } = {}) {
   const capacity = pageLimit + pageOffset;
   const ring = [];
   let totalMessages = 0;
+  let invalidRecords = 0;
+  const invalidLines = [];
   const input = createReadStream2(path, { encoding: "utf8" });
   const lines = createInterface2({ input, crlfDelay: Infinity });
+  let lineNumber = 0;
   for await (const line of lines) {
+    lineNumber++;
     const msg = parseTranscriptRecord(line);
-    if (!msg) continue;
+    if (!msg) {
+      if (line.trim()) {
+        invalidRecords++;
+        if (invalidLines.length < 20) invalidLines.push(lineNumber);
+      }
+      continue;
+    }
     totalMessages++;
     ring.push(msg);
     if (ring.length > capacity) ring.shift();
@@ -3723,7 +3733,10 @@ async function readTranscriptPage(path, { limit = 200, offset = 0 } = {}) {
     offset: pageOffset,
     limit: pageLimit,
     startIndex: Math.max(0, totalMessages - pageOffset - messages.length),
-    hasMore: totalMessages > pageOffset + messages.length
+    hasMore: totalMessages > pageOffset + messages.length,
+    invalidRecords,
+    invalidLines,
+    integrityWarning: invalidRecords > 0 ? `会话中有 ${invalidRecords} 条记录无法解析，当前内容可能不完整。` : null
   };
 }
 
@@ -3747,13 +3760,27 @@ async function writeTranscriptMarkdown(path, filePath, name, meta = {}, messageC
     await writeChunk(`${header}\n`);
     const input = createReadStream2(path, { encoding: "utf8" });
     const lines = createInterface2({ input, crlfDelay: Infinity });
+    let invalidRecords = 0;
+    const invalidLines = [];
+    let lineNumber = 0;
     for await (const line of lines) {
+      lineNumber++;
       const msg = parseTranscriptRecord(line);
-      if (!msg) continue;
+      if (!msg) {
+        if (line.trim()) {
+          invalidRecords++;
+          if (invalidLines.length < 20) invalidLines.push(lineNumber);
+        }
+        continue;
+      }
       await writeChunk(`## ${msg.role || "unknown"}\n\n${String(msg.content || "").trim() || "(empty)"}\n\n`);
+    }
+    if (invalidRecords > 0) {
+      await writeChunk(`> ⚠️ 会话完整性警告：跳过 ${invalidRecords} 条无法解析的记录。${invalidLines.length ? ` 受影响行：${invalidLines.join(", ")}${invalidRecords > invalidLines.length ? " 等" : ""}` : ""}\n\n`);
     }
     output.end();
     await once2(output, "finish");
+    return { invalidRecords, invalidLines };
   } catch (err) {
     output.destroy();
     throw err;
@@ -3872,8 +3899,19 @@ async function handleSessions(method, rest, _body, _ctx, query = new URLSearchPa
     const filePath = join4(dir, safeName);
     try {
       mkdirSync8(dir, { recursive: true });
-      await writeTranscriptMarkdown(path, filePath, name2, meta, session?.messageCount ?? null);
-      return { status: 200, body: { path: filePath, filename: safeName } };
+      const integrity = await writeTranscriptMarkdown(path, filePath, name2, meta, session?.messageCount ?? null);
+      return {
+        status: 200,
+        body: {
+          path: filePath,
+          filename: safeName,
+          invalidRecords: integrity?.invalidRecords ?? 0,
+          invalidLines: integrity?.invalidLines ?? [],
+          integrityWarning: integrity?.invalidRecords > 0
+            ? `导出时跳过 ${integrity.invalidRecords} 条无法解析的记录。`
+            : null
+        }
+      };
     } catch (err) {
       return { status: 500, body: { error: err.message } };
     }
@@ -3914,7 +3952,8 @@ async function handleSessions(method, rest, _body, _ctx, query = new URLSearchPa
           retentionDays: _ctx.getSessionTrashRetentionDays?.() ?? 30
         },
         sessions: sessions.map((s) => {
-          const previewMessages = parseTranscript(s.path, 128 * 1024);
+          const preview = parseTranscript(s.path, 128 * 1024);
+          const previewMessages = preview.messages;
           return {
             name: s.name,
             path: s.path,
@@ -3924,6 +3963,9 @@ async function handleSessions(method, rest, _body, _ctx, query = new URLSearchPa
             meta: s.meta ?? {},
             summary: summarizeTranscript(previewMessages),
             searchText: searchTextForTranscript(previewMessages, s.meta ?? {}),
+            invalidRecords: preview.invalidRecords,
+            invalidLines: preview.invalidLines,
+            integrityWarning: preview.invalidRecords > 0 ? `会话预览发现 ${preview.invalidRecords} 条无法解析的记录，详情可能不完整。` : null,
             ...sessionModeInfo(s.meta)
           };
         })
@@ -3953,6 +3995,9 @@ async function handleSessions(method, rest, _body, _ctx, query = new URLSearchPa
       limit: page.limit,
       startIndex: page.startIndex,
       hasMore: page.hasMore,
+      invalidRecords: page.invalidRecords,
+      invalidLines: page.invalidLines,
+      integrityWarning: page.integrityWarning,
       meta,
       ...sessionModeInfo(meta)
     }

@@ -98,7 +98,7 @@ const { createScheduleReportStore } = await importEarly("./lib/schedule-report-s
 const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, normalizeScheduledKnowledgeReview } = await importEarly("./lib/scheduled-knowledge-store.mjs");
 const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
 const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
-const { buildMessageRiskPrompt, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
+const { buildMessageRiskPrompt, classifyUserSendIntent, consumeSendAuthorization, createSendAuthorization, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
 const { requestModelJson: requestTaskModelJson, requestModelText: requestTaskModelText } = await importEarly("./lib/model-task-request.mjs");
 const { formatToolRepairNotice } = await importEarly("./lib/tool-repair-notice.mjs");
 const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs");
@@ -110,6 +110,8 @@ const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly(".
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
+const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
+const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
 const { modelConfigFingerprint } = await importEarly("./lib/document-model-routing.mjs");
@@ -255,6 +257,9 @@ let activeMessageSendContext = {
   source: "idle",
   userPrompt: "",
   operationId: null,
+  sendAuthorization: null,
+  signal: null,
+  scheduledAuthorization: false,
   autoHandoff: false,
   conversationScope: "none",
 };
@@ -1984,6 +1989,7 @@ registerVHomeSkillTools(tools, {
   isBootstrapSkill: (name) => existsSync(resolve(bootstrapSkillsRoot, name, "SKILL.md")),
   skillExists: (name) => existsSync(resolve(skillsRoot, name, "SKILL.md")),
   getSendContext: () => ({ ...activeMessageSendContext }),
+  consumeSendAuthorization: (authorization, request) => consumeSendAuthorization(authorization, request),
   reviewMessageRisk: async (message, { signal } = {}) => {
     if (!client) return { level: "unknown", confidence: 0, categories: ["model-unavailable"], reason: "风险审查模型不可用" };
     const modelConfig = effectiveModelConfig(config);
@@ -6299,6 +6305,7 @@ async function triggerSchedule(id, { manual = false, catchUp = false, fromQueue 
       skillInvocation: scheduledSkill?.skillInvocation ?? null,
       disableSemanticRetrieval: Boolean(scheduledSkill),
       sendAuthorizationPrompt: scheduledSkill?.skillInvocation?.task ?? task.prompt,
+      scheduledSendAuthorization: classifyUserSendIntent(scheduledSkill?.skillInvocation?.task ?? task.prompt).explicit,
       signal: runController.signal,
       onComplete: (done) => {
         const currentTask = schedules.find((item) => item.id === task.id) ?? task;
@@ -6487,6 +6494,7 @@ function publicActiveOperation(operation = activeOperation) {
     state: operation.state,
     startedAt: operation.startedAt,
     stopRequestedAt: operation.stopRequestedAt ?? null,
+    progress: operation.progress ?? null,
   };
 }
 
@@ -6501,6 +6509,7 @@ function beginActiveOperation(kind) {
     state: "running",
     startedAt: new Date().toISOString(),
     stopRequestedAt: null,
+    progress: null,
     controller: new AbortController(),
   };
   activeOperation = operation;
@@ -6688,6 +6697,8 @@ function clearMessageSendContext(operation) {
       source: "idle",
       userPrompt: "",
       operationId: null,
+      sendAuthorization: null,
+      signal: null,
       autoHandoff: false,
       conversationScope: "none",
       scheduledAuthorization: false,
@@ -8334,8 +8345,21 @@ ${modeList}
         : operation.kind === "scheduled-prompt"
           ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
           : "",
-      scheduledAuthorization: operation.kind === "scheduled-prompt",
+      scheduledAuthorization: operation.kind === "scheduled-prompt" && opts.scheduledSendAuthorization === true,
       operationId: operation.id,
+      sendAuthorization: createSendAuthorization({
+        operationId: operation.id,
+        source: operation.kind,
+        userPrompt: opts.internalHandoff === true
+          ? String(opts.originalUserPrompt || text || "").slice(0, 12_000)
+          : operation.kind === "chat"
+          ? String(text ?? "").slice(0, 12_000)
+          : operation.kind === "scheduled-prompt"
+            ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
+            : "",
+        scheduledAuthorization: operation.kind === "scheduled-prompt" && opts.scheduledSendAuthorization === true,
+      }),
+      signal: operation.controller.signal,
       autoHandoff: opts.isolated !== true && opts.internalHandoff !== true,
       conversationScope: opts.isolated === true ? "isolated" : opts.internalHandoff === true ? "internal" : "chat",
     };
@@ -8359,9 +8383,26 @@ ${modeList}
     let manualSkillInput = null;
     let manualSkillTask = null;
     let promptIsolation = null;
+    let resumeSessionFile = null;
+    let resumeSessionRaw = null;
     try {
       // ── Sync workspace if changed ─────────────────────────────
       await ctx.syncWorkspace({ applyPending: text.trim().toLowerCase() === "/new" || Boolean(sessionName) });
+
+      // Validate and read a requested session before archiving the current
+      // conversation. A stale session-page request must not finalize a live
+      // conversation that cannot actually be resumed.
+      if (sessionName && loop) {
+        if (!isValidSessionName(sessionName)) {
+          return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only letters, numbers, Chinese characters, underscore, dot, or hyphen.` };
+        }
+        resumeSessionFile = sessionJsonlPath(sessionName);
+        try {
+          resumeSessionRaw = await readFile(resumeSessionFile, "utf8");
+        } catch (err) {
+          return { accepted: false, reason: `Failed to load session: ${err.message}` };
+        }
+      }
 
       // ── Session switch: archive current active session first ───
       if (sessionName && loop) {
@@ -8370,14 +8411,10 @@ ${modeList}
 
       // ── Session resume: load historical messages ──────────────
       if (sessionName && loop) {
-        // P2-7: validate sessionName to prevent path traversal
-        if (!isValidSessionName(sessionName)) {
-          return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only letters, numbers, Chinese characters, underscore, dot, or hyphen.` };
-        }
         clearSessionMemories();
         preparedDocumentRegistry.clear({ notifyChange: false });
         try {
-          const sessionFile = sessionJsonlPath(sessionName);
+          const sessionFile = resumeSessionFile || sessionJsonlPath(sessionName);
           const sessionMeta = readSessionMeta(sessionName);
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
@@ -8389,7 +8426,7 @@ ${modeList}
           preparedDocumentRegistry.restore(sessionMeta.preparedDocuments, { replace: true, notifyChange: false });
           const modeRestore = applyModeForSessionMeta(sessionMeta);
           if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
-          const raw = await readFile(sessionFile, "utf8");
+          const raw = resumeSessionRaw ?? await readFile(sessionFile, "utf8");
           const parsed = parseActiveSessionJsonl(raw);
           const entries = parsed.entries;
           const modelEntries = activeEntriesForModel(entries);
@@ -8933,6 +8970,16 @@ ${modeList}
         let contextRecoveryHandle = null;
         let isolationRestoreError = null;
         let executionStarted = false;
+        const loopTelemetry = createLoopTelemetry({ startedAt: turnStartedAt });
+        const turnReceipt = createTurnReceipt({ turnId: assistantId, requestId, startedAt: turnStartedAt });
+        for (const binding of preparedDocumentRegistry.snapshot()) {
+          turnReceipt.recordDocumentBinding({
+            documentRef: binding.documentRef,
+            sourcePath: binding.sourcePath,
+            readablePath: binding.readablePath,
+            verified: Boolean(binding.readablePath && existsSync(binding.readablePath)),
+          });
+        }
         let taskWarnings = [];
         let taskState = null;
         let artifactFiles = [];
@@ -8943,6 +8990,12 @@ ${modeList}
           : detectArtifactRequest(text);
         const planningOnlyRequest = isPlanOnlyRequest(text);
         const requestedOutputPaths = artifactRequest.required ? requestedOutputArtifactPaths(text) : [];
+        const artifactBaselines = new Map();
+        for (const requestedPath of requestedOutputPaths) {
+          const absolute = rememberGeneratedArtifactPath(requestedPath);
+          const baseline = absolute ? generatedArtifactFileInfo(absolute) : null;
+          if (absolute) artifactBaselines.set(process.platform === "win32" ? absolute.toLowerCase() : absolute, baseline);
+        }
         const requestedExistingOutputKeys = new Set();
         const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
         const turnArtifactPaths = new Set();
@@ -9004,9 +9057,12 @@ ${modeList}
             let budgetForcedSummary = false;
             let sawToolActivity = false;
             for await (const ev of loop.step(loopInput)) {
+              operation.progress = loopTelemetry.observe(ev);
+              if (ev.role === "tool_start") turnReceipt.observeToolStart(ev.toolName);
               if (ev.role === "tool") {
                 sawToolActivity = true;
                 const toolSucceeded = toolResultSucceeded(ev.content);
+                turnReceipt.observeTool({ name: ev.toolName, succeeded: toolSucceeded, result: ev.content });
                 if (ev.toolName === "submit_plan" && !toolSucceeded) pendingPlan = null;
                 const toolArgs = parseMaybeJsonObject(ev.toolArgs);
                 const mutatingTool = /^(?:write_file|append_file|edit_file|multi_edit|save_file|save_last_assistant_response|mark_step_complete)$/i.test(String(ev.toolName || ""))
@@ -9028,11 +9084,26 @@ ${modeList}
                   const isRequestedExistingOutput = requestedExistingOutputKeys.has(key);
                   if (!info || info.size <= 0 || (!isRequestedExistingOutput && info.mtimeMs < turnStartedAt - 2000)) continue;
                   if (turnArtifactPaths.has(key)) continue;
+                  const baseline = artifactBaselines.get(key);
+                  const changedThisTurn = !baseline || info.mtimeMs > baseline.mtimeMs || info.size !== baseline.size;
+                  const artifactRecord = {
+                    ...info,
+                    retention: "preserve",
+                    changedThisTurn,
+                    verification: changedThisTurn ? "current-turn-write" : "existing-file-verified",
+                  };
                   turnArtifactPaths.add(key);
-                  turnArtifactFiles.set(key, { ...info, retention: "preserve" });
-                  newFiles.push(info);
+                  turnArtifactFiles.set(key, artifactRecord);
+                  newFiles.push(artifactRecord);
                 }
                 if (newFiles.length > 0) {
+                  turnReceipt.recordArtifact({
+                    paths: newFiles.map((file) => file.path),
+                    files: newFiles,
+                    producer: ev.toolName || "unknown",
+                    verified: true,
+                    reason: "non-empty artifact created during the current turn",
+                  });
                   try {
                     contextInputTransactions.noteArtifactEvidence({
                       paths: newFiles.map((file) => file.path),
@@ -9073,6 +9144,7 @@ ${modeList}
               }
 
               const dashev = loopEventToDashboard(ev, assistantId);
+              if (dashev) dashev.progress = loopTelemetry.snapshot();
               // Scheduled turns are deliberately absent from the user's chat
               // transcript.  Keep their task/report status visible through the
               // scheduler, but do not leave a streaming assistant bubble in the
@@ -9109,10 +9181,16 @@ ${modeList}
 
             let contextInputStatus = null;
             try { contextInputStatus = contextInputTransactions.noteAssistantFinal(assistantText); } catch {}
+            turnReceipt.recordContext(contextInputStatus);
             const intervention = decideContextInputIntervention(contextInputStatus);
             let showContextIntervention = true;
             if (intervention) {
-              try { showContextIntervention = contextInputTransactions.claimIntervention(); } catch {}
+              try {
+                showContextIntervention = turnReceipt.claimIntervention(contextInputStatus)
+                  && contextInputTransactions.claimIntervention();
+              } catch {
+                showContextIntervention = false;
+              }
             }
             if (intervention && !showContextIntervention && !operation.controller.signal.aborted) {
               interventionPaused = true;
@@ -9129,6 +9207,7 @@ ${modeList}
               broadcastDashboardEvent({ kind: "warning", text: intervention.question });
               const verdict = await pauseGate.ask(intervention);
               if (verdict?.type === "text" && String(verdict.text || "").trim()) {
+                turnReceipt.resolveIntervention("custom");
                 const recovery = contextInputTransactions.resolveIntervention("continue");
                 if (recovery?.continueRejected) {
                   interventionPaused = true;
@@ -9143,6 +9222,7 @@ ${modeList}
               }
               const choice = verdict?.type === "pick" ? String(verdict.optionId || "") : "stop";
               interventionChoice = choice;
+              turnReceipt.resolveIntervention(choice);
               const recovery = contextInputTransactions.resolveIntervention(choice);
               if (recovery?.continueRejected) {
                 interventionPaused = true;
@@ -9251,6 +9331,13 @@ ${modeList}
             artifactIncomplete,
             warnings: taskWarnings,
           });
+          turnReceipt.complete({
+            ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
+            taskState,
+            artifactIncomplete,
+            interventionPaused,
+            continuationNeeded,
+          });
           if (taskWarnings.length > 0 && !interventionPaused && !artifactIncomplete) {
             broadcastDashboardEvent({
               kind: "warning",
@@ -9280,6 +9367,8 @@ ${modeList}
               artifactFiles,
               interventionChoice,
               recoveryHandle: contextRecoveryHandle,
+              progress: loopTelemetry.snapshot(),
+              receipt: turnReceipt.snapshot(),
             });
           }
         } catch (err) {
@@ -9385,6 +9474,8 @@ ${modeList}
               interventionChoice,
               recoveryHandle: contextRecoveryHandle,
               stats: loop?.stats?.summary?.() ?? null,
+              loopTelemetry: loopTelemetry.snapshot(),
+              receipt: turnReceipt.snapshot(),
             };
             let completionReceiptError = null;
             try {

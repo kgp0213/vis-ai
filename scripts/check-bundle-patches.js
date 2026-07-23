@@ -17,6 +17,10 @@ const root = join(__dirname, "..");
 
 const required = [
   {
+    file: "scripts/bundle-source-ownership.json",
+    markers: ["schemaVersion", "sourceOfTruth", "scripts/check-bundle-patches.js", "scripts/ui-smoke.js"],
+  },
+  {
     file: "src-tauri/resources/server/lib/provider-configuration.mjs",
     markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults", "validateEffortParams", "effortParams", "validateProviderUi", '"groupId"', '"recommendedFor"'],
   },
@@ -326,9 +330,9 @@ const required = [
       "request.expectedRevision",
       "request.requestId",
       "request.payload",
-      'rawId.startsWith("document:")',
       "generic background jobs require an explicit POST action",
-      "background-job-delete-record",
+      'method === "DELETE" && rest.length === 1',
+      "background-job-stop",
       "readTranscriptPage",
       "writeTranscriptMarkdown",
       "healthFilesystemSnapshot",
@@ -843,28 +847,8 @@ const required = [
     ],
   },
   {
-    file: "src-tauri/resources/server/lib/pdf-text.mjs",
-    markers: ["pdfjs-dist/legacy/build/pdf.mjs", "@napi-rs/canvas", "extractPdfText", "processPdfTextBatches", "renderPdfPageAsDataUrl", "visualDataUrl", "LARGE_PDF_PAGE_THRESHOLD", "requestedPageNumbers", "pageTexts", "likelyScanned", "PDF extraction cancelled"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/document-delivery.mjs",
-    markers: ["buildPdfDeliveryResult", "formatPageRange", "nextPageRange", "deliveryTruncated", "parsePageRange"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/long-task-handoff.mjs",
-    markers: ["createLongTaskHandoffCoordinator", "buildLongTaskHandoffPrompt", "longTaskNeedsAttention", "waiting_conversation", "needs_user"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/document-output-reservation.mjs",
-    markers: ["createDocumentOutputReservation", "canonicalDocumentOutputPath", "output-path-conflict", "releaseTerminal"],
-  },
-  {
     file: "src-tauri/resources/server/lib/artifact-delivery.mjs",
     markers: ["registerSaveLastAssistantResponseTool", "detectArtifactRequest", "artifactDeliveryRetryPrompt", "artifactMissingNotice", "requestedArtifactPaths", "toolResultSucceeded"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/pdf-markdown-workflow.mjs",
-    markers: ["registerPdfMarkdownWorkflowTool", "organize_pdf_to_markdown", "generatePdfSectionWithModel", "PdfModelTimeoutError", "resolveInput", "requiresUserChoice", "evaluateTechnicalRetention", "evaluatePdfPageCoverage", "buildPdfSectionReviewMessages", "parsePdfSectionReview", "quality-review", "quality-repair", "qualityPassed", "coverage-retry", "source-page: N"],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/references/large-document.md",
@@ -940,6 +924,19 @@ const required = [
 ];
 
 const failures = [];
+
+const ownershipManifest = JSON.parse(readFileSync(join(root, "scripts", "bundle-source-ownership.json"), "utf8"));
+if (ownershipManifest.schemaVersion !== 1 || !Array.isArray(ownershipManifest.entries)) {
+  failures.push("scripts/bundle-source-ownership.json: invalid ownership manifest");
+}
+for (const entry of ownershipManifest.entries ?? []) {
+  if (!entry?.path || entry.sourceOfTruth !== "bundle" || !entry.owner || !entry.verification) {
+    failures.push(`scripts/bundle-source-ownership.json: incomplete entry ${JSON.stringify(entry)}`);
+  }
+  if (entry?.path && !existsSync(join(root, entry.path))) {
+    failures.push(`scripts/bundle-source-ownership.json: missing owned bundle ${entry.path}`);
+  }
+}
 
 for (const check of required) {
   const abs = join(root, check.file);

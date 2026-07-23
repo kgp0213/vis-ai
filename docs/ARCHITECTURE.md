@@ -91,7 +91,7 @@ vis-ai/
 | 类型 | 路径 | 维护方式 |
 |------|------|----------|
 | 本项目源码 | `src-tauri/src/`、`src/`、`resources/server/launcher.mjs`、`resources/server/lib/`、`scripts/` | 直接修改，增加针对性测试，执行 `npm run quality:check` |
-| 带本地补丁的上游 bundle | `visionox-pkg/dashboard/dist/app.js`、`dashboard/app.css`、`visionox-pkg/dist/cli/*.js` | 目前按受保护源码管理，必须通过 `check:bundle-patches`，禁止被上游恢复脚本覆盖 |
+| 带本地补丁的上游 bundle | `visionox-pkg/dashboard/dist/app.js`、`dashboard/app.css`、`visionox-pkg/dist/cli/*.js` | 当前直接维护，所有权、事实来源和验证命令登记在 `scripts/bundle-source-ownership.json`，必须通过 `check:bundle-patches`，禁止被上游恢复脚本覆盖 |
 
 历史审计确认，上游包附带的 Dashboard source map 只对应较早的构建快照；当前 `app.js` 在该
 快照之后又积累了大量本地功能修改。因此仓库和 release 都不保留 source map，它不能作为
@@ -296,6 +296,10 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 SHA-256 缓存为 `pending -> materialized -> foldable`，并在压缩前提供背压与 `read_context_input` 引用，不负责
 规划或验收任务。缓存失败、连续无进展或结果不完整时，当前会话显示干预卡片。系统没有 PDF 自动续读、文档
 后台 Worker 或另一套复杂任务状态机。
+
+每个前台 turn 同时创建一个短生命周期执行收据（`lib/turn-receipt.mjs`）。它只汇总工具结果、上下文覆盖、
+产物证据、文档绑定和干预状态，不调度模型、不决定任务步骤。完成事件、干预卡片和 Dashboard 进度使用同一份
+收据快照；同一 turn 内只保留一个活动干预卡片，用户解决后才允许新的状态再次触发。
 
 模型 JSON 中的文档能力和预算是初始提示，不是任务能否完成的唯一真相。宿主按实际探测和本次任务观测到的
 超时、输出截断、上下文错误、非重试错误及多模态可用性做分批、缩小、熔断和备用候选切换；这些决策按能力与

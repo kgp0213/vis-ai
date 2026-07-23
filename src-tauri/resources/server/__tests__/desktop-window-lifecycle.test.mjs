@@ -59,12 +59,12 @@ test("startup loader is theme-aware and avoids the legacy spinner", () => {
   assert.doesNotMatch(loader, /id="diag-actions"|id="log-path"/);
 });
 
-test("startup loader scales text and native window without a diagnostics expansion", () => {
+test("startup loader keeps the approved layout and native window without a diagnostics expansion", () => {
   assert.match(desktop, /const SPLASH_WIDTH: f64 = 630\.0;/);
   assert.match(desktop, /const SPLASH_HEIGHT: f64 = 450\.0;/);
   assert.doesNotMatch(desktop, /SPLASH_ERROR_HEIGHT|fn resize_startup_window/);
-  assert.match(loader, /\.wrap\s*\{[\s\S]*?width:\s*min\(560px, calc\(100vw - 96px\)\)/);
-  assert.match(loader, /h1\s*\{[\s\S]*?font-size:\s*30px/);
-  assert.match(loader, /#status\s*\{[\s\S]*?font-size:\s*24px/);
+  assert.match(loader, /\.wrap\s*\{[\s\S]*?width:\s*min\(360px, calc\(100vw - 96px\)\)/);
+  assert.match(loader, /h1\s*\{[\s\S]*?font-size:\s*24px/);
+  assert.match(loader, /#status\s*\{[\s\S]*?font-size:\s*13px/);
   assert.doesNotMatch(loader, /resize_startup_window|get_log_info/);
 });
