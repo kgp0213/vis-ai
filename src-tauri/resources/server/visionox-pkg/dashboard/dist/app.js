@@ -26572,7 +26572,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "assistant_final") {
-        const replacedStreaming = Boolean(streamBufRef.current);
+        const completedStream = streamBufRef.current;
+        const replacedStreaming = Boolean(completedStream);
         cancelStreamingRaf();
         setStreaming(null);
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
@@ -26582,7 +26583,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             id: dash.id,
             role: "assistant",
             text: dash.text,
-            reasoning: dash.reasoning
+            reasoning: dash.reasoning ?? completedStream?.reasoning
           }
         ]);
         setTotalMessages((count) => count + 1);
@@ -27936,6 +27937,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     .find((provider) => provider.id === activeProviderId)
     ?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
   const activeModelEfforts = Array.isArray(activeModel?.efforts) ? activeModel.efforts : [];
+  const hasCompletedReasoning = messages.some((message) => Boolean(message.reasoning));
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -28286,6 +28288,14 @@ const [providerCaps, setProviderCaps] = d2(null);
               <div style="flex:1"></div>
               <button
                 type="button"
+                class="composer-chip reasoning-cleanup-chip"
+                aria-pressed=${reasoningCleaned}
+                disabled=${!reasoningCleaned && !hasCompletedReasoning}
+                onClick=${() => setReasoningCleaned((cleaned) => !cleaned)}
+                title=${reasoningCleaned ? "显示已完成消息的思考内容" : hasCompletedReasoning ? "刷新对话展示并隐藏已完成消息的思考内容" : "当前对话没有可刷新的思考内容"}
+              >${reasoningCleaned ? "显示思考" : "刷新"}</button>
+              <button
+                type="button"
                 class="image-upload-btn"
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
                 title="添加图片"
@@ -28294,14 +28304,6 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>
             </div>
             <div class="chat-input-actions">
-              <button
-                type="button"
-                class="chat-secondary-action"
-                aria-pressed=${reasoningCleaned}
-                disabled=${!reasoningCleaned && !messages.some((message) => Boolean(message.reasoning))}
-                onClick=${() => setReasoningCleaned((cleaned) => !cleaned)}
-                title=${reasoningCleaned ? "重新显示已完成消息的思考内容" : "隐藏已完成消息的思考内容，不刷新对话"}
-              >${reasoningCleaned ? "查看过程" : "整理对话"}</button>
               <button
                 class="primary"
                 onClick=${send}

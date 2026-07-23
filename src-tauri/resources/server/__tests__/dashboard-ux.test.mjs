@@ -69,8 +69,8 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatPanel, /reasoning: dash\.reasoning \?\? completedStream\?\.reasoning/);
     assert.match(composerControls, /class="composer-chip reasoning-cleanup-chip"/);
     assert.match(composerControls, /<div style="flex:1"><\/div>[\s\S]*?reasoning-cleanup-chip[\s\S]*?image-upload-btn/);
-    assert.match(composerControls, /整理思考/);
-    assert.doesNotMatch(inputActions, /reasoningCleaned|整理思考|reasoning-cleanup-chip/);
+    assert.match(composerControls, />\$\{reasoningCleaned \? "显示思考" : "刷新"\}<\/button>/);
+    assert.doesNotMatch(inputActions, /reasoningCleaned|显示思考|reasoning-cleanup-chip/);
     assert.match(chatPanel, /setReasoningCleaned\(\(cleaned\) => !cleaned\)/);
     assert.doesNotMatch(chatPanel, /整理对话[\s\S]{0,300}refetchCanonicalState/);
     assert.match(chatFeed, /reasoningHidden=\$\{reasoningCleaned && !Boolean\(streaming/);
