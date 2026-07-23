@@ -58,12 +58,19 @@ describe("Dashboard desktop UX", () => {
     const chatMessage = app.slice(app.indexOf("var ChatMessage ="), app.indexOf("function ModalCard("));
     const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
     const chatFeed = app.slice(app.indexOf("var ChatFeed ="), app.indexOf("var SideRail ="));
+    const composerControls = chatPanel.slice(chatPanel.indexOf('<div class="composer-controls">'), chatPanel.indexOf('<div class="chat-input-actions">'));
+    const inputActions = chatPanel.slice(chatPanel.indexOf('<div class="chat-input-actions">'), chatPanel.indexOf('<${InFlightRow}'));
 
     assert.match(chatMessage, /reasoningHidden = false/);
     assert.match(chatMessage, /reasoning-live-tail/);
     assert.match(chatMessage, /node\.scrollTop = node\.scrollHeight/);
     assert.match(chatPanel, /const \[reasoningCleaned, setReasoningCleaned\] = d2\(false\)/);
-    assert.match(chatPanel, /整理对话/);
+    assert.match(chatPanel, /const completedStream = streamBufRef\.current/);
+    assert.match(chatPanel, /reasoning: dash\.reasoning \?\? completedStream\?\.reasoning/);
+    assert.match(composerControls, /class="composer-chip reasoning-cleanup-chip"/);
+    assert.match(composerControls, /<div style="flex:1"><\/div>[\s\S]*?reasoning-cleanup-chip[\s\S]*?image-upload-btn/);
+    assert.match(composerControls, /整理思考/);
+    assert.doesNotMatch(inputActions, /reasoningCleaned|整理思考|reasoning-cleanup-chip/);
     assert.match(chatPanel, /setReasoningCleaned\(\(cleaned\) => !cleaned\)/);
     assert.doesNotMatch(chatPanel, /整理对话[\s\S]{0,300}refetchCanonicalState/);
     assert.match(chatFeed, /reasoningHidden=\$\{reasoningCleaned && !Boolean\(streaming/);
