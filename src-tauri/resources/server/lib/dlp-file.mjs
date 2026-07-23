@@ -336,7 +336,10 @@ function selectPreparedDocument(registry, input, rootDir) {
 export async function preparedDocumentEnvironment(registry, input = null, rootDir = process.cwd(), options = {}) {
   const entries = registry?.snapshot?.() ?? [];
   let entry = selectPreparedDocument(registry, input, resolve(rootDir));
-  if (!entry && entries.length > 1 && await requestsPreparedDocumentEnvironment(input, resolve(rootDir))) {
+  if (!entry && entries.length > 1 && (
+    await requestsPreparedDocumentEnvironment(input, resolve(rootDir))
+    || requestsPreparedDocumentPathPlaceholder(input)
+  )) {
     throw new DlpDecryptError(
       "命令请求使用已准备文档的环境变量，但当前会话准备了多个文档且未提供 documentRef，无法安全选择输入文件。请在 run_command/run_background 的 documentRef 字段中传入目标文档引用后重试。",
       {
@@ -1072,6 +1075,67 @@ function isShellCommandArg(meta) {
   return (name === "run_command" || name === "run_background") && meta?.key === "command";
 }
 
+const PREPARED_DOCUMENT_ENVIRONMENT_PATHS = Object.freeze({
+  VISIONOX_DOCUMENT_READABLE_PATH: "VISIONOX_DOCUMENT_READABLE_PATH",
+  VISIONOX_DOCUMENT_ROOT: "VISIONOX_DOCUMENT_ROOT",
+});
+
+function escapeRegExp(value) {
+  return String(value).replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function commandPathArgument(value) {
+  return `"${String(value).replace(/"/g, '\\"')}"`;
+}
+
+function replaceEnvironmentPlaceholder(text, placeholder, value) {
+  const escaped = escapeRegExp(placeholder);
+  const replacement = commandPathArgument(value);
+  const quoted = new RegExp(`(["'])${escaped}\\1`, "giu");
+  const unquoted = new RegExp(`(^|[^A-Za-z0-9_])${escaped}(?=$|[^A-Za-z0-9_])`, "giu");
+  return text
+    .replace(quoted, replacement)
+    .replace(unquoted, (_match, prefix) => `${prefix}${replacement}`);
+}
+
+function preparedEnvironmentPlaceholders(name) {
+  return [
+    `$env:${name}`,
+    `%${name}%`,
+    `\${${name}}`,
+    `$${name}`,
+  ];
+}
+
+function requestsPreparedDocumentPathPlaceholder(value) {
+  const texts = typeof value === "string"
+    ? [value]
+    : collectPreparedDocumentInputStrings(value);
+  return texts.some((text) => Object.keys(PREPARED_DOCUMENT_ENVIRONMENT_PATHS).some((name) => (
+    preparedEnvironmentPlaceholders(name).some((placeholder) => text.toLowerCase().includes(placeholder.toLowerCase()))
+  )));
+}
+
+async function resolvePreparedDocumentPathPlaceholders(command, options) {
+  if (!requestsPreparedDocumentPathPlaceholder(command)) return command;
+  const environment = await preparedDocumentEnvironment(
+    options.registry,
+    options.bindingInput ?? { command },
+    options.env?.rootDir ?? process.cwd(),
+    options,
+  );
+  if (!environment.VISIONOX_DOCUMENT_READABLE_PATH) return command;
+  let resolved = String(command);
+  for (const [name, environmentKey] of Object.entries(PREPARED_DOCUMENT_ENVIRONMENT_PATHS)) {
+    const value = environment[environmentKey];
+    if (!value) continue;
+    for (const placeholder of preparedEnvironmentPlaceholders(name)) {
+      resolved = replaceEnvironmentPlaceholder(resolved, placeholder, value);
+    }
+  }
+  return resolved;
+}
+
 function looksDestructiveCommand(command) {
   return /^\s*(del|erase|rm|remove-item|move|mv|ren|rename|set-content|out-file|write-output|copy|cp|xcopy|robocopy)\b/i.test(String(command ?? ""));
 }
@@ -1287,13 +1351,15 @@ async function resolveDlpPathsInArgs(value, options, meta = {}) {
   if (meta?.key === "documentRef") return value;
   if (isOfficecliCommandArg(meta)) {
     if (typeof value === "string") {
-      return await resolveOfficecliCommandString(value, options);
+      const bound = await resolvePreparedDocumentPathPlaceholders(value, options);
+      return await resolveOfficecliCommandString(bound, options);
     }
     if (Array.isArray(value)) {
       const out = [];
       for (const item of value) {
         if (typeof item === "string") {
-          const result = await resolveDlpPathToken(item, options);
+          const bound = await resolvePreparedDocumentPathPlaceholders(item, options);
+          const result = await resolveDlpPathToken(bound, options);
           out.push(result.value);
         } else {
           out.push(item);
@@ -1303,7 +1369,8 @@ async function resolveDlpPathsInArgs(value, options, meta = {}) {
     }
   }
   if (isShellCommandArg(meta) && typeof value === "string" && !looksDestructiveCommand(value)) {
-    const embedded = await resolveEmbeddedDocumentPaths(value, options);
+    const bound = await resolvePreparedDocumentPathPlaceholders(value, options);
+    const embedded = await resolveEmbeddedDocumentPaths(bound, options);
     return embedded.command;
   }
   if (typeof value === "string") {
@@ -1373,7 +1440,11 @@ export function wrapToolsPathArgsWithDlp(tools, toolNames, options = {}) {
       ...original,
       __visionoxDlpPathArgsWrapped: true,
       fn: async (args, ctx) => {
-        const rewritten = await resolveDlpPathsInArgs(args, { ...options, signal: ctx?.signal }, { toolName: name });
+        const rewritten = await resolveDlpPathsInArgs(args, {
+          ...options,
+          bindingInput: args,
+          signal: ctx?.signal,
+        }, { toolName: name });
         if (isShellCommandArg({ toolName: name, key: "command" }) && typeof rewritten?.command === "string") {
           const issue = await findUnboundScriptDocument(rewritten.command, options);
           if (issue) return JSON.stringify(issue);

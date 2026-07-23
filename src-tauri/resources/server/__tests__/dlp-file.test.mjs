@@ -473,8 +473,10 @@ test("shell binding resolves prepared document environment placeholders before n
     mkdirSync(join(dir, "prepared"), { recursive: true });
     await writeFile(firstSource, Buffer.from("%PDF-1.7"));
     await writeFile(firstReadable, Buffer.from("%PDF-1.7"));
-    await writeFile(secondSource, Buffer.from("%PDF-1.7"));
+    await writeFile(secondSource, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
     await writeFile(secondReadable, Buffer.from("%PDF-1.7"));
+    const scriptPath = await createRegeneratingDlpScript(dir, secondReadable);
+    const cfg = { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } };
     const registry = createPreparedDocumentRegistry();
     registry.register({ sourcePath: firstSource, readablePath: firstReadable, encrypted: true });
     const second = registry.register({ sourcePath: secondSource, readablePath: secondReadable, encrypted: true });
@@ -484,7 +486,7 @@ test("shell binding resolves prepared document environment placeholders before n
       fn: async (args) => { received.push(args.command); return "ok"; },
     }]]);
     wrapToolsPathArgsWithDlp(tools, ["run_command"], {
-      readConfig: () => ({ dlp: { mode: "on" } }),
+      readConfig: () => cfg,
       env: { rootDir: dir },
       registry,
     });
@@ -510,8 +512,10 @@ test("shell binding uses the only prepared document for an environment placehold
     const source = join(dir, "manual.pdf");
     const readable = join(dir, "prepared", "manual readable.pdf");
     mkdirSync(join(dir, "prepared"), { recursive: true });
-    await writeFile(source, Buffer.from("%PDF-1.7"));
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
     await writeFile(readable, Buffer.from("%PDF-1.7"));
+    const scriptPath = await createRegeneratingDlpScript(dir, readable);
+    const cfg = { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } };
     const registry = createPreparedDocumentRegistry();
     registry.register({ sourcePath: source, readablePath: readable, encrypted: true });
     let receivedCommand = null;
@@ -520,7 +524,7 @@ test("shell binding uses the only prepared document for an environment placehold
       fn: async (args) => { receivedCommand = args.command; return "ok"; },
     }]]);
     wrapToolsPathArgsWithDlp(tools, ["run_command"], {
-      readConfig: () => ({ dlp: { mode: "on" } }),
+      readConfig: () => cfg,
       env: { rootDir: dir },
       registry,
     });
@@ -529,6 +533,30 @@ test("shell binding uses the only prepared document for an environment placehold
 
     assert.equal(receivedCommand, `7z l "${readable}"`);
   });
+});
+
+test("shell binding rejects an ambiguous prepared document placeholder", async () => {
+  const registry = createPreparedDocumentRegistry();
+  registry.register({ sourcePath: "C:\\docs\\first.pdf", readablePath: "C:\\prepared\\first.pdf", encrypted: true });
+  registry.register({ sourcePath: "C:\\docs\\second.pdf", readablePath: "C:\\prepared\\second.pdf", encrypted: true });
+  let called = false;
+  const { defs, tools } = createToolRegistry([["run_command", {
+    name: "run_command",
+    fn: async () => { called = true; return "unexpected"; },
+  }]]);
+  wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+    readConfig: () => ({ dlp: { mode: "on" } }),
+    env: { rootDir: process.cwd() },
+    registry,
+  });
+
+  await assert.rejects(
+    defs.get("run_command").fn({ command: "officecli view %VISIONOX_DOCUMENT_READABLE_PATH% text" }),
+    (error) => error instanceof DlpDecryptError
+      && error.details?.code === "DOCUMENT_REF_REQUIRED"
+      && Array.isArray(error.details?.documentRefs),
+  );
+  assert.equal(called, false);
 });
 
 test("shell binding leaves unrelated environment placeholders unchanged", async () => {
