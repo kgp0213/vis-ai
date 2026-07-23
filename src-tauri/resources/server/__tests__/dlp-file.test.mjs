@@ -324,6 +324,15 @@ test("prepared document environment binds the document referenced by the command
     process.cwd(),
   );
   assert.deepEqual(ambiguous, {});
+
+  await assert.rejects(
+    preparedDocumentEnvironment(
+      registry,
+      { command: `python parse.py "${second.readablePath}"`, documentRef: first.documentRef },
+      process.cwd(),
+    ),
+    /documentRef.*conflicts|文档引用.*冲突/i,
+  );
 });
 
 test("prepared document environment recreates a missing readable file before script execution", async () => {
@@ -372,30 +381,36 @@ test("prepared document tool output keeps real paths out of model context", () =
 });
 
 test("shell binding keeps documentRef as a control field while rewriting command paths", async () => {
-  const registry = createPreparedDocumentRegistry();
-  const prepared = registry.register({
-    sourcePath: "C:\\docs\\manual.pdf",
-    readablePath: "C:\\prepared\\manual.pdf",
-    encrypted: true,
-  });
-  let receivedArgs = null;
-  const { defs, tools } = createToolRegistry([["run_command", {
-    name: "run_command",
-    fn: async (args) => { receivedArgs = args; return "ok"; },
-  }]]);
-  wrapToolsPathArgsWithDlp(tools, ["run_command"], {
-    readConfig: () => ({ dlp: { mode: "off" } }),
-    env: { rootDir: process.cwd() },
-    registry,
-  });
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "manual.pdf");
+    const readable = join(dir, "prepared", "manual.pdf");
+    mkdirSync(join(dir, "prepared"), { recursive: true });
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    const scriptPath = await createRegeneratingDlpScript(dir, readable);
+    const registry = createPreparedDocumentRegistry();
+    const cfg = { dlp: { mode: "on", pythonPath: process.execPath, scriptPath } };
+    const env = { homeDir: dir, projectRoot: dir, rootDir: dir };
+    const prepared = await prepareLocalDocument(source, { cfg, env, logger: null, registry });
+    let receivedArgs = null;
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async (args) => { receivedArgs = args; return "ok"; },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => cfg,
+      env,
+      registry,
+    });
 
-  await defs.get("run_command").fn({
-    command: `python parse.py "${prepared.documentRef}"`,
-    documentRef: prepared.documentRef,
-  });
+    await defs.get("run_command").fn({
+      command: `python parse.py "${prepared.documentRef}"`,
+      documentRef: prepared.documentRef,
+    });
 
-  assert.equal(receivedArgs.documentRef, prepared.documentRef);
-  assert.match(receivedArgs.command, /C:\\prepared\\manual\.pdf/);
+    assert.equal(receivedArgs.documentRef, prepared.documentRef);
+    assert.equal(receivedArgs.command, `python parse.py "${readable}"`);
+  });
 });
 
 test("shell execution blocks generated scripts that hard-code a prepared document path", async () => {
