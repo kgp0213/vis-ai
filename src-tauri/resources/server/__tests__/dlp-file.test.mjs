@@ -442,6 +442,34 @@ test("shell execution blocks generated scripts that hard-code a prepared documen
   });
 });
 
+test("shell execution blocks case-variant hard-coded document paths on Windows", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "Manual.pdf");
+    const readable = join(dir, "manual.decrypted.pdf");
+    const script = join(dir, "parse.py");
+    await writeFile(source, Buffer.from([0, 0, 0, 0, 1, 2, 3, 4]));
+    await writeFile(readable, Buffer.from("%PDF-1.7"));
+    await writeFile(script, `open(${JSON.stringify(source.toUpperCase())}, "rb")`, "utf8");
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: source, readablePath: readable, encrypted: true });
+    let called = false;
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async () => { called = true; return "unexpected"; },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => ({ dlp: { mode: "on" } }),
+      env: { rootDir: dir },
+      registry,
+    });
+
+    const result = JSON.parse(await defs.get("run_command").fn({ command: `python "${script}"` }));
+    assert.equal(result.code, "UNBOUND_DOCUMENT_SCRIPT_INPUT");
+    assert.equal(called, false);
+  });
+});
+
 test("launcher shares managed document references without exposing the retired PDF organizer", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
   const pdfText = readFileSync(new URL("../lib/pdf-text.mjs", import.meta.url), "utf8");
