@@ -80,6 +80,43 @@ const WINDOW_WIDTH: f64 = 1280.0;
 const WINDOW_HEIGHT: f64 = 800.0;
 const WINDOW_MIN_WIDTH: f64 = 800.0;
 const WINDOW_MIN_HEIGHT: f64 = 500.0;
+const SPLASH_WIDTH: f64 = 630.0;
+const SPLASH_HEIGHT: f64 = 450.0;
+
+// Startup splash background per UI theme. Values mirror the `--startup-bg`
+// tokens in src/index.html; keep both tables in sync when adding a theme.
+// The selected theme is persisted by the loader page via save_startup_theme
+// so the window can pick the right color before any JavaScript runs.
+const STARTUP_THEMES: [(&str, (u8, u8, u8)); 9] = [
+    ("light", (244, 246, 248)),
+    ("dark", (23, 25, 28)),
+    ("warm-sand", (243, 239, 231)),
+    ("cool-ash", (237, 240, 242)),
+    ("soft-sage", (238, 242, 237)),
+    ("espresso", (33, 30, 28)),
+    ("midnight-ink", (17, 24, 32)),
+    ("deep-charcoal", (24, 26, 27)),
+    ("indigo-night", (12, 13, 16)),
+];
+const STARTUP_THEME_DEFAULT: (u8, u8, u8) = (243, 244, 246);
+
+fn startup_theme_path() -> PathBuf {
+    visionox_home_dir().join("startup-theme")
+}
+
+fn startup_background_color() -> Color {
+    let rgb = std::fs::read_to_string(startup_theme_path())
+        .ok()
+        .and_then(|raw| {
+            let name = raw.trim();
+            STARTUP_THEMES
+                .iter()
+                .find(|(theme, _)| *theme == name)
+                .map(|(_, rgb)| *rgb)
+        })
+        .unwrap_or(STARTUP_THEME_DEFAULT);
+    Color::from(rgb)
+}
 const LOCALHOST_ORIGIN_PREFIX: &str = "http://127.0.0.1:";
 const CLIPBOARD_FORMAT_NAME_BUF_LEN: usize = 256;
 
@@ -1049,10 +1086,16 @@ pub fn run() -> anyhow::Result<()> {
                 WebviewUrl::App("index.html".into()),
             )
             .title("Visionox-Whale")
-            .background_color(Color::from((243u8, 244u8, 246u8)))
-            .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-            .min_inner_size(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+            // Theme-aware splash background: avoids a light/dark flash before
+            // the loader page applies its theme via JavaScript.
+            .background_color(startup_background_color())
+            // Borderless splash during startup; index.html renders the
+            // centered brand/progress view and drag forwarding. Once the
+            // dashboard reports ready, finish_startup_window resizes to the
+            // full window and restores native decorations in one step.
+            .inner_size(SPLASH_WIDTH, SPLASH_HEIGHT)
             .center()
+            .decorations(false)
             .visible(true)
             .build()?;
 
@@ -1345,7 +1388,10 @@ pub fn run() -> anyhow::Result<()> {
             write_client_log,
             get_clipboard_files,
             pick_markdown_file,
-            pick_directory
+            pick_directory,
+            begin_window_drag,
+            finish_startup_window,
+            save_startup_theme
         ])
         .build(tauri::generate_context!())
         ?
@@ -1444,6 +1490,55 @@ fn write_client_log(message: String) {
     if !msg.is_empty() {
         log_diag(&format!("[webview] {msg}"));
     }
+}
+
+/// Begin a native window drag. The startup splash is borderless, so the
+/// loader page forwards left-button mousedown here to keep it movable.
+#[tauri::command]
+fn begin_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .start_dragging()
+        .map_err(|e| format!("start dragging failed: {e}"))
+}
+
+/// Expand the borderless splash into the full application window once the
+/// dashboard has taken over: resize first, then re-apply the minimum size,
+/// restore native decorations and re-center. Order matters — applying the
+/// minimum before the resize would fight the splash dimensions.
+#[tauri::command]
+fn finish_startup_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .set_size(tauri::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
+        .map_err(|e| format!("resize to full window failed: {e}"))?;
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(
+            WINDOW_MIN_WIDTH,
+            WINDOW_MIN_HEIGHT,
+        )))
+        .map_err(|e| format!("set min size failed: {e}"))?;
+    window
+        .set_decorations(true)
+        .map_err(|e| format!("restore decorations failed: {e}"))?;
+    window
+        .center()
+        .map_err(|e| format!("center window failed: {e}"))?;
+    Ok(())
+}
+
+/// Persist the UI theme chosen in the dashboard so the next cold start can
+/// paint the splash background in the right color before JavaScript runs.
+/// Stored as a tiny standalone file to stay out of config.json, which is
+/// owned and schema-migrated by the Node server.
+#[tauri::command]
+fn save_startup_theme(theme: String) -> Result<(), String> {
+    if !STARTUP_THEMES.iter().any(|(name, _)| *name == theme) {
+        return Err(format!("unknown theme: {theme}"));
+    }
+    let path = startup_theme_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create data dir failed: {e}"))?;
+    }
+    std::fs::write(&path, theme).map_err(|e| format!("write startup theme failed: {e}"))
 }
 
 fn open_path(path: &Path) -> Result<(), String> {
