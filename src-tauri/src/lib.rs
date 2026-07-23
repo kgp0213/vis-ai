@@ -98,7 +98,7 @@ const STARTUP_THEMES: [(&str, (u8, u8, u8)); 9] = [
     ("deep-charcoal", (24, 26, 27)),
     ("indigo-night", (12, 13, 16)),
 ];
-const STARTUP_THEME_DEFAULT: (u8, u8, u8) = (243, 244, 246);
+const STARTUP_THEME_DEFAULT: (u8, u8, u8) = (244, 246, 248);
 
 fn startup_theme_path() -> PathBuf {
     visionox_home_dir().join("startup-theme")
