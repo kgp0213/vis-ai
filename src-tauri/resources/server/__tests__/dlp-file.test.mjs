@@ -325,6 +325,15 @@ test("prepared document environment binds the document referenced by the command
   );
   assert.deepEqual(ambiguous, {});
 
+  assert.deepEqual(
+    await preparedDocumentEnvironment(
+      registry,
+      { command: "rg VISIONOX_DOCUMENT_ROOT ." },
+      process.cwd(),
+    ),
+    {},
+  );
+
   await assert.rejects(
     preparedDocumentEnvironment(
       registry,
@@ -333,6 +342,42 @@ test("prepared document environment binds the document referenced by the command
     ),
     /documentRef.*conflicts|文档引用.*冲突/i,
   );
+});
+
+test("prepared document environment requires documentRef for an external script that reads its injected path", async () => {
+  await withTempDir(async (dir) => {
+    const first = join(dir, "first document.pdf");
+    const second = join(dir, "second document.pdf");
+    const script = join(dir, "parse.mjs");
+    const setupScript = join(dir, "setup.mjs");
+    writeFileSync(first, "%PDF-1.7", "utf8");
+    writeFileSync(second, "%PDF-1.7", "utf8");
+    writeFileSync(script, "process.stdout.write(process.env.VISIONOX_DOCUMENT_READABLE_PATH);", "utf8");
+    writeFileSync(setupScript, "process.stdout.write('ready');", "utf8");
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: first, readablePath: first });
+    registry.register({ sourcePath: second, readablePath: second });
+
+    await assert.rejects(
+      preparedDocumentEnvironment(registry, { command: `node "${script}"` }, dir),
+      /多个文档|documentRef/i,
+    );
+    for (const command of [
+      `node --eval "process.env.VISIONOX_DOCUMENT_READABLE_PATH"`,
+      `node --require "${script}" parse.mjs`,
+      `python -X utf8 "${script}"`,
+      `node "${setupScript}" && node "${script}"`,
+    ]) {
+      await assert.rejects(
+        preparedDocumentEnvironment(registry, { command }, dir),
+        /多个文档|documentRef/i,
+      );
+    }
+    assert.deepEqual(
+      await preparedDocumentEnvironment(registry, { command: `rg documentRef "${script}"` }, dir),
+      {},
+    );
+  });
 });
 
 test("prepared document environment recreates a missing readable file before script execution", async () => {
@@ -378,6 +423,11 @@ test("prepared document tool output keeps real paths out of model context", () =
   assert.equal(result.readablePath, undefined);
   assert.equal(result.documentRef, "visionox-document:doc_1234567890abcdef1234");
   assert.match(result.note, /documentRef/);
+  assert.deepEqual(result.pathUsage, {
+    documentRefField: "documentRef",
+    readablePathEnv: "VISIONOX_DOCUMENT_READABLE_PATH",
+    readableRootEnv: "VISIONOX_DOCUMENT_ROOT",
+  });
 });
 
 test("shell binding keeps documentRef as a control field while rewriting command paths", async () => {

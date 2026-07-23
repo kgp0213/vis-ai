@@ -31673,7 +31673,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="text"
-                    placeholder="http://10.71.4.202:10307/v1/embeddings"
+                    placeholder="https://your-embedding-host.example/v1/embeddings"
                     value=${draft.openaiCompat.baseUrl}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;
@@ -31693,7 +31693,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="password"
-                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "qwen3-embedding-j29c7suqz"}
+                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "enter API key"}
                     value=${draft.openaiCompat.apiKey}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;

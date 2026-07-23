@@ -40,7 +40,7 @@ const required = [
   },
   {
     file: "scripts/run-tauri-build.js",
-    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "resourceOverride", "release-manifest.json", "verify-runtime-manifest.js", "verify-release-resources.js", "release-manifest.js"],
+    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "prepareRuntimeLibResources", '"resources/server/lib/": null', '"server-lib"', "resourceOverride", "release-manifest.json", "verify-runtime-manifest.js", "verify-release-resources.js", "release-manifest.js"],
   },
   {
     file: "scripts/verify-release-resources.js",
@@ -424,6 +424,8 @@ const required = [
       "openModelGroupId",
       "model-provider-trigger",
       "model-cascade-submenu",
+      "https://your-embedding-host.example/v1/embeddings",
+      '"enter API key"',
       "provider-import-file",
       "confirmProviderImport",
       "scheduleModelGroupClose",
@@ -534,7 +536,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2KDUS647.js",
-    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "streamOptionsSupport", "stream_options", "include_usage", "(resp.status === 400 || resp.status === 422)", "max_completion_tokens", "ev.event === \"error\"", "ModelStreamProtocolError", "ModelStreamIncompleteError", "ModelProviderStreamError", "ModelRequestTimeoutError", "MODEL_REQUEST_TIMEOUT", "AbortSignal.any", "streamComplete", "finishReason: data.choices?.[0]?.finish_reason", "isPermanentRateLimitResponse"],
+    markers: ["requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "streamOptionsSupport", "stream_options", "include_usage", "(resp.status === 400 || resp.status === 422)", "API ${resp.status}", "max_completion_tokens", "ev.event === \"error\"", "ModelStreamProtocolError", "ModelStreamIncompleteError", "ModelProviderStreamError", "ModelRequestTimeoutError", "MODEL_REQUEST_TIMEOUT", "AbortSignal.any", "streamComplete", "finishReason: data.choices?.[0]?.finish_reason", "isPermanentRateLimitResponse"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-PV55UMTO.js",
@@ -542,7 +544,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-RE4RAVFF.js",
-    markers: ["tool rounds completed", "configured tool-result budget", "hard tool-round limit"],
+    markers: ["tool rounds completed", "configured tool-result budget", "hard tool-round limit", "Authentication failed (API 401)", "Model API unavailable"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
@@ -587,6 +589,9 @@ const required = [
       "contextMaterializer",
       "contextResourceReader",
       "noteResourceRead",
+      "contextInputMemo.trim() && msgs[0]?.role === \"system\"",
+      "/^API (\\d{3}):",
+      "/deepseek\\.com/i.test",
     ],
   },
   {
@@ -599,7 +604,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/index.js",
-    markers: ["maxResultTokens: opts.maxResultTokens", 'name: "append_file"', '"organize_documents_to_report"', "escalationModel", "finishTurnOnResult", "A path-only call cannot create document content", "Do not use this for PDF or Office binary content", "outputResourceDir", "TOOL_OUTPUT_RESOURCE", "outputResource()", "truncateCommandOutput", "decodeTruncatedOutputPart", "showing beginning and end", "requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "streamOptionsSupport", "stream_options", "include_usage", "(resp.status === 400 || resp.status === 422)", "max_completion_tokens", "ev.event === \"error\"", "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "ModelStreamProtocolError", "ModelStreamIncompleteError", "ModelProviderStreamError", "ModelRequestTimeoutError", "MODEL_REQUEST_TIMEOUT", "AbortSignal.any", "ModelOutputTruncatedError", "TOOL_CALL_REPAIR_META", "droppedContent", "TRUNCATED_TOOL_ARGUMENTS", "isPermanentRateLimitResponse"],
+    markers: ["maxResultTokens: opts.maxResultTokens", 'name: "append_file"', '"organize_documents_to_report"', "escalationModel", "finishTurnOnResult", "A path-only call cannot create document content", "Do not use this for PDF or Office binary content", "outputResourceDir", "TOOL_OUTPUT_RESOURCE", "outputResource()", "truncateCommandOutput", "decodeTruncatedOutputPart", "showing beginning and end", "requestConfigForModel", "requestDefaults", 'requestConfig.policy === "json"', "streamOptionsSupport", "stream_options", "include_usage", "(resp.status === 400 || resp.status === 422)", "API ${resp.status}", "max_completion_tokens", "ev.event === \"error\"", "!jsonPolicy && opts.reasoningEffort", "opts.requestPurpose", "ModelStreamProtocolError", "ModelStreamIncompleteError", "ModelProviderStreamError", "ModelRequestTimeoutError", "MODEL_REQUEST_TIMEOUT", "AbortSignal.any", "ModelOutputTruncatedError", "TOOL_CALL_REPAIR_META", "droppedContent", "TRUNCATED_TOOL_ARGUMENTS", "isPermanentRateLimitResponse"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/app.css",

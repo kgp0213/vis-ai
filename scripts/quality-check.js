@@ -27,11 +27,13 @@ run("API response contracts", "node", ["scripts/check-api-contracts.js"]);
 run("test structure", "node", ["scripts/check-test-structure.js"]);
 run("third-party resources", "node", ["scripts/check-third-party-resources.js"]);
 run("bundle patch guard", "node", ["scripts/check-bundle-patches.js"]);
+run("runtime secrets", "node", ["scripts/check-runtime-secrets.js"]);
 run("repository hygiene", "node", ["scripts/check-repository-hygiene.js"]);
 run("node tests and core coverage", "node", [
   "--import",
   "./scripts/test-safety.mjs",
   "--test",
+  "--test-concurrency=1",
   "--experimental-test-coverage",
   "--test-coverage-include=src-tauri/resources/server/lib/*.mjs",
   "--test-coverage-lines=90",

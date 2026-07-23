@@ -37,6 +37,14 @@ const DOCUMENT_REF_PREFIX = "visionox-document:";
 const DEFAULT_PREPARED_DOCUMENT_LIMIT = 100;
 const SCRIPT_EXTENSIONS = new Set([".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".ps1", ".bat", ".cmd", ".sh"]);
 
+function preparedDocumentPathUsage() {
+  return {
+    documentRefField: "documentRef",
+    readablePathEnv: "VISIONOX_DOCUMENT_READABLE_PATH",
+    readableRootEnv: "VISIONOX_DOCUMENT_ROOT",
+  };
+}
+
 function preparedPathKey(value) {
   try {
     const key = resolve(String(value ?? ""));
@@ -180,6 +188,99 @@ function collectPreparedDocumentInputStrings(value, output = [], seen = new Set(
   return output;
 }
 
+function splitShellCommandSegments(command) {
+  const segments = [];
+  let current = "";
+  let quote = null;
+  const push = () => {
+    if (current.trim()) segments.push(current.trim());
+    current = "";
+  };
+  const text = String(command ?? "");
+  for (let index = 0; index < text.length; index++) {
+    const ch = text[index];
+    if (ch === "\\" && quote && index + 1 < text.length) {
+      current += ch + text[++index];
+      continue;
+    }
+    if ((ch === '"' || ch === "'") && !quote) quote = ch;
+    else if (ch === quote) quote = null;
+    if (!quote && (ch === ";" || ch === "\n" || ch === "\r" || ch === "&" || ch === "|")) {
+      push();
+      if ((ch === "&" || ch === "|") && text[index + 1] === ch) index++;
+      continue;
+    }
+    current += ch;
+  }
+  push();
+  return segments;
+}
+
+async function requestsPreparedDocumentEnvironment(value, rootDir) {
+  const commands = collectPreparedDocumentInputStrings(value)
+    .filter((text) => text.length > 0);
+  for (const command of commands) {
+    const segments = splitShellCommandSegments(command);
+    if (segments.length > 1) {
+      for (const segment of segments) {
+        if (await requestsPreparedDocumentEnvironment(segment, rootDir)) return true;
+      }
+      continue;
+    }
+    const tokens = splitCommandLine(command);
+    if (tokens.length === 0) continue;
+    const executable = basename(tokens[0]).replace(/\.exe$/iu, "").toLowerCase();
+    const inlineInterpreter = new Set(["node", "nodejs", "python", "python3", "py", "pwsh", "powershell"]);
+    const scriptTokens = [];
+    if (SCRIPT_EXTENSIONS.has(extname(tokens[0]).toLowerCase())) {
+      scriptTokens.push(tokens[0]);
+    } else if (inlineInterpreter.has(executable)) {
+      const preloadFlags = new Set(["-r", "--require", "--loader", "--experimental-loader", "--import"]);
+      const inlineFlags = new Set(["-e", "--eval", "-p", "--print", "-c", "--command"]);
+      for (let index = 1; index < tokens.length; index++) {
+        const token = tokens[index];
+        const normalized = token.toLowerCase();
+        const inlineFlag = [...inlineFlags].some((flag) => normalized === flag || normalized.startsWith(`${flag}=`));
+        if (inlineFlag) {
+          const code = normalized.includes("=") ? token.slice(token.indexOf("=") + 1) : tokens[index + 1] ?? "";
+          if (/VISIONOX_DOCUMENT_(?:REF|READABLE_PATH|ROOT)\b/iu.test(code)) return true;
+          break;
+        }
+        if (normalized === "--") {
+          if (SCRIPT_EXTENSIONS.has(extname(tokens[index + 1] ?? "").toLowerCase())) scriptTokens.push(tokens[index + 1]);
+          break;
+        }
+        const preloadFlag = [...preloadFlags].find((flag) => normalized === flag || normalized.startsWith(`${flag}=`));
+        if (preloadFlag) {
+          const preload = normalized.startsWith(`${preloadFlag}=`)
+            ? token.slice(token.indexOf("=") + 1)
+            : tokens[++index];
+          if (SCRIPT_EXTENSIONS.has(extname(preload ?? "").toLowerCase())) scriptTokens.push(preload);
+          continue;
+        }
+        if (normalized === "-m" && ["python", "python3", "py"].includes(executable)) break;
+        if (token.startsWith("-")) {
+          const optionValue = tokens[index + 1];
+          if (optionValue && !optionValue.startsWith("-") && !SCRIPT_EXTENSIONS.has(extname(optionValue).toLowerCase())) index++;
+          continue;
+        }
+        if (SCRIPT_EXTENSIONS.has(extname(token).toLowerCase())) scriptTokens.push(token);
+        break;
+      }
+    }
+    for (const scriptToken of scriptTokens) {
+      const scriptPath = resolveInputPath(scriptToken, rootDir);
+      try {
+        const script = await readFile(scriptPath, "utf8");
+        if (/VISIONOX_DOCUMENT_(?:REF|READABLE_PATH|ROOT)\b/iu.test(script)) return true;
+      } catch {
+        // The normal command path validation will report a missing script.
+      }
+    }
+  }
+  return false;
+}
+
 function includesPreparedCandidate(text, candidate) {
   const haystack = process.platform === "win32" ? text.toLowerCase() : text;
   const needle = process.platform === "win32" ? candidate.toLowerCase() : candidate;
@@ -233,7 +334,18 @@ function selectPreparedDocument(registry, input, rootDir) {
 
 /** Runtime-only variables for child processes; keep real paths out of model messages. */
 export async function preparedDocumentEnvironment(registry, input = null, rootDir = process.cwd(), options = {}) {
+  const entries = registry?.snapshot?.() ?? [];
   let entry = selectPreparedDocument(registry, input, resolve(rootDir));
+  if (!entry && entries.length > 1 && await requestsPreparedDocumentEnvironment(input, resolve(rootDir))) {
+    throw new DlpDecryptError(
+      "命令请求使用已准备文档的环境变量，但当前会话准备了多个文档且未提供 documentRef，无法安全选择输入文件。请在 run_command/run_background 的 documentRef 字段中传入目标文档引用后重试。",
+      {
+        code: "DOCUMENT_REF_REQUIRED",
+        documentRefs: entries.map((item) => item.documentRef).filter(Boolean),
+        hint: "请在 run_command/run_background 的 documentRef 字段中传入目标文档引用，然后让脚本读取 VISIONOX_DOCUMENT_READABLE_PATH。",
+      },
+    );
+  }
   if (!entry) return {};
   if (options.readConfig || options.cfg || options.env) {
     const env = { ...(options.env ?? {}), rootDir: options.env?.rootDir ?? resolve(rootDir) };
@@ -269,6 +381,7 @@ export function preparedDocumentToolResult(result) {
   } = result;
   if (Array.isArray(sources)) visible.sources = sources.map(preparedDocumentToolResult);
   if (visible.ok && visible.documentRef) {
+    visible.pathUsage = visible.pathUsage ?? preparedDocumentPathUsage();
     visible.note = "Keep using documentRef with supported tools and commands; the host manages the current readable file path.";
   }
   return visible;
@@ -565,7 +678,8 @@ function buildPreparedDocumentResult({ input, sourcePath, readable, candidates =
     documentKind: publicDocumentKind(sourcePath),
     suggestedTools: suggestedToolsForPath(sourcePath),
     candidateCount: candidates.length || 1,
-    note: "Use documentRef or readablePath with an available format reader or Skill for the current task step. The host will restore the readable copy if needed.",
+    pathUsage: preparedDocumentPathUsage(),
+    note: "Keep documentRef for later tools. For scripts, set the tool's documentRef and read VISIONOX_DOCUMENT_READABLE_PATH or VISIONOX_DOCUMENT_ROOT; the host restores the readable copy when needed.",
   };
 }
 

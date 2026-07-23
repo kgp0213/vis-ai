@@ -13,10 +13,12 @@ describe("active plan store", () => {
     const root = mkdtempSync(join(tmpdir(), "visionox-plan-store-"));
     try {
       const store = createPlanStore(root);
-      store.savePlanState("desktop", steps, ["one"], { summary: "summary" });
+      store.savePlanState("desktop", steps, ["one"], { summary: "summary", planId: "plan-1", requestId: "request-1" });
       const loaded = store.loadPlanState("desktop");
       assert.deepEqual(loaded.completedStepIds, ["one"]);
       assert.equal(loaded.summary, "summary");
+      assert.equal(loaded.planId, "plan-1");
+      assert.equal(loaded.requestId, "request-1");
       const archive = store.archivePlanState("desktop");
       assert.equal(existsSync(archive), true);
       assert.equal(store.loadPlanState("desktop"), null);

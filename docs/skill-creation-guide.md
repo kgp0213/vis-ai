@@ -47,15 +47,14 @@ scope: global
 ---
 name: <skill-name>
 description: "一句话英文描述"
-description_zh: "中文描述"
 version: 1.0.0
 license: MIT
-metadata:
-  version: "1.0"
-  category: productivity   # productivity / development / system / web
-allowed-tools: Bash(<tool>:*)  # 可选，限制可用工具
 ---
 ```
+
+> **字段说明**：`name` 是唯一硬性必填字段（小写字母+数字+连字符，如 `my-skill`），运行时仅校验此项。
+> `description`、`version`、`license` 等为可选元数据，当前运行时不解析但建议填写以便维护。
+> 不要使用 `allowed-tools`、`description_zh`、`metadata` 等 Claude/Codex 专用字段--Visionox 的工具限制由工具注册层控制，不通过 frontmatter。
 
 > **注意**：`---` 只包裹 YAML 头部，正文不要再用 `---` 做分隔线（某些解析器会误判）。
 
@@ -133,6 +132,8 @@ main();
 ```
 
 AI 会调用 `install_skill({ name: "my-skill", source_dir: "/path/to/my-skill/" })` 递归复制所有文件到 `~/.visionox/skills/<name>/`。无需打包，修改即时生效。
+
+> **限制**：`source_dir` 必须指向当前工作区或其子目录；`/learn skill <目录>` 同样受此限制。如果用户消息中同时包含 `.skill`/`.zip` 压缩包路径和 `source_dir`，系统会拒绝 `source_dir` 并提示改用 `source`（压缩包方式）。
 
 ### 方式二：.skill 文件分发（跨机器部署）
 

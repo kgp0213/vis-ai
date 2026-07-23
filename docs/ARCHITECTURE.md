@@ -294,10 +294,11 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 错误并引导改用 `prepare_local_document`，避免把二进制内容当作 UTF-8 文本读入上下文。嗅探在 DLP 解密后的
 可读副本上进行，因此对 DLP 加密文件（文件头为 `00000000`）同样有效。
 
-内部 PDF 文本解码由 `lib/pdf-text.mjs` 使用随包 PDF.js 延迟执行，不经过 OfficeCLI，也不依赖系统 Python；
-它供文档 Adapter 和兼容路径使用，不再注册为模型可见的 `extract_pdf_text` 任务工具。复杂 PDF 创建、编辑、
-合并、拆分、表单和校验继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。格式能力必须把
-页范围、来源和异常作为步骤证据返回，不能决定任务是否自动继续或已经完成。
+PDF/Office/图片等二进制文件的拦截由 `lib/dlp-file.mjs` 的 `binaryDocumentKind` 完成（嗅探 `%PDF-`、`PK\x03\x04`、
+`D0CF11E0`、JPEG、PNG 等 magic number），命中后返回 `BINARY_INPUT_NOT_READ_AS_TEXT` 并引导改用
+`prepare_local_document`。`lib/pdf-text.mjs` 已退出运行时资源（构建时排除），仅保留为离线测试材料。
+复杂 PDF 创建、编辑、合并、拆分、表单和校验继续使用 `pdf` Skill；`md-to-pdf-cjk` 只负责 Markdown 生成 PDF。
+格式能力必须把页范围、来源和异常作为步骤证据返回，不能决定任务是否自动继续或已经完成。
 
 2026-07-20 已删除 Launcher 中的 PDF 自动续读状态、次数预算、专用提示和专用进度分支；系统提示、办公模式、
 DLP 建议及内置 Skill 也不再定义 PDF->Markdown 生命周期。2026-07-21 起，前台放弃通用复杂任务状态机重型

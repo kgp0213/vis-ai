@@ -141,7 +141,7 @@ test("launcher retries explicit file delivery and fails completion when no artif
   assert.match(launcher, /artifactIncomplete \? "requested artifact was not created"/);
   assert.match(launcher, /const planningOnlyRequest = isPlanOnlyRequest\(text\)/);
   assert.match(launcher, /shouldEnforceArtifactDelivery\(/);
-  assert.match(launcher, /planApproved: !planningOnlyRequest && Boolean\(activePlanSteps\)/);
+  assert.match(launcher, /planApproved: !planningOnlyRequest && activePlanBelongsToRequest\(activeTurnRequestId\)/);
   assert.match(launcher, /taskWarnings = detectTaskWarnings\(assistantText\)/);
   assert.match(launcher, /artifactFiles/);
 });

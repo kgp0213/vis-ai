@@ -246,7 +246,7 @@ var DeepSeekClient = class {
         { ...this.retry, signal }
       );
       if (!resp.ok) {
-        throw new Error(`DeepSeek ${resp.status}: ${await resp.text()}`);
+        throw new Error(`API ${resp.status}: ${await resp.text()}`);
       }
       const data = await resp.json();
       const choice = data.choices?.[0]?.message ?? {};
@@ -295,7 +295,7 @@ var DeepSeekClient = class {
       if (!resp.ok && payload.stream_options) {
         const errorText = await resp.text().catch(() => "");
         const unsupported = (resp.status === 400 || resp.status === 422) && /stream[_ -]?options|include[_ -]?usage/i.test(errorText);
-        if (!unsupported) throw new Error(`DeepSeek ${resp.status}: ${errorText}`);
+        if (!unsupported) throw new Error(`API ${resp.status}: ${errorText}`);
         this.streamOptionsSupport = "unsupported";
         const fallbackPayload = { ...payload };
         delete fallbackPayload.stream_options;
@@ -309,7 +309,7 @@ var DeepSeekClient = class {
     }
     if (!resp.ok || !resp.body) {
       clearTimeout(timer);
-      throw new Error(`DeepSeek ${resp.status}: ${await resp.text().catch(() => "")}`);
+      throw new Error(`API ${resp.status}: ${await resp.text().catch(() => "")}`);
     }
     const queue = [];
     let done = false;

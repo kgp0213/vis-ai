@@ -3,7 +3,7 @@ import { basename, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "./atomic-file.mjs";
 
-const PLAN_VERSION = 1;
+const PLAN_VERSION = 2;
 
 function safeSessionName(value) {
   const name = String(value || "desktop").replace(/[\\/:*?"<>|]/g, "_").trim();
@@ -11,7 +11,7 @@ function safeSessionName(value) {
 }
 
 function normalizePlan(parsed, path = null) {
-  if (!parsed || parsed.version !== PLAN_VERSION) throw new Error("unsupported plan schema");
+  if (!parsed || ![1, PLAN_VERSION].includes(parsed.version)) throw new Error("unsupported plan schema");
   if (!Array.isArray(parsed.steps) || !Array.isArray(parsed.completedStepIds)) throw new Error("invalid plan structure");
   const steps = parsed.steps.filter((step) => step && typeof step.id === "string" && step.id && typeof step.title === "string" && step.title && typeof step.action === "string" && step.action)
     .map((step) => ({ id: step.id, title: step.title, action: step.action, ...(new Set(["low", "med", "high"]).has(step.risk) ? { risk: step.risk } : {}) }));
@@ -27,6 +27,8 @@ function normalizePlan(parsed, path = null) {
     updatedAt,
     ...(typeof parsed.body === "string" && parsed.body ? { body: parsed.body } : {}),
     ...(typeof parsed.summary === "string" && parsed.summary ? { summary: parsed.summary } : {}),
+    ...(typeof parsed.planId === "string" && parsed.planId.trim() ? { planId: parsed.planId.trim().slice(0, 160) } : {}),
+    ...(typeof parsed.requestId === "string" && parsed.requestId.trim() ? { requestId: parsed.requestId.trim().slice(0, 160) } : {}),
   };
 }
 
@@ -52,6 +54,8 @@ export function createPlanStore(sessionsDir, { logger = console } = {}) {
       updatedAt: new Date().toISOString(),
       body: extras.body,
       summary: extras.summary,
+      planId: extras.planId,
+      requestId: extras.requestId,
     });
     atomicWriteFileSync(activePath(session), `${JSON.stringify(state, null, 2)}\n`);
     return state;
@@ -87,6 +91,8 @@ export function createPlanStore(sessionsDir, { logger = console } = {}) {
           completedStepIds: plan.completedStepIds,
           ...(plan.body ? { body: plan.body } : {}),
           ...(plan.summary ? { summary: plan.summary } : {}),
+          ...(plan.planId ? { planId: plan.planId } : {}),
+          ...(plan.requestId ? { requestId: plan.requestId } : {}),
         });
       } catch (error) {
         logger.warn?.(`[plan-store] invalid archive ${name}: ${error.message}`);

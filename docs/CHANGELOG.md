@@ -13,6 +13,12 @@
 - **二进制文件不再误读为文本**：`read_file` 经 DLP 包装层嗅探文件 magic number（PDF / Office 容器 / 图片等），命中二进制类型时直接拒绝并引导改用 `prepare_local_document`，避免二进制内容污染上下文。
 - **工具退出码判定修正**：`toolResultSucceeded` 正则去掉末尾锚定，正确识别 `run_command` 输出中位于中间位置的 `[exit N]` 标记，失败命令不再被误计为成功。
 - **plan 模式放行文档准备**：`prepare_local_document` 标记为只读工具，可在 plan 阶段执行，模型不再需要绕道 `read_file` 直接读 PDF。
+- **API 错误信息不再误导**：`DeepSeekClient` 的 HTTP 错误前缀从 `DeepSeek` 改为 `API`，非 DeepSeek 模型报错时不再显示"DeepSeek 400"，中英文 i18n 文案同步更新。
+- **上下文干预死循环兜底**：`context-input-transaction` 新增 `continueAttempts` 计数与 `MAX_CONTINUE_WITHOUT_PROGRESS` 上限，连续多次"继续"仍无进展时自动停止并请求用户干预，避免模型陷入无限弹卡循环。
+- **运行时密钥扫描**：新增 `check-runtime-secrets` 脚本，扫描源码中硬编码的部署 IP 和内部模型标识符，已纳入 `quality:check` 和 CI。
+- **构建排除死代码**：`run-tauri-build` 新增 `RETIRED_RUNTIME_LIB_FILES`，构建时排除 6 个已退役的 document/pdf lib 文件，release 包不再包含未使用的代码。
+- **prepared document 安全增强**：`prepare_local_document` 返回结果对模型脱敏路径、跨工具绑定 documentRef、拒绝冲突绑定、Windows 下路径大小写不敏感匹配。
+- **系统消息不再重复**：`buildMessages` 将上下文输入备忘合并到首个 system 消息末尾，不再插入第二个 `role: "system"` 消息，修复部分 API 返回 "System message must be at the beginning" 的 400 错误。
 
 ---
 

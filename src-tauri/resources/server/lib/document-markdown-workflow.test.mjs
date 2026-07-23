@@ -19,6 +19,18 @@ function faithful(units, model) {
   return units.map((unit) => `<!-- source-unit: ${unit.id} -->\n\n### ${unit.location}\n\n${unit.text}\n\nHandled by ${model}`).join("\n\n");
 }
 
+async function waitForJobStatus(store, id, expected, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  let job = null;
+  while (Date.now() < deadline) {
+    job = await store.read(id);
+    if (job?.status === expected) return job;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(job?.status, expected);
+  return job;
+}
+
 function createDuplicateIntegrityManager(store, writeOutput) {
   return createDocumentMarkdownManager({
     store,
@@ -519,6 +531,8 @@ test("unrecoverable model output keeps source text, marks degraded quality, and 
   try {
     const store = createDocumentJobStore(join(root, "jobs"));
     let releaseForeground;
+    let foregroundReady;
+    const foregroundReadyPromise = new Promise((resolve) => { foregroundReady = resolve; });
     let foregroundBusy = true;
     const manager = createDocumentMarkdownManager({
       store,
@@ -534,12 +548,15 @@ test("unrecoverable model output keeps source text, marks degraded quality, and 
       generate: async ({ purpose }) => purpose === "verification" ? '{"pass":true,"issues":[]}' : "generic summary",
       generateSummary: async () => "## 摘要\n\n存在需要复核的区块。",
       writeOutput: async ({ outputPath, content }) => { await import("node:fs/promises").then(({ writeFile }) => writeFile(outputPath, content, "utf8")); },
-      onWaitingForForeground: () => { releaseForeground = () => { foregroundBusy = false; }; },
+      onWaitingForForeground: () => {
+        releaseForeground = () => { foregroundBusy = false; };
+        foregroundReady();
+      },
     });
 
     const accepted = await manager.start({ sourcePath: "manual.html", outputPath: output });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal((await store.read(accepted.id)).status, "waiting_foreground");
+    await waitForJobStatus(store, accepted.id, "waiting_foreground");
+    await foregroundReadyPromise;
     releaseForeground();
     await manager.wait(accepted.id);
     const job = await store.read(accepted.id);
@@ -559,12 +576,14 @@ test("document work yields the provider lane to scheduled tasks and resumes auto
     const store = createDocumentJobStore(join(root, "jobs"));
     let providerBusy = true;
     let waitingNotified = false;
+    let providerWaitingReady;
+    const providerWaitingReadyPromise = new Promise((resolve) => { providerWaitingReady = resolve; });
     const manager = createDocumentMarkdownManager({
       store,
       foregroundPollMs: 5,
       isForegroundBusy: () => false,
       isProviderBusy: () => providerBusy,
-      onWaitingForProvider: () => { waitingNotified = true; },
+      onWaitingForProvider: () => { waitingNotified = true; providerWaitingReady(); },
       prepareDocument: async () => ({ ok: true, sourcePath: "manual.md", readablePath: "manual.md", documentKind: "markdown" }),
       processSourceBatches: async (_prepared, { onBatch }) => {
         await onBatch({ id: "b1", units: [{ id: "u1", location: "section", text: "Complete source text." }] });
@@ -577,8 +596,8 @@ test("document work yields the provider lane to scheduled tasks and resumes auto
     });
 
     const accepted = await manager.start({ sourcePath: "manual.md", outputPath: join(root, "result.md") });
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal((await store.read(accepted.id)).status, "waiting_provider");
+    await waitForJobStatus(store, accepted.id, "waiting_provider");
+    await providerWaitingReadyPromise;
     assert.equal(waitingNotified, true);
     assert.equal(manager.activeCount(), 1);
     assert.equal(manager.isProviderBusy(), true);

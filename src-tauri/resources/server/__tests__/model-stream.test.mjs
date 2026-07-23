@@ -209,9 +209,23 @@ test("a 422 unrelated to stream_options is not retried with a different payload"
 
     await assert.rejects(
       () => collect(client),
-      (error) => /DeepSeek 422/.test(error?.message || ""),
+      (error) => /API 422/.test(error?.message || "") && !/DeepSeek 422/.test(error?.message || ""),
     );
     assert.equal(requestCount, 1);
+  }
+});
+
+test("OpenAI-compatible provider errors use a provider-neutral API prefix", async () => {
+  for (const Client of [DeepSeekClient, PackageDeepSeekClient]) {
+    const client = new Client({
+      apiKey: "test-key",
+      baseUrl: "https://provider.invalid/v1",
+      fetch: async () => new Response('{"error":{"message":"invalid credential"}}', { status: 401 }),
+    });
+    await assert.rejects(
+      () => client.chat({ model: "test-model", messages: [{ role: "user", content: "test" }] }),
+      (error) => /API 401/.test(error?.message || "") && !/DeepSeek/.test(error?.message || ""),
+    );
   }
 });
 

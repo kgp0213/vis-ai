@@ -78,7 +78,7 @@ OfficeCLI、PDF.js、`read_file`、`write_file` 和 `append_file` 都只是当�
 ## 五、建议工作流
 
 复杂 Office 操作优先让 Agent 先检查当前文档状态，再进行小批量修改：使用 `get`/`view` 确认对象，
-用 batch 合并同一阶段操作，随后检查 issues、执行 validate，最后 save 并 close。这样能更早发现选择器、
+用 batch 合并同一阶段操作，随后检查 batch 返回结果、执行 validate，最后 save 并 close。这样能更早发现选择器、
 公式或结构问题，也能减少重复启动和往返调用。
 
 OfficeCLI MCP 会在 Dashboard 服务可用后后台初始化，不阻塞应用首屏。刚启动时 MCP 面板可能短暂显示

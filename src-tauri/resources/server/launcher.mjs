@@ -644,47 +644,43 @@ const config = readConfig(configPath);
   }
 }
 
-// ── Semantic indexing: seed default intranet API config ──────────
-// On first install (or when config.semantic is absent/incomplete), pre-fill
-// the intranet OpenAI-compatible embedding API so the user can just click
-// "Save" in the semantic panel without manual entry. Users can still override
-// any field — the seed only fills missing values, never overwrites existing ones.
+// ── Semantic indexing: keep installation defaults credential-free ──────────
+// Embedding credentials are deployment-specific and must never be shipped in
+// source or release resources. Existing installations that received the old
+// intranet seed are sanitized once, while user-supplied values are preserved.
 {
-  const INTRANET_SEMANTIC_DEFAULTS = {
-    provider: "openai-compat",
-    openaiCompat: {
-      baseUrl: "http://10.71.4.202:10307/v1/embeddings",
-      apiKey: "qwen3-embedding-j29c7suqz",
-      model: "Qwen3-Embedding",
-      extraBody: {},
-    },
-  };
-
   let changed = false;
   if (!config.semantic || typeof config.semantic !== "object") {
-    // First install: no semantic config at all — seed the full default.
-    config.semantic = { ...INTRANET_SEMANTIC_DEFAULTS, ollama: { baseUrl: undefined, model: undefined } };
+    config.semantic = {
+      provider: "openai-compat",
+      openaiCompat: { baseUrl: "", apiKey: "", model: "", extraBody: {} },
+      ollama: { baseUrl: "", model: "" },
+    };
     changed = true;
   } else {
-    // Existing config: only fill missing openai-compat fields so we never
-    // overwrite a user's customisation. Also default provider to openai-compat
-    // if unset (so "Save" without touching anything picks the intranet API).
-    if (!config.semantic.provider) {
-      config.semantic.provider = INTRANET_SEMANTIC_DEFAULTS.provider;
-      changed = true;
-    }
     if (!config.semantic.openaiCompat || typeof config.semantic.openaiCompat !== "object") {
       config.semantic.openaiCompat = {};
+      changed = true;
     }
     const oc = config.semantic.openaiCompat;
-    if (!oc.baseUrl) { oc.baseUrl = INTRANET_SEMANTIC_DEFAULTS.openaiCompat.baseUrl; changed = true; }
-    if (!oc.apiKey)  { oc.apiKey  = INTRANET_SEMANTIC_DEFAULTS.openaiCompat.apiKey;  changed = true; }
-    if (!oc.model)   { oc.model   = INTRANET_SEMANTIC_DEFAULTS.openaiCompat.model;   changed = true; }
+    if (typeof oc.baseUrl !== "string") { oc.baseUrl = ""; changed = true; }
+    if (typeof oc.apiKey !== "string") { oc.apiKey = ""; changed = true; }
+    if (typeof oc.model !== "string") { oc.model = ""; changed = true; }
+    const legacyEndpointHash = "a94237d7ebf126c99d5e10a9e0b6fd4ce0a48a028fa1e0aaac884a0f8c472f2e";
+    const legacyKeyHash = "70efe2b6a40b954b50562152a5f22249aa9b619f86f11dc8914e8f4101e37e6b";
+    if (createHash("sha256").update(oc.baseUrl).digest("hex") === legacyEndpointHash
+      && createHash("sha256").update(oc.apiKey).digest("hex") === legacyKeyHash) {
+      oc.baseUrl = "";
+      oc.apiKey = "";
+      oc.model = "";
+      changed = true;
+      console.error("[launcher] removed legacy intranet semantic credentials from local config");
+    }
     if (!oc.extraBody || typeof oc.extraBody !== "object") { oc.extraBody = {}; }
   }
   if (changed) {
     writeConfig(config, configPath);
-    console.error("[launcher] semantic config seeded with intranet defaults (openai-compat, Qwen3-Embedding)");
+    console.error("[launcher] semantic config initialized without embedded credentials");
   }
 }
 
@@ -1569,6 +1565,8 @@ registerPlanTool(tools, {
       steps: structuredSteps,
       summary,
       body: plan,
+      planId: randomUUID(),
+      requestId: activeTurnRequestId,
     };
   },
   onStepCompleted: (update) => {
@@ -4044,6 +4042,9 @@ let activeCompletedIds = null;// Set<string> of completed step ids
 let activePlanSummary = null; // string
 let activePlanBody = null;    // string (markdown)
 let activePlanUpdatedAt = null;// ISO timestamp from the persisted plan file
+let activePlanId = null;       // stable id for the approved plan
+let activePlanRequestId = null;// request that created or explicitly resumed the plan
+let activeTurnRequestId = null;// request currently allowed to submit/advance a plan
 let pendingPlanRevision = null;// committed only after the user accepts the revision card
 
 /** Get the current session name for plan file paths. */
@@ -4059,6 +4060,8 @@ function resetPlanRefs() {
   activePlanSummary = null;
   activePlanBody = null;
   activePlanUpdatedAt = null;
+  activePlanId = null;
+  activePlanRequestId = null;
   pendingPlanRevision = null;
 }
 
@@ -4073,6 +4076,8 @@ function hydrateActivePlanFromDisk() {
   activePlanBody = stored.body ?? null;
   activePlanSummary = stored.summary ?? null;
   activePlanUpdatedAt = stored.updatedAt ?? null;
+  activePlanId = stored.planId ?? null;
+  activePlanRequestId = stored.requestId ?? null;
   console.error(`[launcher] active plan restored (${activePlanSteps.length} steps) for session ${session}`);
 }
 
@@ -4092,6 +4097,8 @@ function getActivePlanSnapshot() {
       completedStepIds: [],
       body: pendingPlan.body,
       summary: pendingPlan.summary,
+      planId: pendingPlan.planId,
+      requestId: pendingPlan.requestId,
     };
   }
   hydrateActivePlanFromDisk();
@@ -4110,6 +4117,8 @@ function getActivePlanSnapshot() {
     completedStepIds,
     body: activePlanBody,
     summary: activePlanSummary,
+    planId: activePlanId,
+    requestId: activePlanRequestId,
   };
 }
 
@@ -4125,6 +4134,15 @@ function incompleteActivePlanSnapshot() {
 function approvedActivePlanSnapshot() {
   const plan = incompleteActivePlanSnapshot();
   return plan?.status === "active" ? plan : null;
+}
+
+function activePlanBelongsToRequest(requestId) {
+  const current = String(requestId || "").trim();
+  return Boolean(current && activePlanSteps && activePlanRequestId === current);
+}
+
+function isExplicitPlanResumeRequest(text) {
+  return /^(?:请)?(?:继续|恢复|接着)(?:执行|处理)?(?:当前|之前|上次)?(?:的)?(?:计划|任务)[。！!]*$/.test(String(text || "").trim());
 }
 
 function planAutoContinuationPrompt(plan, attempt, reason = "budget") {
@@ -4149,6 +4167,8 @@ function persistActivePlan() {
     savePlanState(session, activePlanSteps, completedStepIds, {
       body: activePlanBody,
       summary: activePlanSummary,
+      planId: activePlanId,
+      requestId: activePlanRequestId,
     });
     const stored = loadPlanState(session);
     activePlanUpdatedAt = stored?.updatedAt ?? new Date().toISOString();
@@ -4169,6 +4189,8 @@ function activatePendingPlan() {
   activePlanBody = nextPlan.body;
   activePlanSummary = nextPlan.summary;
   activePlanUpdatedAt = null;
+  activePlanId = nextPlan.planId;
+  activePlanRequestId = nextPlan.requestId;
   pendingPlanRevision = null;
   if (!persistActivePlan()) {
     pendingPlan = nextPlan;
@@ -4176,6 +4198,8 @@ function activatePendingPlan() {
     activeCompletedIds = null;
     activePlanBody = null;
     activePlanSummary = null;
+    activePlanId = null;
+    activePlanRequestId = null;
     return false;
   }
   console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
@@ -8242,6 +8266,7 @@ ${modeList}
 
     busy = true;
     const operation = beginActiveOperation(operationKindForPrompt(text, opts));
+    activeTurnRequestId = requestId || operation.id;
     activeMessageSendContext = {
       source: operation.kind,
       userPrompt: opts.internalHandoff === true
@@ -8806,6 +8831,17 @@ ${modeList}
         return { accepted: false, requestId: requestId || null, reason };
       }
 
+      hydrateActivePlanFromDisk();
+      if (activePlanSteps && isExplicitPlanResumeRequest(text)) {
+        activePlanRequestId = activeTurnRequestId;
+        activePlanId ||= randomUUID();
+        if (!persistActivePlan()) {
+          const reason = "无法把当前请求绑定到待恢复计划，任务未启动。";
+          try { rememberFailedPromptRequest(requestId, reason); } catch {}
+          return { accepted: false, requestId: requestId || null, reason };
+        }
+      }
+
       const previousPlanMode = tools.planMode;
       try {
         if (opts.isolated !== true && opts.internalHandoff !== true) {
@@ -9035,7 +9071,13 @@ ${modeList}
               broadcastDashboardEvent({ kind: "warning", text: intervention.question });
               const verdict = await pauseGate.ask(intervention);
               if (verdict?.type === "text" && String(verdict.text || "").trim()) {
-                contextInputTransactions.resolveIntervention("continue");
+                const recovery = contextInputTransactions.resolveIntervention("continue");
+                if (recovery?.continueRejected) {
+                  interventionPaused = true;
+                  continuationNeeded = true;
+                  assistantText = "连续恢复后没有检测到新的输入覆盖或文件写入，任务已暂停。请调整任务范围或处理方式后再继续。";
+                  break;
+                }
                 interventionChoice = "continue";
                 assistantText = "";
                 loopInput = `${buildContextInputFlushPrompt(contextInputTransactions.status())}\n\n用户补充：${String(verdict.text).trim()}`;
@@ -9043,7 +9085,13 @@ ${modeList}
               }
               const choice = verdict?.type === "pick" ? String(verdict.optionId || "") : "stop";
               interventionChoice = choice;
-              contextInputTransactions.resolveIntervention(choice);
+              const recovery = contextInputTransactions.resolveIntervention(choice);
+              if (recovery?.continueRejected) {
+                interventionPaused = true;
+                continuationNeeded = true;
+                assistantText = "连续恢复后没有检测到新的输入覆盖或文件写入，任务已暂停。请调整任务范围或处理方式后再继续。";
+                break;
+              }
               if (choice === "accept-partial") {
                 activeContextRecoveryHandle = null;
                 contextRecoveryHandle = null;
@@ -9071,7 +9119,7 @@ ${modeList}
 
             const continuation = decidePlanContinuation({
               forcedSummaryReason: budgetForcedSummary ? "budget" : null,
-              plan: incompleteActivePlanSnapshot(),
+              plan: activePlanBelongsToRequest(activeTurnRequestId) ? incompleteActivePlanSnapshot() : null,
               attempts: continuationAttempts,
               maxAttempts: MAX_PLAN_AUTO_CONTINUATIONS,
               aborted: operation.controller.signal.aborted,
@@ -9104,7 +9152,7 @@ ${modeList}
             if (
               continuation.action === "none" &&
               artifactRequest.required &&
-              shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && Boolean(activePlanSteps) }) &&
+              shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && activePlanBelongsToRequest(activeTurnRequestId) }) &&
               turnArtifactPaths.size === 0 &&
               !operation.controller.signal.aborted &&
               artifactContinuationAttempts < MAX_ARTIFACT_AUTO_CONTINUATIONS
@@ -9121,7 +9169,7 @@ ${modeList}
             }
             break;
           }
-          const artifactDeliveryActive = shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && Boolean(activePlanSteps) });
+          const artifactDeliveryActive = shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && activePlanBelongsToRequest(activeTurnRequestId) });
           if (artifactRequest.required && artifactDeliveryActive && turnArtifactPaths.size === 0 && !operation.controller.signal.aborted) {
             artifactIncomplete = true;
             assistantText = `${assistantText}${artifactMissingNotice()}`;
@@ -9303,6 +9351,7 @@ ${modeList}
             try { detachExternalSignal(); } catch { /* Cleanup must not keep the UI busy. */ }
             try { clearMessageSendContext(operation); } catch { /* Cleanup must continue. */ }
             try { finishActiveOperation(operation); } catch (error) { console.error(`[launcher] active operation cleanup failed: ${error.message}`); }
+            if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
           }
         }
       })();
@@ -9317,6 +9366,7 @@ ${modeList}
         broadcastDashboardEvent({ kind: "busy-change", busy: false });
         clearMessageSendContext(operation);
         finishActiveOperation(operation);
+        if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
       }
     }
   },

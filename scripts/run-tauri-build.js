@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,32 @@ const RETIRED_RELEASE_RESOURCES = [
   "server/lib/foreground-task-supervisor.mjs",
   "server/lib/foreground-task-supervisor.test.mjs",
 ];
+const RETIRED_RUNTIME_LIB_FILES = new Set([
+  "document-markdown-workflow.mjs",
+  "document-extractors.mjs",
+  "document-intelligence.mjs",
+  "document-output-reservation.mjs",
+  "pdf-markdown-workflow.mjs",
+  "pdf-text.mjs",
+]);
+
+function includesRuntimeLibFile(name) {
+  return !name.endsWith(".test.mjs")
+    && !/^complex-task-.*\.mjs$/i.test(name)
+    && !RETIRED_RUNTIME_LIB_FILES.has(name);
+}
+
+export function prepareRuntimeLibResources(root, stagingRoot) {
+  const source = resolve(root, "src-tauri", "resources", "server", "lib");
+  const target = resolve(stagingRoot, "server-lib");
+  rmSync(target, { recursive: true, force: true });
+  mkdirSync(target, { recursive: true });
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    if (!entry.isFile() || !includesRuntimeLibFile(entry.name)) continue;
+    copyFileSync(resolve(source, entry.name), resolve(target, entry.name));
+  }
+  return target;
+}
 
 function runProcess(root, env, label, script, args = []) {
   console.log(`[tauri-build] ${label}`);
@@ -63,7 +89,7 @@ export function pruneRetiredReleaseResources(root) {
   const legacyLib = resolve(resourcesRoot, "server", "lib");
   if (existsSync(legacyLib)) {
     for (const entry of readdirSync(legacyLib, { withFileTypes: true })) {
-      if (!entry.isFile() || !/^complex-task-.*\.mjs$/i.test(entry.name)) continue;
+      if (!entry.isFile() || !(entry.name.endsWith(".test.mjs") || /^complex-task-.*\.mjs$/i.test(entry.name) || RETIRED_RUNTIME_LIB_FILES.has(entry.name))) continue;
       const target = resolve(legacyLib, entry.name);
       const targetRelative = relative(resourcesRoot, target);
       if (!targetRelative || targetRelative.startsWith("..") || targetRelative.includes(`..${sep}`)) {
@@ -95,16 +121,23 @@ export function runTauriBuild(options = {}) {
     runner("verify runtime manifest", join(root, "scripts", "verify-runtime-manifest.js"), [], env);
     runner("prepare runtime package", join(root, "scripts", "prepare-runtime-package.js"), [], env);
     runner("check bundle patches", join(root, "scripts", "check-bundle-patches.js"), [], env);
+    const runtimeLib = prepareRuntimeLibResources(root, stagingRoot);
     if (!options.skipTauriExistenceCheck && !existsSync(tauriCli)) throw new Error(`Tauri CLI not found: ${tauriCli}`);
     const resourceOverride = {
       bundle: {
         resources: {
           "runtime/visionox-pkg/": null,
+          "resources/server/lib/": null,
           [`${runtimePackage}${sep}`]: "resources/server/visionox-pkg/",
+          [`${runtimeLib}${sep}`]: "resources/server/lib/",
         },
       },
     };
     runner("build release", tauriCli, ["build", ...args, "--config", JSON.stringify(resourceOverride)], env);
+    // Tauri copies directory resources after the initial guard runs. Prune
+    // again from the actual release tree so tests and retired workflows cannot
+    // re-enter the package during the copy step.
+    pruneRetiredReleaseResources(root);
     runner("verify release resources", join(root, "scripts", "verify-release-resources.js"), [], env);
     runner("write release manifest", join(root, "scripts", "release-manifest.js"), ["--release-verified"], env);
     return { stagingRoot, runtimePackage, env };

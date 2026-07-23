@@ -42,6 +42,8 @@ describe("buildSystemPrompt", () => {
     assert.match(prompt, /save_last_assistant_response/);
     assert.match(prompt, /retain its tables, parameters, commands, and code/);
     assert.match(prompt, /host will recreate a missing readable copy automatically/);
+    assert.match(prompt, /pass its `documentRef` field and read `VISIONOX_DOCUMENT_READABLE_PATH`/);
+    assert.match(prompt, /when more than one document is prepared, a `documentRef` is required/);
     assert.match(prompt, /host controls context size/);
     assert.match(prompt, /large source or an exact whole-document conversion/);
     assert.match(prompt, /concise deterministic converter/);

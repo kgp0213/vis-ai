@@ -451,6 +451,37 @@ test("continue opens one bounded recovery read instead of repeating the same blo
   });
 });
 
+test("repeated continue without progress pauses instead of discarding cached input", async () => {
+  await withStore(async (store) => {
+    store.beginTurn({ turnId: "turn-recovery-limit", requiresArtifact: true, requiresCompleteCoverage: true });
+    store.captureInput({ source: "tool:reader", content: "x".repeat(800) });
+
+    assert.equal(store.resolveIntervention("continue").continueRejected, undefined);
+    assert.equal(store.resolveIntervention("continue").continueRejected, undefined);
+    assert.equal(store.resolveIntervention("continue").continueRejected, undefined);
+    const exhausted = decideContextInputIntervention({ ...store.status(), requiresIntervention: true });
+    assert.doesNotMatch(exhausted.options.map((option) => option.id).join(","), /continue/);
+
+    const rejected = store.resolveIntervention("continue");
+    assert.equal(rejected.continueRejected, true);
+    assert.equal(store.status().pendingCount, 1);
+    assert.equal(store.status().interventionChoice, "continue-exhausted");
+  });
+});
+
+test("unrelated verified artifact evidence does not reset recovery attempts", async () => {
+  await withStore(async (store) => {
+    store.beginTurn({ turnId: "turn-unrelated-artifact", requiresArtifact: true, requiresCompleteCoverage: true });
+    store.captureInput({ source: "tool:reader", content: "x".repeat(800) });
+    store.resolveIntervention("continue");
+    store.resolveIntervention("continue");
+    store.resolveIntervention("continue");
+    assert.equal(store.status().continueAttempts, 3);
+    store.noteArtifactEvidence({ paths: ["other.md"], producer: "unrelated", verified: true });
+    assert.equal(store.status().continueAttempts, 3);
+  });
+});
+
 test("resource-backed tool output is not treated as an unmaterialized context transaction", async () => {
   await withStore(async (store, root) => {
     const resourceDir = join(root, "tool-results");

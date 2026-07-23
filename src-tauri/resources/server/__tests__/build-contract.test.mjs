@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { pruneRetiredReleaseResources, runTauriBuild, validateBuildArgs } from "../../../../scripts/run-tauri-build.js";
+import { prepareRuntimeLibResources, pruneRetiredReleaseResources, runTauriBuild, validateBuildArgs } from "../../../../scripts/run-tauri-build.js";
 import { writeReleaseManifest } from "../../../../scripts/release-manifest.js";
 
 describe("release build contract", () => {
@@ -23,7 +23,11 @@ describe("release build contract", () => {
     assert.equal(result.env.npm_config_offline, "true");
     assert.match(result.env.CARGO_TARGET_DIR, /src-tauri[\\/]target$/);
     assert.equal(result.env.CARGO_TARGET_DIR.endsWith(join("target", "debug")), false);
-    assert.equal(calls.find((call) => call.label === "build release").args.includes("--no-bundle"), true);
+    const buildCall = calls.find((call) => call.label === "build release");
+    assert.equal(buildCall.args.includes("--no-bundle"), true);
+    const resourceOverride = JSON.parse(buildCall.args[buildCall.args.indexOf("--config") + 1]).bundle.resources;
+    assert.equal(resourceOverride["resources/server/lib/"], null);
+    assert.equal(Object.entries(resourceOverride).some(([source, target]) => /server-lib[\\/]?$/.test(source) && target === "resources/server/lib/"), true);
     assert.deepEqual(calls.find((call) => call.label === "write release manifest").args, ["--release-verified"]);
     assert.equal(existsSync(staging), false);
   });
@@ -98,6 +102,27 @@ describe("release build contract", () => {
       assert.equal(existsSync(retainedResource), true);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stages only runtime lib modules before Tauri creates release bundles", () => {
+    const root = mkdtempSync(join(tmpdir(), "visionox-runtime-lib-source-"));
+    const staging = mkdtempSync(join(tmpdir(), "visionox-runtime-lib-stage-"));
+    const source = join(root, "src-tauri", "resources", "server", "lib");
+    try {
+      mkdirSync(source, { recursive: true });
+      writeFileSync(join(source, "active.mjs"), "export const active = true;");
+      writeFileSync(join(source, "active.test.mjs"), "throw new Error('not runtime');");
+      writeFileSync(join(source, "document-markdown-workflow.mjs"), "retired");
+      writeFileSync(join(source, "document-extractors.mjs"), "retired");
+      const runtimeLib = prepareRuntimeLibResources(root, staging);
+      assert.equal(existsSync(join(runtimeLib, "active.mjs")), true);
+      assert.equal(existsSync(join(runtimeLib, "active.test.mjs")), false);
+      assert.equal(existsSync(join(runtimeLib, "document-markdown-workflow.mjs")), false);
+      assert.equal(existsSync(join(runtimeLib, "document-extractors.mjs")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(staging, { recursive: true, force: true });
     }
   });
 

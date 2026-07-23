@@ -122,4 +122,4 @@ Windows release 和 NSIS 是当前唯一受支持的交付目标。仓库中的 
 
 ---
 
-*最后更新：2026-07-12 | 适用：Visionox-Whale 1.28.0*
+*最后更新：2026-07-23 | 适用：Visionox-Whale 1.28.0*

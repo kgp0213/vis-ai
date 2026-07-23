@@ -9,6 +9,7 @@ const DEFAULT_INPUT_THRESHOLD_CHARS = 24_000;
 const DEFAULT_PENDING_LIMIT_CHARS = 64_000;
 const DEFAULT_READ_CHARS = 24_000;
 const MIN_PROGRESS_RATIO = 0.01;
+const MAX_CONTINUE_WITHOUT_PROGRESS = 3;
 const METADATA_ONLY_TOOLS = new Set([
   "get_file_info",
   "list_directory",
@@ -136,6 +137,7 @@ function freshState(transactionId, turnId, turn = {}) {
     interventionChoice: null,
     lastInterventionFingerprint: null,
     recoveryReadAllowance: 0,
+    continueAttempts: 0,
     stalledMaterializerCalls: 0,
     updatedAt: new Date().toISOString(),
   };
@@ -167,6 +169,7 @@ function normalizeState(value, transactionId, turnId, turn) {
     cacheFailures: Array.isArray(value.cacheFailures) ? value.cacheFailures.map(String).slice(-8) : [],
     lastInterventionFingerprint: typeof value.lastInterventionFingerprint === "string" ? value.lastInterventionFingerprint : null,
     recoveryReadAllowance: Number.isSafeInteger(value.recoveryReadAllowance) ? Math.max(0, value.recoveryReadAllowance) : 0,
+    continueAttempts: Number.isSafeInteger(value.continueAttempts) ? Math.max(0, value.continueAttempts) : 0,
     stalledMaterializerCalls: Number.isSafeInteger(value.stalledMaterializerCalls) ? Math.max(0, value.stalledMaterializerCalls) : 0,
   };
 }
@@ -189,6 +192,7 @@ function interventionFingerprint(state) {
     finalWithPending: state.finalWithPending,
     completionClaimWithPending: state.completionClaimWithPending,
     stalledMaterializerCalls: state.stalledMaterializerCalls,
+    continueAttempts: state.continueAttempts,
   }));
 }
 
@@ -298,8 +302,11 @@ export function decideContextInputIntervention(status) {
     materialized > 0 ? `已确认写入 ${formatInputChars(materialized)}` : "已确认写入 0 字符",
     pendingCoverageCount > 0 ? `待处理约 ${formatInputChars(pendingChars)}（${pendingCoverageCount} 批）` : "仍有待处理内容",
   ].join("；");
-  const question = "请选择下一步。若仍要求完整结果，请选择第一项。";
-  const options = interventionOptions(status);
+  const recoveryExhausted = Number(status.continueAttempts) >= MAX_CONTINUE_WITHOUT_PROGRESS;
+  const question = recoveryExhausted
+    ? `已连续恢复 ${status.continueAttempts} 次但没有检测到有效进展。请调整任务要求、检查当前结果或停止任务。`
+    : "请选择下一步。若仍要求完整结果，请选择第一项。";
+  const options = interventionOptions(status).filter((option) => !recoveryExhausted || option.id !== "continue");
   return {
     kind: "choice",
     title: "任务已暂停，需要你决定下一步",
@@ -309,9 +316,11 @@ export function decideContextInputIntervention(status) {
     contextInput: {
       reason,
       statusSummary,
-      recommendation: artifactPaths.length > 0
-        ? "推荐“继续补齐当前文件”：当前文件会保留，系统会从安全位置继续处理。"
-        : "推荐“继续处理剩余内容”：系统会先处理已缓存内容，再继续任务。",
+      recommendation: recoveryExhausted
+        ? "推荐“调整任务要求”：明确范围或处理方式后再恢复；系统不会自动丢弃缓存或接受不完整结果。"
+        : artifactPaths.length > 0
+          ? "推荐“继续补齐当前文件”：当前文件会保留，系统会从安全位置继续处理。"
+          : "推荐“继续处理剩余内容”：系统会先处理已缓存内容，再继续任务。",
     },
     payload: {
       title: "任务已暂停，需要你决定下一步",
@@ -321,9 +330,11 @@ export function decideContextInputIntervention(status) {
       contextInput: {
         reason,
         statusSummary,
-        recommendation: artifactPaths.length > 0
-          ? "推荐“继续补齐当前文件”：当前文件会保留，系统会从安全位置继续处理。"
-          : "推荐“继续处理剩余内容”：系统会先处理已缓存内容，再继续任务。",
+        recommendation: recoveryExhausted
+          ? "推荐“调整任务要求”：明确范围或处理方式后再恢复；系统不会自动丢弃缓存或接受不完整结果。"
+          : artifactPaths.length > 0
+            ? "推荐“继续补齐当前文件”：当前文件会保留，系统会从安全位置继续处理。"
+            : "推荐“继续处理剩余内容”：系统会先处理已缓存内容，再继续任务。",
       },
     },
   };
@@ -638,6 +649,7 @@ export function createContextInputTransactionStore(root, options = {}) {
     state.completionClaimWithPending = false;
     state.lastInterventionFingerprint = null;
     state.recoveryReadAllowance = 0;
+    state.continueAttempts = 0;
     state.stalledMaterializerCalls = 0;
     try { persist(); } catch (error) {
       state.cacheFailures.push(String(error?.message || error).slice(0, 500));
@@ -737,6 +749,7 @@ export function createContextInputTransactionStore(root, options = {}) {
     state.completionClaimWithPending = false;
     state.lastInterventionFingerprint = null;
     state.recoveryReadAllowance = 0;
+    state.continueAttempts = 0;
     state.stalledMaterializerCalls = 0;
     if (leasedEntry) state.readLease = null;
     try {
@@ -810,6 +823,7 @@ export function createContextInputTransactionStore(root, options = {}) {
     state.artifactEvidence = [...state.artifactEvidence, record].slice(-8);
 
     if (verified) {
+      let settledInput = false;
       for (const entry of pendingInputs(state)) {
         const coverage = entry.coverage ?? "source";
         const matchesArtifact = pathMatches(entry.metadata?.path, paths)
@@ -820,16 +834,20 @@ export function createContextInputTransactionStore(root, options = {}) {
             || (entry.resourcePath && comparablePath(reference).includes(comparablePath(entry.resourcePath)))
           ));
         if (coverage === "metadata" || matchesArtifact) {
+          settledInput = true;
           entry.coverage = coverage === "metadata" ? "metadata" : "artifact-output";
           entry.state = "foldable";
           entry.coveredBy = { type: "artifact", paths, producer: record.producer, verifiedAt: record.recordedAt };
         }
       }
-      state.finalWithPending = false;
-      state.completionClaimWithPending = false;
-      state.lastInterventionFingerprint = null;
-      state.recoveryReadAllowance = 0;
-      state.stalledMaterializerCalls = 0;
+      if (settledInput) {
+        state.finalWithPending = false;
+        state.completionClaimWithPending = false;
+        state.lastInterventionFingerprint = null;
+        state.recoveryReadAllowance = 0;
+        state.continueAttempts = 0;
+        state.stalledMaterializerCalls = 0;
+      }
     }
     try {
       persist();
@@ -864,6 +882,13 @@ export function createContextInputTransactionStore(root, options = {}) {
     state.finalWithPending = false;
     state.completionClaimWithPending = false;
     if (selected === "continue") {
+      state.continueAttempts += 1;
+      if (state.continueAttempts > MAX_CONTINUE_WITHOUT_PROGRESS) {
+        state.interventionChoice = "continue-exhausted";
+        state.recoveryReadAllowance = 0;
+        try { persist(); } catch {}
+        return { ...status(), continueRejected: true };
+      }
       state.blockedReadCount = 0;
       state.cacheFailures = [];
       state.recoveryReadAllowance = 1;
@@ -971,6 +996,7 @@ export function createContextInputTransactionStore(root, options = {}) {
       interventionChoice: state.interventionChoice,
       interventionFingerprint: state.lastInterventionFingerprint,
       recoveryReadAllowance: state.recoveryReadAllowance,
+      continueAttempts: state.continueAttempts,
       artifactPaths: [...state.artifactPaths],
       artifactEvidence: state.artifactEvidence.map((entry) => ({ ...entry, paths: [...entry.paths] })),
     };

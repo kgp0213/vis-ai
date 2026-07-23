@@ -13,6 +13,7 @@ npm run quality:check
 This checks launcher, Dashboard and API bundle syntax, product version consistency,
 governed debug/release entrypoints, core API response schemas, test-file growth limits,
 third-party runtime provenance, required local bundle patches, repository hygiene,
+embedded runtime-secret scanning (hard-coded deployment endpoints and internal model identifiers),
 all Node tests, a real Edge Dashboard render, Rust formatting, and diff whitespace.
 Project-owned runtime modules under `resources/server/lib/` must retain
 at least 90% line coverage, 60% branch coverage and 90% function coverage; vendored

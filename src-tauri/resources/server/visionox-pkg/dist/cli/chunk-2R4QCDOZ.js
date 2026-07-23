@@ -6957,7 +6957,7 @@ function formatLoopError(err, probe) {
     const requested = reqMatch ? `${Number(reqMatch[1]).toLocaleString()} tokens` : t("errors.contextOverflowTooMany");
     return t("errors.contextOverflow", { requested });
   }
-  const m = /^DeepSeek (\d{3}):\s*([\s\S]*)$/.exec(msg);
+  const m = /^API (\d{3}):\s*([\s\S]*)$/.exec(msg);
   if (!m) return msg;
   const status = m[1] ?? "";
   const body = m[2] ?? "";
@@ -6971,7 +6971,7 @@ function formatLoopError(err, probe) {
 }
 function is5xxError(err) {
   if (!(err instanceof Error)) return false;
-  const m = /^DeepSeek (5\d{2}):/.exec(err.message ?? "");
+  const m = /^API (5\d{2}):/.exec(err.message ?? "");
   return m !== null;
 }
 async function probeDeepSeekReachable(client, timeoutMs = 1500) {
@@ -8292,8 +8292,8 @@ ${reason}`
     if (this.contextInputGuard) {
       try {
         const contextInputMemo = this.contextInputGuard.memo();
-        if (typeof contextInputMemo === "string" && contextInputMemo.trim()) {
-          msgs.push({ role: "system", content: contextInputMemo.trim() });
+        if (typeof contextInputMemo === "string" && contextInputMemo.trim() && msgs[0]?.role === "system") {
+          msgs[0] = { role: "system", content: `${msgs[0].content}\n\n${contextInputMemo.trim()}` };
         }
       } catch {
       }
@@ -8689,7 +8689,9 @@ ${reason}`
           yield { turn: this._turn, role: "done", content: partial };
           return;
         }
-        const probe = is5xxError(err) ? await probeDeepSeekReachable(this.client) : void 0;
+        const probe = is5xxError(err) && /deepseek\.com/i.test(String(this.client?.baseUrl ?? ""))
+          ? await probeDeepSeekReachable(this.client)
+          : void 0;
         yield {
           turn: this._turn,
           role: "error",
