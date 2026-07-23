@@ -945,6 +945,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(frontmatter, /^description:\s*\S.+$/m);
     assert.doesNotMatch(frontmatter, /^triggers:/m);
     assert.match(skill, /prepare_local_document/);
-    assert.match(skill, /readablePath/);
+    assert.match(skill, /VISIONOX_DOCUMENT_READABLE_PATH/);
+    assert.match(skill, /documentRef/);
+    assert.doesNotMatch(skill, /returned `readablePath`/);
   });
 });

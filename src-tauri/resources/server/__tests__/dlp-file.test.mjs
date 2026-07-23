@@ -449,6 +449,7 @@ test("launcher shares managed document references without exposing the retired P
   const bundledLoop = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
   const bundledIndex = readFileSync(new URL("../visionox-pkg/dist/index.js", import.meta.url), "utf8");
   assert.match(launcher, /createPreparedDocumentRegistry\(\{[\s\S]*?writeActiveSessionMeta\(\{ preparedDocuments \}\)/);
+  assert.match(launcher, /preparedDocumentToolResult\([\s\S]*?prepareLocalDocument/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(meta\.preparedDocuments/);
   assert.match(launcher, /preparedDocumentRegistry\.restore\(sessionMeta\.preparedDocuments/);
   assert.doesNotMatch(launcher, /name:\s*"extract_pdf_text"/);

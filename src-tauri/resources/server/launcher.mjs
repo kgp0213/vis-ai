@@ -107,7 +107,7 @@ const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, res
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
-const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
+const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
@@ -1271,7 +1271,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 
   tools.register({
     name: "prepare_local_document",
-    description: "Prepare a user-provided local document path before reading/parsing it. Use this FIRST for local PDF/Word/Excel/PPT/XML/DSN/text/image files, odd Chinese filenames, wildcard paths, or when another document reader fails. It fixes common Windows path typos such as D:_folder, resolves one matching local file, and returns a stable documentRef plus the current readablePath. Keep using documentRef when switching tools so a missing readable copy can be recreated. Do not explain internal path preparation details to the user.",
+    description: "Prepare a user-provided local document path before reading/parsing it. Use this FIRST for local PDF/Word/Excel/PPT/XML/DSN/text/image files, odd Chinese filenames, wildcard paths, or when another document reader fails. It fixes common Windows path typos such as D:_folder and returns a stable documentRef while the host keeps the real readable path private. Keep using documentRef when switching tools so a missing readable copy can be recreated. Do not explain internal path preparation details to the user.",
     readOnly: true,
     parameters: {
       type: "object",
@@ -1287,14 +1287,16 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
       },
       required: ["input"],
     },
-    fn: async (args, toolCtx) => JSON.stringify(await prepareLocalDocument(args?.input ?? args, {
-      cfg: readConfig(configPath),
-      env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
-      logger: console,
-      allowMultiple: Boolean(args?.allowMultiple),
-      signal: toolCtx?.signal,
-      registry: preparedDocumentRegistry,
-    })),
+    fn: async (args, toolCtx) => JSON.stringify(preparedDocumentToolResult(
+      await prepareLocalDocument(args?.input ?? args, {
+        cfg: readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+        allowMultiple: Boolean(args?.allowMultiple),
+        signal: toolCtx?.signal,
+        registry: preparedDocumentRegistry,
+      }),
+    )),
   });
 
   registerShellTools(tools, {
@@ -1304,6 +1306,16 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
     getOperationId: opts.getOperationId,
+    getEnvironment: ({ command, args }) => preparedDocumentEnvironment(
+      preparedDocumentRegistry,
+      args ?? { command },
+      rootDir,
+      {
+        readConfig: () => readConfig(configPath),
+        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+        logger: console,
+      },
+    ),
   });
   wrapToolsPathArgsWithDlp(tools, ["run_command", "run_background"], {
     readConfig: () => readConfig(configPath),
@@ -1522,7 +1534,7 @@ const DEFAULT_MODES = {
     hint: "关注结构、准确性、可交付文件和中文排版质量。",
     eccRules: ["common"],
     skills: ["file-access-rescue", "officecli", "pdf", "md-to-pdf-cjk"],
-    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。按用户目标选择合适的格式读取器或 Skill；需要分批处理时，先把已处理内容写入目标文件或明确记录进度，再继续下一批。对于大型、结构化或需要完整转换的文档，可以在临时目录编写一次性解析/转换脚本，并通过普通 run_command 执行；优先复用现有依赖，不要在没有必要时安装依赖，不要复制源文件到工作区或搜索旧提取产物。脚本应直接写入目标文件，输出简短的进度与校验结果，并在完成后清理临时文件。交付前检查实际文件，不得把部分结果宣称为完整完成。",
+    prompt: "你处于办公模式。处理本地文档时先调用 prepare_local_document 并保留 documentRef。宿主会在支持的工具和命令执行前自动绑定当前可读文件；脚本不要硬编码原始路径或临时路径，应读取宿主注入的 VISIONOX_DOCUMENT_READABLE_PATH / VISIONOX_DOCUMENT_ROOT，并在 run_command/run_background 的 documentRef 字段中传入对应引用。准备过多个文档时不得省略 documentRef。若脚本无法接受任务绑定的输入，应明确报告并暂停，不要静默读取原始文件。按用户目标选择合适的格式读取器或 Skill；需要分批处理时，先把已处理内容写入目标文件或明确记录进度，再继续下一批。对于大型、结构化或需要完整转换的文档，可以在临时目录编写一次性解析/转换脚本，并通过普通 run_command 执行；优先复用现有依赖，不要在没有必要时安装依赖，不要复制源文件到工作区或搜索旧提取产物。脚本应直接写入目标文件，输出简短的进度与校验结果，并在完成后清理临时文件。交付前检查实际文件，不得把部分结果宣称为完整完成。",
   },
   design: {
     version: CONSTANTS.DEFAULT_MODE_VERSION,

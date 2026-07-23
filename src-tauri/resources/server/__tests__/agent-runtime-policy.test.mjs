@@ -233,18 +233,29 @@ describe("agent runtime policy", () => {
     const rootDir = await mkdtemp(join(tmpdir(), "visionox-document-env-"));
     try {
       const tools = new ToolRegistry();
+      let bindingRequest = null;
       registerShellTools(tools, {
         rootDir,
         allowAll: true,
-        getEnvironment: () => ({
-          VISIONOX_DOCUMENT_REF: "visionox-document:doc_test",
-          VISIONOX_DOCUMENT_READABLE_PATH: "C:\\Temp\\prepared\\manual.pdf",
-          VISIONOX_DOCUMENT_ROOT: "C:\\Temp\\prepared",
-        }),
+        getEnvironment: (request) => {
+          bindingRequest = request;
+          return {
+            VISIONOX_DOCUMENT_REF: "visionox-document:doc_test",
+            VISIONOX_DOCUMENT_READABLE_PATH: "C:\\Temp\\prepared\\manual.pdf",
+            VISIONOX_DOCUMENT_ROOT: "C:\\Temp\\prepared",
+          };
+        },
       });
+      const specs = tools.specs();
+      assert.equal(specs.find((spec) => spec.function?.name === "run_command")?.function?.parameters?.properties?.documentRef?.type, "string");
+      assert.equal(specs.find((spec) => spec.function?.name === "run_background")?.function?.parameters?.properties?.documentRef?.type, "string");
       const command = 'node -e "process.stdout.write(process.env.VISIONOX_DOCUMENT_READABLE_PATH)"';
-      const result = await tools.dispatch("run_command", { command });
+      const result = await tools.dispatch("run_command", {
+        command,
+        documentRef: "visionox-document:doc_test",
+      });
       assert.match(result, /C:\\Temp\\prepared\\manual\.pdf/);
+      assert.equal(bindingRequest?.args?.documentRef, "visionox-document:doc_test");
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

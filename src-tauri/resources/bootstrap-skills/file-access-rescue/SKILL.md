@@ -36,9 +36,15 @@ Pass the user's original wording into `prepare_local_document`; do not try to "f
 - Full prompts that contain a path plus extra instructions.
 
 Keep the returned `documentRef` when switching tools. It is stable across Skill changes and
-lets the host recreate a missing readable copy from the original file. Do not depend on a
-temporary path remaining unchanged. The returned `readablePath` is only the current plaintext
-location for diagnostics or a tool that cannot accept the stable reference.
+lets the host recreate a missing readable copy from the original file. Do not depend on or ask
+for the private plaintext path; the host resolves it at execution time.
+
+For scripts executed through `run_command` or `run_background`, do not hard-code either the
+protected source path or the current temporary path. Read `VISIONOX_DOCUMENT_READABLE_PATH`
+for the current file and `VISIONOX_DOCUMENT_ROOT` for its directory; the host injects these
+runtime-only variables and refreshes the binding before the command starts. Set the shell
+tool's `documentRef` field to the prepared reference. This field is mandatory after more than
+one document has been prepared in the conversation.
 
 ## User-Facing Answer
 

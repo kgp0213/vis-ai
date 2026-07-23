@@ -899,6 +899,10 @@ const required = [
       "truncateCommandOutput",
       "decodeTruncatedOutputPart",
       "showing beginning and end",
+      "const getEnvironment =",
+      "env: environment",
+      "...(opts.env ?? {})",
+      "Optional stable documentRef from prepare_local_document",
     ],
   },
   {

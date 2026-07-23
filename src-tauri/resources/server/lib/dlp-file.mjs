@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { open, access } from "node:fs/promises";
-import { basename, extname, isAbsolute, join, parse, resolve } from "node:path";
+import { access, open, readFile } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -35,6 +35,7 @@ const DOCUMENT_PATH_EXTENSIONS = [
 const decryptCache = new Map();
 const DOCUMENT_REF_PREFIX = "visionox-document:";
 const DEFAULT_PREPARED_DOCUMENT_LIMIT = 100;
+const SCRIPT_EXTENSIONS = new Set([".py", ".pyw", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".ps1", ".bat", ".cmd", ".sh"]);
 
 function preparedPathKey(value) {
   try {
@@ -55,6 +56,7 @@ function publicPreparedDocument(entry) {
     documentRef: `${DOCUMENT_REF_PREFIX}${entry.documentId}`,
     sourcePath: entry.sourcePath,
     readablePath: entry.readablePath,
+    readableDirectory: dirname(entry.readablePath),
     documentKind: entry.documentKind,
     encrypted: entry.encrypted,
     sourceSize: entry.sourceSize,
@@ -125,6 +127,13 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     return [...byId.values()].map(publicPreparedDocument);
   }
 
+  function latest(value = null) {
+    const matched = value == null ? null : find(value);
+    if (matched) return matched;
+    const entries = snapshot();
+    return entries.length > 0 ? entries.at(-1) : null;
+  }
+
   function restore(entries, { replace = true, notifyChange = false } = {}) {
     if (replace) {
       byId.clear();
@@ -147,7 +156,122 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     if (notifyChange) notify();
   }
 
-  return { register, find, snapshot, restore, clear };
+  return { register, find, latest, snapshot, restore, clear };
+}
+
+function collectPreparedDocumentInputStrings(value, output = [], seen = new Set()) {
+  if (typeof value === "string") {
+    if (value.trim()) output.push(value.trim());
+    return output;
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) return output;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) collectPreparedDocumentInputStrings(item, output, seen);
+    return output;
+  }
+  if (typeof value.documentRef === "string" && value.documentRef.trim()) {
+    output.unshift(value.documentRef.trim());
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "documentRef") continue;
+    collectPreparedDocumentInputStrings(item, output, seen);
+  }
+  return output;
+}
+
+function includesPreparedCandidate(text, candidate) {
+  const haystack = process.platform === "win32" ? text.toLowerCase() : text;
+  const needle = process.platform === "win32" ? candidate.toLowerCase() : candidate;
+  return haystack.includes(needle);
+}
+
+function selectPreparedDocument(registry, input, rootDir) {
+  const entries = registry?.snapshot?.() ?? [];
+  if (entries.length === 0) return null;
+  const values = collectPreparedDocumentInputStrings(input);
+  const referencedEntries = new Map();
+  const referencePattern = /visionox-document:[A-Za-z0-9_-]+/gu;
+  for (const value of values) {
+    for (const documentRef of value.match(referencePattern) ?? []) {
+      const exact = registry.find(documentRef);
+      if (!exact) throw new DlpDecryptError("文档引用已失效，无法绑定当前明文文件", { documentRef });
+      referencedEntries.set(exact.documentId, exact);
+    }
+  }
+  if (referencedEntries.size > 1) {
+    throw new DlpDecryptError("命令中的文档引用互相冲突，无法确定当前明文文件", {
+      documentRefs: [...referencedEntries.values()].map((entry) => entry.documentRef),
+    });
+  }
+
+  const matches = new Map();
+  for (const value of values) {
+    const exact = registry.find(value);
+    if (exact) matches.set(exact.documentId, exact);
+    for (const entry of entries) {
+      const rel = relative(rootDir, entry.sourcePath);
+      const candidates = [entry.documentRef, entry.sourcePath, entry.readablePath];
+      if (rel && !rel.startsWith("..") && !isAbsolute(rel)) candidates.push(rel);
+      if (candidates.some((candidate) => candidate && includesPreparedCandidate(value, candidate))) {
+        matches.set(entry.documentId, entry);
+      }
+    }
+  }
+  const referenced = referencedEntries.values().next().value ?? null;
+  if (referenced && [...matches.values()].some((entry) => entry.documentId !== referenced.documentId)) {
+    throw new DlpDecryptError("文档引用 documentRef 与命令中的文档路径冲突，已阻止执行", {
+      documentRef: referenced.documentRef,
+      matchedDocumentRefs: [...matches.values()].map((entry) => entry.documentRef),
+    });
+  }
+  if (referenced) return referenced;
+  if (matches.size === 1) return matches.values().next().value;
+  if (matches.size > 1) return null;
+  return entries.length === 1 ? entries[0] : null;
+}
+
+/** Runtime-only variables for child processes; keep real paths out of model messages. */
+export async function preparedDocumentEnvironment(registry, input = null, rootDir = process.cwd(), options = {}) {
+  let entry = selectPreparedDocument(registry, input, resolve(rootDir));
+  if (!entry) return {};
+  if (options.readConfig || options.cfg || options.env) {
+    const env = { ...(options.env ?? {}), rootDir: options.env?.rootDir ?? resolve(rootDir) };
+    const resolved = await resolveReadablePathForDlp(entry.documentRef, {
+      cfg: typeof options.readConfig === "function" ? options.readConfig() : options.cfg ?? {},
+      env,
+      logger: options.logger,
+      signal: options.signal,
+      registry,
+    });
+    entry = registry.find(resolved.documentRef) ?? {
+      ...entry,
+      readablePath: resolved.path,
+      readableDirectory: dirname(resolved.path),
+    };
+  }
+  return {
+    VISIONOX_DOCUMENT_REF: entry.documentRef,
+    VISIONOX_DOCUMENT_READABLE_PATH: entry.readablePath,
+    VISIONOX_DOCUMENT_ROOT: entry.readableDirectory,
+    VISIONOX_WORKSPACE_ROOT: resolve(rootDir),
+  };
+}
+
+export function preparedDocumentToolResult(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  const {
+    sourcePath: _sourcePath,
+    readablePath: _readablePath,
+    sourcePaths: _sourcePaths,
+    sources,
+    ...visible
+  } = result;
+  if (Array.isArray(sources)) visible.sources = sources.map(preparedDocumentToolResult);
+  if (visible.ok && visible.documentRef) {
+    visible.note = "Keep using documentRef with supported tools and commands; the host manages the current readable file path.";
+  }
+  return visible;
 }
 
 export function latestPreparedDocumentRef(registry, documentKind = null) {
@@ -942,8 +1066,8 @@ async function resolveEmbeddedOfficePaths(command, options) {
 }
 
 async function resolveEmbeddedDocumentPaths(command, options) {
-  const registered = await resolveRegisteredPathsInCommand(command, options);
-  const text = String(registered.command ?? "");
+  const registered = await resolveRegisteredDocumentString(command, options);
+  const text = String(registered.value ?? "");
   const drivePath = /[A-Za-z]:(?:[\\/])?/g;
   let match;
   let changed = registered.changed;
@@ -968,8 +1092,49 @@ async function resolveEmbeddedDocumentPaths(command, options) {
   return { command: out, changed: true };
 }
 
+async function resolveRegisteredDocumentString(value, options) {
+  const original = String(value ?? "");
+  if (!original || !options.registry) return { value, changed: false };
+  let text = original;
+  let changed = false;
+  const entries = options.registry.snapshot?.() ?? [];
+  const uniqueRelativeNames = new Map();
+  for (const entry of entries) {
+    const rel = relative(options.env?.rootDir ?? process.cwd(), entry.sourcePath);
+    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) {
+      const key = rel.toLowerCase();
+      uniqueRelativeNames.set(key, uniqueRelativeNames.has(key) ? null : entry);
+    }
+  }
+  const candidates = [];
+  for (const entry of entries) candidates.push(entry.documentRef, entry.sourcePath, entry.readablePath);
+  for (const [name, entry] of uniqueRelativeNames) {
+    if (entry) candidates.push(relative(options.env?.rootDir ?? process.cwd(), entry.sourcePath));
+  }
+  for (const candidate of [...new Set(candidates.filter(Boolean))].sort((a, b) => b.length - a.length)) {
+    if (!text.includes(candidate)) continue;
+    const resolved = await resolveDlpPathToken(candidate, options);
+    if (!resolved.changed || !resolved.value || resolved.value === candidate) continue;
+    if (/[\\/]/u.test(candidate)) {
+      text = text.split(candidate).join(resolved.value);
+      changed = true;
+      continue;
+    }
+    const escaped = candidate.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+    const token = new RegExp(`(^|[\\s\"'=(,:])${escaped}(?=$|[\\s\"'\\),;，。；、])`, "giu");
+    const next = text.replace(token, `$1${resolved.value}`);
+    changed ||= next !== text;
+    text = next;
+  }
+  return { value: changed ? text : value, changed };
+}
+
 async function resolveDlpPathToken(value, options) {
-  const managed = options.registry?.find(value);
+  const raw = String(value ?? "").trim();
+  const managed = options.registry?.find(value)
+    ?? (raw && options.env?.rootDir && !/\s/u.test(raw)
+      ? options.registry?.find(resolveInputPath(raw, options.env.rootDir))
+      : null);
   const candidate = managed
     ? { abs: managed.sourcePath, fromPattern: false }
     : singlePathCandidateFromString(value, options.env?.rootDir);
@@ -1005,6 +1170,7 @@ async function resolveOfficecliCommandString(command, options) {
 }
 
 async function resolveDlpPathsInArgs(value, options, meta = {}) {
+  if (meta?.key === "documentRef") return value;
   if (isOfficecliCommandArg(meta)) {
     if (typeof value === "string") {
       return await resolveOfficecliCommandString(value, options);
@@ -1027,6 +1193,8 @@ async function resolveDlpPathsInArgs(value, options, meta = {}) {
     return embedded.command;
   }
   if (typeof value === "string") {
+    const registered = await resolveRegisteredDocumentString(value, options);
+    if (registered.changed) return registered.value;
     const result = await resolveDlpPathToken(value, options);
     return result.changed ? result.value : value;
   }
@@ -1045,6 +1213,41 @@ async function resolveDlpPathsInArgs(value, options, meta = {}) {
   return value;
 }
 
+async function findUnboundScriptDocument(command, options) {
+  if (!options.registry || typeof command !== "string") return null;
+  const entries = options.registry.snapshot?.() ?? [];
+  if (entries.length === 0) return null;
+  for (const token of splitCommandLine(command)) {
+    const ext = extname(token).toLowerCase();
+    if (!SCRIPT_EXTENSIONS.has(ext)) continue;
+    const scriptPath = resolveInputPath(token, options.env?.rootDir);
+    let source;
+    try {
+      source = await readFile(scriptPath, "utf8");
+    } catch {
+      continue;
+    }
+    const matched = entries.find((entry) => {
+      const candidates = [entry.sourcePath, entry.readablePath].flatMap((path) => [
+        path,
+        path.replace(/\\/gu, "\\\\"),
+        path.replace(/\\/gu, "/"),
+      ]);
+      return candidates.some((candidate) => source.includes(candidate));
+    });
+    if (!matched) continue;
+    return {
+      ok: false,
+      code: "UNBOUND_DOCUMENT_SCRIPT_INPUT",
+      error: "脚本引用了已准备文档的路径，宿主无法保证后续读取使用当前明文文件。",
+      script: scriptPath,
+      documentRef: matched.documentRef,
+      hint: "请让脚本读取 VISIONOX_DOCUMENT_READABLE_PATH 或 VISIONOX_DOCUMENT_ROOT，不要硬编码原始路径或临时路径。",
+    };
+  }
+  return null;
+}
+
 export function wrapToolsPathArgsWithDlp(tools, toolNames, options = {}) {
   let count = 0;
   for (const name of toolNames) {
@@ -1057,6 +1260,10 @@ export function wrapToolsPathArgsWithDlp(tools, toolNames, options = {}) {
       __visionoxDlpPathArgsWrapped: true,
       fn: async (args, ctx) => {
         const rewritten = await resolveDlpPathsInArgs(args, { ...options, signal: ctx?.signal }, { toolName: name });
+        if (isShellCommandArg({ toolName: name, key: "command" }) && typeof rewritten?.command === "string") {
+          const issue = await findUnboundScriptDocument(rewritten.command, options);
+          if (issue) return JSON.stringify(issue);
+        }
         try {
           return await original.fn(rewritten, ctx);
         } catch (err) {

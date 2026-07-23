@@ -416,7 +416,8 @@ async function runChain(chain, opts) {
       timeoutMs: remainingMs,
       buf,
       signal: opts.signal,
-      projectRoot: opts.projectRoot
+      projectRoot: opts.projectRoot,
+      env: opts.env
     });
     lastExit = result.exitCode;
     if (result.timedOut) {
@@ -514,7 +515,7 @@ async function runPipeGroup(segments, opts) {
   if (opts.signal?.aborted) {
     throw new DOMException("command cancelled", "AbortError");
   }
-  const env = { ...process.env, PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
+  const env = { ...process.env, ...(opts.env ?? {}), PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" };
   const children = [];
   const allFds = [];
   let timedOut = false;
@@ -955,11 +956,12 @@ async function runCommand(cmd, opts) {
       maxOutputChars: maxChars,
       outputResourceDir: opts.outputResourceDir,
       signal: opts.signal,
-      projectRoot: opts.projectRoot
+      projectRoot: opts.projectRoot,
+      env: opts.env
     });
   }
   const timeoutMs = timeoutSec * 1e3;
-  const normalizedEnv = normalizeWindowsEnvVars(process.env);
+  const normalizedEnv = normalizeWindowsEnvVars({ ...process.env, ...(opts.env ?? {}) });
   const spawnOpts = {
     cwd: opts.cwd,
     shell: false,
@@ -1184,6 +1186,7 @@ function registerShellTools(registry, opts) {
   const outputResourceDir = opts.outputResourceDir ? pathMod3.resolve(opts.outputResourceDir) : null;
   const jobs = opts.jobs ?? new JobRegistry();
   const getOperationId = typeof opts.getOperationId === "function" ? opts.getOperationId : () => null;
+  const getEnvironment = typeof opts.getEnvironment === "function" ? opts.getEnvironment : () => ({});
   const getExtraAllowed = typeof opts.extraAllowed === "function" ? opts.extraAllowed : (() => {
     const snapshot2 = opts.extraAllowed ?? [];
     return () => snapshot2;
@@ -1209,6 +1212,10 @@ function registerShellTools(registry, opts) {
           type: "string",
           description: 'Full command line. POSIX-ish quoting. Chain operators `|`, `||`, `&&`, `;` and file redirects `>` / `>>` / `<` / `2>` / `2>>` / `2>&1` / `&>` work natively (no shell). Background `&`, heredoc `<<`, env-var expansion `$VAR`, and command substitution `$(\u2026)` are rejected (or passed through as literal in the case of `$VAR`). To pass an operator character as a literal argument (e.g. a regex), wrap it in quotes: `grep "a|b" file.txt`.'
         },
+        documentRef: {
+          type: "string",
+          description: "Optional stable documentRef from prepare_local_document. Set it when a script reads VISIONOX_DOCUMENT_READABLE_PATH, especially after preparing more than one document."
+        },
         timeoutSec: {
           type: "integer",
           description: `Override the default ${timeoutSec}s timeout for a single command.`
@@ -1220,6 +1227,7 @@ function registerShellTools(registry, opts) {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_command: empty command");
       const effectiveTimeout = Math.max(1, Math.min(600, args.timeoutSec ?? timeoutSec));
+      const environment = await getEnvironment({ toolName: "run_command", command: cmd, args });
       if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed(), rootDir)) {
         const gate = ctx?.confirmationGate ?? pauseGate;
         const choice = await gate.ask({
@@ -1240,6 +1248,7 @@ function registerShellTools(registry, opts) {
         timeoutSec: effectiveTimeout,
         maxOutputChars,
         outputResourceDir,
+        env: environment,
         signal: ctx?.signal
       });
       return formatCommandResult(cmd, result);
@@ -1254,6 +1263,10 @@ function registerShellTools(registry, opts) {
         command: {
           type: "string",
           description: "Full command line. Same quoting rules as run_command (no pipes / redirects / chaining)."
+        },
+        documentRef: {
+          type: "string",
+          description: "Optional stable documentRef from prepare_local_document. Set it when the background process reads VISIONOX_DOCUMENT_READABLE_PATH."
         },
         waitSec: {
           type: "integer",
@@ -1287,6 +1300,7 @@ function registerShellTools(registry, opts) {
       }
       const result = await jobs.start(cmd, {
         cwd: rootDir,
+        env: await getEnvironment({ toolName: "run_background", command: cmd, args }),
         waitSec: args.waitSec,
         signal: args.lifecycle === "service" ? void 0 : ctx?.signal,
         ownerId: getOperationId(),
@@ -1525,7 +1539,7 @@ var JobRegistry = class {
       cwd: pathMod4.resolve(opts.cwd),
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: { ...process.env, ...(opts.env ?? {}) },
       // POSIX: detach so the child becomes its own process-group leader.
       // Required for `process.kill(-pid, …)` later — without it a group
       // kill fails and we end up only signaling the wrapper, leaving
