@@ -36,6 +36,41 @@ describe("Dashboard desktop UX", () => {
     assert.doesNotMatch(app, /var ARTIFACT_OPEN_EXTS = .*"md"/);
   });
 
+  test("keeps artifact viewing reversible and confirms before leaving the conversation", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(dashboardCssUrl, "utf8");
+    const artifactActions = app.slice(app.indexOf("function showArtifactPreview("), app.indexOf("document.addEventListener(\"click\", handleArtifactAction)"));
+    const fileArtifacts = app.slice(app.indexOf("function FileArtifactsCard("), app.indexOf("function ChatPanel("));
+
+    assert.match(artifactActions, /返回对话/);
+    assert.match(artifactActions, /event\.key === "Escape"/);
+    assert.match(artifactActions, /event\.target === backdrop/);
+    assert.match(artifactActions, /function confirmExternalArtifactOpen\(artifact\)/);
+    assert.match(artifactActions, /await confirmExternalArtifactOpen\(artifact\)/);
+    assert.match(fileArtifacts, /await confirmExternalArtifactOpen\(file\)/);
+    assert.match(css, /\.artifact-open-confirmation/);
+    assert.match(css, /\.artifact-preview-close[\s\S]*?min-width:\s*96px/);
+  });
+
+  test("cleans completed reasoning locally while keeping a compact live tail", () => {
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    const css = readFileSync(dashboardCssUrl, "utf8");
+    const chatMessage = app.slice(app.indexOf("var ChatMessage ="), app.indexOf("function ModalCard("));
+    const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
+    const chatFeed = app.slice(app.indexOf("var ChatFeed ="), app.indexOf("var SideRail ="));
+
+    assert.match(chatMessage, /reasoningHidden = false/);
+    assert.match(chatMessage, /reasoning-live-tail/);
+    assert.match(chatMessage, /node\.scrollTop = node\.scrollHeight/);
+    assert.match(chatPanel, /const \[reasoningCleaned, setReasoningCleaned\] = d2\(false\)/);
+    assert.match(chatPanel, /整理对话/);
+    assert.match(chatPanel, /setReasoningCleaned\(true\)/);
+    assert.doesNotMatch(chatPanel, /整理对话[\s\S]{0,300}refetchCanonicalState/);
+    assert.match(chatFeed, /reasoningHidden=\$\{reasoningCleaned && !Boolean\(streaming/);
+    assert.match(css, /\.reasoning-live-tail\s*\{[\s\S]*?max-height:/);
+    assert.match(css, /\.reasoning-live-tail\s*\{[\s\S]*?overflow-y:\s*auto/);
+  });
+
   test("renders context-input intervention cards with an explicit status and recommendation", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");
