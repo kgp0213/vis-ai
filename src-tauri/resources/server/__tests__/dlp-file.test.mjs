@@ -463,6 +463,93 @@ test("shell binding keeps documentRef as a control field while rewriting command
   });
 });
 
+test("shell binding resolves prepared document environment placeholders before native argv parsing", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const firstSource = join(dir, "first.pdf");
+    const firstReadable = join(dir, "prepared", "first.pdf");
+    const secondSource = join(dir, "second.pdf");
+    const secondReadable = join(dir, "prepared", "second readable.pdf");
+    mkdirSync(join(dir, "prepared"), { recursive: true });
+    await writeFile(firstSource, Buffer.from("%PDF-1.7"));
+    await writeFile(firstReadable, Buffer.from("%PDF-1.7"));
+    await writeFile(secondSource, Buffer.from("%PDF-1.7"));
+    await writeFile(secondReadable, Buffer.from("%PDF-1.7"));
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: firstSource, readablePath: firstReadable, encrypted: true });
+    const second = registry.register({ sourcePath: secondSource, readablePath: secondReadable, encrypted: true });
+    const received = [];
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async (args) => { received.push(args.command); return "ok"; },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => ({ dlp: { mode: "on" } }),
+      env: { rootDir: dir },
+      registry,
+    });
+
+    for (const placeholder of [
+      "$env:VISIONOX_DOCUMENT_READABLE_PATH",
+      "%VISIONOX_DOCUMENT_READABLE_PATH%",
+      "${VISIONOX_DOCUMENT_READABLE_PATH}",
+    ]) {
+      await defs.get("run_command").fn({
+        command: `officecli view "${placeholder}" text`,
+        documentRef: second.documentRef,
+      });
+    }
+
+    assert.deepEqual(received, Array(3).fill(`officecli view "${secondReadable}" text`));
+  });
+});
+
+test("shell binding uses the only prepared document for an environment placeholder", async () => {
+  if (process.platform !== "win32") return;
+  await withTempDir(async (dir) => {
+    const source = join(dir, "manual.pdf");
+    const readable = join(dir, "prepared", "manual readable.pdf");
+    mkdirSync(join(dir, "prepared"), { recursive: true });
+    await writeFile(source, Buffer.from("%PDF-1.7"));
+    await writeFile(readable, Buffer.from("%PDF-1.7"));
+    const registry = createPreparedDocumentRegistry();
+    registry.register({ sourcePath: source, readablePath: readable, encrypted: true });
+    let receivedCommand = null;
+    const { defs, tools } = createToolRegistry([["run_command", {
+      name: "run_command",
+      fn: async (args) => { receivedCommand = args.command; return "ok"; },
+    }]]);
+    wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+      readConfig: () => ({ dlp: { mode: "on" } }),
+      env: { rootDir: dir },
+      registry,
+    });
+
+    await defs.get("run_command").fn({ command: "7z l %VISIONOX_DOCUMENT_READABLE_PATH%" });
+
+    assert.equal(receivedCommand, `7z l "${readable}"`);
+  });
+});
+
+test("shell binding leaves unrelated environment placeholders unchanged", async () => {
+  const registry = createPreparedDocumentRegistry();
+  registry.register({ sourcePath: "C:\\docs\\manual.pdf", readablePath: "C:\\prepared\\manual.pdf", encrypted: true });
+  let receivedCommand = null;
+  const { defs, tools } = createToolRegistry([["run_command", {
+    name: "run_command",
+    fn: async (args) => { receivedCommand = args.command; return "ok"; },
+  }]]);
+  wrapToolsPathArgsWithDlp(tools, ["run_command"], {
+    readConfig: () => ({ dlp: { mode: "on" } }),
+    env: { rootDir: process.cwd() },
+    registry,
+  });
+
+  await defs.get("run_command").fn({ command: "node script.mjs %UNRELATED_PATH%" });
+
+  assert.equal(receivedCommand, "node script.mjs %UNRELATED_PATH%");
+});
+
 test("shell execution blocks generated scripts that hard-code a prepared document path", async () => {
   if (process.platform !== "win32") return;
   await withTempDir(async (dir) => {
