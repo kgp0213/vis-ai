@@ -13,6 +13,7 @@ import {
   prepareLocalDocument,
   prepareLocalDocuments,
   preparedDocumentEnvironment,
+  preparedDocumentToolResult,
   resolveDlpScriptPath,
   resolveReadablePathForDlp,
   wrapReadFileToolWithDlp,
@@ -349,6 +350,25 @@ test("prepared document environment recreates a missing readable file before scr
     assert.equal(existsSync(readable), true);
     assert.equal(resolve(environment.VISIONOX_DOCUMENT_READABLE_PATH), resolve(readable));
   });
+});
+
+test("prepared document tool output keeps real paths out of model context", () => {
+  const result = preparedDocumentToolResult({
+    ok: true,
+    sourcePath: "C:\\docs\\protected.pdf",
+    readablePath: "C:\\temp\\protected.pdf",
+    documentId: "doc_1234567890abcdef1234",
+    documentRef: "visionox-document:doc_1234567890abcdef1234",
+    documentKind: "pdf",
+    pathChanged: true,
+    suggestedTools: ["pdf skill"],
+    note: "diagnostic path note",
+  });
+
+  assert.equal(result.sourcePath, undefined);
+  assert.equal(result.readablePath, undefined);
+  assert.equal(result.documentRef, "visionox-document:doc_1234567890abcdef1234");
+  assert.match(result.note, /documentRef/);
 });
 
 test("shell binding keeps documentRef as a control field while rewriting command paths", async () => {
