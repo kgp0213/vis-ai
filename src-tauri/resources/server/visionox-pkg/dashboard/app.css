@@ -3037,6 +3037,14 @@ textarea {
   border-radius: var(--radius-sm);
 }
 
+.chat-msg .reasoning-live-tail {
+  max-height: 76px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  font-variant-numeric: tabular-nums;
+}
+
 .chat-msg .reasoning .chat-artifact-actions {
   display: none;
 }
@@ -5175,6 +5183,51 @@ textarea {
   color: var(--text-secondary);
   line-height: 1;
   cursor: pointer;
+}
+
+.artifact-preview-close {
+  min-width: 96px;
+}
+
+.artifact-open-confirmation {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.artifact-open-confirmation-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 18px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-lg);
+}
+
+.artifact-open-confirmation-title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.artifact-open-confirmation-text {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.artifact-open-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 
 .artifact-preview-body {

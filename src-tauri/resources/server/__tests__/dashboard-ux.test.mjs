@@ -43,8 +43,8 @@ describe("Dashboard desktop UX", () => {
     const fileArtifacts = app.slice(app.indexOf("function FileArtifactsCard("), app.indexOf("function ChatPanel("));
 
     assert.match(artifactActions, /返回对话/);
-    assert.match(artifactActions, /event\.key === "Escape"/);
-    assert.match(artifactActions, /event\.target === backdrop/);
+    assert.match(app, /document\.addEventListener\("keydown", \(ev\) => \{[\s\S]*?ev\.key === "Escape"[\s\S]*?closeArtifactPreview/);
+    assert.match(artifactActions, /ev\.target === backdrop/);
     assert.match(artifactActions, /function confirmExternalArtifactOpen\(artifact\)/);
     assert.match(artifactActions, /await confirmExternalArtifactOpen\(artifact\)/);
     assert.match(fileArtifacts, /await confirmExternalArtifactOpen\(file\)/);
@@ -64,7 +64,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatMessage, /node\.scrollTop = node\.scrollHeight/);
     assert.match(chatPanel, /const \[reasoningCleaned, setReasoningCleaned\] = d2\(false\)/);
     assert.match(chatPanel, /整理对话/);
-    assert.match(chatPanel, /setReasoningCleaned\(true\)/);
+    assert.match(chatPanel, /setReasoningCleaned\(\(cleaned\) => !cleaned\)/);
     assert.doesNotMatch(chatPanel, /整理对话[\s\S]{0,300}refetchCanonicalState/);
     assert.match(chatFeed, /reasoningHidden=\$\{reasoningCleaned && !Boolean\(streaming/);
     assert.match(css, /\.reasoning-live-tail\s*\{[\s\S]*?max-height:/);

@@ -23879,6 +23879,9 @@ function showArtifactPreview(artifact) {
   backdrop.className = "artifact-preview-backdrop";
   const dialog = document.createElement("div");
   dialog.className = "artifact-preview-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", `${artifact.filename} 预览`);
   const title = document.createElement("div");
   title.className = "artifact-preview-head";
   const canShowSource = artifact.lang !== "html" && artifact.lang !== "htm";
@@ -23887,7 +23890,7 @@ function showArtifactPreview(artifact) {
       ${canShowSource ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="source">源码</button>` : ""}
       ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="copy-path">复制路径</button>` : ""}
       ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="folder">所在文件夹</button>` : ""}
-      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close">关闭</button>
+      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close" aria-label="返回对话">返回对话</button>
     </span>`;
   const body = document.createElement("div");
   body.className = "artifact-preview-body";
@@ -23923,6 +23926,9 @@ function showArtifactPreview(artifact) {
   backdrop.appendChild(dialog);
   document.body.appendChild(backdrop);
   document.body.classList.add("artifact-preview-open");
+  backdrop.addEventListener("click", (ev) => {
+    if (ev.target === backdrop) closeArtifactPreview();
+  });
   title.addEventListener("click", async (ev) => {
     const btn = ev.target?.closest?.("[data-artifact-preview-action]");
     if (!btn) return;
@@ -23943,12 +23949,48 @@ function showArtifactPreview(artifact) {
         await writeClipboardText(artifact.path || "");
         showToast("路径已复制", "info");
       } else if (action === "folder") {
+        if (!await confirmExternalArtifactOpen(artifact)) return;
         await api("/artifacts/open-folder", { method: "POST", body: { path: artifact.path } });
         showToast("已打开所在文件夹", "info");
       }
     } catch (err) {
       showToast(err.message || "文件操作失败", "error", 5e3);
     }
+  });
+}
+function confirmExternalArtifactOpen(artifact) {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "artifact-open-confirmation";
+    const dialog = document.createElement("div");
+    dialog.className = "artifact-open-confirmation-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", "确认打开外部文件");
+    dialog.innerHTML = `<div class="artifact-open-confirmation-title">要离开对话打开文件吗？</div>
+      <div class="artifact-open-confirmation-text">${escapeHtml(artifact.filename || artifact.path || "此文件")} 将交给本机程序打开。当前对话会保留，返回本软件后仍可继续。</div>
+      <div class="artifact-open-confirmation-actions">
+        <button type="button" class="artifact-preview-btn" data-artifact-open-action="cancel">留在对话</button>
+        <button type="button" class="artifact-preview-btn primary" data-artifact-open-action="open">使用系统程序打开</button>
+      </div>`;
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    const finish = (approved) => {
+      document.removeEventListener("keydown", onKeyDown);
+      backdrop.remove();
+      resolve(approved);
+    };
+    const onKeyDown = (ev) => {
+      if (ev.key === "Escape") finish(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) finish(false);
+      const action = ev.target?.closest?.("[data-artifact-open-action]")?.dataset?.artifactOpenAction;
+      if (action === "open") finish(true);
+      else if (action === "cancel") finish(false);
+    });
+    dialog.querySelector('[data-artifact-open-action="cancel"]')?.focus();
   });
 }
 function wireArtifactPreviewCodeCopy(iframe) {
@@ -24023,10 +24065,12 @@ async function handleArtifactAction(ev) {
       await saveArtifact(artifact, wrap);
       showToast(`已保存到 ${artifact.filename}`, "info");
     } else if (action === "open-file") {
+      if (!await confirmExternalArtifactOpen(artifact)) return;
       btn.disabled = true;
       await saveArtifact(artifact, wrap);
       await api("/artifacts/open-file", { method: "POST", body: { path: artifact.path } });
     } else if (action === "open-folder") {
+      if (!await confirmExternalArtifactOpen(artifact)) return;
       if (!artifact.dir) await saveArtifact(artifact, wrap);
       await api("/artifacts/open-folder", { method: "POST", body: { dir: artifact.dir } });
     }
@@ -24260,7 +24304,7 @@ function ToolCard({ msg }) {
     </div>
   `;
 }
-var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
+var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, reasoningHidden = false, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
   useLang();
   const role = msg.role;
   const avatar = role === "user" ? userAvatar || ROLE_AVATAR.user : ROLE_AVATAR[role];
@@ -24273,6 +24317,12 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
   const showCopy = role !== "user" && onCopy && canCopy;
   const showFillInput = role === "user" && onFillInput && canCopy;
   const showActions = !streaming && (showCopy || showFillInput);
+  const reasoningRef = A2(null);
+  const reasoningLive = Boolean(streaming && msg.reasoning);
+  y2(() => {
+    const node = reasoningRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [msg.reasoning, reasoningLive]);
   const actions = showActions ? html4`
     <div class="chat-msg-actions">
       ${showCopy ? html4`<button type="button" onClick=${() => onCopy(msg)}>${t4("chat.copyMessage")}</button>` : null}
@@ -24316,7 +24366,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
-        ${msg.reasoning ? html4`<div class="reasoning">${msg.reasoning}</div>` : null}
+        ${msg.reasoning && !reasoningHidden ? html4`<div class=${reasoningLive ? "reasoning reasoning-live-tail" : "reasoning"} ref=${reasoningLive ? reasoningRef : null}>${msg.reasoning}</div>` : null}
         ${renderMessageBody(msg.text, role)}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
@@ -25691,8 +25741,10 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
       if (kind === "preview") {
         await showFileArtifactPreview(file);
       } else if (kind === "open") {
+        if (!await confirmExternalArtifactOpen(file)) return;
         await api("/artifacts/open-file", { method: "POST", body: { path: file.path } });
       } else if (kind === "folder") {
+        if (!await confirmExternalArtifactOpen(file)) return;
         await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
       } else if (kind === "copy") {
         await writeClipboardText(file.path);
@@ -25852,6 +25904,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
+  const [reasoningCleaned, setReasoningCleaned] = d2(false);
   const [activeTool, setActiveTool] = d2(null);
   const [busy, setBusy] = d2(false);
   const initialInputRef = A2(null);
@@ -27048,6 +27101,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setSemanticRetrievalSources([]);
       setSemanticRetrievalStatus("idle");
       setMessages([]);
+      setReasoningCleaned(false);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = true;
@@ -27104,6 +27158,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
       setMessages([]);
+      setReasoningCleaned(false);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = true;
@@ -27961,6 +28016,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             messages=${messages}
             totalMessages=${totalMessages}
             streaming=${streaming}
+            reasoningCleaned=${reasoningCleaned}
             innerRef=${feedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
@@ -28239,6 +28295,14 @@ const [providerCaps, setProviderCaps] = d2(null);
             </div>
             <div class="chat-input-actions">
               <button
+                type="button"
+                class="chat-secondary-action"
+                aria-pressed=${reasoningCleaned}
+                disabled=${!reasoningCleaned && !messages.some((message) => Boolean(message.reasoning))}
+                onClick=${() => setReasoningCleaned((cleaned) => !cleaned)}
+                title=${reasoningCleaned ? "重新显示已完成消息的思考内容" : "隐藏已完成消息的思考内容，不刷新对话"}
+              >${reasoningCleaned ? "查看过程" : "整理对话"}</button>
+              <button
                 class="primary"
                 onClick=${send}
                 disabled=${!inputHasContent && pendingImages.length === 0}
@@ -28266,7 +28330,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, reasoningCleaned = false, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -28300,6 +28364,7 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
                   streaming=${Boolean(streaming && streaming.id === m3.id)}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
+                  reasoningHidden=${reasoningCleaned && !Boolean(streaming && streaming.id === m3.id)}
                   userAvatar=${userAvatar}
                   selectedForArtifacts=${Boolean(selectedArtifactMessageId && String(m3.id || "") === String(selectedArtifactMessageId))}
                   onSelectForArtifacts=${onSelectArtifactMessage}
