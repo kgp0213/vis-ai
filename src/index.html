@@ -243,19 +243,19 @@
       }
 
       h1 {
-        font-size: 30px;
-        font-weight: 600;
+        font-size: 26px;
+        font-weight: 500;
         letter-spacing: 0;
         color: var(--startup-fg);
-        margin: 0 0 9px;
+        margin: 0 0 6px;
       }
 
       #status {
-        font-size: 24px;
+        font-size: 13px;
         color: var(--startup-muted);
-        margin: 0 0 21px;
-        min-height: 36px;
-        line-height: 36px;
+        margin: 0 0 14px;
+        min-height: 18px;
+        line-height: 18px;
         overflow-wrap: anywhere;
       }
 
@@ -290,7 +290,7 @@
       .retry {
         display: none;
         margin-top: 16px;
-        font-size: 13px;
+        font-size: 12px;
         color: var(--startup-accent);
         text-decoration: underline;
         text-underline-offset: 2px;
@@ -358,7 +358,7 @@
           var widths = { 1: "30%", 2: "60%", 3: "85%", 4: "100%" };
           if (fill) fill.style.width = widths[n] || "8%";
           if (text) {
-            setStartupStatus(n >= 1 && n <= 3 ? text + " · 第 " + n + " 步 / 共 3 步" : text);
+            setStartupStatus(n >= 1 && n <= 3 ? "步骤 " + n + "/3 · " + text : text);
           }
         }
 
@@ -432,7 +432,7 @@
         }
 
         window.__visionoxShowStartupFailure = function (message) {
-          showDiagnostics(message || "无法连接本地服务，请查看运行日志。");
+          showDiagnostics(message || "启动失败 · 无法连接本地服务");
         };
 
         // Borderless splash stays movable: any left-button press outside
@@ -787,7 +787,7 @@
                 } else {
                   if (attempt === 0) startupLog("get_dashboard_url is not ready; waiting for current server");
                   if (attempt >= 199) {
-                    showDiagnostics("本地服务启动超时，请查看运行日志后重试。");
+                    showDiagnostics("启动失败 · 本地服务启动超时，请查看运行日志后重试。");
                     return;
                   }
                   dashboardUrlPollTimer = setTimeout(function () {
@@ -799,7 +799,7 @@
               .catch(function (err) {
                 if (attempt === 0) startupLog("get_dashboard_url failed: " + String(err && err.message || err));
                 if (attempt >= 199) {
-                  showDiagnostics("无法连接本地服务，请查看运行日志后重试。");
+                  showDiagnostics("启动失败 · 无法连接本地服务，请查看运行日志后重试。");
                   return;
                 }
                 dashboardUrlPollTimer = setTimeout(function () {
