@@ -1233,7 +1233,7 @@ async function findUnboundScriptDocument(command, options) {
         path.replace(/\\/gu, "\\\\"),
         path.replace(/\\/gu, "/"),
       ]);
-      return candidates.some((candidate) => source.includes(candidate));
+      return candidates.some((candidate) => includesPreparedCandidate(source, candidate));
     });
     if (!matched) continue;
     return {
