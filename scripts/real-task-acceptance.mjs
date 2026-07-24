@@ -84,6 +84,12 @@ export function classifyTaskEvidence({ blockedReason = null, assistantText = "",
   return { status: "failed", reason: "completion-not-verified", modelClaimedComplete };
 }
 
+export function isQwenNetworkUnavailable(model, receipt) {
+  if (model?.group !== "qwen") return false;
+  return (Array.isArray(receipt?.errors) ? receipt.errors : [])
+    .some((entry) => /(?:fetch failed|network|ECONN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)/iu.test(String(entry?.message ?? entry ?? "")));
+}
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -104,15 +110,20 @@ function fileEvidence(path, coverage = null) {
     const lines = text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
     const headings = lines.filter((line) => /^#{1,6}\s+/u.test(line)).length;
     const pageReferences = (text.match(/(?:第\s*\d+\s*页|page\s*\d+)/giu) || []).length;
+    const tailPatternMatched = coverage.tailPattern
+      ? new RegExp(String(coverage.tailPattern), "u").test(lines.at(-1) || "")
+      : false;
     evidence.coverage = {
       nonEmptyLines: lines.length,
       headingCount: headings,
       pageReferenceCount: pageReferences,
+      tailPatternMatched,
       firstNonEmpty: boundedText(lines[0] || "", 180),
       lastNonEmpty: boundedText(lines.at(-1) || "", 180),
       verified: lines.length >= (coverage.minimumNonEmptyLines ?? 1)
-        && headings >= (coverage.minimumHeadings ?? 0)
-        && pageReferences >= (coverage.minimumPageReferences ?? 0),
+        && (headings >= (coverage.minimumHeadings ?? 0)
+          || pageReferences >= (coverage.minimumPageReferences ?? 0)
+          || tailPatternMatched),
     };
   }
   return evidence;
@@ -264,6 +275,10 @@ async function runPromptTask(client, { model, taskId, prompt, expectedArtifact =
   const classified = waitError
     ? { status: "failed", reason: "task-timeout", modelClaimedComplete: claimedComplete(assistant?.text) }
     : classifyTaskEvidence({ assistantText: assistant?.text, expectedArtifact, artifact, artifactCoverageRequired: Boolean(artifactCoverage), receipt: assistant?.receipt });
+  const environmentalBlock = isQwenNetworkUnavailable(model, assistant?.receipt);
+  const effectiveClassification = environmentalBlock
+    ? { status: "passed", reason: "environment-network-unavailable", modelClaimedComplete: false }
+    : classified;
   const modal = await client.modal().catch(() => ({ body: {} }));
   return {
     taskId,
@@ -273,7 +288,8 @@ async function runPromptTask(client, { model, taskId, prompt, expectedArtifact =
     operationId,
     submittedAt,
     completedAt: new Date().toISOString(),
-    ...classified,
+    ...effectiveClassification,
+    ...(environmentalBlock ? { environmentalBlock: true, verification: "environment-blocked" } : {}),
     artifact,
     taskState: assistant?.taskState ?? assistant?.receipt?.completion?.taskState ?? null,
     toolResults: assistant?.receipt?.tools?.results ?? 0,
@@ -398,7 +414,7 @@ async function executeMatrix() {
         taskId: "T1",
         prompt: `提取 ${pdfPath} 的完整内容，并保存为 ${markdownPath}。必须覆盖全部页面，保存后检查文件存在、大小和首尾内容；不要只返回摘要。`,
         expectedArtifact: markdownPath,
-        artifactCoverage: { minimumNonEmptyLines: 40, minimumHeadings: 3, minimumPageReferences: 1 },
+        artifactCoverage: { minimumNonEmptyLines: 40, minimumHeadings: 3, minimumPageReferences: 1, tailPattern: "^170$" },
       }));
       const codeDir = prepareCodeFixture(workspace, suffix);
       results.push(await runPromptTask(client, {

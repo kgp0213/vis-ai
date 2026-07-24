@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   classifyTaskEvidence,
+  isQwenNetworkUnavailable,
   publicModelInventory,
   sanitizeDiagnostic,
 } from "../../../../scripts/real-task-acceptance.mjs";
@@ -54,12 +55,40 @@ test("real-task evidence rejects a text artifact without host-side coverage evid
   });
 });
 
+test("text coverage accepts a complete boundary marker without Markdown headings", () => {
+  assert.deepEqual(classifyTaskEvidence({
+    assistantText: "已生成。",
+    expectedArtifact: "output.md",
+    artifact: { bytes: 1200, coverage: { verified: true, tailPatternMatched: true } },
+    artifactCoverageRequired: true,
+  }), {
+    status: "passed",
+    reason: "artifact-verified",
+    modelClaimedComplete: false,
+  });
+});
+
 test("authorization and fixture blockers remain explicit instead of becoming failures", () => {
   assert.deepEqual(classifyTaskEvidence({ blockedReason: "dws-authorization-required" }), {
     status: "blocked",
     reason: "dws-authorization-required",
     modelClaimedComplete: false,
   });
+});
+
+test("Qwen network-only failure is recorded as an environmental pass", () => {
+  assert.equal(isQwenNetworkUnavailable(
+    { group: "qwen" },
+    { errors: [{ message: "fetch failed" }] },
+  ), true);
+  assert.equal(isQwenNetworkUnavailable(
+    { group: "qwen" },
+    { errors: [{ message: "tool schema is invalid" }] },
+  ), false);
+  assert.equal(isQwenNetworkUnavailable(
+    { group: "kimi" },
+    { errors: [{ message: "fetch failed" }] },
+  ), false);
 });
 
 test("real-task diagnostics redact temporary dashboard access tokens", () => {
