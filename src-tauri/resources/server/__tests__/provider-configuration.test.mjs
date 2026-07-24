@@ -69,6 +69,27 @@ beforeEach(() => writeFileSync(configPath, JSON.stringify(baseConfig(), null, 2)
 after(() => rmSync(tmpDir, { recursive: true, force: true }));
 
 describe("Provider schema v3 maintenance", () => {
+  test("accepts only explicit supported provider adapter types", () => {
+    const configured = previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateProvider",
+        providerId: "company",
+        changes: { providerType: "kimi" },
+      }],
+    });
+    assert.equal(configured.config.providers[0].providerType, "kimi");
+
+    assert.throws(() => previewProviderImport(baseConfig(), {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateProvider",
+        providerId: "company",
+        changes: { providerType: "model-name-guess" },
+      }],
+    }), /providerType/);
+  });
+
   test("accepts model effort parameter maps and rejects options that are not declared", () => {
     const source = baseConfig();
     source.providers[0].requestPolicy = "json";
@@ -326,6 +347,29 @@ describe("Provider schema v2 combined import and cleanup", () => {
 });
 
 describe("Provider credential rotation API", () => {
+  test("exposes redacted diagnostics and records managed imports", async () => {
+    const diagnostics = { activeProviderId: "company", providers: [{ id: "company", apiKeyPresent: true }] };
+    const listed = await get("/api/providers/diagnostics", {
+      getProviderDiagnostics: () => diagnostics,
+    });
+    assert.equal(listed.status, 200);
+    assert.deepEqual(listed.json, diagnostics);
+
+    let provenance = null;
+    const imported = await post("/api/providers/import", {
+      schemaVersion: 3,
+      operations: [{
+        op: "updateProvider",
+        providerId: "company",
+        changes: { name: "Company Imported" },
+      }],
+    }, {
+      recordProviderProvenance: (providerIds, source) => { provenance = { providerIds, source }; },
+    });
+    assert.equal(imported.status, 200);
+    assert.deepEqual(provenance, { providerIds: ["company"], source: "json-import" });
+  });
+
   test("cleans only current failed models, removes empty providers, and selects a passed fallback", async () => {
     writeFileSync(configPath, JSON.stringify({
       preset: "flash",
