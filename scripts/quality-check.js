@@ -47,6 +47,7 @@ run("node tests and core coverage", "node", [
   "--test-coverage-functions=90",
   "src-tauri/resources/server/**/*.test.mjs",
 ]);
+run("deterministic runtime acceptance", "node", ["scripts/runtime-contract-acceptance.mjs"]);
 run("browser UI smoke", "node", ["scripts/ui-smoke.js"]);
 run("Rust formatting", "cargo", ["fmt", "--manifest-path", "src-tauri/Cargo.toml", "--", "--check"]);
 run("diff whitespace", "git", ["diff", "--check"]);

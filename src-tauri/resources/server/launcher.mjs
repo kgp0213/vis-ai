@@ -123,6 +123,7 @@ const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToo
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
+const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
 const { modelConfigFingerprint } = await importEarly("./lib/model-config-fingerprint.mjs");
@@ -4190,6 +4191,7 @@ function buildLoop(client, rootDir) {
 
 let client = null;
 let loop = null;
+const modelRequestObserver = createModelRequestObserver({ maxAttempts: 4 });
 
 function createConfiguredModelClient(clientApiKey = apiKey, clientBaseUrl = baseUrl) {
   return new DeepSeekClient({
@@ -4199,6 +4201,10 @@ function createConfiguredModelClient(clientApiKey = apiKey, clientBaseUrl = base
       ...options,
       reasoningEffort: config.reasoningEffort,
     }),
+    retry: {
+      maxAttempts: 4,
+      onRetry: (event) => modelRequestObserver.onRetry(event),
+    },
   });
 }
 
@@ -9045,7 +9051,13 @@ ${modeList}
           while (true) {
             let budgetForcedSummary = false;
             let sawToolActivity = false;
-            for await (const ev of loop.step(loopInput)) {
+            const requestContext = {
+              operationId: operation.id,
+              requestId: requestId || operation.id,
+              receipt: turnReceipt,
+              publish: opts.isolated === true ? null : (event) => broadcastDashboardEvent(event),
+            };
+            for await (const ev of modelRequestObserver.iterate(requestContext, () => loop.step(loopInput))) {
               operation.progress = loopTelemetry.observe(ev);
               if (ev.role === "tool_start") turnReceipt.observeToolStart(ev.toolName);
               if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);

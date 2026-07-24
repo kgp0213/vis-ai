@@ -7,7 +7,7 @@ const activeLibFiles = await readdir(new URL("../lib/", import.meta.url));
 
 test("all user prompts enter the ordinary CacheFirstLoop without foreground task supervision", () => {
   assert.match(launcher, /new CacheFirstLoop\(/);
-  assert.match(launcher, /for await \(const ev of loop\.step\(loopInput\)\)/);
+  assert.match(launcher, /for await \(const ev of modelRequestObserver\.iterate\(requestContext, \(\) => loop\.step\(loopInput\)\)\)/);
   assert.doesNotMatch(launcher, /foreground-task-supervisor/);
   assert.doesNotMatch(launcher, /activeForegroundTask/);
   assert.doesNotMatch(launcher, /assessTaskComplexity/);

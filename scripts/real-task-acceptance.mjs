@@ -90,6 +90,16 @@ export function isQwenNetworkUnavailable(model, receipt) {
     .some((entry) => /(?:fetch failed|network|ECONN|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH)/iu.test(String(entry?.message ?? entry ?? "")));
 }
 
+export function classifyEnvironmentalResult(model, receipt) {
+  if (!isQwenNetworkUnavailable(model, receipt)) return null;
+  return {
+    status: "blocked",
+    reason: "environment-network-unavailable",
+    environmentalBlock: true,
+    verification: "environment-blocked",
+  };
+}
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -275,9 +285,10 @@ async function runPromptTask(client, { model, taskId, prompt, expectedArtifact =
   const classified = waitError
     ? { status: "failed", reason: "task-timeout", modelClaimedComplete: claimedComplete(assistant?.text) }
     : classifyTaskEvidence({ assistantText: assistant?.text, expectedArtifact, artifact, artifactCoverageRequired: Boolean(artifactCoverage), receipt: assistant?.receipt });
-  const environmentalBlock = isQwenNetworkUnavailable(model, assistant?.receipt);
-  const effectiveClassification = environmentalBlock
-    ? { status: "passed", reason: "environment-network-unavailable", modelClaimedComplete: false }
+  const environmentalClassification = classifyEnvironmentalResult(model, assistant?.receipt);
+  const environmentalBlock = Boolean(environmentalClassification);
+  const effectiveClassification = environmentalClassification
+    ? { ...environmentalClassification, modelClaimedComplete: false }
     : classified;
   const modal = await client.modal().catch(() => ({ body: {} }));
   return {
@@ -289,7 +300,6 @@ async function runPromptTask(client, { model, taskId, prompt, expectedArtifact =
     submittedAt,
     completedAt: new Date().toISOString(),
     ...effectiveClassification,
-    ...(environmentalBlock ? { environmentalBlock: true, verification: "environment-blocked" } : {}),
     artifact,
     taskState: assistant?.taskState ?? assistant?.receipt?.completion?.taskState ?? null,
     toolResults: assistant?.receipt?.tools?.results ?? 0,

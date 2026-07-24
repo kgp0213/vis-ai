@@ -31,6 +31,7 @@
     "test:coverage": "node --import ./scripts/test-safety.mjs --test --test-concurrency=1 --experimental-test-coverage \"src-tauri/resources/server/**/*.test.mjs\"",
     "test:coverage:core": "node --import ./scripts/test-safety.mjs --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include=\"src-tauri/resources/server/lib/*.mjs\" --test-coverage-lines=90 --test-coverage-branches=60 --test-coverage-functions=90 \"src-tauri/resources/server/**/*.test.mjs\"",
     "test:ui:smoke": "node scripts/ui-smoke.js",
+    "acceptance:runtime": "node scripts/runtime-contract-acceptance.mjs",
     "quality:check": "node scripts/quality-check.js"
   },
   "devDependencies": {
