@@ -3,12 +3,20 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
+const knowledgeRuntime = readFileSync(new URL("../lib/knowledge-runtime.mjs", import.meta.url), "utf8");
 
 function block(startMarker, endMarker) {
   const start = launcher.indexOf(startMarker);
   const end = launcher.indexOf(endMarker, start + startMarker.length);
   assert.ok(start >= 0 && end > start, `launcher block not found: ${startMarker}`);
   return launcher.slice(start, end);
+}
+
+function runtimeBlock(startMarker, endMarker) {
+  const start = knowledgeRuntime.indexOf(startMarker);
+  const end = knowledgeRuntime.indexOf(endMarker, start + startMarker.length);
+  assert.ok(start >= 0 && end > start, `knowledge runtime block not found: ${startMarker}`);
+  return knowledgeRuntime.slice(start, end);
 }
 
 test("Soul and project rules report degraded reads instead of silently changing context", () => {
@@ -26,9 +34,9 @@ test("mode memory transactions surface incomplete rollback", () => {
 });
 
 test("unreadable knowledge topics cannot be overwritten", () => {
-  const readManifest = block("function readKnowledgeManifest", "function writeKnowledgeManifest");
-  const organize = block("async function generateSessionKnowledge", "async function updateKnowledgeSemanticIndex");
-  assert.match(readManifest, /manualEdited:[^\n]+contentHash === null/);
+  const readManifest = runtimeBlock("function readManifest", "function writeManifest");
+  const organize = block("async function generateSessionKnowledge", "const updateKnowledgeSemanticIndex");
+  assert.match(readManifest, /manualEdited:[\s\S]*?contentHash === null/);
   assert.match(readManifest, /knowledge-topics:[\s\S]*some knowledge topics could not be read/);
   assert.match(organize, /existing knowledge topic[\s\S]*could not be read/);
 });

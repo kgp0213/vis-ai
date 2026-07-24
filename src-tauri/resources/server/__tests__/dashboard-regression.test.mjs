@@ -28,6 +28,7 @@ const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.
 const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import.meta.url);
 const dashboardSourceRootUrl = new URL("../visionox-pkg/dashboard/src/", import.meta.url);
 const launcherUrl = new URL("../launcher.mjs", import.meta.url);
+const knowledgeRuntimeUrl = new URL("../lib/knowledge-runtime.mjs", import.meta.url);
 const modelTaskRequestUrl = new URL("../lib/model-task-request.mjs", import.meta.url);
 const fileAccessRescueSkillUrl = new URL("../../bootstrap-skills/file-access-rescue/SKILL.md", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
@@ -616,6 +617,7 @@ describe("Dashboard 回归护栏", () => {
   test("会话整理保持原任务类型并显式控制知识提炼和自动 embedding", () => {
     const source = readFileSync(dashboardAppUrl, "utf8");
     const launcher = readFileSync(launcherUrl, "utf8");
+    const knowledgeRuntime = readFileSync(knowledgeRuntimeUrl, "utf8");
     const modelTaskRequest = readFileSync(modelTaskRequestUrl, "utf8");
     assert.match(source, /knowledgeEnabled: draft\.knowledgeEnabled/);
     assert.match(source, /knowledgeAutoIndex: draft\.knowledgeAutoIndex/);
@@ -633,10 +635,10 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /selectPendingKnowledgeSessions/);
     assert.match(launcher, /writeKnowledgeManifest/);
     assert.match(launcher, /workspace: task\.workspaceDir/);
-    assert.match(launcher, /realpathSync\(candidate\)[\s\S]*?resolves outside the bound workspace/);
+    assert.match(knowledgeRuntime, /realpathSync\(candidate\)[\s\S]*?resolves outside the bound workspace/);
     assert.match(launcher, /sourceFingerprint\(candidates\).*instructionId/);
-    assert.match(launcher, /const root = resolve\(projectRoot, "knowledge"\)/);
-    assert.match(launcher, /renameSync\(legacyRoot, root\)/);
+    assert.match(knowledgeRuntime, /const root = resolve\(projectRoot, "knowledge"\)/);
+    assert.match(knowledgeRuntime, /renameSync\(legacyRoot, root\)/);
     assert.match(launcher, /update\.action === "delete" && item\.action !== "delete" \? "keep"/);
     assert.match(launcher, /if \(!client\)[\s\S]*?semantic cleanup review/);
     assert.match(launcher, /buildSessionQualityPrompt/);
@@ -648,7 +650,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /knowledgeAIFailed: aiFailed/);
     assert.match(source, /AI 评估失败/);
     assert.match(launcher, /addToolToPrefix: addToolToActivePrefix/);
-    assert.match(launcher, /await activateSemanticSearch\(task\.workspaceDir\)/);
+    assert.match(launcher, /const updateKnowledgeSemanticIndex = knowledgeRuntime\.updateSemanticIndex/);
+    assert.match(knowledgeRuntime, /onActiveIndexUpdated/);
     assert.match(launcher, /hasSemanticSearch = true[\s\S]*?prefix\?\.addTool/);
     assert.match(launcher, /evaluateKnowledgeDocument/);
     assert.match(launcher, /documentQuality\.action === "revise"/);
@@ -666,6 +669,7 @@ describe("Dashboard 回归护栏", () => {
   test("聊天输入区提供会话级索引模式并展示自动召回来源", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const launcher = readFileSync(launcherUrl, "utf8");
+    const knowledgeRuntime = readFileSync(knowledgeRuntimeUrl, "utf8");
     const chatPanel = app.slice(app.indexOf("function ChatPanel("), app.indexOf("var ChatFeed ="));
     assert.match(chatPanel, /\/index-retrieval-mode/);
     assert.match(chatPanel, /<option value="auto"/);
@@ -688,7 +692,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(composer, /option value="off"[\s\S]*?title="完全关闭本地索引/);
     assert.match(launcher, /indexRetrievalMode === "off"[\s\S]*?semantic_search/);
     assert.match(launcher, /querySemanticGroups/);
-    assert.match(launcher, /SEMANTIC_RETRIEVAL_CACHE_MAX = 100/);
+    assert.match(knowledgeRuntime, /DEFAULT_CACHE_MAX = 100/);
     assert.match(launcher, /const retrievalText = manualSkillTask \?\? text/);
     assert.match(launcher, /retrieveSemanticContext\(retrievalText, retrievalHistory/);
     assert.match(launcher, /restoreOriginalUserInput[\s\S]*?syncActiveSessionFromLoop/);

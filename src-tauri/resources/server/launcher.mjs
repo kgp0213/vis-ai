@@ -92,6 +92,7 @@ const { createPromptQueueStore, promptRequestReceiptDecision } = await importEar
 const { createPromptIsolation } = await importEarly("./lib/scheduled-prompt-isolation.mjs");
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
 const { DEFAULT_SEMANTIC_EMBEDDING_MODEL, DEFAULT_SEMANTIC_EMBEDDING_URL, applySemanticEmbeddingDefaults } = await importEarly("./lib/semantic-config-defaults.mjs");
+const { createKnowledgeRuntime } = await importEarly("./lib/knowledge-runtime.mjs");
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
 const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, normalizeWorkspacePath, removeRecentWorkspace, sameWorkspacePath } = await importEarly("./lib/workspace-history.mjs");
@@ -131,7 +132,6 @@ const {
   normalizeDocumentQualityEvaluation,
   instructionFingerprint,
   hydrateKnowledgeSessionCandidates,
-  knowledgeEvaluationBackoff,
   mergeRejectedKnowledgeSessionNames,
   mapReduceKnowledgeConversation,
   MAX_EXISTING_KNOWLEDGE_UPDATE_CHARS,
@@ -140,7 +140,6 @@ const {
   prepareKnowledgeConversation,
   prepareExistingKnowledgeDocument,
   prioritizeKnowledgeSessionCandidates,
-  reconcileKnowledgeTopics,
   renderTopicMarkdown,
   sessionsForCleanupScope,
   safeTopicId,
@@ -150,13 +149,8 @@ const {
   sourceFingerprint,
 } = await importEarly("./lib/session-knowledge.mjs");
 const {
-  buildSemanticRetrievalCacheKey,
-  buildRetrievalQuery,
-  buildRetrievedModelInput,
   normalizeIndexRetrievalMode,
-  rerankRetrievalHits,
   restoreOriginalUserInput,
-  selectRetrievalHits,
 } = await importEarly("./lib/semantic-retrieval.mjs");
 
 // NOTE: learn.mjs / learn-track.mjs are loaded lazily below so a missing
@@ -1109,28 +1103,21 @@ console.error(`[launcher] workspace: ${workspaceDir}`);
 let wsToolNames = [];
 let hasSemanticSearch = false;
 let indexRetrievalMode = normalizeIndexRetrievalMode(config.indexRetrievalMode);
-const semanticRetrievalCache = new Map();
-const SEMANTIC_RETRIEVAL_CACHE_TTL_MS = 5 * 60 * 1000;
-const SEMANTIC_RETRIEVAL_CACHE_MAX = 100;
-
-function getCachedSemanticRetrieval(key) {
-  const cached = semanticRetrievalCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.at >= SEMANTIC_RETRIEVAL_CACHE_TTL_MS) {
-    semanticRetrievalCache.delete(key);
-    return null;
-  }
-  semanticRetrievalCache.delete(key);
-  semanticRetrievalCache.set(key, cached);
-  return cached.hits;
-}
-
-function setCachedSemanticRetrieval(key, hits) {
-  semanticRetrievalCache.set(key, { at: Date.now(), hits });
-  while (semanticRetrievalCache.size > SEMANTIC_RETRIEVAL_CACHE_MAX) {
-    semanticRetrievalCache.delete(semanticRetrievalCache.keys().next().value);
-  }
-}
+const knowledgeRuntime = createKnowledgeRuntime({
+  configPath,
+  loadSemanticEmbeddingUserConfig,
+  registerSemanticSearchTool,
+  querySemanticGroups,
+  buildIndex,
+  loadIndexConfig,
+  readConfig,
+  writeConfig,
+  atomicWriteFile: atomicWriteFileSync,
+  getActiveWorkspace: () => workspaceDir,
+  sameWorkspacePath,
+  onPersistentIssue: trackPersistentStorageIssue,
+  onActiveIndexUpdated: async (rootDir) => activateSemanticSearch(rootDir),
+});
 
 function addToolToActivePrefix(spec) {
   const name = spec?.function?.name;
@@ -1166,72 +1153,26 @@ function applyIndexRetrievalMode(value, { persist = true } = {}) {
 }
 
 async function activateSemanticSearch(rootDir) {
-  const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
-  const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
-  const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
-  const providerCfg = semanticCfg[cfgKey];
-  const registered = await registerSemanticSearchTool(tools, {
-    root: rootDir,
-    provider,
-    model: providerCfg?.model,
-    baseUrl: providerCfg?.baseUrl,
-    apiKey: providerCfg?.apiKey,
-    extraBody: providerCfg?.extraBody,
-  });
-  if (!registered) return false;
-  semanticRetrievalCache.clear();
-  const spec = tools.specs().find((item) => item.function?.name === "semantic_search");
-  if (spec) addToolToActivePrefix(spec);
-  return true;
+  try {
+    await knowledgeRuntime.registerSemanticSearch(tools, rootDir, {
+      addToolToPrefix: addToolToActivePrefix,
+    });
+  } finally {
+    hasSemanticSearch = knowledgeRuntime.isSemanticAvailable();
+  }
+  return hasSemanticSearch;
 }
 
 async function retrieveSemanticContext(text, recentMessages, signal) {
-  const startedAt = Date.now();
-  if (indexRetrievalMode !== "auto") return { input: text, sources: [], status: "disabled", elapsedMs: 0 };
-  if (!hasSemanticSearch) return { input: text, sources: [], status: "unavailable", elapsedMs: 0 };
-  const query = buildRetrievalQuery(text, recentMessages);
-  if (!query) return { input: text, sources: [], status: "empty", elapsedMs: 0 };
-  const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
-  const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
-  const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
-  const providerCfg = semanticCfg[cfgKey];
-  const cacheKey = buildSemanticRetrievalCacheKey({
+  const result = await knowledgeRuntime.retrieve({
+    text,
+    recentMessages,
     workspace: workspaceDir,
-    query,
-    provider,
-    model: providerCfg?.model,
-    baseUrl: providerCfg?.baseUrl,
-    extraBody: providerCfg?.extraBody,
-    apiKey: providerCfg?.apiKey,
+    mode: indexRetrievalMode,
+    signal,
   });
-  const cached = getCachedSemanticRetrieval(cacheKey);
-  if (cached) {
-    return { ...buildRetrievedModelInput(text, cached), status: cached.length > 0 ? "completed" : "empty", cached: true, elapsedMs: Date.now() - startedAt };
-  }
-  const timeoutSignal = AbortSignal.timeout(3000);
-  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-  try {
-    const groups = await querySemanticGroups(workspaceDir, query, {
-      knowledgeTopK: 24,
-      workspaceTopK: 24,
-      minScore: 0.3,
-      provider,
-      model: providerCfg?.model,
-      baseUrl: providerCfg?.baseUrl,
-      apiKey: providerCfg?.apiKey,
-      extraBody: providerCfg?.extraBody,
-      signal: combinedSignal,
-    });
-    if (!groups) return { input: text, sources: [], status: "unavailable", elapsedMs: Date.now() - startedAt };
-    const selected = selectRetrievalHits(rerankRetrievalHits([...groups.knowledge, ...groups.workspace], query));
-    setCachedSemanticRetrieval(cacheKey, selected);
-    return { ...buildRetrievedModelInput(text, selected), status: selected.length > 0 ? "completed" : "empty", elapsedMs: Date.now() - startedAt };
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.error(`[launcher] automatic semantic retrieval skipped: ${error.message}`);
-    const timedOut = timeoutSignal.aborted || /timeout|timed out/i.test(String(error?.message || ""));
-    return { input: text, sources: [], status: timedOut ? "timeout" : "error", error: String(error?.message || error).slice(0, 240), elapsedMs: Date.now() - startedAt };
-  }
+  if (result.error) console.error(`[launcher] automatic semantic retrieval skipped: ${result.error}`);
+  return result;
 }
 
 async function registerWorkspaceTools(tools, rootDir, opts = {}) {
@@ -1314,20 +1255,9 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 
   let hasSemantic = false;
   try {
-    const semanticCfg = loadSemanticEmbeddingUserConfig(configPath);
-    const provider = semanticCfg.provider === "openai-compat" ? "openai-compat" : "ollama";
-    const cfgKey = provider === "openai-compat" ? "openaiCompat" : "ollama";
-    const providerCfg = semanticCfg[cfgKey];
-    const registered = await registerSemanticSearchTool(tools, {
-      root: rootDir,
-      provider,
-      model: providerCfg?.model,
-      baseUrl: providerCfg?.baseUrl,
-      apiKey: providerCfg?.apiKey,
-      extraBody: providerCfg?.extraBody,
-    });
-    if (registered) {
-      hasSemantic = true;
+    await knowledgeRuntime.registerSemanticSearch(tools, rootDir);
+    hasSemantic = knowledgeRuntime.isSemanticAvailable();
+    if (hasSemantic) {
       console.error(`[launcher] semantic_search tool registered`);
     }
   } catch (err) {
@@ -5195,134 +5125,10 @@ async function requestModelText({ label, messages, model, maxTokens, temperature
   });
 }
 
-function knowledgePaths(workspace) {
-  const projectRoot = resolve(workspace);
-  const root = resolve(projectRoot, "knowledge");
-  const legacyRoot = resolve(projectRoot, ".visionox", "knowledge");
-  if (!(root === projectRoot || root.startsWith(projectRoot + sep))) {
-    throw new Error("knowledge directory escapes the bound workspace");
-  }
-  if (existsSync(projectRoot)) {
-    const projectReal = realpathSync(projectRoot);
-    if (existsSync(legacyRoot) && !existsSync(root)) {
-      const legacyReal = realpathSync(legacyRoot);
-      if (!(legacyReal === projectReal || legacyReal.startsWith(projectReal + sep))) {
-        throw new Error("legacy knowledge directory resolves outside the bound workspace");
-      }
-      renameSync(legacyRoot, root);
-    }
-    for (const candidate of [root, resolve(root, "topics"), resolve(root, "rejected")]) {
-      if (!existsSync(candidate)) continue;
-      const candidateReal = realpathSync(candidate);
-      if (!(candidateReal === projectReal || candidateReal.startsWith(projectReal + sep))) {
-        throw new Error("knowledge directory resolves outside the bound workspace");
-      }
-    }
-  }
-  return {
-    projectRoot,
-    root,
-    topicsDir: resolve(root, "topics"),
-    rejectedDir: resolve(root, "rejected"),
-    manifestPath: resolve(root, ".manifest.json"),
-  };
-}
-
-function readKnowledgeManifest(workspace) {
-  const paths = knowledgePaths(workspace);
-  const stored = readVersionedJsonFile(paths.manifestPath, {
-    version: 2,
-    validate: (value) => Array.isArray(value.topics) && Array.isArray(value.sources)
-      && Array.isArray(value.processedSourceFingerprints) || "knowledge manifest arrays are invalid",
-  });
-  const parsed = stored.ok ? stored.value ?? {} : {};
-  trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, stored.error);
-  try {
-    const topicReadFailures = [];
-    const diskPaths = new Set(existsSync(paths.topicsDir)
-      ? readdirSync(paths.topicsDir).filter((name) => name.toLowerCase().endsWith(".md")).map((name) => `topics/${name}`)
-      : []);
-    const reconciled = reconcileKnowledgeTopics(parsed?.topics, diskPaths);
-    const topics = reconciled.topics.map((topic) => {
-      const target = resolve(paths.root, topic.path);
-      let contentHash = null;
-      try {
-        contentHash = createHash("sha256").update(readFileSync(target)).digest("hex").slice(0, 16);
-      } catch (error) {
-        topicReadFailures.push(`${topic.path}: ${error.message}`);
-      }
-      return {
-        ...topic,
-        contentHash: topic.contentHash || contentHash,
-        manualEdited: topic.manualEdited === true || contentHash === null || Boolean(topic.contentHash && topic.contentHash !== contentHash),
-      };
-    });
-    const trackedPaths = new Set(topics.map((topic) => topic.path));
-    const discoveredPaths = [];
-    for (const path of diskPaths) {
-      if (trackedPaths.has(path)) continue;
-      const target = resolve(paths.root, path);
-      try {
-        const markdown = readFileSync(target, "utf8");
-        const id = (/^topicId:\s*(.+)$/m.exec(markdown)?.[1] || basename(path, ".md")).trim();
-        const title = (/^#\s+(.+)$/m.exec(markdown)?.[1] || id).trim();
-        const qualityScore = Number(/^qualityScore:\s*(\d+(?:\.\d+)?)$/m.exec(markdown)?.[1] || 0);
-        const contentHash = createHash("sha256").update(markdown).digest("hex").slice(0, 16);
-        topics.push({ id, title, path, sourceSessions: [], qualityScore, contentHash, manualEdited: true, discoveredAt: new Date().toISOString() });
-        discoveredPaths.push(path);
-      } catch (error) {
-        topicReadFailures.push(`${path}: ${error.message}`);
-      }
-    }
-    trackPersistentStorageIssue(
-      `knowledge-topics:${paths.projectRoot}`,
-      paths.topicsDir,
-      topicReadFailures.length ? `some knowledge topics could not be read: ${topicReadFailures.join("; ")}` : null,
-      "warning",
-    );
-    return {
-      version: 2,
-      topics,
-      sources: Array.isArray(parsed?.sources) ? parsed.sources.filter((item) => item && typeof item.name === "string").slice(-5000) : [],
-      processedSourceFingerprints: Array.isArray(parsed?.processedSourceFingerprints)
-        ? parsed.processedSourceFingerprints.filter((item) => typeof item === "string").slice(-100)
-        : [],
-      indexDirty: parsed?.indexDirty === true || reconciled.removedIds.length > 0 || discoveredPaths.length > 0,
-      reconciliation: { removedTopicIds: reconciled.removedIds, discoveredPaths },
-      readOnlyError: stored.error,
-    };
-  } catch (error) {
-    const readOnlyError = stored.error ?? `knowledge manifest reconciliation failed: ${error.message}`;
-    trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, readOnlyError);
-    return { version: 2, topics: [], sources: [], processedSourceFingerprints: [], indexDirty: false, reconciliation: { removedTopicIds: [], discoveredPaths: [] }, readOnlyError };
-  }
-}
-
-function writeKnowledgeManifest(workspace, manifest) {
-  const paths = knowledgePaths(workspace);
-  assertVersionedJsonWritable(paths.manifestPath, {
-    version: 2,
-    validate: (value) => Array.isArray(value.topics) && Array.isArray(value.sources)
-      && Array.isArray(value.processedSourceFingerprints) || "knowledge manifest arrays are invalid",
-  });
-  const value = {
-    version: 2,
-    updatedAt: new Date().toISOString(),
-    topics: Array.isArray(manifest.topics) ? manifest.topics : [],
-    sources: Array.isArray(manifest.sources) ? manifest.sources.slice(-5000) : [],
-    processedSourceFingerprints: Array.isArray(manifest.processedSourceFingerprints)
-      ? manifest.processedSourceFingerprints.slice(-100)
-      : [],
-    indexDirty: manifest.indexDirty === true,
-  };
-  writeVersionedJsonFile(paths.manifestPath, value, { version: 2 });
-  trackPersistentStorageIssue(`knowledge:${paths.projectRoot}`, paths.manifestPath, null);
-  return value;
-}
-
-function writeKnowledgeFile(target, content) {
-  atomicWriteFileSync(target, content);
-}
+const knowledgePaths = knowledgeRuntime.paths;
+const readKnowledgeManifest = knowledgeRuntime.readManifest;
+const writeKnowledgeManifest = knowledgeRuntime.writeManifest;
+const writeKnowledgeFile = knowledgeRuntime.writeKnowledgeFile;
 
 function selectKnowledgeSessions(task, manifest) {
   const now = Date.now();
@@ -5418,7 +5224,7 @@ async function evaluateSessionKnowledge(task, signal) {
       evaluationFailures.push({ names: [candidate.name], reason });
       const failedAt = Date.now();
       const previous = manifest.sources.find((item) => item.name === candidate.name);
-      const retry = knowledgeEvaluationBackoff((Number(previous?.evaluationFailureCount) || 0) + 1, failedAt);
+      const retry = knowledgeRuntime.evaluationBackoff((Number(previous?.evaluationFailureCount) || 0) + 1, failedAt);
       updateKnowledgeSource(manifest, candidate, {
         status: "evaluation_failed",
         reason,
@@ -5467,7 +5273,7 @@ async function evaluateSessionKnowledge(task, signal) {
       const failedAt = Date.now();
       for (const candidate of batch) {
         const previous = manifest.sources.find((item) => item.name === candidate.name);
-        const retry = knowledgeEvaluationBackoff((Number(previous?.evaluationFailureCount) || 0) + 1, failedAt);
+        const retry = knowledgeRuntime.evaluationBackoff((Number(previous?.evaluationFailureCount) || 0) + 1, failedAt);
         updateKnowledgeSource(manifest, candidate, {
           status: "evaluation_failed",
           reason: String(error?.message || error),
@@ -5754,40 +5560,7 @@ async function generateSessionKnowledge(task, signal, qualityState = null) {
   return { enabled: true, sessionsProcessed: candidates.length, rejectedLowValue, created, updated, removedTopics, removedTopicBackups, rejectedDocuments, outputPaths, indexDirty: nextManifest.indexDirty, fingerprint, instructionFingerprint: instructionId };
 }
 
-function setKnowledgeIndexDirty(workspace, dirty) {
-  const manifest = readKnowledgeManifest(workspace);
-  manifest.indexDirty = dirty === true;
-  writeKnowledgeManifest(workspace, manifest);
-}
-
-async function updateKnowledgeSemanticIndex(task, signal) {
-  if (!task.knowledgeAutoIndex) return { requested: false, status: "disabled" };
-  const semantic = loadSemanticEmbeddingUserConfig(configPath);
-  if (semantic.provider === "openai-compat" && !semantic.openaiCompat?.apiKey?.trim()) {
-    return { requested: true, status: "skipped: embedding API key is not configured" };
-  }
-  const cfg = readConfig(configPath);
-  cfg.index = { ...(cfg.index ?? {}), includeKnowledgeDocs: true };
-  writeConfig(cfg, configPath);
-  try {
-    const result = await buildIndex(task.workspaceDir, {
-      rebuild: false,
-      configPath,
-      signal,
-      indexConfig: { ...loadIndexConfig(configPath), includeKnowledgeDocs: true },
-    });
-    if (sameWorkspacePath(task.workspaceDir, workspaceDir)) await activateSemanticSearch(task.workspaceDir);
-    if (result.committed === false || result.chunksSkipped > 0 || result.skipBuckets?.readError > 0) {
-      setKnowledgeIndexDirty(task.workspaceDir, true);
-      return { requested: true, status: `pending: ${result.chunksSkipped} embedding chunk(s) failed and the previous index was preserved` };
-    }
-    setKnowledgeIndexDirty(task.workspaceDir, false);
-    return { requested: true, status: "completed" };
-  } catch (err) {
-    setKnowledgeIndexDirty(task.workspaceDir, true);
-    return { requested: true, status: `pending: ${err.message}` };
-  }
-}
+const updateKnowledgeSemanticIndex = knowledgeRuntime.updateSemanticIndex;
 
 function scheduledKnowledgeCategory(skillAction) {
   if (skillAction === "meeting-action-digest") return "meetings";
@@ -5849,7 +5622,7 @@ async function performScheduleSkillArchive(taskId, { runId, autoIndex = false } 
       category: scheduledKnowledgeCategory(task.skillAction),
     });
     rememberGeneratedArtifactPath(archived.path);
-    setKnowledgeIndexDirty(task.skillArchiveWorkspaceDir, true);
+    knowledgeRuntime.setIndexDirty(task.skillArchiveWorkspaceDir, true);
     const semanticIndex = autoIndex
       ? await updateKnowledgeSemanticIndex({ knowledgeAutoIndex: true, workspaceDir: task.skillArchiveWorkspaceDir })
       : { requested: false, status: "disabled" };
@@ -7493,9 +7266,9 @@ const ctx = {
   tools,
   addToolToPrefix: addToolToActivePrefix,
   onSemanticIndexCommitted: async ({ root, indexConfig, complete }) => {
-    semanticRetrievalCache.clear();
+    knowledgeRuntime.clearRetrievalCache();
     if (resolve(root) === resolve(workspaceDir) && indexConfig?.includeKnowledgeDocs === true) {
-      setKnowledgeIndexDirty(root, !complete);
+      knowledgeRuntime.setIndexDirty(root, !complete);
     }
   },
   mcpServers,

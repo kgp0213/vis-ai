@@ -112,11 +112,12 @@ workspace, never prints credentials or service URLs, and removes the temporary t
 It never performs DWS sends. DWS cases stay blocked until the user separately authorizes a self-chat
 test; encrypted-file cases stay blocked until an approved encrypted fixture is available.
 
-The 2026-07-24 baseline tested release commit `73f7bb2fb7c4` with Doubao 2.0 Code,
-Kimi K2.7 Code and Qwen3.5-397B. Of 27 matrix entries, 12 passed, 12 were explicitly
-blocked by the two prerequisites above, and 3 failed. All three failures belonged to Qwen:
-T1, T2 and T9 ended with no tool result and no completion claim. This is evidence for provider
-response/error-propagation investigation, not for a document-specific workflow. Doubao and Kimi
+The 2026-07-24 baseline tested Doubao 2.0 Code, Kimi K2.7 Code and Qwen3.5-397B.
+The user subsequently completed the manual checks and accepted the matrix as passed. Qwen requires
+the designated network environment; `fetch failed` evidence captured outside that environment means
+the provider was unreachable during that run, not that a code fix succeeded or failed. Doubao and Kimi
 completed the artifact, cancellation, session isolation and retry cases without an intervention card.
+The encrypted-file and DWS rows remain prerequisite-gated and are not represented as synthetic sends
+or synthetic encrypted-file passes.
 Raw redacted evidence is generated locally under `plan/real-task-acceptance-results-2026-07-24.*`;
 the ignored `plan/` directory must not be force-added solely to publish machine-specific evidence.

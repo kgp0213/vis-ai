@@ -29,6 +29,10 @@ const required = [
     markers: ["DEFAULT_SEMANTIC_EMBEDDING_URL", "DEFAULT_SEMANTIC_EMBEDDING_MODEL", "applySemanticEmbeddingDefaults"],
   },
   {
+    file: "src-tauri/resources/server/lib/knowledge-runtime.mjs",
+    markers: ["createKnowledgeRuntime", "boundWorkspace", "clearRetrievalCache", "readManifest", "writeManifest", "updateSemanticIndex", "setIndexDirty"],
+  },
+  {
     file: "scripts/prepare-runtime-package.js",
     markers: [
       "function pruneRuntimeFiles(path)",
@@ -112,7 +116,8 @@ const required = [
       "requestModelSwitch",
       "createConfiguredModelClient",
       "resolveProviderModelRequest",
-      "buildSemanticRetrievalCacheKey",
+      "createKnowledgeRuntime",
+      "knowledgeRuntime.updateSemanticIndex",
       "modelcfg=",
       "rebuildProviderContextCaps",
       "contextCapacitySource",
