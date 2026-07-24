@@ -22,6 +22,10 @@ test("launcher connects official Kimi video preparation to the existing ordinary
   const cancelledAfterPreparation = source.indexOf("if (operation.controller.signal.aborted)", mediaPreparation);
   const mediaCommit = source.indexOf("operation.context.attachments =", mediaPreparation);
   assert.ok(cancelledAfterPreparation > mediaPreparation && cancelledAfterPreparation < mediaCommit, "cancelled media preparation must stop before committing the user turn");
+  const queueRemove = source.indexOf("async function removePromptQueueItem");
+  const queueRemoveSuccess = source.indexOf("if (!result?.ok) return result", queueRemove);
+  const queueAttachmentCleanup = source.indexOf("attachmentRuntime.releaseAttachments", queueRemove);
+  assert.ok(queueRemoveSuccess > queueRemove && queueRemoveSuccess < queueAttachmentCleanup, "failed durable queue deletion must not release attachments");
   for (const marker of ['trimmed === "/help"', 'text === "/status"', 'text === "/new" || text === "/clear"']) {
     assert.ok(localCommandGuard < source.indexOf(marker), `attachment guard must run before ${marker}`);
   }
