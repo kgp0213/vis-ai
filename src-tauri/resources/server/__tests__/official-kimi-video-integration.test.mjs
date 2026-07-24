@@ -26,6 +26,7 @@ test("launcher connects official Kimi video preparation to the existing ordinary
   const queueRemoveSuccess = source.indexOf("if (!result?.ok) return result", queueRemove);
   const queueAttachmentCleanup = source.indexOf("attachmentRuntime.releaseAttachments", queueRemove);
   assert.ok(queueRemoveSuccess > queueRemove && queueRemoveSuccess < queueAttachmentCleanup, "failed durable queue deletion must not release attachments");
+  assert.match(source, /if \(!references\.complete\)/, "incomplete reference scans must not run destructive attachment maintenance");
   for (const marker of ['trimmed === "/help"', 'text === "/status"', 'text === "/new" || text === "/clear"']) {
     assert.ok(localCommandGuard < source.indexOf(marker), `attachment guard must run before ${marker}`);
   }

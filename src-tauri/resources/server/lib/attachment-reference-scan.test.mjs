@@ -33,6 +33,7 @@ test("attachment reference scan covers active, archived and durable prompt queue
   assert.deepEqual(result.ids, ids);
   assert.equal(result.warnings.length, 0);
   assert.equal(result.scannedFiles, 3);
+  assert.equal(result.complete, true);
 });
 
 test("attachment reference scan reports corrupt sources and preserves valid references", async (t) => {
@@ -51,4 +52,5 @@ test("attachment reference scan reports corrupt sources and preserves valid refe
   });
   assert.deepEqual(result.ids, [id]);
   assert.equal(result.warnings.length, 2);
+  assert.equal(result.complete, false);
 });
