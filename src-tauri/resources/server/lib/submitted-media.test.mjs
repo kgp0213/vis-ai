@@ -126,3 +126,48 @@ test("cancelled video preparation preserves the original attachment for an expli
   assert.equal(result.mediaParts.length, 0);
   assert.ok(await attachmentRuntime.get(uploaded.id));
 });
+
+test("mixed media preparation rolls back image rebinds when video authentication fails", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "visionox-submitted-transaction-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const attachmentRuntime = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
+  const imageBytes = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+  const image = await attachmentRuntime.ingestBytes(imageBytes, {
+    kind: "image", mimeType: "image/png", sessionId: "session-1", operationId: "upload-image", workspace: "C:\\workspace",
+  });
+  const video = await attachmentRuntime.ingestBytes(MP4, {
+    kind: "video", mimeType: "video/mp4", sessionId: "session-1", operationId: "upload-video", workspace: "C:\\workspace",
+  });
+  const result = await prepareSubmittedMedia({
+    attachmentRuntime,
+    mediaRuntime: {
+      readAttachment: async ({ attachmentId }, context) => {
+        const stored = await attachmentRuntime.get(attachmentId);
+        const rebound = await attachmentRuntime.ingestBytes(await attachmentRuntime.readBytes(attachmentId), {
+          ...stored,
+          operationId: context.operationId,
+          sessionId: context.sessionId,
+          workspace: context.workspace,
+        });
+        return { ok: true, attachment: rebound, dataUrl: "data:image/png;base64,AAAA" };
+      },
+    },
+    mediaProviderAdapter: {
+      resolveMedia: async () => ({
+        parts: [],
+        warnings: [{ code: "media_provider_auth_failed", message: "invalid key", affectsCompleteness: true }],
+      }),
+    },
+    attachmentIds: [image.id, video.id],
+    provider: { providerType: "kimi" },
+    model: { id: "multimodal", capabilities: { inputModalities: ["text", "image", "video"] } },
+    capabilities: { inputModalities: ["text", "image", "video"], maxImagesPerRequest: 1, maxMediaBytes: 50 * 1024 * 1024 },
+    context: { sessionId: "session-1", operationId: "operation-1", workspace: "C:\\workspace" },
+  });
+
+  assert.equal(result.attachments.length, 0);
+  assert.equal(result.modelImages.length, 0);
+  assert.ok(await attachmentRuntime.get(image.id));
+  assert.ok(await attachmentRuntime.get(video.id));
+  assert.equal((await attachmentRuntime.list()).length, 2, "failed transaction must not leave rebound attachments");
+});
