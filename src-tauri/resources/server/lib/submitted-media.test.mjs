@@ -1,0 +1,67 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import test from "node:test";
+
+import { atomicWriteFile } from "./atomic-file.mjs";
+import { createAttachmentRuntime } from "./attachment-runtime.mjs";
+import { prepareSubmittedMedia } from "./submitted-media.mjs";
+
+const MP4 = Buffer.from("000000186674797069736f6d0000020069736f6d69736f32", "hex");
+
+test("submitted official Kimi video is rebound to the operation and becomes a provider-ready part", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "visionox-submitted-media-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const attachmentRuntime = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
+  const uploaded = await attachmentRuntime.ingestBytes(MP4, {
+    kind: "video",
+    mimeType: "video/mp4",
+    name: "clip.mp4",
+    sessionId: "session-1",
+    operationId: "upload-1",
+    workspace: "C:\\workspace",
+  });
+  let resolvedAttachment = null;
+  const result = await prepareSubmittedMedia({
+    attachmentRuntime,
+    mediaRuntime: {},
+    mediaProviderAdapter: {
+      resolveMedia: async (parts) => {
+        resolvedAttachment = parts[0].attachment;
+        return { parts: [{ type: "video_url", video_url: { url: "ms://file-1" } }], warnings: [] };
+      },
+    },
+    attachmentIds: [uploaded.id],
+    provider: { id: "moonshot", providerType: "kimi" },
+    model: { id: "kimi-video", capabilities: { inputModalities: ["text", "video"] } },
+    capabilities: { inputModalities: ["text", "video"], maxMediaBytes: 50 * 1024 * 1024 },
+    context: { sessionId: "session-1", operationId: "operation-1", workspace: "C:\\workspace" },
+  });
+
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(result.mediaParts, [{ type: "video_url", video_url: { url: "ms://file-1" } }]);
+  assert.equal(resolvedAttachment.operationId, "operation-1");
+  assert.equal(result.attachments[0].kind, "video");
+  assert.equal(await attachmentRuntime.get(uploaded.id), null);
+});
+
+test("submitted media rejects a cross-session attachment before reading or uploading it", async () => {
+  let reads = 0;
+  const result = await prepareSubmittedMedia({
+    attachmentRuntime: {
+      get: async () => ({ id: "att-other", kind: "video", sessionId: "session-other", workspace: "C:\\workspace" }),
+      readBytes: async () => { reads++; return MP4; },
+    },
+    mediaRuntime: {},
+    mediaProviderAdapter: { resolveMedia: async () => { throw new Error("must not upload"); } },
+    attachmentIds: ["att-other"],
+    provider: { providerType: "kimi" },
+    model: { id: "video", capabilities: { inputModalities: ["text", "video"] } },
+    capabilities: { inputModalities: ["text", "video"] },
+    context: { sessionId: "session-current", operationId: "operation-current", workspace: "C:\\workspace" },
+  });
+
+  assert.equal(reads, 0);
+  assert.equal(result.errors[0].code, "media_not_found");
+});

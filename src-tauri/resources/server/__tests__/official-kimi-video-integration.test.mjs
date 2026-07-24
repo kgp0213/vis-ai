@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const launcherUrl = new URL("../launcher.mjs", import.meta.url);
+const dashboardUrl = new URL("../visionox-pkg/dashboard/src/panels/chat.ts", import.meta.url);
+
+test("launcher connects official Kimi video preparation to the existing ordinary loop", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  assert.match(source, /createOfficialKimiVideoUploader/);
+  assert.match(source, /createMediaProviderAdapter/);
+  assert.match(source, /prepareSubmittedMedia/);
+  assert.match(source, /loop\.setPendingMediaParts\(preparedMedia\.mediaParts\)/);
+  assert.doesNotMatch(source, /provider\.id.*kimi|model.*includes\(["']kimi/i);
+});
+
+test("Dashboard exposes video upload only for an explicit official Kimi video model", async () => {
+  const source = await readFile(dashboardUrl, "utf8");
+  assert.match(source, /activeProvider\?\.providerType === "kimi"/);
+  assert.match(source, /canUploadVideos/);
+  assert.match(source, /video\/mp4,video\/quicktime,video\/webm/);
+  assert.match(source, /uploadMediaAttachment/);
+});
