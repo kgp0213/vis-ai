@@ -1,11 +1,15 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   DEFAULT_SEMANTIC_EMBEDDING_MODEL,
   DEFAULT_SEMANTIC_EMBEDDING_URL,
   applySemanticEmbeddingDefaults,
 } from "./semantic-config-defaults.mjs";
+
+const launcherSource = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
+const dashboardSource = readFileSync(new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url), "utf8");
 
 describe("semantic embedding installation defaults", () => {
   test("seeds a new installation without persisting an example API key", () => {
@@ -58,5 +62,10 @@ describe("semantic embedding installation defaults", () => {
     assert.equal(config.semantic.openaiCompat.apiKey, "custom-key");
     assert.equal(config.semantic.openaiCompat.model, "custom-embedding-model");
     assert.deepEqual(config.semantic.openaiCompat.extraBody, { dimensions: 1024 });
+  });
+
+  test("wires installation defaults into startup and shows an explicit API key example", () => {
+    assert.match(launcherSource, /applySemanticEmbeddingDefaults\(config\)/);
+    assert.match(dashboardSource, /请输入实际 API Key（例如 api-xxxxx）/);
   });
 });
