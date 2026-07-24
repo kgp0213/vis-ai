@@ -313,7 +313,8 @@ function renderMarkdown(payload) {
   const counts = payload.results.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {});
   const rows = payload.results.map((item) => `| ${item.modelGroup} | ${item.modelId} | ${item.taskId} | ${item.status} | ${item.reason} | ${item.interventionCount ?? 0} | ${item.artifact?.bytes ?? "-"} |`).join("\n");
   return `# 真实任务验收结果（2026-07-24）\n\n`+
-    `- 提交：\`${payload.commit}\`\n`+
+    `- 被测运行时提交：\`${payload.runtimeCommit}\`\n`+
+    `- 验收器提交：\`${payload.harnessCommit}\`\n`+
     `- 开始：${payload.startedAt}\n`+
     `- 完成：${payload.completedAt}\n`+
     `- 汇总：通过 ${counts.passed ?? 0}，失败 ${counts.failed ?? 0}，阻塞 ${counts.blocked ?? 0}\n`+
@@ -394,10 +395,13 @@ async function executeMatrix() {
     rmSync(tempRoot, { recursive: true, force: true });
   }
 
-  const commit = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true }).stdout.trim();
+  const harnessCommit = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true }).stdout.trim();
+  const releaseManifest = readJson(join(releaseRoot, "release-manifest.json"));
+  const runtimeCommit = String(releaseManifest?.build?.git?.commit ?? "unknown").slice(0, 12);
   const payload = {
     schemaVersion: 1,
-    commit,
+    runtimeCommit,
+    harnessCommit,
     startedAt,
     completedAt: new Date().toISOString(),
     inventory: inventory.filter((provider) => MODEL_GROUPS.some((model) => model.providerId === provider.providerId)),
@@ -418,7 +422,7 @@ async function main() {
   }
   const payload = await executeMatrix();
   const summary = payload.results.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {});
-  console.log(JSON.stringify({ commit: payload.commit, summary, resultMarkdownPath, resultJsonPath }, null, 2));
+  console.log(JSON.stringify({ runtimeCommit: payload.runtimeCommit, harnessCommit: payload.harnessCommit, summary, resultMarkdownPath, resultJsonPath }, null, 2));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
