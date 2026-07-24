@@ -502,7 +502,7 @@ describe("V来家 integration", () => {
     assert.match(app, />重新生成链接</);
     assert.match(app, /title=\$\{sidebarIdentityTitle\}>\$\{sidebarIdentity\}/);
     assert.match(launcher, /createVHomeIntegration\(\{ executable: dwsExecutable, logger: console \}\)/);
-    assert.match(launcher, /getSendContext: \(\) => \(\{ \.\.\.activeMessageSendContext, operationContext: activeOperation\?\.context \?\? null \}\)/);
+    assert.match(launcher, /getSendContext: \(\) => \(\{ \.\.\.activeMessageSendContext, operationContext: operationRuntime\.getActive\(\)\?\.context \?\? null \}\)/);
     assert.match(launcher, /buildMessageRiskPrompt\(message\)/);
     assert.match(launcher, /requestPurpose: "messageRisk"/);
     assert.match(launcher, /source: operation\.kind/);

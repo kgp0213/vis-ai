@@ -102,7 +102,7 @@ vis-ai/
 ## Launcher 模块边界
 
 `launcher.mjs` 仍承担启动装配和运行时协调，但可独立验证的逻辑正在逐步迁入
-`resources/server/lib/`。当前已拆分配置迁移、Provider、上下文容量、活动会话、系统提示词、
+`resources/server/lib/`。当前已拆分配置迁移、Provider、上下文容量、Operation 生命周期、活动会话、系统提示词、
 记忆预算、语义召回、会话知识、会话回收站、用户数据备份、原子/版本化文件持久化、提示队列、DLP、
 活动计划存储、定时任务存储/时间策略和 OfficeCLI 策略等模块。提示队列由
 `lib/prompt-queue-store.mjs` 独立管理 TTL、容量、幂等和事务回滚，不再把存储细节留在 Launcher 中。
@@ -114,6 +114,10 @@ vis-ai/
 
 模块化的验收标准不是减少行数，而是模块具有明确输入、无隐藏全局状态、具备独立测试，
 并且完整质量门禁保持通过。
+
+`lib/operation-runtime.mjs` 持有唯一活动 Operation 的私有状态，并通过显式注入发布事件、停止所属后台任务、
+撤销发送授权和唤醒定时队列。Launcher 只负责为普通模型循环创建、停止和结束 Operation；外部中断与 UI
+取消共用同一个幂等停止入口，不会形成第二套模型执行流程。
 
 ## 任务执行内核
 

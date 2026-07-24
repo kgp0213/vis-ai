@@ -106,7 +106,7 @@ const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs
 const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEarly("./lib/shell-side-effect-policy.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
-const { closeOperationContext, createOperationContext, requestOperationStop } = await importEarly("./lib/operation-context.mjs");
+const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
@@ -1397,7 +1397,7 @@ tools.setToolInterceptor(async (name, args) => {
 // Workspace-dependent tools — registered via shared function
 const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
   jobs,
-  getOperationId: () => activeOperation?.id ?? null,
+  getOperationId: () => operationRuntime.getActive()?.id ?? null,
   preparedDocumentRegistry,
   getLastAssistantResponse: () => latestAssistantResponse(messages),
 });
@@ -1972,7 +1972,7 @@ registerVHomeSkillTools(tools, {
   },
   isBootstrapSkill: (name) => existsSync(resolve(bootstrapSkillsRoot, name, "SKILL.md")),
   skillExists: (name) => existsSync(resolve(skillsRoot, name, "SKILL.md")),
-  getSendContext: () => ({ ...activeMessageSendContext, operationContext: activeOperation?.context ?? null }),
+  getSendContext: () => ({ ...activeMessageSendContext, operationContext: operationRuntime.getActive()?.context ?? null }),
   consumeSendAuthorization: (authorization, request) => consumeSendAuthorization(authorization, request),
   reviewMessageRisk: async (message, { signal } = {}) => {
     if (!client) return { level: "unknown", confidence: 0, categories: ["model-unavailable"], reason: "风险审查模型不可用" };
@@ -6467,68 +6467,25 @@ function loopEventToDashboard(ev, assistantId) {
 
 // ── Busy state ──────────────────────────────────────────────────
 let busy = false;
-let activeOperation = null;
 let pendingModelSwitch = null;
-
-function publicActiveOperation(operation = activeOperation) {
-  if (!operation) return null;
-  return {
-    id: operation.id,
-    kind: operation.kind,
-    state: operation.state,
-    startedAt: operation.startedAt,
-    stopRequestedAt: operation.stopRequestedAt ?? null,
-    progress: operation.progress ?? null,
-  };
-}
 
 jobs.setChangeListener?.((change) => {
   broadcastDashboardEvent({ kind: "background-job-change", ...change });
 });
 
-function beginActiveOperation(kind) {
-  const controller = new AbortController();
-  const id = randomUUID();
-  const operation = {
-    id,
-    kind,
-    state: "running",
-    startedAt: new Date().toISOString(),
-    stopRequestedAt: null,
-    progress: null,
-    controller,
-    context: createOperationContext({
-      operationId: id,
-      kind,
-      conversationId: activeConversationId,
-      workspace: workspaceDir,
-      signal: controller.signal,
-      startedAt: new Date().toISOString(),
-    }),
-  };
-  activeOperation = operation;
-  broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation(operation) });
-  return operation;
-}
+const operationRuntime = createOperationRuntime({
+  broadcast: broadcastDashboardEvent,
+  stopOwned: (operationId, options) => jobs.stopOwned(operationId, options),
+  drain: requestScheduleQueueDrain,
+  revokeAuthorization: clearMessageSendContext,
+  getConversationId: () => activeConversationId,
+  getWorkspace: () => workspaceDir,
+});
 
-function finishActiveOperation(operation) {
-  if (!operation || activeOperation?.id !== operation.id) return;
-  const finalState = operation.finalState
-    || (operation.controller.signal.aborted ? "cancelled" : "completed");
-  closeOperationContext(operation.context, finalState);
-  broadcastDashboardEvent({
-    kind: "operation-change",
-    operation: { ...publicActiveOperation(operation), state: finalState },
-  });
-  activeOperation = null;
-  requestScheduleQueueDrain();
-}
-
-function refreshOperationContextScope(operation = activeOperation) {
-  if (!operation?.context) return;
-  operation.context.conversationId = activeConversationId || null;
-  operation.context.workspace = workspaceDir || null;
-}
+const publicActiveOperation = (operation) => operationRuntime.public(operation);
+const beginActiveOperation = (kind) => operationRuntime.begin(kind);
+const finishActiveOperation = (operation) => operationRuntime.finish(operation);
+const refreshOperationContextScope = (operation) => operationRuntime.refreshScope(operation);
 
 function operationKindForPrompt(text, opts = {}) {
   if (opts.internalHandoff === true) return "background-handoff";
@@ -8148,7 +8105,7 @@ const ctx = {
     if (!existsSync(configuredDir)) mkdirSync(configuredDir, { recursive: true });
     const result = await registerWorkspaceTools(tools, configuredDir, {
       jobs,
-      getOperationId: () => activeOperation?.id ?? null,
+      getOperationId: () => operationRuntime.getActive()?.id ?? null,
       preparedDocumentRegistry,
       getLastAssistantResponse: () => latestAssistantResponse(messages),
     });
@@ -8390,12 +8347,7 @@ ${modeList}
     });
     const stopFromExternalSignal = () => {
       if (operation.controller.signal.aborted) return;
-      operation.state = "stopping";
-      operation.stopRequestedAt = new Date().toISOString();
-      requestOperationStop(operation.context, "external_abort", operation.stopRequestedAt);
-      operation.controller.abort();
-      broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation(operation) });
-      void jobs.stopOwned(operation.id, { graceMs: 100 });
+      operationRuntime.stop(operation, "external_abort");
       loop?.abort();
     };
     if (opts.signal?.aborted) stopFromExternalSignal();
@@ -9557,7 +9509,6 @@ ${modeList}
             busy = false;
             broadcastDashboardEvent({ kind: "busy-change", busy: false });
             try { detachExternalSignal(); } catch { /* Cleanup must not keep the UI busy. */ }
-            try { clearMessageSendContext(operation); } catch { /* Cleanup must continue. */ }
             try { finishActiveOperation(operation); } catch (error) { console.error(`[launcher] active operation cleanup failed: ${error.message}`); }
             if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
           }
@@ -9572,7 +9523,6 @@ ${modeList}
         detachExternalSignal();
         busy = false;
         broadcastDashboardEvent({ kind: "busy-change", busy: false });
-        clearMessageSendContext(operation);
         finishActiveOperation(operation);
         if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
       }
@@ -9584,14 +9534,7 @@ ${modeList}
     clearActiveModals();
     broadcastDashboardEvent({ kind: "todo-update", todos: [] });
     if (busy) {
-      if (activeOperation) {
-        activeOperation.state = "stopping";
-        activeOperation.stopRequestedAt = new Date().toISOString();
-        requestOperationStop(activeOperation.context, "user_cancelled", activeOperation.stopRequestedAt);
-        activeOperation.controller.abort();
-        broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation() });
-        void jobs.stopOwned(activeOperation.id, { graceMs: 100 });
-      }
+      operationRuntime.stop(operationRuntime.getActive(), "user_cancelled");
       loop?.abort();
     }
     return { accepted: busy, operation: publicActiveOperation() };
