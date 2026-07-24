@@ -38,7 +38,7 @@ async function importEarly(spec) {
 const { resolve, dirname, join, basename, sep, extname } = await importEarly("node:path");
 const { fileURLToPath, pathToFileURL } = await importEarly("node:url");
 const { homedir, tmpdir } = await importEarly("node:os");
-const { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
+const { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
 const { access, appendFile, copyFile, cp, open: openFile, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
 const launcherBootId = randomUUID();
@@ -75,6 +75,7 @@ const { utf8SafePrefixLength } = await importEarly("./lib/utf8-range.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
+const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
@@ -6592,69 +6593,47 @@ function hasUserMessage() {
   return messages.some((m) => m.role === "user");
 }
 
-// Persistent append stream for the active session — avoids open/write/close per
-// message (appendFile does all three every call). Lazily opened; closed before
-// any rename/rm so Windows doesn't hold the file open.
-let activeSessionStream = null;
+const sessionRuntime = createSessionRuntime({
+  activeSessionFile,
+  activeSessionMetaFile,
+  sessionsDir,
+  metaStore: activeSessionMetaStore,
+  atomicWriteFile,
+  getMessages: () => messages,
+  clearMessages: () => { messages.length = 0; },
+  pushMessage,
+  getNextMessageId: () => nextMsgId,
+  setNextMessageId: (value) => { nextMsgId = value; },
+  getLoop: () => loop,
+  getConversationId: () => activeConversationId,
+  getContextRecoveryHandle: () => activeContextRecoveryHandle,
+  getWorkspace: () => workspaceDir,
+  getMode: () => config.mode || "general",
+  modeSummary,
+  getSessionMemories: () => sessionMemories,
+  getIndexRetrievalMode: () => indexRetrievalMode,
+  applyLoadedMetadata: (meta) => {
+    activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
+      ? meta.conversationId.trim()
+      : activeConversationId;
+    activeContextRecoveryHandle = typeof meta.contextRecoveryHandle === "string" && meta.contextRecoveryHandle.trim()
+      ? meta.contextRecoveryHandle.trim()
+      : null;
+    restoreSessionMemories(meta.sessionMemories);
+    preparedDocumentRegistry.restore(meta.preparedDocuments, { replace: true, notifyChange: false });
+    const modeRestore = applyModeForSessionMeta(meta);
+    if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
+  },
+  onPersistentIssue: (kind, message, level = "error") => trackPersistentStorageIssue(kind, message ? (kind === "active-session" ? activeSessionFile : activeSessionMetaFile) : (kind === "active-session" ? activeSessionFile : activeSessionMetaFile), message, level),
+  onEvent: (event) => broadcastDashboardEvent(event),
+  onLog: (message) => console.error(message),
+  hasUserMessage,
+  writeSessionMeta: async (name, patch) => writeSessionMeta(name, patch),
+});
 
-function getActiveSessionStream() {
-  if (!activeSessionStream) {
-    const stream = createWriteStream(activeSessionFile, { flags: "a" });
-    activeSessionStream = stream;
-    stream.on("error", (err) => {
-      if (activeSessionStream === stream) activeSessionStream = null;
-      trackPersistentStorageIssue("active-session", activeSessionFile, `active session append failed: ${err.message}`);
-      console.error(`[launcher] active-session stream error: ${err.message}`);
-    });
-  }
-  return activeSessionStream;
-}
-
-function closeActiveSessionStream() {
-  if (activeSessionStream) {
-    const s = activeSessionStream;
-    activeSessionStream = null;
-    return new Promise((resolve) => {
-      s.end(() => resolve());
-    });
-  }
-  return Promise.resolve();
-}
-
-function appendActiveMessage(msg) {
-  try {
-    const record = {
-      role: msg.role,
-      content: msg.content !== undefined ? msg.content : msg.text ?? "",
-      ...(Array.isArray(msg.images) && msg.images.length > 0 ? { images: msg.images } : {}),
-      ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
-      ...(msg.toolName ? { toolName: msg.toolName } : {}),
-      ...(msg.toolArgs !== undefined ? { toolArgs: msg.toolArgs } : {}),
-      ...(msg.receipt && typeof msg.receipt === "object" ? { receipt: msg.receipt } : {}),
-      ...(msg.taskState ? { taskState: msg.taskState } : {}),
-      ...(msg.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
-      ...(msg.interventionChoice ? { interventionChoice: msg.interventionChoice } : {}),
-      ...(Array.isArray(msg.warnings) && msg.warnings.length > 0 ? { warnings: msg.warnings } : {}),
-    };
-    const stream = getActiveSessionStream();
-    stream.write(`${JSON.stringify(record)}\n`);
-  } catch (err) {
-    trackPersistentStorageIssue("active-session", activeSessionFile, `active session append failed: ${err.message}`);
-    console.error(`[launcher] active-session append failed: ${err.message}`);
-  }
-}
-
-async function writeActiveSessionEntries(entries) {
-  await closeActiveSessionStream();
-  try {
-    const serialized = serializeActiveSession(entries);
-    await atomicWriteFile(activeSessionFile, serialized);
-    trackPersistentStorageIssue("active-session", activeSessionFile, null);
-  } catch (err) {
-    trackPersistentStorageIssue("active-session", activeSessionFile, `active session was not saved: ${err.message}`);
-    throw err;
-  }
-}
+const appendActiveMessage = (message) => sessionRuntime.appendMessage(message);
+const closeActiveSessionStream = () => sessionRuntime.close();
+const writeActiveSessionEntries = (entries) => sessionRuntime.writeEntries(entries);
 
 function clearMessageSendContext(operation) {
   if (activeMessageSendContext.operationId === operation?.id) {
@@ -6671,164 +6650,12 @@ function clearMessageSendContext(operation) {
   }
 }
 
-async function syncActiveSessionFromLoop(pendingUser = null) {
-  if (!loop?.log?.toMessages) return;
-  try {
-    const entries = withPendingUserEntry(loop.log.toMessages(), pendingUser);
-    await writeActiveSessionEntries(entries);
-    await writeActiveSessionMeta({ messageCount: entries.length });
-  } catch (err) {
-    trackPersistentStorageIssue("active-session", activeSessionFile, `active session model sync failed: ${err.message}`);
-    console.error(`[launcher] active-session model sync failed: ${err.message}`);
-  }
-}
-
-async function finalizeActiveSession() {
-  await closeActiveSessionStream();
-  try {
-    await access(activeSessionFile);
-  } catch {
-    trackPersistentStorageIssue("active-session", activeSessionFile, null);
-    return null;
-  }
-  try {
-    const st = await fsStat(activeSessionFile);
-    if (st.size === 0 || !hasUserMessage()) {
-      await rm(activeSessionFile, { force: true });
-      await rm(activeSessionMetaFile, { force: true });
-      trackPersistentStorageIssue("active-session", activeSessionFile, null);
-      return null;
-    }
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const destFile = resolve(sessionsDir, `${ts}.jsonl`);
-    const destMeta = resolve(sessionsDir, `${ts}.meta.json`);
-    await rename(activeSessionFile, destFile);
-    try {
-      await rename(activeSessionMetaFile, destMeta);
-    } catch {
-      try {
-        const raw = await readFile(destFile, "utf8");
-        const messageCount = raw.split(/\r?\n/).filter((line) => line.trim()).length;
-        writeSessionMeta(ts, { messageCount, conversationId: activeConversationId });
-      } finally {
-        await rm(activeSessionMetaFile, { force: true });
-      }
-    }
-    console.error(`[launcher] active session finalized: ${destFile}`);
-    trackPersistentStorageIssue("active-session", activeSessionFile, null);
-    broadcastDashboardEvent({ kind: "sessions-changed", action: "finalize", name: ts });
-    return ts;
-  } catch (err) {
-    trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be archived: ${err.message}`);
-    console.error(`[launcher] failed to finalize active session: ${err.message}`);
-    return null;
-  }
-}
-
-async function clearActiveSession() {
-  await closeActiveSessionStream();
-  try {
-    await rm(activeSessionFile, { force: true });
-    await rm(activeSessionMetaFile, { force: true });
-    trackPersistentStorageIssue("active-session", activeSessionFile, null);
-    trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, null);
-  } catch (err) {
-    trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be cleared: ${err.message}`);
-    console.error(`[launcher] failed to clear active session: ${err.message}`);
-  }
-}
-
-async function writeActiveSessionMeta(patch = {}) {
-  try {
-    const sessionStat = await fsStat(activeSessionFile);
-    const mode = config.mode || "general";
-    const modeInfo = modeSummary(mode);
-    const now = new Date().toISOString();
-    activeSessionMetaStore.update((current) => ({
-      ...current,
-      ...patch,
-      conversationId: patch.conversationId || current.conversationId || activeConversationId,
-      mode,
-      modeLabel: modeInfo.label,
-      modeDescription: modeInfo.description,
-      workspace: workspaceDir,
-      messageCount: Number.isFinite(patch.messageCount) ? Math.max(0, Math.floor(patch.messageCount)) : messages.length,
-      messageCountFileSize: sessionStat.size,
-      messageCountFileMtimeMs: sessionStat.mtimeMs,
-      savedAt: patch.savedAt || current.savedAt || now,
-      updatedAt: now,
-      sessionMemories: sessionMemories.map((memory) => ({ ...memory })),
-      indexRetrievalMode,
-    }));
-    return true;
-  } catch (err) {
-    console.error(`[launcher] active session metadata was not saved: ${err.message}`);
-    return false;
-  }
-}
-
-async function persistActiveConversationIdentity() {
-  await closeActiveSessionStream();
-  return writeActiveSessionMeta({ conversationId: activeConversationId });
-}
-
-async function loadActiveSession() {
-  const startedAt = Date.now();
-  try {
-    await access(activeSessionFile);
-  } catch {
-    return false;
-  }
-  try {
-    const raw = await readFile(activeSessionFile, "utf8");
-    const parsed = parseActiveSessionJsonl(raw);
-    const entries = parsed.entries;
-    if (entries.length === 0) {
-      await clearActiveSession();
-      return false;
-    }
-    if (parsed.errors.length > 0) {
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const backup = `${activeSessionFile}.corrupt-${stamp}`;
-      try {
-        await writeFile(backup, raw, "utf8");
-        await writeActiveSessionEntries(entries);
-        console.error(`[launcher] active session repaired: kept ${entries.length} records, skipped ${parsed.errors.length}; backup=${backup}`);
-      } catch (err) {
-        console.error(`[launcher] failed to repair active session: ${err.message}`);
-      }
-    }
-    const modelEntries = activeEntriesForModel(entries);
-    if (loop && modelEntries.length > 0) loop.adoptHistory?.(modelEntries, loop.model) ?? loop.log.compactInPlace(modelEntries);
-    messages.length = 0;
-    nextMsgId = 1;
-    for (const entry of activeEntriesForDashboard(entries)) {
-      pushMessage(entry);
-      nextMsgId++;
-    }
-    const storedMeta = activeSessionMetaStore.read();
-    if (storedMeta.ok && storedMeta.value) {
-      const meta = storedMeta.value;
-      activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
-        ? meta.conversationId.trim()
-        : activeConversationId;
-      activeContextRecoveryHandle = typeof meta.contextRecoveryHandle === "string" && meta.contextRecoveryHandle.trim()
-        ? meta.contextRecoveryHandle.trim()
-        : null;
-      restoreSessionMemories(meta.sessionMemories);
-      preparedDocumentRegistry.restore(meta.preparedDocuments, { replace: true, notifyChange: false });
-      const modeRestore = applyModeForSessionMeta(meta);
-      if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
-    }
-    await writeActiveSessionMeta({ messageCount: entries.length });
-    console.error(`[launcher] active session restored: ui=${messages.length}, model=${modelEntries.length}, durationMs=${Date.now() - startedAt}`);
-    return true;
-  } catch (err) {
-    trackPersistentStorageIssue("active-session", activeSessionFile, `active session could not be loaded: ${err.message}`);
-    console.error(`[launcher] failed to load active session: ${err.message}`);
-    return false;
-  }
-}
+const syncActiveSessionFromLoop = (pendingUser = null) => sessionRuntime.syncFromLoop(pendingUser);
+const finalizeActiveSession = () => sessionRuntime.finalize();
+const clearActiveSession = () => sessionRuntime.clear();
+const writeActiveSessionMeta = (patch = {}) => sessionRuntime.writeMeta(patch);
+const persistActiveConversationIdentity = () => sessionRuntime.persistConversationIdentity();
+const loadActiveSession = () => sessionRuntime.load();
 
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
   await finalizeActiveSession();
@@ -8422,8 +8249,7 @@ ${modeList}
           // Seed active-session file with the resumed session so continued
           // conversation survives a crash/restart with full context.
           try {
-            await writeFile(activeSessionFile, raw, "utf8");
-            await writeActiveSessionMeta({ ...sessionMeta, messageCount: entries.length });
+            await sessionRuntime.seed(raw, { ...sessionMeta, messageCount: entries.length });
           } catch (err) {
             console.error(`[launcher] failed to seed active session from ${sessionName}: ${err.message}`);
           }
