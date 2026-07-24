@@ -68,4 +68,49 @@ describe("prompt optimization API", () => {
     assert.equal(res.status, 400);
     assert.equal(called, false);
   });
+
+  test("writes a redacted diagnostic audit entry when optimization fails", async () => {
+    const auditEntries = [];
+    const res = await apiPost({ prompt: "帮我优化这段提示词" }, {
+      optimizePrompt: async () => {
+        const error = new Error("upstream rejected Authorization: Bearer secret-token-123 api_key=raw-secret-456");
+        error.code = "UPSTREAM_REJECTED";
+        error.status = 429;
+        throw error;
+      },
+      getPromptOptimizationContext: () => ({
+        mode: "general",
+        providerId: "volcengine",
+        model: "doubao-test",
+      }),
+      audit: (entry) => auditEntries.push(entry),
+    });
+
+    assert.equal(res.status, 502);
+    assert.equal(auditEntries.length, 1);
+    assert.equal(auditEntries[0].action, "optimize-prompt-failed");
+    assert.equal(auditEntries[0].payload.stage, "model-request");
+    assert.equal(auditEntries[0].payload.providerId, "volcengine");
+    assert.equal(auditEntries[0].payload.model, "doubao-test");
+    assert.equal(auditEntries[0].payload.errorCode, "UPSTREAM_REJECTED");
+    assert.equal(auditEntries[0].payload.httpStatus, 429);
+    assert.equal(auditEntries[0].payload.inputLength, 9);
+    const serialized = JSON.stringify(auditEntries[0]);
+    assert.doesNotMatch(serialized, /secret-token-123|raw-secret-456/);
+    assert.match(auditEntries[0].payload.message, /\[redacted\]/);
+  });
+
+  test("audits an empty model response as a response validation failure", async () => {
+    const auditEntries = [];
+    const res = await apiPost({ prompt: "优化" }, {
+      optimizePrompt: async () => ({ prompt: "" }),
+      audit: (entry) => auditEntries.push(entry),
+    });
+
+    assert.equal(res.status, 502);
+    assert.equal(auditEntries.length, 1);
+    assert.equal(auditEntries[0].action, "optimize-prompt-failed");
+    assert.equal(auditEntries[0].payload.stage, "response-validation");
+    assert.equal(auditEntries[0].payload.message, "model returned an empty optimized prompt");
+  });
 });
