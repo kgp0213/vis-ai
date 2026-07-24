@@ -1227,7 +1227,7 @@ function registerShellTools(registry, opts) {
       const cmd = args.command.trim();
       if (!cmd) throw new Error("run_command: empty command");
       const effectiveTimeout = Math.max(1, Math.min(600, args.timeoutSec ?? timeoutSec));
-      const environment = await getEnvironment({ toolName: "run_command", command: cmd, args });
+      const environment = await getEnvironment({ toolName: "run_command", command: cmd, args, signal: ctx?.signal });
       if (!isAllowAll() && !isCommandAllowed(cmd, getExtraAllowed(), rootDir)) {
         const gate = ctx?.confirmationGate ?? pauseGate;
         const choice = await gate.ask({
@@ -1300,7 +1300,7 @@ function registerShellTools(registry, opts) {
       }
       const result = await jobs.start(cmd, {
         cwd: rootDir,
-        env: await getEnvironment({ toolName: "run_background", command: cmd, args }),
+        env: await getEnvironment({ toolName: "run_background", command: cmd, args, signal: ctx?.signal }),
         waitSec: args.waitSec,
         signal: args.lifecycle === "service" ? void 0 : ctx?.signal,
         ownerId: getOperationId(),

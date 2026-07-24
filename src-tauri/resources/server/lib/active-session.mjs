@@ -76,6 +76,11 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
       toolName: entry.toolName ?? entry.name,
       toolArgs: entry.toolArgs,
       images: Array.isArray(entry.images) ? entry.images : undefined,
+      ...(entry.receipt && typeof entry.receipt === "object" ? { receipt: entry.receipt } : {}),
+      ...(typeof entry.taskState === "string" ? { taskState: entry.taskState } : {}),
+      ...(entry.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
+      ...(typeof entry.interventionChoice === "string" ? { interventionChoice: entry.interventionChoice } : {}),
+      ...(Array.isArray(entry.warnings) && entry.warnings.length > 0 ? { warnings: entry.warnings } : {}),
     };
   };
 

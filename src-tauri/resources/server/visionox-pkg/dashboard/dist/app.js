@@ -24304,6 +24304,28 @@ function ToolCard({ msg }) {
     </div>
   `;
 }
+function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings) {
+  if (!receipt || typeof receipt !== "object") return null;
+  const completion = receipt.completion || {};
+  const tools = receipt.tools || {};
+  const artifactEvents = Array.isArray(receipt.artifactEvidence) ? receipt.artifactEvidence : [];
+  const lastArtifact = artifactEvents.at(-1);
+  const intervention = receipt.intervention || {};
+  const state = taskState || completion.taskState || (completion.ok ? "completed" : "unknown");
+  const stateLabel = state === "completed" ? "已完成" : state === "needs_intervention" ? "需要干预" : state === "incomplete" ? "未完成" : state === "completed_with_warnings" ? "已完成但有提醒" : "结果待确认";
+  const stateClass = state === "completed" ? "ok" : state === "completed_with_warnings" ? "warn" : "err";
+  return html4`
+    <details class=${`execution-receipt execution-receipt-${stateClass}`}>
+      <summary><strong>执行回执</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
+      <div class="execution-receipt-grid">
+        <span>工具</span><span>${tools.results ?? 0} 次，成功 ${tools.successes ?? 0}，失败 ${tools.failures ?? 0}${tools.lastName ? ` · 最近 ${tools.lastName}` : ""}</span>
+        <span>产物</span><span>${artifactIncomplete ? "未完成或待验证" : lastArtifact?.verified ? "已发现并验证" : "未发现可验证产物"}</span>
+        ${intervention.shown > 0 ? html4`<span>干预</span><span>已显示 ${intervention.shown} 次${interventionChoice ? ` · 选择 ${interventionChoice}` : ""}</span>` : null}
+        ${warnings?.length ? html4`<span>提醒</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
+      </div>
+    </details>
+  `;
+}
 var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, reasoningExpanded = false, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
   useLang();
   const role = msg.role;
@@ -24387,6 +24409,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
           </details>
         ` : null}
         ${renderMessageBody(msg.text, role)}
+        ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings) : null}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
         ${actions}
@@ -26637,7 +26660,12 @@ const [providerCaps, setProviderCaps] = d2(null);
             id: dash.id,
             role: "assistant",
             text: dash.text,
-            reasoning: dash.reasoning ?? completedStream?.reasoning
+            reasoning: dash.reasoning ?? completedStream?.reasoning,
+            receipt: dash.receipt,
+            taskState: dash.taskState,
+            artifactIncomplete: dash.artifactIncomplete === true,
+            interventionChoice: dash.interventionChoice,
+            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
           }
         ]);
         setTotalMessages((count) => count + 1);

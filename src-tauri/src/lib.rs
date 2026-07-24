@@ -1517,8 +1517,12 @@ fn finish_startup_window(window: tauri::WebviewWindow) -> Result<(), String> {
         // Reserve ~48px for the native titlebar + taskbar overlap
         let max_h = work_size.height - 48.0;
         let max_w = work_size.width;
-        if target_h > max_h { target_h = max_h; }
-        if target_w > max_w { target_w = max_w; }
+        if target_h > max_h {
+            target_h = max_h;
+        }
+        if target_w > max_w {
+            target_w = max_w;
+        }
     }
     window
         .set_size(tauri::LogicalSize::new(target_w, target_h))

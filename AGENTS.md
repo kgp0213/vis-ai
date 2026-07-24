@@ -50,3 +50,11 @@
 
 - 在执行明确要求的重新构建时，可以关闭 Visionox 所属进程（visionox-whale.exe、node.exe、officecli.exe）。
 - 关闭后须等待进程完全退出再操作目标文件。
+
+## 9. 语义索引默认配置不可回退
+
+- 新安装或语义配置缺失时，必须默认使用 `openai-compat`，预填完整 Embeddings URL `http://10.71.4.202:10307/v1/embeddings` 和模型 ID `Qwen3-Embedding`。
+- API Key 必须保持为空，不得将示意值 `api-xxxxx` 写入配置；界面仅用“请输入实际 API Key（例如 api-xxxxx）”提示用户输入。
+- 凭据清理、配置迁移、安全扫描或默认值整理只能移除历史真实 API Key，不得清空或删除上述默认 URL 和模型 ID。
+- 默认值的源码锚点是 `src-tauri/resources/server/lib/semantic-config-defaults.mjs`，回归锚点是同目录的 `semantic-config-defaults.test.mjs`。涉及语义配置的修改必须运行该测试及 `npm test`。
+- 除非用户明确要求变更产品默认值，否则任何重构、去敏、配置合并或上游 bundle 更新都不得改变这一行为。

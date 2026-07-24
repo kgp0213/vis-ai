@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const chunkUrl = new URL("../visionox-pkg/dist/cli/chunk-XPDVG52A.js", import.meta.url);
-const { readConfig, writeConfig, saveEditMode, loadEditMode, editModeHintShown } = await import(chunkUrl.href);
+const { readConfig, writeConfig, saveEditMode, loadEditMode, editModeHintShown, resolveSemanticEmbeddingConfig } = await import(chunkUrl.href);
 
 describe("config I/O 往返测试", () => {
   let tmpDir;
@@ -54,5 +54,13 @@ describe("config I/O 往返测试", () => {
   test("readConfig 不存在的文件 → {}", () => {
     const cfg = readConfig(join(tmpDir, "nonexistent.json"));
     assert.deepEqual(cfg, {});
+  });
+
+  test("不完整的 OpenAI-compatible embedding 配置安全回退到本地 Ollama", () => {
+    const path = newPath();
+    writeConfig({ semantic: { provider: "openai-compat", openaiCompat: {} } }, path);
+    const resolved = resolveSemanticEmbeddingConfig(path);
+    assert.equal(resolved.provider, "ollama");
+    assert.ok(resolved.model);
   });
 });

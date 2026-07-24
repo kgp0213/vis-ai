@@ -13,6 +13,9 @@ export function createOperationContext({ operationId, kind, conversationId = nul
     workspace: workspace ? String(workspace) : null,
     startedAt,
     closedAt: null,
+    stopRequestedAt: null,
+    stopReason: null,
+    error: null,
     state: "running",
     signal,
     userPrompt: "",
@@ -24,6 +27,18 @@ export function createOperationContext({ operationId, kind, conversationId = nul
   };
 }
 
+export function requestOperationStop(context, reason = "user_cancelled", requestedAt = new Date().toISOString()) {
+  if (!context || typeof context !== "object") return false;
+  if (context.state !== "running") return false;
+  context.state = "stopping";
+  context.stopRequestedAt = requestedAt;
+  context.stopReason = String(reason || "user_cancelled").slice(0, 160);
+  // A stopped operation must not retain a send capability while in-flight
+  // tools are unwinding. The final close still clears the signal itself.
+  context.sendAuthorization = null;
+  return true;
+}
+
 export function isOperationContextActive(context, { operationId, conversationId = null } = {}) {
   if (!context || context.state !== "running") return false;
   if (String(context.operationId ?? "") !== String(operationId ?? "")) return false;
@@ -33,6 +48,7 @@ export function isOperationContextActive(context, { operationId, conversationId 
 
 export function closeOperationContext(context, state = "completed", closedAt = new Date().toISOString()) {
   if (!context || typeof context !== "object") return null;
+  if (["completed", "cancelled", "failed", "unknown"].includes(context.state)) return context;
   context.state = state;
   context.closedAt = closedAt;
   context.sendAuthorization = null;

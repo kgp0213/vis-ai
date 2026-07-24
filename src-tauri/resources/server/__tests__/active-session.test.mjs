@@ -56,6 +56,31 @@ describe("active session recovery", () => {
     assert.match(dashboard[0].id, /^restored-user-123-/);
   });
 
+  test("restores execution receipt facts for completed assistant messages", () => {
+    const receipt = {
+      version: 1,
+      tools: { results: 2, successes: 1, failures: 1, lastName: "write_file" },
+      completion: { ok: false, taskState: "incomplete" },
+    };
+    const entries = [{
+      role: "assistant",
+      content: "The requested output is incomplete.",
+      receipt,
+      taskState: "incomplete",
+      artifactIncomplete: true,
+      interventionChoice: "retry",
+      warnings: ["output verification failed"],
+    }];
+
+    const dashboard = activeEntriesForDashboard(parseActiveSessionJsonl(serializeActiveSession(entries)).entries, 321);
+    assert.equal(dashboard.length, 1);
+    assert.deepEqual(dashboard[0].receipt, receipt);
+    assert.equal(dashboard[0].taskState, "incomplete");
+    assert.equal(dashboard[0].artifactIncomplete, true);
+    assert.equal(dashboard[0].interventionChoice, "retry");
+    assert.deepEqual(dashboard[0].warnings, ["output verification failed"]);
+  });
+
   test("refresh keeps the user turn and final answer but hides reasoning and tool activity", () => {
     const entries = [
       { role: "user", content: "create a deck" },
