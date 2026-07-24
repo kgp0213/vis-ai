@@ -372,9 +372,9 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
 
   test("GET /api/events 只推送请求的共享 SSE 频道", async () => {
     const req = new EventEmitter();
-    req.url = "/api/events?channels=events";
+    req.url = "/api/events?channels=events&cursor=epoch-a%3A4";
     req.method = "GET";
-    req.headers = { "x-reasonix-token": TOKEN };
+    req.headers = { "x-reasonix-token": TOKEN, "last-event-id": "epoch-a:3" };
 
     const res = new EventEmitter();
     const chunks = [];
@@ -392,23 +392,37 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     };
 
     let subscriber;
+    let subscribeOptions;
     let unsubscribed = false;
     await dispatch(req, res, mockCtx({
       isBusy: () => true,
-      subscribeEvents(callback) {
+      subscribeEvents(callback, options) {
         subscriber = callback;
+        subscribeOptions = options;
         return () => { unsubscribed = true; };
       },
     }), TOKEN);
-    subscriber({ kind: "sessions-changed" });
+    subscriber({ kind: "sessions-changed", eventId: "epoch-a:5", eventEpoch: "epoch-a", eventSeq: 5 });
     req.emit("close");
 
     assert.equal(res.status, 200);
     assert.equal(res.headers["content-type"], "text/event-stream");
     assert.match(chunks.join(""), /"kind":"busy-change"/);
     assert.match(chunks.join(""), /"kind":"sessions-changed"/);
+    assert.match(chunks.join(""), /id: epoch-a:5/);
     assert.doesNotMatch(chunks.join(""), /"kind":"overview"|"kind":"health"|"kind":"logs"/);
+    assert.deepEqual(subscribeOptions, { cursor: "epoch-a:4" });
     assert.equal(unsubscribed, true);
+  });
+
+  test("API 错误在统一响应边界补齐结构化字段", async () => {
+    const missing = await apiGet("/api/not-a-real-endpoint");
+    assert.equal(missing.status, 404);
+    assert.equal(missing.json.error, "no such endpoint: /not-a-real-endpoint");
+    assert.equal(missing.json.message, missing.json.error);
+    assert.equal(missing.json.code, "not_found");
+    assert.equal(missing.json.retryable, false);
+    assert.equal(typeof missing.json.action, "string");
   });
 
   test("GET /api/messages 对千条活动会话默认只返回最近一页", async () => {

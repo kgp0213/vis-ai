@@ -100,6 +100,18 @@ describe("Dashboard desktop UX", () => {
     assert.match(css, /\.modal-context-recommendation/);
   });
 
+  test("replays sequenced Dashboard events and buffers updates during canonical resync", () => {
+    const pollSource = readFileSync(new URL("lib/use-poll.ts", dashboardSourceRootUrl), "utf8");
+    const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+
+    assert.match(pollSource, /sseLastCursor/);
+    assert.match(pollSource, /url\.searchParams\.set\("cursor", sseLastCursor\)/);
+    assert.match(pollSource, /event\.lastEventId/);
+    assert.match(chatSource, /resyncingEventsRef/);
+    assert.match(chatSource, /bufferedDashboardEventsRef/);
+    assert.match(chatSource, /dash\.kind === "resync-required"/);
+  });
+
   test("keeps existing entry points while improving semantics, themes and composer hierarchy", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");
