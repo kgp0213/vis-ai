@@ -97,3 +97,26 @@ round-trip through the real versioned store.
 
 All test data belongs under the system temporary directory and must be cleaned on success and failure. Browser tests use
 the isolated HOME/USERPROFILE created by `scripts/ui-smoke.js` and must never read the real `~/.visionox` directory.
+
+## Real-model acceptance
+
+Run the three-model matrix only after a clean release build:
+
+```powershell
+node scripts/real-task-acceptance.mjs          # redacted inventory only
+node scripts/real-task-acceptance.mjs --execute
+```
+
+The executor copies the configured providers into an isolated `%TEMP%` home, uses a temporary
+workspace, never prints credentials or service URLs, and removes the temporary tree when it exits.
+It never performs DWS sends. DWS cases stay blocked until the user separately authorizes a self-chat
+test; encrypted-file cases stay blocked until an approved encrypted fixture is available.
+
+The 2026-07-24 baseline tested release commit `73f7bb2fb7c4` with Doubao 2.0 Code,
+Kimi K2.7 Code and Qwen3.5-397B. Of 27 matrix entries, 12 passed, 12 were explicitly
+blocked by the two prerequisites above, and 3 failed. All three failures belonged to Qwen:
+T1, T2 and T9 ended with no tool result and no completion claim. This is evidence for provider
+response/error-propagation investigation, not for a document-specific workflow. Doubao and Kimi
+completed the artifact, cancellation, session isolation and retry cases without an intervention card.
+Raw redacted evidence is generated locally under `plan/real-task-acceptance-results-2026-07-24.*`;
+the ignored `plan/` directory must not be force-added solely to publish machine-specific evidence.

@@ -415,7 +415,7 @@ async function executeMatrix() {
     completedAt: new Date().toISOString(),
     inventory: inventory.filter((provider) => MODEL_GROUPS.some((model) => model.providerId === provider.providerId)),
     results,
-    diagnostics: { launcherStderrTail: boundedText(stderr, 4000) },
+    diagnostics: { launcherStderrTail: boundedText(stderr.slice(-4000), 4000) },
   };
   writeFileSync(resultJsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   writeFileSync(resultMarkdownPath, renderMarkdown(payload), "utf8");
