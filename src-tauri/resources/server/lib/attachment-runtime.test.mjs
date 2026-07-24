@@ -9,6 +9,9 @@ import { createAttachmentRuntime } from "./attachment-runtime.mjs";
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 const DATA_URL = `data:image/png;base64,${PNG.toString("base64")}`;
+const MP4 = Buffer.from("000000186674797069736f6d0000020069736f6d69736f32", "hex");
+const MOV = Buffer.from("0000001466747970717420200000000071742020", "hex");
+const WEBM = Buffer.concat([Buffer.from("1a45dfa3", "hex"), Buffer.from("webm", "ascii")]);
 
 async function fixture(t) {
   const root = await mkdtemp(resolve(tmpdir(), "visionox-attachments-"));
@@ -146,6 +149,36 @@ test("chunked image upload preserves original bytes and cleans its staging file"
 
   assert.equal(await runtime.releaseAttachments([attachment.id]), 1);
   assert.equal(await runtime.get(attachment.id), null);
+});
+
+test("chunked uploads detect supported video formats from bytes instead of names or declared MIME", async (t) => {
+  const { runtime } = await fixture(t);
+  for (const [name, bytes, mimeType] of [
+    ["renamed.bin", MP4, "video/mp4"],
+    ["clip.mp4", MOV, "video/quicktime"],
+    ["capture.mov", WEBM, "video/webm"],
+  ]) {
+    const upload = await runtime.beginUpload({
+      name,
+      size: bytes.length,
+      mimeType: "image/png",
+      sessionId: "session-video",
+      operationId: "operation-video",
+    });
+    await runtime.appendUpload(upload.uploadId, bytes, 0);
+    const attachment = await runtime.finishUpload(upload.uploadId);
+    assert.equal(attachment.kind, "video");
+    assert.equal(attachment.mimeType, mimeType);
+    assert.deepEqual(await runtime.readBytes(attachment.id), bytes);
+  }
+});
+
+test("chunked uploads reject unsupported bytes even when the extension claims video", async (t) => {
+  const { runtime } = await fixture(t);
+  const bytes = Buffer.from("not a real video", "utf8");
+  const upload = await runtime.beginUpload({ name: "fake.mp4", size: bytes.length, mimeType: "video/mp4" });
+  await runtime.appendUpload(upload.uploadId, bytes, 0);
+  await assert.rejects(runtime.finishUpload(upload.uploadId), /受支持的图片或视频格式/);
 });
 
 test("parallel attachment writes restore every committed index record", async (t) => {

@@ -30,7 +30,7 @@ test("video upload caches success but not temporary failure", async () => {
     },
   });
   const model = { id: "video-model", capabilities: { inputModalities: ["text", "video"] } };
-  const input = { attachment: { id: "att-video", sha256: "a".repeat(64), kind: "video" }, provider: { id: "kimi" } };
+  const input = { attachment: { id: "att-video", sha256: "a".repeat(64), kind: "video" }, provider: { id: "official", providerType: "kimi" } };
 
   const failed = await adapter.uploadVideo(input, model, { id: "op-1", provider: input.provider });
   assert.equal(failed.error.code, "media_upload_failed");
@@ -44,10 +44,10 @@ test("video upload caches success but not temporary failure", async () => {
 test("video authentication errors are exposed and unsupported providers are explicit", async () => {
   const auth = createMediaProviderAdapter({
     attachmentRuntime: { readDataUrl: async () => null },
-    videoUploaders: { provider: async () => { throw new Error("API 401: invalid key"); } },
+    videoUploaders: { kimi: async () => { throw new Error("API 401: invalid key"); } },
   });
   const model = { id: "video-model", capabilities: { inputModalities: ["text", "video"] } };
-  const input = { attachment: { id: "att-video", kind: "video" }, provider: { id: "provider" } };
+  const input = { attachment: { id: "att-video", kind: "video" }, provider: { id: "official", providerType: "kimi" } };
   assert.equal((await auth.uploadVideo(input, model, { provider: input.provider })).error.code, "media_provider_auth_failed");
 
   const unsupported = createMediaProviderAdapter({ attachmentRuntime: { readDataUrl: async () => null } });
@@ -58,12 +58,12 @@ test("video upload cancellation stops before provider dispatch and is never cach
   let attempts = 0;
   const adapter = createMediaProviderAdapter({
     attachmentRuntime: { readDataUrl: async () => null },
-    videoUploaders: { provider: async () => { attempts++; return { fileId: "unexpected" }; } },
+    videoUploaders: { kimi: async () => { attempts++; return { type: "video_url", video_url: { url: "ms://unexpected" } }; } },
   });
   const controller = new AbortController();
   controller.abort();
   const result = await adapter.uploadVideo(
-    { attachment: { id: "att-video", sha256: "b".repeat(64), kind: "video" }, provider: { id: "provider" } },
+    { attachment: { id: "att-video", sha256: "b".repeat(64), kind: "video" }, provider: { id: "official", providerType: "kimi" } },
     { id: "video-model", capabilities: { inputModalities: ["text", "video"] } },
     { id: "op-cancelled", provider: { id: "provider" } },
     controller.signal,
@@ -71,4 +71,34 @@ test("video upload cancellation stops before provider dispatch and is never cach
   assert.equal(result.error.code, "media_upload_failed");
   assert.equal(result.error.affectsCompleteness, false);
   assert.equal(attempts, 0);
+});
+
+test("provider type, not a Kimi-looking id or model name, gates official video upload", async () => {
+  let attempts = 0;
+  const adapter = createMediaProviderAdapter({
+    attachmentRuntime: { readDataUrl: async () => null },
+    videoUploaders: {
+      kimi: async () => {
+        attempts++;
+        return { type: "video_url", video_url: { url: "ms://file-1" } };
+      },
+    },
+  });
+  const model = { id: "kimi-k2-video", capabilities: { inputModalities: ["text", "video"] } };
+  const attachment = { id: "att-video", sha256: "c".repeat(64), kind: "video" };
+
+  const volc = await adapter.uploadVideo(
+    { attachment, provider: { id: "kimi-volcengine", providerType: "openai-compatible" } },
+    model,
+  );
+  assert.equal(volc.error.code, "media_provider_unsupported");
+  assert.equal(attempts, 0);
+
+  const official = await adapter.resolveMedia(
+    [{ attachment }],
+    model,
+    { id: "op-video", provider: { id: "moonshot", providerType: "kimi" } },
+  );
+  assert.deepEqual(official.parts, [{ type: "video_url", video_url: { url: "ms://file-1" } }]);
+  assert.equal(attempts, 1);
 });

@@ -620,6 +620,37 @@ describe("agent runtime policy", () => {
     assert.doesNotMatch(storedUser.content, /base64/);
   });
 
+  test("provider-ready video parts remain in the same ordinary tool loop without entering session history", async () => {
+    const captured = [];
+    let response = 0;
+    const client = {
+      chat: async (options) => {
+        captured.push(structuredClone(options.messages));
+        if (response++ === 0) return { content: "", toolCalls: [toolCall("video-probe")], usage: {} };
+        return { content: "video inspected", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    registerProbe(tools);
+    const loop = makeLoop(client, tools);
+    loop.setPendingMediaParts([{ type: "video_url", video_url: { url: "ms://file-123" } }]);
+
+    for await (const _event of loop.step("inspect this video")) {
+      // Drain the ordinary loop, including its tool continuation.
+    }
+
+    assert.equal(captured.length, 2);
+    for (const messages of captured) {
+      const user = messages.findLast((message) => message.role === "user");
+      assert.ok(Array.isArray(user?.content));
+      assert.deepEqual(user.content.find((part) => part.type === "video_url"), {
+        type: "video_url",
+        video_url: { url: "ms://file-123" },
+      });
+    }
+    assert.doesNotMatch(JSON.stringify(loop.log.toMessages()), /ms:\/\/file-123/);
+  });
+
   test("read_media can queue an image for the next request in the same ordinary tool loop", async () => {
     const captured = [];
     let response = 0;
