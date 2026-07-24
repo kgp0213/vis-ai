@@ -54,5 +54,11 @@ test("Dashboard exposes video upload only for an explicit official Kimi video mo
   assert.match(source, /!queuedAttachmentIdsRef\.current\.has\(item\?\.attachmentId\)/);
   assert.match(source, /queueStorageKey = T2\(\(\) => workspaceDir && activeConversationId/);
   assert.match(source, /activeConversationId}:queue/);
+  assert.match(source, /queueStorageKeyRef\.current !== claimedQueueScope/);
+  const durableQueueDelete = source.indexOf("await deletePersistedQueuedPrompt(id)");
+  const queuedAttachmentRelease = source.indexOf("releaseUploadedImages((removed?.attachments", durableQueueDelete);
+  assert.ok(durableQueueDelete > 0 && queuedAttachmentRelease > durableQueueDelete, "durable queue deletion must precede attachment release");
+  assert.match(source, /deleted\?\.ok === false/);
+  assert.match(source, /if \(!\(await confirmQueuedReset\(\)\)\) return/);
   assert.match(apiServerSource, /conversationId: ctx\.getConversationId\?\.\(\) \?\? null/);
 });
