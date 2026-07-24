@@ -385,6 +385,7 @@ const required = [
       "capabilities?.maxContextTokens",
       'credentials" && rest[1] === "test"',
       "语义搜索配置不完整",
+      "result = await ctx.optimizePrompt",
     ],
   },
   {

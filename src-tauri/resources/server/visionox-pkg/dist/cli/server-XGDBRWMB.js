@@ -5272,7 +5272,12 @@ async function handleOptimizePrompt(method, _rest, body, ctx) {
   if (prompt.length > 2e4) {
     return { status: 400, body: { error: "prompt is too long to optimize (maximum 20000 characters)" } };
   }
-  const result = await ctx.optimizePrompt(prompt.trim());
+  let result;
+  try {
+    result = await ctx.optimizePrompt(prompt.trim());
+  } catch (err) {
+    return { status: 502, body: { error: String(err?.message || err) } };
+  }
   const optimizedPrompt = typeof result?.prompt === "string" ? result.prompt.trim() : "";
   if (!optimizedPrompt) {
     return { status: 502, body: { error: result?.error || "model returned an empty optimized prompt" } };

@@ -105,7 +105,7 @@ const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs
 const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEarly("./lib/shell-side-effect-policy.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
-const { closeOperationContext, createOperationContext } = await importEarly("./lib/operation-context.mjs");
+const { closeOperationContext, createOperationContext, requestOperationStop } = await importEarly("./lib/operation-context.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
@@ -1307,7 +1307,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
     getOperationId: opts.getOperationId,
-    getEnvironment: ({ command, args }) => preparedDocumentEnvironment(
+    getEnvironment: ({ command, args, signal }) => preparedDocumentEnvironment(
       preparedDocumentRegistry,
       args ?? { command },
       rootDir,
@@ -1315,6 +1315,7 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
         readConfig: () => readConfig(configPath),
         env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
         logger: console,
+        signal,
       },
     ),
   });
@@ -6530,7 +6531,8 @@ function beginActiveOperation(kind) {
 
 function finishActiveOperation(operation) {
   if (!operation || activeOperation?.id !== operation.id) return;
-  const finalState = operation.controller.signal.aborted ? "cancelled" : "completed";
+  const finalState = operation.finalState
+    || (operation.controller.signal.aborted ? "cancelled" : "completed");
   closeOperationContext(operation.context, finalState);
   broadcastDashboardEvent({
     kind: "operation-change",
@@ -6538,6 +6540,12 @@ function finishActiveOperation(operation) {
   });
   activeOperation = null;
   requestScheduleQueueDrain();
+}
+
+function refreshOperationContextScope(operation = activeOperation) {
+  if (!operation?.context) return;
+  operation.context.conversationId = activeConversationId || null;
+  operation.context.workspace = workspaceDir || null;
 }
 
 function operationKindForPrompt(text, opts = {}) {
@@ -6683,6 +6691,11 @@ function appendActiveMessage(msg) {
       ...(msg.reasoning ? { reasoning: msg.reasoning } : {}),
       ...(msg.toolName ? { toolName: msg.toolName } : {}),
       ...(msg.toolArgs !== undefined ? { toolArgs: msg.toolArgs } : {}),
+      ...(msg.receipt && typeof msg.receipt === "object" ? { receipt: msg.receipt } : {}),
+      ...(msg.taskState ? { taskState: msg.taskState } : {}),
+      ...(msg.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
+      ...(msg.interventionChoice ? { interventionChoice: msg.interventionChoice } : {}),
+      ...(Array.isArray(msg.warnings) && msg.warnings.length > 0 ? { warnings: msg.warnings } : {}),
     };
     const stream = getActiveSessionStream();
     stream.write(`${JSON.stringify(record)}\n`);
@@ -8204,7 +8217,7 @@ const ctx = {
   })),
 
   optimizePrompt: async (prompt) => {
-    if (!client) throw new Error("model client is not configured");
+    if (!client) throw new Error("尚未配置可用模型，请先在「模型」中导入配置并检测模型，再使用提示词优化。");
     const source = String(prompt ?? "").trim();
     if (!source) throw new Error("prompt is empty");
     const activeModeId = LEGACY_MODE_ALIASES[config.mode] || config.mode || "general";
@@ -8387,6 +8400,7 @@ ${modeList}
       if (operation.controller.signal.aborted) return;
       operation.state = "stopping";
       operation.stopRequestedAt = new Date().toISOString();
+      requestOperationStop(operation.context, "external_abort", operation.stopRequestedAt);
       operation.controller.abort();
       broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation(operation) });
       void jobs.stopOwned(operation.id, { graceMs: 100 });
@@ -8439,6 +8453,7 @@ ${modeList}
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
+          refreshOperationContextScope(operation);
           activeContextRecoveryHandle = typeof sessionMeta.contextRecoveryHandle === "string" && sessionMeta.contextRecoveryHandle.trim()
             ? sessionMeta.contextRecoveryHandle.trim()
             : null;
@@ -8666,6 +8681,7 @@ ${modeList}
       // Handle /new and /clear: finalize active session and reset
       if (text === "/new" || text === "/clear") {
         await resetActiveConversation({ withWelcome: true, reason: "manual new conversation" });
+        refreshOperationContextScope(operation);
         // busy is already true from the outer guard; just broadcast events
         broadcastDashboardEvent({ kind: "busy-change", busy: true });
         return { accepted: true };
@@ -8683,6 +8699,7 @@ ${modeList}
       // /new-style behavior.
       if (opts.newConversation === true && opts.isolated !== true) {
         await resetActiveConversation({ withWelcome: false, reason: "scheduled task" });
+        refreshOperationContextScope(operation);
       }
 
       // /compact — manually trigger context compression (async LLM summarization)
@@ -8992,7 +9009,14 @@ ${modeList}
         let executionStarted = false;
         const loopTelemetry = createLoopTelemetry({ startedAt: turnStartedAt });
         const turnReceipt = createTurnReceipt({ turnId: assistantId, requestId, startedAt: turnStartedAt });
-        for (const binding of preparedDocumentRegistry.snapshot()) {
+        const operationDocuments = preparedDocumentRegistry.snapshot();
+        operation.context.preparedDocuments = operationDocuments.map((binding) => ({
+          documentRef: binding.documentRef,
+          sourcePath: binding.sourcePath,
+          readablePath: binding.readablePath,
+          verified: Boolean(binding.readablePath && existsSync(binding.readablePath)),
+        }));
+        for (const binding of operationDocuments) {
           turnReceipt.recordDocumentBinding({
             documentRef: binding.documentRef,
             sourcePath: binding.sourcePath,
@@ -9016,6 +9040,7 @@ ${modeList}
           const baseline = absolute ? generatedArtifactFileInfo(absolute) : null;
           if (absolute) artifactBaselines.set(process.platform === "win32" ? absolute.toLowerCase() : absolute, baseline);
         }
+        operation.context.artifactBaseline = [...artifactBaselines.entries()].map(([path, baseline]) => ({ path, baseline }));
         const requestedExistingOutputKeys = new Set();
         const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
         const turnArtifactPaths = new Set();
@@ -9369,12 +9394,26 @@ ${modeList}
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
           if (assistantText && opts.isolated !== true) {
+            const receiptSnapshot = turnReceipt.snapshot();
             pushMessage({
               id: assistantId,
               role: "assistant",
               text: assistantText,
+              taskState,
+              artifactIncomplete,
+              interventionChoice,
+              warnings: taskWarnings,
+              receipt: receiptSnapshot,
             });
-            appendActiveMessage({ role: "assistant", text: assistantText });
+            appendActiveMessage({
+              role: "assistant",
+              text: assistantText,
+              taskState,
+              artifactIncomplete,
+              interventionChoice,
+              warnings: taskWarnings,
+              receipt: receiptSnapshot,
+            });
             broadcastDashboardEvent({
               kind: "assistant_final",
               id: assistantId,
@@ -9388,7 +9427,7 @@ ${modeList}
               interventionChoice,
               recoveryHandle: contextRecoveryHandle,
               progress: loopTelemetry.snapshot(),
-              receipt: turnReceipt.snapshot(),
+              receipt: receiptSnapshot,
             });
           }
         } catch (err) {
@@ -9497,6 +9536,14 @@ ${modeList}
               loopTelemetry: loopTelemetry.snapshot(),
               receipt: turnReceipt.snapshot(),
             };
+            operation.finalState = completion.cancelled
+              ? "cancelled"
+              : completion.ok
+                ? "completed"
+                : completion.taskState === "needs_intervention" || completion.taskState === "incomplete"
+                  ? "unknown"
+                  : "failed";
+            if (!completion.ok && completion.error) operation.context.error = String(completion.error).slice(0, 320);
             let completionReceiptError = null;
             try {
               rememberCompletedPromptRequest(requestId, completion);
@@ -9548,6 +9595,7 @@ ${modeList}
       if (activeOperation) {
         activeOperation.state = "stopping";
         activeOperation.stopRequestedAt = new Date().toISOString();
+        requestOperationStop(activeOperation.context, "user_cancelled", activeOperation.stopRequestedAt);
         activeOperation.controller.abort();
         broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation() });
         void jobs.stopOwned(activeOperation.id, { graceMs: 100 });
