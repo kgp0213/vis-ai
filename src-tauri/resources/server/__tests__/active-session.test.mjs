@@ -219,4 +219,26 @@ describe("active session recovery", () => {
     ]);
     assert.equal(entries.length, 1);
   });
+
+  test("attachment-only user messages persist metadata and restore a model reference", () => {
+    const attachment = {
+      id: "att_1234567890abcdef1234",
+      kind: "image",
+      mimeType: "image/png",
+      name: "screen.png",
+      size: 123,
+      sha256: "a".repeat(64),
+      source: { kind: "blob", ref: `blobref:image/png;${"a".repeat(64)}` },
+    };
+    const merged = withPendingUserEntry([], { attachments: [attachment] });
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].content, "");
+    assert.deepEqual(merged[0].attachments, [attachment]);
+
+    const model = activeEntriesForModel(parseActiveSessionJsonl(serializeActiveSession(merged)).entries);
+    assert.equal(model[0].content, `[attachment:${attachment.id}]`);
+    const dashboard = activeEntriesForDashboard(merged, 777);
+    assert.equal(dashboard.length, 1);
+    assert.deepEqual(dashboard[0].attachments, [attachment]);
+  });
 });

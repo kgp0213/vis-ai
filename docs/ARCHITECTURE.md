@@ -130,8 +130,7 @@ vis-ai/
 模型请求遇到鉴权、余额或账户配额阻塞时立即进入用户干预；普通瞬态限流仍由底层做有界重试。
 
 历史 `complexTaskEngine` 灰度路由、Durable Store、Outbox 和任务中心投影不再控制 Launcher 的模型执行。
-约 40 个 `complex-task-*.mjs` 历史文件已移出 `src-tauri/resources/server`，归档于仓库根目录
-`legacy/complex-task/`，不会进入运行时资源或默认测试通配符。活跃的
+已退役的 `complex-task-*.mjs` 状态机实现已从维护树清理，不会进入运行时资源或默认测试通配符。活跃的
 `background-task-registry.mjs` 使用中性 `artifact-reference.mjs`，不再依赖退役任务命名空间。
 旧非终态任务不再由 Launcher 自动恢复或交付；需要继续处理时必须回到主对话，由当前模型工具循环
 重新执行。
@@ -258,9 +257,9 @@ DWS OAuth 凭据、软件认证内核或 DWS 二进制；DWS 自升级仍是独�
 
 ## 架构决策与后续优先级
 
-长期维护以可验证的行为边界为准，不记录易过期的源码行数、提交领先数量或健康度评分。当前接受的
-重点只有三项：建立可重建的 Dashboard 源码；继续按职责与测试边界拆分 Launcher；保持二进制资源和
-Windows release 的可复现治理。Dashboard 源码迁移时再复核 CSP 中 `unsafe-inline`/`unsafe-eval` 的真实依赖。
+长期维护以可验证的行为边界为准，不记录易过期的源码行数、提交领先数量或健康度评分。Dashboard
+源码迁移已经完成，后续只保持源码离线可重建、构建产物与事实来源一致，并继续按职责与测试边界拆分
+Launcher、治理 Agent bundle 所有权和外部副作用，同时保持二进制资源与 Windows release 的可复现性。
 
 以下建议不作为当前整改目标：把 Launcher 压到任意行数、消除全部顶级 `let`、在缺少受控二进制的 CI
 中强制 release 构建、机械修改依赖版本范围、把 bundle target 固定为 NSIS，或把实验性 Unix 代码描述为
@@ -283,8 +282,9 @@ PowerShell 只能作为排障工具，不能加入产品启动依赖。
 
 `read_file` 会嗅探 PDF、Office 和图片等二进制格式，返回 `BINARY_INPUT_NOT_READ_AS_TEXT` 并引导模型先准备文档，
 避免把二进制误当 UTF-8 文本。Office 文件使用 OfficeCLI，复杂 PDF 操作使用 `pdf` Skill，Markdown 生成 PDF
-使用 `md-to-pdf-cjk`。`pdf-text.mjs`、`document-extractors.mjs`、`document-markdown-workflow.mjs`、
-`long-task-handoff.mjs` 和 `document-output-reservation.mjs` 只作为离线兼容与测试材料，构建时不会进入运行资源。
+使用 `md-to-pdf-cjk`。旧版 PDF/文档专用后台模块（包括 `pdf-text.mjs`、`document-extractors.mjs`、
+`document-markdown-workflow.mjs`、`long-task-handoff.mjs` 和 `document-output-reservation.mjs`）已从维护树
+和运行资源清理；当前不再通过这些模块提供文档续跑或专用模型路由。
 
 文档、代码仓库和研究任务都走同一个 `CacheFirstLoop`。模型负责取得下一批输入、保存中间结果和决定继续、暂停
 或请求用户确认；轻量 plan 只记录需要批准的步骤。`context-input-transaction` 只把过大的只读工具结果按
@@ -295,6 +295,12 @@ SHA-256 缓存为 `pending -> materialized -> foldable`，并在压缩前提供�
 每个前台 turn 同时创建一个短生命周期执行收据（`lib/turn-receipt.mjs`）。它只汇总工具结果、上下文覆盖、
 产物证据、文档绑定和干预状态，不调度模型、不决定任务步骤。完成事件、干预卡片和 Dashboard 进度使用同一份
 收据快照；同一 turn 内只保留一个活动干预卡片，用户解决后才允许新的状态再次触发。
+
+图片输入统一由 `lib/attachment-runtime.mjs` 和 `lib/media-runtime.mjs` 管理。Dashboard 以 512 KB 分块上传原始
+文件，只在浏览器内生成预览；会话和提示词队列只保存 Attachment ID，Blob 按 SHA-256 存在用户数据目录并按
+会话引用清理。宿主在每次投递前校验真实格式、像素、解码内存和模型媒体预算，按需生成最长边 2000px 的派生图。
+`read_media` 仍由同一个 `CacheFirstLoop` 调用，可按路径、DLP 文档引用或当前会话 Attachment ID 读取全图和局部
+区域。MCP 图片也进入相同链路；音频和视频当前只保存并报告能力状态，未验证 Provider 不会收到伪造的媒体输入。
 
 模型 JSON 中的文档能力和预算是初始提示，不是任务能否完成的唯一真相。宿主按实际探测和本次任务观测到的
 超时、输出截断、上下文错误、非重试错误及多模态可用性做分批、缩小、熔断和备用候选切换；这些决策按能力与

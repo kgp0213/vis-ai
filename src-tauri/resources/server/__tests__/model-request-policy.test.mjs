@@ -165,6 +165,7 @@ describe("model request policy", () => {
       maxContextTokens: 1_000_000,
       maxOutputTokens: 32_768,
       maxImagesPerRequest: 12,
+      maxMediaBytes: 10 * 1024 * 1024,
       roles: ["chat", "document-draft", "document-review", "vision-review", "summary"],
     };
 
@@ -207,6 +208,7 @@ describe("model request policy", () => {
       maxContextTokens: 131_072,
       maxOutputTokens: null,
       maxImagesPerRequest: 3,
+      maxMediaBytes: 10 * 1024 * 1024,
       roles: ["chat", "document-draft", "document-review", "vision-review", "summary"],
     });
 
@@ -235,6 +237,7 @@ describe("model request policy", () => {
       maxContextTokens: 65_536,
       maxOutputTokens: 4_096,
       maxImagesPerRequest: 0,
+      maxMediaBytes: 0,
       roles: ["chat", "document-draft", "document-review", "summary"],
     });
   });

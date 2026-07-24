@@ -1056,6 +1056,10 @@ const [activeProviderId, setActiveProviderId] = d2(null);
 const [providerCaps, setProviderCaps] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
+  const activeModel = (providers ?? [])
+    .find((provider) => provider.id === activeProviderId)
+    ?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
+  const pendingImageLimit = Math.min(5, Math.max(1, Number(activeModel?.capabilities?.maxImagesPerRequest) || 5));
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
   const [fileArtifacts, setFileArtifacts] = d2([]);
@@ -1142,6 +1146,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [skillCredentialValue, setSkillCredentialValue] = d2("");
   const [skillCredentialSaving, setSkillCredentialSaving] = d2(false);
   const [pendingImages, setPendingImages] = d2([]);
+  const pendingImagesRef = A2([]);
   const [visibleMessageCount, setVisibleMessageCount] = d2(CHAT_INITIAL_RENDER_COUNT);
   const [totalMessages, setTotalMessages] = d2(0);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = d2(false);
@@ -1414,11 +1419,12 @@ const [providerCaps, setProviderCaps] = d2(null);
           requestId: item.requestId || id,
           text: String(item.text ?? "").trim(),
           images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
+          attachments: Array.isArray(item.attachments) ? item.attachments.filter((attachmentId) => typeof attachmentId === "string" && attachmentId.startsWith("att_")) : [],
           status: item.status === "failed" ? "failed" : "queued",
           error: item.status === "failed" ? String(item.error ?? "") : null,
           createdAt: Number(item.createdAt ?? Date.now())
         };
-      }).filter((item) => item.text || item.images.length > 0);
+      }).filter((item) => item.text || item.images.length > 0 || item.attachments.length > 0);
       setQueuedPrompts(restored);
     }).catch((err) => {
       if (!cancelled) setError(t4("chat.queueFailed", { error: err.message }));
@@ -1878,17 +1884,18 @@ const [providerCaps, setProviderCaps] = d2(null);
     var files = e.target.files;
     if (!files || files.length === 0) return;
     var newImages = pendingImages.slice();
-    for (var i = 0; i < files.length && newImages.length < 5; i++) {
+    for (var i = 0; i < files.length && newImages.length < pendingImageLimit; i++) {
       try {
-        var dataUrl = await compressImage(files[i]);
-        newImages.push(dataUrl);
+        var pendingImage = await uploadImageAttachment(files[i]);
+        newImages.push(pendingImage);
       } catch (err) {
-        console.error("Image compression failed:", err);
+        console.error("Image upload failed:", err);
+        setError(`图片上传失败：${err.message}`);
       }
     }
     setPendingImages(newImages);
     e.target.value = "";
-  }, [pendingImages]);
+  }, [pendingImages, pendingImageLimit]);
   var compressImage = function(file) {
     return new Promise(function(resolve, reject) {
       if (file.size < 100 * 1024) {
@@ -1930,6 +1937,59 @@ const [providerCaps, setProviderCaps] = d2(null);
       img.src = url;
     });
   };
+  var uploadChunkData = function(blob) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function() {
+        var value = String(reader.result || "");
+        resolve(value.slice(value.indexOf(",") + 1));
+      };
+      reader.onerror = function() { reject(reader.error || new Error("Failed to read image chunk")); };
+      reader.readAsDataURL(blob);
+    });
+  };
+  var uploadImageAttachment = async function(file) {
+    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error("图片文件为空");
+    if (file.size > 50 * 1024 * 1024) throw new Error("图片超过 50 MB 限制");
+    const preview = await compressImage(file);
+    const initialized = await api("/attachments", {
+      method: "POST",
+      body: { action: "init", name: file.name || "image", size: file.size, mimeType: file.type || "application/octet-stream" }
+    });
+    const uploadId = initialized.uploadId;
+    const chunkBytes = Math.min(Number(initialized.chunkBytes) || 512 * 1024, 512 * 1024);
+    try {
+      for (let offset = 0; offset < file.size; offset += chunkBytes) {
+        const data = await uploadChunkData(file.slice(offset, Math.min(file.size, offset + chunkBytes)));
+        await api("/attachments", { method: "POST", body: { action: "chunk", uploadId, offset, data } });
+      }
+      const completed = await api("/attachments", { method: "POST", body: { action: "finish", uploadId } });
+      if (!completed.attachment?.id) throw new Error("宿主未返回附件 ID");
+      return {
+        attachmentId: completed.attachment.id,
+        preview,
+        name: completed.attachment.name || file.name || "image",
+        size: completed.attachment.size || file.size,
+        mimeType: completed.attachment.mimeType || file.type || "application/octet-stream"
+      };
+    } catch (error) {
+      await api("/attachments", { method: "POST", body: { action: "cancel", uploadId } }).catch(() => {});
+      throw error;
+    }
+  };
+  var releaseUploadedImages = function(items) {
+    const attachmentIds = (Array.isArray(items) ? items : [])
+      .map((item) => typeof item === "object" ? item.attachmentId : null)
+      .filter(Boolean);
+    if (attachmentIds.length === 0) return Promise.resolve();
+    return api("/attachments", { method: "POST", body: { action: "release", attachmentIds } }).catch(() => {});
+  };
+  y2(() => {
+    pendingImagesRef.current = pendingImages;
+  }, [pendingImages]);
+  y2(() => () => {
+    void releaseUploadedImages(pendingImagesRef.current);
+  }, []);
   const loadChatSkills = q2(async () => {
     if (skillList.length > 0) return skillList;
     const r3 = await api("/skills");
@@ -1985,8 +2045,13 @@ const [providerCaps, setProviderCaps] = d2(null);
   const submitPromptPayload = q2(async (payload) => {
     const resolved = await resolveSkillMention(payload?.text ?? "");
     const text = resolved.text;
-    const images = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
-    if (!text && images.length === 0) return { ok: false, reason: "empty" };
+    const imageItems = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
+    const images = imageItems.filter((item) => typeof item === "string" && item.startsWith("data:image/"));
+    const attachments = [...new Set([
+      ...(Array.isArray(payload?.attachments) ? payload.attachments : []),
+      ...imageItems.map((item) => typeof item === "object" ? item.attachmentId : null),
+    ].filter(Boolean))];
+    if (!text && images.length === 0 && attachments.length === 0) return { ok: false, reason: "empty" };
     if (resolved.credentialCheckError) {
       return { ok: false, reason: t4("chat.skillCredentialCheckFailed", { error: resolved.credentialCheckError }) };
     }
@@ -1998,6 +2063,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       var body = { prompt: text, requestId };
       if (resolved.skillInvocation) body.skillInvocation = resolved.skillInvocation;
       if (images.length > 0) body.images = images;
+      if (attachments.length > 0) body.attachments = attachments;
       const res = await api("/submit", { method: "POST", body });
       if (!res.accepted) {
         return { ok: false, requiresUserRetry: res.requiresUserRetry === true, code: res.code ?? null, reason: res.reason ?? "rejected" };
@@ -2028,7 +2094,15 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
-    return api("/prompt-queue", { method: "POST", body: { scope: queueStorageKey, item } });
+    const storedItem = {
+      ...item,
+      images: Array.isArray(item.images) ? item.images.filter((image) => typeof image === "string" && image.startsWith("data:image/")) : [],
+      attachments: [...new Set([
+        ...(Array.isArray(item.attachments) ? item.attachments : []),
+        ...(Array.isArray(item.images) ? item.images.map((image) => typeof image === "object" ? image.attachmentId : null) : []),
+      ].filter(Boolean))],
+    };
+    return api("/prompt-queue", { method: "POST", body: { scope: queueStorageKey, item: storedItem } });
   }, [queueStorageKey]);
   const deletePersistedQueuedPrompt = q2((id = null) => {
     if (!queueStorageKey) return Promise.resolve();
@@ -2049,11 +2123,13 @@ const [providerCaps, setProviderCaps] = d2(null);
       return false;
     }
     const id = `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const attachments = imageList.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean);
     const item = {
       id,
       requestId: id,
       text: trimmed,
       images: imageList,
+      attachments,
       status: "queued",
       error: null,
       createdAt: Date.now()
@@ -2144,7 +2220,11 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       return;
     }
-    const result = await submitPromptPayload({ text, images });
+    const result = await submitPromptPayload({
+      text,
+      images,
+      attachments: images.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean),
+    });
     if (result.ok) {
       setChatInput("");
       setPendingImages([]);
@@ -2244,6 +2324,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (!idle) throw new Error(t4("chat.stopTimeout"));
       }
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
+      await releaseUploadedImages(pendingImages);
       const retrieval = await api("/index-retrieval-mode").catch(() => ({ mode: "tool" }));
       setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       setSemanticRetrievalSources([]);
@@ -2278,7 +2359,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length, draftKey, confirmQueuedReset, waitForIdle, setChatInput]);
+  }, [busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput]);
   const changeIndexRetrievalMode = q2(async (event) => {
     const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
@@ -2304,6 +2385,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (!confirmQueuedReset()) return;
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
+      await releaseUploadedImages(pendingImages);
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
@@ -2334,7 +2416,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [draftKey, confirmQueuedReset, setChatInput]);
+  }, [draftKey, pendingImages, confirmQueuedReset, setChatInput]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -2547,15 +2629,18 @@ const [providerCaps, setProviderCaps] = d2(null);
       }, 0);
     }
     function addPendingImages(files) {
-      var remaining = 5 - pendingImages.length;
+      var remaining = pendingImageLimit - pendingImages.length;
       if (remaining <= 0) return;
       var toProcess = files.slice(0, remaining);
       Promise.all(toProcess.map(function(f2) {
-        return compressImage(f2).catch(function() { return null; });
+        return uploadImageAttachment(f2).catch(function(error) {
+          console.error("Clipboard image upload failed:", error);
+          return null;
+        });
       })).then(function(results) {
         var valid = results.filter(function(r) { return r !== null; });
         if (valid.length > 0) {
-          setPendingImages(pendingImages.slice().concat(valid).slice(0, 5));
+          setPendingImages(pendingImages.slice().concat(valid).slice(0, pendingImageLimit));
         }
       });
     }
@@ -2668,7 +2753,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (text) insertAtCursor(text);
       } catch (_) {}
     }
-  }, [pendingImages, setChatInput]);
+  }, [pendingImages, pendingImageLimit, setChatInput]);
   y2(() => {
     if (bootError) return;
     const el = feedRef.current;
@@ -3078,10 +3163,15 @@ const [providerCaps, setProviderCaps] = d2(null);
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
-  const activeModel = (providers ?? [])
-    .find((provider) => provider.id === activeProviderId)
-    ?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
+  const activeInputModalities = activeModel?.capabilities?.inputModalities ?? (activeModel?.multimodal ? ["text", "image"] : ["text"]);
+  const canUploadImages = activeInputModalities.includes("image");
   const activeModelEfforts = Array.isArray(activeModel?.efforts) ? activeModel.efforts : [];
+  y2(() => {
+    if (!canUploadImages && pendingImages.length > 0) {
+      void releaseUploadedImages(pendingImages);
+      setPendingImages([]);
+    }
+  }, [canUploadImages]);
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -3216,8 +3306,8 @@ const [providerCaps, setProviderCaps] = d2(null);
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
               <div style="display:flex;gap:6px;align-items:flex-end">
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
-            ${html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />`}
-            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) { return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() { var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`; })}</div>` : null}
+            ${canUploadImages ? html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />` : null}
+            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(image, idx) { const preview = typeof image === "string" ? image : image?.preview; return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0">${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">图片</span>`}<button onClick=${function() { void releaseUploadedImages([image]); var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`; })}</div>` : null}
             ${queuedPrompts.length > 0 ? html4`
               <div class="chat-queue">
                 ${queuePaused ? html4`<div class="chat-queue-paused"><span>${t4("chat.queuePaused")}</span><button type="button" onClick=${() => { setQueuePaused(false); setQueuePumpTick((v) => v + 1); }}>${t4("chat.queueResume")}</button></div>` : null}
@@ -3227,7 +3317,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                 </div>
                 <div class="chat-queue-list">
                   ${queuedPrompts.map((item, idx) => {
-                    const imageCount = item.images?.length ?? 0;
+                    const imageCount = Math.max(item.images?.length ?? 0, item.attachments?.length ?? 0);
                     const text = item.text || t4("chat.queueImagesOnly", { count: imageCount });
                     const isSending = item.status === "sending" || queueSendingId === item.id;
                     const isFailed = item.status === "failed";
@@ -3430,13 +3520,13 @@ const [providerCaps, setProviderCaps] = d2(null);
               ` : null}
               ${(showSkillPicker || showWsPicker || showModelPicker || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowRetrievalSources(false); }}></div>` : null}
               <div style="flex:1"></div>
-              <button
+              ${canUploadImages ? html4`<button
                 type="button"
                 class="image-upload-btn"
                 onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
                 title="添加图片"
                 aria-label="添加图片"
-              >📎</button>
+              >📎</button>` : null}
               <button
                 type="button"
                 class="composer-chip prompt-optimize-chip"

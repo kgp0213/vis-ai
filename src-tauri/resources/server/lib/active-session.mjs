@@ -53,6 +53,17 @@ export function activeEntriesForModel(entries) {
         role: entry.role,
         content: entry.content !== undefined ? entry.content : entry.text ?? "",
       };
+      if (entry.role === "user" && Array.isArray(entry.attachments) && entry.attachments.length > 0) {
+        const refs = entry.attachments
+          .map((attachment) => typeof attachment === "string" ? attachment : attachment?.id)
+          .filter(Boolean)
+          .map((id) => `[attachment:${id}]`)
+          .join("\n");
+        if (refs) {
+          if (typeof modelEntry.content === "string") modelEntry.content = `${modelEntry.content}${modelEntry.content ? "\n" : ""}${refs}`;
+          else if (Array.isArray(modelEntry.content)) modelEntry.content = [...modelEntry.content, { type: "text", text: refs }];
+        }
+      }
       if (typeof entry.name === "string") modelEntry.name = entry.name;
       if (typeof entry.tool_call_id === "string") modelEntry.tool_call_id = entry.tool_call_id;
       if (Array.isArray(entry.tool_calls)) modelEntry.tool_calls = entry.tool_calls;
@@ -76,6 +87,7 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
       toolName: entry.toolName ?? entry.name,
       toolArgs: entry.toolArgs,
       images: Array.isArray(entry.images) ? entry.images : undefined,
+      attachments: Array.isArray(entry.attachments) ? entry.attachments : undefined,
       ...(entry.receipt && typeof entry.receipt === "object" ? { receipt: entry.receipt } : {}),
       ...(typeof entry.taskState === "string" ? { taskState: entry.taskState } : {}),
       ...(entry.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
@@ -105,7 +117,7 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
     if (entry.role === "user") {
       if (isInternalUserEntry(entry)) continue;
       flushAssistant();
-      if (text) visible.push(restoredEntry(entry, text));
+      if (text || entry.attachments?.length || entry.images?.length) visible.push(restoredEntry(entry, text));
       continue;
     }
 
@@ -120,7 +132,11 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
 export function withPendingUserEntry(entries, pendingUser = null) {
   const next = Array.isArray(entries) ? [...entries] : [];
   const text = typeof pendingUser?.text === "string" ? pendingUser.text : "";
-  if (!text) return next;
+  const attachments = Array.isArray(pendingUser?.attachments) && pendingUser.attachments.length > 0
+    ? pendingUser.attachments.map((attachment) => ({ ...attachment }))
+    : null;
+  const images = Array.isArray(pendingUser?.images) && pendingUser.images.length > 0 ? [...pendingUser.images] : null;
+  if (!text && !attachments && !images) return next;
 
   let lastUserIndex = -1;
   for (let index = next.length - 1; index >= 0; index--) {
@@ -129,13 +145,21 @@ export function withPendingUserEntry(entries, pendingUser = null) {
       break;
     }
   }
-  const images = Array.isArray(pendingUser.images) && pendingUser.images.length > 0 ? [...pendingUser.images] : null;
   const lastUser = lastUserIndex >= 0 ? next[lastUserIndex] : null;
   if (lastUser && contentText(lastUser.content) === text) {
-    if (images) next[lastUserIndex] = { ...lastUser, images };
+    if (attachments || images) next[lastUserIndex] = {
+      ...lastUser,
+      ...(attachments ? { attachments } : {}),
+      ...(images ? { images } : {}),
+    };
     return next;
   }
-  next.push({ role: "user", content: text, ...(images ? { images } : {}) });
+  next.push({
+    role: "user",
+    content: text,
+    ...(attachments ? { attachments } : {}),
+    ...(images ? { images } : {}),
+  });
   return next;
 }
 

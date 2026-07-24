@@ -18,6 +18,7 @@ export function createSessionTrashStore({
   readConfig,
   writeConfig,
   onChanged = () => {},
+  onPermanentDelete = () => {},
   logger = console,
   defaultRetentionDays = 30,
   now = () => new Date(),
@@ -92,6 +93,7 @@ export function createSessionTrashStore({
       if (!Number.isFinite(movedAt) || movedAt > cutoff) continue;
       const dir = resolve(trashDir, item.id);
       if (!isChildPath(trashDir, dir) || !existsSync(dir)) continue;
+      try { onPermanentDelete(getEntry(item.id)); } catch (error) { logger.warn?.(`[session-trash] permanent-delete callback failed: ${error.message}`); }
       rmSync(dir, { recursive: true, force: true });
       deleted++;
     }
@@ -208,7 +210,11 @@ export function createSessionTrashStore({
     for (const id of requested) {
       const entry = getEntry(id);
       if (!entry) { failed.push({ id, error: "trash item not found" }); continue; }
-      try { rmSync(entry.dir, { recursive: true, force: true }); deleted.push({ id, name: entry.name }); }
+      try {
+        onPermanentDelete(entry);
+        rmSync(entry.dir, { recursive: true, force: true });
+        deleted.push({ id, name: entry.name });
+      }
       catch (error) { failed.push({ id, error: error.message }); }
     }
     if (deleted.length > 0) onChanged({ kind: "sessions-changed", action: "trash-delete", count: deleted.length });

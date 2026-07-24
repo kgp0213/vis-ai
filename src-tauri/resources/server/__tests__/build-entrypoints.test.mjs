@@ -41,9 +41,16 @@ test("release Rust tests use the prepared runtime from a temporary directory", (
   const releaseCheck = readFileSync(new URL("../../../../scripts/release-check.js", import.meta.url), "utf8");
   assert.match(releaseCheck, /visionox-rust-runtime-/);
   assert.match(releaseCheck, /scripts\/prepare-runtime-package\.js/);
+  assert.match(releaseCheck, /CARGO_BUILD_JOBS:\s*process\.env\.CARGO_BUILD_JOBS\s*\|\|\s*"1"/);
   assert.match(releaseCheck, /VISIONOX_RUNTIME_PACKAGE: runtimePackage/);
   assert.match(releaseCheck, /TAURI_CONFIG: JSON\.stringify\(resourceOverride\)/);
   assert.match(releaseCheck, /removeTempPath\(stagingRoot, "isolated Rust runtime"\)/);
+});
+
+test("release guard keeps the canonical release build within the same bounded Cargo concurrency", () => {
+  const releaseCheck = readFileSync(new URL("../../../../scripts/release-check.js", import.meta.url), "utf8");
+  assert.match(releaseCheck, /const releaseCargoEnv = \{[\s\S]*CARGO_BUILD_JOBS:\s*process\.env\.CARGO_BUILD_JOBS\s*\|\|\s*"1"/);
+  assert.match(releaseCheck, /run\("tauri no-bundle build"[\s\S]*releaseCargoEnv\);/);
 });
 
 test("release guard validates the injected build stamp without rewriting the vendored package version", () => {

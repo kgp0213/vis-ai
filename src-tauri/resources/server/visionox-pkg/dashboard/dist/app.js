@@ -6031,6 +6031,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
       <div class="execution-receipt-grid">
         <span>工具</span><span>${tools.results ?? 0} 次，成功 ${tools.successes ?? 0}，失败 ${tools.failures ?? 0}${tools.lastName ? ` · 最近 ${tools.lastName}` : ""}</span>
         <span>产物</span><span>${artifactIncomplete ? "未完成或待验证" : lastArtifact?.verified ? "已发现并验证" : "未发现可验证产物"}</span>
+        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>媒体</span><span>已降级，省略 ${receipt.mediaOmitted ?? 0} 项${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
         ${intervention.shown > 0 ? html4`<span>干预</span><span>已显示 ${intervention.shown} 次${interventionChoice ? ` · 选择 ${interventionChoice}` : ""}</span>` : null}
         ${warnings?.length ? html4`<span>提醒</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
       </div>
@@ -7827,6 +7828,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [providerCaps, setProviderCaps] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
+  const activeModel = (providers ?? []).find((provider) => provider.id === activeProviderId)?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
+  const pendingImageLimit = Math.min(5, Math.max(1, Number(activeModel?.capabilities?.maxImagesPerRequest) || 5));
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
   const [fileArtifacts, setFileArtifacts] = d2([]);
@@ -7913,6 +7916,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [skillCredentialValue, setSkillCredentialValue] = d2("");
   const [skillCredentialSaving, setSkillCredentialSaving] = d2(false);
   const [pendingImages, setPendingImages] = d2([]);
+  const pendingImagesRef = A2([]);
   const [visibleMessageCount, setVisibleMessageCount] = d2(CHAT_INITIAL_RENDER_COUNT);
   const [totalMessages, setTotalMessages] = d2(0);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = d2(false);
@@ -8187,11 +8191,12 @@ function ChatPanel({ userAvatar = null } = {}) {
           requestId: item.requestId || id,
           text: String(item.text ?? "").trim(),
           images: Array.isArray(item.images) ? item.images.filter((img) => typeof img === "string" && img.startsWith("data:image/")) : [],
+          attachments: Array.isArray(item.attachments) ? item.attachments.filter((attachmentId) => typeof attachmentId === "string" && attachmentId.startsWith("att_")) : [],
           status: item.status === "failed" ? "failed" : "queued",
           error: item.status === "failed" ? String(item.error ?? "") : null,
           createdAt: Number(item.createdAt ?? Date.now())
         };
-      }).filter((item) => item.text || item.images.length > 0);
+      }).filter((item) => item.text || item.images.length > 0 || item.attachments.length > 0);
       setQueuedPrompts(restored);
     }).catch((err) => {
       if (!cancelled) setError(t4("chat.queueFailed", { error: err.message }));
@@ -8655,17 +8660,18 @@ function ChatPanel({ userAvatar = null } = {}) {
     var files = e3.target.files;
     if (!files || files.length === 0) return;
     var newImages = pendingImages.slice();
-    for (var i3 = 0; i3 < files.length && newImages.length < 5; i3++) {
+    for (var i3 = 0; i3 < files.length && newImages.length < pendingImageLimit; i3++) {
       try {
-        var dataUrl = await compressImage(files[i3]);
-        newImages.push(dataUrl);
+        var pendingImage = await uploadImageAttachment(files[i3]);
+        newImages.push(pendingImage);
       } catch (err) {
-        console.error("Image compression failed:", err);
+        console.error("Image upload failed:", err);
+        setError(`图片上传失败：${err.message}`);
       }
     }
     setPendingImages(newImages);
     e3.target.value = "";
-  }, [pendingImages]);
+  }, [pendingImages, pendingImageLimit]);
   var compressImage = function(file) {
     return new Promise(function(resolve, reject) {
       if (file.size < 100 * 1024) {
@@ -8714,6 +8720,61 @@ function ChatPanel({ userAvatar = null } = {}) {
       img.src = url;
     });
   };
+  var uploadChunkData = function(blob) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function() {
+        var value = String(reader.result || "");
+        resolve(value.slice(value.indexOf(",") + 1));
+      };
+      reader.onerror = function() {
+        reject(reader.error || new Error("Failed to read image chunk"));
+      };
+      reader.readAsDataURL(blob);
+    });
+  };
+  var uploadImageAttachment = async function(file) {
+    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error("图片文件为空");
+    if (file.size > 50 * 1024 * 1024) throw new Error("图片超过 50 MB 限制");
+    const preview = await compressImage(file);
+    const initialized = await api("/attachments", {
+      method: "POST",
+      body: { action: "init", name: file.name || "image", size: file.size, mimeType: file.type || "application/octet-stream" }
+    });
+    const uploadId = initialized.uploadId;
+    const chunkBytes = Math.min(Number(initialized.chunkBytes) || 512 * 1024, 512 * 1024);
+    try {
+      for (let offset = 0; offset < file.size; offset += chunkBytes) {
+        const data = await uploadChunkData(file.slice(offset, Math.min(file.size, offset + chunkBytes)));
+        await api("/attachments", { method: "POST", body: { action: "chunk", uploadId, offset, data } });
+      }
+      const completed = await api("/attachments", { method: "POST", body: { action: "finish", uploadId } });
+      if (!completed.attachment?.id) throw new Error("宿主未返回附件 ID");
+      return {
+        attachmentId: completed.attachment.id,
+        preview,
+        name: completed.attachment.name || file.name || "image",
+        size: completed.attachment.size || file.size,
+        mimeType: completed.attachment.mimeType || file.type || "application/octet-stream"
+      };
+    } catch (error2) {
+      await api("/attachments", { method: "POST", body: { action: "cancel", uploadId } }).catch(() => {
+      });
+      throw error2;
+    }
+  };
+  var releaseUploadedImages = function(items) {
+    const attachmentIds = (Array.isArray(items) ? items : []).map((item) => typeof item === "object" ? item.attachmentId : null).filter(Boolean);
+    if (attachmentIds.length === 0) return Promise.resolve();
+    return api("/attachments", { method: "POST", body: { action: "release", attachmentIds } }).catch(() => {
+    });
+  };
+  y2(() => {
+    pendingImagesRef.current = pendingImages;
+  }, [pendingImages]);
+  y2(() => () => {
+    void releaseUploadedImages(pendingImagesRef.current);
+  }, []);
   const loadChatSkills = q2(async () => {
     if (skillList.length > 0) return skillList;
     const r3 = await api("/skills");
@@ -8769,8 +8830,13 @@ function ChatPanel({ userAvatar = null } = {}) {
   const submitPromptPayload = q2(async (payload) => {
     const resolved = await resolveSkillMention(payload?.text ?? "");
     const text = resolved.text;
-    const images = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
-    if (!text && images.length === 0) return { ok: false, reason: "empty" };
+    const imageItems = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
+    const images = imageItems.filter((item) => typeof item === "string" && item.startsWith("data:image/"));
+    const attachments = [...new Set([
+      ...Array.isArray(payload?.attachments) ? payload.attachments : [],
+      ...imageItems.map((item) => typeof item === "object" ? item.attachmentId : null)
+    ].filter(Boolean))];
+    if (!text && images.length === 0 && attachments.length === 0) return { ok: false, reason: "empty" };
     if (resolved.credentialCheckError) {
       return { ok: false, reason: t4("chat.skillCredentialCheckFailed", { error: resolved.credentialCheckError }) };
     }
@@ -8782,6 +8848,7 @@ function ChatPanel({ userAvatar = null } = {}) {
       var body = { prompt: text, requestId };
       if (resolved.skillInvocation) body.skillInvocation = resolved.skillInvocation;
       if (images.length > 0) body.images = images;
+      if (attachments.length > 0) body.attachments = attachments;
       const res = await api("/submit", { method: "POST", body });
       if (!res.accepted) {
         return { ok: false, requiresUserRetry: res.requiresUserRetry === true, code: res.code ?? null, reason: res.reason ?? "rejected" };
@@ -8812,7 +8879,15 @@ function ChatPanel({ userAvatar = null } = {}) {
   }, [resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
-    return api("/prompt-queue", { method: "POST", body: { scope: queueStorageKey, item } });
+    const storedItem = {
+      ...item,
+      images: Array.isArray(item.images) ? item.images.filter((image) => typeof image === "string" && image.startsWith("data:image/")) : [],
+      attachments: [...new Set([
+        ...Array.isArray(item.attachments) ? item.attachments : [],
+        ...Array.isArray(item.images) ? item.images.map((image) => typeof image === "object" ? image.attachmentId : null) : []
+      ].filter(Boolean))]
+    };
+    return api("/prompt-queue", { method: "POST", body: { scope: queueStorageKey, item: storedItem } });
   }, [queueStorageKey]);
   const deletePersistedQueuedPrompt = q2((id = null) => {
     if (!queueStorageKey) return Promise.resolve();
@@ -8833,11 +8908,13 @@ function ChatPanel({ userAvatar = null } = {}) {
       return false;
     }
     const id = `queued-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const attachments = imageList.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean);
     const item = {
       id,
       requestId: id,
       text: trimmed,
       images: imageList,
+      attachments,
       status: "queued",
       error: null,
       createdAt: Date.now()
@@ -8928,7 +9005,11 @@ function ChatPanel({ userAvatar = null } = {}) {
       }
       return;
     }
-    const result = await submitPromptPayload({ text, images });
+    const result = await submitPromptPayload({
+      text,
+      images,
+      attachments: images.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean)
+    });
     if (result.ok) {
       setChatInput("");
       setPendingImages([]);
@@ -9028,6 +9109,7 @@ function ChatPanel({ userAvatar = null } = {}) {
         if (!idle) throw new Error(t4("chat.stopTimeout"));
       }
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
+      await releaseUploadedImages(pendingImages);
       const retrieval = await api("/index-retrieval-mode").catch(() => ({ mode: "tool" }));
       setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       setSemanticRetrievalSources([]);
@@ -9062,7 +9144,7 @@ function ChatPanel({ userAvatar = null } = {}) {
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length, draftKey, confirmQueuedReset, waitForIdle, setChatInput]);
+  }, [busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput]);
   const changeIndexRetrievalMode = q2(async (event) => {
     const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
@@ -9088,6 +9170,7 @@ function ChatPanel({ userAvatar = null } = {}) {
     if (!confirmQueuedReset()) return;
     try {
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
+      await releaseUploadedImages(pendingImages);
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
@@ -9118,7 +9201,7 @@ function ChatPanel({ userAvatar = null } = {}) {
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [draftKey, confirmQueuedReset, setChatInput]);
+  }, [draftKey, pendingImages, confirmQueuedReset, setChatInput]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -9346,11 +9429,12 @@ function ChatPanel({ userAvatar = null } = {}) {
       }, 0);
     }
     function addPendingImages(files) {
-      var remaining = 5 - pendingImages.length;
+      var remaining = pendingImageLimit - pendingImages.length;
       if (remaining <= 0) return;
       var toProcess = files.slice(0, remaining);
       Promise.all(toProcess.map(function(f22) {
-        return compressImage(f22).catch(function() {
+        return uploadImageAttachment(f22).catch(function(error2) {
+          console.error("Clipboard image upload failed:", error2);
           return null;
         });
       })).then(function(results) {
@@ -9358,7 +9442,7 @@ function ChatPanel({ userAvatar = null } = {}) {
           return r3 !== null;
         });
         if (valid.length > 0) {
-          setPendingImages(pendingImages.slice().concat(valid).slice(0, 5));
+          setPendingImages(pendingImages.slice().concat(valid).slice(0, pendingImageLimit));
         }
       });
     }
@@ -9477,7 +9561,7 @@ function ChatPanel({ userAvatar = null } = {}) {
       } catch (_3) {
       }
     }
-  }, [pendingImages, setChatInput]);
+  }, [pendingImages, pendingImageLimit, setChatInput]);
   y2(() => {
     if (bootError) return;
     const el = feedRef.current;
@@ -9883,8 +9967,15 @@ function ChatPanel({ userAvatar = null } = {}) {
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
-  const activeModel = (providers ?? []).find((provider) => provider.id === activeProviderId)?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
+  const activeInputModalities = activeModel?.capabilities?.inputModalities ?? (activeModel?.multimodal ? ["text", "image"] : ["text"]);
+  const canUploadImages = activeInputModalities.includes("image");
   const activeModelEfforts = Array.isArray(activeModel?.efforts) ? activeModel.efforts : [];
+  y2(() => {
+    if (!canUploadImages && pendingImages.length > 0) {
+      void releaseUploadedImages(pendingImages);
+      setPendingImages([]);
+    }
+  }, [canUploadImages]);
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -10019,9 +10110,11 @@ function ChatPanel({ userAvatar = null } = {}) {
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
               <div style="display:flex;gap:6px;align-items:flex-end">
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
-            ${html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />`}
-            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(dataUrl, idx) {
-    return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0"><img src=${dataUrl} style="width:100%;height:100%;object-fit:cover" /><button onClick=${function() {
+            ${canUploadImages ? html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />` : null}
+            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(image, idx) {
+    const preview = typeof image === "string" ? image : image?.preview;
+    return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0">${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">图片</span>`}<button onClick=${function() {
+      void releaseUploadedImages([image]);
       var next = pendingImages.slice();
       next.splice(idx, 1);
       setPendingImages(next);
@@ -10039,7 +10132,7 @@ function ChatPanel({ userAvatar = null } = {}) {
                 </div>
                 <div class="chat-queue-list">
                   ${queuedPrompts.map((item, idx) => {
-    const imageCount = item.images?.length ?? 0;
+    const imageCount = Math.max(item.images?.length ?? 0, item.attachments?.length ?? 0);
     const text = item.text || t4("chat.queueImagesOnly", { count: imageCount });
     const isSending = item.status === "sending" || queueSendingId === item.id;
     const isFailed = item.status === "failed";
@@ -10303,7 +10396,7 @@ function ChatPanel({ userAvatar = null } = {}) {
     setShowRetrievalSources(false);
   }}></div>` : null}
               <div style="flex:1"></div>
-              <button
+              ${canUploadImages ? html4`<button
                 type="button"
                 class="image-upload-btn"
                 onClick=${function() {
@@ -10311,7 +10404,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   }}
                 title="添加图片"
                 aria-label="添加图片"
-              >📎</button>
+              >📎</button>` : null}
               <button
                 type="button"
                 class="composer-chip prompt-optimize-chip"

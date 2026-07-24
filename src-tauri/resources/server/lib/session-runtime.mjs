@@ -33,6 +33,8 @@ export function createSessionRuntime({
   onLog = () => {},
   hasUserMessage = () => false,
   writeSessionMeta = async () => {},
+  materializeAttachments = async () => ({ images: [], warnings: [] }),
+  migrateLegacyAttachments = null,
   now = () => new Date(),
 } = {}) {
   if (!activeSessionFile || !activeSessionMetaFile || !sessionsDir) {
@@ -74,6 +76,7 @@ export function createSessionRuntime({
         role: message.role,
         content: message.content !== undefined ? message.content : message.text ?? "",
         ...(Array.isArray(message.images) && message.images.length > 0 ? { images: message.images } : {}),
+        ...(Array.isArray(message.attachments) && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
         ...(message.reasoning ? { reasoning: message.reasoning } : {}),
         ...(message.toolName ? { toolName: message.toolName } : {}),
         ...(message.toolArgs !== undefined ? { toolArgs: message.toolArgs } : {}),
@@ -136,7 +139,8 @@ export function createSessionRuntime({
     try {
       await writeEntries(withPendingUserEntry(loop.log.toMessages(), pendingUser));
       const entries = loop.log.toMessages();
-      await writeMeta({ messageCount: entries.length + (pendingUser?.text ? 1 : 0) });
+      const hasPendingUser = Boolean(pendingUser?.text || pendingUser?.images?.length || pendingUser?.attachments?.length);
+      await writeMeta({ messageCount: entries.length + (hasPendingUser ? 1 : 0) });
     } catch (error) {
       issue("active-session", `active session model sync failed: ${error.message}`);
       onLog(`[session-runtime] active session model sync failed: ${error.message}`);
@@ -214,10 +218,28 @@ export function createSessionRuntime({
     try {
       const raw = await readFile(activeSessionFile, "utf8");
       const parsed = parseActiveSessionJsonl(raw);
-      const entries = parsed.entries;
+      let entries = parsed.entries;
       if (entries.length === 0) {
         await clear();
         return false;
+      }
+      if (typeof migrateLegacyAttachments === "function") {
+        try {
+          const migration = await migrateLegacyAttachments(entries, {
+            sessionId: getConversationId(),
+            workspace: getWorkspace(),
+          });
+          if (migration?.migrated > 0) {
+            entries = migration.entries;
+            await writeEntries(entries);
+            onLog(`[session-runtime] migrated ${migration.migrated} legacy inline image record(s) to attachments`);
+          }
+          if (migration?.errors?.length > 0) {
+            issue("active-session-attachments", `${migration.errors.length} legacy image(s) could not be migrated`, "warning");
+          }
+        } catch (error) {
+          issue("active-session-attachments", `legacy image migration failed: ${error.message}`, "warning");
+        }
       }
       if (parsed.errors.length > 0) {
         const backup = `${activeSessionFile}.corrupt-${now().toISOString().replace(/[:.]/g, "-")}`;
@@ -235,6 +257,20 @@ export function createSessionRuntime({
       clearMessages();
       setNextMessageId(1);
       for (const entry of activeEntriesForDashboard(entries)) {
+        if (Array.isArray(entry.attachments) && entry.attachments.length > 0) {
+          try {
+            const materialized = await materializeAttachments(entry.attachments);
+            if (Array.isArray(materialized?.images) && materialized.images.length > 0) entry.images = materialized.images;
+            if (Array.isArray(materialized?.warnings) && materialized.warnings.length > 0) {
+              entry.warnings = [...new Set([...(entry.warnings ?? []), ...materialized.warnings])];
+              issue("active-session-attachments", materialized.warnings.join("; "), "warning");
+            }
+          } catch (error) {
+            const warning = `会话附件无法恢复：${error.message}`;
+            entry.warnings = [...new Set([...(entry.warnings ?? []), warning])];
+            issue("active-session-attachments", warning, "warning");
+          }
+        }
         pushMessage(entry);
         setNextMessageId(getNextMessageId() + 1);
       }

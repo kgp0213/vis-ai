@@ -41,6 +41,7 @@ const { homedir, tmpdir } = await importEarly("node:os");
 const { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
 const { access, appendFile, copyFile, cp, open: openFile, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
+const { createRequire } = await importEarly("node:module");
 const launcherBootId = randomUUID();
 const { spawnSync } = await importEarly("node:child_process");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
@@ -76,6 +77,9 @@ const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
 const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
+const { createAttachmentRuntime } = await importEarly("./lib/attachment-runtime.mjs");
+const { createMediaRuntime } = await importEarly("./lib/media-runtime.mjs");
+const { adaptMcpMediaResult } = await importEarly("./lib/mcp-media-adapter.mjs");
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
 const { validateOfficecliInvocation } = await importEarly("./lib/officecli-policy.mjs");
@@ -243,6 +247,13 @@ async function loadLearnTrackModule() {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const VISIONOX_DIR = resolve(__dirname, "visionox-pkg");
+const visionoxRequire = createRequire(resolve(VISIONOX_DIR, "package.json"));
+let canvasModule = null;
+try {
+  canvasModule = visionoxRequire("@napi-rs/canvas");
+} catch (error) {
+  console.error(`[launcher] optional image decoder unavailable: ${error.message}`);
+}
 const DEFAULT_SOUL_RESOURCE = resolve(__dirname, "..", "default-soul.md");
 const bootstrapSkillsRoot = resolve(__dirname, "..", "bootstrap-skills");
 const dwsExecutable = resolve(__dirname, process.platform === "win32" ? "dws.exe" : "dws");
@@ -416,6 +427,87 @@ function pruneToolOutputResources() {
   }
 }
 try { pruneToolOutputResources(); } catch (error) { console.error(`[launcher] tool output resource cleanup skipped: ${error.message}`); }
+const attachmentRuntime = createAttachmentRuntime({
+  rootDir: resolve(visionoxDataDir, "attachments"),
+  atomicWriteFile,
+});
+
+async function handleAttachmentUpload(action, input = {}) {
+  if (action === "init") {
+    return attachmentRuntime.beginUpload({
+      name: input.name,
+      size: input.size,
+      mimeType: input.mimeType,
+      sessionId: activeConversationId,
+      workspace: workspaceDir,
+    });
+  }
+  if (action === "chunk") {
+    const base64 = String(input.data ?? "").replace(/\s+/g, "");
+    if (!base64 || base64.length > 750_000 || base64.length % 4 === 1 || !/^[A-Za-z0-9+/=]+$/.test(base64)) {
+      throw new Error("附件上传分块无效或超过 512 KB 限制");
+    }
+    return attachmentRuntime.appendUpload(input.uploadId, Buffer.from(base64, "base64"), input.offset);
+  }
+  if (action === "finish") {
+    return { attachment: await attachmentRuntime.finishUpload(input.uploadId) };
+  }
+  if (action === "cancel") {
+    return { cancelled: await attachmentRuntime.cancelUpload(input.uploadId) };
+  }
+  if (action === "release") {
+    return { released: await attachmentRuntime.releaseAttachments(input.attachmentIds, { sessionId: activeConversationId, workspace: workspaceDir }) };
+  }
+  throw new Error("unknown attachment upload action");
+}
+
+async function decodeImageForMedia(bytes) {
+  if (!canvasModule?.loadImage || !canvasModule?.createCanvas) return null;
+  const image = await canvasModule.loadImage(bytes);
+  return {
+    width: image.width,
+    height: image.height,
+    derive: async ({ region, maxLongEdge, mimeType }) => {
+      const source = region ?? { x: 0, y: 0, width: image.width, height: image.height };
+      const scale = Math.min(1, maxLongEdge / Math.max(source.width, source.height));
+      const width = Math.max(1, Math.round(source.width * scale));
+      const height = Math.max(1, Math.round(source.height * scale));
+      const canvas = canvasModule.createCanvas(width, height);
+      const context = canvas.getContext("2d");
+      context.drawImage(image, source.x, source.y, source.width, source.height, 0, 0, width, height);
+      const outputMime = mimeType === "image/jpeg" ? "image/jpeg" : "image/png";
+      return {
+        bytes: canvas.toBuffer(outputMime, outputMime === "image/jpeg" ? 85 : undefined),
+        mimeType: outputMime,
+        width,
+        height,
+      };
+    },
+  };
+}
+
+async function materializeAttachmentPreviews(attachments, context = {}) {
+  const previewRuntime = createMediaRuntime({
+    attachmentRuntime,
+    workspaceRoot: context.workspace || workspaceDir,
+    decodeImage: decodeImageForMedia,
+    maxLongEdge: 1200,
+    maxSendBytes: 1024 * 1024,
+  });
+  const images = [];
+  const warnings = [];
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const attachmentId = typeof attachment === "string" ? attachment : attachment?.id;
+    if (!attachmentId) continue;
+    const result = await previewRuntime.readAttachment({ attachmentId }, {
+      sessionId: context.sessionId,
+      workspace: context.workspace,
+    });
+    if (result.ok) images.push(result.dataUrl);
+    else warnings.push(result.error?.message || `附件 ${attachmentId} 无法生成预览。`);
+  }
+  return { images, warnings };
+}
 const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
@@ -1225,6 +1317,100 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     registry: preparedDocumentRegistry,
   });
 
+  tools.register({
+    name: "read_media",
+    description: "Read an image through the current ordinary model tool loop. Use a workspace-relative path, an attachmentId from [attachment:...] history, or documentRef after prepare_local_document for an external/encrypted file. The host validates actual bytes, applies image safety budgets, can crop a region, stores the original as an attachment, and makes a bounded view visible to the next model continuation. This tool does not read PDF, Word, audio, or video.",
+    readOnly: true,
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Image path inside the current workspace. For a prepared external file, this may be the stable documentRef." },
+        attachmentId: { type: "string", description: "Attachment ID from the current session, such as att_xxx or [attachment:att_xxx]." },
+        documentRef: { type: "string", description: "Stable visionox-document reference returned by prepare_local_document." },
+        region: {
+          type: "object",
+          properties: {
+            x: { type: "integer", minimum: 0 },
+            y: { type: "integer", minimum: 0 },
+            width: { type: "integer", minimum: 1 },
+            height: { type: "integer", minimum: 1 },
+          },
+          required: ["x", "y", "width", "height"],
+        },
+        full_resolution: { type: "boolean", description: "Request the original resolution. Safety byte and pixel limits still apply." },
+      },
+    },
+    fn: async (args, toolCtx) => {
+      const provider = getActiveProvider(config);
+      const modelConfig = effectiveModelConfig(config);
+      const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
+      if (!capabilities.inputModalities?.includes("image")) {
+        return JSON.stringify({
+          ok: false,
+          error: {
+            code: "media_provider_unsupported",
+            message: `当前模型 ${modelConfig.model} 不支持图片输入。`,
+            retryable: false,
+          },
+        });
+      }
+      const requestedAttachmentId = String(args?.attachmentId ?? "").trim().replace(/^\[attachment:([^\]]+)\]$/, "$1");
+      let mediaPath = args?.path;
+      const trustedPaths = [];
+      if (!requestedAttachmentId) {
+        try {
+          const preparedEnvironment = await preparedDocumentEnvironment(
+            preparedDocumentRegistry,
+            args?.documentRef || args?.path,
+            rootDir,
+            {
+              readConfig: () => readConfig(configPath),
+              env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+              logger: console,
+              signal: toolCtx?.signal,
+            },
+          );
+          if (preparedEnvironment.VISIONOX_DOCUMENT_READABLE_PATH) {
+            mediaPath = preparedEnvironment.VISIONOX_DOCUMENT_READABLE_PATH;
+            trustedPaths.push(mediaPath);
+          }
+        } catch (error) {
+          return JSON.stringify({ ok: false, error: { code: "media_not_found", message: error.message, retryable: true } });
+        }
+      }
+      const mediaRuntime = createMediaRuntime({
+        attachmentRuntime,
+        workspaceRoot: rootDir,
+        decodeImage: decodeImageForMedia,
+        maxSendBytes: capabilities.maxMediaBytes || undefined,
+      });
+      const operation = operationRuntime.getActive();
+      const mediaContext = {
+        operationId: operation?.id ?? null,
+        sessionId: activeConversationId,
+        workspace: rootDir,
+        toolCallId: toolCtx?.toolCallId ?? null,
+        signal: toolCtx?.signal,
+        trustedPaths,
+      };
+      const result = requestedAttachmentId
+        ? await mediaRuntime.readAttachment({ ...args, attachmentId: requestedAttachmentId }, mediaContext)
+        : await mediaRuntime.readMedia({ ...args, path: mediaPath }, mediaContext);
+      if (!result.ok) return JSON.stringify(result);
+      loop?.setPendingImages([result.dataUrl]);
+      if (operation?.context) {
+        const current = Array.isArray(operation.context.attachments) ? operation.context.attachments : [];
+        operation.context.attachments = [...current.filter((item) => item?.id !== result.attachment.id), result.attachment];
+      }
+      const { dataUrl: _dataUrl, ...publicResult } = result;
+      return JSON.stringify({
+        ...publicResult,
+        modelInputQueued: true,
+        message: "图片已读取并加入下一次模型请求。",
+      });
+    },
+  });
+
   registerMemoryTools(tools, { projectRoot: rootDir });
 
   let hasSemantic = false;
@@ -1929,6 +2115,23 @@ const SESSION_CLEANUP_PREVIEW_TTL_MS = 30 * 60 * 1000;
 const SESSION_TRASH_DIR = resolve(visionoxDataDir, "session-trash");
 const DEFAULT_SESSION_TRASH_RETENTION_DAYS = 30;
 const sessionCleanupPreviews = new Map();
+
+function releaseAttachmentsForTrashEntry(entry) {
+  if (!entry?.dir || !Array.isArray(entry.files)) return;
+  const metaName = entry.files.find((name) => name.endsWith(".meta.json"));
+  if (!metaName) return;
+  try {
+    const meta = JSON.parse(readFileSync(resolve(entry.dir, metaName), "utf8"));
+    if (typeof meta.conversationId === "string" && meta.conversationId.trim()) {
+      void attachmentRuntime.releaseSession(meta.conversationId.trim()).catch((error) => {
+        console.error(`[launcher] session attachment cleanup failed: ${error.message}`);
+      });
+    }
+  } catch (error) {
+    console.error(`[launcher] session attachment cleanup skipped: ${error.message}`);
+  }
+}
+
 const sessionTrashStore = createSessionTrashStore({
   sessionsDir,
   trashDir: SESSION_TRASH_DIR,
@@ -1937,6 +2140,7 @@ const sessionTrashStore = createSessionTrashStore({
   readConfig: () => readConfig(configPath),
   writeConfig: (next) => writeConfig(next, configPath),
   onChanged: broadcastDashboardEvent,
+  onPermanentDelete: releaseAttachmentsForTrashEntry,
   defaultRetentionDays: DEFAULT_SESSION_TRASH_RETENTION_DAYS,
   logger: console,
 });
@@ -2553,6 +2757,39 @@ function wrapMcpToolsWithRecovery(serverName, registeredNames) {
   }
 }
 
+async function projectMcpMediaResult({ toolResult, toolName, registeredName, toolCallId, signal }) {
+  const blocks = Array.isArray(toolResult?.content) ? toolResult.content : [];
+  if (!blocks.some((block) => ["image", "audio", "video"].includes(block?.type))) return undefined;
+  const provider = getActiveProvider(config);
+  const modelConfig = effectiveModelConfig(config);
+  const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
+  const operation = operationRuntime.getActive();
+  const mediaRuntime = createMediaRuntime({
+    attachmentRuntime,
+    workspaceRoot: workspaceDir,
+    decodeImage: decodeImageForMedia,
+    maxSendBytes: capabilities.maxMediaBytes || undefined,
+  });
+  const adapted = await adaptMcpMediaResult(toolResult, {
+    attachmentRuntime,
+    mediaRuntime,
+    supportsImages: capabilities.inputModalities?.includes("image") === true,
+    operationId: operation?.id ?? null,
+    sessionId: activeConversationId,
+    workspace: workspaceDir,
+    toolName: registeredName || toolName,
+    toolCallId,
+    signal,
+  });
+  if (adapted.modelImages.length > 0) loop?.setPendingImages(adapted.modelImages);
+  if (operation?.context && adapted.attachments.length > 0) {
+    const current = Array.isArray(operation.context.attachments) ? operation.context.attachments : [];
+    const byId = new Map([...current, ...adapted.attachments].map((attachment) => [attachment.id, attachment]));
+    operation.context.attachments = [...byId.values()];
+  }
+  return adapted.text;
+}
+
 function startMcpInBackground() {
   if (mcpStartupPromise) return mcpStartupPromise;
   mcpStartupPromise = reloadMcp()
@@ -2593,7 +2830,7 @@ async function reloadMcp() {
       const client = new McpClient({ transport, requestTimeoutMs: mcpRequestTimeoutMs(spec.name) });
       await client.initialize();
       const report = await inspectMcpServer(client);
-      const { registeredNames } = await bridgeMcpTools(client, { registry: tools });
+      const { registeredNames } = await bridgeMcpTools(client, { registry: tools, onResult: projectMcpMediaResult });
       wrapMcpToolsWithRecovery(spec.name, registeredNames);
       const dlpWrapped = wrapToolsPathArgsWithDlp(tools, registeredNames, {
         readConfig: () => readConfig(configPath),
@@ -3688,9 +3925,14 @@ function currentEditMode() {
 }
 
 function presentedToolSpecs() {
-  const specs = indexRetrievalMode === "off"
+  let specs = indexRetrievalMode === "off"
     ? tools.specs().filter((spec) => spec.function?.name !== "semantic_search")
     : tools.specs();
+  const modelConfig = effectiveModelConfig(config);
+  const capabilities = resolveProviderModelCapabilities(getActiveProvider(config), modelConfig.model);
+  if (!capabilities.inputModalities?.includes("image")) {
+    specs = specs.filter((spec) => spec.function?.name !== "read_media");
+  }
   return presentToolSpecsForMode(specs, { editMode: currentEditMode() });
 }
 
@@ -3852,7 +4094,6 @@ function buildLoop(client, rootDir) {
   const modelConfig = effectiveModelConfig(config);
   const provider = getActiveProvider(config);
   const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
-  const activeModel = provider?.models?.find((model) => model.disabled !== true && model.id === modelConfig.model);
   const agentPolicy = resolveProviderModelAgentPolicy(provider, modelConfig.model);
   const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
   const memoryBudget = memoryPromptBudget(modelConfig.model);
@@ -3909,7 +4150,7 @@ function buildLoop(client, rootDir) {
     toolSpecs: presentedToolSpecs(),
   });
   // Determine vision capability from the active provider model config.
-  const visionCfg = activeModel?.multimodal === true
+  const visionCfg = capabilities.inputModalities?.includes("image") === true
     ? { vision: true, visionDetail: visionPolicy.detail ?? "high" }
     : { vision: false, visionDetail: "" };
 
@@ -4251,12 +4492,18 @@ function normalizePromptQueueItem(raw) {
   const images = Array.isArray(raw.images)
     ? raw.images.filter((image) => typeof image === "string" && image.startsWith("data:image/")).slice(0, 5)
     : [];
-  if (!id || (!text && images.length === 0)) return null;
+  const attachments = Array.isArray(raw.attachments)
+    ? [...new Set(raw.attachments
+      .map((attachment) => typeof attachment === "string" ? attachment : attachment?.id)
+      .filter((attachmentId) => /^att_[0-9a-f-]{20,}$/i.test(String(attachmentId ?? ""))))].slice(0, 5)
+    : [];
+  if (!id || (!text && images.length === 0 && attachments.length === 0)) return null;
   return {
     id,
     requestId,
     text,
     images,
+    attachments,
     status: raw.status === "failed" ? "failed" : "queued",
     error: raw.status === "failed" && typeof raw.error === "string" ? raw.error.slice(0, 500) : null,
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
@@ -4274,16 +4521,62 @@ const promptQueueStore = createPromptQueueStore({
   onIssue: (error) => trackPersistentStorageIssue("prompt-queue", promptQueueFile, error),
 });
 
-function listPromptQueue(scope) {
-  return promptQueueStore.list(scope);
+async function prepareLegacyQueuedImages(item) {
+  if (!item?.images?.length) return item;
+  const provider = getActiveProvider(config);
+  const modelConfig = effectiveModelConfig(config);
+  const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
+  if (!capabilities.inputModalities?.includes("image")) throw new Error(`当前模型 ${modelConfig.model} 不支持队列中的图片`);
+  const mediaRuntime = createMediaRuntime({
+    attachmentRuntime,
+    workspaceRoot: workspaceDir,
+    decodeImage: decodeImageForMedia,
+    maxSendBytes: capabilities.maxMediaBytes || undefined,
+  });
+  const prepared = await mediaRuntime.prepareInputDataUrls(item.images, {
+    sessionId: activeConversationId,
+    operationId: `queue:${item.id}`,
+    workspace: workspaceDir,
+  });
+  if (prepared.errors.length > 0 || prepared.attachments.length !== item.images.length) {
+    throw new Error(prepared.errors.map((entry) => entry.error?.message || entry.error).join("; ") || "队列图片无法迁移到附件存储");
+  }
+  return { ...item, images: [], attachments: prepared.attachments.map((attachment) => attachment.id) };
 }
 
-function upsertPromptQueueItem(scope, rawItem) {
-  return promptQueueStore.upsert(scope, rawItem);
+async function listPromptQueue(scope) {
+  const items = promptQueueStore.list(scope);
+  const output = [];
+  for (const item of items) {
+    try {
+      const migrated = await prepareLegacyQueuedImages(item);
+      if (migrated !== item) promptQueueStore.upsert(scope, migrated);
+      output.push(migrated);
+    } catch (error) {
+      output.push({ ...item, status: "failed", error: `队列附件恢复失败：${error.message}` });
+    }
+  }
+  return output;
 }
 
-function removePromptQueueItem(scope, id = null) {
-  return promptQueueStore.remove(scope, id);
+async function upsertPromptQueueItem(scope, rawItem) {
+  try {
+    const normalized = normalizePromptQueueItem(rawItem);
+    if (!normalized) return { ok: false, error: "invalid queued prompt" };
+    const prepared = await prepareLegacyQueuedImages(normalized);
+    return promptQueueStore.upsert(scope, prepared);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+async function removePromptQueueItem(scope, id = null) {
+  const before = promptQueueStore.list(scope);
+  const removed = id ? before.filter((item) => item.id === id) : before;
+  const result = promptQueueStore.remove(scope, id);
+  const attachmentIds = removed.flatMap((item) => item.attachments ?? []);
+  if (attachmentIds.length > 0) await attachmentRuntime.releaseAttachments(attachmentIds, { sessionId: activeConversationId, workspace: workspaceDir });
+  return result;
 }
 
 function acceptedPromptRequest(id) {
@@ -6272,6 +6565,16 @@ function loopEventToDashboard(ev, assistantId) {
       return { kind: "status", text: ev.content };
     case "output_recovery_required":
       return { kind: "warning", id, text: ev.content };
+    case "media_recovery":
+      return {
+        kind: "status",
+        id,
+        text: ev.content,
+        mediaReduced: ev.mediaReduced === true,
+        mediaOmitted: ev.mediaOmitted ?? 0,
+        mediaRecovery: ev.mediaRecovery ?? null,
+        mediaWarnings: ev.mediaWarnings ?? [],
+      };
     default:
       return null;
   }
@@ -6311,7 +6614,7 @@ function operationKindForPrompt(text, opts = {}) {
 
 function modelRuntimeOptions(modelConfig) {
   const provider = getActiveProvider(config);
-  const activeModel = provider?.models?.find((model) => model.id === modelConfig.model);
+  const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
   const agentPolicy = resolveProviderModelAgentPolicy(provider, modelConfig.model);
   const visionPolicy = resolveProviderModelVisionPolicy(provider, modelConfig.model);
   return {
@@ -6319,8 +6622,8 @@ function modelRuntimeOptions(modelConfig) {
     maxOutputTokens: resolveProviderModelCapabilities(provider, modelConfig.model).maxOutputTokens,
     autoEscalate: modelConfig.autoEscalate,
     escalationModel: modelConfig.escalationModel,
-    vision: activeModel?.multimodal === true,
-    visionDetail: activeModel?.multimodal === true ? visionPolicy.detail ?? "high" : "",
+    vision: capabilities.inputModalities?.includes("image") === true,
+    visionDetail: capabilities.inputModalities?.includes("image") === true ? visionPolicy.detail ?? "high" : "",
     visionPolicy,
     maxToolIters: agentPolicy.maxToolIterations ?? 64,
     maxToolContinuationWindows: agentPolicy.maxToolContinuationWindows ?? 0,
@@ -6329,10 +6632,23 @@ function modelRuntimeOptions(modelConfig) {
   };
 }
 
+function syncMediaToolAvailability(modelConfig) {
+  if (!loop?.prefix) return;
+  const provider = getActiveProvider(config);
+  const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
+  if (!capabilities.inputModalities?.includes("image")) {
+    loop.prefix.removeTool("read_media");
+    return;
+  }
+  const readMediaSpec = tools.specs().find((spec) => spec.function?.name === "read_media");
+  if (readMediaSpec) loop.prefix.addTool(presentSingleToolSpec(readMediaSpec));
+}
+
 function commitModelSwitch(modelConfig, source = "model") {
   const previousModel = loop?.model ?? null;
   activeContextPolicy = applyContextCap(modelConfig.model);
   const result = loop?.configure(modelRuntimeOptions(modelConfig));
+  syncMediaToolAvailability(modelConfig);
   const contextMessages = loop?.log?.toMessages?.().length ?? 0;
   const modelSwitch = result?.modelSwitch ?? {
     previousModel,
@@ -6440,6 +6756,11 @@ const sessionRuntime = createSessionRuntime({
   onLog: (message) => console.error(message),
   hasUserMessage,
   writeSessionMeta: async (name, patch) => writeSessionMeta(name, patch),
+  materializeAttachments: async (attachments) => materializeAttachmentPreviews(attachments, {
+    sessionId: activeConversationId,
+    workspace: workspaceDir,
+  }),
+  migrateLegacyAttachments: async (entries, context) => attachmentRuntime.migrateLegacySessionEntries(entries, context),
 });
 
 const appendActiveMessage = (message) => sessionRuntime.appendMessage(message);
@@ -7405,6 +7726,7 @@ const ctx = {
   listPromptQueue,
   upsertPromptQueueItem,
   removePromptQueueItem,
+  handleAttachmentUpload,
   listSchedules: () => {
     if (scheduleStoreError) throw new Error(scheduleStoreError);
     return schedules.map(publicSchedule);
@@ -7955,6 +8277,9 @@ ${modeList}
     let manualSkillInput = null;
     let manualSkillTask = null;
     let promptIsolation = null;
+    let attachmentRecords = [];
+    let attachmentWarnings = [];
+    let materializedImages = [];
     let resumeSessionFile = null;
     let resumeSessionRaw = null;
     try {
@@ -7999,11 +8324,33 @@ ${modeList}
           preparedDocumentRegistry.restore(sessionMeta.preparedDocuments, { replace: true, notifyChange: false });
           const modeRestore = applyModeForSessionMeta(sessionMeta);
           if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
-          const raw = resumeSessionRaw ?? await readFile(sessionFile, "utf8");
+          let raw = resumeSessionRaw ?? await readFile(sessionFile, "utf8");
           const parsed = parseActiveSessionJsonl(raw);
-          const entries = parsed.entries;
+          const legacyMigration = await attachmentRuntime.migrateLegacySessionEntries(parsed.entries, {
+            sessionId: activeConversationId,
+            operationId: operation.id,
+            workspace: workspaceDir,
+          });
+          const entries = legacyMigration.entries;
+          if (legacyMigration.migrated > 0) {
+            raw = serializeActiveSession(entries);
+            try {
+              await atomicWriteFile(sessionFile, raw, "utf8");
+            } catch (error) {
+              console.error(`[launcher] legacy session image migration could not be persisted: ${error.message}`);
+            }
+          }
           const modelEntries = activeEntriesForModel(entries);
           const dashboardEntries = activeEntriesForDashboard(entries);
+          for (const entry of dashboardEntries) {
+            if (!Array.isArray(entry.attachments) || entry.attachments.length === 0) continue;
+            const materialized = await materializeAttachmentPreviews(entry.attachments, {
+              sessionId: activeConversationId,
+              workspace: workspaceDir,
+            });
+            if (materialized.images.length > 0) entry.images = materialized.images;
+            if (materialized.warnings.length > 0) entry.warnings = [...new Set([...(entry.warnings ?? []), ...materialized.warnings])];
+          }
           // Load into AI context
           loop.adoptHistory?.(modelEntries, loop.model) ?? loop.log.compactInPlace(modelEntries);
           // Populate dashboard messages
@@ -8229,6 +8576,65 @@ ${modeList}
           accepted: false,
           reason: "API key not configured. Open Settings tab to add your DeepSeek API key, then restart the app."
         };
+      }
+
+      const incomingAttachmentIds = Array.isArray(opts.attachmentIds)
+        ? [...new Set(opts.attachmentIds.filter((id) => /^att_[0-9a-f-]{20,}$/i.test(String(id ?? ""))))]
+        : [];
+      const inlineImages = Array.isArray(images) ? images : [];
+      if (inlineImages.length > 0 || incomingAttachmentIds.length > 0) {
+        const provider = getActiveProvider(config);
+        const modelConfig = effectiveModelConfig(config);
+        const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
+        if (!capabilities.inputModalities?.includes("image")) {
+          return { accepted: false, reason: `当前模型 ${modelConfig.model} 不支持图片输入。` };
+        }
+        if (inlineImages.length + incomingAttachmentIds.length > capabilities.maxImagesPerRequest) {
+          return { accepted: false, reason: `当前模型单次最多接收 ${capabilities.maxImagesPerRequest} 张图片，请减少附件后重试。` };
+        }
+        const mediaRuntime = createMediaRuntime({
+          attachmentRuntime,
+          workspaceRoot: workspaceDir,
+          decodeImage: decodeImageForMedia,
+          maxSendBytes: capabilities.maxMediaBytes || undefined,
+        });
+        const mediaContext = {
+          sessionId: activeConversationId,
+          operationId: operation.id,
+          workspace: workspaceDir,
+          signal: operation.controller.signal,
+          rebind: true,
+        };
+        const reboundIds = [];
+        for (const [index, attachmentId] of incomingAttachmentIds.entries()) {
+          const result = await mediaRuntime.readAttachment({ attachmentId }, mediaContext);
+          if (!result.ok) {
+            attachmentWarnings.push(`附件 ${attachmentId} 未能处理：${result.error?.message || "附件不可用"}`);
+            continue;
+          }
+          attachmentRecords.push(result.attachment);
+          materializedImages.push(result.dataUrl);
+          reboundIds.push(attachmentId);
+        }
+        if (inlineImages.length > 0) {
+          const prepared = await mediaRuntime.prepareInputDataUrls(inlineImages, mediaContext);
+          attachmentRecords.push(...prepared.attachments);
+          materializedImages.push(...prepared.modelImages);
+          attachmentWarnings.push(...prepared.errors.map((item) => `附件 ${Number(item.index) + incomingAttachmentIds.length + 1} 未能处理：${item.error?.message || item.error}`));
+        }
+        if (reboundIds.length > 0) await attachmentRuntime.releaseAttachments(reboundIds, { sessionId: activeConversationId, workspace: workspaceDir });
+        operation.context.attachments = attachmentRecords.map((attachment) => ({ ...attachment }));
+        if (attachmentWarnings.length > 0) {
+          console.error(`[launcher] media attachment warnings: ${attachmentWarnings.join("; ")}`);
+          broadcastDashboardEvent({
+            kind: "warning",
+            id: `attachment-warning-${operation.id}`,
+            text: attachmentWarnings.join("\n"),
+          });
+        }
+        if (inlineImages.length + incomingAttachmentIds.length > 0 && attachmentRecords.length === 0 && !String(text ?? "").trim()) {
+          return { accepted: false, reason: attachmentWarnings.join("; ") || "附件无法读取" };
+        }
       }
 
       // Scheduled prompts use an isolated, empty turn and must never reset the
@@ -8481,8 +8887,8 @@ ${modeList}
 
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
 
-      if (loop && images && images.length > 0) {
-        loop.setPendingImages(images);
+      if (loop && materializedImages.length > 0) {
+        loop.setPendingImages(materializedImages);
       }
 
       const retrievalHistory = opts.isolated === true || opts.internalHandoff === true ? [] : messages.slice(-12);
@@ -8514,9 +8920,9 @@ ${modeList}
       const previousPlanMode = tools.planMode;
       try {
         if (opts.isolated !== true && opts.internalHandoff !== true) {
-          pushMessage({ id: userMsgId, role: "user", text, images: images?.length ? images : undefined });
-          appendActiveMessage({ role: "user", text, images: images?.length ? images : undefined });
-          broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: images?.length ? images : undefined });
+          pushMessage({ id: userMsgId, role: "user", text, images: materializedImages.length ? materializedImages : undefined, attachments: attachmentRecords.length ? attachmentRecords : undefined });
+          appendActiveMessage({ role: "user", text, attachments: attachmentRecords.length ? attachmentRecords : undefined });
+          broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: materializedImages.length ? materializedImages : undefined, attachments: attachmentRecords.length ? attachmentRecords : undefined });
         }
         if (opts.readonly === true) tools.setPlanMode(true);
       } catch (error) {
@@ -8546,6 +8952,14 @@ ${modeList}
         let executionStarted = false;
         const loopTelemetry = createLoopTelemetry({ startedAt: turnStartedAt });
         const turnReceipt = createTurnReceipt({ turnId: assistantId, requestId, startedAt: turnStartedAt });
+        if (attachmentWarnings.length > 0) {
+          turnReceipt.recordMedia({
+            mediaReduced: true,
+            mediaOmitted: attachmentWarnings.length,
+            mediaRecovery: "media_prepare_failed",
+            mediaWarnings: attachmentWarnings,
+          });
+        }
         const operationDocuments = preparedDocumentRegistry.snapshot();
         operation.context.preparedDocuments = operationDocuments.map((binding) => ({
           documentRef: binding.documentRef,
@@ -8641,6 +9055,7 @@ ${modeList}
             for await (const ev of loop.step(loopInput)) {
               operation.progress = loopTelemetry.observe(ev);
               if (ev.role === "tool_start") turnReceipt.observeToolStart(ev.toolName);
+              if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);
               if (ev.role === "tool") {
                 sawToolActivity = true;
                 const toolSucceeded = toolResultSucceeded(ev.content);
@@ -9020,7 +9435,7 @@ ${modeList}
                 }
                 if (opts.internalHandoff === true && !isolationRestoreError) await syncActiveSessionFromLoop();
               } else {
-                await syncActiveSessionFromLoop({ text, images });
+                await syncActiveSessionFromLoop({ text, attachments: attachmentRecords });
               }
               if (opts.isolated !== true && opts.internalHandoff !== true) {
                 await writeActiveSessionMeta({ contextRecoveryHandle: activeContextRecoveryHandle });

@@ -15,6 +15,10 @@ import { spawnSync } from "node:child_process";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 const npmCmd = "npm";
+const releaseCargoEnv = {
+  ...process.env,
+  CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS || "1",
+};
 
 function shellQuote(value) {
   const text = String(value);
@@ -63,7 +67,7 @@ function runRustTestsIsolated() {
       },
     };
     const env = {
-      ...process.env,
+      ...releaseCargoEnv,
       CARGO_TARGET_DIR: targetDir,
       CARGO_NET_OFFLINE: "true",
       npm_config_offline: "true",
@@ -138,7 +142,7 @@ run("bundle patch guard", npmCmd, ["run", "check:bundle-patches"]);
 run("node tests", npmCmd, ["test"]);
 checkBuildStampSource();
 runRustTestsIsolated();
-run("tauri no-bundle build", npmCmd, ["run", "tauri:build", "--", "--no-bundle"]);
+run("tauri no-bundle build", npmCmd, ["run", "tauri:build", "--", "--no-bundle"], root, releaseCargoEnv);
 checkReleaseBuildStamp();
 printArtifacts();
 

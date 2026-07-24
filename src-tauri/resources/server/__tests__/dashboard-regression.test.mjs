@@ -265,6 +265,7 @@ describe("Dashboard 回归护栏", () => {
   test("排队内容由服务端持久化接口管理，并透传稳定请求编号", async () => {
     const queues = new Map();
     let submitted = null;
+    const uploadedAttachmentId = `att_${"a".repeat(32)}`;
     const queueCtx = {
       listPromptQueue: (scope) => queues.get(scope) ?? [],
       upsertPromptQueueItem: (scope, item) => {
@@ -282,6 +283,11 @@ describe("Dashboard 回归护栏", () => {
         submitted = { prompt, session, images, opts };
         return { accepted: true, requestId: opts.requestId, turnId: "turn-queue-1" };
       },
+      handleAttachmentUpload: async (action) => action === "init"
+        ? { uploadId: "upload-1", chunkBytes: 524288, size: 3 }
+        : action === "finish"
+          ? { attachment: { id: uploadedAttachmentId, kind: "image" } }
+          : { received: 3, complete: true },
     };
 
     const item = { id: "queued-stable-1", text: "queued prompt", images: [], status: "queued", createdAt: 1 };
@@ -291,9 +297,14 @@ describe("Dashboard 回归护栏", () => {
     assert.equal(listed.status, 200);
     assert.equal(listed.json.items[0].id, item.id);
 
-    const sent = await api("POST", "/api/submit", { prompt: item.text, requestId: item.id }, queueCtx);
+    const upload = await api("POST", "/api/attachments", { action: "init", name: "screen.png", size: 3 }, queueCtx);
+    assert.equal(upload.status, 200);
+    assert.equal(upload.json.uploadId, "upload-1");
+
+    const sent = await api("POST", "/api/submit", { prompt: item.text, requestId: item.id, attachments: [uploadedAttachmentId] }, queueCtx);
     assert.equal(sent.status, 202);
     assert.equal(submitted.opts.requestId, item.id);
+    assert.deepEqual(submitted.opts.attachmentIds, [uploadedAttachmentId]);
 
     const removed = await api("DELETE", "/api/prompt-queue", { scope: "workspace-a", id: item.id }, queueCtx);
     assert.equal(removed.status, 200);

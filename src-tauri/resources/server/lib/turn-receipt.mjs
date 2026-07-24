@@ -30,6 +30,10 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     artifactEvidence: [],
     documentBindings: [],
     context: null,
+    mediaReduced: false,
+    mediaOmitted: 0,
+    mediaRecovery: null,
+    mediaWarnings: [],
     intervention: { active: false, shown: 0, resolved: 0, fingerprint: null, choice: null },
     completion: null,
   };
@@ -112,6 +116,17 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     };
   }
 
+  function recordMedia(event = {}) {
+    state.mediaReduced ||= event.mediaReduced === true;
+    state.mediaOmitted += Math.max(0, Number(event.mediaOmitted) || 0);
+    if (event.mediaRecovery) state.mediaRecovery = boundedText(event.mediaRecovery, 120);
+    for (const warning of Array.isArray(event.mediaWarnings) ? event.mediaWarnings : []) {
+      const normalized = boundedText(warning, 500).trim();
+      if (normalized && !state.mediaWarnings.includes(normalized)) state.mediaWarnings.push(normalized);
+    }
+    state.mediaWarnings = state.mediaWarnings.slice(-8);
+  }
+
   function claimIntervention(status) {
     if (state.intervention.active) return false;
     const nextFingerprint = fingerprint({
@@ -166,6 +181,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     recordArtifact,
     recordDocumentBinding,
     recordContext,
+    recordMedia,
     claimIntervention,
     resolveIntervention,
     complete,

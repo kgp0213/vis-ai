@@ -40,3 +40,18 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
     recordedAt: snapshot.errors[0].recordedAt,
   });
 });
+
+test("turn receipt keeps media degradation facts without duplicating warnings", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-media" });
+  receipt.recordMedia({
+    mediaReduced: true,
+    mediaOmitted: 1,
+    mediaRecovery: "media_too_large",
+    mediaWarnings: ["API 413", "API 413"],
+  });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.mediaReduced, true);
+  assert.equal(snapshot.mediaOmitted, 1);
+  assert.equal(snapshot.mediaRecovery, "media_too_large");
+  assert.deepEqual(snapshot.mediaWarnings, ["API 413"]);
+});

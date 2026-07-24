@@ -11,6 +11,7 @@ const {
   CacheFirstLoop,
   ImmutablePrefix,
   ToolRegistry,
+  bridgeMcpTools,
   registerFilesystemTools,
 } = await import(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url));
 const { registerShellTools } = await import(new URL("../visionox-pkg/dist/cli/chunk-O52OLQL3.js", import.meta.url));
@@ -51,6 +52,27 @@ function makeLoop(client, tools, options = {}) {
 }
 
 describe("agent runtime policy", () => {
+  test("MCP bridge lets the host project media results before text flattening", async () => {
+    const client = {
+      listTools: async () => ({ tools: [{ name: "capture", description: "capture", inputSchema: { type: "object", properties: {} } }] }),
+      callTool: async () => ({ content: [{ type: "image", mimeType: "image/png", data: "AAAA" }] }),
+    };
+    const tools = new ToolRegistry();
+    let rawResult = null;
+    let projectedCallId = null;
+    await bridgeMcpTools(client, {
+      registry: tools,
+      onResult: async ({ toolResult, toolName, toolCallId }) => {
+        rawResult = toolResult;
+        projectedCallId = toolCallId;
+        return `projected:${toolName}`;
+      },
+    });
+    assert.equal(await tools.dispatch("capture", {}, { toolCallId: "call-media-1" }), "projected:capture");
+    assert.equal(rawResult.content[0].type, "image");
+    assert.equal(projectedCallId, "call-media-1");
+  });
+
   test("tool repair reports become a concise redacted user notice", () => {
     const notice = formatToolRepairNotice({
       truncationsFixed: 2,
@@ -596,6 +618,92 @@ describe("agent runtime policy", () => {
     const storedUser = loop.log.toMessages().find((message) => message.role === "user");
     assert.equal(typeof storedUser?.content, "string");
     assert.doesNotMatch(storedUser.content, /base64/);
+  });
+
+  test("read_media can queue an image for the next request in the same ordinary tool loop", async () => {
+    const captured = [];
+    let response = 0;
+    const client = {
+      chat: async (options) => {
+        captured.push(structuredClone(options.messages));
+        if (response++ === 0) return { content: "", toolCalls: [toolCall("media-1", "read_media", { path: "screen.png" })], usage: {} };
+        return { content: "image inspected", toolCalls: [], usage: {} };
+      },
+    };
+    const tools = new ToolRegistry();
+    let loop;
+    tools.register({
+      name: "read_media",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      readOnly: true,
+      fn: async () => {
+        loop.setPendingImages(["data:image/png;base64,AAAA"]);
+        return JSON.stringify({ ok: true, attachmentId: "att-test" });
+      },
+    });
+    loop = makeLoop(client, tools, {
+      vision: true,
+      visionPolicy: { maxImages: 5, estimatedTokensPerImage: 2048, contextReserveTokens: 4096 },
+    });
+
+    for await (const _event of loop.step("inspect the local screenshot")) {
+      // Drain the turn.
+    }
+
+    assert.equal(captured.length, 2);
+    assert.equal(typeof captured[0].findLast((message) => message.role === "user")?.content, "string");
+    const continuedUser = captured[1].findLast((message) => message.role === "user");
+    assert.ok(Array.isArray(continuedUser?.content));
+    assert.ok(continuedUser.content.some((part) => part.type === "image_url"));
+    assert.doesNotMatch(JSON.stringify(loop.log.toMessages()), /base64/);
+  });
+
+  test("a provider 413 drops older media locally and retries without rewriting history", async () => {
+    const captured = [];
+    const client = {
+      chat: async (options) => {
+        captured.push(structuredClone(options.messages));
+        if (captured.length === 1) throw new Error("API 413: payload too large");
+        return { content: "latest image inspected", toolCalls: [], usage: {} };
+      },
+    };
+    const loop = makeLoop(client, new ToolRegistry(), {
+      vision: true,
+      visionPolicy: { maxImages: 5, estimatedTokensPerImage: 2048, contextReserveTokens: 4096 },
+    });
+    loop.setPendingImages(["data:image/png;base64,OLD", "data:image/png;base64,NEW"]);
+    const events = [];
+    for await (const event of loop.step("inspect the latest image")) events.push(event);
+
+    assert.equal(captured.length, 2);
+    const retryParts = captured[1].findLast((message) => message.role === "user").content;
+    assert.equal(retryParts.filter((part) => part.type === "image_url").length, 1);
+    assert.match(retryParts.find((part) => part.type === "image_url").image_url.url, /NEW$/);
+    assert.equal(events.find((event) => event.role === "media_recovery")?.mediaRecovery, "media_too_large");
+    assert.doesNotMatch(JSON.stringify(loop.log.toMessages()), /OLD|NEW/);
+  });
+
+  test("a provider format rejection removes the latest media without mutating history", async () => {
+    const captured = [];
+    const client = {
+      chat: async (options) => {
+        captured.push(structuredClone(options.messages));
+        if (captured.length === 1) throw new Error("API 400: unsupported image format");
+        return { content: "older image remains available", toolCalls: [], usage: {} };
+      },
+    };
+    const loop = makeLoop(client, new ToolRegistry(), {
+      vision: true,
+      visionPolicy: { maxImages: 5, estimatedTokensPerImage: 2048, contextReserveTokens: 4096 },
+    });
+    loop.setPendingImages(["data:image/png;base64,OLD", "data:image/webp;base64,NEW"]);
+    const events = [];
+    for await (const event of loop.step("inspect the images")) events.push(event);
+
+    const retryParts = captured[1].findLast((message) => message.role === "user").content;
+    assert.match(retryParts.find((part) => part.type === "image_url").image_url.url, /OLD$/);
+    assert.equal(events.find((event) => event.role === "media_recovery")?.mediaRecovery, "media_format_unsupported");
+    assert.doesNotMatch(JSON.stringify(loop.log.toMessages()), /OLD|NEW/);
   });
 
   test("document tools can use a configured result budget above the legacy 8000-token ceiling", async () => {

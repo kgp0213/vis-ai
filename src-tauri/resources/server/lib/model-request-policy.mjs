@@ -21,10 +21,11 @@ const MODEL_CAPABILITY_FIELDS = new Set([
   "maxContextTokens",
   "maxOutputTokens",
   "maxImagesPerRequest",
+  "maxMediaBytes",
   "roles",
 ]);
 const MODEL_PROTOCOLS = new Set(["openai-chat-completions"]);
-const MODEL_INPUT_MODALITIES = new Set(["text", "image"]);
+const MODEL_INPUT_MODALITIES = new Set(["text", "image", "video", "audio"]);
 const MODEL_ROLES = new Set(["chat", "document-draft", "document-review", "vision-review", "summary"]);
 const LEGACY_TEXT_ROLES = ["chat", "document-draft", "document-review", "summary"];
 const REQUEST_PROFILE_NAMES = new Set([
@@ -341,7 +342,7 @@ export function validateModelCapabilities(value) {
       return `capabilities ${field} must be a boolean`;
     }
   }
-  for (const field of ["maxContextTokens", "maxOutputTokens", "maxImagesPerRequest"]) {
+  for (const field of ["maxContextTokens", "maxOutputTokens", "maxImagesPerRequest", "maxMediaBytes"]) {
     if (value[field] !== undefined && (!Number.isSafeInteger(value[field]) || value[field] <= 0)) {
       return `capabilities ${field} must be a positive integer`;
     }
@@ -353,6 +354,9 @@ export function validateModelCapabilities(value) {
   if (Array.isArray(value.inputModalities) && !value.inputModalities.includes("image")) {
     if (value.maxImagesPerRequest !== undefined) return "capabilities maxImagesPerRequest requires image inputModalities";
     if (value.roles?.includes("vision-review")) return "capabilities vision-review role requires image inputModalities";
+  }
+  if (Array.isArray(value.inputModalities) && !value.inputModalities.some((entry) => entry !== "text") && value.maxMediaBytes !== undefined) {
+    return "capabilities maxMediaBytes requires a non-text input modality";
   }
   return validateJsonValue(value, "capabilities", 0, new Set());
 }
@@ -379,6 +383,7 @@ export function resolveProviderModelCapabilities(provider, modelId) {
     ? declaredModalities
     : model.multimodal === true ? ["text", "image"] : ["text"];
   const supportsImages = inputModalities.includes("image");
+  const supportsMedia = inputModalities.some((entry) => entry !== "text");
   const declaredRoles = validCapabilityList(declared.roles, MODEL_ROLES);
   let roles = declaredRoles ?? (supportsImages
     ? ["chat", "document-draft", "document-review", "vision-review", "summary"]
@@ -398,6 +403,9 @@ export function resolveProviderModelCapabilities(provider, modelId) {
     maxOutputTokens: isPositiveInteger(declared.maxOutputTokens) ? declared.maxOutputTokens : null,
     maxImagesPerRequest: supportsImages
       ? isPositiveInteger(declared.maxImagesPerRequest) ? declared.maxImagesPerRequest : legacyMaxImages
+      : 0,
+    maxMediaBytes: supportsMedia
+      ? isPositiveInteger(declared.maxMediaBytes) ? declared.maxMediaBytes : 10 * 1024 * 1024
       : 0,
     roles,
   };

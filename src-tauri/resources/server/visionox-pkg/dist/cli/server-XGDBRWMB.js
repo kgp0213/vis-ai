@@ -5212,13 +5212,16 @@ async function handleSubmit(method, _rest, body, ctx) {
       }
     };
   }
-  const { prompt, session, images, requestId, skillInvocation } = parseBody11(body);
+  const { prompt, session, images, attachments, requestId, skillInvocation } = parseBody11(body);
   let parsedImages = null;
   if (Array.isArray(images) && images.length > 0) {
     parsedImages = images.filter(function(i) { return typeof i === "string" && i.startsWith("data:image/"); });
     if (parsedImages.length === 0) parsedImages = null;
   }
-  if (typeof prompt !== "string" || (!prompt.trim() && !parsedImages && !session)) {
+  const parsedAttachments = Array.isArray(attachments)
+    ? [...new Set(attachments.filter((id) => /^att_[0-9a-f-]{20,}$/i.test(String(id ?? ""))))].slice(0, 5)
+    : [];
+  if (typeof prompt !== "string" || (!prompt.trim() && !parsedImages && parsedAttachments.length === 0 && !session)) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
   const parsedRequestId = typeof requestId === "string" ? requestId.trim().slice(0, 160) : null;
@@ -5236,6 +5239,7 @@ async function handleSubmit(method, _rest, body, ctx) {
   }
   const result = await ctx.submitPrompt(prompt, session || null, parsedImages, {
     requestId: parsedRequestId,
+    attachmentIds: parsedAttachments,
     skillInvocation: parsedSkillInvocation
   });
   if (!result.accepted) {
@@ -5444,19 +5448,31 @@ async function handlePromptQueue(method, _rest, body, ctx, query = new URLSearch
   const scope = String(query.get("scope") || parsed.scope || "default");
   if (method === "GET") {
     if (!ctx.listPromptQueue) return { status: 503, body: { error: "prompt queue is not available" } };
-    return { status: 200, body: { items: ctx.listPromptQueue(scope) } };
+    return { status: 200, body: { items: await ctx.listPromptQueue(scope) } };
   }
   if (method === "POST") {
     if (!ctx.upsertPromptQueueItem) return { status: 503, body: { error: "prompt queue is not available" } };
-    const result = ctx.upsertPromptQueueItem(scope, parsed.item);
+    const result = await ctx.upsertPromptQueueItem(scope, parsed.item);
     return result.ok ? { status: 200, body: result } : { status: 400, body: { error: result.error || "invalid queued prompt" } };
   }
   if (method === "DELETE") {
     if (!ctx.removePromptQueueItem) return { status: 503, body: { error: "prompt queue is not available" } };
-    const result = ctx.removePromptQueueItem(scope, typeof parsed.id === "string" ? parsed.id : null);
+    const result = await ctx.removePromptQueueItem(scope, typeof parsed.id === "string" ? parsed.id : null);
     return { status: 200, body: result };
   }
   return { status: 405, body: { error: "GET/POST/DELETE only" } };
+}
+
+async function handleAttachments(method, _rest, body, ctx) {
+  if (method !== "POST") return { status: 405, body: { error: "POST only" } };
+  if (typeof ctx.handleAttachmentUpload !== "function") return { status: 503, body: { error: "attachment upload is unavailable" } };
+  const parsed = parseBody11(body);
+  const action = typeof parsed.action === "string" ? parsed.action.trim() : "";
+  try {
+    return { status: 200, body: { ok: true, ...await ctx.handleAttachmentUpload(action, parsed) } };
+  } catch (error) {
+    return { status: 400, body: { error: error?.message || String(error) } };
+  }
 }
 var ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
 var ARTIFACT_SAFE_EXTS = /* @__PURE__ */ new Set([
@@ -6136,6 +6152,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleOptimizePrompt(method, rest, body, ctx);
       case "prompt-queue":
         return await handlePromptQueue(method, rest, body, ctx, query);
+      case "attachments":
+        return await handleAttachments(method, rest, body, ctx);
       case "abort":
         return await handleAbort(method, rest, body, ctx);
       case "background-jobs":

@@ -6074,6 +6074,10 @@ function registerSingleMcpTool(mcpTool, env) {
         signal: ctx?.signal
       });
       if (env.tracker) env.tracker.record(Date.now() - t0);
+      if (env.onResult) {
+        const projected = await env.onResult({ toolResult, toolName: mcpTool.name, registeredName, toolCallId: ctx?.toolCallId ?? null, signal: ctx?.signal });
+        if (typeof projected === "string") return projected;
+      }
       return flattenMcpResult(toolResult, { maxChars: env.maxResultChars });
     }
   });
@@ -6143,6 +6147,7 @@ async function bridgeMcpTools(client, opts = {}) {
     maxResultChars,
     tracker,
     onProgress: opts.onProgress,
+    onResult: opts.onResult,
     ready: opts.ready,
     readyTimeoutMs: opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
     serverName
@@ -6441,6 +6446,7 @@ var ToolRegistry = class {
       }
       const result = await tool.fn(args, {
         signal: opts.signal,
+        toolCallId: opts.toolCallId ?? null,
         confirmationGate: opts.confirmationGate,
         maxResultTokens: opts.maxResultTokens,
         maxResultChars: opts.maxResultChars
@@ -7361,6 +7367,12 @@ function classifyToolFailure(result) {
   if (/path parsing failed|invalid path argument|unexpected argument/.test(text)) return "command-path-arguments";
   return null;
 }
+function classifyMediaRequestError(err) {
+  const message = String(err?.message ?? err ?? "");
+  if (/^API 413:|payload too large|request entity too large/i.test(message)) return "media_too_large";
+  if (/^API (?:400|415|422):/i.test(message) && /image|vision|media|mime|format/i.test(message)) return "media_format_unsupported";
+  return null;
+}
 function failureArgsSignature(value) {
   if (Array.isArray(value)) return `[${value.map(failureArgsSignature).join(",")}]`;
   if (value && typeof value === "object") {
@@ -8238,6 +8250,7 @@ ${reason}`
       }
       const result = await this.tools.dispatch(name, args, {
         signal,
+        toolCallId: this.inflightIdFor(call),
         maxResultTokens: this.maxResultTokensForTool(name),
         confirmationGate: this.confirmationGate,
         onRawResult: this.contextInputGuard && contextTool.readOnly && !contextTool.contextControl
@@ -8432,6 +8445,7 @@ ${reason}`
     this._toolDispatchesThisStep = 0;
     this._toolRoundsThisStep = 0;
     let outputRecoveryAttempts = 0;
+    let mediaRecoveryAttempts = 0;
     let outputRecoveryPrefix = "";
     let outputRecoveryInstruction = "";
     this._officeCliElementCallsThisStep = 0;
@@ -8453,7 +8467,7 @@ ${reason}`
       };
     }
     let pendingUser = userInput;
-    const turnImages = this._pendingImages;
+    let turnImages = this._pendingImages;
     this._pendingImages = null;
     const toolSpecs = this.prefix.tools();
     const maxToolRounds = this.maxToolIters * (this.maxToolContinuationWindows + 1);
@@ -8493,6 +8507,12 @@ ${reason}`
           role: "warning",
           content: t("loop.toolBudgetWarning", { iter: this._toolRoundsThisStep, cap: maxToolRounds })
         };
+      }
+      // Visionox patch: a read_media tool can queue an image during this same
+      // turn. Merge it before the next ordinary tool-continuation request.
+      if (this._pendingImages && this._pendingImages.length > 0) {
+        turnImages = [...new Set([...(turnImages ?? []), ...this._pendingImages])].slice(0, this.visionPolicy.maxImages);
+        this._pendingImages = null;
       }
       let messages = this.buildMessages(pendingUser, turnImages);
       if (outputRecoveryInstruction) {
@@ -8737,6 +8757,27 @@ ${reason}`
           };
           yield { turn: this._turn, role: "done", content: partial };
           return;
+        }
+        const mediaError = turnImages?.length ? classifyMediaRequestError(err) : null;
+        if (mediaError && mediaRecoveryAttempts < this.visionPolicy.maxImages) {
+          const before = turnImages.length;
+          turnImages = mediaError === "media_format_unsupported"
+            ? turnImages.slice(0, -1)
+            : turnImages.slice(1);
+          mediaRecoveryAttempts++;
+          yield {
+            turn: this._turn,
+            role: "media_recovery",
+            content: mediaError === "media_too_large"
+              ? "媒体请求过大，已移除较早的图片并继续当前任务。"
+              : "Provider 拒绝了图片格式，已移除对应媒体并继续当前任务。",
+            mediaReduced: true,
+            mediaOmitted: before - turnImages.length,
+            mediaRecovery: mediaError,
+            mediaWarnings: [String(err?.message ?? err ?? "media request rejected")]
+          };
+          iter--;
+          continue;
         }
         const probe = is5xxError(err) && /deepseek\.com/i.test(String(this.client?.baseUrl ?? ""))
           ? await probeDeepSeekReachable(this.client)
