@@ -299,6 +299,47 @@ test("attachment sidecars rebuild a corrupt v1 index without losing media", asyn
   assert.equal(repairedIndex.attachments[0].id, stored.id);
 });
 
+test("attachment sidecars also recover a structurally invalid v1 index", async (t) => {
+  const { root, runtime } = await fixture(t);
+  const stored = await runtime.ingestBytes(PNG, {
+    kind: "image",
+    mimeType: "image/png",
+    sessionId: "session-structural-recovery",
+    workspace: "C:\\structural-recovery",
+  });
+  await writeFile(resolve(root, "index.json"), JSON.stringify({ version: 1, attachments: [{ invalid: true }] }), "utf8");
+
+  const restored = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
+  assert.deepEqual(await restored.readBytes(stored.id), PNG);
+});
+
+test("attachment content descriptors enforce session and workspace ownership", async (t) => {
+  const { runtime } = await fixture(t);
+  const stored = await runtime.ingestBytes(MP4, {
+    kind: "video",
+    mimeType: "video/mp4",
+    sessionId: "session-owner",
+    workspace: "C:\\workspace-owner",
+  });
+  assert.equal(await runtime.getContentDescriptor(stored.id, {
+    sessionId: "session-other",
+    workspace: "C:\\workspace-owner",
+  }), null);
+  assert.equal(await runtime.getContentDescriptor(stored.id, {
+    sessionId: "session-owner",
+    workspace: "C:\\workspace-other",
+  }), null);
+  const descriptor = await runtime.getContentDescriptor(stored.id, {
+    sessionId: "session-owner",
+    workspace: "C:\\workspace-owner",
+  });
+  assert.equal(descriptor.size, MP4.length);
+  assert.deepEqual(await runtime.readRange(stored.id, 4, 7, {
+    sessionId: "session-owner",
+    workspace: "C:\\workspace-owner",
+  }), MP4.subarray(4, 8));
+});
+
 test("attachment maintenance keeps referenced media and removes old orphan records and blobs", async (t) => {
   const root = await mkdtemp(resolve(tmpdir(), "visionox-attachments-sweep-"));
   t.after(() => rm(root, { recursive: true, force: true }));
