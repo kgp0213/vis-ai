@@ -484,6 +484,36 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     });
   });
 
+  test("交互生命周期查询和关闭接口保持 modal 路径向后兼容", async () => {
+    const interactions = [{ interactionId: "interaction-1", status: "pending", kind: "choice" }];
+    const queried = await apiGet("/api/modal/interactions", {
+      getInteractions: () => interactions,
+    });
+    assert.equal(queried.status, 200);
+    assert.deepEqual(queried.json.interactions, interactions);
+
+    let closedId = null;
+    const closed = await apiPost("/api/modal/interactions/interaction-1/close", {}, {
+      closeInteraction: (interactionId) => {
+        closedId = interactionId;
+        return { ok: true, idempotent: false, interaction: { interactionId, status: "cancelled" } };
+      },
+    });
+    assert.equal(closed.status, 200);
+    assert.equal(closedId, "interaction-1");
+    assert.equal(closed.json.interaction.status, "cancelled");
+
+    const duplicate = await apiPost("/api/modal/interactions/interaction-1/close", {}, {
+      closeInteraction: (interactionId) => ({
+        ok: true,
+        idempotent: true,
+        interaction: { interactionId, status: "cancelled" },
+      }),
+    });
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicate.json.idempotent, true);
+  });
+
   test("非 pauseGate 弹窗保持原协议，不要求 gateId", async () => {
     let choice = null;
     const res = await apiPost("/api/modal/resolve", {
