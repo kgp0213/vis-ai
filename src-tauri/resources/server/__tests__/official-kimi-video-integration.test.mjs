@@ -19,6 +19,9 @@ test("launcher connects official Kimi video preparation to the existing ordinary
   const localCommandGuard = source.indexOf("本地命令不能同时提交附件");
   const mediaPreparation = source.indexOf("const preparedMedia = await prepareSubmittedMedia");
   assert.ok(localCommandGuard > 0 && localCommandGuard < mediaPreparation, "local slash commands must reject attachments before provider upload");
+  const cancelledAfterPreparation = source.indexOf("if (operation.controller.signal.aborted)", mediaPreparation);
+  const mediaCommit = source.indexOf("operation.context.attachments =", mediaPreparation);
+  assert.ok(cancelledAfterPreparation > mediaPreparation && cancelledAfterPreparation < mediaCommit, "cancelled media preparation must stop before committing the user turn");
   for (const marker of ['trimmed === "/help"', 'text === "/status"', 'text === "/new" || text === "/clear"']) {
     assert.ok(localCommandGuard < source.indexOf(marker), `attachment guard must run before ${marker}`);
   }
