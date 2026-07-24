@@ -49,5 +49,7 @@ test("Dashboard exposes video upload only for an explicit official Kimi video mo
   assert.ok(queueOwnership > 0 && queueOwnership < queuePersist, "queue ownership must be claimed before persistence awaits");
   assert.match(source, /persisted\?\.ok === false/);
   assert.match(source, /!queuedAttachmentIdsRef\.current\.has\(item\?\.attachmentId\)/);
+  assert.match(source, /queueStorageKey = T2\(\(\) => workspaceDir && activeConversationId/);
+  assert.match(source, /activeConversationId}:queue/);
   assert.match(apiServerSource, /conversationId: ctx\.getConversationId\?\.\(\) \?\? null/);
 });
