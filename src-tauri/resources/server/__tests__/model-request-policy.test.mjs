@@ -162,6 +162,7 @@ describe("model request policy", () => {
       streaming: true,
       toolCalling: true,
       structuredOutput: false,
+      progressiveToolDiscovery: true,
       maxContextTokens: 1_000_000,
       maxOutputTokens: 32_768,
       maxImagesPerRequest: 12,
@@ -171,6 +172,7 @@ describe("model request policy", () => {
 
     assert.equal(validateModelCapabilities(capabilities), null);
     assert.match(validateModelCapabilities({ ...capabilities, streaming: "yes" }), /streaming.*boolean/i);
+    assert.match(validateModelCapabilities({ ...capabilities, progressiveToolDiscovery: "yes" }), /progressiveToolDiscovery.*boolean/i);
     assert.match(validateModelCapabilities({ ...capabilities, inputModalities: ["image"] }), /inputModalities.*text/i);
     assert.match(validateModelCapabilities({ ...capabilities, roles: ["document-draft", "unknown-role"] }), /roles.*unknown-role/i);
     assert.match(validateModelCapabilities({ ...capabilities, maxOutputTokens: 0 }), /maxOutputTokens.*positive integer/i);
@@ -186,6 +188,8 @@ describe("model request policy", () => {
         agentPolicy: { documentPolicy: { batchOutputTokens: 8_192 } },
       }],
     };
+    assert.equal(resolveProviderModelCapabilities(provider, "future-model").progressiveToolDiscovery, true);
+    assert.equal(resolveProviderModelCapabilities({ models: [{ id: "legacy-model" }] }, "legacy-model").progressiveToolDiscovery, false);
     assert.deepEqual(resolveProviderModelCapabilities(provider, "future-model"), capabilities);
     assert.equal(resolveProviderModelAgentPolicy(provider, "future-model").documentPolicy.batchOutputTokens, 8_192);
   });

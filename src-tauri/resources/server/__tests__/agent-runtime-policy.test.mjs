@@ -85,6 +85,87 @@ describe("agent runtime policy", () => {
     assert.equal(formatToolRepairNotice({ truncationsFixed: 0, scavenged: 0 }), null);
   });
 
+  test("refreshes tool specs at every ordinary model request boundary", async () => {
+    const tools = new ToolRegistry();
+    const prefix = new ImmutablePrefix({ system: "test", toolSpecs: [] });
+    tools.register({
+      name: "discover_tools",
+      description: "load a hidden tool",
+      parameters: { type: "object", properties: {} },
+      readOnly: true,
+      fn: async () => {
+        prefix.addTool({
+          type: "function",
+          function: { name: "hidden_mcp_tool", description: "hidden", parameters: { type: "object", properties: {} } },
+        });
+        return JSON.stringify({ loaded: ["hidden_mcp_tool"] });
+      },
+    });
+    prefix.addTool(tools.specs()[0]);
+    const requests = [];
+    const client = {
+      chat: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) {
+          return { content: "", toolCalls: [toolCall("discover-1", "discover_tools")], usage: {}, finishReason: "tool_calls" };
+        }
+        return { content: "done", toolCalls: [], usage: {}, finishReason: "stop" };
+      },
+    };
+    const loop = new CacheFirstLoop({ client, prefix, tools, model: "internal-model", stream: false, autoEscalate: false });
+    for await (const _event of loop.step("find a tool")) { /* consume */ }
+
+    assert.deepEqual(requests[0].tools.map((spec) => spec.function.name), ["discover_tools"]);
+    assert.deepEqual(requests[1].tools.map((spec) => spec.function.name), ["discover_tools", "hidden_mcp_tool"]);
+  });
+
+  test("injects operation steering only at the next model request boundary", async () => {
+    const tools = new ToolRegistry();
+    registerProbe(tools);
+    let boundary = 0;
+    const requests = [];
+    const client = {
+      chat: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) {
+          return { content: "", toolCalls: [toolCall("probe-1")], usage: {}, finishReason: "tool_calls" };
+        }
+        return { content: "done", toolCalls: [], usage: {}, finishReason: "stop" };
+      },
+    };
+    const loop = makeLoop(client, tools, {
+      beforeModelRequest: async () => {
+        boundary++;
+        return boundary === 2 ? { instructions: ["优先验证最终产物"] } : null;
+      },
+    });
+    for await (const _event of loop.step("create artifact")) { /* consume */ }
+
+    assert.equal(requests.length, 2);
+    assert.doesNotMatch(JSON.stringify(requests[0].messages), /优先验证最终产物/);
+    assert.match(JSON.stringify(requests[1].messages), /优先验证最终产物/);
+    assert.doesNotMatch(JSON.stringify(loop.log.toMessages()), /优先验证最终产物/);
+  });
+
+  test("emits queued, running and terminal tool facts with one stable call id", async () => {
+    const tools = new ToolRegistry();
+    registerProbe(tools);
+    let calls = 0;
+    const client = {
+      chat: async () => {
+        calls++;
+        return calls === 1
+          ? { content: "", toolCalls: [toolCall("stable-call")], usage: {}, finishReason: "tool_calls" }
+          : { content: "done", toolCalls: [], usage: {}, finishReason: "stop" };
+      },
+    };
+    const events = [];
+    for await (const event of makeLoop(client, tools).step("probe")) events.push(event);
+    const progress = events.filter((event) => ["tool_queued", "tool_start", "tool"].includes(event.role));
+    assert.deepEqual(progress.map((event) => event.callId), ["stable-call", "stable-call", "stable-call"]);
+    assert.deepEqual(progress.map((event) => event.toolStatus), ["queued", "running", "succeeded"]);
+  });
+
   test("a repaired unterminated string cannot execute a mutating tool", async () => {
     let modelCalls = 0;
     let writes = 0;
