@@ -43,6 +43,10 @@ test("submitted official Kimi video is rebound to the operation and becomes a pr
   assert.deepEqual(result.mediaParts, [{ type: "video_url", video_url: { url: "ms://file-1" } }]);
   assert.equal(resolvedAttachment.operationId, "operation-1");
   assert.equal(result.attachments[0].kind, "video");
+  assert.deepEqual(result.pendingUploads, [{ id: uploaded.id, sessionId: "session-1", workspace: "C:\\workspace" }]);
+  assert.deepEqual(result.rollbackAttachmentIds, [result.attachments[0].id]);
+  assert.ok(await attachmentRuntime.get(uploaded.id), "prepare must preserve the retryable upload until the prompt commits");
+  await attachmentRuntime.releasePendingUploads(result.pendingUploads);
   assert.equal(await attachmentRuntime.get(uploaded.id), null);
 });
 

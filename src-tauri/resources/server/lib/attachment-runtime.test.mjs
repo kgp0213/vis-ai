@@ -223,7 +223,7 @@ test("stale-scope cleanup removes only pending upload attachments", async (t) =>
 
 test("cancelling by upload id cleans a finished attachment whose response was lost", async (t) => {
   const { runtime } = await fixture(t);
-  const context = { sessionId: "session-lost-response", workspace: "C:\lost-response" };
+  const context = { sessionId: "session-lost-response", workspace: "C:\\lost-response" };
   const upload = await runtime.beginUpload({
     name: "lost.png",
     size: PNG.length,
@@ -236,4 +236,44 @@ test("cancelling by upload id cleans a finished attachment whose response was lo
 
   assert.equal(await runtime.cancelUpload(upload.uploadId, context), true);
   assert.equal(await runtime.get(finished.id), null);
+});
+
+test("cancelling while finish persists leaves no completed upload attachment", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "visionox-attachments-race-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let unblockPersist;
+  let notifyPersist;
+  const persistStarted = new Promise((resolveStarted) => { notifyPersist = resolveStarted; });
+  const persistGate = new Promise((resolveGate) => { unblockPersist = resolveGate; });
+  let blocked = false;
+  const runtime = createAttachmentRuntime({
+    rootDir: root,
+    atomicWriteFile: async (...args) => {
+      if (!blocked && String(args[1]).includes('"operationId": "upload:')) {
+        blocked = true;
+        notifyPersist();
+        await persistGate;
+      }
+      return atomicWriteFile(...args);
+    },
+  });
+  const context = { sessionId: "session-race", workspace: "C:\\race" };
+  const upload = await runtime.beginUpload({ name: "race.png", size: PNG.length, mimeType: "image/png", ...context });
+  await runtime.appendUpload(upload.uploadId, PNG, 0);
+  const finishing = runtime.finishUpload(upload.uploadId);
+  await persistStarted;
+  assert.equal(await runtime.cancelUpload(upload.uploadId, context), true);
+  unblockPersist();
+  await assert.rejects(finishing, /取消/);
+  assert.equal((await runtime.list()).length, 0);
+});
+
+test("an upload whose init response is lost expires without requiring its id", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "visionox-attachments-expiry-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtime = createAttachmentRuntime({ rootDir: root, atomicWriteFile, uploadTtlMs: 10 });
+  const upload = await runtime.beginUpload({ name: "lost-init.png", size: PNG.length, mimeType: "image/png" });
+  await new Promise((resolveWait) => setTimeout(resolveWait, 30));
+  await assert.rejects(runtime.appendUpload(upload.uploadId, PNG, 0), /不存在或已过期/);
+  await assert.rejects(readFile(resolve(root, "uploads", upload.uploadId)));
 });

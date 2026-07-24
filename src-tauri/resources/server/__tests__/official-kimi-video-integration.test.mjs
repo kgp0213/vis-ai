@@ -19,6 +19,11 @@ test("launcher connects official Kimi video preparation to the existing ordinary
   const localCommandGuard = source.indexOf("本地命令不能同时提交附件");
   const mediaPreparation = source.indexOf("const preparedMedia = await prepareSubmittedMedia");
   assert.ok(localCommandGuard > 0 && localCommandGuard < mediaPreparation, "local slash commands must reject attachments before provider upload");
+  for (const marker of ['trimmed === "/help"', 'text === "/status"', 'text === "/new" || text === "/clear"']) {
+    assert.ok(localCommandGuard < source.indexOf(marker), `attachment guard must run before ${marker}`);
+  }
+  const dashboardContext = source.slice(source.indexOf("const ctx = {"), source.indexOf("// Sync preset"));
+  assert.match(dashboardContext, /getConversationId: \(\) => activeConversationId/);
 });
 
 test("Dashboard exposes video upload only for an explicit official Kimi video model", async () => {
@@ -35,5 +40,8 @@ test("Dashboard exposes video upload only for an explicit official Kimi video mo
   assert.match(source, /activeConversationId/);
   assert.match(source, /signal: scope\?\.controller\.signal/);
   assert.match(source, /action: "release-upload"/);
+  assert.match(source, /await persistQueuedPrompt\(item\)/);
+  assert.match(source, /if \(await enqueuePrompt/);
+  assert.match(source, /pendingImagesRef\.current = \[\];\s*setPendingImages\(\[\]\)/);
   assert.match(apiServerSource, /conversationId: ctx\.getConversationId\?\.\(\) \?\? null/);
 });

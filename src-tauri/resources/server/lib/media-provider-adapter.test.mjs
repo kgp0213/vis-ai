@@ -73,6 +73,31 @@ test("video upload cancellation stops before provider dispatch and is never cach
   assert.equal(attempts, 0);
 });
 
+test("video upload cancelled as the provider returns is not accepted or cached", async () => {
+  const controller = new AbortController();
+  let uploads = 0;
+  const adapter = createMediaProviderAdapter({
+    attachmentRuntime: { readDataUrl: async () => null },
+    videoUploaders: {
+      kimi: async () => {
+        uploads++;
+        controller.abort();
+        return { type: "video_url", video_url: { url: "ms://late-file" } };
+      },
+    },
+  });
+  const input = { attachment: { id: "att-video", kind: "video", sha256: "late" } };
+  const model = { id: "kimi-video", capabilities: { inputModalities: ["text", "video"] } };
+  const operation = { id: "operation-late", provider: { id: "moonshot", providerType: "kimi", apiKey: "secret" } };
+
+  const cancelled = await adapter.uploadVideo(input, model, operation, controller.signal);
+  assert.equal(cancelled.ok, false);
+  assert.equal(cancelled.error.code, "media_read_cancelled");
+  const retried = await adapter.uploadVideo(input, model, operation, null);
+  assert.equal(retried.ok, true);
+  assert.equal(uploads, 2);
+});
+
 test("provider type, not a Kimi-looking id or model name, gates official video upload", async () => {
   let attempts = 0;
   const adapter = createMediaProviderAdapter({
