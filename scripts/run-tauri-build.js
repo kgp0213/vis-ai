@@ -10,6 +10,7 @@ const defaultRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RETIRED_RELEASE_RESOURCES = [
   "bootstrap-skills/document-organizer/task-recipes.json",
   "bootstrap-skills/pdf/references/pdf-to-markdown.md",
+  "server/officecli.exe.old",
   "server/lib/complex-task-launcher-wiring.test.mjs",
   "server/lib/foreground-task-supervisor.mjs",
   "server/lib/foreground-task-supervisor.test.mjs",
