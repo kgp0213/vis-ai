@@ -220,3 +220,20 @@ test("stale-scope cleanup removes only pending upload attachments", async (t) =>
   assert.equal(await runtime.get(pending.id), null);
   assert.ok(await runtime.get(committed.id));
 });
+
+test("cancelling by upload id cleans a finished attachment whose response was lost", async (t) => {
+  const { runtime } = await fixture(t);
+  const context = { sessionId: "session-lost-response", workspace: "C:\lost-response" };
+  const upload = await runtime.beginUpload({
+    name: "lost.png",
+    size: PNG.length,
+    mimeType: "image/png",
+    ...context,
+  });
+  await runtime.appendUpload(upload.uploadId, PNG, 0);
+  const finished = await runtime.finishUpload(upload.uploadId);
+  assert.ok(await runtime.get(finished.id));
+
+  assert.equal(await runtime.cancelUpload(upload.uploadId, context), true);
+  assert.equal(await runtime.get(finished.id), null);
+});
