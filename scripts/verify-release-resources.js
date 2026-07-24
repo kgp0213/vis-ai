@@ -17,17 +17,6 @@ if (!process.env.VISIONOX_RUNTIME_PACKAGE || !tempRelative || tempRelative.start
   throw new Error("VISIONOX_RUNTIME_PACKAGE must point to a child of the system temporary directory");
 }
 const expected = new Map();
-const RETIRED_RUNTIME_LIB_FILES = new Set([
-  "document-delivery.mjs",
-  "document-markdown-workflow.mjs",
-  "document-extractors.mjs",
-  "document-intelligence.mjs",
-  "document-output-reservation.mjs",
-  "long-task-handoff.mjs",
-  "pdf-markdown-workflow.mjs",
-  "pdf-text.mjs",
-]);
-
 function normalize(path) {
   return path.replaceAll("\\", "/");
 }
@@ -61,7 +50,7 @@ function sha256(path) {
 addDirectory(runtimePackage, "server/visionox-pkg");
 addFile(join(sourceResources, "server", "launcher.mjs"), "server/launcher.mjs");
 for (const name of readdirSync(join(sourceResources, "server", "lib")).sort()) {
-  if (name.endsWith(".test.mjs") || RETIRED_RUNTIME_LIB_FILES.has(name) || /^complex-task-.*\.mjs$/i.test(name)) continue;
+  if (name.endsWith(".test.mjs") || /^complex-task-.*\.mjs$/i.test(name)) continue;
   addFile(join(sourceResources, "server", "lib", name), `server/lib/${name}`);
 }
 for (const name of ["learn.mjs", "learn-track.mjs", "learn-sandbox-impl.mjs", "node.exe", "officecli.exe", "dws.exe"]) {

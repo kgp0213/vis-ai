@@ -116,7 +116,7 @@ const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs"
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
-const { modelConfigFingerprint } = await importEarly("./lib/document-model-routing.mjs");
+const { modelConfigFingerprint } = await importEarly("./lib/model-config-fingerprint.mjs");
 const { archiveRejectedKnowledgeTopic } = await importEarly("./lib/knowledge-topic-archive.mjs");
 const {
   buildTopicDocumentPrompt,

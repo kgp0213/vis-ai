@@ -6,5 +6,5 @@
   "license": "MIT",
   "integrationApiVersion": 1,
   "runtimeRequirements": {},
-  "capabilities": ["document-conversion", "document-report", "resumable-jobs"]
+  "capabilities": ["document-conversion", "document-report"]
 }

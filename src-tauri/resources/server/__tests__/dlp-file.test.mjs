@@ -834,7 +834,6 @@ test("shell execution blocks case-variant hard-coded document paths on Windows",
 
 test("launcher shares managed document references without exposing the retired PDF organizer", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
-  const pdfText = readFileSync(new URL("../lib/pdf-text.mjs", import.meta.url), "utf8");
   const dlp = readFileSync(new URL("../lib/dlp-file.mjs", import.meta.url), "utf8");
   const bundledLoop = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
   const bundledIndex = readFileSync(new URL("../visionox-pkg/dist/index.js", import.meta.url), "utf8");
@@ -846,7 +845,6 @@ test("launcher shares managed document references without exposing the retired P
   assert.doesNotMatch(launcher, /name:\s*"read_prepared_document"/);
   assert.match(launcher, /name:\s*"prepare_local_document"[\s\S]*?readOnly:\s*true[\s\S]*?parameters:/);
   assert.doesNotMatch(launcher, /MAX_DOCUMENT_AUTO_CONTINUATIONS|parsePdfDeliveryResult|updatePdfContinuationState|documentAutoContinuationPrompt|pdfContinuationStates/);
-  assert.match(pdfText, /export async function extractPdfText\(/);
   assert.doesNotMatch(dlp, /extract_pdf_text/);
   assert.doesNotMatch(bundledLoop, /extract_pdf_text/);
   assert.doesNotMatch(bundledIndex, /extract_pdf_text/);

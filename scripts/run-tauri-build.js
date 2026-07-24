@@ -14,7 +14,7 @@ const RETIRED_RELEASE_RESOURCES = [
   "server/lib/foreground-task-supervisor.mjs",
   "server/lib/foreground-task-supervisor.test.mjs",
 ];
-const RETIRED_RUNTIME_LIB_FILES = new Set([
+const STALE_RELEASE_LIB_FILES = new Set([
   "document-delivery.mjs",
   "document-markdown-workflow.mjs",
   "document-extractors.mjs",
@@ -27,8 +27,7 @@ const RETIRED_RUNTIME_LIB_FILES = new Set([
 
 function includesRuntimeLibFile(name) {
   return !name.endsWith(".test.mjs")
-    && !/^complex-task-.*\.mjs$/i.test(name)
-    && !RETIRED_RUNTIME_LIB_FILES.has(name);
+    && !/^complex-task-.*\.mjs$/i.test(name);
 }
 
 export function prepareRuntimeLibResources(root, stagingRoot) {
@@ -91,7 +90,7 @@ export function pruneRetiredReleaseResources(root) {
   const legacyLib = resolve(resourcesRoot, "server", "lib");
   if (existsSync(legacyLib)) {
     for (const entry of readdirSync(legacyLib, { withFileTypes: true })) {
-      if (!entry.isFile() || !(entry.name.endsWith(".test.mjs") || /^complex-task-.*\.mjs$/i.test(entry.name) || RETIRED_RUNTIME_LIB_FILES.has(entry.name))) continue;
+      if (!entry.isFile() || !(entry.name.endsWith(".test.mjs") || /^complex-task-.*\.mjs$/i.test(entry.name) || STALE_RELEASE_LIB_FILES.has(entry.name))) continue;
       const target = resolve(legacyLib, entry.name);
       const targetRelative = relative(resourcesRoot, target);
       if (!targetRelative || targetRelative.startsWith("..") || targetRelative.includes(`..${sep}`)) {

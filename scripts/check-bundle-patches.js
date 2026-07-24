@@ -873,7 +873,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/document-organizer/integration.json",
-    markers: ['"id": "document-organizer"', '"version": "1.1.0"', '"resumable-jobs"'],
+    markers: ['"id": "document-organizer"', '"version": "1.1.0"', '"document-conversion"', '"document-report"'],
   },
   {
     file: "src-tauri/resources/server/lib/tool-repair-notice.mjs",
@@ -882,22 +882,6 @@ const required = [
   {
     file: "src-tauri/resources/server/lib/bootstrap-skill-ownership.mjs",
     markers: ["LEGACY_BOOTSTRAP_DIRECTORY_HASHES", "isKnownLegacyBootstrapSkill", "d587374b670b85430785212e4fa19304949ce510e253208d0014763d2fb3e681"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/document-intelligence.mjs",
-    markers: ["buildDocumentContract", "document-collection", "normalizeDocumentPolicy", "maxModelCallsPerJob", "jobTimeoutMs", "chunkDocumentUnits", "evaluateDocumentQuality", "resolvedVisualUnitIds", "renderDocumentSourceFallback", "buildDocumentReviewMessages"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/document-extractors.mjs",
-    markers: ["processDocumentSourceBatches", "sourceSummaries", "prefixCollectionUnit", "runOfficeCliJson", "htmlDocumentUnits", "officeElementsToUnits", "visionox-office-visual-", "captureVisuals", "visualDataUrl"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/document-job-store.mjs",
-    markers: ["createDocumentJobStore", "retentionDays", "repairInterrupted", "pruneExpired", "failedBatches", "allowOutsideWorkspace", "writeBatchCheckpoint", "manifest-snapshots", "events.jsonl", "restart-recovery"],
-  },
-  {
-    file: "src-tauri/resources/server/lib/document-markdown-workflow.mjs",
-    markers: ["createDocumentMarkdownManager", "renderCollectionSources", "messagesWithBatchVisuals", "generateHierarchicalSummary", "recoverSavedBatch", "orphan-section", "onPersistenceError", "policy-selected", "completed_with_warnings", "classifyDocumentModelError", "modelDiagnostics", "buildDocumentQualityWarnings", "waiting_foreground", "waiting_provider", "candidate-transient-circuit-opened", "DOCUMENT_JOB_CALL_BUDGET_EXCEEDED", "DOCUMENT_JOB_TIMEOUT", "document-summary-fallback", "isProviderBusy", "retryFailed", 'action === "abandon"', 'action === "delete"', "completions.delete"],
   },
   {
     file: "src-tauri/resources/server/lib/atomic-file.mjs",
