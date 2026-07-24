@@ -96,8 +96,9 @@ test("workspace API lists, selects and removes history through the desktop conte
 
 test("a pending workspace is applied only for a new or explicitly resumed conversation", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
+  const runtime = readFileSync(new URL("../lib/workspace-runtime.mjs", import.meta.url), "utf8");
   assert.match(launcher, /syncWorkspace: async \(\{ applyPending = true \} = \{\}\)/);
-  assert.match(launcher, /if \(!applyPending\) return \{ pending: true/);
+  assert.match(runtime, /if \(!applyPending\) return \{ pending: true/);
   assert.match(launcher, /applyPending: text\.trim\(\)\.toLowerCase\(\) === "\/new" \|\| Boolean\(sessionName\)/);
 });
 
@@ -160,19 +161,25 @@ test("two isolated workspaces keep memory, skills, index identity and task execu
 
 test("workspace switch replaces old tools before rebuilding the loop and MCP tools", () => {
   const launcher = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
-  const switchStart = launcher.indexOf("[launcher] workspace switch:");
-  const unregisterWorkspace = launcher.indexOf("for (const name of wsToolNames)", switchStart);
-  const registerWorkspace = launcher.indexOf("registerWorkspaceTools(tools, configuredDir", unregisterWorkspace);
-  const assignWorkspace = launcher.indexOf("workspaceDir = configuredDir", registerWorkspace);
-  const rebuildLoop = launcher.indexOf("rebuildLoopPreservingContext(client, workspaceDir)", assignWorkspace);
-  const deployGuide = launcher.indexOf("await deploySkillGuide(workspaceDir)", rebuildLoop);
-  const reloadMcp = launcher.indexOf("await reloadMcp()", deployGuide);
+  const runtime = readFileSync(new URL("../lib/workspace-runtime.mjs", import.meta.url), "utf8");
+  assert.match(launcher, /return workspaceRuntime\.apply\(\{ applyPending \}\)/);
+  const switchStart = runtime.indexOf("async function apply");
+  const clearPrepared = runtime.indexOf("clearPreparedDocuments", switchStart);
+  const removeMcp = runtime.indexOf("removeMcpServers", clearPrepared);
+  const removeWorkspace = runtime.indexOf("removeWorkspaceTools", removeMcp);
+  const registerWorkspace = runtime.indexOf("const result = await register", removeWorkspace);
+  const assignWorkspace = runtime.indexOf("setCurrent(configured)", registerWorkspace);
+  const rebuildLoop = runtime.indexOf("await rebuildLoop(configured", assignWorkspace);
+  const deployGuide = runtime.indexOf("await deploySkillGuide(configured", rebuildLoop);
+  const reloadMcp = runtime.indexOf("await reloadMcp(configured", deployGuide);
   assert.ok(switchStart >= 0);
-  assert.ok(switchStart < unregisterWorkspace);
-  assert.ok(unregisterWorkspace < registerWorkspace);
+  assert.ok(switchStart < clearPrepared);
+  assert.ok(clearPrepared < removeMcp);
+  assert.ok(removeMcp < removeWorkspace);
+  assert.ok(removeWorkspace < registerWorkspace);
   assert.ok(registerWorkspace < assignWorkspace);
   assert.ok(assignWorkspace < rebuildLoop);
   assert.ok(rebuildLoop < deployGuide);
   assert.ok(deployGuide < reloadMcp);
-  assert.match(launcher.slice(registerWorkspace, assignWorkspace), /hasSemanticSearch = result\.hasSemantic/);
+  assert.match(launcher, /wsToolNames = result\.toolNames/);
 });

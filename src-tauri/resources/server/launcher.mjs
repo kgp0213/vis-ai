@@ -93,6 +93,7 @@ const { createPromptIsolation } = await importEarly("./lib/scheduled-prompt-isol
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
 const { DEFAULT_SEMANTIC_EMBEDDING_MODEL, DEFAULT_SEMANTIC_EMBEDDING_URL, applySemanticEmbeddingDefaults } = await importEarly("./lib/semantic-config-defaults.mjs");
 const { createKnowledgeRuntime } = await importEarly("./lib/knowledge-runtime.mjs");
+const { createWorkspaceRuntime } = await importEarly("./lib/workspace-runtime.mjs");
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
 const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, normalizeWorkspacePath, removeRecentWorkspace, sameWorkspacePath } = await importEarly("./lib/workspace-history.mjs");
@@ -722,44 +723,17 @@ function primaryBalanceSummary() {
 
 // Workspace directory — configurable via config.workspaceDir
 let workspaceDir = resolve(home, config.workspaceDir ?? "visionox-workspace");
+let workspaceRuntime;
 function getWorkspaceState() {
-  const cfg = readConfig(configPath);
-  const configured = normalizeWorkspacePath(cfg.workspaceDir ?? "visionox-workspace", { homeDir: home });
-  const stored = Array.isArray(cfg.recentWorkspaces) ? cfg.recentWorkspaces : [];
-  const recentWorkspaces = normalizeWorkspaceHistory(
-    [configured, workspaceDir, ...stored],
-    { homeDir: home },
-  );
-  return {
-    current: workspaceDir,
-    configured,
-    pending: !sameWorkspacePath(workspaceDir, configured),
-    recentWorkspaces,
-  };
+  return workspaceRuntime.getState();
 }
 
 function selectWorkspaceDir(dir) {
-  const target = normalizeWorkspacePath(dir, { homeDir: home });
-  if (!isWorkspaceDirectory(target)) throw new Error(`workspace directory does not exist: ${target}`);
-  const cfg = readConfig(configPath);
-  const stored = Array.isArray(cfg.recentWorkspaces) ? cfg.recentWorkspaces : [];
-  cfg.workspaceDir = target;
-  cfg.recentWorkspaces = addRecentWorkspace(target, [workspaceDir, ...stored], { homeDir: home });
-  writeConfig(cfg, configPath);
-  console.error(`[launcher] workspaceDir saved to config: ${target} (takes effect next /new)`);
-  return getWorkspaceState();
+  return workspaceRuntime.select(dir);
 }
 
 function removeWorkspaceHistory(dir) {
-  const target = normalizeWorkspacePath(dir, { homeDir: home });
-  const state = getWorkspaceState();
-  if (sameWorkspacePath(target, state.current) || sameWorkspacePath(target, state.configured)) {
-    throw new Error("the current or pending workspace cannot be removed from history");
-  }
-  const cfg = readConfig(configPath);
-  cfg.recentWorkspaces = removeRecentWorkspace(target, cfg.recentWorkspaces, { homeDir: home });
-  writeConfig(cfg, configPath);
-  return getWorkspaceState();
+  return workspaceRuntime.removeHistory(dir);
 }
 const userDataBackups = createUserDataBackupStore({
   dataDir: visionoxDataDir,
@@ -2654,6 +2628,68 @@ function invokeMcpTool(serverName, toolName, args) {
   if (!srv) throw new Error(`MCP server "${serverName}" not found`);
   return srv.host.client.callTool(toolName, args);
 }
+
+workspaceRuntime = createWorkspaceRuntime({
+  homeDir: home,
+  readConfig: () => readConfig(configPath),
+  writeConfig: (next) => writeConfig(next, configPath),
+  getCurrentWorkspace: () => workspaceDir,
+  setCurrentWorkspace: (next) => { workspaceDir = next; },
+  normalizeWorkspacePath,
+  isWorkspaceDirectory,
+  addRecentWorkspace,
+  removeRecentWorkspace,
+  normalizeWorkspaceHistory,
+  sameWorkspacePath,
+  ensureWorkspaceDirectory: async (rootDir) => {
+    if (!existsSync(rootDir)) mkdirSync(rootDir, { recursive: true });
+  },
+  clearPreparedDocuments: async () => {
+    preparedDocumentRegistry.clear({ notifyChange: false });
+    await writeActiveSessionMeta({ preparedDocuments: [] });
+  },
+  removeMcpServers: async () => {
+    for (let index = mcpServers.length - 1; index >= 0; index--) {
+      const server = mcpServers[index];
+      for (const name of server.toolNames) {
+        tools.unregister(name);
+        loop?.prefix?.removeTool(name);
+      }
+      try { await server.host?.client?.close?.(); } catch (error) {
+        console.error(`[launcher] MCP "${server.label}" close during workspace switch failed: ${error.message}`);
+      }
+      mcpServers.splice(index, 1);
+    }
+  },
+  removeWorkspaceTools: async () => {
+    for (const name of wsToolNames) {
+      tools.unregister(name);
+      loop?.prefix?.removeTool(name);
+    }
+    wsToolNames = [];
+    hasSemanticSearch = false;
+  },
+  registerWorkspaceTools: async (rootDir) => {
+    const result = await registerWorkspaceTools(tools, rootDir, {
+      jobs,
+      getOperationId: () => operationRuntime.getActive()?.id ?? null,
+      preparedDocumentRegistry,
+      getLastAssistantResponse: () => latestAssistantResponse(messages),
+    });
+    wsToolNames = result.toolNames;
+    hasSemanticSearch = result.hasSemantic;
+    return result;
+  },
+  rebuildLoop: async (rootDir) => {
+    if (loop && client) {
+      rebuildLoopPreservingContext(client, rootDir);
+      console.error(`[launcher] loop rebuilt for new workspace: ${rootDir}`);
+    }
+  },
+  deploySkillGuide: async (rootDir) => { await deploySkillGuide(rootDir); },
+  reloadMcp: async () => { await reloadMcp(); },
+  onLog: (message) => console.error(message),
+});
 
 // ── Soul (identity) ────────────────────────────────────────────
 function loadSoul() {
@@ -7683,51 +7719,7 @@ const ctx = {
       }
     }
 
-    const configuredDir = resolve(home, cfg.workspaceDir ?? "visionox-workspace");
-    if (sameWorkspacePath(configuredDir, workspaceDir)) return;
-    if (!applyPending) return { pending: true, current: workspaceDir, configured: configuredDir };
-
-    console.error(`[launcher] workspace switch: ${workspaceDir} → ${configuredDir}`);
-
-    // P2-1: unregister MCP tools from old workspace
-    for (const srv of mcpServers) {
-      for (const name of srv.toolNames) {
-        tools.unregister(name);
-        loop?.prefix?.removeTool(name);
-      }
-    }
-
-    // Unregister old workspace tools
-    for (const name of wsToolNames) {
-      tools.unregister(name);
-      loop?.prefix?.removeTool(name);
-    }
-
-    // Re-register with new root
-    if (!existsSync(configuredDir)) mkdirSync(configuredDir, { recursive: true });
-    const result = await registerWorkspaceTools(tools, configuredDir, {
-      jobs,
-      getOperationId: () => operationRuntime.getActive()?.id ?? null,
-      preparedDocumentRegistry,
-      getLastAssistantResponse: () => latestAssistantResponse(messages),
-    });
-    hasSemanticSearch = result.hasSemantic;
-    wsToolNames = result.toolNames;
-    workspaceDir = configuredDir;
-
-    // Rebuild loop with new system prompt & prefix
-    if (loop && client) {
-      rebuildLoopPreservingContext(client, workspaceDir);
-      console.error(`[launcher] loop rebuilt for new workspace: ${workspaceDir}`);
-    }
-
-    // Deploy skill-creation-guide to new workspace
-    await deploySkillGuide(workspaceDir);
-
-    // P2-1: re-register MCP tools for new workspace
-    await reloadMcp();
-
-    console.error(`[launcher] workspace synced: ${workspaceDir}`);
+    return workspaceRuntime.apply({ applyPending });
   },
 
   // ── Chat bridge ────────────────────────────────────────────

@@ -33,6 +33,10 @@ const required = [
     markers: ["createKnowledgeRuntime", "boundWorkspace", "clearRetrievalCache", "readManifest", "writeManifest", "updateSemanticIndex", "setIndexDirty"],
   },
   {
+    file: "src-tauri/resources/server/lib/workspace-runtime.mjs",
+    markers: ["createWorkspaceRuntime", "getState", "select", "removeHistory", "clearPreparedDocuments", "removeMcpServers", "removeWorkspaceTools", "registerWorkspaceTools", "rebuildLoop", "reloadMcp"],
+  },
+  {
     file: "scripts/prepare-runtime-package.js",
     markers: [
       "function pruneRuntimeFiles(path)",
