@@ -29,6 +29,18 @@ const required = [
     markers: ["createProviderProvenanceStore", "providerDiagnostics", "normalizeProviderType", "manual-unknown", "changedOutsideManagedFlow"],
   },
   {
+    file: "src-tauri/resources/server/lib/attachment-runtime.mjs",
+    markers: ["metadataDir", "getContentDescriptor", "readRange", "sweepOrphans", "DEFAULT_ORPHAN_GRACE_MS"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/attachment-http.mjs",
+    markers: ["parseSingleByteRange", "createAttachmentContentResponse", "media_blob_missing", "bytes */${descriptor.size}"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/attachment-reference-scan.mjs",
+    markers: ["collectAttachmentReferences", "scanJsonLines", "scanPromptQueue", 'key === "attachments"'],
+  },
+  {
     file: "src-tauri/resources/server/lib/semantic-config-defaults.mjs",
     markers: ["DEFAULT_SEMANTIC_EMBEDDING_URL", "DEFAULT_SEMANTIC_EMBEDDING_MODEL", "applySemanticEmbeddingDefaults"],
   },
@@ -131,6 +143,7 @@ const required = [
       "contextCapacitySource",
       "createOperationRuntime",
       "operationRuntime.stop",
+      "runAttachmentMaintenance",
       "preparedDocumentRegistry",
       "append_file",
       "save_last_assistant_response",
@@ -323,6 +336,8 @@ const required = [
       'case "workspaces"',
       "function handlePromptQueue",
       "function handleAttachments",
+      "attachmentContentMatch",
+      "ctx.getAttachmentContent",
       "normalizeApiError",
       'req.headers["last-event-id"]',
       "event?.eventId",

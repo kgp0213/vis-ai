@@ -78,6 +78,8 @@ const { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, P
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
 const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
 const { createAttachmentRuntime } = await importEarly("./lib/attachment-runtime.mjs");
+const { createAttachmentContentResponse } = await importEarly("./lib/attachment-http.mjs");
+const { collectAttachmentReferences } = await importEarly("./lib/attachment-reference-scan.mjs");
 const { createMediaRuntime } = await importEarly("./lib/media-runtime.mjs");
 const { createMediaProviderAdapter } = await importEarly("./lib/media-provider-adapter.mjs");
 const { createOfficialKimiVideoUploader } = await importEarly("./lib/kimi-video-uploader.mjs");
@@ -472,7 +474,34 @@ async function handleAttachmentUpload(action, input = {}) {
   if (action === "release") {
     return { released: await attachmentRuntime.releaseAttachments(input.attachmentIds, { sessionId: activeConversationId, workspace: workspaceDir }) };
   }
+  if (action === "maintenance") return runAttachmentMaintenance();
   throw new Error("unknown attachment upload action");
+}
+
+async function getAttachmentContent(id, options = {}) {
+  return createAttachmentContentResponse(attachmentRuntime, {
+    ...options,
+    id,
+    context: { sessionId: activeConversationId, workspace: workspaceDir },
+  });
+}
+
+async function runAttachmentMaintenance() {
+  const references = await collectAttachmentReferences({ activeSessionFile, sessionsDir, promptQueueFile });
+  for (const warning of references.warnings) console.error(`[launcher] attachment maintenance warning: ${warning}`);
+  if (!references.complete) {
+    return {
+      removedRecords: 0,
+      removedBlobs: 0,
+      retainedRecords: (await attachmentRuntime.list()).length,
+      skipped: true,
+      referencedAttachments: references.ids.length,
+      scannedFiles: references.scannedFiles,
+      warnings: references.warnings,
+    };
+  }
+  const swept = await attachmentRuntime.sweepOrphans({ referencedAttachmentIds: references.ids });
+  return { ...swept, referencedAttachments: references.ids.length, scannedFiles: references.scannedFiles, warnings: references.warnings };
 }
 
 async function decodeImageForMedia(bytes) {
@@ -6817,6 +6846,14 @@ const sessionRuntime = createSessionRuntime({
   migrateLegacyAttachments: async (entries, context) => attachmentRuntime.migrateLegacySessionEntries(entries, context),
 });
 
+void runAttachmentMaintenance().then((result) => {
+  if (result.removedRecords > 0 || result.removedBlobs > 0) {
+    console.error(`[launcher] attachment maintenance removed ${result.removedRecords} record(s) and ${result.removedBlobs} blob(s)`);
+  }
+}).catch((error) => {
+  console.error(`[launcher] attachment maintenance skipped: ${error.message}`);
+});
+
 const appendActiveMessage = (message) => sessionRuntime.appendMessage(message);
 const closeActiveSessionStream = () => sessionRuntime.close();
 const writeActiveSessionEntries = (entries) => sessionRuntime.writeEntries(entries);
@@ -7819,6 +7856,7 @@ const ctx = {
   upsertPromptQueueItem,
   removePromptQueueItem,
   handleAttachmentUpload,
+  getAttachmentContent,
   listSchedules: () => {
     if (scheduleStoreError) throw new Error(scheduleStoreError);
     return schedules.map(publicSchedule);

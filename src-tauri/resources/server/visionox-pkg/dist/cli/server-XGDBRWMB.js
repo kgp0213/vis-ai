@@ -6423,6 +6423,52 @@ async function dispatch(req, res, ctx, expectedToken) {
     res.end(avatar.body);
     return;
   }
+  const attachmentContentMatch = /^\/api\/attachments\/([^/]+)\/content$/.exec(path);
+  if (attachmentContentMatch) {
+    const fail = checkAuth(req, expectedToken, false);
+    if (fail) {
+      res.writeHead(fail.status, { "content-type": "application/json" });
+      res.end(fail.body);
+      return;
+    }
+    if (method !== "GET" && method !== "HEAD") {
+      res.writeHead(405, { "content-type": "application/json", allow: "GET, HEAD" });
+      res.end(JSON.stringify({ error: "GET or HEAD required" }));
+      return;
+    }
+    if (typeof ctx.getAttachmentContent !== "function") {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "attachment content is unavailable" }));
+      return;
+    }
+    let attachmentId;
+    try {
+      attachmentId = decodeURIComponent(attachmentContentMatch[1]);
+    } catch {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "invalid attachment id" }));
+      return;
+    }
+    const controller = new AbortController();
+    const abortRead = () => controller.abort();
+    req.once?.("aborted", abortRead);
+    try {
+      const result = await ctx.getAttachmentContent(attachmentId, {
+        method,
+        range: typeof req.headers.range === "string" ? req.headers.range : null,
+        ifNoneMatch: typeof req.headers["if-none-match"] === "string" ? req.headers["if-none-match"] : null,
+        signal: controller.signal
+      });
+      res.writeHead(result.status, result.headers);
+      res.end(method === "HEAD" || result.body == null ? void 0 : result.body);
+    } catch (error) {
+      if (error?.name === "AbortError" || controller.signal.aborted) return;
+      throw error;
+    } finally {
+      req.off?.("aborted", abortRead);
+    }
+    return;
+  }
   if (path.startsWith("/api/")) {
     const fail = checkAuth(req, expectedToken, isMutation);
     if (fail) {

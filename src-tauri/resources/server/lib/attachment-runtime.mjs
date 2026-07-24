@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open as openFile, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const INDEX_VERSION = 1;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const DEFAULT_UPLOAD_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 const DATA_URL_RE = /^data:([^;,\s]+)(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$/i;
 const IMAGE_MIME_RE = /^image\/[A-Za-z0-9.+-]+$/i;
 
@@ -93,7 +94,7 @@ function recordForStorage(record) {
 function normalizeRecord(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const id = safeString(value.id);
-  const hash = safeString(value.sha256);
+  const hash = safeString(value.sha256).toLowerCase();
   const mimeType = normalizeMime(value.mimeType);
   const source = value.source && typeof value.source === "object" ? value.source : null;
   if (!/^att_[0-9a-f-]{20,}$/i.test(id) || !/^[a-f0-9]{64}$/i.test(hash)) return null;
@@ -135,6 +136,7 @@ export function createAttachmentRuntime({
 
   const root = resolve(rootDir);
   const blobDir = resolve(root, "blobs");
+  const metadataDir = resolve(root, "metadata");
   const uploadDir = resolve(root, "uploads");
   const indexPath = resolve(root, "index.json");
   const records = new Map();
@@ -147,27 +149,54 @@ export function createAttachmentRuntime({
   let loading = null;
   let persistTail = Promise.resolve();
 
+  function registerRecord(record) {
+    records.set(record.id, record);
+    const ids = byHash.get(record.sha256) ?? new Set();
+    ids.add(record.id);
+    byHash.set(record.sha256, ids);
+  }
+
+  function metadataPath(id) {
+    if (!/^att_[0-9a-f-]{20,}$/i.test(id)) throw new Error("invalid attachment id");
+    return resolve(metadataDir, `${id}.json`);
+  }
+
+  function indexSnapshot(snapshotRecords = [...records.values()]) {
+    return `${JSON.stringify({ version: INDEX_VERSION, attachments: snapshotRecords.map(recordForStorage) }, null, 2)}\n`;
+  }
+
   async function ensureLoaded() {
     if (loaded) return;
     if (loading) return loading;
     loading = (async () => {
       await mkdir(blobDir, { recursive: true });
+      await mkdir(metadataDir, { recursive: true });
       await rm(uploadDir, { recursive: true, force: true });
       await mkdir(uploadDir, { recursive: true });
+      let validIndex = false;
       try {
         const parsed = JSON.parse(await readFile(indexPath, "utf8"));
         if (parsed?.version === INDEX_VERSION && Array.isArray(parsed.attachments)) {
-          for (const item of parsed.attachments) {
-            const record = normalizeRecord(item);
-            if (!record) continue;
-            records.set(record.id, record);
-            const ids = byHash.get(record.sha256) ?? new Set();
-            ids.add(record.id);
-            byHash.set(record.sha256, ids);
+          const normalized = parsed.attachments.map(normalizeRecord);
+          if (normalized.every(Boolean)) {
+            validIndex = true;
+            for (const record of normalized) registerRecord(record);
           }
         }
       } catch {
         // A missing or corrupt index is recoverable; blobs are content-addressed.
+      }
+      if (!validIndex) {
+        const entries = await readdir(metadataDir, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+          if (!entry.isFile() || !/^att_[0-9a-f-]{20,}\.json$/i.test(entry.name)) continue;
+          try {
+            const parsed = JSON.parse(await readFile(resolve(metadataDir, entry.name), "utf8"));
+            const record = normalizeRecord(parsed?.attachment ?? parsed);
+            if (record) registerRecord(record);
+          } catch {}
+        }
+        if (records.size > 0) await atomicWriteFile(indexPath, indexSnapshot(), "utf8");
       }
       loaded = true;
     })().finally(() => { loading = null; });
@@ -175,8 +204,23 @@ export function createAttachmentRuntime({
   }
 
   function persist() {
-    const snapshot = `${JSON.stringify({ version: INDEX_VERSION, attachments: [...records.values()].map(recordForStorage) }, null, 2)}\n`;
-    const write = persistTail.then(() => atomicWriteFile(indexPath, snapshot, "utf8"));
+    const snapshotRecords = [...records.values()].map(recordForStorage);
+    const snapshotIds = new Set(snapshotRecords.map((record) => record.id));
+    const snapshot = indexSnapshot(snapshotRecords);
+    const write = persistTail.then(async () => {
+      await mkdir(metadataDir, { recursive: true });
+      for (const record of snapshotRecords) {
+        await atomicWriteFile(metadataPath(record.id), `${JSON.stringify({ version: 1, attachment: record }, null, 2)}\n`, "utf8");
+      }
+      await atomicWriteFile(indexPath, snapshot, "utf8");
+      const entries = await readdir(metadataDir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const match = /^(att_[0-9a-f-]{20,})\.json$/i.exec(entry.name);
+        if (entry.isFile() && match && !snapshotIds.has(match[1])) {
+          await rm(resolve(metadataDir, entry.name), { force: true }).catch(() => {});
+        }
+      }
+    });
     persistTail = write.catch(() => {});
     return write;
   }
@@ -304,6 +348,105 @@ export function createAttachmentRuntime({
     } catch {
       return null;
     }
+  }
+
+  async function getContentDescriptor(id, context = {}) {
+    await ensureLoaded();
+    const record = records.get(safeString(id));
+    if (!record) return null;
+    const normalizedContext = normalizeContext(context);
+    if (normalizedContext.sessionId) {
+      const allowed = record.sessionId === normalizedContext.sessionId
+        || record.refs.some((ref) => ref.sessionId === normalizedContext.sessionId);
+      if (!allowed) return null;
+    }
+    if (normalizedContext.workspace && record.workspace) {
+      const left = resolve(normalizedContext.workspace);
+      const right = resolve(record.workspace);
+      if ((process.platform === "win32" ? left.toLowerCase() !== right.toLowerCase() : left !== right)) return null;
+    }
+    const path = blobPath(record.sha256);
+    try {
+      const info = await stat(path);
+      if (!info.isFile() || info.size !== record.size) return null;
+    } catch {
+      return null;
+    }
+    return {
+      id: record.id,
+      path,
+      size: record.size,
+      mimeType: record.mimeType,
+      etag: `"${record.sha256}"`,
+      name: record.name,
+    };
+  }
+
+  async function readRange(id, start, end, context = {}, signal = null) {
+    if (signal?.aborted) throw new DOMException("attachment read aborted", "AbortError");
+    const descriptor = await getContentDescriptor(id, context);
+    if (!descriptor) return null;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= descriptor.size) {
+      throw new RangeError("invalid attachment byte range");
+    }
+    const length = end - start + 1;
+    const bytes = Buffer.allocUnsafe(length);
+    const file = await openFile(descriptor.path, "r");
+    try {
+      let offset = 0;
+      while (offset < length) {
+        if (signal?.aborted) throw new DOMException("attachment read aborted", "AbortError");
+        const result = await file.read(bytes, offset, length - offset, start + offset);
+        if (result.bytesRead === 0) throw new Error("attachment ended before the requested range");
+        offset += result.bytesRead;
+      }
+      if (signal?.aborted) throw new DOMException("attachment read aborted", "AbortError");
+      return bytes;
+    } finally {
+      await file.close();
+    }
+  }
+
+  async function sweepOrphans({
+    referencedAttachmentIds = [],
+    graceMs = DEFAULT_ORPHAN_GRACE_MS,
+  } = {}) {
+    await ensureLoaded();
+    const referenced = new Set((Array.isArray(referencedAttachmentIds) ? referencedAttachmentIds : [])
+      .map(safeString)
+      .filter((id) => /^att_[0-9a-f-]{20,}$/i.test(id)));
+    const grace = Number.isFinite(graceMs) && graceMs >= 0 ? Math.floor(graceMs) : DEFAULT_ORPHAN_GRACE_MS;
+    const cutoff = now().getTime() - grace;
+    let removedRecords = 0;
+    let removedBlobs = 0;
+    const orphanedHashes = new Set();
+    for (const [id, record] of records) {
+      const createdAt = Date.parse(record.createdAt);
+      if (referenced.has(id) || !Number.isFinite(createdAt) || createdAt > cutoff) continue;
+      records.delete(id);
+      const ids = byHash.get(record.sha256);
+      ids?.delete(id);
+      if (!ids || ids.size === 0) {
+        byHash.delete(record.sha256);
+        orphanedHashes.add(record.sha256.toLowerCase());
+      }
+      removedRecords++;
+    }
+    if (removedRecords > 0) await persist();
+    for (const hash of orphanedHashes) {
+      await rm(blobPath(hash), { force: true }).catch(() => {});
+      removedBlobs++;
+    }
+    const blobEntries = await readdir(blobDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of blobEntries) {
+      if (!entry.isFile() || !/^[a-f0-9]{64}$/i.test(entry.name) || byHash.has(entry.name.toLowerCase())) continue;
+      const path = resolve(blobDir, entry.name);
+      const info = await stat(path).catch(() => null);
+      if (!info || info.mtimeMs > cutoff) continue;
+      await rm(path, { force: true }).catch(() => {});
+      removedBlobs++;
+    }
+    return { removedRecords, removedBlobs, retainedRecords: records.size };
   }
 
   async function materialize(attachments) {
@@ -547,6 +690,8 @@ export function createAttachmentRuntime({
     get,
     readDataUrl,
     readBytes,
+    getContentDescriptor,
+    readRange,
     materialize,
     migrateLegacySessionEntries,
     beginUpload,
@@ -556,8 +701,9 @@ export function createAttachmentRuntime({
     releasePendingUploads,
     releaseAttachments,
     releaseSession,
+    sweepOrphans,
     list: async () => { await ensureLoaded(); return [...records.values()].map(recordForPublic); },
   };
 }
 
-export { MAX_ATTACHMENT_BYTES };
+export { DEFAULT_ORPHAN_GRACE_MS, MAX_ATTACHMENT_BYTES };
