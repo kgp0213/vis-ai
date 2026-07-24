@@ -132,7 +132,7 @@ const required = [
       "MAX_ARTIFACT_AUTO_CONTINUATIONS",
       "jobs.stopOwned",
       "scheduleRunRegistry",
-      "createScheduleTriggerQueue",
+      "createScheduleRuntime",
       "queueScheduleTrigger",
       "writeManagedScheduledReport",
       "reportExportPath",

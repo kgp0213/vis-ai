@@ -911,7 +911,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /task\.enabled && task\.missedRunAt/);
     assert.match(launcher, /triggerSchedule\(task\.id, \{ manual: false, catchUp: true \}\)/);
     assert.match(launcher, /decideRejectedScheduleSubmission/);
-    assert.match(launcher, /createScheduleTriggerQueue/);
+    assert.match(launcher, /createScheduleRuntime/);
     assert.match(launcher, /queueScheduleTrigger/);
     assert.match(launcher, /requestScheduleQueueDrain/);
     assert.match(launcher, /SCHEDULE_QUEUE_RECHECK_MS/);

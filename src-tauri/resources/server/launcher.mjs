@@ -95,7 +95,8 @@ const { DEFAULT_SEMANTIC_EMBEDDING_MODEL, DEFAULT_SEMANTIC_EMBEDDING_URL, applyS
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
 const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, normalizeWorkspacePath, removeRecentWorkspace, sameWorkspacePath } = await importEarly("./lib/workspace-history.mjs");
-const { canAcceptScheduleCompletion, classifyScheduledSkillCompletion, classifyScheduleRunError, createScheduleRunRegistry, createScheduleTriggerQueue, DEFAULT_SCHEDULE_RUN_TIMEOUT_MS, decideRejectedScheduleSubmission, decideScheduleAdmission, guardSessionCleanupDeletion, markScheduleCancellationRequested, normalizeScheduleRunTimeoutMs, orderMissedSchedules, repairInterruptedSchedule, resolvePreviousSuccessfulSkillRunAt, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } = await importEarly("./lib/schedule-execution.mjs");
+const { canAcceptScheduleCompletion, classifyScheduledSkillCompletion, classifyScheduleRunError, DEFAULT_SCHEDULE_RUN_TIMEOUT_MS, decideRejectedScheduleSubmission, decideScheduleAdmission, guardSessionCleanupDeletion, markScheduleCancellationRequested, normalizeScheduleRunTimeoutMs, orderMissedSchedules, repairInterruptedSchedule, resolvePreviousSuccessfulSkillRunAt, resolveScheduleRunWorkspace, resolveStoredScheduleWorkspace } = await importEarly("./lib/schedule-execution.mjs");
+const { createScheduleRuntime } = await importEarly("./lib/schedule-runtime.mjs");
 const { createScheduleReportStore } = await importEarly("./lib/schedule-report-store.mjs");
 const { buildScheduledKnowledgeReviewPrompt, createScheduledKnowledgeStore, normalizeScheduledKnowledgeReview } = await importEarly("./lib/scheduled-knowledge-store.mjs");
 const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mjs");
@@ -4380,8 +4381,9 @@ function scheduleRunTimeoutReason(timeoutMs) {
   return `定时任务超过最长运行时间（${label}），已自动停止；如需调整，请修改 schedulePolicy.runTimeoutMs`;
 }
 
-const scheduleRunRegistry = createScheduleRunRegistry({
-  defaultTimeoutMs: configuredScheduleRunTimeoutMs(),
+const scheduleRuntime = createScheduleRuntime({
+  maxConcurrent: MAX_CONCURRENT_SCHEDULE_RUNS,
+  getTimeoutMs: configuredScheduleRunTimeoutMs,
   onTimeout: ({ taskId, runId, timeoutMs, error }) => {
     const reason = scheduleRunTimeoutReason(timeoutMs);
     console.error(`[launcher] scheduled run watchdog timeout: task=${taskId}, run=${runId}, timeoutMs=${timeoutMs}: ${error?.message || reason}`);
@@ -4393,7 +4395,7 @@ const scheduleRunRegistry = createScheduleRunRegistry({
     });
   },
 });
-const scheduleTriggerQueue = createScheduleTriggerQueue();
+const { registry: scheduleRunRegistry, queue: scheduleTriggerQueue } = scheduleRuntime;
 let scheduleQueueDrainTimer = null;
 let scheduleQueueDraining = false;
 
