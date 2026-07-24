@@ -520,10 +520,16 @@ async function api(path, opts = {}) {
     parsed = { error: text };
   }
   if (!res.ok) {
-    const errMsg = parsed?.error ?? `${res.status} ${res.statusText}`;
+    const errorBody = parsed;
+    const errMsg = errorBody?.message ?? errorBody?.error ?? `${res.status} ${res.statusText}`;
     const err = new Error(errMsg);
     err.status = res.status;
     err.body = parsed;
+    err.code = errorBody?.code;
+    err.title = errorBody?.title;
+    err.retryable = errorBody?.retryable;
+    err.action = errorBody?.action;
+    err.details = errorBody?.details;
     throw err;
   }
   return parsed;
@@ -6752,6 +6758,15 @@ var sseListeners = /* @__PURE__ */ new Map();
 var sseStatusListeners = [];
 var sseChannelsKey = "";
 var sseOpened = false;
+var sseLastCursor = "";
+var sseLastDeliveredCursor = "";
+function cursorIsNewer(next, previous) {
+  if (!next || !previous) return true;
+  const nextMatch = /^([^:]+):(\d+)$/u.exec(next);
+  const previousMatch = /^([^:]+):(\d+)$/u.exec(previous);
+  if (!nextMatch || !previousMatch || nextMatch[1] !== previousMatch[1]) return true;
+  return Number(nextMatch[2]) > Number(previousMatch[2]);
+}
 function activeSseChannels() {
   const channels = /* @__PURE__ */ new Set();
   for (const [kind, listeners2] of sseListeners) {
@@ -6772,6 +6787,7 @@ function rebuildSharedSse() {
   const url = new URL("/api/events", window.location.origin);
   url.searchParams.set("token", TOKEN);
   url.searchParams.set("channels", key);
+  if (sseLastCursor) url.searchParams.set("cursor", sseLastCursor);
   const source = new EventSource(url.toString());
   sseSource = source;
   source.onopen = () => {
@@ -6785,6 +6801,12 @@ function rebuildSharedSse() {
   source.onmessage = (event) => {
     try {
       const value = JSON.parse(event.data);
+      const nextCursor = event.lastEventId || (typeof value.eventId === "string" ? value.eventId : "");
+      if (nextCursor && !cursorIsNewer(nextCursor, sseLastDeliveredCursor)) return;
+      if (nextCursor) {
+        sseLastCursor = nextCursor;
+        sseLastDeliveredCursor = nextCursor;
+      }
       const handlers = [...sseListeners.get(value.kind ?? "") ?? [], ...sseListeners.get("*") ?? []];
       for (const handler of handlers) handler(value);
     } catch {
@@ -8406,6 +8428,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   }, []);
   const streamBufRef = A2(null);
   const streamRafRef = A2(null);
+  const resyncingEventsRef = A2(false);
+  const bufferedDashboardEventsRef = A2([]);
   const flushStreaming = q2(() => {
     streamRafRef.current = null;
     if (streamBufRef.current) setStreaming(streamBufRef.current);
@@ -8441,7 +8465,8 @@ function ChatPanel({ userAvatar = null } = {}) {
     }
   }, [cancelStreamingRaf]);
   y2(() => {
-    const onDash = (dash) => {
+    let disposed = false;
+    const applyDashboardEvent = (dash) => {
       if (dash.kind === "ping") return;
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
@@ -8638,12 +8663,35 @@ function ChatPanel({ userAvatar = null } = {}) {
         return;
       }
     };
+    const resyncDashboardEvents = async () => {
+      if (resyncingEventsRef.current) return;
+      resyncingEventsRef.current = true;
+      try {
+        await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+      } finally {
+        if (!disposed) {
+          const buffered = bufferedDashboardEventsRef.current.splice(0).sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
+          resyncingEventsRef.current = false;
+          for (const event of buffered) applyDashboardEvent(event);
+        }
+      }
+    };
+    const onDash = (dash) => {
+      if (dash.kind === "resync-required") {
+        void resyncDashboardEvents();
+        return;
+      }
+      if (resyncingEventsRef.current) {
+        bufferedDashboardEventsRef.current.push(dash);
+        return;
+      }
+      applyDashboardEvent(dash);
+    };
     const unsubscribe = subscribeSse("*", onDash);
     const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
       setEventStreamConnected(connected);
       if (connected && reconnected) {
-        void refetchCanonicalState();
-        void refreshBackgroundJobs();
+        void resyncDashboardEvents();
       }
       if (!connected) {
         setError(t4("chat.eventStreamError"));
@@ -8651,6 +8699,7 @@ function ChatPanel({ userAvatar = null } = {}) {
       }
     });
     return () => {
+      disposed = true;
       unsubscribe();
       unsubscribeStatus();
       cancelStreamingRaf();

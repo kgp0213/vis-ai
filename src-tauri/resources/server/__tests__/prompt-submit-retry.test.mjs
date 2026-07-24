@@ -79,7 +79,15 @@ test("submit preserves uncertain and busy retry metadata and rejects reserved id
     }),
   });
   assert.equal(uncertain.status, 409);
-  assert.deepEqual(uncertain.json, {
+  assert.deepEqual({
+    accepted: uncertain.json.accepted,
+    duplicate: uncertain.json.duplicate,
+    completed: uncertain.json.completed,
+    requiresUserRetry: uncertain.json.requiresUserRetry,
+    code: uncertain.json.code,
+    requestId: uncertain.json.requestId,
+    reason: uncertain.json.reason,
+  }, {
     accepted: false,
     duplicate: true,
     completed: false,
@@ -88,6 +96,8 @@ test("submit preserves uncertain and busy retry metadata and rejects reserved id
     requestId: "queued-1",
     reason: "上一次执行结果无法确认。",
   });
+  assert.equal(uncertain.json.message, "HTTP 409");
+  assert.equal(uncertain.json.retryable, true);
 
   const busy = await api({ prompt: "later", requestId: "queued-2" }, {
     submitPrompt: async () => ({ accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy with a turn" }),

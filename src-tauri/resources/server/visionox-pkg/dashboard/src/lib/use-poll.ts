@@ -81,6 +81,16 @@ const sseListeners = new Map<string, SseHandler[]>();
 const sseStatusListeners: SseStatusHandler[] = [];
 let sseChannelsKey = "";
 let sseOpened = false;
+let sseLastCursor = "";
+let sseLastDeliveredCursor = "";
+
+function cursorIsNewer(next: string, previous: string): boolean {
+  if (!next || !previous) return true;
+  const nextMatch = /^([^:]+):(\d+)$/u.exec(next);
+  const previousMatch = /^([^:]+):(\d+)$/u.exec(previous);
+  if (!nextMatch || !previousMatch || nextMatch[1] !== previousMatch[1]) return true;
+  return Number(nextMatch[2]) > Number(previousMatch[2]);
+}
 
 function activeSseChannels(): string[] {
   const channels = new Set<string>();
@@ -103,6 +113,7 @@ function rebuildSharedSse(): void {
   const url = new URL("/api/events", window.location.origin);
   url.searchParams.set("token", TOKEN);
   url.searchParams.set("channels", key);
+  if (sseLastCursor) url.searchParams.set("cursor", sseLastCursor);
   const source = new EventSource(url.toString());
   sseSource = source;
   source.onopen = () => {
@@ -116,6 +127,12 @@ function rebuildSharedSse(): void {
   source.onmessage = (event) => {
     try {
       const value = JSON.parse(event.data) as SseEvent;
+      const nextCursor = event.lastEventId || (typeof value.eventId === "string" ? value.eventId : "");
+      if (nextCursor && !cursorIsNewer(nextCursor, sseLastDeliveredCursor)) return;
+      if (nextCursor) {
+        sseLastCursor = nextCursor;
+        sseLastDeliveredCursor = nextCursor;
+      }
       const handlers = [...(sseListeners.get(value.kind ?? "") ?? []), ...(sseListeners.get("*") ?? [])];
       for (const handler of handlers) handler(value);
     } catch {

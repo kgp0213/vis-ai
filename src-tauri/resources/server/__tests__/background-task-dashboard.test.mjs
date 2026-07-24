@@ -46,7 +46,8 @@ test("后台工作台兼容通用任务投影并在恢复可见性时重新同�
   assert.match(chatPanel, /expectedRevision: current\?\.revision/);
   assert.match(chatPanel, /requestId: backgroundActionRequestId\(\)/);
   assert.match(chatPanel, /dash\.kind === "background-job-change"[\s\S]*?refreshBackgroundJobs\(\)/);
-  assert.match(chatPanel, /connected && reconnected[\s\S]*?refreshBackgroundJobs\(\)/);
+  assert.match(chatPanel, /connected && reconnected[\s\S]*?resyncDashboardEvents\(\)/);
+  assert.match(chatPanel, /Promise\.all\(\[refetchCanonicalState\(\), refreshBackgroundJobs\(\)\]\)/);
   assert.match(chatPanel, /window\.addEventListener\("focus", refreshOnFocus\)/);
   assert.match(chatPanel, /document\.addEventListener\("visibilitychange", refreshOnVisibility\)/);
 });

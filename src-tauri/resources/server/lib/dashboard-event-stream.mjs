@@ -1,0 +1,105 @@
+import { randomUUID } from "node:crypto";
+
+const DEFAULT_CAPACITY = 2048;
+const TRANSIENT_KINDS = new Set([
+  "assistant_delta",
+  "reasoning_delta",
+  "status",
+  "ping",
+  "overview",
+  "health",
+  "logs",
+]);
+
+function parseCursor(value) {
+  const match = /^([^:]+):(\d+)$/u.exec(String(value ?? "").trim());
+  if (!match) return null;
+  const seq = Number(match[2]);
+  return Number.isSafeInteger(seq) && seq >= 0 ? { epoch: match[1], seq } : null;
+}
+
+function cursor(epoch, seq) {
+  return `${epoch}:${seq}`;
+}
+
+function isReplayable(event) {
+  return event?.replayable === true || !TRANSIENT_KINDS.has(String(event?.kind ?? ""));
+}
+
+/** Process-local ordered Dashboard event stream with bounded replay. */
+export function createDashboardEventStream({ epoch = randomUUID(), capacity = DEFAULT_CAPACITY, now = () => new Date() } = {}) {
+  if (!String(epoch).trim() || String(epoch).includes(":")) throw new TypeError("dashboard event epoch must be non-empty and cannot contain ':'");
+  if (!Number.isSafeInteger(capacity) || capacity < 1) throw new TypeError("dashboard event capacity must be a positive integer");
+  const normalizedEpoch = String(epoch);
+  const ring = [];
+  const subscribers = new Set();
+  let nextSeq = 1;
+
+  function publish(event) {
+    if (!event || typeof event !== "object") return event;
+    let delivered = event;
+    if (isReplayable(event)) {
+      const seq = nextSeq++;
+      delivered = {
+        ...event,
+        eventEpoch: normalizedEpoch,
+        eventSeq: seq,
+        eventId: cursor(normalizedEpoch, seq),
+        emittedAt: now().toISOString(),
+      };
+      ring.push(delivered);
+      if (ring.length > capacity) ring.shift();
+    }
+    for (const handler of subscribers) {
+      try { handler(delivered); } catch { /* A Dashboard subscriber cannot stop the runtime. */ }
+    }
+    return delivered;
+  }
+
+  function replay(value) {
+    const parsed = parseCursor(value);
+    const latestSeq = nextSeq - 1;
+    const latestCursor = cursor(normalizedEpoch, latestSeq);
+    const oldestSeq = ring[0]?.eventSeq ?? nextSeq;
+    if (!parsed) {
+      return { ok: false, reason: "invalid-cursor", epoch: normalizedEpoch, oldestCursor: cursor(normalizedEpoch, oldestSeq), latestCursor };
+    }
+    if (parsed.epoch !== normalizedEpoch) {
+      return { ok: false, reason: "epoch-changed", epoch: normalizedEpoch, oldestCursor: cursor(normalizedEpoch, oldestSeq), latestCursor };
+    }
+    if (parsed.seq < oldestSeq - 1) {
+      return { ok: false, reason: "cursor-too-old", epoch: normalizedEpoch, oldestCursor: cursor(normalizedEpoch, oldestSeq), latestCursor };
+    }
+    return {
+      ok: true,
+      epoch: normalizedEpoch,
+      events: ring.filter((event) => event.eventSeq > parsed.seq),
+      latestCursor,
+    };
+  }
+
+  function subscribe(handler, { cursor: requestedCursor = null } = {}) {
+    if (typeof handler !== "function") throw new TypeError("dashboard event subscriber must be a function");
+    subscribers.add(handler);
+    if (requestedCursor) {
+      const snapshot = replay(requestedCursor);
+      if (snapshot.ok) {
+        for (const event of snapshot.events) handler(event);
+      } else {
+        handler({ kind: "resync-required", ...snapshot });
+      }
+    }
+    return () => subscribers.delete(handler);
+  }
+
+  return {
+    epoch: normalizedEpoch,
+    publish,
+    replay,
+    subscribe,
+    latestCursor: () => cursor(normalizedEpoch, nextSeq - 1),
+    size: () => ring.length,
+  };
+}
+
+export { DEFAULT_CAPACITY as DASHBOARD_EVENT_CAPACITY, TRANSIENT_KINDS as TRANSIENT_DASHBOARD_EVENT_KINDS };

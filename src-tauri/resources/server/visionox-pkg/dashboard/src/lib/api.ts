@@ -18,6 +18,11 @@ export interface ApiOptions {
 export interface ApiError extends Error {
   status: number;
   body: unknown;
+  code?: string;
+  title?: string;
+  retryable?: boolean;
+  action?: string;
+  details?: Record<string, unknown>;
 }
 
 export async function api<T = any>(path: string, opts: ApiOptions = {}): Promise<T> {
@@ -61,11 +66,16 @@ export async function api<T = any>(path: string, opts: ApiOptions = {}): Promise
     parsed = { error: text };
   }
   if (!res.ok) {
-    const errMsg =
-      (parsed as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`;
+    const errorBody = parsed as { error?: string; message?: string; code?: string; title?: string; retryable?: boolean; action?: string; details?: Record<string, unknown> } | null;
+    const errMsg = errorBody?.message ?? errorBody?.error ?? `${res.status} ${res.statusText}`;
     const err = new Error(errMsg) as ApiError;
     err.status = res.status;
     err.body = parsed;
+    err.code = errorBody?.code;
+    err.title = errorBody?.title;
+    err.retryable = errorBody?.retryable;
+    err.action = errorBody?.action;
+    err.details = errorBody?.details;
     throw err;
   }
   return parsed as T;

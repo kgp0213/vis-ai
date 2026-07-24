@@ -54,6 +54,10 @@ import {
   assertModelProbeMarker
 } from "../../../lib/model-task-request.mjs";
 import {
+  normalizeApiError,
+  structuredError
+} from "../../../lib/error-contract.mjs";
+import {
   previewProviderImport
 } from "../../../lib/provider-configuration.mjs";
 import {
@@ -157,7 +161,8 @@ function handleEvents(req, res, ctx, query = new URLSearchParams()) {
   const writeEvent = (event) => {
     if (res.writableEnded) return;
     try {
-      res.write(`data: ${JSON.stringify(event)}
+      const idLine = event?.eventId ? `id: ${event.eventId}\n` : "";
+      res.write(`${idLine}data: ${JSON.stringify(event)}
 
 `);
     } catch {
@@ -194,7 +199,8 @@ function handleEvents(req, res, ctx, query = new URLSearchParams()) {
   healthInterval?.unref?.();
   logsInterval?.unref?.();
   if (wants("events") && ctx.isBusy) writeEvent({ kind: "busy-change", busy: ctx.isBusy() });
-  const unsubscribe = wants("events") ? ctx.subscribeEvents(writeEvent) : () => {};
+  const cursor = String(query.get("cursor") || req.headers["last-event-id"] || "").trim() || null;
+  const unsubscribe = wants("events") ? ctx.subscribeEvents(writeEvent, { cursor }) : () => {};
   const ping = setInterval(() => writeEvent({ kind: "ping" }), PING_INTERVAL_MS);
   ping.unref?.();
   const cleanup = () => {
@@ -6400,7 +6406,7 @@ async function dispatch(req, res, ctx, expectedToken) {
         return;
       }
     }
-    const result = await handleApi(path.slice("/api/".length), method, body, ctx, url.searchParams);
+    const result = normalizeApiError(await handleApi(path.slice("/api/".length), method, body, ctx, url.searchParams));
     res.writeHead(result.status, { "content-type": "application/json" });
     res.end(JSON.stringify(result.body));
     return;
@@ -6418,7 +6424,7 @@ function startDashboardServer(ctx, opts = {}) {
         if (!res.headersSent) {
           res.writeHead(500, { "content-type": "application/json" });
         }
-        res.end(JSON.stringify({ error: err.message }));
+        res.end(JSON.stringify(structuredError({ message: err.message, code: "internal_error", title: "服务处理失败", retryable: true, action: "查看日志后重试" })));
       });
     });
     server.on("error", reject);

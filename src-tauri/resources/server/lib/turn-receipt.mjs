@@ -1,6 +1,7 @@
 const MAX_TOOL_EVENTS = 24;
 const MAX_ARTIFACT_EVENTS = 16;
 const MAX_ERROR_EVENTS = 8;
+const MAX_MODEL_RETRIES = 12;
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").slice(0, limit);
@@ -27,6 +28,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     tools: { dispatches: 0, results: 0, successes: 0, failures: 0, lastName: null },
     toolEvents: [],
     errors: [],
+    modelRetries: [],
     artifactEvidence: [],
     documentBindings: [],
     context: null,
@@ -66,6 +68,23 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       recordedAt: new Date().toISOString(),
     });
     if (state.errors.length > MAX_ERROR_EVENTS) state.errors.shift();
+  }
+
+  function recordModelRetry(event = {}) {
+    const retry = {
+      requestId: boundedText(event.requestId, 160) || state.requestId,
+      attempt: Math.max(1, Number(event.attempt) || 1),
+      maxAttempts: Math.max(1, Number(event.maxAttempts) || 1),
+      delayMs: Math.max(0, Number(event.delayMs ?? event.waitMs) || 0),
+      reason: boundedText(event.reason, 320) || "retry",
+      statusCode: Number.isInteger(Number(event.statusCode)) ? Number(event.statusCode) : null,
+      recordedAt: new Date().toISOString(),
+    };
+    const duplicate = state.modelRetries.some((item) => item.requestId === retry.requestId && item.attempt === retry.attempt);
+    if (duplicate) return false;
+    state.modelRetries.push(retry);
+    if (state.modelRetries.length > MAX_MODEL_RETRIES) state.modelRetries.shift();
+    return true;
   }
 
   function recordArtifact({ paths = [], files = [], producer = "unknown", verified = false, reason = "" } = {}) {
@@ -178,6 +197,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     observeTool,
     observeToolStart,
     recordError,
+    recordModelRetry,
     recordArtifact,
     recordDocumentBinding,
     recordContext,

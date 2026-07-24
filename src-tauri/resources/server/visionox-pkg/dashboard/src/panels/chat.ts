@@ -1632,6 +1632,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   const streamBufRef = A2(null);
   const streamRafRef = A2(null);
+  const resyncingEventsRef = A2(false);
+  const bufferedDashboardEventsRef = A2<any[]>([]);
   const flushStreaming = q2(() => {
     streamRafRef.current = null;
     if (streamBufRef.current) setStreaming(streamBufRef.current);
@@ -1667,7 +1669,8 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, [cancelStreamingRaf]);
   y2(() => {
-    const onDash = (dash) => {
+    let disposed = false;
+    const applyDashboardEvent = (dash) => {
       if (dash.kind === "ping") return;
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
@@ -1862,12 +1865,36 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
     };
+    const resyncDashboardEvents = async () => {
+      if (resyncingEventsRef.current) return;
+      resyncingEventsRef.current = true;
+      try {
+        await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+      } finally {
+        if (!disposed) {
+          const buffered = bufferedDashboardEventsRef.current.splice(0)
+            .sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
+          resyncingEventsRef.current = false;
+          for (const event of buffered) applyDashboardEvent(event);
+        }
+      }
+    };
+    const onDash = (dash) => {
+      if (dash.kind === "resync-required") {
+        void resyncDashboardEvents();
+        return;
+      }
+      if (resyncingEventsRef.current) {
+        bufferedDashboardEventsRef.current.push(dash);
+        return;
+      }
+      applyDashboardEvent(dash);
+    };
     const unsubscribe = subscribeSse("*", onDash);
     const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
       setEventStreamConnected(connected);
       if (connected && reconnected) {
-        void refetchCanonicalState();
-        void refreshBackgroundJobs();
+        void resyncDashboardEvents();
       }
       if (!connected) {
         setError(t4("chat.eventStreamError"));
@@ -1875,6 +1902,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     });
     return () => {
+      disposed = true;
       unsubscribe();
       unsubscribeStatus();
       cancelStreamingRaf();

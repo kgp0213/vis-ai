@@ -79,6 +79,7 @@ const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJson
 const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
 const { createAttachmentRuntime } = await importEarly("./lib/attachment-runtime.mjs");
 const { createMediaRuntime } = await importEarly("./lib/media-runtime.mjs");
+const { createDashboardEventStream } = await importEarly("./lib/dashboard-event-stream.mjs");
 const { adaptMcpMediaResult } = await importEarly("./lib/mcp-media-adapter.mjs");
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
 const { isKnownPlanStep, isPlanComplete, normalizeCompletedStepIds } = await importEarly("./lib/plan-state-policy.mjs");
@@ -6514,13 +6515,10 @@ let latestVersion = VERSION;
 getLatestVersion().then((v) => { if (v) latestVersion = v; }).catch(() => {});
 
 // ── Event subscribers ───────────────────────────────────────────
-const eventSubscribers = new Set();
+const dashboardEventStream = createDashboardEventStream();
 
 function broadcastDashboardEvent(ev) {
-  if (!ev || eventSubscribers.size === 0) return;
-  for (const handler of eventSubscribers) {
-    try { handler(ev); } catch { /* swallow */ }
-  }
+  return dashboardEventStream.publish(ev);
 }
 
 // Mirrors loopEventToDashboard() from chunk-VM6A6QLY.js
@@ -8056,12 +8054,7 @@ const ctx = {
     return { ok: false, error: `unsupported generic background action: ${action}` };
   },
 
-  subscribeEvents: (handler) => {
-    eventSubscribers.add(handler);
-    return () => {
-      eventSubscribers.delete(handler);
-    };
-  },
+  subscribeEvents: (handler, options = {}) => dashboardEventStream.subscribe(handler, options),
   notifySessionsChanged: (action, name) => broadcastDashboardEvent({ kind: "sessions-changed", action, name }),
 
   // Expose the slash-command registry to the dashboard so the UI can render
