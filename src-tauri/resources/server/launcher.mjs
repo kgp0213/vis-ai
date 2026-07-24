@@ -117,6 +117,7 @@ const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, res
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
 const { createInteractionRuntime } = await importEarly("./lib/interaction-runtime.mjs");
+const { createProviderProvenanceStore, providerDiagnostics } = await importEarly("./lib/provider-provenance.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
@@ -528,6 +529,7 @@ if (!existsSync(modeMemoryDir)) {
 
 const configPath = resolve(visionoxDataDir, "config.json");
 const usageLogPath = resolve(visionoxDataDir, "usage.jsonl");
+const providerProvenancePath = resolve(visionoxDataDir, "provider-provenance.json");
 const runtimeIssues = createRuntimeIssueRegistry({
   debug: process.env.VISIONOX_DEBUG_DIAGNOSTICS === "1",
   log: ({ level, message }) => console.error(`[launcher] ${level}: ${message}`),
@@ -536,6 +538,19 @@ const runtimeIssues = createRuntimeIssueRegistry({
 function trackPersistentStorageIssue(key, path, error, level = "error") {
   if (error) runtimeIssues.report(level, { key, path, message: String(error) });
   else runtimeIssues.clear(key);
+}
+
+const providerProvenance = createProviderProvenanceStore({ path: providerProvenancePath });
+
+function recordProviderProvenance(providerIds, source) {
+  try {
+    const result = providerProvenance.record(readConfig(configPath), providerIds, source);
+    trackPersistentStorageIssue("provider-provenance", providerProvenancePath, null);
+    return { ok: true, version: result.version };
+  } catch (error) {
+    trackPersistentStorageIssue("provider-provenance", providerProvenancePath, error.message, "warning");
+    return { ok: false, error: error.message };
+  }
 }
 
 function readDefaultSoul() {
@@ -730,6 +745,9 @@ if (configMigration.backupSanitization?.sanitized || configMigration.backupSanit
   console.error(`[launcher] config backups sanitized=${configMigration.backupSanitization.sanitized}, skipped=${configMigration.backupSanitization.skipped}`);
 }
 const config = readConfig(configPath);
+if (configMigration.status === "migrated" && Array.isArray(config.providers) && config.providers.length > 0) {
+  recordProviderProvenance(config.providers.map((provider) => provider.id), "config-migration");
+}
 // ── Provider migration & helpers ───────────────────────────────
 // Migrate legacy single-provider config (apiKey/baseUrl) to providers[] on first run.
 {
@@ -738,6 +756,7 @@ const config = readConfig(configPath);
     config.providers = legacy.providers;
     config.activeProviderId = legacy.activeProviderId;
     writeConfig(config, configPath);
+    recordProviderProvenance(config.providers.map((provider) => provider.id), "legacy-migration");
     console.error("[launcher] migrated legacy apiKey/baseUrl to providers[0] (id=legacy)");
   }
 }
@@ -7894,6 +7913,11 @@ const ctx = {
   // ── Modal resolution callbacks (called by POST /modal/resolve) ──
   getInteractions: () => interactionRuntime.list({ sessionId: activeConversationId }),
   closeInteraction,
+  getProviderDiagnostics: () => providerDiagnostics(readConfig(configPath), {
+    provenance: providerProvenance,
+    env: process.env,
+  }),
+  recordProviderProvenance,
   resolveShellConfirm: (choice, gateId) => {
     const prefix = activeModal?.allowPrefix ?? "";
     const verdict = choice === "deny" ? { type: "deny", denyContext: "user denied" }

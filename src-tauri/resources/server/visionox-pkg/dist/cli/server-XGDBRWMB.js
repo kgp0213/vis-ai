@@ -4261,6 +4261,12 @@ function pruneCredentialVerificationTokens(now = Date.now()) {
   for (const [token, record] of credentialVerificationTokens) if (record.expiresAt <= now) credentialVerificationTokens.delete(token);
 }
 async function handleProviders(method, rest, body, ctx) {
+  if (method === "GET" && rest[0] === "diagnostics") {
+    if (typeof ctx.getProviderDiagnostics !== "function") {
+      return { status: 503, body: { error: "provider diagnostics are unavailable" } };
+    }
+    return { status: 200, body: ctx.getProviderDiagnostics() };
+  }
   if (method === "GET") {
     const cfg = readConfig(ctx.configPath);
     const providers = (cfg.providers ?? []).map((p) => {
@@ -4280,6 +4286,7 @@ async function handleProviders(method, rest, body, ctx) {
       const failed = enabledModels.filter((model) => model.testStatus === "failed").length;
       return {
         ...p,
+        providerType: p.providerType ?? "openai-compatible",
         apiKey: p.apiKey ? redactKey(p.apiKey) : null,
         apiKeySet: Boolean(p.apiKey),
         models,
@@ -4386,6 +4393,7 @@ async function handleProviders(method, rest, body, ctx) {
     for (const model of candidate.provider.models ?? []) delete model.verification;
     cfg.modelVerification = { dirty: true, reason: "provider-credentials", providerId: candidate.provider.id, changedAt: new Date().toISOString() };
     writeConfig(cfg, ctx.configPath);
+    ctx.recordProviderProvenance?.([candidate.provider.id], "dashboard");
     let credentialSync = null;
     if (cfg.activeProviderId === candidate.provider.id && ctx.syncProvider) {
       if (ctx.isBusy?.()) credentialSync = { deferred: true, providerId: candidate.provider.id };
@@ -4525,6 +4533,9 @@ async function handleProviders(method, rest, body, ctx) {
       removed: removed.length
     };
     writeConfig(cfg, ctx.configPath);
+    ctx.recordProviderProvenance?.([
+      ...new Set([...providers.map((provider) => provider.id), ...removed.map((item) => item.providerId)])
+    ], "dashboard");
     const modelSwitch = selectedProvider ? await ctx.syncProvider?.(selectedProvider.id) : null;
     const refreshed = ctx.refreshContextCap?.() ?? null;
     ctx.audit?.({ ts: Date.now(), action: "cleanup-failed-provider-models", payload: { removed: removed.length, removedProviders } });
@@ -4552,6 +4563,7 @@ async function handleProviders(method, rest, body, ctx) {
     const nextConfig = result.config;
     nextConfig.modelVerification = { dirty: true, reason: "provider-import", changedAt: new Date().toISOString() };
     writeConfig(nextConfig, ctx.configPath);
+    ctx.recordProviderProvenance?.(result.touchedProviderIds, "json-import");
     const providerSync = nextConfig.activeProviderId ? await ctx.syncProvider?.(nextConfig.activeProviderId) : null;
     const refreshed = ctx.refreshContextCap?.() ?? null;
     return { status: 200, body: { ok: true, count: nextConfig.providers?.length ?? 0, preview: result.preview, requiresModelTest: true, modelSwitch: providerSync ?? refreshed?.modelSwitch ?? null, contextPolicy: refreshed?.contextPolicy ?? null } };

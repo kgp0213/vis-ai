@@ -5947,6 +5947,48 @@ textarea {
   font-size: 11px;
 }
 
+.provider-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.provider-diagnostics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.provider-diagnostics-grid {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.35fr) minmax(0, 1fr);
+  gap: 6px 10px;
+  font-size: 11px;
+}
+
+.provider-diagnostics-grid > span {
+  color: var(--text-tertiary);
+}
+
+.provider-diagnostics-grid > code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.provider-diagnostics-issues {
+  padding: 8px 10px;
+  border-left: 2px solid var(--color-warning);
+  background: var(--surface-overlay);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .model-cascade-menu {
   display: flex;
   flex-direction: column;

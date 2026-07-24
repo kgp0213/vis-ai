@@ -14290,6 +14290,7 @@ function SettingsPanel() {
   const [credentialTesting, setCredentialTesting] = d2(false);
   const [managedProviders, setManagedProviders] = d2([]);
   const [modelVerification, setModelVerification] = d2(null);
+  const [providerDiagnostics, setProviderDiagnostics] = d2(null);
   const [providerTesting, setProviderTesting] = d2(false);
   const [catalog, setCatalog] = d2(null);
   const [loopStatus, setLoopStatus] = d2(null);
@@ -14338,10 +14339,15 @@ function SettingsPanel() {
   }, [showDevLog, setDevLogFollow]);
   const load = q2(async () => {
     try {
-      const [r3, providerResult] = await Promise.all([api("/settings"), api("/providers")]);
+      const [r3, providerResult, diagnosticsResult] = await Promise.all([
+        api("/settings"),
+        api("/providers"),
+        api("/providers/diagnostics").catch(() => null)
+      ]);
       setData(r3);
       setManagedProviders(providerResult.providers ?? []);
       setModelVerification(providerResult.modelVerification ?? null);
+      setProviderDiagnostics(diagnosticsResult);
       setDraft({});
       setCredentialProviderId((current) => r3.credentialProviders?.some((provider) => provider.id === current) ? current : r3.credentialTarget?.id ?? r3.credentialProviders?.[0]?.id ?? null);
       setCredentialVerification(null);
@@ -14509,6 +14515,16 @@ function SettingsPanel() {
   const credentialProvider = v3.credentialProviders?.find((provider) => provider.id === credentialProviderId) ?? v3.credentialProviders?.[0] ?? null;
   const credentialBaseUrl = draft.baseUrl ?? credentialProvider?.baseUrl ?? "";
   const credentialChanged = Boolean((draft.apiKey ?? "").trim()) || credentialBaseUrl !== (credentialProvider?.baseUrl ?? "");
+  const activeProviderDiagnostic = providerDiagnostics?.providers?.find((diagnostic) => diagnostic.active) ?? null;
+  const provenanceLabel = {
+    "builtin-default": "内置默认",
+    "json-import": "JSON 导入",
+    dashboard: "Dashboard 修改",
+    "legacy-migration": "旧配置迁移",
+    "config-migration": "配置迁移",
+    environment: "环境变量",
+    "manual-unknown": "外部或手工修改"
+  };
   const lockedPreset = ["flash", "pro"].includes(v3.preset ?? "");
   const modelControlValue = lockedPreset ? v3.effectiveModel ?? v3.displayModel ?? v3.model ?? "—" : v3.configuredModel ?? v3.effectiveModel ?? v3.model ?? "—";
   const runtimeModel = v3.runtimeModel ?? v3.displayModel ?? v3.model ?? "—";
@@ -14626,6 +14642,22 @@ function SettingsPanel() {
             <div class="model-management-group"><strong>${group.label}</strong><span>${group.providers.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型</span></div>
           `)}
         </div>
+        ${activeProviderDiagnostic ? html4`
+          <div class="provider-diagnostics">
+            <div class="provider-diagnostics-head">
+              <strong>当前运行配置</strong>
+              <span class=${activeProviderDiagnostic.issues?.length ? "pill warn" : "pill ok"}>${activeProviderDiagnostic.issues?.length ? `${activeProviderDiagnostic.issues.length} 项需处理` : "配置完整"}</span>
+            </div>
+            <div class="provider-diagnostics-grid">
+              <span>适配器</span><code>${activeProviderDiagnostic.providerType}</code>
+              <span>模型 / 协议</span><code>${activeProviderDiagnostic.modelId ?? "未选择"} · ${activeProviderDiagnostic.protocol}</code>
+              <span>有效 URL</span><code>${activeProviderDiagnostic.effectiveBaseUrl ?? "未配置"}</code>
+              <span>API Key</span><code>${activeProviderDiagnostic.apiKeyPresent ? "已提供" : "未配置"}${activeProviderDiagnostic.configuredApiKeyPresent ? "（配置文件）" : activeProviderDiagnostic.overrides?.apiKey ? "（环境变量）" : ""}</code>
+              <span>配置来源</span><code>${provenanceLabel[activeProviderDiagnostic.source] ?? activeProviderDiagnostic.source}${activeProviderDiagnostic.changedOutsideManagedFlow ? " · 未经受管流程修改" : ""}</code>
+            </div>
+            ${activeProviderDiagnostic.issues?.length ? html4`<div class="provider-diagnostics-issues">${activeProviderDiagnostic.issues.map((issue) => html4`<div>${issue.message}</div>`)}</div>` : null}
+          </div>
+        ` : null}
       </div>
 
       ${sectionH3(t4("settings.sectionDefaults"))}

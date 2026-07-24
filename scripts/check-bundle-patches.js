@@ -22,7 +22,11 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/provider-configuration.mjs",
-    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults", "validateEffortParams", "effortParams", "validateProviderUi", '"groupId"', '"recommendedFor"'],
+    markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults", "validateEffortParams", "effortParams", "validateProviderUi", "providerType", '"groupId"', '"recommendedFor"'],
+  },
+  {
+    file: "src-tauri/resources/server/lib/provider-provenance.mjs",
+    markers: ["createProviderProvenanceStore", "providerDiagnostics", "normalizeProviderType", "manual-unknown", "changedOutsideManagedFlow"],
   },
   {
     file: "src-tauri/resources/server/lib/semantic-config-defaults.mjs",
@@ -403,6 +407,8 @@ const required = [
       "refreshVHomeStatus",
       "logoutVHome",
       'previewProviderImport',
+      "provider diagnostics are unavailable",
+      'providerType: p.providerType ?? "openai-compatible"',
       "capabilities?.maxContextTokens",
       'credentials" && rest[1] === "test"',
       "语义搜索配置不完整",

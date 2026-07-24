@@ -1,7 +1,8 @@
 import { validateAgentPolicy, validateEffortParams, validateModelCapabilities, validateRequestDefaults, validateVisionPolicy } from "./model-request-policy.mjs";
+import { normalizeProviderType } from "./provider-provenance.mjs";
 
 const PROVIDER_CHANGE_FIELDS = new Set([
-  "name", "baseUrl", "apiKey", "requestPolicy", "requestDefaults",
+  "name", "baseUrl", "apiKey", "providerType", "requestPolicy", "requestDefaults",
   "defaultPreset", "defaultEffort", "autoEscalate", "escalationModel", "ui",
 ]);
 const MODEL_CHANGE_FIELDS = new Set([
@@ -67,6 +68,11 @@ function validateProviderUi(ui) {
 
 function validateProvider(provider) {
   if (!provider || typeof provider.id !== "string" || !provider.id.trim()) return "each provider must have a non-empty id";
+  try {
+    normalizeProviderType(provider.providerType);
+  } catch (error) {
+    return `provider "${provider.id}" ${error.message}`;
+  }
   if (provider.requestPolicy !== undefined && !["legacy", "json"].includes(provider.requestPolicy)) {
     return `provider "${provider.id}" requestPolicy must be legacy | json`;
   }
