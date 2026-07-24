@@ -55,3 +55,17 @@ test("turn receipt keeps media degradation facts without duplicating warnings", 
   assert.equal(snapshot.mediaRecovery, "media_too_large");
   assert.deepEqual(snapshot.mediaWarnings, ["API 413"]);
 });
+
+test("turn receipt records bounded model retry facts without duplicate attempts", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-retry", requestId: "request-retry" });
+  receipt.recordModelRetry({ requestId: "model-request-1", attempt: 1, maxAttempts: 4, delayMs: 500, reason: "http 429", statusCode: 429 });
+  receipt.recordModelRetry({ requestId: "model-request-1", attempt: 1, maxAttempts: 4, delayMs: 500, reason: "http 429", statusCode: 429 });
+  receipt.recordModelRetry({ requestId: "model-request-1", attempt: 2, maxAttempts: 4, delayMs: 1000, reason: "network: fetch failed" });
+
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.modelRetries.length, 2);
+  assert.deepEqual(snapshot.modelRetries.map(({ requestId, attempt, maxAttempts, delayMs, reason, statusCode }) => ({ requestId, attempt, maxAttempts, delayMs, reason, statusCode })), [
+    { requestId: "model-request-1", attempt: 1, maxAttempts: 4, delayMs: 500, reason: "http 429", statusCode: 429 },
+    { requestId: "model-request-1", attempt: 2, maxAttempts: 4, delayMs: 1000, reason: "network: fetch failed", statusCode: null },
+  ]);
+});

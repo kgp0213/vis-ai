@@ -76,7 +76,7 @@ test("authorization and fixture blockers remain explicit instead of becoming fai
   });
 });
 
-test("Qwen network-only failure is recorded as an environmental pass", () => {
+test("Qwen network-only failure remains an explicit environmental block", () => {
   assert.equal(isQwenNetworkUnavailable(
     { group: "qwen" },
     { errors: [{ message: "fetch failed" }] },
