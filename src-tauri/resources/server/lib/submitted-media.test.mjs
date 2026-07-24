@@ -94,3 +94,35 @@ test("submitted images beyond the model limit are rejected before entering model
   assert.equal(result.attachments.length, 1);
   assert.equal(result.errors.at(-1).code, "media_too_large");
 });
+
+test("cancelled video preparation preserves the original attachment for an explicit retry", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "visionox-submitted-cancel-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const attachmentRuntime = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
+  const uploaded = await attachmentRuntime.ingestBytes(MP4, {
+    kind: "video",
+    mimeType: "video/mp4",
+    sessionId: "session-1",
+    operationId: "upload-1",
+    workspace: "C:\\workspace",
+  });
+  const result = await prepareSubmittedMedia({
+    attachmentRuntime,
+    mediaRuntime: {},
+    mediaProviderAdapter: {
+      resolveMedia: async () => ({
+        parts: [],
+        warnings: [{ code: "media_read_cancelled", message: "upload cancelled", affectsCompleteness: false }],
+      }),
+    },
+    attachmentIds: [uploaded.id],
+    provider: { providerType: "kimi" },
+    model: { id: "video", capabilities: { inputModalities: ["text", "video"] } },
+    capabilities: { inputModalities: ["text", "video"], maxMediaBytes: 50 * 1024 * 1024 },
+    context: { sessionId: "session-1", operationId: "operation-1", workspace: "C:\\workspace" },
+  });
+
+  assert.equal(result.errors[0].code, "media_read_cancelled");
+  assert.equal(result.mediaParts.length, 0);
+  assert.ok(await attachmentRuntime.get(uploaded.id));
+});

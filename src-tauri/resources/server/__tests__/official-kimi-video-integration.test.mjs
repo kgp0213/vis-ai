@@ -15,6 +15,9 @@ test("launcher connects official Kimi video preparation to the existing ordinary
   const persistedUser = source.indexOf('appendActiveMessage({ role: "user"');
   const queuedVideo = source.lastIndexOf("loop.setPendingMediaParts(materializedMediaParts)");
   assert.ok(persistedUser > 0 && queuedVideo > persistedUser, "media must not enter loop state before prompt startup is durably prepared");
+  const localCommandGuard = source.indexOf("本地命令不能同时提交附件");
+  const mediaPreparation = source.indexOf("const preparedMedia = await prepareSubmittedMedia");
+  assert.ok(localCommandGuard > 0 && localCommandGuard < mediaPreparation, "local slash commands must reject attachments before provider upload");
 });
 
 test("Dashboard exposes video upload only for an explicit official Kimi video model", async () => {

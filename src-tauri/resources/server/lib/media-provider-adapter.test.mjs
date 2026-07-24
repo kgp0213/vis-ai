@@ -68,7 +68,7 @@ test("video upload cancellation stops before provider dispatch and is never cach
     { id: "op-cancelled", provider: { id: "provider" } },
     controller.signal,
   );
-  assert.equal(result.error.code, "media_upload_failed");
+  assert.equal(result.error.code, "media_read_cancelled");
   assert.equal(result.error.affectsCompleteness, false);
   assert.equal(attempts, 0);
 });
