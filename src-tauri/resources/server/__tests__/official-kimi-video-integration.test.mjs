@@ -10,8 +10,11 @@ test("launcher connects official Kimi video preparation to the existing ordinary
   assert.match(source, /createOfficialKimiVideoUploader/);
   assert.match(source, /createMediaProviderAdapter/);
   assert.match(source, /prepareSubmittedMedia/);
-  assert.match(source, /loop\.setPendingMediaParts\(preparedMedia\.mediaParts\)/);
+  assert.match(source, /loop\.setPendingMediaParts\(materializedMediaParts\)/);
   assert.doesNotMatch(source, /provider\.id.*kimi|model.*includes\(["']kimi/i);
+  const persistedUser = source.indexOf('appendActiveMessage({ role: "user"');
+  const queuedVideo = source.lastIndexOf("loop.setPendingMediaParts(materializedMediaParts)");
+  assert.ok(persistedUser > 0 && queuedVideo > persistedUser, "media must not enter loop state before prompt startup is durably prepared");
 });
 
 test("Dashboard exposes video upload only for an explicit official Kimi video model", async () => {

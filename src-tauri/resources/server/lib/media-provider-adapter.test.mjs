@@ -25,7 +25,7 @@ test("video upload caches success but not temporary failure", async () => {
       kimi: async () => {
         attempts++;
         if (attempts === 1) throw new Error("HTTP 503 temporary failure");
-        return { fileId: "video-1" };
+        return { type: "video_url", video_url: { url: "ms://video-1" } };
       },
     },
   });
@@ -101,4 +101,27 @@ test("provider type, not a Kimi-looking id or model name, gates official video u
   );
   assert.deepEqual(official.parts, [{ type: "video_url", video_url: { url: "ms://file-1" } }]);
   assert.equal(attempts, 1);
+});
+
+test("video cache is isolated when an existing provider id changes endpoint or credentials", async () => {
+  let attempts = 0;
+  const adapter = createMediaProviderAdapter({
+    attachmentRuntime: { readDataUrl: async () => null },
+    videoUploaders: {
+      kimi: async ({ provider }) => ({
+        type: "video_url",
+        video_url: { url: `ms://upload-${++attempts}-${new URL(provider.baseUrl).host}` },
+      }),
+    },
+  });
+  const attachment = { id: "att-video", sha256: "d".repeat(64), kind: "video" };
+  const model = { id: "video-model", capabilities: { inputModalities: ["text", "video"] } };
+  const firstProvider = { id: "official", providerType: "kimi", baseUrl: "https://one.example/v1", apiKey: "key-one" };
+  const secondProvider = { id: "official", providerType: "kimi", baseUrl: "https://two.example/v1", apiKey: "key-two" };
+
+  const first = await adapter.uploadVideo({ attachment, provider: firstProvider }, model, { provider: firstProvider });
+  const second = await adapter.uploadVideo({ attachment, provider: secondProvider }, model, { provider: secondProvider });
+  assert.equal(first.cached, false);
+  assert.equal(second.cached, false);
+  assert.equal(attempts, 2);
 });

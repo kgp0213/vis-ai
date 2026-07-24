@@ -65,3 +65,32 @@ test("submitted media rejects a cross-session attachment before reading or uploa
   assert.equal(reads, 0);
   assert.equal(result.errors[0].code, "media_not_found");
 });
+
+test("submitted images beyond the model limit are rejected before entering model input", async () => {
+  const records = new Map([
+    ["att-1", { id: "att-1", kind: "image", sessionId: "session-1", workspace: "C:\\workspace" }],
+    ["att-2", { id: "att-2", kind: "image", sessionId: "session-1", workspace: "C:\\workspace" }],
+  ]);
+  let reads = 0;
+  const result = await prepareSubmittedMedia({
+    attachmentRuntime: {
+      get: async (id) => records.get(id),
+      releaseAttachments: async () => 0,
+    },
+    mediaRuntime: {
+      readAttachment: async ({ attachmentId }) => {
+        reads++;
+        return { ok: true, attachment: records.get(attachmentId), dataUrl: `data:image/png;base64,${attachmentId}` };
+      },
+    },
+    mediaProviderAdapter: {},
+    attachmentIds: ["att-1", "att-2"],
+    capabilities: { inputModalities: ["text", "image"], maxImagesPerRequest: 1 },
+    context: { sessionId: "session-1", operationId: "operation-1", workspace: "C:\\workspace" },
+  });
+
+  assert.equal(reads, 1);
+  assert.equal(result.modelImages.length, 1);
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.errors.at(-1).code, "media_too_large");
+});
