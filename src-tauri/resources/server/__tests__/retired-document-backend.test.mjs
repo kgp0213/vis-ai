@@ -22,6 +22,11 @@ test("retired document background sources are absent from the maintained tree", 
   for (const name of retired) assert.equal(existsSync(new URL(name, lib)), false, name);
 });
 
+test("canonical release build prunes every retired document backend residue", () => {
+  const buildWrapper = readFileSync(new URL("../../../../scripts/run-tauri-build.js", import.meta.url), "utf8");
+  for (const name of retired) assert.match(buildWrapper, new RegExp(name.replaceAll(".", "\\.")), name);
+});
+
 test("the retained model fingerprint remains capability-sensitive and credential-safe", () => {
   const provider = { id: "provider", baseUrl: "https://example.invalid/v1/", apiKey: "secret-value" };
   const model = { id: "model", capabilities: { maxOutputTokens: 8192 }, requestDefaults: { stream: true } };

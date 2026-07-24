@@ -19,6 +19,8 @@ const STALE_RELEASE_LIB_FILES = new Set([
   "document-markdown-workflow.mjs",
   "document-extractors.mjs",
   "document-intelligence.mjs",
+  "document-job-store.mjs",
+  "document-model-routing.mjs",
   "document-output-reservation.mjs",
   "long-task-handoff.mjs",
   "pdf-markdown-workflow.mjs",
