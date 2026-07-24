@@ -105,6 +105,7 @@ const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs
 const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEarly("./lib/shell-side-effect-policy.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
+const { closeOperationContext, createOperationContext } = await importEarly("./lib/operation-context.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
@@ -1988,7 +1989,7 @@ registerVHomeSkillTools(tools, {
   },
   isBootstrapSkill: (name) => existsSync(resolve(bootstrapSkillsRoot, name, "SKILL.md")),
   skillExists: (name) => existsSync(resolve(skillsRoot, name, "SKILL.md")),
-  getSendContext: () => ({ ...activeMessageSendContext }),
+  getSendContext: () => ({ ...activeMessageSendContext, operationContext: activeOperation?.context ?? null }),
   consumeSendAuthorization: (authorization, request) => consumeSendAuthorization(authorization, request),
   reviewMessageRisk: async (message, { signal } = {}) => {
     if (!client) return { level: "unknown", confidence: 0, categories: ["model-unavailable"], reason: "风险审查模型不可用" };
@@ -6503,14 +6504,24 @@ jobs.setChangeListener?.((change) => {
 });
 
 function beginActiveOperation(kind) {
+  const controller = new AbortController();
+  const id = randomUUID();
   const operation = {
-    id: randomUUID(),
+    id,
     kind,
     state: "running",
     startedAt: new Date().toISOString(),
     stopRequestedAt: null,
     progress: null,
-    controller: new AbortController(),
+    controller,
+    context: createOperationContext({
+      operationId: id,
+      kind,
+      conversationId: activeConversationId,
+      workspace: workspaceDir,
+      signal: controller.signal,
+      startedAt: new Date().toISOString(),
+    }),
   };
   activeOperation = operation;
   broadcastDashboardEvent({ kind: "operation-change", operation: publicActiveOperation(operation) });
@@ -6519,9 +6530,11 @@ function beginActiveOperation(kind) {
 
 function finishActiveOperation(operation) {
   if (!operation || activeOperation?.id !== operation.id) return;
+  const finalState = operation.controller.signal.aborted ? "cancelled" : "completed";
+  closeOperationContext(operation.context, finalState);
   broadcastDashboardEvent({
     kind: "operation-change",
-    operation: { ...publicActiveOperation(operation), state: operation.controller.signal.aborted ? "cancelled" : "completed" },
+    operation: { ...publicActiveOperation(operation), state: finalState },
   });
   activeOperation = null;
   requestScheduleQueueDrain();
@@ -8363,6 +8376,13 @@ ${modeList}
       autoHandoff: opts.isolated !== true && opts.internalHandoff !== true,
       conversationScope: opts.isolated === true ? "isolated" : opts.internalHandoff === true ? "internal" : "chat",
     };
+    Object.assign(operation.context, {
+      conversationId: activeConversationId,
+      workspace: workspaceDir,
+      userPrompt: activeMessageSendContext.userPrompt,
+      scheduledAuthorization: activeMessageSendContext.scheduledAuthorization,
+      sendAuthorization: activeMessageSendContext.sendAuthorization,
+    });
     const stopFromExternalSignal = () => {
       if (operation.controller.signal.aborted) return;
       operation.state = "stopping";

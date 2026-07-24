@@ -37,41 +37,64 @@ function run(label, command, args, cwd = root, env = process.env) {
   }
 }
 
-function runRustTestsIsolated() {
-  const targetDir = mkdtempSync(join(tmpdir(), "visionox-rust-tests-"));
-  const stagingRoot = mkdtempSync(join(tmpdir(), "visionox-rust-runtime-"));
-  const runtimePackage = join(stagingRoot, "visionox-pkg");
-  const resourceOverride = {
-    bundle: {
-      resources: {
-        "runtime/visionox-pkg/": null,
-        [`${runtimePackage}${sep}`]: "resources/server/visionox-pkg/",
-      },
-    },
-  };
-  const env = {
-    ...process.env,
-    CARGO_TARGET_DIR: targetDir,
-    CARGO_NET_OFFLINE: "true",
-    npm_config_offline: "true",
-    VISIONOX_RUNTIME_PACKAGE: runtimePackage,
-    TAURI_CONFIG: JSON.stringify(resourceOverride),
-  };
+function removeTempPath(path, label) {
+  if (!path) return;
   try {
-    run("prepare isolated Rust test runtime", process.execPath, ["scripts/prepare-runtime-package.js"], root, env);
-    console.log(`\n[release-check] rust tests (isolated target: ${targetDir})`);
-    const result = spawnSync("cargo", ["test"], {
-      cwd: join(root, "src-tauri"),
+    rmSync(path, { recursive: true, force: true });
+  } catch (error) {
+    console.error(`[release-check] failed to clean ${label}: ${error.message}`);
+  }
+}
+
+function runRustTestsIsolated() {
+  let targetDir = null;
+  let stagingRoot = null;
+  let status = 0;
+  try {
+    targetDir = mkdtempSync(join(tmpdir(), "visionox-rust-tests-"));
+    stagingRoot = mkdtempSync(join(tmpdir(), "visionox-rust-runtime-"));
+    const runtimePackage = join(stagingRoot, "visionox-pkg");
+    const resourceOverride = {
+      bundle: {
+        resources: {
+          "runtime/visionox-pkg/": null,
+          [`${runtimePackage}${sep}`]: "resources/server/visionox-pkg/",
+        },
+      },
+    };
+    const env = {
+      ...process.env,
+      CARGO_TARGET_DIR: targetDir,
+      CARGO_NET_OFFLINE: "true",
+      npm_config_offline: "true",
+      VISIONOX_RUNTIME_PACKAGE: runtimePackage,
+      TAURI_CONFIG: JSON.stringify(resourceOverride),
+    };
+    console.log(`\n[release-check] prepare isolated Rust test runtime`);
+    const prepare = spawnSync(process.execPath, ["scripts/prepare-runtime-package.js"], {
+      cwd: root,
       stdio: "inherit",
       windowsHide: true,
       env,
     });
-    if (result.error) console.error(`[release-check] ${result.error.message}`);
-    if (result.status !== 0) process.exit(result.status || 1);
+    if (prepare.error) console.error(`[release-check] ${prepare.error.message}`);
+    status = prepare.error || prepare.status === null || prepare.signal ? 1 : prepare.status;
+    if (status === 0) {
+      console.log(`\n[release-check] rust tests (isolated target: ${targetDir})`);
+      const result = spawnSync("cargo", ["test"], {
+        cwd: join(root, "src-tauri"),
+        stdio: "inherit",
+        windowsHide: true,
+        env,
+      });
+      if (result.error) console.error(`[release-check] ${result.error.message}`);
+      status = result.error || result.status === null || result.signal ? 1 : result.status;
+    }
   } finally {
-    rmSync(targetDir, { recursive: true, force: true });
-    rmSync(stagingRoot, { recursive: true, force: true });
+    removeTempPath(targetDir, "isolated Rust target");
+    removeTempPath(stagingRoot, "isolated Rust runtime");
   }
+  if (status !== 0) process.exit(status);
 }
 
 function checkBuildStampSource() {

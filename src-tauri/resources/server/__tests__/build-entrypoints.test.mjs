@@ -43,7 +43,7 @@ test("release Rust tests use the prepared runtime from a temporary directory", (
   assert.match(releaseCheck, /scripts\/prepare-runtime-package\.js/);
   assert.match(releaseCheck, /VISIONOX_RUNTIME_PACKAGE: runtimePackage/);
   assert.match(releaseCheck, /TAURI_CONFIG: JSON\.stringify\(resourceOverride\)/);
-  assert.match(releaseCheck, /rmSync\(stagingRoot, \{ recursive: true, force: true \}\)/);
+  assert.match(releaseCheck, /removeTempPath\(stagingRoot, "isolated Rust runtime"\)/);
 });
 
 test("release guard validates the injected build stamp without rewriting the vendored package version", () => {

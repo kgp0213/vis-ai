@@ -76,7 +76,7 @@ const required = [
   },
   {
     file: "scripts/release-check.js",
-    markers: ["visionox-rust-runtime-", "prepare-runtime-package.js", "VISIONOX_RUNTIME_PACKAGE", "TAURI_CONFIG", "rmSync(stagingRoot", "checkReleaseBuildStamp", "valid YYMMDD HH build stamp"],
+    markers: ["visionox-rust-runtime-", "prepare-runtime-package.js", "VISIONOX_RUNTIME_PACKAGE", "TAURI_CONFIG", "removeTempPath(stagingRoot", "checkReleaseBuildStamp", "valid YYMMDD HH build stamp"],
   },
   {
     file: "src-tauri/resources/runtime-manifest.json",
