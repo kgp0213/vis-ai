@@ -66,11 +66,14 @@ export function publicModelInventory(config = {}) {
   }));
 }
 
-export function classifyTaskEvidence({ blockedReason = null, assistantText = "", expectedArtifact = null, artifact = null, receipt = null } = {}) {
+export function classifyTaskEvidence({ blockedReason = null, assistantText = "", expectedArtifact = null, artifact = null, artifactCoverageRequired = false, receipt = null } = {}) {
   const modelClaimedComplete = claimedComplete(assistantText);
   if (blockedReason) return { status: "blocked", reason: String(blockedReason), modelClaimedComplete: false };
   if (expectedArtifact && (!artifact || artifact.bytes <= 0)) {
     return { status: "failed", reason: "required-artifact-missing", modelClaimedComplete };
+  }
+  if (expectedArtifact && artifactCoverageRequired && artifact?.coverage?.verified !== true) {
+    return { status: "failed", reason: "artifact-coverage-unverified", modelClaimedComplete };
   }
   const taskState = receipt?.completion?.taskState ?? null;
   const receiptOk = receipt?.completion?.ok === true && !["incomplete", "needs_intervention"].includes(taskState);
@@ -85,17 +88,34 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function fileEvidence(path) {
+function fileEvidence(path, coverage = null) {
   if (!path || !existsSync(path)) return null;
   const stat = statSync(path);
   if (!stat.isFile()) return null;
   const content = readFileSync(path);
-  return {
+  const evidence = {
     path: basename(path),
     bytes: stat.size,
     mtime: stat.mtime.toISOString(),
     sha256: createHash("sha256").update(content).digest("hex"),
   };
+  if (coverage) {
+    const text = content.toString("utf8").replace(/^\uFEFF/u, "");
+    const lines = text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+    const headings = lines.filter((line) => /^#{1,6}\s+/u.test(line)).length;
+    const pageReferences = (text.match(/(?:第\s*\d+\s*页|page\s*\d+)/giu) || []).length;
+    evidence.coverage = {
+      nonEmptyLines: lines.length,
+      headingCount: headings,
+      pageReferenceCount: pageReferences,
+      firstNonEmpty: boundedText(lines[0] || "", 180),
+      lastNonEmpty: boundedText(lines.at(-1) || "", 180),
+      verified: lines.length >= (coverage.minimumNonEmptyLines ?? 1)
+        && headings >= (coverage.minimumHeadings ?? 0)
+        && pageReferences >= (coverage.minimumPageReferences ?? 0),
+    };
+  }
+  return evidence;
 }
 
 function freePort() {
@@ -219,7 +239,7 @@ async function switchModel(client, model) {
   if (response.status !== 200) throw new Error(`model switch failed: ${response.status} ${boundedText(JSON.stringify(response.body))}`);
 }
 
-async function runPromptTask(client, { model, taskId, prompt, expectedArtifact = null, timeoutMs = 12 * 60_000 }) {
+async function runPromptTask(client, { model, taskId, prompt, expectedArtifact = null, artifactCoverage = null, timeoutMs = 12 * 60_000 }) {
   await resetConversation(client);
   await switchModel(client, model);
   const requestId = `matrix-${model.group}-${taskId.toLowerCase()}-${Date.now()}`;
@@ -240,10 +260,10 @@ async function runPromptTask(client, { model, taskId, prompt, expectedArtifact =
     try { finalPage = await client.waitIdle(30_000); } catch {}
   }
   const assistant = finalAssistant(finalPage?.messages);
-  const artifact = fileEvidence(expectedArtifact);
+  const artifact = fileEvidence(expectedArtifact, artifactCoverage);
   const classified = waitError
     ? { status: "failed", reason: "task-timeout", modelClaimedComplete: claimedComplete(assistant?.text) }
-    : classifyTaskEvidence({ assistantText: assistant?.text, expectedArtifact, artifact, receipt: assistant?.receipt });
+    : classifyTaskEvidence({ assistantText: assistant?.text, expectedArtifact, artifact, artifactCoverageRequired: Boolean(artifactCoverage), receipt: assistant?.receipt });
   const modal = await client.modal().catch(() => ({ body: {} }));
   return {
     taskId,
@@ -259,6 +279,7 @@ async function runPromptTask(client, { model, taskId, prompt, expectedArtifact =
     toolResults: assistant?.receipt?.tools?.results ?? 0,
     toolFailures: assistant?.receipt?.tools?.failures ?? 0,
     interventionCount: assistant?.receipt?.intervention?.shown ?? 0,
+    receiptErrors: Array.isArray(assistant?.receipt?.errors) ? assistant.receipt.errors : [],
     pendingModal: modal?.body?.modal?.kind ?? null,
     assistantText: boundedText(assistant?.text),
     error: waitError ? boundedText(waitError.message) : null,
@@ -320,7 +341,7 @@ function blockedRecord(model, task) {
 
 function renderMarkdown(payload) {
   const counts = payload.results.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {});
-  const rows = payload.results.map((item) => `| ${item.modelGroup} | ${item.modelId} | ${item.taskId} | ${item.status} | ${item.reason} | ${item.interventionCount ?? 0} | ${item.artifact?.bytes ?? "-"} |`).join("\n");
+  const rows = payload.results.map((item) => `| ${item.modelGroup} | ${item.modelId} | ${item.taskId} | ${item.status} | ${item.reason} | ${item.interventionCount ?? 0} | ${item.artifact?.bytes ?? "-"} | ${item.artifact?.coverage?.verified === true ? "是" : item.artifact?.coverage ? "否" : "不适用"} |`).join("\n");
   return `# 真实任务验收结果（2026-07-24）\n\n`+
     `- 被测运行时提交：\`${payload.runtimeCommit}\`\n`+
     `- 验收器提交：\`${payload.harnessCommit}\`\n`+
@@ -329,7 +350,7 @@ function renderMarkdown(payload) {
     `- 汇总：通过 ${counts.passed ?? 0}，失败 ${counts.failed ?? 0}，阻塞 ${counts.blocked ?? 0}\n`+
     `- DWS：未发送；所有相关用例因缺少本轮发送授权而明确阻塞。\n`+
     `- 临时环境：已清理，未保留 API Key、完整服务地址或测试产物正文。\n\n`+
-    `| 分组 | 模型 | 任务 | 结果 | 原因 | 干预次数 | 产物字节 |\n|---|---|---|---|---|---:|---:|\n${rows}\n`;
+    `| 分组 | 模型 | 任务 | 结果 | 原因 | 干预次数 | 产物字节 | 覆盖证据 |\n|---|---|---|---|---|---:|---:|---|\n${rows}\n`;
 }
 
 async function executeMatrix() {
@@ -377,6 +398,7 @@ async function executeMatrix() {
         taskId: "T1",
         prompt: `提取 ${pdfPath} 的完整内容，并保存为 ${markdownPath}。必须覆盖全部页面，保存后检查文件存在、大小和首尾内容；不要只返回摘要。`,
         expectedArtifact: markdownPath,
+        artifactCoverage: { minimumNonEmptyLines: 40, minimumHeadings: 3, minimumPageReferences: 1 },
       }));
       const codeDir = prepareCodeFixture(workspace, suffix);
       results.push(await runPromptTask(client, {

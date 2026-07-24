@@ -40,6 +40,20 @@ test("real-task evidence rejects a completion claim without the required artifac
   });
 });
 
+test("real-task evidence rejects a text artifact without host-side coverage evidence", () => {
+  assert.deepEqual(classifyTaskEvidence({
+    assistantText: "任务已经完成。",
+    expectedArtifact: "output.md",
+    artifact: { bytes: 1200, coverage: { verified: false } },
+    artifactCoverageRequired: true,
+    receipt: { completion: { ok: true, taskState: "completed" } },
+  }), {
+    status: "failed",
+    reason: "artifact-coverage-unverified",
+    modelClaimedComplete: true,
+  });
+});
+
 test("authorization and fixture blockers remain explicit instead of becoming failures", () => {
   assert.deepEqual(classifyTaskEvidence({ blockedReason: "dws-authorization-required" }), {
     status: "blocked",
