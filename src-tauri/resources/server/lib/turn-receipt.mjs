@@ -1,5 +1,6 @@
 const MAX_TOOL_EVENTS = 24;
 const MAX_ARTIFACT_EVENTS = 16;
+const MAX_ERROR_EVENTS = 8;
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").slice(0, limit);
@@ -25,6 +26,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     startedAt,
     tools: { dispatches: 0, results: 0, successes: 0, failures: 0, lastName: null },
     toolEvents: [],
+    errors: [],
     artifactEvidence: [],
     documentBindings: [],
     context: null,
@@ -49,6 +51,17 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
   function observeToolStart(name = null) {
     state.tools.dispatches++;
     state.tools.lastName = boundedText(name, 120) || null;
+  }
+
+  function recordError(error, { source = "model-loop" } = {}) {
+    const message = boundedText(error, 500).trim();
+    if (!message) return;
+    state.errors.push({
+      source: boundedText(source, 80) || "model-loop",
+      message,
+      recordedAt: new Date().toISOString(),
+    });
+    if (state.errors.length > MAX_ERROR_EVENTS) state.errors.shift();
   }
 
   function recordArtifact({ paths = [], files = [], producer = "unknown", verified = false, reason = "" } = {}) {
@@ -149,6 +162,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
   return {
     observeTool,
     observeToolStart,
+    recordError,
     recordArtifact,
     recordDocumentBinding,
     recordContext,

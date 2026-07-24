@@ -8,6 +8,7 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
   receipt.observeToolStart("read_file");
   receipt.observeTool({ name: "read_file", succeeded: true, result: "ok" });
   receipt.observeTool({ name: "write_file", succeeded: false, result: "failed" });
+  receipt.recordError("embedding provider returned an invalid response", { source: "model-loop" });
   receipt.recordArtifact({
     paths: ["C:\\work\\out.md"],
     files: [{ path: "C:\\work\\out.md", size: 42, mtimeMs: 10, ext: ".md", changedThisTurn: true, verification: "current-turn-write" }],
@@ -33,4 +34,9 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
   assert.equal(snapshot.artifactEvidence[0].files[0].verification, "current-turn-write");
   assert.equal(snapshot.documentBindings[0].documentRef, "visionox-document:1");
   assert.equal(snapshot.intervention.shown, 2);
+  assert.deepEqual(snapshot.errors[0], {
+    source: "model-loop",
+    message: "embedding provider returned an invalid response",
+    recordedAt: snapshot.errors[0].recordedAt,
+  });
 });

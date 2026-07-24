@@ -9146,6 +9146,9 @@ ${modeList}
               if (ev.role === "error") {
                 // A protocol or transport failure invalidates streamed partial text.
                 assistantText = "";
+                const modelError = String(ev.error || ev.content || "模型循环返回未知错误").trim();
+                turnReceipt.recordError(modelError, { source: "model-loop" });
+                turnError ??= new Error(modelError);
               }
               if (ev.role === "assistant_final") {
                 const repairNotice = formatToolRepairNotice(ev.repair);
