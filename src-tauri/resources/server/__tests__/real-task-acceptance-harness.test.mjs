@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   classifyTaskEvidence,
+  classifyEnvironmentalResult,
   isQwenNetworkUnavailable,
   publicModelInventory,
   sanitizeDiagnostic,
@@ -89,6 +90,12 @@ test("Qwen network-only failure remains an explicit environmental block", () => 
     { group: "kimi" },
     { errors: [{ message: "fetch failed" }] },
   ), false);
+  assert.deepEqual(classifyEnvironmentalResult({ group: "qwen" }, { errors: [{ message: "fetch failed" }] }), {
+    status: "blocked",
+    reason: "environment-network-unavailable",
+    environmentalBlock: true,
+    verification: "environment-blocked",
+  });
 });
 
 test("real-task diagnostics redact temporary dashboard access tokens", () => {
