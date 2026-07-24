@@ -116,6 +116,7 @@ const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEa
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
+const { createInteractionRuntime } = await importEarly("./lib/interaction-runtime.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
@@ -6720,6 +6721,25 @@ const activeSessionMetaStore = createActiveSessionMetaStore({
   ),
 });
 
+const initialInteractionMetadata = activeSessionMetaStore.read();
+const interactionRuntime = createInteractionRuntime({
+  initial: initialInteractionMetadata.ok ? initialInteractionMetadata.value?.interactions : [],
+  getOperationId: () => operationRuntime.getActive()?.id ?? null,
+  getSessionId: () => activeConversationId,
+  getWorkspace: () => workspaceDir,
+  persist: async (interactions) => {
+    const currentSessionInteractions = interactions.filter((interaction) => interaction.sessionId === activeConversationId);
+    activeSessionMetaStore.update((current) => ({ ...current, interactions: currentSessionInteractions }));
+  },
+  onEvent: (event) => broadcastDashboardEvent(event),
+  onError: (error) => trackPersistentStorageIssue(
+    "active-session-meta",
+    activeSessionMetaFile,
+    `interaction metadata was not saved: ${error?.message || error}`,
+    "warning",
+  ),
+});
+
 function hasUserMessage() {
   return messages.some((m) => m.role === "user");
 }
@@ -6794,6 +6814,7 @@ const persistActiveConversationIdentity = () => sessionRuntime.persistConversati
 const loadActiveSession = () => sessionRuntime.load();
 
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
+  clearActiveModals("session_reset");
   await finalizeActiveSession();
   activeConversationId = randomUUID();
   activeContextRecoveryHandle = null;
@@ -7454,6 +7475,17 @@ const queuedModals = [];
 
 function setActiveModal(modal) {
   if (modal) {
+    if (!modal.interactionId) {
+      const interaction = interactionRuntime.create(modal);
+      modal = {
+        ...modal,
+        interactionId: interaction.interactionId,
+        operationId: interaction.operationId,
+        sessionId: interaction.sessionId,
+        status: interaction.status,
+        createdAt: interaction.createdAt,
+      };
+    }
     if (activeModal) {
       queuedModals.push(modal);
       return;
@@ -7478,16 +7510,41 @@ function setActiveModal(modal) {
   if (next) setActiveModal(next);
 }
 
-function clearActiveModals() {
+function clearActiveModals(reason = "interaction_cancelled") {
+  const operationId = operationRuntime.getActive()?.id ?? null;
+  interactionRuntime.cancelScope(operationId ? { operationId } : { sessionId: activeConversationId }, reason);
   queuedModals.length = 0;
   setActiveModal(null);
 }
 
 function resolveActiveGate(expectedKind, gateId, verdict) {
-  if (!activeModal || activeModal.kind !== expectedKind || activeGateId !== gateId) return false;
+  if (!activeModal || activeModal.kind !== expectedKind || activeGateId !== gateId) {
+    const duplicate = interactionRuntime.resolveByGate(gateId, { action: verdict?.type || "resolved" });
+    return duplicate.ok === true && duplicate.idempotent === true;
+  }
   pauseGate.resolve(activeGateId, verdict);
+  interactionRuntime.resolve(activeModal.interactionId, { action: verdict?.type || "resolved" });
   setActiveModal(null);
   return true;
+}
+
+function closeInteraction(interactionId) {
+  const interaction = interactionRuntime.get(interactionId);
+  if (!interaction || interaction.sessionId !== activeConversationId) {
+    return { ok: false, reason: "interaction_not_found" };
+  }
+  if (activeModal?.interactionId === interactionId) {
+    pauseGate.cancel(activeGateId);
+    const result = interactionRuntime.close(interactionId);
+    setActiveModal(null);
+    return result;
+  }
+  const queuedIndex = queuedModals.findIndex((modal) => modal.interactionId === interactionId);
+  if (queuedIndex >= 0) {
+    const [queued] = queuedModals.splice(queuedIndex, 1);
+    pauseGate.cancel(queued._gateId);
+  }
+  return interactionRuntime.close(interactionId);
 }
 
 // Register pauseGate listener — maps tool confirmation requests to dashboard modals.
@@ -7835,6 +7892,8 @@ const ctx = {
     appendAuditEntry(entry);
   },
   // ── Modal resolution callbacks (called by POST /modal/resolve) ──
+  getInteractions: () => interactionRuntime.list({ sessionId: activeConversationId }),
+  closeInteraction,
   resolveShellConfirm: (choice, gateId) => {
     const prefix = activeModal?.allowPrefix ?? "";
     const verdict = choice === "deny" ? { type: "deny", denyContext: "user denied" }
@@ -8302,6 +8361,7 @@ ${modeList}
 
       // ── Session switch: archive current active session first ───
       if (sessionName && loop) {
+        clearActiveModals("session_switched");
         await finalizeActiveSession();
       }
 
@@ -8315,6 +8375,7 @@ ${modeList}
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
+          interactionRuntime.restore(sessionMeta.interactions, { replaceSessionId: activeConversationId });
           refreshOperationContextScope(operation);
           activeContextRecoveryHandle = typeof sessionMeta.contextRecoveryHandle === "string" && sessionMeta.contextRecoveryHandle.trim()
             ? sessionMeta.contextRecoveryHandle.trim()
@@ -9547,7 +9608,7 @@ ${modeList}
 
   abortTurn: () => {
     pauseGate.cancelAll();
-    clearActiveModals();
+    clearActiveModals("user_cancelled");
     broadcastDashboardEvent({ kind: "todo-update", todos: [] });
     if (busy) {
       operationRuntime.stop(operationRuntime.getActive(), "user_cancelled");

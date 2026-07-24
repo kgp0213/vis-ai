@@ -360,6 +360,8 @@ const required = [
       "query.get(\"channels\")",
       "modal gateId must be a non-negative integer",
       "modal is no longer active",
+      'rest[0] === "interactions"',
+      "interaction close is not available",
       "KATEX_ASSET_RE",
       "KATEX_FONT_ASSET_RE",
       "atomicWriteMemoryFile",

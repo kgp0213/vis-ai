@@ -7,12 +7,13 @@ function createHarness(initial = []) {
   const persisted = [];
   const events = [];
   let tick = 0;
+  let id = 0;
   const runtime = createInteractionRuntime({
     initial,
     getOperationId: () => "operation-1",
     getSessionId: () => "session-1",
     getWorkspace: () => "C:/workspace",
-    idFactory: () => `interaction-${persisted.length + 1}`,
+    idFactory: () => `interaction-${++id}`,
     now: () => `2026-07-25T00:00:0${tick++}.000Z`,
     persist: async (records) => persisted.push(structuredClone(records)),
     onEvent: (event) => events.push(event),

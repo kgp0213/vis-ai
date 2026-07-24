@@ -2360,6 +2360,27 @@ function parseBody7(raw) {
   }
 }
 async function handleModal(method, rest, body, ctx) {
+  if (method === "GET" && rest[0] === "interactions" && rest.length === 1) {
+    return {
+      status: 200,
+      body: { interactions: ctx.getInteractions ? ctx.getInteractions() : [] }
+    };
+  }
+  if (method === "POST" && rest[0] === "interactions" && rest[2] === "close" && rest.length === 3) {
+    if (!rest[1] || typeof ctx.closeInteraction !== "function") {
+      return { status: 503, body: { error: "interaction close is not available" } };
+    }
+    const result = ctx.closeInteraction(rest[1]);
+    if (!result?.ok) return { status: 404, body: { error: "interaction was not found" } };
+    return {
+      status: 200,
+      body: {
+        closed: true,
+        idempotent: result.idempotent === true,
+        interaction: result.interaction
+      }
+    };
+  }
   if (method === "GET" && rest.length === 0) {
     return {
       status: 200,
