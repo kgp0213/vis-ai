@@ -5260,6 +5260,39 @@ async function handleSubmit(method, _rest, body, ctx) {
 
 // Prompt optimization is an editor operation: it never enters the session
 // transcript or the ordinary tool loop.
+function redactPromptOptimizationDiagnostic(value) {
+  return String(value ?? "")
+    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/((?:api[_ -]?key|authorization|token|password)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1[redacted]")
+    .replace(/\b(?:sk|api)-[a-z0-9._-]{6,}\b/gi, "[redacted]")
+    .slice(0, 6e3);
+}
+function auditPromptOptimizationFailure(ctx, error, { stage, inputLength } = {}) {
+  let context = {};
+  try {
+    context = ctx.getPromptOptimizationContext?.() ?? {};
+  } catch {
+  }
+  const rawStatus = error?.statusCode ?? error?.status ?? error?.response?.status;
+  const status = Number(rawStatus);
+  const payload = {
+    stage: stage ?? "unknown",
+    inputLength: Number(inputLength) || 0,
+    mode: typeof context.mode === "string" ? context.mode : null,
+    providerId: typeof context.providerId === "string" ? context.providerId : null,
+    model: typeof context.model === "string" ? context.model : null,
+    errorName: redactPromptOptimizationDiagnostic(error?.name || "Error"),
+    errorCode: redactPromptOptimizationDiagnostic(error?.code || "") || null,
+    httpStatus: Number.isFinite(status) ? status : null,
+    message: redactPromptOptimizationDiagnostic(error?.message || error || "prompt optimization failed"),
+    stack: redactPromptOptimizationDiagnostic(error?.stack || "") || null
+  };
+  try {
+    ctx.audit?.({ ts: Date.now(), action: "optimize-prompt-failed", payload });
+  } catch {
+  }
+  return payload;
+}
 async function handleOptimizePrompt(method, _rest, body, ctx) {
   if (method !== "POST") return { status: 405, body: { error: "POST only" } };
   if (typeof ctx.optimizePrompt !== "function") {
@@ -5276,11 +5309,14 @@ async function handleOptimizePrompt(method, _rest, body, ctx) {
   try {
     result = await ctx.optimizePrompt(prompt.trim());
   } catch (err) {
-    return { status: 502, body: { error: String(err?.message || err) } };
+    const failure = auditPromptOptimizationFailure(ctx, err, { stage: "model-request", inputLength: prompt.length });
+    return { status: 502, body: { error: failure.message } };
   }
   const optimizedPrompt = typeof result?.prompt === "string" ? result.prompt.trim() : "";
   if (!optimizedPrompt) {
-    return { status: 502, body: { error: result?.error || "model returned an empty optimized prompt" } };
+    const error = new Error(result?.error || "model returned an empty optimized prompt");
+    const failure = auditPromptOptimizationFailure(ctx, error, { stage: "response-validation", inputLength: prompt.length });
+    return { status: 502, body: { error: failure.message } };
   }
   ctx.audit?.({ ts: Date.now(), action: "optimize-prompt", payload: { inputLength: prompt.length, outputLength: optimizedPrompt.length } });
   return { status: 200, body: { prompt: optimizedPrompt } };

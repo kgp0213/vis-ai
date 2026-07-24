@@ -31811,7 +31811,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="password"
-                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "enter API key"}
+                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "请输入实际 API Key（例如 api-xxxxx）"}
                     value=${draft.openaiCompat.apiKey}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;

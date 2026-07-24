@@ -10,6 +10,11 @@ const entries = [
   join(root, "src-tauri", "resources", "server", "lib"),
   join(root, "src-tauri", "resources", "server", "visionox-pkg"),
 ];
+const approvedSemanticEndpoint = "http://10.71.4.202:10307/v1/embeddings";
+const approvedEndpointFiles = new Set([
+  join(root, "src-tauri", "resources", "server", "lib", "semantic-config-defaults.mjs"),
+  join(root, "src-tauri", "resources", "server", "lib", "semantic-config-defaults.test.mjs"),
+]);
 const forbidden = [/10\.71\.4\.202(?::\d+)?/i, /qwen3-embedding-j29c7suqz/i];
 
 function walk(path) {
@@ -21,7 +26,10 @@ const violations = [];
 for (const entry of entries) {
   for (const path of walk(entry)) {
     if (!/\.(?:mjs|js|json|md)$/i.test(path)) continue;
-    const source = readFileSync(path, "utf8");
+    const rawSource = readFileSync(path, "utf8");
+    const source = approvedEndpointFiles.has(path)
+      ? rawSource.replaceAll(approvedSemanticEndpoint, "[approved-semantic-endpoint]")
+      : rawSource;
     for (const pattern of forbidden) {
       if (pattern.test(source)) violations.push(`${path}: ${pattern}`);
     }

@@ -25,6 +25,10 @@ const required = [
     markers: ["previewProviderImport", "stableModelKey", "syncModels", "removeProviderIds", "removeProvider", "confirmDestructive", "validateRequestDefaults", "validateEffortParams", "effortParams", "validateProviderUi", '"groupId"', '"recommendedFor"'],
   },
   {
+    file: "src-tauri/resources/server/lib/semantic-config-defaults.mjs",
+    markers: ["DEFAULT_SEMANTIC_EMBEDDING_URL", "DEFAULT_SEMANTIC_EMBEDDING_MODEL", "applySemanticEmbeddingDefaults"],
+  },
+  {
     file: "scripts/prepare-runtime-package.js",
     markers: [
       "function pruneRuntimeFiles(path)",
@@ -386,6 +390,8 @@ const required = [
       'credentials" && rest[1] === "test"',
       "语义搜索配置不完整",
       "result = await ctx.optimizePrompt",
+      "auditPromptOptimizationFailure",
+      "optimize-prompt-failed",
     ],
   },
   {
@@ -444,7 +450,7 @@ const required = [
       "model-provider-trigger",
       "model-cascade-submenu",
       "https://your-embedding-host.example/v1/embeddings",
-      '"enter API key"',
+      "请输入实际 API Key（例如 api-xxxxx）",
       "provider-import-file",
       "confirmProviderImport",
       "scheduleModelGroupClose",

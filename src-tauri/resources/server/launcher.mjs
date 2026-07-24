@@ -90,6 +90,7 @@ const { assertVersionedJsonWritable, readVersionedJsonFile, writeVersionedJsonFi
 const { createPromptQueueStore, promptRequestReceiptDecision } = await importEarly("./lib/prompt-queue-store.mjs");
 const { createPromptIsolation } = await importEarly("./lib/scheduled-prompt-isolation.mjs");
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
+const { DEFAULT_SEMANTIC_EMBEDDING_MODEL, DEFAULT_SEMANTIC_EMBEDDING_URL, applySemanticEmbeddingDefaults } = await importEarly("./lib/semantic-config-defaults.mjs");
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
 const { addRecentWorkspace, isWorkspaceDirectory, normalizeWorkspaceHistory, normalizeWorkspacePath, removeRecentWorkspace, sameWorkspacePath } = await importEarly("./lib/workspace-history.mjs");
@@ -649,43 +650,24 @@ const config = readConfig(configPath);
   }
 }
 
-// ── Semantic indexing: keep installation defaults credential-free ──────────
-// Embedding credentials are deployment-specific and must never be shipped in
-// source or release resources. Existing installations that received the old
-// intranet seed are sanitized once, while user-supplied values are preserved.
+// ── Semantic indexing: prefill the approved endpoint without shipping a key ─
 {
-  let changed = false;
-  if (!config.semantic || typeof config.semantic !== "object") {
-    config.semantic = {
-      provider: "openai-compat",
-      openaiCompat: { baseUrl: "", apiKey: "", model: "", extraBody: {} },
-      ollama: { baseUrl: "", model: "" },
-    };
+  const defaults = applySemanticEmbeddingDefaults(config);
+  let changed = defaults.changed;
+  const oc = config.semantic.openaiCompat;
+  const legacyEndpointHash = "a94237d7ebf126c99d5e10a9e0b6fd4ce0a48a028fa1e0aaac884a0f8c472f2e";
+  const legacyKeyHash = "70efe2b6a40b954b50562152a5f22249aa9b619f86f11dc8914e8f4101e37e6b";
+  if (createHash("sha256").update(oc.baseUrl).digest("hex") === legacyEndpointHash
+    && createHash("sha256").update(oc.apiKey).digest("hex") === legacyKeyHash) {
+    oc.baseUrl = DEFAULT_SEMANTIC_EMBEDDING_URL;
+    oc.apiKey = "";
+    oc.model = DEFAULT_SEMANTIC_EMBEDDING_MODEL;
     changed = true;
-  } else {
-    if (!config.semantic.openaiCompat || typeof config.semantic.openaiCompat !== "object") {
-      config.semantic.openaiCompat = {};
-      changed = true;
-    }
-    const oc = config.semantic.openaiCompat;
-    if (typeof oc.baseUrl !== "string") { oc.baseUrl = ""; changed = true; }
-    if (typeof oc.apiKey !== "string") { oc.apiKey = ""; changed = true; }
-    if (typeof oc.model !== "string") { oc.model = ""; changed = true; }
-    const legacyEndpointHash = "a94237d7ebf126c99d5e10a9e0b6fd4ce0a48a028fa1e0aaac884a0f8c472f2e";
-    const legacyKeyHash = "70efe2b6a40b954b50562152a5f22249aa9b619f86f11dc8914e8f4101e37e6b";
-    if (createHash("sha256").update(oc.baseUrl).digest("hex") === legacyEndpointHash
-      && createHash("sha256").update(oc.apiKey).digest("hex") === legacyKeyHash) {
-      oc.baseUrl = "";
-      oc.apiKey = "";
-      oc.model = "";
-      changed = true;
-      console.error("[launcher] removed legacy intranet semantic credentials from local config");
-    }
-    if (!oc.extraBody || typeof oc.extraBody !== "object") { oc.extraBody = {}; }
+    console.error("[launcher] removed legacy semantic API key and retained approved endpoint defaults");
   }
   if (changed) {
     writeConfig(config, configPath);
-    console.error("[launcher] semantic config initialized without embedded credentials");
+    console.error("[launcher] semantic config initialized with endpoint/model defaults and no embedded API key");
   }
 }
 
@@ -8215,6 +8197,16 @@ const ctx = {
   getSlashCommands: () => SLASH_COMMAND_META.map(({ name, aliases, desc, usage, group }) => ({
     name, aliases: aliases ?? [], desc, usage, group: group ?? "system",
   })),
+
+  getPromptOptimizationContext: () => {
+    const modelConfig = effectiveModelConfig(config);
+    const provider = getActiveProvider(config);
+    return {
+      mode: LEGACY_MODE_ALIASES[config.mode] || config.mode || "general",
+      providerId: provider?.id ?? config.activeProviderId ?? null,
+      model: modelConfig?.model ?? null,
+    };
+  },
 
   optimizePrompt: async (prompt) => {
     if (!client) throw new Error("尚未配置可用模型，请先在「模型」中导入配置并检测模型，再使用提示词优化。");
