@@ -90,8 +90,8 @@ test("submitted images beyond the model limit are rejected before entering model
   });
 
   assert.equal(reads, 1);
-  assert.equal(result.modelImages.length, 1);
-  assert.equal(result.attachments.length, 1);
+  assert.equal(result.modelImages.length, 0);
+  assert.equal(result.attachments.length, 0);
   assert.equal(result.errors.at(-1).code, "media_too_large");
 });
 

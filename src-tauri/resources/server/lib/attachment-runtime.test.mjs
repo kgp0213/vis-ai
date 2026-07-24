@@ -192,3 +192,31 @@ test("parallel attachment writes restore every committed index record", async (t
   const restored = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
   assert.equal((await restored.list()).length, 12);
 });
+
+test("stale-scope cleanup removes only pending upload attachments", async (t) => {
+  const { runtime } = await fixture(t);
+  const upload = await runtime.beginUpload({
+    name: "pending.png",
+    size: PNG.length,
+    mimeType: "image/png",
+    sessionId: "old-session",
+    workspace: "C:\\old-workspace",
+  });
+  await runtime.appendUpload(upload.uploadId, PNG, 0);
+  const pending = await runtime.finishUpload(upload.uploadId);
+  const committed = await runtime.ingestBytes(Buffer.concat([PNG, Buffer.from([1])]), {
+    kind: "image",
+    mimeType: "image/png",
+    sessionId: "old-session",
+    operationId: "operation-committed",
+    workspace: "C:\\old-workspace",
+  });
+
+  const released = await runtime.releasePendingUploads([
+    { id: pending.id, sessionId: "old-session", workspace: "C:\\old-workspace" },
+    { id: committed.id, sessionId: "old-session", workspace: "C:\\old-workspace" },
+  ]);
+  assert.equal(released, 1);
+  assert.equal(await runtime.get(pending.id), null);
+  assert.ok(await runtime.get(committed.id));
+});

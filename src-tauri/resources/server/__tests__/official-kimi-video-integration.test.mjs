@@ -27,4 +27,7 @@ test("Dashboard exposes video upload only for an explicit official Kimi video mo
   assert.match(source, /video\/mp4,video\/quicktime,video\/webm/);
   assert.match(source, /uploadMediaAttachment/);
   assert.doesNotMatch(source, /uploadImageAttachment\(/);
+  assert.match(source, /uploadScopeRef/);
+  assert.match(source, /signal: scope\?\.controller\.signal/);
+  assert.match(source, /action: "release-upload"/);
 });
