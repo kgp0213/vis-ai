@@ -1076,4 +1076,44 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     const res = await apiGet("/api/nonexistent-endpoint");
     assert.equal(res.status, 404);
   });
+
+  test("附件内容 API 支持 GET、HEAD、Range 和会话内授权", async () => {
+    const calls = [];
+    const getAttachmentContent = async (id, options) => {
+      calls.push({ id, method: options.method, range: options.range, hasSignal: Boolean(options.signal) });
+      return {
+        status: options.range ? 206 : 200,
+        headers: {
+          "content-type": "video/mp4",
+          "content-length": options.range ? "4" : "10",
+          "accept-ranges": "bytes",
+          etag: '"hash"',
+          ...(options.range ? { "content-range": "bytes 2-5/10" } : {}),
+        },
+        body: options.method === "HEAD" ? null : Buffer.from(options.range ? "2345" : "0123456789"),
+      };
+    };
+    const get = await apiGet("/api/attachments/att_11111111-1111-4111-8111-111111111111/content", { getAttachmentContent });
+    assert.equal(get.status, 200);
+    assert.equal(Buffer.from(get.body).toString(), "0123456789");
+    assert.equal(get.headers["accept-ranges"], "bytes");
+
+    const rangeReq = { url: "/api/attachments/att_11111111-1111-4111-8111-111111111111/content", method: "GET", headers: { "x-reasonix-token": TOKEN, range: "bytes=2-5" } };
+    const rangeRes = mockRes();
+    await dispatch(rangeReq, rangeRes, mockCtx({ getAttachmentContent }), TOKEN);
+    assert.equal(rangeRes.status, 206);
+    assert.equal(rangeRes.headers["content-range"], "bytes 2-5/10");
+    assert.equal(Buffer.from(rangeRes.body).toString(), "2345");
+
+    const headReq = { url: rangeReq.url, method: "HEAD", headers: { "x-reasonix-token": TOKEN } };
+    const headRes = mockRes();
+    await dispatch(headReq, headRes, mockCtx({ getAttachmentContent }), TOKEN);
+    assert.equal(headRes.status, 200);
+    assert.equal(headRes.body, undefined);
+    assert.deepEqual(calls.map(({ method, range }) => ({ method, range })), [
+      { method: "GET", range: null },
+      { method: "GET", range: "bytes=2-5" },
+      { method: "HEAD", range: null },
+    ]);
+  });
 });

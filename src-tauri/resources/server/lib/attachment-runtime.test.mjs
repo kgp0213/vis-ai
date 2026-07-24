@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -276,4 +276,44 @@ test("an upload whose init response is lost expires without requiring its id", a
   await new Promise((resolveWait) => setTimeout(resolveWait, 30));
   await assert.rejects(runtime.appendUpload(upload.uploadId, PNG, 0), /不存在或已过期/);
   await assert.rejects(readFile(resolve(root, "uploads", upload.uploadId)));
+});
+
+test("attachment sidecars rebuild a corrupt v1 index without losing media", async (t) => {
+  const { root, runtime } = await fixture(t);
+  const stored = await runtime.ingestBytes(MP4, {
+    kind: "video",
+    mimeType: "video/mp4",
+    name: "recover.mp4",
+    sessionId: "session-recover",
+    operationId: "operation-recover",
+    workspace: "C:\\recover",
+  });
+  const sidecars = await readdir(resolve(root, "metadata"));
+  assert.deepEqual(sidecars, [`${stored.id}.json`]);
+
+  await writeFile(resolve(root, "index.json"), "{broken", "utf8");
+  const restored = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
+  assert.deepEqual(await restored.readBytes(stored.id), MP4);
+  const repairedIndex = JSON.parse(await readFile(resolve(root, "index.json"), "utf8"));
+  assert.equal(repairedIndex.version, 1);
+  assert.equal(repairedIndex.attachments[0].id, stored.id);
+});
+
+test("attachment maintenance keeps referenced media and removes old orphan records and blobs", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "visionox-attachments-sweep-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let current = new Date("2026-07-20T00:00:00.000Z");
+  const runtime = createAttachmentRuntime({ rootDir: root, atomicWriteFile, now: () => current });
+  const retained = await runtime.ingestBytes(PNG, { kind: "image", mimeType: "image/png", sessionId: "keep" });
+  const orphan = await runtime.ingestBytes(MP4, { kind: "video", mimeType: "video/mp4", sessionId: "lost" });
+  current = new Date("2026-07-22T00:00:00.000Z");
+
+  const result = await runtime.sweepOrphans({
+    referencedAttachmentIds: [retained.id],
+    graceMs: 24 * 60 * 60 * 1000,
+  });
+  assert.deepEqual(result, { removedRecords: 1, removedBlobs: 1, retainedRecords: 1 });
+  assert.ok(await runtime.get(retained.id));
+  assert.equal(await runtime.get(orphan.id), null);
+  await assert.rejects(readFile(resolve(root, "blobs", orphan.sha256)));
 });
