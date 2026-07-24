@@ -37,8 +37,17 @@ const BLOCKED_TASKS = [
   { id: "T6", reason: "dws-authorization-required" },
 ];
 
+export function sanitizeDiagnostic(value, max = 1600) {
+  return String(value ?? "")
+    .replace(/(?:sk|api)-[a-z0-9._-]{6,}/gi, "[redacted]")
+    .replace(/([?&]token=)[^&\s;]+/gi, "$1[redacted]")
+    .replace(/(--token\s+)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b[a-f0-9]{40,}\b/gi, "[redacted]")
+    .slice(0, max);
+}
+
 function boundedText(value, max = 1600) {
-  return String(value ?? "").replace(/(?:sk|api)-[a-z0-9._-]{6,}/gi, "[redacted]").slice(0, max);
+  return sanitizeDiagnostic(value, max);
 }
 
 function claimedComplete(text) {
