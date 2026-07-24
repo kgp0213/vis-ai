@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
 const dashboardCssUrl = new URL("../visionox-pkg/dashboard/app.css", import.meta.url);
 const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import.meta.url);
+const dashboardSourceRootUrl = new URL("../visionox-pkg/dashboard/src/", import.meta.url);
 
 describe("Dashboard desktop UX", () => {
   test("groups providers into a cascading model menu with import on the chat surface", () => {
@@ -30,10 +31,10 @@ describe("Dashboard desktop UX", () => {
   });
 
   test("keeps generated Markdown inside the app preview instead of launching a system reader", () => {
-    const app = readFileSync(dashboardAppUrl, "utf8");
-    assert.match(app, /Markdown artifacts are preview-only/);
-    assert.match(app, /var ARTIFACT_OPEN_EXTS = .*"html"/);
-    assert.doesNotMatch(app, /var ARTIFACT_OPEN_EXTS = .*"md"/);
+    const markdown = readFileSync(new URL("lib/markdown.ts", dashboardSourceRootUrl), "utf8");
+    assert.match(markdown, /Markdown artifacts are preview-only/);
+    assert.match(markdown, /var ARTIFACT_OPEN_EXTS = .*"html"/);
+    assert.doesNotMatch(markdown, /var ARTIFACT_OPEN_EXTS = .*"md"/);
   });
 
   test("keeps artifact viewing reversible and confirms before leaving the conversation", () => {
@@ -139,7 +140,7 @@ describe("Dashboard desktop UX", () => {
   });
 
   test("uses light for first run without overriding a stored theme", () => {
-    const app = readFileSync(dashboardAppUrl, "utf8");
+    const app = readFileSync(new URL("app.ts", dashboardSourceRootUrl), "utf8");
     const index = readFileSync(dashboardIndexUrl, "utf8");
 
     assert.match(index, /<html lang="en" data-theme="light">/);

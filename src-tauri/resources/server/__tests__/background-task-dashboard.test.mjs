@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
+const dashboardChatSourceUrl = new URL("../visionox-pkg/dashboard/src/panels/chat.ts", import.meta.url);
 
 test("后台工作台兼容通用任务投影并在恢复可见性时重新同步", async () => {
   const source = await readFile(dashboardAppUrl, "utf8");
+  const chatSource = await readFile(dashboardChatSourceUrl, "utf8");
   const workbench = source.slice(source.indexOf("function backgroundJobNeedsAttention"), source.indexOf("function pickWorkspaceDirectoryFromBridge"));
   const chatPanel = source.slice(source.indexOf("function ChatPanel("), source.indexOf("var ChatFeed ="));
 
@@ -37,8 +39,8 @@ test("后台工作台兼容通用任务投影并在恢复可见性时重新同�
   assert.match(workbench, /selectedDeliveries\.find\(\(delivery\) => delivery\?\.target === "conversation"\)/);
   assert.match(workbench, /上一次对话交付结果不确定，重新交付可能产生重复回复。是否确认继续？/);
   assert.match(workbench, /deliveryState\.lastError \|\| deliveryState\.reason \|\| deliveryState\.code/);
-  assert.match(workbench, /options\.find\(\(option/);
-  assert.match(workbench, /choiceId/);
+  assert.match(chatSource, /options\.find\(\(option/);
+  assert.match(chatSource, /choiceId/);
   assert.match(chatPanel, /pendingDeliveries/);
   assert.match(chatPanel, /setPendingDeliveries\(Array\.isArray\(result\.pendingDeliveries\)/);
   assert.match(chatPanel, /expectedRevision: current\?\.revision/);

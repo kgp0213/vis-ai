@@ -9,7 +9,9 @@ export function validateBuildEntrypoints(pkg) {
   const failures = [];
   if (scripts["tauri:build"] !== "node scripts/run-tauri-build.js") failures.push("tauri:build must use the canonical wrapper");
   if (scripts.tauri !== "tauri") failures.push("generic tauri entrypoint must use the project CLI");
-  if (scripts["pretauri:dev"] !== "node scripts/prepare-runtime-package.js") failures.push("tauri:dev must prepare the runtime package first");
+  if (scripts["pretauri:dev"] !== "npm run dashboard:check && node scripts/prepare-runtime-package.js") {
+    failures.push("tauri:dev must verify the Dashboard build and prepare the runtime package first");
+  }
   if (scripts["tauri:dev"] !== "tauri dev") failures.push("tauri:dev must use the project CLI");
   for (const [name, command] of Object.entries(scripts)) {
     if (["tauri", "pretauri:dev", "tauri:dev", "tauri:build", "bundle:nsis", "release:check"].includes(name)) continue;

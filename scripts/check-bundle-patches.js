@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Guardrail for the vendored reasonix dashboard/API bundles.
+ * Guardrail for generated Dashboard assets and directly maintained API bundles.
  *
  * These files are currently treated as patched source in this repository. A
  * restore from the upstream package can silently remove local fixes, so this
@@ -48,7 +48,7 @@ const required = [
   },
   {
     file: "scripts/run-tauri-build.js",
-    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "prepareRuntimeLibResources", '"resources/server/lib/": null', '"server-lib"', "resourceOverride", "release-manifest.json", "verify-runtime-manifest.js", "verify-release-resources.js", "release-manifest.js"],
+    markers: ["CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "npm_config_offline", "mkdtempSync", "visionox-release-", "prepareRuntimeLibResources", '"resources/server/lib/": null', '"server-lib"', "resourceOverride", "release-manifest.json", "verify-runtime-manifest.js", "check-dashboard-build.js", "verify-release-resources.js", "release-manifest.js"],
   },
   {
     file: "scripts/verify-release-resources.js",
@@ -56,7 +56,7 @@ const required = [
   },
   {
     file: "scripts/check-build-entrypoints.js",
-    markers: ["validateBuildEntrypoints", "tauri:dev must prepare the runtime package first", "bypasses the governed build entrypoints"],
+    markers: ["validateBuildEntrypoints", "tauri:dev must verify the Dashboard build and prepare the runtime package first", "bypasses the governed build entrypoints"],
   },
   {
     file: "scripts/check-api-contracts.js",
@@ -404,7 +404,6 @@ const required = [
       "function FilesPanel",
       "app.tabFiles",
       "data-preview-code-copy",
-      "Markdown artifacts are preview-only",
       "confirmExternalArtifactOpen",
       "reasoning-live-tail",
       "reasoningExpanded",
@@ -486,7 +485,6 @@ const required = [
       "closeBackgroundWorkbench",
       "controlDocumentJob",
       "backgroundJobDetailRequestRef",
-      "Keep the original control error visible when the detail refresh also fails.",
       "另存后台草稿",
       "previewDocumentJob",
       "重试失败部分",
@@ -558,6 +556,22 @@ const required = [
       'value="indigo-night"',
     ],
     forbidden: ['<span class="v">Ver${version2}</span>'],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/src/lib/markdown.ts",
+    markers: ["Markdown artifacts are preview-only"],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/src/panels/chat.ts",
+    markers: ["Keep the original control error visible when the detail refresh also fails."],
+  },
+  {
+    file: "scripts/build-dashboard.js",
+    markers: ["offline esbuild is missing", 'entryPoints: ["dashboard/src/app.ts"]', 'treeShaking: false'],
+  },
+  {
+    file: "scripts/check-dashboard-build.js",
+    markers: ["is not deterministic", "is stale", "non-portable marker", "expectedVersions"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2KDUS647.js",
@@ -928,7 +942,8 @@ if (ownershipManifest.schemaVersion !== 1 || !Array.isArray(ownershipManifest.en
   failures.push("scripts/bundle-source-ownership.json: invalid ownership manifest");
 }
 for (const entry of ownershipManifest.entries ?? []) {
-  if (!entry?.path || entry.sourceOfTruth !== "bundle" || !entry.owner || !entry.verification) {
+  const generatedFromSource = typeof entry?.sourceOfTruth === "string" && entry.sourceOfTruth !== "bundle";
+  if (!entry?.path || !entry.sourceOfTruth || !entry.owner || !entry.verification || (generatedFromSource && !entry.build)) {
     failures.push(`scripts/bundle-source-ownership.json: incomplete entry ${JSON.stringify(entry)}`);
   }
   if (entry?.path && !existsSync(join(root, entry.path))) {

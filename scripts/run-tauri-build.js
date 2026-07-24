@@ -120,6 +120,7 @@ export function runTauriBuild(options = {}) {
 
   try {
     runner("verify runtime manifest", join(root, "scripts", "verify-runtime-manifest.js"), [], env);
+    runner("verify Dashboard source build", join(root, "scripts", "check-dashboard-build.js"), [], env);
     runner("prepare runtime package", join(root, "scripts", "prepare-runtime-package.js"), [], env);
     runner("check bundle patches", join(root, "scripts", "check-bundle-patches.js"), [], env);
     const runtimeLib = prepareRuntimeLibResources(root, stagingRoot);

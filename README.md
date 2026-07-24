@@ -239,6 +239,8 @@ docs/                        使用、架构与开发文档
 | `scripts/quality-check.js` | 本地与 CI 共用的提交前质量门禁 |
 | `scripts/check-repository-hygiene.js` | 阻止临时 map、备份和冗余归档文件重新进入项目或 release |
 | `scripts/ui-smoke.js` | 使用真实 Edge 验证 Dashboard 启动渲染，并隔离用户数据 |
+| `scripts/build-dashboard.js` | 使用锁定的离线依赖从 TypeScript 源码生成唯一 Dashboard 产物 |
+| `scripts/check-dashboard-build.js` | 验证 Dashboard 确定性、可移植性及提交产物一致性 |
 | `scripts/run-tauri-build.js` | 唯一 release 构建入口 |
 | `scripts/prepare-runtime-package.js` | 在系统临时目录准备裁剪后的生产运行时 |
 | `scripts/check-bundle-patches.js` | 检查本地补丁、品牌和构建身份 |
@@ -249,8 +251,8 @@ docs/                        使用、架构与开发文档
 
 ## 维护边界
 
-- `src-tauri/resources/server/visionox-pkg/` 包含本项目直接维护的 Dashboard 和服务端补丁。
-- `visionox-pkg` 下的 JavaScript bundle 必须纳入 Git；source map 不作为源码或交付资源保留，不能用于覆盖当前 bundle。
+- Dashboard 源码位于 `src-tauri/resources/server/visionox-pkg/dashboard/src/`；只能修改源码并运行 `npm run dashboard:build`，不得直接编辑生成的 `dist/app.js` 或 `app.css`。
+- `visionox-pkg` 下的生成物和带补丁的 CLI bundle 必须纳入 Git；source map 不作为源码或交付资源保留，不能用于覆盖当前源码。
 - 普通 `restore:pkg` 与 `fetch:binaries` 入口默认禁用。
 - 上游包恢复或网络下载只能在明确授权后使用危险维护入口。
 - 不从旧安装、AppData、历史 build、source map 或备份目录覆盖当前源码。

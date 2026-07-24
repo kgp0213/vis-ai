@@ -21,6 +21,7 @@ describe("release build contract", () => {
     });
     assert.equal(result.env.CARGO_NET_OFFLINE, "true");
     assert.equal(result.env.npm_config_offline, "true");
+    assert.equal(calls.some((call) => call.label === "verify Dashboard source build"), true);
     assert.match(result.env.CARGO_TARGET_DIR, /src-tauri[\\/]target$/);
     assert.equal(result.env.CARGO_TARGET_DIR.endsWith(join("target", "debug")), false);
     const buildCall = calls.find((call) => call.label === "build release");

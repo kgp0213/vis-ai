@@ -19,6 +19,12 @@ function run(label, command, args) {
 }
 
 run("launcher syntax", "node", ["--check", "src-tauri/resources/server/launcher.mjs"]);
+run("dashboard typecheck", "node", [
+  "src-tauri/resources/server/visionox-pkg/node_modules/typescript/bin/tsc",
+  "-p",
+  "src-tauri/resources/server/visionox-pkg/dashboard/tsconfig.json",
+]);
+run("dashboard source build", "node", ["scripts/check-dashboard-build.js"]);
 run("dashboard syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js"]);
 run("server bundle syntax", "node", ["--check", "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js"]);
 run("product version consistency", "node", ["scripts/check-version-consistency.js"]);

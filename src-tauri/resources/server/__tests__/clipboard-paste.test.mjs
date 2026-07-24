@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const dashboard = readFileSync(new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url), "utf8");
+const dashboard = readFileSync(new URL("../visionox-pkg/dashboard/src/panels/chat.ts", import.meta.url), "utf8");
+const chatInternals = readFileSync(new URL("../visionox-pkg/dashboard/src/components/chat-internals.ts", import.meta.url), "utf8");
+const markdown = readFileSync(new URL("../visionox-pkg/dashboard/src/lib/markdown.ts", import.meta.url), "utf8");
 const loader = readFileSync(new URL("../../../../src/index.html", import.meta.url), "utf8");
 
 test("plain Windows paths paste locally while copied files prefer the native bridge", () => {
@@ -25,6 +27,6 @@ test("plain Windows paths paste locally while copied files prefer the native bri
 });
 
 test("Windows paths remain readable when rendered as chat messages", () => {
-  assert.match(dashboard, /function protectWindowsPathBackslashesForMarkdown/);
-  assert.match(dashboard, /renderMessageBody\(msg\.text, role\)/);
+  assert.match(markdown, /function protectWindowsPathBackslashesForMarkdown/);
+  assert.match(chatInternals, /renderMessageBody\(msg\.text, role\)/);
 });

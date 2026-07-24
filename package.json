@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "pretauri:dev": "node scripts/prepare-runtime-package.js",
+    "dashboard:build": "node scripts/build-dashboard.js",
+    "dashboard:typecheck": "node src-tauri/resources/server/visionox-pkg/node_modules/typescript/bin/tsc -p src-tauri/resources/server/visionox-pkg/dashboard/tsconfig.json",
+    "dashboard:check": "node scripts/check-dashboard-build.js",
+    "pretauri:dev": "npm run dashboard:check && node scripts/prepare-runtime-package.js",
     "tauri:dev": "tauri dev",
     "tauri:build": "node scripts/run-tauri-build.js",
     "bundle:nsis": "npm run tauri:build -- --bundles nsis && npm run verify:nsis",

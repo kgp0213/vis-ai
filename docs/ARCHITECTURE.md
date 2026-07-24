@@ -78,11 +78,11 @@ vis-ai/
 | `src-tauri/src/lib.rs` | 窗口创建、Node 进程管理、健康检查、启动流程、全局诊断日志、子进程崩溃监控 |
 | `src/index.html` | 加载页 UI、iframe 恢复逻辑、三层刷新恢复机制 |
 | `src-tauri/resources/server/launcher.mjs` | AI Agent 启动器、工具注册、MCP 管理、会话管理、Skill 安装、系统提示词 |
-| `src-tauri/resources/server/visionox-pkg/` | Vendored 上游服务端代码（Dashboard + CLI chunks） |
+| `src-tauri/resources/server/visionox-pkg/` | Dashboard 可重建源码、生成产物与 vendored CLI chunks |
 | `src-tauri/Cargo.toml` | Rust 依赖与 features |
 | `src-tauri/tauri.conf.json` | 窗口配置、资源打包、跨平台 bundle 配置 |
 
-> 维护边界：当前 `visionox-pkg` 下的 Dashboard bundle 与 API bundle 含本项目本地补丁。普通 `restore:pkg` 已禁用；更新上游包前需要先迁移本地补丁，更新后运行 `npm run check:bundle-patches`。
+> 维护边界：Dashboard 由仓库源码确定性生成；CLI/API bundle 仍含本地补丁。普通 `restore:pkg` 已禁用；更新上游包前需要先迁移本地补丁，更新后运行 `npm run check:bundle-patches`。
 
 ## 源码所有权与可复现性
 
@@ -90,23 +90,14 @@ vis-ai/
 
 | 类型 | 路径 | 维护方式 |
 |------|------|----------|
-| 本项目源码 | `src-tauri/src/`、`src/`、`resources/server/launcher.mjs`、`resources/server/lib/`、`scripts/` | 直接修改，增加针对性测试，执行 `npm run quality:check` |
-| 带本地补丁的上游 bundle | `visionox-pkg/dashboard/dist/app.js`、`dashboard/app.css`、`visionox-pkg/dist/cli/*.js` | 当前直接维护，所有权、事实来源和验证命令登记在 `scripts/bundle-source-ownership.json`，必须通过 `check:bundle-patches`，禁止被上游恢复脚本覆盖 |
+| 本项目源码 | `src-tauri/src/`、`src/`、`resources/server/launcher.mjs`、`resources/server/lib/`、`visionox-pkg/dashboard/src/`、`scripts/` | 直接修改，增加针对性测试，执行 `npm run quality:check` |
+| Dashboard 生成物 | `visionox-pkg/dashboard/dist/app.js`、`dashboard/app.css` | 由 `npm run dashboard:build` 生成，`dashboard:check` 校验，不得直接修改 |
+| 带本地补丁的上游 bundle | `visionox-pkg/dist/cli/*.js` | 当前直接维护，所有权、事实来源和验证命令登记在 `scripts/bundle-source-ownership.json`，必须通过 `check:bundle-patches`，禁止被上游恢复脚本覆盖 |
 
-历史审计确认，上游包附带的 Dashboard source map 只对应较早的构建快照；当前 `app.js` 在该
-快照之后又积累了大量本地功能修改。因此仓库和 release 都不保留 source map，它不能作为
-当前 Dashboard 的可重建源码，也不能用于覆盖当前 bundle。
-
-Dashboard 只有同时满足以下条件后，才允许从“直接维护 bundle”切换到源码构建：
-
-1. 将可读源码放入 Git 跟踪目录，并明确依赖锁文件和离线构建命令。
-2. 按记忆、索引、会话、模型、文件中心等功能建立迁移清单，逐项移植本地差异。
-3. 生成物通过 bundle marker、全部 Node 测试和真实 Edge 渲染检查。
-4. 对比规范 release 资源树，确认构建不下载依赖、不生成 `target/debug` 或第二套资源。
-
-当前功能领域、对应回归证据和切换验收条件见 [Dashboard 功能基线](DASHBOARD_PARITY.md)。
-
-在这些条件满足前，不执行批量反编译、source map 覆盖或上游 bundle 恢复。
+历史 source map 只对应较早上游快照，不能覆盖当前产品。当前源码树已经按现有 bundle 的模块边界和
+本地差异恢复，构建只读取仓库源码与 `visionox-pkg/package-lock.json` 锁定的离线依赖。
+`dashboard:check` 会验证两次临时构建逐字节一致、生成物与提交内容一致，并拒绝 source map、AppData
+和开发机绝对路径泄漏。功能领域与回归证据见 [Dashboard 功能基线](DASHBOARD_PARITY.md)。
 
 ## Launcher 模块边界
 

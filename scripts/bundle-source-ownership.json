@@ -1,18 +1,20 @@
 {
   "schemaVersion": 1,
-  "policy": "vendored bundle files are directly maintained until a reproducible source build is available",
+  "policy": "generated Dashboard assets are owned by checked-in source; remaining upstream runtime bundles are directly maintained",
   "entries": [
     {
       "path": "src-tauri/resources/server/visionox-pkg/dashboard/dist/app.js",
       "owner": "dashboard",
-      "sourceOfTruth": "bundle",
-      "verification": "scripts/check-bundle-patches.js + scripts/ui-smoke.js"
+      "sourceOfTruth": "src-tauri/resources/server/visionox-pkg/dashboard/src",
+      "build": "npm run dashboard:build",
+      "verification": "npm run dashboard:check + scripts/ui-smoke.js"
     },
     {
       "path": "src-tauri/resources/server/visionox-pkg/dashboard/app.css",
       "owner": "dashboard",
-      "sourceOfTruth": "bundle",
-      "verification": "scripts/check-bundle-patches.js + scripts/ui-smoke.js"
+      "sourceOfTruth": "src-tauri/resources/server/visionox-pkg/dashboard/src/app.css",
+      "build": "npm run dashboard:build",
+      "verification": "npm run dashboard:check + scripts/ui-smoke.js"
     },
     {
       "path": "src-tauri/resources/server/visionox-pkg/dist/index.js",

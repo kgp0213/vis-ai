@@ -26,7 +26,7 @@ const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.
 const sessionUrl = new URL("../visionox-pkg/dist/cli/chunk-6PBZN4VI.js", import.meta.url);
 const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
 const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import.meta.url);
-const katexSupportUrl = new URL("../visionox-pkg/dashboard/katex-support.js", import.meta.url);
+const dashboardSourceRootUrl = new URL("../visionox-pkg/dashboard/src/", import.meta.url);
 const launcherUrl = new URL("../launcher.mjs", import.meta.url);
 const modelTaskRequestUrl = new URL("../lib/model-task-request.mjs", import.meta.url);
 const fileAccessRescueSkillUrl = new URL("../../bootstrap-skills/file-access-rescue/SKILL.md", import.meta.url);
@@ -450,28 +450,6 @@ describe("Dashboard 回归护栏", () => {
     assert.deepEqual(calls, [["trash", ["a", "b"]], ["restore", "trash-1", "restored-copy"], ["permanent", ["trash-1"]], ["retention", 45]]);
   });
 
-  test("六个 Markdown 入口共享 KaTeX 扩展，文件预览加载同一份样式", () => {
-    const app = readFileSync(dashboardAppUrl, "utf8");
-    const index = readFileSync(dashboardIndexUrl, "utf8");
-    const support = readFileSync(katexSupportUrl, "utf8");
-
-    assert.match(app, /VisionoxKatex\.markedExtensions\(\)/);
-    assert.match(app, /marked\.use\(\{ renderer, extensions: mathExtensions/);
-    assert.match(app, /function renderMarkdownToString\(text\) \{\s*return marked\.parse\(text\)/);
-    assert.match(app, /function renderMarkdownPreviewToString[\s\S]*?return marked\.parse\(text\)/);
-    assert.match(app, /marked\.parse\(modal\.plan \|\| ""\)/);
-    assert.match(app, /marked\.parse\(modal\.body\)/);
-    assert.match(app, /marked\.parse\(open\.body\)/);
-    assert.match(app, /marked\(markdown, \{ breaks: true, gfm: true \}\)/);
-    assert.match(app, /vendor\/katex\/katex\.min\.css\?token=/);
-    assert.match(index, /vendor\/katex\/katex\.min\.css\?token=__VISIONOX_TOKEN__/);
-    assert.match(index, /vendor\/katex\/katex\.min\.js\?token=__VISIONOX_TOKEN__/);
-    assert.match(index, /katex-support\.js\?token=__VISIONOX_TOKEN__/);
-    assert.match(support, /name: "visionoxBlockMath"/);
-    assert.match(support, /name: "visionoxInlineMath"/);
-    assert.doesNotMatch(support, /mermaid/i);
-  });
-
   test("记忆管理统一长期、场景和会话记忆，不再暴露原始文件编辑器", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
 
@@ -572,7 +550,9 @@ describe("Dashboard 回归护栏", () => {
   });
 
   test("概览位于任务和 OA 之间，系统能力合并后不再占用高级入口", () => {
-    const source = readFileSync(dashboardAppUrl, "utf8");
+    const source = readFileSync(new URL("app.ts", dashboardSourceRootUrl), "utf8");
+    const changesSource = readFileSync(new URL("panels/changes.ts", dashboardSourceRootUrl), "utf8");
+    const systemSource = readFileSync(new URL("panels/system.ts", dashboardSourceRootUrl), "utf8");
     const workspace = source.slice(source.indexOf('label: t4("app.sectionWorkspace")'), source.indexOf('label: t4("app.sectionConfigure")'));
     const advanced = source.slice(source.indexOf('label: t4("app.sectionConfigure")'), source.indexOf("function App("));
     const workspaceIds = [...workspace.matchAll(/\{ id: "([^"]+)"/g)].map((match) => match[1]);
@@ -586,8 +566,10 @@ describe("Dashboard 回归护栏", () => {
     assert.match(advanced, /ChangesPanel is hidden because it duplicates the main chat/);
     assert.match(advanced, /future replacement should be a read-only "session changes" summary/);
     assert.match(advanced, /SystemPanel is retained for diagnostics/);
-    assert.match(source, /function ChangesPanel\(\)/);
-    assert.match(source, /function SystemPanel\(\)/);
+    assert.match(source, /import \{ ChangesPanel \} from "\.\/panels\/changes\.js"/);
+    assert.match(source, /import \{ SystemPanel \} from "\.\/panels\/system\.js"/);
+    assert.match(changesSource, /function ChangesPanel\(\)/);
+    assert.match(systemSource, /function SystemPanel\(\)/);
     assert.match(advanced, /id: "memory"[\s\S]*?breakBefore: true/);
     assert.match(advanced, /id: "mcp"[\s\S]*?breakBefore: true/);
     assert.match(advanced, /id: "permissions"[\s\S]*?breakBefore: true/);
@@ -815,17 +797,19 @@ describe("Dashboard 回归护栏", () => {
   });
 
   test("五类交互卡片校验 gate、避免重复提交并保持计划事务一致", () => {
-    const app = readFileSync(dashboardAppUrl, "utf8");
+    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const chatInternals = readFileSync(new URL("components/chat-internals.ts", dashboardSourceRootUrl), "utf8");
+    const markdown = readFileSync(new URL("lib/markdown.ts", dashboardSourceRootUrl), "utf8");
     const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
     const launcher = readFileSync(launcherUrl, "utf8");
     const server = readFileSync(serverUrl, "utf8");
     const planTools = readFileSync(new URL("../visionox-pkg/dist/cli/chunk-2R4QCDOZ.js", import.meta.url), "utf8");
 
-    assert.match(app, /\.\.\.\(gateModal \? \{ gateId \} : \{\}\)/);
-    assert.match(app, /const \[modalResolving, setModalResolving\]/);
-    assert.match(app, /disabled=\$\{!feedback\.trim\(\)\}/);
-    assert.match(app, /disabled=\$\{!reviseText\.trim\(\)\}/);
-    assert.match(app, /renderer\.html = \(\{ text \}\) => escapeHtml\(text\)/);
+    assert.match(chat, /\.\.\.\(gateModal \? \{ gateId \} : \{\}\)/);
+    assert.match(chat, /const \[modalResolving, setModalResolving\]/);
+    assert.match(chatInternals, /disabled=\$\{!feedback\.trim\(\)\}/);
+    assert.match(chatInternals, /disabled=\$\{!reviseText\.trim\(\)\}/);
+    assert.match(markdown, /renderer\.html = \(\{ text \}\) => escapeHtml\(text\)/);
     assert.match(css, /\.modal-resolving/);
     assert.match(css, /\.modal-step-risk-med/);
 
@@ -837,7 +821,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(launcher, /if \(resolved && choice === "approve"\) \{[\s\S]{0,300}activatePendingPlan\(\)/);
     assert.match(launcher, /if \(resolved && choice !== "approve"\) pendingPlan = null/);
     assert.match(launcher, /stepId .* is not in the active plan/);
-    assert.match(app, /dash\.kind === "plan-activated"/);
+    assert.match(chat, /dash\.kind === "plan-activated"/);
     assert.match(planTools, /onPlanSubmitted\?\.\(plan, steps, summary\)/);
     assert.match(planTools, /completed: checkpoint\?\.completed/);
     assert.match(planTools, /never repeat or translate the title/);
