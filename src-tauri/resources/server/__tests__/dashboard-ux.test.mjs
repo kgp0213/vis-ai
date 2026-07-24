@@ -8,6 +8,16 @@ const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import
 const dashboardSourceRootUrl = new URL("../visionox-pkg/dashboard/src/", import.meta.url);
 
 describe("Dashboard desktop UX", () => {
+  test("shows redacted provider diagnostics in the existing settings surface", () => {
+    const settings = readFileSync(new URL("panels/settings.ts", dashboardSourceRootUrl), "utf8");
+    assert.match(settings, /api\("\/providers\/diagnostics"\)/);
+    assert.match(settings, /providerDiagnostics/);
+    assert.match(settings, /effectiveBaseUrl/);
+    assert.match(settings, /configuredApiKeyPresent/);
+    assert.match(settings, /changedOutsideManagedFlow/);
+    assert.doesNotMatch(settings, /diagnostic\.apiKey\b/);
+  });
+
   test("groups providers into a cascading model menu with import on the chat surface", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     assert.match(app, /function providerDisplayGroups\(providers\)/);
