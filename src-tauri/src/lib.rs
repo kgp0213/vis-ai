@@ -1503,12 +1503,25 @@ fn begin_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
 
 /// Expand the borderless splash into the full application window once the
 /// dashboard has taken over: resize first, then re-apply the minimum size,
-/// restore native decorations and re-center. Order matters — applying the
+/// restore native decorations and re-center. Order matters - applying the
 /// minimum before the resize would fight the splash dimensions.
+/// On low-resolution screens (e.g. 1366x768) the full 800px window height
+/// plus the native titlebar would overflow the screen, pushing the titlebar
+/// off-screen. We clamp the window to the current monitor's work area.
 #[tauri::command]
 fn finish_startup_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    let mut target_w = WINDOW_WIDTH;
+    let mut target_h = WINDOW_HEIGHT;
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let work_size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+        // Reserve ~48px for the native titlebar + taskbar overlap
+        let max_h = work_size.height - 48.0;
+        let max_w = work_size.width;
+        if target_h > max_h { target_h = max_h; }
+        if target_w > max_w { target_w = max_w; }
+    }
     window
-        .set_size(tauri::LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT))
+        .set_size(tauri::LogicalSize::new(target_w, target_h))
         .map_err(|e| format!("resize to full window failed: {e}"))?;
     window
         .set_min_size(Some(tauri::LogicalSize::new(

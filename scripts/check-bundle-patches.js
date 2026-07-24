@@ -113,6 +113,7 @@ const required = [
       "rebuildProviderContextCaps",
       "contextCapacitySource",
       "beginActiveOperation",
+      "requestOperationStop",
       "preparedDocumentRegistry",
       "append_file",
       "save_last_assistant_response",
@@ -288,6 +289,7 @@ const required = [
     markers: [
       "_configCache.ctimeMs === fileStat.ctimeMs",
       "size: fileStat.size, parsed: cfg",
+      "if (baseUrl && apiKey && model)",
     ],
   },
   {
@@ -382,6 +384,7 @@ const required = [
       'previewProviderImport',
       "capabilities?.maxContextTokens",
       'credentials" && rest[1] === "test"',
+      "语义搜索配置不完整",
     ],
   },
   {
@@ -413,6 +416,8 @@ const required = [
       "const skillInvocation = { name: selected.skill.name, task }",
       "body.skillInvocation = resolved.skillInvocation",
       "skillCredentialSetup",
+      "renderExecutionReceipt",
+      "execution-receipt",
       "chat.skillCredentialHint",
       "pickWorkspaceDirectoryFromBridge",
       'api("/workspaces"',
@@ -648,6 +653,7 @@ const required = [
       ".memory-soul-note",
       ".memory-runtime-pending",
       ".memory-soul-history",
+      ".execution-receipt",
       ".memory-trash-blocked",
       ".side-foot .label",
       "text-overflow: ellipsis",
@@ -905,6 +911,7 @@ const required = [
       "decodeTruncatedOutputPart",
       "showing beginning and end",
       "const getEnvironment =",
+      "signal: ctx?.signal",
       "env: environment",
       "...(opts.env ?? {})",
       "Optional stable documentRef from prepare_local_document",

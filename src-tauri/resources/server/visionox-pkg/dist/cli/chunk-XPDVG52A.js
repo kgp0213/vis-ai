@@ -2535,18 +2535,16 @@ function resolveSemanticEmbeddingConfig(path = defaultConfigPath()) {
     const baseUrl = user.openaiCompat?.baseUrl?.trim() ?? "";
     const apiKey = user.openaiCompat?.apiKey?.trim() ?? "";
     const model = user.openaiCompat?.model?.trim() ?? "";
-    if (!baseUrl) throw new Error("OpenAI-compatible embeddings require an API URL.");
-    requireValidUrl(baseUrl, "OpenAI-compatible API URL");
-    if (!apiKey) throw new Error("OpenAI-compatible embeddings require an API key.");
-    if (!model) throw new Error("OpenAI-compatible embeddings require a model.");
-    return {
-      provider,
-      baseUrl,
-      apiKey,
-      model,
-      extraBody: normalizeExtraBody(user.openaiCompat?.extraBody),
-      timeoutMs: DEFAULT_TIMEOUT_MS
-    };
+    if (baseUrl && apiKey && model) {
+      return {
+        provider,
+        baseUrl,
+        apiKey,
+        model,
+        extraBody: normalizeExtraBody(user.openaiCompat?.extraBody),
+        timeoutMs: DEFAULT_TIMEOUT_MS
+      };
+    }
   }
   return {
     provider: "ollama",

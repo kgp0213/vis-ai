@@ -3211,7 +3211,12 @@ async function runSearch(rawBody, ctx) {
   const topK = typeof parsed.topK === "number" && Number.isFinite(parsed.topK) ? Math.max(1, Math.min(16, Math.floor(parsed.topK))) : 8;
   const minScore = typeof parsed.minScore === "number" && Number.isFinite(parsed.minScore) ? Math.max(0, Math.min(1, parsed.minScore)) : 0.3;
   const startedAt = Date.now();
-  const embedding = resolveSemanticEmbeddingConfig(ctx.configPath);
+  let embedding;
+  try {
+    embedding = resolveSemanticEmbeddingConfig(ctx.configPath);
+  } catch (err) {
+    return { status: 503, body: { error: `语义搜索配置不完整：${err.message}。请在设置中配置 embedding API 或切换到本地 Ollama。` } };
+  }
   try {
     const groups = await querySemanticGroups(root, query, {
       knowledgeTopK: topK,
