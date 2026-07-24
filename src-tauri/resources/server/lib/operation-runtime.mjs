@@ -14,9 +14,20 @@ export function createOperationRuntime({
   idFactory = randomUUID,
   now = () => new Date().toISOString(),
   createController = () => new AbortController(),
+  lifecycle = null,
   onError = (error) => console.error(`[operation-runtime] ${error?.message || error}`),
 } = {}) {
   let activeOperation = null;
+
+  function emitLifecycle(event, operation, details = {}) {
+    if (typeof lifecycle?.emit !== "function") return;
+    void Promise.resolve(lifecycle.emit(event, {
+      operationId: operation?.id ?? null,
+      kind: operation?.kind ?? null,
+      state: operation?.state ?? null,
+      ...details,
+    })).catch(onError);
+  }
 
   function publicOperation(operation = activeOperation) {
     if (!operation) return null;
@@ -62,6 +73,7 @@ export function createOperationRuntime({
     });
     activeOperation = operation;
     publish(operation);
+    emitLifecycle("operation.started", operation);
     return operation;
   }
 
@@ -78,6 +90,7 @@ export function createOperationRuntime({
     }
     operation.controller.abort();
     publish(operation);
+    emitLifecycle("operation.stopping", operation, { reason });
     try {
       void Promise.resolve(stopOwned(operation.id, { graceMs: 100 })).catch(onError);
     } catch (error) {
@@ -99,6 +112,7 @@ export function createOperationRuntime({
     }
     closeOperationContext(operation.context, finalState, now());
     publish(operation, finalState);
+    emitLifecycle("operation.finished", operation, { finalState });
     activeOperation = null;
     drain();
     return true;

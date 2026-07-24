@@ -97,3 +97,17 @@ test("operation scope refresh uses current conversation and workspace", () => {
   assert.equal(operation.context.conversationId, "conversation-2");
   assert.equal(operation.context.workspace, "C:/workspace-b");
 });
+
+test("operation lifecycle observers receive non-blocking start, stop and finish facts", async () => {
+  const events = [];
+  const runtime = createOperationRuntime({
+    lifecycle: { emit: async (event, payload) => { events.push({ event, payload }); } },
+    idFactory: () => "operation-hooks",
+  });
+  const operation = runtime.begin("chat");
+  runtime.stop(operation, "user_cancelled");
+  runtime.finish(operation, "cancelled");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events.map((entry) => entry.event), ["operation.started", "operation.stopping", "operation.finished"]);
+  assert.equal(events[2].payload.finalState, "cancelled");
+});

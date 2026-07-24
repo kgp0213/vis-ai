@@ -19,10 +19,45 @@ describe("tool progress projection", () => {
   });
 
   test("redacts nested credentials while preserving useful non-secret facts", () => {
-    const value = redactToolProgressValue({ headers: { Authorization: "Bearer hidden" }, path: "C:/work/a.txt", nested: [{ password: "hidden" }] });
+    const value = redactToolProgressValue({
+      headers: { Authorization: "Bearer hidden", "X-API-Key": "hidden-too" },
+      path: "C:/work/a.txt",
+      nested: [{ password: "hidden", secret_access_key: "aws-secret", access_key_id: "aws-id", credentials: "credential-bundle" }],
+    });
     assert.equal(value.path, "C:/work/a.txt");
     assert.equal(value.headers.Authorization, "[REDACTED]");
+    assert.equal(value.headers["X-API-Key"], "[REDACTED]");
     assert.equal(value.nested[0].password, "[REDACTED]");
+    assert.equal(value.nested[0].secret_access_key, "[REDACTED]");
+    assert.equal(value.nested[0].access_key_id, "[REDACTED]");
+    assert.equal(value.nested[0].credentials, "[REDACTED]");
+  });
+
+  test("redacts credentials from structured tool results before Dashboard projection", () => {
+    const done = projectToolProgressEvent({
+      role: "tool",
+      toolStatus: "succeeded",
+      toolName: "probe",
+      callId: "call-json",
+      content: JSON.stringify({ ok: true, credentials: { apiKey: "json-secret", clientSecret: "client-secret" } }),
+    });
+
+    assert.match(done.content, /\"ok\":true/);
+    assert.doesNotMatch(done.content, /json-secret|client-secret/);
+    assert.match(done.content, /\[REDACTED\]/);
+  });
+
+  test("redacts common credential labels from unstructured tool results", () => {
+    const done = projectToolProgressEvent({
+      role: "tool",
+      toolStatus: "failed",
+      toolName: "probe",
+      callId: "call-text",
+      content: "secret_access_key=aws-secret access_key_id=aws-id credentials=credential-bundle",
+    });
+
+    assert.doesNotMatch(done.content, /aws-secret|aws-id|credential-bundle/);
+    assert.equal((done.content.match(/\[REDACTED\]/g) ?? []).length, 3);
   });
 
   test("stores bounded per-call progress in the turn receipt", () => {

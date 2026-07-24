@@ -172,4 +172,14 @@ describe("Dashboard desktop UX", () => {
     assert.doesNotMatch(index, /test\(t\)\) t = 'dark'/);
     assert.match(app, /getAttribute\("data-theme"\)\) \|\| "light"/);
   });
+
+  test("updates parallel tool progress in place by stable toolCallId", () => {
+    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const internals = readFileSync(new URL("components/chat-internals.ts", dashboardSourceRootUrl), "utf8");
+    assert.match(chat, /upsertToolProgress/);
+    assert.match(chat, /toolCallId/);
+    assert.match(chat, /const \[activeTools, setActiveTools\]/);
+    assert.doesNotMatch(chat, /const \[activeTool, setActiveTool\]/);
+    assert.match(internals, /tool-progress-status/);
+  });
 });

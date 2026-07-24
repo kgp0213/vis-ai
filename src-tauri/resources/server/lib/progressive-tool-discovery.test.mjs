@@ -40,6 +40,26 @@ describe("progressive tool discovery", () => {
     assert.equal(result.remaining, 22);
   });
 
+  test("presents each dynamically loaded tool exactly once", async () => {
+    const allSpecs = Array.from({ length: 25 }, (_, index) => spec(`mcp_${index}`, `service ${index}`));
+    const presentationCounts = new Map();
+    const presentSpec = (toolSpec) => {
+      const name = toolSpec.function.name;
+      presentationCounts.set(name, (presentationCounts.get(name) ?? 0) + 1);
+      return toolSpec;
+    };
+    const runtime = createProgressiveToolDiscovery({
+      getCapabilities: () => ({ progressiveToolDiscovery: true }),
+      getMcpToolNames: () => allSpecs.map((item) => item.function.name),
+      getToolSpecs: () => allSpecs,
+      presentSpec,
+      addToolToPrefix: (toolSpec) => Boolean(presentSpec(toolSpec)),
+    });
+
+    await runtime.toolDefinition.fn({ query: "service", limit: 1 });
+    assert.equal(presentationCounts.get("mcp_0"), 1);
+  });
+
   test("leaves all MCP tools visible for models without the capability", () => {
     const allSpecs = [spec("read_file"), ...Array.from({ length: 30 }, (_, index) => spec(`mcp_${index}`))];
     const runtime = createProgressiveToolDiscovery({
@@ -49,5 +69,30 @@ describe("progressive tool discovery", () => {
       addToolToPrefix: () => true,
     });
     assert.deepEqual(runtime.presentInitialSpecs(allSpecs).map((item) => item.function.name), allSpecs.map((item) => item.function.name));
+  });
+
+  test("synchronizes an existing prefix when capability or MCP count changes", async () => {
+    const allSpecs = [spec("read_file"), ...Array.from({ length: 25 }, (_, index) => spec(`mcp_${index}`, `service ${index}`))];
+    let capabilities = {};
+    const added = [];
+    const removed = [];
+    const runtime = createProgressiveToolDiscovery({
+      getCapabilities: () => capabilities,
+      getMcpToolNames: () => allSpecs.slice(1).map((item) => item.function.name),
+      getToolSpecs: () => allSpecs,
+      addToolToPrefix: (toolSpec) => { added.push(toolSpec.function.name); return true; },
+      removeToolFromPrefix: (name) => { removed.push(name); return true; },
+    });
+
+    assert.equal(JSON.parse(await runtime.toolDefinition.fn({ query: "service" })).code, "progressive_tool_discovery_disabled");
+    assert.deepEqual(runtime.syncPrefix(), { enabled: false, hidden: 0 });
+    assert.equal(added.length, 25);
+    capabilities = { progressiveToolDiscovery: true };
+    assert.equal(runtime.shouldHideTool("mcp_0"), true);
+    assert.deepEqual(runtime.syncPrefix(), { enabled: true, hidden: 25 });
+    assert.equal(removed.includes("mcp_0"), true);
+    assert.equal(added.includes("discover_tools"), true);
+    runtime.reset();
+    assert.deepEqual(runtime.loadedNames(), []);
   });
 });

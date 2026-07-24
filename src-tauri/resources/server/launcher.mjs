@@ -121,6 +121,10 @@ const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEa
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
+const { createOperationSteeringRuntime } = await importEarly("./lib/operation-steering.mjs");
+const { createProgressiveToolDiscovery } = await importEarly("./lib/progressive-tool-discovery.mjs");
+const { createRuntimeLifecycleHooks } = await importEarly("./lib/runtime-lifecycle-hooks.mjs");
+const { projectToolProgressEvent } = await importEarly("./lib/tool-progress.mjs");
 const { createInteractionRuntime } = await importEarly("./lib/interaction-runtime.mjs");
 const { createProviderProvenanceStore, providerDiagnostics } = await importEarly("./lib/provider-provenance.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
@@ -2772,6 +2776,18 @@ function effectiveMcpSpecs(cfg) {
 }
 
 const mcpServers = [];
+const progressiveToolDiscovery = createProgressiveToolDiscovery({
+  getCapabilities: () => {
+    const current = effectiveModelConfig(config);
+    return resolveProviderModelCapabilities(getActiveProvider(config), current.model);
+  },
+  getMcpToolNames: () => mcpServers.flatMap((server) => server.toolNames ?? []),
+  getToolSpecs: () => tools.specs(),
+  addToolToPrefix: (spec) => loop?.prefix?.addTool(presentSingleToolSpec(spec)) ?? false,
+  removeToolFromPrefix: (name) => loop?.prefix?.removeTool(name) ?? false,
+  presentSpec: presentSingleToolSpec,
+});
+tools.register(progressiveToolDiscovery.toolDefinition);
 let mcpStartupPromise = null;
 const mcpRestartPromises = new Map();
 
@@ -2901,7 +2917,7 @@ async function reloadMcp() {
       });
       // Add new tool specs to loop prefix
       for (const ts of tools.specs().filter((s) => registeredNames.includes(s.function?.name))) {
-        loop?.prefix?.addTool(presentSingleToolSpec(ts));
+        if (!progressiveToolDiscovery.shouldHideTool(ts.function?.name)) loop?.prefix?.addTool(presentSingleToolSpec(ts));
       }
       mcpServers.push({
         label: spec.name,
@@ -2918,6 +2934,7 @@ async function reloadMcp() {
       console.error(`[launcher] MCP "${rawSpec}" failed: ${err.message}`);
     }
   }
+  progressiveToolDiscovery.syncPrefix();
   return mcpServers.length;
 }
 
@@ -3994,7 +4011,7 @@ function presentedToolSpecs() {
   if (!capabilities.inputModalities?.includes("image")) {
     specs = specs.filter((spec) => spec.function?.name !== "read_media");
   }
-  return presentToolSpecsForMode(specs, { editMode: currentEditMode() });
+  return progressiveToolDiscovery.presentInitialSpecs(presentToolSpecsForMode(specs, { editMode: currentEditMode() }));
 }
 
 function presentSingleToolSpec(spec) {
@@ -4245,6 +4262,18 @@ function buildLoop(client, rootDir) {
     maxToolContinuationWindows: agentPolicy.maxToolContinuationWindows,
     sameFailureClassLimit: agentPolicy.sameFailureClassLimit,
     toolResultBudget: agentPolicy.toolResultBudget,
+    beforeModelRequest: async ({ turn, iteration, signal }) => {
+      const operation = operationRuntime?.getActive?.();
+      if (!operation || signal?.aborted) return null;
+      const queued = operationSteeringRuntime?.consume(operation.id) ?? [];
+      await runtimeLifecycleHooks?.emit?.("model.request.before", {
+        operationId: operation.id,
+        turn,
+        iteration,
+        steeringIds: queued.map((entry) => entry.id),
+      });
+      return queued.length > 0 ? { instructions: queued.map((entry) => entry.instruction) } : null;
+    },
   });
 }
 
@@ -6582,6 +6611,12 @@ getLatestVersion().then((v) => { if (v) latestVersion = v; }).catch(() => {});
 
 // ── Event subscribers ───────────────────────────────────────────
 const dashboardEventStream = createDashboardEventStream();
+const runtimeLifecycleHooks = createRuntimeLifecycleHooks({
+  onIssue: (issue) => console.error(`[runtime-hook] ${issue.event}/${issue.hook}: ${issue.message}`),
+});
+const operationSteeringRuntime = createOperationSteeringRuntime({
+  onEvent: (event) => broadcastDashboardEvent(event),
+});
 
 function broadcastDashboardEvent(ev) {
   return dashboardEventStream.publish(ev);
@@ -6589,6 +6624,9 @@ function broadcastDashboardEvent(ev) {
 
 // Mirrors loopEventToDashboard() from chunk-VM6A6QLY.js
 function loopEventToDashboard(ev, assistantId) {
+  if (["tool_queued", "tool_start", "tool"].includes(ev.role)) {
+    return projectToolProgressEvent(ev, { assistantId });
+  }
   const id = `${assistantId}-${ev.role}-${Date.now()}`;
   switch (ev.role) {
     case "assistant_delta":
@@ -6597,18 +6635,6 @@ function loopEventToDashboard(ev, assistantId) {
         id: assistantId,
         contentDelta: ev.content || undefined,
         reasoningDelta: ev.reasoningDelta,
-      };
-    case "tool_start":
-      if (!ev.toolName) return null;
-      return { kind: "tool_start", id, toolName: ev.toolName, args: ev.toolArgs };
-    case "tool":
-      if (!ev.toolName) return null;
-      return {
-        kind: "tool",
-        id,
-        toolName: ev.toolName,
-        content: ev.content,
-        args: ev.toolArgs,
       };
     case "warning":
       return { kind: "warning", id, text: ev.content };
@@ -6659,11 +6685,16 @@ const operationRuntime = createOperationRuntime({
   revokeAuthorization: clearMessageSendContext,
   getConversationId: () => activeConversationId,
   getWorkspace: () => workspaceDir,
+  lifecycle: runtimeLifecycleHooks,
 });
 
 const publicActiveOperation = (operation) => operationRuntime.public(operation);
 const beginActiveOperation = (kind) => operationRuntime.begin(kind);
-const finishActiveOperation = (operation) => operationRuntime.finish(operation);
+const finishActiveOperation = (operation) => {
+  const finished = operationRuntime.finish(operation);
+  if (finished) operationSteeringRuntime.close(operation.id, { reason: `operation_${operation.state}` });
+  return finished;
+};
 const refreshOperationContextScope = (operation) => operationRuntime.refreshScope(operation);
 
 function operationKindForPrompt(text, opts = {}) {
@@ -7962,6 +7993,24 @@ const ctx = {
   },
   // ── Modal resolution callbacks (called by POST /modal/resolve) ──
   getInteractions: () => interactionRuntime.list({ sessionId: activeConversationId }),
+  steerOperation: (operationId, input = {}) => {
+    const operation = operationRuntime.getActive();
+    if (!operation || operation.id !== operationId) return { ok: false, status: 404, error: "operation was not found" };
+    if (operation.state !== "running" || operation.controller.signal.aborted) {
+      return { ok: false, status: 409, error: "operation is not accepting steering" };
+    }
+    try {
+      const queued = operationSteeringRuntime.enqueue({
+        operationId: operation.id,
+        sessionId: operation.context?.conversationId ?? activeConversationId,
+        workspace: operation.context?.workspace ?? workspaceDir,
+        instruction: input.instruction,
+      });
+      return { ok: true, queued };
+    } catch (error) {
+      return { ok: false, status: 400, error: error.message };
+    }
+  },
   closeInteraction,
   getProviderDiagnostics: () => providerDiagnostics(readConfig(configPath), {
     provenance: providerProvenance,
@@ -9214,12 +9263,19 @@ ${modeList}
             };
             for await (const ev of modelRequestObserver.iterate(requestContext, () => loop.step(loopInput))) {
               operation.progress = loopTelemetry.observe(ev);
-              if (ev.role === "tool_start") turnReceipt.observeToolStart(ev.toolName);
+              if (["tool_queued", "tool_start", "tool"].includes(ev.role)) {
+                const progressEvent = projectToolProgressEvent(ev, { assistantId });
+                turnReceipt.observeToolProgress({
+                  toolCallId: progressEvent?.toolCallId ?? ev.callId,
+                  name: progressEvent?.toolName ?? ev.toolName,
+                  status: progressEvent?.status ?? ev.toolStatus,
+                  result: ev.role === "tool" ? progressEvent?.content ?? null : null,
+                });
+              }
               if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);
               if (ev.role === "tool") {
                 sawToolActivity = true;
                 const toolSucceeded = toolResultSucceeded(ev.content);
-                turnReceipt.observeTool({ name: ev.toolName, succeeded: toolSucceeded, result: ev.content });
                 if (ev.toolName === "submit_plan" && !toolSucceeded) pendingPlan = null;
                 const toolArgs = parseMaybeJsonObject(ev.toolArgs);
                 const mutatingTool = /^(?:write_file|append_file|edit_file|multi_edit|save_file|save_last_assistant_response|mark_step_complete)$/i.test(String(ev.toolName || ""))
@@ -9302,6 +9358,15 @@ ${modeList}
 
               const dashev = loopEventToDashboard(ev, assistantId);
               if (dashev) dashev.progress = loopTelemetry.snapshot();
+              if (dashev?.toolCallId && dashev?.status) {
+                void runtimeLifecycleHooks.emit(`tool.${dashev.status}`, {
+                  operationId: operation.id,
+                  toolCallId: dashev.toolCallId,
+                  toolName: dashev.toolName,
+                  args: dashev.args,
+                  content: dashev.content,
+                });
+              }
               // Scheduled turns are deliberately absent from the user's chat
               // transcript.  Keep their task/report status visible through the
               // scheduler, but do not leave a streaming assistant bubble in the

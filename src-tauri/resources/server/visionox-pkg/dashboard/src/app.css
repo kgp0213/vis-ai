@@ -3112,6 +3112,42 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.chat-msg.message-complete {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+}
+
+.chat-msg.message-streaming {
+  overflow-anchor: auto;
+}
+
+.tool-progress-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.tool-progress-running,
+.tool-progress-queued {
+  color: #7dd3fc;
+  border-color: rgba(125, 211, 252, 0.35);
+}
+
+.tool-progress-succeeded {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.35);
+}
+
+.tool-progress-failed,
+.tool-progress-cancelled {
+  color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.35);
+}
+
 .chat-msg .reasoning .chat-artifact-actions {
   display: none;
 }

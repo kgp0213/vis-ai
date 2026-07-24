@@ -75,6 +75,9 @@ function ToolCard({ msg }) {
   const args = parseToolArgs(msg.toolArgs);
   const name = msg.toolName ?? "tool";
   const path = args?.path ?? args?.file_path ?? args?.filename;
+  const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
+  const progressLabel = { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败", cancelled: "已取消" }[progressStatus];
+  const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
     const diffHtml = renderSearchReplace(
       args.search,
@@ -86,6 +89,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">✎</span>
           <span class="tool-card-name">edit_file</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
         <div dangerouslySetInnerHTML=${{ __html: diffHtml }}></div>
@@ -100,6 +104,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">+</span>
           <span class="tool-card-name">write_file</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
@@ -115,6 +120,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">▤</span>
           <span class="tool-card-name">read_file</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
@@ -129,6 +135,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">⚡</span>
           <span class="tool-card-name">${name === "run_background" ? "run_background" : "run_command"}</span>
+          ${progressBadge}
         </div>
         ${cmd ? html4`<pre class="tool-card-cmd"><span class="tool-card-prompt">$</span> <code>${cmd}</code></pre>` : null}
         ${msg.text ? renderToolOutput(msg.text) : null}
@@ -141,6 +148,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">▣</span>
           <span class="tool-card-name">${name}</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
         ${renderToolOutput(msg.text)}
@@ -152,6 +160,7 @@ function ToolCard({ msg }) {
       <div class="tool-card-head">
         <span class="tool-card-icon">▣</span>
         <span class="tool-card-name">${name}</span>
+        ${progressBadge}
       </div>
       ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
       ${renderToolOutput(msg.text)}
@@ -229,8 +238,9 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
     }
   };
   if (role === "tool") {
+    const toolComplete = !["queued", "running"].includes(msg.toolStatus);
     return html4`
-      <div class=${`chat-msg tool ${searchMatch ? "search-hit" : ""} ${showActions ? "has-actions" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
+      <div class=${`chat-msg tool ${toolComplete ? "message-complete" : "message-streaming"} ${searchMatch ? "search-hit" : ""} ${showActions ? "has-actions" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
         <div class="glyph">▣</div>
         <div class="chat-tool-wrap">
           <${ToolCard} msg=${msg} />
@@ -241,7 +251,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
   }
   return html4`
     <div
-      class=${`chat-msg ${role} ${searchMatch ? "search-hit" : ""} ${selectedForArtifacts ? "artifact-selected" : ""} ${selectableForArtifacts ? "artifact-selectable" : ""} ${showActions ? "has-actions" : ""}`}
+      class=${`chat-msg ${role} ${streaming ? "message-streaming" : "message-complete"} ${searchMatch ? "search-hit" : ""} ${selectedForArtifacts ? "artifact-selected" : ""} ${selectableForArtifacts ? "artifact-selectable" : ""} ${showActions ? "has-actions" : ""}`}
       data-msg-index=${index}
       data-msg-id=${msg.id ?? ""}
       onClick=${selectArtifacts}

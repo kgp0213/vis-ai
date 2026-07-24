@@ -7829,6 +7829,7 @@ var CacheFirstLoop = class {
   _officeCliElementCallsThisStep = 0;
   context;
   contextInputGuard;
+  beforeModelRequest;
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
   get inflight() {
     return this._inflight;
@@ -7867,6 +7868,7 @@ var CacheFirstLoop = class {
     this.hookCwd = opts.hookCwd ?? process.cwd();
     this.confirmationGate = opts.confirmationGate ?? pauseGate;
     this.contextInputGuard = opts.contextInputGuard ?? null;
+    this.beforeModelRequest = typeof opts.beforeModelRequest === "function" ? opts.beforeModelRequest : null;
     this._rebuildSystem = opts.rebuildSystem ?? null;
     this._streamPreference = opts.stream ?? true;
     this.stream = this._streamPreference;
@@ -8483,7 +8485,6 @@ ${reason}`
     this._pendingImages = null;
     let turnMediaParts = this._pendingMediaParts;
     this._pendingMediaParts = null;
-    const toolSpecs = this.prefix.tools();
     const maxToolRounds = this.maxToolIters * (this.maxToolContinuationWindows + 1);
     const warnAt = Math.max(1, Math.floor(maxToolRounds * 0.7));
     let warnedForIterBudget = false;
@@ -8507,6 +8508,8 @@ ${reason}`
         this._turnAbort = new AbortController();
         return;
       }
+      const toolSpecs = this.prefix.tools();
+      this.repair.opts.allowedToolNames = new Set(toolSpecs.map((spec) => spec.function?.name).filter(Boolean));
       if (iter > 0) {
         yield {
           turn: this._turn,
@@ -8532,7 +8535,32 @@ ${reason}`
         turnMediaParts = [...(turnMediaParts ?? []), ...this._pendingMediaParts];
         this._pendingMediaParts = null;
       }
-      let messages = this.buildMessages(pendingUser, turnImages, turnMediaParts);
+      let steeringMessages = [];
+      if (this.beforeModelRequest) {
+        try {
+          const steering = await this.beforeModelRequest({ turn: this._turn, iteration: iter, signal });
+          const instructions = (Array.isArray(steering?.instructions) ? steering.instructions : [])
+            .map((instruction) => String(instruction ?? "").trim())
+            .filter(Boolean);
+          if (instructions.length > 0) {
+            steeringMessages = [{
+              role: "user",
+              content: `[USER_STEERING — apply to this request only]\n${instructions.map((instruction, index) => `${index + 1}. ${instruction}`).join("\n")}`
+            }];
+          }
+        } catch (error) {
+          yield {
+            turn: this._turn,
+            role: "warning",
+            content: `Steering could not be applied at this request boundary: ${error?.message || error}`
+          };
+        }
+      }
+      const appendSteering = (target) => {
+        if (steeringMessages.length > 0) target.push(...steeringMessages.map((message) => ({ ...message })));
+        return target;
+      };
+      let messages = appendSteering(this.buildMessages(pendingUser, turnImages, turnMediaParts));
       if (outputRecoveryInstruction) {
         if (outputRecoveryPrefix) messages.push({ role: "assistant", content: outputRecoveryPrefix });
         messages.push({ role: "user", content: outputRecoveryInstruction });
@@ -8575,14 +8603,14 @@ ${reason}`
                 summaryChars: result.summaryChars
               })
             };
-            messages = this.buildMessages(pendingUser, turnImages, turnMediaParts);
+            messages = appendSteering(this.buildMessages(pendingUser, turnImages, turnMediaParts));
             // Re-check after fold — if still over emergency threshold, try a
             // second aggressive fold (keepRecentTokens: 0) to avoid API 400.
             const recheck = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
             if (recheck.needsAction) {
               const result2 = await this.context.fold(this.model, { keepRecentTokens: 0 });
               if (result2.folded) {
-                messages = this.buildMessages(pendingUser, turnImages, turnMediaParts);
+                messages = appendSteering(this.buildMessages(pendingUser, turnImages, turnMediaParts));
               }
               const recheck2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
               if (recheck2.needsAction) {
@@ -9014,11 +9042,23 @@ ${reason}`
             content: result,
             toolName: call.function?.name ?? "",
             toolArgs: call.function?.arguments ?? "{}",
-            callId: this.inflightIdFor(call)
+            callId: this.inflightIdFor(call),
+            toolStatus: "failed"
           };
         }
         yield* forceSummaryAfterIterLimit(this.summaryContext(), { reason: "budget" });
         return;
+      }
+      for (const call of repairedCalls) {
+        yield {
+          turn: this._turn,
+          role: "tool_queued",
+          content: "",
+          toolName: call.function?.name ?? "",
+          toolArgs: call.function?.arguments ?? "{}",
+          callId: this.inflightIdFor(call),
+          toolStatus: "queued"
+        };
       }
       this._toolRoundsThisStep++;
       const dispatchSerial = (process.env.visionox_TOOL_DISPATCH ?? "auto").toLowerCase() === "serial";
@@ -9044,7 +9084,8 @@ ${reason}`
             content: "",
             toolName: call.function?.name ?? "",
             toolArgs: call.function?.arguments ?? "{}",
-            callId
+            callId,
+            toolStatus: "running"
           };
         }
         const settled = await Promise.allSettled(chunk.map((c) => this.runOneToolCall(c, signal)));
@@ -9095,7 +9136,8 @@ ${reason}`
             content: result,
             toolName: name,
             toolArgs: args,
-            callId: this.inflightIdFor(call)
+            callId: this.inflightIdFor(call),
+            toolStatus: signal.aborted ? "cancelled" : contextToolResultSucceeded(result) ? "succeeded" : "failed"
           };
           const finishTurnOnResult = this.tools.get(name)?.finishTurnOnResult;
           if (typeof finishTurnOnResult === "function") {

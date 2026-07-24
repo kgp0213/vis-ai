@@ -6167,6 +6167,20 @@ async function handleVHome(method, rest, _body, ctx) {
   return { status: 404, body: { error: "not found" } };
 }
 
+async function handleOperations(method, rest, body, ctx) {
+  if (method !== "POST" || rest[1] !== "steer" || rest.length !== 2) {
+    return { status: 404, body: { error: "operation endpoint not found" } };
+  }
+  if (!rest[0] || typeof ctx.steerOperation !== "function") {
+    return { status: 503, body: { error: "operation steering is unavailable" } };
+  }
+  let parsed;
+  try { parsed = body ? JSON.parse(body) : {}; } catch { return { status: 400, body: { error: "invalid JSON body" } }; }
+  const result = await ctx.steerOperation(rest[0], parsed);
+  if (!result?.ok) return { status: result?.status ?? 400, body: { error: result?.error ?? "steering was rejected" } };
+  return { status: 202, body: { queued: result.queued } };
+}
+
 async function handleApi(pathTail, method, body, ctx, query = new URLSearchParams()) {
   const normalized = pathTail.replace(/\/+$/, "");
   const [head, ...rest] = normalized.split("/");
@@ -6202,6 +6216,8 @@ async function handleApi(pathTail, method, body, ctx, query = new URLSearchParam
         return await handleHealth(method, rest, body, ctx);
       case "vhome":
         return await handleVHome(method, rest, body, ctx);
+      case "operations":
+        return await handleOperations(method, rest, body, ctx);
       case "logs":
         return await handleLogs(method, rest, body, ctx);
       case "sessions":

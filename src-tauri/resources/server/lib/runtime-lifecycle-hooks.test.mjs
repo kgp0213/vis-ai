@@ -25,4 +25,15 @@ describe("runtime lifecycle hooks", () => {
     const hooks = createRuntimeLifecycleHooks();
     assert.throws(() => hooks.register("PreToolUse", "legacy", async () => {}), /unsupported lifecycle event/);
   });
+
+  test("supports unregistering an internal observer", async () => {
+    const hooks = createRuntimeLifecycleHooks();
+    let calls = 0;
+    const unregister = hooks.register("operation.started", "temporary", async () => { calls++; });
+    unregister();
+    const outcome = await hooks.emit("operation.started", { operationId: "op-1" });
+    assert.equal(calls, 0);
+    assert.equal(outcome.completed, 0);
+    assert.equal(hooks.supportedEvents().includes("tool.cancelled"), true);
+  });
 });

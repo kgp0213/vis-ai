@@ -26,6 +26,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     requestId: requestId ? String(requestId) : null,
     startedAt,
     tools: { dispatches: 0, results: 0, successes: 0, failures: 0, lastName: null },
+    toolCalls: [],
     toolEvents: [],
     errors: [],
     modelRetries: [],
@@ -52,6 +53,32 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       result: boundedText(result),
     });
     if (state.toolEvents.length > MAX_TOOL_EVENTS) state.toolEvents.shift();
+  }
+
+  function observeToolProgress({ toolCallId = null, name = null, status = null, result = null } = {}) {
+    const id = boundedText(toolCallId, 180) || `legacy-${state.toolCalls.length + 1}`;
+    const toolName = boundedText(name, 120) || null;
+    let call = state.toolCalls.find((entry) => entry.toolCallId === id);
+    const isNew = !call;
+    if (!call) {
+      call = { toolCallId: id, name: toolName, status: null, result: null };
+      state.toolCalls.push(call);
+      if (state.toolCalls.length > MAX_TOOL_EVENTS) state.toolCalls.shift();
+    }
+    if (toolName) call.name = toolName;
+    state.tools.lastName = call.name;
+    if (isNew && ["queued", "running"].includes(status)) state.tools.dispatches++;
+    const wasTerminal = ["succeeded", "failed", "cancelled"].includes(call.status);
+    const isTerminal = ["succeeded", "failed", "cancelled"].includes(status);
+    call.status = boundedText(status, 40) || call.status;
+    if (result !== null && result !== undefined) call.result = boundedText(result);
+    if (!wasTerminal && isTerminal) {
+      state.tools.results++;
+      if (status === "succeeded") state.tools.successes++;
+      else state.tools.failures++;
+      state.toolEvents.push({ name: call.name, succeeded: status === "succeeded", result: call.result });
+      if (state.toolEvents.length > MAX_TOOL_EVENTS) state.toolEvents.shift();
+    }
   }
 
   function observeToolStart(name = null) {
@@ -195,6 +222,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
 
   return {
     observeTool,
+    observeToolProgress,
     observeToolStart,
     recordError,
     recordModelRetry,

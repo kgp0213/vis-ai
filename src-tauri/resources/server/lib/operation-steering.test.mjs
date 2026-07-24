@@ -42,6 +42,16 @@ describe("operation steering", () => {
     assert.equal(closed[0].resolution.reason, "operation_completed");
   });
 
+  test("publishes only a safe steering projection and releases terminal operation state", () => {
+    const events = [];
+    const runtime = createOperationSteeringRuntime({ onEvent: (event) => events.push(event) });
+    runtime.enqueue({ operationId: "op-secret", instruction: "token=do-not-publish" });
+    runtime.close("op-secret", { reason: "operation_cancelled" });
+    assert.doesNotMatch(JSON.stringify(events), /do-not-publish/);
+    assert.equal(events[0].steering.instructionLength, 20);
+    assert.deepEqual(runtime.list("op-secret"), []);
+  });
+
   test("exposes the compatible steering endpoint through the existing Dashboard server", async () => {
     const seen = [];
     const response = await steerRequest("/api/operations/op-1/steer", { instruction: "verify output" }, {

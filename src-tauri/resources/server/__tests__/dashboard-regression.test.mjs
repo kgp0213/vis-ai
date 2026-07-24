@@ -787,16 +787,6 @@ describe("Dashboard 回归护栏", () => {
     assert.doesNotMatch(css, /\.chat-msg\s*\{[\s\S]*?animation:\s*message-enter/);
   });
 
-  test("工具进度按稳定 toolCallId 原位更新并保留并行调用", () => {
-    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
-    const internals = readFileSync(new URL("components/chat-internals.ts", dashboardSourceRootUrl), "utf8");
-    assert.match(chat, /upsertToolProgress/);
-    assert.match(chat, /toolCallId/);
-    assert.match(chat, /const \[activeTools, setActiveTools\]/);
-    assert.doesNotMatch(chat, /const \[activeTool, setActiveTool\]/);
-    assert.match(internals, /tool-progress-status/);
-  });
-
   test("长会话阅读历史时实时消息不会挤掉当前窗口，启动错误不会改变 Hook 数量", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const bootErrorReturn = app.indexOf("if (bootError) {");

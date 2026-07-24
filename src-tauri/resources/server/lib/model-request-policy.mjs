@@ -18,6 +18,7 @@ const MODEL_CAPABILITY_FIELDS = new Set([
   "streaming",
   "toolCalling",
   "structuredOutput",
+  "progressiveToolDiscovery",
   "maxContextTokens",
   "maxOutputTokens",
   "maxImagesPerRequest",
@@ -337,7 +338,7 @@ export function validateModelCapabilities(value) {
     if (issue) return issue;
     if (!value.inputModalities.includes("text")) return "capabilities inputModalities must include text";
   }
-  for (const field of ["streaming", "toolCalling", "structuredOutput"]) {
+  for (const field of ["streaming", "toolCalling", "structuredOutput", "progressiveToolDiscovery"]) {
     if (value[field] !== undefined && typeof value[field] !== "boolean") {
       return `capabilities ${field} must be a boolean`;
     }
@@ -397,6 +398,7 @@ export function resolveProviderModelCapabilities(provider, modelId) {
     streaming: typeof declared.streaming === "boolean" ? declared.streaming : true,
     toolCalling: typeof declared.toolCalling === "boolean" ? declared.toolCalling : true,
     structuredOutput: typeof declared.structuredOutput === "boolean" ? declared.structuredOutput : false,
+    progressiveToolDiscovery: declared.progressiveToolDiscovery === true,
     maxContextTokens: isPositiveInteger(declared.maxContextTokens)
       ? declared.maxContextTokens
       : isPositiveInteger(model.maxContextLength) ? model.maxContextLength : null,

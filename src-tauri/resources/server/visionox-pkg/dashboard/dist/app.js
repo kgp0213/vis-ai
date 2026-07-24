@@ -5938,6 +5938,9 @@ function ToolCard({ msg }) {
   const args = parseToolArgs(msg.toolArgs);
   const name = msg.toolName ?? "tool";
   const path = args?.path ?? args?.file_path ?? args?.filename;
+  const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
+  const progressLabel = { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败", cancelled: "已取消" }[progressStatus];
+  const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
     const diffHtml = renderSearchReplace(
       args.search,
@@ -5949,6 +5952,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">✎</span>
           <span class="tool-card-name">edit_file</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
         <div dangerouslySetInnerHTML=${{ __html: diffHtml }}></div>
@@ -5963,6 +5967,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">+</span>
           <span class="tool-card-name">write_file</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
@@ -5978,6 +5983,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">▤</span>
           <span class="tool-card-name">read_file</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
@@ -5992,6 +5998,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">⚡</span>
           <span class="tool-card-name">${name === "run_background" ? "run_background" : "run_command"}</span>
+          ${progressBadge}
         </div>
         ${cmd ? html4`<pre class="tool-card-cmd"><span class="tool-card-prompt">$</span> <code>${cmd}</code></pre>` : null}
         ${msg.text ? renderToolOutput(msg.text) : null}
@@ -6004,6 +6011,7 @@ function ToolCard({ msg }) {
         <div class="tool-card-head">
           <span class="tool-card-icon">▣</span>
           <span class="tool-card-name">${name}</span>
+          ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
         ${renderToolOutput(msg.text)}
@@ -6015,6 +6023,7 @@ function ToolCard({ msg }) {
       <div class="tool-card-head">
         <span class="tool-card-icon">▣</span>
         <span class="tool-card-name">${name}</span>
+        ${progressBadge}
       </div>
       ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
       ${renderToolOutput(msg.text)}
@@ -6092,8 +6101,9 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
     }
   };
   if (role === "tool") {
+    const toolComplete = !["queued", "running"].includes(msg.toolStatus);
     return html4`
-      <div class=${`chat-msg tool ${searchMatch ? "search-hit" : ""} ${showActions ? "has-actions" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
+      <div class=${`chat-msg tool ${toolComplete ? "message-complete" : "message-streaming"} ${searchMatch ? "search-hit" : ""} ${showActions ? "has-actions" : ""}`} data-msg-index=${index} data-msg-id=${msg.id ?? ""}>
         <div class="glyph">▣</div>
         <div class="chat-tool-wrap">
           <${ToolCard} msg=${msg} />
@@ -6104,7 +6114,7 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
   }
   return html4`
     <div
-      class=${`chat-msg ${role} ${searchMatch ? "search-hit" : ""} ${selectedForArtifacts ? "artifact-selected" : ""} ${selectableForArtifacts ? "artifact-selectable" : ""} ${showActions ? "has-actions" : ""}`}
+      class=${`chat-msg ${role} ${streaming ? "message-streaming" : "message-complete"} ${searchMatch ? "search-hit" : ""} ${selectedForArtifacts ? "artifact-selected" : ""} ${selectableForArtifacts ? "artifact-selectable" : ""} ${showActions ? "has-actions" : ""}`}
       data-msg-index=${index}
       data-msg-id=${msg.id ?? ""}
       onClick=${selectArtifacts}
@@ -6965,6 +6975,35 @@ function restoreChatScrollAnchor(feed, anchor, done) {
     }
   }));
 }
+function upsertToolProgress(items, dash) {
+  const toolCallId = String(dash.toolCallId || dash.id || "");
+  if (!toolCallId) return items;
+  const id = String(dash.id || `tool-${toolCallId}`);
+  const next = {
+    id,
+    toolCallId,
+    role: "tool",
+    text: dash.content || "",
+    toolName: dash.toolName,
+    toolArgs: dash.args,
+    toolStatus: dash.status || "running"
+  };
+  const index = items.findIndex((item) => String(item.toolCallId || item.id) === toolCallId || item.id === id);
+  if (index < 0) return [...items, next];
+  const copy = [...items];
+  copy[index] = { ...copy[index], ...next, text: next.text || copy[index].text || "" };
+  return copy;
+}
+function upsertActiveTool(items, dash) {
+  const toolCallId = String(dash.toolCallId || dash.id || "");
+  if (!toolCallId) return items;
+  const next = { id: dash.id, toolCallId, toolName: dash.toolName, args: dash.args, status: dash.status || "running" };
+  const index = items.findIndex((item) => item.toolCallId === toolCallId);
+  if (index < 0) return [...items, next];
+  const copy = [...items];
+  copy[index] = { ...copy[index], ...next };
+  return copy;
+}
 function chatDraftKey(workspaceDir, mode) {
   const ws = encodeURIComponent(workspaceDir || "default");
   const m3 = encodeURIComponent(mode || "general");
@@ -7812,7 +7851,7 @@ function ChatPanel({ userAvatar = null } = {}) {
       return false;
     }
   });
-  const [activeTool, setActiveTool] = d2(null);
+  const [activeTools, setActiveTools] = d2([]);
   const [busy, setBusy] = d2(false);
   const initialInputRef = A2(null);
   if (initialInputRef.current === null) {
@@ -8493,6 +8532,7 @@ ${workspaceDir || ""}`;
       if (dash.kind === "operation-change") {
         setOperation(dash.operation ?? null);
         if (dash.operation?.state === "cancelled") {
+          setActiveTools([]);
           setSemanticRetrievalSources([]);
           setSemanticRetrievalStatus("idle");
           setShowRetrievalSources(false);
@@ -8535,6 +8575,7 @@ ${workspaceDir || ""}`;
         const replacedStreaming = Boolean(completedStream);
         cancelStreamingRaf();
         setStreaming(null);
+        setActiveTools([]);
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
         setMessages((prev) => [
           ...prev,
@@ -8554,23 +8595,14 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "tool_start") {
-        setActiveTool({ id: dash.id, toolName: dash.toolName, args: dash.args });
+        if (!dash.status || dash.status === "queued") preserveVisibleHistoryOnAppend();
+        setActiveTools((current) => upsertActiveTool(current, dash));
+        setMessages((current) => upsertToolProgress(current, dash));
         return;
       }
       if (dash.kind === "tool") {
-        setActiveTool((cur) => cur && cur.id === dash.id ? null : cur);
-        preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: dash.id,
-            role: "tool",
-            text: dash.content,
-            toolName: dash.toolName,
-            toolArgs: dash.args
-          }
-        ]);
-        setTotalMessages((count) => count + 1);
+        setActiveTools((current) => current.filter((item) => item.toolCallId !== String(dash.toolCallId || dash.id || "")));
+        setMessages((current) => upsertToolProgress(current, dash));
         return;
       }
       if (dash.kind === "artifact-created") {
@@ -8588,7 +8620,7 @@ ${workspaceDir || ""}`;
       }
       if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info") {
         if (dash.kind === "error") {
-          setActiveTool(null);
+          setActiveTools([]);
         }
         preserveVisibleHistoryOnAppend();
         setMessages((prev) => [...prev, { id: dash.id, role: dash.kind, text: dash.text }]);
@@ -8601,6 +8633,7 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "messages-reset") {
+        setActiveTools([]);
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("idle");
         setShowRetrievalSources(false);
@@ -10635,7 +10668,7 @@ ${workspaceDir || ""}`;
 
           ${busy ? html4`<${InFlightRow}
                   streaming=${streaming}
-                  activeTool=${activeTool}
+                  activeTools=${activeTools}
                   startedAt=${turnStartedAt}
                   statusLine=${statusLine}
                   onAbort=${abort}
@@ -10764,7 +10797,7 @@ function summarizeActiveTool(activeTool) {
 }
 function InFlightRow({
   streaming,
-  activeTool,
+  activeTools,
   startedAt,
   statusLine,
   onAbort,
@@ -10776,7 +10809,9 @@ function InFlightRow({
   const elapsed = (elapsedMs / 1e3).toFixed(1);
   const reasoningLen = streaming?.reasoning?.length ?? 0;
   const textLen = streaming?.text?.length ?? 0;
+  const activeTool = activeTools?.at?.(-1) ?? null;
   const toolSummary = summarizeActiveTool(activeTool);
+  const activeToolCount = Array.isArray(activeTools) ? activeTools.length : 0;
   const phase = toolSummary ? t4("chat.inflightRunning") : reasoningLen > 0 && textLen === 0 ? t4("chat.inflightThinking") : textLen > 0 ? t4("chat.inflightStreaming") : t4("chat.inflightWaiting");
   return html4`
     <div class="chat-inflight">
@@ -10786,7 +10821,7 @@ function InFlightRow({
       <span class="muted">${elapsed}s</span>
       ${toolSummary ? html4`
             <span class="chat-inflight-sep">·</span>
-            <span class="chat-inflight-tool" title=${toolSummary}>${toolSummary}</span>
+            <span class="chat-inflight-tool" title=${toolSummary}>${toolSummary}${activeToolCount > 1 ? ` +${activeToolCount - 1}` : ""}</span>
           ` : null}
       ${!toolSummary && (textLen > 0 || reasoningLen > 0) ? html4`
             <span class="chat-inflight-sep">·</span>
