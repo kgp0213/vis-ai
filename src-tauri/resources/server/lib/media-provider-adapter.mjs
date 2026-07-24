@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { mediaFailure } from "./media-errors.mjs";
 
 function modalities(model) {
@@ -6,7 +8,15 @@ function modalities(model) {
 }
 
 function providerKey(provider, model, attachment) {
-  return `${provider?.id || provider?.name || "provider"}\n${model?.id || "model"}\n${attachment?.sha256 || attachment?.id || "attachment"}`;
+  const credential = createHash("sha256").update(String(provider?.apiKey ?? "")).digest("hex").slice(0, 16);
+  return [
+    provider?.id || provider?.name || "provider",
+    provider?.providerType || "openai-compatible",
+    String(provider?.baseUrl ?? "").trim(),
+    credential,
+    model?.id || "model",
+    attachment?.sha256 || attachment?.id || "attachment",
+  ].join("\n");
 }
 
 function statusFromError(error) {
@@ -25,12 +35,15 @@ export function createMediaProviderAdapter({ attachmentRuntime, videoUploaders =
     const provider = operation.provider ?? input.provider;
     const attachment = input.attachment ?? input;
     if (signal?.aborted) {
-      return { ok: false, error: mediaFailure("media_upload_failed", "视频上传已取消。", { retryable: true, affectsCompleteness: false, attachmentId: attachment?.id, operationId: operation?.id }) };
+      return { ok: false, error: mediaFailure("media_read_cancelled", "视频上传已取消。", { retryable: true, affectsCompleteness: false, attachmentId: attachment?.id, operationId: operation?.id }) };
     }
     if (!modalities(model).includes("video")) {
       return { ok: false, error: mediaFailure("media_provider_unsupported", `模型 ${model?.id || "unknown"} 未声明视频输入能力。`, { attachmentId: attachment?.id, operationId: operation?.id }) };
     }
-    const uploader = videoUploaders[provider?.id] ?? videoUploaders[provider?.type];
+    if (provider?.providerType !== "kimi") {
+      return { ok: false, error: mediaFailure("media_provider_unsupported", "只有显式配置为官方 Kimi 的 Provider 才能使用视频上传。", { attachmentId: attachment?.id, operationId: operation?.id }) };
+    }
+    const uploader = videoUploaders.kimi;
     if (typeof uploader !== "function") {
       return { ok: false, error: mediaFailure("media_provider_unsupported", "当前 Provider 没有经过验证的视频上传适配器。", { attachmentId: attachment?.id, operationId: operation?.id }) };
     }
@@ -38,7 +51,10 @@ export function createMediaProviderAdapter({ attachmentRuntime, videoUploaders =
     if (videoCache.has(key)) return { ok: true, reference: videoCache.get(key), cached: true };
     try {
       const reference = await uploader({ attachment, model, provider, operation, signal });
-      if (!reference) throw new Error("provider returned an empty video reference");
+      if (signal?.aborted) {
+        return { ok: false, error: mediaFailure("media_read_cancelled", "视频上传已取消。", { retryable: true, affectsCompleteness: false, attachmentId: attachment?.id, operationId: operation?.id }) };
+      }
+      if (!reference?.type || !reference?.video_url?.url) throw new Error("provider returned an invalid video reference");
       videoCache.set(key, reference);
       return { ok: true, reference, cached: false };
     } catch (error) {
@@ -46,7 +62,10 @@ export function createMediaProviderAdapter({ attachmentRuntime, videoUploaders =
       if (status === 401 || status === 403) {
         return { ok: false, error: mediaFailure("media_provider_auth_failed", error?.message || "视频上传鉴权失败。", { attachmentId: attachment?.id, operationId: operation?.id }) };
       }
-      return { ok: false, error: mediaFailure("media_upload_failed", error?.message || "视频上传失败。", { retryable: true, attachmentId: attachment?.id, operationId: operation?.id }) };
+      if (error?.name === "AbortError" || signal?.aborted) {
+        return { ok: false, error: mediaFailure("media_read_cancelled", "视频上传已取消。", { retryable: true, affectsCompleteness: false, attachmentId: attachment?.id, operationId: operation?.id }) };
+      }
+      return { ok: false, error: mediaFailure("media_upload_failed", error?.message || "视频上传失败。", { retryable: true, affectsCompleteness: error?.name === "AbortError" ? false : undefined, attachmentId: attachment?.id, operationId: operation?.id }) };
     }
   }
 
@@ -75,7 +94,7 @@ export function createMediaProviderAdapter({ attachmentRuntime, videoUploaders =
       }
       if (attachment.kind === "video") {
         const uploaded = await uploadVideo({ attachment, provider: operation.provider }, model, operation, signal);
-        if (uploaded.ok) ready.push({ type: "provider_video", reference: uploaded.reference, attachmentId: attachment.id });
+        if (uploaded.ok) ready.push(uploaded.reference);
         else warnings.push(uploaded.error);
         continue;
       }

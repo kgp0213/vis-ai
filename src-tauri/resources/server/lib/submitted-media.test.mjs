@@ -19,7 +19,7 @@ test("submitted official Kimi video is rebound to the operation and becomes a pr
     mimeType: "video/mp4",
     name: "clip.mp4",
     sessionId: "session-1",
-    operationId: "upload-1",
+    operationId: "upload:upload-1",
     workspace: "C:\\workspace",
   });
   let resolvedAttachment = null;

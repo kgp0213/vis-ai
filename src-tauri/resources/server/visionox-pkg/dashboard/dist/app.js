@@ -7850,7 +7850,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [providerCaps, setProviderCaps] = d2(null);
   const [stats, setStats] = d2(null);
   const [overviewModel, setOverviewModel] = d2(null);
-  const activeModel = (providers ?? []).find((provider) => provider.id === activeProviderId)?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
+  const activeProvider = (providers ?? []).find((provider) => provider.id === activeProviderId);
+  const activeModel = activeProvider?.models?.find((model) => model.disabled !== true && model.id === overviewModel);
   const pendingImageLimit = Math.min(5, Math.max(1, Number(activeModel?.capabilities?.maxImagesPerRequest) || 5));
   const [budgetUsd, setBudgetUsd] = d2(null);
   const [activePlan, setActivePlan] = d2(null);
@@ -7889,6 +7890,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [turnStartedAt, setTurnStartedAt] = d2(null);
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
+  const [activeConversationId, setActiveConversationId] = d2(null);
   const [recentWss, setRecentWss] = d2([]);
   const [workspaceSelection, setWorkspaceSelection] = d2(null);
   y2(() => {
@@ -7939,6 +7941,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [skillCredentialSaving, setSkillCredentialSaving] = d2(false);
   const [pendingImages, setPendingImages] = d2([]);
   const pendingImagesRef = A2([]);
+  const queuedAttachmentIdsRef = A2(/* @__PURE__ */ new Set());
+  const uploadScopeRef = A2(null);
   const [visibleMessageCount, setVisibleMessageCount] = d2(CHAT_INITIAL_RENDER_COUNT);
   const [totalMessages, setTotalMessages] = d2(0);
   const [loadingEarlierMessages, setLoadingEarlierMessages] = d2(false);
@@ -7959,7 +7963,11 @@ function ChatPanel({ userAvatar = null } = {}) {
   const queueSubmittingRef = A2(false);
   const CHAT_QUEUE_LIMIT = 5;
   const draftKey = $2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
-  const queueStorageKey = $2(() => workspaceDir ? `${draftKey}:queue` : null, [draftKey, workspaceDir]);
+  const queueStorageKey = $2(() => workspaceDir && activeConversationId ? `${draftKey}:conversation:${activeConversationId}:queue` : null, [draftKey, workspaceDir, activeConversationId]);
+  const queueStorageKeyRef = A2(queueStorageKey);
+  queueStorageKeyRef.current = queueStorageKey;
+  const uploadScopeKey = `${activeConversationId || "unresolved"}
+${workspaceDir || ""}`;
   const persistDraftSoon = q2((value) => {
     if (draftSaveTimerRef.current !== null) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = setTimeout(() => {
@@ -8203,6 +8211,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   y2(() => {
     if (!draftReady || !queueStorageKey) return;
     let cancelled = false;
+    queuedAttachmentIdsRef.current = /* @__PURE__ */ new Set();
     setQueueReady(false);
     api(`/prompt-queue?scope=${encodeURIComponent(queueStorageKey)}`).then((res) => {
       if (cancelled) return;
@@ -8219,6 +8228,9 @@ function ChatPanel({ userAvatar = null } = {}) {
           createdAt: Number(item.createdAt ?? Date.now())
         };
       }).filter((item) => item.text || item.images.length > 0 || item.attachments.length > 0);
+      for (const item of restored) {
+        for (const attachmentId of item.attachments) queuedAttachmentIdsRef.current.add(attachmentId);
+      }
       setQueuedPrompts(restored);
     }).catch((err) => {
       if (!cancelled) setError(t4("chat.queueFailed", { error: err.message }));
@@ -8709,18 +8721,25 @@ function ChatPanel({ userAvatar = null } = {}) {
     var files = e3.target.files;
     if (!files || files.length === 0) return;
     var newImages = pendingImages.slice();
+    const scope = currentUploadScope();
     for (var i3 = 0; i3 < files.length && newImages.length < pendingImageLimit; i3++) {
       try {
-        var pendingImage = await uploadImageAttachment(files[i3]);
+        var pendingImage = await uploadMediaAttachment(files[i3], scope);
         newImages.push(pendingImage);
       } catch (err) {
-        console.error("Image upload failed:", err);
-        setError(`图片上传失败：${err.message}`);
+        if (err?.name === "AbortError") continue;
+        console.error("Media upload failed:", err);
+        setError(`附件上传失败：${err.message}`);
       }
+    }
+    if (uploadScopeRef.current !== scope || scope.controller.signal.aborted) {
+      await releaseUploadedImages(newImages.filter((item) => item?.uploadScopeKey === scope.key));
+      e3.target.value = "";
+      return;
     }
     setPendingImages(newImages);
     e3.target.value = "";
-  }, [pendingImages, pendingImageLimit]);
+  }, [pendingImages, pendingImageLimit, uploadScopeKey]);
   var compressImage = function(file) {
     return new Promise(function(resolve, reject) {
       if (file.size < 100 * 1024) {
@@ -8782,48 +8801,98 @@ function ChatPanel({ userAvatar = null } = {}) {
       reader.readAsDataURL(blob);
     });
   };
-  var uploadImageAttachment = async function(file) {
-    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error("图片文件为空");
-    if (file.size > 50 * 1024 * 1024) throw new Error("图片超过 50 MB 限制");
-    const preview = await compressImage(file);
+  var currentUploadScope = function() {
+    const current = uploadScopeRef.current;
+    if (current && current.key === uploadScopeKey && !current.controller.signal.aborted) return current;
+    const scope = {
+      key: uploadScopeKey,
+      sessionId: activeConversationId,
+      workspace: workspaceDir,
+      controller: new AbortController()
+    };
+    uploadScopeRef.current = scope;
+    return scope;
+  };
+  var uploadMediaAttachment = async function(file, scope = currentUploadScope()) {
+    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error("附件文件为空");
+    if (file.size > 50 * 1024 * 1024) throw new Error("附件超过 50 MB 限制");
+    const isImage = String(file.type || "").startsWith("image/");
+    const extension = /\.([^.]+)$/.exec(String(file.name || ""))?.[1]?.toLowerCase() || "";
+    const videoMimeByExtension = { mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm" };
+    const declaredMime = String(file.type || videoMimeByExtension[extension] || "application/octet-stream").toLowerCase();
+    const isVideo = ["video/mp4", "video/quicktime", "video/webm"].includes(declaredMime) || Object.hasOwn(videoMimeByExtension, extension);
+    if (!isImage && !isVideo) throw new Error("仅支持图片、MP4、MOV 或 WebM 视频");
+    if (isImage && !canUploadImages) throw new Error("当前模型不支持图片输入");
+    if (isVideo && !canUploadVideos) throw new Error("仅显式配置的官方 Kimi 视频模型支持视频输入");
+    const preview = isImage ? await compressImage(file) : null;
     const initialized = await api("/attachments", {
       method: "POST",
-      body: { action: "init", name: file.name || "image", size: file.size, mimeType: file.type || "application/octet-stream" }
+      body: { action: "init", name: file.name || "image", size: file.size, mimeType: declaredMime },
+      signal: scope?.controller.signal
     });
     const uploadId = initialized.uploadId;
+    const uploadSessionId = initialized.sessionId || scope?.sessionId || null;
+    const uploadWorkspace = initialized.workspace || scope?.workspace || null;
     const chunkBytes = Math.min(Number(initialized.chunkBytes) || 512 * 1024, 512 * 1024);
     try {
       for (let offset = 0; offset < file.size; offset += chunkBytes) {
         const data = await uploadChunkData(file.slice(offset, Math.min(file.size, offset + chunkBytes)));
-        await api("/attachments", { method: "POST", body: { action: "chunk", uploadId, offset, data } });
+        await api("/attachments", { method: "POST", body: { action: "chunk", uploadId, offset, data }, signal: scope?.controller.signal });
       }
-      const completed = await api("/attachments", { method: "POST", body: { action: "finish", uploadId } });
+      const completed = await api("/attachments", { method: "POST", body: { action: "finish", uploadId }, signal: scope?.controller.signal });
       if (!completed.attachment?.id) throw new Error("宿主未返回附件 ID");
-      return {
+      const result = {
         attachmentId: completed.attachment.id,
         preview,
+        kind: completed.attachment.kind || (isVideo ? "video" : "image"),
         name: completed.attachment.name || file.name || "image",
         size: completed.attachment.size || file.size,
-        mimeType: completed.attachment.mimeType || file.type || "application/octet-stream"
+        mimeType: completed.attachment.mimeType || declaredMime,
+        sessionId: completed.attachment.sessionId || uploadSessionId,
+        workspace: completed.attachment.workspace || uploadWorkspace,
+        uploadScopeKey: scope?.key || null
       };
+      if (uploadScopeRef.current !== scope || scope?.controller.signal.aborted) {
+        await releaseUploadedImages([result]);
+        const staleError = new Error("附件上传所属会话或工作区已经切换");
+        staleError.name = "AbortError";
+        throw staleError;
+      }
+      return result;
     } catch (error2) {
-      await api("/attachments", { method: "POST", body: { action: "cancel", uploadId } }).catch(() => {
+      await api("/attachments", {
+        method: "POST",
+        body: { action: "cancel", uploadId, sessionId: uploadSessionId, workspace: uploadWorkspace }
+      }).catch(() => {
       });
       throw error2;
     }
   };
   var releaseUploadedImages = function(items) {
-    const attachmentIds = (Array.isArray(items) ? items : []).map((item) => typeof item === "object" ? item.attachmentId : null).filter(Boolean);
-    if (attachmentIds.length === 0) return Promise.resolve();
-    return api("/attachments", { method: "POST", body: { action: "release", attachmentIds } }).catch(() => {
+    const attachments = (Array.isArray(items) ? items : []).filter((item) => item && typeof item === "object" && item.attachmentId && item.sessionId && item.workspace).map((item) => ({ id: item.attachmentId, sessionId: item.sessionId, workspace: item.workspace }));
+    if (attachments.length === 0) return Promise.resolve();
+    return api("/attachments", { method: "POST", body: { action: "release-upload", attachments } }).catch(() => {
     });
+  };
+  var rotateUploadScope = function() {
+    const scope = uploadScopeRef.current;
+    if (!scope) return;
+    scope.controller.abort();
+    if (uploadScopeRef.current === scope) uploadScopeRef.current = null;
+    void releaseUploadedImages(pendingImagesRef.current.filter((item) => item?.uploadScopeKey === scope.key && !queuedAttachmentIdsRef.current.has(item?.attachmentId)));
   };
   y2(() => {
     pendingImagesRef.current = pendingImages;
   }, [pendingImages]);
-  y2(() => () => {
-    void releaseUploadedImages(pendingImagesRef.current);
-  }, []);
+  y2(() => {
+    const scope = currentUploadScope();
+    setPendingImages((current) => current.filter((item) => !item?.uploadScopeKey || item.uploadScopeKey === scope.key));
+    return () => {
+      scope.controller.abort();
+      void releaseUploadedImages(pendingImagesRef.current.filter((item) => (!item?.uploadScopeKey || item.uploadScopeKey === scope.key) && !queuedAttachmentIdsRef.current.has(item?.attachmentId)));
+      if (uploadScopeRef.current === scope) uploadScopeRef.current = null;
+    };
+  }, [uploadScopeKey]);
   const loadChatSkills = q2(async () => {
     if (skillList.length > 0) return skillList;
     const r3 = await api("/skills");
@@ -8942,7 +9011,7 @@ function ChatPanel({ userAvatar = null } = {}) {
     if (!queueStorageKey) return Promise.resolve();
     return api("/prompt-queue", { method: "DELETE", body: { scope: queueStorageKey, id } });
   }, [queueStorageKey]);
-  const enqueuePrompt = q2((text, images = []) => {
+  const enqueuePrompt = q2(async (text, images = []) => {
     const trimmed = String(text ?? "").trim();
     const imageList = Array.isArray(images) ? images.slice() : [];
     if (!trimmed && imageList.length === 0) return false;
@@ -8968,23 +9037,70 @@ function ChatPanel({ userAvatar = null } = {}) {
       error: null,
       createdAt: Date.now()
     };
+    const claimedQueueScope = queueStorageKey;
+    for (const attachmentId of attachments) queuedAttachmentIdsRef.current.add(attachmentId);
+    try {
+      const persisted = await persistQueuedPrompt(item);
+      if (persisted?.ok === false) throw new Error(persisted.error || "队列持久化失败");
+    } catch (err) {
+      for (const attachmentId of attachments) queuedAttachmentIdsRef.current.delete(attachmentId);
+      const currentScopeKey = uploadScopeRef.current?.key ?? null;
+      const ownershipStillActive = imageList.every((item2) => !item2?.uploadScopeKey || item2.uploadScopeKey === currentScopeKey);
+      if (!ownershipStillActive) void releaseUploadedImages(imageList);
+      setError(t4("chat.queueFailed", { error: err.message }));
+      return false;
+    }
+    if (queueStorageKeyRef.current !== claimedQueueScope) {
+      const attachmentSet = new Set(attachments);
+      for (const attachmentId of attachments) queuedAttachmentIdsRef.current.delete(attachmentId);
+      pendingImagesRef.current = pendingImagesRef.current.filter((item2) => !attachmentSet.has(item2?.attachmentId));
+      setPendingImages((current2) => current2.filter((item2) => !attachmentSet.has(item2?.attachmentId)));
+      return false;
+    }
     setQueuedPrompts((prev) => [...prev, item]);
-    persistQueuedPrompt(item).catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
     showToast(t4("chat.queueAdded", { count: current.length + 1 }), "info");
     setQueuePumpTick((v3) => v3 + 1);
     return true;
-  }, [persistQueuedPrompt]);
-  const removeQueuedPrompt = q2((id) => {
+  }, [persistQueuedPrompt, queueStorageKey]);
+  const removeQueuedPrompt = q2(async (id) => {
+    const removed = queuedPromptsRef.current.find((item) => item.id === id);
+    const claimedQueueScope = queueStorageKey;
+    try {
+      const deleted = await deletePersistedQueuedPrompt(id);
+      if (deleted?.ok === false) throw new Error(deleted.error || "队列删除失败");
+    } catch (err) {
+      setError(t4("chat.queueFailed", { error: err.message }));
+      return false;
+    }
+    for (const attachmentId of removed?.attachments ?? []) queuedAttachmentIdsRef.current.delete(attachmentId);
+    void releaseUploadedImages((removed?.attachments ?? []).map((attachmentId) => ({
+      attachmentId,
+      sessionId: activeConversationId,
+      workspace: workspaceDir
+    })));
+    if (queueStorageKeyRef.current !== claimedQueueScope) return true;
     setQueuedPrompts((prev) => prev.filter((item) => item.id !== id));
-    deletePersistedQueuedPrompt(id).catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
-  }, [deletePersistedQueuedPrompt]);
-  const clearQueuedPrompts = q2(() => {
+    return true;
+  }, [deletePersistedQueuedPrompt, activeConversationId, workspaceDir, queueStorageKey]);
+  const clearQueuedPrompts = q2(async () => {
     const count = queuedPromptsRef.current.length;
     if (count > 0 && !confirm(t4("chat.queueClearConfirm", { count }))) return;
+    const claimedQueueScope = queueStorageKey;
+    try {
+      const deleted = await deletePersistedQueuedPrompt();
+      if (deleted?.ok === false) throw new Error(deleted.error || "队列清空失败");
+    } catch (err) {
+      setError(t4("chat.queueFailed", { error: err.message }));
+      return false;
+    }
+    const attachmentIds = queuedPromptsRef.current.flatMap((item) => item.attachments ?? []);
+    for (const attachmentId of attachmentIds) queuedAttachmentIdsRef.current.delete(attachmentId);
+    void releaseUploadedImages(attachmentIds.map((attachmentId) => ({ attachmentId, sessionId: activeConversationId, workspace: workspaceDir })));
+    if (queueStorageKeyRef.current !== claimedQueueScope) return true;
     setQueuedPrompts([]);
     setQueueSendingId(null);
-    deletePersistedQueuedPrompt().catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
-  }, [deletePersistedQueuedPrompt]);
+    return true;
+  }, [deletePersistedQueuedPrompt, activeConversationId, workspaceDir, queueStorageKey]);
   const retryQueuedPrompt = q2((id) => {
     const retryRequestId = `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setQueuedPrompts((prev) => prev.map((item) => {
@@ -8995,15 +9111,26 @@ function ChatPanel({ userAvatar = null } = {}) {
     }));
     setQueuePumpTick((v3) => v3 + 1);
   }, [persistQueuedPrompt]);
-  const confirmQueuedReset = q2(() => {
+  const confirmQueuedReset = q2(async () => {
     const count = queuedPromptsRef.current.length;
     if (count === 0) return true;
     if (!confirm(t4("chat.queueResetConfirm", { count }))) return false;
+    const claimedQueueScope = queueStorageKey;
+    try {
+      const deleted = await deletePersistedQueuedPrompt();
+      if (deleted?.ok === false) throw new Error(deleted.error || "队列清空失败");
+    } catch (err) {
+      setError(t4("chat.queueFailed", { error: err.message }));
+      return false;
+    }
+    const attachmentIds = queuedPromptsRef.current.flatMap((item) => item.attachments ?? []);
+    for (const attachmentId of attachmentIds) queuedAttachmentIdsRef.current.delete(attachmentId);
+    void releaseUploadedImages(attachmentIds.map((attachmentId) => ({ attachmentId, sessionId: activeConversationId, workspace: workspaceDir })));
+    if (queueStorageKeyRef.current !== claimedQueueScope) return true;
     setQueuedPrompts([]);
     setQueueSendingId(null);
-    deletePersistedQueuedPrompt().catch((err) => setError(t4("chat.queueFailed", { error: err.message })));
     return true;
-  }, [deletePersistedQueuedPrompt]);
+  }, [deletePersistedQueuedPrompt, activeConversationId, workspaceDir, queueStorageKey]);
   y2(() => {
     if (!queueReady || queuePaused || busy || queueSubmittingRef.current || queuedPrompts.length === 0) return;
     const item = queuedPrompts.find((q4) => q4.status !== "failed");
@@ -9016,6 +9143,7 @@ function ChatPanel({ userAvatar = null } = {}) {
         await new Promise((resolve) => setTimeout(resolve, 300));
         const result = await submitPromptPayload(item);
         if (result.ok) {
+          for (const attachmentId of item.attachments ?? []) queuedAttachmentIdsRef.current.delete(attachmentId);
           setQueuedPrompts((prev) => prev.filter((q4) => q4.id !== item.id));
           await deletePersistedQueuedPrompt(item.id);
           setTimeout(() => setQueuePumpTick((v3) => v3 + 1), 700);
@@ -9046,8 +9174,9 @@ function ChatPanel({ userAvatar = null } = {}) {
     if (!text && images.length === 0) return;
     setError(null);
     if (busy) {
-      if (enqueuePrompt(text, images)) {
+      if (await enqueuePrompt(text, images)) {
         setChatInput("");
+        pendingImagesRef.current = [];
         setPendingImages([]);
         setPopoverKind(null);
         removeChatDraft(draftKey);
@@ -9061,12 +9190,14 @@ function ChatPanel({ userAvatar = null } = {}) {
     });
     if (result.ok) {
       setChatInput("");
+      pendingImagesRef.current = [];
       setPendingImages([]);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
     } else if (result.busy) {
-      if (enqueuePrompt(text, images)) {
+      if (await enqueuePrompt(text, images)) {
         setChatInput("");
+        pendingImagesRef.current = [];
         setPendingImages([]);
         setPopoverKind(null);
         removeChatDraft(draftKey);
@@ -9093,12 +9224,14 @@ function ChatPanel({ userAvatar = null } = {}) {
       const result = await submitPromptPayload(payload);
       if (result.ok) {
         if (skillCredentialSetup.queuedId) {
+          for (const attachmentId of payload?.attachments ?? []) queuedAttachmentIdsRef.current.delete(attachmentId);
           setQueuedPrompts((prev) => prev.filter((item) => item.id !== skillCredentialSetup.queuedId));
           await deletePersistedQueuedPrompt(skillCredentialSetup.queuedId);
           setQueuePaused(false);
           setTimeout(() => setQueuePumpTick((value) => value + 1), 700);
         } else {
           setChatInput("");
+          pendingImagesRef.current = [];
           setPendingImages([]);
           removeChatDraft(draftKey);
         }
@@ -9150,15 +9283,18 @@ function ChatPanel({ userAvatar = null } = {}) {
     } else if (messages.length > 0 && !confirm(t4("chat.newConfirm"))) {
       return;
     }
-    if (!confirmQueuedReset()) return;
+    if (!await confirmQueuedReset()) return;
     try {
       if (wasBusy) {
         await api("/abort", { method: "POST" });
         const idle = await waitForIdle();
         if (!idle) throw new Error(t4("chat.stopTimeout"));
       }
+      rotateUploadScope();
       await api("/submit", { method: "POST", body: { prompt: "/new" } });
       await releaseUploadedImages(pendingImages);
+      const nextOverview = await api("/overview").catch(() => null);
+      setActiveConversationId(nextOverview?.conversationId ?? null);
       const retrieval = await api("/index-retrieval-mode").catch(() => ({ mode: "tool" }));
       setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       setSemanticRetrievalSources([]);
@@ -9216,10 +9352,13 @@ function ChatPanel({ userAvatar = null } = {}) {
     }
   }, [workspaceDir]);
   const clearScrollback = q2(async () => {
-    if (!confirmQueuedReset()) return;
+    if (!await confirmQueuedReset()) return;
     try {
+      rotateUploadScope();
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
       await releaseUploadedImages(pendingImages);
+      const nextOverview = await api("/overview").catch(() => null);
+      setActiveConversationId(nextOverview?.conversationId ?? activeConversationId);
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
@@ -9481,8 +9620,10 @@ function ChatPanel({ userAvatar = null } = {}) {
       var remaining = pendingImageLimit - pendingImages.length;
       if (remaining <= 0) return;
       var toProcess = files.slice(0, remaining);
+      const scope = currentUploadScope();
       Promise.all(toProcess.map(function(f22) {
-        return uploadImageAttachment(f22).catch(function(error2) {
+        return uploadMediaAttachment(f22, scope).catch(function(error2) {
+          if (error2?.name === "AbortError") return null;
           console.error("Clipboard image upload failed:", error2);
           return null;
         });
@@ -9490,6 +9631,10 @@ function ChatPanel({ userAvatar = null } = {}) {
         var valid = results.filter(function(r3) {
           return r3 !== null;
         });
+        if (uploadScopeRef.current !== scope || scope.controller.signal.aborted) {
+          void releaseUploadedImages(valid);
+          return;
+        }
         if (valid.length > 0) {
           setPendingImages(pendingImages.slice().concat(valid).slice(0, pendingImageLimit));
         }
@@ -9610,7 +9755,7 @@ function ChatPanel({ userAvatar = null } = {}) {
       } catch (_3) {
       }
     }
-  }, [pendingImages, pendingImageLimit, setChatInput]);
+  }, [pendingImages, pendingImageLimit, setChatInput, uploadScopeKey]);
   y2(() => {
     if (bootError) return;
     const el = feedRef.current;
@@ -9700,6 +9845,7 @@ function ChatPanel({ userAvatar = null } = {}) {
         setActiveModeLocal(o3.activeMode ?? null);
         setEccRulesLocal(o3.eccRules ?? null);
         setWorkspaceDirLocal(o3.cwd ?? null);
+        setActiveConversationId(o3.conversationId ?? null);
         setStats(o3.stats ?? null);
         setOverviewModel(o3.model ?? null);
         setBudgetUsd(o3.budgetUsd ?? null);
@@ -9736,6 +9882,7 @@ function ChatPanel({ userAvatar = null } = {}) {
       setActiveModeLocal(o3.activeMode ?? null);
       setEccRulesLocal(o3.eccRules ?? null);
       setWorkspaceDirLocal(o3.cwd ?? null);
+      setActiveConversationId(o3.conversationId ?? null);
       setStats(o3.stats ?? null);
       setOverviewModel(o3.model ?? null);
       setBudgetUsd(o3.budgetUsd ?? null);
@@ -10018,13 +10165,21 @@ function ChatPanel({ userAvatar = null } = {}) {
   }, [loadEarlierMessages]);
   const activeInputModalities = activeModel?.capabilities?.inputModalities ?? (activeModel?.multimodal ? ["text", "image"] : ["text"]);
   const canUploadImages = activeInputModalities.includes("image");
+  const canUploadVideos = activeProvider?.providerType === "kimi" && activeInputModalities.includes("video");
+  const canUploadMedia = canUploadImages || canUploadVideos;
+  const acceptedAttachmentTypes = canUploadVideos ? `${canUploadImages ? "image/*," : ""}video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm` : "image/*";
   const activeModelEfforts = Array.isArray(activeModel?.efforts) ? activeModel.efforts : [];
   y2(() => {
-    if (!canUploadImages && pendingImages.length > 0) {
-      void releaseUploadedImages(pendingImages);
-      setPendingImages([]);
-    }
-  }, [canUploadImages]);
+    if (pendingImages.length === 0) return;
+    const retained = pendingImages.filter((item) => {
+      if (typeof item === "string") return canUploadImages;
+      return item?.kind === "video" ? canUploadVideos : canUploadImages;
+    });
+    if (retained.length === pendingImages.length) return;
+    const removed = pendingImages.filter((item) => !retained.includes(item));
+    void releaseUploadedImages(removed);
+    setPendingImages(retained);
+  }, [canUploadImages, canUploadVideos]);
   if (bootError) {
     return html4`<div class="notice err">${t4("common.loadingFailed", { name: "chat", error: bootError })}</div>`;
   }
@@ -10159,15 +10314,16 @@ function ChatPanel({ userAvatar = null } = {}) {
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
               <div style="display:flex;gap:6px;align-items:flex-end">
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
-            ${canUploadImages ? html4`<input type="file" accept="image/*" multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />` : null}
+            ${canUploadMedia ? html4`<input type="file" accept=${acceptedAttachmentTypes} multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />` : null}
             ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(image, idx) {
     const preview = typeof image === "string" ? image : image?.preview;
-    return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0">${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">图片</span>`}<button onClick=${function() {
+    const isVideo = typeof image === "object" && image?.kind === "video";
+    return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0" title=${typeof image === "object" ? image.name : "图片"}>${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">${isVideo ? "视频" : "图片"}</span>`}<button onClick=${function() {
       void releaseUploadedImages([image]);
       var next = pendingImages.slice();
       next.splice(idx, 1);
       setPendingImages(next);
-    }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除图片">✕</button></div>`;
+    }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除附件">✕</button></div>`;
   })}</div>` : null}
             ${queuedPrompts.length > 0 ? html4`
               <div class="chat-queue">
@@ -10445,14 +10601,14 @@ function ChatPanel({ userAvatar = null } = {}) {
     setShowRetrievalSources(false);
   }}></div>` : null}
               <div style="flex:1"></div>
-              ${canUploadImages ? html4`<button
+              ${canUploadMedia ? html4`<button
                 type="button"
                 class="image-upload-btn"
                 onClick=${function() {
     if (fileInputRef.current) fileInputRef.current.click();
   }}
-                title="添加图片"
-                aria-label="添加图片"
+                title=${canUploadVideos ? "添加图片或视频" : "添加图片"}
+                aria-label=${canUploadVideos ? "添加图片或视频" : "添加图片"}
               >📎</button>` : null}
               <button
                 type="button"

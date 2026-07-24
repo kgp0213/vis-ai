@@ -7851,6 +7851,7 @@ var CacheFirstLoop = class {
     this.visionPolicy = normalizeVisionPolicy(opts.visionPolicy);
     this.visionDetail = opts.visionDetail ?? this.visionPolicy.detail;
     this._pendingImages = null;
+    this._pendingMediaParts = null;
     this.toolResultBudget = normalizeToolResultBudget(opts.toolResultBudget);
     this.budgetUsd = typeof opts.budgetUsd === "number" && opts.budgetUsd > 0 ? opts.budgetUsd : null;
     this._turnFailures = new TurnFailureTracker(
@@ -8327,13 +8328,13 @@ ${reason}`
     return generated;
   }
   _inflightCounter = 0;
-  buildUserContent(text, images, visionDetail) {
-    if (!images || images.length === 0) return text || "";
+  buildUserContent(text, images, visionDetail, mediaParts = null) {
+    if ((!images || images.length === 0) && (!mediaParts || mediaParts.length === 0)) return text || "";
     const parts = [];
     if (text && text.trim()) {
       parts.push({ type: "text", text });
     }
-    for (const dataUrl of images) {
+    for (const dataUrl of images ?? []) {
       if (!dataUrl || !dataUrl.startsWith("data:image/")) continue;
       const rawBase64 = dataUrl.replace(/^data:image\/[^;]+;base64,/, "");
       const mimeMatch = dataUrl.match(/^data:(image\/[^;]+);base64,/);
@@ -8342,13 +8343,18 @@ ${reason}`
       if (visionDetail) block.image_url.detail = visionDetail;
       parts.push(block);
     }
+    for (const part of mediaParts ?? []) {
+      if (part?.type === "video_url" && /^ms:\/\/[A-Za-z0-9._:-]+$/.test(String(part.video_url?.url ?? ""))) {
+        parts.push({ type: "video_url", video_url: { url: part.video_url.url } });
+      }
+    }
     if (parts.length === 0) return text || "";
     if (!parts.some((p) => p.type === "text")) {
       parts.unshift({ type: "text", text: text || "" });
     }
     return parts;
   }
-  buildMessages(pendingUser, turnImages = null) {
+  buildMessages(pendingUser, turnImages = null, turnMediaParts = null) {
     const healed = healLoadedMessagesByTokens(this.log.toMessages(), this.toolResultBudget.absoluteMaxTokens);
     const msgs = [...this.prefix.toMessages()];
     if (this.contextInputGuard) {
@@ -8362,16 +8368,16 @@ ${reason}`
     }
     msgs.push(...healed.messages);
     if (pendingUser !== null) {
-      if (this.vision && turnImages && turnImages.length > 0) {
-        msgs.push({ role: "user", content: this.buildUserContent(pendingUser, turnImages, this.visionDetail) });
+      if ((this.vision && turnImages && turnImages.length > 0) || (turnMediaParts && turnMediaParts.length > 0)) {
+        msgs.push({ role: "user", content: this.buildUserContent(pendingUser, turnImages, this.visionDetail, turnMediaParts) });
       } else {
         msgs.push({ role: "user", content: pendingUser });
       }
-    } else if (this.vision && turnImages && turnImages.length > 0) {
+    } else if ((this.vision && turnImages && turnImages.length > 0) || (turnMediaParts && turnMediaParts.length > 0)) {
       for (let index = msgs.length - 1; index >= 0; index--) {
         if (msgs[index]?.role !== "user") continue;
         const text = typeof msgs[index].content === "string" ? msgs[index].content : "";
-        msgs[index] = { ...msgs[index], content: this.buildUserContent(text, turnImages, this.visionDetail) };
+        msgs[index] = { ...msgs[index], content: this.buildUserContent(text, turnImages, this.visionDetail, turnMediaParts) };
         break;
       }
     }
@@ -8382,6 +8388,12 @@ ${reason}`
   }
   setPendingImages(images) {
     this._pendingImages = images && images.length > 0 ? images.slice(0, this.visionPolicy.maxImages) : null;
+  }
+  setPendingMediaParts(parts) {
+    const safe = (Array.isArray(parts) ? parts : []).filter((part) =>
+      part?.type === "video_url" && /^ms:\/\/[A-Za-z0-9._:-]+$/.test(String(part.video_url?.url ?? ""))
+    ).map((part) => ({ type: "video_url", video_url: { url: part.video_url.url } }));
+    this._pendingMediaParts = safe.length > 0 ? safe : null;
   }
   /** Drop the last user message + everything after; caller re-sends. Persists to session file. */
   retryLastUser() {
@@ -8469,6 +8481,8 @@ ${reason}`
     let pendingUser = userInput;
     let turnImages = this._pendingImages;
     this._pendingImages = null;
+    let turnMediaParts = this._pendingMediaParts;
+    this._pendingMediaParts = null;
     const toolSpecs = this.prefix.tools();
     const maxToolRounds = this.maxToolIters * (this.maxToolContinuationWindows + 1);
     const warnAt = Math.max(1, Math.floor(maxToolRounds * 0.7));
@@ -8514,7 +8528,11 @@ ${reason}`
         turnImages = [...new Set([...(turnImages ?? []), ...this._pendingImages])].slice(0, this.visionPolicy.maxImages);
         this._pendingImages = null;
       }
-      let messages = this.buildMessages(pendingUser, turnImages);
+      if (this._pendingMediaParts && this._pendingMediaParts.length > 0) {
+        turnMediaParts = [...(turnMediaParts ?? []), ...this._pendingMediaParts];
+        this._pendingMediaParts = null;
+      }
+      let messages = this.buildMessages(pendingUser, turnImages, turnMediaParts);
       if (outputRecoveryInstruction) {
         if (outputRecoveryPrefix) messages.push({ role: "assistant", content: outputRecoveryPrefix });
         messages.push({ role: "user", content: outputRecoveryInstruction });
@@ -8557,14 +8575,14 @@ ${reason}`
                 summaryChars: result.summaryChars
               })
             };
-            messages = this.buildMessages(pendingUser, turnImages);
+            messages = this.buildMessages(pendingUser, turnImages, turnMediaParts);
             // Re-check after fold — if still over emergency threshold, try a
             // second aggressive fold (keepRecentTokens: 0) to avoid API 400.
             const recheck = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
             if (recheck.needsAction) {
               const result2 = await this.context.fold(this.model, { keepRecentTokens: 0 });
               if (result2.folded) {
-                messages = this.buildMessages(pendingUser, turnImages);
+                messages = this.buildMessages(pendingUser, turnImages, turnMediaParts);
               }
               const recheck2 = this.context.decidePreflight(messages, this.prefix.toolSpecs, this.model);
               if (recheck2.needsAction) {
@@ -8758,21 +8776,25 @@ ${reason}`
           yield { turn: this._turn, role: "done", content: partial };
           return;
         }
-        const mediaError = turnImages?.length ? classifyMediaRequestError(err) : null;
+        const mediaError = turnImages?.length || turnMediaParts?.length ? classifyMediaRequestError(err) : null;
         if (mediaError && mediaRecoveryAttempts < this.visionPolicy.maxImages) {
-          const before = turnImages.length;
-          turnImages = mediaError === "media_format_unsupported"
-            ? turnImages.slice(0, -1)
-            : turnImages.slice(1);
+          const combined = [
+            ...(turnImages ?? []).map((value) => ({ kind: "image", value })),
+            ...(turnMediaParts ?? []).map((value) => ({ kind: "part", value })),
+          ];
+          const before = combined.length;
+          const retained = mediaError === "media_format_unsupported" ? combined.slice(0, -1) : combined.slice(1);
+          turnImages = retained.filter((item) => item.kind === "image").map((item) => item.value);
+          turnMediaParts = retained.filter((item) => item.kind === "part").map((item) => item.value);
           mediaRecoveryAttempts++;
           yield {
             turn: this._turn,
             role: "media_recovery",
             content: mediaError === "media_too_large"
-              ? "媒体请求过大，已移除较早的图片并继续当前任务。"
-              : "Provider 拒绝了图片格式，已移除对应媒体并继续当前任务。",
+              ? "媒体请求过大，已移除较早的媒体并继续当前任务。"
+              : "Provider 拒绝了媒体格式，已移除对应媒体并继续当前任务。",
             mediaReduced: true,
-            mediaOmitted: before - turnImages.length,
+            mediaOmitted: before - retained.length,
             mediaRecovery: mediaError,
             mediaWarnings: [String(err?.message ?? err ?? "media request rejected")]
           };
@@ -8913,7 +8935,7 @@ ${reason}`
         const ctxMax = decision.ctxMax;
         const result = await this.compactHistory({ keepRecentTokens: decision.tailBudget });
         const after = this.context.decidePreflight(
-          this.buildMessages(null, turnImages),
+          this.buildMessages(null, turnImages, turnMediaParts),
           this.prefix.toolSpecs,
           this.model,
           "fold"

@@ -2801,6 +2801,7 @@ async function handleOverview(method, _rest, _body, ctx) {
     eccRules: ctx.getEccRules?.() ?? null,
     latestVersion: ctx.getLatestVersion?.() ?? null,
     session: ctx.getSessionName?.() ?? null,
+    conversationId: ctx.getConversationId?.() ?? null,
     cwd,
     model: model.displayModel,
     configuredModel: model.configuredModel,

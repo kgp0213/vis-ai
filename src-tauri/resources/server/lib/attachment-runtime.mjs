@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 const INDEX_VERSION = 1;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const DEFAULT_UPLOAD_TTL_MS = 10 * 60 * 1000;
 const DATA_URL_RE = /^data:([^;,\s]+)(?:;[^,]*)?;base64,([A-Za-z0-9+/=\r\n]+)$/i;
 const IMAGE_MIME_RE = /^image\/[A-Za-z0-9.+-]+$/i;
 
@@ -42,6 +43,16 @@ function sniffImageMime(bytes) {
   if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
   if (bytes.length >= 2 && bytes.subarray(0, 2).equals(Buffer.from([66, 77]))) return "image/bmp";
   if (bytes.length >= 4 && (bytes.subarray(0, 4).equals(Buffer.from([73, 73, 42, 0])) || bytes.subarray(0, 4).equals(Buffer.from([77, 77, 0, 42])))) return "image/tiff";
+  return null;
+}
+
+function sniffVideoMime(bytes) {
+  if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+    return bytes.subarray(8, 12).toString("ascii") === "qt  " ? "video/quicktime" : "video/mp4";
+  }
+  if (bytes.length >= 4 && bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+    return "video/webm";
+  }
   return null;
 }
 
@@ -112,7 +123,13 @@ function normalizeRecord(value) {
  * Owns user media outside conversation JSONL. The model loop only receives
  * materialized data URLs at request time; sessions persist attachment refs.
  */
-export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => new Date(), maxBytes = MAX_ATTACHMENT_BYTES } = {}) {
+export function createAttachmentRuntime({
+  rootDir,
+  atomicWriteFile,
+  now = () => new Date(),
+  maxBytes = MAX_ATTACHMENT_BYTES,
+  uploadTtlMs = DEFAULT_UPLOAD_TTL_MS,
+} = {}) {
   if (!rootDir) throw new TypeError("attachment runtime rootDir is required");
   if (typeof atomicWriteFile !== "function") throw new TypeError("attachment runtime atomicWriteFile is required");
 
@@ -123,6 +140,9 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
   const records = new Map();
   const byHash = new Map();
   const uploads = new Map();
+  const effectiveUploadTtlMs = Number.isFinite(uploadTtlMs) && uploadTtlMs > 0
+    ? Math.floor(uploadTtlMs)
+    : DEFAULT_UPLOAD_TTL_MS;
   let loaded = false;
   let loading = null;
   let persistTail = Promise.resolve();
@@ -164,6 +184,28 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
   function blobPath(hash) {
     if (!/^[a-f0-9]{64}$/i.test(hash)) throw new Error("invalid attachment hash");
     return resolve(blobDir, hash.toLowerCase());
+  }
+
+  function clearUploadExpiry(upload) {
+    if (!upload?.expiryTimer) return;
+    clearTimeout(upload.expiryTimer);
+    upload.expiryTimer = null;
+  }
+
+  async function discardUpload(upload) {
+    if (!upload) return;
+    clearUploadExpiry(upload);
+    if (uploads.get(upload.id) === upload) uploads.delete(upload.id);
+    await rm(upload.path, { force: true }).catch(() => {});
+  }
+
+  function armUploadExpiry(upload) {
+    clearUploadExpiry(upload);
+    upload.expiryTimer = setTimeout(() => {
+      upload.cancelled = true;
+      if (!upload.busy) void discardUpload(upload);
+    }, effectiveUploadTtlMs);
+    upload.expiryTimer.unref?.();
   }
 
   async function ingestDataUrls(dataUrls, context = {}) {
@@ -363,6 +405,30 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
     return removed;
   }
 
+  async function releasePendingUploads(items) {
+    await ensureLoaded();
+    let removed = 0;
+    for (const item of Array.isArray(items) ? items : []) {
+      const id = safeString(item?.id);
+      const sessionId = safeString(item?.sessionId);
+      const workspace = safeString(item?.workspace);
+      if (!id || !sessionId || !workspace) continue;
+      const record = records.get(id);
+      if (!record || !safeString(record.operationId).startsWith("upload:")) continue;
+      if (record.sessionId !== sessionId || !record.workspace || resolve(record.workspace) !== resolve(workspace)) continue;
+      records.delete(id);
+      const hashIds = byHash.get(record.sha256);
+      hashIds?.delete(id);
+      if (!hashIds || hashIds.size === 0) {
+        byHash.delete(record.sha256);
+        await rm(blobPath(record.sha256), { force: true }).catch(() => {});
+      }
+      removed++;
+    }
+    if (removed > 0) await persist();
+    return removed;
+  }
+
   async function beginUpload(context = {}) {
     await ensureLoaded();
     const size = Number(context.size);
@@ -374,7 +440,7 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
     const normalizedContext = normalizeContext(context);
     if (!normalizedContext.operationId) normalizedContext.operationId = `upload:${id}`;
     await writeFile(path, Buffer.alloc(0), { flag: "wx" });
-    uploads.set(id, {
+    const upload = {
       id,
       path,
       size,
@@ -383,26 +449,41 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
       mimeType: normalizeMime(context.mimeType),
       ...normalizedContext,
       busy: false,
-    });
-    return { uploadId: id, chunkBytes: 512 * 1024, size };
+      cancelled: false,
+      expiryTimer: null,
+    };
+    uploads.set(id, upload);
+    armUploadExpiry(upload);
+    return {
+      uploadId: id,
+      chunkBytes: 512 * 1024,
+      size,
+      sessionId: normalizedContext.sessionId,
+      workspace: normalizedContext.workspace,
+    };
   }
 
   async function appendUpload(id, bytes, offset) {
     await ensureLoaded();
     const upload = uploads.get(safeString(id));
     if (!upload) throw new Error("附件上传不存在或已过期");
+    if (upload.cancelled) throw new Error("附件上传已取消");
     if (upload.busy) throw new Error("附件上传正在处理上一分块");
     const payload = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes ?? []);
     if (payload.length === 0) throw new Error("附件上传分块为空");
     if (Number(offset) !== upload.received) throw new Error(`附件上传偏移不匹配，期望 ${upload.received}`);
     if (upload.received + payload.length > upload.size) throw new Error("附件上传内容超过声明大小");
+    clearUploadExpiry(upload);
     upload.busy = true;
     try {
       await appendFile(upload.path, payload);
       upload.received += payload.length;
+      if (upload.cancelled) throw new Error("附件上传已取消");
       return { uploadId: upload.id, received: upload.received, size: upload.size, complete: upload.received === upload.size };
     } finally {
       upload.busy = false;
+      if (upload.cancelled) await discardUpload(upload);
+      else if (uploads.get(upload.id) === upload) armUploadExpiry(upload);
     }
   }
 
@@ -410,34 +491,53 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
     await ensureLoaded();
     const upload = uploads.get(safeString(id));
     if (!upload) throw new Error("附件上传不存在或已过期");
+    if (upload.cancelled) throw new Error("附件上传已取消");
     if (upload.busy) throw new Error("附件上传仍在写入");
     if (upload.received !== upload.size) throw new Error(`附件上传不完整：${upload.received}/${upload.size} 字节`);
+    clearUploadExpiry(upload);
     upload.busy = true;
     try {
       const bytes = await readFile(upload.path);
-      const detectedMime = sniffImageMime(bytes);
-      if (!detectedMime) throw new Error("上传内容不是受支持的图片格式");
-      return await ingestBytes(bytes, {
-        kind: "image",
+      const detectedMime = sniffImageMime(bytes) ?? sniffVideoMime(bytes);
+      if (!detectedMime) throw new Error("上传内容不是受支持的图片或视频格式");
+      const attachment = await ingestBytes(bytes, {
+        kind: detectedMime.startsWith("video/") ? "video" : "image",
         mimeType: detectedMime,
         name: upload.name,
         operationId: upload.operationId,
         sessionId: upload.sessionId,
         workspace: upload.workspace,
       });
+      if (upload.cancelled) {
+        await releaseAttachments([attachment.id], {
+          sessionId: upload.sessionId,
+          workspace: upload.workspace,
+        });
+        throw new Error("附件上传已取消");
+      }
+      return attachment;
     } finally {
-      uploads.delete(upload.id);
-      await rm(upload.path, { force: true }).catch(() => {});
+      upload.busy = false;
+      await discardUpload(upload);
     }
   }
 
-  async function cancelUpload(id) {
+  async function cancelUpload(id, context = {}) {
     await ensureLoaded();
-    const upload = uploads.get(safeString(id));
-    if (!upload) return false;
-    uploads.delete(upload.id);
-    await rm(upload.path, { force: true }).catch(() => {});
-    return true;
+    const target = safeString(id);
+    const upload = uploads.get(target);
+    if (upload) {
+      upload.cancelled = true;
+      clearUploadExpiry(upload);
+      if (!upload.busy) await discardUpload(upload);
+      return true;
+    }
+    const sessionId = safeString(context.sessionId);
+    const workspace = safeString(context.workspace);
+    if (!target || !sessionId || !workspace) return false;
+    const record = [...records.values()].find((candidate) => candidate.operationId === `upload:${target}`);
+    if (!record) return false;
+    return await releasePendingUploads([{ id: record.id, sessionId, workspace }]) > 0;
   }
 
   return {
@@ -453,6 +553,7 @@ export function createAttachmentRuntime({ rootDir, atomicWriteFile, now = () => 
     appendUpload,
     finishUpload,
     cancelUpload,
+    releasePendingUploads,
     releaseAttachments,
     releaseSession,
     list: async () => { await ensureLoaded(); return [...records.values()].map(recordForPublic); },

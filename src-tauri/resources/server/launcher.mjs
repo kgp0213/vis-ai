@@ -79,6 +79,9 @@ const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJson
 const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
 const { createAttachmentRuntime } = await importEarly("./lib/attachment-runtime.mjs");
 const { createMediaRuntime } = await importEarly("./lib/media-runtime.mjs");
+const { createMediaProviderAdapter } = await importEarly("./lib/media-provider-adapter.mjs");
+const { createOfficialKimiVideoUploader } = await importEarly("./lib/kimi-video-uploader.mjs");
+const { prepareSubmittedMedia } = await importEarly("./lib/submitted-media.mjs");
 const { createDashboardEventStream } = await importEarly("./lib/dashboard-event-stream.mjs");
 const { adaptMcpMediaResult } = await importEarly("./lib/mcp-media-adapter.mjs");
 const { decidePlanContinuation } = await importEarly("./lib/plan-continuation.mjs");
@@ -435,6 +438,10 @@ const attachmentRuntime = createAttachmentRuntime({
   rootDir: resolve(visionoxDataDir, "attachments"),
   atomicWriteFile,
 });
+const mediaProviderAdapter = createMediaProviderAdapter({
+  attachmentRuntime,
+  videoUploaders: { kimi: createOfficialKimiVideoUploader({ attachmentRuntime }) },
+});
 
 async function handleAttachmentUpload(action, input = {}) {
   if (action === "init") {
@@ -457,7 +464,10 @@ async function handleAttachmentUpload(action, input = {}) {
     return { attachment: await attachmentRuntime.finishUpload(input.uploadId) };
   }
   if (action === "cancel") {
-    return { cancelled: await attachmentRuntime.cancelUpload(input.uploadId) };
+    return { cancelled: await attachmentRuntime.cancelUpload(input.uploadId, { sessionId: input.sessionId, workspace: input.workspace }) };
+  }
+  if (action === "release-upload") {
+    return { released: await attachmentRuntime.releasePendingUploads(input.attachments) };
   }
   if (action === "release") {
     return { released: await attachmentRuntime.releaseAttachments(input.attachmentIds, { sessionId: activeConversationId, workspace: workspaceDir }) };
@@ -4601,6 +4611,7 @@ async function removePromptQueueItem(scope, id = null) {
   const before = promptQueueStore.list(scope);
   const removed = id ? before.filter((item) => item.id === id) : before;
   const result = promptQueueStore.remove(scope, id);
+  if (!result?.ok) return result;
   const attachmentIds = removed.flatMap((item) => item.attachments ?? []);
   if (attachmentIds.length > 0) await attachmentRuntime.releaseAttachments(attachmentIds, { sessionId: activeConversationId, workspace: workspaceDir });
   return result;
@@ -7712,6 +7723,7 @@ const ctx = {
 
   // ── Getters ────────────────────────────────────────────────
   getCurrentCwd: () => workspaceDir,
+  getConversationId: () => activeConversationId,
   getIndexRetrievalMode: () => ({ mode: indexRetrievalMode, semanticAvailable: hasSemanticSearch }),
   setIndexRetrievalMode: (mode) => {
     if (busy) return { ok: false, error: "index retrieval mode changes apply only while idle" };
@@ -8251,8 +8263,16 @@ const ctx = {
       return { accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy with a turn" };
     }
 
-    // ── Intercept /help — show user-facing capability overview ──
     const trimmed = (text || "").trim();
+    const incomingAttachmentIds = Array.isArray(opts.attachmentIds)
+      ? [...new Set(opts.attachmentIds.filter((id) => /^att_[0-9a-f-]{20,}$/i.test(String(id ?? ""))))]
+      : [];
+    const inlineImages = Array.isArray(images) ? images : [];
+    if ((inlineImages.length > 0 || incomingAttachmentIds.length > 0) && trimmed.startsWith("/")) {
+      return { accepted: false, code: "LOCAL_COMMAND_ATTACHMENTS_UNSUPPORTED", reason: "本地命令不能同时提交附件，请移除附件后重试。" };
+    }
+
+    // ── Intercept /help — show user-facing capability overview ──
     if (trimmed === "/help" || trimmed === "/?") {
       const mc = getModeConfig();
       const modeList = Object.entries(config.modes ?? DEFAULT_MODES)
@@ -8362,6 +8382,9 @@ ${modeList}
     let attachmentRecords = [];
     let attachmentWarnings = [];
     let materializedImages = [];
+    let materializedMediaParts = [];
+    let pendingUploads = [];
+    let rollbackAttachmentIds = [];
     let resumeSessionFile = null;
     let resumeSessionRaw = null;
     try {
@@ -8662,20 +8685,10 @@ ${modeList}
         };
       }
 
-      const incomingAttachmentIds = Array.isArray(opts.attachmentIds)
-        ? [...new Set(opts.attachmentIds.filter((id) => /^att_[0-9a-f-]{20,}$/i.test(String(id ?? ""))))]
-        : [];
-      const inlineImages = Array.isArray(images) ? images : [];
       if (inlineImages.length > 0 || incomingAttachmentIds.length > 0) {
         const provider = getActiveProvider(config);
         const modelConfig = effectiveModelConfig(config);
         const capabilities = resolveProviderModelCapabilities(provider, modelConfig.model);
-        if (!capabilities.inputModalities?.includes("image")) {
-          return { accepted: false, reason: `当前模型 ${modelConfig.model} 不支持图片输入。` };
-        }
-        if (inlineImages.length + incomingAttachmentIds.length > capabilities.maxImagesPerRequest) {
-          return { accepted: false, reason: `当前模型单次最多接收 ${capabilities.maxImagesPerRequest} 张图片，请减少附件后重试。` };
-        }
         const mediaRuntime = createMediaRuntime({
           attachmentRuntime,
           workspaceRoot: workspaceDir,
@@ -8689,24 +8702,35 @@ ${modeList}
           signal: operation.controller.signal,
           rebind: true,
         };
-        const reboundIds = [];
-        for (const [index, attachmentId] of incomingAttachmentIds.entries()) {
-          const result = await mediaRuntime.readAttachment({ attachmentId }, mediaContext);
-          if (!result.ok) {
-            attachmentWarnings.push(`附件 ${attachmentId} 未能处理：${result.error?.message || "附件不可用"}`);
-            continue;
-          }
-          attachmentRecords.push(result.attachment);
-          materializedImages.push(result.dataUrl);
-          reboundIds.push(attachmentId);
+        const activeModel = provider?.models?.find((candidate) => candidate?.id === modelConfig.model);
+        const preparedMedia = await prepareSubmittedMedia({
+          attachmentRuntime,
+          mediaRuntime,
+          mediaProviderAdapter,
+          attachmentIds: incomingAttachmentIds,
+          inlineImages,
+          provider,
+          model: { ...activeModel, id: modelConfig.model, capabilities },
+          capabilities,
+          context: mediaContext,
+        });
+        attachmentRecords = preparedMedia.attachments;
+        materializedImages = preparedMedia.modelImages;
+        materializedMediaParts = preparedMedia.mediaParts;
+        pendingUploads = preparedMedia.pendingUploads ?? [];
+        rollbackAttachmentIds = preparedMedia.rollbackAttachmentIds ?? [];
+        if (operation.controller.signal.aborted) {
+          return { accepted: false, cancelled: true, code: "OPERATION_CANCELLED", reason: "附件准备期间任务已取消，未启动模型。" };
         }
-        if (inlineImages.length > 0) {
-          const prepared = await mediaRuntime.prepareInputDataUrls(inlineImages, mediaContext);
-          attachmentRecords.push(...prepared.attachments);
-          materializedImages.push(...prepared.modelImages);
-          attachmentWarnings.push(...prepared.errors.map((item) => `附件 ${Number(item.index) + incomingAttachmentIds.length + 1} 未能处理：${item.error?.message || item.error}`));
+        attachmentWarnings = preparedMedia.errors.map((error) => `${error.title || "附件处理失败"}：${error.message || error}`);
+        const preparationFailure = preparedMedia.errors[0];
+        if (preparationFailure) {
+          return {
+            accepted: false,
+            code: preparationFailure.code || "MEDIA_PREPARATION_FAILED",
+            reason: `${preparationFailure.title || "附件处理失败"}：${preparationFailure.message || preparationFailure}`,
+          };
         }
-        if (reboundIds.length > 0) await attachmentRuntime.releaseAttachments(reboundIds, { sessionId: activeConversationId, workspace: workspaceDir });
         operation.context.attachments = attachmentRecords.map((attachment) => ({ ...attachment }));
         if (attachmentWarnings.length > 0) {
           console.error(`[launcher] media attachment warnings: ${attachmentWarnings.join("; ")}`);
@@ -8971,10 +8995,6 @@ ${modeList}
 
       broadcastDashboardEvent({ kind: "busy-change", busy: true });
 
-      if (loop && materializedImages.length > 0) {
-        loop.setPendingImages(materializedImages);
-      }
-
       const retrievalHistory = opts.isolated === true || opts.internalHandoff === true ? [] : messages.slice(-12);
       const userMsgId = String(nextMsgId++);
       const assistantId = `assistant-${Date.now()}`;
@@ -9017,11 +9037,23 @@ ${modeList}
         return { accepted: false, requestId: requestId || null, reason };
       }
 
+      if (loop && materializedImages.length > 0) {
+        loop.setPendingImages(materializedImages);
+      }
+      if (loop && materializedMediaParts.length > 0) {
+        loop.setPendingMediaParts(materializedMediaParts);
+      }
+
       // Fire-and-forget: process the turn asynchronously
       // When committed=true, the outer finally skips busy-reset because
       // the fire-and-forget's own finally handles it.
       committed = true;
       (async () => {
+        if (pendingUploads.length > 0) {
+          await attachmentRuntime.releasePendingUploads(pendingUploads).catch((error) => {
+            console.error(`[launcher] committed media upload cleanup failed: ${error.message}`);
+          });
+        }
         const turnStartedAt = Date.now();
         let assistantText = "";
         let turnError = null;
@@ -9620,6 +9652,14 @@ ${modeList}
     } finally {
       // Reset busy on any early-return path (session load, /new, no-loop, etc.)
       if (!committed) {
+        if (rollbackAttachmentIds.length > 0) {
+          await attachmentRuntime.releaseAttachments(rollbackAttachmentIds, {
+            sessionId: activeConversationId,
+            workspace: workspaceDir,
+          }).catch((error) => {
+            console.error(`[launcher] media preparation rollback failed: ${error.message}`);
+          });
+        }
         if (promptIsolation?.enabled) promptIsolation.restore();
         detachExternalSignal();
         busy = false;
