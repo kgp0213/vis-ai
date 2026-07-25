@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "requirements": [
+    {
+      "id": "pdf-python-toolkit",
+      "optional": true,
+      "kind": "python",
+      "versionRange": ">=3.10,<3.14",
+      "packages": [
+        { "name": "pdfplumber", "version": "0.11.9", "importName": "pdfplumber" },
+        { "name": "pikepdf", "version": "10.0.2", "importName": "pikepdf" },
+        { "name": "pypdf", "version": "6.1.1", "importName": "pypdf" },
+        { "name": "reportlab", "version": "4.4.4", "importName": "reportlab" },
+        { "name": "PyMuPDF", "version": "1.26.5", "importName": "fitz" }
+      ],
+      "healthChecks": [
+        "import:pdfplumber",
+        "import:pikepdf",
+        "import:pypdf",
+        "import:reportlab",
+        "import:fitz"
+      ]
+    },
+    {
+      "id": "pdf-node-reader",
+      "kind": "node",
+      "versionRange": ">=20",
+      "packages": [
+        { "name": "pdfjs-dist", "version": "5.4.296" },
+        { "name": "@napi-rs/canvas", "version": "0.1.80" }
+      ],
+      "healthChecks": [
+        "require:pdfjs-dist",
+        "require:@napi-rs/canvas"
+      ]
+    }
+  ]
+}

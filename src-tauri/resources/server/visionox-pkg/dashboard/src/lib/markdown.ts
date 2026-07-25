@@ -1,6 +1,6 @@
 // Recovered from the product bundle; types are tightened incrementally without changing behavior.
 // @ts-nocheck
-import hljs from "highlight.js/es/common.js";
+import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
 import { TOKEN, api, writeClipboardText } from "./api.js";
 import { showToast } from "./bus.js";
@@ -148,16 +148,14 @@ function renderPreviewCodeBlock(content, rawLang) {
   const lang = normalizeArtifactLang(rawLang);
   const hlLang = lang === "html" || lang === "htm" ? "xml" : lang;
   let codeHtml = escapeHtml(content);
-  if (hlLang && common_default.getLanguage(hlLang)) {
-    try {
-      codeHtml = common_default.highlight(content, { language: hlLang, ignoreIllegals: true }).value;
-    } catch {
+  try {
+    if (hlLang && hljs?.getLanguage?.(hlLang)) {
+      codeHtml = hljs.highlight(content, { language: hlLang, ignoreIllegals: true }).value;
+    } else if (hljs?.highlightAuto) {
+      codeHtml = hljs.highlightAuto(content).value;
     }
-  } else {
-    try {
-      codeHtml = common_default.highlightAuto(content).value;
-    } catch {
-    }
+  } catch {
+    codeHtml = escapeHtml(content);
   }
   const langLabel = lang ? escapeHtml(lang) : "代码";
   const codeClass = hlLang ? ` class="hljs language-${escapeHtml(hlLang)}"` : ' class="hljs"';
@@ -190,18 +188,18 @@ renderer.code = function reasonixCode(arg1, arg2) {
   }
   if (lang === "diff") return renderUnifiedDiff(codeText);
   const artifact = registerChatArtifact(codeText, lang);
-  if (lang && typeof lang === "string" && common_default.getLanguage(lang)) {
+  if (lang && typeof lang === "string" && hljs?.getLanguage?.(lang)) {
     try {
-      const h3 = common_default.highlight(codeText, { language: lang, ignoreIllegals: true }).value;
+      const h3 = hljs.highlight(codeText, { language: lang, ignoreIllegals: true }).value;
       return renderArtifactFrame(artifact, `<pre><code class="hljs language-${lang}">${h3}</code></pre>`);
     } catch {
     }
   }
   if (artifact) {
     const hlLang = artifact.lang === "html" || artifact.lang === "htm" ? "xml" : artifact.lang;
-    if (common_default.getLanguage(hlLang)) {
+    if (hljs?.getLanguage?.(hlLang)) {
       try {
-        const h3 = common_default.highlight(codeText, { language: hlLang, ignoreIllegals: true }).value;
+        const h3 = hljs.highlight(codeText, { language: hlLang, ignoreIllegals: true }).value;
         return renderArtifactFrame(artifact, `<pre><code class="hljs language-${hlLang}">${h3}</code></pre>`);
       } catch {
       }
@@ -209,7 +207,7 @@ renderer.code = function reasonixCode(arg1, arg2) {
     return renderArtifactFrame(artifact, `<pre><code>${escapeHtml(codeText)}</code></pre>`);
   }
   try {
-    const auto = common_default.highlightAuto(codeText);
+    const auto = hljs.highlightAuto(codeText);
     return `<pre><code class="hljs">${auto.value}</code></pre>`;
   } catch {
     return `<pre><code>${escapeHtml(codeText)}</code></pre>`;
@@ -549,9 +547,9 @@ function langFromPath(path) {
 }
 function renderHighlightedBlock(text, lang) {
   if (!text) return "";
-  const safeLang = lang && common_default.getLanguage(lang) ? lang : null;
+  const safeLang = lang && hljs?.getLanguage?.(lang) ? lang : null;
   try {
-    const out = safeLang ? common_default.highlight(text, { language: safeLang, ignoreIllegals: true }) : common_default.highlightAuto(text);
+    const out = safeLang ? hljs.highlight(text, { language: safeLang, ignoreIllegals: true }) : hljs.highlightAuto(text);
     return `<pre class="md"><code class="hljs ${safeLang ? `language-${safeLang}` : ""}">${out.value}</code></pre>`;
   } catch {
     return `<pre><code>${escapeHtml(text)}</code></pre>`;
@@ -561,10 +559,10 @@ function hlLine(text, lang) {
   if (text == null) return "";
   if (text === "") return "";
   try {
-    if (lang && common_default.getLanguage(lang)) {
-      return common_default.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    if (lang && hljs?.getLanguage?.(lang)) {
+      return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
     }
-    return common_default.highlightAuto(text).value;
+    return hljs.highlightAuto(text).value;
   } catch {
     return escapeHtml(text);
   }

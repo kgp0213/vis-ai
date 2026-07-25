@@ -132,7 +132,7 @@ test("launcher retries explicit file delivery and fails completion when no artif
   assert.match(launcher, /finishTurnOnResult/);
   assert.match(launcher, /artifactContinuationAttempts < MAX_ARTIFACT_AUTO_CONTINUATIONS/);
   assert.match(launcher, /if \(!info \|\| info\.size <= 0 \|\| \(!isRequestedExistingOutput && info\.mtimeMs < turnStartedAt/);
-  assert.match(launcher, /toolResultSucceeded\(ev\.content\)/);
+  assert.match(launcher, /toolResultSucceeded\(ev\.content, \{ status: ev\.toolStatus \}\)/);
   assert.match(launcher, /rememberToolGeneratedArtifacts\(ev\.toolName, ev\.toolArgs, ev\.content\)/);
   assert.match(launcher, /edit_file\|multi_edit/);
   assert.match(launcher, /Array\.isArray\(args\.edits\)/);
@@ -161,4 +161,6 @@ test("artifact completion rejects failed tool results", () => {
   assert.equal(toolResultSucceeded('{"ok":true,"exitCode":1,"stdout":"failed"}'), false);
   assert.equal(toolResultSucceeded('{"ok":false,"exitCode":0,"error":"dispatch failed"}'), false);
   assert.equal(toolResultSucceeded('{"ok":true,"exitCode":null}'), true);
+  assert.equal(toolResultSucceeded("", { status: "succeeded" }), true);
+  assert.equal(toolResultSucceeded("completed", { status: "failed" }), false);
 });

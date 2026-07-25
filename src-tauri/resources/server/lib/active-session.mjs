@@ -1,5 +1,6 @@
 const MODEL_ROLES = new Set(["system", "user", "assistant", "tool"]);
 const DASHBOARD_ROLES = new Set(["user", "assistant", "tool", "warning", "error", "info"]);
+const PERSISTED_FACT_ROLES = new Set(["execution"]);
 const INTERNAL_USER_PROMPT_RE = /^\[(?:系统自动续跑\s+\d+\/\d+|系统后台任务接管\s+document:[^\]]+|系统通用复杂任务调度|系统步骤检查点)\]/;
 
 function contentText(content) {
@@ -14,7 +15,7 @@ function contentText(content) {
 function normalizeEntry(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const role = typeof value.role === "string" ? value.role : "";
-  if (!MODEL_ROLES.has(role) && !DASHBOARD_ROLES.has(role)) return null;
+  if (!MODEL_ROLES.has(role) && !DASHBOARD_ROLES.has(role) && !PERSISTED_FACT_ROLES.has(role)) return null;
   const content = value.content !== undefined ? value.content : value.text;
   if (typeof content !== "string" && !Array.isArray(content)) return null;
   return { ...value, role, content };
@@ -88,9 +89,12 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
       toolArgs: entry.toolArgs,
       images: Array.isArray(entry.images) ? entry.images : undefined,
       attachments: Array.isArray(entry.attachments) ? entry.attachments : undefined,
+      ...(entry.turnId ? { turnId: String(entry.turnId) } : {}),
+      ...(entry.operationId ? { operationId: String(entry.operationId) } : {}),
       ...(entry.receipt && typeof entry.receipt === "object" ? { receipt: entry.receipt } : {}),
       ...(typeof entry.taskState === "string" ? { taskState: entry.taskState } : {}),
       ...(entry.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
+      ...(Array.isArray(entry.artifactEvidence) ? { artifactEvidence: entry.artifactEvidence } : {}),
       ...(typeof entry.interventionChoice === "string" ? { interventionChoice: entry.interventionChoice } : {}),
       ...(Array.isArray(entry.warnings) && entry.warnings.length > 0 ? { warnings: entry.warnings } : {}),
     };

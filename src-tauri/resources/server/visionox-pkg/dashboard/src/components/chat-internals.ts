@@ -54,6 +54,24 @@ function renderToolOutput(text, kind = "pre", lang = "") {
   const body = kind === "highlight" ? html4`<div dangerouslySetInnerHTML=${{ __html: renderHighlightedBlock(value, lang) }}></div>` : html4`<pre class="tool-card-output">${value}</pre>`;
   return body;
 }
+const TOOL_OUTPUT_COLLAPSE_CHARS = 200;
+const TOOL_OUTPUT_COLLAPSE_LINES = 4;
+function shouldCollapseToolOutput(text) {
+  const stats = toolTextStats(text);
+  return stats.chars > TOOL_OUTPUT_COLLAPSE_CHARS || stats.lines > TOOL_OUTPUT_COLLAPSE_LINES;
+}
+// 长输出默认折叠成一行摘要，短输出直接展示，保持对话框不被中间过程淹没
+function renderCollapsibleToolOutput(text, kind = "pre", lang = "") {
+  const value = text ?? "";
+  if (!value || !shouldCollapseToolOutput(value)) return renderToolOutput(value, kind, lang);
+  const stats = toolTextStats(value);
+  return html4`
+    <details class="tool-card-collapse">
+      <summary>${t4("chat.toolOutputCollapsed", { lines: stats.lines.toLocaleString(), chars: stats.chars.toLocaleString() })}</summary>
+      ${renderToolOutput(value, kind, lang)}
+    </details>
+  `;
+}
 function chatSearchText(msg) {
   if (!msg) return "";
   const parts = [msg.role, msg.toolName, msg.text, msg.reasoning, msg.toolArgs];
@@ -108,7 +126,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
-        ${renderToolOutput(args.content, "highlight", lang)}
+        ${renderCollapsibleToolOutput(args.content, "highlight", lang)}
         ${msg.text ? html4`<div class="tool-card-result">${msg.text}</div>` : null}
       </div>
     `;
@@ -124,7 +142,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
-        ${renderToolOutput(msg.text ?? "", "highlight", lang)}
+        ${renderCollapsibleToolOutput(msg.text ?? "", "highlight", lang)}
       </div>
     `;
   }
@@ -138,7 +156,7 @@ function ToolCard({ msg }) {
           ${progressBadge}
         </div>
         ${cmd ? html4`<pre class="tool-card-cmd"><span class="tool-card-prompt">$</span> <code>${cmd}</code></pre>` : null}
-        ${msg.text ? renderToolOutput(msg.text) : null}
+        ${msg.text ? renderCollapsibleToolOutput(msg.text) : null}
       </div>
     `;
   }
@@ -151,7 +169,7 @@ function ToolCard({ msg }) {
           ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
-        ${renderToolOutput(msg.text)}
+        ${renderCollapsibleToolOutput(msg.text)}
       </div>
     `;
   }
@@ -161,10 +179,66 @@ function ToolCard({ msg }) {
         <span class="tool-card-icon">▣</span>
         <span class="tool-card-name">${name}</span>
         ${progressBadge}
+        ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
       </div>
       ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
-      ${renderToolOutput(msg.text)}
+      ${renderCollapsibleToolOutput(msg.text)}
     </div>
+  `;
+}
+// 连续的工具调用在正文流里降级为一行淡灰日志：任务进行中原地更新"正在使用工具 · 第 N 步"，
+// 任务结束后落地为"使用了 N 个工具"。点击展开后是扁平日志列表（无卡片边框），
+// 每步一行，失败/取消的步骤以警示色标出。
+function briefToolLabel(msg) {
+  const name = msg.toolName ?? "tool";
+  const args = parseToolArgs(msg.toolArgs);
+  const target = args?.path ?? args?.file_path ?? args?.filename ?? args?.command ?? null;
+  return { name, target: typeof target === "string" ? target : null };
+}
+function ToolGroup({ items, taskActive = false, searchHitIds = null }) {
+  useLang();
+  const isActiveStatus = (status) => ["queued", "running"].includes(status);
+  const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
+  const doneItems = items.filter((m3) => !isActiveStatus(m3.toolStatus));
+  const failedItems = doneItems.filter((m3) => ["failed", "cancelled"].includes(m3.toolStatus));
+  const hitSet = searchHitIds ? new Set(searchHitIds) : null;
+  const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
+  const statusIcon = (status) => {
+    if (["queued", "running"].includes(status)) return html4`<span class="spinner tool-log-spinner"></span>`;
+    if (status === "failed" || status === "cancelled") return html4`<span class="tool-log-icon-failed">✗</span>`;
+    return html4`<span class="tool-log-icon-ok">✓</span>`;
+  };
+  const renderRow = (m3) => {
+    const brief = briefToolLabel(m3);
+    const hasDetail = Boolean((m3.text ?? "").trim()) || Boolean(m3.toolArgs);
+    const summaryInner = html4`
+      ${statusIcon(m3.toolStatus)}
+      <span class="tool-log-name">${brief.name}</span>
+      ${brief.target ? html4`<span class="tool-log-brief" title=${brief.target}>${brief.target}</span>` : null}
+    `;
+    if (!hasDetail) {
+      return html4`<div key=${m3.id} data-msg-id=${m3.id ?? ""} class=${`tool-log-row ${hitSet?.has(String(m3.id)) ? "search-hit" : ""}`}>${summaryInner}</div>`;
+    }
+    return html4`
+      <details key=${m3.id} data-msg-id=${m3.id ?? ""} class=${`tool-log-row ${hitSet?.has(String(m3.id)) ? "search-hit" : ""}`}>
+        <summary>${summaryInner}</summary>
+        <div class="tool-log-detail">
+          ${m3.toolArgs ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(typeof m3.toolArgs === "string" ? m3.toolArgs : JSON.stringify(parseToolArgs(m3.toolArgs) ?? m3.toolArgs, null, 2))}</pre></details>` : null}
+          ${(m3.text ?? "").trim() ? renderCollapsibleToolOutput(m3.text) : null}
+        </div>
+      </details>
+    `;
+  };
+  const currentTool = activeItems.at(-1) ?? null;
+  const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
+  const summaryLabel = taskActive
+    ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>正在使用工具 · 第 ${doneItems.length + (currentTool ? 1 : 0)} 步${currentBrief ? html4` · ${currentBrief.name}` : null}</span>`
+    : html4`使用了 ${items.length} 个工具${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${failedItems.length} 个失败</span>` : null}`;
+  return html4`
+    <details class=${`tool-log ${taskActive ? "tool-log-running" : ""} ${!taskActive && failedItems.length > 0 ? "tool-log-has-failed" : ""}`} open=${hasHit || void 0}>
+      <summary>${summaryLabel}</summary>
+      <div class="tool-log-list">${items.map((m3) => renderRow(m3))}</div>
+    </details>
   `;
 }
 function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings) {
@@ -190,7 +264,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
     </details>
   `;
 }
-var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, reasoningExpanded = false, selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
+var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch, onCopy, onFillInput, reasoningExpanded = false, reasoningDisplay = "live", selectedForArtifacts = false, onSelectForArtifacts, userAvatar = null }) {
   useLang();
   const role = msg.role;
   const avatar = role === "user" ? userAvatar || ROLE_AVATAR.user : ROLE_AVATAR[role];
@@ -207,10 +281,12 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
   const reasoningLive = Boolean(streaming && msg.reasoning);
   const [reasoningOpen, setReasoningOpen] = d2(Boolean(reasoningExpanded));
   const reasoningLength = String(msg.reasoning || "").length;
+  // 流式期间只展示当前这一轮思考；turnReasoning 缺失时（旧数据或其他面板）回退为完整思考
+  const liveReasoningText = msg.turnReasoning ?? msg.reasoning;
   y2(() => {
     const node = reasoningRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [msg.reasoning, reasoningLive]);
+  }, [msg.reasoning, msg.turnReasoning, reasoningLive]);
   y2(() => {
     if (!reasoningLive) setReasoningOpen(Boolean(reasoningExpanded));
   }, [reasoningExpanded, reasoningLive]);
@@ -262,13 +338,14 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
-        ${msg.reasoning ? reasoningLive ? html4`
-          <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${msg.reasoning}</div>
-        ` : html4`
+        ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
+          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? `思考中 · 第 ${msg.reasoningTurns} 轮` : "思考中…"}</div>
+          <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
+        ` : null : html4`
           <details class="reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
             <summary class="reasoning-summary">
               <span class="reasoning-summary-label">思考过程</span>
-              <span class="reasoning-summary-meta">约 ${reasoningLength.toLocaleString()} 字</span>
+              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? `共 ${msg.reasoningTurns} 轮思考 · ` : ""}约 ${reasoningLength.toLocaleString()} 字</span>
             </summary>
             <div class="reasoning">${msg.reasoning}</div>
           </details>
@@ -782,6 +859,7 @@ export {
   RevisionModal,
   ShellModal,
   ToolCard,
+  ToolGroup,
   ViewerModal,
   WorkspaceModal,
   computeChatSearchMatches,

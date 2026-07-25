@@ -14,6 +14,10 @@ const serverUrl = new URL("../visionox-pkg/dist/cli/server-XGDBRWMB.js", import.
 const dashboardUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
 const { dispatch } = await import(serverUrl.href);
 const TOKEN = "superpowers-test-token";
+const LAUNCHER_SLASH_COMMANDS = [
+  "help", "new", "status", "compact", "retry", "cost", "context",
+  "skill", "ecc", "btw", "report", "learn",
+];
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -60,8 +64,8 @@ test("斜杠菜单公开 launcher 命令，/skill 支持列出、查看和带任
     ],
   });
   assert.equal(listed.status, 200);
-  assert.ok(listed.body.commands.some((command) => command.cmd === "skill"));
-  assert.ok(listed.body.commands.some((command) => command.cmd === "ecc"));
+  assert.deepEqual(listed.body.commands.map((command) => command.cmd), ["skill", "ecc"]);
+  assert.equal(listed.body.commands.some((command) => command.cmd === "exit"), false);
   assert.match(launcher, /name: "\/skill"/);
   assert.match(launcher, /new SkillStore\(\{ homeDir: home, projectRoot: workspaceDir \}\)/);
   assert.match(launcher, /manualSkillInput = await tools\.dispatch\("run_skill"/);
@@ -81,7 +85,7 @@ test("真实 launcher 可执行 /skill list", { timeout: 30000 }, async () => {
   try {
     await waitForServer(`${base}/api/health?token=${TOKEN}`);
     const slash = await (await fetch(`${base}/api/slash`, { headers })).json();
-    assert.ok(slash.commands.some((command) => command.cmd === "skill"));
+    assert.deepEqual(slash.commands.map((command) => command.cmd), LAUNCHER_SLASH_COMMANDS);
 
     const submitted = await fetch(`${base}/api/submit`, {
       method: "POST",
@@ -91,6 +95,14 @@ test("真实 launcher 可执行 /skill list", { timeout: 30000 }, async () => {
     assert.equal(submitted.status, 202, stderr.slice(-2000));
     const messages = await (await fetch(`${base}/api/messages?limit=20`, { headers })).json();
     assert.ok(messages.messages.some((message) => /可用技能/.test(message.text ?? "")));
+
+    const reset = await fetch(`${base}/api/submit`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "/new" }),
+    });
+    assert.equal(reset.status, 202, stderr.slice(-2000));
+    assert.equal((await reset.json()).accepted, true);
   } finally {
     if (proc.exitCode === null) {
       if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });

@@ -1,7 +1,7 @@
 // Recovered from the product bundle; types are tightened incrementally without changing behavior.
 // @ts-nocheck
 import htm_module_default from "htm";
-import common_default from "highlight.js/lib/common";
+import hljs from "highlight.js/lib/common";
 import { h as k } from "preact";
 import { useCallback as q2, useEffect as y2, useRef as A2, useState as d2 } from "preact/hooks";
 import { ChatMessage, ToolCard } from "../components/chat-internals.js";
@@ -950,13 +950,13 @@ function CodeViewer(props) {
         });
       }
     });
-    if (common_default) {
+    if (hljs) {
       const codeEl = codeRef.current;
       if (codeEl) {
         codeEl.querySelectorAll(".ln-content").forEach((span) => {
           const text = span.textContent ?? "";
           try {
-            const result = common_default.highlight(text, { language: file.language, ignoreIllegals: true });
+            const result = hljs.highlight(text, { language: file.language, ignoreIllegals: true });
             span.innerHTML = result.value;
           } catch {
             span.textContent = text;

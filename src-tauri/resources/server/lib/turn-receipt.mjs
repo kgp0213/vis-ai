@@ -34,6 +34,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     providerResults: [],
     artifactEvidence: [],
     documentBindings: [],
+    runtime: [],
     context: null,
     mediaReduced: false,
     mediaOmitted: 0,
@@ -136,7 +137,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     return true;
   }
 
-  function recordArtifact({ paths = [], files = [], producer = "unknown", verified = false, reason = "" } = {}) {
+  function recordArtifact({ paths = [], files = [], producer = "unknown", verified = false, status = null, reason = "" } = {}) {
     const normalized = [...new Set((Array.isArray(paths) ? paths : []).map((path) => String(path ?? "").trim()).filter(Boolean))];
     if (normalized.length === 0) return;
     state.artifactEvidence.push({
@@ -148,9 +149,11 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
         ext: boundedText(file?.ext, 24) || null,
         changedThisTurn: file?.changedThisTurn !== false,
         verification: boundedText(file?.verification, 80) || null,
+        status: boundedText(file?.status, 40) || (verified ? "verified" : "present_unverified"),
       })),
       producer: boundedText(producer, 120),
       verified: verified === true,
+      status: boundedText(status, 40) || (verified ? "verified" : "present_unverified"),
       reason: boundedText(reason, 240),
       recordedAt: new Date().toISOString(),
     });
@@ -169,6 +172,28 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     };
     if (existing) Object.assign(existing, next);
     else state.documentBindings.push(next);
+  }
+
+  function recordRuntime(runtime = {}) {
+    if (!runtime || typeof runtime !== "object") return;
+    const environmentId = boundedText(runtime.environmentId, 180) || null;
+    const toolId = boundedText(runtime.toolId, 180) || null;
+    if (!environmentId && !toolId) return;
+    const next = {
+      environmentId,
+      toolId,
+      kind: boundedText(runtime.kind, 40) || null,
+      status: boundedText(runtime.status, 40) || "degraded",
+      reused: runtime.reused === true,
+      repaired: runtime.repaired === true,
+      installed: runtime.installed === true,
+      packageSource: boundedText(runtime.packageSource, 300) || null,
+      requirementsHash: boundedText(runtime.requirementsHash, 240) || null,
+    };
+    const index = state.runtime.findIndex((item) => (environmentId && item.environmentId === environmentId) || (!environmentId && toolId && item.toolId === toolId));
+    if (index >= 0) state.runtime[index] = next;
+    else state.runtime.push(next);
+    state.runtime = state.runtime.slice(-32);
   }
 
   function recordContext(status) {
@@ -259,6 +284,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     recordProviderResult,
     recordArtifact,
     recordDocumentBinding,
+    recordRuntime,
     recordContext,
     recordMedia,
     claimIntervention,

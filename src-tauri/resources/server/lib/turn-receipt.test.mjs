@@ -45,6 +45,28 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
   });
 });
 
+test("turn receipt distinguishes missing artifacts from present but unverified files", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-artifact-status" });
+  receipt.recordArtifact({
+    paths: ["C:\\work\\missing.md"],
+    files: [{ path: "C:\\work\\missing.md", size: 0, mtimeMs: 0, status: "missing", verification: "missing" }],
+    producer: "artifact-delivery",
+    status: "missing",
+    reason: "requested artifact was not found",
+  });
+  receipt.recordArtifact({
+    paths: ["C:\\work\\existing.md"],
+    files: [{ path: "C:\\work\\existing.md", size: 12, mtimeMs: 10, status: "present_unverified", verification: "existing-file" }],
+    producer: "read_file",
+    status: "present_unverified",
+  });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.artifactEvidence[0].status, "missing");
+  assert.equal(snapshot.artifactEvidence[0].files[0].status, "missing");
+  assert.equal(snapshot.artifactEvidence[1].status, "present_unverified");
+  assert.equal(snapshot.artifactEvidence[1].files[0].status, "present_unverified");
+});
+
 test("turn receipt keeps media degradation facts without duplicating warnings", () => {
   const receipt = createTurnReceipt({ turnId: "turn-media" });
   receipt.recordMedia({
@@ -72,4 +94,22 @@ test("turn receipt records bounded model retry facts without duplicate attempts"
     { requestId: "model-request-1", attempt: 1, maxAttempts: 4, delayMs: 500, reason: "http 429", statusCode: 429 },
     { requestId: "model-request-1", attempt: 2, maxAttempts: 4, delayMs: 1000, reason: "network: fetch failed", statusCode: null },
   ]);
+});
+
+test("turn receipt records runtime reuse without persisting local executable paths", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-runtime" });
+  receipt.recordRuntime({
+    environmentId: "pyenv-pdf",
+    toolId: "python-3-12",
+    status: "healthy",
+    reused: true,
+    packageSource: "pypi.tuna.tsinghua.edu.cn",
+    requirementsHash: "sha256:abc",
+    bindings: { VISIONOX_PYTHON: "C:\\private\\python.exe" },
+  });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.runtime[0].environmentId, "pyenv-pdf");
+  assert.equal(snapshot.runtime[0].reused, true);
+  assert.equal(snapshot.runtime[0].bindings, undefined);
+  assert.equal(JSON.stringify(snapshot).includes("C:\\private"), false);
 });

@@ -20,11 +20,12 @@ Most Markdown-to-PDF tools break on CJK characters, require LaTeX, or need heavy
 ## Usage
 
 ```bash
-python <skill-path>/scripts/md_to_pdf.py input.md output.pdf
+sh -c '"$VISIONOX_PYTHON" "<skill-path>/scripts/md_to_pdf.py" input.md output.pdf'
 ```
 
 Use the absolute skill `path` shown in the `run_skill` result header for
 `<skill-path>`. On macOS/Linux, `python3` may be the executable name.
+The script arguments are `md_to_pdf.py input.md output.pdf`.
 
 ## Features
 
@@ -46,13 +47,10 @@ Use the absolute skill `path` shown in the `run_skill` result header for
 
 ## Dependencies
 
-```bash
-python -m pip install reportlab
-```
-
-ReportLab is not bundled with Visionox. Confirm with
-`python -c "import reportlab"` before conversion; install it only with the
-user's permission when it is missing.
+`run_skill` prepares the declared ReportLab environment through the host runtime
+manager. Do not run `pip install` or create a virtual environment in the task folder.
+If the returned runtime header does not contain `VISIONOX_PYTHON`, report the missing
+capability and request a host-managed repair instead of installing locally.
 
 ## Font Configuration
 

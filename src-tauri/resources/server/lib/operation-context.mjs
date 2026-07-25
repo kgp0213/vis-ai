@@ -22,6 +22,8 @@ export function createOperationContext({ operationId, kind, conversationId = nul
     scheduledAuthorization: false,
     sendAuthorization: null,
     preparedDocuments: [],
+    runtimeBindings: {},
+    runtimeEnvironments: [],
     artifactBaseline: [],
     receipt: null,
   };

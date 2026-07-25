@@ -9,6 +9,7 @@ const DIRECT_REQUEST_RE = /(?:请|帮我|把|将|直接|现在|立即)/i;
 const PLAN_ONLY_REQUEST_RE = /(?:先|首先).{0,32}(?:计划|方案).{0,36}(?:确认|审批|同意).{0,20}(?:后|再).{0,24}(?:执行|开始|落地|生成|写入|保存|导出|创建|制作|处理)|(?:制定|给出|提供|生成|给我|给).{0,24}(?:计划|方案).{0,40}(?:等|待|确认|审批|同意).{0,20}(?:后|再).{0,24}(?:执行|开始|落地|生成|写入|保存|导出|创建|制作|处理)|(?:plan|proposal).{0,48}(?:confirm|approve).{0,24}(?:before|then).{0,24}(?:execute|start|generate|write|save|export)/iu;
 const ARTIFACT_OUTPUT_MARKER_RE = /(?:wrote|written|saved|created|generated|exported|moved|copied|output(?:\s+file)?|artifact|destination|target|输出|写入|保存|生成|创建|导出|目标文件)/iu;
 const ARTIFACT_OUTPUT_CONTEXT_RE = /(?:保存|另存|写入|导出|生成|创建|落盘|save|write|export|output|target|destination)/iu;
+import { normalizeToolOutcome } from "./tool-progress.mjs";
 function isUrlLikePath(value) {
   return String(value ?? "").includes("://");
 }
@@ -163,21 +164,6 @@ export function artifactMissingNotice() {
   return "\n\n> 文件交付未确认：当前轮没有获得目标文件的可验证证据，因此暂不能确认交付完成。文件可能已经生成但未被当前工具结果识别，请检查目标路径或重新执行文件校验。";
 }
 
-export function toolResultSucceeded(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return false;
-  if (/^(?:error|failed|failure)\s*:/i.test(text)) return false;
-  const exitMatch = text.match(/\[exit\s+(-?\d+)\]/i);
-  if (exitMatch) return Number(exitMatch[1]) === 0;
-  if (!text.startsWith("{")) return true;
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed?.ok === false || typeof parsed?.error === "string") return false;
-    if (parsed?.exitCode !== null && parsed?.exitCode !== undefined && parsed?.exitCode !== "" && Number.isFinite(Number(parsed.exitCode))) {
-      return Number(parsed.exitCode) === 0;
-    }
-    return true;
-  } catch {
-    return true;
-  }
+export function toolResultSucceeded(value, { status = null } = {}) {
+  return normalizeToolOutcome(value, { status }).ok === true;
 }

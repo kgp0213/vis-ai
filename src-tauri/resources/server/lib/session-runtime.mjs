@@ -4,6 +4,12 @@ import { resolve } from "node:path";
 
 import { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } from "./active-session.mjs";
 
+function entryText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+}
+
 /**
  * Owns active-session persistence and recovery. The Launcher supplies the
  * application state adapters; this module never builds or schedules a model
@@ -85,6 +91,9 @@ export function createSessionRuntime({
       const record = {
         role: message.role,
         content: message.content !== undefined ? message.content : message.text ?? "",
+        ...(message.id ? { id: String(message.id) } : {}),
+        ...(message.turnId ? { turnId: String(message.turnId) } : {}),
+        ...(message.operationId ? { operationId: String(message.operationId) } : {}),
         ...(Array.isArray(message.images) && message.images.length > 0 ? { images: message.images } : {}),
         ...(Array.isArray(message.attachments) && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
         ...(message.reasoning ? { reasoning: message.reasoning } : {}),
@@ -93,11 +102,12 @@ export function createSessionRuntime({
         ...(message.receipt && typeof message.receipt === "object" ? { receipt: message.receipt } : {}),
         ...(message.taskState ? { taskState: message.taskState } : {}),
         ...(message.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
+        ...(Array.isArray(message.artifactEvidence) && message.artifactEvidence.length > 0 ? { artifactEvidence: message.artifactEvidence } : {}),
         ...(message.interventionChoice ? { interventionChoice: message.interventionChoice } : {}),
         ...(Array.isArray(message.warnings) && message.warnings.length > 0 ? { warnings: message.warnings } : {}),
       };
       const line = `${JSON.stringify(record)}\n`;
-      void enqueuePersistence(async () => {
+      return enqueuePersistence(async () => {
         try {
           stream().write(line);
         } catch (error) {
@@ -108,6 +118,7 @@ export function createSessionRuntime({
     } catch (error) {
       issue("active-session", `active session append failed: ${error.message}`);
       onLog(`[session-runtime] active session append failed: ${error.message}`);
+      return false;
     }
   }
 
@@ -175,7 +186,43 @@ export function createSessionRuntime({
     const loop = getLoop();
     if (!loop?.log?.toMessages) return;
     try {
-      await writeEntries(withPendingUserEntry(loop.log.toMessages(), pendingUser));
+      // appendMessage() writes through the persistence queue and the stream
+      // itself is asynchronous. Drain both before taking the JSONL snapshot,
+      // otherwise a stale read can overwrite a durable finalization.
+      await persistenceTail;
+      await closeStream();
+      const nextEntries = withPendingUserEntry(loop.log.toMessages(), pendingUser);
+      let existingEntries = [];
+      try {
+        existingEntries = parseActiveSessionJsonl(await readFile(activeSessionFile, "utf8")).entries;
+      } catch {
+        existingEntries = [];
+      }
+      const durableKeys = ["id", "messageId", "turnId", "operationId", "receipt", "taskState", "artifactIncomplete", "artifactEvidence", "warnings", "interventionChoice"];
+      const durableEntries = existingEntries.filter((entry) => (entry?.role === "assistant" || entry?.role === "execution") && durableKeys.some((key) => entry[key] !== undefined));
+      const mergedEntries = [...nextEntries];
+      for (const existing of durableEntries) {
+        let target = -1;
+        for (let index = mergedEntries.length - 1; index >= 0; index--) {
+          const candidate = mergedEntries[index];
+          if (candidate?.role !== existing.role) continue;
+          if ((existing.id && candidate.id === existing.id)
+            || (existing.turnId && candidate.turnId === existing.turnId)
+            || (entryText(existing.content) && entryText(existing.content) === entryText(candidate.content))) {
+            target = index;
+            break;
+          }
+        }
+        if (target < 0) {
+          // Hidden execution facts are not part of the model history, but
+          // must survive later syncs just like assistant receipts do.
+          if (existing.role === "execution") mergedEntries.push({ ...existing });
+          continue;
+        }
+        const durable = Object.fromEntries(durableKeys.filter((key) => existing[key] !== undefined).map((key) => [key, existing[key]]));
+        mergedEntries[target] = { ...mergedEntries[target], ...durable };
+      }
+      await writeEntries(mergedEntries);
       const entries = loop.log.toMessages();
       const hasPendingUser = Boolean(pendingUser?.text || pendingUser?.images?.length || pendingUser?.attachments?.length);
       await writeMeta({ messageCount: entries.length + (hasPendingUser ? 1 : 0) });
@@ -183,6 +230,88 @@ export function createSessionRuntime({
       issue("active-session", `active session model sync failed: ${error.message}`);
       onLog(`[session-runtime] active session model sync failed: ${error.message}`);
     }
+  }
+
+  async function persistTurnFinalization({
+    modelEntries = null,
+    pendingUser = null,
+    assistant = {},
+    operationId = null,
+    receipt = null,
+    taskState = null,
+    artifactIncomplete = false,
+    artifactEvidence = [],
+    warnings = [],
+    interventionChoice = null,
+  } = {}) {
+    return enqueuePersistence(async () => {
+      await closeStream();
+      let entries = Array.isArray(modelEntries) ? modelEntries.map((entry) => ({ ...entry })) : null;
+      if (!entries) {
+        try {
+          entries = parseActiveSessionJsonl(await readFile(activeSessionFile, "utf8")).entries;
+        } catch {
+          entries = [];
+        }
+      }
+      entries = withPendingUserEntry(entries, pendingUser);
+      const text = typeof assistant.text === "string" ? assistant.text : "";
+      const messageId = assistant.messageId ? String(assistant.messageId) : null;
+      const turnId = assistant.turnId ? String(assistant.turnId) : null;
+      const durable = {
+        ...(messageId ? { id: messageId } : {}),
+        ...(messageId ? { messageId } : {}),
+        ...(turnId ? { turnId } : {}),
+        ...(operationId ? { operationId: String(operationId) } : {}),
+        ...(receipt && typeof receipt === "object" ? { receipt } : {}),
+        ...(typeof taskState === "string" && taskState ? { taskState } : {}),
+        ...(artifactIncomplete === true ? { artifactIncomplete: true } : {}),
+        ...(Array.isArray(artifactEvidence) && artifactEvidence.length > 0 ? { artifactEvidence } : {}),
+        ...(Array.isArray(warnings) && warnings.length > 0 ? { warnings } : {}),
+        ...(interventionChoice ? { interventionChoice: String(interventionChoice) } : {}),
+      };
+      let target = -1;
+      for (let index = entries.length - 1; index >= 0; index--) {
+        const entry = entries[index];
+        if (entry?.role !== "assistant") continue;
+        if (messageId && entry.id === messageId) {
+          target = index;
+          break;
+        }
+        if (text && entryText(entry.content) === text) {
+          target = index;
+          break;
+        }
+      }
+      if (target < 0 && text) {
+        for (let index = entries.length - 1; index >= 0; index--) {
+          if (entries[index]?.role === "assistant") {
+            target = index;
+            break;
+          }
+        }
+      }
+      if (target >= 0) {
+        entries[target] = { ...entries[target], ...(text ? { content: text } : {}), ...durable };
+      } else if (text) {
+        entries.push({ role: "assistant", content: text, ...durable });
+      } else {
+        // A failed/cancelled turn may have no assistant text. Persist its
+        // execution facts without manufacturing an empty visible message.
+        const executionId = `execution-${operationId || turnId || messageId || now().getTime()}`;
+        entries.push({ role: "execution", content: "", id: executionId, ...durable });
+      }
+      try {
+        await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));
+        const metaSaved = await writeMetaNow({ messageCount: entries.length });
+        if (!metaSaved) throw new Error("active session metadata could not be saved");
+        return true;
+      } catch (error) {
+        issue("active-session", `final turn persistence failed: ${error.message}`);
+        onLog(`[session-runtime] final turn persistence failed: ${error.message}`);
+        return false;
+      }
+    });
   }
 
   async function finalize() {
@@ -344,6 +473,7 @@ export function createSessionRuntime({
     },
     seed,
     syncFromLoop,
+    persistTurnFinalization,
     writeEntries,
     writeMeta,
   };

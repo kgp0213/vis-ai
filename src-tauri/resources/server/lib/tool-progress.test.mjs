@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { projectToolProgressEvent, redactToolProgressValue } from "./tool-progress.mjs";
+import { normalizeToolOutcome, projectToolProgressEvent, redactToolProgressValue } from "./tool-progress.mjs";
 import { createTurnReceipt } from "./turn-receipt.mjs";
 
 describe("tool progress projection", () => {
@@ -58,6 +58,42 @@ describe("tool progress projection", () => {
 
     assert.doesNotMatch(done.content, /aws-secret|aws-id|credential-bundle/);
     assert.equal((done.content.match(/\[REDACTED\]/g) ?? []).length, 3);
+  });
+
+  test("treats non-zero command exit codes as failed tool outcomes", () => {
+    const failed = normalizeToolOutcome("$ python script.py\n[exit 9009]\nPython was not found");
+    const succeeded = normalizeToolOutcome("$ command\n[exit 0]\ncompleted");
+    assert.equal(failed.ok, false);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.exitCode, 9009);
+    assert.equal(failed.code, "tool_exit_nonzero");
+    assert.equal(succeeded.ok, true);
+    assert.equal(succeeded.status, "succeeded");
+    assert.equal(succeeded.exitCode, 0);
+  });
+
+  test("projects timeout and cancellation facts", () => {
+    const timeout = projectToolProgressEvent({
+      role: "tool",
+      toolName: "run_command",
+      callId: "timeout-1",
+      content: "$ npm test\n[killed after timeout]",
+    });
+    const cancelled = normalizeToolOutcome(JSON.stringify({ ok: false, cancelled: true, error: "aborted" }));
+    assert.equal(timeout.status, "failed");
+    assert.equal(timeout.timedOut, true);
+    assert.equal(timeout.retryable, true);
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.cancelled, true);
+    assert.equal(normalizeToolOutcome("credential validation failed", { status: "failed" }).status, "failed");
+  });
+
+  test("honors explicit terminal status and does not infer cancellation from ordinary prose", () => {
+    assert.equal(normalizeToolOutcome("", { status: "succeeded" }).status, "succeeded");
+    assert.equal(normalizeToolOutcome("the operation was not cancelled; completed", { status: "succeeded" }).status, "succeeded");
+    assert.equal(normalizeToolOutcome("", { status: "failed" }).status, "failed");
+    assert.equal(normalizeToolOutcome(JSON.stringify({ ok: true, exitCode: null }), { status: "succeeded" }).exitCode, null);
+    assert.equal(normalizeToolOutcome(JSON.stringify({ ok: true, exitCode: "" }), { status: "succeeded" }).exitCode, null);
   });
 
   test("stores bounded per-call progress in the turn receipt", () => {

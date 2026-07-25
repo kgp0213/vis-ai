@@ -1,5 +1,10 @@
 const SENSITIVE_KEY = /^(?:authorization|cookie|set-cookie|password|passwd|secret|token|access[_-]?token|refresh[_-]?token|(?:x[_-]?)?api[_-]?key|apikey|client[_-]?secret|private[_-]?key|(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:aws[_-]?)?access[_-]?key[_-]?id|credentials?)$/i;
-const TOOL_STATUSES = new Set(["queued", "running", "succeeded", "failed", "cancelled"]);
+const EXIT_CODE_RE = /\[exit\s+(-?\d+)\]/i;
+const TIMEOUT_RE = /\[(?:killed after timeout|timeout)\]|\b(?:timed\s*out|execution timed out|command timed out)\b/i;
+// Do not classify ordinary prose such as "the request was not cancelled"
+// as a cancellation. Only recognize the runner's explicit cancellation forms.
+const CANCELLED_RE = /(?:^\s*\[(?:aborted|cancelled|canceled)\]\s*$|\b(?:tool|command|operation|request)\s+(?:was\s+)?(?:aborted|cancelled|canceled)\b|\b(?:aborted|cancelled|canceled)\s+by\s+(?:user|request|signal)\b)/i;
+const FAILURE_RE = /(?:^|\b)(?:error|failed|failure|denied|exception)\s*:/i;
 
 function redactString(value, limit = 4000) {
   return String(value ?? "")
@@ -39,18 +44,105 @@ function safeContent(value) {
   }
 }
 
+function parseStructuredResult(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim().startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Normalize the facts exposed by a tool result. The command runner currently
+ * returns a human-readable string, so exit markers must be treated as facts,
+ * not as an informal hint for the UI.
+ */
+export function normalizeToolOutcome(value, { role = "tool", status = null } = {}) {
+  const raw = String(value ?? "").trim();
+  const parsed = parseStructuredResult(value);
+  const exitMatch = raw.match(EXIT_CODE_RE);
+  const structuredExitCode = parsed?.exitCode;
+  const hasStructuredExitCode = (typeof structuredExitCode === "number" && Number.isFinite(structuredExitCode))
+    || (typeof structuredExitCode === "string" && structuredExitCode.trim() !== "" && Number.isFinite(Number(structuredExitCode)));
+  const exitCode = exitMatch
+    ? Number(exitMatch[1])
+    : hasStructuredExitCode ? Number(structuredExitCode) : null;
+  const timedOut = parsed?.timedOut === true || TIMEOUT_RE.test(raw);
+  const statusCancelled = status === "cancelled";
+  const cancelled = statusCancelled || parsed?.cancelled === true || parsed?.aborted === true || CANCELLED_RE.test(raw);
+  const explicitFailure = parsed?.ok === false || typeof parsed?.error === "string" || FAILURE_RE.test(raw);
+  const statusFailure = status === "failed";
+  const statusSucceeded = status === "succeeded";
+  const hasExplicitOk = typeof parsed?.ok === "boolean";
+  let ok;
+  if (timedOut || cancelled || explicitFailure || statusFailure || statusCancelled) ok = false;
+  else if (exitCode !== null) ok = exitCode === 0;
+  else if (hasExplicitOk) ok = parsed.ok === true;
+  else if (statusSucceeded) ok = true;
+  else ok = role !== "tool" || raw.length > 0;
+
+  const normalizedStatus = status && ["queued", "running"].includes(status)
+    ? status
+    : statusCancelled || cancelled ? "cancelled" : ok ? "succeeded" : "failed";
+  const code = timedOut
+    ? "tool_timeout"
+    : cancelled
+      ? "tool_cancelled"
+      : exitCode !== null && exitCode !== 0
+        ? "tool_exit_nonzero"
+        : statusFailure
+          ? "tool_failed"
+        : explicitFailure
+          ? "tool_failed"
+          : null;
+  const message = typeof parsed?.error === "string"
+    ? parsed.error
+    : timedOut
+      ? "工具执行超时"
+      : cancelled
+        ? "工具执行已取消"
+        : exitCode !== null && exitCode !== 0
+          ? `工具以退出码 ${exitCode} 结束`
+          : ok ? null : raw.slice(0, 500);
+  return {
+    ok: normalizedStatus === "succeeded",
+    status: normalizedStatus,
+    exitCode: Number.isInteger(exitCode) ? exitCode : null,
+    timedOut,
+    cancelled,
+    retryable: timedOut === true,
+    code,
+    message: message ? redactString(message, 500) : null,
+    details: {
+      hasOutput: raw.length > 0,
+      structured: Boolean(parsed),
+    },
+  };
+}
+
 function inferredStatus(event) {
-  if (TOOL_STATUSES.has(event?.toolStatus)) return event.toolStatus;
   if (event?.role === "tool_queued") return "queued";
   if (event?.role === "tool_start") return "running";
   if (event?.role !== "tool") return null;
-  const content = String(event?.content ?? "");
-  return /(?:\berror\b|\bfailed\b|\[hook block\])/i.test(content) ? "failed" : "succeeded";
+  const outcome = normalizeToolOutcome(event.content, {
+    role: event.role,
+    status: event.toolStatus,
+  });
+  return outcome.status;
+}
+
+function outcomeForEvent(event) {
+  if (event?.role !== "tool") return null;
+  return normalizeToolOutcome(event.content, { role: event.role, status: event.toolStatus });
 }
 
 export function projectToolProgressEvent(event, { assistantId = "assistant" } = {}) {
   const status = inferredStatus(event);
   if (!status || !event?.toolName) return null;
+  const outcome = outcomeForEvent(event);
   const toolCallId = String(event.callId ?? event.toolCallId ?? event.id ?? "unknown");
   const id = `${assistantId}-tool-${toolCallId}`;
   return {
@@ -61,5 +153,14 @@ export function projectToolProgressEvent(event, { assistantId = "assistant" } = 
     toolName: String(event.toolName).slice(0, 160),
     args: safeArgs(event.toolArgs),
     content: event.role === "tool" ? safeContent(event.content) : "",
+    ...(outcome ? {
+      ok: outcome.ok,
+      exitCode: outcome.exitCode,
+      timedOut: outcome.timedOut,
+      cancelled: outcome.cancelled,
+      retryable: outcome.retryable,
+      code: outcome.code,
+      message: outcome.message,
+    } : {}),
   };
 }

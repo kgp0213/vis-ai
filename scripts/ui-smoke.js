@@ -546,10 +546,10 @@ try {
       return window.__backgroundJobsOriginalFetch(input, init);
     };
   })()`);
-  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
   await waitForBrowserValue(cdp, `(() => ({
     workbench: Boolean(document.querySelector('.background-jobs-workbench .background-jobs-detail')),
-    chip: [...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.textContent ?? '',
+    chip: [...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.textContent ?? '',
     error: document.querySelector('.notice.err')?.textContent ?? '',
   }))()`, (value) => value.workbench);
   await waitForBrowserValue(cdp, `(() => ({
@@ -613,7 +613,7 @@ try {
       const layoutRect = layout.getBoundingClientRect();
       const detailRect = detail.getBoundingClientRect();
       const inputArea = document.querySelector('.chat-input-area');
-      const modelButton = [...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('模型'));
+      const modelButton = [...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('模型'));
       const closeButton = document.querySelector('.background-jobs-close');
       const rect = (element) => {
         const value = element.getBoundingClientRect();
@@ -648,11 +648,11 @@ try {
   }
   await evaluate(cdp, `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`);
   await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
-  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
   await waitForBrowserValue(cdp, `Boolean(document.querySelector('.background-jobs-workbench'))`, Boolean);
-  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
   await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
-  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
   await waitForBrowserValue(cdp, `Boolean(document.querySelector('.background-jobs-workbench'))`, Boolean);
   await evaluate(cdp, `document.querySelector('.background-jobs-close')?.click()`);
   await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
@@ -704,7 +704,7 @@ try {
   console.log(`[ui-smoke] plain Windows path paste stayed local (${pastePerformance.dispatchMs.toFixed(2)}ms)`);
 
   await evaluate(cdp, `(() => {
-    const chip = [...document.querySelectorAll('.composer-chip')].find((item) => item.textContent.includes('模型'));
+    const chip = [...document.querySelectorAll('.composer-chip-ghost')].find((item) => item.textContent.includes('模型'));
     if (!chip) throw new Error('model picker not found');
     chip.click();
   })()`);
@@ -761,24 +761,25 @@ try {
   console.log("[ui-smoke] grouped model submenu hover lifecycle and one-step import passed");
 
   await evaluate(cdp, `(() => {
-    const select = [...document.querySelectorAll('.chat-input-area select')].find((item) => [...item.options].some((option) => option.value === 'off'));
-    if (!select) throw new Error('index retrieval selector not found');
-    select.value = 'off';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    const chip = [...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'));
+    if (!chip) throw new Error('index retrieval chip not found');
+    chip.click();
   })()`);
-  console.log("[ui-smoke] index selector change dispatched");
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('.composer-plus-menu .popover-row')].find((item) => item.textContent.includes('不使用')))`, Boolean);
+  await evaluate(cdp, `[...document.querySelectorAll('.composer-plus-menu .popover-row')].find((item) => item.textContent.includes('不使用'))?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
+  console.log("[ui-smoke] index chip popup change dispatched");
   await waitForApiValue(`http://127.0.0.1:${port}/api/index-retrieval-mode?token=${token}`, (value) => value.mode === "off");
   console.log("[ui-smoke] index mode persisted by API");
 
   await evaluate(cdp, `document.querySelector('.work-mode-picker .mode-btn:not(.active)')?.click()`);
   console.log("[ui-smoke] work-mode switch dispatched");
-  await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
+  await waitForBrowserValue(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'))?.textContent ?? ''`, (value) => value.includes('索引关'));
   console.log("[ui-smoke] index mode survived work-mode switch");
   await evaluate(cdp, `window.confirm = () => true`);
-  await evaluate(cdp, `[...document.querySelectorAll('button')].find((item) => item.title?.startsWith('/new'))?.click()`);
+  await evaluate(cdp, `(() => { const btn = document.querySelector('.status-new-btn'); if (!btn) throw new Error('status new button not found'); btn.click(); })()`);
   console.log("[ui-smoke] new-session action dispatched");
   await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1);
-  await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
+  await waitForBrowserValue(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'))?.textContent ?? ''`, (value) => value.includes('索引关'));
   console.log("[ui-smoke] index mode persisted across work-mode switch and new session");
 
   const backupFlow = await evaluate(cdp, `(async () => {
@@ -799,7 +800,7 @@ try {
 
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitForDashboard(cdp, 15_000);
-  await waitForBrowserValue(cdp, `document.querySelector('.chat-input-area select option:checked')?.value`, (value) => value === "off");
+  await waitForBrowserValue(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'))?.textContent ?? ''`, (value) => value.includes('索引关'));
   console.log(`[ui-smoke] Dashboard rendered; long-session input p95=${performance.p95Ms.toFixed(2)}ms, max=${performance.maxMs.toFixed(2)}ms, DOM messages=${performance.renderedMessages}`);
 } catch (error) {
   console.error(`[ui-smoke] ${error.message}`);

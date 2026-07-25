@@ -2067,6 +2067,58 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+
+.chat-new-messages-pill {
+  position: absolute;
+  right: 24px;
+  bottom: 12px;
+  z-index: 20;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  animation: toolChipIn var(--duration-fast, 180ms) ease-out;
+}
+
+.chat-new-messages-pill:hover {
+  filter: brightness(1.1);
+}
+
+.chat-feed-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 172px;
+  padding: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.chat-feed-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-feed-menu button:hover {
+  background: var(--accent-primary);
+  color: #fff;
 }
 
 .chat-rail {
@@ -3016,6 +3068,158 @@ textarea {
   max-height: 420px;
 }
 
+/* Tool log: 工具调用在正文流中降级为一行淡灰日志（无卡片边框） */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent-primary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: toolLogSpin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+
+.tool-log {
+  margin: 2px 0 2px 36px;
+  font-size: 12px;
+}
+
+.tool-log > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--text-tertiary);
+  line-height: 20px;
+  user-select: none;
+  list-style: none;
+}
+
+.tool-log > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-log > summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  font-size: 10px;
+  transition: transform var(--duration-fast, 180ms) ease-out;
+}
+
+.tool-log[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-log > summary:hover {
+  color: var(--text-secondary);
+}
+
+.tool-log-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-log-spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+  border-color: var(--text-tertiary);
+  border-top-color: transparent;
+}
+
+.tool-log-list {
+  padding: 2px 0 4px 16px;
+}
+
+.tool-log-row {
+  padding: 1px 0;
+  color: var(--text-secondary);
+  line-height: 20px;
+}
+
+div.tool-log-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-log-has-failed > summary {
+  color: var(--color-warning);
+}
+
+.tool-log-row > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  list-style: none;
+}
+
+.tool-log-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-log-row > summary:hover {
+  color: var(--text-primary);
+}
+
+.tool-log-name {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tool-log-brief {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.tool-log-icon-ok {
+  flex: 0 0 auto;
+  color: var(--c-ok, #34d399);
+  font-size: 11px;
+}
+
+.tool-log-icon-failed {
+  flex: 0 0 auto;
+  color: var(--c-err, #f87171);
+  font-size: 11px;
+}
+
+.tool-log-detail {
+  padding: 4px 0 6px 16px;
+}
+
+.tool-log-row.search-hit > summary {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+@keyframes toolLogSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes toolChipIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .tool-card-result {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
@@ -3102,6 +3306,14 @@ textarea {
   white-space: pre-wrap;
   word-break: break-word;
   border-radius: var(--radius-sm);
+}
+
+.chat-msg .reasoning-live-header {
+  margin-top: var(--space-2);
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .chat-msg .reasoning-live-tail {
@@ -3204,6 +3416,188 @@ textarea {
 .chat-input-area textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Composer capsule: 圆角容器包住 textarea 与底栏，发送钮为圆形 ↑/■ */
+.composer-box {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-input);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.composer-box:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: var(--shadow-glow);
+}
+
+.chat-input-area .composer-box textarea {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: var(--space-1);
+  min-height: 44px;
+}
+
+.chat-input-area .composer-box textarea:focus {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: relative;
+  min-height: 34px;
+}
+
+.composer-plus {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 17px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.composer-plus:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.composer-plus-menu {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.composer-plus-menu .popover-row.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.composer-bar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.composer-send {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  color: var(--accent-contrast);
+  padding: 0;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.composer-send:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+  color: var(--accent-hover-contrast, var(--accent-contrast));
+}
+
+.composer-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.composer-send-square {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.composer-plus svg {
+  display: block;
+}
+
+/* 胶囊内幽灵小 chip：无边框，hover 出底色；token 驱动保证各主题可见 */
+.composer-chip-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.composer-chip-ghost:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.composer-chip-ghost .n {
+  margin-left: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.composer-chip-ghost.has-activity {
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--color-info);
+}
+
+.composer-optimize {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.composer-optimize:hover:not(:disabled) {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.composer-optimize:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.chat-queue-guide {
+  color: var(--accent-primary);
 }
 
 .chat-queue {
@@ -3360,6 +3754,27 @@ textarea {
   font-size: 11px;
   color: var(--text-tertiary);
   flex-shrink: 0;
+}
+
+/* 状态行右端「新建对话」：带细边框的小圆角按钮，右缘与发送钮对齐；任务忙碌时隐藏，停止按钮独占右端 */
+.status-new-btn {
+  margin-left: auto;
+  align-self: center;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 14px;
+  cursor: pointer;
+}
+
+.status-new-btn:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  border-color: var(--border-strong, var(--border-default));
 }
 
 .status-item {
@@ -5848,70 +6263,6 @@ textarea {
 }
 
 /* ── Composer chip ─────────────────────────────────────── */
-.composer-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 30px;
-  padding: 0 10px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out-quart);
-  white-space: nowrap;
-}
-.composer-chip:hover {
-  background: var(--surface-overlay);
-  color: var(--text-primary);
-  border-color: var(--border-default);
-}
-
-.composer-controls {
-  display: flex;
-  align-items: center;
-  position: relative;
-  flex-wrap: wrap;
-  min-width: 0;
-  min-height: 32px;
-  margin: 0;
-  column-gap: 8px;
-  row-gap: 6px;
-}
-
-.composer-chip.has-activity {
-  border-color: var(--color-info);
-  color: var(--text-primary);
-}
-
-.composer-index {
-  gap: 7px;
-  padding: 0 5px 0 10px;
-  cursor: default;
-}
-
-.composer-index-label {
-  padding-right: 8px;
-  border-right: 1px solid var(--border-default);
-}
-
-.composer-index select {
-  min-width: 92px;
-  max-width: 108px;
-  height: 24px;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--surface-input);
-  color: inherit;
-  font-size: 12px;
-  padding: 0 22px 0 6px;
-  cursor: pointer;
-}
-
 .composer-retrieval-status {
   min-height: 18px;
   display: inline-flex;
@@ -6224,52 +6575,6 @@ textarea {
 .model-choice:disabled,
 .model-primary-action:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.chat-input-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-self: stretch;
-  justify-content: flex-end;
-  padding-left: 2px;
-}
-
-.chat-input-actions .chat-secondary-action {
-  color: var(--text-tertiary);
-}
-
-.chat-input-actions .chat-secondary-action:hover {
-  color: var(--text-primary);
-}
-
-/* ── Image upload ────────────────────────────────────────── */
-/* Sits in .composer-controls next to .composer-chip buttons, so it shares
-   their 30px geometry, surface and colors to keep the row aligned. */
-.image-upload-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 30px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  transition: all var(--duration-fast);
-  flex-shrink: 0;
-}
-.image-upload-btn:hover:not(:disabled) {
-  background: var(--surface-overlay);
-  color: var(--text-primary);
-  border-color: var(--border-default);
-}
-.image-upload-btn:disabled {
-  opacity: 0.4;
   cursor: not-allowed;
 }
 

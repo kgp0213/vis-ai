@@ -157,7 +157,7 @@ function recordExtractedConcepts(concepts, sourcePrefix) {
 export function parseLearnCommand(text) {
   if (typeof text !== "string") return null;
   const trimmed = text.trim();
-  if (!trimmed.startsWith("/learn")) return null;
+  if (!/^\/learn(?:\s|$)/i.test(trimmed)) return null;
   const tail = trimmed.slice("/learn".length).trim();
   const parts = tail.split(/\s+/).filter(Boolean);
   const cmd = parts[0]?.toLowerCase() ?? "help";

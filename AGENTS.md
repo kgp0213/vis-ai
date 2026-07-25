@@ -60,6 +60,9 @@
 - 资源缺失必须明确失败，并通过规范构建流程修复。
 - `src-tauri/resources/server/visionox-pkg/node_modules/` 是离线构建和测试依赖。它不进入 Git，但在没有下载授权时不得当作“过期文件”删除。
 - Node、OfficeCLI、DWS 等二进制必须与 `runtime-manifest.json`、`third-party-resources.json`、许可证、版本和 SHA-256 保持一致。
+- Python、Node 及 Skill 依赖由 `%USERPROFILE%\.visionox\runtime\tool-registry.json` 和共享环境统一管理；不得在任务输出目录创建 `.venv`、`node_modules` 或执行临时 `npm --prefix` 安装。
+- Skill 应通过可选的 `runtime-requirements.json` 声明依赖。普通工具子进程复用 operation 注入的 `VISIONOX_PYTHON`、`VISIONOX_NODE`、`VIRTUAL_ENV`、`NODE_PATH` 和 `PATH`，不得依赖系统 PATH 猜测解释器位置。
+- 本地发现和缓存修复可以自动执行；联网安装必须取得一次 operation 级授权，默认按用户配置、国内镜像、官方源的顺序尝试，禁止使用 HTTP、任意模型传入镜像或 `--trusted-host` 绕过 TLS。
 
 ## 7. 加密文件和临时数据
 

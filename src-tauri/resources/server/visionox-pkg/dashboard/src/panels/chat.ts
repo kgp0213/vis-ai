@@ -10,6 +10,7 @@ import {
   PickerModal,
   PlanModal,
   RevisionModal,
+  ToolGroup,
   ShellModal,
   ViewerModal,
   WorkspaceModal,
@@ -1043,14 +1044,25 @@ function ChatPanel({ userAvatar = null } = {}) {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
-  const [reasoningExpanded] = d2(() => {
+  const [reasoningDisplay, setReasoningDisplay] = d2(() => {
     try {
-      return localStorage.getItem("visionox-reasoning-display") === "expanded";
+      const stored = localStorage.getItem("visionox-reasoning-display");
+      return stored === "expanded" || stored === "status" || stored === "hidden" ? stored : "live";
     } catch (e) {
-      return false;
+      return "live";
     }
   });
+  const reasoningExpanded = reasoningDisplay === "expanded";
+  const changeReasoningDisplay = (mode) => {
+    const next = mode === "status" || mode === "hidden" ? mode : "live";
+    setReasoningDisplay(next);
+    try {
+      localStorage.setItem("visionox-reasoning-display", next);
+    } catch (e) {
+    }
+  };
   const [activeTools, setActiveTools] = d2([]);
+  const [completedSteps, setCompletedSteps] = d2(0);
   const [busy, setBusy] = d2(false);
   const initialInputRef = A2(null);
   if (initialInputRef.current === null) {
@@ -1148,6 +1160,9 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [showWsPicker, setShowWsPicker] = d2(false);
   const [showSkillPicker, setShowSkillPicker] = d2(false);
   const [showModelPicker, setShowModelPicker] = d2(false);
+  const [showPlusMenu, setShowPlusMenu] = d2(false);
+  const [showIndexPicker, setShowIndexPicker] = d2(false);
+  const [steeringQueueId, setSteeringQueueId] = d2(null);
   const [openModelGroupId, setOpenModelGroupId] = d2(null);
   const modelGroupCloseTimerRef = A2(null);
   const [modelNotice, setModelNotice] = d2(null);
@@ -1520,6 +1535,31 @@ const [providerCaps, setProviderCaps] = d2(null);
   const scrollbarDraggingRef = A2(false);
   const topLoadArmedRef = A2(true);
   const loadEarlierMessagesRef = A2(null);
+  const [hasNewBelow, setHasNewBelow] = d2(false);
+  const [feedMenu, setFeedMenu] = d2(null);
+  const pinFeedToBottom = q2(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    autoScrollInFlight.current = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      setTimeout(() => {
+        autoScrollInFlight.current = false;
+      }, 0);
+    });
+  }, []);
+  const setAllToolGroupsOpen = (open) => {
+    feedRef.current?.querySelectorAll("details.tool-log").forEach((node) => {
+      node.open = open;
+    });
+  };
+  const feedMenuAction = (action) => (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    setFeedMenu(null);
+    action();
+  };
   const preserveVisibleHistoryOnAppend = q2(() => {
     if (!shouldAutoScroll.current) setVisibleMessageCount((count) => count + 1);
   }, []);
@@ -1529,7 +1569,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       id: streaming.id,
       role: "assistant",
       text: streaming.text,
-      reasoning: streaming.reasoning
+      reasoning: streaming.reasoning,
+      turnReasoning: streaming.turnReasoning,
+      reasoningTurns: streaming.reasoningTurns
     }
   ] : messages;
   y2(() => {
@@ -1703,7 +1745,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setOperation(data.operation ?? null);
       cancelStreamingRaf();
       setStreaming(null);
-      setActiveTool(null);
+      setActiveTools([]);
+      setCompletedSteps(0);
     } catch {
     }
     try {
@@ -1740,6 +1783,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setOperation(dash.operation ?? null);
         if (dash.operation?.state === "cancelled") {
           setActiveTools([]);
+          setCompletedSteps(0);
           setSemanticRetrievalSources([]);
           setSemanticRetrievalStatus("idle");
           setShowRetrievalSources(false);
@@ -1758,6 +1802,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setShowRetrievalSources(false);
         setTodos((current) => current.length > 0 && current.every((todo) => todo.status === "completed") ? [] : current);
         setPlanContinuation(null);
+        setCompletedSteps(0);
         preserveVisibleHistoryOnAppend();
         setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
         setTotalMessages((count) => count + 1);
@@ -1767,10 +1812,27 @@ const [providerCaps, setProviderCaps] = d2(null);
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
+        const reasoningDelta = String(dash.reasoningDelta ?? "");
+        let turnReasoning = baseId?.turnReasoning ?? "";
+        let reasoningTurns = baseId?.reasoningTurns ?? 0;
+        let reasoningStale = baseId?.reasoningStale === true;
+        if (reasoningDelta) {
+          // 工具事件之后的第一个思考增量开启新一轮：尾迹只保留当前轮
+          if (reasoningStale && turnReasoning) {
+            turnReasoning = "";
+            reasoningTurns += 1;
+          }
+          if (reasoningTurns === 0) reasoningTurns = 1;
+          turnReasoning += reasoningDelta;
+          reasoningStale = false;
+        }
         streamBufRef.current = {
           id: dash.id,
           text: (baseId?.text ?? "") + (dash.contentDelta ?? ""),
-          reasoning: (baseId?.reasoning ?? "") + (dash.reasoningDelta ?? "")
+          reasoning: (baseId?.reasoning ?? "") + reasoningDelta,
+          turnReasoning,
+          reasoningTurns,
+          reasoningStale
         };
         if (streamRafRef.current === null) {
           streamRafRef.current = setTimeout(flushStreaming, 75);
@@ -1791,6 +1853,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             role: "assistant",
             text: dash.text,
             reasoning: dash.reasoning ?? completedStream?.reasoning,
+            reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
             receipt: dash.receipt,
             taskState: dash.taskState,
             artifactIncomplete: dash.artifactIncomplete === true,
@@ -1803,12 +1866,15 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       if (dash.kind === "tool_start") {
         if (!dash.status || dash.status === "queued") preserveVisibleHistoryOnAppend();
+        if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
         setActiveTools((current) => upsertActiveTool(current, dash));
         setMessages((current) => upsertToolProgress(current, dash));
         return;
       }
       if (dash.kind === "tool") {
+        if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
         setActiveTools((current) => current.filter((item) => item.toolCallId !== String(dash.toolCallId || dash.id || "")));
+        setCompletedSteps((count) => count + 1);
         setMessages((current) => upsertToolProgress(current, dash));
         return;
       }
@@ -1828,6 +1894,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info") {
         if (dash.kind === "error") {
           setActiveTools([]);
+          setCompletedSteps(0);
         }
         preserveVisibleHistoryOnAppend();
         setMessages((prev) => [...prev, { id: dash.id, role: dash.kind, text: dash.text }]);
@@ -1842,6 +1909,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (dash.kind === "messages-reset") {
         executionStateRef.current = createDashboardReducerState();
         setActiveTools([]);
+        setCompletedSteps(0);
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("idle");
         setShowRetrievalSources(false);
@@ -2324,6 +2392,30 @@ const [providerCaps, setProviderCaps] = d2(null);
     setQueuedPrompts((prev) => prev.filter((item) => item.id !== id));
     return true;
   }, [deletePersistedQueuedPrompt, activeConversationId, workspaceDir, queueStorageKey]);
+  // 引导：把排队消息立即注入当前进行中的任务（服务端在下一次模型请求边界生效）；
+  // 成功后从队列移除，失败（如任务刚好收尾）保留排队并提示。
+  const steerQueuedPrompt = q2(async (item) => {
+    const opId = operation?.id;
+    if (!opId || !item?.text || steeringQueueId) return false;
+    setSteeringQueueId(item.id);
+    try {
+      await api(`/operations/${encodeURIComponent(opId)}/steer`, { method: "POST", body: { instruction: item.text } });
+      await removeQueuedPrompt(item.id);
+      showToast(t4("chat.queueGuided"), "success");
+      return true;
+    } catch (err) {
+      showToast(t4("chat.queueGuideFailed", { error: err.message }), "info", 5e3);
+      return false;
+    } finally {
+      setSteeringQueueId(null);
+    }
+  }, [operation?.id, steeringQueueId, removeQueuedPrompt]);
+  const editQueuedPrompt = q2(async (item) => {
+    if (!item) return;
+    await removeQueuedPrompt(item.id);
+    setChatInput(item.text || "");
+    inputRef.current?.focus();
+  }, [removeQueuedPrompt, setChatInput]);
   const clearQueuedPrompts = q2(async () => {
     const count = queuedPromptsRef.current.length;
     if (count > 0 && !confirm(t4("chat.queueClearConfirm", { count }))) return;
@@ -2546,7 +2638,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = true;
       setStreaming(null);
-      setActiveTool(null);
+      setActiveTools([]);
+      setCompletedSteps(0);
       setFileArtifacts([]);
       setFileArtifactsKey("");
       setFileArtifactsDismissed(false);
@@ -2606,7 +2699,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = true;
       setStreaming(null);
-      setActiveTool(null);
+      setActiveTools([]);
+      setCompletedSteps(0);
       setFileArtifacts([]);
       setFileArtifactsKey("");
       setFileArtifactsDismissed(false);
@@ -2746,6 +2840,13 @@ const [providerCaps, setProviderCaps] = d2(null);
           setPopoverKind(null);
           return;
         }
+      }
+      if ((e3.ctrlKey || e3.metaKey) && String(e3.key || "").toLowerCase() === "u") {
+        if (fileInputRef.current) {
+          e3.preventDefault();
+          fileInputRef.current.click();
+        }
+        return;
       }
       if (e3.key === "Enter" && !e3.shiftKey) {
         e3.preventDefault();
@@ -3003,27 +3104,58 @@ const [providerCaps, setProviderCaps] = d2(null);
       scrollbarDraggingRef.current = false;
       maybeLoadEarlier();
     };
+    const onContextMenu = (event) => {
+      event.preventDefault();
+      setFeedMenu({
+        x: Math.min(event.clientX, Math.max(8, window.innerWidth - 190)),
+        y: Math.min(event.clientY, Math.max(8, window.innerHeight - 140))
+      });
+    };
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("pointerdown", onPointerDown, { passive: true });
+    el.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
   }, [bootError]);
   y2(() => {
-    if (!shouldAutoScroll.current) return;
+    if (!shouldAutoScroll.current) {
+      if (messages.length > 0) setHasNewBelow(true);
+      return;
+    }
+    setHasNewBelow(false);
+    pinFeedToBottom();
+  }, [messages, streaming, pinFeedToBottom]);
+  // 跟随加固：内容高度一旦增长（流式输出、图片加载、分组展开）就重新钉在底部
+  y2(() => {
     const el = feedRef.current;
-    if (!el) return;
-    autoScrollInFlight.current = true;
-    el.scrollTop = el.scrollHeight;
-    setTimeout(() => {
-      autoScrollInFlight.current = false;
-    }, 0);
-  }, [messages, streaming]);
+    if (!el || typeof MutationObserver !== "function") return;
+    const observer = new MutationObserver(() => {
+      if (!shouldAutoScroll.current) return;
+      pinFeedToBottom();
+    });
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [pinFeedToBottom]);
+  y2(() => {
+    if (!feedMenu) return;
+    const close = () => setFeedMenu(null);
+    const onKey = (event) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [feedMenu]);
   const resolveModal = q2(async (kind, choice, text) => {
     if (modalResolving || !modal) return;
     const gateModal = kind === "shell" || kind === "choice" || kind === "plan" || kind === "checkpoint" || kind === "revision";
@@ -3485,7 +3617,9 @@ const [providerCaps, setProviderCaps] = d2(null);
             messages=${messages}
             totalMessages=${totalMessages}
             streaming=${streaming}
+            taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
+            reasoningDisplay=${reasoningDisplay}
             innerRef=${feedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
@@ -3497,6 +3631,18 @@ const [providerCaps, setProviderCaps] = d2(null);
             selectedArtifactMessageId=${fileArtifactsSelectedMessageId}
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
+          ${!showBackgroundJobs && hasNewBelow ? html4`
+            <button type="button" class="chat-new-messages-pill" onClick=${() => { shouldAutoScroll.current = true; setHasNewBelow(false); pinFeedToBottom(); }}>↓ 有新消息</button>
+          ` : null}
+          ${feedMenu ? html4`
+            <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { shouldAutoScroll.current = true; setHasNewBelow(false); void refetchCanonicalState(); })}>刷新对话</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>展开全部工作步骤</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>折叠全部工作步骤</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void newConversation(); })}>${t4("chat.new")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void clearScrollback(); })}>${t4("chat.clear")}</button>
+            </div>
+          ` : null}
 
           ${modal ? html4`<div class=${modalResolving ? "modal-resolving" : ""}>${modal.kind === "shell" ? html4`<${ShellModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "choice" ? html4`<${ChoiceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "plan" ? html4`<${PlanModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "edit-review" ? html4`<${EditReviewModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "workspace" ? html4`<${WorkspaceModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "checkpoint" ? html4`<${CheckpointModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "revision" ? html4`<${RevisionModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "picker" ? html4`<${PickerModal} modal=${modal} onResolve=${resolveModal} />` : modal.kind === "viewer" ? html4`<${ViewerModal} modal=${modal} onResolve=${resolveModal} />` : null}</div>` : null}
 
@@ -3562,6 +3708,14 @@ const [providerCaps, setProviderCaps] = d2(null);
                         ${isSending ? html4`<span class="chat-queue-state">${t4("chat.queueSending")}</span>` : null}
                         ${isFailed ? html4`<span class="chat-queue-state error" title=${item.error || ""}>${t4("chat.queueFailedStatus")}</span>` : null}
                         ${isFailed ? html4`<button type="button" onClick=${() => retryQueuedPrompt(item.id)}>${t4("chat.queueRetry")}</button>` : null}
+                        ${!isSending && !isFailed ? html4`<button
+                          type="button"
+                          class="chat-queue-guide"
+                          disabled=${!operation?.id || steeringQueueId === item.id || imageCount > 0}
+                          title=${imageCount > 0 ? t4("chat.queueGuideNoMedia") : operation?.id ? t4("chat.queueGuideTitle") : t4("chat.queueGuideNoTask")}
+                          onClick=${() => void steerQueuedPrompt(item)}
+                        >${steeringQueueId === item.id ? t4("chat.queueGuiding") : t4("chat.queueGuide")}</button>` : null}
+                        ${!isSending ? html4`<button type="button" title=${t4("chat.queueEditTitle")} onClick=${() => void editQueuedPrompt(item)}>${t4("chat.queueEdit")}</button>` : null}
                         ${!isSending ? html4`<button type="button" onClick=${() => removeQueuedPrompt(item.id)}>${t4("chat.queueCancel")}</button>` : null}
                       </div>
                     `;
@@ -3594,6 +3748,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                 </div>
               </div>
             ` : null}
+            <div class="composer-box">
             <textarea
               ref=${inputRef}
               placeholder=${busy ? t4("chat.placeholderBusy") : t4("chat.placeholder")}
@@ -3605,8 +3760,29 @@ const [providerCaps, setProviderCaps] = d2(null);
               style="flex:1"
               rows="4"
             ></textarea>
-            <div class="composer-controls">
-              <button type="button" class="composer-chip" aria-expanded=${showSkillPicker} onClick=${() => { setShowSkillPicker(!showSkillPicker); setShowWsPicker(false); if (!showSkillPicker) { loadChatSkills().catch(() => {}); } }}>🔧 技能</button>
+            <div class="composer-bar">
+              <button type="button" class="composer-chip-ghost" aria-expanded=${showModelPicker} title="模型与思考设置" onClick=${() => { cancelModelGroupClose(); setShowModelPicker(!showModelPicker); setOpenModelGroupId(null); setShowSkillPicker(false); setShowWsPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}>🤖 模型</button>
+              <button type="button" class="composer-chip-ghost" aria-expanded=${showWsPicker} title="切换工作空间" onClick=${() => { const next = !showWsPicker; setShowWsPicker(next); setShowSkillPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); if (next) void loadWorkspaceOptions(); }}>💻 工作空间</button>
+              <button type="button" class=${`composer-chip-ghost ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? "has-activity" : ""}`} title=${`运行中 ${backgroundJobs.filter((job) => job.running).length}，待处理 ${backgroundJobs.filter(backgroundJobNeedsAttention).length}`} aria-expanded=${showBackgroundJobs} onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench(); }}>📋 后台${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length > 0 ? html4` <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span>` : null}</button>
+              <span style="position:relative;display:inline-flex">
+                <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title="索引：从当前工作区和知识库中查找相关内容" onClick=${() => { const next = !showIndexPicker; setShowIndexPicker(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowRetrievalSources(false); }}>🔍 ${indexRetrievalMode === "tool" ? "按需搜索" : indexRetrievalMode === "off" ? "索引关" : "自动召回"}</button>
+                ${showIndexPicker ? html4`
+                  <div class="popover composer-plus-menu" style="position:absolute;bottom:calc(100% + 8px);left:0;width:240px;z-index:10">
+                    <div class="popover-h">索引</div>
+                    ${[["auto", "自动召回"], ["tool", "按需搜索"], ["off", "不使用"]].map(([mode, label]) => {
+                      const modeDisabled = semanticIndex === false && mode !== "off";
+                      return html4`<div class=${`popover-row ${indexRetrievalMode === mode ? "sel" : ""} ${modeDisabled ? "disabled" : ""}`} title=${globalThis.VisionoxIndexModePolicy.hint(mode)} onMouseDown=${(e2) => { e2.preventDefault(); if (modeDisabled || mode === indexRetrievalMode) return; void changeIndexRetrievalMode({ target: { value: mode } }); }}><span class="g">${indexRetrievalMode === mode ? "✓" : ""}</span><span class="name">${label}</span></div>`;
+                    })}
+                  </div>
+                ` : null}
+              </span>
+              ${showPlusMenu ? html4`
+                <div class="popover composer-plus-menu" style="position:absolute;bottom:calc(100% + 8px);right:0;width:280px;z-index:10">
+                  <div class="popover-h">更多操作</div>
+                  ${canUploadMedia ? html4`<div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setShowPlusMenu(false); fileInputRef.current?.click(); }}><span class="g">📎</span><span class="name">${canUploadVideos ? "添加图片或视频" : "添加图片"}</span><span class="meta">Ctrl+U</span></div>` : null}
+                  <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setShowPlusMenu(false); setShowSkillPicker(true); setShowWsPicker(false); setShowModelPicker(false); loadChatSkills().catch(() => {}); }}><span class="g">🔧</span><span class="name">技能</span><span class="meta">@ 提及</span></div>
+                </div>
+              ` : null}
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
                   <div class="popover-h">选择技能</div>
@@ -3618,7 +3794,6 @@ const [providerCaps, setProviderCaps] = d2(null);
                   `)}
                 </div>
               ` : null}
-              <button type="button" class="composer-chip" aria-expanded=${showWsPicker} onClick=${() => { const next = !showWsPicker; setShowWsPicker(next); setShowSkillPicker(false); if (next) void loadWorkspaceOptions(); }}>💻 工作空间 ▼</button>
               ${showWsPicker ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:360px;max-height:320px;overflow-y:auto;z-index:10">
                   <div class="popover-h">${t4("chat.workspacePicker")}</div>
@@ -3644,7 +3819,6 @@ const [providerCaps, setProviderCaps] = d2(null);
                   <div class="popover-row" onMouseDown=${(e5) => { e5.preventDefault(); void browseWorkspace(); }}><span class="name">▤ ${t4("chat.workspaceBrowse")}</span></div>
                 </div>
               ` : null}
-              <button type="button" class="composer-chip" aria-expanded=${showModelPicker} onClick=${() => { cancelModelGroupClose(); setShowModelPicker(!showModelPicker); setOpenModelGroupId(null); setShowSkillPicker(false); setShowWsPicker(false); }}>🤖 模型 ▼</button>
               ${showModelPicker ? html4`
                 <div class="popover model-popover" style="position:absolute;bottom:100%;left:0;z-index:10" onMouseLeave=${scheduleModelGroupClose}>
                   <div class="popover-h">选择模型</div>
@@ -3721,17 +3895,15 @@ const [providerCaps, setProviderCaps] = d2(null);
                       ` : html4`<div style="font-size:12px;color:var(--text-primary);">${reasoningEffortLabel(activeModelEfforts[0])}（固定）</div>`}
                     </div>
                   ` : null}
+                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title="控制对话中模型思考过程的展示方式：实时显示会滚动展示当前一轮思考；仅状态行只显示“思考中”提示；完全隐藏则不展示任何思考内容。">思考过程显示</label>
+                    <div class="model-choice-row">
+                      ${[["live", "实时显示"], ["status", "仅状态行"], ["hidden", "完全隐藏"]].map(([mode, label]) => html4`<button type="button" key=${mode} class=${`model-choice ${reasoningDisplay === mode || mode === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode)}>${label}</button>`)}
+                    </div>
+                  </div>
                 </div>
               ` : null}
-              <button type="button" title=${`运行中 ${backgroundJobs.filter((job) => job.running).length}，待处理 ${backgroundJobs.filter(backgroundJobNeedsAttention).length}`} class=${`composer-chip ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? "has-activity" : ""}`} aria-expanded=${showBackgroundJobs} onClick=${() => showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench()}>${t4("chat.backgroundJobs", { count: backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length })}</button>
-              <label class="composer-chip composer-index">
-                <span class="composer-index-label" title="索引用于从当前工作区和知识库中查找相关内容，帮助模型参考本地资料。">索引</span>
-                <select title=${globalThis.VisionoxIndexModePolicy.hint(indexRetrievalMode)} value=${indexRetrievalMode} disabled=${busy} onChange=${changeIndexRetrievalMode}>
-                  <option value="auto" title="每次发送消息前自动搜索索引，并把相关内容加入上下文。" disabled=${semanticIndex === false}>自动召回</option>
-                  <option value="tool" title="不主动搜索，仅在模型判断有必要时调用索引工具。" disabled=${semanticIndex === false}>按需搜索</option>
-                  <option value="off" title="完全关闭本地索引，不自动召回，也不提供索引工具。">不使用</option>
-                </select>
-              </label>
+              <div class="composer-bar-status">
               ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="composer-retrieval-status muted">召回中...</span>` : null}
               ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="composer-retrieval-status muted">未找到相关内容</span>` : null}
               ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">召回超时</span>` : null}
@@ -3751,33 +3923,35 @@ const [providerCaps, setProviderCaps] = d2(null);
                   </div>
                 ` : null}
               ` : null}
-              ${(showSkillPicker || showWsPicker || showModelPicker || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowRetrievalSources(false); }}></div>` : null}
+              </div>
+              ${(showPlusMenu || showIndexPicker || showSkillPicker || showWsPicker || showModelPicker || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowRetrievalSources(false); }}></div>` : null}
               <div style="flex:1"></div>
-              ${canUploadMedia ? html4`<button
-                type="button"
-                class="image-upload-btn"
-                onClick=${function() { if (fileInputRef.current) fileInputRef.current.click(); }}
-                title=${canUploadVideos ? "添加图片或视频" : "添加图片"}
-                aria-label=${canUploadVideos ? "添加图片或视频" : "添加图片"}
-              >📎</button>` : null}
+              <button type="button" class="composer-plus" aria-expanded=${showPlusMenu} title="更多操作" aria-label="更多操作" onClick=${() => { const next = !showPlusMenu; setShowPlusMenu(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}><svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></button>
               <button
                 type="button"
-                class="composer-chip prompt-optimize-chip"
+                class="composer-optimize"
                 disabled=${!inputHasContent || promptOptimizing}
                 onClick=${optimizeCurrentPrompt}
                 title="优化当前输入，不会自动发送"
                 aria-label="优化当前提示词"
-              >${promptOptimizing ? "优化中…" : "优化提示词"}</button>
+              >${promptOptimizing ? "✨ 优化中…" : "✨ 优化提示词"}</button>
+              ${(() => {
+                const canSendContent = inputHasContent || pendingImages.length > 0;
+                const sendMode = busy ? canSendContent ? "queue" : "stop" : canSendContent ? "send" : "idle";
+                const sendLabel = sendMode === "send" ? "发送 (Enter)" : sendMode === "queue" ? "排队发送，当前任务完成后自动发出" : sendMode === "stop" ? "停止当前任务" : "输入内容后发送";
+                return html4`
+                  <button
+                    type="button"
+                    class=${`composer-send composer-send-${sendMode}`}
+                    disabled=${sendMode === "idle"}
+                    title=${sendLabel}
+                    aria-label=${sendLabel}
+                    onClick=${() => { if (sendMode === "stop") void abort(); else void send(); }}
+                  >${sendMode === "stop" ? html4`<span class="composer-send-square"></span>` : html4`<svg class="composer-send-arrow" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 13V3M8 3L3.5 7.5M8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`}</button>
+                `;
+              })()}
             </div>
             </div>
-            <div class="chat-input-actions">
-              <button
-                class="primary"
-                onClick=${send}
-                disabled=${!inputHasContent && pendingImages.length === 0}
-              >${busy ? t4("chat.queueSend") : t4("chat.send")}</button>
-              <button class="chat-secondary-action" onClick=${clearScrollback} title=${t4("chat.clearTitle")}>${t4("chat.clear")}</button>
-              <button class="chat-secondary-action" onClick=${newConversation} title=${t4("chat.newTitle")}>${t4("chat.new")}</button>
             </div>
               </div>
             </div>
@@ -3786,20 +3960,21 @@ const [providerCaps, setProviderCaps] = d2(null);
           ${busy ? html4`<${InFlightRow}
                   streaming=${streaming}
                   activeTools=${activeTools}
+                  completedSteps=${completedSteps}
                   startedAt=${turnStartedAt}
                   statusLine=${statusLine}
                   onAbort=${abort}
                   stopping=${operation?.state === "stopping"}
                   tick=${nowTick}
                 />` : null}
-          <${ChatStatusBar} stats=${stats} model=${overviewModel} />
+          <${ChatStatusBar} stats=${stats} model=${overviewModel} onNew=${newConversation} busy=${busy} />
         </div>
         ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
       </div>
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, reasoningExpanded = false, innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -3807,13 +3982,46 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
       id: streaming.id,
       role: "assistant",
       text: streaming.text,
-      reasoning: streaming.reasoning
+      reasoning: streaming.reasoning,
+      turnReasoning: streaming.turnReasoning,
+      reasoningTurns: streaming.reasoningTurns
     }
   ] : messages;
   const hiddenCount = Math.max(0, allMessages.length - visibleCount);
   const remoteHiddenCount = Math.max(0, totalMessages - messages.length);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
   const displayTotal = Math.max(totalMessages, allMessages.length);
+  // 连续的工具消息合并为一个工作步骤组，单条工具消息保持原样渲染
+  const renderUnits = [];
+  renderedMessages.forEach((m3, i3) => {
+    const globalIndex = i3 + hiddenCount;
+    if (m3.role === "tool") {
+      const last = renderUnits[renderUnits.length - 1];
+      if (last?.kind === "toolGroup") {
+        last.items.push({ msg: m3, index: globalIndex });
+      } else {
+        renderUnits.push({ kind: "toolGroup", id: `tg-${m3.id ?? globalIndex}`, items: [{ msg: m3, index: globalIndex }] });
+      }
+    } else {
+      renderUnits.push({ kind: "msg", msg: m3, index: globalIndex });
+    }
+  });
+  const renderChatMessage = (m3, globalIndex) => html4`
+                <${ChatMessage}
+                  key=${m3.id}
+                  msg=${m3}
+                  index=${globalIndex}
+                  searchMatch=${globalIndex === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
+                  streaming=${Boolean(streaming && streaming.id === m3.id)}
+                  onCopy=${onCopyMessage}
+                  onFillInput=${onFillInput}
+                  reasoningExpanded=${reasoningExpanded}
+                  reasoningDisplay=${reasoningDisplay}
+                  userAvatar=${userAvatar}
+                  selectedForArtifacts=${Boolean(selectedArtifactMessageId && String(m3.id || "") === String(selectedArtifactMessageId))}
+                  onSelectForArtifacts=${onSelectArtifactMessage}
+                />
+              `;
   return html4`
     <div class="chat-feed" ref=${innerRef}>
       ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : null}
@@ -3823,22 +4031,19 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
           <button type="button" onClick=${onLoadEarlier} disabled=${loadingEarlier}>${loadingEarlier ? "加载中..." : t4("chat.loadEarlierMessages", { count: Math.min(hiddenCount || remoteHiddenCount, hiddenCount ? CHAT_RENDER_STEP : CHAT_MESSAGE_PAGE_SIZE) })}</button>
         </div>
       ` : null}
-      ${renderedMessages.map(
-    (m3, i3) => html4`
-                <${ChatMessage}
-                  key=${m3.id}
-                  msg=${m3}
-                  index=${i3 + hiddenCount}
-                  searchMatch=${i3 + hiddenCount === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
-                  streaming=${Boolean(streaming && streaming.id === m3.id)}
-                  onCopy=${onCopyMessage}
-                  onFillInput=${onFillInput}
-                  reasoningExpanded=${reasoningExpanded}
-                  userAvatar=${userAvatar}
-                  selectedForArtifacts=${Boolean(selectedArtifactMessageId && String(m3.id || "") === String(selectedArtifactMessageId))}
-                  onSelectForArtifacts=${onSelectArtifactMessage}
-                />
-              `
+      ${renderUnits.map(
+    (unit) => {
+      if (unit.kind !== "toolGroup") {
+        return renderChatMessage(unit.msg, unit.index);
+      }
+      const hitIds = unit.items.filter((item) => item.index === searchMatchIndex || Boolean(highlightMessageId && item.msg.id === highlightMessageId)).map((item) => String(item.msg.id));
+      return html4`<${ToolGroup}
+                    key=${unit.id}
+                    items=${unit.items.map((item) => item.msg)}
+                    taskActive=${taskActive}
+                    searchHitIds=${hitIds.length > 0 ? hitIds : null}
+                  />`;
+    }
   )}
     </div>
   `;
@@ -3915,6 +4120,7 @@ function summarizeActiveTool(activeTool) {
 function InFlightRow({
   streaming,
   activeTools,
+  completedSteps = 0,
   startedAt,
   statusLine,
   onAbort,
@@ -3939,6 +4145,10 @@ function InFlightRow({
       ${toolSummary ? html4`
             <span class="chat-inflight-sep">·</span>
             <span class="chat-inflight-tool" title=${toolSummary}>${toolSummary}${activeToolCount > 1 ? ` +${activeToolCount - 1}` : ""}</span>
+          ` : null}
+      ${completedSteps > 0 ? html4`
+            <span class="chat-inflight-sep">·</span>
+            <span class="muted">${t4("chat.inflightSteps", { count: completedSteps.toLocaleString() })}</span>
           ` : null}
       ${!toolSummary && (textLen > 0 || reasoningLen > 0) ? html4`
             <span class="chat-inflight-sep">·</span>
@@ -3988,12 +4198,13 @@ function TodoBar({ todos, expanded, onToggle }) {
     </div>
   `;
 }
-var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
+var ChatStatusBar = N2(function ChatStatusBar2({ stats, model, onNew, busy }) {
   useLang();
   if (!stats) {
     return html4`
       <div class="chat-statusbar">
         <span class="muted">${t4("chat.waitingStats")}</span>
+        ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title="开始新对话（当前对话会保留在历史记录）" onClick=${() => { void onNew(); }}>新建对话</button>` : null}
       </div>
     `;
   }
@@ -4043,6 +4254,7 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model }) {
             <code>${balance.total_balance ?? balance.total} ${balance.currency}</code>
           </span>
         ` : null}
+      ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title="开始新对话（当前对话会保留在历史记录）" onClick=${() => { void onNew(); }}>新建对话</button>` : null}
     </div>
   `;
 });

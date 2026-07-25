@@ -6,6 +6,23 @@ import { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, 
 const launcherSource = readFileSync(new URL("../launcher.mjs", import.meta.url), "utf8");
 
 describe("buildSystemPrompt", () => {
+  test("routes dependency discovery through host-managed runtime bindings", () => {
+    const prompt = buildSystemPrompt([], "/root", false);
+    assert.match(prompt, /VISIONOX_PYTHON/);
+    assert.match(prompt, /list_runtime_capabilities/);
+    assert.match(prompt, /Never run `npm install`/);
+  });
+
+  test("startup reconciles stale runtime paths through the capability resolver", () => {
+    assert.match(launcherSource, /await runtimeCapabilities\.discoverRuntime\(\{ force: true \}\)/u);
+    assert.doesNotMatch(launcherSource, /for \(const tool of await runtimeDiscovery\.discover\(\{ force: true \}\)\)/u);
+  });
+
+  test("runtime installation approval is decided once per operation", () => {
+    assert.match(launcherSource, /runtimeInstallApprovals\.has\(key\)/u);
+    assert.match(launcherSource, /runtimeInstallApprovals\.set\(key, allowed\)/u);
+    assert.match(launcherSource, /runtimeInstallApprovals\.delete\(operation\.id\)/u);
+  });
   const mockSpecs = [
     { function: { name: "read_file", description: "Read a file from disk. Returns content." } },
     { function: { name: "write_file", description: "Write content to a file." } },

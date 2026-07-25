@@ -38,7 +38,7 @@ async function importEarly(spec) {
 const { resolve, dirname, join, basename, sep, extname } = await importEarly("node:path");
 const { fileURLToPath, pathToFileURL } = await importEarly("node:url");
 const { homedir, tmpdir } = await importEarly("node:os");
-const { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
+const { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync, appendFileSync, rmSync, cpSync, copyFileSync } = await importEarly("node:fs");
 const { access, appendFile, copyFile, cp, open: openFile, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
 const { createRequire } = await importEarly("node:module");
@@ -123,7 +123,14 @@ const { buildMessageRiskPrompt, classifyUserSendIntent, consumeSendAuthorization
 const { requestModelJson: requestTaskModelJson, requestModelText: requestTaskModelText } = await importEarly("./lib/model-task-request.mjs");
 const { formatToolRepairNotice } = await importEarly("./lib/tool-repair-notice.mjs");
 const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs");
-const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEarly("./lib/shell-side-effect-policy.mjs");
+const { shellCommandArtifactPaths, shellCommandHasSideEffects, shellRuntimeInstallIntent } = await importEarly("./lib/shell-side-effect-policy.mjs");
+const { createRuntimeToolRegistry } = await importEarly("./lib/runtime-tool-registry.mjs");
+const { discoverRuntimeTools } = await importEarly("./lib/runtime-tool-discovery.mjs");
+const { createRuntimeEnvironmentManager } = await importEarly("./lib/runtime-environment-manager.mjs");
+const { createRuntimeCapabilityResolver } = await importEarly("./lib/runtime-capability-resolver.mjs");
+const { resolveLocalRuntimeCapability } = await importEarly("./lib/runtime-local-capability.mjs");
+const { createRuntimePackageInstaller } = await importEarly("./lib/runtime-package-installer.mjs");
+const { createSkillRuntimeCoordinator } = await importEarly("./lib/runtime-requirements.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
@@ -871,6 +878,129 @@ if (configMigration.backupSanitization?.sanitized || configMigration.backupSanit
   console.error(`[launcher] config backups sanitized=${configMigration.backupSanitization.sanitized}, skipped=${configMigration.backupSanitization.skipped}`);
 }
 const config = readConfig(configPath);
+
+// Host runtime capabilities are discovered once at startup and persisted in
+// the user data directory. They never write into a task workspace.
+const runtimeRoot = resolve(visionoxDataDir, "runtime");
+const runtimeResourceRoot = resolve(__dirname, "..");
+function readRuntimeJson(relativePath, fallback) {
+  try { return JSON.parse(readFileSync(resolve(runtimeResourceRoot, relativePath), "utf8")); } catch { return fallback; }
+}
+const runtimeRegistry = createRuntimeToolRegistry({ rootDir: runtimeRoot });
+const runtimeConfig = config.runtime && typeof config.runtime === "object" ? config.runtime : {};
+const configuredRuntimePaths = [
+  ...(Array.isArray(runtimeConfig.configuredPaths) ? runtimeConfig.configuredPaths : []),
+  ...(Array.isArray(runtimeConfig.toolPaths) ? runtimeConfig.toolPaths : []),
+  runtimeConfig.pythonPath,
+  runtimeConfig.nodePath,
+  runtimeConfig.npmPath,
+  runtimeConfig.paths?.python,
+  runtimeConfig.paths?.node,
+  runtimeConfig.paths?.npm,
+].filter((value) => typeof value === "string" && value.trim());
+const runtimeDiscovery = {
+  discover: (options = {}) => discoverRuntimeTools({
+    ...options,
+    configuredPaths: [...configuredRuntimePaths, ...(Array.isArray(options.configuredPaths) ? options.configuredPaths : [])],
+    resourceRoot: runtimeResourceRoot,
+    userDataRoot: visionoxDataDir,
+    runtimeManifest: readRuntimeJson("runtime-manifest.json", { artifacts: [] }),
+    thirdPartyResources: readRuntimeJson("third-party-resources.json", { resources: [] }),
+  }),
+};
+await runtimeRegistry.open();
+await runtimeRegistry.upsertTool({
+  id: "node-runtime",
+  kind: "node",
+  executable: process.execPath,
+  root: dirname(process.execPath),
+  version: process.version,
+  source: "launcher-process",
+  status: "healthy",
+});
+const runtimePackageInstaller = createRuntimePackageInstaller({ registry: runtimeRegistry });
+const runtimeInstallApprovals = new Map();
+function checkRuntimeEnvironment(environment, requirement) {
+  const packages = Array.isArray(requirement?.packages) ? requirement.packages : [];
+  if (environment?.kind === "python") {
+    const executable = environment?.bindings?.VISIONOX_PYTHON || environment?.executable;
+    if (!executable || !existsSync(executable)) return false;
+    const checks = packages.map((pkg) => {
+      const importName = pkg.importName || String(pkg.name || "").replaceAll("-", "_");
+      if (!/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(importName)) return false;
+      const versionCheck = pkg.version ? `; assert metadata.version(${JSON.stringify(pkg.name)}) == ${JSON.stringify(pkg.version)}` : "";
+      return `import importlib; importlib.import_module(${JSON.stringify(importName)})${versionCheck}`;
+    }).filter(Boolean);
+    for (const healthCheck of requirement?.healthChecks ?? []) {
+      const importName = String(healthCheck).startsWith("import:") ? String(healthCheck).slice(7) : "";
+      if (!/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/u.test(importName)) continue;
+      checks.push(`import importlib; importlib.import_module(${JSON.stringify(importName)})`);
+    }
+    const code = checks.length > 0 ? `from importlib import metadata; ${checks.join("; ")}` : "import sys; print(sys.executable)";
+    return spawnSync(executable, ["-c", code], { windowsHide: true, timeout: 8_000, encoding: "utf8" }).status === 0;
+  }
+  if (environment?.kind === "node") {
+    const executable = environment?.bindings?.VISIONOX_NODE || environment?.executable;
+    if (!executable || !existsSync(executable)) return false;
+    const names = packages.map((pkg) => String(pkg.name || "")).filter(Boolean);
+    for (const healthCheck of requirement?.healthChecks ?? []) {
+      if (String(healthCheck).startsWith("require:")) names.push(String(healthCheck).slice(8));
+    }
+    const code = names.length > 0
+      ? names.map((name) => name === "pdfjs-dist" ? `require.resolve(${JSON.stringify(name)})` : `require(${JSON.stringify(name)})`).join("; ")
+      : "process.stdout.write(process.execPath)";
+    return spawnSync(executable, ["-e", code], {
+      windowsHide: true,
+      timeout: 8_000,
+      encoding: "utf8",
+      env: { ...process.env, ...(environment.bindings || {}) },
+    }).status === 0;
+  }
+  return false;
+}
+async function authorizeRuntimeInstall({ requirement, context }) {
+  const key = String(context?.operationId || "global");
+  if (context?.operationKind === "scheduled-prompt" || context?.headless === true) return false;
+  if (runtimeInstallApprovals.has(key)) return runtimeInstallApprovals.get(key) === true;
+  let allowed = false;
+  try {
+    const verdict = await pauseGate.ask({
+      kind: "choice",
+      payload: {
+        title: "安装运行时依赖",
+        question: `技能需要 ${requirement?.id || requirement?.kind || "运行时"}。将使用国内镜像优先，必要时回退官方源；依赖只写入 Visionox 运行时目录，不会写入任务输出目录。是否允许本次 operation 安装？`,
+        options: [
+          { id: "approve", label: "允许本次安装" },
+          { id: "cancel", label: "取消" },
+        ],
+        allowCustom: false,
+      },
+    });
+    allowed = verdict?.type === "pick" && verdict.optionId === "approve";
+  } catch (error) {
+    console.error(`[launcher] runtime install approval unavailable: ${error.message}`);
+  }
+  runtimeInstallApprovals.set(key, allowed);
+  return allowed;
+}
+const runtimeEnvironmentManager = createRuntimeEnvironmentManager({
+  rootDir: runtimeRoot,
+  registry: runtimeRegistry,
+  resolveLocal: (requirement, context) => resolveLocalRuntimeCapability(requirement, {
+    registry: runtimeRegistry,
+    signal: context?.signal,
+  }),
+  cacheProbe: (requirement, context) => runtimePackageInstaller.canUseCache(requirement, context),
+  install: runtimePackageInstaller.install,
+  healthCheck: checkRuntimeEnvironment,
+  authorizeNetwork: authorizeRuntimeInstall,
+});
+const runtimeCapabilities = createRuntimeCapabilityResolver({
+  registry: runtimeRegistry,
+  discovery: runtimeDiscovery,
+  environments: runtimeEnvironmentManager,
+});
+await runtimeCapabilities.discoverRuntime({ force: true });
 if (configMigration.status === "migrated" && Array.isArray(config.providers) && config.providers.length > 0) {
   recordProviderProvenance(config.providers.map((provider) => provider.id), "config-migration");
 }
@@ -1445,18 +1575,24 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     extraAllowed: () => loadProjectShellAllowed(rootDir, configPath),
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
-    getOperationId: opts.getOperationId,
-    getEnvironment: ({ command, args, signal }) => preparedDocumentEnvironment(
-      preparedDocumentRegistry,
-      args ?? { command },
-      rootDir,
-      {
-        readConfig: () => readConfig(configPath),
-        env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
-        logger: console,
-        signal,
-      },
-    ),
+    getOperationId: (signal) => operationForSignal(signal)?.id ?? null,
+    getEnvironment: async ({ command, args, signal, operationId }) => {
+      const documentEnvironment = await preparedDocumentEnvironment(
+        preparedDocumentRegistry,
+        args ?? { command },
+        rootDir,
+        {
+          readConfig: () => readConfig(configPath),
+          env: { homeDir: home, projectRoot: resolve(__dirname, "..", "..", ".."), serverDir: __dirname, rootDir },
+          logger: console,
+          signal,
+        },
+      );
+      const ownerOperation = operationForSignal(signal);
+      if (operationId && ownerOperation?.id !== operationId) return documentEnvironment;
+      const runtimeEnvironment = ownerOperation?.context?.runtimeBindings ?? (signal ? {} : defaultRuntimeBindings());
+      return { ...runtimeEnvironment, ...documentEnvironment };
+    },
   });
   wrapToolsPathArgsWithDlp(tools, ["run_command", "run_background"], {
     readConfig: () => readConfig(configPath),
@@ -1573,6 +1709,29 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   }
 
   registerSkillTools(tools, { homeDir: home, projectRoot: rootDir });
+  const skillRuntimeCoordinator = createSkillRuntimeCoordinator({
+    skillStore: new SkillStore({ homeDir: home, projectRoot: rootDir }),
+    resolver: runtimeCapabilities,
+    getOperation: () => operationRuntime.getActive(),
+    getRuntimeContext: (requirement) => {
+      const currentConfig = readConfig(configPath);
+      const runtimeConfig = currentConfig.runtime && typeof currentConfig.runtime === "object" ? currentConfig.runtime : {};
+      return {
+        packageSources: Array.isArray(runtimeConfig.packageSources?.[requirement.kind]) ? runtimeConfig.packageSources[requirement.kind] : [],
+        domesticOnly: runtimeConfig.domesticOnly === true,
+        allowOfficialFallback: runtimeConfig.domesticOnly !== true && runtimeConfig.allowOfficialFallback !== false,
+      };
+    },
+  });
+  skillRuntimeCoordinator.wrapSkillDefinition(tools.get("run_skill"));
+  tools.register({
+    name: "list_runtime_capabilities",
+    description: "List host-discovered Python, Node and managed dependency environments. Paths are bound by the host to run_command/run_background and are intentionally not exposed. Use this only for diagnostics; do not install dependencies yourself.",
+    readOnly: true,
+    parallelSafe: true,
+    parameters: { type: "object", properties: {} },
+    fn: async () => JSON.stringify({ ok: true, ...runtimeCapabilities.listCapabilities() }),
+  });
   console.error(`[launcher] skill tools registered (run_skill), ${tools.size} total tools`);
 
   const after = new Set(tools.specs().map(s => s.function?.name).filter(Boolean));
@@ -1626,8 +1785,26 @@ async function readToolOutputResource(args = {}) {
 const preparedDocumentRegistry = createPreparedDocumentRegistry({
   onChange: (preparedDocuments) => { void writeActiveSessionMeta({ preparedDocuments }); },
 });
+const operationBySignal = new WeakMap();
+function operationForSignal(signal) {
+  if (signal) return operationBySignal.get(signal) ?? null;
+  return operationRuntime.getActive();
+}
 tools.setToolInterceptor(async (name, args) => {
-  const issue = validateFileWriteArgs(name, args)
+  const runtimeInstall = ["run_command", "run_background"].includes(String(name))
+    ? shellRuntimeInstallIntent(args?.command)
+    : null;
+  const issue = runtimeInstall?.blocked
+    ? {
+      ok: false,
+      error: "依赖安装由 Visionox 运行时管理器统一处理，不能在任务输出目录或普通 shell 中执行。请先调用 run_skill 让宿主解析依赖；如需联网，宿主会申请一次安装授权。",
+      code: runtimeInstall.code,
+      title: "运行时安装已转交宿主管理",
+      retryable: false,
+      action: "调用对应 Skill 或 list_runtime_capabilities，不要重复执行安装命令。",
+      details: { family: runtimeInstall.family, managedRoot: "%USERPROFILE%\\.visionox\\runtime" },
+    }
+    : validateFileWriteArgs(name, args)
     ?? validateOfficecliInvocation(name, args)
     ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable });
   if (issue) return JSON.stringify(issue);
@@ -4002,6 +4179,15 @@ function generatedArtifactFileInfo(abs) {
   try {
     const st = statSync(abs);
     if (!st.isFile()) return null;
+    let readable = false;
+    let fd = null;
+    try {
+      fd = openSync(abs, "r");
+      const probe = Buffer.alloc(1);
+      readable = readSync(fd, probe, 0, 1, 0) === 1;
+    } finally {
+      if (fd !== null) closeSync(fd);
+    }
     const ext = extname(abs).toLowerCase();
     return {
       path: abs,
@@ -4010,12 +4196,20 @@ function generatedArtifactFileInfo(abs) {
       ext,
       size: st.size,
       mtimeMs: st.mtimeMs,
+      readable,
       previewable: GENERATED_ARTIFACT_PREVIEW_EXTS.has(ext) && st.size <= GENERATED_ARTIFACT_PREVIEW_MAX_BYTES,
       openable: !GENERATED_ARTIFACT_EXTERNAL_OPEN_BLOCKED_EXTS.has(ext) && !GENERATED_ARTIFACT_SCRIPT_EXTS.has(ext),
     };
   } catch {
     return null;
   }
+}
+
+function artifactVerificationStatus(info, { changedThisTurn = false, explicitlyVerified = false } = {}) {
+  if (!info) return "missing";
+  if (!Number.isFinite(Number(info.size)) || Number(info.size) <= 0 || info.readable !== true) return "invalid";
+  if (explicitlyVerified || changedThisTurn) return "verified";
+  return "present_unverified";
 }
 
 function parseMaybeJsonObject(value) {
@@ -6794,16 +6988,52 @@ const operationRuntime = createOperationRuntime({
   broadcast: broadcastDashboardEvent,
   stopOwned: (operationId, options) => jobs.stopOwned(operationId, options),
   drain: requestScheduleQueueDrain,
-  revokeAuthorization: clearMessageSendContext,
+  revokeAuthorization: (operation) => {
+    clearMessageSendContext();
+    if (operation?.id) runtimeInstallApprovals.delete(operation.id);
+  },
   getConversationId: () => activeConversationId,
   getWorkspace: () => workspaceDir,
   lifecycle: runtimeLifecycleHooks,
 });
 
 const publicActiveOperation = (operation) => operationRuntime.public(operation);
-const beginActiveOperation = (kind) => operationRuntime.begin(kind);
+function defaultRuntimeBindings() {
+  const tools = runtimeRegistry.listTools();
+  const bindings = {};
+  const node = tools.find((tool) => tool.kind === "node" && tool.status === "healthy" && tool.executable && existsSync(tool.executable));
+  const python = tools.find((tool) => tool.kind === "python" && tool.status === "healthy" && tool.executable && existsSync(tool.executable));
+  const npm = tools.find((tool) => tool.kind === "npm" && tool.status === "healthy" && tool.executable && existsSync(tool.executable));
+  const moduleRoots = [...new Set(tools.filter((tool) => tool.kind === "node-module" && tool.status === "healthy").map((tool) => tool.metadata?.moduleRoot).filter(Boolean))];
+  if (node) bindings.VISIONOX_NODE = node.executable;
+  if (python) bindings.VISIONOX_PYTHON = python.executable;
+  if (moduleRoots.length > 0) bindings.NODE_PATH = moduleRoots.join(process.platform === "win32" ? ";" : ":");
+  const runtimePaths = [...new Set([node, python, npm].map((tool) => tool?.executable ? dirname(tool.executable) : null).filter(Boolean))];
+  if (runtimePaths.length > 0) bindings.PATH = `${runtimePaths.join(process.platform === "win32" ? ";" : ":")}${process.platform === "win32" ? ";" : ":"}${process.env.PATH || ""}`;
+  return bindings;
+}
+function defaultRuntimeEnvironmentRecords() {
+  return runtimeRegistry.listTools().filter((tool) => ["node", "python", "node-module", "npm"].includes(tool.kind) && tool.status === "healthy").map((tool) => ({
+    environmentId: null,
+    toolId: tool.id,
+    kind: tool.kind,
+    status: tool.status,
+    reused: true,
+    repaired: false,
+    installed: false,
+  }));
+}
+const beginActiveOperation = (kind) => {
+  const operation = operationRuntime.begin(kind);
+  operationBySignal.set(operation.controller.signal, operation);
+  operation.context.runtimeBindings = defaultRuntimeBindings();
+  operation.context.runtimeEnvironments = defaultRuntimeEnvironmentRecords();
+  return operation;
+};
 const finishActiveOperation = (operation) => {
   const finished = operationRuntime.finish(operation);
+  if (finished) operationBySignal.delete(operation.controller.signal);
+  if (finished) runtimeInstallApprovals.delete(operation.id);
   if (finished) operationSteeringRuntime.close(operation.id, { reason: `operation_${operation.state}` });
   return finished;
 };
@@ -6815,7 +7045,7 @@ function operationKindForPrompt(text, opts = {}) {
   if (text === "/compact") return "compact";
   if (text?.startsWith?.("/btw ")) return "side-question";
   if (text === "/report" || text?.startsWith?.("/report ")) return "report";
-  if (text?.startsWith?.("/learn")) return "learn";
+  if (/^\/learn(?:\s|$)/.test(text ?? "")) return "learn";
   return "chat";
 }
 
@@ -7036,6 +7266,7 @@ function clearMessageSendContext(operation) {
 }
 
 const syncActiveSessionFromLoop = (pendingUser = null) => sessionRuntime.syncFromLoop(pendingUser);
+const persistActiveTurnFinalization = (value) => sessionRuntime.persistTurnFinalization(value);
 const finalizeActiveSession = () => sessionRuntime.finalize();
 const clearActiveSession = () => sessionRuntime.clear();
 const writeActiveSessionMeta = (patch = {}) => sessionRuntime.writeMeta(patch);
@@ -7929,9 +8160,9 @@ pauseGate.setAuditListener((event) => {
 //               pre-refactor bug where /report used startsWith("/report"))
 //   "prefix-or-exact" — matches both "/name" and "/name ..." (e.g. /cost)
 //
-// Note: /help, /?, /learn, and /retry are NOT listed here because they have
-// special routing (help runs before busy; learn needs lazy module load;
-// retry falls through into the AI loop). They are documented separately.
+// The registry is also the authoritative Dashboard autocomplete list. Some
+// commands still have special routing (help runs before the ordinary loop;
+// learn loads lazily; retry falls through into the ordinary model loop).
 const SLASH_COMMAND_META = [
   { name: "/help",  aliases: ["/?"], desc: "显示能力概览", usage: "/help", group: "system" },
   { name: "/new",   aliases: ["/clear"], desc: "新建会话（清空当前对话）", usage: "/new", group: "session" },
@@ -8016,6 +8247,13 @@ const ctx = {
   getLatestVersion: () => latestVersion,
   getSessionName: () => "desktop",
   getPersistentStorageIssues: () => runtimeIssues.listUserActionable(),
+  getRuntimeCapabilities: () => runtimeCapabilities.listCapabilities(),
+  repairRuntimeCapability: (runtimeId) => runtimeCapabilities.repairCapability(runtimeId, {
+    operationId: operationRuntime.getActive()?.id ?? null,
+    sessionId: activeConversationId,
+    workspace: workspaceDir,
+    signal: operationRuntime.getActive()?.controller?.signal ?? null,
+  }),
   openExternalUrl,
   getVHomeStatus: () => getVHomeStatusAndResumeSchedules(),
   getVHomeAvatar: () => vhomeIntegration.getAvatar(),
@@ -8566,6 +8804,12 @@ const ctx = {
     }
 
     const trimmed = (text || "").trim();
+    const parsedCommandInput = parseSlashInput(trimmed);
+    if (parsedCommandInput) {
+      text = `/${parsedCommandInput.name}${parsedCommandInput.args ? ` ${parsedCommandInput.args}` : ""}`;
+    } else if (trimmed === "/?") {
+      text = trimmed;
+    }
     const incomingAttachmentIds = Array.isArray(opts.attachmentIds)
       ? [...new Set(opts.attachmentIds.filter((id) => /^att_[0-9a-f-]{20,}$/i.test(String(id ?? ""))))]
       : [];
@@ -8575,7 +8819,7 @@ const ctx = {
     }
 
     // ── Intercept /help — show user-facing capability overview ──
-    if (trimmed === "/help" || trimmed === "/?") {
+    if (text === "/help" || text === "/?") {
       const mc = getModeConfig();
       const modeList = Object.entries(config.modes ?? DEFAULT_MODES)
         .filter(([id]) => DEFAULT_MODES[id])
@@ -8621,9 +8865,9 @@ ${modeList}
 
       const userId = `user-${Date.now()}-${nextMsgId++}`;
       const assistantId = `assistant-${Date.now()}-${nextMsgId++}`;
-      pushMessage({ id: userId, role: "user", text: trimmed });
+      pushMessage({ id: userId, role: "user", text });
       pushMessage({ id: assistantId, role: "assistant", text: helpText });
-      broadcastDashboardEvent({ kind: "user", id: userId, text: trimmed });
+      broadcastDashboardEvent({ kind: "user", id: userId, text });
       broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text: helpText });
       return { accepted: true, loaded: false };
     }
@@ -9207,8 +9451,8 @@ ${modeList}
       }
 
       // /btw <question> — side question from blank slate (no context pollution)
-      if (text.startsWith("/btw ")) {
-        const question = text.slice(5).trim();
+      if (text === "/btw" || text.startsWith("/btw ")) {
+        const question = text.slice(4).trim();
         if (!question) {
           const id = `assistant-${Date.now()}`;
           pushMessage({ id, role: "assistant", text: "\u2139\uFE0F \u7528\u6CD5: /btw <\u95EE\u9898>" });
@@ -9389,6 +9633,7 @@ ${modeList}
         let interventionChoice = null;
         let contextRecoveryHandle = null;
         let isolationRestoreError = null;
+        let finalizationPersistenceError = null;
         let executionStarted = false;
         const loopTelemetry = createLoopTelemetry({ startedAt: turnStartedAt });
         const turnReceipt = createTurnReceipt({ turnId: assistantId, requestId, startedAt: turnStartedAt });
@@ -9530,7 +9775,7 @@ ${modeList}
               if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);
               if (ev.role === "tool") {
                 sawToolActivity = true;
-                const toolSucceeded = toolResultSucceeded(ev.content);
+                const toolSucceeded = toolResultSucceeded(ev.content, { status: ev.toolStatus });
                 if (ev.toolName === "submit_plan" && !toolSucceeded) pendingPlan = null;
                 const toolArgs = parseMaybeJsonObject(ev.toolArgs);
                 const mutatingTool = /^(?:write_file|append_file|edit_file|multi_edit|save_file|save_last_assistant_response|mark_step_complete)$/i.test(String(ev.toolName || ""))
@@ -9559,6 +9804,10 @@ ${modeList}
                     retention: "preserve",
                     changedThisTurn,
                     verification: changedThisTurn ? "current-turn-write" : "existing-file-verified",
+                    status: artifactVerificationStatus(info, {
+                      changedThisTurn,
+                      explicitlyVerified: isRequestedExistingOutput,
+                    }),
                   };
                   turnArtifactPaths.add(key);
                   turnArtifactFiles.set(key, artifactRecord);
@@ -9569,14 +9818,16 @@ ${modeList}
                     paths: newFiles.map((file) => file.path),
                     files: newFiles,
                     producer: ev.toolName || "unknown",
-                    verified: true,
+                    verified: newFiles.every((file) => file.status === "verified"),
+                    status: newFiles.every((file) => file.status === "verified") ? "verified" : "present_unverified",
                     reason: "non-empty artifact created during the current turn",
                   });
                   try {
                     contextInputTransactions.noteArtifactEvidence({
                       paths: newFiles.map((file) => file.path),
                       producer: ev.toolName || "unknown",
-                      verified: true,
+                      verified: newFiles.every((file) => file.status === "verified"),
+                      status: newFiles.every((file) => file.status === "verified") ? "verified" : "present_unverified",
                       reason: "non-empty artifact created during the current turn",
                       sourceReferences: ev.toolName === "run_command"
                         ? [String(parseMaybeJsonObject(ev.toolArgs)?.command || "")]
@@ -9812,6 +10063,23 @@ ${modeList}
           const artifactDeliveryActive = shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && activePlanBelongsToRequest(activeTurnRequestId) });
           if (artifactRequest.required && artifactDeliveryActive && turnArtifactPaths.size === 0 && !operation.controller.signal.aborted) {
             artifactIncomplete = true;
+            if (requestedOutputPaths.length > 0) {
+              turnReceipt.recordArtifact({
+                paths: requestedOutputPaths,
+                files: requestedOutputPaths.map((path) => ({
+                  path,
+                  size: 0,
+                  mtimeMs: 0,
+                  changedThisTurn: false,
+                  verification: "missing",
+                  status: "missing",
+                })),
+                producer: "artifact-delivery",
+                verified: false,
+                status: "missing",
+                reason: "requested artifact was not found or did not contain non-empty content",
+              });
+            }
             assistantText = `${assistantText}${artifactMissingNotice()}`;
             broadcastDashboardEvent({
               kind: "artifact-missing",
@@ -9833,6 +10101,7 @@ ${modeList}
             artifactIncomplete,
             warnings: taskWarnings,
           });
+          for (const runtime of operation.context?.runtimeEnvironments ?? []) turnReceipt.recordRuntime(runtime);
           turnReceipt.complete({
             ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
             taskState,
@@ -9864,10 +10133,14 @@ ${modeList}
               receipt: receiptSnapshot,
             });
             appendActiveMessage({
+              id: assistantId,
               role: "assistant",
               text: assistantText,
+              turnId: requestId || operation.id,
+              operationId: operation.id,
               taskState,
               artifactIncomplete,
+              artifactEvidence: receiptSnapshot.artifactEvidence,
               interventionChoice,
               warnings: taskWarnings,
               receipt: receiptSnapshot,
@@ -9940,6 +10213,57 @@ ${modeList}
               } else {
                 await syncActiveSessionFromLoop({ text, attachments: attachmentRecords });
               }
+              if (opts.isolated !== true) {
+                for (const runtime of operation.context?.runtimeEnvironments ?? []) turnReceipt.recordRuntime(runtime);
+                const finalizationReceipt = turnReceipt.snapshot();
+                let persisted = false;
+                try {
+                  persisted = await persistActiveTurnFinalization({
+                    modelEntries: loop?.log?.toMessages?.() ?? [],
+                    pendingUser: { text, attachments: attachmentRecords },
+                    assistant: {
+                      messageId: assistantId,
+                      turnId: requestId || operation.id,
+                      text: assistantText,
+                    },
+                    operationId: operation.id,
+                    receipt: finalizationReceipt,
+                    taskState,
+                    artifactIncomplete,
+                    artifactEvidence: finalizationReceipt.artifactEvidence,
+                    warnings: taskWarnings,
+                    interventionChoice,
+                  });
+                } catch (error) {
+                  console.error(`[launcher] final turn persistence threw: ${error.message}`);
+                }
+                if (!persisted) {
+                  finalizationPersistenceError = "本轮执行事实无法持久化，结果状态未知";
+                  taskState = "unknown";
+                  turnReceipt.recordError(finalizationPersistenceError, { source: "session-runtime" });
+                  turnReceipt.complete({
+                    ok: false,
+                    taskState: "unknown",
+                    artifactIncomplete,
+                    interventionPaused,
+                    continuationNeeded,
+                  });
+                  trackPersistentStorageIssue("active-session", activeSessionFile, finalizationPersistenceError, "error");
+                  broadcastDashboardEvent({ kind: "error", id: `${assistantId}-finalization-persistence-error`, text: finalizationPersistenceError });
+                  // Reuse the final assistant identity so the Dashboard
+                  // reducer replaces the earlier optimistic completion.
+                  broadcastDashboardEvent({
+                    kind: "assistant_final",
+                    id: assistantId,
+                    text: assistantText,
+                    taskState: "unknown",
+                    artifactIncomplete,
+                    warnings: [...taskWarnings, finalizationPersistenceError].slice(0, 8),
+                    interventionChoice,
+                    receipt: turnReceipt.snapshot(),
+                  });
+                }
+              }
               if (opts.isolated !== true && opts.internalHandoff !== true) {
                 await writeActiveSessionMeta({ contextRecoveryHandle: activeContextRecoveryHandle });
               }
@@ -9970,9 +10294,10 @@ ${modeList}
               ?? (artifactIncomplete ? "requested artifact was not created" : null)
               ?? (interventionPaused ? "task paused for user intervention" : null)
               ?? (continuationNeeded ? "task requires continuation" : null)
+              ?? finalizationPersistenceError
               ?? isolationRestoreError;
             const completion = {
-              ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
+              ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !finalizationPersistenceError && !operation.controller.signal.aborted,
               cancelled: operation.controller.signal.aborted,
               error: completionError,
               assistantText,
@@ -9996,6 +10321,8 @@ ${modeList}
             };
             operation.finalState = completion.cancelled
               ? "cancelled"
+              : finalizationPersistenceError
+                ? "unknown"
               : completion.ok
                 ? "completed"
                 : completion.taskState === "needs_intervention" || completion.taskState === "incomplete"

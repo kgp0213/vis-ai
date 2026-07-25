@@ -4217,6 +4217,26 @@ function parseBody9(raw) {
     return {};
   }
 }
+// VISIONOX_PATCH_RUNTIME_MIRROR_SETTINGS
+function normalizeRuntimeMirrorSettings(value, current = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("runtime must be an object");
+  const packageSources = {};
+  for (const kind of ["python", "node"]) {
+    const configured = value.packageSources?.[kind] ?? current.packageSources?.[kind] ?? [];
+    if (!Array.isArray(configured) || configured.length > 8) throw new Error(`runtime.packageSources.${kind} must be an array with at most 8 entries`);
+    packageSources[kind] = [...new Set(configured.map((source) => {
+      if (typeof source !== "string" || source.length > 500) throw new Error(`runtime.packageSources.${kind} contains an invalid URL`);
+      let url;
+      try { url = new URL(source.trim()); } catch { throw new Error(`runtime.packageSources.${kind} must contain valid HTTPS URLs`); }
+      if (url.protocol !== "https:" || url.username || url.password) throw new Error(`runtime.packageSources.${kind} must contain HTTPS URLs without credentials`);
+      return url.toString().replace(/\/$/, "");
+    }))];
+  }
+  const domesticOnly = value.domesticOnly === void 0 ? current.domesticOnly === true : value.domesticOnly;
+  const allowOfficialFallback = value.allowOfficialFallback === void 0 ? current.allowOfficialFallback !== false : value.allowOfficialFallback;
+  if (typeof domesticOnly !== "boolean" || typeof allowOfficialFallback !== "boolean") throw new Error("runtime mirror switches must be boolean");
+  return { packageSources, domesticOnly, allowOfficialFallback: domesticOnly ? false : allowOfficialFallback };
+}
 var VALID_PRESETS = /* @__PURE__ */ new Set(["auto", "flash", "pro", "fast", "smart", "max"]);
 var DEFAULT_MODEL = "deepseek-v4-flash";
 var PRESET_MODELS = {
@@ -4712,6 +4732,14 @@ async function handleSettings(method, _rest, body, ctx) {
           }
           return { presets: [...allPresets], efforts: [...allEfforts] };
         })(),
+        runtime: {
+          packageSources: {
+            python: Array.isArray(cfg.runtime?.packageSources?.python) ? cfg.runtime.packageSources.python : [],
+            node: Array.isArray(cfg.runtime?.packageSources?.node) ? cfg.runtime.packageSources.node : []
+          },
+          domesticOnly: cfg.runtime?.domesticOnly === true,
+          allowOfficialFallback: cfg.runtime?.domesticOnly !== true && cfg.runtime?.allowOfficialFallback !== false
+        },
         // Hint to the SPA which fields require restart.
         appliesAt: {
           apiKey: activeProvider ? "live" : "next-turn",
@@ -4727,7 +4755,8 @@ async function handleSettings(method, _rest, body, ctx) {
           budgetUsd: "live",
           mode: "live",
           eccRules: "live",
-          contextCapTokens: "live"
+          contextCapTokens: "live",
+          runtime: "next-operation"
         }
       }
     };
@@ -4745,6 +4774,14 @@ async function handleSettings(method, _rest, body, ctx) {
     let presetPendingLive = null;
     let effortPendingLive = null;
     let eccRulesPending = null;
+    if (fields.runtime !== void 0) {
+      try {
+        cfg.runtime = { ...(cfg.runtime && typeof cfg.runtime === "object" ? cfg.runtime : {}), ...normalizeRuntimeMirrorSettings(fields.runtime, cfg.runtime) };
+      } catch (error) {
+        return { status: 400, body: { error: error.message } };
+      }
+      changed.push("runtime");
+    }
     if (fields.lang !== void 0) {
       const raw = String(fields.lang);
       const supported = getSupportedLanguages();
@@ -5242,19 +5279,22 @@ async function handleSlash(method, _rest, _body, ctx) {
     "commit","plan","checkpoint","restore","cwd","jobs","kill","logs",
     "resource","prompt","memory","skill","replay","stats","doctor"
   ]);
-  const commands = SLASH_COMMANDS
+  const hostCommands = ctx.getSlashCommands?.();
+  const commands = Array.isArray(hostCommands) ? [] : SLASH_COMMANDS
     .filter((c) => c.contextual !== "code" || codeMode)
     .filter((c) => !HIDDEN_CMDS.has(c.cmd))
     .map((c) => ({ cmd: c.cmd, summary: c.summary, argsHint: c.argsHint, contextual: c.contextual, aliases: c.aliases }));
-  commands.push({
-    cmd: "learn",
-    summary: "\u5B66\u4E60\u7CFB\u7EDF\uFF08\u6280\u80FD\u63D0\u53D6/\u9879\u76EE\u8BB0\u5FC6/\u8BED\u4E49\u7D22\u5F15/\u95EE\u7B54/\u5BFC\u5E08\u6A21\u5F0F\uFF09",
-    argsHint: "<subcommand>",
-    contextual: null,
-    aliases: []
-  });
+  if (!Array.isArray(hostCommands)) {
+    commands.push({
+      cmd: "learn",
+      summary: "\u5B66\u4E60\u7CFB\u7EDF\uFF08\u6280\u80FD\u63D0\u53D6/\u9879\u76EE\u8BB0\u5FC6/\u8BED\u4E49\u7D22\u5F15/\u95EE\u7B54/\u5BFC\u5E08\u6A21\u5F0F\uFF09",
+      argsHint: "<subcommand>",
+      contextual: null,
+      aliases: []
+    });
+  }
   const merged = new Map(commands.map((command) => [command.cmd, command]));
-  for (const command of ctx.getSlashCommands?.() ?? []) {
+  for (const command of hostCommands ?? []) {
     const cmd = String(command.name ?? "").replace(/^\//, "");
     if (!cmd) continue;
     merged.set(cmd, {

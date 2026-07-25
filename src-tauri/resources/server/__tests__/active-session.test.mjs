@@ -65,6 +65,8 @@ describe("active session recovery", () => {
     const entries = [{
       role: "assistant",
       content: "The requested output is incomplete.",
+      turnId: "turn-1",
+      operationId: "operation-1",
       receipt,
       taskState: "incomplete",
       artifactIncomplete: true,
@@ -75,6 +77,8 @@ describe("active session recovery", () => {
     const dashboard = activeEntriesForDashboard(parseActiveSessionJsonl(serializeActiveSession(entries)).entries, 321);
     assert.equal(dashboard.length, 1);
     assert.deepEqual(dashboard[0].receipt, receipt);
+    assert.equal(dashboard[0].turnId, "turn-1");
+    assert.equal(dashboard[0].operationId, "operation-1");
     assert.equal(dashboard[0].taskState, "incomplete");
     assert.equal(dashboard[0].artifactIncomplete, true);
     assert.equal(dashboard[0].interventionChoice, "retry");

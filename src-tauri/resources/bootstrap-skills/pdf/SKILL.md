@@ -16,25 +16,36 @@ task; do not place the complete PDF production manual into the model context.
 
 ## Runtime Path
 
-`run_skill` includes this skill's absolute path in its result header. Use that path and
-never assume a source checkout or installation directory.
+`run_skill` resolves this Skill's declared Python and Node requirements through the
+Visionox runtime registry before returning these instructions. Reuse the injected
+`VISIONOX_PYTHON`, `VISIONOX_NODE`, `VIRTUAL_ENV`, and `NODE_PATH` values when they are
+present in the runtime capability header; never create
+`.venv` or `node_modules` in the task/output directory.
+
+The Python toolkit is optional for this router. If its capability is unavailable, use
+the packaged Node/PDF reader for operations it supports and report that Python-only
+operations require the user to configure or authorize a Python environment; do not
+invent a path or run a package installer in the task directory.
 
 Windows PowerShell:
 
 ```powershell
-$env:PDF_SKILL_DIR = '<path from the run_skill result header>'
-python "$env:PDF_SKILL_DIR\scripts\pdf.py" env.check
+powershell.exe -NoProfile -Command "& $env:VISIONOX_PYTHON '<path from the run_skill result header>\scripts\pdf.py' env.check"
 ```
 
 macOS/Linux:
 
 ```bash
-export PDF_SKILL_DIR='<path from the run_skill result header>'
-python3 "$PDF_SKILL_DIR/scripts/pdf.py" env.check
+sh -c '"$VISIONOX_PYTHON" "<path from the run_skill result header>/scripts/pdf.py" env.check'
 ```
 
-Do not run `setup.sh` directly on Windows. Never install dependencies automatically;
-`env.fix --allow-install` requires explicit user approval.
+`run_command` does not expand environment variables itself. Keep the PowerShell or
+`sh -c` wrapper shown above so the child shell resolves the host-provided absolute
+interpreter path. Environment assignments from an earlier command do not persist.
+
+Do not run `setup.sh` or `env.fix --allow-install`. Never execute `npm install`,
+`pip install`, or `python -m venv` yourself; the host runtime manager owns dependency
+reuse, repair, installation approval, mirrors, and cache placement.
 
 ## Route Existing PDFs
 
@@ -104,10 +115,10 @@ Read shared files only when the chosen brief points to them:
 ## Tool Entry Points
 
 ```powershell
-python "$env:PDF_SKILL_DIR\scripts\pdf.py" --help
-python "$env:PDF_SKILL_DIR\scripts\pdf.py" env.check
-python "$env:PDF_SKILL_DIR\scripts\pdf.py" qa.check output.pdf
-python "$env:PDF_SKILL_DIR\scripts\pdf.py" pages.chunk huge.pdf -o volumes --pages-per-file 200
+powershell.exe -NoProfile -Command "& $env:VISIONOX_PYTHON '<skill path>\scripts\pdf.py' --help"
+powershell.exe -NoProfile -Command "& $env:VISIONOX_PYTHON '<skill path>\scripts\pdf.py' env.check"
+powershell.exe -NoProfile -Command "& $env:VISIONOX_PYTHON '<skill path>\scripts\pdf.py' qa.check output.pdf"
+powershell.exe -NoProfile -Command "& $env:VISIONOX_PYTHON '<skill path>\scripts\pdf.py' pages.chunk huge.pdf -o volumes --pages-per-file 200"
 ```
 
 Detailed flags and recovery steps live in `briefs/process.md`; layout generation and

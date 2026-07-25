@@ -38,11 +38,15 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js",
-    markers: ["getSessionTranscript", "rest[1] === \"transcript\"", "rest[1] === \"fork\"", "forkSession", "projectExecutionTranscript", "paginateExecutionTranscript"],
+    markers: ["getSessionTranscript", "rest[1] === \"transcript\"", "rest[1] === \"fork\"", "forkSession", "projectExecutionTranscript", "paginateExecutionTranscript", "const hostCommands = ctx.getSlashCommands?.()", "VISIONOX_PATCH_RUNTIME_MIRROR_SETTINGS", "normalizeRuntimeMirrorSettings"],
   },
   {
     file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
     markers: ["parallelBatchPlanner", "Parallel tool planning failed; continuing serially"],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-O52OLQL3.js",
+    markers: ["operationId: getOperationId(ctx?.signal)", "ownerId: getOperationId(ctx?.signal)"],
   },
   {
     file: "src-tauri/resources/server/lib/attachment-runtime.mjs",
@@ -478,7 +482,8 @@ const required = [
       "inputValueRef",
       "setChatInput",
       "optimizeCurrentPrompt",
-      "prompt-optimize-chip",
+      "composer-send",
+      "composer-plus-menu",
       "defaultValue=${inputValueRef.current}",
       "const skillInvocation = { name: selected.skill.name, task }",
       "body.skillInvocation = resolved.skillInvocation",
@@ -833,7 +838,11 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/pdf/SKILL.md",
-    markers: ["PDF Workbench Router", "path from the run_skill result header", "$env:PDF_SKILL_DIR", "Do not run `setup.sh` directly on Windows", "format operations only", "references/large-document.md"],
+    markers: ["PDF Workbench Router", "path from the run_skill result header", "powershell.exe -NoProfile -Command", "$env:VISIONOX_PYTHON", "`run_command` does not expand environment variables", "Do not run `setup.sh` or `env.fix --allow-install`", "format operations only", "references/large-document.md"],
+  },
+  {
+    file: "src-tauri/resources/bootstrap-skills/pdf/runtime-requirements.json",
+    markers: ['"schemaVersion": 1', '"pdf-python-toolkit"', '"pdf-node-reader"', '"pdfjs-dist"', '"@napi-rs/canvas"'],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/subagent-driven-development/SKILL.md",

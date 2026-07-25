@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "requirements": [
+    {
+      "id": "md-to-pdf-reportlab",
+      "kind": "python",
+      "versionRange": ">=3.10,<3.14",
+      "packages": [
+        { "name": "reportlab", "version": "4.4.4", "importName": "reportlab" }
+      ],
+      "healthChecks": ["import:reportlab"]
+    }
+  ]
+}

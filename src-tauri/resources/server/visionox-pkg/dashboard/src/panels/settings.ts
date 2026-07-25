@@ -317,6 +317,7 @@ function SettingsPanel() {
   const [modelVerification, setModelVerification] = d2(null);
   const [providerDiagnostics, setProviderDiagnostics] = d2(null);
   const [providerTesting, setProviderTesting] = d2(false);
+  const [runtimeDraft, setRuntimeDraft] = d2({ python: "", node: "", domesticOnly: false, allowOfficialFallback: true });
   const [catalog, setCatalog] = d2(null);
   const [loopStatus, setLoopStatus] = d2(null);
   const [loopAvgCost, setLoopAvgCost] = d2(null);
@@ -373,6 +374,12 @@ function SettingsPanel() {
       setManagedProviders(providerResult.providers ?? []);
       setModelVerification(providerResult.modelVerification ?? null);
       setProviderDiagnostics(diagnosticsResult);
+      setRuntimeDraft({
+        python: (r3.runtime?.packageSources?.python ?? []).join("\n"),
+        node: (r3.runtime?.packageSources?.node ?? []).join("\n"),
+        domesticOnly: r3.runtime?.domesticOnly === true,
+        allowOfficialFallback: r3.runtime?.allowOfficialFallback !== false,
+      });
       setDraft({});
       setCredentialProviderId((current) => r3.credentialProviders?.some((provider) => provider.id === current) ? current : r3.credentialTarget?.id ?? r3.credentialProviders?.[0]?.id ?? null);
       setCredentialVerification(null);
@@ -809,6 +816,33 @@ function SettingsPanel() {
 
       ${sectionH3(t4("settings.sectionRuntime"))}
       <div class="card">
+        ${fieldRow(
+          "国内镜像优先",
+          html4`<div style="display:flex;flex-direction:column;gap:8px;width:100%">
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px">
+              <input type="checkbox" checked=${runtimeDraft.domesticOnly} onChange=${(e3) => setRuntimeDraft((current) => ({ ...current, domesticOnly: e3.target.checked, allowOfficialFallback: e3.target.checked ? false : current.allowOfficialFallback }))} disabled=${saving} />
+              仅允许国内镜像
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px">
+              <input type="checkbox" checked=${runtimeDraft.allowOfficialFallback} onChange=${(e3) => setRuntimeDraft((current) => ({ ...current, allowOfficialFallback: e3.target.checked }))} disabled=${saving || runtimeDraft.domesticOnly} />
+              国内镜像失败后回退官方源
+            </label>
+          </div>`,
+          "安装由宿主管理器执行，不会在任务目录创建 node_modules 或 .venv。"
+        )}
+        ${fieldRow(
+          "Python 包源顺序",
+          html4`<textarea rows="2" value=${runtimeDraft.python} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, python: e3.target.value }))} placeholder="每行一个 HTTPS 源" style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
+          "留空时使用清华、阿里镜像，必要时回退官方源。"
+        )}
+        ${fieldRow(
+          "Node 包源顺序",
+          html4`<textarea rows="2" value=${runtimeDraft.node} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, node: e3.target.value }))} placeholder="每行一个 HTTPS 源" style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
+          "留空时优先使用 npmmirror。"
+        )}
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          <button class="btn primary" disabled=${saving} onClick=${() => save({ runtime: { packageSources: { python: runtimeDraft.python.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), node: runtimeDraft.node.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }, domesticOnly: runtimeDraft.domesticOnly, allowOfficialFallback: runtimeDraft.allowOfficialFallback } })}>保存运行时源</button>
+        </div>
         ${fieldRow(
     t4("settings.activeModel"),
     html4`<${ModelRow}

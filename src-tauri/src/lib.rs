@@ -561,6 +561,30 @@ fn spawn_server_blocking(
         node_path, launcher
     ));
 
+    // Create the stderr log before spawning the child. An empty file is still
+    // useful evidence: it distinguishes a clean launcher from a missing
+    // capture path or an untracked process.
+    let stderr_log_path = server_stderr_log_path();
+    if let Some(parent) = stderr_log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    rotate_log_if_needed(&stderr_log_path, LOG_ROTATE_BYTES);
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_log_path)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+            let _ = writeln!(file, "[{ts}] [rust] launcher stderr capture starting");
+        }
+        Err(error) => log_diag(&format!(
+            "[rust] failed to initialize server stderr log {}: {error}",
+            stderr_log_path.display()
+        )),
+    }
+
     let mut child = Command::new(&node_path);
     let runtime_path = std::env::join_paths(
         std::iter::once(server_dir.clone()).chain(
@@ -655,6 +679,9 @@ fn spawn_server_blocking(
             let _ = writeln!(writer, "{rendered}");
             current_bytes += rendered.len() as u64 + 1;
         }
+        let _ = writer.flush();
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+        let _ = writeln!(writer, "[{ts}] [rust] launcher stderr stream closed");
         let _ = writer.flush();
     });
 

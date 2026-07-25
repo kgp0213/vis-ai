@@ -37,13 +37,13 @@ test("all bundled skill directories contain a readable SKILL.md and provenance",
   assert.deepEqual([...covered].sort(), skillNames);
 });
 
-test("PDF skill resolves its deployed path and documents Windows execution", () => {
+test("PDF skill uses host-managed runtime bindings and documents Windows execution", () => {
   const pdf = readFileSync(skillFile("pdf"), "utf8");
-  const initialization = pdf.indexOf("$env:PDF_SKILL_DIR");
-  const firstWindowsCall = pdf.indexOf('python "$env:PDF_SKILL_DIR');
-  assert.ok(initialization >= 0 && firstWindowsCall > initialization);
+  assert.match(pdf, /powershell\.exe -NoProfile -Command/);
+  assert.match(pdf, /run_command` does not expand environment variables/);
+  assert.match(pdf, /Python toolkit is optional/);
   assert.match(pdf, /path.*run_skill result header/i);
-  assert.match(pdf, /Do not run `setup\.sh` directly on Windows/);
+  assert.match(pdf, /Do not run `setup\.sh` or `env\.fix --allow-install`/);
   assert.doesNotMatch(pdf, /organize_document_to_markdown/);
   assert.doesNotMatch(pdf, /extract_pdf_text|references\/pdf-to-markdown\.md|nextPageRange/);
   assert.equal(existsSync(skillFile("pdf", "references/pdf-to-markdown.md")), false);
@@ -52,7 +52,9 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   assert.match(pdf, /must not decide task continuation, completion, or user intervention/);
   assert.match(pdf, /normal foreground model tool loop/);
   assert.match(pdf, /Do not switch to a format-specific\s+background workflow/);
-  assert.match(pdf, /Never install dependencies automatically/);
+  assert.match(pdf, /Never execute `npm install`,\s*`pip install`, or `python -m venv`/);
+  assert.match(pdf, /never create\s*`\.venv` or `node_modules` in the task\/output directory/i);
+  assert.equal(existsSync(skillFile("pdf", "runtime-requirements.json")), true);
   const pdfScript = readFileSync(skillFile("pdf", "scripts/pdf.py"), "utf8");
   assert.match(pdfScript, /PermissionRequired/);
   assert.match(pdfScript, /\["pdfplumber", "pdfium", "pypdf"\]/);
@@ -68,8 +70,9 @@ test("PDF skill resolves its deployed path and documents Windows execution", () 
   assert.doesNotMatch(organizer, /extract_pdf_text|nextPageRange|complete=true/);
 
   const cjk = readFileSync(skillFile("md-to-pdf-cjk"), "utf8");
-  assert.match(cjk, /python -m pip install reportlab/);
-  assert.match(cjk, /ReportLab is not bundled with Visionox/);
+  assert.match(cjk, /host runtime\s+manager/);
+  assert.doesNotMatch(cjk, /python -m pip install reportlab/);
+  assert.equal(existsSync(skillFile("md-to-pdf-cjk", "runtime-requirements.json")), true);
   assert.match(cjk, /md_to_pdf\.py input\.md output\.pdf/);
   assert.match(cjk, /must never be used as a fallback PDF reader/);
   assert.doesNotMatch(cjk, /md_to_pdf\.py input\.md "Document Title"/);

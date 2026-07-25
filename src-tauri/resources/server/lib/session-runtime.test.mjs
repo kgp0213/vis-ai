@@ -93,6 +93,72 @@ test("session runtime appends and synchronizes model history", async () => {
   }
 });
 
+test("session runtime preserves final receipt facts across model-history synchronization", async () => {
+  const harness = await createHarness();
+  try {
+    harness.runtime.appendMessage({ role: "user", text: "finish this", id: "user-1" });
+    harness.setLoopMessages([
+      { role: "user", content: "finish this" },
+      { role: "assistant", content: "completed output" },
+    ]);
+    await harness.runtime.syncFromLoop();
+    const receipt = { completion: { ok: true, taskState: "completed" }, artifactEvidence: [{ paths: ["C:/out.md"], verified: true }] };
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "finish this" },
+      assistant: { messageId: "assistant-1", turnId: "turn-1", text: "completed output" },
+      operationId: "op-1",
+      receipt,
+      taskState: "completed",
+      artifactEvidence: receipt.artifactEvidence,
+    }), true);
+
+    await harness.runtime.syncFromLoop();
+    const entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const assistant = entries.find((entry) => entry.role === "assistant");
+    assert.equal(assistant.id, "assistant-1");
+    assert.equal(assistant.turnId, "turn-1");
+    assert.equal(assistant.operationId, "op-1");
+    assert.deepEqual(assistant.receipt, receipt);
+    assert.equal(assistant.taskState, "completed");
+    assert.deepEqual(assistant.artifactEvidence, receipt.artifactEvidence);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session runtime stores empty-text terminal facts without a visible blank assistant", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([{ role: "user", content: "run the command" }]);
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "run the command" },
+      assistant: { messageId: "assistant-empty", turnId: "turn-empty", text: "" },
+      operationId: "op-empty",
+      receipt: { completion: { ok: false, taskState: "unknown" } },
+      taskState: "unknown",
+      warnings: ["执行结果无法确认"],
+    }), true);
+
+    const entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(entries.some((entry) => entry.role === "assistant" && entry.id === "assistant-empty"), false);
+    const fact = entries.find((entry) => entry.role === "execution");
+    assert.equal(fact.operationId, "op-empty");
+    assert.equal(fact.messageId, "assistant-empty");
+    assert.equal(fact.taskState, "unknown");
+
+    await harness.runtime.syncFromLoop();
+    const afterSync = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(afterSync.filter((entry) => entry.role === "execution").length, 1);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
 test("session runtime serializes append and metadata writes", async () => {
   const harness = await createHarness();
   try {
