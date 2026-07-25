@@ -2,6 +2,7 @@ const MAX_TOOL_EVENTS = 24;
 const MAX_ARTIFACT_EVENTS = 16;
 const MAX_ERROR_EVENTS = 8;
 const MAX_MODEL_RETRIES = 12;
+const MAX_PROVIDER_RESULTS = 16;
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").slice(0, limit);
@@ -30,6 +31,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     toolEvents: [],
     errors: [],
     modelRetries: [],
+    providerResults: [],
     artifactEvidence: [],
     documentBindings: [],
     context: null,
@@ -114,6 +116,26 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     return true;
   }
 
+  function recordProviderResult(result = {}) {
+    const normalized = {
+      requestId: boundedText(result.requestId, 160) || state.requestId,
+      attempt: Math.max(1, Number(result.attempt) || 1),
+      statusCode: Number.isInteger(Number(result.statusCode)) ? Number(result.statusCode) : null,
+      finishReason: boundedText(result.finishReason, 80) || null,
+      rawFinishReason: boundedText(result.rawFinishReason, 120) || null,
+      usage: result.usage && typeof result.usage === "object" ? { ...result.usage } : null,
+      traceId: boundedText(result.traceId, 160) || null,
+      cancelled: result.cancelled === true,
+      retryable: result.retryable === true,
+      recordedAt: new Date().toISOString(),
+    };
+    const duplicate = state.providerResults.some((item) => item.requestId === normalized.requestId && item.attempt === normalized.attempt && item.finishReason === normalized.finishReason);
+    if (duplicate) return false;
+    state.providerResults.push(normalized);
+    if (state.providerResults.length > MAX_PROVIDER_RESULTS) state.providerResults.shift();
+    return true;
+  }
+
   function recordArtifact({ paths = [], files = [], producer = "unknown", verified = false, reason = "" } = {}) {
     const normalized = [...new Set((Array.isArray(paths) ? paths : []).map((path) => String(path ?? "").trim()).filter(Boolean))];
     if (normalized.length === 0) return;
@@ -153,12 +175,20 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     if (!status || typeof status !== "object") return;
     state.context = {
       transactionId: boundedText(status.transactionId, 160) || null,
+      inputChars: Math.max(0, Number(status.inputChars ?? status.totalInputChars) || 0),
+      estimatedTokens: Math.max(0, Number(status.estimatedTokens) || 0),
+      toolResultBytes: Math.max(0, Number(status.toolResultBytes) || 0),
+      compressed: status.compressed === true,
+      resourceRefs: [...new Set((Array.isArray(status.resourceRefs) ? status.resourceRefs : []).map((value) => boundedText(value, 240)).filter((value) => /^[A-Za-z0-9._:-]{1,240}$/u.test(value)))].slice(0, 32),
       pendingCount: Math.max(0, Number(status.pendingCount) || 0),
       pendingChars: Math.max(0, Number(status.pendingChars) || 0),
       materializedChars: Math.max(0, Number(status.materializedChars) || 0),
       cacheFailureCount: Math.max(0, Number(status.cacheFailureCount) || 0),
       requiresIntervention: status.requiresIntervention === true,
       finalWithPending: status.finalWithPending === true,
+      contextOverflow: status.contextOverflow === true || status.error?.code === "context_overflow",
+      droppedItems: Array.isArray(status.droppedItems) ? status.droppedItems.slice(0, 16) : [],
+      warnings: Array.isArray(status.warnings) ? status.warnings.slice(0, 8) : [],
     };
   }
 
@@ -226,6 +256,7 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     observeToolStart,
     recordError,
     recordModelRetry,
+    recordProviderResult,
     recordArtifact,
     recordDocumentBinding,
     recordContext,

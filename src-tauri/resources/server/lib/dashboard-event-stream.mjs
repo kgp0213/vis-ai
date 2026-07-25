@@ -37,11 +37,19 @@ export function createDashboardEventStream({ epoch = randomUUID(), capacity = DE
 
   function publish(event) {
     if (!event || typeof event !== "object") return event;
-    let delivered = event;
+    const base = {
+      ...event,
+      schemaVersion: Number.isSafeInteger(Number(event.schemaVersion)) ? Number(event.schemaVersion) : 1,
+      occurredAt: event.occurredAt ?? now().toISOString(),
+      operationId: event.operationId ?? null,
+      sessionId: event.sessionId ?? null,
+      entityId: event.entityId ?? event.toolCallId ?? event.interactionId ?? event.attachmentId ?? event.artifactId ?? event.id ?? null,
+    };
+    let delivered = base;
     if (isReplayable(event)) {
       const seq = nextSeq++;
       delivered = {
-        ...event,
+        ...base,
         eventEpoch: normalizedEpoch,
         eventSeq: seq,
         eventId: cursor(normalizedEpoch, seq),

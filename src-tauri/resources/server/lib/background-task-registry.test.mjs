@@ -6,6 +6,7 @@ import {
   projectBackgroundTask,
   taskNeedsAttention,
   taskIsActive,
+  markRunningTasksLost,
 } from "./background-task-registry.mjs";
 
 test("projects generic lifecycle into stable active and attention flags", () => {
@@ -47,6 +48,33 @@ test("projects generic lifecycle into stable active and attention flags", () => 
   assert.equal(warning.artifacts[0].artifactId, "artifact-1");
   assert.ok(taskNeedsAttention(warning));
   assert.equal(taskIsActive(warning), false);
+});
+
+test("preserves operation ownership and exposes lost task recovery actions", () => {
+  const projected = projectBackgroundTask({
+    id: "task:lost-1",
+    lifecycle: "lost",
+    operationId: "op-1",
+    sessionId: "session-1",
+    workspace: "C:/work",
+    outputTail: "process exited unexpectedly",
+    stopReason: "process_restarted",
+  });
+  assert.equal(projected.active, false);
+  assert.equal(projected.operationId, "op-1");
+  assert.equal(projected.sessionId, "session-1");
+  assert.equal(projected.outputTail, "process exited unexpectedly");
+  assert.deepEqual(projected.allowedActions, ["inspect", "retry", "cancel"]);
+});
+
+test("crash recovery marks only active tasks lost and never infers completion", () => {
+  const tasks = markRunningTasksLost([
+    { id: "running", lifecycle: "running" },
+    { id: "done", lifecycle: "terminal", outcome: "delivered" },
+  ], { now: () => "2026-07-25T00:00:00.000Z" });
+  assert.equal(tasks[0].lifecycle, "lost");
+  assert.equal(tasks[0].outcome, null);
+  assert.equal(tasks[1].outcome, "delivered");
 });
 
 test("legacy jobs retain compatibility fields without changing lifecycle semantics", () => {

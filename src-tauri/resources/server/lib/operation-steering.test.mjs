@@ -42,6 +42,12 @@ describe("operation steering", () => {
     assert.equal(closed[0].resolution.reason, "operation_completed");
   });
 
+  test("cancels queued steering when its operation stops", () => {
+    const runtime = createOperationSteeringRuntime();
+    runtime.enqueue({ operationId: "op-cancel", instruction: "stop" });
+    assert.equal(runtime.cancel("op-cancel")[0].status, "cancelled");
+  });
+
   test("publishes only a safe steering projection and releases terminal operation state", () => {
     const events = [];
     const runtime = createOperationSteeringRuntime({ onEvent: (event) => events.push(event) });
@@ -50,6 +56,16 @@ describe("operation steering", () => {
     assert.doesNotMatch(JSON.stringify(events), /do-not-publish/);
     assert.equal(events[0].steering.instructionLength, 20);
     assert.deepEqual(runtime.list("op-secret"), []);
+  });
+
+  test("keeps a safe prompt entity projection for each lifecycle update", () => {
+    const events = [];
+    const runtime = createOperationSteeringRuntime({ onEvent: (event) => events.push(event) });
+    const queued = runtime.enqueue({ operationId: "op-entity", sessionId: "session-1", instruction: "check result" });
+    runtime.consume("op-entity");
+    assert.equal(events.every((event) => event.steering.instruction === undefined), true);
+    assert.equal(events[0].steering.id, queued.id);
+    assert.equal(events.at(-1).steering.status, "applied");
   });
 
   test("exposes the compatible steering endpoint through the existing Dashboard server", async () => {

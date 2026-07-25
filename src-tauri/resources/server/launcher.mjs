@@ -71,12 +71,18 @@ const {
 } = await importEarly("./lib/provider.mjs");
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
+const { buildContextBudgetStatus } = await importEarly("./lib/context-budget.mjs");
+const { projectModelContext } = await importEarly("./lib/model-context-projector.mjs");
 const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage, startsFreshContextTransaction } = await importEarly("./lib/context-input-transaction.mjs");
 const { utf8SafePrefixLength } = await importEarly("./lib/utf8-range.mjs");
 const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
+const { paginateExecutionTranscript, projectExecutionTranscript } = await importEarly("./lib/execution-transcript.mjs");
 const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
+const { createSessionRecoveryRuntime } = await importEarly("./lib/session-recovery.mjs");
+const { isTodoScopeCurrent, normalizeTodoList } = await importEarly("./lib/session-todo-state.mjs");
+const { normalizeGoal, normalizePromptSteering } = await importEarly("./lib/execution-entities.mjs");
 const { createAttachmentRuntime } = await importEarly("./lib/attachment-runtime.mjs");
 const { createAttachmentContentResponse } = await importEarly("./lib/attachment-http.mjs");
 const { collectAttachmentReferences } = await importEarly("./lib/attachment-reference-scan.mjs");
@@ -121,6 +127,7 @@ const { shellCommandArtifactPaths, shellCommandHasSideEffects } = await importEa
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
+const { planToolCallBatches } = await importEarly("./lib/parallel-tool-scheduler.mjs");
 const { createOperationSteeringRuntime } = await importEarly("./lib/operation-steering.mjs");
 const { createProgressiveToolDiscovery } = await importEarly("./lib/progressive-tool-discovery.mjs");
 const { createRuntimeLifecycleHooks } = await importEarly("./lib/runtime-lifecycle-hooks.mjs");
@@ -135,6 +142,7 @@ const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-ou
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
+const { normalizeProviderResult } = await importEarly("./lib/provider-result.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
 const { modelConfigFingerprint } = await importEarly("./lib/model-config-fingerprint.mjs");
@@ -290,9 +298,84 @@ let activeMessageSendContext = {
 // must never inject a result into a different conversation after /new or a
 // session switch.
 let activeConversationId = randomUUID();
+let activeTodos = [];
+let activeGoals = [];
+let activePromptEntities = [];
+let sessionMutationInFlight = false;
 // A paused context-input transaction is scoped to the visible conversation so
 // a later turn (or a restart) can explicitly recover the same cached input.
 let activeContextRecoveryHandle = null;
+
+function restoreActiveTodos(value, { broadcast = true } = {}) {
+  activeTodos = normalizeTodoList(value);
+  if (broadcast) broadcastDashboardEvent({ kind: "todo-update", todos: activeTodos });
+  return activeTodos;
+}
+
+function restoreActiveGoals(value, { broadcast = true } = {}) {
+  const source = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  activeGoals = source
+    .map((entry, index) => normalizeGoal({ ...entry, sessionId: entry?.sessionId ?? activeConversationId }, `goal-${index + 1}`))
+    .filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return !entry.sessionId || entry.sessionId === activeConversationId;
+    })
+    .slice(-32);
+  if (broadcast) broadcastDashboardEvent({ kind: "goal-update", goals: activeGoals });
+  return activeGoals;
+}
+
+function restoreActivePromptEntities(value, { broadcast = true } = {}) {
+  const source = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  activePromptEntities = source
+    .map((entry, index) => normalizePromptSteering({ ...entry, sessionId: entry?.sessionId ?? activeConversationId }, `prompt-${index + 1}`))
+    .filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return !entry.sessionId || entry.sessionId === activeConversationId;
+    })
+    .slice(-64);
+  if (broadcast) {
+    broadcastDashboardEvent({ kind: "prompt-update", prompts: activePromptEntities });
+  }
+  return activePromptEntities;
+}
+
+function recordPromptSteeringEvent(event) {
+  const raw = event?.prompt ?? event?.steering;
+  if (!raw || typeof raw !== "object") return null;
+  const sessionId = String(raw.sessionId ?? activeConversationId).trim() || activeConversationId;
+  if (sessionId !== activeConversationId) return null;
+  const next = normalizePromptSteering({ ...raw, sessionId }, `prompt-${activePromptEntities.length + 1}`);
+  const existingIndex = activePromptEntities.findIndex((entry) => entry.id === next.id);
+  if (existingIndex >= 0) {
+    activePromptEntities = activePromptEntities.map((entry, index) => index === existingIndex ? next : entry);
+  } else {
+    activePromptEntities = [...activePromptEntities, next].slice(-64);
+  }
+  void writeActiveSessionMeta({ prompts: activePromptEntities });
+  return next;
+}
+
+function persistActiveTodos(todos) {
+  const operation = operationRuntime?.getActive?.();
+  if (!operation || operation.state !== "running" || operation.context?.conversationScope !== "chat" || activeMessageSendContext.conversationScope !== "chat" || !isTodoScopeCurrent({
+    operationId: operation.id,
+    sessionId: operation.context?.conversationId,
+    activeOperationId: activeMessageSendContext.operationId,
+    activeSessionId: activeConversationId,
+  })) {
+    console.error("[launcher] ignored out-of-scope todo update");
+    return false;
+  }
+  activeTodos = normalizeTodoList(todos, 100, activeTodos);
+  broadcastDashboardEvent({ kind: "todo-update", todos: activeTodos });
+  void writeActiveSessionMeta({ todos: activeTodos });
+  return true;
+}
 
 // ── Centralized constants ───────────────────────────────────────
 const CONSTANTS = {
@@ -1742,9 +1825,7 @@ if (submitPlanTool) {
   submitPlanTool.finishTurnOnResult = null;
 }
 registerChoiceTool(tools);
-registerTodoTool(tools, {
-  onTodosUpdated: (todos) => broadcastDashboardEvent({ kind: "todo-update", todos })
-});
+registerTodoTool(tools, { onTodosUpdated: persistActiveTodos });
 
 console.error(`[launcher] ${tools.size} tools registered`);
 
@@ -4262,6 +4343,7 @@ function buildLoop(client, rootDir) {
     maxToolContinuationWindows: agentPolicy.maxToolContinuationWindows,
     sameFailureClassLimit: agentPolicy.sameFailureClassLimit,
     toolResultBudget: agentPolicy.toolResultBudget,
+    parallelBatchPlanner: (calls) => planToolCallBatches(calls, { maxParallel: 3 }),
     beforeModelRequest: async ({ turn, iteration, signal }) => {
       const operation = operationRuntime?.getActive?.();
       if (!operation || signal?.aborted) return null;
@@ -4497,6 +4579,13 @@ function activatePendingPlan() {
   activePlanUpdatedAt = null;
   activePlanId = nextPlan.planId;
   activePlanRequestId = nextPlan.requestId;
+  activeGoals = [normalizeGoal({
+    id: activePlanId || `goal:${activeConversationId}`,
+    title: activePlanSummary || activePlanSteps?.[0]?.title || "当前计划",
+    status: "active",
+    sessionId: activeConversationId,
+    updatedAt: new Date().toISOString(),
+  })];
   pendingPlanRevision = null;
   if (!persistActivePlan()) {
     pendingPlan = nextPlan;
@@ -4506,8 +4595,10 @@ function activatePendingPlan() {
     activePlanSummary = null;
     activePlanId = null;
     activePlanRequestId = null;
+    activeGoals = [];
     return false;
   }
+  void writeActiveSessionMeta({ goals: activeGoals });
   console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
   broadcastDashboardEvent({ kind: "plan-activated", session: currentSessionName() });
   return true;
@@ -4524,6 +4615,8 @@ function markStepDone(stepId) {
   }
   if (isPlanComplete(activePlanSteps, [...activeCompletedIds])) {
     const session = currentSessionName();
+    activeGoals = activeGoals.map((goal) => ({ ...goal, status: "completed", updatedAt: new Date().toISOString() }));
+    void writeActiveSessionMeta({ goals: activeGoals });
     try {
       archivePlanState(session);
       console.error(`[launcher] plan archived (${activeCompletedIds.size}/${activePlanSteps.length} steps) for session ${session}`);
@@ -4561,6 +4654,8 @@ function cancelActivePlan() {
     trackPersistentStorageIssue(`active-plan:${session}`, resolve(sessionsDir, `${session}.plan.json`), error.message);
     return { ok: false, error: `active plan was not cancelled: ${error.message}` };
   }
+  activeGoals = activeGoals.map((goal) => ({ ...goal, status: "cancelled", updatedAt: new Date().toISOString() }));
+  void writeActiveSessionMeta({ goals: activeGoals });
   resetPlanRefs();
   broadcastDashboardEvent({ kind: "plan-cancelled", session });
   return { ok: true };
@@ -6615,12 +6710,17 @@ const runtimeLifecycleHooks = createRuntimeLifecycleHooks({
   onIssue: (issue) => console.error(`[runtime-hook] ${issue.event}/${issue.hook}: ${issue.message}`),
 });
 const operationSteeringRuntime = createOperationSteeringRuntime({
-  onEvent: (event) => broadcastDashboardEvent(event),
+  onEvent: (event) => {
+    const prompt = recordPromptSteeringEvent(event);
+    broadcastDashboardEvent(prompt ? { ...event, entityType: "prompt", entityId: prompt.id, prompt } : event);
+  },
 });
 
 function broadcastDashboardEvent(ev) {
   return dashboardEventStream.publish(ev);
 }
+
+const dashboardMessageOffsets = new Map();
 
 // Mirrors loopEventToDashboard() from chunk-VM6A6QLY.js
 function loopEventToDashboard(ev, assistantId) {
@@ -6630,12 +6730,24 @@ function loopEventToDashboard(ev, assistantId) {
   const id = `${assistantId}-${ev.role}-${Date.now()}`;
   switch (ev.role) {
     case "assistant_delta":
-      return {
-        kind: "assistant_delta",
-        id: assistantId,
-        contentDelta: ev.content || undefined,
-        reasoningDelta: ev.reasoningDelta,
-      };
+      {
+        const current = dashboardMessageOffsets.get(assistantId) ?? { content: 0, reasoning: 0 };
+        const contentDelta = String(ev.content ?? "");
+        const reasoningDelta = String(ev.reasoningDelta ?? "");
+        const result = {
+          kind: "assistant_delta",
+          id: assistantId,
+          contentDelta: ev.content || undefined,
+          reasoningDelta: ev.reasoningDelta,
+          offset: Number.isSafeInteger(Number(ev.offset)) ? Number(ev.offset) : current.content,
+          reasoningOffset: Number.isSafeInteger(Number(ev.reasoningOffset)) ? Number(ev.reasoningOffset) : current.reasoning,
+        };
+        dashboardMessageOffsets.set(assistantId, {
+          content: result.offset + contentDelta.length,
+          reasoning: result.reasoningOffset + reasoningDelta.length,
+        });
+        return result;
+      }
     case "warning":
       return { kind: "warning", id, text: ev.content };
     case "error":
@@ -6852,6 +6964,22 @@ const sessionRuntime = createSessionRuntime({
   getMode: () => config.mode || "general",
   modeSummary,
   getSessionMemories: () => sessionMemories,
+  getTodos: () => activeTodos,
+  getGoals: () => {
+    if (activeGoals.length > 0) return activeGoals;
+    const plan = getActivePlanSnapshot();
+    if (!plan) return [];
+    const status = plan.status === "done" || plan.completionRatio >= 1 ? "completed" : "active";
+    activeGoals = [normalizeGoal({
+      id: plan.planId || `goal:${activeConversationId}`,
+      title: plan.summary || plan.steps?.[0]?.title || "当前计划",
+      status,
+      sessionId: activeConversationId,
+      updatedAt: plan.updatedAt || null,
+    })];
+    return activeGoals;
+  },
+  getPrompts: () => activePromptEntities,
   getIndexRetrievalMode: () => indexRetrievalMode,
   applyLoadedMetadata: (meta) => {
     activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
@@ -6861,6 +6989,9 @@ const sessionRuntime = createSessionRuntime({
       ? meta.contextRecoveryHandle.trim()
       : null;
     restoreSessionMemories(meta.sessionMemories);
+    restoreActiveTodos(meta.todos);
+    restoreActiveGoals(meta.goals);
+    restoreActivePromptEntities(meta.prompts);
     preparedDocumentRegistry.restore(meta.preparedDocuments, { replace: true, notifyChange: false });
     const modeRestore = applyModeForSessionMeta(meta);
     if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
@@ -6919,6 +7050,9 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   preparedDocumentRegistry.clear({ notifyChange: false });
   if (loop) loop.clearLog();
   clearSessionMemories();
+  activeTodos = [];
+  activeGoals = [];
+  activePromptEntities = [];
   clearTutorMode();
   clearLearningMode();
   resetPlanRefs();
@@ -6941,6 +7075,8 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   }
   messages.length = 0;
   nextMsgId = 1;
+  broadcastDashboardEvent({ kind: "todo-update", todos: [] });
+  broadcastDashboardEvent({ kind: "prompt-update", prompts: [] });
   if (withWelcome) {
     const welcomeId = `assistant-${Date.now()}`;
     const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
@@ -6970,6 +7106,48 @@ function sessionJsonlPath(name) {
 
 function sessionMetaPath(name) {
   return sessionArtifactPath(name, ".meta.json");
+}
+
+async function getSessionTranscript(name, options = {}) {
+  const sessionName = String(name || "");
+  const path = sessionJsonlPath(sessionName);
+  if (!existsSync(path)) return null;
+  const raw = await readFile(path, "utf8");
+  const parsed = parseActiveSessionJsonl(raw);
+  const meta = readSessionMeta(sessionName);
+  const activePlan = sessionName === currentSessionName() ? getActivePlanSnapshot() : null;
+  const goals = Array.isArray(meta.goals) && meta.goals.length > 0
+    ? meta.goals
+    : activePlan
+      ? [{
+        id: activePlan.planId || `goal:${activeConversationId}`,
+        title: activePlan.summary || activePlan.steps?.[0]?.title || "当前计划",
+        status: activePlan.status === "done" || activePlan.completionRatio >= 1 ? "completed" : "active",
+        sessionId: activeConversationId,
+        updatedAt: activePlan.updatedAt || null,
+      }]
+      : [];
+  const snapshot = projectExecutionTranscript(parsed.entries, {
+    sessionId: sessionName,
+    goals,
+    todos: meta.todos,
+    prompts: meta.prompts,
+  });
+  const page = paginateExecutionTranscript(snapshot, {
+    beforeTurn: options.beforeTurn ?? null,
+    afterTurn: options.afterTurn ?? null,
+    limit: options.limit ?? 20,
+  });
+  return {
+    ...page,
+    name: sessionName,
+    meta,
+    invalidRecords: parsed.errors.length,
+    invalidLines: parsed.errors.slice(0, 20).map((entry) => entry.line),
+    integrityWarning: parsed.errors.length > 0
+      ? `会话中有 ${parsed.errors.length} 条记录无法解析，Transcript 可能不完整。`
+      : null,
+  };
 }
 
 function readSessionMeta(name) {
@@ -7011,6 +7189,38 @@ function writeSessionMeta(name, patch = {}) {
   const written = writeVersionedJsonFile(path, next, { version: 1 });
   trackPersistentStorageIssue(`session-meta:${name}`, path, null);
   return written;
+}
+
+const sessionRecoveryRuntime = createSessionRecoveryRuntime({
+  sessionPath: sessionJsonlPath,
+  sessionMetaPath,
+  isValidSessionName,
+  readMeta: readSessionMeta,
+  writeMeta: async (name, patch) => writeSessionMeta(name, patch),
+  atomicWriteFile,
+  currentWorkspace: () => ({ path: workspaceDir }),
+  rebindAttachments: async (attachmentIds, context) => {
+    let attached = 0;
+    const warnings = [];
+    for (const attachmentId of attachmentIds) {
+      const result = await attachmentRuntime.addSessionReference(attachmentId, context);
+      if (result?.ok) attached++;
+      else if (result?.reason) warnings.push(result.reason);
+    }
+    return { attached, warnings };
+  },
+});
+
+async function forkSession(sourceName, targetName, options = {}) {
+  if (operationRuntime.getActive() || busy || sessionMutationInFlight) {
+    return { ok: false, code: "OPERATION_ACTIVE", reason: "cannot fork a session while an operation is running" };
+  }
+  sessionMutationInFlight = true;
+  try {
+    return await sessionRecoveryRuntime.fork(sourceName, targetName, options);
+  } finally {
+    sessionMutationInFlight = false;
+  }
 }
 
 function applyModeForSessionMeta(meta) {
@@ -8232,6 +8442,8 @@ const ctx = {
 
   // ── Chat bridge ────────────────────────────────────────────
   getMessages: () => messages,
+  getSessionTranscript,
+  forkSession,
   getActiveOperation: () => publicActiveOperation(),
   // The dashboard exposes only the ordinary process/schedule job registry.
   listBackgroundJobs: async () => ({ jobs: jobs.listMetadata(), pendingDeliveries: [] }),
@@ -8349,6 +8561,9 @@ const ctx = {
     if (busy) {
       return { accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy with a turn" };
     }
+    if (sessionMutationInFlight) {
+      return { accepted: false, busy: true, code: "SESSION_MUTATION_ACTIVE", reason: "session recovery is in progress" };
+    }
 
     const trimmed = (text || "").trim();
     const incomingAttachmentIds = Array.isArray(opts.attachmentIds)
@@ -8449,6 +8664,7 @@ ${modeList}
       userPrompt: activeMessageSendContext.userPrompt,
       scheduledAuthorization: activeMessageSendContext.scheduledAuthorization,
       sendAuthorization: activeMessageSendContext.sendAuthorization,
+      conversationScope: activeMessageSendContext.conversationScope,
     });
     const stopFromExternalSignal = () => {
       if (operation.controller.signal.aborted) return;
@@ -8474,6 +8690,7 @@ ${modeList}
     let rollbackAttachmentIds = [];
     let resumeSessionFile = null;
     let resumeSessionRaw = null;
+    let resumeSessionSnapshot = null;
     try {
       // ── Sync workspace if changed ─────────────────────────────
       await ctx.syncWorkspace({ applyPending: text.trim().toLowerCase() === "/new" || Boolean(sessionName) });
@@ -8485,9 +8702,26 @@ ${modeList}
         if (!isValidSessionName(sessionName)) {
           return { accepted: false, reason: `Invalid session name: ${sessionName}. Use only letters, numbers, Chinese characters, underscore, dot, or hyphen.` };
         }
-        resumeSessionFile = sessionJsonlPath(sessionName);
         try {
-          resumeSessionRaw = await readFile(resumeSessionFile, "utf8");
+          resumeSessionSnapshot = await sessionRecoveryRuntime.resume(sessionName, {
+            allowWorkspaceMismatch: opts.allowWorkspaceMismatch === true,
+          });
+          if (!resumeSessionSnapshot.ok) {
+            return {
+              accepted: false,
+              code: resumeSessionSnapshot.code || "SESSION_RESUME_BLOCKED",
+              reason: "会话工作区与当前工作区不一致。请切换到会话所属工作区，或明确允许跨工作区恢复后重试。",
+              recovery: {
+                expectedWorkspace: resumeSessionSnapshot.workspaceCheck?.expected?.path ?? null,
+                currentWorkspace: resumeSessionSnapshot.workspaceCheck?.actual?.path ?? null,
+              },
+            };
+          }
+          resumeSessionFile = resumeSessionSnapshot.path;
+          resumeSessionRaw = resumeSessionSnapshot.raw;
+          if (resumeSessionSnapshot.warnings?.length > 0) {
+            console.error(`[launcher] session resume warnings for ${sessionName}: ${resumeSessionSnapshot.warnings.join("; ")}`);
+          }
         } catch (err) {
           return { accepted: false, reason: `Failed to load session: ${err.message}` };
         }
@@ -8505,7 +8739,7 @@ ${modeList}
         preparedDocumentRegistry.clear({ notifyChange: false });
         try {
           const sessionFile = resumeSessionFile || sessionJsonlPath(sessionName);
-          const sessionMeta = readSessionMeta(sessionName);
+          const sessionMeta = resumeSessionSnapshot?.meta ?? readSessionMeta(sessionName);
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
@@ -8515,11 +8749,14 @@ ${modeList}
             ? sessionMeta.contextRecoveryHandle.trim()
             : null;
           restoreSessionMemories(sessionMeta.sessionMemories);
+          restoreActiveTodos(sessionMeta.todos);
           preparedDocumentRegistry.restore(sessionMeta.preparedDocuments, { replace: true, notifyChange: false });
           const modeRestore = applyModeForSessionMeta(sessionMeta);
           if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
           let raw = resumeSessionRaw ?? await readFile(sessionFile, "utf8");
-          const parsed = parseActiveSessionJsonl(raw);
+          const parsed = resumeSessionSnapshot?.entries
+            ? { entries: resumeSessionSnapshot.entries, errors: resumeSessionSnapshot.errors ?? [] }
+            : parseActiveSessionJsonl(raw);
           const legacyMigration = await attachmentRuntime.migrateLegacySessionEntries(parsed.entries, {
             sessionId: activeConversationId,
             operationId: operation.id,
@@ -9179,6 +9416,7 @@ ${modeList}
           });
         }
         let taskWarnings = [];
+        let contextWarningEmitted = false;
         let taskState = null;
         let artifactFiles = [];
         let loopInput = text;
@@ -9255,10 +9493,27 @@ ${modeList}
           while (true) {
             let budgetForcedSummary = false;
             let sawToolActivity = false;
+            const modelContextProjection = projectModelContext({
+              history: loop?.log?.toMessages?.() ?? [],
+              operation: operation.context,
+              providerCapabilities: resolveProviderModelCapabilities(getActiveProvider(config), loop?.model),
+              contextBudget: loop?.contextStatus?.() ?? {},
+            });
+            if (modelContextProjection.error && !contextWarningEmitted && opts.isolated !== true) {
+              contextWarningEmitted = true;
+              broadcastDashboardEvent({
+                kind: "warning",
+                code: modelContextProjection.error.code,
+                title: modelContextProjection.error.title,
+                text: modelContextProjection.error.action,
+                droppedItems: modelContextProjection.droppedItems.length,
+              });
+            }
             const requestContext = {
               operationId: operation.id,
               requestId: requestId || operation.id,
               receipt: turnReceipt,
+              contextProjection: modelContextProjection,
               publish: opts.isolated === true ? null : (event) => broadcastDashboardEvent(event),
             };
             for await (const ev of modelRequestObserver.iterate(requestContext, () => loop.step(loopInput))) {
@@ -9384,6 +9639,15 @@ ${modeList}
                 turnError ??= new Error(modelError);
               }
               if (ev.role === "assistant_final") {
+                modelRequestObserver.onResult(normalizeProviderResult({
+                  requestId: requestId || operation.id,
+                  attempt: ev.attempt,
+                  statusCode: ev.statusCode,
+                  finishReason: ev.finishReason ?? ev.finish_reason,
+                  usage: ev.usage,
+                  traceId: ev.traceId,
+                  cancelled: operation.controller.signal.aborted,
+                }));
                 const repairNotice = formatToolRepairNotice(ev.repair);
                 if (repairNotice && opts.isolated !== true) {
                   broadcastDashboardEvent({
@@ -9406,7 +9670,20 @@ ${modeList}
 
             let contextInputStatus = null;
             try { contextInputStatus = contextInputTransactions.noteAssistantFinal(assistantText); } catch {}
-            turnReceipt.recordContext(contextInputStatus);
+            const projectedContextStatus = contextInputStatus
+              ? buildContextBudgetStatus(contextInputStatus, {
+                assistantText,
+                compressed: budgetForcedSummary,
+              })
+              : {};
+            turnReceipt.recordContext({
+              ...projectedContextStatus,
+              estimatedTokens: Math.max(projectedContextStatus.estimatedTokens ?? 0, modelContextProjection.estimatedTokens),
+              resourceRefs: [...(projectedContextStatus.resourceRefs ?? []), ...modelContextProjection.resources.map((item) => item.resourceId)],
+              contextOverflow: Boolean(modelContextProjection.error),
+              droppedItems: modelContextProjection.droppedItems,
+              warnings: modelContextProjection.warnings,
+            });
             const intervention = decideContextInputIntervention(contextInputStatus);
             let showContextIntervention = true;
             if (intervention) {
@@ -9571,6 +9848,7 @@ ${modeList}
             });
           }
           artifactFiles = Array.from(turnArtifactFiles.values());
+          dashboardMessageOffsets.delete(assistantId);
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
           if (assistantText && opts.isolated !== true) {

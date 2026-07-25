@@ -17,6 +17,9 @@ async function createHarness(options = {}) {
   const messages = [];
   let nextMessageId = 1;
   let conversationId = "conversation-1";
+  let todos = [];
+  let goals = [];
+  let prompts = [];
   let loopMessages = [];
   const issues = [];
   const loop = {
@@ -45,6 +48,9 @@ async function createHarness(options = {}) {
     getMode: () => "general",
     modeSummary: () => ({ label: "通用", description: "test" }),
     getSessionMemories: () => [],
+    getTodos: () => todos,
+    getGoals: () => goals,
+    getPrompts: () => prompts,
     getIndexRetrievalMode: () => "off",
     hasUserMessage: () => messages.some((message) => message.role === "user"),
     materializeAttachments: options.materializeAttachments,
@@ -61,6 +67,9 @@ async function createHarness(options = {}) {
     runtime,
     setLoopMessages(value) { loopMessages = value; },
     setConversationId(value) { conversationId = value; },
+    setTodos(value) { todos = value; },
+    setGoals(value) { goals = value; },
+    setPrompts(value) { prompts = value; },
   };
 }
 
@@ -79,6 +88,85 @@ test("session runtime appends and synchronizes model history", async () => {
     ]);
     await harness.runtime.syncFromLoop();
     assert.equal((await readFile(harness.activeSessionFile, "utf8")).includes('"content":"world"'), true);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session runtime serializes append and metadata writes", async () => {
+  const harness = await createHarness();
+  try {
+    for (let index = 0; index < 40; index++) {
+      harness.runtime.appendMessage({ role: index === 0 ? "user" : "assistant", text: `message-${index}` });
+      if (index % 4 === 0) void harness.runtime.writeMeta({ messageCount: index + 1 });
+    }
+    await harness.runtime.writeMeta({ messageCount: 40 });
+    await harness.runtime.close();
+    const lines = (await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).filter(Boolean);
+    assert.equal(lines.length, 40);
+    assert.equal(JSON.parse(lines[39]).content, "message-39");
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session runtime persists and restores todo state through metadata", async () => {
+  const harness = await createHarness();
+  let restoredTodos = null;
+  try {
+    harness.setTodos([{ id: "todo-1", content: "verify output", activeForm: "Verifying output", status: "in_progress" }]);
+    harness.runtime.appendMessage({ role: "user", text: "track this" });
+    await harness.runtime.close();
+    await harness.runtime.writeMeta({});
+    const rawMeta = JSON.parse(await readFile(harness.activeSessionMetaFile, "utf8"));
+    assert.deepEqual(rawMeta.todos, [{ id: "todo-1", content: "verify output", activeForm: "Verifying output", status: "in_progress" }]);
+
+    const resumed = await createHarness();
+    restoredTodos = resumed;
+    await writeFile(resumed.activeSessionFile, `${JSON.stringify({ role: "user", content: "track this" })}\n`, "utf8");
+    const metadata = JSON.parse(await readFile(harness.activeSessionMetaFile, "utf8"));
+    const applied = [];
+    resumed.runtime = createSessionRuntime({
+      activeSessionFile: resumed.activeSessionFile,
+      activeSessionMetaFile: resumed.activeSessionMetaFile,
+      sessionsDir: join(resumed.root, "sessions"),
+      metaStore: createActiveSessionMetaStore({ path: resumed.activeSessionMetaFile }),
+      atomicWriteFile,
+      getMessages: () => resumed.messages,
+      clearMessages: () => { resumed.messages.length = 0; },
+      pushMessage: (message) => resumed.messages.push(message),
+      getNextMessageId: () => 1,
+      setNextMessageId: () => {},
+      getLoop: () => resumed.loop,
+      getConversationId: () => "conversation-1",
+      getWorkspace: () => resumed.root,
+      getMode: () => "general",
+      modeSummary: () => ({ label: "通用", description: "test" }),
+      getSessionMemories: () => [],
+      getIndexRetrievalMode: () => "off",
+      applyLoadedMetadata: (meta) => applied.push(meta.todos),
+      hasUserMessage: () => true,
+    });
+    await writeFile(resumed.activeSessionMetaFile, JSON.stringify(metadata), "utf8");
+    assert.equal(await resumed.runtime.load(), true);
+    assert.deepEqual(applied[0], rawMeta.todos);
+  } finally {
+    if (restoredTodos) await rm(restoredTodos.root, { recursive: true, force: true });
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session runtime persists redacted goal and prompt entities", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setGoals([{ id: "goal-1", title: "交付", status: "active" }]);
+    harness.setPrompts([{ id: "prompt-1", operationId: "op-1", sessionId: "conversation-1", instruction: "secret", instructionLength: 6, status: "queued" }]);
+    harness.runtime.appendMessage({ role: "user", text: "persist entities" });
+    await harness.runtime.writeMeta({});
+    const rawMeta = JSON.parse(await readFile(harness.activeSessionMetaFile, "utf8"));
+    assert.deepEqual(rawMeta.goals, [{ id: "goal-1", title: "交付", status: "active" }]);
+    assert.equal(rawMeta.prompts[0].instruction, undefined);
+    assert.equal(rawMeta.prompts[0].instructionLength, 6);
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }

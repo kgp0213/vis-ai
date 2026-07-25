@@ -26,6 +26,9 @@ export function createSessionRuntime({
   getMode = () => "general",
   modeSummary = (mode) => ({ label: mode, description: "" }),
   getSessionMemories = () => [],
+  getTodos = () => [],
+  getGoals = () => [],
+  getPrompts = () => [],
   getIndexRetrievalMode = () => "off",
   applyLoadedMetadata = () => {},
   onPersistentIssue = () => {},
@@ -46,6 +49,13 @@ export function createSessionRuntime({
   if (typeof atomicWriteFile !== "function") throw new TypeError("session runtime atomic writer is required");
 
   let appendStream = null;
+  let persistenceTail = Promise.resolve();
+
+  function enqueuePersistence(task) {
+    const run = persistenceTail.then(task, task);
+    persistenceTail = run.catch(() => {});
+    return run;
+  }
 
   function issue(kind, message = null, level = "error") {
     onPersistentIssue(kind, message, level);
@@ -86,7 +96,15 @@ export function createSessionRuntime({
         ...(message.interventionChoice ? { interventionChoice: message.interventionChoice } : {}),
         ...(Array.isArray(message.warnings) && message.warnings.length > 0 ? { warnings: message.warnings } : {}),
       };
-      stream().write(`${JSON.stringify(record)}\n`);
+      const line = `${JSON.stringify(record)}\n`;
+      void enqueuePersistence(async () => {
+        try {
+          stream().write(line);
+        } catch (error) {
+          issue("active-session", `active session append failed: ${error.message}`);
+          onLog(`[session-runtime] active session append failed: ${error.message}`);
+        }
+      });
     } catch (error) {
       issue("active-session", `active session append failed: ${error.message}`);
       onLog(`[session-runtime] active session append failed: ${error.message}`);
@@ -94,18 +112,23 @@ export function createSessionRuntime({
   }
 
   async function writeEntries(entries) {
-    await closeStream();
-    try {
-      await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));
-      issue("active-session", null, "clear");
-    } catch (error) {
-      issue("active-session", `active session was not saved: ${error.message}`);
-      throw error;
-    }
+    return enqueuePersistence(async () => {
+      await closeStream();
+      try {
+        await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));
+        issue("active-session", null, "clear");
+      } catch (error) {
+        issue("active-session", `active session was not saved: ${error.message}`);
+        throw error;
+      }
+    });
   }
 
-  async function writeMeta(patch = {}) {
+  async function writeMetaNow(patch = {}) {
     try {
+      // Metadata must observe the latest append, including todo updates that
+      // arrive while the active JSONL stream is still open.
+      await closeStream();
       const sessionStat = await stat(activeSessionFile);
       const mode = getMode() || "general";
       const modeInfo = modeSummary(mode);
@@ -124,6 +147,17 @@ export function createSessionRuntime({
         savedAt: patch.savedAt || current.savedAt || currentTime,
         updatedAt: currentTime,
         sessionMemories: getSessionMemories().map((memory) => ({ ...memory })),
+        todos: Array.isArray(getTodos()) ? getTodos().map((todo) => ({ ...todo })) : [],
+        goals: Array.isArray(getGoals()) ? getGoals().map((goal) => ({ ...goal })) : [],
+        prompts: Array.isArray(getPrompts()) ? getPrompts().map((prompt) => ({
+          id: prompt.id,
+          operationId: prompt.operationId ?? null,
+          sessionId: prompt.sessionId ?? null,
+          instructionLength: Number(prompt.instructionLength) || 0,
+          status: prompt.status,
+          createdAt: prompt.createdAt ?? null,
+          resolution: prompt.resolution ?? null,
+        })) : [],
         indexRetrievalMode: getIndexRetrievalMode(),
       }));
       return true;
@@ -131,6 +165,10 @@ export function createSessionRuntime({
       onLog(`[session-runtime] active session metadata was not saved: ${error.message}`);
       return false;
     }
+  }
+
+  async function writeMeta(patch = {}) {
+    return enqueuePersistence(() => writeMetaNow(patch));
   }
 
   async function syncFromLoop(pendingUser = null) {
@@ -148,64 +186,70 @@ export function createSessionRuntime({
   }
 
   async function finalize() {
-    await closeStream();
-    try {
-      await access(activeSessionFile);
-    } catch {
-      issue("active-session", null, "clear");
-      return null;
-    }
-    try {
-      const sessionStat = await stat(activeSessionFile);
-      if (sessionStat.size === 0 || !hasUserMessage()) {
-        await rm(activeSessionFile, { force: true });
-        await rm(activeSessionMetaFile, { force: true });
+    return enqueuePersistence(async () => {
+      await closeStream();
+      try {
+        await access(activeSessionFile);
+      } catch {
         issue("active-session", null, "clear");
         return null;
       }
-      const name = now().toISOString().replace(/[:.]/g, "-");
-      const destination = resolve(sessionsDir, `${name}.jsonl`);
-      const destinationMeta = resolve(sessionsDir, `${name}.meta.json`);
-      await rename(activeSessionFile, destination);
       try {
-        await rename(activeSessionMetaFile, destinationMeta);
-      } catch {
-        try {
-          const raw = await readFile(destination, "utf8");
-          const messageCount = raw.split(/\r?\n/).filter((line) => line.trim()).length;
-          await writeSessionMeta(name, { messageCount, conversationId: getConversationId() });
-        } finally {
+        const sessionStat = await stat(activeSessionFile);
+        if (sessionStat.size === 0 || !hasUserMessage()) {
+          await rm(activeSessionFile, { force: true });
           await rm(activeSessionMetaFile, { force: true });
+          issue("active-session", null, "clear");
+          return null;
         }
+        const name = now().toISOString().replace(/[:.]/g, "-");
+        const destination = resolve(sessionsDir, `${name}.jsonl`);
+        const destinationMeta = resolve(sessionsDir, `${name}.meta.json`);
+        await rename(activeSessionFile, destination);
+        try {
+          await rename(activeSessionMetaFile, destinationMeta);
+        } catch {
+          try {
+            const raw = await readFile(destination, "utf8");
+            const messageCount = raw.split(/\r?\n/).filter((line) => line.trim()).length;
+            await writeSessionMeta(name, { messageCount, conversationId: getConversationId() });
+          } finally {
+            await rm(activeSessionMetaFile, { force: true });
+          }
+        }
+        onLog(`[session-runtime] active session finalized: ${destination}`);
+        issue("active-session", null, "clear");
+        onEvent({ kind: "sessions-changed", action: "finalize", name });
+        return name;
+      } catch (error) {
+        issue("active-session", `active session could not be archived: ${error.message}`);
+        onLog(`[session-runtime] failed to finalize active session: ${error.message}`);
+        return null;
       }
-      onLog(`[session-runtime] active session finalized: ${destination}`);
-      issue("active-session", null, "clear");
-      onEvent({ kind: "sessions-changed", action: "finalize", name });
-      return name;
-    } catch (error) {
-      issue("active-session", `active session could not be archived: ${error.message}`);
-      onLog(`[session-runtime] failed to finalize active session: ${error.message}`);
-      return null;
-    }
+    });
   }
 
   async function clear() {
-    await closeStream();
-    try {
-      await rm(activeSessionFile, { force: true });
-      await rm(activeSessionMetaFile, { force: true });
-      issue("active-session", null, "clear");
-      issue("active-session-meta", null, "clear");
-    } catch (error) {
-      issue("active-session", `active session could not be cleared: ${error.message}`);
-      onLog(`[session-runtime] failed to clear active session: ${error.message}`);
-    }
+    return enqueuePersistence(async () => {
+      await closeStream();
+      try {
+        await rm(activeSessionFile, { force: true });
+        await rm(activeSessionMetaFile, { force: true });
+        issue("active-session", null, "clear");
+        issue("active-session-meta", null, "clear");
+      } catch (error) {
+        issue("active-session", `active session could not be cleared: ${error.message}`);
+        onLog(`[session-runtime] failed to clear active session: ${error.message}`);
+      }
+    });
   }
 
   async function seed(raw, patch = {}) {
-    await closeStream();
-    await writeFile(activeSessionFile, raw, "utf8");
-    await writeMeta(patch);
+    return enqueuePersistence(async () => {
+      await closeStream();
+      await writeFile(activeSessionFile, raw, "utf8");
+      await writeMetaNow(patch);
+    });
   }
 
   async function load() {
@@ -289,12 +333,14 @@ export function createSessionRuntime({
   return {
     appendMessage,
     clear,
-    close: closeStream,
+    close: () => enqueuePersistence(closeStream),
     finalize,
     load,
     persistConversationIdentity: async () => {
-      await closeStream();
-      return writeMeta({ conversationId: getConversationId() });
+      return enqueuePersistence(async () => {
+        await closeStream();
+        return writeMetaNow({ conversationId: getConversationId() });
+      });
     },
     seed,
     syncFromLoop,

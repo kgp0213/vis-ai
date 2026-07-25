@@ -21,6 +21,7 @@ import { fmtBytes, fmtCost, fmtUsd, primaryBalance } from "../lib/format.js";
 import { html as html4 } from "../lib/html.js";
 import { confirmExternalArtifactOpen, showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
+import { applyDashboardEvent as reduceDashboardEvent, createDashboardEventBatcher, createDashboardEventGuard, createDashboardReducerState } from "../lib/event-reducer.js";
 import { t as t4, useLang } from "../i18n/index.js";
 const N2: any = preactMemo;
 
@@ -1071,6 +1072,11 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [error, setError] = d2(null);
   const [bootError, setBootError] = d2(null);
   const [eventStreamConnected, setEventStreamConnected] = d2(true);
+  const eventGuardRef = A2(null);
+  if (eventGuardRef.current === null) eventGuardRef.current = createDashboardEventGuard();
+  const executionStateRef = A2(null);
+  if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const eventBatcherRef = A2(null);
   const [statusLine, setStatusLine] = d2(null);
   const [modal, setModal] = d2(null);
   const [modalResolving, setModalResolving] = d2(false);
@@ -1715,6 +1721,11 @@ const [providerCaps, setProviderCaps] = d2(null);
     let disposed = false;
     const applyDashboardEvent = (dash) => {
       if (dash.kind === "ping") return;
+      const reduced = reduceDashboardEvent(executionStateRef.current, dash);
+      executionStateRef.current = reduced.state;
+      if (dash.kind === "todo-update") {
+        setTodos(Object.values(reduced.state.todos));
+      }
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
         if (!dash.busy) setSemanticRetrievalStatus((current) => current === "running" ? "idle" : current);
@@ -1829,6 +1840,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "messages-reset") {
+        executionStateRef.current = createDashboardReducerState();
         setActiveTools([]);
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("idle");
@@ -1873,7 +1885,6 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "todo-update") {
-        setTodos(dash.todos ?? []);
         return;
       }
       if (dash.kind === "plan-continuation-needed") {
@@ -1916,7 +1927,15 @@ const [providerCaps, setProviderCaps] = d2(null);
         }
       }
     };
+    const eventBatcher = createDashboardEventBatcher({
+      onFlush: (events) => {
+        if (disposed) return;
+        for (const event of events) applyDashboardEvent(event);
+      },
+    });
+    eventBatcherRef.current = eventBatcher;
     const onDash = (dash) => {
+      if (!eventGuardRef.current?.accept(dash)) return;
       if (dash.kind === "resync-required") {
         void resyncDashboardEvents();
         return;
@@ -1925,7 +1944,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         bufferedDashboardEventsRef.current.push(dash);
         return;
       }
-      applyDashboardEvent(dash);
+      eventBatcher.enqueue(dash);
     };
     const unsubscribe = subscribeSse("*", onDash);
     const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
@@ -1942,6 +1961,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       disposed = true;
       unsubscribe();
       unsubscribeStatus();
+      eventBatcher.dispose();
+      eventBatcherRef.current = null;
       cancelStreamingRaf();
     };
   }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend]);

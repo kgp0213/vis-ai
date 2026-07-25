@@ -7830,6 +7830,7 @@ var CacheFirstLoop = class {
   context;
   contextInputGuard;
   beforeModelRequest;
+  parallelBatchPlanner;
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
   get inflight() {
     return this._inflight;
@@ -7869,6 +7870,7 @@ var CacheFirstLoop = class {
     this.confirmationGate = opts.confirmationGate ?? pauseGate;
     this.contextInputGuard = opts.contextInputGuard ?? null;
     this.beforeModelRequest = typeof opts.beforeModelRequest === "function" ? opts.beforeModelRequest : null;
+    this.parallelBatchPlanner = typeof opts.parallelBatchPlanner === "function" ? opts.parallelBatchPlanner : null;
     this._rebuildSystem = opts.rebuildSystem ?? null;
     this._streamPreference = opts.stream ?? true;
     this.stream = this._streamPreference;
@@ -9067,7 +9069,23 @@ ${reason}`
       let callIdx = 0;
       while (callIdx < repairedCalls.length) {
         const chunk = [];
-        if (!dispatchSerial) {
+        if (!dispatchSerial && this.parallelBatchPlanner) {
+          try {
+            const planned = this.parallelBatchPlanner(repairedCalls.slice(callIdx));
+            const firstBatch = Array.isArray(planned?.batches) ? planned.batches[0] : null;
+            if (Array.isArray(firstBatch) && firstBatch.length > 0) {
+              chunk.push(...firstBatch);
+              callIdx += firstBatch.length;
+            }
+          } catch (error) {
+            yield {
+              turn: this._turn,
+              role: "warning",
+              content: `Parallel tool planning failed; continuing serially: ${error?.message || error}`
+            };
+          }
+        }
+        if (!dispatchSerial && chunk.length === 0) {
           while (callIdx < repairedCalls.length && chunk.length < parallelMax && this.tools.isParallelSafe(repairedCalls[callIdx]?.function?.name ?? "")) {
             chunk.push(repairedCalls[callIdx++]);
           }

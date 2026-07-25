@@ -58,6 +58,62 @@ test("attachment runtime deduplicates bytes while retaining session references",
   await assert.rejects(readFile(blobPath));
 });
 
+test("attachment session references can be rebound for a fork without copying the blob", async (t) => {
+  const { root, runtime } = await fixture(t);
+  const stored = (await runtime.ingestDataUrls([DATA_URL], {
+    sessionId: "source-conversation",
+    operationId: "source-operation",
+    workspace: "C:\\workspace",
+  })).attachments[0];
+  const rebound = await runtime.addSessionReference(stored.id, {
+    sourceSessionId: "source-conversation",
+    targetSessionId: "fork-conversation",
+    workspace: "C:\\workspace",
+  });
+  assert.equal(rebound.ok, true);
+  assert.ok(await runtime.getContentDescriptor(stored.id, {
+    sessionId: "fork-conversation",
+    workspace: "C:\\workspace",
+  }));
+  assert.equal((await runtime.addSessionReference(stored.id, {
+    sourceSessionId: "other-source",
+    targetSessionId: "another-fork",
+    workspace: "C:\\workspace",
+  })).code, "ATTACHMENT_SOURCE_MISMATCH");
+  assert.equal(await runtime.releaseAttachments([stored.id], { sessionId: "source-conversation", workspace: "C:\\workspace" }), 1);
+  assert.ok(await runtime.getContentDescriptor(stored.id, {
+    sessionId: "fork-conversation",
+    workspace: "C:\\workspace",
+  }));
+  assert.equal(await runtime.releaseSession("source-conversation"), 0);
+  assert.equal(await runtime.readDataUrl(stored.id), DATA_URL);
+  assert.equal((await runtime.list()).length, 1);
+  assert.ok(root);
+});
+
+test("releaseSession persists ownership changes while a fork keeps the blob", async (t) => {
+  const { root, runtime } = await fixture(t);
+  const stored = (await runtime.ingestDataUrls([DATA_URL], {
+    sessionId: "source-conversation",
+    workspace: "C:\\workspace",
+  })).attachments[0];
+  await runtime.addSessionReference(stored.id, {
+    sourceSessionId: "source-conversation",
+    targetSessionId: "fork-conversation",
+    workspace: "C:\\workspace",
+  });
+  assert.equal(await runtime.releaseSession("source-conversation"), 0);
+  const restored = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
+  assert.equal(await restored.getContentDescriptor(stored.id, {
+    sessionId: "source-conversation",
+    workspace: "C:\\workspace",
+  }), null);
+  assert.ok(await restored.getContentDescriptor(stored.id, {
+    sessionId: "fork-conversation",
+    workspace: "C:\\workspace",
+  }));
+});
+
 test("attachment runtime reports a missing blob without crashing", async (t) => {
   const { root, runtime } = await fixture(t);
   const stored = await runtime.ingestDataUrls([DATA_URL], { sessionId: "session-1" });

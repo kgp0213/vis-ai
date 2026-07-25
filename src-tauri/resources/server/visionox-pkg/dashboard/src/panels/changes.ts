@@ -14,6 +14,7 @@ import { primaryBalance } from "../lib/format.js";
 import { useLineComments } from "../lib/line-comments.js";
 import { useReviewDiffs } from "../lib/review-diffs.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
+import { applyDashboardEvent as reduceDashboardEvent, createDashboardReducerState } from "../lib/event-reducer.js";
 import { t as t4, useLang } from "../i18n/index.js";
 
 var html6 = htm_module_default.bind(k);
@@ -1007,6 +1008,8 @@ function ChatPane(props) {
   const [model, setModel] = d2(null);
   const [todos, setTodos] = d2([]);
   const [todoExpanded, setTodoExpanded] = d2(false);
+  const executionStateRef = A2(null);
+  if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const streamBufRef = A2(null);
@@ -1093,6 +1096,9 @@ function ChatPane(props) {
   y2(() => {
     const onDash = (dash) => {
       if (dash.kind === "ping") return;
+      const reduced = reduceDashboardEvent(executionStateRef.current, dash);
+      executionStateRef.current = reduced.state;
+      if (dash.kind === "todo-update") setTodos(Object.values(reduced.state.todos));
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
         return;
@@ -1153,7 +1159,6 @@ function ChatPane(props) {
         return;
       }
       if (dash.kind === "todo-update") {
-        setTodos(dash.todos ?? []);
         return;
       }
     };

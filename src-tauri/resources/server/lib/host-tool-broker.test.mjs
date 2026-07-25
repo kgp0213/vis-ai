@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createHostToolBroker } from "./host-tool-broker.mjs";
+import { createOperationPolicy } from "./operation-policy.mjs";
 
 function memoryIntentStore() {
   const intents = new Map();
@@ -145,4 +146,22 @@ test("broker converts an interaction request into a durable user input result", 
   assert.equal(result.taskId, "task:2");
   assert.equal(result.reason, "output-conflict");
   assert.match(result.requestId, /^request:/);
+});
+
+test("broker reuses an operation-scoped approval without prompting twice", async () => {
+  const policy = createOperationPolicy();
+  let prompts = 0;
+  let executions = 0;
+  const broker = createHostToolBroker({
+    operationPolicy: policy,
+    authorize: async () => { prompts += 1; return true; },
+    operations: {
+      send_message: { effect: false, requiresApproval: true, execute: async () => { executions += 1; return { ok: true }; } },
+    },
+  });
+  const context = { operationId: "op-approval", sessionId: "s", workspace: "w" };
+  await broker.invoke("send_message", { to: "self", text: "hello" }, context);
+  await broker.invoke("send_message", { to: "self", text: "hello" }, context);
+  assert.equal(prompts, 1);
+  assert.equal(executions, 2);
 });

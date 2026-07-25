@@ -61,6 +61,10 @@ import {
   previewProviderImport
 } from "../../../lib/provider-configuration.mjs";
 import {
+  paginateExecutionTranscript,
+  projectExecutionTranscript
+} from "../../../lib/execution-transcript.mjs";
+import {
   DeepSeekClient
 } from "./chunk-2KDUS647.js";
 import {
@@ -3866,6 +3870,41 @@ function sessionModeInfo(meta = {}) {
   };
 }
 async function handleSessions(method, rest, _body, _ctx, query = new URLSearchParams()) {
+  if (method === "GET" && rest[1] === "transcript") {
+    const name2 = decodeURIComponent(rest[0] || "");
+    if (!name2) return { status: 400, body: { error: "session name required" } };
+    if (typeof _ctx.getSessionTranscript !== "function") return { status: 503, body: { error: "session transcript is not available" } };
+    const transcript = await _ctx.getSessionTranscript(name2, {
+      beforeTurn: query.get("beforeTurn"),
+      afterTurn: query.get("afterTurn"),
+      limit: query.get("limit")
+    });
+    if (!transcript) return { status: 404, body: { error: `no such session: ${name2}` } };
+    return { status: 200, body: transcript };
+  }
+  if (method === "POST" && rest[1] === "fork") {
+    const sourceName = decodeURIComponent(rest[0] || "");
+    if (!sourceName) return { status: 400, body: { error: "source session name required" } };
+    if (typeof _ctx.forkSession !== "function") return { status: 503, body: { error: "session fork is not available" } };
+    const body = parseBody(_body);
+    const targetName = String(body.targetName || body.newName || "").trim();
+    if (!targetName) return { status: 400, body: { error: "targetName is required" } };
+    const result = await _ctx.forkSession(sourceName, targetName, {
+      allowWorkspaceMismatch: body.allowWorkspaceMismatch === true,
+    });
+    if (!result?.ok) {
+      const status = result?.code === "SESSION_EXISTS" || result?.code === "SESSION_WORKSPACE_CHANGED" || result?.code === "OPERATION_ACTIVE" ? 409 : 400;
+      return { status, body: { error: result?.reason || "session fork failed", code: result?.code || "SESSION_FORK_FAILED", warnings: result?.warnings || [] } };
+    }
+    _ctx.notifySessionsChanged?.("fork", result.targetSessionId);
+    return { status: 201, body: {
+      forked: true,
+      sourceSessionId: result.sourceSessionId,
+      targetSessionId: result.targetSessionId,
+      conversationId: result.conversationId,
+      warnings: result.warnings || [],
+    } };
+  }
   if (method === "POST" && rest[0] === "batch-trash") {
     const body = parseBody(_body);
     const names = Array.isArray(body.names) ? body.names : [];

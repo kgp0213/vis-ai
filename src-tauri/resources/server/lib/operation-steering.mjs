@@ -86,7 +86,22 @@ export function createOperationSteeringRuntime({
     return result;
   }
 
+  function cancel(operationId, { reason = "operation_cancelled" } = {}) {
+    const list = entries(operationId);
+    const resolvedAt = now();
+    const changed = [];
+    for (const entry of list) {
+      if (entry.status !== "queued") continue;
+      entry.status = "cancelled";
+      entry.resolution = { resolvedAt, reason: String(reason || "operation_cancelled").slice(0, 160) };
+      changed.push(entry);
+      publish("operation-steering", entry);
+    }
+    return clone(changed);
+  }
+
   return {
+    cancel,
     close,
     consume,
     enqueue,

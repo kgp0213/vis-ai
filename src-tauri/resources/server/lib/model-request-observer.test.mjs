@@ -44,3 +44,17 @@ test("model request observer keeps concurrent async contexts isolated", async ()
   })));
   assert.deepEqual(seen.sort(), ["one", "two"]);
 });
+
+test("model request observer records provider result facts on the active receipt", async () => {
+  const recorded = [];
+  const published = [];
+  const observer = createModelRequestObserver();
+  await observer.run({
+    operationId: "op-result",
+    requestId: "req-result",
+    receipt: { recordProviderResult: (event) => recorded.push(event) },
+    publish: (event) => published.push(event),
+  }, async () => observer.onResult({ finishReason: "tool_call", attempt: 1 }));
+  assert.equal(recorded[0].requestId, "req-result");
+  assert.equal(published[0].kind, "model-result");
+});

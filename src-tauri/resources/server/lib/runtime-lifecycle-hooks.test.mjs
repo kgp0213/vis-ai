@@ -36,4 +36,15 @@ describe("runtime lifecycle hooks", () => {
     assert.equal(outcome.completed, 0);
     assert.equal(hooks.supportedEvents().includes("tool.cancelled"), true);
   });
+
+  test("supports cancellable policy boundary hooks without exposing decisions to the loop", async () => {
+    const hooks = createRuntimeLifecycleHooks();
+    let receivedSignal = null;
+    hooks.register("prepareTool", "prepare", async (_payload, context) => { receivedSignal = context.signal; return { args: { changed: true } }; });
+    const controller = new AbortController();
+    const result = await hooks.runBoundary("prepareTool", { toolCallId: "call-1" }, { signal: controller.signal });
+    assert.equal(result.results[0].status, "completed");
+    assert.equal(receivedSignal, controller.signal);
+    assert.deepEqual(result.results[0].value, { args: { changed: true } });
+  });
 });

@@ -59,6 +59,7 @@ function memoryEffectStore() {
 export function createHostToolBroker(options = {}) {
   const operations = options.operations && typeof options.operations === "object" ? options.operations : {};
   const effectStore = options.effectStore ?? memoryEffectStore();
+  const authorizationPolicy = options.operationPolicy ?? null;
   const inflightEffects = new Map();
 
   async function invokeInteraction(name, operation, args, context) {
@@ -138,7 +139,26 @@ export function createHostToolBroker(options = {}) {
       if (validation !== true) throw validationError(name, validation);
     }
     if (typeof options.authorize === "function") {
-      const authorization = await options.authorize(name, args, context, operation);
+      const approvalRequest = {
+        operationId: context?.operationId ?? context?.taskId ?? null,
+        sessionId: context?.sessionId ?? null,
+        workspace: context?.workspace ?? null,
+        toolName: name,
+        args,
+        recipient: context?.recipient ?? args?.to ?? args?.recipient ?? null,
+        attachments: context?.attachments ?? args?.attachments ?? [],
+        requiresApproval: operation.requiresApproval === true || operation.effect === true || operation.interaction === true,
+      };
+      const cached = authorizationPolicy?.evaluate?.(approvalRequest);
+      if (cached?.decision === "deny") {
+        const error = new Error(`operation is not authorized: ${name}`);
+        error.code = "TOOL_NOT_AUTHORIZED";
+        throw error;
+      }
+      let authorization = cached?.decision === "allow" ? true : await options.authorize(name, args, context, operation);
+      if (authorizationPolicy && cached?.decision === "ask") {
+        authorizationPolicy.record(approvalRequest, authorization === true ? "allow" : "deny", { source: "host-tool-broker" });
+      }
       if (authorization !== true) {
         const error = new Error(typeof authorization === "string" ? authorization : `operation is not authorized: ${name}`);
         error.code = "TOOL_NOT_AUTHORIZED";

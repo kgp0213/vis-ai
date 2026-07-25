@@ -11,6 +11,8 @@ test("dashboard event stream sequences replayable events and omits transient del
   const final = stream.publish({ kind: "assistant_final", id: "message-2", text: "done" });
 
   assert.equal(user.eventId, "epoch-a:1");
+  assert.equal(user.schemaVersion, 1);
+  assert.equal(user.entityId, "message-1");
   assert.equal(delta.eventId, undefined);
   assert.equal(final.eventId, "epoch-a:2");
   assert.deepEqual(stream.replay("epoch-a:1"), {

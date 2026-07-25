@@ -99,6 +99,17 @@ describe("Dashboard desktop UX", () => {
     assert.match(css, /\.reasoning-summary:focus-visible\s*\{/);
   });
 
+  test("guards Dashboard events with stable ids and terminal tool state", () => {
+    const source = readFileSync(new URL("lib/event-reducer.ts", dashboardSourceRootUrl), "utf8");
+    const app = readFileSync(dashboardAppUrl, "utf8");
+    assert.match(source, /createDashboardEventGuard/);
+    assert.match(source, /event\.eventId/);
+    assert.match(source, /terminalTools/);
+    assert.match(source, /messages-reset/);
+    assert.match(app, /createDashboardEventGuard\(\)/);
+    assert.match(app, /eventGuardRef\.current\?\.accept\(dash\)/);
+  });
+
   test("renders context-input intervention cards with an explicit status and recommendation", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");

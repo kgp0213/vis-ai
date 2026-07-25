@@ -43,5 +43,17 @@ export function createModelRequestObserver({ maxAttempts = 4 } = {}) {
     return true;
   }
 
-  return { run, iterate, onRetry, current: () => storage.getStore() ?? null };
+  function onResult(event = {}) {
+    const context = storage.getStore();
+    if (!context) return false;
+    const result = {
+      requestId: context.requestId ?? context.operationId ?? null,
+      ...event,
+    };
+    context.receipt?.recordProviderResult?.(result);
+    context.publish?.({ kind: "model-result", operationId: context.operationId ?? null, ...result });
+    return true;
+  }
+
+  return { run, iterate, onRetry, onResult, current: () => storage.getStore() ?? null };
 }

@@ -78,6 +78,7 @@ function defaultAllowedActions(raw, lifecycle, outcome) {
   if (["created", "queued", "leased", "running", "assembling"].includes(lifecycle)) actions.push("pause", "cancel");
   if (lifecycle === "paused") actions.push("resume", "retarget_output", "cancel");
   if (lifecycle === "blocked") actions.push("retry", "retarget_output", "cancel");
+  if (["lost", "timed_out", "killed"].includes(lifecycle)) actions.push("inspect", "retry", "cancel");
   if (lifecycle === "waiting_user") {
     if (raw?.userInputRequest) actions.push("resolve_user_input");
     actions.push("retarget_output", "cancel");
@@ -264,6 +265,23 @@ export function taskNeedsAttention(task) {
     || pendingOutboxEntries(task).length > 0;
 }
 
+/** Crash recovery projection: an in-flight task cannot be assumed complete. */
+export function markRunningTasksLost(tasks, { reason = "process_restarted", now = () => new Date().toISOString() } = {}) {
+  return (Array.isArray(tasks) ? tasks : []).map((task) => {
+    const lifecycle = String(task?.lifecycle ?? "").toLowerCase();
+    if (!ACTIVE_LIFECYCLES.has(lifecycle)) return { ...task };
+    return {
+      ...task,
+      lifecycle: "lost",
+      status: "lost",
+      stopReason: String(reason).slice(0, 160),
+      updatedAt: now(),
+      allowedActions: ["inspect", "retry", "cancel"],
+      outcome: null,
+    };
+  });
+}
+
 export function projectBackgroundTask(raw = {}, options = {}) {
   const legacy = options.legacy === true
     || raw?.legacy === true
@@ -305,6 +323,8 @@ export function projectBackgroundTask(raw = {}, options = {}) {
     taskId: id,
     taskType: text(raw.taskType, text(contract?.taskType, raw.kind === "document" ? "document" : "process")),
     kind: raw.kind ?? (legacy ? "document" : "task"),
+    operationId: raw.operationId ?? raw.operation?.id ?? contract?.operationId ?? null,
+    sessionId: raw.sessionId ?? raw.conversationId ?? contract?.sessionId ?? null,
     goal: text(raw.goal, text(contract?.goal, text(raw.command, text(raw.sourceName, "后台任务")))),
     workspace: raw.workspace ?? raw.workspaceRoot ?? contract?.workspace ?? null,
     lifecycle,
@@ -328,6 +348,8 @@ export function projectBackgroundTask(raw = {}, options = {}) {
     artifacts,
     artifactRefs: artifacts,
     outputPath: outputPath ?? null,
+    outputTail: text(raw.outputTail ?? raw.stderrTail ?? raw.stdoutTail) || null,
+    stopReason: text(raw.stopReason ?? raw.cancelReason ?? outcomeEnvelope?.stopReason) || null,
     artifactStatus: raw.artifactStatus ?? (outcome === "delivered" || outcome === "delivered_with_warnings" ? "verified" : "pending"),
     userAction: raw.userAction ?? raw.userInput ?? raw.userInputRequest ?? raw.pendingUserInput ?? outcomeEnvelope?.userAction ?? null,
     blockingReason: raw.blockingReason ?? outcomeEnvelope?.blockingReason ?? null,

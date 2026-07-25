@@ -29,6 +29,22 @@ const required = [
     markers: ["createProviderProvenanceStore", "providerDiagnostics", "normalizeProviderType", "manual-unknown", "changedOutsideManagedFlow"],
   },
   {
+    file: "src-tauri/resources/server/lib/execution-transcript.mjs",
+    markers: ["projectExecutionTranscript", "paginateExecutionTranscript", "Turn-granular pagination", "display-safe"],
+  },
+  {
+    file: "src-tauri/resources/server/lib/context-budget.mjs",
+    markers: ["estimateContextTokens", "buildContextBudgetStatus", "resourceRefs", "estimatedTokens"],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/server-XGDBRWMB.js",
+    markers: ["getSessionTranscript", "rest[1] === \"transcript\"", "rest[1] === \"fork\"", "forkSession", "projectExecutionTranscript", "paginateExecutionTranscript"],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dist/cli/chunk-2R4QCDOZ.js",
+    markers: ["parallelBatchPlanner", "Parallel tool planning failed; continuing serially"],
+  },
+  {
     file: "src-tauri/resources/server/lib/attachment-runtime.mjs",
     markers: ["metadataDir", "getContentDescriptor", "readRange", "sweepOrphans", "DEFAULT_ORPHAN_GRACE_MS"],
   },
@@ -609,6 +625,10 @@ const required = [
   {
     file: "src-tauri/resources/server/visionox-pkg/dashboard/src/panels/chat.ts",
     markers: ["Keep the original control error visible when the detail refresh also fails."],
+  },
+  {
+    file: "src-tauri/resources/server/visionox-pkg/dashboard/src/lib/event-reducer.ts",
+    markers: ["createDashboardEventGuard", "terminalTools", "messages-reset"],
   },
   {
     file: "scripts/build-dashboard.js",

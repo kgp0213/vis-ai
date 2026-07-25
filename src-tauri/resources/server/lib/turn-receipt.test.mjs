@@ -17,7 +17,7 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
     reason: "non-empty",
   });
   receipt.recordDocumentBinding({ documentRef: "visionox-document:1", readablePath: "C:\\temp\\plain.pdf", verified: true });
-  receipt.recordContext({ transactionId: "tx-1", pendingCount: 1, pendingChars: 120, requiresIntervention: true });
+  receipt.recordContext({ transactionId: "tx-1", inputChars: 1000, estimatedTokens: 286, toolResultBytes: 128, compressed: true, resourceRefs: ["tool-output-1.txt"], pendingCount: 1, pendingChars: 120, requiresIntervention: true });
 
   const status = { pendingCount: 1, pendingChars: 120, finalWithPending: true };
   assert.equal(receipt.claimIntervention(status), true);
@@ -33,6 +33,10 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
   assert.equal(snapshot.artifactEvidence[0].verified, true);
   assert.equal(snapshot.artifactEvidence[0].files[0].verification, "current-turn-write");
   assert.equal(snapshot.documentBindings[0].documentRef, "visionox-document:1");
+  assert.equal(snapshot.context.inputChars, 1000);
+  assert.equal(snapshot.context.estimatedTokens, 286);
+  assert.equal(snapshot.context.compressed, true);
+  assert.deepEqual(snapshot.context.resourceRefs, ["tool-output-1.txt"]);
   assert.equal(snapshot.intervention.shown, 2);
   assert.deepEqual(snapshot.errors[0], {
     source: "model-loop",

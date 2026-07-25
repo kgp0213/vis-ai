@@ -382,6 +382,41 @@ export function createAttachmentRuntime({
     };
   }
 
+  /**
+   * Add a session reference without copying the content-addressed blob. This
+   * is used when a session is forked: the source session keeps its reference
+   * and the fork receives an additional, independently scoped reference.
+   */
+  async function addSessionReference(id, {
+    sourceSessionId = null,
+    targetSessionId,
+    operationId = null,
+    workspace = null,
+  } = {}) {
+    await ensureLoaded();
+    const target = safeString(targetSessionId);
+    if (!target) return { ok: false, code: "SESSION_ID_REQUIRED", reason: "target session id is required" };
+    const record = records.get(safeString(id));
+    if (!record) return { ok: false, code: "ATTACHMENT_NOT_FOUND", reason: `attachment ${safeString(id)} was not found` };
+    const source = safeString(sourceSessionId);
+    if (source && record.sessionId !== source && !record.refs.some((ref) => ref.sessionId === source)) {
+      return { ok: false, code: "ATTACHMENT_SOURCE_MISMATCH", reason: `attachment ${record.id} is not owned by source session` };
+    }
+    if (workspace && record.workspace) {
+      const left = resolve(workspace);
+      const right = resolve(record.workspace);
+      if (process.platform === "win32" ? left.toLowerCase() !== right.toLowerCase() : left !== right) {
+        return { ok: false, code: "ATTACHMENT_WORKSPACE_MISMATCH", reason: `attachment ${record.id} belongs to another workspace` };
+      }
+    }
+    const ref = { sessionId: target, operationId: safeString(operationId) || null };
+    if (!record.refs.some((item) => item.sessionId === ref.sessionId && item.operationId === ref.operationId)) {
+      record.refs.push(ref);
+      await persist();
+    }
+    return { ok: true, attachment: recordForPublic(record), reference: ref };
+  }
+
   async function readRange(id, start, end, context = {}, signal = null) {
     if (signal?.aborted) throw new DOMException("attachment read aborted", "AbortError");
     const descriptor = await getContentDescriptor(id, context);
@@ -510,8 +545,13 @@ export function createAttachmentRuntime({
     const target = safeString(sessionId);
     if (!target) return 0;
     let removed = 0;
+    let changed = false;
     for (const [id, record] of records) {
+      const previousRefs = record.refs.length;
+      const previousOwner = record.sessionId;
       record.refs = record.refs.filter((ref) => ref.sessionId !== target);
+      if (record.sessionId === target) record.sessionId = record.refs[0]?.sessionId || null;
+      if (previousRefs !== record.refs.length || previousOwner !== record.sessionId) changed = true;
       if (record.refs.length > 0) continue;
       records.delete(id);
       const ids = byHash.get(record.sha256);
@@ -522,7 +562,7 @@ export function createAttachmentRuntime({
       }
       removed++;
     }
-    if (removed > 0) await persist();
+    if (changed || removed > 0) await persist();
     return removed;
   }
 
@@ -533,8 +573,26 @@ export function createAttachmentRuntime({
     for (const id of requested) {
       const record = records.get(id);
       if (!record) continue;
-      if (context.sessionId && record.sessionId && record.sessionId !== context.sessionId) continue;
+      const sessionId = safeString(context.sessionId);
+      if (sessionId) {
+        const ownsReference = record.sessionId === sessionId || record.refs.some((ref) => ref.sessionId === sessionId);
+        if (!ownsReference) continue;
+      } else if (record.refs.length > 1) {
+        // Without a session scope, never delete a record that is shared by
+        // multiple sessions. Callers with an explicit scope remove only
+        // their own reference below.
+        continue;
+      }
       if (context.workspace && record.workspace && resolve(context.workspace) !== resolve(record.workspace)) continue;
+      if (sessionId) {
+        const before = record.refs.length;
+        record.refs = record.refs.filter((ref) => ref.sessionId !== sessionId);
+        if (record.sessionId === sessionId) record.sessionId = record.refs[0]?.sessionId || null;
+        if (record.refs.length > 0 || record.sessionId) {
+          if (before !== record.refs.length || record.sessionId === sessionId) removed++;
+          continue;
+        }
+      }
       records.delete(id);
       const hashIds = byHash.get(record.sha256);
       hashIds?.delete(id);
@@ -691,6 +749,7 @@ export function createAttachmentRuntime({
     readDataUrl,
     readBytes,
     getContentDescriptor,
+    addSessionReference,
     readRange,
     materialize,
     migrateLegacySessionEntries,
