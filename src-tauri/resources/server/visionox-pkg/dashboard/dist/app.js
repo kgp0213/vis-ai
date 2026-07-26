@@ -14581,305 +14581,6 @@ function D2(n3, t5) {
   return "function" == typeof t5 ? t5(n3) : t5;
 }
 
-// dashboard/src/lib/api.ts
-var TOKEN = document.querySelector('meta[name="reasonix-token"]')?.getAttribute("content") ?? "";
-var MODE = document.querySelector('meta[name="reasonix-mode"]')?.getAttribute("content") ?? "standalone";
-async function api(path, opts = {}) {
-  const method = opts.method ?? "GET";
-  const url = `/api${path}${path.includes("?") ? "&" : "?"}token=${TOKEN}`;
-  const headers = { ...opts.headers ?? {} };
-  headers["X-Reasonix-Token"] = TOKEN;
-  if (opts.body !== void 0) headers["Content-Type"] = "application/json";
-  const timeoutMs = opts.timeoutMs === 0 ? 0 : Math.max(1e3, Number(opts.timeoutMs ?? (method === "GET" ? 15e3 : 12e4)));
-  const controller = new AbortController();
-  let timedOut = false;
-  const abortFromCaller = () => controller.abort();
-  opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
-  const timeout = timeoutMs > 0 ? setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs) : null;
-  let res;
-  let text;
-  try {
-    res = await fetch(url, {
-      method,
-      headers,
-      body: opts.body !== void 0 ? JSON.stringify(opts.body) : void 0,
-      signal: controller.signal
-    });
-    text = await res.text();
-  } catch (error) {
-    if (timedOut) throw new Error(`请求超时（${Math.round(timeoutMs / 1e3)} 秒）：${path}`);
-    throw error;
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    opts.signal?.removeEventListener?.("abort", abortFromCaller);
-  }
-  let parsed = null;
-  try {
-    parsed = text ? JSON.parse(text) : null;
-  } catch {
-    parsed = { error: text };
-  }
-  if (!res.ok) {
-    const errorBody = parsed;
-    const errMsg = errorBody?.message ?? errorBody?.error ?? `${res.status} ${res.statusText}`;
-    const err = new Error(errMsg);
-    err.status = res.status;
-    err.body = parsed;
-    err.code = errorBody?.code;
-    err.title = errorBody?.title;
-    err.retryable = errorBody?.retryable;
-    err.action = errorBody?.action;
-    err.details = errorBody?.details;
-    throw err;
-  }
-  return parsed;
-}
-async function writeClipboardText(text) {
-  const value = String(text ?? "");
-  let primaryError = null;
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch (error) {
-      primaryError = error;
-    }
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("readonly", "");
-  Object.assign(textarea.style, {
-    position: "fixed",
-    left: "-9999px",
-    top: "0",
-    width: "1px",
-    height: "1px",
-    opacity: "0"
-  });
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus();
-    textarea.select();
-    textarea.setSelectionRange(0, value.length);
-    if (document.execCommand("copy")) return;
-    throw primaryError || new Error("copy command failed");
-  } finally {
-    textarea.remove();
-  }
-}
-
-// dashboard/src/lib/bus-filter.ts
-var THIRD_PARTY_ORIGIN_PREFIXES = [
-  "chrome-extension://",
-  "moz-extension://",
-  "safari-web-extension://",
-  "safari-extension://",
-  "ms-browser-extension://"
-];
-function isThirdPartyError(error, filename) {
-  const stack = error && typeof error === "object" && "stack" in error ? String(error.stack ?? "") : "";
-  const haystack = `${filename ?? ""}
-${stack}`;
-  return THIRD_PARTY_ORIGIN_PREFIXES.some((prefix) => haystack.includes(prefix));
-}
-
-// dashboard/src/lib/bus.ts
-var html = htm_module_default.bind(k);
-var appBus = new EventTarget();
-var toastBus = new EventTarget();
-function showToast(text, kind = "info", ttl = 3e3) {
-  toastBus.dispatchEvent(new CustomEvent("toast", { detail: { text, kind, ttl } }));
-}
-function requestChatMessageJump(messageId) {
-  if (!messageId) return;
-  try {
-    window.__visionoxPendingChatJump = { messageId, ts: Date.now() };
-  } catch {
-  }
-  appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "chat", messageId } }));
-  setTimeout(() => {
-    appBus.dispatchEvent(new CustomEvent("chat-jump-message", { detail: { messageId } }));
-  }, 80);
-}
-function reportAppError(error, source, info) {
-  console.error(`[visionox dashboard] ${source}:`, error, info);
-  try {
-    const value = error;
-    const message = `${source}: ${value?.message ?? String(error)}
-${value?.stack ?? ""}
-${info ?? ""}`.slice(0, 12e3);
-    if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: "vis_client_log", message }, "*");
-    }
-  } catch {
-  }
-  appBus.dispatchEvent(
-    new CustomEvent("error", { detail: { error, source, info, ts: Date.now() } })
-  );
-}
-window.addEventListener("error", (ev) => {
-  if (!ev.error) return;
-  if (isThirdPartyError(ev.error, ev.filename)) return;
-  reportAppError(ev.error, "window", ev.message);
-});
-window.addEventListener("unhandledrejection", (ev) => {
-  if (isThirdPartyError(ev.reason)) return;
-  reportAppError(ev.reason, "promise");
-});
-function ToastStack() {
-  const [toasts, setToasts] = d2([]);
-  y2(() => {
-    const onToast = (ev) => {
-      const detail = ev.detail;
-      const id = `${Date.now()}-${Math.random()}`;
-      const t5 = { id, ...detail };
-      setToasts((prev) => [...prev, t5]);
-      setTimeout(() => setToasts((prev) => prev.filter((x4) => x4.id !== id)), t5.ttl);
-    };
-    toastBus.addEventListener("toast", onToast);
-    return () => toastBus.removeEventListener("toast", onToast);
-  }, []);
-  if (toasts.length === 0) return null;
-  return html`
-    <div class="toast-stack">
-      ${toasts.map((t5) => html`<div key=${t5.id} class="toast ${t5.kind}">${t5.text}</div>`)}
-    </div>
-  `;
-}
-
-// dashboard/src/lib/error-boundary.ts
-var html2 = htm_module_default.bind(k);
-function buildIssueBody({ error, source, info }) {
-  const ua = typeof navigator === "object" ? navigator.userAgent : "(unknown)";
-  const errMsg = error?.message ?? String(error);
-  const stack = error?.stack ?? "(no stack)";
-  return [
-    "**What happened**",
-    "(describe what you were doing — typing, switching tabs, clicking a tool path, etc.)",
-    "",
-    "**Error**",
-    "```",
-    `${source}: ${errMsg}`,
-    info ? `info: ${info}` : null,
-    "",
-    stack,
-    "```",
-    "",
-    "**Environment**",
-    `- Visionox-Whale: ${MODE}`,
-    `- Browser: ${ua}`,
-    `- URL: ${location.pathname} (token redacted)`,
-    "",
-    "_Reported from the local dashboard's error overlay._"
-  ].filter((l3) => l3 !== null).join("\n");
-}
-function ErrorOverlay() {
-  const [err, setErr] = d2(null);
-  const [copied, setCopied] = d2(false);
-  y2(() => {
-    const onError = (ev) => {
-      setErr(ev.detail);
-      setCopied(false);
-    };
-    appBus.addEventListener("error", onError);
-    return () => appBus.removeEventListener("error", onError);
-  }, []);
-  y2(() => {
-    if (!err) return;
-    const onKey = (e3) => {
-      if (e3.key === "Escape") setErr(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [err]);
-  if (!err) return null;
-  const error = err.error;
-  const errMsg = error?.message ?? String(error);
-  const stack = error?.stack ?? "(no stack)";
-  const copyDetails = async () => {
-    try {
-      await writeClipboardText(buildIssueBody(err));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2e3);
-    } catch {
-    }
-  };
-  const openLogs = () => {
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: "vis_open_log_dir" }, "*");
-      }
-    } catch {
-    }
-  };
-  return html2`
-    <div class="error-overlay">
-      <div class="error-overlay-card">
-        <div class="error-overlay-head">
-          <span class="error-overlay-icon">✦</span>
-          <div>
-            <div class="error-overlay-title">当前页面遇到错误</div>
-            <div class="error-overlay-subtitle">${err.source} · ${errMsg}</div>
-          </div>
-        </div>
-
-        <pre class="error-overlay-trace">${stack}</pre>
-
-        ${err.info ? html2`<div class="error-overlay-info"><strong>info:</strong> ${err.info}</div>` : null}
-
-        <div class="error-overlay-help">
-          错误详情已写入本地运行日志。你可以关闭提示后继续操作；如果页面无法恢复，请打开日志目录并重新启动应用。
-        </div>
-
-        <div class="error-overlay-actions">
-          <button class="primary" onClick=${copyDetails}>
-            ${copied ? "已复制" : "复制详情"}
-          </button>
-          <button onClick=${openLogs}>打开日志目录</button>
-          <button onClick=${() => setErr(null)} style="margin-left: auto;">关闭 (Esc)</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-var ErrorBoundary = class extends C {
-  constructor(props) {
-    super(props);
-    this.state = { caught: false, lastErr: null, attempts: 0 };
-  }
-  static getDerivedStateFromError(error) {
-    return { caught: true, lastErr: error };
-  }
-  componentDidCatch(error, info) {
-    reportAppError(error, "render", info?.componentStack ?? "");
-    const attempts = (this.state.attempts ?? 0) + 1;
-    if (attempts >= 3) {
-      this.setState({ attempts });
-      return;
-    }
-    setTimeout(() => this.setState({ caught: false, attempts }), 100);
-  }
-  render() {
-    if (this.state.caught) {
-      if ((this.state.attempts ?? 0) >= 3) {
-        return html2`
-          <div class="boot" style="flex-direction: column; gap: 12px;">
-            <div>当前页面连续恢复失败，请查看运行日志。</div>
-            <button onClick=${() => this.setState({ caught: false, attempts: 0 })}>
-              重新尝试
-            </button>
-          </div>
-        `;
-      }
-      return html2`<div class="boot">正在恢复...</div>`;
-    }
-    return this.props.children;
-  }
-};
-
 // dashboard/src/lib/i18n.ts
 var LANG_REGISTRY = [
   ["en", "EN"],
@@ -15030,6 +14731,7 @@ var en = {
     commentLine: "Line",
     commentEdit: "Edit",
     commentDelete: "Delete",
+    diffSource: "Diff source",
     diffSourceGit: "Git changes",
     diffSourceSession: "Previous session",
     diffSourceCheckpoint: "Checkpoint",
@@ -15057,6 +14759,8 @@ var en = {
     add: "Add",
     confirm: "Confirm",
     noData: "No {name} yet.",
+    choose: "Choose",
+    clear: "Clear",
     all: "all",
     yes: "yes",
     no: "no",
@@ -15165,6 +14869,429 @@ var en = {
     devBackToBottom: "Back to bottom"
   },
   chat: {
+    artifactFallback: "Artifact {n}",
+    handoffCheckModel: "Please check the model configuration before continuing.",
+    handoffRedeliverNote: "After confirming, you can redeliver existing results only; the document will not be reprocessed.",
+    unknownTask: "Unknown task",
+    actPause: "Pause",
+    actResume: "Resume",
+    actRetry: "Retry",
+    actRetryDelivery: "Redeliver after confirmation",
+    actCancel: "Cancel task",
+    actSubmitResult: "Submit result",
+    actRetarget: "Change output location",
+    actAckOutcome: "Acknowledge result",
+    actDeleteRecord: "Delete record",
+    handoffQueued: "Background processing finished; waiting for AI to take over and continue delivery.",
+    handoffRunning: "AI has taken over the background result and is verifying the artifact before continuing.",
+    handoffWaitingConversation: "Task belongs to another conversation. Return to the original conversation and AI will continue automatically.",
+    handoffNeedsUser: "AI takeover incomplete: {error}",
+    handoffUserPaused: 'Task paused by user; click "Resume" to continue.',
+    handoffLegacy: 'This task was created by an older version and cannot be safely linked to its conversation; manually click "Resume" or "Retry" in the background panel.',
+    stageExtracting: "Reading source content",
+    stageSelectingModel: "Selecting available model",
+    stageDraft: "Drafting current section",
+    stageQualityRepair: "Completing current section",
+    stageQualityReview: "Reviewing current section",
+    stageBatchComplete: "Current section saved",
+    stageAssembling: "Assembling full document",
+    stageSummary: "Generating summary",
+    stageCompleted: "Document completed",
+    stageFailed: "Task failed",
+    stageCancelled: "Task cancelled",
+    stageStopped: "Stopped, checkpoint kept",
+    stageAbandoned: "Task abandoned",
+    stageSourceChanged: "Source changed",
+    stageAwaitingOutput: "Final draft saved, awaiting output path",
+    stageWaitingProvider: "Waiting for other model tasks",
+    stageJobTimeout: "Total execution time limit reached",
+    stageJobCallBudget: "Execution call budget exhausted",
+    progressUnitBatch: "sections",
+    progressCompletedUnits: "{completed} {unit} done",
+    progressPreparing: "Preparing document",
+    retryAfterModelFix: "Retry after fixing model issues",
+    retryFailedPart: "Retry failed parts",
+    taskLevelModelCall: "Task-level model call",
+    etcSuffix: " etc.",
+    confirmCancelTask: "Cancel this task?",
+    confirmDeleteRecord: "Delete this task record?",
+    promptNewOutputPath: "Enter the new full output file path",
+    confirmRedelivery: "Last delivery result is uncertain; redelivering may produce duplicate replies. Continue?",
+    currentModel: "Current model",
+    recentModel: "Recently used model",
+    noModelCallYet: "No model call yet",
+    bgJobsTitle: "Background tasks",
+    bgJobsRunning: "{count} running",
+    bgJobsClose: "Back to chat",
+    bgJobsEmpty: "No background tasks",
+    bgSelectTask: "Select a task on the left to view details",
+    bgStopNow: "Stop now",
+    bgAbandon: "Abandon task",
+    bgConfirmAbandon: "Abandoning will stop processing. Confirm?",
+    bgConfirmDeleteRecord: "Only deletes the task record and intermediate artifacts. Confirm?",
+    bgRedeliverTitle: "Only redelivers existing results; does not reprocess the document",
+    bgReviewReasons: "Reasons for review",
+    unknownProvider: "Unknown provider",
+    unknownModel: "Unknown model",
+    affectedBatches: "Affected sections · {label}",
+    suggestionPrefix: "Suggestion: ",
+    sourceAndArtifact: "Source and artifacts",
+    localDirOnlyDesktop: "Local directory picker is only available on desktop",
+    dirPickerTimeout: "Directory picker timed out",
+    selectMdDoc: "Please select a Markdown document...",
+    mdOpenFailed: "Failed to open Markdown document",
+    pathCopied: "Path copied",
+    fileOpFailed: "File operation failed",
+    currentReplyFiles: "Files for current reply",
+    latestFiles: "Latest generated files",
+    followLatest: "Follow latest",
+    hide: "Hide",
+    filesDetected: "{count} actionable files detected",
+    preview: "Preview",
+    open: "Open",
+    openFolder: "Open folder",
+    copyPath: "Copy path",
+    moreFilesDedup: "{count} more files, auto-deduplicated",
+    srcReport: "Task report",
+    srcOpened: "Opened",
+    srcSaved: "Saved as",
+    srcGenerated: "Generated file",
+    srcFile: "File",
+    timeUnknown: "Unknown time",
+    requestTimeout: "Request timed out after {sec}s: {path}",
+    thumbImage: "Image",
+    thumbVideo: "Video",
+    deleteAttachment: "Remove attachment",
+    importingShort: "Importing...",
+    importConfigBtn: "Import model config",
+    testingShort: "Testing...",
+    testAllBtn: "Test all models",
+    cleaningShort: "Deleting...",
+    cleanFailedBtn: "Delete failed models ({count})",
+    chipModel: "Model",
+    chipWorkspace: "Workspace",
+    chipJobs: "Jobs",
+    indexOffShort: "Index off",
+    addImageOrVideo: "Add image or video",
+    addImage: "Add image",
+    skillEntry: "Skills",
+    skillMentionMeta: "@ mention",
+    loadEarlierFailed: "Failed to load earlier messages",
+    clipboardNoPath: "Could not read a file path from the clipboard. Copy the file or folder again.",
+    modelApplying: "Applying model settings...",
+    modeSwitchedNextChat: "Work mode switched; takes effect on the next new chat",
+    compactionNote: "; history will be compacted before the next message",
+    modelQueuedSwitch: "Selected {model}; will switch after the current reply, keeping {count} context messages{adaptation}",
+    modelSwitchedKeep: "✓ Switched to {model}, keeping {count} context messages{adaptation}",
+    effortSelected: "✓ Selected {value} mode",
+    effortSetTo: "✓ Reasoning effort set to {label}",
+    switchFailed: "Switch failed: {msg}",
+    modelSwitching: "Switching model...",
+    modelSwitchedKeepCount: "✓ Model switched, keeping {count} context messages",
+    modelSwitched: "✓ Model switched",
+    importingConfig: "Importing model config...",
+    importOkVerify: "✓ Config imported. Please test the models",
+    importFailed: "Import failed: {msg}",
+    checkingConfig: "Checking model config...",
+    confirmImportDeletes: "This config permanently deletes existing models. Continue importing?",
+    importCancelled: "Import cancelled",
+    testingAll: "Testing all models...",
+    testDoneWithFail: "Test done: {passed} usable, {failed} unusable",
+    testAllPassed: "✓ All {passed} models usable",
+    testFailed: "Model test failed: {msg}",
+    confirmCleanFailed: "Delete {failed} models that failed testing? Usable models are not affected. Continue?",
+    cleaningFailed: "Deleting failed models...",
+    cleanedModels: "✓ Deleted {count} unusable models",
+    cleanFailed: "Delete failed: {msg}",
+    modeSwitchHint: "Takes effect on the next new chat",
+    switchWorkMode: "Switch work mode",
+    eccNotEnabled: "not enabled",
+    modePickerTitle: "Work mode — takes effect on next new chat",
+    modeOptionTitle: "{label}: {desc} · ECC {rules} · takes effect on next new chat",
+    newMessagesBelow: "↓ New messages",
+    feedRefresh: "Refresh conversation",
+    feedExpandAll: "Expand all work steps",
+    feedCollapseAll: "Collapse all work steps",
+    planIncomplete: "Plan incomplete · {done}/{total} steps",
+    planAutoResumed: "Auto-resumed {count} times",
+    planResume: "Resume",
+    planDismiss: "Dismiss for now",
+    modelAndEffortTitle: "Model and reasoning settings",
+    switchWorkspaceTitle: "Switch workspace",
+    bgChipTitle: "Running {running}, attention {attention}",
+    indexChipTitle: "Index: find relevant content in the workspace and knowledge bases",
+    indexTitle: "Index",
+    indexAuto: "Auto recall",
+    indexTool: "On-demand search",
+    indexOff: "Off",
+    moreActions: "More actions",
+    pickSkill: "Pick a skill",
+    pickModel: "Pick a model",
+    modelProvidersAria: "Model providers",
+    groupModelsAria: "{group} models",
+    statusVerified: "Verified",
+    statusUnavailable: "Unavailable",
+    statusUntested: "Untested",
+    statusUsable: "Usable",
+    providerNoModels: "No usable models for this provider",
+    noModelsYet: "No models imported yet",
+    configDirtyRetest: "Config updated. Please retest all models",
+    testFailedFallback: "Test failed",
+    testedSummary: "Passed {passed}/{total}",
+    modeLabel: "Mode",
+    fixedSuffix: " (fixed)",
+    effortLabel: "Reasoning effort",
+    reasoningDisplayLabel: "Reasoning display",
+    reasoningDisplayTitle: "Controls how model reasoning is shown: live scrolls the current reasoning turn; status only shows a thinking indicator; hidden shows nothing.",
+    reasoningLive: "Live",
+    reasoningStatusOnly: "Status only",
+    reasoningHidden: "Hidden",
+    retrievalRunning: "Recalling...",
+    retrievalEmpty: "No relevant content found",
+    retrievalTimeout: "Recall timed out",
+    retrievalUnavailable: "Index unavailable",
+    retrievalError: "Recall failed",
+    refsCount: "Refs {count}",
+    retrievalSourcesTitle: "Index sources for this turn",
+    optimizeInputTitle: "Optimize current input; will not auto-send",
+    optimizeInputAria: "Optimize current prompt",
+    sendSend: "Send (Enter)",
+    sendQueue: "Queue; auto-sent when the current task finishes",
+    sendStop: "Stop current task",
+    sendIdle: "Type to send",
+    shownOfTotal: "Showing {shown} / {total}",
+    loadingDots: "Loading...",
+    newChatTitle: "Start a new chat (the current one is kept in history)",
+    newChatBtn: "New chat",
+    foldNormal: "Normal compaction",
+    foldAggressive: "Aggressive compaction",
+    foldForceSummary: "Forced summary",
+    draftKept: "Input changed; your edits were not overwritten",
+    optimizeNoResult: "The model returned no usable optimization",
+    optimizeDone: "Prompt optimized. Review and send.",
+    optimizeFailed: "Prompt optimization failed: {msg}",
+    artifactDefaultName: "Task artifact",
+    noPreviewableChunk: "No finished chunk to preview yet",
+    docPreviewDefaultName: "document-preview.md",
+    uploadFailed: "Attachment upload failed: {msg}",
+    attachmentEmpty: "Attachment file is empty",
+    attachmentTooLarge: "Attachment exceeds the 50 MB limit",
+    attachmentTypeUnsupported: "Only images, MP4, MOV, or WebM videos are supported",
+    imageNotSupported: "The current model does not support image input",
+    videoNotSupported: "Only explicitly configured official Kimi video models support video input",
+    attachmentNoId: "Host returned no attachment ID",
+    attachmentStale: "The conversation or workspace for this upload has changed",
+    lastRunFailed: "The last run did not succeed. Please retry explicitly.",
+    queuePersistFailed: "Failed to persist queue",
+    queueDeleteFailed: "Failed to delete from queue",
+    queueClearFailed: "Failed to clear queue",
+    planContinuationText: "Continue the current unfinished plan. Do not replan; resume from the interruption, finish the actual artifacts, and verify before ending.",
+    planContinueFailed: "Failed to continue execution",
+    indexPreviewFailed: "Failed to preview index source",
+    providerFallback: "Provider",
+    mdOpened: "Opened {name}",
+    mdDocFallback: "Markdown document",
+    mdDocDefaultName: "Markdown document.md",
+    mdSelectRequired: "Please select a Markdown document",
+    mdTooLarge: "File too large, max {mb}MB supported",
+    localFileOnlyDesktop: "Local file picker is only available on desktop",
+    filePickerTimeout: "File picker timed out",
+    retryAfterBalance: "Retry after resolving balance/quota",
+    listSep: ", ",
+    fallbackModelSuffix: " (fallback candidate)",
+    userActionNeededFallback: "The task needs your input before it can continue.",
+    confirmCancelTaskDetail: "Cancel this task? Saved checkpoints and artifacts will not be deleted.",
+    confirmDeleteRecordDetail: "Delete this task record? Delivered artifacts will not be deleted.",
+    bgJobsHeaderMeta: "Running {active} · Attention {attention} · Total {total}",
+    bgPendingDeliveries: " · Pending notifications {count}",
+    bgJobsCloseTitle: "Back to chat (Esc)",
+    kindDocument: "Doc",
+    kindService: "Service",
+    kindTask: "Task",
+    genericRunning: "Running",
+    exitCode: "exit {code}",
+    revisionLabel: "Revision {n}",
+    epochLabel: "Epoch {n}",
+    outcomeSummaryTitle: "Outcome summary",
+    blockingReasonTitle: "Blocking reason",
+    userActionTitle: "Action needed",
+    deliveryStateTitle: "Delivery state",
+    deliveryWaitingConfirm: "Waiting for delivery confirmation",
+    deliveryConversation: "Conversation",
+    deliveryTaskCenter: "Task center",
+    deliveryWaiting: "waiting",
+    warningsTitle: "Needs attention",
+    artifactsTitle: "Artifacts",
+    artifactsEmpty: "No artifacts yet",
+    previewBtn: "Preview",
+    coverageTitle: "Coverage",
+    procRunning: "Running",
+    procEnded: "Ended · exit {code}",
+    stopBtn: "Stop",
+    waitingNextStep: "Waiting for next step",
+    pauseBtn: "Pause",
+    resumeSaveAs: "Save draft as new file",
+    resumeRecoverFinal: "Recover final file",
+    resumeSubmitDraft: "Submit saved draft",
+    resumeContinue: "Resume",
+    redeliverBtn: "Redeliver only",
+    redeliverConfirm: "This only redelivers the existing result without reprocessing the document. It may produce a duplicate reply. Continue?",
+    abandonBtn: "Abandon",
+    abandonConfirm: "Abandoning stops further processing but keeps the task record and saved drafts. Continue?",
+    previewArtifactBtn: "Preview artifact",
+    deleteRecordBtn: "Delete record",
+    deleteRecordConfirm: "Only the task record and intermediate drafts will be deleted; source files and final artifacts are kept. Continue?",
+    modelCallsSummary: "Total model calls {total} · this run {current} / {limit}",
+    currentChunk: "Current chunk · {label}",
+    awaitingOutputTitle: "Content assembly and final draft are complete.",
+    awaitingOutputBody: 'Click "Submit saved draft" to continue; if the same-name file is still locked, a new file name is used automatically without calling the model again.',
+    artifactMissingTitle: "The final output file no longer exists.",
+    artifactMissingBody: 'The task record and the saved final draft are still here. Click "Resume" to try recovering delivery.',
+    artifactModifiedTitle: "The final output file has been modified.",
+    artifactModifiedBody: 'The current file differs from the draft saved at completion. "Save draft as new file" keeps the current file and saves the verified draft as a new file.',
+    completedWarnTitle: "The task has finished and the output file was generated.",
+    completedWarnBody: "Some chunks did not pass the full quality review. Handle the reasons below, then review or retry.",
+    reviewReasonsTitle: "Reasons to review",
+    reviewWarningFallback: "Some content needs review.",
+    modelCallFailed: "Model call failed",
+    technicalInfo: "Technical details",
+    techMsgJoin: "; ",
+    outputLabel: "Output · {path}",
+    outputUndecided: "not determined yet",
+    criteriaTitle: "Completion criteria",
+    modelHistoryTitle: "Model call chain",
+    thModel: "Model",
+    thRole: "Role",
+    thResult: "Result",
+    thCalls: "Calls",
+    roleFallback: "Fallback",
+    rolePrimary: "Primary",
+    resultPass: "Passed",
+    resultFail: "Failed",
+    draftPreviewTitle: "Saved draft preview",
+    draftPreviewPartial: " (in progress)",
+    previewTruncated: "\n\n[Preview too long, truncated in workbench]",
+    recentEventsTitle: "Recent events",
+    currentDir: "Current directory",
+    foldersSuffix: " · {count} folders",
+    filesTitle: "Files",
+    filesSubtitle: "Recently generated, opened, and task output files in one place",
+    filesSearchPlaceholder: "Search file name or path",
+    refreshBtn: "Refresh",
+    refreshingBtn: "Refreshing...",
+    filesLoadFailed: "Failed to load file list: ",
+    filesLoading: "Loading recent files...",
+    filesNoMatch: "No matching files.",
+    filesEmpty: "No recent files yet. Files generated in chat, task reports, or opened Markdown documents will appear here.",
+    filesSummary: "{total} recent files",
+    filesSummaryFiltered: " · showing {count}",
+    reasoningThinking: "Thinking…",
+    reasoningTurnsPrefix: "{n} turns · ",
+    stateIncomplete: "Incomplete",
+    stateCompletedWarn: "Completed with warnings",
+    statePendingConfirm: "Result pending confirmation",
+    receiptRecent: "latest {name}",
+    receiptRetryable: "recoverable",
+    receiptRepeatBlocked: "similar failures reached suggested limit",
+    receiptTimes: "{count} times",
+    receiptMediaItems: "downgraded, omitted {count} items",
+    receiptChoice: "chose {choice}",
+    toolUsingLiveStep: "Using tools · step {n}",
+    toolFailedCountSuffix: "{count} failed",
+    statusExecuting: "Executing",
+    toolFailedContinue: "Tool failed, task continues",
+    toolUsingLive: "Using tools",
+    toolUsedCount: "Used {count} tools",
+    toolFailedCount: "{count} failed",
+    artifactVerified: "Found and verified",
+    artifactPresentUnverified: "Found but not fully verified",
+    artifactMissing: "Artifact missing",
+    artifactInvalid: "Artifact invalid",
+    artifactUnknown: "Artifact status unknown",
+    artifactNone: "No verifiable artifact found",
+    stateCompleted: "Completed",
+    stateNeedsIntervention: "Needs intervention",
+    receiptTitle: "Execution receipt",
+    receiptTools: "Tools",
+    receiptToolsSummary: "{total} runs, {ok} ok, {bad} failed",
+    receiptToolDiagnostic: "Tool diagnostic",
+    receiptRecovery: "Recovery",
+    receiptRecoveryTimes: "{count} times",
+    receiptArtifact: "Artifact",
+    receiptArtifactIncomplete: "Incomplete or pending verification",
+    receiptMedia: "Media",
+    receiptMediaReduced: "Downgraded, omitted {count}",
+    receiptIntervention: "Intervention",
+    receiptInterventionShown: "Shown {count} times",
+    receiptReminder: "Reminder",
+    artifactRelatedClick: "Click to view files related to this reply",
+    reasoningTurnLive: "Thinking · turn {n}",
+    reasoningProcess: "Reasoning",
+    reasoningTurnsTotal: "{n} turns",
+    reasoningChars: "~{n} chars",
+    taskPaused: "Current task paused",
+    currentStatus: "Current status",
+    suggestion: "Suggestion: ",
+    progressUnit: "units",
+    progressCompleted: "{completed} {unit} done",
+    effortLow: "Fast",
+    effortMedium: "Balanced",
+    effortDeep: "Deep",
+    effortExtreme: "Extreme",
+    capImageText: "Vision",
+    capTextOnly: "Text only",
+    capCode: "Code",
+    fileMd: "Markdown document",
+    fileHtml: "HTML page",
+    filePdf: "PDF document",
+    fileWord: "Word document",
+    filePpt: "Presentation",
+    fileExcel: "Spreadsheet",
+    fileCsv: "CSV table",
+    fileData: "Data file",
+    fileScript: "Script file",
+    fileText: "Text file",
+    fileGeneric: "{ext} file",
+    fileFallback: "File",
+    providerNeedsId: "Every provider must include an id",
+    providerNeedsModels: "Provider {id} must include models",
+    providerModelNoId: "Provider {id} contains a model without an id",
+    modelNeedsContext: "Model {id} must declare a valid maxContextLength",
+    jsonNeedsOperations: "Maintenance JSON must include a non-empty operations array",
+    jsonNeedsProviders: "JSON must include a non-empty providers array",
+    statusQueued: "Queued",
+    statusRunning: "Running",
+    statusWaitingForeground: "Waiting for foreground conversation",
+    statusWaitingProvider: "Waiting for other model tasks",
+    statusPausing: "Pausing",
+    statusPaused: "Paused",
+    statusInterrupted: "Resumable",
+    statusStopped: "Stopped, resumable",
+    statusAbandoned: "Abandoned",
+    statusSourceChanged: "Source changed",
+    statusAwaitingOutput: "Content done, awaiting delivery",
+    statusCompleted: "Completed",
+    statusCompletedWarnings: "Completed, needs review",
+    statusFailed: "Failed",
+    statusCancelled: "Cancelled",
+    statusUnknown: "Unknown",
+    groupActive: "Active",
+    groupAttention: "Needs attention",
+    groupCompleted: "Completed",
+    lifecycleCreated: "Created",
+    lifecycleLeased: "Leased",
+    lifecycleAssembling: "Assembling",
+    lifecycleWaitingUser: "Waiting for user",
+    lifecycleBlocked: "Blocked",
+    lifecycleTerminal: "Finished",
+    lifecycleUnknown: "Unknown state",
+    outcomeDelivered: "Delivered",
+    outcomeDeliveredWarnings: "Delivered, needs review",
+    outcomePartial: "Partially delivered",
+    outcomeNone: "No result yet",
+    qualityVerified: "Verified",
+    qualityNeedsReview: "Needs review",
+    qualityUnknown: "Not evaluated",
     modeMirror: "mirror",
     modeView: "chat",
     placeholder: "Type a prompt — Enter sends, Shift+Enter for a newline · / @ for pickers",
@@ -15199,7 +15326,6 @@ var en = {
     loadEarlierMessages: "Load {count} earlier messages",
     reconnecting: "Reconnecting to the local service. Queued prompts are preserved.",
     new: "New",
-    clear: "Clear",
     newTitle: "/new — wipe conversation context (loop log + scrollback)",
     clearTitle: "/clear — wipe just visible scrollback (context kept)",
     noConversation: "No conversation yet. Send a prompt below to begin.",
@@ -15232,7 +15358,7 @@ var en = {
     },
     projectFiles: "project files",
     mentionTargets: "skills / project files",
-    skillMentionMeta: "skill",
+    skillPickerMeta: "skill",
     skillInvokeTaskFallback: "Follow this skill's workflow for the user's request.",
     skillCredentialTitle: "Set up {label}",
     skillCredentialHint: "Required only for {skill}. The key is saved locally and is never added to the conversation or sent to the model.",
@@ -15429,7 +15555,50 @@ var en = {
     resumeConfirm: "Loading this session will replace the current chat context. Current chat: {messages} message(s), busy: {busy}, drafts: {drafts}. Continue?",
     transcriptSearchPlaceholder: "Search this session",
     transcriptSearchIdle: "session transcript",
-    transcriptSearchCount: "{current} / {total}"
+    transcriptSearchCount: "{current} / {total}",
+    tabSessions: "Sessions",
+    tabTrash: "Trash",
+    trashConfirmTitle: "Move to trash",
+    trashConfirmSingle: "Move “{name}” to trash?",
+    trashConfirmMulti: "Move the selected {count} sessions to trash?",
+    trashConfirmKeep: "You can restore them within the retention period.",
+    dontAskAgain: "Don’t ask again",
+    trashResult: "Moved {moved} to trash, {failed} failed.",
+    restoreConfirmBack: "Delete confirmation restored.",
+    restored: "Session restored from trash.",
+    restoreResult: "Restored {restored}, {failed} failed. Sessions with name conflicts can be renamed in preview before restoring.",
+    purgeConfirm: "Permanently delete {count} trashed sessions? This cannot be undone.",
+    purgeResult: "Permanently deleted {deleted}, {failed} failed.",
+    retentionSaved: "Trashed files will be auto-deleted after {days} days.",
+    skippedInvalid: "Skipped {count} unparsable records.",
+    exitBatch: "Exit batch",
+    batchManage: "Batch manage",
+    autoCleanup: "Auto cleanup",
+    retentionAria: "Auto cleanup retention days",
+    daysUnit: "{d} days",
+    restoreConfirmAction: "Restore delete confirmation",
+    emptyTrash: "Trash is empty",
+    selectSessionAria: "Select session {name}",
+    selectTrashAria: "Select trashed session {name}",
+    trashFileCount: "{count} files",
+    deletedAt: "Deleted {time}",
+    cleanupAt: "Cleanup {time}",
+    selectedCount: "{count} selected",
+    deselectAll: "Deselect all",
+    selectAllFiltered: "Select all",
+    restoreAction: "Restore",
+    purgeAction: "Delete forever",
+    trashPreviewMeta: "Trash preview · {count} messages",
+    restoreReviewTitle: "Review before restoring",
+    restoreNameLabel: "Session name after restore",
+    restoreSessionAction: "Restore session",
+    restoreNameHint: "If the original name is taken, rename it before restoring. Existing sessions will not be overwritten.",
+    affectedLines: "Affected lines: {lines}",
+    loadingDots: "Loading...",
+    loadEarlier200: "Load 200 earlier messages",
+    resumeTitle2: "Resume session",
+    resumeDesc2: "Load history into the current chat and restore the saved work context{mode}. The AI gets the full context so you can continue right away.",
+    resumeAction: "Load and resume session"
   },
   tools: {
     loading: "loading tools…",
@@ -15569,6 +15738,343 @@ var en = {
     saved: "saved {scope}",
     reloadHint: "re-applied on next /new or session restart"
   },
+  memPanel: {
+    unsavedConfirm: "Unsaved changes. Discard them?",
+    moved: "Scene memory moved",
+    saved: "Memory saved",
+    sceneAdded: "Scene memory added",
+    longTermAdded: "Long-term memory added",
+    trashMoveConfirm: "Move “{label}” to trash? Restorable within {days} days.",
+    deleteConfirm: "Delete “{label}”? This cannot be undone.",
+    deleted: "Memory deleted",
+    pickOtherScene: "Pick another scene before copying",
+    sceneCopied: "Scene memory copied",
+    batchDeleteConfirm: "Delete the {count} selected scene memories?",
+    batchDeleted: "Batch deleted",
+    batchEnabled: "Batch enabled",
+    batchDisabled: "Batch disabled",
+    applyFailed: "Cannot apply memory",
+    applied: "Memory applied to current conversation",
+    soulRestoreConfirm: "Restore this Soul version? The current version is auto-saved to history first.",
+    soulRestored: "Soul version restored",
+    soulResetConfirm: "Restore the default Soul? The current version is auto-saved to history first.",
+    soulResetDone: "Default Soul restored",
+    trashRestored: "Memory restored from trash",
+    permanentDeleteConfirm: "Permanently delete “{label}”? This cannot be undone.",
+    permanentDeleted: "Memory permanently deleted",
+    invalidSuffix: ", {count} of them are corrupted and cannot be previewed",
+    emptyTrashConfirm: "Empty the {count} memories in trash{invalid}? Everything will be permanently deleted.",
+    emptied: "Permanently deleted {count} memories",
+    aiIdentityNamed: "AI identity: {name}",
+    aiIdentityDefault: "AI identity and behavior guidelines",
+    scopeGlobal: "Global",
+    scopeProject: "Current project",
+    scopeSoul: "AI identity",
+    scopeTrash: "Trash",
+    scopeSession: "Current session",
+    stateDisabled: "Disabled",
+    stateFullInject: "Full inject",
+    stateSummaryInject: "Summary inject",
+    stateWillInject: "Will inject",
+    stateIdentityConfig: "Identity config",
+    stateRecoverable: "Recoverable",
+    stateNotInjected: "Not injected",
+    diagSensitive: "May contain sensitive info",
+    diagConflict: "May conflict",
+    diagDuplicate: "Duplicate content",
+    pageTitle: "Memory",
+    noWorkspace: "No workspace selected",
+    searchPlaceholder: "Search summary, content, or keywords",
+    filterAll: "All",
+    filterMode: "Scenes",
+    allScenes: "All scenes",
+    pendingTitle: "Current context still uses old memory",
+    pendingDesc: "Disk changes are saved. Apply to make the current conversation use the new version.",
+    applyNow: "Apply to current conversation now",
+    budgetCurrent: "Current memory context",
+    budgetFixed: "pinned",
+    budgetRecallable: "recallable",
+    budgetDedup: "high-priority full text and normal summaries deduplicated",
+    listCount: "{count} item(s)",
+    trashRetentionHint: "auto-cleanup in {days} days",
+    trashInvalidHint: "{count} corrupted",
+    collapseCreate: "Collapse",
+    createMemory: "New memory",
+    emptyTrash: "Empty trash",
+    refresh: "Refresh",
+    createSceneTitle: "New scene memory",
+    createLongTermTitle: "New long-term memory",
+    ariaScope: "Memory scope",
+    scopeProjectMem: "Current project",
+    scopeMode: "Scene",
+    ariaPriority: "Priority",
+    prioLow: "Low priority",
+    prioNormal: "Normal",
+    prioHigh: "High priority",
+    ariaTargetScene: "Target scene",
+    modeEnabledMeta: "{enabled}/{count} enabled",
+    summaryPlaceholder: "One-line summary",
+    bodyPlaceholderMode: "Scene memory content, max 180 chars",
+    bodyPlaceholder: "Memory content",
+    cancel: "Cancel",
+    batchSelected: "{count} selected",
+    batchEnable: "Enable",
+    batchDisable: "Disable",
+    batchDelete: "Delete",
+    cleanedAt: "cleaned {date}",
+    unknown: "unknown",
+    priorityMeta: "priority {prio}",
+    temporary: "temporary",
+    manualMaintain: "manual",
+    prioHighShort: "high priority",
+    prioLowShort: "low priority",
+    emptyList: "No matching memories",
+    projectRules: "Current project rules",
+    stateFull: "full",
+    stateTruncated: "truncated {chars} chars",
+    stateOmitted: "omitted due to budget",
+    notConfigured: "Not configured",
+    actualInject: "actually injected {used} / {max} chars",
+    pickDetail: "Pick a memory to view details",
+    detailDirty: "Unsaved changes",
+    detailSynced: "Synced",
+    restoreHintDefault: "Restore to original scope",
+    restoreThis: "Restore this memory",
+    permanentDelete: "Delete permanently",
+    saveBtn: "Save",
+    deleteBtn: "Delete",
+    diagAction: "Review and decide whether to keep, edit, or delete. The system will not auto-merge.",
+    fieldSummary: "Summary",
+    fieldType: "Type",
+    typeUser: "User preference",
+    typeFeedback: "Correction feedback",
+    typeProject: "Project fact",
+    typeReference: "Reference",
+    fieldPriority: "Priority",
+    prioLowTiny: "Low",
+    prioHighTiny: "High",
+    fieldTargetScene: "Target scene",
+    moveHint: "Will move to target scene after saving",
+    copyHint: "Pick another scene to move or copy",
+    copyToScene: "Copy to scene",
+    fieldKeywords: "Keywords",
+    enableThis: "Enable this scene memory",
+    soulBasic: "Basic",
+    soulAdvanced: "Advanced",
+    fieldAiName: "AI name",
+    soulWho: "Identity & role",
+    soulCollab: "Collaboration style",
+    soulSafety: "Safety & privacy",
+    soulFullMd: "Full Soul Markdown · {count} chars",
+    previewInject: "Preview final injection",
+    resetSoul: "Reset default Soul",
+    finalPreview: "Final injection preview",
+    previewChars: "{used}/{max} chars",
+    soulNoDelete: "Soul cannot be deleted",
+    soulEffective: "Takes effect on the next /new or context rebuild.",
+    versionHistory: "Version history",
+    unnamed: "Unnamed",
+    restoreVersion: "Restore this version",
+    trashDeletedAt: "Deleted {date}, ",
+    trashExpireAt: "auto permanent cleanup after {date}.",
+    trashRetentionDays: "retained for {days} days.",
+    trashOtherProject: " This memory belongs to another project. Open that project to restore; you can still preview or permanently delete here.",
+    trashNoProject: " Old records lack project info and cannot be auto-restored safely; preview and recreate manually.",
+    trashWillRestore: " It will return to its original scope after restore.",
+    sessionNote: "Effective only in the current conversation; restored together when that conversation resumes.",
+    contentLabelMode: "Content · {count}/180",
+    contentLabel: "Content",
+    footSession: "Current session",
+    footCreated: "created {created} · updated {updated} · source {source}",
+    sourceModel: "AI",
+    sourceUi: "UI",
+    sourceHistory: "history"
+  },
+  appPanel: {
+    loginDwsNotFound: "V-Home login component not found. Reinstall or repair Visionox-Whale.",
+    loginStartFailed: "Cannot start the V-Home login component. Restart the app and retry.",
+    loginNetworkFailed: "Cannot reach the V-Home auth service. Check network, proxy, or firewall and retry.",
+    loginTlsFailed: "Secure connection to the V-Home auth service failed. Check system time, certificates, or proxy.",
+    loginPermissionDenied: "The V-Home auth service denied the request. Confirm account permission or contact an admin.",
+    loginCommandUnsupported: "The current DWS login command is unsupported. Update or reinstall Visionox-Whale.",
+    loginTimeout: "Login wait timed out. Confirm the network is working and re-fetch the auth link.",
+    loginLinkUnavailable: "DWS started but returned no auth link. Check network or proxy and retry.",
+    loginAuthRequired: "Authorization not detected yet. Confirm it succeeded in the browser and retry.",
+    loginIdentityUnavailable: "Authorization may have completed, but user info is temporarily unavailable. Refresh later.",
+    loginCommunicationFailed: "The auth process ended but V-Home connection state is unconfirmed. Check network and retry.",
+    loginIncomplete: "V-Home login incomplete. Retry based on the diagnostics.",
+    localIdentity: "127.0.0.1 · local service",
+    vhomeConnected: "V-Home connected",
+    vhomePreparing: "Fetching auth link",
+    vhomeWaiting: "Waiting for V-Home auth",
+    vhomeLogin: "Sign in to V-Home",
+    errLoginStart: "Failed to start login",
+    errRegenLink: "Failed to regenerate auth link",
+    errCancelLogin: "Failed to cancel login",
+    logoutConfirm: "Sign out of the current V-Home org? This will not affect AI, files, indexing, or other local features.",
+    errLogout: "Sign-out failed",
+    errRefresh: "Failed to refresh status",
+    errEdgeFailed: "Cannot open with Microsoft Edge. Copy the auth link instead.",
+    errBrowserFailed: "Default browser failed to open. Copy the auth link or try Microsoft Edge.",
+    copiedSuffix: " copied",
+    copyFailedSuffix: " copy failed",
+    themeIndigoNight: "Indigo Night",
+    themeLight: "Light",
+    themeDark: "Dark",
+    themeWarmSand: "Warm Sand",
+    themeCoolAsh: "Cool Ash",
+    themeSoftSage: "Soft Sage",
+    themeEspresso: "Espresso",
+    themeMidnightInk: "Midnight Ink",
+    themeDeepCharcoal: "Deep Charcoal",
+    cmdSectionNav: "Go",
+    cmdThemePrefix: "Theme: ",
+    cmdThemeCurrent: "current",
+    cmdSectionAction: "Action",
+    openMd: "Open MD",
+    openMdDesc: "Open a Markdown document with Visionox-Whale",
+    themeAria: "Theme",
+    vhomePopoverAria: "V-Home connection",
+    closeTitle: "Close",
+    closeAria: "Close V-Home connection card",
+    refreshStatus: "Refresh status",
+    logoutOrg: "Sign out of org",
+    metaPreparing: "Fetching the auth link, please wait. You can keep using AI and other local features.",
+    metaCompleting: "Confirming the authorization, please wait.",
+    metaActive: "You can keep using AI and other local features while waiting for authorization.",
+    metaDefault: "Authorize once using your browser and V-Home.",
+    authCode: "Auth code",
+    copyBtn: "Copy",
+    authLink: "auth link",
+    copyLink: "Copy link",
+    linkExpired: "Auth link expired. Regenerate it.",
+    browserNotOpen: "Browser didn't open? Copy the link to any browser.",
+    linkRemaining: "{time} left · copy the link if the browser didn't open.",
+    dwsDiag: "DWS diagnostics: ",
+    openBrowser: "Open browser",
+    openWithEdge: "Open with Edge",
+    authDone: "I've completed authorization",
+    regenLink: "Regenerate link",
+    cancelBtn: "Cancel",
+    starting: "Starting...",
+    relogin: "Sign in again",
+    oaPlatform: "Visionox Collaboration Platform"
+  },
+  setPanel: {
+    ariaModel: "Model",
+    ariaTimeUnit: "Time unit",
+    ariaCredentialProvider: "Credential provider",
+    ariaWorkMode: "Work mode",
+    ariaContextLength: "Context length",
+    ariaSearchEngine: "Search engine",
+    apiTestFailed: "API test failed: {msg}",
+    modelTestDone: "Model test done: {passed}/{total} available",
+    modelTestFailed: "Model test failed: {msg}",
+    provenanceBuiltin: "Built-in default",
+    provenanceJsonImport: "JSON import",
+    provenanceDashboard: "Dashboard edit",
+    provenanceLegacy: "Legacy config migration",
+    provenanceMigration: "Config migration",
+    provenanceEnv: "Environment variable",
+    provenanceManual: "External or manual edit",
+    noteDrift: "Running model {runtime} differs from preset {expected}. Start a new conversation or restart the app.",
+    noteLocked: "Actual model is locked by the {preset} preset to {effective}; base config {configured} only applies under auto.",
+    notePending: "Currently running {runtime}; base model {base} will be used for new conversations.",
+    credSaveHint: "Changes do not take effect immediately; saving requires a successful API test.",
+    credLastTest: "Last credential test: {time}",
+    credNoTest: "No saved test record",
+    sectionModelMgmt: "Model Management",
+    modelMgmtTitle: "Model configuration & testing",
+    modelCount: "{count} models",
+    configDirty: " · Config updated, re-test pending",
+    testing: "Testing...",
+    testAllModels: "Test all models",
+    activeConfig: "Current running config",
+    issuesNeedFix: "{count} issues to fix",
+    configComplete: "Config complete",
+    labelAdapter: "Adapter",
+    labelModelProtocol: "Model / Protocol",
+    labelEffectiveUrl: "Effective URL",
+    labelApiKey: "API Key",
+    labelSource: "Config source",
+    notSelected: "Not selected",
+    notConfigured: "Not configured",
+    provided: "Provided",
+    fromConfigFile: " (config file)",
+    fromEnv: " (env var)",
+    outsideManaged: " · Modified outside managed flow",
+    sectionWorkMode: "Work Mode",
+    workModeHintDefault: "Takes effect on the next new conversation",
+    sectionEcc: "ECC Coding Rules",
+    eccRuleTitle: "The {name} rule will be injected into the current work mode's system prompt",
+    eccEnabledNote: "{enabled}/{total} enabled in current mode; changes take effect immediately",
+    contextModelDefault: "Model default ({cap}K)",
+    contextModelDefaultNoCap: "Model default",
+    engineMojeek: "Mojeek (free)",
+    engineBingScrape: "Bing CN (free, no API key)",
+    engineSearxng: "SearXNG (self-hosted/public)",
+    engineBing: "Bing API (API key required)",
+    mirrorPriority: "Prefer domestic mirrors",
+    mirrorOnly: "Domestic mirrors only",
+    mirrorFallback: "Fall back to official sources on mirror failure",
+    mirrorNote: "Installations run via the host package manager; no node_modules or .venv is created in task directories.",
+    pythonSources: "Python package sources",
+    oneSourcePerLine: "One HTTPS source per line",
+    pythonSourcesHint: "When empty, Tsinghua and Aliyun mirrors are used, with fallback to official sources.",
+    nodeSources: "Node package sources",
+    nodeSourcesHint: "When empty, npmmirror is preferred.",
+    saveRuntimeSources: "Save runtime sources"
+  },
+  errOverlay: {
+    title: "Something went wrong on this page",
+    help: "Error details have been written to the local runtime log. You can close this and continue; if the page cannot recover, open the log directory and restart the app.",
+    copied: "Copied",
+    copyDetails: "Copy details",
+    openLogs: "Open log directory",
+    closeEsc: "Close (Esc)",
+    recoverFailed: "This page failed to recover repeatedly. Check the runtime log.",
+    retry: "Try again",
+    recovering: "Recovering..."
+  },
+  uiPrim: {
+    cmdPlaceholder: "Type a command or search…",
+    cmdAria: "Command palette",
+    cmdEmpty: "No matching commands",
+    selectPlaceholder: "Select…",
+    selectAria: "Select",
+    selectSearch: "Search…",
+    selectEmpty: "No matches",
+    switchAria: "Switch"
+  },
+  mdArt: {
+    preview: "Preview",
+    open: "Open",
+    artifactStatus: "Conversation artifact (savable)",
+    copy: "Copy",
+    saveAs: "Save as",
+    openFolder: "Open folder",
+    code: "Code",
+    previewAria: "{name} preview",
+    source: "Source",
+    copyPath: "Copy path",
+    folder: "Containing folder",
+    backToChat: "Back to chat",
+    pathCopied: "Path copied",
+    folderOpened: "Containing folder opened",
+    fileOpFailed: "File operation failed",
+    confirmOpenAria: "Confirm opening external file",
+    confirmOpenTitle: "Leave the chat to open this file?",
+    thisFile: "this file",
+    confirmOpenText: "{name} will be opened by a local application. The current chat is preserved and you can continue when you return.",
+    stayInChat: "Stay in chat",
+    openWithSystem: "Open with system app",
+    copied: "Copied",
+    copyFailed: "Copy failed",
+    saved: "Saved",
+    contentCopied: "Artifact content copied",
+    savedTo: "Saved to {name}",
+    opFailed: "Artifact operation failed"
+  },
   hooks: {
     loading: "loading hooks…",
     resolved: "resolved",
@@ -15588,6 +16094,7 @@ var en = {
     colOutcome: "outcome"
   },
   skills: {
+    scopeAria: "Skill scope",
     loading: "loading skills…",
     filterPlaceholder: "filter skills",
     project: "project",
@@ -15807,7 +16314,45 @@ var en = {
     cleanupSemanticReviewed: "AI reviewed",
     cleanupTrashRoot: "Trash folder",
     cleanupFailed: "Failed",
-    viewConversation: "View conversation"
+    viewConversation: "View conversation",
+    stopping: "stopping",
+    stoppingAction: "Stopping...",
+    stopTask: "Stop task",
+    stopRequested: "Stop requested",
+    openedFolder: "Opened containing folder",
+    pathCopied: "Path copied",
+    fileOpFailed: "File operation failed",
+    pickArchiveWorkspaceFailed: "Failed to pick archive workspace",
+    resultArchivedDup: "Already archived",
+    resultArchived: "Archived to knowledge base",
+    archiveFailed: "Knowledge archive failed",
+    knowledgeAIReviewed: "AI reviewed",
+    knowledgeAIFailed: "AI review failed",
+    knowledgeRejectedLowValue: "Low-value rejected",
+    knowledgeDocumentsRejected: "Quality rejected",
+    knowledgeTopicsRemoved: "Old topics removed",
+    previewReport: "Preview report",
+    archiveQualityTitle: "Archived to a fixed workspace after passing quality review",
+    archivePickFirstTitle: "Pick an archive workspace below and save the task first",
+    archivedState: "Archived",
+    archiveToKnowledge: "Archive to knowledge",
+    knowledgeArchiveLabel: "Knowledge archive: ",
+    openFolder: "Containing folder",
+    copyPath: "Copy path",
+    previewAction: "Preview",
+    knowledgeArchive: "Knowledge archive",
+    noArchiveWorkspace: "No archive workspace selected",
+    archiveFixedHint: "Reports stay in the task record first; the archive target is fixed to this workspace and does not follow the current workspace.",
+    autoArchiveHQ: "Auto-archive high-quality results",
+    autoIndexAfterArchive: "Update local index after archiving",
+    needEmbeddingApi: "requires embedding API setup",
+    ariaCleanupAction: "Cleanup action",
+    ariaCleanupStrength: "Cleanup strength",
+    ariaSemanticMode: "Semantic mode",
+    ariaRunMode: "Run mode",
+    ariaWorkspaceScope: "Workspace scope",
+    ariaTaskType: "Task type",
+    ariaWeekday: "Weekday"
   },
   semantic: {
     codeRequired: "Semantic — code-mode required",
@@ -15858,6 +16403,9 @@ var en = {
     saveBeforeIndex: "Save semantic settings before starting an index.",
     extraBody: "extra body",
     keepExistingKey: "leave blank to keep existing key",
+    knowledgeDocs: "Knowledge docs",
+    knowledgeDocsValue: "{files} docs · {chunks} chunks",
+    enterApiKey: "Enter the actual API Key (e.g. api-xxxxx)",
     remoteProvider: "Remote embedding provider",
     remoteProviderDesc: "Configure the full OpenAI-compatible embeddings URL here. Visionox-Whale will send requests exactly to the URL you provide.",
     ollama: "ollama",
@@ -16031,7 +16579,9 @@ var zhCN = {
     commentEdit: "编辑",
     commentDelete: "删除",
     reviewEmpty: "暂无可审查的更改",
+    diffSource: "差异来源",
     diffSourceGit: "Git 变更",
+    diffSourceCheckpoint: "检查点",
     diffSourceSession: "上一轮变更",
     diffStyleUnified: "统一视图",
     diffStyleSplit: "分栏视图",
@@ -16049,6 +16599,8 @@ var zhCN = {
     add: "添加",
     confirm: "确认",
     noData: "暂无{name}。",
+    choose: "选择",
+    clear: "清除",
     all: "全部",
     yes: "是",
     no: "否",
@@ -16157,6 +16709,429 @@ var zhCN = {
     devBackToBottom: "回到底部"
   },
   chat: {
+    artifactFallback: "产物 {n}",
+    handoffCheckModel: "请检查模型配置后继续处理。",
+    handoffRedeliverNote: "确认后可仅重新交付已有结果，不会重新处理文档。",
+    unknownTask: "未知任务",
+    actPause: "暂停",
+    actResume: "继续",
+    actRetry: "重试",
+    actRetryDelivery: "确认后重新交付",
+    actCancel: "取消任务",
+    actSubmitResult: "提交处理结果",
+    actRetarget: "更改输出位置",
+    actAckOutcome: "确认结果",
+    actDeleteRecord: "删除记录",
+    handoffQueued: "后台处理已经结束，正在等待 AI 接管并继续交付。",
+    handoffRunning: "AI 已接管后台结果，正在核实产物并继续处理。",
+    handoffWaitingConversation: "任务属于另一个会话。返回发起任务的原会话后，AI 会自动继续处理。",
+    handoffNeedsUser: "AI 自动接管未完成：{error}",
+    handoffUserPaused: "任务由用户暂停，点击“继续”后才会恢复。",
+    handoffLegacy: "这是旧版本创建的任务，无法安全关联到原会话；请在后台面板中手动点击“继续”或“重试”。",
+    stageExtracting: "正在读取来源内容",
+    stageSelectingModel: "正在选择可用模型",
+    stageDraft: "正在整理当前区块",
+    stageQualityRepair: "正在补全当前区块",
+    stageQualityReview: "正在审校当前区块",
+    stageBatchComplete: "当前区块已保存",
+    stageAssembling: "正在组装完整文档",
+    stageSummary: "正在生成摘要",
+    stageCompleted: "文档已经完成",
+    stageFailed: "任务执行失败",
+    stageCancelled: "任务已取消",
+    stageStopped: "已停止，检查点已保留",
+    stageAbandoned: "任务已放弃",
+    stageSourceChanged: "来源已变化",
+    stageAwaitingOutput: "最终草稿已保存，等待处理输出路径",
+    stageWaitingProvider: "等待其他模型任务",
+    stageJobTimeout: "本次执行总时限已到",
+    stageJobCallBudget: "本次执行调用预算已用尽",
+    progressUnitBatch: "区块",
+    progressCompletedUnits: "已完成 {completed} {unit}",
+    progressPreparing: "正在准备文档",
+    retryAfterModelFix: "处理模型问题后重试",
+    retryFailedPart: "重试失败部分",
+    taskLevelModelCall: "任务级模型调用",
+    etcSuffix: "等",
+    confirmCancelTask: "确认取消该任务？",
+    confirmDeleteRecord: "确认删除该任务记录？",
+    promptNewOutputPath: "请输入新的输出文件完整路径",
+    confirmRedelivery: "上一次对话交付结果不确定，重新交付可能产生重复回复。是否确认继续？",
+    currentModel: "当前模型",
+    recentModel: "最近使用模型",
+    noModelCallYet: "尚未开始模型调用",
+    bgJobsTitle: "后台任务",
+    bgJobsRunning: "运行中 {count}",
+    bgJobsClose: "返回对话",
+    bgJobsEmpty: "当前没有后台任务",
+    bgSelectTask: "选择左侧任务查看详情",
+    bgStopNow: "立即停止",
+    bgAbandon: "放弃任务",
+    bgConfirmAbandon: "放弃任务会终止处理，确认？",
+    bgConfirmDeleteRecord: "仅删除任务记录和中间产物，确认？",
+    bgRedeliverTitle: "只重新交付已有结果，不会重新处理文档",
+    bgReviewReasons: "需要复核的原因",
+    unknownProvider: "未知服务商",
+    unknownModel: "未知模型",
+    affectedBatches: "影响区块 · {label}",
+    suggestionPrefix: "建议：",
+    sourceAndArtifact: "来源与产物",
+    localDirOnlyDesktop: "本地目录选择器仅在桌面端可用",
+    dirPickerTimeout: "目录选择器响应超时",
+    selectMdDoc: "请选择 Markdown 文档...",
+    mdOpenFailed: "Markdown 文档打开失败",
+    pathCopied: "路径已复制",
+    fileOpFailed: "文件操作失败",
+    currentReplyFiles: "当前回复文件",
+    latestFiles: "最新生成文件",
+    followLatest: "跟随最新",
+    hide: "隐藏",
+    filesDetected: "检测到 {count} 个可操作文件",
+    preview: "预览",
+    open: "打开",
+    openFolder: "所在文件夹",
+    copyPath: "复制路径",
+    moreFilesDedup: "还有 {count} 个文件，已自动去重",
+    srcReport: "任务报告",
+    srcOpened: "打开过",
+    srcSaved: "另存产物",
+    srcGenerated: "生成文件",
+    srcFile: "文件",
+    timeUnknown: "时间未知",
+    requestTimeout: "请求超时（{sec} 秒）：{path}",
+    thumbImage: "图片",
+    thumbVideo: "视频",
+    deleteAttachment: "删除附件",
+    importingShort: "导入中...",
+    importConfigBtn: "导入模型配置",
+    testingShort: "检测中...",
+    testAllBtn: "检测全部模型",
+    cleaningShort: "删除中...",
+    cleanFailedBtn: "删除检测失败模型（{count}）",
+    chipModel: "模型",
+    chipWorkspace: "工作空间",
+    chipJobs: "后台",
+    indexOffShort: "索引关",
+    addImageOrVideo: "添加图片或视频",
+    addImage: "添加图片",
+    skillEntry: "技能",
+    skillMentionMeta: "@ 提及",
+    loadEarlierFailed: "加载更早消息失败",
+    clipboardNoPath: "无法读取剪贴板中的文件路径，请重新复制文件或文件夹。",
+    modelApplying: "正在应用模型设置...",
+    modeSwitchedNextChat: "工作场景已切换，下次新对话生效",
+    compactionNote: "，发送下一条消息前将自动整理历史",
+    modelQueuedSwitch: "已选择 {model}，将在当前回答结束后切换，保留 {count} 条上下文{adaptation}",
+    modelSwitchedKeep: "✓ 已切换到 {model}，保留 {count} 条上下文{adaptation}",
+    effortSelected: "✓ 已选择 {value} 模式",
+    effortSetTo: "✓ 推理强度已设为 {label}",
+    switchFailed: "切换失败：{msg}",
+    modelSwitching: "正在切换模型...",
+    modelSwitchedKeepCount: "✓ 已切换模型，保留 {count} 条上下文",
+    modelSwitched: "✓ 模型已切换",
+    importingConfig: "正在导入模型配置...",
+    importOkVerify: "✓ 配置导入成功，请检测模型",
+    importFailed: "导入失败：{msg}",
+    checkingConfig: "正在检查模型配置...",
+    confirmImportDeletes: "该配置会永久删除现有模型，确认继续导入吗？",
+    importCancelled: "已取消导入",
+    testingAll: "正在检测全部模型...",
+    testDoneWithFail: "检测完成：{passed} 个可用，{failed} 个不可用",
+    testAllPassed: "✓ {passed} 个模型全部可用",
+    testFailed: "模型检测失败：{msg}",
+    confirmCleanFailed: "将删除 {failed} 个检测失败模型，不影响可用模型。确认继续吗？",
+    cleaningFailed: "正在删除检测失败模型...",
+    cleanedModels: "✓ 已删除 {count} 个不可用模型",
+    cleanFailed: "删除失败：{msg}",
+    modeSwitchHint: "切换后下次新对话生效",
+    switchWorkMode: "切换工作场景",
+    eccNotEnabled: "未启用",
+    modePickerTitle: "工作场景 — 下次新对话生效",
+    modeOptionTitle: "{label}: {desc} · ECC {rules} · 下次新对话生效",
+    newMessagesBelow: "↓ 有新消息",
+    feedRefresh: "刷新对话",
+    feedExpandAll: "展开全部工作步骤",
+    feedCollapseAll: "折叠全部工作步骤",
+    planIncomplete: "计划尚未完成 · {done}/{total} 步",
+    planAutoResumed: "已自动续跑 {count} 次",
+    planResume: "继续执行",
+    planDismiss: "暂时关闭",
+    modelAndEffortTitle: "模型与思考设置",
+    switchWorkspaceTitle: "切换工作空间",
+    bgChipTitle: "运行中 {running}，待处理 {attention}",
+    indexChipTitle: "索引：从当前工作区和知识库中查找相关内容",
+    indexTitle: "索引",
+    indexAuto: "自动召回",
+    indexTool: "按需搜索",
+    indexOff: "不使用",
+    moreActions: "更多操作",
+    pickSkill: "选择技能",
+    pickModel: "选择模型",
+    modelProvidersAria: "模型服务商",
+    groupModelsAria: "{group} 模型",
+    statusVerified: "已验证",
+    statusUnavailable: "不可用",
+    statusUntested: "未检测",
+    statusUsable: "可用",
+    providerNoModels: "该服务商暂无可用模型",
+    noModelsYet: "尚未导入模型",
+    configDirtyRetest: "配置已更新，请重新检测全部模型",
+    testFailedFallback: "检测失败",
+    testedSummary: "已通过 {passed}/{total}",
+    modeLabel: "模式",
+    fixedSuffix: "（固定）",
+    effortLabel: "思考强度",
+    reasoningDisplayLabel: "思考过程显示",
+    reasoningDisplayTitle: "控制对话中模型思考过程的展示方式：实时显示会滚动展示当前一轮思考；仅状态行只显示“思考中”提示；完全隐藏则不展示任何思考内容。",
+    reasoningLive: "实时显示",
+    reasoningStatusOnly: "仅状态行",
+    reasoningHidden: "完全隐藏",
+    retrievalRunning: "召回中...",
+    retrievalEmpty: "未找到相关内容",
+    retrievalTimeout: "召回超时",
+    retrievalUnavailable: "索引不可用",
+    retrievalError: "召回失败",
+    refsCount: "参考 {count}",
+    retrievalSourcesTitle: "本轮索引来源",
+    optimizeInputTitle: "优化当前输入，不会自动发送",
+    optimizeInputAria: "优化当前提示词",
+    sendSend: "发送 (Enter)",
+    sendQueue: "排队发送，当前任务完成后自动发出",
+    sendStop: "停止当前任务",
+    sendIdle: "输入内容后发送",
+    shownOfTotal: "已显示 {shown} / 共 {total} 条",
+    loadingDots: "加载中...",
+    newChatTitle: "开始新对话（当前对话会保留在历史记录）",
+    newChatBtn: "新建对话",
+    foldNormal: "普通压缩",
+    foldAggressive: "激进压缩",
+    foldForceSummary: "强制总结",
+    draftKept: "输入内容已变化，未覆盖你刚才的修改",
+    optimizeNoResult: "模型没有返回可用的优化结果",
+    optimizeDone: "提示词已优化，请确认后发送",
+    optimizeFailed: "提示词优化失败：{msg}",
+    artifactDefaultName: "任务产物",
+    noPreviewableChunk: "当前还没有可预览的已完成区块",
+    docPreviewDefaultName: "文档中间预览.md",
+    uploadFailed: "附件上传失败：{msg}",
+    attachmentEmpty: "附件文件为空",
+    attachmentTooLarge: "附件超过 50 MB 限制",
+    attachmentTypeUnsupported: "仅支持图片、MP4、MOV 或 WebM 视频",
+    imageNotSupported: "当前模型不支持图片输入",
+    videoNotSupported: "仅显式配置的官方 Kimi 视频模型支持视频输入",
+    attachmentNoId: "宿主未返回附件 ID",
+    attachmentStale: "附件上传所属会话或工作区已经切换",
+    lastRunFailed: "上一次执行未成功，请明确重试。",
+    queuePersistFailed: "队列持久化失败",
+    queueDeleteFailed: "队列删除失败",
+    queueClearFailed: "队列清空失败",
+    planContinuationText: "继续执行当前未完成计划。不要重新制定计划，从中断处继续，完成实际产物并验证后再结束。",
+    planContinueFailed: "继续执行失败",
+    indexPreviewFailed: "索引来源预览失败",
+    providerFallback: "服务商",
+    mdOpened: "已打开 {name}",
+    mdDocFallback: "Markdown 文档",
+    mdDocDefaultName: "Markdown 文档.md",
+    mdSelectRequired: "请选择 Markdown 文档",
+    mdTooLarge: "文件过大，最大支持 {mb}MB",
+    localFileOnlyDesktop: "本地文件选择器仅在桌面端可用",
+    filePickerTimeout: "文件选择器响应超时",
+    retryAfterBalance: "余额/额度处理后重试",
+    listSep: "、",
+    fallbackModelSuffix: "（备用候选）",
+    userActionNeededFallback: "任务需要你的补充信息后才能继续。",
+    confirmCancelTaskDetail: "确定取消这个任务？已保存的检查点和产物不会被删除。",
+    confirmDeleteRecordDetail: "确定删除这条任务记录？已经交付的产物不会被删除。",
+    bgJobsHeaderMeta: "运行中 {active} · 待处理 {attention} · 共 {total}",
+    bgPendingDeliveries: " · 待确认通知 {count}",
+    bgJobsCloseTitle: "返回对话（Esc）",
+    kindDocument: "文档",
+    kindService: "服务",
+    kindTask: "任务",
+    genericRunning: "运行中",
+    exitCode: "exit {code}",
+    revisionLabel: "修订 {n}",
+    epochLabel: "执行轮次 {n}",
+    outcomeSummaryTitle: "结果摘要",
+    blockingReasonTitle: "阻塞原因",
+    userActionTitle: "需要你的处理",
+    deliveryStateTitle: "交付状态",
+    deliveryWaitingConfirm: "等待交付确认",
+    deliveryConversation: "对话",
+    deliveryTaskCenter: "任务中心",
+    deliveryWaiting: "等待中",
+    warningsTitle: "需要留意",
+    artifactsTitle: "产物",
+    artifactsEmpty: "暂未生成产物",
+    previewBtn: "预览",
+    coverageTitle: "覆盖情况",
+    procRunning: "正在运行",
+    procEnded: "已结束 · exit {code}",
+    stopBtn: "停止",
+    waitingNextStep: "等待下一步",
+    pauseBtn: "暂停",
+    resumeSaveAs: "另存后台草稿",
+    resumeRecoverFinal: "恢复最终文件",
+    resumeSubmitDraft: "提交已保存草稿",
+    resumeContinue: "继续",
+    redeliverBtn: "仅重新交付",
+    redeliverConfirm: "只重新交付已有结果，不会重新处理文档。可能产生重复回复，是否继续？",
+    abandonBtn: "放弃",
+    abandonConfirm: "放弃任务会终止后续处理，但保留任务记录和已保存草稿。确定继续？",
+    previewArtifactBtn: "预览产物",
+    deleteRecordBtn: "删除记录",
+    deleteRecordConfirm: "仅删除任务记录和中间草稿；源文件及已经生成的最终产物不会删除。确定继续？",
+    modelCallsSummary: "累计模型调用 {total} 次 · 本次执行 {current} / {limit} 次",
+    currentChunk: "当前区块 · {label}",
+    awaitingOutputTitle: "内容整理和最终草稿已经完成。",
+    awaitingOutputBody: "点击“提交已保存草稿”即可继续；若同名文件仍被占用，程序会自动使用新文件名，且不会再次调用模型。",
+    artifactMissingTitle: "最终输出文件已不存在。",
+    artifactMissingBody: "任务记录和后台保存的最终草稿仍在，可以点击“继续”尝试恢复交付。",
+    artifactModifiedTitle: "最终输出文件已被修改。",
+    artifactModifiedBody: "当前文件与任务完成时保存的草稿不一致。点击“另存后台草稿”会保留当前文件，并把已验证草稿保存为新文件。",
+    completedWarnTitle: "任务已经结束，输出文件已生成。",
+    completedWarnBody: "部分区块未通过完整质量审查，请根据下方原因处理后复核或重试。",
+    reviewReasonsTitle: "需要复核的原因",
+    reviewWarningFallback: "部分内容需要复核。",
+    modelCallFailed: "模型调用失败",
+    technicalInfo: "技术信息",
+    techMsgJoin: "；",
+    outputLabel: "输出 · {path}",
+    outputUndecided: "尚未确定",
+    criteriaTitle: "完成条件",
+    modelHistoryTitle: "模型调用链",
+    thModel: "模型",
+    thRole: "角色",
+    thResult: "结果",
+    thCalls: "调用",
+    roleFallback: "备用",
+    rolePrimary: "主模型",
+    resultPass: "通过",
+    resultFail: "未通过",
+    draftPreviewTitle: "已保存草稿预览",
+    draftPreviewPartial: "（处理中）",
+    previewTruncated: "\n\n[预览过长，已在工作台截断显示]",
+    recentEventsTitle: "最近事件",
+    currentDir: "当前目录",
+    foldersSuffix: " · {count} 个文件夹",
+    filesTitle: "文件中心",
+    filesSubtitle: "集中查看最近生成、打开和任务输出的文件",
+    filesSearchPlaceholder: "搜索文件名或路径",
+    refreshBtn: "刷新",
+    refreshingBtn: "刷新中...",
+    filesLoadFailed: "文件列表加载失败：",
+    filesLoading: "正在加载最近文件...",
+    filesNoMatch: "没有匹配的文件。",
+    filesEmpty: "暂无最近文件。对话生成文件、任务报告或打开 Markdown 后会出现在这里。",
+    filesSummary: "共 {total} 个最近文件",
+    filesSummaryFiltered: " · 当前显示 {count} 个",
+    reasoningThinking: "思考中…",
+    reasoningTurnsPrefix: "共 {n} 轮思考 · ",
+    stateIncomplete: "未完成",
+    stateCompletedWarn: "已完成但有提醒",
+    statePendingConfirm: "结果待确认",
+    receiptRecent: "最近 {name}",
+    receiptRetryable: "可恢复",
+    receiptRepeatBlocked: "同类失败已达到建议上限",
+    receiptTimes: "{count} 次",
+    receiptMediaItems: "已降级，省略 {count} 项",
+    receiptChoice: "选择 {choice}",
+    toolUsingLiveStep: "正在使用工具 · 第 {n} 步",
+    toolFailedCountSuffix: "{count} 个失败",
+    statusExecuting: "执行中",
+    toolFailedContinue: "工具失败，任务继续",
+    toolUsingLive: "正在使用工具",
+    toolUsedCount: "使用了 {count} 个工具",
+    toolFailedCount: "{count} 失败",
+    artifactVerified: "已发现并验证",
+    artifactPresentUnverified: "已发现但未充分验证",
+    artifactMissing: "产物缺失",
+    artifactInvalid: "产物无效",
+    artifactUnknown: "产物状态未知",
+    artifactNone: "未发现可验证产物",
+    stateCompleted: "已完成",
+    stateNeedsIntervention: "需要干预",
+    receiptTitle: "执行回执",
+    receiptTools: "工具",
+    receiptToolsSummary: "{total} 次，成功 {ok}，失败 {bad}",
+    receiptToolDiagnostic: "工具诊断",
+    receiptRecovery: "恢复",
+    receiptRecoveryTimes: "{count} 次",
+    receiptArtifact: "产物",
+    receiptArtifactIncomplete: "未完成或待验证",
+    receiptMedia: "媒体",
+    receiptMediaReduced: "已降级，省略 {count}",
+    receiptIntervention: "干预",
+    receiptInterventionShown: "已显示 {count} 次",
+    receiptReminder: "提醒",
+    artifactRelatedClick: "点击查看这条回复相关文件",
+    reasoningTurnLive: "思考中 · 第 {n} 轮",
+    reasoningProcess: "思考过程",
+    reasoningTurnsTotal: "共 {n} 轮",
+    reasoningChars: "约 {n} 字",
+    taskPaused: "当前任务已暂停",
+    currentStatus: "当前状态",
+    suggestion: "建议：",
+    progressUnit: "单元",
+    progressCompleted: "已完成 {completed} {unit}",
+    effortLow: "快速",
+    effortMedium: "均衡",
+    effortDeep: "深入",
+    effortExtreme: "极致",
+    capImageText: "图文",
+    capTextOnly: "仅文本",
+    capCode: "代码",
+    fileMd: "Markdown 文档",
+    fileHtml: "HTML 页面",
+    filePdf: "PDF 文档",
+    fileWord: "Word 文档",
+    filePpt: "演示文稿",
+    fileExcel: "表格文档",
+    fileCsv: "CSV 表格",
+    fileData: "数据文件",
+    fileScript: "脚本文件",
+    fileText: "文本文件",
+    fileGeneric: "{ext} 文件",
+    fileFallback: "文件",
+    providerNeedsId: "每个 provider 都必须包含 id",
+    providerNeedsModels: "provider {id} 必须包含模型",
+    providerModelNoId: "provider {id} 中存在无 id 的模型",
+    modelNeedsContext: "模型 {id} 必须声明有效的 maxContextLength",
+    jsonNeedsOperations: "维护 JSON 必须包含非空 operations 数组",
+    jsonNeedsProviders: "JSON 必须包含非空 providers 数组",
+    statusQueued: "排队中",
+    statusRunning: "处理中",
+    statusWaitingForeground: "等待前台对话",
+    statusWaitingProvider: "等待其他模型任务",
+    statusPausing: "正在暂停",
+    statusPaused: "已暂停",
+    statusInterrupted: "可继续",
+    statusStopped: "已停止，可继续",
+    statusAbandoned: "已放弃",
+    statusSourceChanged: "来源已变化",
+    statusAwaitingOutput: "内容已完成，等待交付",
+    statusCompleted: "已完成",
+    statusCompletedWarnings: "已完成，需复核",
+    statusFailed: "失败",
+    statusCancelled: "已取消",
+    statusUnknown: "未知",
+    groupActive: "运行中",
+    groupAttention: "需要处理",
+    groupCompleted: "已完成",
+    lifecycleCreated: "已创建",
+    lifecycleLeased: "已领取",
+    lifecycleAssembling: "正在装配",
+    lifecycleWaitingUser: "等待用户处理",
+    lifecycleBlocked: "受阻",
+    lifecycleTerminal: "已结束",
+    lifecycleUnknown: "未知状态",
+    outcomeDelivered: "已交付",
+    outcomeDeliveredWarnings: "已交付，需复核",
+    outcomePartial: "部分交付",
+    outcomeNone: "尚无结果",
+    qualityVerified: "已验证",
+    qualityNeedsReview: "需复核",
+    qualityUnknown: "未评估",
     modeMirror: "镜像",
     modeView: "对话",
     placeholder: "输入提示词 — Enter 发送，Shift+Enter 换行 · / @ 打开选择器",
@@ -16191,7 +17166,6 @@ var zhCN = {
     loadEarlierMessages: "加载更早的 {count} 条消息",
     reconnecting: "正在重新连接本地服务，排队内容已保留。",
     new: "新建",
-    clear: "清除",
     newTitle: "/new — 清除对话上下文（循环日志 + 滚动回放）",
     clearTitle: "/clear — 仅清除可见的滚动回放（上下文保留）",
     noConversation: "暂无对话。在下方发送提示词开始。",
@@ -16262,7 +17236,7 @@ var zhCN = {
     },
     projectFiles: "项目文件",
     mentionTargets: "技能 / 项目文件",
-    skillMentionMeta: "技能",
+    skillPickerMeta: "技能",
     skillInvokeTaskFallback: "按这个技能的流程处理用户请求。",
     skillCredentialTitle: "配置 {label}",
     skillCredentialHint: "仅 {skill} 技能需要。密钥只保存在本机，不会写入对话或发送给模型。",
@@ -16459,7 +17433,50 @@ var zhCN = {
     resumeConfirm: "加载该会话会替换当前对话上下文。当前对话：{messages} 条消息，忙碌：{busy}，草稿：{drafts}。继续？",
     transcriptSearchPlaceholder: "搜索此会话",
     transcriptSearchIdle: "会话记录",
-    transcriptSearchCount: "{current} / {total}"
+    transcriptSearchCount: "{current} / {total}",
+    tabSessions: "会话",
+    tabTrash: "回收站",
+    trashConfirmTitle: "移入回收站",
+    trashConfirmSingle: "确认将“{name}”移入回收站？",
+    trashConfirmMulti: "确认将选中的 {count} 个会话移入回收站？",
+    trashConfirmKeep: "保留期内可以恢复。",
+    dontAskAgain: "下次不再提示",
+    trashResult: "已移入回收站 {moved} 个，失败 {failed} 个。",
+    restoreConfirmBack: "删除确认已恢复。",
+    restored: "会话已从回收站恢复。",
+    restoreResult: "已恢复 {restored} 个，失败 {failed} 个。名称冲突的会话可打开预览后改名恢复。",
+    purgeConfirm: "永久删除 {count} 个回收站会话？此操作无法撤销。",
+    purgeResult: "已永久删除 {deleted} 个，失败 {failed} 个。",
+    retentionSaved: "回收站文件将在 {days} 天后自动删除。",
+    skippedInvalid: "已跳过 {count} 条无法解析的记录。",
+    exitBatch: "退出批量",
+    batchManage: "批量管理",
+    autoCleanup: "自动清理",
+    retentionAria: "自动清理保留天数",
+    daysUnit: "{d} 天",
+    restoreConfirmAction: "恢复删除确认",
+    emptyTrash: "回收站为空",
+    selectSessionAria: "选择会话 {name}",
+    selectTrashAria: "选择回收站会话 {name}",
+    trashFileCount: "{count} 个文件",
+    deletedAt: "删除于 {time}",
+    cleanupAt: "清理于 {time}",
+    selectedCount: "已选 {count} 项",
+    deselectAll: "取消全选",
+    selectAllFiltered: "全选当前",
+    restoreAction: "恢复",
+    purgeAction: "永久删除",
+    trashPreviewMeta: "回收站预览 · {count} 条消息",
+    restoreReviewTitle: "确认内容后恢复",
+    restoreNameLabel: "恢复后的会话名称",
+    restoreSessionAction: "恢复会话",
+    restoreNameHint: "如果原名称已被使用，可以修改名称后恢复，不会覆盖现有会话。",
+    affectedLines: "受影响行：{lines}",
+    loadingDots: "加载中...",
+    loadEarlier200: "加载更早的 200 条消息",
+    resumeTitle2: "继续会话",
+    resumeDesc2: "加载历史消息到当前聊天，并恢复保存时的工作场景{mode}，AI 将获得完整上下文，你可以直接继续对话。",
+    resumeAction: "加载并继续会话"
   },
   tools: {
     loading: "加载工具…",
@@ -16599,6 +17616,343 @@ var zhCN = {
     saved: "已保存 {scope}",
     reloadHint: "在下次 /new 或会话重启时重新加载"
   },
+  memPanel: {
+    unsavedConfirm: "当前修改尚未保存，确定放弃吗？",
+    moved: "场景记忆已移动",
+    saved: "记忆已保存",
+    sceneAdded: "工作场景记忆已新增",
+    longTermAdded: "长期记忆已新增",
+    trashMoveConfirm: "将“{label}”移入回收站？{days} 天内可以恢复。",
+    deleteConfirm: "确定删除“{label}”吗？此操作不可撤销。",
+    deleted: "记忆已删除",
+    pickOtherScene: "请选择其他工作场景后再复制",
+    sceneCopied: "场景记忆已复制",
+    batchDeleteConfirm: "确定删除选中的 {count} 条场景记忆吗？",
+    batchDeleted: "已批量删除",
+    batchEnabled: "已批量启用",
+    batchDisabled: "已批量停用",
+    applyFailed: "无法应用记忆",
+    applied: "记忆已应用到当前对话",
+    soulRestoreConfirm: "恢复此 Soul 版本？当前版本会先自动保存到历史。",
+    soulRestored: "Soul 版本已恢复",
+    soulResetConfirm: "恢复默认 Soul？当前版本会先自动保存到历史。",
+    soulResetDone: "已恢复默认 Soul",
+    trashRestored: "记忆已从回收站恢复",
+    permanentDeleteConfirm: "永久删除“{label}”？删除后无法恢复。",
+    permanentDeleted: "记忆已永久删除",
+    invalidSuffix: "，其中 {count} 条文件已损坏、无法预览",
+    emptyTrashConfirm: "清空回收站中的 {count} 条记忆{invalid}？全部内容将永久删除且无法恢复。",
+    emptied: "已永久删除 {count} 条记忆",
+    aiIdentityNamed: "AI 身份：{name}",
+    aiIdentityDefault: "AI 身份与行为准则",
+    scopeGlobal: "全局",
+    scopeProject: "当前项目",
+    scopeSoul: "AI 身份",
+    scopeTrash: "回收站",
+    scopeSession: "当前会话",
+    stateDisabled: "已停用",
+    stateFullInject: "全文注入",
+    stateSummaryInject: "摘要注入",
+    stateWillInject: "将注入",
+    stateIdentityConfig: "身份配置",
+    stateRecoverable: "可恢复",
+    stateNotInjected: "未注入",
+    diagSensitive: "可能包含敏感信息",
+    diagConflict: "可能冲突",
+    diagDuplicate: "内容重复",
+    pageTitle: "记忆管理",
+    noWorkspace: "未选择工作区",
+    searchPlaceholder: "搜索摘要、内容或关键词",
+    filterAll: "全部",
+    filterMode: "工作场景",
+    allScenes: "全部场景",
+    pendingTitle: "当前上下文仍在使用旧记忆",
+    pendingDesc: "磁盘修改已保存，执行应用后当前对话才会使用新版本。",
+    applyNow: "立即应用到当前对话",
+    budgetCurrent: "当前记忆上下文",
+    budgetFixed: "固定",
+    budgetRecallable: "可召回",
+    budgetDedup: "高优先级全文与普通摘要已去重",
+    listCount: "{count} 条",
+    trashRetentionHint: "{days} 天后自动清理",
+    trashInvalidHint: "{count} 条损坏",
+    collapseCreate: "收起新增",
+    createMemory: "新增记忆",
+    emptyTrash: "清空回收站",
+    refresh: "刷新",
+    createSceneTitle: "新增场景记忆",
+    createLongTermTitle: "新增长期记忆",
+    ariaScope: "记忆范围",
+    scopeProjectMem: "当前项目",
+    scopeMode: "工作场景",
+    ariaPriority: "优先级",
+    prioLow: "低优先级",
+    prioNormal: "普通",
+    prioHigh: "高优先级",
+    ariaTargetScene: "目标场景",
+    modeEnabledMeta: "{enabled}/{count} 启用",
+    summaryPlaceholder: "一句话摘要",
+    bodyPlaceholderMode: "场景记忆内容，最多 180 字符",
+    bodyPlaceholder: "记忆内容",
+    cancel: "取消",
+    batchSelected: "已选 {count} 条",
+    batchEnable: "启用",
+    batchDisable: "停用",
+    batchDelete: "删除",
+    cleanedAt: "清理于 {date}",
+    unknown: "未知",
+    priorityMeta: "优先级 {prio}",
+    temporary: "临时",
+    manualMaintain: "手动维护",
+    prioHighShort: "高优先级",
+    prioLowShort: "低优先级",
+    emptyList: "没有符合条件的记忆",
+    projectRules: "当前项目规则",
+    stateFull: "全文",
+    stateTruncated: "截断 {chars} 字符",
+    stateOmitted: "因总预算省略",
+    notConfigured: "未配置",
+    actualInject: "实际注入 {used} / {max} 字符",
+    pickDetail: "选择一条记忆查看详情",
+    detailDirty: "有未保存修改",
+    detailSynced: "已同步",
+    restoreHintDefault: "恢复到原范围",
+    restoreThis: "恢复此记忆",
+    permanentDelete: "永久删除",
+    saveBtn: "保存",
+    deleteBtn: "删除",
+    diagAction: "请核对后自行决定保留、修改或删除，系统不会自动合并。",
+    fieldSummary: "摘要",
+    fieldType: "类型",
+    typeUser: "用户偏好",
+    typeFeedback: "纠正反馈",
+    typeProject: "项目事实",
+    typeReference: "参考信息",
+    fieldPriority: "优先级",
+    prioLowTiny: "低",
+    prioHighTiny: "高",
+    fieldTargetScene: "目标场景",
+    moveHint: "保存后将移动到目标场景",
+    copyHint: "选择其他场景可移动或复制",
+    copyToScene: "复制到场景",
+    fieldKeywords: "关键词",
+    enableThis: "启用此场景记忆",
+    soulBasic: "基础编辑",
+    soulAdvanced: "高级原文",
+    fieldAiName: "AI 名称",
+    soulWho: "身份与定位",
+    soulCollab: "协作方式",
+    soulSafety: "安全与隐私",
+    soulFullMd: "完整 Soul Markdown · {count} 字符",
+    previewInject: "预览最终注入",
+    resetSoul: "恢复默认 Soul",
+    finalPreview: "最终注入预览",
+    previewChars: "{used}/{max} 字符",
+    soulNoDelete: "Soul 不提供删除",
+    soulEffective: "保存后在下一次 /new 或上下文重建时生效。",
+    versionHistory: "版本历史",
+    unnamed: "未命名",
+    restoreVersion: "恢复此版本",
+    trashDeletedAt: "删除于 {date}，",
+    trashExpireAt: "{date} 后自动永久清理。",
+    trashRetentionDays: "保留 {days} 天。",
+    trashOtherProject: " 这是其他项目的记忆，请打开原项目后恢复；仍可在此预览或永久删除。",
+    trashNoProject: " 旧记录未保存原项目信息，无法安全自动恢复；可预览内容后重新创建。",
+    trashWillRestore: " 恢复后将回到原范围。",
+    sessionNote: "仅在当前对话中生效，恢复该对话时会一并恢复。",
+    contentLabelMode: "内容 · {count}/180",
+    contentLabel: "内容",
+    footSession: "当前会话",
+    footCreated: "创建 {created} · 更新 {updated} · 来源 {source}",
+    sourceModel: "AI",
+    sourceUi: "界面",
+    sourceHistory: "历史数据"
+  },
+  appPanel: {
+    loginDwsNotFound: "未找到 V来家登录组件，请重新安装或修复 Visionox-Whale。",
+    loginStartFailed: "无法启动 V来家登录组件，请重启软件后再试。",
+    loginNetworkFailed: "无法连接 V来家授权服务，请检查网络、代理或防火墙后重试。",
+    loginTlsFailed: "V来家授权服务的安全连接失败，请检查系统时间、证书或网络代理。",
+    loginPermissionDenied: "V来家授权服务拒绝了当前请求，请确认账号权限或联系管理员。",
+    loginCommandUnsupported: "当前 DWS 登录命令不受支持，请更新或重新安装 Visionox-Whale。",
+    loginTimeout: "登录等待已超时，请确认网络正常后重新获取授权链接。",
+    loginLinkUnavailable: "DWS 已启动，但没有返回授权链接。请检查网络或代理后重试。",
+    loginAuthRequired: "尚未检测到授权完成，请确认浏览器中的授权已成功后重试。",
+    loginIdentityUnavailable: "授权可能已完成，但暂时无法获取当前用户信息，请稍后刷新。",
+    loginCommunicationFailed: "授权进程已结束，但无法确认 V来家连接状态，请检查网络后重试。",
+    loginIncomplete: "V来家登录未完成，请根据诊断信息重试。",
+    localIdentity: "127.0.0.1 · 本地服务",
+    vhomeConnected: "V来家已连接",
+    vhomePreparing: "正在获取授权链接",
+    vhomeWaiting: "等待 V来家授权",
+    vhomeLogin: "登录 V来家",
+    errLoginStart: "登录启动失败",
+    errRegenLink: "重新生成授权链接失败",
+    errCancelLogin: "取消登录失败",
+    logoutConfirm: "确认退出当前 V来家组织？退出后不会影响 AI、文件、索引和其他本地功能。",
+    errLogout: "退出登录失败",
+    errRefresh: "刷新状态失败",
+    errEdgeFailed: "无法使用 Microsoft Edge 打开，请复制授权链接。",
+    errBrowserFailed: "默认浏览器未能打开，请复制授权链接或尝试 Microsoft Edge。",
+    copiedSuffix: "已复制",
+    copyFailedSuffix: "复制失败",
+    themeIndigoNight: "靛夜",
+    themeLight: "浅色",
+    themeDark: "深色",
+    themeWarmSand: "暖沙",
+    themeCoolAsh: "冷灰",
+    themeSoftSage: "柔绿",
+    themeEspresso: "浓缩咖啡",
+    themeMidnightInk: "午夜墨蓝",
+    themeDeepCharcoal: "深炭灰",
+    cmdSectionNav: "跳转",
+    cmdThemePrefix: "主题：",
+    cmdThemeCurrent: "当前",
+    cmdSectionAction: "动作",
+    openMd: "打开 MD",
+    openMdDesc: "用 Visionox-Whale 打开 Markdown 文档",
+    themeAria: "主题",
+    vhomePopoverAria: "V来家连接",
+    closeTitle: "关闭",
+    closeAria: "关闭 V来家连接卡片",
+    refreshStatus: "刷新状态",
+    logoutOrg: "退出当前组织",
+    metaPreparing: "正在获取授权链接，请稍候。此时可以继续使用 AI 和其他本地功能。",
+    metaCompleting: "正在确认授权结果，请稍候。",
+    metaActive: "授权等待期间可以继续使用 AI 和其他本地功能。",
+    metaDefault: "使用浏览器和 V来家完成一次授权。",
+    authCode: "授权码",
+    copyBtn: "复制",
+    authLink: "授权链接",
+    copyLink: "复制链接",
+    linkExpired: "授权链接已过期，请重新生成。",
+    browserNotOpen: "浏览器未打开？复制链接到任意可用浏览器。",
+    linkRemaining: "剩余 {time} · 浏览器未打开可复制链接。",
+    dwsDiag: "DWS 诊断：",
+    openBrowser: "打开浏览器",
+    openWithEdge: "使用 Edge 打开",
+    authDone: "我已完成授权",
+    regenLink: "重新生成链接",
+    cancelBtn: "取消",
+    starting: "正在启动...",
+    relogin: "重新登录",
+    oaPlatform: "维信诺协同办公平台"
+  },
+  setPanel: {
+    ariaModel: "模型",
+    ariaTimeUnit: "时间单位",
+    ariaCredentialProvider: "凭据提供商",
+    ariaWorkMode: "工作场景",
+    ariaContextLength: "上下文长度",
+    ariaSearchEngine: "搜索引擎",
+    apiTestFailed: "API 检测失败：{msg}",
+    modelTestDone: "模型检测完成：{passed}/{total} 可用",
+    modelTestFailed: "模型检测失败：{msg}",
+    provenanceBuiltin: "内置默认",
+    provenanceJsonImport: "JSON 导入",
+    provenanceDashboard: "Dashboard 修改",
+    provenanceLegacy: "旧配置迁移",
+    provenanceMigration: "配置迁移",
+    provenanceEnv: "环境变量",
+    provenanceManual: "外部或手工修改",
+    noteDrift: "运行模型 {runtime} 与预设期望 {expected} 不一致，请新建对话或重启应用。",
+    noteLocked: "实际模型由 {preset} 预设锁定为 {effective}；基础配置 {configured} 仅在 auto 下使用。",
+    notePending: "当前运行 {runtime}；基础模型 {base} 将用于后续新对话。",
+    credSaveHint: "修改内容不会立即生效；API 检测通过后才能保存。",
+    credLastTest: "上次凭据检测：{time}",
+    credNoTest: "尚无已保存的检测记录",
+    sectionModelMgmt: "模型管理",
+    modelMgmtTitle: "模型配置与检测",
+    modelCount: "共 {count} 个模型",
+    configDirty: " · 配置已更新，等待重新检测",
+    testing: "检测中...",
+    testAllModels: "检测全部模型",
+    activeConfig: "当前运行配置",
+    issuesNeedFix: "{count} 项需处理",
+    configComplete: "配置完整",
+    labelAdapter: "适配器",
+    labelModelProtocol: "模型 / 协议",
+    labelEffectiveUrl: "有效 URL",
+    labelApiKey: "API Key",
+    labelSource: "配置来源",
+    notSelected: "未选择",
+    notConfigured: "未配置",
+    provided: "已提供",
+    fromConfigFile: "（配置文件）",
+    fromEnv: "（环境变量）",
+    outsideManaged: " · 未经受管流程修改",
+    sectionWorkMode: "工作场景",
+    workModeHintDefault: "切换后下次新对话生效",
+    sectionEcc: "ECC 编码规范",
+    eccRuleTitle: "{name} 规则将注入当前工作场景的系统提示词",
+    eccEnabledNote: "当前场景已启用 {enabled}/{total}，修改后立即生效",
+    contextModelDefault: "模型默认 ({cap}K)",
+    contextModelDefaultNoCap: "模型默认",
+    engineMojeek: "Mojeek (免费)",
+    engineBingScrape: "Bing 国内版 (免费，无需API)",
+    engineSearxng: "SearXNG (自部署/公共实例)",
+    engineBing: "Bing API (需 API Key)",
+    mirrorPriority: "国内镜像优先",
+    mirrorOnly: "仅允许国内镜像",
+    mirrorFallback: "国内镜像失败后回退官方源",
+    mirrorNote: "安装由宿主管理器执行，不会在任务目录创建 node_modules 或 .venv。",
+    pythonSources: "Python 包源顺序",
+    oneSourcePerLine: "每行一个 HTTPS 源",
+    pythonSourcesHint: "留空时使用清华、阿里镜像，必要时回退官方源。",
+    nodeSources: "Node 包源顺序",
+    nodeSourcesHint: "留空时优先使用 npmmirror。",
+    saveRuntimeSources: "保存运行时源"
+  },
+  errOverlay: {
+    title: "当前页面遇到错误",
+    help: "错误详情已写入本地运行日志。你可以关闭提示后继续操作；如果页面无法恢复，请打开日志目录并重新启动应用。",
+    copied: "已复制",
+    copyDetails: "复制详情",
+    openLogs: "打开日志目录",
+    closeEsc: "关闭 (Esc)",
+    recoverFailed: "当前页面连续恢复失败，请查看运行日志。",
+    retry: "重新尝试",
+    recovering: "正在恢复..."
+  },
+  uiPrim: {
+    cmdPlaceholder: "输入命令或搜索…",
+    cmdAria: "命令面板",
+    cmdEmpty: "没有匹配的命令",
+    selectPlaceholder: "请选择…",
+    selectAria: "选择",
+    selectSearch: "搜索…",
+    selectEmpty: "无匹配项",
+    switchAria: "开关"
+  },
+  mdArt: {
+    preview: "预览",
+    open: "打开",
+    artifactStatus: "可保存的对话产物",
+    copy: "复制",
+    saveAs: "另存",
+    openFolder: "打开目录",
+    code: "代码",
+    previewAria: "{name} 预览",
+    source: "源码",
+    copyPath: "复制路径",
+    folder: "所在文件夹",
+    backToChat: "返回对话",
+    pathCopied: "路径已复制",
+    folderOpened: "已打开所在文件夹",
+    fileOpFailed: "文件操作失败",
+    confirmOpenAria: "确认打开外部文件",
+    confirmOpenTitle: "要离开对话打开文件吗？",
+    thisFile: "此文件",
+    confirmOpenText: "{name} 将交给本机程序打开。当前对话会保留，返回本软件后仍可继续。",
+    stayInChat: "留在对话",
+    openWithSystem: "使用系统程序打开",
+    copied: "已复制",
+    copyFailed: "复制失败",
+    saved: "已保存",
+    contentCopied: "产物内容已复制",
+    savedTo: "已保存到 {name}",
+    opFailed: "产物操作失败"
+  },
   hooks: {
     loading: "加载钩子…",
     resolved: "已解析",
@@ -16618,6 +17972,7 @@ var zhCN = {
     colOutcome: "结果"
   },
   skills: {
+    scopeAria: "技能作用域",
     loading: "加载技能…",
     filterPlaceholder: "筛选技能",
     project: "项目",
@@ -16837,7 +18192,45 @@ var zhCN = {
     cleanupSemanticReviewed: "AI 复核",
     cleanupTrashRoot: "回收站",
     cleanupFailed: "失败",
-    viewConversation: "查看本次对话"
+    viewConversation: "查看本次对话",
+    stopping: "停止中",
+    stoppingAction: "停止中...",
+    stopTask: "停止任务",
+    stopRequested: "已请求停止任务",
+    openedFolder: "已打开所在文件夹",
+    pathCopied: "路径已复制",
+    fileOpFailed: "文件操作失败",
+    pickArchiveWorkspaceFailed: "选择归档工作区失败",
+    resultArchivedDup: "该结果已经归档",
+    resultArchived: "已归档到知识库",
+    archiveFailed: "知识归档失败",
+    knowledgeAIReviewed: "AI 评估",
+    knowledgeAIFailed: "AI 评估失败",
+    knowledgeRejectedLowValue: "低价值回收候选",
+    knowledgeDocumentsRejected: "文档质量拒绝",
+    knowledgeTopicsRemoved: "移除旧主题",
+    previewReport: "预览报告",
+    archiveQualityTitle: "通过质量审核后归档到固定工作区",
+    archivePickFirstTitle: "请先在下方选择归档工作区并保存任务",
+    archivedState: "已归档",
+    archiveToKnowledge: "归档到知识库",
+    knowledgeArchiveLabel: "知识归档：",
+    openFolder: "所在文件夹",
+    copyPath: "复制路径",
+    previewAction: "预览",
+    knowledgeArchive: "知识归档",
+    noArchiveWorkspace: "未选择归档工作区",
+    archiveFixedHint: "报告先保存在任务记录中；归档目标固定为此工作区，不随当前工作区切换。",
+    autoArchiveHQ: "高质量结果自动归档",
+    autoIndexAfterArchive: "归档后自动更新本地索引",
+    needEmbeddingApi: "需先配置 embedding API",
+    ariaCleanupAction: "清理动作",
+    ariaCleanupStrength: "清理强度",
+    ariaSemanticMode: "语义模式",
+    ariaRunMode: "运行模式",
+    ariaWorkspaceScope: "工作区范围",
+    ariaTaskType: "任务类型",
+    ariaWeekday: "星期"
   },
   semantic: {
     codeRequired: "语义 — 需要代码模式",
@@ -16888,6 +18281,8 @@ var zhCN = {
     saveBeforeIndex: "请先保存语义设置，再启动索引。",
     extraBody: "扩展请求体",
     keepExistingKey: "留空则保留现有 Key",
+    knowledgeDocs: "知识文档",
+    enterApiKey: "请输入实际 API Key（例如 api-xxxxx）",
     remoteProvider: "远程向量服务",
     remoteProviderDesc: "在这里配置 OpenAI-Compatible embeddings 的完整 URL。Visionox-Whale 会严格使用你提供的 URL 发起请求。",
     ollama: "Ollama",
@@ -17003,6 +18398,305 @@ var zhCN = {
 
 // dashboard/src/i18n/index.ts
 var t4 = createT({ en, "zh-CN": zhCN });
+
+// dashboard/src/lib/api.ts
+var TOKEN = document.querySelector('meta[name="reasonix-token"]')?.getAttribute("content") ?? "";
+var MODE = document.querySelector('meta[name="reasonix-mode"]')?.getAttribute("content") ?? "standalone";
+async function api(path, opts = {}) {
+  const method = opts.method ?? "GET";
+  const url = `/api${path}${path.includes("?") ? "&" : "?"}token=${TOKEN}`;
+  const headers = { ...opts.headers ?? {} };
+  headers["X-Reasonix-Token"] = TOKEN;
+  if (opts.body !== void 0) headers["Content-Type"] = "application/json";
+  const timeoutMs = opts.timeoutMs === 0 ? 0 : Math.max(1e3, Number(opts.timeoutMs ?? (method === "GET" ? 15e3 : 12e4)));
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
+  const timeout = timeoutMs > 0 ? setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs) : null;
+  let res;
+  let text;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      body: opts.body !== void 0 ? JSON.stringify(opts.body) : void 0,
+      signal: controller.signal
+    });
+    text = await res.text();
+  } catch (error) {
+    if (timedOut) throw new Error(t4("chat.requestTimeout", { sec: Math.round(timeoutMs / 1e3), path }));
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    opts.signal?.removeEventListener?.("abort", abortFromCaller);
+  }
+  let parsed = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = { error: text };
+  }
+  if (!res.ok) {
+    const errorBody = parsed;
+    const errMsg = errorBody?.message ?? errorBody?.error ?? `${res.status} ${res.statusText}`;
+    const err = new Error(errMsg);
+    err.status = res.status;
+    err.body = parsed;
+    err.code = errorBody?.code;
+    err.title = errorBody?.title;
+    err.retryable = errorBody?.retryable;
+    err.action = errorBody?.action;
+    err.details = errorBody?.details;
+    throw err;
+  }
+  return parsed;
+}
+async function writeClipboardText(text) {
+  const value = String(text ?? "");
+  let primaryError = null;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (error) {
+      primaryError = error;
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  Object.assign(textarea.style, {
+    position: "fixed",
+    left: "-9999px",
+    top: "0",
+    width: "1px",
+    height: "1px",
+    opacity: "0"
+  });
+  document.body.appendChild(textarea);
+  try {
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, value.length);
+    if (document.execCommand("copy")) return;
+    throw primaryError || new Error("copy command failed");
+  } finally {
+    textarea.remove();
+  }
+}
+
+// dashboard/src/lib/bus-filter.ts
+var THIRD_PARTY_ORIGIN_PREFIXES = [
+  "chrome-extension://",
+  "moz-extension://",
+  "safari-web-extension://",
+  "safari-extension://",
+  "ms-browser-extension://"
+];
+function isThirdPartyError(error, filename) {
+  const stack = error && typeof error === "object" && "stack" in error ? String(error.stack ?? "") : "";
+  const haystack = `${filename ?? ""}
+${stack}`;
+  return THIRD_PARTY_ORIGIN_PREFIXES.some((prefix) => haystack.includes(prefix));
+}
+
+// dashboard/src/lib/bus.ts
+var html = htm_module_default.bind(k);
+var appBus = new EventTarget();
+var toastBus = new EventTarget();
+function showToast(text, kind = "info", ttl = 3e3) {
+  toastBus.dispatchEvent(new CustomEvent("toast", { detail: { text, kind, ttl } }));
+}
+function requestChatMessageJump(messageId) {
+  if (!messageId) return;
+  try {
+    window.__visionoxPendingChatJump = { messageId, ts: Date.now() };
+  } catch {
+  }
+  appBus.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "chat", messageId } }));
+  setTimeout(() => {
+    appBus.dispatchEvent(new CustomEvent("chat-jump-message", { detail: { messageId } }));
+  }, 80);
+}
+function reportAppError(error, source, info) {
+  console.error(`[visionox dashboard] ${source}:`, error, info);
+  try {
+    const value = error;
+    const message = `${source}: ${value?.message ?? String(error)}
+${value?.stack ?? ""}
+${info ?? ""}`.slice(0, 12e3);
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: "vis_client_log", message }, "*");
+    }
+  } catch {
+  }
+  appBus.dispatchEvent(
+    new CustomEvent("error", { detail: { error, source, info, ts: Date.now() } })
+  );
+}
+window.addEventListener("error", (ev) => {
+  if (!ev.error) return;
+  if (isThirdPartyError(ev.error, ev.filename)) return;
+  reportAppError(ev.error, "window", ev.message);
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  if (isThirdPartyError(ev.reason)) return;
+  reportAppError(ev.reason, "promise");
+});
+function ToastStack() {
+  const [toasts, setToasts] = d2([]);
+  y2(() => {
+    const onToast = (ev) => {
+      const detail = ev.detail;
+      const id = `${Date.now()}-${Math.random()}`;
+      const t5 = { id, ...detail };
+      setToasts((prev) => [...prev, t5]);
+      setTimeout(() => setToasts((prev) => prev.filter((x4) => x4.id !== id)), t5.ttl);
+    };
+    toastBus.addEventListener("toast", onToast);
+    return () => toastBus.removeEventListener("toast", onToast);
+  }, []);
+  if (toasts.length === 0) return null;
+  return html`
+    <div class="toast-stack">
+      ${toasts.map((t5) => html`<div key=${t5.id} class="toast ${t5.kind}">${t5.text}</div>`)}
+    </div>
+  `;
+}
+
+// dashboard/src/lib/error-boundary.ts
+var html2 = htm_module_default.bind(k);
+function buildIssueBody({ error, source, info }) {
+  const ua = typeof navigator === "object" ? navigator.userAgent : "(unknown)";
+  const errMsg = error?.message ?? String(error);
+  const stack = error?.stack ?? "(no stack)";
+  return [
+    "**What happened**",
+    "(describe what you were doing — typing, switching tabs, clicking a tool path, etc.)",
+    "",
+    "**Error**",
+    "```",
+    `${source}: ${errMsg}`,
+    info ? `info: ${info}` : null,
+    "",
+    stack,
+    "```",
+    "",
+    "**Environment**",
+    `- Visionox-Whale: ${MODE}`,
+    `- Browser: ${ua}`,
+    `- URL: ${location.pathname} (token redacted)`,
+    "",
+    "_Reported from the local dashboard's error overlay._"
+  ].filter((l3) => l3 !== null).join("\n");
+}
+function ErrorOverlay() {
+  const [err, setErr] = d2(null);
+  const [copied, setCopied] = d2(false);
+  y2(() => {
+    const onError = (ev) => {
+      setErr(ev.detail);
+      setCopied(false);
+    };
+    appBus.addEventListener("error", onError);
+    return () => appBus.removeEventListener("error", onError);
+  }, []);
+  y2(() => {
+    if (!err) return;
+    const onKey = (e3) => {
+      if (e3.key === "Escape") setErr(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [err]);
+  if (!err) return null;
+  const error = err.error;
+  const errMsg = error?.message ?? String(error);
+  const stack = error?.stack ?? "(no stack)";
+  const copyDetails = async () => {
+    try {
+      await writeClipboardText(buildIssueBody(err));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2e3);
+    } catch {
+    }
+  };
+  const openLogs = () => {
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "vis_open_log_dir" }, "*");
+      }
+    } catch {
+    }
+  };
+  return html2`
+    <div class="error-overlay">
+      <div class="error-overlay-card">
+        <div class="error-overlay-head">
+          <span class="error-overlay-icon">✦</span>
+          <div>
+            <div class="error-overlay-title">${t4("errOverlay.title")}</div>
+            <div class="error-overlay-subtitle">${err.source} · ${errMsg}</div>
+          </div>
+        </div>
+
+        <pre class="error-overlay-trace">${stack}</pre>
+
+        ${err.info ? html2`<div class="error-overlay-info"><strong>info:</strong> ${err.info}</div>` : null}
+
+        <div class="error-overlay-help">
+          ${t4("errOverlay.help")}
+        </div>
+
+        <div class="error-overlay-actions">
+          <button class="primary" onClick=${copyDetails}>
+            ${copied ? t4("errOverlay.copied") : t4("errOverlay.copyDetails")}
+          </button>
+          <button onClick=${openLogs}>${t4("errOverlay.openLogs")}</button>
+          <button onClick=${() => setErr(null)} style="margin-left: auto;">${t4("errOverlay.closeEsc")}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+var ErrorBoundary = class extends C {
+  constructor(props) {
+    super(props);
+    this.state = { caught: false, lastErr: null, attempts: 0 };
+  }
+  static getDerivedStateFromError(error) {
+    return { caught: true, lastErr: error };
+  }
+  componentDidCatch(error, info) {
+    reportAppError(error, "render", info?.componentStack ?? "");
+    const attempts = (this.state.attempts ?? 0) + 1;
+    if (attempts >= 3) {
+      this.setState({ attempts });
+      return;
+    }
+    setTimeout(() => this.setState({ caught: false, attempts }), 100);
+  }
+  render() {
+    if (this.state.caught) {
+      if ((this.state.attempts ?? 0) >= 3) {
+        return html2`
+          <div class="boot" style="flex-direction: column; gap: 12px;">
+            <div>${t4("errOverlay.recoverFailed")}</div>
+            <button onClick=${() => this.setState({ caught: false, attempts: 0 })}>
+              ${t4("errOverlay.retry")}
+            </button>
+          </div>
+        `;
+      }
+      return html2`<div class="boot">${t4("errOverlay.recovering")}</div>`;
+    }
+    return this.props.children;
+  }
+};
 
 // node_modules/preact/compat/dist/compat.module.js
 function g3(n3, t5) {
@@ -19512,6 +21206,15 @@ var ARTIFACT_OPEN_EXTS = /* @__PURE__ */ new Set(["html", "htm", "txt", "json", 
 function normalizeArtifactLang(raw) {
   return String(raw || "").trim().split(/\s+/)[0].replace(/^language-/, "").toLowerCase();
 }
+function knownHighlightLanguage(raw) {
+  const lang = String(raw || "").trim();
+  if (!lang) return null;
+  try {
+    return typeof common_default?.getLanguage === "function" && common_default.getLanguage(lang) ? lang : null;
+  } catch {
+    return null;
+  }
+}
 function artifactDisplayName(content, lang, ext, seq) {
   const text = String(content || "");
   if (lang === "html" || lang === "htm") {
@@ -19562,21 +21265,21 @@ function registerChatArtifact(content, rawLang) {
 }
 function renderArtifactFrame(artifact, codeHtml) {
   if (!artifact) return codeHtml;
-  const previewBtn = artifact.previewable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="preview">预览</button>` : "";
-  const openBtn = artifact.openable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="open-file">打开</button>` : "";
+  const previewBtn = artifact.previewable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="preview">${t4("mdArt.preview")}</button>` : "";
+  const openBtn = artifact.openable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="open-file">${t4("mdArt.open")}</button>` : "";
   return `<div class="chat-artifact" data-artifact-id="${escapeHtml(artifact.id)}">
     <div class="chat-artifact-head">
       <div class="chat-artifact-title">
         <span class="chat-artifact-type">${escapeHtml(artifact.label)}</span>
         <span class="chat-artifact-name" title="${escapeHtml(artifact.filename)}">${escapeHtml(artifact.filename)}</span>
-        <span class="chat-artifact-status" data-artifact-status>可保存的对话产物</span>
+        <span class="chat-artifact-status" data-artifact-status>${t4("mdArt.artifactStatus")}</span>
       </div>
       <div class="chat-artifact-actions">
         ${previewBtn}
         ${openBtn}
-        <button type="button" class="chat-artifact-btn" data-artifact-action="copy">复制</button>
-        <button type="button" class="chat-artifact-btn" data-artifact-action="save">另存</button>
-        <button type="button" class="chat-artifact-btn" data-artifact-action="open-folder" disabled>打开目录</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="copy">${t4("mdArt.copy")}</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="save">${t4("mdArt.saveAs")}</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="open-folder" disabled>${t4("mdArt.openFolder")}</button>
       </div>
     </div>
     ${codeHtml}
@@ -19585,22 +21288,23 @@ function renderArtifactFrame(artifact, codeHtml) {
 function renderPreviewCodeBlock(content, rawLang) {
   const lang = normalizeArtifactLang(rawLang);
   const hlLang = lang === "html" || lang === "htm" ? "xml" : lang;
+  const safeLang = knownHighlightLanguage(hlLang);
   let codeHtml = escapeHtml(content);
   try {
-    if (hlLang && common_default?.getLanguage?.(hlLang)) {
-      codeHtml = common_default.highlight(content, { language: hlLang, ignoreIllegals: true }).value;
-    } else if (common_default?.highlightAuto) {
+    if (safeLang) {
+      codeHtml = common_default.highlight(content, { language: safeLang, ignoreIllegals: true }).value;
+    } else if (typeof common_default?.highlightAuto === "function") {
       codeHtml = common_default.highlightAuto(content).value;
     }
   } catch {
     codeHtml = escapeHtml(content);
   }
-  const langLabel = lang ? escapeHtml(lang) : "代码";
-  const codeClass = hlLang ? ` class="hljs language-${escapeHtml(hlLang)}"` : ' class="hljs"';
+  const langLabel = lang ? escapeHtml(lang) : t4("mdArt.code");
+  const codeClass = safeLang ? ` class="hljs language-${escapeHtml(safeLang)}"` : ' class="hljs"';
   return `<div class="artifact-preview-code">
     <div class="artifact-preview-code-head">
       <span>${langLabel}</span>
-      <button type="button" data-preview-code-copy>复制</button>
+      <button type="button" data-preview-code-copy>${t4("mdArt.copy")}</button>
     </div>
     <pre><code${codeClass}>${codeHtml}</code></pre>
   </div>`;
@@ -19626,19 +21330,21 @@ renderer.code = function reasonixCode(arg1, arg2) {
   }
   if (lang === "diff") return renderUnifiedDiff(codeText);
   const artifact = registerChatArtifact(codeText, lang);
-  if (lang && typeof lang === "string" && common_default?.getLanguage?.(lang)) {
+  const safeRequestedLang = knownHighlightLanguage(lang);
+  if (safeRequestedLang) {
     try {
-      const h3 = common_default.highlight(codeText, { language: lang, ignoreIllegals: true }).value;
-      return renderArtifactFrame(artifact, `<pre><code class="hljs language-${lang}">${h3}</code></pre>`);
+      const h3 = common_default.highlight(codeText, { language: safeRequestedLang, ignoreIllegals: true }).value;
+      return renderArtifactFrame(artifact, `<pre><code class="hljs language-${safeRequestedLang}">${h3}</code></pre>`);
     } catch {
     }
   }
   if (artifact) {
     const hlLang = artifact.lang === "html" || artifact.lang === "htm" ? "xml" : artifact.lang;
-    if (common_default?.getLanguage?.(hlLang)) {
+    const safeArtifactLang = knownHighlightLanguage(hlLang);
+    if (safeArtifactLang) {
       try {
-        const h3 = common_default.highlight(codeText, { language: hlLang, ignoreIllegals: true }).value;
-        return renderArtifactFrame(artifact, `<pre><code class="hljs language-${hlLang}">${h3}</code></pre>`);
+        const h3 = common_default.highlight(codeText, { language: safeArtifactLang, ignoreIllegals: true }).value;
+        return renderArtifactFrame(artifact, `<pre><code class="hljs language-${safeArtifactLang}">${h3}</code></pre>`);
       } catch {
       }
     }
@@ -19722,16 +21428,16 @@ function showArtifactPreview(artifact) {
   dialog.className = "artifact-preview-dialog";
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-label", `${artifact.filename} 预览`);
+  dialog.setAttribute("aria-label", t4("mdArt.previewAria", { name: artifact.filename }));
   const title = document.createElement("div");
   title.className = "artifact-preview-head";
   const canShowSource = artifact.lang !== "html" && artifact.lang !== "htm";
   title.innerHTML = `<span class="artifact-preview-name" title="${escapeHtml(artifact.path || artifact.filename)}">${escapeHtml(artifact.filename)}</span>
     <span class="artifact-preview-actions">
-      ${canShowSource ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="source">源码</button>` : ""}
-      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="copy-path">复制路径</button>` : ""}
-      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="folder">所在文件夹</button>` : ""}
-      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close" aria-label="返回对话">返回对话</button>
+      ${canShowSource ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="source">${t4("mdArt.source")}</button>` : ""}
+      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="copy-path">${t4("mdArt.copyPath")}</button>` : ""}
+      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="folder">${t4("mdArt.folder")}</button>` : ""}
+      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close" aria-label="${t4("mdArt.backToChat")}">${t4("mdArt.backToChat")}</button>
     </span>`;
   const body = document.createElement("div");
   body.className = "artifact-preview-body";
@@ -19780,7 +21486,7 @@ function showArtifactPreview(artifact) {
     }
     if (action === "source") {
       showingSource = !showingSource;
-      btn.textContent = showingSource ? "预览" : "源码";
+      btn.textContent = showingSource ? t4("mdArt.preview") : t4("mdArt.source");
       if (showingSource) renderSource();
       else renderPreview();
       return;
@@ -19788,14 +21494,14 @@ function showArtifactPreview(artifact) {
     try {
       if (action === "copy-path") {
         await writeClipboardText(artifact.path || "");
-        showToast("路径已复制", "info");
+        showToast(t4("mdArt.pathCopied"), "info");
       } else if (action === "folder") {
         if (!await confirmExternalArtifactOpen(artifact)) return;
         await api("/artifacts/open-folder", { method: "POST", body: { path: artifact.path } });
-        showToast("已打开所在文件夹", "info");
+        showToast(t4("mdArt.folderOpened"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("mdArt.fileOpFailed"), "error", 5e3);
     }
   });
 }
@@ -19807,12 +21513,12 @@ function confirmExternalArtifactOpen(artifact) {
     dialog.className = "artifact-open-confirmation-dialog";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", "确认打开外部文件");
-    dialog.innerHTML = `<div class="artifact-open-confirmation-title">要离开对话打开文件吗？</div>
-      <div class="artifact-open-confirmation-text">${escapeHtml(artifact.filename || artifact.path || "此文件")} 将交给本机程序打开。当前对话会保留，返回本软件后仍可继续。</div>
+    dialog.setAttribute("aria-label", t4("mdArt.confirmOpenAria"));
+    dialog.innerHTML = `<div class="artifact-open-confirmation-title">${t4("mdArt.confirmOpenTitle")}</div>
+      <div class="artifact-open-confirmation-text">${t4("mdArt.confirmOpenText", { name: escapeHtml(artifact.filename || artifact.path || t4("mdArt.thisFile")) })}</div>
       <div class="artifact-open-confirmation-actions">
-        <button type="button" class="artifact-preview-btn" data-artifact-open-action="cancel">留在对话</button>
-        <button type="button" class="artifact-preview-btn primary" data-artifact-open-action="open">使用系统程序打开</button>
+        <button type="button" class="artifact-preview-btn" data-artifact-open-action="cancel">${t4("mdArt.stayInChat")}</button>
+        <button type="button" class="artifact-preview-btn primary" data-artifact-open-action="open">${t4("mdArt.openWithSystem")}</button>
       </div>`;
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
@@ -19849,16 +21555,16 @@ function wireArtifactPreviewCodeCopy(iframe) {
     ev.preventDefault();
     const wrap = btn.closest(".artifact-preview-code");
     const text = wrap?.querySelector?.("pre code")?.textContent || "";
-    const original = btn.textContent || "复制";
+    const original = btn.textContent || t4("mdArt.copy");
     try {
       await writeClipboardText(text);
-      btn.textContent = "已复制";
+      btn.textContent = t4("mdArt.copied");
       setTimeout(() => {
         btn.textContent = original;
       }, 1200);
     } catch (err) {
-      btn.textContent = "复制失败";
-      showToast(err.message || "复制失败", "error", 4e3);
+      btn.textContent = t4("mdArt.copyFailed");
+      showToast(err.message || t4("mdArt.copyFailed"), "error", 4e3);
       setTimeout(() => {
         btn.textContent = original;
       }, 1500);
@@ -19882,7 +21588,7 @@ async function saveArtifact(artifact, wrap) {
     nameEl.setAttribute("title", artifact.path || artifact.filename);
   }
   const statusEl = wrap?.querySelector?.("[data-artifact-status]");
-  if (statusEl) statusEl.textContent = "已保存";
+  if (statusEl) statusEl.textContent = t4("mdArt.saved");
   return artifact;
 }
 async function handleArtifactAction(ev) {
@@ -19898,13 +21604,13 @@ async function handleArtifactAction(ev) {
   try {
     if (action === "copy") {
       await writeClipboardText(artifact.content);
-      showToast("产物内容已复制", "info");
+      showToast(t4("mdArt.contentCopied"), "info");
     } else if (action === "preview") {
       showArtifactPreview(artifact);
     } else if (action === "save") {
       btn.disabled = true;
       await saveArtifact(artifact, wrap);
-      showToast(`已保存到 ${artifact.filename}`, "info");
+      showToast(t4("mdArt.savedTo", { name: artifact.filename }), "info");
     } else if (action === "open-file") {
       if (!await confirmExternalArtifactOpen(artifact)) return;
       btn.disabled = true;
@@ -19916,7 +21622,7 @@ async function handleArtifactAction(ev) {
       await api("/artifacts/open-folder", { method: "POST", body: { dir: artifact.dir } });
     }
   } catch (err) {
-    showToast(err.message || "产物操作失败", "error", 5e3);
+    showToast(err.message || t4("mdArt.opFailed"), "error", 5e3);
   } finally {
     if (action === "save" || action === "open-file") btn.disabled = false;
   }
@@ -19985,9 +21691,10 @@ function langFromPath(path) {
 }
 function renderHighlightedBlock(text, lang) {
   if (!text) return "";
-  const safeLang = lang && common_default?.getLanguage?.(lang) ? lang : null;
+  const safeLang = knownHighlightLanguage(lang);
   try {
-    const out = safeLang ? common_default.highlight(text, { language: safeLang, ignoreIllegals: true }) : common_default.highlightAuto(text);
+    const out = safeLang ? common_default.highlight(text, { language: safeLang, ignoreIllegals: true }) : typeof common_default?.highlightAuto === "function" ? common_default.highlightAuto(text) : null;
+    if (!out) return `<pre><code>${escapeHtml(text)}</code></pre>`;
     return `<pre class="md"><code class="hljs ${safeLang ? `language-${safeLang}` : ""}">${out.value}</code></pre>`;
   } catch {
     return `<pre><code>${escapeHtml(text)}</code></pre>`;
@@ -19997,10 +21704,12 @@ function hlLine(text, lang) {
   if (text == null) return "";
   if (text === "") return "";
   try {
-    if (lang && common_default?.getLanguage?.(lang)) {
-      return common_default.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    const safeLang = knownHighlightLanguage(lang);
+    if (safeLang) {
+      return common_default.highlight(text, { language: safeLang, ignoreIllegals: true }).value;
     }
-    return common_default.highlightAuto(text).value;
+    if (typeof common_default?.highlightAuto === "function") return common_default.highlightAuto(text).value;
+    return escapeHtml(text);
   } catch {
     return escapeHtml(text);
   }
@@ -20081,8 +21790,9 @@ function ToolCard({ msg }) {
   const name = msg.toolName ?? "tool";
   const path = args?.path ?? args?.file_path ?? args?.filename;
   const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
-  const progressLabel = { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败", cancelled: "已取消" }[progressStatus];
+  const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled") }[progressStatus];
   const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
+  const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage) ? html4`<div class="tool-card-diagnostic"><strong>${t4("chat.toolFailedContinue")}</strong>${msg.code ? html4`<span>${msg.code}</span>` : null}${msg.recommendedAction ? html4`<span>${msg.recommendedAction}</span>` : null}${msg.diagnosticMessage ? html4`<span>${msg.diagnosticMessage}</span>` : null}</div>` : null;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
     const diffHtml = renderSearchReplace(
       args.search,
@@ -20097,6 +21807,7 @@ function ToolCard({ msg }) {
           ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
+        ${diagnostic}
         <div dangerouslySetInnerHTML=${{ __html: diffHtml }}></div>
         ${msg.text ? html4`<div class="tool-card-result">${msg.text}</div>` : null}
       </div>
@@ -20113,6 +21824,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
+        ${diagnostic}
         ${renderCollapsibleToolOutput(args.content, "highlight", lang)}
         ${msg.text ? html4`<div class="tool-card-result">${msg.text}</div>` : null}
       </div>
@@ -20129,6 +21841,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
+        ${diagnostic}
         ${renderCollapsibleToolOutput(msg.text ?? "", "highlight", lang)}
       </div>
     `;
@@ -20142,6 +21855,7 @@ function ToolCard({ msg }) {
           <span class="tool-card-name">${name === "run_background" ? "run_background" : "run_command"}</span>
           ${progressBadge}
         </div>
+        ${diagnostic}
         ${cmd ? html4`<pre class="tool-card-cmd"><span class="tool-card-prompt">$</span> <code>${cmd}</code></pre>` : null}
         ${msg.text ? renderCollapsibleToolOutput(msg.text) : null}
       </div>
@@ -20156,6 +21870,7 @@ function ToolCard({ msg }) {
           ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
+        ${diagnostic}
         ${renderCollapsibleToolOutput(msg.text)}
       </div>
     `;
@@ -20168,6 +21883,7 @@ function ToolCard({ msg }) {
         ${progressBadge}
         ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
       </div>
+      ${diagnostic}
       ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
       ${renderCollapsibleToolOutput(msg.text)}
     </div>
@@ -20215,7 +21931,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null }) {
   };
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
-  const summaryLabel = taskActive ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>正在使用工具 · 第 ${doneItems.length + (currentTool ? 1 : 0)} 步${currentBrief ? html4` · ${currentBrief.name}` : null}</span>` : html4`使用了 ${items.length} 个工具${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${failedItems.length} 个失败</span>` : null}`;
+  const summaryLabel = taskActive ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}${currentBrief ? html4` · ${currentBrief.name}` : null}</span>` : html4`${t4("chat.toolUsedCount", { count: items.length })}${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : null}`;
   return html4`
     <details class=${`tool-log ${taskActive ? "tool-log-running" : ""} ${!taskActive && failedItems.length > 0 ? "tool-log-has-failed" : ""}`} open=${hasHit || void 0}>
       <summary>${summaryLabel}</summary>
@@ -20230,18 +21946,29 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
   const artifactEvents = Array.isArray(receipt.artifactEvidence) ? receipt.artifactEvidence : [];
   const lastArtifact = artifactEvents.at(-1);
   const intervention = receipt.intervention || {};
+  const failures = Array.isArray(receipt.toolFailures) ? receipt.toolFailures : [];
+  const recoveries = Array.isArray(receipt.recoveries) ? receipt.recoveries : [];
   const state = taskState || completion.taskState || (completion.ok ? "completed" : "unknown");
-  const stateLabel = state === "completed" ? "已完成" : state === "needs_intervention" ? "需要干预" : state === "incomplete" ? "未完成" : state === "completed_with_warnings" ? "已完成但有提醒" : "结果待确认";
+  const artifactStatusLabel = {
+    verified: t4("chat.artifactVerified"),
+    present_unverified: t4("chat.artifactPresentUnverified"),
+    missing: t4("chat.artifactMissing"),
+    invalid: t4("chat.artifactInvalid"),
+    unknown: t4("chat.artifactUnknown")
+  }[lastArtifact?.status] || t4("chat.artifactNone");
+  const stateLabel = state === "completed" ? t4("chat.stateCompleted") : state === "needs_intervention" ? t4("chat.stateNeedsIntervention") : state === "incomplete" ? t4("chat.stateIncomplete") : state === "completed_with_warnings" ? t4("chat.stateCompletedWarn") : t4("chat.statePendingConfirm");
   const stateClass = state === "completed" ? "ok" : state === "completed_with_warnings" ? "warn" : "err";
   return html4`
     <details class=${`execution-receipt execution-receipt-${stateClass}`}>
-      <summary><strong>执行回执</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
+      <summary><strong>${t4("chat.receiptTitle")}</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
       <div class="execution-receipt-grid">
-        <span>工具</span><span>${tools.results ?? 0} 次，成功 ${tools.successes ?? 0}，失败 ${tools.failures ?? 0}${tools.lastName ? ` · 最近 ${tools.lastName}` : ""}</span>
-        <span>产物</span><span>${artifactIncomplete ? "未完成或待验证" : lastArtifact?.verified ? "已发现并验证" : "未发现可验证产物"}</span>
-        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>媒体</span><span>已降级，省略 ${receipt.mediaOmitted ?? 0} 项${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
-        ${intervention.shown > 0 ? html4`<span>干预</span><span>已显示 ${intervention.shown} 次${interventionChoice ? ` · 选择 ${interventionChoice}` : ""}</span>` : null}
-        ${warnings?.length ? html4`<span>提醒</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
+        <span>${t4("chat.receiptTools")}</span><span>${t4("chat.receiptToolsSummary", { total: tools.results ?? 0, ok: tools.successes ?? 0, bad: tools.failures ?? 0 })}${tools.lastName ? ` · ${t4("chat.receiptRecent", { name: tools.lastName })}` : ""}</span>
+        ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${failures.at(-1).code}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
+        ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${recoveries.at(-1).recovery}` : ""}</span>` : null}
+        <span>${t4("chat.receiptArtifact")}</span><span>${artifactIncomplete ? t4("chat.receiptArtifactIncomplete") : artifactStatusLabel}</span>
+        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
+        ${intervention.shown > 0 ? html4`<span>${t4("chat.receiptIntervention")}</span><span>${t4("chat.receiptInterventionShown", { count: intervention.shown })}${interventionChoice ? ` · ${t4("chat.receiptChoice", { choice: interventionChoice })}` : ""}</span>` : null}
+        ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
       </div>
     </details>
   `;
@@ -20314,18 +22041,18 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
       onClick=${selectArtifacts}
       onKeyDown=${selectArtifactsKey}
       tabIndex=${selectableForArtifacts ? 0 : void 0}
-      title=${selectableForArtifacts ? "点击查看这条回复相关文件" : void 0}
+      title=${selectableForArtifacts ? t4("chat.artifactRelatedClick") : void 0}
     >
       ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />` : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
-          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? `思考中 · 第 ${msg.reasoningTurns} 轮` : "思考中…"}</div>
+          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</div>
           <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
         ` : null : html4`
           <details class="reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
             <summary class="reasoning-summary">
-              <span class="reasoning-summary-label">思考过程</span>
-              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? `共 ${msg.reasoningTurns} 轮思考 · ` : ""}约 ${reasoningLength.toLocaleString()} 字</span>
+              <span class="reasoning-summary-label">${t4("chat.reasoningProcess")}</span>
+              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
             </summary>
             <div class="reasoning">${msg.reasoning}</div>
           </details>
@@ -20383,14 +22110,14 @@ function ChoiceModal({ modal, onResolve }) {
     <${ModalCard} accent=${contextInput ? "#f59e0b" : "#f0abfc"} icon=${contextInput ? "!" : "🔀"} title=${contextInput?.title || t4("modal.choiceTitle")} subtitle=${contextInput ? null : modal.question}>
       ${contextInput ? html4`
         <div class="modal-context-alert">
-          <div class="modal-context-alert-title">当前任务已暂停</div>
+          <div class="modal-context-alert-title">${t4("chat.taskPaused")}</div>
           <div class="modal-context-alert-reason">${contextInput.reason}</div>
         </div>
         <div class="modal-context-status">
-          <div class="modal-context-status-label">当前状态</div>
+          <div class="modal-context-status-label">${t4("chat.currentStatus")}</div>
           <div>${contextInput.statusSummary}</div>
         </div>
-        <div class="modal-context-recommendation"><strong>建议：</strong>${contextInput.recommendation}</div>
+        <div class="modal-context-recommendation"><strong>${t4("chat.suggestion")}</strong>${contextInput.recommendation}</div>
         <div class="modal-context-question">${modal.question}</div>
       ` : null}
       ${modal.options.map(
@@ -21043,7 +22770,20 @@ var TERMINAL_TOOL_STATES = /* @__PURE__ */ new Set(["succeeded", "failed", "canc
 function createDashboardEventGuard(maxEvents = 4096) {
   const eventIds = /* @__PURE__ */ new Set();
   const terminalTools = /* @__PURE__ */ new Map();
-  const terminalMessages = /* @__PURE__ */ new Set();
+  const terminalMessages = /* @__PURE__ */ new Map();
+  const assistantFinalFingerprint = (event) => {
+    try {
+      return JSON.stringify({
+        text: event?.text ?? "",
+        taskState: event?.taskState ?? null,
+        artifactIncomplete: event?.artifactIncomplete === true,
+        warnings: Array.isArray(event?.warnings) ? event.warnings : [],
+        receipt: event?.receipt ?? null
+      });
+    } catch {
+      return String(event?.text ?? "");
+    }
+  };
   const remember = (id) => {
     if (!id) return true;
     if (eventIds.has(id)) return false;
@@ -21064,8 +22804,18 @@ function createDashboardEventGuard(maxEvents = 4096) {
       }
       if (event.kind === "assistant_final" && event.id) {
         const id = String(event.id);
-        if (terminalMessages.has(id)) return false;
-        terminalMessages.add(id);
+        const fingerprint = assistantFinalFingerprint(event);
+        const previous = terminalMessages.get(id);
+        const nextEpoch = event.eventEpoch ? String(event.eventEpoch) : null;
+        const nextSeq = Number.isSafeInteger(Number(event.eventSeq)) ? Number(event.eventSeq) : null;
+        const revision = event.revision ? String(event.revision) : null;
+        const correction = event.correction === true || Boolean(revision);
+        if (previous) {
+          if (nextEpoch && previous.eventEpoch === nextEpoch && nextSeq !== null && previous.eventSeq !== null && nextSeq <= previous.eventSeq) return false;
+          if (!correction) return false;
+          if (revision && revision === previous.revision && fingerprint === previous.fingerprint) return false;
+        }
+        terminalMessages.set(id, { fingerprint, eventEpoch: nextEpoch, eventSeq: nextSeq, revision });
       }
       if (event.kind === "messages-reset") {
         terminalTools.clear();
@@ -21115,41 +22865,40 @@ function applyDashboardEvent(input, event) {
   if (!event || typeof event !== "object") return { state, changed: false, anomaly: "invalid-event" };
   const eventId = String(event.eventId ?? "");
   if (eventId && state.seen.has(eventId)) return { state, changed: false, duplicate: true };
+  const eventIds = [eventId, ...Array.isArray(event.coalescedEventIds) ? event.coalescedEventIds.map((id2) => String(id2 ?? "")) : []].filter((id2, index, values) => id2 && values.indexOf(id2) === index);
   const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
   if (epoch && state.epoch && epoch !== state.epoch) return { state, changed: false, resyncRequired: true, anomaly: "epoch-changed" };
   if (epoch) state.epoch = epoch;
   const seq = Number(event.eventSeq);
   if (Number.isSafeInteger(seq) && seq > state.lastSeq + 1) state.anomalies.push({ type: "event-gap", expected: state.lastSeq + 1, received: seq });
   if (Number.isSafeInteger(seq)) state.lastSeq = Math.max(state.lastSeq, seq);
-  if (eventId) state.seen.add(eventId);
+  for (const id2 of eventIds) state.seen.add(id2);
   while (state.seen.size > 4096) state.seen.delete(state.seen.values().next().value);
   const kind = String(event.kind ?? "");
   if (kind === "todo-update") {
-    let changed = false;
     const previousTodos = state.todos;
-    state.todos = {};
+    const nextTodos = {};
     for (const [index, item] of (Array.isArray(event.todos) ? event.todos : []).entries()) {
       const itemId = String(item?.id ?? `todo-${index + 1}`);
-      const previous2 = state.todos[itemId];
+      const previous2 = previousTodos[itemId];
       const next = { ...previous2 ?? { id: itemId }, ...item, id: itemId };
-      state.todos[itemId] = next;
-      changed || (changed = JSON.stringify(previous2) !== JSON.stringify(next));
+      nextTodos[itemId] = next;
     }
-    changed || (changed = Object.keys(previousTodos).length !== Object.keys(state.todos).length);
+    const changed = Object.keys(previousTodos).length !== Object.keys(nextTodos).length || Object.keys(nextTodos).some((id2) => JSON.stringify(previousTodos[id2]) !== JSON.stringify(nextTodos[id2]));
+    state.todos = nextTodos;
     return { state, changed };
   }
   if (kind === "prompt-update") {
-    let changed = false;
     const previousPrompts = state.prompts;
-    state.prompts = {};
+    const nextPrompts = {};
     for (const [index, item] of (Array.isArray(event.prompts) ? event.prompts : []).entries()) {
       const itemId = String(item?.id ?? `prompt-${index + 1}`);
-      const previous2 = state.prompts[itemId];
+      const previous2 = previousPrompts[itemId];
       const next = { ...previous2 ?? { id: itemId }, ...item, id: itemId };
-      state.prompts[itemId] = next;
-      changed || (changed = JSON.stringify(previous2) !== JSON.stringify(next));
+      nextPrompts[itemId] = next;
     }
-    changed || (changed = Object.keys(previousPrompts).length !== Object.keys(state.prompts).length);
+    const changed = Object.keys(previousPrompts).length !== Object.keys(nextPrompts).length || Object.keys(nextPrompts).some((id2) => JSON.stringify(previousPrompts[id2]) !== JSON.stringify(nextPrompts[id2]));
+    state.prompts = nextPrompts;
     return { state, changed };
   }
   const bucket = entityBucket(kind, event);
@@ -21166,11 +22915,107 @@ function applyDashboardEvent(input, event) {
   state[bucket] = { ...state[bucket], [id]: { ...previous ?? { id }, ...entityPayload, id, ...requestedState ? { state: requestedState } : {} } };
   return { state, changed: JSON.stringify(previous) !== JSON.stringify(state[bucket][id]) };
 }
+var DELTA_KINDS = /* @__PURE__ */ new Set(["assistant_delta", "reasoning_delta", "tool_output", "task_progress"]);
+var DELTA_FIELDS = ["contentDelta", "reasoningDelta", "outputDelta", "textDelta", "delta"];
+var OFFSET_FIELDS = {
+  contentDelta: "offset",
+  reasoningDelta: "reasoningOffset",
+  outputDelta: "offset",
+  textDelta: "offset",
+  delta: "offset"
+};
+var STREAM_ID_FIELDS = ["sessionId", "turnId", "messageId", "id", "toolCallId", "taskId", "contentIndex"];
+function textLength(value) {
+  return typeof value === "string" ? value.length : 0;
+}
+function eventChars(event) {
+  try {
+    return JSON.stringify(event).length;
+  } catch {
+    return 0;
+  }
+}
+function streamIdentityMatches(left, right) {
+  if (String(left?.kind ?? "") !== String(right?.kind ?? "")) return false;
+  let identified = false;
+  let entityIdentified = false;
+  for (const field of STREAM_ID_FIELDS) {
+    const a3 = left?.[field];
+    const b3 = right?.[field];
+    if (a3 !== void 0 || b3 !== void 0) {
+      identified = true;
+      if (["messageId", "id", "toolCallId", "taskId", "contentIndex"].includes(field)) entityIdentified = true;
+      if (String(a3 ?? "") !== String(b3 ?? "")) return false;
+    }
+  }
+  return identified && entityIdentified;
+}
+function deltaFields(event) {
+  return DELTA_FIELDS.filter((field) => textLength(event?.[field]) > 0);
+}
+function canMergeDelta(left, right) {
+  if (!DELTA_KINDS.has(String(left?.kind ?? "")) || !streamIdentityMatches(left, right)) return false;
+  const fields = deltaFields(right);
+  if (fields.length === 0) return false;
+  for (const field of fields) {
+    const previousText = textLength(left?.[field]) > 0 ? String(left[field]) : "";
+    if (!previousText) return false;
+    const previousOffset = Number(left?.[OFFSET_FIELDS[field]]);
+    const nextOffset = Number(right?.[OFFSET_FIELDS[field]]);
+    if (!Number.isSafeInteger(previousOffset) || !Number.isSafeInteger(nextOffset)) return false;
+    if (nextOffset !== previousOffset + previousText.length) return false;
+  }
+  return true;
+}
+function mergeDelta(left, right) {
+  const merged = {
+    ...left,
+    ...right?.eventEpoch !== void 0 ? { eventEpoch: right.eventEpoch } : {},
+    ...right?.eventSeq !== void 0 ? { eventSeq: right.eventSeq } : {},
+    ...right?.eventId !== void 0 ? { eventId: right.eventId } : {},
+    ...right?.emittedAt !== void 0 ? { emittedAt: right.emittedAt } : {},
+    ...right?.occurredAt !== void 0 ? { occurredAt: right.occurredAt } : {}
+  };
+  const coalescedEventIds = [
+    ...Array.isArray(left?.coalescedEventIds) ? left.coalescedEventIds : [],
+    ...left?.eventId ? [left.eventId] : [],
+    ...Array.isArray(right?.coalescedEventIds) ? right.coalescedEventIds : [],
+    ...right?.eventId ? [right.eventId] : []
+  ].filter((id, index, values) => id && id !== merged.eventId && values.indexOf(id) === index);
+  if (coalescedEventIds.length > 0) merged.coalescedEventIds = coalescedEventIds;
+  for (const field of DELTA_FIELDS) {
+    const next = right?.[field];
+    if (typeof next === "string" && next) merged[field] = `${typeof merged[field] === "string" ? merged[field] : ""}${next}`;
+  }
+  return merged;
+}
+function splitDelta(event, maxChars) {
+  const fields = deltaFields(event);
+  if (fields.length === 0) return [event];
+  const longest = Math.max(...fields.map((field) => textLength(event[field])));
+  if (longest <= maxChars) return [event];
+  const chunks = [];
+  for (let offset = 0; offset < longest; offset += maxChars) {
+    const chunk = { ...event };
+    for (const field of fields) {
+      const value = String(event[field]);
+      const start = Math.min(offset, value.length);
+      const end = Math.min(value.length, offset + maxChars);
+      chunk[field] = value.slice(start, end);
+      const offsetField = OFFSET_FIELDS[field];
+      const baseOffset = Number(event[offsetField]);
+      if (Number.isSafeInteger(baseOffset)) chunk[offsetField] = baseOffset + start;
+    }
+    chunks.push(chunk);
+  }
+  return chunks;
+}
 function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3, delayMs = 16 }) {
   const queue = [];
   let timer = null;
   let disposed = false;
-  const transient = /* @__PURE__ */ new Set(["assistant_delta", "reasoning_delta", "status"]);
+  const eventLimit = Math.max(1, maxEvents);
+  const charLimit = Math.max(1, maxChars);
   const flush = () => {
     if (timer) clearTimeout(timer);
     timer = null;
@@ -21186,18 +23031,405 @@ function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3,
     enqueue(event) {
       if (disposed || !event) return;
       const kind = String(event.kind ?? "");
-      if (!transient.has(kind)) flush();
-      queue.push(event);
-      const chars = queue.reduce((sum, item) => sum + JSON.stringify(item).length, 0);
-      if (queue.length >= Math.max(1, maxEvents) || chars >= Math.max(1, maxChars) || !transient.has(kind)) flush();
-      else schedule();
+      const chunks = DELTA_KINDS.has(kind) ? splitDelta(event, charLimit) : [event];
+      for (const chunk of chunks) {
+        const isDelta = DELTA_KINDS.has(String(chunk.kind ?? ""));
+        if (!isDelta) flush();
+        const previous = queue.at(-1);
+        if (isDelta && previous && canMergeDelta(previous, chunk)) {
+          queue[queue.length - 1] = mergeDelta(previous, chunk);
+        } else {
+          if (isDelta && queue.length > 0 && eventChars(queue[0]) + eventChars(chunk) >= charLimit) flush();
+          queue.push(chunk);
+        }
+        const chars = queue.reduce((sum, item) => sum + eventChars(item), 0);
+        if (!isDelta || queue.length >= eventLimit || chars >= charLimit) flush();
+        else schedule();
+      }
     },
     flush,
+    discard(predicate) {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (typeof predicate !== "function") {
+        queue.splice(0);
+        return;
+      }
+      for (let index = queue.length - 1; index >= 0; index--) {
+        if (predicate(queue[index])) queue.splice(index, 1);
+      }
+      if (queue.length > 0 && !disposed) schedule();
+    },
     dispose() {
-      disposed = true;
+      if (disposed) return;
       flush();
+      disposed = true;
     }
   };
+}
+
+// dashboard/src/ui/Select.ts
+function Select({
+  value,
+  options: options2 = [],
+  onChange,
+  placeholder = t4("uiPrim.selectPlaceholder"),
+  disabled = false,
+  searchable = false,
+  ariaLabel = t4("uiPrim.selectAria"),
+  width = null
+}) {
+  const [open, setOpen] = d2(false);
+  const [query, setQuery] = d2("");
+  const [active, setActive] = d2(0);
+  const rootRef = A2(null);
+  const listRef = A2(null);
+  const searchRef = A2(null);
+  const norm = (options2 || []).map((o3) => typeof o3 === "string" ? { value: o3, label: o3 } : o3);
+  const filtered = query.trim() ? norm.filter((o3) => `${o3.label} ${o3.meta ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())) : norm;
+  const enabled = filtered.filter((o3) => !o3.disabled);
+  const current = norm.find((o3) => o3.value === value);
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+  };
+  const openMenu = () => {
+    if (disabled) return;
+    setOpen(true);
+    const idx = Math.max(0, filtered.findIndex((o3) => o3.value === value && !o3.disabled));
+    setActive(idx);
+  };
+  const pick = (o3) => {
+    if (!o3 || o3.disabled) return;
+    if (o3.value !== value) onChange?.(o3.value);
+    close();
+  };
+  y2(() => {
+    if (!open) return;
+    const onDoc = (e3) => {
+      if (rootRef.current && !rootRef.current.contains(e3.target)) close();
+    };
+    const onEsc = (e3) => {
+      if (e3.key === "Escape") {
+        e3.preventDefault();
+        e3.stopPropagation();
+        close();
+      }
+    };
+    document.addEventListener("pointerdown", onDoc, true);
+    document.addEventListener("keydown", onEsc, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDoc, true);
+      document.removeEventListener("keydown", onEsc, true);
+    };
+  }, [open]);
+  y2(() => {
+    if (!open) return;
+    if (searchable) searchRef.current?.focus();
+    const sel = listRef.current?.querySelector(".ui-select-option.sel");
+    sel?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+  const moveActive = (dir) => {
+    if (enabled.length === 0) return;
+    let i3 = active;
+    for (let step = 0; step < filtered.length; step++) {
+      i3 = (i3 + dir + filtered.length) % filtered.length;
+      if (!filtered[i3].disabled) break;
+    }
+    setActive(i3);
+    listRef.current?.children?.[i3]?.scrollIntoView?.({ block: "nearest" });
+  };
+  const onKeyDown = (e3) => {
+    if (!open) {
+      if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e3.key)) {
+        e3.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    if (e3.key === "ArrowDown") {
+      e3.preventDefault();
+      moveActive(1);
+    } else if (e3.key === "ArrowUp") {
+      e3.preventDefault();
+      moveActive(-1);
+    } else if (e3.key === "Enter") {
+      e3.preventDefault();
+      pick(filtered[active]);
+    } else if (e3.key === "Home") {
+      e3.preventDefault();
+      setActive(0);
+    } else if (e3.key === "End") {
+      e3.preventDefault();
+      setActive(filtered.length - 1);
+    }
+  };
+  return html4`
+    <div class="ui-select" ref=${rootRef} style=${width ? `width:${width}` : null} onKeyDown=${onKeyDown}>
+      <button
+        type="button"
+        class=${`ui-select-trigger ${open ? "open" : ""}`}
+        aria-haspopup="listbox"
+        aria-expanded=${open}
+        aria-label=${ariaLabel}
+        disabled=${disabled}
+        onClick=${() => open ? close() : openMenu()}
+      >
+        <span class=${`ui-select-value ${current ? "" : "placeholder"}`}>${current ? current.label : placeholder}</span>
+        <span class="ui-select-chev" aria-hidden="true">▾</span>
+      </button>
+      ${open ? html4`
+        <div class="ui-select-menu" role="listbox" aria-label=${ariaLabel}>
+          ${searchable ? html4`
+            <div class="ui-select-search">
+              <input
+                ref=${searchRef}
+                type="text"
+                value=${query}
+                placeholder=${t4("uiPrim.selectSearch")}
+                onInput=${(e3) => {
+    setQuery(e3.target.value);
+    setActive(0);
+  }}
+              />
+            </div>
+          ` : null}
+          <div class="ui-select-list" ref=${listRef}>
+            ${filtered.length === 0 ? html4`<div class="ui-select-empty">${t4("uiPrim.selectEmpty")}</div>` : filtered.map((o3, i3) => html4`
+              <div
+                key=${o3.value}
+                role="option"
+                aria-selected=${o3.value === value}
+                class=${`ui-select-option ${o3.value === value ? "sel" : ""} ${i3 === active ? "active" : ""} ${o3.disabled ? "disabled" : ""}`}
+                onMouseEnter=${() => !o3.disabled && setActive(i3)}
+                onMouseDown=${(e3) => {
+    e3.preventDefault();
+    pick(o3);
+  }}
+              >
+                <span class="ui-select-check" aria-hidden="true">${o3.value === value ? "✓" : ""}</span>
+                <span class="ui-select-name">${o3.label}</span>
+                ${o3.meta ? html4`<span class="ui-select-meta">${o3.meta}</span>` : null}
+              </div>
+            `)}
+          </div>
+        </div>
+      ` : null}
+    </div>
+  `;
+}
+
+// dashboard/src/ui/Switch.ts
+function Switch({ checked = false, onChange, disabled = false, label = "", ariaLabel = null }) {
+  const toggle = () => {
+    if (disabled) return;
+    onChange?.(!checked);
+  };
+  return html4`
+    <button
+      type="button"
+      role="switch"
+      aria-checked=${checked ? "true" : "false"}
+      aria-label=${ariaLabel ?? label ?? t4("uiPrim.switchAria")}
+      class=${`ui-switch ${checked ? "on" : ""}`}
+      disabled=${disabled}
+      onClick=${toggle}
+    >
+      <span class="ui-switch-knob"></span>
+    </button>
+    ${label ? html4`<span class="ui-switch-label" onClick=${toggle}>${label}</span>` : null}
+  `;
+}
+
+// dashboard/src/ui/SectionHeader.ts
+function SectionHeader({ title }) {
+  return html4`<h3 class="ui-section-h">${title}</h3>`;
+}
+function FieldRow({ label, note = null, children }) {
+  return html4`
+    <div class="ui-field-row">
+      <span class="ui-field-label">${label}</span>
+      <div class="ui-field-control">${children}</div>
+      ${note ? html4`<span class="ui-field-note">${note}</span>` : null}
+    </div>
+  `;
+}
+
+// dashboard/src/ui/EmptyState.ts
+function EmptyState({ icon = "∅", title, desc = null, action = null }) {
+  return html4`
+    <div class="ui-empty">
+      <div class="ui-empty-icon" aria-hidden="true">${icon}</div>
+      <div class="ui-empty-title">${title}</div>
+      ${desc ? html4`<div class="ui-empty-desc">${desc}</div>` : null}
+      ${action ? html4`<div class="ui-empty-action">${action}</div>` : null}
+    </div>
+  `;
+}
+function Skeleton({ lines = 3, widths = null }) {
+  const arr = Array.from({ length: Math.max(1, lines) });
+  return html4`
+    <div class="ui-skeleton" aria-hidden="true">
+      ${arr.map((_3, i3) => {
+    const w4 = widths && widths[i3] != null ? widths[i3] : i3 === arr.length - 1 ? "72%" : `${88 - i3 * 6}%`;
+    return html4`<div class="ui-skeleton-line" style=${`width:${w4}`}></div>`;
+  })}
+    </div>
+  `;
+}
+
+// dashboard/src/ui/CmdPalette.ts
+function CmdPalette({ open, onClose, items = [], placeholder = t4("uiPrim.cmdPlaceholder"), ariaLabel = t4("uiPrim.cmdAria") }) {
+  const [query, setQuery] = d2("");
+  const [sel, setSel] = d2(0);
+  const inputRef = A2(null);
+  const listRef = A2(null);
+  y2(() => {
+    if (!open) return;
+    setQuery("");
+    setSel(0);
+    const id = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+  const q4 = query.trim().toLowerCase();
+  const filtered = q4 ? items.filter((it) => (it.name + " " + (it.desc ?? "") + " " + (it.section ?? "")).toLowerCase().includes(q4)) : items;
+  y2(() => {
+    setSel(0);
+  }, [q4]);
+  y2(() => {
+    if (!open) return;
+    listRef.current?.querySelector(".cmd-row.sel")?.scrollIntoView({ block: "nearest" });
+  }, [sel, open, filtered.length]);
+  if (!open) return null;
+  const exec = (item) => {
+    if (!item) return;
+    onClose?.();
+    setTimeout(() => item.run?.(), 0);
+  };
+  const onKeyDown = (e3) => {
+    if (e3.key === "Escape") {
+      e3.preventDefault();
+      e3.stopPropagation();
+      onClose?.();
+      return;
+    }
+    if (e3.key === "ArrowDown") {
+      e3.preventDefault();
+      setSel((s3) => Math.min(s3 + 1, filtered.length - 1));
+      return;
+    }
+    if (e3.key === "ArrowUp") {
+      e3.preventDefault();
+      setSel((s3) => Math.max(s3 - 1, 0));
+      return;
+    }
+    if (e3.key === "Home") {
+      e3.preventDefault();
+      setSel(0);
+      return;
+    }
+    if (e3.key === "End") {
+      e3.preventDefault();
+      setSel(Math.max(0, filtered.length - 1));
+      return;
+    }
+    if (e3.key === "Enter") {
+      e3.preventDefault();
+      exec(filtered[sel]);
+      return;
+    }
+  };
+  let lastSection = null;
+  return html4`
+    <div class="cmd-overlay" role="presentation" onPointerDown=${(e3) => {
+    if (e3.target === e3.currentTarget) onClose?.();
+  }}>
+      <div class="cmd-palette" role="dialog" aria-modal="true" aria-label=${ariaLabel} onKeyDown=${onKeyDown}>
+        <div class="cmd-input-row">
+          <span class="g" aria-hidden="true">›</span>
+          <input
+            ref=${inputRef}
+            type="text"
+            value=${query}
+            placeholder=${placeholder}
+            aria-label=${placeholder}
+            onInput=${(e3) => setQuery(e3.currentTarget.value)}
+          />
+          <span class="kbd">esc</span>
+        </div>
+        <div class="cmd-list" role="listbox" aria-label=${ariaLabel} ref=${listRef}>
+          ${filtered.length === 0 ? html4`<div class="cmd-empty">${t4("uiPrim.cmdEmpty")}</div>` : null}
+          ${filtered.map((it, i3) => {
+    const showHead = it.section !== lastSection;
+    lastSection = it.section;
+    return html4`
+              ${showHead ? html4`<div class="cmd-section-h">${it.section}</div>` : null}
+              <div
+                key=${it.id}
+                class=${`cmd-row ${i3 === sel ? "sel" : ""}`}
+                role="option"
+                aria-selected=${i3 === sel}
+                onPointerEnter=${() => setSel(i3)}
+                onClick=${() => exec(it)}
+              >
+                <span class="g" aria-hidden="true">${it.glyph ?? "›"}</span>
+                <span class="name">${it.name}</span>
+                ${it.desc ? html4`<span class="desc">${it.desc}</span>` : null}
+                ${it.kbd ? html4`<span class="kbd">${it.kbd}</span>` : null}
+              </div>
+            `;
+  })}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// dashboard/src/ui/icons.ts
+function base(children, size = 14) {
+  return html4`<svg viewBox="0 0 16 16" width=${size} height=${size} aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">${children}</svg>`;
+}
+function IconModel({ size } = {}) {
+  return base(html4`
+    <rect x="4" y="4" width="8" height="8" rx="1.5" />
+    <path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2" />
+  `, size);
+}
+function IconWorkspace({ size } = {}) {
+  return base(html4`
+    <rect x="2" y="3" width="12" height="8.5" rx="1.5" />
+    <path d="M6 14h4M8 11.5V14" />
+  `, size);
+}
+function IconJobs({ size } = {}) {
+  return base(html4`
+    <path d="M5.5 4h8M5.5 8h8M5.5 12h8" />
+    <circle cx="2.75" cy="4" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="2.75" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="2.75" cy="12" r="0.9" fill="currentColor" stroke="none" />
+  `, size);
+}
+function IconSearch({ size } = {}) {
+  return base(html4`
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.5 10.5 14 14" />
+  `, size);
+}
+function IconWand({ size } = {}) {
+  return base(html4`
+    <path d="M3 13 10.5 5.5" />
+    <path d="M11.5 2v2M13.5 4h2M11.5 6v2M9.5 4h-2" stroke-width="1.2" />
+  `, size);
+}
+function IconAttach({ size } = {}) {
+  return base(html4`
+    <path d="M12.5 7.5 7 13a3 3 0 0 1-4.2-4.2l5.6-5.6a2 2 0 0 1 2.8 2.8l-5.6 5.6a1 1 0 0 1-1.4-1.4l5-5" />
+  `, size);
+}
+function IconSkill({ size } = {}) {
+  return base(html4`
+    <path d="M9.7 2.3a3.5 3.5 0 0 0-4.4 4.4L2 10l4 4 3.3-3.3a3.5 3.5 0 0 0 4.4-4.4L11 9 9 7l2.7-2.7a3.5 3.5 0 0 0-2-2z" />
+  `, size);
 }
 
 // dashboard/src/panels/chat.ts
@@ -21220,16 +23452,16 @@ var CHAT_INITIAL_RENDER_COUNT = 30;
 function parseProviderImportJson(text) {
   const parsed = JSON.parse(String(text || ""));
   if (parsed.schemaVersion === 3) {
-    if (!Array.isArray(parsed.operations) || parsed.operations.length === 0) throw new Error("维护 JSON 必须包含非空 operations 数组");
+    if (!Array.isArray(parsed.operations) || parsed.operations.length === 0) throw new Error(t4("chat.jsonNeedsOperations"));
     return parsed;
   }
-  if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) throw new Error("JSON 必须包含非空 providers 数组");
+  if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) throw new Error(t4("chat.jsonNeedsProviders"));
   for (const provider of parsed.providers) {
-    if (!provider?.id || typeof provider.id !== "string") throw new Error("每个 provider 都必须包含 id");
-    if (!Array.isArray(provider.models) || provider.models.length === 0) throw new Error(`provider ${provider.id} 必须包含模型`);
+    if (!provider?.id || typeof provider.id !== "string") throw new Error(t4("chat.providerNeedsId"));
+    if (!Array.isArray(provider.models) || provider.models.length === 0) throw new Error(t4("chat.providerNeedsModels", { id: provider.id }));
     for (const model of provider.models) {
-      if (!model?.id || typeof model.id !== "string") throw new Error(`provider ${provider.id} 中存在无 id 的模型`);
-      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) throw new Error(`模型 ${model.id} 必须声明有效的 maxContextLength`);
+      if (!model?.id || typeof model.id !== "string") throw new Error(t4("chat.providerModelNoId", { id: provider.id }));
+      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) throw new Error(t4("chat.modelNeedsContext", { id: model.id }));
     }
   }
   return parsed;
@@ -21248,7 +23480,7 @@ function providerDisplayGroups(providers) {
   const groups = /* @__PURE__ */ new Map();
   for (const provider of Array.isArray(providers) ? providers : []) {
     const groupId = provider?.ui?.groupId || provider?.id || "default";
-    const label = provider?.ui?.groupName || provider?.name || provider?.id || "服务商";
+    const label = provider?.ui?.groupName || provider?.name || provider?.id || t4("chat.providerFallback");
     const group = groups.get(groupId) || { id: groupId, label, providers: [] };
     group.providers.push(provider);
     groups.set(groupId, group);
@@ -21263,11 +23495,11 @@ function providerDisplayLabel(provider) {
 }
 function reasoningEffortLabel(effort) {
   return {
-    low: "快速",
-    medium: "均衡",
-    high: "深入",
-    xhigh: "极致",
-    max: "极致"
+    low: t4("chat.effortLow"),
+    medium: t4("chat.effortMedium"),
+    high: t4("chat.effortDeep"),
+    xhigh: t4("chat.effortExtreme"),
+    max: t4("chat.effortExtreme")
   }[effort] ?? effort;
 }
 function providerModelContextLabel(model) {
@@ -21279,8 +23511,8 @@ function providerModelContextLabel(model) {
 function providerModelCapabilityLabels(model) {
   const labels = [];
   const modalities = model?.capabilities?.inputModalities ?? (model?.multimodal ? ["text", "image"] : ["text"]);
-  labels.push(modalities.includes("image") ? "图文" : "仅文本");
-  if (model?.capabilities?.roles?.some((role) => /code/i.test(role)) || /code/i.test(`${model?.id || ""} ${model?.name || ""}`)) labels.push("代码");
+  labels.push(modalities.includes("image") ? t4("chat.capImageText") : t4("chat.capTextOnly"));
+  if (model?.capabilities?.roles?.some((role) => /code/i.test(role)) || /code/i.test(`${model?.id || ""} ${model?.name || ""}`)) labels.push(t4("chat.capCode"));
   const context = providerModelContextLabel(model);
   if (context) labels.push(context);
   return labels;
@@ -21343,7 +23575,13 @@ function upsertToolProgress(items, dash) {
     text: dash.content || "",
     toolName: dash.toolName,
     toolArgs: dash.args,
-    toolStatus: dash.status || "running"
+    toolStatus: dash.status || "running",
+    category: dash.category || null,
+    code: dash.code || null,
+    recommendedAction: dash.recommendedAction || null,
+    retryable: dash.retryable === true,
+    diagnosticMessage: dash.message || null,
+    repeatFailureBlocked: dash.repeatFailureBlocked === true
   };
   const index = items.findIndex((item) => String(item.toolCallId || item.id) === toolCallId || item.id === id);
   if (index < 0) return [...items, next];
@@ -21375,17 +23613,17 @@ function removeChatDraft(key) {
 }
 function fileArtifactKind(ext) {
   const e3 = String(ext || "").replace(/^\./, "").toLowerCase();
-  if (e3 === "md" || e3 === "markdown") return "Markdown 文档";
-  if (e3 === "html" || e3 === "htm") return "HTML 页面";
-  if (e3 === "pdf") return "PDF 文档";
-  if (["doc", "docx"].includes(e3)) return "Word 文档";
-  if (["ppt", "pptx"].includes(e3)) return "演示文稿";
-  if (["xls", "xlsx"].includes(e3)) return "表格文档";
-  if (e3 === "csv") return "CSV 表格";
-  if (["json", "xml", "yaml", "yml"].includes(e3)) return "数据文件";
-  if (FILE_ARTIFACT_SCRIPT_EXTS.has(e3)) return "脚本文件";
-  if (["css", "sql", "ini", "toml", "txt"].includes(e3)) return "文本文件";
-  return e3 ? `${e3.toUpperCase()} 文件` : "文件";
+  if (e3 === "md" || e3 === "markdown") return t4("chat.fileMd");
+  if (e3 === "html" || e3 === "htm") return t4("chat.fileHtml");
+  if (e3 === "pdf") return t4("chat.filePdf");
+  if (["doc", "docx"].includes(e3)) return t4("chat.fileWord");
+  if (["ppt", "pptx"].includes(e3)) return t4("chat.filePpt");
+  if (["xls", "xlsx"].includes(e3)) return t4("chat.fileExcel");
+  if (e3 === "csv") return t4("chat.fileCsv");
+  if (["json", "xml", "yaml", "yml"].includes(e3)) return t4("chat.fileData");
+  if (FILE_ARTIFACT_SCRIPT_EXTS.has(e3)) return t4("chat.fileScript");
+  if (["css", "sql", "ini", "toml", "txt"].includes(e3)) return t4("chat.fileText");
+  return e3 ? t4("chat.fileGeneric", { ext: e3.toUpperCase() }) : t4("chat.fileFallback");
 }
 function fileArtifactExtOf(value) {
   const m3 = /\.([A-Za-z0-9]{1,12})(?:$|[?#\s，。；;、)）（\]`*_~])/.exec(String(value || ""));
@@ -21483,7 +23721,7 @@ async function registerAndPreviewMarkdownDocument(path, cwd = "") {
     body: { path, cwd }
   });
   await showFileArtifactPreview(file);
-  showToast(`已打开 ${file.filename || "Markdown 文档"}`, "info");
+  showToast(t4("chat.mdOpened", { name: file.filename || t4("chat.mdDocFallback") }), "info");
 }
 function cleanOpenedDocumentArg(value) {
   let raw = String(value || "").trim();
@@ -21522,7 +23760,7 @@ ${docs.join("\n")}`;
   try {
     await registerAndPreviewMarkdownDocument(docs[0], cwd || "");
   } catch (err) {
-    showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
+    showToast(err.message || t4("chat.mdOpenFailed"), "error", 5e3);
   }
 }
 var MARKDOWN_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
@@ -21560,12 +23798,12 @@ function selectMarkdownDocumentFile() {
 }
 async function previewSelectedMarkdownDocument(file) {
   if (!file) return;
-  const filename = file.name || "Markdown 文档.md";
+  const filename = file.name || t4("chat.mdDocDefaultName");
   if (!/\.(md|markdown)$/i.test(filename)) {
-    throw new Error("请选择 Markdown 文档");
+    throw new Error(t4("chat.mdSelectRequired"));
   }
   if (file.size > MARKDOWN_DOCUMENT_MAX_BYTES) {
-    throw new Error(`文件过大，最大支持 ${Math.round(MARKDOWN_DOCUMENT_MAX_BYTES / 1024 / 1024)}MB`);
+    throw new Error(t4("chat.mdTooLarge", { mb: Math.round(MARKDOWN_DOCUMENT_MAX_BYTES / 1024 / 1024) }));
   }
   const content = await file.text();
   showArtifactPreview({
@@ -21578,7 +23816,7 @@ async function previewSelectedMarkdownDocument(file) {
     previewable: true,
     openable: false
   });
-  showToast(`已打开 ${filename}`, "info");
+  showToast(t4("chat.mdOpened", { name: filename }), "info");
 }
 function pickMarkdownFileFromBridge() {
   return api("/artifacts/pick-markdown-file", { method: "POST", body: {}, timeoutMs: 0 }).then((result) => result?.path || "").catch((apiErr) => {
@@ -21590,13 +23828,13 @@ function pickMarkdownFileFromBridge() {
     }
     return new Promise((resolve, reject) => {
       if (!window.parent || window.parent === window) {
-        reject(new Error("本地文件选择器仅在桌面端可用"));
+        reject(new Error(t4("chat.localFileOnlyDesktop")));
         return;
       }
       const requestId = `md-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
       const timer = setTimeout(() => {
         window.removeEventListener("message", onMessage);
-        reject(new Error("文件选择器响应超时"));
+        reject(new Error(t4("chat.filePickerTimeout")));
       }, 5 * 60 * 1e3);
       function onMessage(event) {
         const data = event.data;
@@ -21623,22 +23861,22 @@ function pickMarkdownFileFromBridge() {
 }
 function documentJobStatusLabel(status) {
   return {
-    queued: "排队中",
-    running: "处理中",
-    waiting_foreground: "等待前台对话",
-    waiting_provider: "等待其他模型任务",
-    pausing: "正在暂停",
-    paused: "已暂停",
-    interrupted: "可继续",
-    stopped: "已停止，可继续",
-    abandoned: "已放弃",
-    source_changed: "来源已变化",
-    awaiting_output: "内容已完成，等待交付",
-    completed: "已完成",
-    completed_with_warnings: "已完成，需复核",
-    failed: "失败",
-    cancelled: "已取消"
-  }[status] || status || "未知";
+    queued: t4("chat.statusQueued"),
+    running: t4("chat.statusRunning"),
+    waiting_foreground: t4("chat.statusWaitingForeground"),
+    waiting_provider: t4("chat.statusWaitingProvider"),
+    pausing: t4("chat.statusPausing"),
+    paused: t4("chat.statusPaused"),
+    interrupted: t4("chat.statusInterrupted"),
+    stopped: t4("chat.statusStopped"),
+    abandoned: t4("chat.statusAbandoned"),
+    source_changed: t4("chat.statusSourceChanged"),
+    awaiting_output: t4("chat.statusAwaitingOutput"),
+    completed: t4("chat.statusCompleted"),
+    completed_with_warnings: t4("chat.statusCompletedWarnings"),
+    failed: t4("chat.statusFailed"),
+    cancelled: t4("chat.statusCancelled")
+  }[status] || status || t4("chat.statusUnknown");
 }
 function backgroundJobNeedsAttention(job) {
   return job?.needsAttention === true || ["waiting_user", "blocked", "paused"].includes(job?.lifecycle) || ["delivered_with_warnings", "partial", "failed"].includes(job?.outcome) || ["queued", "running", "waiting_conversation", "needs_user", "user_paused"].includes(job?.handoff?.state);
@@ -21654,53 +23892,53 @@ function backgroundJobGroup(job) {
 function backgroundJobGroups(jobs) {
   const values = Array.isArray(jobs) ? jobs : [];
   return [
-    { key: "active", label: "运行中" },
-    { key: "attention", label: "需要处理" },
-    { key: "completed", label: "已完成" }
+    { key: "active", label: t4("chat.groupActive") },
+    { key: "attention", label: t4("chat.groupAttention") },
+    { key: "completed", label: t4("chat.groupCompleted") }
   ].map((group) => ({ ...group, jobs: values.filter((job) => backgroundJobGroup(job) === group.key) })).filter((group) => group.jobs.length > 0);
 }
 function isGenericBackgroundTask(job) {
   return String(job?.id ?? "").startsWith("task:");
 }
 function backgroundJobTitle(job) {
-  return job?.goal || job?.command || job?.sourceName || `#${job?.id || "未知任务"}`;
+  return job?.goal || job?.command || job?.sourceName || `#${job?.id || t4("chat.unknownTask")}`;
 }
 function genericTaskLifecycleLabel(lifecycle) {
   return {
-    created: "已创建",
-    queued: "排队中",
-    leased: "已领取",
-    running: "处理中",
-    assembling: "正在装配",
-    paused: "已暂停",
-    waiting_user: "等待用户处理",
-    blocked: "受阻",
-    terminal: "已结束"
-  }[lifecycle] || lifecycle || "未知状态";
+    created: t4("chat.lifecycleCreated"),
+    queued: t4("chat.statusQueued"),
+    leased: t4("chat.lifecycleLeased"),
+    running: t4("chat.statusRunning"),
+    assembling: t4("chat.lifecycleAssembling"),
+    paused: t4("chat.statusPaused"),
+    waiting_user: t4("chat.lifecycleWaitingUser"),
+    blocked: t4("chat.lifecycleBlocked"),
+    terminal: t4("chat.lifecycleTerminal")
+  }[lifecycle] || lifecycle || t4("chat.lifecycleUnknown");
 }
 function genericTaskOutcomeLabel(outcome) {
   return {
-    delivered: "已交付",
-    delivered_with_warnings: "已交付，需复核",
-    partial: "部分交付",
-    failed: "失败",
-    cancelled: "已取消"
-  }[outcome] || outcome || "尚无结果";
+    delivered: t4("chat.outcomeDelivered"),
+    delivered_with_warnings: t4("chat.outcomeDeliveredWarnings"),
+    partial: t4("chat.outcomePartial"),
+    failed: t4("chat.statusFailed"),
+    cancelled: t4("chat.statusCancelled")
+  }[outcome] || outcome || t4("chat.outcomeNone");
 }
 function genericTaskQualityLabel(quality) {
   return {
-    verified: "已验证",
-    needs_review: "需复核",
-    unknown: "未评估"
-  }[quality] || quality || "未评估";
+    verified: t4("chat.qualityVerified"),
+    needs_review: t4("chat.qualityNeedsReview"),
+    unknown: t4("chat.qualityUnknown")
+  }[quality] || quality || t4("chat.qualityUnknown");
 }
 function genericTaskProgressLabel(job) {
   const progress = job?.progress || {};
   const completed = progress.completedUnits ?? progress.completed;
   const total = progress.totalUnits ?? progress.total;
-  const unit = progress.unitLabel || "单元";
+  const unit = progress.unitLabel || t4("chat.progressUnit");
   if (Number.isFinite(completed) && Number.isFinite(total) && total > 0) return `${completed}/${total} ${unit}`;
-  if (Number.isFinite(completed)) return `已完成 ${completed} ${unit}`;
+  if (Number.isFinite(completed)) return t4("chat.progressCompleted", { completed, unit });
   return progress.label || progress.currentLabel || genericTaskLifecycleLabel(job?.lifecycle);
 }
 function genericTaskProgressPercent(job) {
@@ -21710,22 +23948,32 @@ function genericTaskProgressPercent(job) {
   const total = Number(progress.totalUnits ?? progress.total);
   return Number.isFinite(completed) && Number.isFinite(total) && total > 0 ? Math.max(0, Math.min(100, completed / total * 100)) : 0;
 }
-var GENERIC_TASK_ACTION_LABELS = /* @__PURE__ */ new Map([
-  ["pause", "暂停"],
-  ["resume", "继续"],
-  ["retry", "重试"],
-  ["retry_delivery", "确认后重新交付"],
-  ["cancel", "取消任务"],
-  ["resolve_user_input", "提交处理结果"],
-  ["retarget_output", "更改输出位置"],
-  ["ack_outcome", "确认结果"],
-  ["delete_record", "删除记录"]
+var GENERIC_TASK_ACTION_LABELS = /* @__PURE__ */ new Set([
+  "pause",
+  "resume",
+  "retry",
+  "retry_delivery",
+  "cancel",
+  "resolve_user_input",
+  "retarget_output",
+  "ack_outcome",
+  "delete_record"
 ]);
 function genericTaskActionLabel(action) {
-  return GENERIC_TASK_ACTION_LABELS.get(action) || action;
+  return {
+    pause: t4("chat.actPause"),
+    resume: t4("chat.actResume"),
+    retry: t4("chat.actRetry"),
+    retry_delivery: t4("chat.actRetryDelivery"),
+    cancel: t4("chat.actCancel"),
+    resolve_user_input: t4("chat.actSubmitResult"),
+    retarget_output: t4("chat.actRetarget"),
+    ack_outcome: t4("chat.actAckOutcome"),
+    delete_record: t4("chat.actDeleteRecord")
+  }[action] || action;
 }
 function genericTaskArtifactLabel(artifact, index) {
-  return artifact?.filename || artifact?.name || artifact?.label || artifact?.path || artifact?.artifactId || `产物 ${index + 1}`;
+  return artifact?.filename || artifact?.name || artifact?.label || artifact?.path || artifact?.artifactId || t4("chat.artifactFallback", { n: index + 1 });
 }
 function backgroundActionRequestId() {
   return globalThis.crypto?.randomUUID?.() || `background-action-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -21733,12 +23981,12 @@ function backgroundActionRequestId() {
 function documentHandoffNotice(job) {
   const state = job?.handoff?.state;
   return {
-    queued: { tone: "warn", text: "后台处理已经结束，正在等待 AI 接管并继续交付。" },
-    running: { tone: "warn", text: "AI 已接管后台结果，正在核实产物并继续处理。" },
-    waiting_conversation: { tone: "warn", text: "任务属于另一个会话。返回发起任务的原会话后，AI 会自动继续处理。" },
-    needs_user: { tone: "err", text: `AI 自动接管未完成：${job?.handoff?.lastError || "请检查模型配置后继续处理。"}。确认后可仅重新交付已有结果，不会重新处理文档。` },
-    user_paused: { tone: "warn", text: "任务由用户暂停，点击“继续”后才会恢复。" },
-    legacy_unassigned: { tone: "warn", text: "这是旧版本创建的任务，无法安全关联到原会话；请在后台面板中手动点击“继续”或“重试”。" }
+    queued: { tone: "warn", text: t4("chat.handoffQueued") },
+    running: { tone: "warn", text: t4("chat.handoffRunning") },
+    waiting_conversation: { tone: "warn", text: t4("chat.handoffWaitingConversation") },
+    needs_user: { tone: "err", text: `${t4("chat.handoffNeedsUser", { error: job?.handoff?.lastError || t4("chat.handoffCheckModel") })}${t4("chat.handoffRedeliverNote")}` },
+    user_paused: { tone: "warn", text: t4("chat.handoffUserPaused") },
+    legacy_unassigned: { tone: "warn", text: t4("chat.handoffLegacy") }
   }[state] || null;
 }
 function retryDocumentDelivery(job) {
@@ -21746,44 +23994,44 @@ function retryDocumentDelivery(job) {
 }
 function documentJobStageLabel(stage) {
   return {
-    extracting: "正在读取来源内容",
-    "selecting-model": "正在选择可用模型",
-    draft: "正在整理当前区块",
-    "quality-repair": "正在补全当前区块",
-    "quality-review": "正在审校当前区块",
-    "batch-complete": "当前区块已保存",
-    assembling: "正在组装完整文档",
-    summary: "正在生成摘要",
-    completed: "文档已经完成",
-    failed: "任务执行失败",
-    cancelled: "任务已取消",
-    stopped: "已停止，检查点已保留",
-    abandoned: "任务已放弃",
-    "source-changed": "来源已变化",
-    "awaiting-output": "最终草稿已保存，等待处理输出路径",
-    "waiting-provider": "等待其他模型任务",
-    "job-timeout": "本次执行总时限已到",
-    "job-call-budget": "本次执行调用预算已用尽"
+    extracting: t4("chat.stageExtracting"),
+    "selecting-model": t4("chat.stageSelectingModel"),
+    draft: t4("chat.stageDraft"),
+    "quality-repair": t4("chat.stageQualityRepair"),
+    "quality-review": t4("chat.stageQualityReview"),
+    "batch-complete": t4("chat.stageBatchComplete"),
+    assembling: t4("chat.stageAssembling"),
+    summary: t4("chat.stageSummary"),
+    completed: t4("chat.stageCompleted"),
+    failed: t4("chat.stageFailed"),
+    cancelled: t4("chat.stageCancelled"),
+    stopped: t4("chat.stageStopped"),
+    abandoned: t4("chat.stageAbandoned"),
+    "source-changed": t4("chat.stageSourceChanged"),
+    "awaiting-output": t4("chat.stageAwaitingOutput"),
+    "waiting-provider": t4("chat.stageWaitingProvider"),
+    "job-timeout": t4("chat.stageJobTimeout"),
+    "job-call-budget": t4("chat.stageJobCallBudget")
   }[stage] || "";
 }
 function documentJobProgressLabel(job) {
   const progress = job?.progress || {};
-  const unit = progress.unitLabel || "区块";
+  const unit = progress.unitLabel || t4("chat.progressUnitBatch");
   if (progress.total) return `${progress.completed}/${progress.total} ${unit}`;
-  if (progress.completed) return `已完成 ${progress.completed} ${unit}`;
-  return documentJobStageLabel(progress.stage) || "正在准备文档";
+  if (progress.completed) return t4("chat.progressCompletedUnits", { completed: progress.completed, unit });
+  return documentJobStageLabel(progress.stage) || t4("chat.progressPreparing");
 }
 function documentRetryLabel(modelIssues) {
   const issues = Array.isArray(modelIssues) ? modelIssues : [];
-  if (issues.some((issue) => issue.category === "insufficient_balance" || issue.category === "quota_exhausted")) return "余额/额度处理后重试";
-  if (issues.some((issue) => issue.requiresUserAction === true)) return "处理模型问题后重试";
-  return "重试失败部分";
+  if (issues.some((issue) => issue.category === "insufficient_balance" || issue.category === "quota_exhausted")) return t4("chat.retryAfterBalance");
+  if (issues.some((issue) => issue.requiresUserAction === true)) return t4("chat.retryAfterModelFix");
+  return t4("chat.retryFailedPart");
 }
 function documentIssueBatchLabel(issue) {
   const batches = Array.isArray(issue?.affectedBatches) ? issue.affectedBatches : [];
-  if (batches.length === 0) return "任务级模型调用";
+  if (batches.length === 0) return t4("chat.taskLevelModelCall");
   const labels = batches.slice(0, 6).map((batch) => batch.label || batch.id).filter(Boolean);
-  return `${labels.join("、")}${batches.length > labels.length ? "等" : ""}`;
+  return `${labels.join(t4("chat.listSep"))}${batches.length > labels.length ? t4("chat.etcSuffix") : ""}`;
 }
 var BackgroundJobsWorkbench = N23(function BackgroundJobsWorkbench2({ jobs, pendingDeliveries, selectedId, detail, onSelect, onClose, onControl, onStop, onAbandon, onDelete, onPreview }) {
   const deliveries = Array.isArray(pendingDeliveries) ? pendingDeliveries : [];
@@ -21817,7 +24065,7 @@ var BackgroundJobsWorkbench = N23(function BackgroundJobsWorkbench2({ jobs, pend
     ...Array.isArray(selected?.issues) ? selected.issues : []
   ];
   const genericUserAction = selected?.userAction;
-  const genericUserActionText = typeof genericUserAction === "string" ? genericUserAction : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || "任务需要你的补充信息后才能继续。";
+  const genericUserActionText = typeof genericUserAction === "string" ? genericUserAction : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || t4("chat.userActionNeededFallback");
   const genericOutcomeSummary = typeof selected?.outcomeSummary === "string" ? selected.outcomeSummary.trim() : "";
   const genericBlockingReason = selected?.blockingReason;
   const genericBlockingReasonText = typeof genericBlockingReason === "string" ? genericBlockingReason : genericBlockingReason?.message || genericBlockingReason?.reason || genericBlockingReason?.code || "";
@@ -21829,7 +24077,7 @@ var BackgroundJobsWorkbench = N23(function BackgroundJobsWorkbench2({ jobs, pend
   const genericDeliveryStates = selectedDeliveries.filter((delivery) => delivery?.deliveryState);
   const runGenericAction = (action) => {
     if (!selected) return;
-    if (["cancel", "delete_record"].includes(action) && !confirm(action === "cancel" ? "确定取消这个任务？已保存的检查点和产物不会被删除。" : "确定删除这条任务记录？已经交付的产物不会被删除。")) return;
+    if (["cancel", "delete_record"].includes(action) && !confirm(action === "cancel" ? t4("chat.confirmCancelTaskDetail") : t4("chat.confirmDeleteRecordDetail"))) return;
     let payload = null;
     if (action === "resolve_user_input") {
       const options2 = Array.isArray(genericUserAction?.choices) ? genericUserAction.choices : Array.isArray(genericUserAction?.options) ? genericUserAction.options : [];
@@ -21851,7 +24099,7 @@ ${optionText}` : ""}`, "");
       };
     }
     if (action === "retarget_output") {
-      const path = prompt("请输入新的输出文件完整路径", selected.outputPath || "");
+      const path = prompt(t4("chat.promptNewOutputPath"), selected.outputPath || "");
       if (path === null || !path.trim()) return;
       payload = { path: path.trim(), ...genericUserInputRequestId ? { requestId: genericUserInputRequestId } : {} };
     }
@@ -21861,35 +24109,35 @@ ${optionText}` : ""}`, "");
     }
     if (action === "retry_delivery") {
       if (!conversationDelivery?.deliveryId) return;
-      if (!confirm("上一次对话交付结果不确定，重新交付可能产生重复回复。是否确认继续？")) return;
+      if (!confirm(t4("chat.confirmRedelivery"))) return;
       payload = { deliveryId: conversationDelivery.deliveryId, consumer: "conversation" };
     }
     onControl(selected.id, action, payload);
   };
-  const modelCaption = selected?.model ? `${selected.running ? "当前模型" : "最近使用模型"} · ${selected.model}${selected.modelRole === "fallback" ? "（备用候选）" : ""}` : "尚未开始模型调用";
+  const modelCaption = selected?.model ? `${selected.running ? t4("chat.currentModel") : t4("chat.recentModel")} · ${selected.model}${selected.modelRole === "fallback" ? t4("chat.fallbackModelSuffix") : ""}` : t4("chat.noModelCallYet");
   const retryLabel = documentRetryLabel(modelIssues);
   return html4`
     <section class="background-jobs-workbench" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface-default);border-top:1px solid var(--border-default)">
       <header class="background-jobs-header">
-        <div class="background-jobs-heading"><strong>后台任务</strong><span class="meta">运行中 ${displayJobs.filter((job) => backgroundJobGroup(job) === "active").length} · 待处理 ${displayJobs.filter((job) => backgroundJobGroup(job) === "attention").length} · 共 ${displayJobs.length}${deliveries.length > 0 ? ` · 待确认通知 ${deliveries.length}` : ""}</span></div>
-        <button type="button" class="background-jobs-close" onClick=${onClose} title="返回对话（Esc）" aria-label="返回对话"><span aria-hidden="true">←</span><span>返回对话</span></button>
+        <div class="background-jobs-heading"><strong>${t4("chat.bgJobsTitle")}</strong><span class="meta">${t4("chat.bgJobsHeaderMeta", { active: displayJobs.filter((job) => backgroundJobGroup(job) === "active").length, attention: displayJobs.filter((job) => backgroundJobGroup(job) === "attention").length, total: displayJobs.length })}${deliveries.length > 0 ? t4("chat.bgPendingDeliveries", { count: deliveries.length }) : ""}</span></div>
+        <button type="button" class="background-jobs-close" onClick=${onClose} title=${t4("chat.bgJobsCloseTitle")} aria-label=${t4("chat.bgJobsClose")}><span aria-hidden="true">←</span><span>${t4("chat.bgJobsClose")}</span></button>
       </header>
       <div class="background-jobs-layout">
         <nav class="background-jobs-list">
-          ${displayJobs.length === 0 ? html4`<div class="meta" style="padding:18px">当前没有后台任务</div>` : groups.map((group) => html4`
+          ${displayJobs.length === 0 ? html4`<div class="meta" style="padding:18px">${t4("chat.bgJobsEmpty")}</div>` : groups.map((group) => html4`
             <section class="background-job-group" aria-label=${group.label}>
               <div class="background-job-group-title"><span>${group.label}</span><span>${group.jobs.length}</span></div>
               ${group.jobs.map((job) => html4`
                 <button type="button" class=${`background-job-list-item ${job.id === selected?.id ? "selected" : ""}`} onClick=${() => onSelect(job.id)}>
-                  <div class="background-job-list-heading"><span class=${`pill ${backgroundJobIsActive(job) ? "info" : backgroundJobNeedsAttention(job) ? "warn" : job.status === "completed" || job.outcome === "delivered" ? "ok" : ""}`}>${job.kind === "document" || job.taskType === "document" ? "文档" : job.lifecycle === "service" ? "服务" : "任务"}</span><span class="name">${backgroundJobTitle(job)}</span></div>
-                  <div class="meta background-job-list-meta"><span>${isGenericBackgroundTask(job) ? genericTaskLifecycleLabel(job.lifecycle) : job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? "运行中" : `exit ${job.exitCode ?? "?"}`}</span><span>${isGenericBackgroundTask(job) ? genericTaskProgressLabel(job) : job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
+                  <div class="background-job-list-heading"><span class=${`pill ${backgroundJobIsActive(job) ? "info" : backgroundJobNeedsAttention(job) ? "warn" : job.status === "completed" || job.outcome === "delivered" ? "ok" : ""}`}>${job.kind === "document" || job.taskType === "document" ? t4("chat.kindDocument") : job.lifecycle === "service" ? t4("chat.kindService") : t4("chat.kindTask")}</span><span class="name">${backgroundJobTitle(job)}</span></div>
+                  <div class="meta background-job-list-meta"><span>${isGenericBackgroundTask(job) ? genericTaskLifecycleLabel(job.lifecycle) : job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? t4("chat.genericRunning") : t4("chat.exitCode", { code: job.exitCode ?? "?" })}</span><span>${isGenericBackgroundTask(job) ? genericTaskProgressLabel(job) : job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
                 </button>
               `)}
             </section>
           `)}
         </nav>
         <main class="background-jobs-detail">
-          ${!selected ? html4`<div class="meta">选择左侧任务查看详情</div>` : isGenericTask ? html4`
+          ${!selected ? html4`<div class="meta">${t4("chat.bgSelectTask")}</div>` : isGenericTask ? html4`
             <div class="background-task-detail-head">
               <div style="min-width:0;flex:1"><h3>${backgroundJobTitle(selected)}</h3><div class="meta">${selected.id} · ${genericTaskLifecycleLabel(selected.lifecycle)} · ${genericTaskOutcomeLabel(selected.outcome)} · ${genericTaskQualityLabel(selected.quality)}</div></div>
               <div class="background-task-actions">
@@ -21897,68 +24145,68 @@ ${optionText}` : ""}`, "");
               </div>
             </div>
             <div class="background-task-progress"><div style=${`width:${genericTaskProgressPercent(selected)}%`}></div></div>
-            <div class="meta background-task-facts"><span>${genericTaskProgressLabel(selected)}</span><span>修订 ${selected.revision ?? 0}</span>${selected.executionEpoch ? html4`<span>执行轮次 ${selected.executionEpoch}</span>` : null}</div>
-            ${genericOutcomeSummary ? html4`<div class="notice background-task-outcome-summary"><strong>结果摘要</strong><div>${genericOutcomeSummary}</div></div>` : null}
-            ${genericBlockingReasonText ? html4`<div class="notice warn background-task-blocking-reason"><strong>阻塞原因</strong><div>${genericBlockingReasonText}${genericBlockingReasonCode && genericBlockingReasonCode !== genericBlockingReasonText ? html4` <span class="meta">(${genericBlockingReasonCode})</span>` : null}</div></div>` : null}
-            ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>需要你的处理</strong><div>${genericUserActionText}</div></div>` : null}
-            ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>交付状态</h4>${genericDeliveryStates.map((delivery) => {
+            <div class="meta background-task-facts"><span>${genericTaskProgressLabel(selected)}</span><span>${t4("chat.revisionLabel", { n: selected.revision ?? 0 })}</span>${selected.executionEpoch ? html4`<span>${t4("chat.epochLabel", { n: selected.executionEpoch })}</span>` : null}</div>
+            ${genericOutcomeSummary ? html4`<div class="notice background-task-outcome-summary"><strong>${t4("chat.outcomeSummaryTitle")}</strong><div>${genericOutcomeSummary}</div></div>` : null}
+            ${genericBlockingReasonText ? html4`<div class="notice warn background-task-blocking-reason"><strong>${t4("chat.blockingReasonTitle")}</strong><div>${genericBlockingReasonText}${genericBlockingReasonCode && genericBlockingReasonCode !== genericBlockingReasonText ? html4` <span class="meta">(${genericBlockingReasonCode})</span>` : null}</div></div>` : null}
+            ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>${t4("chat.userActionTitle")}</strong><div>${genericUserActionText}</div></div>` : null}
+            ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.deliveryStateTitle")}</h4>${genericDeliveryStates.map((delivery) => {
     const deliveryState = delivery.deliveryState || {};
-    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || "等待交付确认";
+    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || t4("chat.deliveryWaitingConfirm");
     const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? deliveryState.code : "";
-    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? "对话" : "任务中心"}交付 · ${deliveryState.status || "等待中"}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
+    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? t4("chat.deliveryConversation") : t4("chat.deliveryTaskCenter")} · ${deliveryState.status || t4("chat.deliveryWaiting")}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
   })}</section>` : null}
-            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>需要留意</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
-            <section class="background-task-section"><h4>产物</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">暂未生成产物</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>预览</button>` : null}</li>`)}</ul>`}</section>
-            ${selected.coverage ? html4`<section class="background-task-section"><h4>覆盖情况</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
+            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.warningsTitle")}</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
+            <section class="background-task-section"><h4>${t4("chat.artifactsTitle")}</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">${t4("chat.artifactsEmpty")}</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>${t4("chat.previewBtn")}</button>` : null}</li>`)}</ul>`}</section>
+            ${selected.coverage ? html4`<section class="background-task-section"><h4>${t4("chat.coverageTitle")}</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
           ` : !isDocument ? html4`
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h3 style="margin:0 0 6px;font-size:15px">${selected.command}</h3><div class="meta">${selected.running ? "正在运行" : `已结束 · exit ${selected.exitCode ?? "?"}`}</div></div>${selected.running ? html4`<button type="button" onClick=${() => onStop(selected.id)}>停止</button>` : null}</div>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h3 style="margin:0 0 6px;font-size:15px">${selected.command}</h3><div class="meta">${selected.running ? t4("chat.procRunning") : t4("chat.procEnded", { code: selected.exitCode ?? "?" })}</div></div>${selected.running ? html4`<button type="button" onClick=${() => onStop(selected.id)}>${t4("chat.stopBtn")}</button>` : null}</div>
           ` : html4`
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
-              <div style="min-width:0;flex:1"><h3 style="margin:0 0 5px;font-size:16px;overflow-wrap:anywhere">${selected.command}</h3><div class="meta">${documentJobStatusLabel(selected.status)} · ${documentJobStageLabel(progress.stage) || "等待下一步"}</div></div>
+              <div style="min-width:0;flex:1"><h3 style="margin:0 0 5px;font-size:16px;overflow-wrap:anywhere">${selected.command}</h3><div class="meta">${documentJobStatusLabel(selected.status)} · ${documentJobStageLabel(progress.stage) || t4("chat.waitingNextStep")}</div></div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-                ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>暂停</button>` : null}
-                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>${selected.artifactStatus === "modified" ? "另存后台草稿" : selected.artifactStatus === "missing" ? "恢复最终文件" : selected.status === "awaiting_output" ? "提交已保存草稿" : "继续"}</button>` : null}
-                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" title=${modelIssues.find((issue) => issue.requiresUserAction)?.action || "重试失败部分"} onClick=${() => onControl(selected.id, "retry")}>${retryLabel}</button>` : null}
-                ${deliveryRetryable ? html4`<button type="button" title="只重新交付已有结果，不会重新处理文档" onClick=${() => {
-    if (confirm("只重新交付已有结果，不会重新处理文档。可能产生重复回复，是否继续？")) onControl(selected.id, "retry_delivery");
-  }}>仅重新交付</button>` : null}
-                ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>立即停止</button>` : null}
+                ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>${t4("chat.pauseBtn")}</button>` : null}
+                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>${selected.artifactStatus === "modified" ? t4("chat.resumeSaveAs") : selected.artifactStatus === "missing" ? t4("chat.resumeRecoverFinal") : selected.status === "awaiting_output" ? t4("chat.resumeSubmitDraft") : t4("chat.resumeContinue")}</button>` : null}
+                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" title=${modelIssues.find((issue) => issue.requiresUserAction)?.action || t4("chat.retryFailedPart")} onClick=${() => onControl(selected.id, "retry")}>${retryLabel}</button>` : null}
+                ${deliveryRetryable ? html4`<button type="button" title=${t4("chat.bgRedeliverTitle")} onClick=${() => {
+    if (confirm(t4("chat.redeliverConfirm"))) onControl(selected.id, "retry_delivery");
+  }}>${t4("chat.redeliverBtn")}</button>` : null}
+                ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>${t4("chat.bgStopNow")}</button>` : null}
                 ${abandonable ? html4`<button type="button" onClick=${() => {
-    if (confirm("放弃任务会终止后续处理，但保留任务记录和已保存草稿。确定继续？")) onAbandon(selected.id);
-  }}>放弃</button>` : null}
-                ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>预览产物</button>` : null}
+    if (confirm(t4("chat.abandonConfirm"))) onAbandon(selected.id);
+  }}>${t4("chat.abandonBtn")}</button>` : null}
+                ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>${t4("chat.previewArtifactBtn")}</button>` : null}
                 ${deletable ? html4`<button type="button" onClick=${() => {
-    if (confirm("仅删除任务记录和中间草稿；源文件及已经生成的最终产物不会删除。确定继续？")) onDelete(selected.id);
-  }}>删除记录</button>` : null}
+    if (confirm(t4("chat.deleteRecordConfirm"))) onDelete(selected.id);
+  }}>${t4("chat.deleteRecordBtn")}</button>` : null}
               </div>
             </div>
             <div style="height:6px;background:var(--border-subtle);overflow:hidden;margin:16px 0 8px"><div style=${`height:100%;width:${progress.percent ?? 0}%;background:${selected.qualityPassed === false ? "var(--color-warning)" : "var(--accent-primary)"}`}></div></div>
-            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>累计模型调用 ${progress.taskModelCalls || 0} 次 · 本次执行 ${progress.executionModelCalls || 0} / ${progress.taskModelCallLimit || "—"} 次</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>当前区块 · ${progress.currentLabel}</span>` : null}</div>
+            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>${t4("chat.modelCallsSummary", { total: progress.taskModelCalls || 0, current: progress.executionModelCalls || 0, limit: progress.taskModelCallLimit || "—" })}</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>${t4("chat.currentChunk", { label: progress.currentLabel })}</span>` : null}</div>
             ${handoffNotice ? html4`<div class=${`notice ${handoffNotice.tone}`} style="margin-top:12px">${handoffNotice.text}</div>` : null}
-            ${selected.status === "awaiting_output" ? html4`<div class="notice warn" style="margin-top:12px"><strong>内容整理和最终草稿已经完成。</strong><div style="margin-top:4px">点击“提交已保存草稿”即可继续；若同名文件仍被占用，程序会自动使用新文件名，且不会再次调用模型。</div></div>` : null}
-            ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>最终输出文件已不存在。</strong><div style="margin-top:4px">任务记录和后台保存的最终草稿仍在，可以点击“继续”尝试恢复交付。</div></div>` : null}
-            ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>最终输出文件已被修改。</strong><div style="margin-top:4px">当前文件与任务完成时保存的草稿不一致。点击“另存后台草稿”会保留当前文件，并把已验证草稿保存为新文件。</div></div>` : null}
-            ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>任务已经结束，输出文件已生成。</strong><div style="margin-top:4px">部分区块未通过完整质量审查，请根据下方原因处理后复核或重试。</div></div>` : null}
+            ${selected.status === "awaiting_output" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.awaitingOutputTitle")}</strong><div style="margin-top:4px">${t4("chat.awaitingOutputBody")}</div></div>` : null}
+            ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>${t4("chat.artifactMissingTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactMissingBody")}</div></div>` : null}
+            ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.artifactModifiedTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactModifiedBody")}</div></div>` : null}
+            ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.completedWarnTitle")}</strong><div style="margin-top:4px">${t4("chat.completedWarnBody")}</div></div>` : null}
             ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
             ${showReviewReasons && (reviewWarnings.length > 0 || modelIssues.length > 0) ? html4`
               <section style="margin-top:18px">
-                <h4 style="font-size:13px;margin:0 0 8px">需要复核的原因</h4>
-                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || "部分内容需要复核。"}</div>`)}
+                <h4 style="font-size:13px;margin:0 0 8px">${t4("chat.reviewReasonsTitle")}</h4>
+                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || t4("chat.reviewWarningFallback")}</div>`)}
                 ${modelIssues.map((issue) => html4`
                   <div class="notice warn" style="margin:0 0 8px">
-                    <div><strong>${issue.providerId || "未知服务商"}/${issue.modelId || "未知模型"}</strong> · ${issue.message || "模型调用失败"}</div>
-                    <div class="meta" style="margin-top:5px">影响区块 · ${documentIssueBatchLabel(issue)}</div>
-                    ${issue.action ? html4`<div style="margin-top:5px">建议：${issue.action}</div>` : null}
-                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">技术信息</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join("；")}</div></details>` : null}
+                    <div><strong>${issue.providerId || t4("chat.unknownProvider")}/${issue.modelId || t4("chat.unknownModel")}</strong> · ${issue.message || t4("chat.modelCallFailed")}</div>
+                    <div class="meta" style="margin-top:5px">${t4("chat.affectedBatches", { label: documentIssueBatchLabel(issue) })}</div>
+                    ${issue.action ? html4`<div style="margin-top:5px">${t4("chat.suggestionPrefix")}${issue.action}</div>` : null}
+                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">${t4("chat.technicalInfo")}</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join(t4("chat.techMsgJoin"))}</div></details>` : null}
                   </div>
                 `)}
               </section>
             ` : null}
-            <section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">来源与产物</h4><div class="meta" style="overflow-wrap:anywhere">输出 · ${selected.outputPath || "尚未确定"}</div>${sourcePaths.length > 0 ? html4`<ol style="margin:8px 0 0;padding-left:22px">${sourcePaths.map((path) => html4`<li style="font-size:12px;line-height:1.6;overflow-wrap:anywhere">${path}</li>`)}</ol>` : null}</section>
-            ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">完成条件</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
-            ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">模型调用链</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">模型</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">角色</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">结果</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">调用</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? "备用" : "主模型"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? "通过" : "未通过"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
-            ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">已保存草稿预览${selected.preview?.partial ? "（处理中）" : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? "\n\n[预览过长，已在工作台截断显示]" : ""}</pre></section>` : null}
-            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">最近事件</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
+            <section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.sourceAndArtifact")}</h4><div class="meta" style="overflow-wrap:anywhere">${t4("chat.outputLabel", { path: selected.outputPath || t4("chat.outputUndecided") })}</div>${sourcePaths.length > 0 ? html4`<ol style="margin:8px 0 0;padding-left:22px">${sourcePaths.map((path) => html4`<li style="font-size:12px;line-height:1.6;overflow-wrap:anywhere">${path}</li>`)}</ol>` : null}</section>
+            ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.criteriaTitle")}</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
+            ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.modelHistoryTitle")}</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thModel")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thRole")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thResult")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thCalls")}</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? t4("chat.roleFallback") : t4("chat.rolePrimary")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? t4("chat.resultPass") : t4("chat.resultFail")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
+            ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.draftPreviewTitle")}${selected.preview?.partial ? t4("chat.draftPreviewPartial") : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? t4("chat.previewTruncated") : ""}</pre></section>` : null}
+            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.recentEventsTitle")}</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
           `}
         </main>
       </div>
@@ -21974,13 +24222,13 @@ function pickWorkspaceDirectoryFromBridge() {
   }
   return new Promise((resolve, reject) => {
     if (!window.parent || window.parent === window) {
-      reject(new Error("本地目录选择器仅在桌面端可用"));
+      reject(new Error(t4("chat.localDirOnlyDesktop")));
       return;
     }
     const requestId = `workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => {
       window.removeEventListener("message", onMessage);
-      reject(new Error("目录选择器响应超时"));
+      reject(new Error(t4("chat.dirPickerTimeout")));
     }, 5 * 60 * 1e3);
     function onMessage(event) {
       const data = event.data;
@@ -21996,7 +24244,7 @@ function pickWorkspaceDirectoryFromBridge() {
 }
 async function openMarkdownDocumentByPicker() {
   try {
-    showToast("请选择 Markdown 文档...", "info", 1500);
+    showToast(t4("chat.selectMdDoc"), "info", 1500);
     try {
       const path = await pickMarkdownFileFromBridge();
       if (!path) return;
@@ -22010,7 +24258,7 @@ async function openMarkdownDocumentByPicker() {
       return;
     }
   } catch (err) {
-    showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
+    showToast(err.message || t4("chat.mdOpenFailed"), "error", 5e3);
   }
 }
 window.addEventListener("message", (event) => {
@@ -22045,24 +24293,24 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
         await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
       } else if (kind === "copy") {
         await writeClipboardText(file.path);
-        showToast("路径已复制", "info");
+        showToast(t4("chat.pathCopied"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("chat.fileOpFailed"), "error", 5e3);
     }
   };
   return html4`
     <div class="rail-card file-artifact-card">
       <div class="rh">
-        <span>${selected ? "当前回复文件" : "最新生成文件"}</span>
-        ${selected ? html4`<button type="button" class="rail-card-link" onClick=${onFollowLatest}>回到最新</button>` : null}
-        <button type="button" class="rail-card-close" onClick=${onDismiss} title="隐藏">×</button>
+        <span>${selected ? t4("chat.currentReplyFiles") : t4("chat.latestFiles")}</span>
+        ${selected ? html4`<button type="button" class="rail-card-link" onClick=${onFollowLatest}>${t4("chat.followLatest")}</button>` : null}
+        <button type="button" class="rail-card-close" onClick=${onDismiss} title=${t4("chat.hide")}>×</button>
       </div>
-      <div class="file-artifact-summary">检测到 ${files.length} 个可操作文件${groups.length > 1 ? ` · ${groups.length} 个文件夹` : ""}</div>
+      <div class="file-artifact-summary">${t4("chat.filesDetected", { count: files.length })}${groups.length > 1 ? t4("chat.foldersSuffix", { count: groups.length }) : ""}</div>
       <div class="file-artifact-list">
         ${groups.map((group) => html4`
           <div class="file-artifact-group" key=${group.dir || "root"}>
-            ${groups.length > 1 ? html4`<div class="file-artifact-dir" title=${group.dir}>${group.dir || "当前目录"}</div>` : null}
+            ${groups.length > 1 ? html4`<div class="file-artifact-dir" title=${group.dir}>${group.dir || t4("chat.currentDir")}</div>` : null}
             ${group.files.map((file) => {
     const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
     const canPreview = file.previewable || FILE_ARTIFACT_PREVIEW_EXTS.has(ext);
@@ -22072,10 +24320,10 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
               <div class="file-artifact-name" title=${file.path}>${file.filename}</div>
               <div class="file-artifact-meta">${fileArtifactKind(ext)}${file.size ? ` · ${fmtBytes(file.size)}` : ""}</div>
               <div class="file-artifact-actions">
-                ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>查看</button>` : null}
-                ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>打开</button>` : null}
-                <button type="button" onClick=${() => action("folder", file)}>所在文件夹</button>
-                <button type="button" onClick=${() => action("copy", file)}>复制路径</button>
+                ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>${t4("chat.preview")}</button>` : null}
+                ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>${t4("chat.open")}</button>` : null}
+                <button type="button" onClick=${() => action("folder", file)}>${t4("chat.openFolder")}</button>
+                <button type="button" onClick=${() => action("copy", file)}>${t4("chat.copyPath")}</button>
               </div>
             </div>
           `;
@@ -22083,23 +24331,23 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
           </div>
         `)}
       </div>
-      ${more > 0 ? html4`<div class="file-artifact-more">还有 ${more} 个文件，已自动去重</div>` : null}
+      ${more > 0 ? html4`<div class="file-artifact-more">${t4("chat.moreFilesDedup", { count: more })}</div>` : null}
     </div>
   `;
 }
 function recentFileSourceLabel(source) {
-  if (source === "report") return "任务报告";
-  if (source === "opened") return "打开过";
-  if (source === "saved") return "另存产物";
-  if (source === "generated") return "生成文件";
-  return "文件";
+  if (source === "report") return t4("chat.srcReport");
+  if (source === "opened") return t4("chat.srcOpened");
+  if (source === "saved") return t4("chat.srcSaved");
+  if (source === "generated") return t4("chat.srcGenerated");
+  return t4("chat.srcFile");
 }
 function fmtRecentFileTime(ms) {
-  if (!Number.isFinite(Number(ms))) return "时间未知";
+  if (!Number.isFinite(Number(ms))) return t4("chat.timeUnknown");
   try {
     return new Date(Number(ms)).toLocaleString();
   } catch {
-    return "时间未知";
+    return t4("chat.timeUnknown");
   }
 }
 function FilesPanel() {
@@ -22138,32 +24386,32 @@ function FilesPanel() {
         await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
       } else if (kind === "copy") {
         await writeClipboardText(file.path);
-        showToast("路径已复制", "info");
+        showToast(t4("chat.pathCopied"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("chat.fileOpFailed"), "error", 5e3);
     }
   };
   return html4`
     <div class="files-panel">
       <div class="files-toolbar">
         <div class="files-heading">
-          <div class="files-title">文件中心</div>
-          <div class="files-subtitle">集中查看最近生成、打开和任务输出的文件</div>
+          <div class="files-title">${t4("chat.filesTitle")}</div>
+          <div class="files-subtitle">${t4("chat.filesSubtitle")}</div>
         </div>
         <input
           class="input files-search"
           value=${query}
           onInput=${(e3) => setQuery(e3.target.value)}
-          placeholder="搜索文件名或路径"
+          placeholder=${t4("chat.filesSearchPlaceholder")}
         />
-        <button class="btn" onClick=${load} disabled=${loading}>${loading ? "刷新中..." : "刷新"}</button>
+        <button class="btn" onClick=${load} disabled=${loading}>${loading ? t4("chat.refreshingBtn") : t4("chat.refreshBtn")}</button>
       </div>
-      ${error ? html4`<div class="files-notice err">文件列表加载失败：${error.message}</div>` : null}
-      ${loading && files.length === 0 ? html4`<div class="files-empty">正在加载最近文件...</div>` : null}
-      ${!loading && visible.length === 0 ? html4`<div class="files-empty">${query.trim() ? "没有匹配的文件。" : "暂无最近文件。对话生成文件、任务报告或打开 Markdown 后会出现在这里。"}</div>` : null}
+      ${error ? html4`<div class="files-notice err">${t4("chat.filesLoadFailed")}${error.message}</div>` : null}
+      ${loading && files.length === 0 ? html4`<div class="files-empty">${t4("chat.filesLoading")}</div>` : null}
+      ${!loading && visible.length === 0 ? html4`<div class="files-empty">${query.trim() ? t4("chat.filesNoMatch") : t4("chat.filesEmpty")}</div>` : null}
       ${visible.length > 0 ? html4`
-        <div class="files-summary">共 ${files.length} 个最近文件${query.trim() ? ` · 当前显示 ${visible.length} 个` : ""}</div>
+        <div class="files-summary">${t4("chat.filesSummary", { total: files.length })}${query.trim() ? t4("chat.filesSummaryFiltered", { count: visible.length }) : ""}</div>
         <div class="files-list">
           ${visible.map((file) => {
     const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
@@ -22183,10 +24431,10 @@ function FilesPanel() {
               <div class="files-side">
                 <span class="files-source">${recentFileSourceLabel(file.source)}</span>
                 <div class="files-actions">
-                  ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>查看</button>` : null}
-                  ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>打开</button>` : null}
-                  <button type="button" onClick=${() => action("folder", file)}>所在文件夹</button>
-                  <button type="button" onClick=${() => action("copy", file)}>复制路径</button>
+                  ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>${t4("chat.preview")}</button>` : null}
+                  ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>${t4("chat.open")}</button>` : null}
+                  <button type="button" onClick=${() => action("folder", file)}>${t4("chat.openFolder")}</button>
+                  <button type="button" onClick=${() => action("copy", file)}>${t4("chat.copyPath")}</button>
                 </div>
               </div>
             </div>
@@ -22369,6 +24617,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [operation, setOperation] = d2(null);
   const [backgroundJobs, setBackgroundJobs] = d2([]);
   const [pendingDeliveries, setPendingDeliveries] = d2([]);
+  const [backgroundJobsLoading, setBackgroundJobsLoading] = d2(false);
   const [showBackgroundJobs, setShowBackgroundJobs] = d2(false);
   const [selectedBackgroundJobId, setSelectedBackgroundJobId] = d2(null);
   const [backgroundJobDetail, setBackgroundJobDetail] = d2(null);
@@ -22414,11 +24663,11 @@ ${workspaceDir || ""}`;
     try {
       const result = await api("/optimize-prompt", { method: "POST", body: { prompt: source } });
       if (inputValueRef.current.trim() !== source) {
-        showToast("输入内容已变化，未覆盖你刚才的修改", "info");
+        showToast(t4("chat.draftKept"), "info");
         return;
       }
       const optimized = String(result?.prompt ?? "").trim();
-      if (!optimized) throw new Error("模型没有返回可用的优化结果");
+      if (!optimized) throw new Error(t4("chat.optimizeNoResult"));
       setChatInput(optimized);
       setTimeout(() => {
         inputRef.current?.focus();
@@ -22427,9 +24676,9 @@ ${workspaceDir || ""}`;
         } catch {
         }
       }, 0);
-      showToast("提示词已优化，请确认后发送", "success");
+      showToast(t4("chat.optimizeDone"), "success");
     } catch (err) {
-      setError(`提示词优化失败：${err.message}`);
+      setError(t4("chat.optimizeFailed", { msg: err.message }));
     } finally {
       setPromptOptimizing(false);
     }
@@ -22438,6 +24687,7 @@ ${workspaceDir || ""}`;
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
   const refreshBackgroundJobs = q2(async () => {
+    setBackgroundJobsLoading(true);
     try {
       const result = await api("/background-jobs");
       const next = Array.isArray(result.jobs) ? result.jobs : [];
@@ -22446,6 +24696,8 @@ ${workspaceDir || ""}`;
       return next;
     } catch {
       return [];
+    } finally {
+      setBackgroundJobsLoading(false);
     }
   }, []);
   const stopBackgroundJob = q2(async (id) => {
@@ -22562,7 +24814,7 @@ ${workspaceDir || ""}`;
   const previewDocumentJob = q2(async (job, artifact = null) => {
     try {
       if (artifact?.path) {
-        const filename = artifact.filename || artifact.name || artifact.path.split(/[\\/]/).pop() || "任务产物";
+        const filename = artifact.filename || artifact.name || artifact.path.split(/[\\/]/).pop() || t4("chat.artifactDefaultName");
         const ext = filename.includes(".") ? filename.split(".").pop() : "";
         await showFileArtifactPreview({ path: artifact.path, filename, ext });
         return;
@@ -22573,10 +24825,10 @@ ${workspaceDir || ""}`;
       }
       const detail = await api(`/background-jobs/${encodeURIComponent(job.id)}`);
       const preview = detail?.job?.preview;
-      if (!preview?.content) throw new Error("当前还没有可预览的已完成区块");
+      if (!preview?.content) throw new Error(t4("chat.noPreviewableChunk"));
       showArtifactPreview({
         id: `document-job-${Date.now()}`,
-        filename: preview.filename || "文档中间预览.md",
+        filename: preview.filename || t4("chat.docPreviewDefaultName"),
         path: "",
         lang: "markdown",
         content: preview.content
@@ -22591,6 +24843,9 @@ ${workspaceDir || ""}`;
     const id = setInterval(refreshBackgroundJobs, 5e3);
     return () => clearInterval(id);
   }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
+  y2(() => {
+    if (showBackgroundJobs && !backgroundJobsLoading && !backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job))) closeBackgroundWorkbench();
+  }, [showBackgroundJobs, backgroundJobsLoading, backgroundJobs, closeBackgroundWorkbench]);
   y2(() => {
     const refreshOnFocus = () => {
       void refreshBackgroundJobs();
@@ -23004,22 +25259,30 @@ ${workspaceDir || ""}`;
         setStreaming(null);
         setActiveTools([]);
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: dash.id,
-            role: "assistant",
-            text: dash.text,
-            reasoning: dash.reasoning ?? completedStream?.reasoning,
-            reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-            receipt: dash.receipt,
-            taskState: dash.taskState,
-            artifactIncomplete: dash.artifactIncomplete === true,
-            interventionChoice: dash.interventionChoice,
-            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+        const nextMessage = {
+          id: dash.id,
+          role: "assistant",
+          text: dash.text,
+          reasoning: dash.reasoning ?? completedStream?.reasoning,
+          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
+          receipt: dash.receipt,
+          taskState: dash.taskState,
+          artifactIncomplete: dash.artifactIncomplete === true,
+          interventionChoice: dash.interventionChoice,
+          warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+        };
+        let inserted = false;
+        setMessages((prev) => {
+          const index = prev.findIndex((item) => String(item.id || "") === String(dash.id || ""));
+          if (index < 0) {
+            inserted = true;
+            return [...prev, nextMessage];
           }
-        ]);
-        setTotalMessages((count) => count + 1);
+          const copy = [...prev];
+          copy[index] = { ...copy[index], ...nextMessage };
+          return copy;
+        });
+        if (inserted) setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
@@ -23163,6 +25426,8 @@ ${workspaceDir || ""}`;
     eventBatcherRef.current = eventBatcher;
     const onDash = (dash) => {
       if (!eventGuardRef.current?.accept(dash)) return;
+      const eventSessionId = String(dash.sessionId ?? "").trim();
+      if (eventSessionId && activeConversationId && eventSessionId !== String(activeConversationId)) return;
       if (dash.kind === "resync-required") {
         void resyncDashboardEvents();
         return;
@@ -23192,7 +25457,13 @@ ${workspaceDir || ""}`;
       eventBatcherRef.current = null;
       cancelStreamingRaf();
     };
-  }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend]);
+  }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend, activeConversationId]);
+  y2(() => {
+    eventBatcherRef.current?.discard();
+    bufferedDashboardEventsRef.current.splice(0);
+    executionStateRef.current = createDashboardReducerState();
+    eventGuardRef.current?.reset();
+  }, [activeConversationId]);
   var handleFileChange = q2(async function(e3) {
     var files = e3.target.files;
     if (!files || files.length === 0) return;
@@ -23205,7 +25476,7 @@ ${workspaceDir || ""}`;
       } catch (err) {
         if (err?.name === "AbortError") continue;
         console.error("Media upload failed:", err);
-        setError(`附件上传失败：${err.message}`);
+        setError(t4("chat.uploadFailed", { msg: err.message }));
       }
     }
     if (uploadScopeRef.current !== scope || scope.controller.signal.aborted) {
@@ -23290,16 +25561,16 @@ ${workspaceDir || ""}`;
     return scope;
   };
   var uploadMediaAttachment = async function(file, scope = currentUploadScope()) {
-    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error("附件文件为空");
-    if (file.size > 50 * 1024 * 1024) throw new Error("附件超过 50 MB 限制");
+    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error(t4("chat.attachmentEmpty"));
+    if (file.size > 50 * 1024 * 1024) throw new Error(t4("chat.attachmentTooLarge"));
     const isImage = String(file.type || "").startsWith("image/");
     const extension = /\.([^.]+)$/.exec(String(file.name || ""))?.[1]?.toLowerCase() || "";
     const videoMimeByExtension = { mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm" };
     const declaredMime = String(file.type || videoMimeByExtension[extension] || "application/octet-stream").toLowerCase();
     const isVideo = ["video/mp4", "video/quicktime", "video/webm"].includes(declaredMime) || Object.hasOwn(videoMimeByExtension, extension);
-    if (!isImage && !isVideo) throw new Error("仅支持图片、MP4、MOV 或 WebM 视频");
-    if (isImage && !canUploadImages) throw new Error("当前模型不支持图片输入");
-    if (isVideo && !canUploadVideos) throw new Error("仅显式配置的官方 Kimi 视频模型支持视频输入");
+    if (!isImage && !isVideo) throw new Error(t4("chat.attachmentTypeUnsupported"));
+    if (isImage && !canUploadImages) throw new Error(t4("chat.imageNotSupported"));
+    if (isVideo && !canUploadVideos) throw new Error(t4("chat.videoNotSupported"));
     const preview = isImage ? await compressImage(file) : null;
     const initialized = await api("/attachments", {
       method: "POST",
@@ -23316,7 +25587,7 @@ ${workspaceDir || ""}`;
         await api("/attachments", { method: "POST", body: { action: "chunk", uploadId, offset, data }, signal: scope?.controller.signal });
       }
       const completed = await api("/attachments", { method: "POST", body: { action: "finish", uploadId }, signal: scope?.controller.signal });
-      if (!completed.attachment?.id) throw new Error("宿主未返回附件 ID");
+      if (!completed.attachment?.id) throw new Error(t4("chat.attachmentNoId"));
       const result = {
         attachmentId: completed.attachment.id,
         preview,
@@ -23330,7 +25601,7 @@ ${workspaceDir || ""}`;
       };
       if (uploadScopeRef.current !== scope || scope?.controller.signal.aborted) {
         await releaseUploadedImages([result]);
-        const staleError = new Error("附件上传所属会话或工作区已经切换");
+        const staleError = new Error(t4("chat.attachmentStale"));
         staleError.name = "AbortError";
         throw staleError;
       }
@@ -23379,9 +25650,9 @@ ${workspaceDir || ""}`;
   const appendSkillMention = q2((name) => {
     const skillName = String(name ?? "").trim();
     if (!skillName) return;
-    const base = inputValueRef.current;
-    const spacer = base && !/\s$/.test(base) ? " " : "";
-    setChatInput(`${base}${spacer}@${skillName} `);
+    const base2 = inputValueRef.current;
+    const spacer = base2 && !/\s$/.test(base2) ? " " : "";
+    setChatInput(`${base2}${spacer}@${skillName} `);
     setShowSkillPicker(false);
     setPopoverKind(null);
     setTimeout(() => inputRef.current?.focus(), 0);
@@ -23452,7 +25723,7 @@ ${workspaceDir || ""}`;
           ok: false,
           requiresUserRetry: true,
           code: "PROMPT_COMPLETION_FAILED",
-          reason: res.completion.error ?? "上一次执行未成功，请明确重试。"
+          reason: res.completion.error ?? t4("chat.lastRunFailed")
         };
       }
       shouldAutoScroll.current = true;
@@ -23517,7 +25788,7 @@ ${workspaceDir || ""}`;
     for (const attachmentId of attachments) queuedAttachmentIdsRef.current.add(attachmentId);
     try {
       const persisted = await persistQueuedPrompt(item);
-      if (persisted?.ok === false) throw new Error(persisted.error || "队列持久化失败");
+      if (persisted?.ok === false) throw new Error(persisted.error || t4("chat.queuePersistFailed"));
     } catch (err) {
       for (const attachmentId of attachments) queuedAttachmentIdsRef.current.delete(attachmentId);
       const currentScopeKey = uploadScopeRef.current?.key ?? null;
@@ -23543,7 +25814,7 @@ ${workspaceDir || ""}`;
     const claimedQueueScope = queueStorageKey;
     try {
       const deleted = await deletePersistedQueuedPrompt(id);
-      if (deleted?.ok === false) throw new Error(deleted.error || "队列删除失败");
+      if (deleted?.ok === false) throw new Error(deleted.error || t4("chat.queueDeleteFailed"));
     } catch (err) {
       setError(t4("chat.queueFailed", { error: err.message }));
       return false;
@@ -23586,7 +25857,7 @@ ${workspaceDir || ""}`;
     const claimedQueueScope = queueStorageKey;
     try {
       const deleted = await deletePersistedQueuedPrompt();
-      if (deleted?.ok === false) throw new Error(deleted.error || "队列清空失败");
+      if (deleted?.ok === false) throw new Error(deleted.error || t4("chat.queueClearFailed"));
     } catch (err) {
       setError(t4("chat.queueFailed", { error: err.message }));
       return false;
@@ -23616,7 +25887,7 @@ ${workspaceDir || ""}`;
     const claimedQueueScope = queueStorageKey;
     try {
       const deleted = await deletePersistedQueuedPrompt();
-      if (deleted?.ok === false) throw new Error(deleted.error || "队列清空失败");
+      if (deleted?.ok === false) throw new Error(deleted.error || t4("chat.queueClearFailed"));
     } catch (err) {
       setError(t4("chat.queueFailed", { error: err.message }));
       return false;
@@ -23748,11 +26019,11 @@ ${workspaceDir || ""}`;
     const paused = planContinuation;
     setPlanContinuation(null);
     const result = await submitPromptPayload({
-      text: "继续执行当前未完成计划。不要重新制定计划，从中断处继续，完成实际产物并验证后再结束。"
+      text: t4("chat.planContinuationText")
     });
     if (!result.ok) {
       setPlanContinuation(paused);
-      setError(result.reason ?? "继续执行失败");
+      setError(result.reason ?? t4("chat.planContinueFailed"));
     }
   }, [busy, planContinuation, submitPromptPayload]);
   const abort = q2(async () => {
@@ -23847,7 +26118,7 @@ ${workspaceDir || ""}`;
     try {
       await showFileArtifactPreview({ path: `${workspaceDir}/${source.path}` });
     } catch (err) {
-      showToast(err.message || "索引来源预览失败", "error", 5e3);
+      showToast(err.message || t4("chat.indexPreviewFailed"), "error", 5e3);
     }
   }, [workspaceDir]);
   const clearScrollback = q2(async () => {
@@ -24209,7 +26480,7 @@ ${workspaceDir || ""}`;
         } else if (plainText) {
           insertAtCursor(plainText);
         } else if (fileNames.length > 0) {
-          showClipboardNotice("无法读取剪贴板中的文件路径，请重新复制文件或文件夹。");
+          showClipboardNotice(t4("chat.clipboardNoPath"));
         }
       }, tryServerClipboardPaths = function() {
         var clipboardUrl = "/api/clipboard-files" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
@@ -24451,22 +26722,22 @@ ${workspaceDir || ""}`;
   }, []);
   const setSetting = q2(async (key, value) => {
     const modelMenuSetting = key === "preset" || key === "reasoningEffort" || key === "model";
-    if (modelMenuSetting) pushModelNotice("正在应用模型设置...", "info", 0);
+    if (modelMenuSetting) pushModelNotice(t4("chat.modelApplying"), "info", 0);
     if (key === "preset") setPresetLocal(value);
     if (key === "reasoningEffort") setEffortLocal(value);
     if (key === "mode") setModeLocal(value);
     try {
       const updated = await api("/settings", { method: "POST", body: { [key]: value } });
-      if (key === "mode") showToast("工作场景已切换，下次新对话生效", "info");
+      if (key === "mode") showToast(t4("chat.modeSwitchedNextChat"), "info");
       if ((key === "preset" || key === "model") && updated?.modelSwitch) {
         const switched = updated.modelSwitch;
         const count = Number.isFinite(switched.messageCount) ? switched.messageCount : 0;
-        const adaptation = switched.contextStatus?.needsCompaction ? "，发送下一条消息前将自动整理历史" : "";
-        pushModelNotice(switched.deferred ? `已选择 ${switched.model}，将在当前回答结束后切换，保留 ${count} 条上下文${adaptation}` : `✓ 已切换到 ${switched.model}，保留 ${count} 条上下文${adaptation}`, "success");
+        const adaptation = switched.contextStatus?.needsCompaction ? t4("chat.compactionNote") : "";
+        pushModelNotice(switched.deferred ? t4("chat.modelQueuedSwitch", { model: switched.model, count, adaptation }) : t4("chat.modelSwitchedKeep", { model: switched.model, count, adaptation }), "success");
       } else if (key === "preset") {
-        pushModelNotice(`✓ 已选择 ${value} 模式`, "success");
+        pushModelNotice(t4("chat.effortSelected", { value }), "success");
       } else if (key === "reasoningEffort") {
-        pushModelNotice(`✓ 推理强度已设为 ${reasoningEffortLabel(value)}`, "success");
+        pushModelNotice(t4("chat.effortSetTo", { label: reasoningEffortLabel(value) }), "success");
       }
       try {
         const o3 = await api("/overview");
@@ -24477,7 +26748,7 @@ ${workspaceDir || ""}`;
       } catch {
       }
     } catch (err) {
-      if (modelMenuSetting) pushModelNotice(`切换失败：${err.message}`, "error", 5e3);
+      if (modelMenuSetting) pushModelNotice(t4("chat.switchFailed", { msg: err.message }), "error", 5e3);
       else setError(`${key} switch failed: ${err.message}`);
       try {
         const o3 = await api("/overview");
@@ -24492,7 +26763,7 @@ ${workspaceDir || ""}`;
     }
   }, [pushModelNotice]);
   const selectProviderModel = q2(async (providerId, modelId) => {
-    pushModelNotice("正在切换模型...", "info", 0);
+    pushModelNotice(t4("chat.modelSwitching"), "info", 0);
     try {
       const switched = await api("/providers/active", { method: "POST", body: { id: providerId, modelId } });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
@@ -24504,13 +26775,13 @@ ${workspaceDir || ""}`;
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? modelId);
       const count = switched?.modelSwitch?.messageCount;
-      pushModelNotice(Number.isFinite(count) ? `✓ 已切换模型，保留 ${count} 条上下文` : "✓ 模型已切换", "success");
+      pushModelNotice(Number.isFinite(count) ? t4("chat.modelSwitchedKeepCount", { count }) : t4("chat.modelSwitched"), "success");
     } catch (err) {
-      pushModelNotice(`切换失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.switchFailed", { msg: err.message }), "error", 5e3);
     }
   }, [pushModelNotice]);
   const confirmProviderImport = q2(async (draft, plan) => {
-    pushModelNotice("正在导入模型配置...", "info", 0);
+    pushModelNotice(t4("chat.importingConfig"), "info", 0);
     try {
       await api("/providers/import", {
         method: "POST",
@@ -24524,26 +26795,26 @@ ${workspaceDir || ""}`;
       setPresetLocal(overview.preset ?? null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? null);
-      pushModelNotice("✓ 配置导入成功，请检测模型", "success", 5e3);
+      pushModelNotice(t4("chat.importOkVerify"), "success", 5e3);
     } catch (err) {
-      pushModelNotice(`导入失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.importFailed", { msg: err.message }), "error", 5e3);
     }
   }, [pushModelNotice]);
   const loadProviderImportFile = q2(async (event) => {
     const file = event.target.files?.[0];
     if (!file || providerImporting) return;
     setProviderImporting(true);
-    pushModelNotice("正在检查模型配置...", "info", 0);
+    pushModelNotice(t4("chat.checkingConfig"), "info", 0);
     try {
       const draft = parseProviderImportJson(await file.text());
       const plan = await api("/providers/import/preview", { method: "POST", body: draft });
-      if (plan.requiresConfirmation === true && !confirm("该配置会永久删除现有模型，确认继续导入吗？")) {
-        pushModelNotice("已取消导入", "info");
+      if (plan.requiresConfirmation === true && !confirm(t4("chat.confirmImportDeletes"))) {
+        pushModelNotice(t4("chat.importCancelled"), "info");
         return;
       }
       await confirmProviderImport(draft, plan);
     } catch (err) {
-      pushModelNotice(`导入失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.importFailed", { msg: err.message }), "error", 5e3);
     } finally {
       setProviderImporting(false);
     }
@@ -24551,7 +26822,7 @@ ${workspaceDir || ""}`;
   const testAllProviders = q2(async () => {
     if (providerTesting) return;
     setProviderTesting(true);
-    pushModelNotice("正在检测全部模型...", "info", 0);
+    pushModelNotice(t4("chat.testingAll"), "info", 0);
     try {
       const tested = await api("/providers/test", { method: "POST", body: {} });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
@@ -24563,9 +26834,9 @@ ${workspaceDir || ""}`;
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? null);
       const failed = tested.total - tested.passed;
-      pushModelNotice(failed > 0 ? `检测完成：${tested.passed} 个可用，${failed} 个不可用` : `✓ ${tested.passed} 个模型全部可用`, failed > 0 ? "error" : "success", 5e3);
+      pushModelNotice(failed > 0 ? t4("chat.testDoneWithFail", { passed: tested.passed, failed }) : t4("chat.testAllPassed", { passed: tested.passed }), failed > 0 ? "error" : "success", 5e3);
     } catch (err) {
-      pushModelNotice(`模型检测失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.testFailed", { msg: err.message }), "error", 5e3);
     } finally {
       setProviderTesting(false);
     }
@@ -24573,9 +26844,9 @@ ${workspaceDir || ""}`;
   const cleanupFailedModels = q2(async () => {
     const failed = providerModelTestSummary(providers ?? []).failed;
     if (!failed || !modelVerification?.testedAt || providerCleaning) return;
-    if (!confirm(`将删除 ${failed} 个检测失败模型，不影响可用模型。确认继续吗？`)) return;
+    if (!confirm(t4("chat.confirmCleanFailed", { failed }))) return;
     setProviderCleaning(true);
-    pushModelNotice("正在删除检测失败模型...", "info", 0);
+    pushModelNotice(t4("chat.cleaningFailed"), "info", 0);
     try {
       const cleaned = await api("/providers/cleanup-failed", { method: "POST", body: { testedAt: modelVerification.testedAt } });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
@@ -24586,9 +26857,9 @@ ${workspaceDir || ""}`;
       setPresetLocal(overview.preset ?? null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? cleaned.activeModelId ?? null);
-      pushModelNotice(`✓ 已删除 ${cleaned.removedModels} 个不可用模型`, "success", 5e3);
+      pushModelNotice(t4("chat.cleanedModels", { count: cleaned.removedModels }), "success", 5e3);
     } catch (err) {
-      pushModelNotice(`删除失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.cleanFailed", { msg: err.message }), "error", 5e3);
     } finally {
       setProviderCleaning(false);
     }
@@ -24724,18 +26995,18 @@ ${workspaceDir || ""}`;
     <div class="chat-shell">
       <div class="chat-toolbar">
         <div class="header-pickers">${modes ? html4`
-              <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
+              <div class="work-mode-summary" title=${activeMode?.hint || t4("chat.modeSwitchHint")}>
                 <span class="work-mode-label">${activeMode?.label ?? mode}</span>
-                <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
-                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || "未启用"}${eccRules?.available ? ` · ${(eccRules.enabled ?? []).length}/${eccRules.available.length}` : ""}</span>
+                <span class="work-mode-desc">${activeMode?.description ?? t4("chat.switchWorkMode")}</span>
+                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || t4("chat.eccNotEnabled")}${eccRules?.available ? ` · ${(eccRules.enabled ?? []).length}/${eccRules.available.length}` : ""}</span>
               </div>
-              <div class="mode-picker work-mode-picker" title="工作场景 \u2014 下次新对话生效">
+              <div class="mode-picker work-mode-picker" title=${t4("chat.modePickerTitle")}>
                 ${modes.map((m3) => html4`
                   <button
                     key=${m3.id}
                     class="mode-btn ${mode === m3.id ? "active accent" : ""}"
                     onClick=${() => setSetting("mode", m3.id)}
-                    title="${m3.label}: ${m3.description || "切换工作场景"} · ECC ${(m3.effectiveRules || m3.rules || []).join("+")} · 下次新对话生效"
+                    title=${t4("chat.modeOptionTitle", { label: m3.label, desc: m3.description || t4("chat.switchWorkMode"), rules: (m3.effectiveRules || m3.rules || []).join("+") })}
                   >${m3.label}</button>
                 `)}
               </div>
@@ -24816,7 +27087,7 @@ ${workspaceDir || ""}`;
     shouldAutoScroll.current = true;
     setHasNewBelow(false);
     pinFeedToBottom();
-  }}>↓ 有新消息</button>
+  }}>${t4("chat.newMessagesBelow")}</button>
           ` : null}
           ${feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
@@ -24824,9 +27095,9 @@ ${workspaceDir || ""}`;
     shouldAutoScroll.current = true;
     setHasNewBelow(false);
     void refetchCanonicalState();
-  })}>刷新对话</button>
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>展开全部工作步骤</button>
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>折叠全部工作步骤</button>
+  })}>${t4("chat.feedRefresh")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>${t4("chat.feedCollapseAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => {
     void newConversation();
   })}>${t4("chat.new")}</button>
@@ -24842,11 +27113,11 @@ ${workspaceDir || ""}`;
             <div class="plan-continuation-bar" role="status">
               <span class="plan-continuation-icon">!</span>
               <span class="plan-continuation-text">
-                计划尚未完成 · ${planContinuation.completedSteps}/${planContinuation.totalSteps} 步
-                <small>已自动续跑 ${planContinuation.attempts} 次</small>
+                ${t4("chat.planIncomplete", { done: planContinuation.completedSteps, total: planContinuation.totalSteps })}
+                <small>${t4("chat.planAutoResumed", { count: planContinuation.attempts })}</small>
               </span>
-              <button type="button" class="primary" onClick=${resumeIncompletePlan} disabled=${busy}>继续执行</button>
-              <button type="button" class="plan-continuation-dismiss" onClick=${() => setPlanContinuation(null)} title="暂时关闭">×</button>
+              <button type="button" class="primary" onClick=${resumeIncompletePlan} disabled=${busy}>${t4("chat.planResume")}</button>
+              <button type="button" class="plan-continuation-dismiss" onClick=${() => setPlanContinuation(null)} title=${t4("chat.planDismiss")}>×</button>
             </div>
           ` : null}
 
@@ -24881,12 +27152,12 @@ ${workspaceDir || ""}`;
             ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(image, idx) {
     const preview = typeof image === "string" ? image : image?.preview;
     const isVideo = typeof image === "object" && image?.kind === "video";
-    return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0" title=${typeof image === "object" ? image.name : "图片"}>${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">${isVideo ? "视频" : "图片"}</span>`}<button onClick=${function() {
+    return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0" title=${typeof image === "object" ? image.name : t4("chat.thumbImage")}>${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">${isVideo ? t4("chat.thumbVideo") : t4("chat.thumbImage")}</span>`}<button onClick=${function() {
       void releaseUploadedImages([image]);
       var next = pendingImages.slice();
       next.splice(idx, 1);
       setPendingImages(next);
-    }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除附件">✕</button></div>`;
+    }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title=${t4("chat.deleteAttachment")}>✕</button></div>`;
   })}</div>` : null}
             ${queuedPrompts.length > 0 ? html4`
               <div class="chat-queue">
@@ -24973,7 +27244,7 @@ ${workspaceDir || ""}`;
               rows="4"
             ></textarea>
             <div class="composer-bar">
-              <button type="button" class="composer-chip-ghost" aria-expanded=${showModelPicker} title="模型与思考设置" onClick=${() => {
+              <button type="button" class="composer-chip-ghost" aria-expanded=${showModelPicker} title=${t4("chat.modelAndEffortTitle")} onClick=${() => {
     cancelModelGroupClose();
     setShowModelPicker(!showModelPicker);
     setOpenModelGroupId(null);
@@ -24982,8 +27253,8 @@ ${workspaceDir || ""}`;
     setShowPlusMenu(false);
     setShowIndexPicker(false);
     setShowRetrievalSources(false);
-  }}>🤖 模型</button>
-              <button type="button" class="composer-chip-ghost" aria-expanded=${showWsPicker} title="切换工作空间" onClick=${() => {
+  }}><${IconModel} /> ${t4("chat.chipModel")}</button>
+              <button type="button" class="composer-chip-ghost" aria-expanded=${showWsPicker} title=${t4("chat.switchWorkspaceTitle")} onClick=${() => {
     const next = !showWsPicker;
     setShowWsPicker(next);
     setShowSkillPicker(false);
@@ -24992,14 +27263,16 @@ ${workspaceDir || ""}`;
     setShowIndexPicker(false);
     setShowRetrievalSources(false);
     if (next) void loadWorkspaceOptions();
-  }}>💻 工作空间</button>
-              <button type="button" class=${`composer-chip-ghost ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? "has-activity" : ""}`} title=${`运行中 ${backgroundJobs.filter((job) => job.running).length}，待处理 ${backgroundJobs.filter(backgroundJobNeedsAttention).length}`} aria-expanded=${showBackgroundJobs} onClick=${() => {
+  }}><${IconWorkspace} /> ${t4("chat.chipWorkspace")}</button>
+              ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? html4`
+                <button type="button" class="composer-chip-ghost has-activity" title=${t4("chat.bgChipTitle", { running: backgroundJobs.filter((job) => job.running).length, attention: backgroundJobs.filter(backgroundJobNeedsAttention).length })} aria-expanded=${showBackgroundJobs} onClick=${() => {
     setShowPlusMenu(false);
     setShowIndexPicker(false);
     showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench();
-  }}>📋 后台${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length > 0 ? html4` <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span>` : null}</button>
+  }}><${IconJobs} /> ${t4("chat.chipJobs")} <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span></button>
+              ` : null}
               <span style="position:relative;display:inline-flex">
-                <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title="索引：从当前工作区和知识库中查找相关内容" onClick=${() => {
+                <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title=${t4("chat.indexChipTitle")} onClick=${() => {
     const next = !showIndexPicker;
     setShowIndexPicker(next);
     setShowSkillPicker(false);
@@ -25007,11 +27280,11 @@ ${workspaceDir || ""}`;
     setShowModelPicker(false);
     setShowPlusMenu(false);
     setShowRetrievalSources(false);
-  }}>🔍 ${indexRetrievalMode === "tool" ? "按需搜索" : indexRetrievalMode === "off" ? "索引关" : "自动召回"}</button>
+  }}><${IconSearch} /> ${indexRetrievalMode === "tool" ? t4("chat.indexTool") : indexRetrievalMode === "off" ? t4("chat.indexOffShort") : t4("chat.indexAuto")}</button>
                 ${showIndexPicker ? html4`
                   <div class="popover composer-plus-menu" style="position:absolute;bottom:calc(100% + 8px);left:0;width:240px;z-index:10">
-                    <div class="popover-h">索引</div>
-                    ${[["auto", "自动召回"], ["tool", "按需搜索"], ["off", "不使用"]].map(([mode2, label]) => {
+                    <div class="popover-h">${t4("chat.indexTitle")}</div>
+                    ${[["auto", t4("chat.indexAuto")], ["tool", t4("chat.indexTool")], ["off", t4("chat.indexOff")]].map(([mode2, label]) => {
     const modeDisabled = semanticIndex === false && mode2 !== "off";
     return html4`<div class=${`popover-row ${indexRetrievalMode === mode2 ? "sel" : ""} ${modeDisabled ? "disabled" : ""}`} title=${globalThis.VisionoxIndexModePolicy.hint(mode2)} onMouseDown=${(e22) => {
       e22.preventDefault();
@@ -25024,12 +27297,12 @@ ${workspaceDir || ""}`;
               </span>
               ${showPlusMenu ? html4`
                 <div class="popover composer-plus-menu" style="position:absolute;bottom:calc(100% + 8px);right:0;width:280px;z-index:10">
-                  <div class="popover-h">更多操作</div>
+                  <div class="popover-h">${t4("chat.moreActions")}</div>
                   ${canUploadMedia ? html4`<div class="popover-row" onMouseDown=${(e22) => {
     e22.preventDefault();
     setShowPlusMenu(false);
     fileInputRef.current?.click();
-  }}><span class="g">📎</span><span class="name">${canUploadVideos ? "添加图片或视频" : "添加图片"}</span><span class="meta">Ctrl+U</span></div>` : null}
+  }}><span class="g"><${IconAttach} /></span><span class="name">${canUploadVideos ? t4("chat.addImageOrVideo") : t4("chat.addImage")}</span><span class="meta">Ctrl+U</span></div>` : null}
                   <div class="popover-row" onMouseDown=${(e22) => {
     e22.preventDefault();
     setShowPlusMenu(false);
@@ -25038,12 +27311,12 @@ ${workspaceDir || ""}`;
     setShowModelPicker(false);
     loadChatSkills().catch(() => {
     });
-  }}><span class="g">🔧</span><span class="name">技能</span><span class="meta">@ 提及</span></div>
+  }}><span class="g"><${IconSkill} /></span><span class="name">${t4("chat.skillEntry")}</span><span class="meta">${t4("chat.skillPickerMeta")}</span></div>
                 </div>
               ` : null}
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
-                  <div class="popover-h">选择技能</div>
+                  <div class="popover-h">${t4("chat.pickSkill")}</div>
                   ${skillList.map((s22) => html4`
                     <div class="popover-row" onMouseDown=${(e22) => {
     e22.preventDefault();
@@ -25095,9 +27368,9 @@ ${workspaceDir || ""}`;
               ` : null}
               ${showModelPicker ? html4`
                 <div class="popover model-popover" style="position:absolute;bottom:100%;left:0;z-index:10" onMouseLeave=${scheduleModelGroupClose}>
-                  <div class="popover-h">选择模型</div>
+                  <div class="popover-h">${t4("chat.pickModel")}</div>
                   <div class="model-picker-browser">
-                    <div class="model-cascade-menu" role="menu" aria-label="模型服务商">
+                    <div class="model-cascade-menu" role="menu" aria-label=${t4("chat.modelProvidersAria")}>
                       ${providerDisplayGroups(providers ?? []).map((group) => {
     const open = openModelGroupId === group.id;
     const active = group.providers.some((provider) => provider.id === activeProviderId);
@@ -25112,24 +27385,24 @@ ${workspaceDir || ""}`;
                               <span class="model-provider-indicators"><span aria-hidden="true">${active ? "✓" : ""}</span><span class="model-menu-chevron" aria-hidden="true">›</span></span>
                             </button>
                             ${open ? html4`
-                              <div class="model-cascade-submenu" role="menu" aria-label=${`${group.label} 模型`} onMouseEnter=${cancelModelGroupClose} onMouseLeave=${scheduleModelGroupClose}>
+                              <div class="model-cascade-submenu" role="menu" aria-label=${t4("chat.groupModelsAria", { group: group.label })} onMouseEnter=${cancelModelGroupClose} onMouseLeave=${scheduleModelGroupClose}>
                                 ${models.length > 0 ? models.map(({ provider, model }) => {
       const selected = provider.id === activeProviderId && model.id === overviewModel;
       const status = model.testStatus || "untested";
       const details = providerModelCapabilityLabels(model).join(" · ");
-      const statusText = status === "passed" ? "已验证" : status === "failed" ? model.testError || "不可用" : "未检测";
+      const statusText = status === "passed" ? t4("chat.statusVerified") : status === "failed" ? model.testError || t4("chat.statusUnavailable") : t4("chat.statusUntested");
       return html4`
                                     <button type="button" class=${`model-cascade-model ${selected ? "active" : ""} ${status}`} role="menuitemradio" aria-checked=${selected} disabled=${busy || status === "failed"} title=${`${details}${details ? " · " : ""}${statusText}`} onClick=${() => selectProviderModel(provider.id, model.id)}>
-                                      <span>${model.name ?? providerDisplayLabel(provider)}</span><span class="model-row-indicators"><span class=${`model-row-status ${status}`}>${status === "passed" ? "可用" : status === "failed" ? "不可用" : "未检测"}</span><span class="model-current-check" aria-hidden="true">${selected ? "✓" : ""}</span></span>
+                                      <span>${model.name ?? providerDisplayLabel(provider)}</span><span class="model-row-indicators"><span class=${`model-row-status ${status}`}>${status === "passed" ? t4("chat.statusUsable") : status === "failed" ? t4("chat.statusUnavailable") : t4("chat.statusUntested")}</span><span class="model-current-check" aria-hidden="true">${selected ? "✓" : ""}</span></span>
                                     </button>
                                   `;
-    }) : html4`<div class="model-picker-empty">该服务商暂无可用模型</div>`}
+    }) : html4`<div class="model-picker-empty">${t4("chat.providerNoModels")}</div>`}
                               </div>
                             ` : null}
                           </div>
                         `;
   })}
-                      ${providerDisplayGroups(providers ?? []).length === 0 ? html4`<div class="model-picker-empty">尚未导入模型</div>` : null}
+                      ${providerDisplayGroups(providers ?? []).length === 0 ? html4`<div class="model-picker-empty">${t4("chat.noModelsYet")}</div>` : null}
                     </div>
                     <div class="model-menu-actions">
                       <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none" onChange=${loadProviderImportFile} />
@@ -25137,14 +27410,14 @@ ${workspaceDir || ""}`;
     const input = document.getElementById("provider-import-file");
     input.value = "";
     input.click();
-  }}>${providerImporting ? "导入中..." : "导入模型配置"}</button>
-                      <button type="button" class="model-test-link" disabled=${busy || providerImporting || providerTesting || providerCleaning || providerModelTestSummary(providers ?? []).total === 0} onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
-                      ${providerModelTestSummary(providers ?? []).failed > 0 && modelVerification?.dirty !== true ? html4`<button type="button" class="model-cleanup-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${cleanupFailedModels}>${providerCleaning ? "删除中..." : `删除检测失败模型（${providerModelTestSummary(providers ?? []).failed}）`}</button>` : null}
+  }}>${providerImporting ? t4("chat.importingShort") : t4("chat.importConfigBtn")}</button>
+                      <button type="button" class="model-test-link" disabled=${busy || providerImporting || providerTesting || providerCleaning || providerModelTestSummary(providers ?? []).total === 0} onClick=${testAllProviders}>${providerTesting ? t4("chat.testingShort") : t4("chat.testAllBtn")}</button>
+                      ${providerModelTestSummary(providers ?? []).failed > 0 && modelVerification?.dirty !== true ? html4`<button type="button" class="model-cleanup-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${cleanupFailedModels}>${providerCleaning ? t4("chat.cleaningShort") : t4("chat.cleanFailedBtn", { count: providerModelTestSummary(providers ?? []).failed })}</button>` : null}
                     </div>
                     <div role="status" aria-live="polite" style="min-height:18px;margin-top:5px;font-size:11px;line-height:18px;overflow-wrap:anywhere;color:${modelNotice?.kind === "error" ? "var(--c-err)" : modelNotice?.kind === "success" ? "var(--c-ok)" : "var(--fg-3)"};">${modelNotice?.text ?? ""}</div>
                     ${(() => {
     if (modelVerification?.dirty) {
-      return html4`<div style="font-size:11px;margin-top:6px;color:var(--c-warn);">配置已更新，请重新检测全部模型</div>`;
+      return html4`<div style="font-size:11px;margin-top:6px;color:var(--c-warn);">${t4("chat.configDirtyRetest")}</div>`;
     }
     const allModels = (providers ?? []).flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => ({ provider, model })));
     const testedModels = allModels.filter(({ model }) => model.testStatus !== "untested");
@@ -25152,53 +27425,53 @@ ${workspaceDir || ""}`;
     const passed = allModels.filter(({ model }) => model.testStatus === "passed").length;
     const failedModels = allModels.filter(({ model }) => model.testStatus === "failed");
     return html4`
-                        <div title=${failedModels.map(({ provider, model }) => `${provider.name ?? provider.id} / ${model.name ?? model.id}: ${model.testError ?? "检测失败"}`).join("\n")} style="display:flex;align-items:center;gap:5px;font-size:11px;margin-top:5px;color:var(--fg-3)">
-                          <span>已通过 ${passed}/${allModels.length}</span>
+                        <div title=${failedModels.map(({ provider, model }) => `${provider.name ?? provider.id} / ${model.name ?? model.id}: ${model.testError ?? t4("chat.testFailedFallback")}`).join("\n")} style="display:flex;align-items:center;gap:5px;font-size:11px;margin-top:5px;color:var(--fg-3)">
+                          <span>${t4("chat.testedSummary", { passed, total: allModels.length })}</span>
                         </div>
                       `;
   })()}
                   </div>
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模式</label>
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${t4("chat.modeLabel")}</label>
                     ${(providerCaps?.presets?.length ?? 0) > 1 ? html4`
                       <div class="model-choice-row">
                         ${providerCaps.presets.map((p3) => html4`<button type="button" key=${p3} class=${`model-choice ${preset === p3 ? "active" : ""}`} onClick=${() => {
     setSetting("preset", p3);
   }}>${p3}</button>`)}
                       </div>
-                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}（固定）</div>`}
+                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}${t4("chat.fixedSuffix")}</div>`}
                   </div>
                   ${activeModelEfforts.length > 0 ? html4`
                     <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">思考强度</label>
+                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${t4("chat.effortLabel")}</label>
                       ${activeModelEfforts.length > 1 ? html4`
                         <div class="model-choice-row">
                           ${activeModelEfforts.map((e3) => html4`<button type="button" key=${e3} title=${e3} disabled=${busy} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => {
     setSetting("reasoningEffort", e3);
   }}>${reasoningEffortLabel(e3)}</button>`)}
                         </div>
-                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${reasoningEffortLabel(activeModelEfforts[0])}（固定）</div>`}
+                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${reasoningEffortLabel(activeModelEfforts[0])}${t4("chat.fixedSuffix")}</div>`}
                     </div>
                   ` : null}
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title="控制对话中模型思考过程的展示方式：实时显示会滚动展示当前一轮思考；仅状态行只显示“思考中”提示；完全隐藏则不展示任何思考内容。">思考过程显示</label>
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title=${t4("chat.reasoningDisplayTitle")}>${t4("chat.reasoningDisplayLabel")}</label>
                     <div class="model-choice-row">
-                      ${[["live", "实时显示"], ["status", "仅状态行"], ["hidden", "完全隐藏"]].map(([mode2, label]) => html4`<button type="button" key=${mode2} class=${`model-choice ${reasoningDisplay === mode2 || mode2 === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode2)}>${label}</button>`)}
+                      ${[["live", t4("chat.reasoningLive")], ["status", t4("chat.reasoningStatusOnly")], ["hidden", t4("chat.reasoningHidden")]].map(([mode2, label]) => html4`<button type="button" key=${mode2} class=${`model-choice ${reasoningDisplay === mode2 || mode2 === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode2)}>${label}</button>`)}
                     </div>
                   </div>
                 </div>
               ` : null}
               <div class="composer-bar-status">
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="composer-retrieval-status muted">召回中...</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="composer-retrieval-status muted">未找到相关内容</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">召回超时</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">索引不可用</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span class="composer-retrieval-status" style="color:var(--c-err)">召回失败</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="composer-retrieval-status muted">${t4("chat.retrievalRunning")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="composer-retrieval-status muted">${t4("chat.retrievalEmpty")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">${t4("chat.retrievalTimeout")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">${t4("chat.retrievalUnavailable")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span class="composer-retrieval-status" style="color:var(--c-err)">${t4("chat.retrievalError")}</span>` : null}
               ${semanticRetrievalSources.length > 0 ? html4`
-                <button class="btn btn-sm" style="font-size:11px;padding:2px 7px" onClick=${() => setShowRetrievalSources(!showRetrievalSources)}>参考 ${semanticRetrievalSources.length}</button>
+                <button class="btn btn-sm" style="font-size:11px;padding:2px 7px" onClick=${() => setShowRetrievalSources(!showRetrievalSources)}>${t4("chat.refsCount", { count: semanticRetrievalSources.length })}</button>
                 ${showRetrievalSources ? html4`
                   <div class="popover" style="position:absolute;bottom:100%;right:0;width:420px;max-height:260px;overflow-y:auto;z-index:10">
-                    <div class="popover-h">本轮索引来源</div>
+                    <div class="popover-h">${t4("chat.retrievalSourcesTitle")}</div>
                     ${semanticRetrievalSources.map((source) => html4`
                       <button class="popover-row" style="width:100%;text-align:left" onMouseDown=${(event) => {
     event.preventDefault();
@@ -25221,7 +27494,7 @@ ${workspaceDir || ""}`;
     setShowRetrievalSources(false);
   }}></div>` : null}
               <div style="flex:1"></div>
-              <button type="button" class="composer-plus" aria-expanded=${showPlusMenu} title="更多操作" aria-label="更多操作" onClick=${() => {
+              <button type="button" class="composer-plus" aria-expanded=${showPlusMenu} title=${t4("chat.moreActions")} aria-label=${t4("chat.moreActions")} onClick=${() => {
     const next = !showPlusMenu;
     setShowPlusMenu(next);
     setShowSkillPicker(false);
@@ -25235,13 +27508,13 @@ ${workspaceDir || ""}`;
                 class="composer-optimize"
                 disabled=${!inputHasContent || promptOptimizing}
                 onClick=${optimizeCurrentPrompt}
-                title="优化当前输入，不会自动发送"
-                aria-label="优化当前提示词"
-              >${promptOptimizing ? "✨ 优化中…" : "✨ 优化提示词"}</button>
+                title=${t4("chat.optimizeInputTitle")}
+                aria-label=${t4("chat.optimizeInputAria")}
+              ><${IconWand} size=${15} />${promptOptimizing ? html4`<span class="composer-optimize-spin"></span>` : null}</button>
               ${(() => {
     const canSendContent = inputHasContent || pendingImages.length > 0;
     const sendMode = busy ? canSendContent ? "queue" : "stop" : canSendContent ? "send" : "idle";
-    const sendLabel = sendMode === "send" ? "发送 (Enter)" : sendMode === "queue" ? "排队发送，当前任务完成后自动发出" : sendMode === "stop" ? "停止当前任务" : "输入内容后发送";
+    const sendLabel = sendMode === "send" ? t4("chat.sendSend") : sendMode === "queue" ? t4("chat.sendQueue") : sendMode === "stop" ? t4("chat.sendStop") : t4("chat.sendIdle");
     return html4`
                   <button
                     type="button"
@@ -25332,8 +27605,8 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
       ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : null}
       ${hiddenCount > 0 || remoteHiddenCount > 0 ? html4`
         <div class="chat-history-loader">
-          <span>已显示 ${renderedMessages.length} / 共 ${displayTotal} 条</span>
-          <button type="button" onClick=${onLoadEarlier} disabled=${loadingEarlier}>${loadingEarlier ? "加载中..." : t4("chat.loadEarlierMessages", { count: Math.min(hiddenCount || remoteHiddenCount, hiddenCount ? CHAT_RENDER_STEP : CHAT_MESSAGE_PAGE_SIZE) })}</button>
+          <span>${t4("chat.shownOfTotal", { shown: renderedMessages.length, total: displayTotal })}</span>
+          <button type="button" onClick=${onLoadEarlier} disabled=${loadingEarlier}>${loadingEarlier ? t4("chat.loadingDots") : t4("chat.loadEarlierMessages", { count: Math.min(hiddenCount || remoteHiddenCount, hiddenCount ? CHAT_RENDER_STEP : CHAT_MESSAGE_PAGE_SIZE) })}</button>
         </div>
       ` : null}
       ${renderUnits.map(
@@ -25509,18 +27782,18 @@ var ChatStatusBar = N23(function ChatStatusBar2({ stats, model, onNew, busy }) {
     return html4`
       <div class="chat-statusbar">
         <span class="muted">${t4("chat.waitingStats")}</span>
-        ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title="开始新对话（当前对话会保留在历史记录）" onClick=${() => {
+        ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title=${t4("chat.newChatTitle")} onClick=${() => {
       void onNew();
-    }}>新建对话</button>` : null}
+    }}>${t4("chat.newChatBtn")}</button>` : null}
       </div>
     `;
   }
   const currentContextTokens = stats.estimatedContextTokens ?? stats.lastPromptTokens;
   const ctxPct = stats.contextCapTokens > 0 ? currentContextTokens / stats.contextCapTokens * 100 : 0;
   const contextMarks = [
-    { tokens: stats.contextFoldTokens, label: "普通压缩" },
-    { tokens: stats.contextAggressiveTokens, label: "激进压缩" },
-    { tokens: stats.contextForceSummaryTokens, label: "强制总结" }
+    { tokens: stats.contextFoldTokens, label: t4("chat.foldNormal") },
+    { tokens: stats.contextAggressiveTokens, label: t4("chat.foldAggressive") },
+    { tokens: stats.contextForceSummaryTokens, label: t4("chat.foldForceSummary") }
   ].filter((mark) => Number.isFinite(mark.tokens) && mark.tokens > 0 && stats.contextCapTokens > 0).map((mark) => ({ ...mark, pct: Math.min(100, mark.tokens / stats.contextCapTokens * 100) }));
   const balance = primaryBalance(stats);
   return html4`
@@ -25560,9 +27833,9 @@ var ChatStatusBar = N23(function ChatStatusBar2({ stats, model, onNew, busy }) {
             <code>${balance.total_balance ?? balance.total} ${balance.currency}</code>
           </span>
         ` : null}
-      ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title="开始新对话（当前对话会保留在历史记录）" onClick=${() => {
+      ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title=${t4("chat.newChatTitle")} onClick=${() => {
     void onNew();
-  }}>新建对话</button>` : null}
+  }}>${t4("chat.newChatBtn")}</button>` : null}
     </div>
   `;
 });
@@ -26285,7 +28558,7 @@ function MemoryPanel() {
     load();
   }, [load]);
   const dirty = draft != null && JSON.stringify(draft) !== baseline;
-  const acceptNavigation = () => !dirty || globalThis.confirm("当前修改尚未保存，确定放弃吗？");
+  const acceptNavigation = () => !dirty || globalThis.confirm(t4("memPanel.unsavedConfirm"));
   const showInfo = (message) => {
     setInfo(message);
     setTimeout(() => setInfo(null), 3e3);
@@ -26364,7 +28637,7 @@ function MemoryPanel() {
         }
       }
       if (!moved) setBaseline(JSON.stringify(savedDraft));
-      showInfo(moved ? "场景记忆已移动" : "记忆已保存");
+      showInfo(moved ? t4("memPanel.moved") : t4("memPanel.saved"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26385,7 +28658,7 @@ function MemoryPanel() {
         setNewBody("");
         setNewPriority("medium");
         setCreateOpen(false);
-        showInfo("工作场景记忆已新增");
+        showInfo(t4("memPanel.sceneAdded"));
         await load();
       } catch (err) {
         setError(err.message);
@@ -26418,7 +28691,7 @@ function MemoryPanel() {
       setNewBody("");
       setNewPriority("medium");
       setCreateOpen(false);
-      showInfo("长期记忆已新增");
+      showInfo(t4("memPanel.longTermAdded"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26429,7 +28702,7 @@ function MemoryPanel() {
   const remove = q2(async () => {
     if (!open || !draft) return;
     const label = draft.description || draft.text || draft.name;
-    const prompt2 = open.kind === "persistent" || open.kind === "mode" ? `将“${label}”移入回收站？${tree?.trash?.retentionDays ?? 30} 天内可以恢复。` : `确定删除“${label}”吗？此操作不可撤销。`;
+    const prompt2 = open.kind === "persistent" || open.kind === "mode" ? t4("memPanel.trashMoveConfirm", { label, days: tree?.trash?.retentionDays ?? 30 }) : t4("memPanel.deleteConfirm", { label });
     if (!globalThis.confirm(prompt2)) return;
     setBusy(true);
     setError(null);
@@ -26439,7 +28712,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo("记忆已删除");
+      showInfo(t4("memPanel.deleted"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26450,14 +28723,14 @@ function MemoryPanel() {
   const copyModeMemory = q2(async () => {
     if (!open || open.kind !== "mode" || !draft?.targetMode) return;
     if (draft.targetMode === open.modeId) {
-      setError("请选择其他工作场景后再复制");
+      setError(t4("memPanel.pickOtherScene"));
       return;
     }
     setBusy(true);
     setError(null);
     try {
       await api(`/mode-memory/${encodeURIComponent(open.name)}/move`, { method: "POST", body: { mode: open.modeId, targetMode: draft.targetMode, copy: true } });
-      showInfo("场景记忆已复制");
+      showInfo(t4("memPanel.sceneCopied"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26467,7 +28740,7 @@ function MemoryPanel() {
   }, [open, draft, load]);
   const batchModeMemories = q2(async (action) => {
     if (!tree || selectedModeKeys.length === 0) return;
-    if (action === "delete" && !globalThis.confirm(`确定删除选中的 ${selectedModeKeys.length} 条场景记忆吗？`)) return;
+    if (action === "delete" && !globalThis.confirm(t4("memPanel.batchDeleteConfirm", { count: selectedModeKeys.length }))) return;
     const selected = new Set(selectedModeKeys);
     const items = (tree.modeMemory?.modes ?? []).flatMap((mode) => (mode.items ?? []).map((item) => ({ ...item, modeId: mode.id }))).filter((item) => selected.has(`${item.modeId}:${item.id}`));
     setBusy(true);
@@ -26475,7 +28748,7 @@ function MemoryPanel() {
     try {
       await api("/mode-memory/batch", { method: "POST", body: { action, items: items.map((item) => ({ mode: item.modeId, id: item.id })) } });
       setSelectedModeKeys([]);
-      showInfo(action === "delete" ? "已批量删除" : action === "enable" ? "已批量启用" : "已批量停用");
+      showInfo(action === "delete" ? t4("memPanel.batchDeleted") : action === "enable" ? t4("memPanel.batchEnabled") : t4("memPanel.batchDisabled"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26488,8 +28761,8 @@ function MemoryPanel() {
     setError(null);
     try {
       const result = await api("/memory/apply", { method: "POST", body: {} });
-      if (result.applied === false) throw new Error(result.error || "无法应用记忆");
-      showInfo("记忆已应用到当前对话");
+      if (result.applied === false) throw new Error(result.error || t4("memPanel.applyFailed"));
+      showInfo(t4("memPanel.applied"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26510,7 +28783,7 @@ function MemoryPanel() {
     }
   }, [open, draft]);
   const restoreSoulVersion = q2(async (id) => {
-    if (!globalThis.confirm("恢复此 Soul 版本？当前版本会先自动保存到历史。")) return;
+    if (!globalThis.confirm(t4("memPanel.soulRestoreConfirm"))) return;
     setBusy(true);
     try {
       await api(`/memory/soul/history/${encodeURIComponent(id)}/restore`, { method: "POST", body: {} });
@@ -26519,7 +28792,7 @@ function MemoryPanel() {
       setDraft(next);
       setBaseline(JSON.stringify(next));
       setSoulPreview(null);
-      showInfo("Soul 版本已恢复");
+      showInfo(t4("memPanel.soulRestored"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26528,7 +28801,7 @@ function MemoryPanel() {
     }
   }, [draft, load]);
   const resetSoul = q2(async () => {
-    if (!globalThis.confirm("恢复默认 Soul？当前版本会先自动保存到历史。")) return;
+    if (!globalThis.confirm(t4("memPanel.soulResetConfirm"))) return;
     setBusy(true);
     try {
       await api("/memory/soul/reset", { method: "POST", body: {} });
@@ -26537,7 +28810,7 @@ function MemoryPanel() {
       setDraft(next);
       setBaseline(JSON.stringify(next));
       setSoulPreview(null);
-      showInfo("已恢复默认 Soul");
+      showInfo(t4("memPanel.soulResetDone"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26554,7 +28827,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo("记忆已从回收站恢复");
+      showInfo(t4("memPanel.trashRestored"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26565,7 +28838,7 @@ function MemoryPanel() {
   const permanentlyDeleteMemoryTrash = q2(async () => {
     if (!open || open.kind !== "trash") return;
     const label = draft?.description || draft?.name || open.name;
-    if (!globalThis.confirm(`永久删除“${label}”？删除后无法恢复。`)) return;
+    if (!globalThis.confirm(t4("memPanel.permanentDeleteConfirm", { label }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -26573,7 +28846,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo("记忆已永久删除");
+      showInfo(t4("memPanel.permanentDeleted"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26584,8 +28857,8 @@ function MemoryPanel() {
   const emptyMemoryTrash = q2(async () => {
     const count = tree?.trash?.total ?? tree?.trash?.items?.length ?? 0;
     const invalidCount = tree?.trash?.invalidCount ?? 0;
-    const invalidHint = invalidCount > 0 ? `，其中 ${invalidCount} 条文件已损坏、无法预览` : "";
-    if (count === 0 || !globalThis.confirm(`清空回收站中的 ${count} 条记忆${invalidHint}？全部内容将永久删除且无法恢复。`)) return;
+    const invalidHint = invalidCount > 0 ? t4("memPanel.invalidSuffix", { count: invalidCount }) : "";
+    if (count === 0 || !globalThis.confirm(t4("memPanel.emptyTrashConfirm", { count, invalid: invalidHint }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -26593,7 +28866,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo(`已永久删除 ${result.deleted ?? count} 条记忆`);
+      showInfo(t4("memPanel.emptied", { count: result.deleted ?? count }));
       await load();
     } catch (err) {
       setError(err.message);
@@ -26620,7 +28893,7 @@ function MemoryPanel() {
   })));
   const sessionItems = (tree.session?.items ?? []).map((item) => ({ ...item, kind: "session", scopeKey: "session", description: item.description || item.body }));
   const trashItems = (tree.trash?.items ?? []).map((item) => ({ ...item, kindType: item.kind, kind: "trash", name: item.id, scopeKey: "trash", description: item.kind === "mode" ? item.item?.text ?? item.name : item.name }));
-  const soulItems = scopeFilter === "soul" ? [{ kind: "soul", name: "soul", scopeKey: "soul", description: tree.soul?.name ? `AI 身份：${tree.soul.name}` : "AI 身份与行为准则" }] : [];
+  const soulItems = scopeFilter === "soul" ? [{ kind: "soul", name: "soul", scopeKey: "soul", description: tree.soul?.name ? t4("memPanel.aiIdentityNamed", { name: tree.soul.name }) : t4("memPanel.aiIdentityDefault") }] : [];
   const allItems = [...persistentItems, ...modeItems, ...sessionItems, ...soulItems, ...trashItems];
   const needle = query.trim().toLowerCase();
   const visibleItems = allItems.filter((item) => {
@@ -26630,7 +28903,7 @@ function MemoryPanel() {
     return [item.description, item.body, item.raw, item.item?.text, item.searchText, item.text, item.type, item.modeLabel, ...item.keywords ?? []].some((value) => String(value ?? "").toLowerCase().includes(needle));
   });
   const activeInjection = tree.runtime?.active ?? tree.injection;
-  const scopeLabel = (item) => item.scopeKey === "global" ? "全局" : item.scopeKey === "project" ? "当前项目" : item.scopeKey === "mode" ? item.modeLabel : item.scopeKey === "soul" ? "AI 身份" : item.scopeKey === "trash" ? "回收站" : "当前会话";
+  const scopeLabel = (item) => item.scopeKey === "global" ? t4("memPanel.scopeGlobal") : item.scopeKey === "project" ? t4("memPanel.scopeProject") : item.scopeKey === "mode" ? item.modeLabel : item.scopeKey === "soul" ? t4("memPanel.scopeSoul") : item.scopeKey === "trash" ? t4("memPanel.scopeTrash") : t4("memPanel.scopeSession");
   const injectionState = (item) => {
     if (item.kind === "trash") return "trash";
     if (item.kind === "persistent") return activeInjection?.persistent?.entries?.[`${item.scopeKey}:${item.name}`] ?? "omitted";
@@ -26639,64 +28912,58 @@ function MemoryPanel() {
     return "manual";
   };
   const injectionLabel = (item) => {
-    if (item.enabled === false) return "已停用";
+    if (item.enabled === false) return t4("memPanel.stateDisabled");
     const state = injectionState(item);
-    if (state === "high-full") return "全文注入";
-    if (state === "index") return item.kind === "persistent" ? "摘要注入" : "将注入";
-    if (state === "manual") return "身份配置";
-    if (state === "trash") return "可恢复";
-    return "未注入";
+    if (state === "high-full") return t4("memPanel.stateFullInject");
+    if (state === "index") return item.kind === "persistent" ? t4("memPanel.stateSummaryInject") : t4("memPanel.stateWillInject");
+    if (state === "manual") return t4("memPanel.stateIdentityConfig");
+    if (state === "trash") return t4("memPanel.stateRecoverable");
+    return t4("memPanel.stateNotInjected");
   };
   const diagnosticLabel = (item) => {
     if (item.kind !== "persistent") return "";
     const key = `${item.scopeKey}:${item.name}`;
-    if (tree.diagnostics?.sensitiveKeys?.includes(key)) return "可能包含敏感信息";
-    if (tree.diagnostics?.conflicts?.some((group) => group.includes(key))) return "可能冲突";
-    if (tree.diagnostics?.duplicates?.some((group) => group.includes(key))) return "内容重复";
+    if (tree.diagnostics?.sensitiveKeys?.includes(key)) return t4("memPanel.diagSensitive");
+    if (tree.diagnostics?.conflicts?.some((group) => group.includes(key))) return t4("memPanel.diagConflict");
+    if (tree.diagnostics?.duplicates?.some((group) => group.includes(key))) return t4("memPanel.diagDuplicate");
     return "";
   };
   return html4`
     <div class="memory-manager">
       <div class="memory-toolbar">
         <div>
-          <div class="memory-page-title">记忆管理</div>
-          <div class="memory-workspace">${tree.workspace ? `${tree.workspace.name} · ${tree.workspace.path}` : "未选择工作区"}</div>
+          <div class="memory-page-title">${t4("memPanel.pageTitle")}</div>
+          <div class="memory-workspace">${tree.workspace ? `${tree.workspace.name} · ${tree.workspace.path}` : t4("memPanel.noWorkspace")}</div>
         </div>
-        <input class="memory-search" type="search" placeholder="搜索摘要、内容或关键词" value=${query} onInput=${(event) => setQuery(event.target.value)} />
+        <input class="memory-search" type="search" placeholder=${t4("memPanel.searchPlaceholder")} value=${query} onInput=${(event) => setQuery(event.target.value)} />
       </div>
       <div class="memory-scope-tabs">
-        ${[["all", "全部"], ["global", "全局"], ["project", "当前项目"], ["mode", "工作场景"], ["session", "当前会话"], ["soul", "AI 身份"], ["trash", "回收站"]].map(([value, label]) => html4`
+        ${[["all", t4("memPanel.filterAll")], ["global", t4("memPanel.scopeGlobal")], ["project", t4("memPanel.scopeProject")], ["mode", t4("memPanel.filterMode")], ["session", t4("memPanel.scopeSession")], ["soul", t4("memPanel.scopeSoul")], ["trash", t4("memPanel.scopeTrash")]].map(([value, label]) => html4`
           <button class=${scopeFilter === value ? "active" : ""} onClick=${() => setScopeFilter(value)}>${label}</button>
         `)}
       </div>
       ${scopeFilter === "mode" ? html4`<div class="memory-mode-tabs">
-        <button class=${modeFilter === "all" ? "active" : ""} onClick=${() => setModeFilter("all")}>全部场景</button>
+        <button class=${modeFilter === "all" ? "active" : ""} onClick=${() => setModeFilter("all")}>${t4("memPanel.allScenes")}</button>
         ${(tree.modeMemory?.modes ?? []).map((mode) => html4`<button class=${modeFilter === mode.id ? "active" : ""} onClick=${() => setModeFilter(mode.id)}>${mode.label ?? mode.id} ${mode.enabledCount ?? 0}/${mode.count ?? 0}</button>`)}
       </div>` : null}
-      ${tree.runtime?.pending ? html4`<div class="memory-runtime-pending"><div><strong>当前上下文仍在使用旧记忆</strong><span>磁盘修改已保存，执行应用后当前对话才会使用新版本。</span></div><button class="btn primary" disabled=${busy} onClick=${applyMemoryNow}>立即应用到当前对话</button></div>` : null}
-      ${activeInjection ? html4`<div class="memory-budget-summary"><span>当前记忆上下文</span><strong>${Number(activeInjection.totalTokens ?? 0).toLocaleString()} tokens</strong><span>固定 ${Number(activeInjection.budget?.pinnedTokens ?? 0).toLocaleString()} · 可召回 ${Number(activeInjection.budget?.recallableTokens ?? 0).toLocaleString()} / ${Number(activeInjection.budget?.maxRecallableTokens ?? 0).toLocaleString()} · 高优先级全文与普通摘要已去重</span></div>` : null}
+      ${tree.runtime?.pending ? html4`<div class="memory-runtime-pending"><div><strong>${t4("memPanel.pendingTitle")}</strong><span>${t4("memPanel.pendingDesc")}</span></div><button class="btn primary" disabled=${busy} onClick=${applyMemoryNow}>${t4("memPanel.applyNow")}</button></div>` : null}
+      ${activeInjection ? html4`<div class="memory-budget-summary"><span>${t4("memPanel.budgetCurrent")}</span><strong>${Number(activeInjection.totalTokens ?? 0).toLocaleString()} tokens</strong><span>${t4("memPanel.budgetFixed")} ${Number(activeInjection.budget?.pinnedTokens ?? 0).toLocaleString()} \xB7 ${t4("memPanel.budgetRecallable")} ${Number(activeInjection.budget?.recallableTokens ?? 0).toLocaleString()} / ${Number(activeInjection.budget?.maxRecallableTokens ?? 0).toLocaleString()} \xB7 ${t4("memPanel.budgetDedup")}</span></div>` : null}
       ${info ? html4`<div class="memory-notice ok">${info}</div>` : null}
       ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
       <div class="memory-layout">
         <div class="memory-list-pane">
-          <div class="memory-list-head"><span>${visibleItems.length} 条${scopeFilter === "trash" ? ` · ${tree.trash?.retentionDays ?? 30} 天后自动清理${tree.trash?.invalidCount ? ` · ${tree.trash.invalidCount} 条损坏` : ""}` : ""}</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? "收起新增" : "新增记忆"}</button>` : null}${scopeFilter === "trash" && (tree.trash?.total ?? trashItems.length) > 0 ? html4`<button class="btn btn-sm danger" disabled=${busy} onClick=${emptyMemoryTrash}>清空回收站</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>刷新</button></div></div>
+          <div class="memory-list-head"><span>${t4("memPanel.listCount", { count: visibleItems.length })}${scopeFilter === "trash" ? ` · ${t4("memPanel.trashRetentionHint", { days: tree.trash?.retentionDays ?? 30 })}${tree.trash?.invalidCount ? ` · ${t4("memPanel.trashInvalidHint", { count: tree.trash.invalidCount })}` : ""}` : ""}</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? t4("memPanel.collapseCreate") : t4("memPanel.createMemory")}</button>` : null}${scopeFilter === "trash" && (tree.trash?.total ?? trashItems.length) > 0 ? html4`<button class="btn btn-sm danger" disabled=${busy} onClick=${emptyMemoryTrash}>${t4("memPanel.emptyTrash")}</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>${t4("memPanel.refresh")}</button></div></div>
           ${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" && createOpen ? html4`<div class="memory-create-panel">
-            <div class="memory-section-title">${newScope === "mode" ? "新增场景记忆" : "新增长期记忆"}</div>
+            <div class="memory-section-title">${newScope === "mode" ? t4("memPanel.createSceneTitle") : t4("memPanel.createLongTermTitle")}</div>
             <div class="memory-create-row">
-              <select value=${newScope} onChange=${(event) => setNewScope(event.target.value)} disabled=${busy}>
-                <option value="global">全局</option>
-                <option value="project-mem">当前项目</option>
-                <option value="mode">工作场景</option>
-              </select>
-              <select value=${newPriority} onChange=${(event) => setNewPriority(event.target.value)} disabled=${busy}>
-                <option value="low">低优先级</option><option value="medium">普通</option><option value="high">高优先级</option>
-              </select>
+              <${Select} value=${newScope} onChange=${(v3) => setNewScope(v3)} disabled=${busy} ariaLabel=${t4("memPanel.ariaScope")} options=${[{ value: "global", label: t4("memPanel.scopeGlobal") }, { value: "project-mem", label: t4("memPanel.scopeProjectMem") }, { value: "mode", label: t4("memPanel.scopeMode") }]} />
+              <${Select} value=${newPriority} onChange=${(v3) => setNewPriority(v3)} disabled=${busy} ariaLabel=${t4("memPanel.ariaPriority")} options=${[{ value: "low", label: t4("memPanel.prioLow") }, { value: "medium", label: t4("memPanel.prioNormal") }, { value: "high", label: t4("memPanel.prioHigh") }]} />
             </div>
-            ${newScope === "mode" ? html4`<select value=${newMode} onChange=${(event) => setNewMode(event.target.value)} disabled=${busy}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id} · ${mode.enabledCount ?? 0}/${mode.count ?? 0} 启用</option>`)}</select>` : html4`<input type="text" placeholder="一句话摘要" value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />`}
-            <textarea rows="3" maxlength=${newScope === "mode" ? 180 : null} placeholder=${newScope === "mode" ? "场景记忆内容，最多 180 字符" : "记忆内容"} value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
-            <div class="memory-create-actions"><button class="btn primary" disabled=${busy || !newBody.trim() || newScope !== "mode" && !newDesc.trim()} onClick=${createMemory}>新增记忆</button><button type="button" class="btn ghost" disabled=${busy} onClick=${() => setCreateOpen(false)}>取消</button></div>
+            ${newScope === "mode" ? html4`<${Select} value=${newMode} onChange=${(v3) => setNewMode(v3)} disabled=${busy} ariaLabel=${t4("memPanel.ariaTargetScene")} options=${(tree.modeMemory?.modes ?? []).map((mode) => ({ value: mode.id, label: mode.label ?? mode.id, meta: t4("memPanel.modeEnabledMeta", { enabled: mode.enabledCount ?? 0, count: mode.count ?? 0 }) }))} />` : html4`<input type="text" placeholder=${t4("memPanel.summaryPlaceholder")} value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />`}
+            <textarea rows="3" maxlength=${newScope === "mode" ? 180 : null} placeholder=${newScope === "mode" ? t4("memPanel.bodyPlaceholderMode") : t4("memPanel.bodyPlaceholder")} value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
+            <div class="memory-create-actions"><button class="btn primary" disabled=${busy || !newBody.trim() || newScope !== "mode" && !newDesc.trim()} onClick=${createMemory}>${t4("memPanel.createMemory")}</button><button type="button" class="btn ghost" disabled=${busy} onClick=${() => setCreateOpen(false)}>${t4("memPanel.cancel")}</button></div>
           </div>` : null}
-          ${scopeFilter === "mode" && selectedModeKeys.length > 0 ? html4`<div class="memory-batch-bar"><span>已选 ${selectedModeKeys.length} 条</span><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("enable")}>启用</button><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("disable")}>停用</button><button class="btn danger" disabled=${busy} onClick=${() => batchModeMemories("delete")}>删除</button></div>` : null}
+          ${scopeFilter === "mode" && selectedModeKeys.length > 0 ? html4`<div class="memory-batch-bar"><span>${t4("memPanel.batchSelected", { count: selectedModeKeys.length })}</span><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("enable")}>${t4("memPanel.batchEnable")}</button><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("disable")}>${t4("memPanel.batchDisable")}</button><button class="btn danger" disabled=${busy} onClick=${() => batchModeMemories("delete")}>${t4("memPanel.batchDelete")}</button></div>` : null}
           <div class="memory-rows">
             ${visibleItems.map((item) => html4`
               <div class=${`memory-row ${open?.kind === item.kind && open?.name === item.name && open?.modeId === item.modeId ? "selected" : ""}`}>
@@ -26708,60 +28975,60 @@ function MemoryPanel() {
                   <span class="memory-row-main">${item.description || item.text || item.name}</span>
                   <span class="memory-row-meta">
                     <span>${scopeLabel(item)}</span>
-                    <span>${item.kind === "trash" ? `清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "未知"}` : item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.kind === "soul" ? "手动维护" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
+                    <span>${item.kind === "trash" ? t4("memPanel.cleanedAt", { date: item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : t4("memPanel.unknown") }) : item.kind === "mode" ? t4("memPanel.priorityMeta", { prio: item.priority ?? 50 }) : item.kind === "session" ? t4("memPanel.temporary") : item.kind === "soul" ? t4("memPanel.manualMaintain") : item.priority === "high" ? t4("memPanel.prioHighShort") : item.priority === "low" ? t4("memPanel.prioLowShort") : t4("memPanel.prioNormal")}</span>
                     <span class=${injectionState(item) === "omitted" || item.enabled === false ? "memory-disabled" : "memory-injected"}>${injectionLabel(item)}</span>
                     ${diagnosticLabel(item) ? html4`<span class="memory-diagnostic">${diagnosticLabel(item)}</span>` : null}
                   </span>
                 </button>
               </div>
             `)}
-            ${visibleItems.length === 0 ? html4`<div class="memory-empty">没有符合条件的记忆</div>` : null}
+            ${visibleItems.length === 0 ? html4`<div class="memory-empty">${t4("memPanel.emptyList")}</div>` : null}
           </div>
           <div class="memory-rule-status">
-            <span>当前项目规则</span>
-            ${(tree.project?.files ?? []).length > 0 ? tree.project.files.map((file) => html4`<strong>${file.name} · ${fmtBytes(file.size)} · ${file.state === "full" ? "全文" : file.state === "truncated" ? `截断 ${Number(file.injectedChars ?? 0).toLocaleString()} 字符` : "因总预算省略"}</strong>`) : html4`<strong>未配置</strong>`}
-            <span>${tree.project?.exists ? `实际注入 ${Number(tree.project.totalChars ?? 0).toLocaleString()} / ${Number(tree.project.maxChars ?? 0).toLocaleString()} 字符` : ""}</span>
+            <span>${t4("memPanel.projectRules")}</span>
+            ${(tree.project?.files ?? []).length > 0 ? tree.project.files.map((file) => html4`<strong>${file.name} · ${fmtBytes(file.size)} · ${file.state === "full" ? t4("memPanel.stateFull") : file.state === "truncated" ? t4("memPanel.stateTruncated", { chars: Number(file.injectedChars ?? 0).toLocaleString() }) : t4("memPanel.stateOmitted")}</strong>`) : html4`<strong>${t4("memPanel.notConfigured")}</strong>`}
+            <span>${tree.project?.exists ? t4("memPanel.actualInject", { used: Number(tree.project.totalChars ?? 0).toLocaleString(), max: Number(tree.project.maxChars ?? 0).toLocaleString() }) : ""}</span>
           </div>
         </div>
         <div class="memory-detail-pane">
-          ${!draft ? html4`<div class="memory-empty-detail">选择一条记忆查看详情</div>` : html4`
+          ${!draft ? html4`<div class="memory-empty-detail">${t4("memPanel.pickDetail")}</div>` : html4`
             <div class="memory-detail-head">
-              <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? "有未保存修改" : "已同步"}</div></div>
+              <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? t4("memPanel.detailDirty") : t4("memPanel.detailSynced")}</div></div>
               <div class="memory-detail-actions">
-                ${open.kind === "trash" ? html4`<button class="btn primary" title=${draft.restoreHint ?? "恢复到原范围"} disabled=${busy || draft.canRestore === false} onClick=${restoreTrash}>恢复此记忆</button><button class="btn danger" disabled=${busy} onClick=${permanentlyDeleteMemoryTrash}>永久删除</button>` : open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>保存</button>` : null}
-                ${open.kind !== "soul" && open.kind !== "trash" ? html4`<button class="btn danger" disabled=${busy} onClick=${remove}>删除</button>` : null}
+                ${open.kind === "trash" ? html4`<button class="btn primary" title=${draft.restoreHint ?? t4("memPanel.restoreHintDefault")} disabled=${busy || draft.canRestore === false} onClick=${restoreTrash}>${t4("memPanel.restoreThis")}</button><button class="btn danger" disabled=${busy} onClick=${permanentlyDeleteMemoryTrash}>${t4("memPanel.permanentDelete")}</button>` : open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>${t4("memPanel.saveBtn")}</button>` : null}
+                ${open.kind !== "soul" && open.kind !== "trash" ? html4`<button class="btn danger" disabled=${busy} onClick=${remove}>${t4("memPanel.deleteBtn")}</button>` : null}
               </div>
             </div>
-            ${diagnosticLabel(draft) ? html4`<div class="memory-detail-warning">${diagnosticLabel(draft)}。请核对后自行决定保留、修改或删除，系统不会自动合并。</div>` : null}
+            ${diagnosticLabel(draft) ? html4`<div class="memory-detail-warning">${diagnosticLabel(draft)}${t4("memPanel.diagAction")}</div>` : null}
             ${open.kind === "persistent" ? html4`
-              <label class="memory-field"><span>摘要</span><input value=${draft.description ?? ""} onInput=${(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+              <label class="memory-field"><span>${t4("memPanel.fieldSummary")}</span><input value=${draft.description ?? ""} onInput=${(event) => setDraft({ ...draft, description: event.target.value })} /></label>
               <div class="memory-field-row">
-                <label class="memory-field"><span>类型</span><select value=${draft.type ?? "user"} onChange=${(event) => setDraft({ ...draft, type: event.target.value })}><option value="user">用户偏好</option><option value="feedback">纠正反馈</option><option value="project">项目事实</option><option value="reference">参考信息</option></select></label>
-                <label class="memory-field"><span>优先级</span><select value=${draft.priority ?? "medium"} onChange=${(event) => setDraft({ ...draft, priority: event.target.value })}><option value="low">低</option><option value="medium">普通</option><option value="high">高</option></select></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldType")}</span><${Select} value=${draft.type ?? "user"} onChange=${(v3) => setDraft({ ...draft, type: v3 })} ariaLabel=${t4("memPanel.fieldType")} options=${[{ value: "user", label: t4("memPanel.typeUser") }, { value: "feedback", label: t4("memPanel.typeFeedback") }, { value: "project", label: t4("memPanel.typeProject") }, { value: "reference", label: t4("memPanel.typeReference") }]} /></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldPriority")}</span><${Select} value=${draft.priority ?? "medium"} onChange=${(v3) => setDraft({ ...draft, priority: v3 })} ariaLabel=${t4("memPanel.fieldPriority")} options=${[{ value: "low", label: t4("memPanel.prioLowTiny") }, { value: "medium", label: t4("memPanel.prioNormal") }, { value: "high", label: t4("memPanel.prioHighTiny") }]} /></label>
               </div>
             ` : open.kind === "mode" ? html4`
               <div class="memory-field-row">
-                <label class="memory-field"><span>目标场景</span><select value=${draft.targetMode ?? open.modeId} onChange=${(event) => setDraft({ ...draft, targetMode: event.target.value })}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id}</option>`)}</select></label>
-                <label class="memory-field"><span>优先级</span><input type="number" min="0" max="100" value=${draft.priority ?? 50} onInput=${(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldTargetScene")}</span><${Select} value=${draft.targetMode ?? open.modeId} onChange=${(v3) => setDraft({ ...draft, targetMode: v3 })} ariaLabel=${t4("memPanel.fieldTargetScene")} options=${(tree.modeMemory?.modes ?? []).map((mode) => ({ value: mode.id, label: mode.label ?? mode.id }))} /></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldPriority")}</span><input type="number" min="0" max="100" value=${draft.priority ?? 50} onInput=${(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
               </div>
-              <div class="memory-mode-actions"><span>${draft.targetMode !== open.modeId ? "保存后将移动到目标场景" : "选择其他场景可移动或复制"}</span><button class="btn" disabled=${busy || !draft.targetMode || draft.targetMode === open.modeId} onClick=${copyModeMemory}>复制到场景</button></div>
-              <label class="memory-field"><span>关键词</span><input value=${draft.keywordsText ?? ""} onInput=${(event) => setDraft({ ...draft, keywordsText: event.target.value })} /></label>
-              <label class="memory-toggle"><input type="checkbox" checked=${draft.enabled !== false} onChange=${(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用此场景记忆</span></label>
+              <div class="memory-mode-actions"><span>${draft.targetMode !== open.modeId ? t4("memPanel.moveHint") : t4("memPanel.copyHint")}</span><button class="btn" disabled=${busy || !draft.targetMode || draft.targetMode === open.modeId} onClick=${copyModeMemory}>${t4("memPanel.copyToScene")}</button></div>
+              <label class="memory-field"><span>${t4("memPanel.fieldKeywords")}</span><input value=${draft.keywordsText ?? ""} onInput=${(event) => setDraft({ ...draft, keywordsText: event.target.value })} /></label>
+              <label class="memory-toggle"><input type="checkbox" checked=${draft.enabled !== false} onChange=${(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>${t4("memPanel.enableThis")}</span></label>
             ` : open.kind === "soul" ? html4`
-              <div class="memory-editor-tabs"><button class=${soulEditorMode === "basic" ? "active" : ""} onClick=${() => setSoulEditorMode("basic")}>基础编辑</button><button class=${soulEditorMode === "advanced" ? "active" : ""} onClick=${() => setSoulEditorMode("advanced")}>高级原文</button></div>
-              <label class="memory-field"><span>AI 名称</span><input maxlength="80" value=${draft.aiName ?? ""} onInput=${(event) => setDraft({ ...draft, aiName: event.target.value })} /></label>
+              <div class="memory-editor-tabs"><button class=${soulEditorMode === "basic" ? "active" : ""} onClick=${() => setSoulEditorMode("basic")}>${t4("memPanel.soulBasic")}</button><button class=${soulEditorMode === "advanced" ? "active" : ""} onClick=${() => setSoulEditorMode("advanced")}>${t4("memPanel.soulAdvanced")}</button></div>
+              <label class="memory-field"><span>${t4("memPanel.fieldAiName")}</span><input maxlength="80" value=${draft.aiName ?? ""} onInput=${(event) => setDraft({ ...draft, aiName: event.target.value })} /></label>
               ${soulEditorMode === "basic" ? html4`
-                <label class="memory-field"><span>身份与定位</span><textarea rows="5" value=${soulSectionValue(draft.content, "我是谁")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "我是谁", event.target.value) })}></textarea></label>
-                <label class="memory-field"><span>协作方式</span><textarea rows="7" value=${soulSectionValue(draft.content, "协作方式")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "协作方式", event.target.value) })}></textarea></label>
-                <label class="memory-field"><span>安全与隐私</span><textarea rows="6" value=${soulSectionValue(draft.content, "安全与隐私")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "安全与隐私", event.target.value) })}></textarea></label>
-              ` : html4`<label class="memory-field memory-content-field"><span>完整 Soul Markdown · ${String(draft.content ?? "").length} 字符</span><textarea rows="18" value=${draft.content ?? ""} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>`}
-              <div class="memory-soul-actions"><button class="btn" disabled=${busy} onClick=${previewSoul}>预览最终注入</button><button class="btn" disabled=${busy} onClick=${resetSoul}>恢复默认 Soul</button></div>
-              ${soulPreview ? html4`<div class=${`memory-soul-preview ${soulPreview.valid ? "" : "invalid"}`}><div><strong>最终注入预览</strong><span>${soulPreview.chars}/${soulPreview.maxChars} 字符</span></div><pre>${soulPreview.finalBody}</pre></div>` : null}
-              <div class="memory-soul-note"><strong>Soul 不提供删除</strong><span>保存后在下一次 /new 或上下文重建时生效。</span></div>
-              ${(draft.history ?? []).length > 0 ? html4`<div class="memory-soul-history"><strong>版本历史</strong>${draft.history.map((item) => html4`<div><span>${new Date(item.savedAt).toLocaleString()} · ${item.name || "未命名"} · ${fmtBytes(item.size)}</span><button class="btn ghost" disabled=${busy} onClick=${() => restoreSoulVersion(item.id)}>恢复此版本</button></div>`)}</div>` : null}
-            ` : open.kind === "trash" ? html4`<div class=${`memory-session-note ${draft.canRestore === false ? "memory-trash-blocked" : ""}`}>删除于 ${new Date(draft.deletedAt).toLocaleString()}，${draft.expiresAt ? `${new Date(draft.expiresAt).toLocaleString()} 后自动永久清理。` : `保留 ${tree.trash?.retentionDays ?? 30} 天。`}${draft.canRestore === false ? draft.projectId ? " 这是其他项目的记忆，请打开原项目后恢复；仍可在此预览或永久删除。" : " 旧记录未保存原项目信息，无法安全自动恢复；可预览内容后重新创建。" : " 恢复后将回到原范围。"}</div>` : html4`<div class="memory-session-note">仅在当前对话中生效，恢复该对话时会一并恢复。</div>`}
-            ${open.kind !== "soul" ? html4`<label class="memory-field memory-content-field"><span>${open.kind === "mode" ? `内容 · ${String(draft.content ?? "").length}/180` : "内容"}</span><textarea rows="16" maxlength=${open.kind === "mode" ? 180 : null} value=${draft.content ?? ""} disabled=${open.kind === "session" || open.kind === "trash"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>` : null}
-            <div class="memory-detail-foot">${open.kind === "session" ? "当前会话" : open.kind === "soul" ? draft.path ?? "~/.visionox/soul.md" : `创建 ${draft.createdAt || "未知"} · 更新 ${draft.updatedAt || "未知"} · 来源 ${draft.source === "model" ? "AI" : draft.source === "ui" ? "界面" : "历史数据"}`}</div>
+                <label class="memory-field"><span>${t4("memPanel.soulWho")}</span><textarea rows="5" value=${soulSectionValue(draft.content, "我是谁")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "我是谁", event.target.value) })}></textarea></label>
+                <label class="memory-field"><span>${t4("memPanel.soulCollab")}</span><textarea rows="7" value=${soulSectionValue(draft.content, "协作方式")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "协作方式", event.target.value) })}></textarea></label>
+                <label class="memory-field"><span>${t4("memPanel.soulSafety")}</span><textarea rows="6" value=${soulSectionValue(draft.content, "安全与隐私")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "安全与隐私", event.target.value) })}></textarea></label>
+              ` : html4`<label class="memory-field memory-content-field"><span>${t4("memPanel.soulFullMd", { count: String(draft.content ?? "").length })}</span><textarea rows="18" value=${draft.content ?? ""} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>`}
+              <div class="memory-soul-actions"><button class="btn" disabled=${busy} onClick=${previewSoul}>${t4("memPanel.previewInject")}</button><button class="btn" disabled=${busy} onClick=${resetSoul}>${t4("memPanel.resetSoul")}</button></div>
+              ${soulPreview ? html4`<div class=${`memory-soul-preview ${soulPreview.valid ? "" : "invalid"}`}><div><strong>${t4("memPanel.finalPreview")}</strong><span>${t4("memPanel.previewChars", { used: soulPreview.chars, max: soulPreview.maxChars })}</span></div><pre>${soulPreview.finalBody}</pre></div>` : null}
+              <div class="memory-soul-note"><strong>${t4("memPanel.soulNoDelete")}</strong><span>${t4("memPanel.soulEffective")}</span></div>
+              ${(draft.history ?? []).length > 0 ? html4`<div class="memory-soul-history"><strong>${t4("memPanel.versionHistory")}</strong>${draft.history.map((item) => html4`<div><span>${new Date(item.savedAt).toLocaleString()} · ${item.name || t4("memPanel.unnamed")} · ${fmtBytes(item.size)}</span><button class="btn ghost" disabled=${busy} onClick=${() => restoreSoulVersion(item.id)}>${t4("memPanel.restoreVersion")}</button></div>`)}</div>` : null}
+            ` : open.kind === "trash" ? html4`<div class=${`memory-session-note ${draft.canRestore === false ? "memory-trash-blocked" : ""}`}>${t4("memPanel.trashDeletedAt", { date: new Date(draft.deletedAt).toLocaleString() })}${draft.expiresAt ? t4("memPanel.trashExpireAt", { date: new Date(draft.expiresAt).toLocaleString() }) : t4("memPanel.trashRetentionDays", { days: tree.trash?.retentionDays ?? 30 })}${draft.canRestore === false ? draft.projectId ? t4("memPanel.trashOtherProject") : t4("memPanel.trashNoProject") : t4("memPanel.trashWillRestore")}</div>` : html4`<div class="memory-session-note">${t4("memPanel.sessionNote")}</div>`}
+            ${open.kind !== "soul" ? html4`<label class="memory-field memory-content-field"><span>${open.kind === "mode" ? t4("memPanel.contentLabelMode", { count: String(draft.content ?? "").length }) : t4("memPanel.contentLabel")}</span><textarea rows="16" maxlength=${open.kind === "mode" ? 180 : null} value=${draft.content ?? ""} disabled=${open.kind === "session" || open.kind === "trash"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>` : null}
+            <div class="memory-detail-foot">${open.kind === "session" ? t4("memPanel.footSession") : open.kind === "soul" ? draft.path ?? "~/.visionox/soul.md" : t4("memPanel.footCreated", { created: draft.createdAt || t4("memPanel.unknown"), updated: draft.updatedAt || t4("memPanel.unknown"), source: draft.source === "model" ? t4("memPanel.sourceModel") : draft.source === "ui" ? t4("memPanel.sourceUi") : t4("memPanel.sourceHistory") })}</div>
           `}
         </div>
       </div>
@@ -27571,21 +29838,22 @@ function SemanticPanel() {
           <div class="card-h"><span class="title">${t4("semantic.provider")}</span></div>
           <div class="form-row">
             <span class="lbl">${t4("semantic.providerType")}</span>
-            <select
-              class="input mono"
+            <${Select}
               value=${draft.provider}
-              onInput=${(e3) => {
+              ariaLabel=${t4("semantic.providerType")}
+              onChange=${(v3) => {
     draftDirtyRef.current = true;
     setDraftDirty(true);
     setDraft({
       ...draft,
-      provider: e3.target.value
+      provider: v3
     });
   }}
-            >
-              <option value="ollama">Ollama</option>
-              <option value="openai-compat">OpenAI-Compatible</option>
-            </select>
+              options=${[
+    { value: "ollama", label: "Ollama" },
+    { value: "openai-compat", label: "OpenAI-Compatible" }
+  ]}
+            />
           </div>
           ${draft.provider === "ollama" ? html4`
                 <div class="form-row">
@@ -27630,7 +29898,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="password"
-                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "请输入实际 API Key（例如 api-xxxxx）"}
+                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : t4("semantic.enterApiKey")}
                     value=${draft.openaiCompat.apiKey}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;
@@ -27770,7 +30038,7 @@ function SemanticPanel() {
                 <div class="rail-kv"><span class="k">${t4("semantic.provider")}</span><span class="v">${idx.builtWith?.provider ?? idx.provider ?? provider}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.chunks")}</span><span class="v">${fmtNum(idx.chunks)}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.files")}</span><span class="v">${fmtNum(idx.files)}</span></div>
-                <div class="rail-kv"><span class="k">知识文档</span><span class="v">${fmtNum(idx.knowledgeFiles || 0)} 个 · ${fmtNum(idx.knowledgeChunks || 0)} 片段</span></div>
+                <div class="rail-kv"><span class="k">${t4("semantic.knowledgeDocs")}</span><span class="v">${t4("semantic.knowledgeDocsValue", { files: fmtNum(idx.knowledgeFiles || 0), chunks: fmtNum(idx.knowledgeChunks || 0) })}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.model")}</span><span class="v" style="font-size:11px">${idx.builtWith?.model ?? idx.model ?? modelName}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.dim")}</span><span class="v">${fmtNum(idx.dim)}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.size")}</span><span class="v">${fmtBytes(idx.sizeBytes)}</span></div>
@@ -28340,7 +30608,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
       }
       setSelectedNames(/* @__PURE__ */ new Set());
       if (open && names.includes(open.name)) closeDetail();
-      setInfo(`已移入回收站 ${result.movedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
+      setInfo(t4("sessions.trashResult", { moved: result.movedCount || 0, failed: result.failedCount || 0 }));
       await refresh();
     } catch (err) {
       setInfo(err.message);
@@ -28375,7 +30643,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     } catch {
     }
     setSkipTrashConfirm(false);
-    setInfo("删除确认已恢复。");
+    setInfo(t4("sessions.restoreConfirmBack"));
   }, []);
   const remove = q2((name) => requestTrash([name]), [requestTrash]);
   const toggleSelectedSession = q2((name) => {
@@ -28421,7 +30689,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setInfo(null);
     try {
       await api(`/sessions/trash/${encodeURIComponent(id)}/restore`, { method: "POST", body: { newName } });
-      setInfo("会话已从回收站恢复。");
+      setInfo(t4("sessions.restored"));
       setSelectedTrashIds((current) => {
         const next = new Set(current);
         next.delete(id);
@@ -28449,7 +30717,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
       }
       setSelectedTrashIds(/* @__PURE__ */ new Set());
       if (open?.kind === "trash" && ids.includes(open.id)) closeDetail();
-      setInfo(`已恢复 ${result.restoredCount || 0} 个，失败 ${result.failedCount || 0} 个。名称冲突的会话可打开预览后改名恢复。`);
+      setInfo(t4("sessions.restoreResult", { restored: result.restoredCount || 0, failed: result.failedCount || 0 }));
       await refresh();
     } catch (err) {
       setInfo(err.message);
@@ -28458,14 +30726,14 @@ function SessionsPanel({ userAvatar = null } = {}) {
     }
   }, [selectedTrashIds, open, refresh, closeDetail]);
   const permanentlyDeleteTrash = q2(async (ids) => {
-    if (ids.length === 0 || !confirm(`永久删除 ${ids.length} 个回收站会话？此操作无法撤销。`)) return;
+    if (ids.length === 0 || !confirm(t4("sessions.purgeConfirm", { count: ids.length }))) return;
     setDeleting(true);
     setInfo(null);
     try {
       const result = await api("/sessions/trash/batch", { method: "DELETE", body: { ids } });
       setSelectedTrashIds(/* @__PURE__ */ new Set());
       if (open?.kind === "trash" && ids.includes(open.id)) closeDetail();
-      setInfo(`已永久删除 ${result.deletedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
+      setInfo(t4("sessions.purgeResult", { deleted: result.deletedCount || 0, failed: result.failedCount || 0 }));
       await refresh();
     } catch (err) {
       setInfo(err.message);
@@ -28479,7 +30747,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     try {
       const result = await api("/sessions/trash-retention", { method: "POST", body: { retentionDays } });
       setRetentionDraft(result.retentionDays);
-      setInfo(`回收站文件将在 ${result.retentionDays} 天后自动删除。`);
+      setInfo(t4("sessions.retentionSaved", { days: result.retentionDays }));
       await refresh();
     } catch (err) {
       setInfo(err.message);
@@ -28491,7 +30759,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setInfo(null);
     try {
       const res = await api(`/sessions/${encodeURIComponent(name)}/export`, { method: "POST", body: {} });
-      setInfo(res.invalidRecords > 0 ? `${t4("sessions.exported", { path: res.path || res.filename || name })} ${res.integrityWarning || `已跳过 ${res.invalidRecords} 条无法解析的记录。`}` : t4("sessions.exported", { path: res.path || res.filename || name }));
+      setInfo(res.invalidRecords > 0 ? `${t4("sessions.exported", { path: res.path || res.filename || name })} ${res.integrityWarning || t4("sessions.skippedInvalid", { count: res.invalidRecords })}` : t4("sessions.exported", { path: res.path || res.filename || name }));
     } catch (err) {
       setInfo(t4("sessions.exportFailed", { error: err.message }));
     }
@@ -28626,7 +30894,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
   const allFilteredTrashSelected = filteredTrash.length > 0 && filteredTrash.every((item) => selectedTrashIds.has(item.id));
   return html4`
     <div class="sessions-grid">
-      ${trashConfirm ? html4`<div class="session-confirm-overlay" role="presentation" onClick=${() => setTrashConfirm(null)}><div class="modal-card session-confirm-card" role="dialog" aria-modal="true" aria-labelledby="session-trash-confirm-title" onClick=${(event) => event.stopPropagation()}><div class="modal-card-head"><span class="modal-card-icon" style="color:var(--c-warn)">!</span><div><div class="modal-card-title" id="session-trash-confirm-title">移入回收站</div><div class="modal-card-subtitle">${trashConfirm.names.length === 1 ? `确认将“${trashConfirm.names[0]}”移入回收站？` : `确认将选中的 ${trashConfirm.names.length} 个会话移入回收站？`} 保留期内可以恢复。</div></div></div><label class="checkbox-row"><input type="checkbox" checked=${dontAskAgain} onChange=${(event) => setDontAskAgain(event.target.checked)} /><span>下次不再提示</span></label><div class="modal-actions"><button class="primary" disabled=${deleting} onClick=${confirmTrash}>移入回收站</button><button disabled=${deleting} onClick=${() => setTrashConfirm(null)}>取消</button></div></div></div>` : null}
+      ${trashConfirm ? html4`<div class="session-confirm-overlay" role="presentation" onClick=${() => setTrashConfirm(null)}><div class="modal-card session-confirm-card" role="dialog" aria-modal="true" aria-labelledby="session-trash-confirm-title" onClick=${(event) => event.stopPropagation()}><div class="modal-card-head"><span class="modal-card-icon" style="color:var(--c-warn)">!</span><div><div class="modal-card-title" id="session-trash-confirm-title">${t4("sessions.trashConfirmTitle")}</div><div class="modal-card-subtitle">${trashConfirm.names.length === 1 ? t4("sessions.trashConfirmSingle", { name: trashConfirm.names[0] }) : t4("sessions.trashConfirmMulti", { count: trashConfirm.names.length })} ${t4("sessions.trashConfirmKeep")}</div></div></div><label class="checkbox-row"><input type="checkbox" checked=${dontAskAgain} onChange=${(event) => setDontAskAgain(event.target.checked)} /><span>${t4("sessions.dontAskAgain")}</span></label><div class="modal-actions"><button class="primary" disabled=${deleting} onClick=${confirmTrash}>${t4("sessions.trashConfirmTitle")}</button><button disabled=${deleting} onClick=${() => setTrashConfirm(null)}>${t4("common.cancel")}</button></div></div></div>` : null}
       ${info ? html4`<div class="card accent-brand session-page-feedback" role="status">${info}</div>` : null}
       <div class="sessions-list">
         <div class="session-list-tabs">
@@ -28634,12 +30902,12 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setListMode("sessions");
     setSelectionMode(false);
     closeDetail();
-  }}>会话 <span>${sessions.length}</span></button>
+  }}>${t4("sessions.tabSessions")} <span>${sessions.length}</span></button>
           <button class=${listMode === "trash" ? "active" : ""} onClick=${() => {
     setListMode("trash");
     setSelectionMode(false);
     closeDetail();
-  }}>回收站 <span>${trashItems.length}</span></button>
+  }}>${t4("sessions.tabTrash")} <span>${trashItems.length}</span></button>
         </div>
         <div class="ssl-h">
           <input
@@ -28653,9 +30921,9 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setSelectionMode((value) => !value);
     setSelectedNames(/* @__PURE__ */ new Set());
     setSelectedTrashIds(/* @__PURE__ */ new Set());
-  }}>${selectionMode ? "退出批量" : "批量管理"}</button>
+  }}>${selectionMode ? t4("sessions.exitBatch") : t4("sessions.batchManage")}</button>
         </div>
-        ${listMode === "trash" ? html4`<div class="session-trash-settings"><span>自动清理</span><select value=${retentionDraft} onChange=${(event) => setRetentionDraft(Number(event.target.value))}><option value="7">7 天</option><option value="15">15 天</option><option value="30">30 天</option><option value="60">60 天</option><option value="90">90 天</option><option value="365">365 天</option></select><button class="btn btn-sm" disabled=${deleting || retentionDraft === data?.trash?.retentionDays} onClick=${saveTrashRetention}>保存</button>${skipTrashConfirm ? html4`<button class="btn btn-sm" onClick=${restoreTrashConfirmation}>恢复删除确认</button>` : null}${trashItems.length > 0 ? html4`<button class="btn btn-sm danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash(trashItems.map((item) => item.id))}>清空</button>` : null}</div>` : null}
+        ${listMode === "trash" ? html4`<div class="session-trash-settings"><span>${t4("sessions.autoCleanup")}</span><${Select} value=${String(retentionDraft)} width="90px" ariaLabel=${t4("sessions.retentionAria")} onChange=${(v3) => setRetentionDraft(Number(v3))} options=${[7, 15, 30, 60, 90, 365].map((d3) => ({ value: String(d3), label: t4("sessions.daysUnit", { d: d3 }) }))} /><button class="btn btn-sm" disabled=${deleting || retentionDraft === data?.trash?.retentionDays} onClick=${saveTrashRetention}>${t4("common.save")}</button>${skipTrashConfirm ? html4`<button class="btn btn-sm" onClick=${restoreTrashConfirmation}>${t4("sessions.restoreConfirmAction")}</button>` : null}${trashItems.length > 0 ? html4`<button class="btn btn-sm danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash(trashItems.map((item) => item.id))}>${t4("common.clear")}</button>` : null}</div>` : null}
         <div class="ssl-rows">
           ${listMode === "sessions" ? html4`
           ${filtered.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">${t4("sessions.noSessions")}</div>` : null}
@@ -28665,7 +30933,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
                 class=${`ssl-row ${open?.name === s3.name ? "sel" : ""}`}
                 onClick=${() => selectionMode ? toggleSelectedSession(s3.name) : view(s3.name)}
               >
-                <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${`选择会话 ${s3.name}`} checked=${selectedNames.has(s3.name)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedSession(s3.name)} />` : null}<span class="name">${s3.name}</span></div>
+                <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${t4("sessions.selectSessionAria", { name: s3.name })} checked=${selectedNames.has(s3.name)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedSession(s3.name)} />` : null}<span class="name">${s3.name}</span></div>
                 <span class="preview">${s3.summary || t4("sessions.noSummary")}</span>
                 <span class="meta">
                   <span><span class="v">${fmtNum(s3.messageCount)}</span> ${t4("sessions.msgs")}</span>
@@ -28676,25 +30944,25 @@ function SessionsPanel({ userAvatar = null } = {}) {
               </div>
             `
   )}` : html4`
-          ${filteredTrash.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">回收站为空</div>` : null}
+          ${filteredTrash.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">${t4("sessions.emptyTrash")}</div>` : null}
           ${filteredTrash.map((item) => html4`<div class=${`ssl-row ${open?.kind === "trash" && open.id === item.id ? "sel" : ""}`} onClick=${() => selectionMode ? toggleSelectedTrash(item.id) : viewTrash(item)}>
-            <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${`选择回收站会话 ${item.name}`} checked=${selectedTrashIds.has(item.id)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedTrash(item.id)} />` : null}<span class="name">${item.name}</span></div>
-            <span class="preview">${item.fileCount} 个文件 · ${fmtBytes(item.totalBytes)}</span>
-            <span class="meta"><span>删除于 ${fmtRelativeTime(Date.parse(item.movedAt))}</span><span>清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "—"}</span></span>
+            <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${t4("sessions.selectTrashAria", { name: item.name })} checked=${selectedTrashIds.has(item.id)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedTrash(item.id)} />` : null}<span class="name">${item.name}</span></div>
+            <span class="preview">${t4("sessions.trashFileCount", { count: item.fileCount })} · ${fmtBytes(item.totalBytes)}</span>
+            <span class="meta"><span>${t4("sessions.deletedAt", { time: fmtRelativeTime(Date.parse(item.movedAt)) })}</span><span>${t4("sessions.cleanupAt", { time: item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "—" })}</span></span>
           </div>`)}
           `}
         </div>
-        ${selectionMode ? html4`<div class="session-batch-bar"><span>已选 ${listMode === "sessions" ? selectedNames.size : selectedTrashIds.size} 项</span><button class="btn btn-sm" onClick=${() => listMode === "sessions" ? setSelectedNames(allFilteredSelected ? /* @__PURE__ */ new Set() : new Set(filtered.map((session) => session.name))) : setSelectedTrashIds(allFilteredTrashSelected ? /* @__PURE__ */ new Set() : new Set(filteredTrash.map((item) => item.id)))}>${(listMode === "sessions" ? allFilteredSelected : allFilteredTrashSelected) ? "取消全选" : "全选当前"}</button>${listMode === "sessions" ? html4`<button class="btn btn-sm danger" disabled=${deleting || selectedNames.size === 0} onClick=${batchTrash}>移入回收站</button>` : html4`<button class="btn btn-sm" disabled=${deleting || selectedTrashIds.size === 0} onClick=${batchRestoreTrash}>恢复</button><button class="btn btn-sm danger" disabled=${deleting || selectedTrashIds.size === 0} onClick=${() => permanentlyDeleteTrash([...selectedTrashIds])}>永久删除</button>`}</div>` : null}
+        ${selectionMode ? html4`<div class="session-batch-bar"><span>${t4("sessions.selectedCount", { count: listMode === "sessions" ? selectedNames.size : selectedTrashIds.size })}</span><button class="btn btn-sm" onClick=${() => listMode === "sessions" ? setSelectedNames(allFilteredSelected ? /* @__PURE__ */ new Set() : new Set(filtered.map((session) => session.name))) : setSelectedTrashIds(allFilteredTrashSelected ? /* @__PURE__ */ new Set() : new Set(filteredTrash.map((item) => item.id)))}>${(listMode === "sessions" ? allFilteredSelected : allFilteredTrashSelected) ? t4("sessions.deselectAll") : t4("sessions.selectAllFiltered")}</button>${listMode === "sessions" ? html4`<button class="btn btn-sm danger" disabled=${deleting || selectedNames.size === 0} onClick=${batchTrash}>${t4("sessions.trashConfirmTitle")}</button>` : html4`<button class="btn btn-sm" disabled=${deleting || selectedTrashIds.size === 0} onClick=${batchRestoreTrash}>${t4("sessions.restoreAction")}</button><button class="btn btn-sm danger" disabled=${deleting || selectedTrashIds.size === 0} onClick=${() => permanentlyDeleteTrash([...selectedTrashIds])}>${t4("sessions.purgeAction")}</button>`}</div>` : null}
       </div>
 
       <div class="sessions-detail">
         ${open == null ? html4`<div style="color:var(--fg-3);font-size:13px;text-align:center;padding:60px 20px">
                 ${t4("sessions.pickHint")}
               </div>` : open.kind === "trash" ? html4`
-                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">回收站预览 · ${fmtNum(open.totalMessages ?? open.messages?.length ?? 0)} 条消息</span><span class="actions"><button class="btn ghost" onClick=${closeDetail}>返回</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>永久删除</button></span></div>
-                <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">确认内容后恢复</span></div><div class="card-b"><label>恢复后的会话名称</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>恢复会话</button></div><span>如果原名称已被使用，可以修改名称后恢复，不会覆盖现有会话。</span></div></div>
-                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>受影响行：${open.invalidLines.join(", ")}${open.invalidRecords > open.invalidLines.length ? " 等" : ""}</span>` : null}</div>` : null}
-                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} userAvatar=${userAvatar} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
+                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">${t4("sessions.trashPreviewMeta", { count: fmtNum(open.totalMessages ?? open.messages?.length ?? 0) })}</span><span class="actions"><button class="btn ghost" onClick=${closeDetail}>${t4("common.back")}</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>${t4("sessions.purgeAction")}</button></span></div>
+                <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">${t4("sessions.restoreReviewTitle")}</span></div><div class="card-b"><label>${t4("sessions.restoreNameLabel")}</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>${t4("sessions.restoreSessionAction")}</button></div><span>${t4("sessions.restoreNameHint")}</span></div></div>
+                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>${t4("sessions.affectedLines", { lines: open.invalidLines.join(", ") })}${open.invalidRecords > open.invalidLines.length ? " …" : ""}</span>` : null}</div>` : null}
+                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? t4("sessions.loadingDots") : t4("sessions.loadEarlier200")}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} userAvatar=${userAvatar} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
               ` : html4`
                 <div class="sessions-detail-h">
                   ${renaming ? html4`
@@ -28728,17 +30996,17 @@ function SessionsPanel({ userAvatar = null } = {}) {
                   `}
                 </div>
                 <div class="card accent-brand" style="margin-bottom:10px">
-                  <div class="card-h"><span class="title">继续会话</span></div>
+                  <div class="card-h"><span class="title">${t4("sessions.resumeTitle2")}</span></div>
                   <div class="card-b" style="font-size:12.5px;color:var(--fg-2)">
-                    加载历史消息到当前聊天，并恢复保存时的工作场景${open.modeLabel ? html4`（${open.modeLabel}）` : null}，AI 将获得完整上下文，你可以直接继续对话。
+                    ${t4("sessions.resumeDesc2", { mode: open.modeLabel ? `（${open.modeLabel}）` : "" })}
                     <button class="btn primary" style="margin-top:8px;width:100%"
                             disabled=${resuming}
                             onClick=${() => doResume(open.name)}>
-                      ${resuming ? "加载中..." : "加载并继续会话"}
+                      ${resuming ? t4("sessions.loadingDots") : t4("sessions.resumeAction")}
                     </button>
                   </div>
                 </div>
-                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>受影响行：${open.invalidLines.join(", ")}${open.invalidRecords > open.invalidLines.length ? " 等" : ""}</span>` : null}</div>` : null}
+                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>${t4("sessions.affectedLines", { lines: open.invalidLines.join(", ") })}${open.invalidRecords > open.invalidLines.length ? " …" : ""}</span>` : null}</div>` : null}
                 ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`
                           <div class="chat-searchbar session-transcript-search">
                             <span class="chat-search-icon">⌕</span>
@@ -28765,7 +31033,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
                             ${transcriptSearch ? html4`<button type="button" onClick=${() => setTranscriptSearch("")} title=${t4("chat.searchClear")}>×</button>` : null}
                           </div>
                           <div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 260px);overflow-y:auto">
-                            ${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}
+                            ${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? t4("sessions.loadingDots") : t4("sessions.loadEarlier200")}</button></div>` : null}
                             ${detailChatMessages.map(
     (m3, i3) => html4`
                                 <${ChatMessage}
@@ -28847,17 +31115,17 @@ function ModelRow({
   const price = catalog?.pricing[current];
   return html4`
     <span style="display:inline-flex;flex-direction:column;gap:4px">
-      <select
+      <${Select}
         value=${current}
-        onChange=${(e3) => {
-    const next = e3.target.value;
+        onChange=${(next) => {
     if (next && next !== current) onPick(next);
   }}
         disabled=${saving || locked}
-        style="font-family:var(--font-mono);min-width:200px"
-      >
-        ${options2.map((m3) => html4`<option key=${m3} value=${m3}>${m3}</option>`)}
-      </select>
+        searchable
+        width="220px"
+        ariaLabel=${t4("setPanel.ariaModel")}
+        options=${options2.map((m3) => ({ value: m3, label: m3 }))}
+      />
       ${price ? html4`<span style="color:var(--fg-3);font-size:11px;font-family:var(--font-mono)">${formatPricing(price)}</span>` : null}
     </span>
   `;
@@ -29054,10 +31322,9 @@ function LoopSection({
               style="width:64px;font-family:var(--font-mono)"
               disabled=${busy}
             />
-            <select
+            <${Select}
               value=${customUnit}
-              onChange=${(e3) => {
-    const next = e3.target.value;
+              onChange=${(next) => {
     setCustomUnit(next);
     if (customValue) {
       const ms = parseCustomInterval6(customValue, next);
@@ -29065,11 +31332,10 @@ function LoopSection({
     }
   }}
               disabled=${busy}
-            >
-              <option value="s">s</option>
-              <option value="m">m</option>
-              <option value="h">h</option>
-            </select>
+              width="70px"
+              ariaLabel=${t4("setPanel.ariaTimeUnit")}
+              options=${[{ value: "s", label: "s" }, { value: "m", label: "m" }, { value: "h", label: "h" }]}
+            />
           </span>
         </div>
         ${customValue && customMs === null ? html4`<span style="color:var(--c-err);font-size:11px">${t4("settings.loopRangeError")}</span>` : null}
@@ -29301,7 +31567,7 @@ function SettingsPanel() {
       const result = await api("/providers/credentials/test", { method: "POST", body: payload });
       setCredentialVerification({ ...result, apiKey: payload.apiKey, baseUrl: payload.baseUrl });
     } catch (err) {
-      setError(`API 检测失败：${err.message}`);
+      setError(t4("setPanel.apiTestFailed", { msg: err.message }));
     } finally {
       setCredentialTesting(false);
     }
@@ -29336,9 +31602,9 @@ function SettingsPanel() {
     try {
       const result = await api("/providers/test", { method: "POST", body: {} });
       await load();
-      setSaved(`模型检测完成：${result.passed}/${result.total} 可用`);
+      setSaved(t4("setPanel.modelTestDone", { passed: result.passed, total: result.total }));
     } catch (err) {
-      setError(`模型检测失败：${err.message}`);
+      setError(t4("setPanel.modelTestFailed", { msg: err.message }));
     } finally {
       setProviderTesting(false);
     }
@@ -29353,18 +31619,18 @@ function SettingsPanel() {
   const credentialChanged = Boolean((draft.apiKey ?? "").trim()) || credentialBaseUrl !== (credentialProvider?.baseUrl ?? "");
   const activeProviderDiagnostic = providerDiagnostics?.providers?.find((diagnostic) => diagnostic.active) ?? null;
   const provenanceLabel = {
-    "builtin-default": "内置默认",
-    "json-import": "JSON 导入",
-    dashboard: "Dashboard 修改",
-    "legacy-migration": "旧配置迁移",
-    "config-migration": "配置迁移",
-    environment: "环境变量",
-    "manual-unknown": "外部或手工修改"
+    "builtin-default": t4("setPanel.provenanceBuiltin"),
+    "json-import": t4("setPanel.provenanceJsonImport"),
+    dashboard: t4("setPanel.provenanceDashboard"),
+    "legacy-migration": t4("setPanel.provenanceLegacy"),
+    "config-migration": t4("setPanel.provenanceMigration"),
+    environment: t4("setPanel.provenanceEnv"),
+    "manual-unknown": t4("setPanel.provenanceManual")
   };
   const lockedPreset = ["flash", "pro"].includes(v3.preset ?? "");
   const modelControlValue = lockedPreset ? v3.effectiveModel ?? v3.displayModel ?? v3.model ?? "—" : v3.configuredModel ?? v3.effectiveModel ?? v3.model ?? "—";
   const runtimeModel = v3.runtimeModel ?? v3.displayModel ?? v3.model ?? "—";
-  const modelNote = v3.modelDrift ? `运行模型 ${runtimeModel} 与预设期望 ${v3.effectiveModel ?? "—"} 不一致，请新建对话或重启应用。` : lockedPreset ? `实际模型由 ${v3.preset} 预设锁定为 ${v3.effectiveModel ?? v3.model ?? "—"}；基础配置 ${v3.configuredModel ?? "—"} 仅在 auto 下使用。` : runtimeModel !== modelControlValue ? `当前运行 ${runtimeModel}；基础模型 ${modelControlValue} 将用于后续新对话。` : t4("settings.appliesNextTurn");
+  const modelNote = v3.modelDrift ? t4("setPanel.noteDrift", { runtime: runtimeModel, expected: v3.effectiveModel ?? "—" }) : lockedPreset ? t4("setPanel.noteLocked", { preset: v3.preset, effective: v3.effectiveModel ?? v3.model ?? "—", configured: v3.configuredModel ?? "—" }) : runtimeModel !== modelControlValue ? t4("setPanel.notePending", { runtime: runtimeModel, base: modelControlValue }) : t4("settings.appliesNextTurn");
   const availableEccRules = (v3.eccRules?.available ?? []).filter((name) => name !== "custom");
   const enabledEccRules = new Set(v3.eccRules?.enabled ?? []);
   const toggleEccRule = (name) => {
@@ -29392,16 +31658,17 @@ function SettingsPanel() {
         ${fieldRow(
     t4("settings.language"),
     html4`
-            <select
+            <${Select}
               value=${currentLang2}
-              onChange=${(e3) => {
-      const lang = e3.target.value;
+              onChange=${(lang) => {
       setLang(lang);
     }}
-            >
-              <option value="en">${t4("settings.langEn")}</option>
-              <option value="zh-CN">${t4("settings.langZhCn")}</option>
-            </select>
+              ariaLabel=${t4("settings.language")}
+              options=${[
+      { value: "en", label: t4("settings.langEn") },
+      { value: "zh-CN", label: t4("settings.langZhCn") }
+    ]}
+            />
           `
   )}
       </div>
@@ -29410,22 +31677,21 @@ function SettingsPanel() {
       <div class="card">
         <div style="padding:2px 0 8px;border-bottom:1px solid var(--bd);margin-bottom:4px">
           <div style="font-size:12px;color:var(--fg-1);font-weight:600">${t4("settings.credentialCurrent", { name: credentialProvider?.name ?? "Legacy" })}</div>
-          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">修改内容不会立即生效；API 检测通过后才能保存。</div>
+          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">${t4("setPanel.credSaveHint")}</div>
         </div>
         ${fieldRow(
     t4("settings.credentialProvider"),
-    html4`<select value=${credentialProvider?.id ?? ""} disabled=${saving || credentialTesting} onChange=${(e3) => {
-      const nextId = e3.target.value;
+    html4`<${Select} value=${credentialProvider?.id ?? ""} disabled=${saving || credentialTesting} ariaLabel=${t4("setPanel.ariaCredentialProvider")} onChange=${(nextId) => {
       const next = v3.credentialProviders?.find((provider) => provider.id === nextId);
       setCredentialProviderId(nextId);
       setDraft({ ...draft, apiKey: "", baseUrl: next?.baseUrl ?? "" });
       setCredentialVerification(null);
-    }}>${(v3.credentialProviders ?? []).map((provider) => html4`<option value=${provider.id}>${provider.name}</option>`)}</select>`
+    }} options=${(v3.credentialProviders ?? []).map((provider) => ({ value: provider.id, label: provider.name }))} />`
   )}
         ${fieldRow(
     t4("settings.apiKey"),
     html4`<code class="mono" style="color:var(--fg-2);font-size:11.5px">${credentialProvider?.apiKey ?? t4("settings.notSet")}</code>`,
-    credentialProvider?.credentialTest?.checkedAt ? `上次凭据检测：${fmtRelativeTime(credentialProvider.credentialTest.checkedAt)}` : "尚无已保存的检测记录"
+    credentialProvider?.credentialTest?.checkedAt ? t4("setPanel.credLastTest", { time: fmtRelativeTime(credentialProvider.credentialTest.checkedAt) }) : t4("setPanel.credNoTest")
   )}
         ${fieldRow(
     t4("settings.replace"),
@@ -29464,32 +31730,32 @@ function SettingsPanel() {
         </div>
       </div>
 
-      ${sectionH3("模型管理")}
+      ${sectionH3(t4("setPanel.sectionModelMgmt"))}
       <div class="card model-management-card">
         <div class="model-management-head">
           <div>
-            <strong>模型配置与检测</strong>
-            <div class="meta">共 ${managedProviders.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型${modelVerification?.dirty ? " · 配置已更新，等待重新检测" : ""}</div>
+            <strong>${t4("setPanel.modelMgmtTitle")}</strong>
+            <div class="meta">${t4("setPanel.modelCount", { count: managedProviders.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0) })}${modelVerification?.dirty ? t4("setPanel.configDirty") : ""}</div>
           </div>
-          <button class="btn" disabled=${providerTesting || saving || managedProviders.length === 0} onClick=${testManagedProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+          <button class="btn" disabled=${providerTesting || saving || managedProviders.length === 0} onClick=${testManagedProviders}>${providerTesting ? t4("setPanel.testing") : t4("setPanel.testAllModels")}</button>
         </div>
         <div class="model-management-groups">
           ${providerDisplayGroups(managedProviders).map((group) => html4`
-            <div class="model-management-group"><strong>${group.label}</strong><span>${group.providers.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型</span></div>
+            <div class="model-management-group"><strong>${group.label}</strong><span>${t4("setPanel.modelCount", { count: group.providers.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0) })}</span></div>
           `)}
         </div>
         ${activeProviderDiagnostic ? html4`
           <div class="provider-diagnostics">
             <div class="provider-diagnostics-head">
-              <strong>当前运行配置</strong>
-              <span class=${activeProviderDiagnostic.issues?.length ? "pill warn" : "pill ok"}>${activeProviderDiagnostic.issues?.length ? `${activeProviderDiagnostic.issues.length} 项需处理` : "配置完整"}</span>
+              <strong>${t4("setPanel.activeConfig")}</strong>
+              <span class=${activeProviderDiagnostic.issues?.length ? "pill warn" : "pill ok"}>${activeProviderDiagnostic.issues?.length ? t4("setPanel.issuesNeedFix", { count: activeProviderDiagnostic.issues.length }) : t4("setPanel.configComplete")}</span>
             </div>
             <div class="provider-diagnostics-grid">
-              <span>适配器</span><code>${activeProviderDiagnostic.providerType}</code>
-              <span>模型 / 协议</span><code>${activeProviderDiagnostic.modelId ?? "未选择"} · ${activeProviderDiagnostic.protocol}</code>
-              <span>有效 URL</span><code>${activeProviderDiagnostic.effectiveBaseUrl ?? "未配置"}</code>
-              <span>API Key</span><code>${activeProviderDiagnostic.apiKeyPresent ? "已提供" : "未配置"}${activeProviderDiagnostic.configuredApiKeyPresent ? "（配置文件）" : activeProviderDiagnostic.overrides?.apiKey ? "（环境变量）" : ""}</code>
-              <span>配置来源</span><code>${provenanceLabel[activeProviderDiagnostic.source] ?? activeProviderDiagnostic.source}${activeProviderDiagnostic.changedOutsideManagedFlow ? " · 未经受管流程修改" : ""}</code>
+              <span>${t4("setPanel.labelAdapter")}</span><code>${activeProviderDiagnostic.providerType}</code>
+              <span>${t4("setPanel.labelModelProtocol")}</span><code>${activeProviderDiagnostic.modelId ?? t4("setPanel.notSelected")} · ${activeProviderDiagnostic.protocol}</code>
+              <span>${t4("setPanel.labelEffectiveUrl")}</span><code>${activeProviderDiagnostic.effectiveBaseUrl ?? t4("setPanel.notConfigured")}</code>
+              <span>${t4("setPanel.labelApiKey")}</span><code>${activeProviderDiagnostic.apiKeyPresent ? t4("setPanel.provided") : t4("setPanel.notConfigured")}${activeProviderDiagnostic.configuredApiKeyPresent ? t4("setPanel.fromConfigFile") : activeProviderDiagnostic.overrides?.apiKey ? t4("setPanel.fromEnv") : ""}</code>
+              <span>${t4("setPanel.labelSource")}</span><code>${provenanceLabel[activeProviderDiagnostic.source] ?? activeProviderDiagnostic.source}${activeProviderDiagnostic.changedOutsideManagedFlow ? t4("setPanel.outsideManaged") : ""}</code>
             </div>
             ${activeProviderDiagnostic.issues?.length ? html4`<div class="provider-diagnostics-issues">${activeProviderDiagnostic.issues.map((issue) => html4`<div>${issue.message}</div>`)}</div>` : null}
           </div>
@@ -29499,44 +31765,42 @@ function SettingsPanel() {
       ${sectionH3(t4("settings.sectionDefaults"))}
       <div class="card">
         ${v3.modes ? fieldRow(
-    "工作场景",
+    t4("setPanel.sectionWorkMode"),
     html4`
-            <select
+            <${Select}
               value=${v3.mode ?? "general"}
-              onChange=${(e3) => save({ mode: e3.target.value })}
+              onChange=${(mode) => save({ mode })}
               disabled=${saving}
-            >
-              ${v3.modes.map((m3) => html4`<option value=${m3.id}>${m3.label} — ${m3.description || (m3.effectiveRules || m3.rules || []).join("+")}</option>`)}
-            </select>
+              ariaLabel=${t4("setPanel.ariaWorkMode")}
+              options=${v3.modes.map((m3) => ({ value: m3.id, label: m3.label, meta: m3.description || (m3.effectiveRules || m3.rules || []).join("+") }))}
+            />
           `,
-    `${v3.activeMode?.hint || "切换后下次新对话生效"} · ECC ${(v3.activeMode?.effectiveRules || v3.activeMode?.rules || []).join("+") || "common"}`
+    `${v3.activeMode?.hint || t4("setPanel.workModeHintDefault")} · ECC ${(v3.activeMode?.effectiveRules || v3.activeMode?.rules || []).join("+") || "common"}`
   ) : null}
         ${availableEccRules.length > 0 ? fieldRow(
-    "ECC 编码规范",
+    t4("setPanel.sectionEcc"),
     html4`<div class="ecc-rule-grid">
-      ${availableEccRules.map((name) => html4`<label class=${`ecc-rule-option ${enabledEccRules.has(name) ? "active" : ""}`} title=${`${name} 规则将注入当前工作场景的系统提示词`}>
+      ${availableEccRules.map((name) => html4`<label class=${`ecc-rule-option ${enabledEccRules.has(name) ? "active" : ""}`} title=${t4("setPanel.eccRuleTitle", { name })}>
         <input type="checkbox" checked=${enabledEccRules.has(name)} disabled=${saving} onChange=${() => toggleEccRule(name)} />
         <span>${name}</span>
       </label>`)}
     </div>`,
-    `当前场景已启用 ${enabledEccRules.size}/${availableEccRules.length}，修改后立即生效`
+    t4("setPanel.eccEnabledNote", { enabled: enabledEccRules.size, total: availableEccRules.length })
   ) : null}
         ${fieldRow(
     "上下文长度",
     html4`
-            <select
-              value=${v3.contextCapTokens ?? "auto"}
-              onChange=${(e3) => save({ contextCapTokens: e3.target.value === "auto" ? null : parseInt(e3.target.value, 10) })}
+            <${Select}
+              value=${String(v3.contextCapTokens ?? "auto")}
+              onChange=${(val) => save({ contextCapTokens: val === "auto" ? null : parseInt(val, 10) })}
               disabled=${saving}
-            >
-              <option value="auto">${v3.providerContextCap ? `模型默认 (${Math.round(v3.providerContextCap / 1024)}K)` : "模型默认"}</option>
-              <option value="32768" disabled=${Boolean(v3.providerContextCap && 32768 > v3.providerContextCap)}>32K</option>
-              <option value="65536" disabled=${Boolean(v3.providerContextCap && 65536 > v3.providerContextCap)}>64K</option>
-              <option value="131072" disabled=${Boolean(v3.providerContextCap && 131072 > v3.providerContextCap)}>128K</option>
-              <option value="262144" disabled=${Boolean(v3.providerContextCap && 262144 > v3.providerContextCap)}>256K</option>
-              <option value="1048576" disabled=${Boolean(v3.providerContextCap && 1048576 > v3.providerContextCap)}>1M</option>
-              ${v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? html4`<option value="${v3.contextCapTokens}" disabled=${Boolean(v3.providerContextCap && v3.contextCapTokens > v3.providerContextCap)}>${Math.round(v3.contextCapTokens / 1024)}K</option>` : null}
-            </select>
+              ariaLabel=${t4("setPanel.ariaContextLength")}
+              options=${[
+      { value: "auto", label: v3.providerContextCap ? t4("setPanel.contextModelDefault", { cap: Math.round(v3.providerContextCap / 1024) }) : t4("setPanel.contextModelDefaultNoCap") },
+      ...[[32768, "32K"], [65536, "64K"], [131072, "128K"], [262144, "256K"], [1048576, "1M"]].map(([n3, label]) => ({ value: String(n3), label, disabled: Boolean(v3.providerContextCap && n3 > v3.providerContextCap) })),
+      ...v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? [{ value: String(v3.contextCapTokens), label: `${Math.round(v3.contextCapTokens / 1024)}K`, disabled: Boolean(v3.providerContextCap && v3.contextCapTokens > v3.providerContextCap) }] : []
+    ]}
+            />
           `,
     "即时生效"
   )}
@@ -29555,16 +31819,18 @@ function SettingsPanel() {
           ${fieldRow(
     "搜索引擎",
     html4`
-              <select
+              <${Select}
                 value=${v3.webSearchEngine ?? "bing-scrape"}
-                onChange=${(e3) => save({ webSearchEngine: e3.target.value })}
+                onChange=${(eng) => save({ webSearchEngine: eng })}
                 disabled=${saving}
-              >
-                <option value="mojeek">Mojeek (\u514D\u8D39)</option>
-                <option value="bing-scrape">Bing \u56FD\u5185\u7248 (\u514D\u8D39\uFF0C\u65E0\u9700API)</option>
-                <option value="searxng">SearXNG (\u81EA\u90E8\u7F72/\u516C\u5171\u5B9E\u4F8B)</option>
-                <option value="bing">Bing API (\u9700 API Key)</option>
-              </select>
+                ariaLabel=${t4("setPanel.ariaSearchEngine")}
+                options=${[
+      { value: "mojeek", label: t4("setPanel.engineMojeek") },
+      { value: "bing-scrape", label: t4("setPanel.engineBingScrape") },
+      { value: "searxng", label: t4("setPanel.engineSearxng") },
+      { value: "bing", label: t4("setPanel.engineBing") }
+    ]}
+              />
             `,
     "切换引擎后需重启应用生效"
   )}
@@ -29628,31 +31894,31 @@ function SettingsPanel() {
       ${sectionH3(t4("settings.sectionRuntime"))}
       <div class="card">
         ${fieldRow(
-    "国内镜像优先",
+    t4("setPanel.mirrorPriority"),
     html4`<div style="display:flex;flex-direction:column;gap:8px;width:100%">
             <label style="display:flex;align-items:center;gap:8px;font-size:12px">
               <input type="checkbox" checked=${runtimeDraft.domesticOnly} onChange=${(e3) => setRuntimeDraft((current) => ({ ...current, domesticOnly: e3.target.checked, allowOfficialFallback: e3.target.checked ? false : current.allowOfficialFallback }))} disabled=${saving} />
-              仅允许国内镜像
+              ${t4("setPanel.mirrorOnly")}
             </label>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px">
               <input type="checkbox" checked=${runtimeDraft.allowOfficialFallback} onChange=${(e3) => setRuntimeDraft((current) => ({ ...current, allowOfficialFallback: e3.target.checked }))} disabled=${saving || runtimeDraft.domesticOnly} />
-              国内镜像失败后回退官方源
+              ${t4("setPanel.mirrorFallback")}
             </label>
           </div>`,
-    "安装由宿主管理器执行，不会在任务目录创建 node_modules 或 .venv。"
+    t4("setPanel.mirrorNote")
   )}
         ${fieldRow(
-    "Python 包源顺序",
-    html4`<textarea rows="2" value=${runtimeDraft.python} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, python: e3.target.value }))} placeholder="每行一个 HTTPS 源" style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
-    "留空时使用清华、阿里镜像，必要时回退官方源。"
+    t4("setPanel.pythonSources"),
+    html4`<textarea rows="2" value=${runtimeDraft.python} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, python: e3.target.value }))} placeholder=${t4("setPanel.oneSourcePerLine")} style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
+    t4("setPanel.pythonSourcesHint")
   )}
         ${fieldRow(
-    "Node 包源顺序",
-    html4`<textarea rows="2" value=${runtimeDraft.node} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, node: e3.target.value }))} placeholder="每行一个 HTTPS 源" style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
-    "留空时优先使用 npmmirror。"
+    t4("setPanel.nodeSources"),
+    html4`<textarea rows="2" value=${runtimeDraft.node} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, node: e3.target.value }))} placeholder=${t4("setPanel.oneSourcePerLine")} style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
+    t4("setPanel.nodeSourcesHint")
   )}
         <div style="display:flex;justify-content:flex-end;margin-top:8px">
-          <button class="btn primary" disabled=${saving} onClick=${() => save({ runtime: { packageSources: { python: runtimeDraft.python.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), node: runtimeDraft.node.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }, domesticOnly: runtimeDraft.domesticOnly, allowOfficialFallback: runtimeDraft.allowOfficialFallback } })}>保存运行时源</button>
+          <button class="btn primary" disabled=${saving} onClick=${() => save({ runtime: { packageSources: { python: runtimeDraft.python.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), node: runtimeDraft.node.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }, domesticOnly: runtimeDraft.domesticOnly, allowOfficialFallback: runtimeDraft.allowOfficialFallback } })}>${t4("setPanel.saveRuntimeSources")}</button>
         </div>
         ${fieldRow(
     t4("settings.activeModel"),
@@ -29861,14 +32127,16 @@ description: TODO — one-line description that helps the model match this skill
         </div>
 
         <div style="padding:0 12px 8px;display:flex;gap:6px;flex-wrap:wrap">
-          <select
+          <${Select}
             value=${newScope}
-            onChange=${(e3) => setNewScope(e3.target.value)}
-            style="flex:0 0 auto;font-size:11.5px;padding:5px 6px"
-          >
-            <option value="global">${t4("skills.global")}</option>
-            ${data.paths.project ? html4`<option value="project">${t4("skills.project")}</option>` : null}
-          </select>
+            onChange=${(v3) => setNewScope(v3)}
+            width="96px"
+            ariaLabel=${t4("skills.scopeAria")}
+            options=${[
+    { value: "global", label: t4("skills.global") },
+    ...data.paths.project ? [{ value: "project", label: t4("skills.project") }] : []
+  ]}
+          />
           <input
             type="text"
             placeholder=${t4("skills.newSkill")}
@@ -30112,7 +32380,7 @@ function taskStatusPill(task) {
   if (task.workspaceMismatch) return html4`<span class="pill warn">${t4("tasks.workspaceMismatch")}</span>`;
   if (!task.enabled) return html4`<span class="pill">${t4("tasks.disabled")}</span>`;
   if (task.lastStatus === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
-  if (task.lastStatus === "stopping") return html4`<span class="pill warn">停止中</span>`;
+  if (task.lastStatus === "stopping") return html4`<span class="pill warn">${t4("tasks.stopping")}</span>`;
   if (task.lastStatus === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
   if (task.lastStatus === "cancelled") return html4`<span class="pill warn">${t4("tasks.cancelled")}</span>`;
   if (task.lastStatus === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
@@ -30126,7 +32394,7 @@ function taskStatusPill(task) {
 }
 function scheduleRunPill(status) {
   if (status === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
-  if (status === "stopping") return html4`<span class="pill warn">停止中</span>`;
+  if (status === "stopping") return html4`<span class="pill warn">${t4("tasks.stopping")}</span>`;
   if (status === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
   if (status === "cancelled") return html4`<span class="pill warn">${t4("tasks.cancelled")}</span>`;
   if (status === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
@@ -30280,7 +32548,7 @@ function ScheduledTasksPanel() {
     setNotice(null);
     try {
       await api(`/schedules/${encodeURIComponent(task.id)}/cancel`, { method: "POST", body: {} });
-      setNotice("已请求停止任务");
+      setNotice(t4("tasks.stopRequested"));
       await refresh();
     } catch (err) {
       setNotice(err.message);
@@ -30299,13 +32567,13 @@ function ScheduledTasksPanel() {
         await showFileArtifactPreview({ path });
       } else if (kind === "folder") {
         await api("/artifacts/open-folder", { method: "POST", body: { path } });
-        showToast("已打开所在文件夹", "info");
+        showToast(t4("tasks.openedFolder"), "info");
       } else if (kind === "copy") {
         await writeClipboardText(path);
-        showToast("路径已复制", "info");
+        showToast(t4("tasks.pathCopied"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("tasks.fileOpFailed"), "error", 5e3);
     }
   }, []);
   const pickSkillArchiveWorkspace = q2(async () => {
@@ -30313,7 +32581,7 @@ function ScheduledTasksPanel() {
       const path = await pickWorkspaceDirectoryFromBridge();
       if (path) setDraft((current) => ({ ...current, skillArchiveWorkspaceDir: path }));
     } catch (err) {
-      showToast(err.message || "选择归档工作区失败", "error", 5e3);
+      showToast(err.message || t4("tasks.pickArchiveWorkspaceFailed"), "error", 5e3);
     }
   }, []);
   const archiveTaskResult = q2(async (task, run) => {
@@ -30325,10 +32593,10 @@ function ScheduledTasksPanel() {
         method: "POST",
         body: { runId: run.runId, autoIndex: task.skillAutoIndex === true }
       });
-      showToast(result.duplicate ? "该结果已经归档" : "已归档到知识库", "info", 4e3);
+      showToast(result.duplicate ? t4("tasks.resultArchivedDup") : t4("tasks.resultArchived"), "info", 4e3);
       await refresh();
     } catch (err) {
-      setNotice(err.message || "知识归档失败");
+      setNotice(err.message || t4("tasks.archiveFailed"));
       await refresh();
     } finally {
       setBusy(false);
@@ -30410,7 +32678,7 @@ function ScheduledTasksPanel() {
         <div class="sessions-detail-h">
           <span class="name">${draft.id ? draft.name || t4("tasks.title") : t4("tasks.create")}</span>
           <span class="ws">${selected ? `${fmtScheduleRule(selected)} · ${t4("tasks.nextRun")}: ${fmtScheduleDate(selected.nextRunAt)}` : t4("tasks.selectHint")}</span>
-          ${selected ? html4`<span class="actions">${selected.lastStatus === "running" || selected.lastStatus === "stopping" ? html4`<button class="btn danger" disabled=${busy || selected.lastStatus === "stopping"} onClick=${() => cancelTask(selected)}>${selected.lastStatus === "stopping" ? "停止中..." : "停止任务"}</button>` : html4`<button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button>`}</span>` : null}
+          ${selected ? html4`<span class="actions">${selected.lastStatus === "running" || selected.lastStatus === "stopping" ? html4`<button class="btn danger" disabled=${busy || selected.lastStatus === "stopping"} onClick=${() => cancelTask(selected)}>${selected.lastStatus === "stopping" ? t4("tasks.stoppingAction") : t4("tasks.stopTask")}</button>` : html4`<button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button>`}</span>` : null}
         </div>
         ${selected?.workspaceMismatch ? html4`<div class="card accent-warn" style="margin-bottom:10px">${t4("tasks.workspaceMismatchHint")}</div>` : null}
         ${notice ? html4`<div class=${`card ${notice === t4("tasks.saved") || notice === t4("tasks.deleted") || notice === t4("tasks.runAccepted") || notice === t4("tasks.runCompleted") || notice === t4("tasks.runPending") ? "accent-brand" : "accent-err"}`} style="margin-bottom:10px">${notice}</div>` : null}
@@ -30451,11 +32719,11 @@ function ScheduledTasksPanel() {
                 <div class="card-b" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;border-bottom:1px solid var(--bd)">
                   <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeSessions")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeSessionsProcessed)}</div></div>
                   <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeDocuments")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens((latestRun.knowledgeDocumentsCreated || 0) + (latestRun.knowledgeDocumentsUpdated || 0))}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">AI 评估</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIReviewed || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">AI 评估失败</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIFailed || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">低价值回收候选</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeRejectedLowValue || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">文档质量拒绝</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeDocumentsRejected || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">移除旧主题</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeTopicsRemoved || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeAIReviewed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIReviewed || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeAIFailed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIFailed || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeRejectedLowValue")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeRejectedLowValue || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeDocumentsRejected")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeDocumentsRejected || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeTopicsRemoved")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeTopicsRemoved || 0)}</div></div>
                   <div><div style="color:var(--fg-3);font-size:11px">embedding</div><div style="font-size:12px">${latestRun.semanticIndexStatus || "-"}</div></div>
                 </div>
               ` : null}
@@ -30469,16 +32737,16 @@ function ScheduledTasksPanel() {
                 ${latestRun.reportPath ? html4`
                   <div style="display:flex;flex-direction:column;gap:6px;color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
-                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>预览报告</button>
-                      ${selected?.skillName ? html4`<button class="btn btn-sm" disabled=${busy || !selected.skillArchiveWorkspaceDir || latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate"} title=${selected.skillArchiveWorkspaceDir ? "通过质量审核后归档到固定工作区" : "请先在下方选择归档工作区并保存任务"} onClick=${() => archiveTaskResult(selected, latestRun)}>${latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate" ? "已归档" : "归档到知识库"}</button>` : null}
+                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>${t4("tasks.previewReport")}</button>
+                      ${selected?.skillName ? html4`<button class="btn btn-sm" disabled=${busy || !selected.skillArchiveWorkspaceDir || latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate"} title=${selected.skillArchiveWorkspaceDir ? t4("tasks.archiveQualityTitle") : t4("tasks.archivePickFirstTitle")} onClick=${() => archiveTaskResult(selected, latestRun)}>${latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate" ? t4("tasks.archivedState") : t4("tasks.archiveToKnowledge")}</button>` : null}
                     </div>
                     <div>${t4("tasks.reportStored")}</div>
-                    ${latestRun.knowledgeArchiveError ? html4`<div style="color:var(--c-warn)">知识归档：${latestRun.knowledgeArchiveError}</div>` : null}
+                    ${latestRun.knowledgeArchiveError ? html4`<div style="color:var(--c-warn)">${t4("tasks.knowledgeArchiveLabel")}${latestRun.knowledgeArchiveError}</div>` : null}
                     ${latestRun.reportExportPath ? html4`
                       <div>${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportExportPath}</code></div>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportExportPath)}>所在文件夹</button>
-                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportExportPath)}>复制路径</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportExportPath)}>${t4("tasks.openFolder")}</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportExportPath)}>${t4("tasks.copyPath")}</button>
                       </div>
                     ` : null}
                     ${latestRun.reportExportError ? html4`<div style="color:var(--c-warn)">${t4("tasks.reportExportFailed", { error: latestRun.reportExportError })}</div>` : null}
@@ -30490,7 +32758,7 @@ function ScheduledTasksPanel() {
                     ${latestRun.knowledgeOutputPaths.map((path) => html4`
                       <div style="display:flex;gap:6px;align-items:center;min-width:0">
                         <code class="mono" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${path}</code>
-                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", path)}>预览</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", path)}>${t4("tasks.previewAction")}</button>
                       </div>
                     `)}
                   </div>
@@ -30502,8 +32770,7 @@ function ScheduledTasksPanel() {
         <div class="card">
           <div class="form-row">
             <span class="lbl">${t4("tasks.taskKind")}</span>
-            <select class="input mono" value=${draft.kind} onChange=${(e3) => {
-    const kind = e3.target.value;
+            <${Select} value=${draft.kind} ariaLabel=${t4("tasks.taskKind")} onChange=${(kind) => {
     setDraft({
       ...draft,
       kind,
@@ -30512,11 +32779,11 @@ function ScheduledTasksPanel() {
       skillName: kind === "prompt" ? draft.skillName : "",
       skillAction: kind === "prompt" ? draft.skillAction : ""
     });
-  }}>
-              <option value="prompt">${t4("tasks.kindPrompt")}</option>
-              <option value="report">${t4("tasks.kindReport")}</option>
-              <option value="session_cleanup">${t4("tasks.kindSessionCleanup")}</option>
-            </select>
+  }} options=${[
+    { value: "prompt", label: t4("tasks.kindPrompt") },
+    { value: "report", label: t4("tasks.kindReport") },
+    { value: "session_cleanup", label: t4("tasks.kindSessionCleanup") }
+  ]} />
           </div>
           <div class="form-row">
             <span class="lbl">${t4("tasks.name")}</span>
@@ -30525,26 +32792,15 @@ function ScheduledTasksPanel() {
           ${draft.kind === "session_cleanup" ? html4`
             <div class="form-row">
               <span class="lbl">${t4("tasks.sessionCleanupAction")}</span>
-              <select class="input mono" value=${draft.sessionCleanupAction} onChange=${(e3) => setDraft({ ...draft, sessionCleanupAction: e3.target.value })}>
-                <option value="preview">${t4("tasks.sessionCleanupPreview")}</option>
-                <option value="delete">${t4("tasks.sessionCleanupDelete")}</option>
-              </select>
+              <${Select} value=${draft.sessionCleanupAction} ariaLabel=${t4("tasks.ariaCleanupAction")} onChange=${(v3) => setDraft({ ...draft, sessionCleanupAction: v3 })} options=${[{ value: "preview", label: t4("tasks.sessionCleanupPreview") }, { value: "delete", label: t4("tasks.sessionCleanupDelete") }]} />
             </div>
             <div class="form-row">
               <span class="lbl">${t4("tasks.sessionCleanupStrength")}</span>
-              <select class="input mono" value=${draft.sessionCleanupStrength} onChange=${(e3) => setDraft({ ...draft, sessionCleanupStrength: e3.target.value })}>
-                <option value="conservative">${t4("tasks.sessionCleanupConservative")}</option>
-                <option value="standard">${t4("tasks.sessionCleanupStandard")}</option>
-                <option value="aggressive">${t4("tasks.sessionCleanupAggressive")}</option>
-              </select>
+              <${Select} value=${draft.sessionCleanupStrength} ariaLabel=${t4("tasks.ariaCleanupStrength")} onChange=${(v3) => setDraft({ ...draft, sessionCleanupStrength: v3 })} options=${[{ value: "conservative", label: t4("tasks.sessionCleanupConservative") }, { value: "standard", label: t4("tasks.sessionCleanupStandard") }, { value: "aggressive", label: t4("tasks.sessionCleanupAggressive") }]} />
             </div>
             <div class="form-row">
               <span class="lbl">${t4("tasks.sessionCleanupSemanticMode")}</span>
-              <select class="input mono" value=${draft.sessionCleanupSemanticMode} onChange=${(e3) => setDraft({ ...draft, sessionCleanupSemanticMode: e3.target.value })}>
-                <option value="off">${t4("tasks.sessionCleanupSemanticOff")}</option>
-                <option value="uncertain">${t4("tasks.sessionCleanupSemanticUncertain")}</option>
-                <option value="deep">${t4("tasks.sessionCleanupSemanticDeep")}</option>
-              </select>
+              <${Select} value=${draft.sessionCleanupSemanticMode} ariaLabel=${t4("tasks.ariaSemanticMode")} onChange=${(v3) => setDraft({ ...draft, sessionCleanupSemanticMode: v3 })} options=${[{ value: "off", label: t4("tasks.sessionCleanupSemanticOff") }, { value: "uncertain", label: t4("tasks.sessionCleanupSemanticUncertain") }, { value: "deep", label: t4("tasks.sessionCleanupSemanticDeep") }]} />
             </div>
             <div class="form-row" style="align-items:flex-start">
               <span class="lbl">${t4("tasks.sessionCleanupPromptAddendum")}</span>
@@ -30579,17 +32835,17 @@ function ScheduledTasksPanel() {
             <div class="form-row">
               <span class="lbl">${t4("tasks.reportRange")}</span>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <select class="input mono" value=${draft.reportRangeMode} onChange=${(e3) => setDraft({ ...draft, reportRangeMode: e3.target.value })}>
-                  <option value="yesterday">${t4("tasks.reportYesterday")}</option>
-                  <option value="today">${t4("tasks.reportToday")}</option>
-                  <option value="last_week">${t4("tasks.reportLastWeek")}</option>
-                  <option value="this_week">${t4("tasks.reportThisWeek")}</option>
-                  <option value="last_7_days">${t4("tasks.reportLast7Days")}</option>
-                  <option value="last_30_days">${t4("tasks.reportLast30Days")}</option>
-                  <option value="this_year">${t4("tasks.reportThisYear")}</option>
-                  <option value="last_year">${t4("tasks.reportLastYear")}</option>
-                  <option value="custom">${t4("tasks.reportFixedRange")}</option>
-                </select>
+                <${Select} value=${draft.reportRangeMode} ariaLabel=${t4("tasks.reportRange")} onChange=${(v3) => setDraft({ ...draft, reportRangeMode: v3 })} options=${[
+    { value: "yesterday", label: t4("tasks.reportYesterday") },
+    { value: "today", label: t4("tasks.reportToday") },
+    { value: "last_week", label: t4("tasks.reportLastWeek") },
+    { value: "this_week", label: t4("tasks.reportThisWeek") },
+    { value: "last_7_days", label: t4("tasks.reportLast7Days") },
+    { value: "last_30_days", label: t4("tasks.reportLast30Days") },
+    { value: "this_year", label: t4("tasks.reportThisYear") },
+    { value: "last_year", label: t4("tasks.reportLastYear") },
+    { value: "custom", label: t4("tasks.reportFixedRange") }
+  ]} />
                 ${draft.reportRangeMode === "custom" ? html4`
                   <span style="color:var(--fg-3);font-size:12px">${t4("tasks.reportStart")}</span>
                   <input class="input mono" type="date" value=${draft.reportStartDate} onInput=${(e3) => setDraft({ ...draft, reportStartDate: e3.target.value })} />
@@ -30610,8 +32866,7 @@ function ScheduledTasksPanel() {
             <div class="form-row" style="align-items:flex-start">
               <span class="lbl">${t4("tasks.executionSource")}</span>
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-                <select class="input" value=${draft.executionSource} onChange=${(e3) => {
-    const executionSource = e3.target.value;
+                <${Select} value=${draft.executionSource} ariaLabel=${t4("tasks.executionSource")} onChange=${(executionSource) => {
     const first = skillTemplates[0] ?? null;
     setDraft({
       ...draft,
@@ -30620,10 +32875,10 @@ function ScheduledTasksPanel() {
       skillAction: executionSource === "skill" ? draft.skillAction || first?.id || "" : "",
       runMode: executionSource === "skill" ? "readonly" : draft.runMode
     });
-  }}>
-                  <option value="prompt">${t4("tasks.executionPrompt")}</option>
-                  <option value="skill">${t4("tasks.executionSkill")}</option>
-                </select>
+  }} options=${[
+    { value: "prompt", label: t4("tasks.executionPrompt") },
+    { value: "skill", label: t4("tasks.executionSkill") }
+  ]} />
               </div>
             </div>
             ${draft.executionSource === "skill" ? html4`
@@ -30631,13 +32886,11 @@ function ScheduledTasksPanel() {
                 <span class="lbl">${t4("tasks.skillTemplate")}</span>
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
                   ${skillTemplates.length > 0 ? html4`
-                    <select class="input" value=${draft.skillName && draft.skillAction ? `${draft.skillName}/${draft.skillAction}` : ""} onChange=${(e3) => {
-    const template = skillTemplates.find((item) => `${item.skillName}/${item.id}` === e3.target.value);
+                    <${Select} value=${draft.skillName && draft.skillAction ? `${draft.skillName}/${draft.skillAction}` : ""} ariaLabel=${t4("tasks.skillTemplate")} searchable onChange=${(val) => {
+    const template = skillTemplates.find((item) => `${item.skillName}/${item.id}` === val);
     if (!template) return;
     setDraft({ ...draft, skillName: template.skillName, skillAction: template.id, name: draft.name || template.title, runMode: "readonly" });
-  }}>
-                      ${skillTemplates.map((template) => html4`<option value=${`${template.skillName}/${template.id}`}>${template.integrationName} · ${template.title}</option>`)}
-                    </select>
+  }} options=${skillTemplates.map((template) => ({ value: `${template.skillName}/${template.id}`, label: template.title, meta: template.integrationName }))} />
                     <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${selectedSkillTemplate?.description ?? ""}</span>
                     <span style="color:var(--c-warn);font-size:11px;line-height:1.45">${t4("tasks.skillReadOnlyHint")}</span>
                   ` : html4`<span style="color:var(--c-warn);font-size:12px">${t4("tasks.skillTemplateUnavailable")}</span>`}
@@ -30648,21 +32901,21 @@ function ScheduledTasksPanel() {
                 <textarea class="input" maxlength="2000" rows="4" placeholder=${t4("tasks.skillAddendumPlaceholder")} value=${draft.skillPromptAddendum} onInput=${(e3) => setDraft({ ...draft, skillPromptAddendum: e3.target.value.slice(0, 2e3) })}></textarea>
               </div>
               <div class="form-row" style="align-items:flex-start">
-                <span class="lbl">知识归档</span>
+                <span class="lbl">${t4("tasks.knowledgeArchive")}</span>
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:7px">
                   <div style="display:flex;gap:7px;align-items:center;min-width:0">
-                    <input class="input mono" style="flex:1;min-width:0" readonly value=${draft.skillArchiveWorkspaceDir} placeholder="未选择归档工作区" />
-                    <button class="btn" type="button" onClick=${pickSkillArchiveWorkspace}>选择</button>
-                    ${draft.skillArchiveWorkspaceDir ? html4`<button class="btn ghost" type="button" onClick=${() => setDraft({ ...draft, skillArchiveWorkspaceDir: "", skillAutoArchive: false, skillAutoIndex: false })}>清除</button>` : null}
+                    <input class="input mono" style="flex:1;min-width:0" readonly value=${draft.skillArchiveWorkspaceDir} placeholder=${t4("tasks.noArchiveWorkspace")} />
+                    <button class="btn" type="button" onClick=${pickSkillArchiveWorkspace}>${t4("common.choose")}</button>
+                    ${draft.skillArchiveWorkspaceDir ? html4`<button class="btn ghost" type="button" onClick=${() => setDraft({ ...draft, skillArchiveWorkspaceDir: "", skillAutoArchive: false, skillAutoIndex: false })}>${t4("common.clear")}</button>` : null}
                   </div>
-                  <span style="color:var(--fg-3);font-size:11px;line-height:1.45">报告先保存在任务记录中；归档目标固定为此工作区，不随当前工作区切换。</span>
+                  <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.archiveFixedHint")}</span>
                   <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
                     <input type="checkbox" disabled=${!draft.skillArchiveWorkspaceDir} checked=${draft.skillAutoArchive} onChange=${(e3) => setDraft({ ...draft, skillAutoArchive: e3.target.checked })} />
-                    高质量结果自动归档
+                    ${t4("tasks.autoArchiveHQ")}
                   </label>
                   <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
                     <input type="checkbox" disabled=${!draft.skillArchiveWorkspaceDir || !embeddingApiReady} checked=${draft.skillAutoIndex && embeddingApiReady} onChange=${(e3) => setDraft({ ...draft, skillAutoIndex: e3.target.checked })} />
-                    归档后自动更新本地索引${embeddingApiReady ? "" : " · 需先配置 embedding API"}
+                    ${t4("tasks.autoIndexAfterArchive")}${embeddingApiReady ? "" : ` · ${t4("tasks.needEmbeddingApi")}`}
                   </label>
                 </div>
               </div>
@@ -30676,19 +32929,19 @@ function ScheduledTasksPanel() {
               </div>
               <div class="form-row">
                 <span class="lbl">${t4("tasks.runMode")}</span>
-                <select class="input mono" value=${draft.runMode} onChange=${(e3) => setDraft({ ...draft, runMode: e3.target.value })}>
-                  <option value="auto">${t4("tasks.runModeAuto")}</option>
-                  <option value="readonly">${t4("tasks.runModeReadonly")}</option>
-                  <option value="confirm">${t4("tasks.runModeConfirm")}</option>
-                </select>
+                <${Select} value=${draft.runMode} ariaLabel=${t4("tasks.ariaRunMode")} onChange=${(v3) => setDraft({ ...draft, runMode: v3 })} options=${[
+    { value: "auto", label: t4("tasks.runModeAuto") },
+    { value: "readonly", label: t4("tasks.runModeReadonly") },
+    { value: "confirm", label: t4("tasks.runModeConfirm") }
+  ]} />
               </div>
               <div class="form-row" style="align-items:flex-start">
                 <span class="lbl">${t4("tasks.workspaceScope")}</span>
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-                  <select class="input mono" value=${draft.workspaceScope} onChange=${(e3) => setDraft({ ...draft, workspaceScope: e3.target.value, rebindWorkspace: false })}>
-                    <option value="bound">${t4("tasks.workspaceScopeBound")}</option>
-                    <option value="current">${t4("tasks.workspaceScopeCurrent")}</option>
-                  </select>
+                  <${Select} value=${draft.workspaceScope} ariaLabel=${t4("tasks.ariaWorkspaceScope")} onChange=${(v3) => setDraft({ ...draft, workspaceScope: v3, rebindWorkspace: false })} options=${[
+    { value: "bound", label: t4("tasks.workspaceScopeBound") },
+    { value: "current", label: t4("tasks.workspaceScopeCurrent") }
+  ]} />
                   <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.workspaceScopeHint")}</span>
                 </div>
               </div>
@@ -30697,17 +32950,15 @@ function ScheduledTasksPanel() {
           <div class="form-row">
             <span class="lbl">${t4("tasks.type")}</span>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <select class="input mono" value=${draft.type} onChange=${(e3) => setDraft({ ...draft, type: e3.target.value })}>
-                <option value="daily">${t4("tasks.daily")}</option>
-                <option value="weekly">${t4("tasks.weekly")}</option>
-                <option value="interval">${t4("tasks.customInterval")}</option>
-              </select>
+              <${Select} value=${draft.type} ariaLabel=${t4("tasks.ariaTaskType")} onChange=${(v3) => setDraft({ ...draft, type: v3 })} options=${[
+    { value: "daily", label: t4("tasks.daily") },
+    { value: "weekly", label: t4("tasks.weekly") },
+    { value: "interval", label: t4("tasks.customInterval") }
+  ]} />
               ${draft.type === "daily" || draft.type === "weekly" ? html4`
                 ${draft.type === "weekly" ? html4`
                   <span style="color:var(--fg-3);font-size:12px">${t4("tasks.dayOfWeek")}</span>
-                  <select class="input mono" value=${String(draft.dayOfWeek)} onChange=${(e3) => setDraft({ ...draft, dayOfWeek: Number(e3.target.value) })}>
-                    ${weekdayLabels.map((label, idx) => html4`<option value=${String(idx)}>${label}</option>`)}
-                  </select>
+                  <${Select} value=${String(draft.dayOfWeek)} ariaLabel=${t4("tasks.ariaWeekday")} onChange=${(v3) => setDraft({ ...draft, dayOfWeek: Number(v3) })} options=${weekdayLabels.map((label, idx) => ({ value: String(idx), label }))} />
                 ` : null}
                 <span style="color:var(--fg-3);font-size:12px">${t4("tasks.at")}</span>
                 <input class="input mono" type="time" value=${draft.timeOfDay} onInput=${(e3) => setDraft({ ...draft, timeOfDay: e3.target.value })} />
@@ -30904,19 +33155,19 @@ function formatVHomeCountdown(totalSeconds) {
 function vhomeLoginFailureMessage(login) {
   if (login?.message) return login.message;
   const messages = {
-    "dws-not-found": "未找到 V来家登录组件，请重新安装或修复 Visionox-Whale。",
-    "login-start-failed": "无法启动 V来家登录组件，请重启软件后再试。",
-    "login-network-failed": "无法连接 V来家授权服务，请检查网络、代理或防火墙后重试。",
-    "login-tls-failed": "V来家授权服务的安全连接失败，请检查系统时间、证书或网络代理。",
-    "login-permission-denied": "V来家授权服务拒绝了当前请求，请确认账号权限或联系管理员。",
-    "login-command-unsupported": "当前 DWS 登录命令不受支持，请更新或重新安装 Visionox-Whale。",
-    "login-timeout": "登录等待已超时，请确认网络正常后重新获取授权链接。",
-    "login-link-unavailable": "DWS 已启动，但没有返回授权链接。请检查网络或代理后重试。",
-    "authentication-required": "尚未检测到授权完成，请确认浏览器中的授权已成功后重试。",
-    "identity-unavailable": "授权可能已完成，但暂时无法获取当前用户信息，请稍后刷新。",
-    "communication-failed": "授权进程已结束，但无法确认 V来家连接状态，请检查网络后重试。"
+    "dws-not-found": t4("appPanel.loginDwsNotFound"),
+    "login-start-failed": t4("appPanel.loginStartFailed"),
+    "login-network-failed": t4("appPanel.loginNetworkFailed"),
+    "login-tls-failed": t4("appPanel.loginTlsFailed"),
+    "login-permission-denied": t4("appPanel.loginPermissionDenied"),
+    "login-command-unsupported": t4("appPanel.loginCommandUnsupported"),
+    "login-timeout": t4("appPanel.loginTimeout"),
+    "login-link-unavailable": t4("appPanel.loginLinkUnavailable"),
+    "authentication-required": t4("appPanel.loginAuthRequired"),
+    "identity-unavailable": t4("appPanel.loginIdentityUnavailable"),
+    "communication-failed": t4("appPanel.loginCommunicationFailed")
   };
-  return messages[login?.reason] ?? "V来家登录未完成，请根据诊断信息重试。";
+  return messages[login?.reason] ?? t4("appPanel.loginIncomplete");
 }
 function App() {
   useLang();
@@ -31009,8 +33260,8 @@ function App() {
   const vhomeAuthorizationReady = Boolean(vhomeLoginUrl || vhomeStatus?.login?.userCode);
   const vhomeLoginPreparing = vhomeLoginState === "starting" && !vhomeAuthorizationReady;
   const sidebarIdentity = vhomeConnected ? vhomeStatus.userName : "127.0.0.1";
-  const sidebarIdentityTitle = vhomeConnected ? `${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}` : "127.0.0.1 · 本地服务";
-  const vhomeControlText = vhomeConnected ? "V来家已连接" : vhomeLoginPreparing ? "正在获取授权链接" : vhomeLoginActive ? "等待 V来家授权" : "登录 V来家";
+  const sidebarIdentityTitle = vhomeConnected ? `${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}` : t4("appPanel.localIdentity");
+  const vhomeControlText = vhomeConnected ? t4("appPanel.vhomeConnected") : vhomeLoginPreparing ? t4("appPanel.vhomePreparing") : vhomeLoginActive ? t4("appPanel.vhomeWaiting") : t4("appPanel.vhomeLogin");
   const vhomeLoginExpiresAt = vhomeStatus?.login?.expiresAt ?? null;
   const vhomeLoginExpired = vhomeRemainingSeconds === 0;
   y2(() => {
@@ -31051,7 +33302,7 @@ function App() {
       setVhomeMenuOpen(true);
       finishVHomeLogin(nextStatus);
     } catch (error) {
-      setVhomeError(error.message || "登录启动失败");
+      setVhomeError(error.message || t4("appPanel.errLoginStart"));
     } finally {
       setVhomeBusy(false);
     }
@@ -31067,7 +33318,7 @@ function App() {
       replaceVHomeStatus(nextStatus);
       setVhomeMenuOpen(true);
     } catch (error) {
-      setVhomeError(error.message || "重新生成授权链接失败");
+      setVhomeError(error.message || t4("appPanel.errRegenLink"));
     } finally {
       setVhomeBusy(false);
     }
@@ -31080,13 +33331,13 @@ function App() {
       replaceVHomeStatus(nextStatus);
       setVhomeMenuOpen(false);
     } catch (error) {
-      setVhomeError(error.message || "取消登录失败");
+      setVhomeError(error.message || t4("appPanel.errCancelLogin"));
     } finally {
       setVhomeBusy(false);
     }
   }, [replaceVHomeStatus]);
   const logoutVHome = q2(async () => {
-    if (!window.confirm("确认退出当前 V来家组织？退出后不会影响 AI、文件、索引和其他本地功能。")) return;
+    if (!window.confirm(t4("appPanel.logoutConfirm"))) return;
     setVhomeBusy(true);
     setVhomeError(null);
     try {
@@ -31095,7 +33346,7 @@ function App() {
       setVhomeMenuOpen(false);
     } catch (error) {
       await refreshVHome();
-      setVhomeError(error.message || "退出登录失败");
+      setVhomeError(error.message || t4("appPanel.errLogout"));
     } finally {
       setVhomeBusy(false);
     }
@@ -31107,7 +33358,7 @@ function App() {
       const nextStatus = await api("/vhome/refresh", { method: "POST", body: {} });
       finishVHomeLogin(replaceVHomeStatus(nextStatus));
     } catch (error) {
-      setVhomeError(error.message || "刷新状态失败");
+      setVhomeError(error.message || t4("appPanel.errRefresh"));
     } finally {
       setVhomeBusy(false);
     }
@@ -31118,7 +33369,7 @@ function App() {
     try {
       await api("/open-url", { method: "POST", body: { url: vhomeLoginUrl, browser } });
     } catch (error) {
-      setVhomeError(browser === "edge" ? "无法使用 Microsoft Edge 打开，请复制授权链接。" : "默认浏览器未能打开，请复制授权链接或尝试 Microsoft Edge。");
+      setVhomeError(browser === "edge" ? t4("appPanel.errEdgeFailed") : t4("appPanel.errBrowserFailed"));
     } finally {
       if (browser === "default") setVhomeOpenFallback(true);
     }
@@ -31126,10 +33377,10 @@ function App() {
   const copyVHomeValue = q2(async (value, label) => {
     try {
       await writeClipboardText(value);
-      setVhomeCopyStatus(`${label}已复制`);
+      setVhomeCopyStatus(`${label}${t4("appPanel.copiedSuffix")}`);
       setTimeout(() => setVhomeCopyStatus(null), 2e3);
     } catch (error) {
-      setVhomeError(error.message || `${label}复制失败`);
+      setVhomeError(error.message || `${label}${t4("appPanel.copyFailedSuffix")}`);
     }
   }, []);
   const toggleVHomeControl = q2(() => {
@@ -31174,8 +33425,74 @@ function App() {
     return () => appBus.removeEventListener("navigate-tab", onNav);
   }, []);
   const pickTab = q2((id) => setActiveId(id), []);
+  const THEMES = [
+    ["indigo-night", t4("appPanel.themeIndigoNight")],
+    ["light", t4("appPanel.themeLight")],
+    ["dark", t4("appPanel.themeDark")],
+    ["warm-sand", t4("appPanel.themeWarmSand")],
+    ["cool-ash", t4("appPanel.themeCoolAsh")],
+    ["soft-sage", t4("appPanel.themeSoftSage")],
+    ["espresso", t4("appPanel.themeEspresso")],
+    ["midnight-ink", t4("appPanel.themeMidnightInk")],
+    ["deep-charcoal", t4("appPanel.themeDeepCharcoal")]
+  ];
   const openMarkdown = q2(() => {
     openMarkdownDocumentByPicker();
+  }, []);
+  const applyTheme = q2((v3) => {
+    document.documentElement.setAttribute("data-theme", v3);
+    try {
+      localStorage.setItem("visionox-theme", v3);
+    } catch {
+    }
+    try {
+      document.cookie = "visionox-theme=" + encodeURIComponent(v3) + ";path=/;max-age=31536000";
+    } catch {
+    }
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: "vis_theme_changed", theme: v3 }, "*");
+      }
+    } catch {
+    }
+  }, []);
+  const [cmdOpen, setCmdOpen] = d2(false);
+  const currentTheme = typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") || "light";
+  const cmdItems = [
+    ...TAB_SECTIONS.flatMap((section) => section.tabs.map((tab) => ({
+      id: `tab:${tab.id}`,
+      name: tab.name,
+      desc: section.label,
+      glyph: tab.glyph,
+      section: t4("appPanel.cmdSectionNav"),
+      run: () => pickTab(tab.id)
+    }))),
+    ...THEMES.map(([value, label]) => ({
+      id: `theme:${value}`,
+      name: `${t4("appPanel.cmdThemePrefix")}${label}`,
+      desc: value === currentTheme ? t4("appPanel.cmdThemeCurrent") : null,
+      glyph: "◐",
+      section: t4("appPanel.cmdSectionAction"),
+      run: () => applyTheme(value)
+    })),
+    {
+      id: "action:open-md",
+      name: t4("appPanel.openMd"),
+      desc: t4("appPanel.openMdDesc"),
+      glyph: "MD",
+      section: t4("appPanel.cmdSectionAction"),
+      run: openMarkdown
+    }
+  ];
+  y2(() => {
+    const onKey = (e3) => {
+      if ((e3.metaKey || e3.ctrlKey) && (e3.key === "k" || e3.key === "K")) {
+        e3.preventDefault();
+        setCmdOpen((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, []);
   return html7`
     <div class=${`app ${sidebarCollapsed ? "collapsed" : ""}`}>
@@ -31223,37 +33540,14 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => {
-    const v3 = e3.target.value;
-    document.documentElement.setAttribute("data-theme", v3);
-    try {
-      localStorage.setItem("visionox-theme", v3);
-    } catch {
-    }
-    ;
-    try {
-      document.cookie = "visionox-theme=" + encodeURIComponent(v3) + ";path=/;max-age=31536000";
-    } catch {
-    }
-    ;
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: "vis_theme_changed", theme: v3 }, "*");
-      }
-    } catch {
-    }
-    ;
-  }} value=${typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") || "light"}>
-            <option value="indigo-night">靛夜</option>
-            <option value="light">\u6D45\u8272</option>
-            <option value="dark">\u6DF1\u8272</option>
-            <option value="warm-sand">\u6696\u6C99</option>
-            <option value="cool-ash">\u51B7\u7070</option>
-            <option value="soft-sage">\u67D4\u7EFF</option>
-            <option value="espresso">\u6D53\u7F29\u5496\u5561</option>
-            <option value="midnight-ink">\u5348\u591C\u58A8\u84DD</option>
-            <option value="deep-charcoal">\u6DF1\u70AD\u7070</option>
-          </select>
+          <${Select}
+            value=${currentTheme}
+            onChange=${(v3) => applyTheme(v3)}
+            ariaLabel=${t4("appPanel.themeAria")}
+            searchable
+            width="100%"
+            options=${THEMES.map(([value, label]) => ({ value, label }))}
+          />
         </div>
         <div class="vhome-control" ref=${vhomeControlRef}>
           <button type="button"
@@ -31268,39 +33562,39 @@ function App() {
             <span class="vhome-control-label">${vhomeControlText}</span>
           </button>
           ${vhomeMenuOpen ? html7`
-            <div id="vhome-connection-popover" class="vhome-popover" role="dialog" aria-label="V来家连接">
+            <div id="vhome-connection-popover" class="vhome-popover" role="dialog" aria-label=${t4("appPanel.vhomePopoverAria")}>
               <div class="vhome-popover-head">
-                <div class="vhome-popover-title">${vhomeConnected ? "V来家已连接" : "登录 V来家"}</div>
-                <button type="button" class="vhome-popover-close" onClick=${dismissVHomePopover} title="关闭" aria-label="关闭 V来家连接卡片">×</button>
+                <div class="vhome-popover-title">${vhomeConnected ? t4("appPanel.vhomeConnected") : t4("appPanel.vhomeLogin")}</div>
+                <button type="button" class="vhome-popover-close" onClick=${dismissVHomePopover} title=${t4("appPanel.closeTitle")} aria-label=${t4("appPanel.closeAria")}>×</button>
               </div>
               ${vhomeConnected ? html7`
                 <div class="vhome-popover-meta">${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}</div>
                 <div class="vhome-popover-actions vhome-popover-actions-connected">
-                  <button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>刷新状态</button>
-                  <button type="button" class="danger" disabled=${vhomeBusy} onClick=${logoutVHome}>退出当前组织</button>
+                  <button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>${t4("appPanel.refreshStatus")}</button>
+                  <button type="button" class="danger" disabled=${vhomeBusy} onClick=${logoutVHome}>${t4("appPanel.logoutOrg")}</button>
                 </div>
               ` : html7`
-                <div class="vhome-popover-meta">${vhomeLoginPreparing ? "正在获取授权链接，请稍候。此时可以继续使用 AI 和其他本地功能。" : vhomeLoginState === "completing" ? "正在确认授权结果，请稍候。" : vhomeLoginActive ? "授权等待期间可以继续使用 AI 和其他本地功能。" : vhomeLoginFailure ?? "使用浏览器和 V来家完成一次授权。"}</div>
+                <div class="vhome-popover-meta">${vhomeLoginPreparing ? t4("appPanel.metaPreparing") : vhomeLoginState === "completing" ? t4("appPanel.metaCompleting") : vhomeLoginActive ? t4("appPanel.metaActive") : vhomeLoginFailure ?? t4("appPanel.metaDefault")}</div>
                 ${vhomeStatus?.login?.userCode ? html7`
-                  <div class="vhome-code-row"><span>授权码</span><code>${vhomeStatus.login.userCode}</code><button type="button" onClick=${() => copyVHomeValue(vhomeStatus.login.userCode, "授权码")}>复制</button></div>
+                  <div class="vhome-code-row"><span>${t4("appPanel.authCode")}</span><code>${vhomeStatus.login.userCode}</code><button type="button" onClick=${() => copyVHomeValue(vhomeStatus.login.userCode, t4("appPanel.authCode"))}>${t4("appPanel.copyBtn")}</button></div>
                 ` : null}
                 ${vhomeLoginUrl ? html7`
                   <div class="vhome-login-link" title=${vhomeLoginUrl}>
                     <span>login.dingtalk.com</span>
-                    <button type="button" onClick=${() => copyVHomeValue(vhomeLoginUrl, "授权链接")}>复制链接</button>
+                    <button type="button" onClick=${() => copyVHomeValue(vhomeLoginUrl, t4("appPanel.authLink"))}>${t4("appPanel.copyLink")}</button>
                   </div>
                   <div class=${`vhome-popover-meta ${vhomeLoginExpired ? "vhome-popover-error" : ""}`}>
-                    ${vhomeLoginExpired ? "授权链接已过期，请重新生成。" : vhomeRemainingSeconds === null ? "浏览器未打开？复制链接到任意可用浏览器。" : `剩余 ${formatVHomeCountdown(vhomeRemainingSeconds)} · 浏览器未打开可复制链接。`}
+                    ${vhomeLoginExpired ? t4("appPanel.linkExpired") : vhomeRemainingSeconds === null ? t4("appPanel.browserNotOpen") : t4("appPanel.linkRemaining", { time: formatVHomeCountdown(vhomeRemainingSeconds) })}
                   </div>
                 ` : null}
                 ${vhomeCopyStatus ? html7`<div class="vhome-copy-status" role="status">${vhomeCopyStatus}</div>` : null}
-                ${vhomeLoginDetail ? html7`<div class="vhome-popover-error" role="alert">DWS 诊断：${vhomeLoginDetail}</div>` : null}
+                ${vhomeLoginDetail ? html7`<div class="vhome-popover-error" role="alert">${t4("appPanel.dwsDiag")}${vhomeLoginDetail}</div>` : null}
                 <div class="vhome-popover-actions">
-                  ${vhomeLoginUrl && !vhomeLoginExpired ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("default")}>打开浏览器</button>` : null}
-                  ${vhomeLoginUrl && vhomeOpenFallback && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("edge")}>使用 Edge 打开</button>` : null}
-                  ${vhomeAuthorizationReady && vhomeLoginActive && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>我已完成授权</button>` : null}
-                  ${vhomeLoginExpired || vhomeLoginState === "failed" ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${restartVHomeLogin}>重新生成链接</button>` : null}
-                  ${vhomeLoginActive ? html7`<button type="button" disabled=${vhomeBusy} onClick=${cancelVHomeLogin}>取消</button>` : vhomeLoginState === "failed" ? null : html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${startVHomeLogin}>${vhomeBusy ? "正在启动..." : "重新登录"}</button>`}
+                  ${vhomeLoginUrl && !vhomeLoginExpired ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("default")}>${t4("appPanel.openBrowser")}</button>` : null}
+                  ${vhomeLoginUrl && vhomeOpenFallback && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("edge")}>${t4("appPanel.openWithEdge")}</button>` : null}
+                  ${vhomeAuthorizationReady && vhomeLoginActive && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>${t4("appPanel.authDone")}</button>` : null}
+                  ${vhomeLoginExpired || vhomeLoginState === "failed" ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${restartVHomeLogin}>${t4("appPanel.regenLink")}</button>` : null}
+                  ${vhomeLoginActive ? html7`<button type="button" disabled=${vhomeBusy} onClick=${cancelVHomeLogin}>${t4("appPanel.cancelBtn")}</button>` : vhomeLoginState === "failed" ? null : html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${startVHomeLogin}>${vhomeBusy ? t4("appPanel.starting") : t4("appPanel.relogin")}</button>`}
                 </div>
               `}
               ${vhomeError ? html7`<div class="vhome-popover-error">${vhomeError}</div>` : null}
@@ -31321,12 +33615,12 @@ function App() {
         <span class="ws">
           <span class="path">Visionox-Whale</span>
           <span class="sep">·</span>
-          <span class="session">维信诺协同办公平台</span>
+          <span class="session">${t4("appPanel.oaPlatform")}</span>
         </span>
         <span class="grow"></span>
-        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title="用 Visionox-Whale 打开 Markdown 文档">
+        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title=${t4("appPanel.openMdDesc")}>
           <span class="top-action-g">MD</span>
-          <span class="top-action-label">打开 MD</span>
+          <span class="top-action-label">${t4("appPanel.openMd")}</span>
         </button>
         <span class="meter">
           ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
@@ -31345,6 +33639,7 @@ function App() {
         <span class="item">${t4("app.footer")}</span>
       </footer>
     </div>
+    <${CmdPalette} open=${cmdOpen} onClose=${() => setCmdOpen(false)} items=${cmdItems} />
     <${ToastStack} />
     <${ErrorOverlay} />
   `;

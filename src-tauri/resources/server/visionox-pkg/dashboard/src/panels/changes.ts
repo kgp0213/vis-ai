@@ -16,6 +16,7 @@ import { useReviewDiffs } from "../lib/review-diffs.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
 import { applyDashboardEvent as reduceDashboardEvent, createDashboardReducerState } from "../lib/event-reducer.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 
 var html6 = htm_module_default.bind(k);
 function escapeAttr(s3) {
@@ -278,15 +279,14 @@ function ChangesPanel() {
                 onClose=${closeFile}
               />
               <div class="review-controls" style=${{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", borderBottom: "1px solid var(--bd)", fontSize: "12px" }}>
-                <select value=${diffSource} onChange=${(e3) => {
-    const v3 = e3.target.value;
+                <${Select} value=${diffSource} width="150px" ariaLabel=${t4("changes.diffSource")} onChange=${(v3) => {
     setDiffSource(v3);
     if (v3 !== "checkpoint") setSelectedCheckpointId(null);
-  }} style=${{ fontSize: "12px", fontWeight: 500, padding: "1px 4px", borderRadius: "3px", background: "var(--bg-elev)", color: "var(--fg-0)", border: "1px solid var(--bd)", cursor: "pointer", outline: "none" }}>
-                  <option value="git">${t4("changes.diffSourceGit")}</option>
-                  <option value="session">${t4("changes.diffSourceSession")}</option>
-                  <option value="checkpoint">${t4("changes.diffSourceCheckpoint")}</option>
-                </select>
+  }} options=${[
+                  { value: "git", label: t4("changes.diffSourceGit") },
+                  { value: "session", label: t4("changes.diffSourceSession") },
+                  { value: "checkpoint", label: t4("changes.diffSourceCheckpoint") }
+                ]} />
                 ${diffSource !== "checkpoint" || selectedCheckpointId ? html6`
                 <span style=${{ color: "var(--fg-3)" }}>${modifiedCount()}</span>
                 <div style=${{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "4px" }}>
@@ -463,9 +463,9 @@ function ChatStatusBar3({ stats, model }) {
   const currentContextTokens = stats.estimatedContextTokens ?? stats.lastPromptTokens;
   const ctxPct = stats.contextCapTokens > 0 ? currentContextTokens / stats.contextCapTokens * 100 : 0;
   const contextMarks = [
-    { tokens: stats.contextFoldTokens, label: "普通压缩" },
-    { tokens: stats.contextAggressiveTokens, label: "激进压缩" },
-    { tokens: stats.contextForceSummaryTokens, label: "强制总结" },
+    { tokens: stats.contextFoldTokens, label: t4("chat.foldNormal") },
+    { tokens: stats.contextAggressiveTokens, label: t4("chat.foldAggressive") },
+    { tokens: stats.contextForceSummaryTokens, label: t4("chat.foldForceSummary") },
   ].filter((mark) => Number.isFinite(mark.tokens) && mark.tokens > 0 && stats.contextCapTokens > 0)
     .map((mark) => ({ ...mark, pct: Math.min(100, mark.tokens / stats.contextCapTokens * 100) }));
   const balance = primaryBalance(stats);

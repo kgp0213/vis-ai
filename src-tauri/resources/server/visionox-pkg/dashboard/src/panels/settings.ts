@@ -13,6 +13,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { getLang, setLang, t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 import { providerDisplayGroups } from "./chat.js";
 const N2: any = preactMemo;
 
@@ -43,17 +44,17 @@ function ModelRow({
   const price = catalog?.pricing[current];
   return html4`
     <span style="display:inline-flex;flex-direction:column;gap:4px">
-      <select
+      <${Select}
         value=${current}
-        onChange=${(e3) => {
-    const next = e3.target.value;
+        onChange=${(next) => {
     if (next && next !== current) onPick(next);
   }}
         disabled=${saving || locked}
-        style="font-family:var(--font-mono);min-width:200px"
-      >
-        ${options2.map((m3) => html4`<option key=${m3} value=${m3}>${m3}</option>`)}
-      </select>
+        searchable
+        width="220px"
+        ariaLabel=${t4("setPanel.ariaModel")}
+        options=${options2.map((m3) => ({ value: m3, label: m3 }))}
+      />
       ${price ? html4`<span style="color:var(--fg-3);font-size:11px;font-family:var(--font-mono)">${formatPricing(price)}</span>` : null}
     </span>
   `;
@@ -250,10 +251,9 @@ function LoopSection({
               style="width:64px;font-family:var(--font-mono)"
               disabled=${busy}
             />
-            <select
+            <${Select}
               value=${customUnit}
-              onChange=${(e3) => {
-    const next = e3.target.value;
+              onChange=${(next) => {
     setCustomUnit(next);
     if (customValue) {
       const ms = parseCustomInterval(customValue, next);
@@ -261,11 +261,10 @@ function LoopSection({
     }
   }}
               disabled=${busy}
-            >
-              <option value="s">s</option>
-              <option value="m">m</option>
-              <option value="h">h</option>
-            </select>
+              width="70px"
+              ariaLabel=${t4("setPanel.ariaTimeUnit")}
+              options=${[{ value: "s", label: "s" }, { value: "m", label: "m" }, { value: "h", label: "h" }]}
+            />
           </span>
         </div>
         ${customValue && customMs === null ? html4`<span style="color:var(--c-err);font-size:11px">${t4("settings.loopRangeError")}</span>` : null}
@@ -497,7 +496,7 @@ function SettingsPanel() {
       const result = await api("/providers/credentials/test", { method: "POST", body: payload });
       setCredentialVerification({ ...result, apiKey: payload.apiKey, baseUrl: payload.baseUrl });
     } catch (err) {
-      setError(`API 检测失败：${err.message}`);
+      setError(t4("setPanel.apiTestFailed", { msg: err.message }));
     } finally {
       setCredentialTesting(false);
     }
@@ -532,9 +531,9 @@ function SettingsPanel() {
     try {
       const result = await api("/providers/test", { method: "POST", body: {} });
       await load();
-      setSaved(`模型检测完成：${result.passed}/${result.total} 可用`);
+      setSaved(t4("setPanel.modelTestDone", { passed: result.passed, total: result.total }));
     } catch (err) {
-      setError(`模型检测失败：${err.message}`);
+      setError(t4("setPanel.modelTestFailed", { msg: err.message }));
     } finally {
       setProviderTesting(false);
     }
@@ -549,18 +548,18 @@ function SettingsPanel() {
   const credentialChanged = Boolean((draft.apiKey ?? "").trim()) || credentialBaseUrl !== (credentialProvider?.baseUrl ?? "");
   const activeProviderDiagnostic = providerDiagnostics?.providers?.find((diagnostic) => diagnostic.active) ?? null;
   const provenanceLabel = {
-    "builtin-default": "内置默认",
-    "json-import": "JSON 导入",
-    dashboard: "Dashboard 修改",
-    "legacy-migration": "旧配置迁移",
-    "config-migration": "配置迁移",
-    environment: "环境变量",
-    "manual-unknown": "外部或手工修改",
+    "builtin-default": t4("setPanel.provenanceBuiltin"),
+    "json-import": t4("setPanel.provenanceJsonImport"),
+    dashboard: t4("setPanel.provenanceDashboard"),
+    "legacy-migration": t4("setPanel.provenanceLegacy"),
+    "config-migration": t4("setPanel.provenanceMigration"),
+    environment: t4("setPanel.provenanceEnv"),
+    "manual-unknown": t4("setPanel.provenanceManual"),
   };
   const lockedPreset = ["flash", "pro"].includes(v3.preset ?? "");
   const modelControlValue = lockedPreset ? v3.effectiveModel ?? v3.displayModel ?? v3.model ?? "\u2014" : v3.configuredModel ?? v3.effectiveModel ?? v3.model ?? "\u2014";
   const runtimeModel = v3.runtimeModel ?? v3.displayModel ?? v3.model ?? "\u2014";
-  const modelNote = v3.modelDrift ? `运行模型 ${runtimeModel} 与预设期望 ${v3.effectiveModel ?? "\u2014"} 不一致，请新建对话或重启应用。` : lockedPreset ? `实际模型由 ${v3.preset} 预设锁定为 ${v3.effectiveModel ?? v3.model ?? "\u2014"}；基础配置 ${v3.configuredModel ?? "\u2014"} 仅在 auto 下使用。` : runtimeModel !== modelControlValue ? `当前运行 ${runtimeModel}；基础模型 ${modelControlValue} 将用于后续新对话。` : t4("settings.appliesNextTurn");
+  const modelNote = v3.modelDrift ? t4("setPanel.noteDrift", { runtime: runtimeModel, expected: v3.effectiveModel ?? "\u2014" }) : lockedPreset ? t4("setPanel.noteLocked", { preset: v3.preset, effective: v3.effectiveModel ?? v3.model ?? "\u2014", configured: v3.configuredModel ?? "\u2014" }) : runtimeModel !== modelControlValue ? t4("setPanel.notePending", { runtime: runtimeModel, base: modelControlValue }) : t4("settings.appliesNextTurn");
   const availableEccRules = (v3.eccRules?.available ?? []).filter((name) => name !== "custom");
   const enabledEccRules = new Set(v3.eccRules?.enabled ?? []);
   const toggleEccRule = (name) => {
@@ -590,16 +589,17 @@ function SettingsPanel() {
         ${fieldRow(
     t4("settings.language"),
     html4`
-            <select
+            <${Select}
               value=${currentLang2}
-              onChange=${(e3) => {
-      const lang = e3.target.value;
+              onChange=${(lang) => {
       setLang(lang);
     }}
-            >
-              <option value="en">${t4("settings.langEn")}</option>
-              <option value="zh-CN">${t4("settings.langZhCn")}</option>
-            </select>
+              ariaLabel=${t4("settings.language")}
+              options=${[
+                { value: "en", label: t4("settings.langEn") },
+                { value: "zh-CN", label: t4("settings.langZhCn") }
+              ]}
+            />
           `
   )}
       </div>
@@ -608,22 +608,21 @@ function SettingsPanel() {
       <div class="card">
         <div style="padding:2px 0 8px;border-bottom:1px solid var(--bd);margin-bottom:4px">
           <div style="font-size:12px;color:var(--fg-1);font-weight:600">${t4("settings.credentialCurrent", { name: credentialProvider?.name ?? "Legacy" })}</div>
-          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">修改内容不会立即生效；API 检测通过后才能保存。</div>
+          <div style="font-size:11px;color:var(--fg-3);margin-top:3px;line-height:1.45">${t4("setPanel.credSaveHint")}</div>
         </div>
         ${fieldRow(
     t4("settings.credentialProvider"),
-    html4`<select value=${credentialProvider?.id ?? ""} disabled=${saving || credentialTesting} onChange=${(e3) => {
-      const nextId = e3.target.value;
+    html4`<${Select} value=${credentialProvider?.id ?? ""} disabled=${saving || credentialTesting} ariaLabel=${t4("setPanel.ariaCredentialProvider")} onChange=${(nextId) => {
       const next = v3.credentialProviders?.find((provider) => provider.id === nextId);
       setCredentialProviderId(nextId);
       setDraft({ ...draft, apiKey: "", baseUrl: next?.baseUrl ?? "" });
       setCredentialVerification(null);
-    }}>${(v3.credentialProviders ?? []).map((provider) => html4`<option value=${provider.id}>${provider.name}</option>`)}</select>`
+    }} options=${(v3.credentialProviders ?? []).map((provider) => ({ value: provider.id, label: provider.name }))} />`
   )}
         ${fieldRow(
     t4("settings.apiKey"),
     html4`<code class="mono" style="color:var(--fg-2);font-size:11.5px">${credentialProvider?.apiKey ?? t4("settings.notSet")}</code>`,
-    credentialProvider?.credentialTest?.checkedAt ? `上次凭据检测：${fmtRelativeTime(credentialProvider.credentialTest.checkedAt)}` : "尚无已保存的检测记录"
+    credentialProvider?.credentialTest?.checkedAt ? t4("setPanel.credLastTest", { time: fmtRelativeTime(credentialProvider.credentialTest.checkedAt) }) : t4("setPanel.credNoTest")
   )}
         ${fieldRow(
     t4("settings.replace"),
@@ -656,32 +655,32 @@ function SettingsPanel() {
         </div>
       </div>
 
-      ${sectionH3("模型管理")}
+      ${sectionH3(t4("setPanel.sectionModelMgmt"))}
       <div class="card model-management-card">
         <div class="model-management-head">
           <div>
-            <strong>模型配置与检测</strong>
-            <div class="meta">共 ${managedProviders.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型${modelVerification?.dirty ? " · 配置已更新，等待重新检测" : ""}</div>
+            <strong>${t4("setPanel.modelMgmtTitle")}</strong>
+            <div class="meta">${t4("setPanel.modelCount", { count: managedProviders.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0) })}${modelVerification?.dirty ? t4("setPanel.configDirty") : ""}</div>
           </div>
-          <button class="btn" disabled=${providerTesting || saving || managedProviders.length === 0} onClick=${testManagedProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
+          <button class="btn" disabled=${providerTesting || saving || managedProviders.length === 0} onClick=${testManagedProviders}>${providerTesting ? t4("setPanel.testing") : t4("setPanel.testAllModels")}</button>
         </div>
         <div class="model-management-groups">
           ${providerDisplayGroups(managedProviders).map((group) => html4`
-            <div class="model-management-group"><strong>${group.label}</strong><span>${group.providers.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0)} 个模型</span></div>
+            <div class="model-management-group"><strong>${group.label}</strong><span>${t4("setPanel.modelCount", { count: group.providers.reduce((count, provider) => count + (provider.models ?? []).filter((model) => model.disabled !== true).length, 0) })}</span></div>
           `)}
         </div>
         ${activeProviderDiagnostic ? html4`
           <div class="provider-diagnostics">
             <div class="provider-diagnostics-head">
-              <strong>当前运行配置</strong>
-              <span class=${activeProviderDiagnostic.issues?.length ? "pill warn" : "pill ok"}>${activeProviderDiagnostic.issues?.length ? `${activeProviderDiagnostic.issues.length} 项需处理` : "配置完整"}</span>
+              <strong>${t4("setPanel.activeConfig")}</strong>
+              <span class=${activeProviderDiagnostic.issues?.length ? "pill warn" : "pill ok"}>${activeProviderDiagnostic.issues?.length ? t4("setPanel.issuesNeedFix", { count: activeProviderDiagnostic.issues.length }) : t4("setPanel.configComplete")}</span>
             </div>
             <div class="provider-diagnostics-grid">
-              <span>适配器</span><code>${activeProviderDiagnostic.providerType}</code>
-              <span>模型 / 协议</span><code>${activeProviderDiagnostic.modelId ?? "未选择"} · ${activeProviderDiagnostic.protocol}</code>
-              <span>有效 URL</span><code>${activeProviderDiagnostic.effectiveBaseUrl ?? "未配置"}</code>
-              <span>API Key</span><code>${activeProviderDiagnostic.apiKeyPresent ? "已提供" : "未配置"}${activeProviderDiagnostic.configuredApiKeyPresent ? "（配置文件）" : activeProviderDiagnostic.overrides?.apiKey ? "（环境变量）" : ""}</code>
-              <span>配置来源</span><code>${provenanceLabel[activeProviderDiagnostic.source] ?? activeProviderDiagnostic.source}${activeProviderDiagnostic.changedOutsideManagedFlow ? " · 未经受管流程修改" : ""}</code>
+              <span>${t4("setPanel.labelAdapter")}</span><code>${activeProviderDiagnostic.providerType}</code>
+              <span>${t4("setPanel.labelModelProtocol")}</span><code>${activeProviderDiagnostic.modelId ?? t4("setPanel.notSelected")} · ${activeProviderDiagnostic.protocol}</code>
+              <span>${t4("setPanel.labelEffectiveUrl")}</span><code>${activeProviderDiagnostic.effectiveBaseUrl ?? t4("setPanel.notConfigured")}</code>
+              <span>${t4("setPanel.labelApiKey")}</span><code>${activeProviderDiagnostic.apiKeyPresent ? t4("setPanel.provided") : t4("setPanel.notConfigured")}${activeProviderDiagnostic.configuredApiKeyPresent ? t4("setPanel.fromConfigFile") : activeProviderDiagnostic.overrides?.apiKey ? t4("setPanel.fromEnv") : ""}</code>
+              <span>${t4("setPanel.labelSource")}</span><code>${provenanceLabel[activeProviderDiagnostic.source] ?? activeProviderDiagnostic.source}${activeProviderDiagnostic.changedOutsideManagedFlow ? t4("setPanel.outsideManaged") : ""}</code>
             </div>
             ${activeProviderDiagnostic.issues?.length ? html4`<div class="provider-diagnostics-issues">${activeProviderDiagnostic.issues.map((issue) => html4`<div>${issue.message}</div>`)}</div>` : null}
           </div>
@@ -691,44 +690,42 @@ function SettingsPanel() {
       ${sectionH3(t4("settings.sectionDefaults"))}
       <div class="card">
         ${v3.modes ? fieldRow(
-    "工作场景",
+    t4("setPanel.sectionWorkMode"),
     html4`
-            <select
+            <${Select}
               value=${v3.mode ?? "general"}
-              onChange=${(e3) => save({ mode: e3.target.value })}
+              onChange=${(mode) => save({ mode })}
               disabled=${saving}
-            >
-              ${v3.modes.map((m) => html4`<option value=${m.id}>${m.label} — ${m.description || (m.effectiveRules || m.rules || []).join("+")}</option>`)}
-            </select>
+              ariaLabel=${t4("setPanel.ariaWorkMode")}
+              options=${v3.modes.map((m) => ({ value: m.id, label: m.label, meta: m.description || (m.effectiveRules || m.rules || []).join("+") }))}
+            />
           `,
-    `${(v3.activeMode?.hint || "切换后下次新对话生效")} · ECC ${((v3.activeMode?.effectiveRules || v3.activeMode?.rules || [])).join("+") || "common"}`
+    `${(v3.activeMode?.hint || t4("setPanel.workModeHintDefault"))} · ECC ${((v3.activeMode?.effectiveRules || v3.activeMode?.rules || [])).join("+") || "common"}`
   ) : null}
         ${availableEccRules.length > 0 ? fieldRow(
-    "ECC 编码规范",
+    t4("setPanel.sectionEcc"),
     html4`<div class="ecc-rule-grid">
-      ${availableEccRules.map((name) => html4`<label class=${`ecc-rule-option ${enabledEccRules.has(name) ? "active" : ""}`} title=${`${name} 规则将注入当前工作场景的系统提示词`}>
+      ${availableEccRules.map((name) => html4`<label class=${`ecc-rule-option ${enabledEccRules.has(name) ? "active" : ""}`} title=${t4("setPanel.eccRuleTitle", { name })}>
         <input type="checkbox" checked=${enabledEccRules.has(name)} disabled=${saving} onChange=${() => toggleEccRule(name)} />
         <span>${name}</span>
       </label>`)}
     </div>`,
-    `当前场景已启用 ${enabledEccRules.size}/${availableEccRules.length}，修改后立即生效`
+    t4("setPanel.eccEnabledNote", { enabled: enabledEccRules.size, total: availableEccRules.length })
   ) : null}
         ${fieldRow(
     "\u4E0A\u4E0B\u6587\u957F\u5EA6",
     html4`
-            <select
-              value=${v3.contextCapTokens ?? "auto"}
-              onChange=${(e3) => save({ contextCapTokens: e3.target.value === "auto" ? null : parseInt(e3.target.value, 10) })}
+            <${Select}
+              value=${String(v3.contextCapTokens ?? "auto")}
+              onChange=${(val) => save({ contextCapTokens: val === "auto" ? null : parseInt(val, 10) })}
               disabled=${saving}
-            >
-              <option value="auto">${v3.providerContextCap ? `\u6A21\u578B\u9ED8\u8BA4 (${Math.round(v3.providerContextCap / 1024)}K)` : "\u6A21\u578B\u9ED8\u8BA4"}</option>
-              <option value="32768" disabled=${Boolean(v3.providerContextCap && 32768 > v3.providerContextCap)}>32K</option>
-              <option value="65536" disabled=${Boolean(v3.providerContextCap && 65536 > v3.providerContextCap)}>64K</option>
-              <option value="131072" disabled=${Boolean(v3.providerContextCap && 131072 > v3.providerContextCap)}>128K</option>
-              <option value="262144" disabled=${Boolean(v3.providerContextCap && 262144 > v3.providerContextCap)}>256K</option>
-              <option value="1048576" disabled=${Boolean(v3.providerContextCap && 1048576 > v3.providerContextCap)}>1M</option>
-              ${v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? html4`<option value="${v3.contextCapTokens}" disabled=${Boolean(v3.providerContextCap && v3.contextCapTokens > v3.providerContextCap)}>${Math.round(v3.contextCapTokens / 1024)}K</option>` : null}
-            </select>
+              ariaLabel=${t4("setPanel.ariaContextLength")}
+              options=${[
+                { value: "auto", label: v3.providerContextCap ? t4("setPanel.contextModelDefault", { cap: Math.round(v3.providerContextCap / 1024) }) : t4("setPanel.contextModelDefaultNoCap") },
+                ...[[32768, "32K"], [65536, "64K"], [131072, "128K"], [262144, "256K"], [1048576, "1M"]].map(([n, label]) => ({ value: String(n), label, disabled: Boolean(v3.providerContextCap && n > v3.providerContextCap) })),
+                ...(v3.contextCapTokens && ![32768, 65536, 131072, 262144, 1048576].includes(v3.contextCapTokens) ? [{ value: String(v3.contextCapTokens), label: `${Math.round(v3.contextCapTokens / 1024)}K`, disabled: Boolean(v3.providerContextCap && v3.contextCapTokens > v3.providerContextCap) }] : [])
+              ]}
+            />
           `,
     "\u5373\u65F6\u751F\u6548"
   )}
@@ -747,16 +744,18 @@ function SettingsPanel() {
           ${fieldRow(
             "\u641C\u7D22\u5F15\u64CE",
             html4`
-              <select
+              <${Select}
                 value=${v3.webSearchEngine ?? "bing-scrape"}
-                onChange=${(e3) => save({ webSearchEngine: e3.target.value })}
+                onChange=${(eng) => save({ webSearchEngine: eng })}
                 disabled=${saving}
-              >
-                <option value="mojeek">Mojeek (\u514D\u8D39)</option>
-                <option value="bing-scrape">Bing \u56FD\u5185\u7248 (\u514D\u8D39\uFF0C\u65E0\u9700API)</option>
-                <option value="searxng">SearXNG (\u81EA\u90E8\u7F72/\u516C\u5171\u5B9E\u4F8B)</option>
-                <option value="bing">Bing API (\u9700 API Key)</option>
-              </select>
+                ariaLabel=${t4("setPanel.ariaSearchEngine")}
+                options=${[
+                  { value: "mojeek", label: t4("setPanel.engineMojeek") },
+                  { value: "bing-scrape", label: t4("setPanel.engineBingScrape") },
+                  { value: "searxng", label: t4("setPanel.engineSearxng") },
+                  { value: "bing", label: t4("setPanel.engineBing") }
+                ]}
+              />
             `,
             "\u5207\u6362\u5F15\u64CE\u540E\u9700\u91CD\u542F\u5E94\u7528\u751F\u6548"
           )}
@@ -817,31 +816,31 @@ function SettingsPanel() {
       ${sectionH3(t4("settings.sectionRuntime"))}
       <div class="card">
         ${fieldRow(
-          "国内镜像优先",
+          t4("setPanel.mirrorPriority"),
           html4`<div style="display:flex;flex-direction:column;gap:8px;width:100%">
             <label style="display:flex;align-items:center;gap:8px;font-size:12px">
               <input type="checkbox" checked=${runtimeDraft.domesticOnly} onChange=${(e3) => setRuntimeDraft((current) => ({ ...current, domesticOnly: e3.target.checked, allowOfficialFallback: e3.target.checked ? false : current.allowOfficialFallback }))} disabled=${saving} />
-              仅允许国内镜像
+              ${t4("setPanel.mirrorOnly")}
             </label>
             <label style="display:flex;align-items:center;gap:8px;font-size:12px">
               <input type="checkbox" checked=${runtimeDraft.allowOfficialFallback} onChange=${(e3) => setRuntimeDraft((current) => ({ ...current, allowOfficialFallback: e3.target.checked }))} disabled=${saving || runtimeDraft.domesticOnly} />
-              国内镜像失败后回退官方源
+              ${t4("setPanel.mirrorFallback")}
             </label>
           </div>`,
-          "安装由宿主管理器执行，不会在任务目录创建 node_modules 或 .venv。"
+          t4("setPanel.mirrorNote")
         )}
         ${fieldRow(
-          "Python 包源顺序",
-          html4`<textarea rows="2" value=${runtimeDraft.python} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, python: e3.target.value }))} placeholder="每行一个 HTTPS 源" style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
-          "留空时使用清华、阿里镜像，必要时回退官方源。"
+          t4("setPanel.pythonSources"),
+          html4`<textarea rows="2" value=${runtimeDraft.python} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, python: e3.target.value }))} placeholder=${t4("setPanel.oneSourcePerLine")} style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
+          t4("setPanel.pythonSourcesHint")
         )}
         ${fieldRow(
-          "Node 包源顺序",
-          html4`<textarea rows="2" value=${runtimeDraft.node} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, node: e3.target.value }))} placeholder="每行一个 HTTPS 源" style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
-          "留空时优先使用 npmmirror。"
+          t4("setPanel.nodeSources"),
+          html4`<textarea rows="2" value=${runtimeDraft.node} onInput=${(e3) => setRuntimeDraft((current) => ({ ...current, node: e3.target.value }))} placeholder=${t4("setPanel.oneSourcePerLine")} style="width:100%;font-family:var(--font-mono);resize:vertical" disabled=${saving}></textarea>`,
+          t4("setPanel.nodeSourcesHint")
         )}
         <div style="display:flex;justify-content:flex-end;margin-top:8px">
-          <button class="btn primary" disabled=${saving} onClick=${() => save({ runtime: { packageSources: { python: runtimeDraft.python.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), node: runtimeDraft.node.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }, domesticOnly: runtimeDraft.domesticOnly, allowOfficialFallback: runtimeDraft.allowOfficialFallback } })}>保存运行时源</button>
+          <button class="btn primary" disabled=${saving} onClick=${() => save({ runtime: { packageSources: { python: runtimeDraft.python.split(/\r?\n/).map((item) => item.trim()).filter(Boolean), node: runtimeDraft.node.split(/\r?\n/).map((item) => item.trim()).filter(Boolean) }, domesticOnly: runtimeDraft.domesticOnly, allowOfficialFallback: runtimeDraft.allowOfficialFallback } })}>${t4("setPanel.saveRuntimeSources")}</button>
         </div>
         ${fieldRow(
     t4("settings.activeModel"),

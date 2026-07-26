@@ -25,6 +25,7 @@ import { ScheduledTasksPanel } from "./panels/tasks.js";
 import { ToolsPanel } from "./panels/tools.js";
 import { UsagePanel } from "./panels/usage.js";
 import { subscribeSse, usePoll } from "./lib/use-poll.js";
+import { CmdPalette, Select } from "./ui/index.js";
 
 var html7 = htm_module_default.bind(k);
 function tabSections(userAvatar = null) {
@@ -65,19 +66,19 @@ function formatVHomeCountdown(totalSeconds) {
 function vhomeLoginFailureMessage(login) {
   if (login?.message) return login.message;
   const messages = {
-    "dws-not-found": "未找到 V来家登录组件，请重新安装或修复 Visionox-Whale。",
-    "login-start-failed": "无法启动 V来家登录组件，请重启软件后再试。",
-    "login-network-failed": "无法连接 V来家授权服务，请检查网络、代理或防火墙后重试。",
-    "login-tls-failed": "V来家授权服务的安全连接失败，请检查系统时间、证书或网络代理。",
-    "login-permission-denied": "V来家授权服务拒绝了当前请求，请确认账号权限或联系管理员。",
-    "login-command-unsupported": "当前 DWS 登录命令不受支持，请更新或重新安装 Visionox-Whale。",
-    "login-timeout": "登录等待已超时，请确认网络正常后重新获取授权链接。",
-    "login-link-unavailable": "DWS 已启动，但没有返回授权链接。请检查网络或代理后重试。",
-    "authentication-required": "尚未检测到授权完成，请确认浏览器中的授权已成功后重试。",
-    "identity-unavailable": "授权可能已完成，但暂时无法获取当前用户信息，请稍后刷新。",
-    "communication-failed": "授权进程已结束，但无法确认 V来家连接状态，请检查网络后重试。"
+    "dws-not-found": t4("appPanel.loginDwsNotFound"),
+    "login-start-failed": t4("appPanel.loginStartFailed"),
+    "login-network-failed": t4("appPanel.loginNetworkFailed"),
+    "login-tls-failed": t4("appPanel.loginTlsFailed"),
+    "login-permission-denied": t4("appPanel.loginPermissionDenied"),
+    "login-command-unsupported": t4("appPanel.loginCommandUnsupported"),
+    "login-timeout": t4("appPanel.loginTimeout"),
+    "login-link-unavailable": t4("appPanel.loginLinkUnavailable"),
+    "authentication-required": t4("appPanel.loginAuthRequired"),
+    "identity-unavailable": t4("appPanel.loginIdentityUnavailable"),
+    "communication-failed": t4("appPanel.loginCommunicationFailed")
   };
-  return messages[login?.reason] ?? "V来家登录未完成，请根据诊断信息重试。";
+  return messages[login?.reason] ?? t4("appPanel.loginIncomplete");
 }
 function App() {
   useLang();
@@ -172,8 +173,8 @@ function App() {
   const vhomeAuthorizationReady = Boolean(vhomeLoginUrl || vhomeStatus?.login?.userCode);
   const vhomeLoginPreparing = vhomeLoginState === "starting" && !vhomeAuthorizationReady;
   const sidebarIdentity = vhomeConnected ? vhomeStatus.userName : "127.0.0.1";
-  const sidebarIdentityTitle = vhomeConnected ? `${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}` : "127.0.0.1 · 本地服务";
-  const vhomeControlText = vhomeConnected ? "V来家已连接" : vhomeLoginPreparing ? "正在获取授权链接" : vhomeLoginActive ? "等待 V来家授权" : "登录 V来家";
+  const sidebarIdentityTitle = vhomeConnected ? `${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}` : t4("appPanel.localIdentity");
+  const vhomeControlText = vhomeConnected ? t4("appPanel.vhomeConnected") : vhomeLoginPreparing ? t4("appPanel.vhomePreparing") : vhomeLoginActive ? t4("appPanel.vhomeWaiting") : t4("appPanel.vhomeLogin");
   const vhomeLoginExpiresAt = vhomeStatus?.login?.expiresAt ?? null;
   const vhomeLoginExpired = vhomeRemainingSeconds === 0;
   y2(() => {
@@ -214,7 +215,7 @@ function App() {
       setVhomeMenuOpen(true);
       finishVHomeLogin(nextStatus);
     } catch (error) {
-      setVhomeError(error.message || "登录启动失败");
+      setVhomeError(error.message || t4("appPanel.errLoginStart"));
     } finally {
       setVhomeBusy(false);
     }
@@ -230,7 +231,7 @@ function App() {
       replaceVHomeStatus(nextStatus);
       setVhomeMenuOpen(true);
     } catch (error) {
-      setVhomeError(error.message || "重新生成授权链接失败");
+      setVhomeError(error.message || t4("appPanel.errRegenLink"));
     } finally {
       setVhomeBusy(false);
     }
@@ -243,13 +244,13 @@ function App() {
       replaceVHomeStatus(nextStatus);
       setVhomeMenuOpen(false);
     } catch (error) {
-      setVhomeError(error.message || "取消登录失败");
+      setVhomeError(error.message || t4("appPanel.errCancelLogin"));
     } finally {
       setVhomeBusy(false);
     }
   }, [replaceVHomeStatus]);
   const logoutVHome = q2(async () => {
-    if (!window.confirm("确认退出当前 V来家组织？退出后不会影响 AI、文件、索引和其他本地功能。")) return;
+    if (!window.confirm(t4("appPanel.logoutConfirm"))) return;
     setVhomeBusy(true);
     setVhomeError(null);
     try {
@@ -258,7 +259,7 @@ function App() {
       setVhomeMenuOpen(false);
     } catch (error) {
       await refreshVHome();
-      setVhomeError(error.message || "退出登录失败");
+      setVhomeError(error.message || t4("appPanel.errLogout"));
     } finally {
       setVhomeBusy(false);
     }
@@ -270,7 +271,7 @@ function App() {
       const nextStatus = await api("/vhome/refresh", { method: "POST", body: {} });
       finishVHomeLogin(replaceVHomeStatus(nextStatus));
     } catch (error) {
-      setVhomeError(error.message || "刷新状态失败");
+      setVhomeError(error.message || t4("appPanel.errRefresh"));
     } finally {
       setVhomeBusy(false);
     }
@@ -281,7 +282,7 @@ function App() {
     try {
       await api("/open-url", { method: "POST", body: { url: vhomeLoginUrl, browser } });
     } catch (error) {
-      setVhomeError(browser === "edge" ? "无法使用 Microsoft Edge 打开，请复制授权链接。" : "默认浏览器未能打开，请复制授权链接或尝试 Microsoft Edge。");
+      setVhomeError(browser === "edge" ? t4("appPanel.errEdgeFailed") : t4("appPanel.errBrowserFailed"));
     } finally {
       if (browser === "default") setVhomeOpenFallback(true);
     }
@@ -289,10 +290,10 @@ function App() {
   const copyVHomeValue = q2(async (value, label) => {
     try {
       await writeClipboardText(value);
-      setVhomeCopyStatus(`${label}已复制`);
+      setVhomeCopyStatus(`${label}${t4("appPanel.copiedSuffix")}`);
       setTimeout(() => setVhomeCopyStatus(null), 2e3);
     } catch (error) {
-      setVhomeError(error.message || `${label}复制失败`);
+      setVhomeError(error.message || `${label}${t4("appPanel.copyFailedSuffix")}`);
     }
   }, []);
   const toggleVHomeControl = q2(() => {
@@ -337,8 +338,58 @@ function App() {
     return () => appBus.removeEventListener("navigate-tab", onNav);
   }, []);
   const pickTab = q2((id) => setActiveId(id), []);
+  const THEMES = [
+    ["indigo-night", t4("appPanel.themeIndigoNight")], ["light", t4("appPanel.themeLight")], ["dark", t4("appPanel.themeDark")],
+    ["warm-sand", t4("appPanel.themeWarmSand")], ["cool-ash", t4("appPanel.themeCoolAsh")], ["soft-sage", t4("appPanel.themeSoftSage")],
+    ["espresso", t4("appPanel.themeEspresso")], ["midnight-ink", t4("appPanel.themeMidnightInk")], ["deep-charcoal", t4("appPanel.themeDeepCharcoal")]
+  ];
   const openMarkdown = q2(() => {
     openMarkdownDocumentByPicker();
+  }, []);
+  const applyTheme = q2((v) => {
+    document.documentElement.setAttribute("data-theme", v);
+    try { localStorage.setItem("visionox-theme", v); } catch {}
+    try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}
+    try { if (window.parent && window.parent !== window) { window.parent.postMessage({ type: 'vis_theme_changed', theme: v }, '*'); } } catch {}
+  }, []);
+  const [cmdOpen, setCmdOpen] = d2(false);
+  const currentTheme = (typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "light";
+  const cmdItems = [
+    ...TAB_SECTIONS.flatMap((section) => section.tabs.map((tab) => ({
+      id: `tab:${tab.id}`,
+      name: tab.name,
+      desc: section.label,
+      glyph: tab.glyph,
+      section: t4("appPanel.cmdSectionNav"),
+      run: () => pickTab(tab.id)
+    }))),
+    ...THEMES.map(([value, label]) => ({
+      id: `theme:${value}`,
+      name: `${t4("appPanel.cmdThemePrefix")}${label}`,
+      desc: value === currentTheme ? t4("appPanel.cmdThemeCurrent") : null,
+      glyph: "◐",
+      section: t4("appPanel.cmdSectionAction"),
+      run: () => applyTheme(value)
+    })),
+    {
+      id: "action:open-md",
+      name: t4("appPanel.openMd"),
+      desc: t4("appPanel.openMdDesc"),
+      glyph: "MD",
+      section: t4("appPanel.cmdSectionAction"),
+      run: openMarkdown
+    }
+  ];
+  // 全局快捷键：Cmd/Ctrl+K 切换命令面板（输入框聚焦时也生效，与主流产品一致）。
+  y2(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setCmdOpen((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, []);
   return html7`
     <div class=${`app ${sidebarCollapsed ? "collapsed" : ""}`}>
@@ -384,17 +435,14 @@ function App() {
   )}
         </div>
         <div style="padding:6px 16px;display:flex;justify-content:flex-start">
-          <select class="theme-select" style="width:100%;font-size:11px;padding:2px 4px;background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border-default);border-radius:3px;cursor:pointer" onChange=${(e3) => { const v = e3.target.value; document.documentElement.setAttribute("data-theme", v); try { localStorage.setItem("visionox-theme", v); } catch {}; try { document.cookie = "visionox-theme=" + encodeURIComponent(v) + ";path=/;max-age=31536000"; } catch {}; try { if (window.parent && window.parent !== window) { window.parent.postMessage({ type: 'vis_theme_changed', theme: v }, '*'); } } catch {}; }} value=${(typeof document !== 'undefined' && document.documentElement.getAttribute("data-theme")) || "light"}>
-            <option value="indigo-night">靛夜</option>
-            <option value="light">\u6D45\u8272</option>
-            <option value="dark">\u6DF1\u8272</option>
-            <option value="warm-sand">\u6696\u6C99</option>
-            <option value="cool-ash">\u51B7\u7070</option>
-            <option value="soft-sage">\u67D4\u7EFF</option>
-            <option value="espresso">\u6D53\u7F29\u5496\u5561</option>
-            <option value="midnight-ink">\u5348\u591C\u58A8\u84DD</option>
-            <option value="deep-charcoal">\u6DF1\u70AD\u7070</option>
-          </select>
+          <${Select}
+            value=${currentTheme}
+            onChange=${(v) => applyTheme(v)}
+            ariaLabel=${t4("appPanel.themeAria")}
+            searchable
+            width="100%"
+            options=${THEMES.map(([value, label]) => ({ value, label }))}
+          />
         </div>
         <div class="vhome-control" ref=${vhomeControlRef}>
           <button type="button"
@@ -409,39 +457,39 @@ function App() {
             <span class="vhome-control-label">${vhomeControlText}</span>
           </button>
           ${vhomeMenuOpen ? html7`
-            <div id="vhome-connection-popover" class="vhome-popover" role="dialog" aria-label="V来家连接">
+            <div id="vhome-connection-popover" class="vhome-popover" role="dialog" aria-label=${t4("appPanel.vhomePopoverAria")}>
               <div class="vhome-popover-head">
-                <div class="vhome-popover-title">${vhomeConnected ? "V来家已连接" : "登录 V来家"}</div>
-                <button type="button" class="vhome-popover-close" onClick=${dismissVHomePopover} title="关闭" aria-label="关闭 V来家连接卡片">×</button>
+                <div class="vhome-popover-title">${vhomeConnected ? t4("appPanel.vhomeConnected") : t4("appPanel.vhomeLogin")}</div>
+                <button type="button" class="vhome-popover-close" onClick=${dismissVHomePopover} title=${t4("appPanel.closeTitle")} aria-label=${t4("appPanel.closeAria")}>×</button>
               </div>
               ${vhomeConnected ? html7`
                 <div class="vhome-popover-meta">${vhomeStatus.userName}${vhomeStatus.corpName ? ` · ${vhomeStatus.corpName}` : ""}</div>
                 <div class="vhome-popover-actions vhome-popover-actions-connected">
-                  <button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>刷新状态</button>
-                  <button type="button" class="danger" disabled=${vhomeBusy} onClick=${logoutVHome}>退出当前组织</button>
+                  <button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>${t4("appPanel.refreshStatus")}</button>
+                  <button type="button" class="danger" disabled=${vhomeBusy} onClick=${logoutVHome}>${t4("appPanel.logoutOrg")}</button>
                 </div>
               ` : html7`
-                <div class="vhome-popover-meta">${vhomeLoginPreparing ? "正在获取授权链接，请稍候。此时可以继续使用 AI 和其他本地功能。" : vhomeLoginState === "completing" ? "正在确认授权结果，请稍候。" : vhomeLoginActive ? "授权等待期间可以继续使用 AI 和其他本地功能。" : vhomeLoginFailure ?? "使用浏览器和 V来家完成一次授权。"}</div>
+                <div class="vhome-popover-meta">${vhomeLoginPreparing ? t4("appPanel.metaPreparing") : vhomeLoginState === "completing" ? t4("appPanel.metaCompleting") : vhomeLoginActive ? t4("appPanel.metaActive") : vhomeLoginFailure ?? t4("appPanel.metaDefault")}</div>
                 ${vhomeStatus?.login?.userCode ? html7`
-                  <div class="vhome-code-row"><span>授权码</span><code>${vhomeStatus.login.userCode}</code><button type="button" onClick=${() => copyVHomeValue(vhomeStatus.login.userCode, "授权码")}>复制</button></div>
+                  <div class="vhome-code-row"><span>${t4("appPanel.authCode")}</span><code>${vhomeStatus.login.userCode}</code><button type="button" onClick=${() => copyVHomeValue(vhomeStatus.login.userCode, t4("appPanel.authCode"))}>${t4("appPanel.copyBtn")}</button></div>
                 ` : null}
                 ${vhomeLoginUrl ? html7`
                   <div class="vhome-login-link" title=${vhomeLoginUrl}>
                     <span>login.dingtalk.com</span>
-                    <button type="button" onClick=${() => copyVHomeValue(vhomeLoginUrl, "授权链接")}>复制链接</button>
+                    <button type="button" onClick=${() => copyVHomeValue(vhomeLoginUrl, t4("appPanel.authLink"))}>${t4("appPanel.copyLink")}</button>
                   </div>
                   <div class=${`vhome-popover-meta ${vhomeLoginExpired ? "vhome-popover-error" : ""}`}>
-                    ${vhomeLoginExpired ? "授权链接已过期，请重新生成。" : vhomeRemainingSeconds === null ? "浏览器未打开？复制链接到任意可用浏览器。" : `剩余 ${formatVHomeCountdown(vhomeRemainingSeconds)} · 浏览器未打开可复制链接。`}
+                    ${vhomeLoginExpired ? t4("appPanel.linkExpired") : vhomeRemainingSeconds === null ? t4("appPanel.browserNotOpen") : t4("appPanel.linkRemaining", { time: formatVHomeCountdown(vhomeRemainingSeconds) })}
                   </div>
                 ` : null}
                 ${vhomeCopyStatus ? html7`<div class="vhome-copy-status" role="status">${vhomeCopyStatus}</div>` : null}
-                ${vhomeLoginDetail ? html7`<div class="vhome-popover-error" role="alert">DWS 诊断：${vhomeLoginDetail}</div>` : null}
+                ${vhomeLoginDetail ? html7`<div class="vhome-popover-error" role="alert">${t4("appPanel.dwsDiag")}${vhomeLoginDetail}</div>` : null}
                 <div class="vhome-popover-actions">
-                  ${vhomeLoginUrl && !vhomeLoginExpired ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("default")}>打开浏览器</button>` : null}
-                  ${vhomeLoginUrl && vhomeOpenFallback && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("edge")}>使用 Edge 打开</button>` : null}
-                  ${vhomeAuthorizationReady && vhomeLoginActive && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>我已完成授权</button>` : null}
-                  ${vhomeLoginExpired || vhomeLoginState === "failed" ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${restartVHomeLogin}>重新生成链接</button>` : null}
-                  ${vhomeLoginActive ? html7`<button type="button" disabled=${vhomeBusy} onClick=${cancelVHomeLogin}>取消</button>` : vhomeLoginState === "failed" ? null : html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${startVHomeLogin}>${vhomeBusy ? "正在启动..." : "重新登录"}</button>`}
+                  ${vhomeLoginUrl && !vhomeLoginExpired ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("default")}>${t4("appPanel.openBrowser")}</button>` : null}
+                  ${vhomeLoginUrl && vhomeOpenFallback && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${() => openVHomeAuthorization("edge")}>${t4("appPanel.openWithEdge")}</button>` : null}
+                  ${vhomeAuthorizationReady && vhomeLoginActive && !vhomeLoginExpired ? html7`<button type="button" disabled=${vhomeBusy} onClick=${refreshVHomeNow}>${t4("appPanel.authDone")}</button>` : null}
+                  ${vhomeLoginExpired || vhomeLoginState === "failed" ? html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${restartVHomeLogin}>${t4("appPanel.regenLink")}</button>` : null}
+                  ${vhomeLoginActive ? html7`<button type="button" disabled=${vhomeBusy} onClick=${cancelVHomeLogin}>${t4("appPanel.cancelBtn")}</button>` : vhomeLoginState === "failed" ? null : html7`<button type="button" class="primary" disabled=${vhomeBusy} onClick=${startVHomeLogin}>${vhomeBusy ? t4("appPanel.starting") : t4("appPanel.relogin")}</button>`}
                 </div>
               `}
               ${vhomeError ? html7`<div class="vhome-popover-error">${vhomeError}</div>` : null}
@@ -462,12 +510,12 @@ function App() {
         <span class="ws">
           <span class="path">Visionox-Whale</span>
           <span class="sep">·</span>
-          <span class="session">维信诺协同办公平台</span>
+          <span class="session">${t4("appPanel.oaPlatform")}</span>
         </span>
         <span class="grow"></span>
-        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title="用 Visionox-Whale 打开 Markdown 文档">
+        <button type="button" class="top-action top-action-md" onClick=${openMarkdown} title=${t4("appPanel.openMdDesc")}>
           <span class="top-action-g">MD</span>
-          <span class="top-action-label">打开 MD</span>
+          <span class="top-action-label">${t4("appPanel.openMd")}</span>
         </button>
         <span class="meter">
           ${wsRoot ? html7`<span class="v">${wsRoot}</span>` : null}
@@ -483,6 +531,7 @@ function App() {
         <span class="item">${t4("app.footer")}</span>
       </footer>
     </div>
+    <${CmdPalette} open=${cmdOpen} onClose=${() => setCmdOpen(false)} items=${cmdItems} />
     <${ToastStack} />
     <${ErrorOverlay} />
   `;

@@ -94,8 +94,11 @@ function ToolCard({ msg }) {
   const name = msg.toolName ?? "tool";
   const path = args?.path ?? args?.file_path ?? args?.filename;
   const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
-  const progressLabel = { queued: "排队中", running: "执行中", succeeded: "已完成", failed: "失败", cancelled: "已取消" }[progressStatus];
+  const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled") }[progressStatus];
   const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
+  const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage)
+    ? html4`<div class="tool-card-diagnostic"><strong>${t4("chat.toolFailedContinue")}</strong>${msg.code ? html4`<span>${msg.code}</span>` : null}${msg.recommendedAction ? html4`<span>${msg.recommendedAction}</span>` : null}${msg.diagnosticMessage ? html4`<span>${msg.diagnosticMessage}</span>` : null}</div>`
+    : null;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
     const diffHtml = renderSearchReplace(
       args.search,
@@ -110,6 +113,7 @@ function ToolCard({ msg }) {
           ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
+        ${diagnostic}
         <div dangerouslySetInnerHTML=${{ __html: diffHtml }}></div>
         ${msg.text ? html4`<div class="tool-card-result">${msg.text}</div>` : null}
       </div>
@@ -126,6 +130,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
+        ${diagnostic}
         ${renderCollapsibleToolOutput(args.content, "highlight", lang)}
         ${msg.text ? html4`<div class="tool-card-result">${msg.text}</div>` : null}
       </div>
@@ -142,6 +147,7 @@ function ToolCard({ msg }) {
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
           ${lang ? html4`<span class="pill">${lang}</span>` : null}
         </div>
+        ${diagnostic}
         ${renderCollapsibleToolOutput(msg.text ?? "", "highlight", lang)}
       </div>
     `;
@@ -155,6 +161,7 @@ function ToolCard({ msg }) {
           <span class="tool-card-name">${name === "run_background" ? "run_background" : "run_command"}</span>
           ${progressBadge}
         </div>
+        ${diagnostic}
         ${cmd ? html4`<pre class="tool-card-cmd"><span class="tool-card-prompt">$</span> <code>${cmd}</code></pre>` : null}
         ${msg.text ? renderCollapsibleToolOutput(msg.text) : null}
       </div>
@@ -169,6 +176,7 @@ function ToolCard({ msg }) {
           ${progressBadge}
           ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
         </div>
+        ${diagnostic}
         ${renderCollapsibleToolOutput(msg.text)}
       </div>
     `;
@@ -181,6 +189,7 @@ function ToolCard({ msg }) {
         ${progressBadge}
         ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
       </div>
+      ${diagnostic}
       ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
       ${renderCollapsibleToolOutput(msg.text)}
     </div>
@@ -232,8 +241,8 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null }) {
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
   const summaryLabel = taskActive
-    ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>正在使用工具 · 第 ${doneItems.length + (currentTool ? 1 : 0)} 步${currentBrief ? html4` · ${currentBrief.name}` : null}</span>`
-    : html4`使用了 ${items.length} 个工具${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${failedItems.length} 个失败</span>` : null}`;
+    ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}${currentBrief ? html4` · ${currentBrief.name}` : null}</span>`
+    : html4`${t4("chat.toolUsedCount", { count: items.length })}${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : null}`;
   return html4`
     <details class=${`tool-log ${taskActive ? "tool-log-running" : ""} ${!taskActive && failedItems.length > 0 ? "tool-log-has-failed" : ""}`} open=${hasHit || void 0}>
       <summary>${summaryLabel}</summary>
@@ -248,18 +257,29 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
   const artifactEvents = Array.isArray(receipt.artifactEvidence) ? receipt.artifactEvidence : [];
   const lastArtifact = artifactEvents.at(-1);
   const intervention = receipt.intervention || {};
+  const failures = Array.isArray(receipt.toolFailures) ? receipt.toolFailures : [];
+  const recoveries = Array.isArray(receipt.recoveries) ? receipt.recoveries : [];
   const state = taskState || completion.taskState || (completion.ok ? "completed" : "unknown");
-  const stateLabel = state === "completed" ? "已完成" : state === "needs_intervention" ? "需要干预" : state === "incomplete" ? "未完成" : state === "completed_with_warnings" ? "已完成但有提醒" : "结果待确认";
+  const artifactStatusLabel = {
+    verified: t4("chat.artifactVerified"),
+    present_unverified: t4("chat.artifactPresentUnverified"),
+    missing: t4("chat.artifactMissing"),
+    invalid: t4("chat.artifactInvalid"),
+    unknown: t4("chat.artifactUnknown"),
+  }[lastArtifact?.status] || t4("chat.artifactNone");
+  const stateLabel = state === "completed" ? t4("chat.stateCompleted") : state === "needs_intervention" ? t4("chat.stateNeedsIntervention") : state === "incomplete" ? t4("chat.stateIncomplete") : state === "completed_with_warnings" ? t4("chat.stateCompletedWarn") : t4("chat.statePendingConfirm");
   const stateClass = state === "completed" ? "ok" : state === "completed_with_warnings" ? "warn" : "err";
   return html4`
     <details class=${`execution-receipt execution-receipt-${stateClass}`}>
-      <summary><strong>执行回执</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
+      <summary><strong>${t4("chat.receiptTitle")}</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
       <div class="execution-receipt-grid">
-        <span>工具</span><span>${tools.results ?? 0} 次，成功 ${tools.successes ?? 0}，失败 ${tools.failures ?? 0}${tools.lastName ? ` · 最近 ${tools.lastName}` : ""}</span>
-        <span>产物</span><span>${artifactIncomplete ? "未完成或待验证" : lastArtifact?.verified ? "已发现并验证" : "未发现可验证产物"}</span>
-        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>媒体</span><span>已降级，省略 ${receipt.mediaOmitted ?? 0} 项${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
-        ${intervention.shown > 0 ? html4`<span>干预</span><span>已显示 ${intervention.shown} 次${interventionChoice ? ` · 选择 ${interventionChoice}` : ""}</span>` : null}
-        ${warnings?.length ? html4`<span>提醒</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
+        <span>${t4("chat.receiptTools")}</span><span>${t4("chat.receiptToolsSummary", { total: tools.results ?? 0, ok: tools.successes ?? 0, bad: tools.failures ?? 0 })}${tools.lastName ? ` · ${t4("chat.receiptRecent", { name: tools.lastName })}` : ""}</span>
+        ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${failures.at(-1).code}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
+        ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${recoveries.at(-1).recovery}` : ""}</span>` : null}
+        <span>${t4("chat.receiptArtifact")}</span><span>${artifactIncomplete ? t4("chat.receiptArtifactIncomplete") : artifactStatusLabel}</span>
+        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
+        ${intervention.shown > 0 ? html4`<span>${t4("chat.receiptIntervention")}</span><span>${t4("chat.receiptInterventionShown", { count: intervention.shown })}${interventionChoice ? ` · ${t4("chat.receiptChoice", { choice: interventionChoice })}` : ""}</span>` : null}
+        ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
       </div>
     </details>
   `;
@@ -333,19 +353,19 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       onClick=${selectArtifacts}
       onKeyDown=${selectArtifactsKey}
       tabIndex=${selectableForArtifacts ? 0 : void 0}
-      title=${selectableForArtifacts ? "点击查看这条回复相关文件" : void 0}
+      title=${selectableForArtifacts ? t4("chat.artifactRelatedClick") : void 0}
     >
       ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />`
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
-          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? `思考中 · 第 ${msg.reasoningTurns} 轮` : "思考中…"}</div>
+          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</div>
           <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
         ` : null : html4`
           <details class="reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
             <summary class="reasoning-summary">
-              <span class="reasoning-summary-label">思考过程</span>
-              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? `共 ${msg.reasoningTurns} 轮思考 · ` : ""}约 ${reasoningLength.toLocaleString()} 字</span>
+              <span class="reasoning-summary-label">${t4("chat.reasoningProcess")}</span>
+              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
             </summary>
             <div class="reasoning">${msg.reasoning}</div>
           </details>
@@ -401,14 +421,14 @@ function ChoiceModal({ modal, onResolve }) {
     <${ModalCard} accent=${contextInput ? "#f59e0b" : "#f0abfc"} icon=${contextInput ? "!" : "🔀"} title=${contextInput?.title || t4("modal.choiceTitle")} subtitle=${contextInput ? null : modal.question}>
       ${contextInput ? html4`
         <div class="modal-context-alert">
-          <div class="modal-context-alert-title">当前任务已暂停</div>
+          <div class="modal-context-alert-title">${t4("chat.taskPaused")}</div>
           <div class="modal-context-alert-reason">${contextInput.reason}</div>
         </div>
         <div class="modal-context-status">
-          <div class="modal-context-status-label">当前状态</div>
+          <div class="modal-context-status-label">${t4("chat.currentStatus")}</div>
           <div>${contextInput.statusSummary}</div>
         </div>
-        <div class="modal-context-recommendation"><strong>建议：</strong>${contextInput.recommendation}</div>
+        <div class="modal-context-recommendation"><strong>${t4("chat.suggestion")}</strong>${contextInput.recommendation}</div>
         <div class="modal-context-question">${modal.question}</div>
       ` : null}
       ${modal.options.map(

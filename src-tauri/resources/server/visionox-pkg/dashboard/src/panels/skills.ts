@@ -13,6 +13,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 const N2: any = preactMemo;
 
 function SkillsPanel() {
@@ -173,14 +174,16 @@ description: TODO \u2014 one-line description that helps the model match this sk
         </div>
 
         <div style="padding:0 12px 8px;display:flex;gap:6px;flex-wrap:wrap">
-          <select
+          <${Select}
             value=${newScope}
-            onChange=${(e3) => setNewScope(e3.target.value)}
-            style="flex:0 0 auto;font-size:11.5px;padding:5px 6px"
-          >
-            <option value="global">${t4("skills.global")}</option>
-            ${data.paths.project ? html4`<option value="project">${t4("skills.project")}</option>` : null}
-          </select>
+            onChange=${(v) => setNewScope(v)}
+            width="96px"
+            ariaLabel=${t4("skills.scopeAria")}
+            options=${[
+              { value: "global", label: t4("skills.global") },
+              ...(data.paths.project ? [{ value: "project", label: t4("skills.project") }] : [])
+            ]}
+          />
           <input
             type="text"
             placeholder=${t4("skills.newSkill")}

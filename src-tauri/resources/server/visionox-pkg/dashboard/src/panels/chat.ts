@@ -24,6 +24,7 @@ import { confirmExternalArtifactOpen, showArtifactPreview } from "../lib/markdow
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
 import { applyDashboardEvent as reduceDashboardEvent, createDashboardEventBatcher, createDashboardEventGuard, createDashboardReducerState } from "../lib/event-reducer.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { IconModel, IconWorkspace, IconJobs, IconSearch, IconWand, IconAttach, IconSkill } from "../ui/index.js";
 const N2: any = preactMemo;
 
 function planStatus(plan: any): string {
@@ -46,16 +47,16 @@ var CHAT_INITIAL_RENDER_COUNT = 30;
 function parseProviderImportJson(text) {
   const parsed = JSON.parse(String(text || ""));
   if (parsed.schemaVersion === 3) {
-    if (!Array.isArray(parsed.operations) || parsed.operations.length === 0) throw new Error("维护 JSON 必须包含非空 operations 数组");
+    if (!Array.isArray(parsed.operations) || parsed.operations.length === 0) throw new Error(t4("chat.jsonNeedsOperations"));
     return parsed;
   }
-  if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) throw new Error("JSON 必须包含非空 providers 数组");
+  if (!Array.isArray(parsed.providers) || parsed.providers.length === 0) throw new Error(t4("chat.jsonNeedsProviders"));
   for (const provider of parsed.providers) {
-    if (!provider?.id || typeof provider.id !== "string") throw new Error("每个 provider 都必须包含 id");
-    if (!Array.isArray(provider.models) || provider.models.length === 0) throw new Error(`provider ${provider.id} 必须包含模型`);
+    if (!provider?.id || typeof provider.id !== "string") throw new Error(t4("chat.providerNeedsId"));
+    if (!Array.isArray(provider.models) || provider.models.length === 0) throw new Error(t4("chat.providerNeedsModels", { id: provider.id }));
     for (const model of provider.models) {
-      if (!model?.id || typeof model.id !== "string") throw new Error(`provider ${provider.id} 中存在无 id 的模型`);
-      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) throw new Error(`模型 ${model.id} 必须声明有效的 maxContextLength`);
+      if (!model?.id || typeof model.id !== "string") throw new Error(t4("chat.providerModelNoId", { id: provider.id }));
+      if (!Number.isSafeInteger(model.maxContextLength) || model.maxContextLength <= 0) throw new Error(t4("chat.modelNeedsContext", { id: model.id }));
     }
   }
   return parsed;
@@ -74,7 +75,7 @@ function providerDisplayGroups(providers) {
   const groups = new Map();
   for (const provider of Array.isArray(providers) ? providers : []) {
     const groupId = provider?.ui?.groupId || provider?.id || "default";
-    const label = provider?.ui?.groupName || provider?.name || provider?.id || "服务商";
+    const label = provider?.ui?.groupName || provider?.name || provider?.id || t4("chat.providerFallback");
     const group = groups.get(groupId) || { id: groupId, label, providers: [] };
     group.providers.push(provider);
     groups.set(groupId, group);
@@ -91,11 +92,11 @@ function providerDisplayLabel(provider) {
 }
 function reasoningEffortLabel(effort) {
   return {
-    low: "快速",
-    medium: "均衡",
-    high: "深入",
-    xhigh: "极致",
-    max: "极致"
+    low: t4("chat.effortLow"),
+    medium: t4("chat.effortMedium"),
+    high: t4("chat.effortDeep"),
+    xhigh: t4("chat.effortExtreme"),
+    max: t4("chat.effortExtreme")
   }[effort] ?? effort;
 }
 function providerModelContextLabel(model) {
@@ -107,8 +108,8 @@ function providerModelContextLabel(model) {
 function providerModelCapabilityLabels(model) {
   const labels = [];
   const modalities = model?.capabilities?.inputModalities ?? (model?.multimodal ? ["text", "image"] : ["text"]);
-  labels.push(modalities.includes("image") ? "图文" : "仅文本");
-  if (model?.capabilities?.roles?.some((role) => /code/i.test(role)) || /code/i.test(`${model?.id || ""} ${model?.name || ""}`)) labels.push("代码");
+  labels.push(modalities.includes("image") ? t4("chat.capImageText") : t4("chat.capTextOnly"));
+  if (model?.capabilities?.roles?.some((role) => /code/i.test(role)) || /code/i.test(`${model?.id || ""} ${model?.name || ""}`)) labels.push(t4("chat.capCode"));
   const context = providerModelContextLabel(model);
   if (context) labels.push(context);
   return labels;
@@ -173,6 +174,12 @@ function upsertToolProgress(items, dash) {
     toolName: dash.toolName,
     toolArgs: dash.args,
     toolStatus: dash.status || "running",
+    category: dash.category || null,
+    code: dash.code || null,
+    recommendedAction: dash.recommendedAction || null,
+    retryable: dash.retryable === true,
+    diagnosticMessage: dash.message || null,
+    repeatFailureBlocked: dash.repeatFailureBlocked === true,
   };
   const index = items.findIndex((item) => String(item.toolCallId || item.id) === toolCallId || item.id === id);
   if (index < 0) return [...items, next];
@@ -205,17 +212,17 @@ function removeChatDraft(key) {
 }
 function fileArtifactKind(ext) {
   const e3 = String(ext || "").replace(/^\./, "").toLowerCase();
-  if (e3 === "md" || e3 === "markdown") return "Markdown 文档";
-  if (e3 === "html" || e3 === "htm") return "HTML 页面";
-  if (e3 === "pdf") return "PDF 文档";
-  if (["doc", "docx"].includes(e3)) return "Word 文档";
-  if (["ppt", "pptx"].includes(e3)) return "演示文稿";
-  if (["xls", "xlsx"].includes(e3)) return "表格文档";
-  if (e3 === "csv") return "CSV 表格";
-  if (["json", "xml", "yaml", "yml"].includes(e3)) return "数据文件";
-  if (FILE_ARTIFACT_SCRIPT_EXTS.has(e3)) return "脚本文件";
-  if (["css", "sql", "ini", "toml", "txt"].includes(e3)) return "文本文件";
-  return e3 ? `${e3.toUpperCase()} 文件` : "文件";
+  if (e3 === "md" || e3 === "markdown") return t4("chat.fileMd");
+  if (e3 === "html" || e3 === "htm") return t4("chat.fileHtml");
+  if (e3 === "pdf") return t4("chat.filePdf");
+  if (["doc", "docx"].includes(e3)) return t4("chat.fileWord");
+  if (["ppt", "pptx"].includes(e3)) return t4("chat.filePpt");
+  if (["xls", "xlsx"].includes(e3)) return t4("chat.fileExcel");
+  if (e3 === "csv") return t4("chat.fileCsv");
+  if (["json", "xml", "yaml", "yml"].includes(e3)) return t4("chat.fileData");
+  if (FILE_ARTIFACT_SCRIPT_EXTS.has(e3)) return t4("chat.fileScript");
+  if (["css", "sql", "ini", "toml", "txt"].includes(e3)) return t4("chat.fileText");
+  return e3 ? t4("chat.fileGeneric", { ext: e3.toUpperCase() }) : t4("chat.fileFallback");
 }
 function fileArtifactExtOf(value) {
   const m3 = /\.([A-Za-z0-9]{1,12})(?:$|[?#\s，。；;、)）（\]`*_~])/.exec(String(value || ""));
@@ -313,7 +320,7 @@ async function registerAndPreviewMarkdownDocument(path, cwd = "") {
     body: { path, cwd }
   });
   await showFileArtifactPreview(file);
-  showToast(`已打开 ${file.filename || "Markdown 文档"}`, "info");
+  showToast(t4("chat.mdOpened", { name: file.filename || t4("chat.mdDocFallback") }), "info");
 }
 function cleanOpenedDocumentArg(value) {
   let raw = String(value || "").trim();
@@ -351,7 +358,7 @@ async function openMarkdownDocumentFromArgs(args, cwd) {
   try {
     await registerAndPreviewMarkdownDocument(docs[0], cwd || "");
   } catch (err) {
-    showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
+    showToast(err.message || t4("chat.mdOpenFailed"), "error", 5e3);
   }
 }
 var MARKDOWN_DOCUMENT_MAX_BYTES = 5 * 1024 * 1024;
@@ -389,12 +396,12 @@ function selectMarkdownDocumentFile() {
 }
 async function previewSelectedMarkdownDocument(file) {
   if (!file) return;
-  const filename = file.name || "Markdown 文档.md";
+  const filename = file.name || t4("chat.mdDocDefaultName");
   if (!/\.(md|markdown)$/i.test(filename)) {
-    throw new Error("请选择 Markdown 文档");
+    throw new Error(t4("chat.mdSelectRequired"));
   }
   if (file.size > MARKDOWN_DOCUMENT_MAX_BYTES) {
-    throw new Error(`文件过大，最大支持 ${Math.round(MARKDOWN_DOCUMENT_MAX_BYTES / 1024 / 1024)}MB`);
+    throw new Error(t4("chat.mdTooLarge", { mb: Math.round(MARKDOWN_DOCUMENT_MAX_BYTES / 1024 / 1024) }));
   }
   const content = await file.text();
   showArtifactPreview({
@@ -407,7 +414,7 @@ async function previewSelectedMarkdownDocument(file) {
     previewable: true,
     openable: false
   });
-  showToast(`已打开 ${filename}`, "info");
+  showToast(t4("chat.mdOpened", { name: filename }), "info");
 }
 function pickMarkdownFileFromBridge() {
   return api("/artifacts/pick-markdown-file", { method: "POST", body: {}, timeoutMs: 0 }).then((result) => result?.path || "").catch((apiErr) => {
@@ -419,13 +426,13 @@ function pickMarkdownFileFromBridge() {
   }
   return new Promise((resolve, reject) => {
     if (!window.parent || window.parent === window) {
-      reject(new Error("本地文件选择器仅在桌面端可用"));
+      reject(new Error(t4("chat.localFileOnlyDesktop")));
       return;
     }
     const requestId = `md-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => {
       window.removeEventListener("message", onMessage);
-      reject(new Error("文件选择器响应超时"));
+      reject(new Error(t4("chat.filePickerTimeout")));
     }, 5 * 60 * 1e3);
     function onMessage(event) {
       const data = event.data;
@@ -452,22 +459,22 @@ function pickMarkdownFileFromBridge() {
 }
 function documentJobStatusLabel(status) {
   return {
-    queued: "排队中",
-    running: "处理中",
-    waiting_foreground: "等待前台对话",
-    waiting_provider: "等待其他模型任务",
-    pausing: "正在暂停",
-    paused: "已暂停",
-    interrupted: "可继续",
-    stopped: "已停止，可继续",
-    abandoned: "已放弃",
-    source_changed: "来源已变化",
-    awaiting_output: "内容已完成，等待交付",
-    completed: "已完成",
-    completed_with_warnings: "已完成，需复核",
-    failed: "失败",
-    cancelled: "已取消"
-  }[status] || status || "未知";
+    queued: t4("chat.statusQueued"),
+    running: t4("chat.statusRunning"),
+    waiting_foreground: t4("chat.statusWaitingForeground"),
+    waiting_provider: t4("chat.statusWaitingProvider"),
+    pausing: t4("chat.statusPausing"),
+    paused: t4("chat.statusPaused"),
+    interrupted: t4("chat.statusInterrupted"),
+    stopped: t4("chat.statusStopped"),
+    abandoned: t4("chat.statusAbandoned"),
+    source_changed: t4("chat.statusSourceChanged"),
+    awaiting_output: t4("chat.statusAwaitingOutput"),
+    completed: t4("chat.statusCompleted"),
+    completed_with_warnings: t4("chat.statusCompletedWarnings"),
+    failed: t4("chat.statusFailed"),
+    cancelled: t4("chat.statusCancelled")
+  }[status] || status || t4("chat.statusUnknown");
 }
 function backgroundJobNeedsAttention(job) {
   return job?.needsAttention === true
@@ -486,53 +493,53 @@ function backgroundJobGroup(job) {
 function backgroundJobGroups(jobs) {
   const values = Array.isArray(jobs) ? jobs : [];
   return [
-    { key: "active", label: "运行中" },
-    { key: "attention", label: "需要处理" },
-    { key: "completed", label: "已完成" }
+    { key: "active", label: t4("chat.groupActive") },
+    { key: "attention", label: t4("chat.groupAttention") },
+    { key: "completed", label: t4("chat.groupCompleted") }
   ].map((group) => ({ ...group, jobs: values.filter((job) => backgroundJobGroup(job) === group.key) })).filter((group) => group.jobs.length > 0);
 }
 function isGenericBackgroundTask(job) {
   return String(job?.id ?? "").startsWith("task:");
 }
 function backgroundJobTitle(job) {
-  return job?.goal || job?.command || job?.sourceName || `#${job?.id || "未知任务"}`;
+  return job?.goal || job?.command || job?.sourceName || `#${job?.id || t4("chat.unknownTask")}`;
 }
 function genericTaskLifecycleLabel(lifecycle) {
   return {
-    created: "已创建",
-    queued: "排队中",
-    leased: "已领取",
-    running: "处理中",
-    assembling: "正在装配",
-    paused: "已暂停",
-    waiting_user: "等待用户处理",
-    blocked: "受阻",
-    terminal: "已结束"
-  }[lifecycle] || lifecycle || "未知状态";
+    created: t4("chat.lifecycleCreated"),
+    queued: t4("chat.statusQueued"),
+    leased: t4("chat.lifecycleLeased"),
+    running: t4("chat.statusRunning"),
+    assembling: t4("chat.lifecycleAssembling"),
+    paused: t4("chat.statusPaused"),
+    waiting_user: t4("chat.lifecycleWaitingUser"),
+    blocked: t4("chat.lifecycleBlocked"),
+    terminal: t4("chat.lifecycleTerminal")
+  }[lifecycle] || lifecycle || t4("chat.lifecycleUnknown");
 }
 function genericTaskOutcomeLabel(outcome) {
   return {
-    delivered: "已交付",
-    delivered_with_warnings: "已交付，需复核",
-    partial: "部分交付",
-    failed: "失败",
-    cancelled: "已取消"
-  }[outcome] || outcome || "尚无结果";
+    delivered: t4("chat.outcomeDelivered"),
+    delivered_with_warnings: t4("chat.outcomeDeliveredWarnings"),
+    partial: t4("chat.outcomePartial"),
+    failed: t4("chat.statusFailed"),
+    cancelled: t4("chat.statusCancelled")
+  }[outcome] || outcome || t4("chat.outcomeNone");
 }
 function genericTaskQualityLabel(quality) {
   return {
-    verified: "已验证",
-    needs_review: "需复核",
-    unknown: "未评估"
-  }[quality] || quality || "未评估";
+    verified: t4("chat.qualityVerified"),
+    needs_review: t4("chat.qualityNeedsReview"),
+    unknown: t4("chat.qualityUnknown")
+  }[quality] || quality || t4("chat.qualityUnknown");
 }
 function genericTaskProgressLabel(job) {
   const progress = job?.progress || {};
   const completed = progress.completedUnits ?? progress.completed;
   const total = progress.totalUnits ?? progress.total;
-  const unit = progress.unitLabel || "单元";
+  const unit = progress.unitLabel || t4("chat.progressUnit");
   if (Number.isFinite(completed) && Number.isFinite(total) && total > 0) return `${completed}/${total} ${unit}`;
-  if (Number.isFinite(completed)) return `已完成 ${completed} ${unit}`;
+  if (Number.isFinite(completed)) return t4("chat.progressCompleted", { completed, unit });
   return progress.label || progress.currentLabel || genericTaskLifecycleLabel(job?.lifecycle);
 }
 function genericTaskProgressPercent(job) {
@@ -542,22 +549,32 @@ function genericTaskProgressPercent(job) {
   const total = Number(progress.totalUnits ?? progress.total);
   return Number.isFinite(completed) && Number.isFinite(total) && total > 0 ? Math.max(0, Math.min(100, completed / total * 100)) : 0;
 }
-var GENERIC_TASK_ACTION_LABELS = new Map([
-  ["pause", "暂停"],
-  ["resume", "继续"],
-  ["retry", "重试"],
-  ["retry_delivery", "确认后重新交付"],
-  ["cancel", "取消任务"],
-  ["resolve_user_input", "提交处理结果"],
-  ["retarget_output", "更改输出位置"],
-  ["ack_outcome", "确认结果"],
-  ["delete_record", "删除记录"]
+const GENERIC_TASK_ACTION_LABELS = new Set([
+  "pause",
+  "resume",
+  "retry",
+  "retry_delivery",
+  "cancel",
+  "resolve_user_input",
+  "retarget_output",
+  "ack_outcome",
+  "delete_record",
 ]);
 function genericTaskActionLabel(action) {
-  return GENERIC_TASK_ACTION_LABELS.get(action) || action;
+  return {
+    pause: t4("chat.actPause"),
+    resume: t4("chat.actResume"),
+    retry: t4("chat.actRetry"),
+    retry_delivery: t4("chat.actRetryDelivery"),
+    cancel: t4("chat.actCancel"),
+    resolve_user_input: t4("chat.actSubmitResult"),
+    retarget_output: t4("chat.actRetarget"),
+    ack_outcome: t4("chat.actAckOutcome"),
+    delete_record: t4("chat.actDeleteRecord")
+  }[action] || action;
 }
 function genericTaskArtifactLabel(artifact, index) {
-  return artifact?.filename || artifact?.name || artifact?.label || artifact?.path || artifact?.artifactId || `产物 ${index + 1}`;
+  return artifact?.filename || artifact?.name || artifact?.label || artifact?.path || artifact?.artifactId || t4("chat.artifactFallback", { n: index + 1 });
 }
 function backgroundActionRequestId() {
   return globalThis.crypto?.randomUUID?.() || `background-action-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -565,12 +582,12 @@ function backgroundActionRequestId() {
 function documentHandoffNotice(job) {
   const state = job?.handoff?.state;
   return {
-    queued: { tone: "warn", text: "后台处理已经结束，正在等待 AI 接管并继续交付。" },
-    running: { tone: "warn", text: "AI 已接管后台结果，正在核实产物并继续处理。" },
-    waiting_conversation: { tone: "warn", text: "任务属于另一个会话。返回发起任务的原会话后，AI 会自动继续处理。" },
-    needs_user: { tone: "err", text: `AI 自动接管未完成：${job?.handoff?.lastError || "请检查模型配置后继续处理。"}。确认后可仅重新交付已有结果，不会重新处理文档。` },
-    user_paused: { tone: "warn", text: "任务由用户暂停，点击“继续”后才会恢复。" },
-    legacy_unassigned: { tone: "warn", text: "这是旧版本创建的任务，无法安全关联到原会话；请在后台面板中手动点击“继续”或“重试”。" }
+    queued: { tone: "warn", text: t4("chat.handoffQueued") },
+    running: { tone: "warn", text: t4("chat.handoffRunning") },
+    waiting_conversation: { tone: "warn", text: t4("chat.handoffWaitingConversation") },
+    needs_user: { tone: "err", text: `${t4("chat.handoffNeedsUser", { error: job?.handoff?.lastError || t4("chat.handoffCheckModel") })}${t4("chat.handoffRedeliverNote")}` },
+    user_paused: { tone: "warn", text: t4("chat.handoffUserPaused") },
+    legacy_unassigned: { tone: "warn", text: t4("chat.handoffLegacy") }
   }[state] || null;
 }
 function retryDocumentDelivery(job) {
@@ -580,44 +597,44 @@ function retryDocumentDelivery(job) {
 }
 function documentJobStageLabel(stage) {
   return {
-    extracting: "正在读取来源内容",
-    "selecting-model": "正在选择可用模型",
-    draft: "正在整理当前区块",
-    "quality-repair": "正在补全当前区块",
-    "quality-review": "正在审校当前区块",
-    "batch-complete": "当前区块已保存",
-    assembling: "正在组装完整文档",
-    summary: "正在生成摘要",
-    completed: "文档已经完成",
-    failed: "任务执行失败",
-    cancelled: "任务已取消",
-    stopped: "已停止，检查点已保留",
-    abandoned: "任务已放弃",
-    "source-changed": "来源已变化",
-    "awaiting-output": "最终草稿已保存，等待处理输出路径",
-    "waiting-provider": "等待其他模型任务",
-    "job-timeout": "本次执行总时限已到",
-    "job-call-budget": "本次执行调用预算已用尽"
+    extracting: t4("chat.stageExtracting"),
+    "selecting-model": t4("chat.stageSelectingModel"),
+    draft: t4("chat.stageDraft"),
+    "quality-repair": t4("chat.stageQualityRepair"),
+    "quality-review": t4("chat.stageQualityReview"),
+    "batch-complete": t4("chat.stageBatchComplete"),
+    assembling: t4("chat.stageAssembling"),
+    summary: t4("chat.stageSummary"),
+    completed: t4("chat.stageCompleted"),
+    failed: t4("chat.stageFailed"),
+    cancelled: t4("chat.stageCancelled"),
+    stopped: t4("chat.stageStopped"),
+    abandoned: t4("chat.stageAbandoned"),
+    "source-changed": t4("chat.stageSourceChanged"),
+    "awaiting-output": t4("chat.stageAwaitingOutput"),
+    "waiting-provider": t4("chat.stageWaitingProvider"),
+    "job-timeout": t4("chat.stageJobTimeout"),
+    "job-call-budget": t4("chat.stageJobCallBudget")
   }[stage] || "";
 }
 function documentJobProgressLabel(job) {
   const progress = job?.progress || {};
-  const unit = progress.unitLabel || "区块";
+  const unit = progress.unitLabel || t4("chat.progressUnitBatch");
   if (progress.total) return `${progress.completed}/${progress.total} ${unit}`;
-  if (progress.completed) return `已完成 ${progress.completed} ${unit}`;
-  return documentJobStageLabel(progress.stage) || "正在准备文档";
+  if (progress.completed) return t4("chat.progressCompletedUnits", { completed: progress.completed, unit });
+  return documentJobStageLabel(progress.stage) || t4("chat.progressPreparing");
 }
 function documentRetryLabel(modelIssues) {
   const issues = Array.isArray(modelIssues) ? modelIssues : [];
-  if (issues.some((issue) => issue.category === "insufficient_balance" || issue.category === "quota_exhausted")) return "余额/额度处理后重试";
-  if (issues.some((issue) => issue.requiresUserAction === true)) return "处理模型问题后重试";
-  return "重试失败部分";
+  if (issues.some((issue) => issue.category === "insufficient_balance" || issue.category === "quota_exhausted")) return t4("chat.retryAfterBalance");
+  if (issues.some((issue) => issue.requiresUserAction === true)) return t4("chat.retryAfterModelFix");
+  return t4("chat.retryFailedPart");
 }
 function documentIssueBatchLabel(issue) {
   const batches = Array.isArray(issue?.affectedBatches) ? issue.affectedBatches : [];
-  if (batches.length === 0) return "任务级模型调用";
+  if (batches.length === 0) return t4("chat.taskLevelModelCall");
   const labels = batches.slice(0, 6).map((batch) => batch.label || batch.id).filter(Boolean);
-  return `${labels.join("、")}${batches.length > labels.length ? "等" : ""}`;
+  return `${labels.join(t4("chat.listSep"))}${batches.length > labels.length ? t4("chat.etcSuffix") : ""}`;
 }
 var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendingDeliveries, selectedId, detail, onSelect, onClose, onControl, onStop, onAbandon, onDelete, onPreview }) {
   const deliveries = Array.isArray(pendingDeliveries) ? pendingDeliveries : [];
@@ -653,7 +670,7 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
   const genericUserAction = selected?.userAction;
   const genericUserActionText = typeof genericUserAction === "string"
     ? genericUserAction
-    : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || "任务需要你的补充信息后才能继续。";
+    : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || t4("chat.userActionNeededFallback");
   const genericOutcomeSummary = typeof selected?.outcomeSummary === "string" ? selected.outcomeSummary.trim() : "";
   const genericBlockingReason = selected?.blockingReason;
   const genericBlockingReasonText = typeof genericBlockingReason === "string"
@@ -672,7 +689,7 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
   const genericDeliveryStates = selectedDeliveries.filter((delivery) => delivery?.deliveryState);
   const runGenericAction = (action) => {
     if (!selected) return;
-    if (["cancel", "delete_record"].includes(action) && !confirm(action === "cancel" ? "确定取消这个任务？已保存的检查点和产物不会被删除。" : "确定删除这条任务记录？已经交付的产物不会被删除。")) return;
+    if (["cancel", "delete_record"].includes(action) && !confirm(action === "cancel" ? t4("chat.confirmCancelTaskDetail") : t4("chat.confirmDeleteRecordDetail"))) return;
     let payload = null;
     if (action === "resolve_user_input") {
       const options = Array.isArray(genericUserAction?.choices)
@@ -698,7 +715,7 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
       };
     }
     if (action === "retarget_output") {
-      const path = prompt("请输入新的输出文件完整路径", selected.outputPath || "");
+      const path = prompt(t4("chat.promptNewOutputPath"), selected.outputPath || "");
       if (path === null || !path.trim()) return;
       payload = { path: path.trim(), ...(genericUserInputRequestId ? { requestId: genericUserInputRequestId } : {}) };
     }
@@ -708,37 +725,37 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
     }
     if (action === "retry_delivery") {
       if (!conversationDelivery?.deliveryId) return;
-      if (!confirm("上一次对话交付结果不确定，重新交付可能产生重复回复。是否确认继续？")) return;
+      if (!confirm(t4("chat.confirmRedelivery"))) return;
       payload = { deliveryId: conversationDelivery.deliveryId, consumer: "conversation" };
     }
     onControl(selected.id, action, payload);
   };
   const modelCaption = selected?.model
-    ? `${selected.running ? "当前模型" : "最近使用模型"} · ${selected.model}${selected.modelRole === "fallback" ? "（备用候选）" : ""}`
-    : "尚未开始模型调用";
+    ? `${selected.running ? t4("chat.currentModel") : t4("chat.recentModel")} · ${selected.model}${selected.modelRole === "fallback" ? t4("chat.fallbackModelSuffix") : ""}`
+    : t4("chat.noModelCallYet");
   const retryLabel = documentRetryLabel(modelIssues);
   return html4`
     <section class="background-jobs-workbench" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface-default);border-top:1px solid var(--border-default)">
       <header class="background-jobs-header">
-        <div class="background-jobs-heading"><strong>后台任务</strong><span class="meta">运行中 ${displayJobs.filter((job) => backgroundJobGroup(job) === "active").length} · 待处理 ${displayJobs.filter((job) => backgroundJobGroup(job) === "attention").length} · 共 ${displayJobs.length}${deliveries.length > 0 ? ` · 待确认通知 ${deliveries.length}` : ""}</span></div>
-        <button type="button" class="background-jobs-close" onClick=${onClose} title="返回对话（Esc）" aria-label="返回对话"><span aria-hidden="true">←</span><span>返回对话</span></button>
+        <div class="background-jobs-heading"><strong>${t4("chat.bgJobsTitle")}</strong><span class="meta">${t4("chat.bgJobsHeaderMeta", { active: displayJobs.filter((job) => backgroundJobGroup(job) === "active").length, attention: displayJobs.filter((job) => backgroundJobGroup(job) === "attention").length, total: displayJobs.length })}${deliveries.length > 0 ? t4("chat.bgPendingDeliveries", { count: deliveries.length }) : ""}</span></div>
+        <button type="button" class="background-jobs-close" onClick=${onClose} title=${t4("chat.bgJobsCloseTitle")} aria-label=${t4("chat.bgJobsClose")}><span aria-hidden="true">←</span><span>${t4("chat.bgJobsClose")}</span></button>
       </header>
       <div class="background-jobs-layout">
         <nav class="background-jobs-list">
-          ${displayJobs.length === 0 ? html4`<div class="meta" style="padding:18px">当前没有后台任务</div>` : groups.map((group) => html4`
+          ${displayJobs.length === 0 ? html4`<div class="meta" style="padding:18px">${t4("chat.bgJobsEmpty")}</div>` : groups.map((group) => html4`
             <section class="background-job-group" aria-label=${group.label}>
               <div class="background-job-group-title"><span>${group.label}</span><span>${group.jobs.length}</span></div>
               ${group.jobs.map((job) => html4`
                 <button type="button" class=${`background-job-list-item ${job.id === selected?.id ? "selected" : ""}`} onClick=${() => onSelect(job.id)}>
-                  <div class="background-job-list-heading"><span class=${`pill ${backgroundJobIsActive(job) ? "info" : backgroundJobNeedsAttention(job) ? "warn" : job.status === "completed" || job.outcome === "delivered" ? "ok" : ""}`}>${job.kind === "document" || job.taskType === "document" ? "文档" : job.lifecycle === "service" ? "服务" : "任务"}</span><span class="name">${backgroundJobTitle(job)}</span></div>
-                  <div class="meta background-job-list-meta"><span>${isGenericBackgroundTask(job) ? genericTaskLifecycleLabel(job.lifecycle) : job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? "运行中" : `exit ${job.exitCode ?? "?"}`}</span><span>${isGenericBackgroundTask(job) ? genericTaskProgressLabel(job) : job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
+                  <div class="background-job-list-heading"><span class=${`pill ${backgroundJobIsActive(job) ? "info" : backgroundJobNeedsAttention(job) ? "warn" : job.status === "completed" || job.outcome === "delivered" ? "ok" : ""}`}>${job.kind === "document" || job.taskType === "document" ? t4("chat.kindDocument") : job.lifecycle === "service" ? t4("chat.kindService") : t4("chat.kindTask")}</span><span class="name">${backgroundJobTitle(job)}</span></div>
+                  <div class="meta background-job-list-meta"><span>${isGenericBackgroundTask(job) ? genericTaskLifecycleLabel(job.lifecycle) : job.kind === "document" ? documentJobStatusLabel(job.status) : job.running ? t4("chat.genericRunning") : t4("chat.exitCode", { code: job.exitCode ?? "?" })}</span><span>${isGenericBackgroundTask(job) ? genericTaskProgressLabel(job) : job.kind === "document" ? documentJobProgressLabel(job) : ""}</span></div>
                 </button>
               `)}
             </section>
           `)}
         </nav>
         <main class="background-jobs-detail">
-          ${!selected ? html4`<div class="meta">选择左侧任务查看详情</div>` : isGenericTask ? html4`
+          ${!selected ? html4`<div class="meta">${t4("chat.bgSelectTask")}</div>` : isGenericTask ? html4`
             <div class="background-task-detail-head">
               <div style="min-width:0;flex:1"><h3>${backgroundJobTitle(selected)}</h3><div class="meta">${selected.id} · ${genericTaskLifecycleLabel(selected.lifecycle)} · ${genericTaskOutcomeLabel(selected.outcome)} · ${genericTaskQualityLabel(selected.quality)}</div></div>
               <div class="background-task-actions">
@@ -746,62 +763,62 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
               </div>
             </div>
             <div class="background-task-progress"><div style=${`width:${genericTaskProgressPercent(selected)}%`}></div></div>
-            <div class="meta background-task-facts"><span>${genericTaskProgressLabel(selected)}</span><span>修订 ${selected.revision ?? 0}</span>${selected.executionEpoch ? html4`<span>执行轮次 ${selected.executionEpoch}</span>` : null}</div>
-            ${genericOutcomeSummary ? html4`<div class="notice background-task-outcome-summary"><strong>结果摘要</strong><div>${genericOutcomeSummary}</div></div>` : null}
-            ${genericBlockingReasonText ? html4`<div class="notice warn background-task-blocking-reason"><strong>阻塞原因</strong><div>${genericBlockingReasonText}${genericBlockingReasonCode && genericBlockingReasonCode !== genericBlockingReasonText ? html4` <span class="meta">(${genericBlockingReasonCode})</span>` : null}</div></div>` : null}
-            ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>需要你的处理</strong><div>${genericUserActionText}</div></div>` : null}
-            ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>交付状态</h4>${genericDeliveryStates.map((delivery) => {
+            <div class="meta background-task-facts"><span>${genericTaskProgressLabel(selected)}</span><span>${t4("chat.revisionLabel", { n: selected.revision ?? 0 })}</span>${selected.executionEpoch ? html4`<span>${t4("chat.epochLabel", { n: selected.executionEpoch })}</span>` : null}</div>
+            ${genericOutcomeSummary ? html4`<div class="notice background-task-outcome-summary"><strong>${t4("chat.outcomeSummaryTitle")}</strong><div>${genericOutcomeSummary}</div></div>` : null}
+            ${genericBlockingReasonText ? html4`<div class="notice warn background-task-blocking-reason"><strong>${t4("chat.blockingReasonTitle")}</strong><div>${genericBlockingReasonText}${genericBlockingReasonCode && genericBlockingReasonCode !== genericBlockingReasonText ? html4` <span class="meta">(${genericBlockingReasonCode})</span>` : null}</div></div>` : null}
+            ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>${t4("chat.userActionTitle")}</strong><div>${genericUserActionText}</div></div>` : null}
+            ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.deliveryStateTitle")}</h4>${genericDeliveryStates.map((delivery) => {
     const deliveryState = delivery.deliveryState || {};
-    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || "等待交付确认";
+    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || t4("chat.deliveryWaitingConfirm");
     const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? deliveryState.code : "";
-    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? "对话" : "任务中心"}交付 · ${deliveryState.status || "等待中"}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
+    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? t4("chat.deliveryConversation") : t4("chat.deliveryTaskCenter")} · ${deliveryState.status || t4("chat.deliveryWaiting")}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
   })}</section>` : null}
-            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>需要留意</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
-            <section class="background-task-section"><h4>产物</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">暂未生成产物</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>预览</button>` : null}</li>`)}</ul>`}</section>
-            ${selected.coverage ? html4`<section class="background-task-section"><h4>覆盖情况</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
+            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.warningsTitle")}</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
+            <section class="background-task-section"><h4>${t4("chat.artifactsTitle")}</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">${t4("chat.artifactsEmpty")}</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>${t4("chat.previewBtn")}</button>` : null}</li>`)}</ul>`}</section>
+            ${selected.coverage ? html4`<section class="background-task-section"><h4>${t4("chat.coverageTitle")}</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
           ` : !isDocument ? html4`
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h3 style="margin:0 0 6px;font-size:15px">${selected.command}</h3><div class="meta">${selected.running ? "正在运行" : `已结束 · exit ${selected.exitCode ?? "?"}`}</div></div>${selected.running ? html4`<button type="button" onClick=${() => onStop(selected.id)}>停止</button>` : null}</div>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h3 style="margin:0 0 6px;font-size:15px">${selected.command}</h3><div class="meta">${selected.running ? t4("chat.procRunning") : t4("chat.procEnded", { code: selected.exitCode ?? "?" })}</div></div>${selected.running ? html4`<button type="button" onClick=${() => onStop(selected.id)}>${t4("chat.stopBtn")}</button>` : null}</div>
           ` : html4`
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
-              <div style="min-width:0;flex:1"><h3 style="margin:0 0 5px;font-size:16px;overflow-wrap:anywhere">${selected.command}</h3><div class="meta">${documentJobStatusLabel(selected.status)} · ${documentJobStageLabel(progress.stage) || "等待下一步"}</div></div>
+              <div style="min-width:0;flex:1"><h3 style="margin:0 0 5px;font-size:16px;overflow-wrap:anywhere">${selected.command}</h3><div class="meta">${documentJobStatusLabel(selected.status)} · ${documentJobStageLabel(progress.stage) || t4("chat.waitingNextStep")}</div></div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-                ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>暂停</button>` : null}
-                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>${selected.artifactStatus === "modified" ? "另存后台草稿" : selected.artifactStatus === "missing" ? "恢复最终文件" : selected.status === "awaiting_output" ? "提交已保存草稿" : "继续"}</button>` : null}
-                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" title=${modelIssues.find((issue) => issue.requiresUserAction)?.action || "重试失败部分"} onClick=${() => onControl(selected.id, "retry")}>${retryLabel}</button>` : null}
-                ${deliveryRetryable ? html4`<button type="button" title="只重新交付已有结果，不会重新处理文档" onClick=${() => { if (confirm("只重新交付已有结果，不会重新处理文档。可能产生重复回复，是否继续？")) onControl(selected.id, "retry_delivery"); }}>仅重新交付</button>` : null}
-                ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>立即停止</button>` : null}
-                ${abandonable ? html4`<button type="button" onClick=${() => { if (confirm("放弃任务会终止后续处理，但保留任务记录和已保存草稿。确定继续？")) onAbandon(selected.id); }}>放弃</button>` : null}
-                ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>预览产物</button>` : null}
-                ${deletable ? html4`<button type="button" onClick=${() => { if (confirm("仅删除任务记录和中间草稿；源文件及已经生成的最终产物不会删除。确定继续？")) onDelete(selected.id); }}>删除记录</button>` : null}
+                ${selected.running && !selected.paused ? html4`<button type="button" onClick=${() => onControl(selected.id, "pause")}>${t4("chat.pauseBtn")}</button>` : null}
+                ${resumable ? html4`<button type="button" class="primary" onClick=${() => onControl(selected.id, "resume")}>${selected.artifactStatus === "modified" ? t4("chat.resumeSaveAs") : selected.artifactStatus === "missing" ? t4("chat.resumeRecoverFinal") : selected.status === "awaiting_output" ? t4("chat.resumeSubmitDraft") : t4("chat.resumeContinue")}</button>` : null}
+                ${["completed_with_warnings", "failed"].includes(selected.status) ? html4`<button type="button" title=${modelIssues.find((issue) => issue.requiresUserAction)?.action || t4("chat.retryFailedPart")} onClick=${() => onControl(selected.id, "retry")}>${retryLabel}</button>` : null}
+                ${deliveryRetryable ? html4`<button type="button" title=${t4("chat.bgRedeliverTitle")} onClick=${() => { if (confirm(t4("chat.redeliverConfirm"))) onControl(selected.id, "retry_delivery"); }}>${t4("chat.redeliverBtn")}</button>` : null}
+                ${active ? html4`<button type="button" onClick=${() => onStop(selected.id)}>${t4("chat.bgStopNow")}</button>` : null}
+                ${abandonable ? html4`<button type="button" onClick=${() => { if (confirm(t4("chat.abandonConfirm"))) onAbandon(selected.id); }}>${t4("chat.abandonBtn")}</button>` : null}
+                ${selected.previewAvailable || ["completed", "completed_with_warnings"].includes(selected.status) ? html4`<button type="button" onClick=${() => onPreview(selected)}>${t4("chat.previewArtifactBtn")}</button>` : null}
+                ${deletable ? html4`<button type="button" onClick=${() => { if (confirm(t4("chat.deleteRecordConfirm"))) onDelete(selected.id); }}>${t4("chat.deleteRecordBtn")}</button>` : null}
               </div>
             </div>
             <div style="height:6px;background:var(--border-subtle);overflow:hidden;margin:16px 0 8px"><div style=${`height:100%;width:${progress.percent ?? 0}%;background:${selected.qualityPassed === false ? "var(--color-warning)" : "var(--accent-primary)"}`}></div></div>
-            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>累计模型调用 ${progress.taskModelCalls || 0} 次 · 本次执行 ${progress.executionModelCalls || 0} / ${progress.taskModelCallLimit || "—"} 次</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>当前区块 · ${progress.currentLabel}</span>` : null}</div>
+            <div class="meta" style="display:flex;gap:18px;flex-wrap:wrap"><span>${documentJobProgressLabel(selected)}</span><span>${t4("chat.modelCallsSummary", { total: progress.taskModelCalls || 0, current: progress.executionModelCalls || 0, limit: progress.taskModelCallLimit || "—" })}</span><span>${modelCaption}</span>${progress.currentLabel ? html4`<span title=${progress.currentLabel}>${t4("chat.currentChunk", { label: progress.currentLabel })}</span>` : null}</div>
             ${handoffNotice ? html4`<div class=${`notice ${handoffNotice.tone}`} style="margin-top:12px">${handoffNotice.text}</div>` : null}
-            ${selected.status === "awaiting_output" ? html4`<div class="notice warn" style="margin-top:12px"><strong>内容整理和最终草稿已经完成。</strong><div style="margin-top:4px">点击“提交已保存草稿”即可继续；若同名文件仍被占用，程序会自动使用新文件名，且不会再次调用模型。</div></div>` : null}
-            ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>最终输出文件已不存在。</strong><div style="margin-top:4px">任务记录和后台保存的最终草稿仍在，可以点击“继续”尝试恢复交付。</div></div>` : null}
-            ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>最终输出文件已被修改。</strong><div style="margin-top:4px">当前文件与任务完成时保存的草稿不一致。点击“另存后台草稿”会保留当前文件，并把已验证草稿保存为新文件。</div></div>` : null}
-            ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>任务已经结束，输出文件已生成。</strong><div style="margin-top:4px">部分区块未通过完整质量审查，请根据下方原因处理后复核或重试。</div></div>` : null}
+            ${selected.status === "awaiting_output" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.awaitingOutputTitle")}</strong><div style="margin-top:4px">${t4("chat.awaitingOutputBody")}</div></div>` : null}
+            ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>${t4("chat.artifactMissingTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactMissingBody")}</div></div>` : null}
+            ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.artifactModifiedTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactModifiedBody")}</div></div>` : null}
+            ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.completedWarnTitle")}</strong><div style="margin-top:4px">${t4("chat.completedWarnBody")}</div></div>` : null}
             ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
             ${showReviewReasons && (reviewWarnings.length > 0 || modelIssues.length > 0) ? html4`
               <section style="margin-top:18px">
-                <h4 style="font-size:13px;margin:0 0 8px">需要复核的原因</h4>
-                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || "部分内容需要复核。"}</div>`)}
+                <h4 style="font-size:13px;margin:0 0 8px">${t4("chat.reviewReasonsTitle")}</h4>
+                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || t4("chat.reviewWarningFallback")}</div>`)}
                 ${modelIssues.map((issue) => html4`
                   <div class="notice warn" style="margin:0 0 8px">
-                    <div><strong>${issue.providerId || "未知服务商"}/${issue.modelId || "未知模型"}</strong> · ${issue.message || "模型调用失败"}</div>
-                    <div class="meta" style="margin-top:5px">影响区块 · ${documentIssueBatchLabel(issue)}</div>
-                    ${issue.action ? html4`<div style="margin-top:5px">建议：${issue.action}</div>` : null}
-                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">技术信息</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join("；")}</div></details>` : null}
+                    <div><strong>${issue.providerId || t4("chat.unknownProvider")}/${issue.modelId || t4("chat.unknownModel")}</strong> · ${issue.message || t4("chat.modelCallFailed")}</div>
+                    <div class="meta" style="margin-top:5px">${t4("chat.affectedBatches", { label: documentIssueBatchLabel(issue) })}</div>
+                    ${issue.action ? html4`<div style="margin-top:5px">${t4("chat.suggestionPrefix")}${issue.action}</div>` : null}
+                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">${t4("chat.technicalInfo")}</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join(t4("chat.techMsgJoin"))}</div></details>` : null}
                   </div>
                 `)}
               </section>
             ` : null}
-            <section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">来源与产物</h4><div class="meta" style="overflow-wrap:anywhere">输出 · ${selected.outputPath || "尚未确定"}</div>${sourcePaths.length > 0 ? html4`<ol style="margin:8px 0 0;padding-left:22px">${sourcePaths.map((path) => html4`<li style="font-size:12px;line-height:1.6;overflow-wrap:anywhere">${path}</li>`)}</ol>` : null}</section>
-            ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">完成条件</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
-            ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">模型调用链</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">模型</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">角色</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">结果</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">调用</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? "备用" : "主模型"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? "通过" : "未通过"}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
-            ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">已保存草稿预览${selected.preview?.partial ? "（处理中）" : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? "\n\n[预览过长，已在工作台截断显示]" : ""}</pre></section>` : null}
-            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">最近事件</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
+            <section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.sourceAndArtifact")}</h4><div class="meta" style="overflow-wrap:anywhere">${t4("chat.outputLabel", { path: selected.outputPath || t4("chat.outputUndecided") })}</div>${sourcePaths.length > 0 ? html4`<ol style="margin:8px 0 0;padding-left:22px">${sourcePaths.map((path) => html4`<li style="font-size:12px;line-height:1.6;overflow-wrap:anywhere">${path}</li>`)}</ol>` : null}</section>
+            ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.criteriaTitle")}</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
+            ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.modelHistoryTitle")}</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thModel")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thRole")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thResult")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thCalls")}</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? t4("chat.roleFallback") : t4("chat.rolePrimary")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? t4("chat.resultPass") : t4("chat.resultFail")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
+            ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.draftPreviewTitle")}${selected.preview?.partial ? t4("chat.draftPreviewPartial") : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? t4("chat.previewTruncated") : ""}</pre></section>` : null}
+            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.recentEventsTitle")}</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
           `}
         </main>
       </div>
@@ -817,13 +834,13 @@ function pickWorkspaceDirectoryFromBridge() {
   }
   return new Promise((resolve, reject) => {
     if (!window.parent || window.parent === window) {
-      reject(new Error("本地目录选择器仅在桌面端可用"));
+      reject(new Error(t4("chat.localDirOnlyDesktop")));
       return;
     }
     const requestId = `workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const timer = setTimeout(() => {
       window.removeEventListener("message", onMessage);
-      reject(new Error("目录选择器响应超时"));
+      reject(new Error(t4("chat.dirPickerTimeout")));
     }, 5 * 60 * 1e3);
     function onMessage(event) {
       const data = event.data;
@@ -839,7 +856,7 @@ function pickWorkspaceDirectoryFromBridge() {
 }
 async function openMarkdownDocumentByPicker() {
   try {
-    showToast("请选择 Markdown 文档...", "info", 1500);
+    showToast(t4("chat.selectMdDoc"), "info", 1500);
     try {
       const path = await pickMarkdownFileFromBridge();
       if (!path) return;
@@ -853,7 +870,7 @@ async function openMarkdownDocumentByPicker() {
       return;
     }
   } catch (err) {
-    showToast(err.message || "Markdown 文档打开失败", "error", 5e3);
+    showToast(err.message || t4("chat.mdOpenFailed"), "error", 5e3);
   }
 }
 window.addEventListener("message", (event) => {
@@ -888,24 +905,24 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
         await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
       } else if (kind === "copy") {
         await writeClipboardText(file.path);
-        showToast("路径已复制", "info");
+        showToast(t4("chat.pathCopied"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("chat.fileOpFailed"), "error", 5e3);
     }
   };
   return html4`
     <div class="rail-card file-artifact-card">
       <div class="rh">
-        <span>${selected ? "当前回复文件" : "最新生成文件"}</span>
-        ${selected ? html4`<button type="button" class="rail-card-link" onClick=${onFollowLatest}>回到最新</button>` : null}
-        <button type="button" class="rail-card-close" onClick=${onDismiss} title="隐藏">×</button>
+        <span>${selected ? t4("chat.currentReplyFiles") : t4("chat.latestFiles")}</span>
+        ${selected ? html4`<button type="button" class="rail-card-link" onClick=${onFollowLatest}>${t4("chat.followLatest")}</button>` : null}
+        <button type="button" class="rail-card-close" onClick=${onDismiss} title=${t4("chat.hide")}>×</button>
       </div>
-      <div class="file-artifact-summary">检测到 ${files.length} 个可操作文件${groups.length > 1 ? ` · ${groups.length} 个文件夹` : ""}</div>
+      <div class="file-artifact-summary">${t4("chat.filesDetected", { count: files.length })}${groups.length > 1 ? t4("chat.foldersSuffix", { count: groups.length }) : ""}</div>
       <div class="file-artifact-list">
         ${groups.map((group) => html4`
           <div class="file-artifact-group" key=${group.dir || "root"}>
-            ${groups.length > 1 ? html4`<div class="file-artifact-dir" title=${group.dir}>${group.dir || "当前目录"}</div>` : null}
+            ${groups.length > 1 ? html4`<div class="file-artifact-dir" title=${group.dir}>${group.dir || t4("chat.currentDir")}</div>` : null}
             ${group.files.map((file) => {
     const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
     const canPreview = file.previewable || FILE_ARTIFACT_PREVIEW_EXTS.has(ext);
@@ -915,10 +932,10 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
               <div class="file-artifact-name" title=${file.path}>${file.filename}</div>
               <div class="file-artifact-meta">${fileArtifactKind(ext)}${file.size ? ` · ${fmtBytes(file.size)}` : ""}</div>
               <div class="file-artifact-actions">
-                ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>查看</button>` : null}
-                ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>打开</button>` : null}
-                <button type="button" onClick=${() => action("folder", file)}>所在文件夹</button>
-                <button type="button" onClick=${() => action("copy", file)}>复制路径</button>
+                ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>${t4("chat.preview")}</button>` : null}
+                ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>${t4("chat.open")}</button>` : null}
+                <button type="button" onClick=${() => action("folder", file)}>${t4("chat.openFolder")}</button>
+                <button type="button" onClick=${() => action("copy", file)}>${t4("chat.copyPath")}</button>
               </div>
             </div>
           `;
@@ -926,23 +943,23 @@ function FileArtifactsCard({ files, selected, onFollowLatest, onDismiss }) {
           </div>
         `)}
       </div>
-      ${more > 0 ? html4`<div class="file-artifact-more">还有 ${more} 个文件，已自动去重</div>` : null}
+      ${more > 0 ? html4`<div class="file-artifact-more">${t4("chat.moreFilesDedup", { count: more })}</div>` : null}
     </div>
   `;
 }
 function recentFileSourceLabel(source) {
-  if (source === "report") return "任务报告";
-  if (source === "opened") return "打开过";
-  if (source === "saved") return "另存产物";
-  if (source === "generated") return "生成文件";
-  return "文件";
+  if (source === "report") return t4("chat.srcReport");
+  if (source === "opened") return t4("chat.srcOpened");
+  if (source === "saved") return t4("chat.srcSaved");
+  if (source === "generated") return t4("chat.srcGenerated");
+  return t4("chat.srcFile");
 }
 function fmtRecentFileTime(ms) {
-  if (!Number.isFinite(Number(ms))) return "时间未知";
+  if (!Number.isFinite(Number(ms))) return t4("chat.timeUnknown");
   try {
     return new Date(Number(ms)).toLocaleString();
   } catch {
-    return "时间未知";
+    return t4("chat.timeUnknown");
   }
 }
 function FilesPanel() {
@@ -981,32 +998,32 @@ function FilesPanel() {
         await api("/artifacts/open-folder", { method: "POST", body: { path: file.path } });
       } else if (kind === "copy") {
         await writeClipboardText(file.path);
-        showToast("路径已复制", "info");
+        showToast(t4("chat.pathCopied"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("chat.fileOpFailed"), "error", 5e3);
     }
   };
   return html4`
     <div class="files-panel">
       <div class="files-toolbar">
         <div class="files-heading">
-          <div class="files-title">文件中心</div>
-          <div class="files-subtitle">集中查看最近生成、打开和任务输出的文件</div>
+          <div class="files-title">${t4("chat.filesTitle")}</div>
+          <div class="files-subtitle">${t4("chat.filesSubtitle")}</div>
         </div>
         <input
           class="input files-search"
           value=${query}
           onInput=${(e3) => setQuery(e3.target.value)}
-          placeholder="搜索文件名或路径"
+          placeholder=${t4("chat.filesSearchPlaceholder")}
         />
-        <button class="btn" onClick=${load} disabled=${loading}>${loading ? "刷新中..." : "刷新"}</button>
+        <button class="btn" onClick=${load} disabled=${loading}>${loading ? t4("chat.refreshingBtn") : t4("chat.refreshBtn")}</button>
       </div>
-      ${error ? html4`<div class="files-notice err">文件列表加载失败：${error.message}</div>` : null}
-      ${loading && files.length === 0 ? html4`<div class="files-empty">正在加载最近文件...</div>` : null}
-      ${!loading && visible.length === 0 ? html4`<div class="files-empty">${query.trim() ? "没有匹配的文件。" : "暂无最近文件。对话生成文件、任务报告或打开 Markdown 后会出现在这里。"}</div>` : null}
+      ${error ? html4`<div class="files-notice err">${t4("chat.filesLoadFailed")}${error.message}</div>` : null}
+      ${loading && files.length === 0 ? html4`<div class="files-empty">${t4("chat.filesLoading")}</div>` : null}
+      ${!loading && visible.length === 0 ? html4`<div class="files-empty">${query.trim() ? t4("chat.filesNoMatch") : t4("chat.filesEmpty")}</div>` : null}
       ${visible.length > 0 ? html4`
-        <div class="files-summary">共 ${files.length} 个最近文件${query.trim() ? ` · 当前显示 ${visible.length} 个` : ""}</div>
+        <div class="files-summary">${t4("chat.filesSummary", { total: files.length })}${query.trim() ? t4("chat.filesSummaryFiltered", { count: visible.length }) : ""}</div>
         <div class="files-list">
           ${visible.map((file) => {
     const ext = String(file.ext || "").replace(/^\./, "").toLowerCase();
@@ -1026,10 +1043,10 @@ function FilesPanel() {
               <div class="files-side">
                 <span class="files-source">${recentFileSourceLabel(file.source)}</span>
                 <div class="files-actions">
-                  ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>查看</button>` : null}
-                  ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>打开</button>` : null}
-                  <button type="button" onClick=${() => action("folder", file)}>所在文件夹</button>
-                  <button type="button" onClick=${() => action("copy", file)}>复制路径</button>
+                  ${canPreview ? html4`<button type="button" onClick=${() => action("preview", file)}>${t4("chat.preview")}</button>` : null}
+                  ${canOpen ? html4`<button type="button" onClick=${() => action("open", file)}>${t4("chat.open")}</button>` : null}
+                  <button type="button" onClick=${() => action("folder", file)}>${t4("chat.openFolder")}</button>
+                  <button type="button" onClick=${() => action("copy", file)}>${t4("chat.copyPath")}</button>
                 </div>
               </div>
             </div>
@@ -1213,6 +1230,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [operation, setOperation] = d2(null);
   const [backgroundJobs, setBackgroundJobs] = d2([]);
   const [pendingDeliveries, setPendingDeliveries] = d2([]);
+  const [backgroundJobsLoading, setBackgroundJobsLoading] = d2(false);
   const [showBackgroundJobs, setShowBackgroundJobs] = d2(false);
   const [selectedBackgroundJobId, setSelectedBackgroundJobId] = d2(null);
   const [backgroundJobDetail, setBackgroundJobDetail] = d2(null);
@@ -1259,11 +1277,11 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       const result = await api("/optimize-prompt", { method: "POST", body: { prompt: source } });
       if (inputValueRef.current.trim() !== source) {
-        showToast("输入内容已变化，未覆盖你刚才的修改", "info");
+        showToast(t4("chat.draftKept"), "info");
         return;
       }
       const optimized = String(result?.prompt ?? "").trim();
-      if (!optimized) throw new Error("模型没有返回可用的优化结果");
+      if (!optimized) throw new Error(t4("chat.optimizeNoResult"));
       setChatInput(optimized);
       setTimeout(() => {
         inputRef.current?.focus();
@@ -1272,9 +1290,9 @@ const [providerCaps, setProviderCaps] = d2(null);
         } catch {
         }
       }, 0);
-      showToast("提示词已优化，请确认后发送", "success");
+      showToast(t4("chat.optimizeDone"), "success");
     } catch (err) {
-      setError(`提示词优化失败：${err.message}`);
+      setError(t4("chat.optimizeFailed", { msg: err.message }));
     } finally {
       setPromptOptimizing(false);
     }
@@ -1283,6 +1301,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
   const refreshBackgroundJobs = q2(async () => {
+    setBackgroundJobsLoading(true);
     try {
       const result = await api("/background-jobs");
       const next = Array.isArray(result.jobs) ? result.jobs : [];
@@ -1291,6 +1310,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       return next;
     } catch {
       return [];
+    } finally {
+      setBackgroundJobsLoading(false);
     }
   }, []);
   const stopBackgroundJob = q2(async (id) => {
@@ -1408,7 +1429,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const previewDocumentJob = q2(async (job, artifact = null) => {
     try {
       if (artifact?.path) {
-        const filename = artifact.filename || artifact.name || artifact.path.split(/[\\/]/).pop() || "任务产物";
+        const filename = artifact.filename || artifact.name || artifact.path.split(/[\\/]/).pop() || t4("chat.artifactDefaultName");
         const ext = filename.includes(".") ? filename.split(".").pop() : "";
         await showFileArtifactPreview({ path: artifact.path, filename, ext });
         return;
@@ -1419,10 +1440,10 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       const detail = await api(`/background-jobs/${encodeURIComponent(job.id)}`);
       const preview = detail?.job?.preview;
-      if (!preview?.content) throw new Error("当前还没有可预览的已完成区块");
+      if (!preview?.content) throw new Error(t4("chat.noPreviewableChunk"));
       showArtifactPreview({
         id: `document-job-${Date.now()}`,
-        filename: preview.filename || "文档中间预览.md",
+        filename: preview.filename || t4("chat.docPreviewDefaultName"),
         path: "",
         lang: "markdown",
         content: preview.content
@@ -1437,6 +1458,10 @@ const [providerCaps, setProviderCaps] = d2(null);
     const id = setInterval(refreshBackgroundJobs, 5e3);
     return () => clearInterval(id);
   }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
+  // B+：后台 chip 平时隐藏、仅在有运行中/需处理任务时出现。若工作台打开期间任务清零，则自动收起回消息流，避免工作台失去唯一入口。
+  y2(() => {
+    if (showBackgroundJobs && !backgroundJobsLoading && !backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job))) closeBackgroundWorkbench();
+  }, [showBackgroundJobs, backgroundJobsLoading, backgroundJobs, closeBackgroundWorkbench]);
   y2(() => {
     const refreshOnFocus = () => {
       void refreshBackgroundJobs();
@@ -1846,22 +1871,30 @@ const [providerCaps, setProviderCaps] = d2(null);
         setStreaming(null);
         setActiveTools([]);
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: dash.id,
-            role: "assistant",
-            text: dash.text,
-            reasoning: dash.reasoning ?? completedStream?.reasoning,
-            reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-            receipt: dash.receipt,
-            taskState: dash.taskState,
-            artifactIncomplete: dash.artifactIncomplete === true,
-            interventionChoice: dash.interventionChoice,
-            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+        const nextMessage = {
+          id: dash.id,
+          role: "assistant",
+          text: dash.text,
+          reasoning: dash.reasoning ?? completedStream?.reasoning,
+          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
+          receipt: dash.receipt,
+          taskState: dash.taskState,
+          artifactIncomplete: dash.artifactIncomplete === true,
+          interventionChoice: dash.interventionChoice,
+          warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+        };
+        let inserted = false;
+        setMessages((prev) => {
+          const index = prev.findIndex((item) => String(item.id || "") === String(dash.id || ""));
+          if (index < 0) {
+            inserted = true;
+            return [...prev, nextMessage];
           }
-        ]);
-        setTotalMessages((count) => count + 1);
+          const copy = [...prev];
+          copy[index] = { ...copy[index], ...nextMessage };
+          return copy;
+        });
+        if (inserted) setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
@@ -2004,6 +2037,8 @@ const [providerCaps, setProviderCaps] = d2(null);
     eventBatcherRef.current = eventBatcher;
     const onDash = (dash) => {
       if (!eventGuardRef.current?.accept(dash)) return;
+      const eventSessionId = String(dash.sessionId ?? "").trim();
+      if (eventSessionId && activeConversationId && eventSessionId !== String(activeConversationId)) return;
       if (dash.kind === "resync-required") {
         void resyncDashboardEvents();
         return;
@@ -2033,7 +2068,15 @@ const [providerCaps, setProviderCaps] = d2(null);
       eventBatcherRef.current = null;
       cancelStreamingRaf();
     };
-  }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend]);
+  }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend, activeConversationId]);
+  y2(() => {
+    // A session switch invalidates queued transient events from the previous
+    // conversation. Canonical state loading will repopulate the new session.
+    eventBatcherRef.current?.discard();
+    bufferedDashboardEventsRef.current.splice(0);
+    executionStateRef.current = createDashboardReducerState();
+    eventGuardRef.current?.reset();
+  }, [activeConversationId]);
   var handleFileChange = q2(async function(e) {
     var files = e.target.files;
     if (!files || files.length === 0) return;
@@ -2046,7 +2089,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       } catch (err) {
         if (err?.name === "AbortError") continue;
         console.error("Media upload failed:", err);
-        setError(`附件上传失败：${err.message}`);
+        setError(t4("chat.uploadFailed", { msg: err.message }));
       }
     }
     if (uploadScopeRef.current !== scope || scope.controller.signal.aborted) {
@@ -2122,16 +2165,16 @@ const [providerCaps, setProviderCaps] = d2(null);
     return scope;
   };
   var uploadMediaAttachment = async function(file, scope = currentUploadScope()) {
-    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error("附件文件为空");
-    if (file.size > 50 * 1024 * 1024) throw new Error("附件超过 50 MB 限制");
+    if (!file || !Number.isFinite(file.size) || file.size < 1) throw new Error(t4("chat.attachmentEmpty"));
+    if (file.size > 50 * 1024 * 1024) throw new Error(t4("chat.attachmentTooLarge"));
     const isImage = String(file.type || "").startsWith("image/");
     const extension = /\.([^.]+)$/.exec(String(file.name || ""))?.[1]?.toLowerCase() || "";
     const videoMimeByExtension = { mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm" };
     const declaredMime = String(file.type || videoMimeByExtension[extension] || "application/octet-stream").toLowerCase();
     const isVideo = ["video/mp4", "video/quicktime", "video/webm"].includes(declaredMime) || Object.hasOwn(videoMimeByExtension, extension);
-    if (!isImage && !isVideo) throw new Error("仅支持图片、MP4、MOV 或 WebM 视频");
-    if (isImage && !canUploadImages) throw new Error("当前模型不支持图片输入");
-    if (isVideo && !canUploadVideos) throw new Error("仅显式配置的官方 Kimi 视频模型支持视频输入");
+    if (!isImage && !isVideo) throw new Error(t4("chat.attachmentTypeUnsupported"));
+    if (isImage && !canUploadImages) throw new Error(t4("chat.imageNotSupported"));
+    if (isVideo && !canUploadVideos) throw new Error(t4("chat.videoNotSupported"));
     const preview = isImage ? await compressImage(file) : null;
     const initialized = await api("/attachments", {
       method: "POST",
@@ -2148,7 +2191,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         await api("/attachments", { method: "POST", body: { action: "chunk", uploadId, offset, data }, signal: scope?.controller.signal });
       }
       const completed = await api("/attachments", { method: "POST", body: { action: "finish", uploadId }, signal: scope?.controller.signal });
-      if (!completed.attachment?.id) throw new Error("宿主未返回附件 ID");
+      if (!completed.attachment?.id) throw new Error(t4("chat.attachmentNoId"));
       const result = {
         attachmentId: completed.attachment.id,
         preview,
@@ -2162,7 +2205,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       };
       if (uploadScopeRef.current !== scope || scope?.controller.signal.aborted) {
         await releaseUploadedImages([result]);
-        const staleError = new Error("附件上传所属会话或工作区已经切换");
+        const staleError = new Error(t4("chat.attachmentStale"));
         staleError.name = "AbortError";
         throw staleError;
       }
@@ -2286,7 +2329,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           ok: false,
           requiresUserRetry: true,
           code: "PROMPT_COMPLETION_FAILED",
-          reason: res.completion.error ?? "上一次执行未成功，请明确重试。"
+          reason: res.completion.error ?? t4("chat.lastRunFailed")
         };
       }
       shouldAutoScroll.current = true;
@@ -2351,7 +2394,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     for (const attachmentId of attachments) queuedAttachmentIdsRef.current.add(attachmentId);
     try {
       const persisted = await persistQueuedPrompt(item);
-      if (persisted?.ok === false) throw new Error(persisted.error || "队列持久化失败");
+      if (persisted?.ok === false) throw new Error(persisted.error || t4("chat.queuePersistFailed"));
     } catch (err) {
       for (const attachmentId of attachments) queuedAttachmentIdsRef.current.delete(attachmentId);
       const currentScopeKey = uploadScopeRef.current?.key ?? null;
@@ -2377,7 +2420,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     const claimedQueueScope = queueStorageKey;
     try {
       const deleted = await deletePersistedQueuedPrompt(id);
-      if (deleted?.ok === false) throw new Error(deleted.error || "队列删除失败");
+      if (deleted?.ok === false) throw new Error(deleted.error || t4("chat.queueDeleteFailed"));
     } catch (err) {
       setError(t4("chat.queueFailed", { error: err.message }));
       return false;
@@ -2422,7 +2465,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     const claimedQueueScope = queueStorageKey;
     try {
       const deleted = await deletePersistedQueuedPrompt();
-      if (deleted?.ok === false) throw new Error(deleted.error || "队列清空失败");
+      if (deleted?.ok === false) throw new Error(deleted.error || t4("chat.queueClearFailed"));
     } catch (err) {
       setError(t4("chat.queueFailed", { error: err.message }));
       return false;
@@ -2452,7 +2495,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     const claimedQueueScope = queueStorageKey;
     try {
       const deleted = await deletePersistedQueuedPrompt();
-      if (deleted?.ok === false) throw new Error(deleted.error || "队列清空失败");
+      if (deleted?.ok === false) throw new Error(deleted.error || t4("chat.queueClearFailed"));
     } catch (err) {
       setError(t4("chat.queueFailed", { error: err.message }));
       return false;
@@ -2584,11 +2627,11 @@ const [providerCaps, setProviderCaps] = d2(null);
     const paused = planContinuation;
     setPlanContinuation(null);
     const result = await submitPromptPayload({
-      text: "继续执行当前未完成计划。不要重新制定计划，从中断处继续，完成实际产物并验证后再结束。"
+      text: t4("chat.planContinuationText")
     });
     if (!result.ok) {
       setPlanContinuation(paused);
-      setError(result.reason ?? "继续执行失败");
+      setError(result.reason ?? t4("chat.planContinueFailed"));
     }
   }, [busy, planContinuation, submitPromptPayload]);
   const abort = q2(async () => {
@@ -2683,7 +2726,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     try {
       await showFileArtifactPreview({ path: `${workspaceDir}/${source.path}` });
     } catch (err) {
-      showToast(err.message || "索引来源预览失败", "error", 5e3);
+      showToast(err.message || t4("chat.indexPreviewFailed"), "error", 5e3);
     }
   }, [workspaceDir]);
   const clearScrollback = q2(async () => {
@@ -3024,7 +3067,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         } else if (plainText) {
           insertAtCursor(plainText);
         } else if (fileNames.length > 0) {
-          showClipboardNotice("无法读取剪贴板中的文件路径，请重新复制文件或文件夹。");
+          showClipboardNotice(t4("chat.clipboardNoPath"));
         }
       }
       function tryServerClipboardPaths() {
@@ -3268,24 +3311,24 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   const setSetting = q2(async (key, value) => {
     const modelMenuSetting = key === "preset" || key === "reasoningEffort" || key === "model";
-    if (modelMenuSetting) pushModelNotice("正在应用模型设置...", "info", 0);
+    if (modelMenuSetting) pushModelNotice(t4("chat.modelApplying"), "info", 0);
     if (key === "preset") setPresetLocal(value);
     if (key === "reasoningEffort") setEffortLocal(value);
     if (key === "mode") setModeLocal(value);
     try {
       const updated = await api("/settings", { method: "POST", body: { [key]: value } });
-      if (key === "mode") showToast("工作场景已切换，下次新对话生效", "info");
+      if (key === "mode") showToast(t4("chat.modeSwitchedNextChat"), "info");
       if ((key === "preset" || key === "model") && updated?.modelSwitch) {
         const switched = updated.modelSwitch;
         const count = Number.isFinite(switched.messageCount) ? switched.messageCount : 0;
-        const adaptation = switched.contextStatus?.needsCompaction ? "，发送下一条消息前将自动整理历史" : "";
+        const adaptation = switched.contextStatus?.needsCompaction ? t4("chat.compactionNote") : "";
         pushModelNotice(switched.deferred
-          ? `已选择 ${switched.model}，将在当前回答结束后切换，保留 ${count} 条上下文${adaptation}`
-          : `✓ 已切换到 ${switched.model}，保留 ${count} 条上下文${adaptation}`, "success");
+          ? t4("chat.modelQueuedSwitch", { model: switched.model, count, adaptation })
+          : t4("chat.modelSwitchedKeep", { model: switched.model, count, adaptation }), "success");
       } else if (key === "preset") {
-        pushModelNotice(`✓ 已选择 ${value} 模式`, "success");
+        pushModelNotice(t4("chat.effortSelected", { value }), "success");
       } else if (key === "reasoningEffort") {
-        pushModelNotice(`✓ 推理强度已设为 ${reasoningEffortLabel(value)}`, "success");
+        pushModelNotice(t4("chat.effortSetTo", { label: reasoningEffortLabel(value) }), "success");
       }
       try {
         const o3 = await api("/overview");
@@ -3295,7 +3338,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setEffortLocal(o3.reasoningEffort ?? null);
       } catch {}
     } catch (err) {
-      if (modelMenuSetting) pushModelNotice(`切换失败：${err.message}`, "error", 5e3);
+      if (modelMenuSetting) pushModelNotice(t4("chat.switchFailed", { msg: err.message }), "error", 5e3);
       else setError(`${key} switch failed: ${err.message}`);
       try {
         const o3 = await api("/overview");
@@ -3310,7 +3353,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     }
   }, [pushModelNotice]);
   const selectProviderModel = q2(async (providerId, modelId) => {
-    pushModelNotice("正在切换模型...", "info", 0);
+    pushModelNotice(t4("chat.modelSwitching"), "info", 0);
     try {
       const switched = await api("/providers/active", { method: "POST", body: { id: providerId, modelId } });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
@@ -3322,13 +3365,13 @@ const [providerCaps, setProviderCaps] = d2(null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? modelId);
       const count = switched?.modelSwitch?.messageCount;
-      pushModelNotice(Number.isFinite(count) ? `✓ 已切换模型，保留 ${count} 条上下文` : "✓ 模型已切换", "success");
+      pushModelNotice(Number.isFinite(count) ? t4("chat.modelSwitchedKeepCount", { count }) : t4("chat.modelSwitched"), "success");
     } catch (err) {
-      pushModelNotice(`切换失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.switchFailed", { msg: err.message }), "error", 5e3);
     }
   }, [pushModelNotice]);
   const confirmProviderImport = q2(async (draft, plan) => {
-    pushModelNotice("正在导入模型配置...", "info", 0);
+    pushModelNotice(t4("chat.importingConfig"), "info", 0);
     try {
       await api("/providers/import", {
         method: "POST",
@@ -3342,26 +3385,26 @@ const [providerCaps, setProviderCaps] = d2(null);
       setPresetLocal(overview.preset ?? null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? null);
-      pushModelNotice("✓ 配置导入成功，请检测模型", "success", 5e3);
+      pushModelNotice(t4("chat.importOkVerify"), "success", 5e3);
     } catch (err) {
-      pushModelNotice(`导入失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.importFailed", { msg: err.message }), "error", 5e3);
     }
   }, [pushModelNotice]);
   const loadProviderImportFile = q2(async (event) => {
     const file = event.target.files?.[0];
     if (!file || providerImporting) return;
     setProviderImporting(true);
-    pushModelNotice("正在检查模型配置...", "info", 0);
+    pushModelNotice(t4("chat.checkingConfig"), "info", 0);
     try {
       const draft = parseProviderImportJson(await file.text());
       const plan = await api("/providers/import/preview", { method: "POST", body: draft });
-      if (plan.requiresConfirmation === true && !confirm("该配置会永久删除现有模型，确认继续导入吗？")) {
-        pushModelNotice("已取消导入", "info");
+      if (plan.requiresConfirmation === true && !confirm(t4("chat.confirmImportDeletes"))) {
+        pushModelNotice(t4("chat.importCancelled"), "info");
         return;
       }
       await confirmProviderImport(draft, plan);
     } catch (err) {
-      pushModelNotice(`导入失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.importFailed", { msg: err.message }), "error", 5e3);
     } finally {
       setProviderImporting(false);
     }
@@ -3369,7 +3412,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const testAllProviders = q2(async () => {
     if (providerTesting) return;
     setProviderTesting(true);
-    pushModelNotice("正在检测全部模型...", "info", 0);
+    pushModelNotice(t4("chat.testingAll"), "info", 0);
     try {
       const tested = await api("/providers/test", { method: "POST", body: {} });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
@@ -3381,9 +3424,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? null);
       const failed = tested.total - tested.passed;
-      pushModelNotice(failed > 0 ? `检测完成：${tested.passed} 个可用，${failed} 个不可用` : `✓ ${tested.passed} 个模型全部可用`, failed > 0 ? "error" : "success", 5e3);
+      pushModelNotice(failed > 0 ? t4("chat.testDoneWithFail", { passed: tested.passed, failed }) : t4("chat.testAllPassed", { passed: tested.passed }), failed > 0 ? "error" : "success", 5e3);
     } catch (err) {
-      pushModelNotice(`模型检测失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.testFailed", { msg: err.message }), "error", 5e3);
     } finally {
       setProviderTesting(false);
     }
@@ -3391,9 +3434,9 @@ const [providerCaps, setProviderCaps] = d2(null);
   const cleanupFailedModels = q2(async () => {
     const failed = providerModelTestSummary(providers ?? []).failed;
     if (!failed || !modelVerification?.testedAt || providerCleaning) return;
-    if (!confirm(`将删除 ${failed} 个检测失败模型，不影响可用模型。确认继续吗？`)) return;
+    if (!confirm(t4("chat.confirmCleanFailed", { failed }))) return;
     setProviderCleaning(true);
-    pushModelNotice("正在删除检测失败模型...", "info", 0);
+    pushModelNotice(t4("chat.cleaningFailed"), "info", 0);
     try {
       const cleaned = await api("/providers/cleanup-failed", { method: "POST", body: { testedAt: modelVerification.testedAt } });
       const [pr, overview] = await Promise.all([api("/providers"), api("/overview")]);
@@ -3404,9 +3447,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       setPresetLocal(overview.preset ?? null);
       setEffortLocal(overview.reasoningEffort ?? null);
       setOverviewModel(overview.model ?? cleaned.activeModelId ?? null);
-      pushModelNotice(`✓ 已删除 ${cleaned.removedModels} 个不可用模型`, "success", 5e3);
+      pushModelNotice(t4("chat.cleanedModels", { count: cleaned.removedModels }), "success", 5e3);
     } catch (err) {
-      pushModelNotice(`删除失败：${err.message}`, "error", 5e3);
+      pushModelNotice(t4("chat.cleanFailed", { msg: err.message }), "error", 5e3);
     } finally {
       setProviderCleaning(false);
     }
@@ -3544,18 +3587,18 @@ const [providerCaps, setProviderCaps] = d2(null);
     <div class="chat-shell">
       <div class="chat-toolbar">
         <div class="header-pickers">${modes ? html4`
-              <div class="work-mode-summary" title=${activeMode?.hint || "切换后下次新对话生效"}>
+              <div class="work-mode-summary" title=${activeMode?.hint || t4("chat.modeSwitchHint")}>
                 <span class="work-mode-label">${activeMode?.label ?? mode}</span>
-                <span class="work-mode-desc">${activeMode?.description ?? "切换工作场景"}</span>
-                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || "未启用"}${eccRules?.available ? ` · ${(eccRules.enabled ?? []).length}/${eccRules.available.length}` : ""}</span>
+                <span class="work-mode-desc">${activeMode?.description ?? t4("chat.switchWorkMode")}</span>
+                <span class="work-mode-meta">ECC ${(activeMode?.effectiveRules ?? activeMode?.rules ?? []).join("+") || t4("chat.eccNotEnabled")}${eccRules?.available ? ` · ${(eccRules.enabled ?? []).length}/${eccRules.available.length}` : ""}</span>
               </div>
-              <div class="mode-picker work-mode-picker" title="工作场景 \u2014 下次新对话生效">
+              <div class="mode-picker work-mode-picker" title=${t4("chat.modePickerTitle")}>
                 ${modes.map((m) => html4`
                   <button
                     key=${m.id}
                     class="mode-btn ${mode === m.id ? "active accent" : ""}"
                     onClick=${() => setSetting("mode", m.id)}
-                    title="${m.label}: ${m.description || "切换工作场景"} · ECC ${(m.effectiveRules||m.rules||[]).join("+")} · 下次新对话生效"
+                    title=${t4("chat.modeOptionTitle", { label: m.label, desc: m.description || t4("chat.switchWorkMode"), rules: (m.effectiveRules || m.rules || []).join("+") })}
                   >${m.label}</button>
                 `)}
               </div>
@@ -3632,13 +3675,13 @@ const [providerCaps, setProviderCaps] = d2(null);
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
           ${!showBackgroundJobs && hasNewBelow ? html4`
-            <button type="button" class="chat-new-messages-pill" onClick=${() => { shouldAutoScroll.current = true; setHasNewBelow(false); pinFeedToBottom(); }}>↓ 有新消息</button>
+            <button type="button" class="chat-new-messages-pill" onClick=${() => { shouldAutoScroll.current = true; setHasNewBelow(false); pinFeedToBottom(); }}>${t4("chat.newMessagesBelow")}</button>
           ` : null}
           ${feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { shouldAutoScroll.current = true; setHasNewBelow(false); void refetchCanonicalState(); })}>刷新对话</button>
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>展开全部工作步骤</button>
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>折叠全部工作步骤</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { shouldAutoScroll.current = true; setHasNewBelow(false); void refetchCanonicalState(); })}>${t4("chat.feedRefresh")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>${t4("chat.feedCollapseAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void newConversation(); })}>${t4("chat.new")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void clearScrollback(); })}>${t4("chat.clear")}</button>
             </div>
@@ -3650,11 +3693,11 @@ const [providerCaps, setProviderCaps] = d2(null);
             <div class="plan-continuation-bar" role="status">
               <span class="plan-continuation-icon">!</span>
               <span class="plan-continuation-text">
-                计划尚未完成 · ${planContinuation.completedSteps}/${planContinuation.totalSteps} 步
-                <small>已自动续跑 ${planContinuation.attempts} 次</small>
+                ${t4("chat.planIncomplete", { done: planContinuation.completedSteps, total: planContinuation.totalSteps })}
+                <small>${t4("chat.planAutoResumed", { count: planContinuation.attempts })}</small>
               </span>
-              <button type="button" class="primary" onClick=${resumeIncompletePlan} disabled=${busy}>继续执行</button>
-              <button type="button" class="plan-continuation-dismiss" onClick=${() => setPlanContinuation(null)} title="暂时关闭">×</button>
+              <button type="button" class="primary" onClick=${resumeIncompletePlan} disabled=${busy}>${t4("chat.planResume")}</button>
+              <button type="button" class="plan-continuation-dismiss" onClick=${() => setPlanContinuation(null)} title=${t4("chat.planDismiss")}>×</button>
             </div>
           ` : null}
 
@@ -3686,7 +3729,7 @@ const [providerCaps, setProviderCaps] = d2(null);
               <div style="display:flex;gap:6px;align-items:flex-end">
             <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0">
             ${canUploadMedia ? html4`<input type="file" accept=${acceptedAttachmentTypes} multiple onChange=${handleFileChange} ref=${fileInputRef} style="display:none" />` : null}
-            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(image, idx) { const preview = typeof image === "string" ? image : image?.preview; const isVideo = typeof image === "object" && image?.kind === "video"; return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0" title=${typeof image === "object" ? image.name : "图片"}>${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">${isVideo ? "视频" : "图片"}</span>`}<button onClick=${function() { void releaseUploadedImages([image]); var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title="删除附件">✕</button></div>`; })}</div>` : null}
+            ${pendingImages.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px">${pendingImages.map(function(image, idx) { const preview = typeof image === "string" ? image : image?.preview; const isVideo = typeof image === "object" && image?.kind === "video"; return html4`<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;border:1px solid var(--border-default,#2a2e38);flex-shrink:0" title=${typeof image === "object" ? image.name : t4("chat.thumbImage")}>${preview ? html4`<img src=${preview} style="width:100%;height:100%;object-fit:cover" />` : html4`<span style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;font-size:11px;color:var(--text-muted)">${isVideo ? t4("chat.thumbVideo") : t4("chat.thumbImage")}</span>`}<button onClick=${function() { void releaseUploadedImages([image]); var next = pendingImages.slice(); next.splice(idx, 1); setPendingImages(next); }} style="position:absolute;top:2px;right:2px;width:18px;height:18px;background:rgba(248,113,113,0.95);color:#fff;border:none;border-radius:50%;font-size:10px;line-height:18px;cursor:pointer;padding:0;box-shadow:0 1px 3px rgba(0,0,0,0.3);opacity:1;display:flex;align-items:center;justify-content:center;" title=${t4("chat.deleteAttachment")}>✕</button></div>`; })}</div>` : null}
             ${queuedPrompts.length > 0 ? html4`
               <div class="chat-queue">
                 ${queuePaused ? html4`<div class="chat-queue-paused"><span>${t4("chat.queuePaused")}</span><button type="button" onClick=${() => { setQueuePaused(false); setQueuePumpTick((v) => v + 1); }}>${t4("chat.queueResume")}</button></div>` : null}
@@ -3761,15 +3804,17 @@ const [providerCaps, setProviderCaps] = d2(null);
               rows="4"
             ></textarea>
             <div class="composer-bar">
-              <button type="button" class="composer-chip-ghost" aria-expanded=${showModelPicker} title="模型与思考设置" onClick=${() => { cancelModelGroupClose(); setShowModelPicker(!showModelPicker); setOpenModelGroupId(null); setShowSkillPicker(false); setShowWsPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}>🤖 模型</button>
-              <button type="button" class="composer-chip-ghost" aria-expanded=${showWsPicker} title="切换工作空间" onClick=${() => { const next = !showWsPicker; setShowWsPicker(next); setShowSkillPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); if (next) void loadWorkspaceOptions(); }}>💻 工作空间</button>
-              <button type="button" class=${`composer-chip-ghost ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? "has-activity" : ""}`} title=${`运行中 ${backgroundJobs.filter((job) => job.running).length}，待处理 ${backgroundJobs.filter(backgroundJobNeedsAttention).length}`} aria-expanded=${showBackgroundJobs} onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench(); }}>📋 后台${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length > 0 ? html4` <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span>` : null}</button>
+              <button type="button" class="composer-chip-ghost" aria-expanded=${showModelPicker} title=${t4("chat.modelAndEffortTitle")} onClick=${() => { cancelModelGroupClose(); setShowModelPicker(!showModelPicker); setOpenModelGroupId(null); setShowSkillPicker(false); setShowWsPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}><${IconModel} /> ${t4("chat.chipModel")}</button>
+              <button type="button" class="composer-chip-ghost" aria-expanded=${showWsPicker} title=${t4("chat.switchWorkspaceTitle")} onClick=${() => { const next = !showWsPicker; setShowWsPicker(next); setShowSkillPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); if (next) void loadWorkspaceOptions(); }}><${IconWorkspace} /> ${t4("chat.chipWorkspace")}</button>
+              ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? html4`
+                <button type="button" class="composer-chip-ghost has-activity" title=${t4("chat.bgChipTitle", { running: backgroundJobs.filter((job) => job.running).length, attention: backgroundJobs.filter(backgroundJobNeedsAttention).length })} aria-expanded=${showBackgroundJobs} onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench(); }}><${IconJobs} /> ${t4("chat.chipJobs")} <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span></button>
+              ` : null}
               <span style="position:relative;display:inline-flex">
-                <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title="索引：从当前工作区和知识库中查找相关内容" onClick=${() => { const next = !showIndexPicker; setShowIndexPicker(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowRetrievalSources(false); }}>🔍 ${indexRetrievalMode === "tool" ? "按需搜索" : indexRetrievalMode === "off" ? "索引关" : "自动召回"}</button>
+                <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title=${t4("chat.indexChipTitle")} onClick=${() => { const next = !showIndexPicker; setShowIndexPicker(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowRetrievalSources(false); }}><${IconSearch} /> ${indexRetrievalMode === "tool" ? t4("chat.indexTool") : indexRetrievalMode === "off" ? t4("chat.indexOffShort") : t4("chat.indexAuto")}</button>
                 ${showIndexPicker ? html4`
                   <div class="popover composer-plus-menu" style="position:absolute;bottom:calc(100% + 8px);left:0;width:240px;z-index:10">
-                    <div class="popover-h">索引</div>
-                    ${[["auto", "自动召回"], ["tool", "按需搜索"], ["off", "不使用"]].map(([mode, label]) => {
+                    <div class="popover-h">${t4("chat.indexTitle")}</div>
+                    ${[["auto", t4("chat.indexAuto")], ["tool", t4("chat.indexTool")], ["off", t4("chat.indexOff")]].map(([mode, label]) => {
                       const modeDisabled = semanticIndex === false && mode !== "off";
                       return html4`<div class=${`popover-row ${indexRetrievalMode === mode ? "sel" : ""} ${modeDisabled ? "disabled" : ""}`} title=${globalThis.VisionoxIndexModePolicy.hint(mode)} onMouseDown=${(e2) => { e2.preventDefault(); if (modeDisabled || mode === indexRetrievalMode) return; void changeIndexRetrievalMode({ target: { value: mode } }); }}><span class="g">${indexRetrievalMode === mode ? "✓" : ""}</span><span class="name">${label}</span></div>`;
                     })}
@@ -3778,14 +3823,14 @@ const [providerCaps, setProviderCaps] = d2(null);
               </span>
               ${showPlusMenu ? html4`
                 <div class="popover composer-plus-menu" style="position:absolute;bottom:calc(100% + 8px);right:0;width:280px;z-index:10">
-                  <div class="popover-h">更多操作</div>
-                  ${canUploadMedia ? html4`<div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setShowPlusMenu(false); fileInputRef.current?.click(); }}><span class="g">📎</span><span class="name">${canUploadVideos ? "添加图片或视频" : "添加图片"}</span><span class="meta">Ctrl+U</span></div>` : null}
-                  <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setShowPlusMenu(false); setShowSkillPicker(true); setShowWsPicker(false); setShowModelPicker(false); loadChatSkills().catch(() => {}); }}><span class="g">🔧</span><span class="name">技能</span><span class="meta">@ 提及</span></div>
+                  <div class="popover-h">${t4("chat.moreActions")}</div>
+                  ${canUploadMedia ? html4`<div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setShowPlusMenu(false); fileInputRef.current?.click(); }}><span class="g"><${IconAttach} /></span><span class="name">${canUploadVideos ? t4("chat.addImageOrVideo") : t4("chat.addImage")}</span><span class="meta">Ctrl+U</span></div>` : null}
+                  <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); setShowPlusMenu(false); setShowSkillPicker(true); setShowWsPicker(false); setShowModelPicker(false); loadChatSkills().catch(() => {}); }}><span class="g"><${IconSkill} /></span><span class="name">${t4("chat.skillEntry")}</span><span class="meta">${t4("chat.skillPickerMeta")}</span></div>
                 </div>
               ` : null}
               ${showSkillPicker && skillList.length > 0 ? html4`
                 <div class="popover" style="position:absolute;bottom:100%;left:0;width:320px;max-height:260px;overflow-y:auto;z-index:10">
-                  <div class="popover-h">选择技能</div>
+                  <div class="popover-h">${t4("chat.pickSkill")}</div>
                   ${skillList.map((s2) => html4`
                     <div class="popover-row" onMouseDown=${(e2) => { e2.preventDefault(); appendSkillMention(s2.name); }}>
                       <span class="name">${s2.name}</span>
@@ -3821,9 +3866,9 @@ const [providerCaps, setProviderCaps] = d2(null);
               ` : null}
               ${showModelPicker ? html4`
                 <div class="popover model-popover" style="position:absolute;bottom:100%;left:0;z-index:10" onMouseLeave=${scheduleModelGroupClose}>
-                  <div class="popover-h">选择模型</div>
+                  <div class="popover-h">${t4("chat.pickModel")}</div>
                   <div class="model-picker-browser">
-                    <div class="model-cascade-menu" role="menu" aria-label="模型服务商">
+                    <div class="model-cascade-menu" role="menu" aria-label=${t4("chat.modelProvidersAria")}>
                       ${providerDisplayGroups(providers ?? []).map((group) => {
                         const open = openModelGroupId === group.id;
                         const active = group.providers.some((provider) => provider.id === activeProviderId);
@@ -3835,35 +3880,35 @@ const [providerCaps, setProviderCaps] = d2(null);
                               <span class="model-provider-indicators"><span aria-hidden="true">${active ? "✓" : ""}</span><span class="model-menu-chevron" aria-hidden="true">›</span></span>
                             </button>
                             ${open ? html4`
-                              <div class="model-cascade-submenu" role="menu" aria-label=${`${group.label} 模型`} onMouseEnter=${cancelModelGroupClose} onMouseLeave=${scheduleModelGroupClose}>
+                              <div class="model-cascade-submenu" role="menu" aria-label=${t4("chat.groupModelsAria", { group: group.label })} onMouseEnter=${cancelModelGroupClose} onMouseLeave=${scheduleModelGroupClose}>
                                 ${models.length > 0 ? models.map(({ provider, model }) => {
                                   const selected = provider.id === activeProviderId && model.id === overviewModel;
                                   const status = model.testStatus || "untested";
                                   const details = providerModelCapabilityLabels(model).join(" · ");
-                                  const statusText = status === "passed" ? "已验证" : status === "failed" ? model.testError || "不可用" : "未检测";
+                                  const statusText = status === "passed" ? t4("chat.statusVerified") : status === "failed" ? model.testError || t4("chat.statusUnavailable") : t4("chat.statusUntested");
                                   return html4`
                                     <button type="button" class=${`model-cascade-model ${selected ? "active" : ""} ${status}`} role="menuitemradio" aria-checked=${selected} disabled=${busy || status === "failed"} title=${`${details}${details ? " · " : ""}${statusText}`} onClick=${() => selectProviderModel(provider.id, model.id)}>
-                                      <span>${model.name ?? providerDisplayLabel(provider)}</span><span class="model-row-indicators"><span class=${`model-row-status ${status}`}>${status === "passed" ? "可用" : status === "failed" ? "不可用" : "未检测"}</span><span class="model-current-check" aria-hidden="true">${selected ? "✓" : ""}</span></span>
+                                      <span>${model.name ?? providerDisplayLabel(provider)}</span><span class="model-row-indicators"><span class=${`model-row-status ${status}`}>${status === "passed" ? t4("chat.statusUsable") : status === "failed" ? t4("chat.statusUnavailable") : t4("chat.statusUntested")}</span><span class="model-current-check" aria-hidden="true">${selected ? "✓" : ""}</span></span>
                                     </button>
                                   `;
-                                }) : html4`<div class="model-picker-empty">该服务商暂无可用模型</div>`}
+                                }) : html4`<div class="model-picker-empty">${t4("chat.providerNoModels")}</div>`}
                               </div>
                             ` : null}
                           </div>
                         `;
                       })}
-                      ${providerDisplayGroups(providers ?? []).length === 0 ? html4`<div class="model-picker-empty">尚未导入模型</div>` : null}
+                      ${providerDisplayGroups(providers ?? []).length === 0 ? html4`<div class="model-picker-empty">${t4("chat.noModelsYet")}</div>` : null}
                     </div>
                     <div class="model-menu-actions">
                       <input type="file" id="provider-import-file" accept=".json,application/json" style="display:none" onChange=${loadProviderImportFile} />
-                      <button type="button" class="model-import-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${() => { const input = document.getElementById("provider-import-file"); input.value = ""; input.click(); }}>${providerImporting ? "导入中..." : "导入模型配置"}</button>
-                      <button type="button" class="model-test-link" disabled=${busy || providerImporting || providerTesting || providerCleaning || providerModelTestSummary(providers ?? []).total === 0} onClick=${testAllProviders}>${providerTesting ? "检测中..." : "检测全部模型"}</button>
-                      ${providerModelTestSummary(providers ?? []).failed > 0 && modelVerification?.dirty !== true ? html4`<button type="button" class="model-cleanup-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${cleanupFailedModels}>${providerCleaning ? "删除中..." : `删除检测失败模型（${providerModelTestSummary(providers ?? []).failed}）`}</button>` : null}
+                      <button type="button" class="model-import-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${() => { const input = document.getElementById("provider-import-file"); input.value = ""; input.click(); }}>${providerImporting ? t4("chat.importingShort") : t4("chat.importConfigBtn")}</button>
+                      <button type="button" class="model-test-link" disabled=${busy || providerImporting || providerTesting || providerCleaning || providerModelTestSummary(providers ?? []).total === 0} onClick=${testAllProviders}>${providerTesting ? t4("chat.testingShort") : t4("chat.testAllBtn")}</button>
+                      ${providerModelTestSummary(providers ?? []).failed > 0 && modelVerification?.dirty !== true ? html4`<button type="button" class="model-cleanup-link" disabled=${busy || providerImporting || providerTesting || providerCleaning} onClick=${cleanupFailedModels}>${providerCleaning ? t4("chat.cleaningShort") : t4("chat.cleanFailedBtn", { count: providerModelTestSummary(providers ?? []).failed })}</button>` : null}
                     </div>
                     <div role="status" aria-live="polite" style="min-height:18px;margin-top:5px;font-size:11px;line-height:18px;overflow-wrap:anywhere;color:${modelNotice?.kind === 'error' ? 'var(--c-err)' : modelNotice?.kind === 'success' ? 'var(--c-ok)' : 'var(--fg-3)'};">${modelNotice?.text ?? ""}</div>
                     ${(() => {
                       if (modelVerification?.dirty) {
-                        return html4`<div style="font-size:11px;margin-top:6px;color:var(--c-warn);">配置已更新，请重新检测全部模型</div>`;
+                        return html4`<div style="font-size:11px;margin-top:6px;color:var(--c-warn);">${t4("chat.configDirtyRetest")}</div>`;
                       }
                       const allModels = (providers ?? []).flatMap((provider) => (provider.models ?? []).filter((model) => model.disabled !== true).map((model) => ({ provider, model })));
                       const testedModels = allModels.filter(({ model }) => model.testStatus !== "untested");
@@ -3871,49 +3916,49 @@ const [providerCaps, setProviderCaps] = d2(null);
                       const passed = allModels.filter(({ model }) => model.testStatus === "passed").length;
                       const failedModels = allModels.filter(({ model }) => model.testStatus === "failed");
                       return html4`
-                        <div title=${failedModels.map(({ provider, model }) => `${provider.name ?? provider.id} / ${model.name ?? model.id}: ${model.testError ?? "检测失败"}`).join("\n")} style="display:flex;align-items:center;gap:5px;font-size:11px;margin-top:5px;color:var(--fg-3)">
-                          <span>已通过 ${passed}/${allModels.length}</span>
+                        <div title=${failedModels.map(({ provider, model }) => `${provider.name ?? provider.id} / ${model.name ?? model.id}: ${model.testError ?? t4("chat.testFailedFallback")}`).join("\n")} style="display:flex;align-items:center;gap:5px;font-size:11px;margin-top:5px;color:var(--fg-3)">
+                          <span>${t4("chat.testedSummary", { passed, total: allModels.length })}</span>
                         </div>
                       `;
                     })()}
                   </div>
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">模式</label>
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${t4("chat.modeLabel")}</label>
                     ${(providerCaps?.presets?.length ?? 0) > 1 ? html4`
                       <div class="model-choice-row">
                         ${providerCaps.presets.map((p3) => html4`<button type="button" key=${p3} class=${`model-choice ${preset === p3 ? "active" : ""}`} onClick=${() => { setSetting('preset', p3); }}>${p3}</button>`)}
                       </div>
-                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}（固定）</div>`}
+                    ` : html4`<div style="font-size:12px;color:var(--text-primary);">${preset}${t4("chat.fixedSuffix")}</div>`}
                   </div>
                   ${activeModelEfforts.length > 0 ? html4`
                     <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">思考强度</label>
+                      <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;">${t4("chat.effortLabel")}</label>
                       ${activeModelEfforts.length > 1 ? html4`
                         <div class="model-choice-row">
                           ${activeModelEfforts.map((e3) => html4`<button type="button" key=${e3} title=${e3} disabled=${busy} class=${`model-choice ${effort === e3 ? "active" : ""}`} onClick=${() => { setSetting('reasoningEffort', e3); }}>${reasoningEffortLabel(e3)}</button>`)}
                         </div>
-                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${reasoningEffortLabel(activeModelEfforts[0])}（固定）</div>`}
+                      ` : html4`<div style="font-size:12px;color:var(--text-primary);">${reasoningEffortLabel(activeModelEfforts[0])}${t4("chat.fixedSuffix")}</div>`}
                     </div>
                   ` : null}
                   <div style="padding:8px;border-bottom:1px solid var(--border-default);">
-                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title="控制对话中模型思考过程的展示方式：实时显示会滚动展示当前一轮思考；仅状态行只显示“思考中”提示；完全隐藏则不展示任何思考内容。">思考过程显示</label>
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title=${t4("chat.reasoningDisplayTitle")}>${t4("chat.reasoningDisplayLabel")}</label>
                     <div class="model-choice-row">
-                      ${[["live", "实时显示"], ["status", "仅状态行"], ["hidden", "完全隐藏"]].map(([mode, label]) => html4`<button type="button" key=${mode} class=${`model-choice ${reasoningDisplay === mode || mode === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode)}>${label}</button>`)}
+                      ${[["live", t4("chat.reasoningLive")], ["status", t4("chat.reasoningStatusOnly")], ["hidden", t4("chat.reasoningHidden")]].map(([mode, label]) => html4`<button type="button" key=${mode} class=${`model-choice ${reasoningDisplay === mode || mode === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode)}>${label}</button>`)}
                     </div>
                   </div>
                 </div>
               ` : null}
               <div class="composer-bar-status">
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="composer-retrieval-status muted">召回中...</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="composer-retrieval-status muted">未找到相关内容</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">召回超时</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">索引不可用</span>` : null}
-              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span class="composer-retrieval-status" style="color:var(--c-err)">召回失败</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "running" ? html4`<span class="composer-retrieval-status muted">${t4("chat.retrievalRunning")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "empty" ? html4`<span class="composer-retrieval-status muted">${t4("chat.retrievalEmpty")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "timeout" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">${t4("chat.retrievalTimeout")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "unavailable" ? html4`<span class="composer-retrieval-status" style="color:var(--c-warn)">${t4("chat.retrievalUnavailable")}</span>` : null}
+              ${indexRetrievalMode === "auto" && semanticRetrievalStatus === "error" ? html4`<span class="composer-retrieval-status" style="color:var(--c-err)">${t4("chat.retrievalError")}</span>` : null}
               ${semanticRetrievalSources.length > 0 ? html4`
-                <button class="btn btn-sm" style="font-size:11px;padding:2px 7px" onClick=${() => setShowRetrievalSources(!showRetrievalSources)}>参考 ${semanticRetrievalSources.length}</button>
+                <button class="btn btn-sm" style="font-size:11px;padding:2px 7px" onClick=${() => setShowRetrievalSources(!showRetrievalSources)}>${t4("chat.refsCount", { count: semanticRetrievalSources.length })}</button>
                 ${showRetrievalSources ? html4`
                   <div class="popover" style="position:absolute;bottom:100%;right:0;width:420px;max-height:260px;overflow-y:auto;z-index:10">
-                    <div class="popover-h">本轮索引来源</div>
+                    <div class="popover-h">${t4("chat.retrievalSourcesTitle")}</div>
                     ${semanticRetrievalSources.map((source) => html4`
                       <button class="popover-row" style="width:100%;text-align:left" onMouseDown=${(event) => { event.preventDefault(); void previewRetrievedSource(source); }}>
                         <span class="name" style="overflow-wrap:anywhere">${source.path}</span>
@@ -3926,19 +3971,19 @@ const [providerCaps, setProviderCaps] = d2(null);
               </div>
               ${(showPlusMenu || showIndexPicker || showSkillPicker || showWsPicker || showModelPicker || showRetrievalSources) ? html4`<div style="position:fixed;inset:0;z-index:5" onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowRetrievalSources(false); }}></div>` : null}
               <div style="flex:1"></div>
-              <button type="button" class="composer-plus" aria-expanded=${showPlusMenu} title="更多操作" aria-label="更多操作" onClick=${() => { const next = !showPlusMenu; setShowPlusMenu(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}><svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></button>
+              <button type="button" class="composer-plus" aria-expanded=${showPlusMenu} title=${t4("chat.moreActions")} aria-label=${t4("chat.moreActions")} onClick=${() => { const next = !showPlusMenu; setShowPlusMenu(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}><svg viewBox="0 0 16 16" width="19" height="19" aria-hidden="true"><path d="M8 2.5v11M2.5 8h11" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg></button>
               <button
                 type="button"
                 class="composer-optimize"
                 disabled=${!inputHasContent || promptOptimizing}
                 onClick=${optimizeCurrentPrompt}
-                title="优化当前输入，不会自动发送"
-                aria-label="优化当前提示词"
-              >${promptOptimizing ? "✨ 优化中…" : "✨ 优化提示词"}</button>
+                title=${t4("chat.optimizeInputTitle")}
+                aria-label=${t4("chat.optimizeInputAria")}
+              ><${IconWand} size=${15} />${promptOptimizing ? html4`<span class="composer-optimize-spin"></span>` : null}</button>
               ${(() => {
                 const canSendContent = inputHasContent || pendingImages.length > 0;
                 const sendMode = busy ? canSendContent ? "queue" : "stop" : canSendContent ? "send" : "idle";
-                const sendLabel = sendMode === "send" ? "发送 (Enter)" : sendMode === "queue" ? "排队发送，当前任务完成后自动发出" : sendMode === "stop" ? "停止当前任务" : "输入内容后发送";
+                const sendLabel = sendMode === "send" ? t4("chat.sendSend") : sendMode === "queue" ? t4("chat.sendQueue") : sendMode === "stop" ? t4("chat.sendStop") : t4("chat.sendIdle");
                 return html4`
                   <button
                     type="button"
@@ -4027,8 +4072,8 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
       ${allMessages.length === 0 ? html4`<div class="chat-empty">${t4("chat.noConversation")}</div>` : null}
       ${hiddenCount > 0 || remoteHiddenCount > 0 ? html4`
         <div class="chat-history-loader">
-          <span>已显示 ${renderedMessages.length} / 共 ${displayTotal} 条</span>
-          <button type="button" onClick=${onLoadEarlier} disabled=${loadingEarlier}>${loadingEarlier ? "加载中..." : t4("chat.loadEarlierMessages", { count: Math.min(hiddenCount || remoteHiddenCount, hiddenCount ? CHAT_RENDER_STEP : CHAT_MESSAGE_PAGE_SIZE) })}</button>
+          <span>${t4("chat.shownOfTotal", { shown: renderedMessages.length, total: displayTotal })}</span>
+          <button type="button" onClick=${onLoadEarlier} disabled=${loadingEarlier}>${loadingEarlier ? t4("chat.loadingDots") : t4("chat.loadEarlierMessages", { count: Math.min(hiddenCount || remoteHiddenCount, hiddenCount ? CHAT_RENDER_STEP : CHAT_MESSAGE_PAGE_SIZE) })}</button>
         </div>
       ` : null}
       ${renderUnits.map(
@@ -4204,16 +4249,16 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model, onNew, busy }) {
     return html4`
       <div class="chat-statusbar">
         <span class="muted">${t4("chat.waitingStats")}</span>
-        ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title="开始新对话（当前对话会保留在历史记录）" onClick=${() => { void onNew(); }}>新建对话</button>` : null}
+        ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title=${t4("chat.newChatTitle")} onClick=${() => { void onNew(); }}>${t4("chat.newChatBtn")}</button>` : null}
       </div>
     `;
   }
   const currentContextTokens = stats.estimatedContextTokens ?? stats.lastPromptTokens;
   const ctxPct = stats.contextCapTokens > 0 ? currentContextTokens / stats.contextCapTokens * 100 : 0;
   const contextMarks = [
-    { tokens: stats.contextFoldTokens, label: "普通压缩" },
-    { tokens: stats.contextAggressiveTokens, label: "激进压缩" },
-    { tokens: stats.contextForceSummaryTokens, label: "强制总结" },
+    { tokens: stats.contextFoldTokens, label: t4("chat.foldNormal") },
+    { tokens: stats.contextAggressiveTokens, label: t4("chat.foldAggressive") },
+    { tokens: stats.contextForceSummaryTokens, label: t4("chat.foldForceSummary") },
   ].filter((mark) => Number.isFinite(mark.tokens) && mark.tokens > 0 && stats.contextCapTokens > 0)
     .map((mark) => ({ ...mark, pct: Math.min(100, mark.tokens / stats.contextCapTokens * 100) }));
   const balance = primaryBalance(stats);
@@ -4254,7 +4299,7 @@ var ChatStatusBar = N2(function ChatStatusBar2({ stats, model, onNew, busy }) {
             <code>${balance.total_balance ?? balance.total} ${balance.currency}</code>
           </span>
         ` : null}
-      ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title="开始新对话（当前对话会保留在历史记录）" onClick=${() => { void onNew(); }}>新建对话</button>` : null}
+      ${onNew && !busy ? html4`<button type="button" class="status-new-btn" title=${t4("chat.newChatTitle")} onClick=${() => { void onNew(); }}>${t4("chat.newChatBtn")}</button>` : null}
     </div>
   `;
 });

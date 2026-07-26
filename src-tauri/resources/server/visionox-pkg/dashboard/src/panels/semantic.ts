@@ -13,6 +13,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 const N2: any = preactMemo;
 
 function SemanticPanel() {
@@ -199,21 +200,22 @@ function SemanticPanel() {
           <div class="card-h"><span class="title">${t4("semantic.provider")}</span></div>
           <div class="form-row">
             <span class="lbl">${t4("semantic.providerType")}</span>
-            <select
-              class="input mono"
+            <${Select}
               value=${draft.provider}
-              onInput=${(e3) => {
+              ariaLabel=${t4("semantic.providerType")}
+              onChange=${(v) => {
     draftDirtyRef.current = true;
     setDraftDirty(true);
     setDraft({
       ...draft,
-      provider: e3.target.value
+      provider: v
     });
   }}
-            >
-              <option value="ollama">Ollama</option>
-              <option value="openai-compat">OpenAI-Compatible</option>
-            </select>
+              options=${[
+                { value: "ollama", label: "Ollama" },
+                { value: "openai-compat", label: "OpenAI-Compatible" }
+              ]}
+            />
           </div>
           ${draft.provider === "ollama" ? html4`
                 <div class="form-row">
@@ -258,7 +260,7 @@ function SemanticPanel() {
                   <input
                     class="input mono"
                     type="password"
-                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : "请输入实际 API Key（例如 api-xxxxx）"}
+                    placeholder=${draft.openaiCompat.apiKeySet ? t4("semantic.keepExistingKey") : t4("semantic.enterApiKey")}
                     value=${draft.openaiCompat.apiKey}
                     onInput=${(e3) => {
     draftDirtyRef.current = true;
@@ -398,7 +400,7 @@ function SemanticPanel() {
                 <div class="rail-kv"><span class="k">${t4("semantic.provider")}</span><span class="v">${idx.builtWith?.provider ?? idx.provider ?? provider}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.chunks")}</span><span class="v">${fmtNum(idx.chunks)}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.files")}</span><span class="v">${fmtNum(idx.files)}</span></div>
-                <div class="rail-kv"><span class="k">知识文档</span><span class="v">${fmtNum(idx.knowledgeFiles || 0)} 个 · ${fmtNum(idx.knowledgeChunks || 0)} 片段</span></div>
+                <div class="rail-kv"><span class="k">${t4("semantic.knowledgeDocs")}</span><span class="v">${t4("semantic.knowledgeDocsValue", { files: fmtNum(idx.knowledgeFiles || 0), chunks: fmtNum(idx.knowledgeChunks || 0) })}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.model")}</span><span class="v" style="font-size:11px">${idx.builtWith?.model ?? idx.model ?? modelName}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.dim")}</span><span class="v">${fmtNum(idx.dim)}</span></div>
                 <div class="rail-kv"><span class="k">${t4("semantic.size")}</span><span class="v">${fmtBytes(idx.sizeBytes)}</span></div>

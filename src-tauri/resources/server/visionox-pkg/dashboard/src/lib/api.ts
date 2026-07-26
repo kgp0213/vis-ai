@@ -1,3 +1,5 @@
+import { t as t4 } from "../i18n/index.js";
+
 export const TOKEN: string =
   document.querySelector('meta[name="reasonix-token"]')?.getAttribute("content") ?? "";
 
@@ -53,7 +55,7 @@ export async function api<T = any>(path: string, opts: ApiOptions = {}): Promise
     });
     text = await res.text();
   } catch (error) {
-    if (timedOut) throw new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒）：${path}`);
+    if (timedOut) throw new Error(t4("chat.requestTimeout", { sec: Math.round(timeoutMs / 1000), path }));
     throw error;
   } finally {
     if (timeout) clearTimeout(timeout);

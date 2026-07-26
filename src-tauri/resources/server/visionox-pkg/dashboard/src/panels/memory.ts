@@ -13,6 +13,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 const N2: any = preactMemo;
 
 function soulSectionValue(markdown, heading) {
@@ -59,7 +60,7 @@ function MemoryPanel() {
     load();
   }, [load]);
   const dirty = draft != null && JSON.stringify(draft) !== baseline;
-  const acceptNavigation = () => !dirty || globalThis.confirm("当前修改尚未保存，确定放弃吗？");
+  const acceptNavigation = () => !dirty || globalThis.confirm(t4("memPanel.unsavedConfirm"));
   const showInfo = (message) => {
     setInfo(message);
     setTimeout(() => setInfo(null), 3e3);
@@ -138,7 +139,7 @@ function MemoryPanel() {
         }
       }
       if (!moved) setBaseline(JSON.stringify(savedDraft));
-      showInfo(moved ? "场景记忆已移动" : "记忆已保存");
+      showInfo(moved ? t4("memPanel.moved") : t4("memPanel.saved"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -159,7 +160,7 @@ function MemoryPanel() {
         setNewBody("");
         setNewPriority("medium");
         setCreateOpen(false);
-        showInfo("工作场景记忆已新增");
+        showInfo(t4("memPanel.sceneAdded"));
         await load();
       } catch (err) {
         setError(err.message);
@@ -192,7 +193,7 @@ function MemoryPanel() {
       setNewBody("");
       setNewPriority("medium");
       setCreateOpen(false);
-      showInfo("长期记忆已新增");
+      showInfo(t4("memPanel.longTermAdded"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -203,7 +204,7 @@ function MemoryPanel() {
   const remove = q2(async () => {
     if (!open || !draft) return;
     const label = draft.description || draft.text || draft.name;
-    const prompt = open.kind === "persistent" || open.kind === "mode" ? `将“${label}”移入回收站？${tree?.trash?.retentionDays ?? 30} 天内可以恢复。` : `确定删除“${label}”吗？此操作不可撤销。`;
+    const prompt = open.kind === "persistent" || open.kind === "mode" ? t4("memPanel.trashMoveConfirm", { label, days: tree?.trash?.retentionDays ?? 30 }) : t4("memPanel.deleteConfirm", { label });
     if (!globalThis.confirm(prompt)) return;
     setBusy(true);
     setError(null);
@@ -215,7 +216,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo("记忆已删除");
+      showInfo(t4("memPanel.deleted"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -226,14 +227,14 @@ function MemoryPanel() {
   const copyModeMemory = q2(async () => {
     if (!open || open.kind !== "mode" || !draft?.targetMode) return;
     if (draft.targetMode === open.modeId) {
-      setError("请选择其他工作场景后再复制");
+      setError(t4("memPanel.pickOtherScene"));
       return;
     }
     setBusy(true);
     setError(null);
     try {
       await api(`/mode-memory/${encodeURIComponent(open.name)}/move`, { method: "POST", body: { mode: open.modeId, targetMode: draft.targetMode, copy: true } });
-      showInfo("场景记忆已复制");
+      showInfo(t4("memPanel.sceneCopied"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -243,7 +244,7 @@ function MemoryPanel() {
   }, [open, draft, load]);
   const batchModeMemories = q2(async (action) => {
     if (!tree || selectedModeKeys.length === 0) return;
-    if (action === "delete" && !globalThis.confirm(`确定删除选中的 ${selectedModeKeys.length} 条场景记忆吗？`)) return;
+    if (action === "delete" && !globalThis.confirm(t4("memPanel.batchDeleteConfirm", { count: selectedModeKeys.length }))) return;
     const selected = new Set(selectedModeKeys);
     const items = (tree.modeMemory?.modes ?? []).flatMap((mode) => (mode.items ?? []).map((item) => ({ ...item, modeId: mode.id }))).filter((item) => selected.has(`${item.modeId}:${item.id}`));
     setBusy(true);
@@ -251,7 +252,7 @@ function MemoryPanel() {
     try {
       await api("/mode-memory/batch", { method: "POST", body: { action, items: items.map((item) => ({ mode: item.modeId, id: item.id })) } });
       setSelectedModeKeys([]);
-      showInfo(action === "delete" ? "已批量删除" : action === "enable" ? "已批量启用" : "已批量停用");
+      showInfo(action === "delete" ? t4("memPanel.batchDeleted") : action === "enable" ? t4("memPanel.batchEnabled") : t4("memPanel.batchDisabled"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -264,8 +265,8 @@ function MemoryPanel() {
     setError(null);
     try {
       const result = await api("/memory/apply", { method: "POST", body: {} });
-      if (result.applied === false) throw new Error(result.error || "无法应用记忆");
-      showInfo("记忆已应用到当前对话");
+      if (result.applied === false) throw new Error(result.error || t4("memPanel.applyFailed"));
+      showInfo(t4("memPanel.applied"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -286,7 +287,7 @@ function MemoryPanel() {
     }
   }, [open, draft]);
   const restoreSoulVersion = q2(async (id) => {
-    if (!globalThis.confirm("恢复此 Soul 版本？当前版本会先自动保存到历史。")) return;
+    if (!globalThis.confirm(t4("memPanel.soulRestoreConfirm"))) return;
     setBusy(true);
     try {
       await api(`/memory/soul/history/${encodeURIComponent(id)}/restore`, { method: "POST", body: {} });
@@ -295,7 +296,7 @@ function MemoryPanel() {
       setDraft(next);
       setBaseline(JSON.stringify(next));
       setSoulPreview(null);
-      showInfo("Soul 版本已恢复");
+      showInfo(t4("memPanel.soulRestored"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -304,7 +305,7 @@ function MemoryPanel() {
     }
   }, [draft, load]);
   const resetSoul = q2(async () => {
-    if (!globalThis.confirm("恢复默认 Soul？当前版本会先自动保存到历史。")) return;
+    if (!globalThis.confirm(t4("memPanel.soulResetConfirm"))) return;
     setBusy(true);
     try {
       await api("/memory/soul/reset", { method: "POST", body: {} });
@@ -313,7 +314,7 @@ function MemoryPanel() {
       setDraft(next);
       setBaseline(JSON.stringify(next));
       setSoulPreview(null);
-      showInfo("已恢复默认 Soul");
+      showInfo(t4("memPanel.soulResetDone"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -330,7 +331,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo("记忆已从回收站恢复");
+      showInfo(t4("memPanel.trashRestored"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -341,7 +342,7 @@ function MemoryPanel() {
   const permanentlyDeleteMemoryTrash = q2(async () => {
     if (!open || open.kind !== "trash") return;
     const label = draft?.description || draft?.name || open.name;
-    if (!globalThis.confirm(`永久删除“${label}”？删除后无法恢复。`)) return;
+    if (!globalThis.confirm(t4("memPanel.permanentDeleteConfirm", { label }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -349,7 +350,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo("记忆已永久删除");
+      showInfo(t4("memPanel.permanentDeleted"));
       await load();
     } catch (err) {
       setError(err.message);
@@ -360,8 +361,8 @@ function MemoryPanel() {
   const emptyMemoryTrash = q2(async () => {
     const count = tree?.trash?.total ?? tree?.trash?.items?.length ?? 0;
     const invalidCount = tree?.trash?.invalidCount ?? 0;
-    const invalidHint = invalidCount > 0 ? `，其中 ${invalidCount} 条文件已损坏、无法预览` : "";
-    if (count === 0 || !globalThis.confirm(`清空回收站中的 ${count} 条记忆${invalidHint}？全部内容将永久删除且无法恢复。`)) return;
+    const invalidHint = invalidCount > 0 ? t4("memPanel.invalidSuffix", { count: invalidCount }) : "";
+    if (count === 0 || !globalThis.confirm(t4("memPanel.emptyTrashConfirm", { count, invalid: invalidHint }))) return;
     setBusy(true);
     setError(null);
     try {
@@ -369,7 +370,7 @@ function MemoryPanel() {
       setOpen(null);
       setDraft(null);
       setBaseline("");
-      showInfo(`已永久删除 ${result.deleted ?? count} 条记忆`);
+      showInfo(t4("memPanel.emptied", { count: result.deleted ?? count }));
       await load();
     } catch (err) {
       setError(err.message);
@@ -390,7 +391,7 @@ function MemoryPanel() {
   })));
   const sessionItems = (tree.session?.items ?? []).map((item) => ({ ...item, kind: "session", scopeKey: "session", description: item.description || item.body }));
   const trashItems = (tree.trash?.items ?? []).map((item) => ({ ...item, kindType: item.kind, kind: "trash", name: item.id, scopeKey: "trash", description: item.kind === "mode" ? item.item?.text ?? item.name : item.name }));
-  const soulItems = scopeFilter === "soul" ? [{ kind: "soul", name: "soul", scopeKey: "soul", description: tree.soul?.name ? `AI 身份：${tree.soul.name}` : "AI 身份与行为准则" }] : [];
+  const soulItems = scopeFilter === "soul" ? [{ kind: "soul", name: "soul", scopeKey: "soul", description: tree.soul?.name ? t4("memPanel.aiIdentityNamed", { name: tree.soul.name }) : t4("memPanel.aiIdentityDefault") }] : [];
   const allItems = [...persistentItems, ...modeItems, ...sessionItems, ...soulItems, ...trashItems];
   const needle = query.trim().toLowerCase();
   const visibleItems = allItems.filter((item) => {
@@ -400,7 +401,7 @@ function MemoryPanel() {
     return [item.description, item.body, item.raw, item.item?.text, item.searchText, item.text, item.type, item.modeLabel, ...(item.keywords ?? [])].some((value) => String(value ?? "").toLowerCase().includes(needle));
   });
   const activeInjection = tree.runtime?.active ?? tree.injection;
-  const scopeLabel = (item) => item.scopeKey === "global" ? "全局" : item.scopeKey === "project" ? "当前项目" : item.scopeKey === "mode" ? item.modeLabel : item.scopeKey === "soul" ? "AI 身份" : item.scopeKey === "trash" ? "回收站" : "当前会话";
+  const scopeLabel = (item) => item.scopeKey === "global" ? t4("memPanel.scopeGlobal") : item.scopeKey === "project" ? t4("memPanel.scopeProject") : item.scopeKey === "mode" ? item.modeLabel : item.scopeKey === "soul" ? t4("memPanel.scopeSoul") : item.scopeKey === "trash" ? t4("memPanel.scopeTrash") : t4("memPanel.scopeSession");
   const injectionState = (item) => {
     if (item.kind === "trash") return "trash";
     if (item.kind === "persistent") return activeInjection?.persistent?.entries?.[`${item.scopeKey}:${item.name}`] ?? "omitted";
@@ -409,64 +410,58 @@ function MemoryPanel() {
     return "manual";
   };
   const injectionLabel = (item) => {
-    if (item.enabled === false) return "已停用";
+    if (item.enabled === false) return t4("memPanel.stateDisabled");
     const state = injectionState(item);
-    if (state === "high-full") return "全文注入";
-    if (state === "index") return item.kind === "persistent" ? "摘要注入" : "将注入";
-    if (state === "manual") return "身份配置";
-    if (state === "trash") return "可恢复";
-    return "未注入";
+    if (state === "high-full") return t4("memPanel.stateFullInject");
+    if (state === "index") return item.kind === "persistent" ? t4("memPanel.stateSummaryInject") : t4("memPanel.stateWillInject");
+    if (state === "manual") return t4("memPanel.stateIdentityConfig");
+    if (state === "trash") return t4("memPanel.stateRecoverable");
+    return t4("memPanel.stateNotInjected");
   };
   const diagnosticLabel = (item) => {
     if (item.kind !== "persistent") return "";
     const key = `${item.scopeKey}:${item.name}`;
-    if (tree.diagnostics?.sensitiveKeys?.includes(key)) return "可能包含敏感信息";
-    if (tree.diagnostics?.conflicts?.some((group) => group.includes(key))) return "可能冲突";
-    if (tree.diagnostics?.duplicates?.some((group) => group.includes(key))) return "内容重复";
+    if (tree.diagnostics?.sensitiveKeys?.includes(key)) return t4("memPanel.diagSensitive");
+    if (tree.diagnostics?.conflicts?.some((group) => group.includes(key))) return t4("memPanel.diagConflict");
+    if (tree.diagnostics?.duplicates?.some((group) => group.includes(key))) return t4("memPanel.diagDuplicate");
     return "";
   };
   return html4`
     <div class="memory-manager">
       <div class="memory-toolbar">
         <div>
-          <div class="memory-page-title">记忆管理</div>
-          <div class="memory-workspace">${tree.workspace ? `${tree.workspace.name} · ${tree.workspace.path}` : "未选择工作区"}</div>
+          <div class="memory-page-title">${t4("memPanel.pageTitle")}</div>
+          <div class="memory-workspace">${tree.workspace ? `${tree.workspace.name} · ${tree.workspace.path}` : t4("memPanel.noWorkspace")}</div>
         </div>
-        <input class="memory-search" type="search" placeholder="搜索摘要、内容或关键词" value=${query} onInput=${(event) => setQuery(event.target.value)} />
+        <input class="memory-search" type="search" placeholder=${t4("memPanel.searchPlaceholder")} value=${query} onInput=${(event) => setQuery(event.target.value)} />
       </div>
       <div class="memory-scope-tabs">
-        ${[["all", "全部"], ["global", "全局"], ["project", "当前项目"], ["mode", "工作场景"], ["session", "当前会话"], ["soul", "AI 身份"], ["trash", "回收站"]].map(([value, label]) => html4`
+        ${[["all", t4("memPanel.filterAll")], ["global", t4("memPanel.scopeGlobal")], ["project", t4("memPanel.scopeProject")], ["mode", t4("memPanel.filterMode")], ["session", t4("memPanel.scopeSession")], ["soul", t4("memPanel.scopeSoul")], ["trash", t4("memPanel.scopeTrash")]].map(([value, label]) => html4`
           <button class=${scopeFilter === value ? "active" : ""} onClick=${() => setScopeFilter(value)}>${label}</button>
         `)}
       </div>
       ${scopeFilter === "mode" ? html4`<div class="memory-mode-tabs">
-        <button class=${modeFilter === "all" ? "active" : ""} onClick=${() => setModeFilter("all")}>全部场景</button>
+        <button class=${modeFilter === "all" ? "active" : ""} onClick=${() => setModeFilter("all")}>${t4("memPanel.allScenes")}</button>
         ${(tree.modeMemory?.modes ?? []).map((mode) => html4`<button class=${modeFilter === mode.id ? "active" : ""} onClick=${() => setModeFilter(mode.id)}>${mode.label ?? mode.id} ${mode.enabledCount ?? 0}/${mode.count ?? 0}</button>`)}
       </div>` : null}
-      ${tree.runtime?.pending ? html4`<div class="memory-runtime-pending"><div><strong>当前上下文仍在使用旧记忆</strong><span>磁盘修改已保存，执行应用后当前对话才会使用新版本。</span></div><button class="btn primary" disabled=${busy} onClick=${applyMemoryNow}>立即应用到当前对话</button></div>` : null}
-      ${activeInjection ? html4`<div class="memory-budget-summary"><span>当前记忆上下文</span><strong>${Number(activeInjection.totalTokens ?? 0).toLocaleString()} tokens</strong><span>固定 ${Number(activeInjection.budget?.pinnedTokens ?? 0).toLocaleString()} · 可召回 ${Number(activeInjection.budget?.recallableTokens ?? 0).toLocaleString()} / ${Number(activeInjection.budget?.maxRecallableTokens ?? 0).toLocaleString()} · 高优先级全文与普通摘要已去重</span></div>` : null}
+      ${tree.runtime?.pending ? html4`<div class="memory-runtime-pending"><div><strong>${t4("memPanel.pendingTitle")}</strong><span>${t4("memPanel.pendingDesc")}</span></div><button class="btn primary" disabled=${busy} onClick=${applyMemoryNow}>${t4("memPanel.applyNow")}</button></div>` : null}
+      ${activeInjection ? html4`<div class="memory-budget-summary"><span>${t4("memPanel.budgetCurrent")}</span><strong>${Number(activeInjection.totalTokens ?? 0).toLocaleString()} tokens</strong><span>${t4("memPanel.budgetFixed")} ${Number(activeInjection.budget?.pinnedTokens ?? 0).toLocaleString()} \xB7 ${t4("memPanel.budgetRecallable")} ${Number(activeInjection.budget?.recallableTokens ?? 0).toLocaleString()} / ${Number(activeInjection.budget?.maxRecallableTokens ?? 0).toLocaleString()} \xB7 ${t4("memPanel.budgetDedup")}</span></div>` : null}
       ${info ? html4`<div class="memory-notice ok">${info}</div>` : null}
       ${error ? html4`<div class="memory-notice error">${error}</div>` : null}
       <div class="memory-layout">
         <div class="memory-list-pane">
-          <div class="memory-list-head"><span>${visibleItems.length} 条${scopeFilter === "trash" ? ` · ${tree.trash?.retentionDays ?? 30} 天后自动清理${tree.trash?.invalidCount ? ` · ${tree.trash.invalidCount} 条损坏` : ""}` : ""}</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? "收起新增" : "新增记忆"}</button>` : null}${scopeFilter === "trash" && (tree.trash?.total ?? trashItems.length) > 0 ? html4`<button class="btn btn-sm danger" disabled=${busy} onClick=${emptyMemoryTrash}>清空回收站</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>刷新</button></div></div>
+          <div class="memory-list-head"><span>${t4("memPanel.listCount", { count: visibleItems.length })}${scopeFilter === "trash" ? ` \xB7 ${t4("memPanel.trashRetentionHint", { days: tree.trash?.retentionDays ?? 30 })}${tree.trash?.invalidCount ? ` \xB7 ${t4("memPanel.trashInvalidHint", { count: tree.trash.invalidCount })}` : ""}` : ""}</span><div class="memory-list-actions">${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" ? html4`<button type="button" class=${`btn btn-sm ${createOpen ? "primary" : ""}`} aria-expanded=${createOpen} onClick=${() => setCreateOpen((value) => !value)}>${createOpen ? t4("memPanel.collapseCreate") : t4("memPanel.createMemory")}</button>` : null}${scopeFilter === "trash" && (tree.trash?.total ?? trashItems.length) > 0 ? html4`<button class="btn btn-sm danger" disabled=${busy} onClick=${emptyMemoryTrash}>${t4("memPanel.emptyTrash")}</button>` : null}<button class="btn btn-sm ghost" disabled=${busy} onClick=${load}>${t4("memPanel.refresh")}</button></div></div>
           ${scopeFilter !== "session" && scopeFilter !== "soul" && scopeFilter !== "trash" && createOpen ? html4`<div class="memory-create-panel">
-            <div class="memory-section-title">${newScope === "mode" ? "新增场景记忆" : "新增长期记忆"}</div>
+            <div class="memory-section-title">${newScope === "mode" ? t4("memPanel.createSceneTitle") : t4("memPanel.createLongTermTitle")}</div>
             <div class="memory-create-row">
-              <select value=${newScope} onChange=${(event) => setNewScope(event.target.value)} disabled=${busy}>
-                <option value="global">全局</option>
-                <option value="project-mem">当前项目</option>
-                <option value="mode">工作场景</option>
-              </select>
-              <select value=${newPriority} onChange=${(event) => setNewPriority(event.target.value)} disabled=${busy}>
-                <option value="low">低优先级</option><option value="medium">普通</option><option value="high">高优先级</option>
-              </select>
+              <${Select} value=${newScope} onChange=${(v) => setNewScope(v)} disabled=${busy} ariaLabel=${t4("memPanel.ariaScope")} options=${[{ value: "global", label: t4("memPanel.scopeGlobal") }, { value: "project-mem", label: t4("memPanel.scopeProjectMem") }, { value: "mode", label: t4("memPanel.scopeMode") }]} />
+              <${Select} value=${newPriority} onChange=${(v) => setNewPriority(v)} disabled=${busy} ariaLabel=${t4("memPanel.ariaPriority")} options=${[{ value: "low", label: t4("memPanel.prioLow") }, { value: "medium", label: t4("memPanel.prioNormal") }, { value: "high", label: t4("memPanel.prioHigh") }]} />
             </div>
-            ${newScope === "mode" ? html4`<select value=${newMode} onChange=${(event) => setNewMode(event.target.value)} disabled=${busy}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id} · ${mode.enabledCount ?? 0}/${mode.count ?? 0} 启用</option>`)}</select>` : html4`<input type="text" placeholder="一句话摘要" value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />`}
-            <textarea rows="3" maxlength=${newScope === "mode" ? 180 : null} placeholder=${newScope === "mode" ? "场景记忆内容，最多 180 字符" : "记忆内容"} value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
-            <div class="memory-create-actions"><button class="btn primary" disabled=${busy || !newBody.trim() || (newScope !== "mode" && !newDesc.trim())} onClick=${createMemory}>新增记忆</button><button type="button" class="btn ghost" disabled=${busy} onClick=${() => setCreateOpen(false)}>取消</button></div>
+            ${newScope === "mode" ? html4`<${Select} value=${newMode} onChange=${(v) => setNewMode(v)} disabled=${busy} ariaLabel=${t4("memPanel.ariaTargetScene")} options=${(tree.modeMemory?.modes ?? []).map((mode) => ({ value: mode.id, label: mode.label ?? mode.id, meta: t4("memPanel.modeEnabledMeta", { enabled: mode.enabledCount ?? 0, count: mode.count ?? 0 }) }))} />` : html4`<input type="text" placeholder=${t4("memPanel.summaryPlaceholder")} value=${newDesc} onInput=${(event) => setNewDesc(event.target.value)} disabled=${busy} />`}
+            <textarea rows="3" maxlength=${newScope === "mode" ? 180 : null} placeholder=${newScope === "mode" ? t4("memPanel.bodyPlaceholderMode") : t4("memPanel.bodyPlaceholder")} value=${newBody} onInput=${(event) => setNewBody(event.target.value)} disabled=${busy}></textarea>
+            <div class="memory-create-actions"><button class="btn primary" disabled=${busy || !newBody.trim() || (newScope !== "mode" && !newDesc.trim())} onClick=${createMemory}>${t4("memPanel.createMemory")}</button><button type="button" class="btn ghost" disabled=${busy} onClick=${() => setCreateOpen(false)}>${t4("memPanel.cancel")}</button></div>
           </div>` : null}
-          ${scopeFilter === "mode" && selectedModeKeys.length > 0 ? html4`<div class="memory-batch-bar"><span>已选 ${selectedModeKeys.length} 条</span><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("enable")}>启用</button><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("disable")}>停用</button><button class="btn danger" disabled=${busy} onClick=${() => batchModeMemories("delete")}>删除</button></div>` : null}
+          ${scopeFilter === "mode" && selectedModeKeys.length > 0 ? html4`<div class="memory-batch-bar"><span>${t4("memPanel.batchSelected", { count: selectedModeKeys.length })}</span><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("enable")}>${t4("memPanel.batchEnable")}</button><button class="btn" disabled=${busy} onClick=${() => batchModeMemories("disable")}>${t4("memPanel.batchDisable")}</button><button class="btn danger" disabled=${busy} onClick=${() => batchModeMemories("delete")}>${t4("memPanel.batchDelete")}</button></div>` : null}
           <div class="memory-rows">
             ${visibleItems.map((item) => html4`
               <div class=${`memory-row ${open?.kind === item.kind && open?.name === item.name && open?.modeId === item.modeId ? "selected" : ""}`}>
@@ -475,60 +470,60 @@ function MemoryPanel() {
                   <span class="memory-row-main">${item.description || item.text || item.name}</span>
                   <span class="memory-row-meta">
                     <span>${scopeLabel(item)}</span>
-                    <span>${item.kind === "trash" ? `清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "未知"}` : item.kind === "mode" ? `优先级 ${item.priority ?? 50}` : item.kind === "session" ? "临时" : item.kind === "soul" ? "手动维护" : item.priority === "high" ? "高优先级" : item.priority === "low" ? "低优先级" : "普通"}</span>
+                    <span>${item.kind === "trash" ? t4("memPanel.cleanedAt", { date: item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : t4("memPanel.unknown") }) : item.kind === "mode" ? t4("memPanel.priorityMeta", { prio: item.priority ?? 50 }) : item.kind === "session" ? t4("memPanel.temporary") : item.kind === "soul" ? t4("memPanel.manualMaintain") : item.priority === "high" ? t4("memPanel.prioHighShort") : item.priority === "low" ? t4("memPanel.prioLowShort") : t4("memPanel.prioNormal")}</span>
                     <span class=${injectionState(item) === "omitted" || item.enabled === false ? "memory-disabled" : "memory-injected"}>${injectionLabel(item)}</span>
                     ${diagnosticLabel(item) ? html4`<span class="memory-diagnostic">${diagnosticLabel(item)}</span>` : null}
                   </span>
                 </button>
               </div>
             `)}
-            ${visibleItems.length === 0 ? html4`<div class="memory-empty">没有符合条件的记忆</div>` : null}
+            ${visibleItems.length === 0 ? html4`<div class="memory-empty">${t4("memPanel.emptyList")}</div>` : null}
           </div>
           <div class="memory-rule-status">
-            <span>当前项目规则</span>
-            ${(tree.project?.files ?? []).length > 0 ? tree.project.files.map((file) => html4`<strong>${file.name} · ${fmtBytes(file.size)} · ${file.state === "full" ? "全文" : file.state === "truncated" ? `截断 ${Number(file.injectedChars ?? 0).toLocaleString()} 字符` : "因总预算省略"}</strong>`) : html4`<strong>未配置</strong>`}
-            <span>${tree.project?.exists ? `实际注入 ${Number(tree.project.totalChars ?? 0).toLocaleString()} / ${Number(tree.project.maxChars ?? 0).toLocaleString()} 字符` : ""}</span>
+            <span>${t4("memPanel.projectRules")}</span>
+            ${(tree.project?.files ?? []).length > 0 ? tree.project.files.map((file) => html4`<strong>${file.name} · ${fmtBytes(file.size)} · ${file.state === "full" ? t4("memPanel.stateFull") : file.state === "truncated" ? t4("memPanel.stateTruncated", { chars: Number(file.injectedChars ?? 0).toLocaleString() }) : t4("memPanel.stateOmitted")}</strong>`) : html4`<strong>${t4("memPanel.notConfigured")}</strong>`}
+            <span>${tree.project?.exists ? t4("memPanel.actualInject", { used: Number(tree.project.totalChars ?? 0).toLocaleString(), max: Number(tree.project.maxChars ?? 0).toLocaleString() }) : ""}</span>
           </div>
         </div>
         <div class="memory-detail-pane">
-          ${!draft ? html4`<div class="memory-empty-detail">选择一条记忆查看详情</div>` : html4`
+          ${!draft ? html4`<div class="memory-empty-detail">${t4("memPanel.pickDetail")}</div>` : html4`
             <div class="memory-detail-head">
-              <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? "有未保存修改" : "已同步"}</div></div>
+              <div><div class="memory-section-title">${scopeLabel(draft)}</div><div class="memory-detail-state">${dirty ? t4("memPanel.detailDirty") : t4("memPanel.detailSynced")}</div></div>
               <div class="memory-detail-actions">
-                ${open.kind === "trash" ? html4`<button class="btn primary" title=${draft.restoreHint ?? "恢复到原范围"} disabled=${busy || draft.canRestore === false} onClick=${restoreTrash}>恢复此记忆</button><button class="btn danger" disabled=${busy} onClick=${permanentlyDeleteMemoryTrash}>永久删除</button>` : open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>保存</button>` : null}
-                ${open.kind !== "soul" && open.kind !== "trash" ? html4`<button class="btn danger" disabled=${busy} onClick=${remove}>删除</button>` : null}
+                ${open.kind === "trash" ? html4`<button class="btn primary" title=${draft.restoreHint ?? t4("memPanel.restoreHintDefault")} disabled=${busy || draft.canRestore === false} onClick=${restoreTrash}>${t4("memPanel.restoreThis")}</button><button class="btn danger" disabled=${busy} onClick=${permanentlyDeleteMemoryTrash}>${t4("memPanel.permanentDelete")}</button>` : open.kind !== "session" ? html4`<button class="btn primary" disabled=${busy || !dirty || !String(draft.content ?? "").trim()} onClick=${save}>${t4("memPanel.saveBtn")}</button>` : null}
+                ${open.kind !== "soul" && open.kind !== "trash" ? html4`<button class="btn danger" disabled=${busy} onClick=${remove}>${t4("memPanel.deleteBtn")}</button>` : null}
               </div>
             </div>
-            ${diagnosticLabel(draft) ? html4`<div class="memory-detail-warning">${diagnosticLabel(draft)}。请核对后自行决定保留、修改或删除，系统不会自动合并。</div>` : null}
+            ${diagnosticLabel(draft) ? html4`<div class="memory-detail-warning">${diagnosticLabel(draft)}${t4("memPanel.diagAction")}</div>` : null}
             ${open.kind === "persistent" ? html4`
-              <label class="memory-field"><span>摘要</span><input value=${draft.description ?? ""} onInput=${(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+              <label class="memory-field"><span>${t4("memPanel.fieldSummary")}</span><input value=${draft.description ?? ""} onInput=${(event) => setDraft({ ...draft, description: event.target.value })} /></label>
               <div class="memory-field-row">
-                <label class="memory-field"><span>类型</span><select value=${draft.type ?? "user"} onChange=${(event) => setDraft({ ...draft, type: event.target.value })}><option value="user">用户偏好</option><option value="feedback">纠正反馈</option><option value="project">项目事实</option><option value="reference">参考信息</option></select></label>
-                <label class="memory-field"><span>优先级</span><select value=${draft.priority ?? "medium"} onChange=${(event) => setDraft({ ...draft, priority: event.target.value })}><option value="low">低</option><option value="medium">普通</option><option value="high">高</option></select></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldType")}</span><${Select} value=${draft.type ?? "user"} onChange=${(v) => setDraft({ ...draft, type: v })} ariaLabel=${t4("memPanel.fieldType")} options=${[{ value: "user", label: t4("memPanel.typeUser") }, { value: "feedback", label: t4("memPanel.typeFeedback") }, { value: "project", label: t4("memPanel.typeProject") }, { value: "reference", label: t4("memPanel.typeReference") }]} /></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldPriority")}</span><${Select} value=${draft.priority ?? "medium"} onChange=${(v) => setDraft({ ...draft, priority: v })} ariaLabel=${t4("memPanel.fieldPriority")} options=${[{ value: "low", label: t4("memPanel.prioLowTiny") }, { value: "medium", label: t4("memPanel.prioNormal") }, { value: "high", label: t4("memPanel.prioHighTiny") }]} /></label>
               </div>
             ` : open.kind === "mode" ? html4`
               <div class="memory-field-row">
-                <label class="memory-field"><span>目标场景</span><select value=${draft.targetMode ?? open.modeId} onChange=${(event) => setDraft({ ...draft, targetMode: event.target.value })}>${(tree.modeMemory?.modes ?? []).map((mode) => html4`<option value=${mode.id}>${mode.label ?? mode.id}</option>`)}</select></label>
-                <label class="memory-field"><span>优先级</span><input type="number" min="0" max="100" value=${draft.priority ?? 50} onInput=${(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldTargetScene")}</span><${Select} value=${draft.targetMode ?? open.modeId} onChange=${(v) => setDraft({ ...draft, targetMode: v })} ariaLabel=${t4("memPanel.fieldTargetScene")} options=${(tree.modeMemory?.modes ?? []).map((mode) => ({ value: mode.id, label: mode.label ?? mode.id }))} /></label>
+                <label class="memory-field"><span>${t4("memPanel.fieldPriority")}</span><input type="number" min="0" max="100" value=${draft.priority ?? 50} onInput=${(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></label>
               </div>
-              <div class="memory-mode-actions"><span>${draft.targetMode !== open.modeId ? "保存后将移动到目标场景" : "选择其他场景可移动或复制"}</span><button class="btn" disabled=${busy || !draft.targetMode || draft.targetMode === open.modeId} onClick=${copyModeMemory}>复制到场景</button></div>
-              <label class="memory-field"><span>关键词</span><input value=${draft.keywordsText ?? ""} onInput=${(event) => setDraft({ ...draft, keywordsText: event.target.value })} /></label>
-              <label class="memory-toggle"><input type="checkbox" checked=${draft.enabled !== false} onChange=${(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用此场景记忆</span></label>
+              <div class="memory-mode-actions"><span>${draft.targetMode !== open.modeId ? t4("memPanel.moveHint") : t4("memPanel.copyHint")}</span><button class="btn" disabled=${busy || !draft.targetMode || draft.targetMode === open.modeId} onClick=${copyModeMemory}>${t4("memPanel.copyToScene")}</button></div>
+              <label class="memory-field"><span>${t4("memPanel.fieldKeywords")}</span><input value=${draft.keywordsText ?? ""} onInput=${(event) => setDraft({ ...draft, keywordsText: event.target.value })} /></label>
+              <label class="memory-toggle"><input type="checkbox" checked=${draft.enabled !== false} onChange=${(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>${t4("memPanel.enableThis")}</span></label>
             ` : open.kind === "soul" ? html4`
-              <div class="memory-editor-tabs"><button class=${soulEditorMode === "basic" ? "active" : ""} onClick=${() => setSoulEditorMode("basic")}>基础编辑</button><button class=${soulEditorMode === "advanced" ? "active" : ""} onClick=${() => setSoulEditorMode("advanced")}>高级原文</button></div>
-              <label class="memory-field"><span>AI 名称</span><input maxlength="80" value=${draft.aiName ?? ""} onInput=${(event) => setDraft({ ...draft, aiName: event.target.value })} /></label>
+              <div class="memory-editor-tabs"><button class=${soulEditorMode === "basic" ? "active" : ""} onClick=${() => setSoulEditorMode("basic")}>${t4("memPanel.soulBasic")}</button><button class=${soulEditorMode === "advanced" ? "active" : ""} onClick=${() => setSoulEditorMode("advanced")}>${t4("memPanel.soulAdvanced")}</button></div>
+              <label class="memory-field"><span>${t4("memPanel.fieldAiName")}</span><input maxlength="80" value=${draft.aiName ?? ""} onInput=${(event) => setDraft({ ...draft, aiName: event.target.value })} /></label>
               ${soulEditorMode === "basic" ? html4`
-                <label class="memory-field"><span>身份与定位</span><textarea rows="5" value=${soulSectionValue(draft.content, "我是谁")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "我是谁", event.target.value) })}></textarea></label>
-                <label class="memory-field"><span>协作方式</span><textarea rows="7" value=${soulSectionValue(draft.content, "协作方式")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "协作方式", event.target.value) })}></textarea></label>
-                <label class="memory-field"><span>安全与隐私</span><textarea rows="6" value=${soulSectionValue(draft.content, "安全与隐私")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "安全与隐私", event.target.value) })}></textarea></label>
-              ` : html4`<label class="memory-field memory-content-field"><span>完整 Soul Markdown · ${String(draft.content ?? "").length} 字符</span><textarea rows="18" value=${draft.content ?? ""} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>`}
-              <div class="memory-soul-actions"><button class="btn" disabled=${busy} onClick=${previewSoul}>预览最终注入</button><button class="btn" disabled=${busy} onClick=${resetSoul}>恢复默认 Soul</button></div>
-              ${soulPreview ? html4`<div class=${`memory-soul-preview ${soulPreview.valid ? "" : "invalid"}`}><div><strong>最终注入预览</strong><span>${soulPreview.chars}/${soulPreview.maxChars} 字符</span></div><pre>${soulPreview.finalBody}</pre></div>` : null}
-              <div class="memory-soul-note"><strong>Soul 不提供删除</strong><span>保存后在下一次 /new 或上下文重建时生效。</span></div>
-              ${(draft.history ?? []).length > 0 ? html4`<div class="memory-soul-history"><strong>版本历史</strong>${draft.history.map((item) => html4`<div><span>${new Date(item.savedAt).toLocaleString()} · ${item.name || "未命名"} · ${fmtBytes(item.size)}</span><button class="btn ghost" disabled=${busy} onClick=${() => restoreSoulVersion(item.id)}>恢复此版本</button></div>`)}</div>` : null}
-            ` : open.kind === "trash" ? html4`<div class=${`memory-session-note ${draft.canRestore === false ? "memory-trash-blocked" : ""}`}>删除于 ${new Date(draft.deletedAt).toLocaleString()}，${draft.expiresAt ? `${new Date(draft.expiresAt).toLocaleString()} 后自动永久清理。` : `保留 ${tree.trash?.retentionDays ?? 30} 天。`}${draft.canRestore === false ? draft.projectId ? " 这是其他项目的记忆，请打开原项目后恢复；仍可在此预览或永久删除。" : " 旧记录未保存原项目信息，无法安全自动恢复；可预览内容后重新创建。" : " 恢复后将回到原范围。"}</div>` : html4`<div class="memory-session-note">仅在当前对话中生效，恢复该对话时会一并恢复。</div>`}
-            ${open.kind !== "soul" ? html4`<label class="memory-field memory-content-field"><span>${open.kind === "mode" ? `内容 · ${String(draft.content ?? "").length}/180` : "内容"}</span><textarea rows="16" maxlength=${open.kind === "mode" ? 180 : null} value=${draft.content ?? ""} disabled=${open.kind === "session" || open.kind === "trash"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>` : null}
-            <div class="memory-detail-foot">${open.kind === "session" ? "当前会话" : open.kind === "soul" ? draft.path ?? "~/.visionox/soul.md" : `创建 ${draft.createdAt || "未知"} · 更新 ${draft.updatedAt || "未知"} · 来源 ${draft.source === "model" ? "AI" : draft.source === "ui" ? "界面" : "历史数据"}`}</div>
+                <label class="memory-field"><span>${t4("memPanel.soulWho")}</span><textarea rows="5" value=${soulSectionValue(draft.content, "我是谁")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "我是谁", event.target.value) })}></textarea></label>
+                <label class="memory-field"><span>${t4("memPanel.soulCollab")}</span><textarea rows="7" value=${soulSectionValue(draft.content, "协作方式")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "协作方式", event.target.value) })}></textarea></label>
+                <label class="memory-field"><span>${t4("memPanel.soulSafety")}</span><textarea rows="6" value=${soulSectionValue(draft.content, "安全与隐私")} onInput=${(event) => setDraft({ ...draft, content: updateSoulSection(draft.content, "安全与隐私", event.target.value) })}></textarea></label>
+              ` : html4`<label class="memory-field memory-content-field"><span>${t4("memPanel.soulFullMd", { count: String(draft.content ?? "").length })}</span><textarea rows="18" value=${draft.content ?? ""} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>`}
+              <div class="memory-soul-actions"><button class="btn" disabled=${busy} onClick=${previewSoul}>${t4("memPanel.previewInject")}</button><button class="btn" disabled=${busy} onClick=${resetSoul}>${t4("memPanel.resetSoul")}</button></div>
+              ${soulPreview ? html4`<div class=${`memory-soul-preview ${soulPreview.valid ? "" : "invalid"}`}><div><strong>${t4("memPanel.finalPreview")}</strong><span>${t4("memPanel.previewChars", { used: soulPreview.chars, max: soulPreview.maxChars })}</span></div><pre>${soulPreview.finalBody}</pre></div>` : null}
+              <div class="memory-soul-note"><strong>${t4("memPanel.soulNoDelete")}</strong><span>${t4("memPanel.soulEffective")}</span></div>
+              ${(draft.history ?? []).length > 0 ? html4`<div class="memory-soul-history"><strong>${t4("memPanel.versionHistory")}</strong>${draft.history.map((item) => html4`<div><span>${new Date(item.savedAt).toLocaleString()} · ${item.name || t4("memPanel.unnamed")} · ${fmtBytes(item.size)}</span><button class="btn ghost" disabled=${busy} onClick=${() => restoreSoulVersion(item.id)}>${t4("memPanel.restoreVersion")}</button></div>`)}</div>` : null}
+            ` : open.kind === "trash" ? html4`<div class=${`memory-session-note ${draft.canRestore === false ? "memory-trash-blocked" : ""}`}>${t4("memPanel.trashDeletedAt", { date: new Date(draft.deletedAt).toLocaleString() })}${draft.expiresAt ? t4("memPanel.trashExpireAt", { date: new Date(draft.expiresAt).toLocaleString() }) : t4("memPanel.trashRetentionDays", { days: tree.trash?.retentionDays ?? 30 })}${draft.canRestore === false ? draft.projectId ? t4("memPanel.trashOtherProject") : t4("memPanel.trashNoProject") : t4("memPanel.trashWillRestore")}</div>` : html4`<div class="memory-session-note">${t4("memPanel.sessionNote")}</div>`}
+            ${open.kind !== "soul" ? html4`<label class="memory-field memory-content-field"><span>${open.kind === "mode" ? t4("memPanel.contentLabelMode", { count: String(draft.content ?? "").length }) : t4("memPanel.contentLabel")}</span><textarea rows="16" maxlength=${open.kind === "mode" ? 180 : null} value=${draft.content ?? ""} disabled=${open.kind === "session" || open.kind === "trash"} onInput=${(event) => setDraft({ ...draft, content: event.target.value })}></textarea></label>` : null}
+            <div class="memory-detail-foot">${open.kind === "session" ? t4("memPanel.footSession") : open.kind === "soul" ? draft.path ?? "~/.visionox/soul.md" : t4("memPanel.footCreated", { created: draft.createdAt || t4("memPanel.unknown"), updated: draft.updatedAt || t4("memPanel.unknown"), source: draft.source === "model" ? t4("memPanel.sourceModel") : draft.source === "ui" ? t4("memPanel.sourceUi") : t4("memPanel.sourceHistory") })}</div>
           `}
         </div>
       </div>

@@ -4,6 +4,7 @@ import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
 import { TOKEN, api, writeClipboardText } from "./api.js";
 import { showToast } from "./bus.js";
+import { t as t4 } from "../i18n/index.js";
 
 function escapeHtml(s3) {
   if (s3 == null) return "";
@@ -74,6 +75,15 @@ var ARTIFACT_OPEN_EXTS = /* @__PURE__ */ new Set(["html", "htm", "txt", "json", 
 function normalizeArtifactLang(raw) {
   return String(raw || "").trim().split(/\s+/)[0].replace(/^language-/, "").toLowerCase();
 }
+function knownHighlightLanguage(raw) {
+  const lang = String(raw || "").trim();
+  if (!lang) return null;
+  try {
+    return typeof hljs?.getLanguage === "function" && hljs.getLanguage(lang) ? lang : null;
+  } catch {
+    return null;
+  }
+}
 function artifactDisplayName(content, lang, ext, seq) {
   const text = String(content || "");
   if (lang === "html" || lang === "htm") {
@@ -124,21 +134,21 @@ function registerChatArtifact(content, rawLang) {
 }
 function renderArtifactFrame(artifact, codeHtml) {
   if (!artifact) return codeHtml;
-  const previewBtn = artifact.previewable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="preview">预览</button>` : "";
-  const openBtn = artifact.openable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="open-file">打开</button>` : "";
+  const previewBtn = artifact.previewable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="preview">${t4("mdArt.preview")}</button>` : "";
+  const openBtn = artifact.openable ? `<button type="button" class="chat-artifact-btn" data-artifact-action="open-file">${t4("mdArt.open")}</button>` : "";
   return `<div class="chat-artifact" data-artifact-id="${escapeHtml(artifact.id)}">
     <div class="chat-artifact-head">
       <div class="chat-artifact-title">
         <span class="chat-artifact-type">${escapeHtml(artifact.label)}</span>
         <span class="chat-artifact-name" title="${escapeHtml(artifact.filename)}">${escapeHtml(artifact.filename)}</span>
-        <span class="chat-artifact-status" data-artifact-status>可保存的对话产物</span>
+        <span class="chat-artifact-status" data-artifact-status>${t4("mdArt.artifactStatus")}</span>
       </div>
       <div class="chat-artifact-actions">
         ${previewBtn}
         ${openBtn}
-        <button type="button" class="chat-artifact-btn" data-artifact-action="copy">复制</button>
-        <button type="button" class="chat-artifact-btn" data-artifact-action="save">另存</button>
-        <button type="button" class="chat-artifact-btn" data-artifact-action="open-folder" disabled>打开目录</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="copy">${t4("mdArt.copy")}</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="save">${t4("mdArt.saveAs")}</button>
+        <button type="button" class="chat-artifact-btn" data-artifact-action="open-folder" disabled>${t4("mdArt.openFolder")}</button>
       </div>
     </div>
     ${codeHtml}
@@ -147,22 +157,23 @@ function renderArtifactFrame(artifact, codeHtml) {
 function renderPreviewCodeBlock(content, rawLang) {
   const lang = normalizeArtifactLang(rawLang);
   const hlLang = lang === "html" || lang === "htm" ? "xml" : lang;
+  const safeLang = knownHighlightLanguage(hlLang);
   let codeHtml = escapeHtml(content);
   try {
-    if (hlLang && hljs?.getLanguage?.(hlLang)) {
-      codeHtml = hljs.highlight(content, { language: hlLang, ignoreIllegals: true }).value;
-    } else if (hljs?.highlightAuto) {
+    if (safeLang) {
+      codeHtml = hljs.highlight(content, { language: safeLang, ignoreIllegals: true }).value;
+    } else if (typeof hljs?.highlightAuto === "function") {
       codeHtml = hljs.highlightAuto(content).value;
     }
   } catch {
     codeHtml = escapeHtml(content);
   }
-  const langLabel = lang ? escapeHtml(lang) : "代码";
-  const codeClass = hlLang ? ` class="hljs language-${escapeHtml(hlLang)}"` : ' class="hljs"';
+  const langLabel = lang ? escapeHtml(lang) : t4("mdArt.code");
+  const codeClass = safeLang ? ` class="hljs language-${escapeHtml(safeLang)}"` : ' class="hljs"';
   return `<div class="artifact-preview-code">
     <div class="artifact-preview-code-head">
       <span>${langLabel}</span>
-      <button type="button" data-preview-code-copy>复制</button>
+      <button type="button" data-preview-code-copy>${t4("mdArt.copy")}</button>
     </div>
     <pre><code${codeClass}>${codeHtml}</code></pre>
   </div>`;
@@ -188,19 +199,21 @@ renderer.code = function reasonixCode(arg1, arg2) {
   }
   if (lang === "diff") return renderUnifiedDiff(codeText);
   const artifact = registerChatArtifact(codeText, lang);
-  if (lang && typeof lang === "string" && hljs?.getLanguage?.(lang)) {
+  const safeRequestedLang = knownHighlightLanguage(lang);
+  if (safeRequestedLang) {
     try {
-      const h3 = hljs.highlight(codeText, { language: lang, ignoreIllegals: true }).value;
-      return renderArtifactFrame(artifact, `<pre><code class="hljs language-${lang}">${h3}</code></pre>`);
+      const h3 = hljs.highlight(codeText, { language: safeRequestedLang, ignoreIllegals: true }).value;
+      return renderArtifactFrame(artifact, `<pre><code class="hljs language-${safeRequestedLang}">${h3}</code></pre>`);
     } catch {
     }
   }
   if (artifact) {
     const hlLang = artifact.lang === "html" || artifact.lang === "htm" ? "xml" : artifact.lang;
-    if (hljs?.getLanguage?.(hlLang)) {
+    const safeArtifactLang = knownHighlightLanguage(hlLang);
+    if (safeArtifactLang) {
       try {
-        const h3 = hljs.highlight(codeText, { language: hlLang, ignoreIllegals: true }).value;
-        return renderArtifactFrame(artifact, `<pre><code class="hljs language-${hlLang}">${h3}</code></pre>`);
+        const h3 = hljs.highlight(codeText, { language: safeArtifactLang, ignoreIllegals: true }).value;
+        return renderArtifactFrame(artifact, `<pre><code class="hljs language-${safeArtifactLang}">${h3}</code></pre>`);
       } catch {
       }
     }
@@ -284,16 +297,16 @@ function showArtifactPreview(artifact) {
   dialog.className = "artifact-preview-dialog";
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-label", `${artifact.filename} 预览`);
+  dialog.setAttribute("aria-label", t4("mdArt.previewAria", { name: artifact.filename }));
   const title = document.createElement("div");
   title.className = "artifact-preview-head";
   const canShowSource = artifact.lang !== "html" && artifact.lang !== "htm";
   title.innerHTML = `<span class="artifact-preview-name" title="${escapeHtml(artifact.path || artifact.filename)}">${escapeHtml(artifact.filename)}</span>
     <span class="artifact-preview-actions">
-      ${canShowSource ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="source">源码</button>` : ""}
-      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="copy-path">复制路径</button>` : ""}
-      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="folder">所在文件夹</button>` : ""}
-      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close" aria-label="返回对话">返回对话</button>
+      ${canShowSource ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="source">${t4("mdArt.source")}</button>` : ""}
+      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="copy-path">${t4("mdArt.copyPath")}</button>` : ""}
+      ${artifact.path ? `<button type="button" class="artifact-preview-btn" data-artifact-preview-action="folder">${t4("mdArt.folder")}</button>` : ""}
+      <button type="button" class="artifact-preview-close" data-artifact-preview-action="close" aria-label="${t4("mdArt.backToChat")}">${t4("mdArt.backToChat")}</button>
     </span>`;
   const body = document.createElement("div");
   body.className = "artifact-preview-body";
@@ -342,7 +355,7 @@ function showArtifactPreview(artifact) {
     }
     if (action === "source") {
       showingSource = !showingSource;
-      btn.textContent = showingSource ? "预览" : "源码";
+      btn.textContent = showingSource ? t4("mdArt.preview") : t4("mdArt.source");
       if (showingSource) renderSource();
       else renderPreview();
       return;
@@ -350,14 +363,14 @@ function showArtifactPreview(artifact) {
     try {
       if (action === "copy-path") {
         await writeClipboardText(artifact.path || "");
-        showToast("路径已复制", "info");
+        showToast(t4("mdArt.pathCopied"), "info");
       } else if (action === "folder") {
         if (!await confirmExternalArtifactOpen(artifact)) return;
         await api("/artifacts/open-folder", { method: "POST", body: { path: artifact.path } });
-        showToast("已打开所在文件夹", "info");
+        showToast(t4("mdArt.folderOpened"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("mdArt.fileOpFailed"), "error", 5e3);
     }
   });
 }
@@ -369,12 +382,12 @@ function confirmExternalArtifactOpen(artifact) {
     dialog.className = "artifact-open-confirmation-dialog";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", "确认打开外部文件");
-    dialog.innerHTML = `<div class="artifact-open-confirmation-title">要离开对话打开文件吗？</div>
-      <div class="artifact-open-confirmation-text">${escapeHtml(artifact.filename || artifact.path || "此文件")} 将交给本机程序打开。当前对话会保留，返回本软件后仍可继续。</div>
+    dialog.setAttribute("aria-label", t4("mdArt.confirmOpenAria"));
+    dialog.innerHTML = `<div class="artifact-open-confirmation-title">${t4("mdArt.confirmOpenTitle")}</div>
+      <div class="artifact-open-confirmation-text">${t4("mdArt.confirmOpenText", { name: escapeHtml(artifact.filename || artifact.path || t4("mdArt.thisFile")) })}</div>
       <div class="artifact-open-confirmation-actions">
-        <button type="button" class="artifact-preview-btn" data-artifact-open-action="cancel">留在对话</button>
-        <button type="button" class="artifact-preview-btn primary" data-artifact-open-action="open">使用系统程序打开</button>
+        <button type="button" class="artifact-preview-btn" data-artifact-open-action="cancel">${t4("mdArt.stayInChat")}</button>
+        <button type="button" class="artifact-preview-btn primary" data-artifact-open-action="open">${t4("mdArt.openWithSystem")}</button>
       </div>`;
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
@@ -411,16 +424,16 @@ function wireArtifactPreviewCodeCopy(iframe) {
     ev.preventDefault();
     const wrap = btn.closest(".artifact-preview-code");
     const text = wrap?.querySelector?.("pre code")?.textContent || "";
-    const original = btn.textContent || "复制";
+    const original = btn.textContent || t4("mdArt.copy");
     try {
       await writeClipboardText(text);
-      btn.textContent = "已复制";
+      btn.textContent = t4("mdArt.copied");
       setTimeout(() => {
         btn.textContent = original;
       }, 1200);
     } catch (err) {
-      btn.textContent = "复制失败";
-      showToast(err.message || "复制失败", "error", 4e3);
+      btn.textContent = t4("mdArt.copyFailed");
+      showToast(err.message || t4("mdArt.copyFailed"), "error", 4e3);
       setTimeout(() => {
         btn.textContent = original;
       }, 1500);
@@ -444,7 +457,7 @@ async function saveArtifact(artifact, wrap) {
     nameEl.setAttribute("title", artifact.path || artifact.filename);
   }
   const statusEl = wrap?.querySelector?.("[data-artifact-status]");
-  if (statusEl) statusEl.textContent = "已保存";
+  if (statusEl) statusEl.textContent = t4("mdArt.saved");
   return artifact;
 }
 async function handleArtifactAction(ev) {
@@ -460,13 +473,13 @@ async function handleArtifactAction(ev) {
   try {
     if (action === "copy") {
       await writeClipboardText(artifact.content);
-      showToast("产物内容已复制", "info");
+      showToast(t4("mdArt.contentCopied"), "info");
     } else if (action === "preview") {
       showArtifactPreview(artifact);
     } else if (action === "save") {
       btn.disabled = true;
       await saveArtifact(artifact, wrap);
-      showToast(`已保存到 ${artifact.filename}`, "info");
+      showToast(t4("mdArt.savedTo", { name: artifact.filename }), "info");
     } else if (action === "open-file") {
       if (!await confirmExternalArtifactOpen(artifact)) return;
       btn.disabled = true;
@@ -478,7 +491,7 @@ async function handleArtifactAction(ev) {
       await api("/artifacts/open-folder", { method: "POST", body: { dir: artifact.dir } });
     }
   } catch (err) {
-    showToast(err.message || "产物操作失败", "error", 5e3);
+    showToast(err.message || t4("mdArt.opFailed"), "error", 5e3);
   } finally {
     if (action === "save" || action === "open-file") btn.disabled = false;
   }
@@ -547,9 +560,12 @@ function langFromPath(path) {
 }
 function renderHighlightedBlock(text, lang) {
   if (!text) return "";
-  const safeLang = lang && hljs?.getLanguage?.(lang) ? lang : null;
+  const safeLang = knownHighlightLanguage(lang);
   try {
-    const out = safeLang ? hljs.highlight(text, { language: safeLang, ignoreIllegals: true }) : hljs.highlightAuto(text);
+    const out = safeLang
+      ? hljs.highlight(text, { language: safeLang, ignoreIllegals: true })
+      : typeof hljs?.highlightAuto === "function" ? hljs.highlightAuto(text) : null;
+    if (!out) return `<pre><code>${escapeHtml(text)}</code></pre>`;
     return `<pre class="md"><code class="hljs ${safeLang ? `language-${safeLang}` : ""}">${out.value}</code></pre>`;
   } catch {
     return `<pre><code>${escapeHtml(text)}</code></pre>`;
@@ -559,10 +575,12 @@ function hlLine(text, lang) {
   if (text == null) return "";
   if (text === "") return "";
   try {
-    if (lang && hljs?.getLanguage?.(lang)) {
-      return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    const safeLang = knownHighlightLanguage(lang);
+    if (safeLang) {
+      return hljs.highlight(text, { language: safeLang, ignoreIllegals: true }).value;
     }
-    return hljs.highlightAuto(text).value;
+    if (typeof hljs?.highlightAuto === "function") return hljs.highlightAuto(text).value;
+    return escapeHtml(text);
   } catch {
     return escapeHtml(text);
   }

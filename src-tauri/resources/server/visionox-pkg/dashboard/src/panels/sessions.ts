@@ -13,6 +13,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 import { CHAT_DRAFT_KEY } from "./chat.js";
 const N2: any = preactMemo;
 
@@ -104,7 +105,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
       }
       setSelectedNames(/* @__PURE__ */ new Set());
       if (open && names.includes(open.name)) closeDetail();
-      setInfo(`已移入回收站 ${result.movedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
+      setInfo(t4("sessions.trashResult", { moved: result.movedCount || 0, failed: result.failedCount || 0 }));
       await refresh();
     } catch (err) {
       setInfo(err.message);
@@ -130,7 +131,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
   const restoreTrashConfirmation = q2(() => {
     try { localStorage.removeItem("visionox.sessions.skipTrashConfirm"); } catch {}
     setSkipTrashConfirm(false);
-    setInfo("删除确认已恢复。");
+    setInfo(t4("sessions.restoreConfirmBack"));
   }, []);
   const remove = q2((name) => requestTrash([name]), [requestTrash]);
   const toggleSelectedSession = q2((name) => {
@@ -176,7 +177,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     setInfo(null);
     try {
       await api(`/sessions/trash/${encodeURIComponent(id)}/restore`, { method: "POST", body: { newName } });
-      setInfo("会话已从回收站恢复。");
+      setInfo(t4("sessions.restored"));
       setSelectedTrashIds((current) => { const next = new Set(current); next.delete(id); return next; });
       if (open?.kind === "trash" && open.id === id) closeDetail();
       await refresh();
@@ -200,20 +201,20 @@ function SessionsPanel({ userAvatar = null } = {}) {
       }
       setSelectedTrashIds(/* @__PURE__ */ new Set());
       if (open?.kind === "trash" && ids.includes(open.id)) closeDetail();
-      setInfo(`已恢复 ${result.restoredCount || 0} 个，失败 ${result.failedCount || 0} 个。名称冲突的会话可打开预览后改名恢复。`);
+      setInfo(t4("sessions.restoreResult", { restored: result.restoredCount || 0, failed: result.failedCount || 0 }));
       await refresh();
     } catch (err) { setInfo(err.message); }
     finally { setDeleting(false); }
   }, [selectedTrashIds, open, refresh, closeDetail]);
   const permanentlyDeleteTrash = q2(async (ids) => {
-    if (ids.length === 0 || !confirm(`永久删除 ${ids.length} 个回收站会话？此操作无法撤销。`)) return;
+    if (ids.length === 0 || !confirm(t4("sessions.purgeConfirm", { count: ids.length }))) return;
     setDeleting(true);
     setInfo(null);
     try {
       const result = await api("/sessions/trash/batch", { method: "DELETE", body: { ids } });
       setSelectedTrashIds(/* @__PURE__ */ new Set());
       if (open?.kind === "trash" && ids.includes(open.id)) closeDetail();
-      setInfo(`已永久删除 ${result.deletedCount || 0} 个，失败 ${result.failedCount || 0} 个。`);
+      setInfo(t4("sessions.purgeResult", { deleted: result.deletedCount || 0, failed: result.failedCount || 0 }));
       await refresh();
     } catch (err) { setInfo(err.message); }
     finally { setDeleting(false); }
@@ -224,7 +225,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     try {
       const result = await api("/sessions/trash-retention", { method: "POST", body: { retentionDays } });
       setRetentionDraft(result.retentionDays);
-      setInfo(`回收站文件将在 ${result.retentionDays} 天后自动删除。`);
+      setInfo(t4("sessions.retentionSaved", { days: result.retentionDays }));
       await refresh();
     } catch (err) {
       setInfo(err.message);
@@ -237,7 +238,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
     try {
       const res = await api(`/sessions/${encodeURIComponent(name)}/export`, { method: "POST", body: {} });
       setInfo(res.invalidRecords > 0
-        ? `${t4("sessions.exported", { path: res.path || res.filename || name })} ${res.integrityWarning || `已跳过 ${res.invalidRecords} 条无法解析的记录。`}`
+        ? `${t4("sessions.exported", { path: res.path || res.filename || name })} ${res.integrityWarning || t4("sessions.skippedInvalid", { count: res.invalidRecords })}`
         : t4("sessions.exported", { path: res.path || res.filename || name }));
     } catch (err) {
       setInfo(t4("sessions.exportFailed", { error: err.message }));
@@ -373,12 +374,12 @@ function SessionsPanel({ userAvatar = null } = {}) {
   const allFilteredTrashSelected = filteredTrash.length > 0 && filteredTrash.every((item) => selectedTrashIds.has(item.id));
   return html4`
     <div class="sessions-grid">
-      ${trashConfirm ? html4`<div class="session-confirm-overlay" role="presentation" onClick=${() => setTrashConfirm(null)}><div class="modal-card session-confirm-card" role="dialog" aria-modal="true" aria-labelledby="session-trash-confirm-title" onClick=${(event) => event.stopPropagation()}><div class="modal-card-head"><span class="modal-card-icon" style="color:var(--c-warn)">!</span><div><div class="modal-card-title" id="session-trash-confirm-title">移入回收站</div><div class="modal-card-subtitle">${trashConfirm.names.length === 1 ? `确认将“${trashConfirm.names[0]}”移入回收站？` : `确认将选中的 ${trashConfirm.names.length} 个会话移入回收站？`} 保留期内可以恢复。</div></div></div><label class="checkbox-row"><input type="checkbox" checked=${dontAskAgain} onChange=${(event) => setDontAskAgain(event.target.checked)} /><span>下次不再提示</span></label><div class="modal-actions"><button class="primary" disabled=${deleting} onClick=${confirmTrash}>移入回收站</button><button disabled=${deleting} onClick=${() => setTrashConfirm(null)}>取消</button></div></div></div>` : null}
+      ${trashConfirm ? html4`<div class="session-confirm-overlay" role="presentation" onClick=${() => setTrashConfirm(null)}><div class="modal-card session-confirm-card" role="dialog" aria-modal="true" aria-labelledby="session-trash-confirm-title" onClick=${(event) => event.stopPropagation()}><div class="modal-card-head"><span class="modal-card-icon" style="color:var(--c-warn)">!</span><div><div class="modal-card-title" id="session-trash-confirm-title">${t4("sessions.trashConfirmTitle")}</div><div class="modal-card-subtitle">${trashConfirm.names.length === 1 ? t4("sessions.trashConfirmSingle", { name: trashConfirm.names[0] }) : t4("sessions.trashConfirmMulti", { count: trashConfirm.names.length })} ${t4("sessions.trashConfirmKeep")}</div></div></div><label class="checkbox-row"><input type="checkbox" checked=${dontAskAgain} onChange=${(event) => setDontAskAgain(event.target.checked)} /><span>${t4("sessions.dontAskAgain")}</span></label><div class="modal-actions"><button class="primary" disabled=${deleting} onClick=${confirmTrash}>${t4("sessions.trashConfirmTitle")}</button><button disabled=${deleting} onClick=${() => setTrashConfirm(null)}>${t4("common.cancel")}</button></div></div></div>` : null}
       ${info ? html4`<div class="card accent-brand session-page-feedback" role="status">${info}</div>` : null}
       <div class="sessions-list">
         <div class="session-list-tabs">
-          <button class=${listMode === "sessions" ? "active" : ""} onClick=${() => { setListMode("sessions"); setSelectionMode(false); closeDetail(); }}>会话 <span>${sessions.length}</span></button>
-          <button class=${listMode === "trash" ? "active" : ""} onClick=${() => { setListMode("trash"); setSelectionMode(false); closeDetail(); }}>回收站 <span>${trashItems.length}</span></button>
+          <button class=${listMode === "sessions" ? "active" : ""} onClick=${() => { setListMode("sessions"); setSelectionMode(false); closeDetail(); }}>${t4("sessions.tabSessions")} <span>${sessions.length}</span></button>
+          <button class=${listMode === "trash" ? "active" : ""} onClick=${() => { setListMode("trash"); setSelectionMode(false); closeDetail(); }}>${t4("sessions.tabTrash")} <span>${trashItems.length}</span></button>
         </div>
         <div class="ssl-h">
           <input
@@ -388,9 +389,9 @@ function SessionsPanel({ userAvatar = null } = {}) {
             onInput=${(e3) => setFilter(e3.target.value)}
             style="flex:1"
           />
-          <button class=${`btn btn-sm ${selectionMode ? "primary" : ""}`} onClick=${() => { setSelectionMode((value) => !value); setSelectedNames(/* @__PURE__ */ new Set()); setSelectedTrashIds(/* @__PURE__ */ new Set()); }}>${selectionMode ? "退出批量" : "批量管理"}</button>
+          <button class=${`btn btn-sm ${selectionMode ? "primary" : ""}`} onClick=${() => { setSelectionMode((value) => !value); setSelectedNames(/* @__PURE__ */ new Set()); setSelectedTrashIds(/* @__PURE__ */ new Set()); }}>${selectionMode ? t4("sessions.exitBatch") : t4("sessions.batchManage")}</button>
         </div>
-        ${listMode === "trash" ? html4`<div class="session-trash-settings"><span>自动清理</span><select value=${retentionDraft} onChange=${(event) => setRetentionDraft(Number(event.target.value))}><option value="7">7 天</option><option value="15">15 天</option><option value="30">30 天</option><option value="60">60 天</option><option value="90">90 天</option><option value="365">365 天</option></select><button class="btn btn-sm" disabled=${deleting || retentionDraft === data?.trash?.retentionDays} onClick=${saveTrashRetention}>保存</button>${skipTrashConfirm ? html4`<button class="btn btn-sm" onClick=${restoreTrashConfirmation}>恢复删除确认</button>` : null}${trashItems.length > 0 ? html4`<button class="btn btn-sm danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash(trashItems.map((item) => item.id))}>清空</button>` : null}</div>` : null}
+        ${listMode === "trash" ? html4`<div class="session-trash-settings"><span>${t4("sessions.autoCleanup")}</span><${Select} value=${String(retentionDraft)} width="90px" ariaLabel=${t4("sessions.retentionAria")} onChange=${(v) => setRetentionDraft(Number(v))} options=${[7,15,30,60,90,365].map((d) => ({ value: String(d), label: t4("sessions.daysUnit", { d }) }))} /><button class="btn btn-sm" disabled=${deleting || retentionDraft === data?.trash?.retentionDays} onClick=${saveTrashRetention}>${t4("common.save")}</button>${skipTrashConfirm ? html4`<button class="btn btn-sm" onClick=${restoreTrashConfirmation}>${t4("sessions.restoreConfirmAction")}</button>` : null}${trashItems.length > 0 ? html4`<button class="btn btn-sm danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash(trashItems.map((item) => item.id))}>${t4("common.clear")}</button>` : null}</div>` : null}
         <div class="ssl-rows">
           ${listMode === "sessions" ? html4`
           ${filtered.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">${t4("sessions.noSessions")}</div>` : null}
@@ -400,7 +401,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
                 class=${`ssl-row ${open?.name === s3.name ? "sel" : ""}`}
                 onClick=${() => selectionMode ? toggleSelectedSession(s3.name) : view(s3.name)}
               >
-                <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${`选择会话 ${s3.name}`} checked=${selectedNames.has(s3.name)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedSession(s3.name)} />` : null}<span class="name">${s3.name}</span></div>
+                <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${t4("sessions.selectSessionAria", { name: s3.name })} checked=${selectedNames.has(s3.name)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedSession(s3.name)} />` : null}<span class="name">${s3.name}</span></div>
                 <span class="preview">${s3.summary || t4("sessions.noSummary")}</span>
                 <span class="meta">
                   <span><span class="v">${fmtNum(s3.messageCount)}</span> ${t4("sessions.msgs")}</span>
@@ -411,25 +412,25 @@ function SessionsPanel({ userAvatar = null } = {}) {
               </div>
             `
   )}` : html4`
-          ${filteredTrash.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">回收站为空</div>` : null}
+          ${filteredTrash.length === 0 ? html4`<div style="padding:18px;color:var(--fg-3);font-size:13px">${t4("sessions.emptyTrash")}</div>` : null}
           ${filteredTrash.map((item) => html4`<div class=${`ssl-row ${open?.kind === "trash" && open.id === item.id ? "sel" : ""}`} onClick=${() => selectionMode ? toggleSelectedTrash(item.id) : viewTrash(item)}>
-            <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${`选择回收站会话 ${item.name}`} checked=${selectedTrashIds.has(item.id)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedTrash(item.id)} />` : null}<span class="name">${item.name}</span></div>
-            <span class="preview">${item.fileCount} 个文件 · ${fmtBytes(item.totalBytes)}</span>
-            <span class="meta"><span>删除于 ${fmtRelativeTime(Date.parse(item.movedAt))}</span><span>清理于 ${item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "\u2014"}</span></span>
+            <div class="session-row-title">${selectionMode ? html4`<input class="session-select-box" type="checkbox" aria-label=${t4("sessions.selectTrashAria", { name: item.name })} checked=${selectedTrashIds.has(item.id)} onClick=${(event) => event.stopPropagation()} onChange=${() => toggleSelectedTrash(item.id)} />` : null}<span class="name">${item.name}</span></div>
+            <span class="preview">${t4("sessions.trashFileCount", { count: item.fileCount })} · ${fmtBytes(item.totalBytes)}</span>
+            <span class="meta"><span>${t4("sessions.deletedAt", { time: fmtRelativeTime(Date.parse(item.movedAt)) })}</span><span>${t4("sessions.cleanupAt", { time: item.expiresAt ? new Date(item.expiresAt).toLocaleDateString() : "\u2014" })}</span></span>
           </div>`)}
           `}
         </div>
-        ${selectionMode ? html4`<div class="session-batch-bar"><span>已选 ${listMode === "sessions" ? selectedNames.size : selectedTrashIds.size} 项</span><button class="btn btn-sm" onClick=${() => listMode === "sessions" ? setSelectedNames(allFilteredSelected ? /* @__PURE__ */ new Set() : new Set(filtered.map((session) => session.name))) : setSelectedTrashIds(allFilteredTrashSelected ? /* @__PURE__ */ new Set() : new Set(filteredTrash.map((item) => item.id)))}>${(listMode === "sessions" ? allFilteredSelected : allFilteredTrashSelected) ? "取消全选" : "全选当前"}</button>${listMode === "sessions" ? html4`<button class="btn btn-sm danger" disabled=${deleting || selectedNames.size === 0} onClick=${batchTrash}>移入回收站</button>` : html4`<button class="btn btn-sm" disabled=${deleting || selectedTrashIds.size === 0} onClick=${batchRestoreTrash}>恢复</button><button class="btn btn-sm danger" disabled=${deleting || selectedTrashIds.size === 0} onClick=${() => permanentlyDeleteTrash([...selectedTrashIds])}>永久删除</button>`}</div>` : null}
+        ${selectionMode ? html4`<div class="session-batch-bar"><span>${t4("sessions.selectedCount", { count: listMode === "sessions" ? selectedNames.size : selectedTrashIds.size })}</span><button class="btn btn-sm" onClick=${() => listMode === "sessions" ? setSelectedNames(allFilteredSelected ? /* @__PURE__ */ new Set() : new Set(filtered.map((session) => session.name))) : setSelectedTrashIds(allFilteredTrashSelected ? /* @__PURE__ */ new Set() : new Set(filteredTrash.map((item) => item.id)))}>${(listMode === "sessions" ? allFilteredSelected : allFilteredTrashSelected) ? t4("sessions.deselectAll") : t4("sessions.selectAllFiltered")}</button>${listMode === "sessions" ? html4`<button class="btn btn-sm danger" disabled=${deleting || selectedNames.size === 0} onClick=${batchTrash}>${t4("sessions.trashConfirmTitle")}</button>` : html4`<button class="btn btn-sm" disabled=${deleting || selectedTrashIds.size === 0} onClick=${batchRestoreTrash}>${t4("sessions.restoreAction")}</button><button class="btn btn-sm danger" disabled=${deleting || selectedTrashIds.size === 0} onClick=${() => permanentlyDeleteTrash([...selectedTrashIds])}>${t4("sessions.purgeAction")}</button>`}</div>` : null}
       </div>
 
       <div class="sessions-detail">
         ${open == null ? html4`<div style="color:var(--fg-3);font-size:13px;text-align:center;padding:60px 20px">
                 ${t4("sessions.pickHint")}
               </div>` : open.kind === "trash" ? html4`
-                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">回收站预览 · ${fmtNum(open.totalMessages ?? open.messages?.length ?? 0)} 条消息</span><span class="actions"><button class="btn ghost" onClick=${closeDetail}>返回</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>永久删除</button></span></div>
-                <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">确认内容后恢复</span></div><div class="card-b"><label>恢复后的会话名称</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>恢复会话</button></div><span>如果原名称已被使用，可以修改名称后恢复，不会覆盖现有会话。</span></div></div>
-                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>受影响行：${open.invalidLines.join(", ")}${open.invalidRecords > open.invalidLines.length ? " 等" : ""}</span>` : null}</div>` : null}
-                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} userAvatar=${userAvatar} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
+                <div class="sessions-detail-h"><span class="name">${open.name}</span><span class="ws">${t4("sessions.trashPreviewMeta", { count: fmtNum(open.totalMessages ?? open.messages?.length ?? 0) })}</span><span class="actions"><button class="btn ghost" onClick=${closeDetail}>${t4("common.back")}</button><button class="btn ghost danger" disabled=${deleting} onClick=${() => permanentlyDeleteTrash([open.id])}>${t4("sessions.purgeAction")}</button></span></div>
+                <div class="card accent-brand session-trash-restore"><div class="card-h"><span class="title">${t4("sessions.restoreReviewTitle")}</span></div><div class="card-b"><label>${t4("sessions.restoreNameLabel")}</label><div class="session-restore-row"><input class="input" value=${restoreName} onInput=${(event) => setRestoreName(event.target.value)} /><button class="btn primary" disabled=${deleting || !restoreName.trim()} onClick=${() => restoreTrashSession(open.id, restoreName.trim())}>${t4("sessions.restoreSessionAction")}</button></div><span>${t4("sessions.restoreNameHint")}</span></div></div>
+                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>${t4("sessions.affectedLines", { lines: open.invalidLines.join(", ") })}${open.invalidRecords > open.invalidLines.length ? " …" : ""}</span>` : null}</div>` : null}
+                ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`<div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 280px);overflow-y:auto">${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? t4("sessions.loadingDots") : t4("sessions.loadEarlier200")}</button></div>` : null}${detailChatMessages.map((m3, i3) => html4`<${ChatMessage} key=${i3} msg=${m3} index=${i3} streaming=${false} userAvatar=${userAvatar} />`)}</div>` : html4`<div style="color:var(--fg-3)">${t4("sessions.emptyTranscript")}</div>`}
               ` : html4`
                 <div class="sessions-detail-h">
                   ${renaming ? html4`
@@ -460,17 +461,17 @@ function SessionsPanel({ userAvatar = null } = {}) {
                   `}
                 </div>
                 <div class="card accent-brand" style="margin-bottom:10px">
-                  <div class="card-h"><span class="title">继续会话</span></div>
+                  <div class="card-h"><span class="title">${t4("sessions.resumeTitle2")}</span></div>
                   <div class="card-b" style="font-size:12.5px;color:var(--fg-2)">
-                    加载历史消息到当前聊天，并恢复保存时的工作场景${open.modeLabel ? html4`（${open.modeLabel}）` : null}，AI 将获得完整上下文，你可以直接继续对话。
+                    ${t4("sessions.resumeDesc2", { mode: open.modeLabel ? `（${open.modeLabel}）` : "" })}
                     <button class="btn primary" style="margin-top:8px;width:100%"
                             disabled=${resuming}
                             onClick=${() => doResume(open.name)}>
-                      ${resuming ? "加载中..." : "加载并继续会话"}
+                      ${resuming ? t4("sessions.loadingDots") : t4("sessions.resumeAction")}
                     </button>
                   </div>
                 </div>
-                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>受影响行：${open.invalidLines.join(", ")}${open.invalidRecords > open.invalidLines.length ? " 等" : ""}</span>` : null}</div>` : null}
+                ${open.integrityWarning ? html4`<div class="card accent-warn session-integrity-warning" role="alert">${open.integrityWarning}${open.invalidLines?.length ? html4`<span>${t4("sessions.affectedLines", { lines: open.invalidLines.join(", ") })}${open.invalidRecords > open.invalidLines.length ? " …" : ""}</span>` : null}</div>` : null}
                 ${openLoading && !open.messages ? html4`<div style="color:var(--fg-3)">${t4("sessions.loadingTranscript")}</div>` : open.error ? html4`<div class="card accent-err">${open.error}</div>` : detailChatMessages.length > 0 ? html4`
                           <div class="chat-searchbar session-transcript-search">
                             <span class="chat-search-icon">⌕</span>
@@ -497,7 +498,7 @@ function SessionsPanel({ userAvatar = null } = {}) {
                             ${transcriptSearch ? html4`<button type="button" onClick=${() => setTranscriptSearch("")} title=${t4("chat.searchClear")}>×</button>` : null}
                           </div>
                           <div class="chat-feed" ref=${transcriptFeedRef} style="max-height:calc(100vh - 260px);overflow-y:auto">
-                            ${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? "加载中..." : "加载更早的 200 条消息"}</button></div>` : null}
+                            ${open.hasMore ? html4`<div class="chat-history-loader"><button type="button" onClick=${loadEarlierTranscript} disabled=${openLoading}>${openLoading ? t4("sessions.loadingDots") : t4("sessions.loadEarlier200")}</button></div>` : null}
                             ${detailChatMessages.map(
     (m3, i3) => html4`
                                 <${ChatMessage}

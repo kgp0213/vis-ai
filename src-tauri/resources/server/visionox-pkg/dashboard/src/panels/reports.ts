@@ -14,6 +14,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 const N2: any = preactMemo;
 
 const reportStore = {
@@ -157,12 +158,18 @@ function ReportsPanel() {
       <div class="reports-controls">
         <label>
           <span>${t4("reports.period")}</span>
-          <select value=${period} onChange=${(e3) => setPeriod(e3.target.value)} disabled=${busy}>
-            <option value="daily">${t4("reports.daily")}</option>
-            <option value="weekly">${t4("reports.weekly")}</option>
-            <option value="yearly">${t4("reports.yearly")}</option>
-            <option value="custom">${t4("reports.custom")}</option>
-          </select>
+          <${Select}
+            value=${period}
+            onChange=${(v) => setPeriod(v)}
+            disabled=${busy}
+            ariaLabel=${t4("reports.period")}
+            options=${[
+              { value: "daily", label: t4("reports.daily") },
+              { value: "weekly", label: t4("reports.weekly") },
+              { value: "yearly", label: t4("reports.yearly") },
+              { value: "custom", label: t4("reports.custom") }
+            ]}
+          />
         </label>
         ${isCustom ? html4`
           <label>

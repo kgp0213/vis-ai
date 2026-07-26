@@ -13,6 +13,7 @@ import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
 import { compareVersions } from "../lib/version.js";
 import { getLang, t as t4, useLang } from "../i18n/index.js";
+import { Select } from "../ui/index.js";
 import { pickWorkspaceDirectoryFromBridge, showFileArtifactPreview } from "./chat.js";
 const N2: any = preactMemo;
 
@@ -173,7 +174,7 @@ function taskStatusPill(task) {
   if (task.workspaceMismatch) return html4`<span class="pill warn">${t4("tasks.workspaceMismatch")}</span>`;
   if (!task.enabled) return html4`<span class="pill">${t4("tasks.disabled")}</span>`;
   if (task.lastStatus === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
-  if (task.lastStatus === "stopping") return html4`<span class="pill warn">停止中</span>`;
+  if (task.lastStatus === "stopping") return html4`<span class="pill warn">${t4("tasks.stopping")}</span>`;
   if (task.lastStatus === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
   if (task.lastStatus === "cancelled") return html4`<span class="pill warn">${t4("tasks.cancelled")}</span>`;
   if (task.lastStatus === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
@@ -187,7 +188,7 @@ function taskStatusPill(task) {
 }
 function scheduleRunPill(status) {
   if (status === "running") return html4`<span class="pill info">${t4("tasks.running")}</span>`;
-  if (status === "stopping") return html4`<span class="pill warn">停止中</span>`;
+  if (status === "stopping") return html4`<span class="pill warn">${t4("tasks.stopping")}</span>`;
   if (status === "completed") return html4`<span class="pill ok">${t4("tasks.completed")}</span>`;
   if (status === "cancelled") return html4`<span class="pill warn">${t4("tasks.cancelled")}</span>`;
   if (status === "failed") return html4`<span class="pill err">${t4("tasks.failed")}</span>`;
@@ -344,7 +345,7 @@ function ScheduledTasksPanel() {
     setNotice(null);
     try {
       await api(`/schedules/${encodeURIComponent(task.id)}/cancel`, { method: "POST", body: {} });
-      setNotice("已请求停止任务");
+      setNotice(t4("tasks.stopRequested"));
       await refresh();
     } catch (err) {
       setNotice(err.message);
@@ -363,13 +364,13 @@ function ScheduledTasksPanel() {
         await showFileArtifactPreview({ path });
       } else if (kind === "folder") {
         await api("/artifacts/open-folder", { method: "POST", body: { path } });
-        showToast("已打开所在文件夹", "info");
+        showToast(t4("tasks.openedFolder"), "info");
       } else if (kind === "copy") {
         await writeClipboardText(path);
-        showToast("路径已复制", "info");
+        showToast(t4("tasks.pathCopied"), "info");
       }
     } catch (err) {
-      showToast(err.message || "文件操作失败", "error", 5e3);
+      showToast(err.message || t4("tasks.fileOpFailed"), "error", 5e3);
     }
   }, []);
   const pickSkillArchiveWorkspace = q2(async () => {
@@ -377,7 +378,7 @@ function ScheduledTasksPanel() {
       const path = await pickWorkspaceDirectoryFromBridge();
       if (path) setDraft((current) => ({ ...current, skillArchiveWorkspaceDir: path }));
     } catch (err) {
-      showToast(err.message || "选择归档工作区失败", "error", 5e3);
+      showToast(err.message || t4("tasks.pickArchiveWorkspaceFailed"), "error", 5e3);
     }
   }, []);
   const archiveTaskResult = q2(async (task, run) => {
@@ -389,10 +390,10 @@ function ScheduledTasksPanel() {
         method: "POST",
         body: { runId: run.runId, autoIndex: task.skillAutoIndex === true }
       });
-      showToast(result.duplicate ? "该结果已经归档" : "已归档到知识库", "info", 4e3);
+      showToast(result.duplicate ? t4("tasks.resultArchivedDup") : t4("tasks.resultArchived"), "info", 4e3);
       await refresh();
     } catch (err) {
-      setNotice(err.message || "知识归档失败");
+      setNotice(err.message || t4("tasks.archiveFailed"));
       await refresh();
     } finally {
       setBusy(false);
@@ -466,7 +467,7 @@ function ScheduledTasksPanel() {
         <div class="sessions-detail-h">
           <span class="name">${draft.id ? draft.name || t4("tasks.title") : t4("tasks.create")}</span>
           <span class="ws">${selected ? `${fmtScheduleRule(selected)} · ${t4("tasks.nextRun")}: ${fmtScheduleDate(selected.nextRunAt)}` : t4("tasks.selectHint")}</span>
-          ${selected ? html4`<span class="actions">${selected.lastStatus === "running" || selected.lastStatus === "stopping" ? html4`<button class="btn danger" disabled=${busy || selected.lastStatus === "stopping"} onClick=${() => cancelTask(selected)}>${selected.lastStatus === "stopping" ? "停止中..." : "停止任务"}</button>` : html4`<button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button>`}</span>` : null}
+          ${selected ? html4`<span class="actions">${selected.lastStatus === "running" || selected.lastStatus === "stopping" ? html4`<button class="btn danger" disabled=${busy || selected.lastStatus === "stopping"} onClick=${() => cancelTask(selected)}>${selected.lastStatus === "stopping" ? t4("tasks.stoppingAction") : t4("tasks.stopTask")}</button>` : html4`<button class="btn primary" disabled=${busy} onClick=${() => runTask(selected)}>${t4("tasks.testRun")}</button>`}</span>` : null}
         </div>
         ${selected?.workspaceMismatch ? html4`<div class="card accent-warn" style="margin-bottom:10px">${t4("tasks.workspaceMismatchHint")}</div>` : null}
         ${notice ? html4`<div class=${`card ${notice === t4("tasks.saved") || notice === t4("tasks.deleted") || notice === t4("tasks.runAccepted") || notice === t4("tasks.runCompleted") || notice === t4("tasks.runPending") ? "accent-brand" : "accent-err"}`} style="margin-bottom:10px">${notice}</div>` : null}
@@ -507,11 +508,11 @@ function ScheduledTasksPanel() {
                 <div class="card-b" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;border-bottom:1px solid var(--bd)">
                   <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeSessions")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeSessionsProcessed)}</div></div>
                   <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeDocuments")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens((latestRun.knowledgeDocumentsCreated || 0) + (latestRun.knowledgeDocumentsUpdated || 0))}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">AI 评估</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIReviewed || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">AI 评估失败</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIFailed || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">低价值回收候选</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeRejectedLowValue || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">文档质量拒绝</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeDocumentsRejected || 0)}</div></div>
-                  <div><div style="color:var(--fg-3);font-size:11px">移除旧主题</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeTopicsRemoved || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeAIReviewed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIReviewed || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeAIFailed")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeAIFailed || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeRejectedLowValue")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeRejectedLowValue || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeDocumentsRejected")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeDocumentsRejected || 0)}</div></div>
+                  <div><div style="color:var(--fg-3);font-size:11px">${t4("tasks.knowledgeTopicsRemoved")}</div><div class="mono" style="font-size:12px">${fmtScheduleTokens(latestRun.knowledgeTopicsRemoved || 0)}</div></div>
                   <div><div style="color:var(--fg-3);font-size:11px">embedding</div><div style="font-size:12px">${latestRun.semanticIndexStatus || "-"}</div></div>
                 </div>
               ` : null}
@@ -525,16 +526,16 @@ function ScheduledTasksPanel() {
                 ${latestRun.reportPath ? html4`
                   <div style="display:flex;flex-direction:column;gap:6px;color:var(--fg-3);font-size:12px;overflow-wrap:anywhere">
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
-                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>预览报告</button>
-                      ${selected?.skillName ? html4`<button class="btn btn-sm" disabled=${busy || !selected.skillArchiveWorkspaceDir || latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate"} title=${selected.skillArchiveWorkspaceDir ? "通过质量审核后归档到固定工作区" : "请先在下方选择归档工作区并保存任务"} onClick=${() => archiveTaskResult(selected, latestRun)}>${latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate" ? "已归档" : "归档到知识库"}</button>` : null}
+                      <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", latestRun.reportPath)}>${t4("tasks.previewReport")}</button>
+                      ${selected?.skillName ? html4`<button class="btn btn-sm" disabled=${busy || !selected.skillArchiveWorkspaceDir || latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate"} title=${selected.skillArchiveWorkspaceDir ? t4("tasks.archiveQualityTitle") : t4("tasks.archivePickFirstTitle")} onClick=${() => archiveTaskResult(selected, latestRun)}>${latestRun.knowledgeArchiveStatus === "accepted" || latestRun.knowledgeArchiveStatus === "duplicate" ? t4("tasks.archivedState") : t4("tasks.archiveToKnowledge")}</button>` : null}
                     </div>
                     <div>${t4("tasks.reportStored")}</div>
-                    ${latestRun.knowledgeArchiveError ? html4`<div style="color:var(--c-warn)">知识归档：${latestRun.knowledgeArchiveError}</div>` : null}
+                    ${latestRun.knowledgeArchiveError ? html4`<div style="color:var(--c-warn)">${t4("tasks.knowledgeArchiveLabel")}${latestRun.knowledgeArchiveError}</div>` : null}
                     ${latestRun.reportExportPath ? html4`
                       <div>${t4("tasks.reportExportPath")}: <code class="mono">${latestRun.reportExportPath}</code></div>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportExportPath)}>所在文件夹</button>
-                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportExportPath)}>复制路径</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("folder", latestRun.reportExportPath)}>${t4("tasks.openFolder")}</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("copy", latestRun.reportExportPath)}>${t4("tasks.copyPath")}</button>
                       </div>
                     ` : null}
                     ${latestRun.reportExportError ? html4`<div style="color:var(--c-warn)">${t4("tasks.reportExportFailed", { error: latestRun.reportExportError })}</div>` : null}
@@ -546,7 +547,7 @@ function ScheduledTasksPanel() {
                     ${latestRun.knowledgeOutputPaths.map((path) => html4`
                       <div style="display:flex;gap:6px;align-items:center;min-width:0">
                         <code class="mono" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${path}</code>
-                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", path)}>预览</button>
+                        <button class="btn btn-sm" onClick=${() => taskResultFileAction("preview", path)}>${t4("tasks.previewAction")}</button>
                       </div>
                     `)}
                   </div>
@@ -558,8 +559,7 @@ function ScheduledTasksPanel() {
         <div class="card">
           <div class="form-row">
             <span class="lbl">${t4("tasks.taskKind")}</span>
-            <select class="input mono" value=${draft.kind} onChange=${(e3) => {
-    const kind = e3.target.value;
+            <${Select} value=${draft.kind} ariaLabel=${t4("tasks.taskKind")} onChange=${(kind) => {
     setDraft({
       ...draft,
       kind,
@@ -568,11 +568,11 @@ function ScheduledTasksPanel() {
       skillName: kind === "prompt" ? draft.skillName : "",
       skillAction: kind === "prompt" ? draft.skillAction : ""
     });
-  }}>
-              <option value="prompt">${t4("tasks.kindPrompt")}</option>
-              <option value="report">${t4("tasks.kindReport")}</option>
-              <option value="session_cleanup">${t4("tasks.kindSessionCleanup")}</option>
-            </select>
+  }} options=${[
+              { value: "prompt", label: t4("tasks.kindPrompt") },
+              { value: "report", label: t4("tasks.kindReport") },
+              { value: "session_cleanup", label: t4("tasks.kindSessionCleanup") }
+            ]} />
           </div>
           <div class="form-row">
             <span class="lbl">${t4("tasks.name")}</span>
@@ -581,26 +581,15 @@ function ScheduledTasksPanel() {
           ${draft.kind === "session_cleanup" ? html4`
             <div class="form-row">
               <span class="lbl">${t4("tasks.sessionCleanupAction")}</span>
-              <select class="input mono" value=${draft.sessionCleanupAction} onChange=${(e3) => setDraft({ ...draft, sessionCleanupAction: e3.target.value })}>
-                <option value="preview">${t4("tasks.sessionCleanupPreview")}</option>
-                <option value="delete">${t4("tasks.sessionCleanupDelete")}</option>
-              </select>
+              <${Select} value=${draft.sessionCleanupAction} ariaLabel=${t4("tasks.ariaCleanupAction")} onChange=${(v) => setDraft({ ...draft, sessionCleanupAction: v })} options=${[{ value: "preview", label: t4("tasks.sessionCleanupPreview") }, { value: "delete", label: t4("tasks.sessionCleanupDelete") }]} />
             </div>
             <div class="form-row">
               <span class="lbl">${t4("tasks.sessionCleanupStrength")}</span>
-              <select class="input mono" value=${draft.sessionCleanupStrength} onChange=${(e3) => setDraft({ ...draft, sessionCleanupStrength: e3.target.value })}>
-                <option value="conservative">${t4("tasks.sessionCleanupConservative")}</option>
-                <option value="standard">${t4("tasks.sessionCleanupStandard")}</option>
-                <option value="aggressive">${t4("tasks.sessionCleanupAggressive")}</option>
-              </select>
+              <${Select} value=${draft.sessionCleanupStrength} ariaLabel=${t4("tasks.ariaCleanupStrength")} onChange=${(v) => setDraft({ ...draft, sessionCleanupStrength: v })} options=${[{ value: "conservative", label: t4("tasks.sessionCleanupConservative") }, { value: "standard", label: t4("tasks.sessionCleanupStandard") }, { value: "aggressive", label: t4("tasks.sessionCleanupAggressive") }]} />
             </div>
             <div class="form-row">
               <span class="lbl">${t4("tasks.sessionCleanupSemanticMode")}</span>
-              <select class="input mono" value=${draft.sessionCleanupSemanticMode} onChange=${(e3) => setDraft({ ...draft, sessionCleanupSemanticMode: e3.target.value })}>
-                <option value="off">${t4("tasks.sessionCleanupSemanticOff")}</option>
-                <option value="uncertain">${t4("tasks.sessionCleanupSemanticUncertain")}</option>
-                <option value="deep">${t4("tasks.sessionCleanupSemanticDeep")}</option>
-              </select>
+              <${Select} value=${draft.sessionCleanupSemanticMode} ariaLabel=${t4("tasks.ariaSemanticMode")} onChange=${(v) => setDraft({ ...draft, sessionCleanupSemanticMode: v })} options=${[{ value: "off", label: t4("tasks.sessionCleanupSemanticOff") }, { value: "uncertain", label: t4("tasks.sessionCleanupSemanticUncertain") }, { value: "deep", label: t4("tasks.sessionCleanupSemanticDeep") }]} />
             </div>
             <div class="form-row" style="align-items:flex-start">
               <span class="lbl">${t4("tasks.sessionCleanupPromptAddendum")}</span>
@@ -635,17 +624,17 @@ function ScheduledTasksPanel() {
             <div class="form-row">
               <span class="lbl">${t4("tasks.reportRange")}</span>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <select class="input mono" value=${draft.reportRangeMode} onChange=${(e3) => setDraft({ ...draft, reportRangeMode: e3.target.value })}>
-                  <option value="yesterday">${t4("tasks.reportYesterday")}</option>
-                  <option value="today">${t4("tasks.reportToday")}</option>
-                  <option value="last_week">${t4("tasks.reportLastWeek")}</option>
-                  <option value="this_week">${t4("tasks.reportThisWeek")}</option>
-                  <option value="last_7_days">${t4("tasks.reportLast7Days")}</option>
-                  <option value="last_30_days">${t4("tasks.reportLast30Days")}</option>
-                  <option value="this_year">${t4("tasks.reportThisYear")}</option>
-                  <option value="last_year">${t4("tasks.reportLastYear")}</option>
-                  <option value="custom">${t4("tasks.reportFixedRange")}</option>
-                </select>
+                <${Select} value=${draft.reportRangeMode} ariaLabel=${t4("tasks.reportRange")} onChange=${(v) => setDraft({ ...draft, reportRangeMode: v })} options=${[
+                  { value: "yesterday", label: t4("tasks.reportYesterday") },
+                  { value: "today", label: t4("tasks.reportToday") },
+                  { value: "last_week", label: t4("tasks.reportLastWeek") },
+                  { value: "this_week", label: t4("tasks.reportThisWeek") },
+                  { value: "last_7_days", label: t4("tasks.reportLast7Days") },
+                  { value: "last_30_days", label: t4("tasks.reportLast30Days") },
+                  { value: "this_year", label: t4("tasks.reportThisYear") },
+                  { value: "last_year", label: t4("tasks.reportLastYear") },
+                  { value: "custom", label: t4("tasks.reportFixedRange") }
+                ]} />
                 ${draft.reportRangeMode === "custom" ? html4`
                   <span style="color:var(--fg-3);font-size:12px">${t4("tasks.reportStart")}</span>
                   <input class="input mono" type="date" value=${draft.reportStartDate} onInput=${(e3) => setDraft({ ...draft, reportStartDate: e3.target.value })} />
@@ -666,8 +655,7 @@ function ScheduledTasksPanel() {
             <div class="form-row" style="align-items:flex-start">
               <span class="lbl">${t4("tasks.executionSource")}</span>
               <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-                <select class="input" value=${draft.executionSource} onChange=${(e3) => {
-    const executionSource = e3.target.value;
+                <${Select} value=${draft.executionSource} ariaLabel=${t4("tasks.executionSource")} onChange=${(executionSource) => {
     const first = skillTemplates[0] ?? null;
     setDraft({
       ...draft,
@@ -676,10 +664,10 @@ function ScheduledTasksPanel() {
       skillAction: executionSource === "skill" ? draft.skillAction || first?.id || "" : "",
       runMode: executionSource === "skill" ? "readonly" : draft.runMode
     });
-  }}>
-                  <option value="prompt">${t4("tasks.executionPrompt")}</option>
-                  <option value="skill">${t4("tasks.executionSkill")}</option>
-                </select>
+  }} options=${[
+                  { value: "prompt", label: t4("tasks.executionPrompt") },
+                  { value: "skill", label: t4("tasks.executionSkill") }
+                ]} />
               </div>
             </div>
             ${draft.executionSource === "skill" ? html4`
@@ -687,13 +675,11 @@ function ScheduledTasksPanel() {
                 <span class="lbl">${t4("tasks.skillTemplate")}</span>
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
                   ${skillTemplates.length > 0 ? html4`
-                    <select class="input" value=${draft.skillName && draft.skillAction ? `${draft.skillName}/${draft.skillAction}` : ""} onChange=${(e3) => {
-    const template = skillTemplates.find((item) => `${item.skillName}/${item.id}` === e3.target.value);
+                    <${Select} value=${draft.skillName && draft.skillAction ? `${draft.skillName}/${draft.skillAction}` : ""} ariaLabel=${t4("tasks.skillTemplate")} searchable onChange=${(val) => {
+    const template = skillTemplates.find((item) => `${item.skillName}/${item.id}` === val);
     if (!template) return;
     setDraft({ ...draft, skillName: template.skillName, skillAction: template.id, name: draft.name || template.title, runMode: "readonly" });
-  }}>
-                      ${skillTemplates.map((template) => html4`<option value=${`${template.skillName}/${template.id}`}>${template.integrationName} · ${template.title}</option>`)}
-                    </select>
+  }} options=${skillTemplates.map((template) => ({ value: `${template.skillName}/${template.id}`, label: template.title, meta: template.integrationName }))} />
                     <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${selectedSkillTemplate?.description ?? ""}</span>
                     <span style="color:var(--c-warn);font-size:11px;line-height:1.45">${t4("tasks.skillReadOnlyHint")}</span>
                   ` : html4`<span style="color:var(--c-warn);font-size:12px">${t4("tasks.skillTemplateUnavailable")}</span>`}
@@ -704,21 +690,21 @@ function ScheduledTasksPanel() {
                 <textarea class="input" maxlength="2000" rows="4" placeholder=${t4("tasks.skillAddendumPlaceholder")} value=${draft.skillPromptAddendum} onInput=${(e3) => setDraft({ ...draft, skillPromptAddendum: e3.target.value.slice(0, 2000) })}></textarea>
               </div>
               <div class="form-row" style="align-items:flex-start">
-                <span class="lbl">知识归档</span>
+                <span class="lbl">${t4("tasks.knowledgeArchive")}</span>
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:7px">
                   <div style="display:flex;gap:7px;align-items:center;min-width:0">
-                    <input class="input mono" style="flex:1;min-width:0" readonly value=${draft.skillArchiveWorkspaceDir} placeholder="未选择归档工作区" />
-                    <button class="btn" type="button" onClick=${pickSkillArchiveWorkspace}>选择</button>
-                    ${draft.skillArchiveWorkspaceDir ? html4`<button class="btn ghost" type="button" onClick=${() => setDraft({ ...draft, skillArchiveWorkspaceDir: "", skillAutoArchive: false, skillAutoIndex: false })}>清除</button>` : null}
+                    <input class="input mono" style="flex:1;min-width:0" readonly value=${draft.skillArchiveWorkspaceDir} placeholder=${t4("tasks.noArchiveWorkspace")} />
+                    <button class="btn" type="button" onClick=${pickSkillArchiveWorkspace}>${t4("common.choose")}</button>
+                    ${draft.skillArchiveWorkspaceDir ? html4`<button class="btn ghost" type="button" onClick=${() => setDraft({ ...draft, skillArchiveWorkspaceDir: "", skillAutoArchive: false, skillAutoIndex: false })}>${t4("common.clear")}</button>` : null}
                   </div>
-                  <span style="color:var(--fg-3);font-size:11px;line-height:1.45">报告先保存在任务记录中；归档目标固定为此工作区，不随当前工作区切换。</span>
+                  <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.archiveFixedHint")}</span>
                   <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
                     <input type="checkbox" disabled=${!draft.skillArchiveWorkspaceDir} checked=${draft.skillAutoArchive} onChange=${(e3) => setDraft({ ...draft, skillAutoArchive: e3.target.checked })} />
-                    高质量结果自动归档
+                    ${t4("tasks.autoArchiveHQ")}
                   </label>
                   <label style="display:flex;align-items:center;gap:6px;color:var(--fg-2);font-size:12px">
                     <input type="checkbox" disabled=${!draft.skillArchiveWorkspaceDir || !embeddingApiReady} checked=${draft.skillAutoIndex && embeddingApiReady} onChange=${(e3) => setDraft({ ...draft, skillAutoIndex: e3.target.checked })} />
-                    归档后自动更新本地索引${embeddingApiReady ? "" : " · 需先配置 embedding API"}
+                    ${t4("tasks.autoIndexAfterArchive")}${embeddingApiReady ? "" : ` · ${t4("tasks.needEmbeddingApi")}`}
                   </label>
                 </div>
               </div>
@@ -732,19 +718,19 @@ function ScheduledTasksPanel() {
               </div>
               <div class="form-row">
                 <span class="lbl">${t4("tasks.runMode")}</span>
-                <select class="input mono" value=${draft.runMode} onChange=${(e3) => setDraft({ ...draft, runMode: e3.target.value })}>
-                  <option value="auto">${t4("tasks.runModeAuto")}</option>
-                  <option value="readonly">${t4("tasks.runModeReadonly")}</option>
-                  <option value="confirm">${t4("tasks.runModeConfirm")}</option>
-                </select>
+                <${Select} value=${draft.runMode} ariaLabel=${t4("tasks.ariaRunMode")} onChange=${(v) => setDraft({ ...draft, runMode: v })} options=${[
+                  { value: "auto", label: t4("tasks.runModeAuto") },
+                  { value: "readonly", label: t4("tasks.runModeReadonly") },
+                  { value: "confirm", label: t4("tasks.runModeConfirm") }
+                ]} />
               </div>
               <div class="form-row" style="align-items:flex-start">
                 <span class="lbl">${t4("tasks.workspaceScope")}</span>
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-                  <select class="input mono" value=${draft.workspaceScope} onChange=${(e3) => setDraft({ ...draft, workspaceScope: e3.target.value, rebindWorkspace: false })}>
-                    <option value="bound">${t4("tasks.workspaceScopeBound")}</option>
-                    <option value="current">${t4("tasks.workspaceScopeCurrent")}</option>
-                  </select>
+                  <${Select} value=${draft.workspaceScope} ariaLabel=${t4("tasks.ariaWorkspaceScope")} onChange=${(v) => setDraft({ ...draft, workspaceScope: v, rebindWorkspace: false })} options=${[
+                    { value: "bound", label: t4("tasks.workspaceScopeBound") },
+                    { value: "current", label: t4("tasks.workspaceScopeCurrent") }
+                  ]} />
                   <span style="color:var(--fg-3);font-size:11px;line-height:1.45">${t4("tasks.workspaceScopeHint")}</span>
                 </div>
               </div>
@@ -753,17 +739,15 @@ function ScheduledTasksPanel() {
           <div class="form-row">
             <span class="lbl">${t4("tasks.type")}</span>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <select class="input mono" value=${draft.type} onChange=${(e3) => setDraft({ ...draft, type: e3.target.value })}>
-                <option value="daily">${t4("tasks.daily")}</option>
-                <option value="weekly">${t4("tasks.weekly")}</option>
-                <option value="interval">${t4("tasks.customInterval")}</option>
-              </select>
+              <${Select} value=${draft.type} ariaLabel=${t4("tasks.ariaTaskType")} onChange=${(v) => setDraft({ ...draft, type: v })} options=${[
+                { value: "daily", label: t4("tasks.daily") },
+                { value: "weekly", label: t4("tasks.weekly") },
+                { value: "interval", label: t4("tasks.customInterval") }
+              ]} />
               ${draft.type === "daily" || draft.type === "weekly" ? html4`
                 ${draft.type === "weekly" ? html4`
                   <span style="color:var(--fg-3);font-size:12px">${t4("tasks.dayOfWeek")}</span>
-                  <select class="input mono" value=${String(draft.dayOfWeek)} onChange=${(e3) => setDraft({ ...draft, dayOfWeek: Number(e3.target.value) })}>
-                    ${weekdayLabels.map((label, idx) => html4`<option value=${String(idx)}>${label}</option>`)}
-                  </select>
+                  <${Select} value=${String(draft.dayOfWeek)} ariaLabel=${t4("tasks.ariaWeekday")} onChange=${(v) => setDraft({ ...draft, dayOfWeek: Number(v) })} options=${weekdayLabels.map((label, idx) => ({ value: String(idx), label }))} />
                 ` : null}
                 <span style="color:var(--fg-3);font-size:12px">${t4("tasks.at")}</span>
                 <input class="input mono" type="time" value=${draft.timeOfDay} onInput=${(e3) => setDraft({ ...draft, timeOfDay: e3.target.value })} />
