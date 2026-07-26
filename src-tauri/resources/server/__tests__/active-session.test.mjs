@@ -5,6 +5,7 @@ import {
   activeEntriesForDashboard,
   activeEntriesForModel,
   parseActiveSessionJsonl,
+  recoverInterruptedToolCalls,
   serializeActiveSession,
   withPendingUserEntry,
 } from "../lib/active-session.mjs";
@@ -39,6 +40,61 @@ describe("active session recovery", () => {
     assert.equal(restored[0].text, undefined);
     assert.equal(restored[0].tool_calls[0].id, "call-1");
     assert.equal(restored[0].reasoning_content, "reasoning");
+  });
+
+  test("records an unknown result for an interrupted tool call without replaying it", () => {
+    const source = [
+      { role: "user", content: "inspect the file" },
+      {
+        role: "assistant",
+        content: "I will inspect it",
+        turnId: "turn-1",
+        operationId: "operation-1",
+        tool_calls: [{ id: "call-crashed", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+    ];
+    const recovered = recoverInterruptedToolCalls(source, { now: () => "2026-07-26T00:00:00.000Z" });
+    assert.equal(recovered.changed, true);
+    assert.equal(recovered.entries.length, 3);
+    const tool = recovered.entries[2];
+    assert.equal(tool.role, "tool");
+    assert.equal(tool.tool_call_id, "call-crashed");
+    assert.equal(tool.toolStatus, "unknown");
+    assert.equal(tool.turnId, "turn-1");
+    assert.equal(JSON.parse(tool.content).error.code, "tool_interrupted");
+    assert.match(recovered.warnings[0], /call-crashed/);
+
+    const second = recoverInterruptedToolCalls(recovered.entries);
+    assert.equal(second.changed, false);
+    assert.equal(second.entries.length, recovered.entries.length);
+  });
+
+  test("scopes recovery by turn when a provider reuses a tool call id", () => {
+    const source = [
+      { role: "user", content: "first" },
+      {
+        role: "assistant",
+        turnId: "turn-1",
+        operationId: "operation-1",
+        tool_calls: [{ id: "call-reused", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+      { role: "tool", tool_call_id: "call-reused", turnId: "turn-1", operationId: "operation-1", content: "first result" },
+      { role: "user", content: "second" },
+      {
+        role: "assistant",
+        turnId: "turn-2",
+        operationId: "operation-2",
+        tool_calls: [{ id: "call-reused", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      },
+    ];
+
+    const recovered = recoverInterruptedToolCalls(source, { now: () => "2026-07-26T00:00:00.000Z" });
+    assert.equal(recovered.changed, true);
+    const unknown = recovered.entries.filter((entry) => entry.role === "tool" && entry.toolStatus === "unknown");
+    assert.equal(unknown.length, 1);
+    assert.equal(unknown[0].tool_call_id, "call-reused");
+    assert.equal(unknown[0].turnId, "turn-2");
+    assert.equal(unknown[0].operationId, "operation-2");
   });
 
   test("converts multimodal user content into readable dashboard text", () => {

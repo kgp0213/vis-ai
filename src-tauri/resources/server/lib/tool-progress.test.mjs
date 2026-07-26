@@ -14,6 +14,7 @@ describe("tool progress projection", () => {
     assert.equal(queued.id, running.id);
     assert.equal(running.id, done.id);
     assert.equal(done.toolCallId, "call-1");
+    assert.equal(done.category, null);
     assert.deepEqual([queued.status, running.status, done.status], ["queued", "running", "succeeded"]);
     assert.doesNotMatch(JSON.stringify([queued, running, done]), /secret|private/);
   });
@@ -61,7 +62,7 @@ describe("tool progress projection", () => {
   });
 
   test("treats non-zero command exit codes as failed tool outcomes", () => {
-    const failed = normalizeToolOutcome("$ python script.py\n[exit 9009]\nPython was not found");
+    const failed = normalizeToolOutcome("$ command\n[exit 9009]\ncommand failed");
     const succeeded = normalizeToolOutcome("$ command\n[exit 0]\ncompleted");
     assert.equal(failed.ok, false);
     assert.equal(failed.status, "failed");
@@ -70,6 +71,40 @@ describe("tool progress projection", () => {
     assert.equal(succeeded.ok, true);
     assert.equal(succeeded.status, "succeeded");
     assert.equal(succeeded.exitCode, 0);
+  });
+
+  test("uses the final exit marker when a tool emits more than one marker", () => {
+    const outcome = normalizeToolOutcome("diagnostic mentioned [exit 1]\nrunner completed\n[exit 0]");
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.exitCode, 0);
+  });
+
+  test("classifies a missing Python runtime separately from its exit code", () => {
+    const outcome = normalizeToolOutcome("$ python script.py\n[exit 9009]\nPython was not found");
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "runtime_not_found");
+    assert.equal(outcome.category, "environment");
+    assert.equal(outcome.retryable, true);
+    assert.equal(outcome.recommendedAction, "reuse_registered_runtime");
+    assert.equal(outcome.exitCode, 9009);
+    const projected = projectToolProgressEvent({ role: "tool", toolStatus: "failed", toolName: "run_command", callId: "runtime-1", content: "$ python script.py\n[exit 9009]\nPython was not found" });
+    assert.equal(projected.category, "environment");
+    assert.equal(projected.recommendedAction, "reuse_registered_runtime");
+  });
+
+  test("does not let a shell fallback hide a missing runtime", () => {
+    const outcome = normalizeToolOutcome("python: command not found\nfallback executed\n[exit 0]");
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.code, "runtime_not_found");
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(normalizeToolOutcome("'node' is not recognized as an internal or external command\n[exit 0]").code, "runtime_not_found");
+  });
+
+  test("treats an explicit zero exit as success unless a structured failure or runtime diagnostic exists", () => {
+    const successfulText = normalizeToolOutcome("completed with note: error: value was repaired\n[exit 0]");
+    assert.equal(successfulText.status, "succeeded");
+    assert.equal(normalizeToolOutcome(JSON.stringify({ ok: false, error: "reported failure", exitCode: 0 })).status, "failed");
+    assert.equal(normalizeToolOutcome("Python was not found\n[exit 0]").code, "runtime_not_found");
   });
 
   test("projects timeout and cancellation facts", () => {
@@ -94,6 +129,50 @@ describe("tool progress projection", () => {
     assert.equal(normalizeToolOutcome("", { status: "failed" }).status, "failed");
     assert.equal(normalizeToolOutcome(JSON.stringify({ ok: true, exitCode: null }), { status: "succeeded" }).exitCode, null);
     assert.equal(normalizeToolOutcome(JSON.stringify({ ok: true, exitCode: "" }), { status: "succeeded" }).exitCode, null);
+  });
+
+  test("classifies AbortError and structured error fields as failures", () => {
+    const aborted = normalizeToolOutcome("AbortError: The request was aborted");
+    const structured = normalizeToolOutcome(JSON.stringify({ error: "" }));
+    assert.equal(aborted.status, "cancelled");
+    assert.equal(aborted.cancelled, true);
+    assert.equal(structured.status, "failed");
+    assert.equal(structured.code, "tool_failed");
+  });
+
+  test("preserves structured diagnostics and warnings without treating ordinary text as an error", () => {
+    const structured = normalizeToolOutcome(JSON.stringify({
+      ok: false,
+      code: "runtime_not_found",
+      category: "environment",
+      retryable: true,
+      recommendedAction: "reuse_registered_runtime",
+      warnings: ["using registered interpreter"],
+      error: "python unavailable",
+    }));
+    assert.equal(structured.code, "runtime_not_found");
+    assert.equal(structured.category, "environment");
+    assert.equal(structured.retryable, true);
+    assert.equal(structured.recommendedAction, "reuse_registered_runtime");
+    assert.deepEqual(structured.warnings, ["using registered interpreter"]);
+    assert.equal(normalizeToolOutcome("the word error appears in a successful report", { status: "succeeded" }).status, "succeeded");
+    assert.equal(normalizeToolOutcome("report text includes error: value was repaired").status, "succeeded");
+    assert.equal(normalizeToolOutcome("error: command could not be completed").status, "failed");
+  });
+
+  test("does not replace a structured runtime code with a conflicting text diagnostic", () => {
+    const outcome = normalizeToolOutcome(JSON.stringify({
+      ok: false,
+      code: "runtime_install_approval_required",
+      category: "permission",
+      retryable: false,
+      recommendedAction: "request_runtime_install_approval",
+      error: "Python was not found while preparing the optional package",
+    }));
+    assert.equal(outcome.code, "runtime_install_approval_required");
+    assert.equal(outcome.category, "permission");
+    assert.equal(outcome.retryable, false);
+    assert.equal(outcome.recommendedAction, "request_runtime_install_approval");
   });
 
   test("stores bounded per-call progress in the turn receipt", () => {

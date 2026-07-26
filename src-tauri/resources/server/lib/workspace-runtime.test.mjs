@@ -43,16 +43,68 @@ function fixture() {
     reloadMcp: async (value) => { events.push(`reload-mcp:${value}`); },
     onLog: (message) => events.push(message),
   });
-  return { first, second, runtime, events, get current() { return current; }, get config() { return config; } };
+  return { root, first, second, runtime, events, get current() { return current; }, get config() { return config; } };
 }
 
 describe("workspace runtime", () => {
+  test("uses no-op lifecycle adapters when optional workspace hooks are omitted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "visionox-workspace-runtime-defaults-"));
+    const first = join(root, "first");
+    const second = join(root, "second");
+    mkdirSync(first, { recursive: true });
+    mkdirSync(second, { recursive: true });
+    let current = first;
+    let config = { workspaceDir: second, recentWorkspaces: [] };
+    try {
+      const runtime = createWorkspaceRuntime({
+        homeDir: root,
+        readConfig: () => config,
+        writeConfig: (next) => { config = next; },
+        getCurrentWorkspace: () => current,
+        setCurrentWorkspace: (next) => { current = next; },
+        normalizeWorkspacePath: (value) => resolve(value),
+        isWorkspaceDirectory: () => true,
+        addRecentWorkspace: (value, values) => [value, ...values],
+        removeRecentWorkspace: (value, values) => values.filter((item) => item !== value),
+        normalizeWorkspaceHistory: (values) => [...new Set(values)],
+        sameWorkspacePath: (left, right) => resolve(left) === resolve(right),
+        ensureWorkspaceDirectory: async () => {},
+        registerWorkspaceTools: async () => ({}),
+      });
+      const result = await runtime.apply();
+      assert.equal(result.changed, true);
+      assert.equal(current, resolve(second));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns current state without rebuilding when the configured workspace is active", async () => {
+    const value = fixture();
+    const result = await value.runtime.apply();
+    assert.deepEqual(result, {
+      changed: false,
+      current: resolve(value.first),
+      configured: resolve(value.first),
+    });
+    assert.deepEqual(value.events, []);
+  });
+
   test("persists a selected workspace and maintains recent history", () => {
     const value = fixture();
     const state = value.runtime.select(value.second);
     assert.equal(value.config.workspaceDir, resolve(value.second));
     assert.equal(state.configured, resolve(value.second));
     assert.deepEqual(value.config.recentWorkspaces, [resolve(value.second), resolve(value.first)]);
+  });
+
+  test("rejects invalid selections and removes inactive history entries", () => {
+    const value = fixture();
+    assert.throws(() => value.runtime.select(join(value.first, "missing")), /does not exist/);
+    value.config.recentWorkspaces = [resolve(value.second), join(value.root, "stale")];
+    const state = value.runtime.removeHistory(value.second);
+    assert.deepEqual(state.recentWorkspaces, [resolve(value.first), join(value.root, "stale")]);
+    assert.throws(() => value.runtime.removeHistory(value.first), /cannot be removed/);
   });
 
   test("does not apply a pending selection until the caller allows it", async () => {

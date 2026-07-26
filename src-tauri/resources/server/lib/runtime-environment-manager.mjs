@@ -84,7 +84,10 @@ export function createRuntimeEnvironmentManager({
     return {
       environmentId: environment?.id ?? null,
       toolId: environment?.baseToolId ?? null,
+      kind: environment?.kind ?? null,
       status: environment?.status ?? "degraded",
+      selected: environment?.status === "healthy",
+      bound: Object.keys(environment?.bindings && typeof environment.bindings === "object" ? environment.bindings : {}).length > 0,
       reused: flags.reused === true,
       repaired: flags.repaired === true,
       installed: flags.installed === true,

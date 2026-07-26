@@ -45,6 +45,8 @@ describe("Dashboard desktop UX", () => {
     assert.match(markdown, /Markdown artifacts are preview-only/);
     assert.match(markdown, /var ARTIFACT_OPEN_EXTS = .*"html"/);
     assert.doesNotMatch(markdown, /var ARTIFACT_OPEN_EXTS = .*"md"/);
+    assert.match(markdown, /function knownHighlightLanguage\(raw\)/);
+    assert.doesNotMatch(markdown, /const safeLang = lang && hljs\?\.getLanguage/);
   });
 
   test("keeps artifact viewing reversible and confirms before leaving the conversation", () => {
@@ -53,7 +55,7 @@ describe("Dashboard desktop UX", () => {
     const artifactActions = app.slice(app.indexOf("function showArtifactPreview("), app.indexOf("document.addEventListener(\"click\", handleArtifactAction)"));
     const fileArtifacts = app.slice(app.indexOf("function FileArtifactsCard("), app.indexOf("function ChatPanel("));
 
-    assert.match(artifactActions, /返回对话/);
+    assert.match(artifactActions, /t4\("mdArt\.backToChat"\)/);
     assert.match(app, /document\.addEventListener\("keydown", \(ev\) => \{[\s\S]*?ev\.key === "Escape"[\s\S]*?closeArtifactPreview/);
     assert.match(artifactActions, /ev\.target === backdrop/);
     assert.match(artifactActions, /function confirmExternalArtifactOpen\(artifact\)/);
@@ -80,13 +82,13 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatMessage, /reasoning-summary/);
     assert.match(chatMessage, /setReasoningOpen/);
     assert.match(chatMessage, /liveReasoningText/);
-    assert.match(chatMessage, /共 \$\{msg\.reasoningTurns\} 轮思考 · /);
-    assert.match(chatMessage, /思考中 · 第 \$\{msg\.reasoningTurns\} 轮/);
+    assert.match(chatMessage, /t4\("chat\.reasoningTurnsPrefix", \{ n: msg\.reasoningTurns \}\)/);
+    assert.match(chatMessage, /t4\("chat\.reasoningTurnLive", \{ n: msg\.reasoningTurns \}\)/);
     assert.doesNotMatch(chatMessage, /reasoningHidden/);
     assert.match(chatPanel, /const \[reasoningDisplay, setReasoningDisplay\] = d2\(\(\) =>/);
     assert.match(chatPanel, /const reasoningExpanded = reasoningDisplay === "expanded"/);
     assert.match(chatPanel, /visionox-reasoning-display/);
-    assert.match(chatPanel, /思考过程显示/);
+    assert.match(chatPanel, /t4\("chat\.reasoningDisplayLabel"\)/);
     assert.match(chatPanel, /turnReasoning/);
     assert.match(chatPanel, /reasoningStale/);
     assert.match(chatPanel, /reasoningTurns: completedStream\?\.reasoningTurns > 1/);
@@ -95,8 +97,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(composerBar, /class="composer-plus"/);
     assert.match(composerBar, /composer-plus-menu/);
     assert.match(composerBar, /promptOptimizing/);
-    assert.match(composerBar, /优化提示词/);
-    assert.match(composerBar, /不会自动发送/);
+    assert.match(composerBar, /t4\("chat\.optimizeInputTitle"\)/);
     assert.doesNotMatch(composerBar, /reasoningExpanded|折叠思考|展开思考|reasoning-cleanup-chip|prompt-optimize-chip/);
     assert.doesNotMatch(chatPanel, /toggleReasoningDisplay|setReasoningExpanded/);
     assert.doesNotMatch(chatPanel, /reasoningCleaned|setReasoningCleaned/);
@@ -141,9 +142,9 @@ describe("Dashboard desktop UX", () => {
     assert.match(app, /tool-log-name/);
     assert.match(app, /tool-log-icon-failed/);
     assert.match(app, /tool-log-detail/);
-    assert.match(app, /正在使用工具 · 第 /);
-    assert.match(app, /使用了 \$\{items\.length\} 个工具/);
-    assert.match(app, /个失败/);
+    assert.match(app, /t4\("chat\.toolUsingLiveStep", \{ n: doneItems\.length \+ \(currentTool \? 1 : 0\) \}\)/);
+    assert.match(app, /t4\("chat\.toolUsedCount", \{ count: items\.length \}\)/);
+    assert.match(app, /t4\("chat\.toolFailedCountSuffix", \{ count: failedItems\.length \}\)/);
     assert.match(app, /kind: "toolGroup"/);
     assert.match(app, /taskActive = false/);
     assert.match(chatPanel, /taskActive=\$\{busy\}/);
@@ -156,16 +157,16 @@ describe("Dashboard desktop UX", () => {
     // 对话框右键菜单：局部刷新对话（不重载整页）+ 工作步骤折叠控制
     assert.match(chatPanel, /addEventListener\("contextmenu", onContextMenu\)/);
     assert.match(chatPanel, /class="chat-feed-menu"/);
-    assert.match(chatPanel, /刷新对话/);
-    assert.match(chatPanel, /展开全部工作步骤/);
-    assert.match(chatPanel, /折叠全部工作步骤/);
+    assert.match(chatPanel, /t4\("chat\.feedRefresh"\)/);
+    assert.match(chatPanel, /t4\("chat\.feedExpandAll"\)/);
+    assert.match(chatPanel, /t4\("chat\.feedCollapseAll"\)/);
     assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*shouldAutoScroll\.current = true;\s*setHasNewBelow\(false\);\s*void refetchCanonicalState\(\);?\s*\}\)/);
     assert.match(chatPanel, /details\.tool-log/);
 
     // 跟随加固与新消息提示：内容增长即钉底，脱钩时给出回底入口
     assert.match(chatPanel, /const \[hasNewBelow, setHasNewBelow\] = d2\(false\)/);
     assert.match(chatPanel, /class="chat-new-messages-pill"/);
-    assert.match(chatPanel, /有新消息/);
+    assert.match(chatPanel, /t4\("chat\.newMessagesBelow"\)/);
     assert.match(chatPanel, /new MutationObserver/);
     assert.match(chatPanel, /requestAnimationFrame/);
     assert.match(css, /\.chat-new-messages-pill\s*\{/);
@@ -178,6 +179,8 @@ describe("Dashboard desktop UX", () => {
     assert.match(source, /createDashboardEventGuard/);
     assert.match(source, /event\.eventId/);
     assert.match(source, /terminalTools/);
+    assert.match(source, /terminalMessages = new Map/);
+    assert.match(source, /event\.correction/);
     assert.match(source, /messages-reset/);
     assert.match(app, /createDashboardEventGuard\(\)/);
     assert.match(app, /eventGuardRef\.current\?\.accept\(dash\)/);
@@ -204,6 +207,10 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatSource, /resyncingEventsRef/);
     assert.match(chatSource, /bufferedDashboardEventsRef/);
     assert.match(chatSource, /dash\.kind === "resync-required"/);
+    assert.match(chatSource, /eventBatcherRef\.current\?\.discard\(\)/);
+    assert.match(chatSource, /executionStateRef\.current = createDashboardReducerState\(\)/);
+    assert.match(chatSource, /eventSessionId/);
+    assert.match(chatSource, /eventSessionId && activeConversationId/);
   });
 
   test("keeps existing entry points while improving semantics, themes and composer hierarchy", () => {
@@ -220,7 +227,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(appShell, /<button type="button" class="side-section side-section-toggle" aria-expanded=/);
     assert.match(appShell, /aria-current=\$\{tab\.id === active\.id \? "page" : null\}/);
     assert.match(appShell, /aria-label=\$\{sidebarCollapsed/);
-    assert.match(appShell, /<span class="session">维信诺协同办公平台<\/span>/);
+    assert.match(appShell, /<span class="session">\$\{t4\("appPanel\.oaPlatform"\)\}<\/span>/);
     assert.doesNotMatch(appShell, /color:#1a3a5c/);
 
     assert.match(chatPanel, /<div class="composer-box">/);
@@ -271,22 +278,22 @@ describe("Dashboard desktop UX", () => {
 
     // 圆形发送钮状态机：空闲发送 / 忙碌空输入停止 / 忙碌有输入排队，均有悬停提示
     assert.match(chatPanel, /composer-send composer-send-\$\{sendMode\}/);
-    assert.match(chatPanel, /发送 \(Enter\)/);
-    assert.match(chatPanel, /停止当前任务/);
-    assert.match(chatPanel, /排队发送，当前任务完成后自动发出/);
-    assert.match(chatPanel, /输入内容后发送/);
+    assert.match(chatPanel, /t4\("chat\.sendSend"\)/);
+    assert.match(chatPanel, /t4\("chat\.sendStop"\)/);
+    assert.match(chatPanel, /t4\("chat\.sendQueue"\)/);
+    assert.match(chatPanel, /t4\("chat\.sendIdle"\)/);
     assert.match(chatPanel, /composer-send-square/);
     assert.match(chatPanel, /if \(sendMode === "stop"\) void abort\(\);\s*else void send\(\);/);
 
     // 底栏幽灵 chip：模型 / 工作空间 / 后台 / 索引（索引 chip 直接显示当前模式，弹出模式弹层）
     assert.match(chatPanel, /composer-chip-ghost/);
-    assert.match(chatPanel, /模型与思考设置/);
+    assert.match(chatPanel, /t4\("chat\.modelAndEffortTitle"\)/);
     assert.match(chatPanel, /showIndexPicker/);
     assert.match(chatPanel, /changeIndexRetrievalMode\(\{ target: \{ value: mode2? \} \}\)/);
 
     // 「+」菜单只保留上传入口；优化提示词独立为发送钮左侧按钮
     assert.match(chatPanel, /composer-plus-menu/);
-    assert.match(chatPanel, /添加图片或视频/);
+    assert.match(chatPanel, /t4\("chat\.addImageOrVideo"\)/);
     assert.match(chatPanel, /Ctrl\+U/);
     assert.match(chatPanel, /composer-optimize/);
 
@@ -327,6 +334,7 @@ describe("Dashboard desktop UX", () => {
     const internals = readFileSync(new URL("components/chat-internals.ts", dashboardSourceRootUrl), "utf8");
     assert.match(chat, /upsertToolProgress/);
     assert.match(chat, /toolCallId/);
+    assert.match(chat, /findIndex\(\(item\) => String\(item\.id/);
     assert.match(chat, /const \[activeTools, setActiveTools\]/);
     assert.doesNotMatch(chat, /const \[activeTool, setActiveTool\]/);
     assert.doesNotMatch(chat, /\bsetActiveTool\s*\(/);

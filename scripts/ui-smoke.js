@@ -175,6 +175,24 @@ function terminateProcessTree(child) {
   }
 }
 
+async function waitForProcessExit(child, timeoutMs = 8_000) {
+  if (!child || child.exitCode !== null) return;
+  await new Promise((resolveWait) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener("exit", finish);
+      child.removeListener("close", finish);
+      resolveWait();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    child.once("exit", finish);
+    child.once("close", finish);
+  });
+}
+
 const edge = edgePath();
 if (!edge) {
   console.error("[ui-smoke] Microsoft Edge is required; set VISIONOX_EDGE_PATH when installed elsewhere");
@@ -254,6 +272,9 @@ try {
   await cdp.ready;
   await Promise.all([cdp.send("Runtime.enable"), cdp.send("Page.enable"), cdp.send("Log.enable")]);
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(() => {
+    // The assertions below intentionally use the Chinese copy so this smoke
+    // flow is independent of the host browser locale and saved user setting.
+    try { localStorage.setItem('rx.lang', 'zh-CN'); } catch {}
     const makeState = (overrides = {}) => ({
       available: true,
       connected: false,
@@ -435,13 +456,22 @@ try {
     if (!taskTab) throw new Error('task tab not found');
     taskTab.click();
   })()`);
-  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('select option')].find((item) => item.value === 'skill'))`, Boolean);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.ui-select-trigger[aria-label="执行方式"]'))`, Boolean);
   await evaluate(cdp, `(() => {
-    const source = [...document.querySelectorAll('select')].find((item) => [...item.options].some((option) => option.value === 'skill'));
-    source.value = 'skill';
-    source.dispatchEvent(new Event('change', { bubbles: true }));
+    const trigger = document.querySelector('.ui-select-trigger[aria-label="执行方式"]');
+    trigger?.click();
   })()`);
-  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('select option')].find((item) => item.value === 'dws/daily-work-briefing'))`, Boolean);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('.ui-select-option')].find((item) => item.textContent.includes('Skill 模板')))`, Boolean);
+  await evaluate(cdp, `(() => {
+    const option = [...document.querySelectorAll('.ui-select-option')].find((item) => item.textContent.includes('Skill 模板'));
+    option?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.ui-select-trigger[aria-label="Skill 模板"]'))`, Boolean);
+  await evaluate(cdp, `(() => {
+    const trigger = document.querySelector('.ui-select-trigger[aria-label="Skill 模板"]');
+    trigger?.click();
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('.ui-select-option')].find((item) => item.textContent.trim().length > 0))`, Boolean);
   await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('input')].find((item) => item.placeholder === '未选择归档工作区'))`, Boolean);
   console.log("[ui-smoke] read-only DWS schedule templates rendered from the installed Skill");
   await evaluate(cdp, `[...document.querySelectorAll('.side-tab')].find((item) => item.textContent.includes('对话'))?.click()`);
@@ -546,6 +576,7 @@ try {
       return window.__backgroundJobsOriginalFetch(input, init);
     };
   })()`);
+  await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台')))`, Boolean);
   await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
   await waitForBrowserValue(cdp, `(() => ({
     workbench: Boolean(document.querySelector('.background-jobs-workbench .background-jobs-detail')),
@@ -761,7 +792,7 @@ try {
   console.log("[ui-smoke] grouped model submenu hover lifecycle and one-step import passed");
 
   await evaluate(cdp, `(() => {
-    const chip = [...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'));
+    const chip = document.querySelector('button.composer-chip-ghost[title^="索引："]');
     if (!chip) throw new Error('index retrieval chip not found');
     chip.click();
   })()`);
@@ -773,13 +804,13 @@ try {
 
   await evaluate(cdp, `document.querySelector('.work-mode-picker .mode-btn:not(.active)')?.click()`);
   console.log("[ui-smoke] work-mode switch dispatched");
-  await waitForBrowserValue(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'))?.textContent ?? ''`, (value) => value.includes('索引关'));
+  await waitForBrowserValue(cdp, `document.querySelector('button.composer-chip-ghost[title^="索引："]')?.textContent ?? ''`, (value) => value.includes('索引关'));
   console.log("[ui-smoke] index mode survived work-mode switch");
   await evaluate(cdp, `window.confirm = () => true`);
   await evaluate(cdp, `(() => { const btn = document.querySelector('.status-new-btn'); if (!btn) throw new Error('status new button not found'); btn.click(); })()`);
   console.log("[ui-smoke] new-session action dispatched");
   await waitForApiValue(`http://127.0.0.1:${port}/api/messages?limit=1&token=${token}`, (value) => value.totalMessages === 1);
-  await waitForBrowserValue(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'))?.textContent ?? ''`, (value) => value.includes('索引关'));
+  await waitForBrowserValue(cdp, `document.querySelector('button.composer-chip-ghost[title^="索引："]')?.textContent ?? ''`, (value) => value.includes('索引关'));
   console.log("[ui-smoke] index mode persisted across work-mode switch and new session");
 
   const backupFlow = await evaluate(cdp, `(async () => {
@@ -800,7 +831,7 @@ try {
 
   await cdp.send("Page.reload", { ignoreCache: true });
   await waitForDashboard(cdp, 15_000);
-  await waitForBrowserValue(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('🔍'))?.textContent ?? ''`, (value) => value.includes('索引关'));
+  await waitForBrowserValue(cdp, `document.querySelector('button.composer-chip-ghost[title^="索引："]')?.textContent ?? ''`, (value) => value.includes('索引关'));
   console.log(`[ui-smoke] Dashboard rendered; long-session input p95=${performance.p95Ms.toFixed(2)}ms, max=${performance.maxMs.toFixed(2)}ms, DOM messages=${performance.renderedMessages}`);
 } catch (error) {
   console.error(`[ui-smoke] ${error.message}`);
@@ -810,5 +841,7 @@ try {
   if (cdp) cdp.socket.close();
   terminateProcessTree(edgeProcess);
   terminateProcessTree(launcher);
+  await waitForProcessExit(edgeProcess);
+  await waitForProcessExit(launcher);
   await removeTempRoot(tempRoot);
 }

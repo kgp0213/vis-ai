@@ -67,6 +67,7 @@ describe("memory correctness", () => {
     const block = launcher.slice(start, end);
     assert.match(block, /clearSessionMemories\(\)/);
     assert.match(block, /restoreSessionMemories\(sessionMeta\.sessionMemories\)/);
+    assert.match(block, /sessionInputAdmission\.restore\(sessionMeta\.promptInputs\)/);
     assert.ok(
       block.indexOf("clearSessionMemories()") < block.indexOf("adoptHistory"),
       "temporary memory must be cleared before historical messages are adopted",

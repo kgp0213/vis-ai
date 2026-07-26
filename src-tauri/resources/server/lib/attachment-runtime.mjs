@@ -243,8 +243,16 @@ export function createAttachmentRuntime({
     await rm(upload.path, { force: true }).catch(() => {});
   }
 
+  async function expireUploadIfNeeded(upload) {
+    if (!upload || upload.busy || !Number.isFinite(upload.expiresAt) || Date.now() < upload.expiresAt) return false;
+    upload.cancelled = true;
+    await discardUpload(upload);
+    return true;
+  }
+
   function armUploadExpiry(upload) {
     clearUploadExpiry(upload);
+    upload.expiresAt = Date.now() + effectiveUploadTtlMs;
     upload.expiryTimer = setTimeout(() => {
       upload.cancelled = true;
       if (!upload.busy) void discardUpload(upload);
@@ -651,6 +659,7 @@ export function createAttachmentRuntime({
       ...normalizedContext,
       busy: false,
       cancelled: false,
+      expiresAt: 0,
       expiryTimer: null,
     };
     uploads.set(id, upload);
@@ -668,6 +677,7 @@ export function createAttachmentRuntime({
     await ensureLoaded();
     const upload = uploads.get(safeString(id));
     if (!upload) throw new Error("附件上传不存在或已过期");
+    if (await expireUploadIfNeeded(upload)) throw new Error("附件上传不存在或已过期");
     if (upload.cancelled) throw new Error("附件上传已取消");
     if (upload.busy) throw new Error("附件上传正在处理上一分块");
     const payload = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes ?? []);
@@ -692,6 +702,7 @@ export function createAttachmentRuntime({
     await ensureLoaded();
     const upload = uploads.get(safeString(id));
     if (!upload) throw new Error("附件上传不存在或已过期");
+    if (await expireUploadIfNeeded(upload)) throw new Error("附件上传不存在或已过期");
     if (upload.cancelled) throw new Error("附件上传已取消");
     if (upload.busy) throw new Error("附件上传仍在写入");
     if (upload.received !== upload.size) throw new Error(`附件上传不完整：${upload.received}/${upload.size} 字节`);

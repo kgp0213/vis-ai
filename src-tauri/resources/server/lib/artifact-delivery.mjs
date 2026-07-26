@@ -167,3 +167,34 @@ export function artifactMissingNotice() {
 export function toolResultSucceeded(value, { status = null } = {}) {
   return normalizeToolOutcome(value, { status }).ok === true;
 }
+
+const TEMPORARY_SCRIPT_EXTENSIONS = new Set([".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"]);
+
+/**
+ * Remove deleted helper scripts from the final artifact fact set. A temporary
+ * script is an implementation detail, not a missing user deliverable. A
+ * caller can preserve an explicitly requested script by passing its path.
+ */
+export function filterTemporaryArtifactEvidence(entries = [], { preservePaths = [] } = {}) {
+  const preserved = new Set((Array.isArray(preservePaths) ? preservePaths : []).map((path) => String(path ?? "").toLowerCase()));
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    const files = (Array.isArray(entry?.files) ? entry.files : []).filter((file) => {
+      const path = String(file?.path ?? "");
+      const missing = file?.status === "missing" || file?.verification === "missing";
+      const ext = path.slice(path.lastIndexOf(".")).toLowerCase();
+      return !(missing && TEMPORARY_SCRIPT_EXTENSIONS.has(ext) && !preserved.has(path.toLowerCase()));
+    });
+    const filePaths = new Set(files.map((file) => String(file?.path ?? "").toLowerCase()));
+    const paths = (Array.isArray(entry?.paths) ? entry.paths : []).filter((path) => filePaths.has(String(path ?? "").toLowerCase()));
+    const status = files.length === 0
+      ? null
+      : files.every((file) => file?.status === "verified")
+        ? "verified"
+        : files.some((file) => file?.status === "missing")
+          ? "missing"
+          : files.some((file) => file?.status === "invalid")
+            ? "invalid"
+            : "present_unverified";
+    return { ...entry, files, paths, status, verified: status === "verified" };
+  }).filter((entry) => entry.files.length > 0 && entry.paths.length > 0);
+}

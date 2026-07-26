@@ -68,6 +68,23 @@ describe("operation steering", () => {
     assert.equal(events.at(-1).steering.status, "applied");
   });
 
+  test("restores queued steering as not_applied without replaying its instruction", () => {
+    const runtime = createOperationSteeringRuntime({ now: () => "2026-07-26T00:00:00.000Z" });
+    const restored = runtime.restore([{
+      id: "steer-restart",
+      operationId: "op-restart",
+      sessionId: "session-1",
+      status: "queued",
+      instructionLength: 12,
+      createdAt: "2026-07-25T00:00:00.000Z",
+    }]);
+    assert.equal(restored[0].status, "not_applied");
+    assert.equal(restored[0].instruction, undefined);
+    assert.equal(restored[0].instructionLength, 12);
+    assert.equal(runtime.list("op-restart")[0].status, "not_applied");
+    assert.equal(runtime.consume("op-restart").length, 0);
+  });
+
   test("exposes the compatible steering endpoint through the existing Dashboard server", async () => {
     const seen = [];
     const response = await steerRequest("/api/operations/op-1/steer", { instruction: "verify output" }, {

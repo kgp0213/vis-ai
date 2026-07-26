@@ -2,12 +2,74 @@ import { createWriteStream } from "node:fs";
 import { access, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } from "./active-session.mjs";
+import { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, recoverInterruptedToolCalls, serializeActiveSession, withPendingUserEntry } from "./active-session.mjs";
+import { createLifecycleMachine } from "./lifecycle-transaction.mjs";
 
 function entryText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+}
+
+function belongsToPendingTurn(entries, index, pendingUser) {
+  const pendingText = entryText(pendingUser?.text);
+  if (!pendingText || !Array.isArray(entries) || index < 0 || index >= entries.length) return false;
+  let latestUserIndex = -1;
+  for (let cursor = 0; cursor < index; cursor++) {
+    const entry = entries[cursor];
+    if (entry?.role === "user" && entryText(entry.content) === pendingText) latestUserIndex = cursor;
+  }
+  if (latestUserIndex < 0) return false;
+  return !entries.slice(latestUserIndex + 1, index).some((entry) => entry?.role === "user");
+}
+
+const FINALIZATION_RANK = Object.freeze({
+  unknown: 1,
+  incomplete: 2,
+  needs_intervention: 2,
+  awaiting_approval: 2,
+  failed: 3,
+  cancelled: 3,
+  completed_with_warnings: 4,
+  completed: 5,
+});
+
+function persistedTaskState(entry) {
+  const value = entry?.taskState
+    ?? entry?.state
+    ?? entry?.receipt?.taskState
+    ?? entry?.receipt?.completion?.taskState
+    ?? null;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized) return normalized;
+  // Older sessions persisted only completion.ok. Treat a positive completion
+  // as a durable terminal fact so a late unknown callback cannot regress it.
+  if (entry?.receipt?.completion?.ok === true) return "completed";
+  if (entry?.receipt?.completion?.ok === false) return "unknown";
+  return null;
+}
+
+function finalizationIdentityMatches(entry, { messageId = null, turnId = null, operationId = null } = {}) {
+  // A Steering/user record can share the operation with its final assistant
+  // turn. It is an input fact, never a terminal execution fact, so it must
+  // not win the late-finalization lookup.
+  if (!entry || typeof entry !== "object" || !["assistant", "execution"].includes(entry.role)) return false;
+  return Boolean(
+    (messageId && (entry.messageId === messageId || entry.id === messageId))
+    || (turnId && entry.turnId === turnId)
+    || (operationId && entry.operationId === operationId),
+  );
+}
+
+function shouldIgnoreLateFinalization(entry, incomingState) {
+  if (!entry) return false;
+  const existing = persistedTaskState(entry);
+  const existingRank = FINALIZATION_RANK[existing] ?? 0;
+  const incomingRank = FINALIZATION_RANK[String(incomingState ?? "").trim().toLowerCase()] ?? 0;
+  if (["completed", "completed_with_warnings", "failed", "cancelled"].includes(existing)) return true;
+  // An indeterminate fact may be upgraded by a later verified completion, but
+  // an already terminal result is write-once for this identity.
+  return existingRank >= incomingRank;
 }
 
 /**
@@ -35,6 +97,7 @@ export function createSessionRuntime({
   getTodos = () => [],
   getGoals = () => [],
   getPrompts = () => [],
+  getPromptInputs = () => [],
   getIndexRetrievalMode = () => "off",
   applyLoadedMetadata = () => {},
   onPersistentIssue = () => {},
@@ -56,6 +119,7 @@ export function createSessionRuntime({
 
   let appendStream = null;
   let persistenceTail = Promise.resolve();
+  const finalizationLifecycle = createLifecycleMachine("ready");
 
   function enqueuePersistence(task) {
     const run = persistenceTail.then(task, task);
@@ -109,10 +173,28 @@ export function createSessionRuntime({
       const line = `${JSON.stringify(record)}\n`;
       return enqueuePersistence(async () => {
         try {
-          stream().write(line);
+          const target = stream();
+          await new Promise((resolveWrite, rejectWrite) => {
+            let settled = false;
+            const finish = (error = null) => {
+              if (settled) return;
+              settled = true;
+              target.removeListener("error", onError);
+              if (error) rejectWrite(error instanceof Error ? error : new Error(String(error)));
+              else resolveWrite();
+            };
+            const onError = (error) => finish(error);
+            target.once("error", onError);
+            try {
+              target.write(line, "utf8", finish);
+            } catch (error) {
+              finish(error);
+            }
+          });
         } catch (error) {
           issue("active-session", `active session append failed: ${error.message}`);
           onLog(`[session-runtime] active session append failed: ${error.message}`);
+          throw error;
         }
       });
     } catch (error) {
@@ -169,6 +251,7 @@ export function createSessionRuntime({
           createdAt: prompt.createdAt ?? null,
           resolution: prompt.resolution ?? null,
         })) : [],
+        promptInputs: Array.isArray(getPromptInputs()) ? getPromptInputs().map((input) => ({ ...input })) : [],
         indexRetrievalMode: getIndexRetrievalMode(),
       }));
       return true;
@@ -206,9 +289,12 @@ export function createSessionRuntime({
         for (let index = mergedEntries.length - 1; index >= 0; index--) {
           const candidate = mergedEntries[index];
           if (candidate?.role !== existing.role) continue;
+          const sameText = entryText(existing.content) && entryText(existing.content) === entryText(candidate.content);
+          const uniqueTextMatch = sameText && !pendingUser
+            && mergedEntries.filter((entry) => entry?.role === existing.role && entryText(entry.content) === entryText(existing.content)).length === 1;
           if ((existing.id && candidate.id === existing.id)
             || (existing.turnId && candidate.turnId === existing.turnId)
-            || (entryText(existing.content) && entryText(existing.content) === entryText(candidate.content))) {
+            || (sameText && (belongsToPendingTurn(mergedEntries, index, pendingUser) || uniqueTextMatch))) {
             target = index;
             break;
           }
@@ -245,70 +331,98 @@ export function createSessionRuntime({
     interventionChoice = null,
   } = {}) {
     return enqueuePersistence(async () => {
-      await closeStream();
-      let entries = Array.isArray(modelEntries) ? modelEntries.map((entry) => ({ ...entry })) : null;
-      if (!entries) {
-        try {
-          entries = parseActiveSessionJsonl(await readFile(activeSessionFile, "utf8")).entries;
-        } catch {
-          entries = [];
-        }
-      }
-      entries = withPendingUserEntry(entries, pendingUser);
-      const text = typeof assistant.text === "string" ? assistant.text : "";
-      const messageId = assistant.messageId ? String(assistant.messageId) : null;
-      const turnId = assistant.turnId ? String(assistant.turnId) : null;
-      const durable = {
-        ...(messageId ? { id: messageId } : {}),
-        ...(messageId ? { messageId } : {}),
-        ...(turnId ? { turnId } : {}),
-        ...(operationId ? { operationId: String(operationId) } : {}),
-        ...(receipt && typeof receipt === "object" ? { receipt } : {}),
-        ...(typeof taskState === "string" && taskState ? { taskState } : {}),
-        ...(artifactIncomplete === true ? { artifactIncomplete: true } : {}),
-        ...(Array.isArray(artifactEvidence) && artifactEvidence.length > 0 ? { artifactEvidence } : {}),
-        ...(Array.isArray(warnings) && warnings.length > 0 ? { warnings } : {}),
-        ...(interventionChoice ? { interventionChoice: String(interventionChoice) } : {}),
-      };
-      let target = -1;
-      for (let index = entries.length - 1; index >= 0; index--) {
-        const entry = entries[index];
-        if (entry?.role !== "assistant") continue;
-        if (messageId && entry.id === messageId) {
-          target = index;
-          break;
-        }
-        if (text && entryText(entry.content) === text) {
-          target = index;
-          break;
-        }
-      }
-      if (target < 0 && text) {
-        for (let index = entries.length - 1; index >= 0; index--) {
-          if (entries[index]?.role === "assistant") {
-            target = index;
-            break;
-          }
-        }
-      }
-      if (target >= 0) {
-        entries[target] = { ...entries[target], ...(text ? { content: text } : {}), ...durable };
-      } else if (text) {
-        entries.push({ role: "assistant", content: text, ...durable });
-      } else {
-        // A failed/cancelled turn may have no assistant text. Persist its
-        // execution facts without manufacturing an empty visible message.
-        const executionId = `execution-${operationId || turnId || messageId || now().getTime()}`;
-        entries.push({ role: "execution", content: "", id: executionId, ...durable });
-      }
       try {
-        await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));
-        const metaSaved = await writeMetaNow({ messageCount: entries.length });
-        if (!metaSaved) throw new Error("active session metadata could not be saved");
-        return true;
+        const result = await finalizationLifecycle.transaction({
+          operation: `finalize:${operationId || assistant.turnId || assistant.messageId || "turn"}`,
+          from: "ready",
+          enter: "finalizing",
+          commit: "finalized",
+          rollback: "failed",
+        }, async (transaction) => {
+          await closeStream();
+          let entries = Array.isArray(modelEntries) ? modelEntries.map((entry) => ({ ...entry })) : null;
+          if (!entries) {
+            try {
+              entries = parseActiveSessionJsonl(await readFile(activeSessionFile, "utf8")).entries;
+            } catch {
+              entries = [];
+            }
+          }
+          entries = withPendingUserEntry(entries, pendingUser);
+          const text = typeof assistant.text === "string" ? assistant.text : "";
+          const messageId = assistant.messageId ? String(assistant.messageId) : null;
+          const turnId = assistant.turnId ? String(assistant.turnId) : null;
+          const incomingState = String(taskState ?? receipt?.taskState ?? receipt?.completion?.taskState ?? "unknown").trim().toLowerCase();
+          let persistedEntries = [];
+          try {
+            persistedEntries = parseActiveSessionJsonl(await readFile(activeSessionFile, "utf8")).entries;
+          } catch {
+            persistedEntries = [];
+          }
+          const existingFinalization = [...persistedEntries]
+            .reverse()
+            .find((entry) => finalizationIdentityMatches(entry, { messageId, turnId, operationId }));
+          if (shouldIgnoreLateFinalization(existingFinalization, incomingState)) {
+            transaction.commit("finalized");
+            return true;
+          }
+          const durable = {
+            ...(messageId ? { id: messageId } : {}),
+            ...(messageId ? { messageId } : {}),
+            ...(turnId ? { turnId } : {}),
+            ...(operationId ? { operationId: String(operationId) } : {}),
+            ...(receipt && typeof receipt === "object" ? { receipt } : {}),
+            ...(typeof taskState === "string" && taskState ? { taskState } : {}),
+            artifactIncomplete: artifactIncomplete === true,
+            artifactEvidence: Array.isArray(artifactEvidence) ? artifactEvidence : [],
+            warnings: Array.isArray(warnings) ? warnings : [],
+            interventionChoice: interventionChoice ? String(interventionChoice) : null,
+          };
+          let target = -1;
+          for (let index = entries.length - 1; index >= 0; index--) {
+            const entry = entries[index];
+            if (entry?.role !== "assistant") continue;
+            if (messageId && entry.id === messageId) {
+              target = index;
+              break;
+            }
+            if (turnId && entry.turnId === turnId) {
+              target = index;
+              break;
+            }
+            if (text && entryText(entry.content) === text && belongsToPendingTurn(entries, index, pendingUser)) {
+              target = index;
+              break;
+            }
+          }
+          if (target >= 0) {
+            entries[target] = { ...entries[target], ...(text ? { content: text } : {}), ...durable };
+          } else if (text) {
+            entries.push({ role: "assistant", content: text, ...durable });
+          } else {
+            // A failed/cancelled turn may have no assistant text. Persist its
+            // execution facts without manufacturing an empty visible message.
+            const executionId = `execution-${operationId || turnId || messageId || now().getTime()}`;
+            entries.push({ role: "execution", content: "", id: executionId, ...durable });
+          }
+          await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));
+          const metaSaved = await writeMetaNow({ messageCount: entries.length });
+          if (!metaSaved) throw new Error("active session metadata could not be saved");
+          transaction.commit("finalized");
+          return true;
+        });
+        finalizationLifecycle.switch({ operation: "reset-finalization", from: ["finalized", "failed"], to: "ready" });
+        return result;
       } catch (error) {
         issue("active-session", `final turn persistence failed: ${error.message}`);
         onLog(`[session-runtime] final turn persistence failed: ${error.message}`);
+        try {
+          if (!finalizationLifecycle.is("ready")) {
+            finalizationLifecycle.switch({ operation: "reset-finalization-after-error", from: ["finalized", "failed", "finalizing"], to: "ready" });
+          }
+        } catch (resetError) {
+          onLog(`[session-runtime] finalization lifecycle reset failed: ${resetError.message}`);
+        }
         return false;
       }
     });
@@ -395,6 +509,17 @@ export function createSessionRuntime({
       if (entries.length === 0) {
         await clear();
         return false;
+      }
+      const interrupted = recoverInterruptedToolCalls(entries, { now });
+      if (interrupted.changed) {
+        entries = interrupted.entries;
+        try {
+          await writeEntries(entries);
+          for (const warning of interrupted.warnings) issue("active-session-recovery", warning, "warning");
+          onLog(`[session-runtime] recovered ${interrupted.warnings.length} interrupted tool call(s) as unknown`);
+        } catch (error) {
+          issue("active-session-recovery", `interrupted tool recovery could not be saved: ${error.message}`, "warning");
+        }
       }
       if (typeof migrateLegacyAttachments === "function") {
         try {

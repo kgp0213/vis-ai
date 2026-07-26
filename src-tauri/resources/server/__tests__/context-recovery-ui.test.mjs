@@ -50,7 +50,8 @@ test("大工具输出通过通用资源句柄分段读取", () => {
 
 test("产物证据和暂停状态会进入通用交付链路", () => {
   assert.match(launcher, /noteArtifactEvidence\(\{/);
-  assert.match(launcher, /taskState: taskState \|\| deriveTaskState\(/);
+  assert.match(launcher, /taskState:\s*taskState\s*\|\|/);
+  assert.match(launcher, /deriveTaskState\(\{/);
   assert.match(launcher, /interventionPaused,/);
   assert.match(launcher, /artifactFiles/);
   assert.match(launcher, /recoveryHandle: contextRecoveryHandle/);

@@ -1,8 +1,14 @@
+import { createExecutionPhaseTracker } from "./execution-phase.mjs";
+
 const MAX_TOOL_EVENTS = 24;
 const MAX_ARTIFACT_EVENTS = 16;
 const MAX_ERROR_EVENTS = 8;
 const MAX_MODEL_RETRIES = 12;
 const MAX_PROVIDER_RESULTS = 16;
+const MAX_TOOL_FAILURES = 32;
+const MAX_RECOVERIES = 32;
+const MAX_TOOL_REPEATS = 16;
+const MAX_AUTHORIZATION_FACTS = 32;
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").slice(0, limit);
@@ -20,19 +26,26 @@ function fingerprint(value) {
  * Collects facts for one model turn. This is deliberately not a task engine:
  * it never schedules work or decides what the model should do.
  */
-export function createTurnReceipt({ turnId = null, requestId = null, startedAt = Date.now() } = {}) {
+export function createTurnReceipt({ turnId = null, requestId = null, operationId = null, sessionId = null, startedAt = Date.now() } = {}) {
+  const phaseTracker = createExecutionPhaseTracker({ operationId, sessionId, turnId });
   const state = {
     version: 1,
     turnId: turnId ? String(turnId) : null,
     requestId: requestId ? String(requestId) : null,
     startedAt,
+    phase: phaseTracker.snapshot(),
     tools: { dispatches: 0, results: 0, successes: 0, failures: 0, lastName: null },
     toolCalls: [],
     toolEvents: [],
+    toolFailures: [],
+    recoveries: [],
+    toolRepeats: [],
+    authorizationFacts: [],
     errors: [],
     modelRetries: [],
     providerResults: [],
     artifactEvidence: [],
+    warnings: [],
     documentBindings: [],
     runtime: [],
     context: null,
@@ -71,8 +84,12 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     if (toolName) call.name = toolName;
     state.tools.lastName = call.name;
     if (isNew && ["queued", "running"].includes(status)) state.tools.dispatches++;
-    const wasTerminal = ["succeeded", "failed", "cancelled"].includes(call.status);
-    const isTerminal = ["succeeded", "failed", "cancelled"].includes(status);
+    const wasTerminal = ["succeeded", "failed", "cancelled", "unknown"].includes(call.status);
+    const isTerminal = ["succeeded", "failed", "cancelled", "unknown"].includes(status);
+    // Once a tool result is unknown (for example after cancellation or a
+    // process exit), a late success/failure callback is not allowed to rewrite
+    // the fact or increment the aggregate counters a second time.
+    if (wasTerminal) return;
     call.status = boundedText(status, 40) || call.status;
     if (result !== null && result !== undefined) call.result = boundedText(result);
     if (!wasTerminal && isTerminal) {
@@ -98,6 +115,89 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       recordedAt: new Date().toISOString(),
     });
     if (state.errors.length > MAX_ERROR_EVENTS) state.errors.shift();
+  }
+
+  function recordWarning(value) {
+    const warning = boundedText(value, 500).trim();
+    if (!warning || state.warnings.includes(warning)) return;
+    state.warnings = [...state.warnings, warning].slice(-8);
+  }
+
+  function recordToolFailure(failure = {}) {
+    if (!failure || typeof failure !== "object") return;
+    const next = {
+      toolCallId: boundedText(failure.toolCallId, 180) || null,
+      toolName: boundedText(failure.toolName, 120) || "tool",
+      category: boundedText(failure.category, 80) || "tool_result",
+      code: boundedText(failure.code, 100) || "tool_failed",
+      retryable: failure.retryable === true,
+      exitCode: Number.isInteger(failure.exitCode) ? failure.exitCode : null,
+      attempt: Math.max(1, Number(failure.attempt) || 1),
+      maxAttempts: Math.max(1, Number(failure.maxAttempts) || 1),
+      count: Math.max(1, Number(failure.count) || 1),
+      fingerprint: boundedText(failure.fingerprint, 100) || null,
+      argsFingerprint: boundedText(failure.argsFingerprint, 100) || null,
+      message: boundedText(failure.message, 500) || null,
+      repeatFailureBlocked: failure.repeatFailureBlocked === true,
+      recordedAt: boundedText(failure.recordedAt, 40) || new Date().toISOString(),
+    };
+    const duplicate = state.toolFailures.some((item) => item.toolCallId === next.toolCallId && item.fingerprint === next.fingerprint && item.count === next.count);
+    if (!duplicate) state.toolFailures = [...state.toolFailures, next].slice(-MAX_TOOL_FAILURES);
+  }
+
+  function recordRecovery(recovery = {}) {
+    if (!recovery || typeof recovery !== "object") return;
+    const next = {
+      toolCallId: boundedText(recovery.toolCallId, 180) || null,
+      toolName: boundedText(recovery.toolName, 120) || "tool",
+      recovery: boundedText(recovery.recovery, 160) || "tool_retry",
+      fromFingerprint: boundedText(recovery.fromFingerprint, 100) || null,
+      recordedAt: boundedText(recovery.recordedAt, 40) || new Date().toISOString(),
+    };
+    const duplicate = state.recoveries.some((item) => item.toolCallId === next.toolCallId && item.recovery === next.recovery && item.fromFingerprint === next.fromFingerprint);
+    if (!duplicate) state.recoveries = [...state.recoveries, next].slice(-MAX_RECOVERIES);
+  }
+
+  function recordToolRepeat(repeat = {}) {
+    if (!repeat || typeof repeat !== "object") return;
+    const next = {
+      toolName: boundedText(repeat.toolName, 120) || "tool",
+      argsHash: boundedText(repeat.argsHash, 100) || null,
+      repeatCount: Math.max(1, Number(repeat.repeatCount) || 1),
+      action: boundedText(repeat.action, 40) || "reminder",
+      recordedAt: boundedText(repeat.recordedAt, 40) || new Date().toISOString(),
+    };
+    const duplicate = state.toolRepeats.some((item) => item.toolName === next.toolName && item.argsHash === next.argsHash && item.repeatCount === next.repeatCount);
+    if (!duplicate) state.toolRepeats = [...state.toolRepeats, next].slice(-MAX_TOOL_REPEATS);
+  }
+
+  function recordAuthorizationFact(fact = {}) {
+    if (!fact || typeof fact !== "object") return;
+    const next = {
+      factId: boundedText(fact.factId, 180) || null,
+      decision: boundedText(fact.decision, 24) || "allow",
+      scope: boundedText(fact.scope, 24) || "operation",
+      toolName: boundedText(fact.toolName, 160) || "tool",
+      rule: fact.rule && typeof fact.rule === "object"
+        ? {
+          kind: boundedText(fact.rule.kind, 24) || null,
+          ...(fact.rule.value ? { value: boundedText(fact.rule.value, 160) } : {}),
+          ...(fact.rule.argsFingerprint ? { argsFingerprint: boundedText(fact.rule.argsFingerprint, 100) } : {}),
+        }
+        : null,
+      argsFingerprint: boundedText(fact.argsFingerprint, 100) || null,
+      reusable: fact.reusable !== false,
+      source: boundedText(fact.source, 80) || "permission-runtime",
+      reason: boundedText(fact.reason, 240) || null,
+      createdAt: boundedText(fact.createdAt, 40) || new Date().toISOString(),
+    };
+    if (!next.factId || !next.rule?.kind) return;
+    if (state.authorizationFacts.some((item) => item.factId === next.factId)) return;
+    state.authorizationFacts = [...state.authorizationFacts, next].slice(-MAX_AUTHORIZATION_FACTS);
+  }
+
+  function recordAuthorizationFacts(facts = []) {
+    for (const fact of Array.isArray(facts) ? facts : []) recordAuthorizationFact(fact);
   }
 
   function recordModelRetry(event = {}) {
@@ -160,6 +260,30 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     if (state.artifactEvidence.length > MAX_ARTIFACT_EVENTS) state.artifactEvidence.shift();
   }
 
+  function replaceArtifactEvidence(entries = []) {
+    state.artifactEvidence = (Array.isArray(entries) ? entries : [])
+      .filter((entry) => entry && typeof entry === "object")
+      .slice(-MAX_ARTIFACT_EVENTS)
+      .map((entry) => ({
+        paths: [...new Set((Array.isArray(entry.paths) ? entry.paths : []).map((path) => boundedText(path, 500)).filter(Boolean))].slice(0, 8),
+        files: (Array.isArray(entry.files) ? entry.files : []).slice(0, 8).map((file) => ({
+          path: boundedText(file?.path, 500),
+          size: Math.max(0, Number(file?.size) || 0),
+          mtimeMs: Math.max(0, Number(file?.mtimeMs) || 0),
+          ext: boundedText(file?.ext, 24) || null,
+          changedThisTurn: file?.changedThisTurn === true,
+          verification: boundedText(file?.verification, 80) || null,
+          status: boundedText(file?.status, 40) || "unknown",
+          readable: file?.readable === true,
+        })),
+        producer: boundedText(entry.producer, 120) || "unknown",
+        verified: entry.verified === true,
+        status: boundedText(entry.status, 40) || "unknown",
+        reason: boundedText(entry.reason, 240),
+        recordedAt: boundedText(entry.recordedAt, 40) || new Date().toISOString(),
+      }));
+  }
+
   function recordDocumentBinding(binding = {}) {
     const documentRef = boundedText(binding.documentRef, 180);
     if (!documentRef) return;
@@ -184,6 +308,8 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       toolId,
       kind: boundedText(runtime.kind, 40) || null,
       status: boundedText(runtime.status, 40) || "degraded",
+      selected: runtime.selected === true,
+      bound: runtime.bound === true,
       reused: runtime.reused === true,
       repaired: runtime.repaired === true,
       installed: runtime.installed === true,
@@ -202,6 +328,16 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       transactionId: boundedText(status.transactionId, 160) || null,
       inputChars: Math.max(0, Number(status.inputChars ?? status.totalInputChars) || 0),
       estimatedTokens: Math.max(0, Number(status.estimatedTokens) || 0),
+      estimatedTokensSource: boundedText(status.estimatedTokensSource, 40) || "estimated",
+      measurement: status.measurement && typeof status.measurement === "object"
+        ? {
+          source: boundedText(status.measurement.source, 40) || "measured",
+          promptTokens: Math.max(0, Number(status.measurement.promptTokens) || 0),
+          messageCount: Math.max(0, Number(status.measurement.messageCount) || 0),
+          requestId: boundedText(status.measurement.requestId, 240) || null,
+          measuredAt: boundedText(status.measurement.measuredAt, 40) || null,
+        }
+        : null,
       toolResultBytes: Math.max(0, Number(status.toolResultBytes) || 0),
       compressed: status.compressed === true,
       resourceRefs: [...new Set((Array.isArray(status.resourceRefs) ? status.resourceRefs : []).map((value) => boundedText(value, 240)).filter((value) => /^[A-Za-z0-9._:-]{1,240}$/u.test(value)))].slice(0, 32),
@@ -226,6 +362,12 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       if (normalized && !state.mediaWarnings.includes(normalized)) state.mediaWarnings.push(normalized);
     }
     state.mediaWarnings = state.mediaWarnings.slice(-8);
+  }
+
+  function observePhase(event = {}) {
+    const result = phaseTracker.observe(event);
+    if (result.accepted && result.changed) state.phase = result.state;
+    return result;
   }
 
   function claimIntervention(status) {
@@ -258,6 +400,18 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
   }
 
   function complete(value = {}) {
+    const taskState = boundedText(value.taskState, 80).trim().toLowerCase();
+    const indeterminate = new Set(["unknown", "incomplete", "needs_intervention", "awaiting_approval"]);
+    const terminal = value.ok === true && !indeterminate.has(taskState) && taskState !== "cancelled" && taskState !== "failed"
+      ? "completed"
+      : taskState === "cancelled"
+        ? "cancelled"
+        : indeterminate.has(taskState)
+          ? "unknown"
+          : "failed";
+    const phaseResult = phaseTracker.finish(terminal, value.error);
+    if (!phaseResult.accepted) return false;
+    state.phase = phaseResult.state;
     state.completion = {
       ok: value.ok === true,
       taskState: boundedText(value.taskState, 80) || null,
@@ -265,6 +419,28 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
       interventionPaused: value.interventionPaused === true,
       continuationNeeded: value.continuationNeeded === true,
       completedAt: new Date().toISOString(),
+    };
+    return true;
+  }
+
+  // A receipt can be finalized as completed before the persistence boundary
+  // returns. If that boundary fails, downgrade the local fact to unknown so
+  // callers cannot expose a successful but unpersisted result.
+  function markUnknown(reason = "execution result could not be persisted") {
+    const message = boundedText(reason, 500) || "execution result could not be persisted";
+    const now = new Date().toISOString();
+    state.phase = {
+      ...state.phase,
+      phase: "ended",
+      terminalState: "unknown",
+      reason: message,
+      updatedAt: now,
+    };
+    state.completion = {
+      ...(state.completion ?? {}),
+      ok: false,
+      taskState: "unknown",
+      completedAt: now,
     };
   }
 
@@ -280,16 +456,25 @@ export function createTurnReceipt({ turnId = null, requestId = null, startedAt =
     observeToolProgress,
     observeToolStart,
     recordError,
+    recordWarning,
+    recordToolFailure,
+    recordRecovery,
+    recordToolRepeat,
+    recordAuthorizationFact,
+    recordAuthorizationFacts,
     recordModelRetry,
     recordProviderResult,
     recordArtifact,
+    replaceArtifactEvidence,
     recordDocumentBinding,
     recordRuntime,
     recordContext,
     recordMedia,
+    observePhase,
     claimIntervention,
     resolveIntervention,
     complete,
+    markUnknown,
     snapshot,
   };
 }

@@ -33,6 +33,7 @@ export function createModelRequestObserver({ maxAttempts = 4 } = {}) {
       reason: String(event.reason || "retry").slice(0, 320),
       statusCode: Number.isInteger(Number(event.statusCode)) ? Number(event.statusCode) : statusCodeFromReason(event.reason),
     };
+    context.receipt?.observePhase?.({ role: "model-retry", reason: retry.reason, attempt: retry.attempt });
     context.receipt?.recordModelRetry?.(retry);
     context.publish?.({
       kind: "model-retry",

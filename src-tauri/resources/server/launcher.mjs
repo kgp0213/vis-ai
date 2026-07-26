@@ -42,6 +42,7 @@ const { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, read
 const { access, appendFile, copyFile, cp, open: openFile, readFile, readdir, rename, rm, stat: fsStat, writeFile } = await importEarly("node:fs/promises");
 const { createHash, randomBytes, randomUUID } = await importEarly("node:crypto");
 const { createRequire } = await importEarly("node:module");
+const { AsyncLocalStorage } = await importEarly("node:async_hooks");
 const launcherBootId = randomUUID();
 const { spawnSync } = await importEarly("node:child_process");
 const { atomicWriteFile, atomicWriteFileSync } = await importEarly("./lib/atomic-file.mjs");
@@ -72,6 +73,7 @@ const {
 const { resolveDocumentOutputBudget, resolveProviderModelAgentPolicy, resolveProviderModelCapabilities, resolveProviderModelRequest, resolveProviderModelVisionPolicy } = await importEarly("./lib/model-request-policy.mjs");
 const { resolveContextPolicy } = await importEarly("./lib/context-cap.mjs");
 const { buildContextBudgetStatus } = await importEarly("./lib/context-budget.mjs");
+const { contextRequestShapeFingerprint, createContextSizeCalibration } = await importEarly("./lib/context-size-calibration.mjs");
 const { projectModelContext } = await importEarly("./lib/model-context-projector.mjs");
 const { buildContextInputFlushPrompt, createContextInputTransactionStore, decideContextInputIntervention, requiresCompleteContextCoverage, startsFreshContextTransaction } = await importEarly("./lib/context-input-transaction.mjs");
 const { utf8SafePrefixLength } = await importEarly("./lib/utf8-range.mjs");
@@ -131,24 +133,35 @@ const { createRuntimeCapabilityResolver } = await importEarly("./lib/runtime-cap
 const { resolveLocalRuntimeCapability } = await importEarly("./lib/runtime-local-capability.mjs");
 const { createRuntimePackageInstaller } = await importEarly("./lib/runtime-package-installer.mjs");
 const { createSkillRuntimeCoordinator } = await importEarly("./lib/runtime-requirements.mjs");
+const { normalizeRuntimeCommand } = await importEarly("./lib/runtime-command.mjs");
 const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, resolveSkillScheduleTemplate, validateSkillIntegration } = await importEarly("./lib/skill-integration.mjs");
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
+const { createSessionRunCoordinator } = await importEarly("./lib/session-run-coordinator.mjs");
+const { createContextEpochRuntime } = await importEarly("./lib/context-epoch.mjs");
+const { createFileEffectStore, createHostToolBroker } = await importEarly("./lib/host-tool-broker.mjs");
+const { recordOperationAuthorizationFact, recordOperationRecovery, recordOperationToolFailure, recordOperationToolSuccess, shouldBlockRepeatedToolFailure } = await importEarly("./lib/operation-context.mjs");
+const { createPermissionFactRuntime, permissionFactRequest } = await importEarly("./lib/permission-fact-runtime.mjs");
+const { createPermissionRuleRuntime, readPermissionRules } = await importEarly("./lib/permission-rule-runtime.mjs");
 const { planToolCallBatches } = await importEarly("./lib/parallel-tool-scheduler.mjs");
 const { createOperationSteeringRuntime } = await importEarly("./lib/operation-steering.mjs");
+const { createSessionInputAdmission } = await importEarly("./lib/session-input-admission.mjs");
 const { createProgressiveToolDiscovery } = await importEarly("./lib/progressive-tool-discovery.mjs");
+const { explainToolActivation, filterToolSpecsByActivation, publicToolActivationPolicy, resolveToolActivationPolicy } = await importEarly("./lib/tool-activation-policy.mjs");
 const { createRuntimeLifecycleHooks } = await importEarly("./lib/runtime-lifecycle-hooks.mjs");
-const { projectToolProgressEvent } = await importEarly("./lib/tool-progress.mjs");
+const { normalizeToolOutcome, projectToolProgressEvent } = await importEarly("./lib/tool-progress.mjs");
+const { createToolRepeatRuntime } = await importEarly("./lib/tool-repeat-runtime.mjs");
 const { createInteractionRuntime } = await importEarly("./lib/interaction-runtime.mjs");
 const { createProviderProvenanceStore, providerDiagnostics } = await importEarly("./lib/provider-provenance.mjs");
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
-const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
+const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, filterTemporaryArtifactEvidence, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
+const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
 const { normalizeProviderResult } = await importEarly("./lib/provider-result.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
@@ -301,6 +314,10 @@ let activeMessageSendContext = {
   autoHandoff: false,
   conversationScope: "none",
 };
+// Preserve the originating operation across async model/tool callbacks. A
+// newer chat or session switch may replace activeMessageSendContext while an
+// older operation is still unwinding.
+const dashboardEventContext = new AsyncLocalStorage();
 // A stable identity for the currently visible conversation. Background work
 // must never inject a result into a different conversation after /new or a
 // session switch.
@@ -309,9 +326,20 @@ let activeTodos = [];
 let activeGoals = [];
 let activePromptEntities = [];
 let sessionMutationInFlight = false;
+// Keep a bounded operation-to-session ledger so late events emitted while an
+// operation is unwinding retain their original conversation identity after a
+// session switch. The ledger contains no message content or credentials.
+const operationSessionIds = new Map();
+// Tool contexts normally carry the operation AbortSignal, but recovery paths
+// may only preserve operationId. Keep a bounded identity map so those paths
+// cannot fall back to whichever operation happens to be active.
+const operationById = new Map();
 // A paused context-input transaction is scoped to the visible conversation so
 // a later turn (or a restart) can explicitly recover the same cached input.
 let activeContextRecoveryHandle = null;
+// Provider usage is a measured prefix for the current operation/session/model;
+// it is never used across a context mutation or a different operation.
+const contextSizeCalibration = createContextSizeCalibration();
 
 function restoreActiveTodos(value, { broadcast = true } = {}) {
   activeTodos = normalizeTodoList(value);
@@ -673,6 +701,28 @@ function trackPersistentStorageIssue(key, path, error, level = "error") {
   else runtimeIssues.clear(key);
 }
 
+const permissionFactsPath = resolve(visionoxDataDir, "permission-facts.json");
+function loadPermissionFacts() {
+  if (!existsSync(permissionFactsPath)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(permissionFactsPath, "utf8"));
+    return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.facts) ? parsed.facts : [];
+  } catch (error) {
+    const backup = `${permissionFactsPath}.corrupt-${Date.now()}`;
+    try { copyFileSync(permissionFactsPath, backup); } catch {}
+    trackPersistentStorageIssue("permission-facts", permissionFactsPath, `permission facts were reset; backup=${backup}: ${error.message}`, "warning");
+    return [];
+  }
+}
+const permissionFactRuntime = createPermissionFactRuntime({
+  initial: loadPermissionFacts(),
+  persist: (facts) => {
+    atomicWriteFileSync(permissionFactsPath, JSON.stringify({ schemaVersion: 1, facts }, null, 2));
+    trackPersistentStorageIssue("permission-facts", permissionFactsPath, null, "clear");
+  },
+  onIssue: (error) => trackPersistentStorageIssue("permission-facts", permissionFactsPath, error?.message || String(error), "warning"),
+});
+
 const providerProvenance = createProviderProvenanceStore({ path: providerProvenancePath });
 
 function recordProviderProvenance(providerIds, source) {
@@ -878,6 +928,12 @@ if (configMigration.backupSanitization?.sanitized || configMigration.backupSanit
   console.error(`[launcher] config backups sanitized=${configMigration.backupSanitization.sanitized}, skipped=${configMigration.backupSanitization.skipped}`);
 }
 const config = readConfig(configPath);
+// Static permission rules are a policy layer, not another execution path.
+// They are refreshed at each confirmation boundary so manual config edits take
+// effect without restarting the ordinary model loop.
+const permissionRuleRuntime = createPermissionRuleRuntime({
+  initialRules: readPermissionRules(config),
+});
 
 // Host runtime capabilities are discovered once at startup and persisted in
 // the user data directory. They never write into a task workspace.
@@ -1576,6 +1632,15 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
     allowAll: () => loadEditMode(configPath) === "yolo" || loadEditMode(configPath) === "admin",
     jobs,
     getOperationId: (signal) => operationForSignal(signal)?.id ?? null,
+    normalizeCommand: (command, context = {}) => {
+      const operation = operationForSignal(context?.signal, context?.operationId);
+      const bindings = operation?.context?.runtimeBindings ?? defaultRuntimeBindings();
+      const normalized = normalizeRuntimeCommand(command, bindings);
+      if (normalized.changed) {
+        console.error(`[launcher] selected bound ${normalized.kind} runtime for operation ${operation?.id ?? "default"}`);
+      }
+      return normalized.command;
+    },
     getEnvironment: async ({ command, args, signal, operationId }) => {
       const documentEnvironment = await preparedDocumentEnvironment(
         preparedDocumentRegistry,
@@ -1712,7 +1777,8 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
   const skillRuntimeCoordinator = createSkillRuntimeCoordinator({
     skillStore: new SkillStore({ homeDir: home, projectRoot: rootDir }),
     resolver: runtimeCapabilities,
-    getOperation: () => operationRuntime.getActive(),
+    packagedRoot: bootstrapSkillsRoot,
+    getOperation: (context = {}) => operationForSignal(context?.signal, context?.operationId),
     getRuntimeContext: (requirement) => {
       const currentConfig = readConfig(configPath);
       const runtimeConfig = currentConfig.runtime && typeof currentConfig.runtime === "object" ? currentConfig.runtime : {};
@@ -1786,11 +1852,78 @@ const preparedDocumentRegistry = createPreparedDocumentRegistry({
   onChange: (preparedDocuments) => { void writeActiveSessionMeta({ preparedDocuments }); },
 });
 const operationBySignal = new WeakMap();
-function operationForSignal(signal) {
+let toolRepeatRuntime = null;
+function attachToolRepeatResultAugmenter() {
+  if (!toolRepeatRuntime || typeof tools.getResultAugmenter !== "function" || typeof tools.setResultAugmenter !== "function") return;
+  const baseResultAugmenter = tools.getResultAugmenter();
+  if (typeof baseResultAugmenter !== "function" || baseResultAugmenter.__visionoxToolRepeat === true) return;
+  const composed = (name, args, result, dispatchOptions = {}) => {
+    const baseResult = baseResultAugmenter(name, args, result, dispatchOptions) ?? result;
+    const operation = operationForSignal(dispatchOptions?.signal, dispatchOptions?.operationId);
+    const tool = tools.get(name);
+    const repeatable = tool?.readOnly === true || tool?.repeatable === true;
+    const outcome = normalizeToolOutcome(baseResult, { role: "tool" });
+    return toolRepeatRuntime.augment({
+      operationId: operation?.id,
+      toolName: name,
+      args,
+      result: baseResult,
+      repeatable,
+      cacheable: outcome.ok === true,
+    });
+  };
+  composed.__visionoxToolRepeat = true;
+  tools.setResultAugmenter(composed);
+}
+function operationForSignal(signal, operationId = null) {
   if (signal) return operationBySignal.get(signal) ?? null;
+  if (operationId) return operationById.get(String(operationId)) ?? null;
   return operationRuntime.getActive();
 }
-tools.setToolInterceptor(async (name, args) => {
+tools.setToolInterceptor(async (name, args, dispatchOptions = {}) => {
+  const activation = explainToolActivation(currentToolActivationPolicy(), name);
+  if (!activation.active) {
+    return JSON.stringify({
+      ok: false,
+      code: "TOOL_DISABLED_BY_POLICY",
+      category: "policy",
+      retryable: false,
+      title: "工具未启用",
+      message: `工具 ${String(name)} 当前未被激活，未执行任何操作。`,
+      action: "切换工作模式或调整工具策略后重试。",
+      details: {
+        toolName: String(name),
+        layer: activation.layer,
+        reason: activation.reason,
+        matchedPattern: activation.matchedPattern,
+      },
+    });
+  }
+  const activeOperation = operationForSignal(dispatchOptions?.signal, dispatchOptions?.operationId);
+  const repeatLimit = modelRuntimeOptions(effectiveModelConfig(config)).sameFailureClassLimit ?? 2;
+  const repeatedFailure = shouldBlockRepeatedToolFailure(activeOperation?.context, {
+    toolName: name,
+    args,
+    maxAttempts: repeatLimit,
+  });
+  if (repeatedFailure.blocked) {
+    return JSON.stringify({
+      ok: false,
+      code: "tool_failure_repeat_blocked",
+      category: "recovery",
+      retryable: false,
+      title: "相同工具失败已停止重试",
+      message: `相同工具和参数已连续失败 ${repeatedFailure.failure.count} 次。`,
+      action: "switch_tool_or_adjust_args",
+      recommendedAction: "switch_tool_or_adjust_args",
+      details: {
+        toolName: name,
+        argsFingerprint: repeatedFailure.failure.argsFingerprint,
+        previousFailure: repeatedFailure.failure.code,
+        operationId: activeOperation?.id ?? null,
+      },
+    });
+  }
   const runtimeInstall = ["run_command", "run_background"].includes(String(name))
     ? shellRuntimeInstallIntent(args?.command)
     : null;
@@ -1808,6 +1941,13 @@ tools.setToolInterceptor(async (name, args) => {
     ?? validateOfficecliInvocation(name, args)
     ?? validateDwsInvocation(name, args, { bundledExecutable: dwsExecutable });
   if (issue) return JSON.stringify(issue);
+  const duplicate = toolRepeatRuntime?.beforeExecute({
+    operationId: activeOperation?.id,
+    toolName: name,
+    args,
+    repeatable: tools.get(name)?.readOnly === true || tools.get(name)?.repeatable === true,
+  });
+  if (duplicate?.duplicate === true) return duplicate.result;
   return undefined;
 });
 
@@ -1828,7 +1968,6 @@ if (runCommandDefinition?.readOnlyCheck) {
     return originalReadOnlyCheck(args);
   };
 }
-
 tools.register({
   name: "read_context_input",
   description: "Recover one bounded segment from a lossless context-input cache after compaction or a context-input flush notice. Read one segment, materialize it into the requested artifact, then request the next segment. This is a recovery/control tool and remains available while new read-only tools are paused.",
@@ -2367,6 +2506,19 @@ tools.register({
   },
 });
 
+const hostEffectRoot = resolve(visionoxDataDir, "effects");
+if (!existsSync(hostEffectRoot)) mkdirSync(hostEffectRoot, { recursive: true });
+const hostToolEffectStore = createFileEffectStore({ path: resolve(hostEffectRoot, "host-effects.json"), atomicWriteFile });
+const hostToolBroker = createHostToolBroker({
+  effectStore: hostToolEffectStore,
+  operations: {
+    dws_write: {
+      effect: true,
+      execute: (args, context) => runDwsWrite(args, { executable: dwsExecutable, signal: context?.signal }),
+    },
+  },
+});
+
 registerVHomeSkillTools(tools, {
   draftStore: vhomeSkillDraftStore,
   runDwsRead,
@@ -2388,6 +2540,7 @@ registerVHomeSkillTools(tools, {
   isBootstrapSkill: (name) => existsSync(resolve(bootstrapSkillsRoot, name, "SKILL.md")),
   skillExists: (name) => existsSync(resolve(skillsRoot, name, "SKILL.md")),
   getSendContext: () => ({ ...activeMessageSendContext, operationContext: operationRuntime.getActive()?.context ?? null }),
+  effectBroker: hostToolBroker,
   consumeSendAuthorization: (authorization, request) => consumeSendAuthorization(authorization, request),
   reviewMessageRisk: async (message, { signal } = {}) => {
     if (!client) return { level: "unknown", confidence: 0, categories: ["model-unavailable"], reason: "风险审查模型不可用" };
@@ -3040,8 +3193,13 @@ const progressiveToolDiscovery = createProgressiveToolDiscovery({
     return resolveProviderModelCapabilities(getActiveProvider(config), current.model);
   },
   getMcpToolNames: () => mcpServers.flatMap((server) => server.toolNames ?? []),
-  getToolSpecs: () => tools.specs(),
-  addToolToPrefix: (spec) => loop?.prefix?.addTool(presentSingleToolSpec(spec)) ?? false,
+  getToolSpecs: () => filterToolSpecsByActivation(tools.specs(), currentToolActivationPolicy()),
+  addToolToPrefix: (spec) => {
+    const name = spec?.function?.name;
+    const policy = currentToolActivationPolicy({ extraMcpTools: name ? [name] : [] });
+    if (!explainToolActivation(policy, name, "mcp").active) return false;
+    return loop?.prefix?.addTool(presentSingleToolSpec(spec)) ?? false;
+  },
   removeToolFromPrefix: (name) => loop?.prefix?.removeTool(name) ?? false,
   presentSpec: presentSingleToolSpec,
 });
@@ -3174,8 +3332,12 @@ async function reloadMcp() {
         registry: preparedDocumentRegistry,
       });
       // Add new tool specs to loop prefix
+      const activationPolicy = currentToolActivationPolicy({ extraMcpTools: registeredNames });
       for (const ts of tools.specs().filter((s) => registeredNames.includes(s.function?.name))) {
-        if (!progressiveToolDiscovery.shouldHideTool(ts.function?.name)) loop?.prefix?.addTool(presentSingleToolSpec(ts));
+        const name = ts.function?.name;
+        if (explainToolActivation(activationPolicy, name, "mcp").active && !progressiveToolDiscovery.shouldHideTool(name)) {
+          loop?.prefix?.addTool(presentSingleToolSpec(ts));
+        }
       }
       mcpServers.push({
         label: spec.name,
@@ -3333,6 +3495,12 @@ function normalizeModeConfig(mode, id) {
   const fallback = DEFAULT_MODES[id] ?? {};
   const rules = Array.isArray(mode?.eccRules) ? mode.eccRules.filter(Boolean) : (fallback.eccRules ?? ["common"]);
   const skills = Array.isArray(mode?.skills) ? mode.skills.filter(Boolean) : (fallback.skills ?? []);
+  const tools = mode?.tools === undefined
+    ? fallback.tools
+    : Array.isArray(mode.tools) ? mode.tools.filter((item) => typeof item === "string" && item.trim()).slice(0, 128) : [];
+  const disallowedTools = mode?.disallowedTools === undefined
+    ? fallback.disallowedTools
+    : Array.isArray(mode.disallowedTools) ? mode.disallowedTools.filter((item) => typeof item === "string" && item.trim()).slice(0, 128) : [];
   return {
     label: String(mode?.label ?? fallback.label ?? id),
     description: String(mode?.description ?? fallback.description ?? ""),
@@ -3340,6 +3508,8 @@ function normalizeModeConfig(mode, id) {
     version: Number(mode?.version ?? fallback.version ?? CONSTANTS.DEFAULT_MODE_VERSION),
     eccRules: rules,
     skills,
+    ...(tools === undefined ? {} : { tools }),
+    ...(disallowedTools === undefined ? {} : { disallowedTools }),
     prompt: String(mode?.prompt ?? fallback.prompt ?? ""),
   };
 }
@@ -3419,6 +3589,8 @@ function modeSummary(modeId = config.mode || "general") {
     rules: mode.eccRules || [],
     effectiveRules: enabledRules,
     skills: mode.skills || [],
+    tools: mode.tools,
+    disallowedTools: mode.disallowedTools || [],
     appliesOn: "new-chat",
   };
 }
@@ -4212,6 +4384,48 @@ function artifactVerificationStatus(info, { changedThisTurn = false, explicitlyV
   return "present_unverified";
 }
 
+function rescanArtifactEvidence(entries = []) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    const sourceFiles = Array.isArray(entry?.files) ? entry.files : [];
+    const files = sourceFiles.map((file) => {
+      const path = String(file?.path ?? "").trim();
+      const info = path ? generatedArtifactFileInfo(path) : null;
+      if (!info) {
+        return {
+          ...file,
+          path,
+          size: 0,
+          mtimeMs: 0,
+          readable: false,
+          changedThisTurn: false,
+          verification: "missing",
+          status: "missing",
+        };
+      }
+      const changedThisTurn = file?.changedThisTurn === true;
+      const explicitlyVerified = file?.verification === "existing-file-verified" || file?.status === "verified" && !changedThisTurn;
+      const status = artifactVerificationStatus(info, { changedThisTurn, explicitlyVerified });
+      return {
+        ...file,
+        ...info,
+        changedThisTurn,
+        verification: status === "verified" ? (changedThisTurn ? "current-turn-write" : "existing-file-verified") : status,
+        status,
+      };
+    });
+    const paths = files.map((file) => file.path).filter(Boolean);
+    const verified = files.length > 0 && files.every((file) => file.status === "verified");
+    return {
+      ...entry,
+      paths,
+      files,
+      verified,
+      status: files.length === 0 ? "unknown" : verified ? "verified" : files.some((file) => file.status === "missing") ? "missing" : files.some((file) => file.status === "invalid") ? "invalid" : "present_unverified",
+      reason: files.some((file) => file.status === "missing") ? "artifact was removed or is no longer readable during final verification" : entry.reason,
+    };
+  });
+}
+
 function parseMaybeJsonObject(value) {
   if (value && typeof value === "object") return value;
   if (typeof value !== "string" || !value.trim()) return null;
@@ -4277,6 +4491,31 @@ function currentEditMode() {
   return loadEditMode(configPath);
 }
 
+let lastToolActivationDiagnosticFingerprint = null;
+
+function currentToolActivationPolicy({ extraMcpTools = [] } = {}) {
+  const knownSpecs = typeof tools?.specs === "function" ? tools.specs() : [];
+  const knownTools = knownSpecs.map((spec) => spec?.function?.name).filter(Boolean);
+  const registeredMcpTools = [
+    ...(Array.isArray(mcpServers) ? mcpServers.flatMap((server) => server.toolNames ?? []) : []),
+    ...(Array.isArray(extraMcpTools) ? extraMcpTools : []),
+  ];
+  const policy = resolveToolActivationPolicy({
+    config,
+    mode: getModeConfig(),
+    knownTools,
+    mcpTools: registeredMcpTools,
+  });
+  const diagnosticFingerprint = JSON.stringify(policy.diagnostics);
+  if (diagnosticFingerprint !== lastToolActivationDiagnosticFingerprint) {
+    lastToolActivationDiagnosticFingerprint = diagnosticFingerprint;
+    for (const issue of policy.diagnostics) {
+      console.warn(`[launcher] tool activation policy ${issue.kind}: ${issue.pattern}`);
+    }
+  }
+  return policy;
+}
+
 function presentedToolSpecs() {
   let specs = indexRetrievalMode === "off"
     ? tools.specs().filter((spec) => spec.function?.name !== "semantic_search")
@@ -4286,6 +4525,7 @@ function presentedToolSpecs() {
   if (!capabilities.inputModalities?.includes("image")) {
     specs = specs.filter((spec) => spec.function?.name !== "read_media");
   }
+  specs = filterToolSpecsByActivation(specs, currentToolActivationPolicy());
   return progressiveToolDiscovery.presentInitialSpecs(presentToolSpecsForMode(specs, { editMode: currentEditMode() }));
 }
 
@@ -4520,7 +4760,7 @@ function buildLoop(client, rootDir) {
   // The registry survives loop rebuilds; discard only the previous parent
   // loop's closure so its counters and model policy cannot leak forward.
   tools.setResultAugmenter(null);
-  return new CacheFirstLoop({
+  const createdLoop = new CacheFirstLoop({
     client,
     prefix,
     tools,
@@ -4541,16 +4781,119 @@ function buildLoop(client, rootDir) {
     beforeModelRequest: async ({ turn, iteration, signal }) => {
       const operation = operationRuntime?.getActive?.();
       if (!operation || signal?.aborted) return null;
+      toolRepeatRuntime?.beginRequest(operation.id);
+      const sessionId = operation.context?.conversationId ?? activeConversationId;
+      const admitted = sessionInputAdmission.promoteSteers(sessionId, {
+        operationId: operation.id,
+        workspace: workspaceDir,
+        boundary: "next_model_request",
+      });
+      const admissionError = sessionInputAdmission.lastError?.();
+      const hasPendingSteer = sessionInputAdmission.list(sessionId, { includeTerminal: false })
+        .some((input) => input.delivery === "steer"
+          && (!input.operationId || input.operationId === operation.id)
+          && (!input.workspace || input.workspace === sessionInputAdmission.workspaceKey(workspaceDir)));
+      if (admissionError && hasPendingSteer) {
+        throw new Error(`${admissionError.code}: ${admissionError.error}`);
+      }
+      for (const input of admitted) {
+        const messageId = `input-${input.id}`;
+        try {
+          const historyMessage = {
+            id: messageId,
+            role: "user",
+            content: input.text,
+            operationId: operation.id,
+            turnId: String(turn),
+            ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+          };
+          if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
+          // The vendored loop is built without a durable session name in this
+          // host, so its appendAndPersist method only updates in-memory
+          // history. Persist the same stable user record through the owning
+          // session runtime before crossing the model request boundary.
+          const persisted = await appendActiveMessage(historyMessage);
+          if (persisted === false) throw new Error("active session input append was rejected");
+          loop.appendAndPersist(historyMessage);
+          pushMessage({
+            id: messageId,
+            role: "user",
+            text: input.text,
+            operationId: operation.id,
+            turnId: String(turn),
+            ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+          });
+          broadcastDashboardEvent({
+            kind: "user",
+            id: messageId,
+            text: input.text,
+            operationId: operation.id,
+            sessionId,
+            ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+            admittedInputId: input.id,
+          });
+        } catch (error) {
+          const requeued = sessionInputAdmission.requeuePromoted(input.id, {
+            operationId: operation.id,
+            clearOperation: true,
+            reason: "model_history_persist_failed",
+          });
+          console.error(`[launcher] admitted session input ${input.id} could not enter model history: ${error.message}`);
+          if (!requeued?.ok) {
+            throw new Error(`${requeued?.code || "SESSION_INPUT_REQUEUE_FAILED"}: ${requeued?.error || "session input could not be returned to the durable queue"}`);
+          }
+          // Do not inject a one-request in-memory fallback. The durable
+          // admission remains retryable and the current model request must not
+          // proceed with history that cannot be saved.
+          throw new Error(`SESSION_INPUT_DELIVERY_FAILED: ${error.message || String(error)}`);
+        }
+      }
       const queued = operationSteeringRuntime?.consume(operation.id) ?? [];
+      if ((queued.length > 0 || admitted.length > 0) && operation.context) operation.context.calibrationUntrusted = true;
       await runtimeLifecycleHooks?.emit?.("model.request.before", {
         operationId: operation.id,
         turn,
         iteration,
         steeringIds: queued.map((entry) => entry.id),
+        admittedInputIds: admitted.map((entry) => entry.id),
       });
-      return queued.length > 0 ? { instructions: queued.map((entry) => entry.instruction) } : null;
+      const instructions = [
+        ...queued.map((entry) => entry.instruction),
+      ];
+      return instructions.length > 0 ? { instructions } : null;
     },
   });
+  attachToolRepeatResultAugmenter();
+  return createdLoop;
+}
+
+// The vendored loop adds the current user input, system prefix, tool
+// definitions and media parts inside buildMessages().  Context measurements
+// must fingerprint that exact request shape; measuring only log.toMessages()
+// makes provider prompt_tokens look like a durable-history prefix and counts
+// the pending input twice on the next request.
+function buildContextCalibrationMessages(activeLoop, pendingInput, images = [], mediaParts = []) {
+  try {
+    if (typeof activeLoop?.buildMessages === "function") {
+      const messages = activeLoop.buildMessages(
+        pendingInput,
+        Array.isArray(images) && images.length > 0 ? images : null,
+        Array.isArray(mediaParts) && mediaParts.length > 0 ? mediaParts : null,
+      );
+      if (Array.isArray(messages)) return messages;
+    }
+  } catch {
+    // Fall through to the same prefix/history shape available on legacy loops.
+  }
+  const prefix = typeof activeLoop?.prefix?.toMessages === "function"
+    ? activeLoop.prefix.toMessages()
+    : [];
+  const history = activeLoop?.log?.toMessages?.() ?? [];
+  return [
+    ...(Array.isArray(prefix) ? prefix : []),
+    ...(Array.isArray(history) ? history : []),
+    ...(pendingInput === null || pendingInput === undefined ? [] : [{ role: "user", content: pendingInput }]),
+  ];
 }
 
 let client = null;
@@ -6911,37 +7254,35 @@ const operationSteeringRuntime = createOperationSteeringRuntime({
 });
 
 function broadcastDashboardEvent(ev) {
-  return dashboardEventStream.publish(ev);
+  if (!ev || typeof ev !== "object") return dashboardEventStream.publish(ev);
+  const scoped = dashboardEventContext.getStore();
+  const operationId = ev.operationId ?? scoped?.operationId ?? activeMessageSendContext.operationId ?? null;
+  const sessionId = ev.sessionId
+    ?? scoped?.sessionId
+    ?? (operationId ? operationSessionIds.get(String(operationId)) : null)
+    ?? activeConversationId;
+  return dashboardEventStream.publish({
+    ...ev,
+    ...(operationId ? { operationId: String(operationId) } : {}),
+    ...(sessionId ? { sessionId: String(sessionId) } : {}),
+  });
 }
 
-const dashboardMessageOffsets = new Map();
+const dashboardAssistantStreams = createAssistantStreamProjector();
 
 // Mirrors loopEventToDashboard() from chunk-VM6A6QLY.js
-function loopEventToDashboard(ev, assistantId) {
+function loopEventToDashboard(ev, assistantId, streamContext = {}) {
   if (["tool_queued", "tool_start", "tool"].includes(ev.role)) {
     return projectToolProgressEvent(ev, { assistantId });
   }
   const id = `${assistantId}-${ev.role}-${Date.now()}`;
   switch (ev.role) {
     case "assistant_delta":
-      {
-        const current = dashboardMessageOffsets.get(assistantId) ?? { content: 0, reasoning: 0 };
-        const contentDelta = String(ev.content ?? "");
-        const reasoningDelta = String(ev.reasoningDelta ?? "");
-        const result = {
-          kind: "assistant_delta",
-          id: assistantId,
-          contentDelta: ev.content || undefined,
-          reasoningDelta: ev.reasoningDelta,
-          offset: Number.isSafeInteger(Number(ev.offset)) ? Number(ev.offset) : current.content,
-          reasoningOffset: Number.isSafeInteger(Number(ev.reasoningOffset)) ? Number(ev.reasoningOffset) : current.reasoning,
-        };
-        dashboardMessageOffsets.set(assistantId, {
-          content: result.offset + contentDelta.length,
-          reasoning: result.reasoningOffset + reasoningDelta.length,
-        });
-        return result;
-      }
+      return dashboardAssistantStreams.project(ev, {
+        assistantId,
+        operationId: ev.operationId ?? streamContext.operationId ?? null,
+        sessionId: ev.sessionId ?? streamContext.sessionId ?? null,
+      });
     case "warning":
       return { kind: "warning", id, text: ev.content };
     case "error":
@@ -6984,6 +7325,23 @@ jobs.setChangeListener?.((change) => {
   broadcastDashboardEvent({ kind: "background-job-change", ...change });
 });
 
+// OpenCode-style process-local Session lanes. The existing operation runtime
+// remains the only model-loop owner; this coordinator only coalesces repeated
+// wakes and fences a provider turn against a changed session/workspace.
+const sessionRunCoordinator = createSessionRunCoordinator({
+  getLocation: () => ({ sessionId: activeConversationId, workspace: workspaceDir }),
+  onEvent: (event) => {
+    if (event.kind === "session-run.fenced") {
+      console.error(`[launcher] session run fenced: ${event.run?.runId || "unknown"}`);
+    }
+  },
+});
+
+// Context Epoch keeps the model-visible system baseline separate from the
+// append-only session history. It is intentionally process-local here; the
+// session JSONL remains the source of durable history and receipts.
+const contextEpochRuntime = createContextEpochRuntime();
+
 const operationRuntime = createOperationRuntime({
   broadcast: broadcastDashboardEvent,
   stopOwned: (operationId, options) => jobs.stopOwned(operationId, options),
@@ -6991,11 +7349,48 @@ const operationRuntime = createOperationRuntime({
   revokeAuthorization: (operation) => {
     clearMessageSendContext();
     if (operation?.id) runtimeInstallApprovals.delete(operation.id);
+    if (operation?.id) permissionFactRuntime.revoke({ operationId: operation.id });
   },
   getConversationId: () => activeConversationId,
   getWorkspace: () => workspaceDir,
   lifecycle: runtimeLifecycleHooks,
 });
+
+toolRepeatRuntime = createToolRepeatRuntime({
+  onRepeat: (event) => {
+    const operation = operationById.get(event.operationId) ?? operationRuntime.getActive?.();
+    if (!operation || operation.id !== event.operationId) return;
+    const fact = {
+      toolName: event.toolName,
+      argsHash: event.argsHash,
+      repeatCount: event.repeatCount,
+      action: event.action,
+      recordedAt: event.recordedAt,
+    };
+    operation.context.toolRepeats = [
+      ...(Array.isArray(operation.context.toolRepeats) ? operation.context.toolRepeats : []),
+      fact,
+    ].slice(-16);
+    if (operation.context.conversationId === activeConversationId) {
+      broadcastDashboardEvent({
+        kind: "tool-repeat",
+        operationId: operation.id,
+        sessionId: operation.context.conversationId,
+        toolName: fact.toolName,
+        argsHash: fact.argsHash,
+        repeatCount: fact.repeatCount,
+        action: fact.action,
+      });
+    }
+    void runtimeLifecycleHooks?.emit?.("tool.repeat", {
+      operationId: operation.id,
+      toolName: fact.toolName,
+      repeatCount: fact.repeatCount,
+      action: fact.action,
+    });
+  },
+});
+attachToolRepeatResultAugmenter();
 
 const publicActiveOperation = (operation) => operationRuntime.public(operation);
 function defaultRuntimeBindings() {
@@ -7007,6 +7402,7 @@ function defaultRuntimeBindings() {
   const moduleRoots = [...new Set(tools.filter((tool) => tool.kind === "node-module" && tool.status === "healthy").map((tool) => tool.metadata?.moduleRoot).filter(Boolean))];
   if (node) bindings.VISIONOX_NODE = node.executable;
   if (python) bindings.VISIONOX_PYTHON = python.executable;
+  if (npm) bindings.VISIONOX_NPM = npm.executable;
   if (moduleRoots.length > 0) bindings.NODE_PATH = moduleRoots.join(process.platform === "win32" ? ";" : ":");
   const runtimePaths = [...new Set([node, python, npm].map((tool) => tool?.executable ? dirname(tool.executable) : null).filter(Boolean))];
   if (runtimePaths.length > 0) bindings.PATH = `${runtimePaths.join(process.platform === "win32" ? ";" : ":")}${process.platform === "win32" ? ";" : ":"}${process.env.PATH || ""}`;
@@ -7018,25 +7414,123 @@ function defaultRuntimeEnvironmentRecords() {
     toolId: tool.id,
     kind: tool.kind,
     status: tool.status,
+    selected: true,
+    bound: true,
     reused: true,
     repaired: false,
     installed: false,
   }));
 }
+const bindOperationSessionRun = (operation, { replace = false } = {}) => {
+  if (!operation) return { accepted: false, code: "OPERATION_REQUIRED" };
+  const previousRunId = operation.context?.sessionRun?.runId;
+  if (replace && previousRunId) {
+    sessionRunCoordinator.finish(previousRunId, "cancelled", { operationId: operation.id, reason: "session_rebound" });
+  }
+  const sessionRun = sessionRunCoordinator.begin({
+    sessionId: operation.context?.conversationId ?? activeConversationId,
+    workspace: operation.context?.workspace ?? workspaceDir,
+    operationId: operation.id,
+    requestId: activeTurnRequestId || operation.id,
+    coalesce: false,
+  });
+  if (!sessionRun.accepted || !sessionRun.run?.runId) {
+    operation.finalState = "unknown";
+    operationRuntime.finish(operation, "unknown");
+    return sessionRun;
+  }
+  operationSessionIds.set(operation.id, operation.context?.conversationId ?? activeConversationId);
+  operation.context.sessionRun = {
+    runId: sessionRun.run.runId,
+    sessionId: sessionRun.run.sessionId,
+    locationFingerprint: sessionRun.run.locationFingerprint,
+  };
+  return sessionRun;
+};
 const beginActiveOperation = (kind) => {
   const operation = operationRuntime.begin(kind);
+  const sessionRun = bindOperationSessionRun(operation);
+  if (!sessionRun.accepted || !sessionRun.run?.runId) {
+    throw new Error(sessionRun.code || "SESSION_RUN_ACTIVE");
+  }
+  operationById.set(operation.id, operation);
+  while (operationSessionIds.size > 128) operationSessionIds.delete(operationSessionIds.keys().next().value);
+  while (operationById.size > 128) operationById.delete(operationById.keys().next().value);
   operationBySignal.set(operation.controller.signal, operation);
   operation.context.runtimeBindings = defaultRuntimeBindings();
   operation.context.runtimeEnvironments = defaultRuntimeEnvironmentRecords();
   return operation;
 };
 const finishActiveOperation = (operation) => {
-  const finished = operationRuntime.finish(operation);
-  if (finished) operationBySignal.delete(operation.controller.signal);
+  const runState = operation?.finalState
+    ?? (operation?.controller?.signal?.aborted ? "cancelled" : "completed");
+  if (operation?.context?.sessionRun?.runId) {
+    sessionRunCoordinator.finish(operation.context.sessionRun.runId, runState, { operationId: operation.id });
+  }
+  const finished = operationRuntime.finish(operation, runState);
+  if (finished) {
+    operationBySignal.delete(operation.controller.signal);
+    operationById.delete(operation.id);
+    toolRepeatRuntime?.close(operation.id);
+  }
   if (finished) runtimeInstallApprovals.delete(operation.id);
-  if (finished) operationSteeringRuntime.close(operation.id, { reason: `operation_${operation.state}` });
+  if (finished) {
+    operationSteeringRuntime.close(operation.id, { reason: `operation_${operation.state}` });
+    sessionInputAdmission.closeOperation(operation.id, { reason: `operation_${operation.state}` });
+  }
   return finished;
 };
+
+function scheduleQueuedSessionInputDrain(operation) {
+  const sessionId = operation?.context?.conversationId ?? null;
+  const workspace = operation?.context?.workspace ?? workspaceDir;
+  if (!sessionId || !workspace) return;
+  const next = sessionInputAdmission.promoteNextQueue(sessionId, {
+    operationId: operation.id,
+    workspace,
+    boundary: "next_turn",
+  });
+  const admissionError = sessionInputAdmission.lastError?.();
+  const hasPendingQueue = sessionInputAdmission.list(sessionId, { includeTerminal: false })
+    .some((input) => input.delivery === "queue"
+      && (!input.workspace || input.workspace === sessionInputAdmission.workspaceKey(workspace)));
+  if (admissionError && hasPendingQueue) {
+    console.error(`[launcher] queued session input promotion deferred: ${admissionError.error}`);
+    return;
+  }
+   if (!next) return;
+   queueMicrotask(async () => {
+     if (busy || activeConversationId !== sessionId || !sameWorkspacePath(workspaceDir, workspace)) {
+       sessionInputAdmission.resolve(next.id, "interrupted", busy ? "another_operation_started" : "session_or_workspace_changed", { operationId: operation.id });
+       return;
+     }
+     const dispatch = sessionInputAdmission.beginDispatch(next.id, { operationId: operation.id });
+     if (!dispatch?.ok) {
+       console.error(`[launcher] queued session input ${next.id} could not reserve dispatch: ${dispatch?.error || "unknown error"}`);
+       return;
+     }
+     try {
+       const result = await ctx.submitPrompt(next.text, null, null, {
+         requestId: next.requestId || next.id,
+         admittedInputId: next.id,
+         dispatchToken: dispatch.input.dispatchToken,
+         delivery: "queue",
+         attachmentIds: next.attachments,
+       });
+       if (result?.accepted) {
+         const dispatched = sessionInputAdmission.resolve(next.id, "dispatched", "prompt_accepted", { operationId: operation.id });
+         if (!dispatched?.ok) {
+           console.error(`[launcher] queued session input ${next.id} was accepted but dispatch state could not be persisted: ${dispatched?.error || "unknown error"}`);
+         }
+       } else {
+         sessionInputAdmission.resolve(next.id, "failed", result?.reason || "queued prompt was not accepted", { operationId: operation.id });
+       }
+     } catch (error) {
+       sessionInputAdmission.resolve(next.id, "unknown", error.message || String(error), { operationId: operation.id });
+       console.error(`[launcher] queued session input ${next.id} failed to start: ${error.message}`);
+     }
+  });
+}
 const refreshOperationContextScope = (operation) => operationRuntime.refreshScope(operation);
 
 function operationKindForPrompt(text, opts = {}) {
@@ -7172,6 +7666,31 @@ const interactionRuntime = createInteractionRuntime({
   ),
 });
 
+// OpenCode-style session input admission. This is deliberately only a
+// durable input ledger: promotion still happens at the existing loop's model
+// boundary and execution remains owned by the ordinary model loop.
+const sessionInputAdmission = createSessionInputAdmission({
+  initial: initialInteractionMetadata.ok ? initialInteractionMetadata.value?.promptInputs : [],
+  onChange: (inputs) => {
+    try {
+      activeSessionMetaStore.update((current) => ({
+        ...current,
+        promptInputs: inputs.filter((input) => input.sessionId === activeConversationId),
+      }));
+      trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, null);
+    } catch (error) {
+      trackPersistentStorageIssue("active-session-meta", activeSessionMetaFile, `session input admission could not be saved: ${error.message}`, "warning");
+      throw error;
+    }
+  },
+  onEvent: (event) => {
+    const prompt = recordPromptSteeringEvent({ prompt: event.input });
+    broadcastDashboardEvent(prompt
+      ? { ...event, entityType: "prompt", entityId: prompt.id, prompt }
+      : event);
+  },
+});
+
 function hasUserMessage() {
   return messages.some((m) => m.role === "user");
 }
@@ -7210,6 +7729,7 @@ const sessionRuntime = createSessionRuntime({
     return activeGoals;
   },
   getPrompts: () => activePromptEntities,
+  getPromptInputs: () => sessionInputAdmission.snapshot(),
   getIndexRetrievalMode: () => indexRetrievalMode,
   applyLoadedMetadata: (meta) => {
     activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
@@ -7222,6 +7742,7 @@ const sessionRuntime = createSessionRuntime({
     restoreActiveTodos(meta.todos);
     restoreActiveGoals(meta.goals);
     restoreActivePromptEntities(meta.prompts);
+    sessionInputAdmission.restore(meta.promptInputs);
     preparedDocumentRegistry.restore(meta.preparedDocuments, { replace: true, notifyChange: false });
     const modeRestore = applyModeForSessionMeta(meta);
     if (!modeRestore.changed && client) rebuildLoopPreservingContext(client, workspaceDir);
@@ -7273,6 +7794,25 @@ const writeActiveSessionMeta = (patch = {}) => sessionRuntime.writeMeta(patch);
 const persistActiveConversationIdentity = () => sessionRuntime.persistConversationIdentity();
 const loadActiveSession = () => sessionRuntime.load();
 
+// Steering instructions are intentionally not replayed after a process
+// restart. Keep the durable prompt entity, but close any queued instruction
+// with an explicit not_applied fact so the Dashboard and recovery audit agree.
+const restoredSteering = operationSteeringRuntime.restore(
+  initialInteractionMetadata.ok ? initialInteractionMetadata.value?.prompts : [],
+  { reason: "process_restarted" },
+);
+const restoredSteeringById = new Map(restoredSteering.map((entry) => [entry.id, entry]));
+const staleQueuedSteering = (Array.isArray(initialInteractionMetadata.value?.prompts) ? initialInteractionMetadata.value.prompts : [])
+  .filter((entry) => entry?.status === "queued" && restoredSteeringById.has(entry.id));
+if (staleQueuedSteering.length > 0) {
+  void writeActiveSessionMeta({
+    prompts: (initialInteractionMetadata.value?.prompts ?? []).map((entry) => {
+      const restored = restoredSteeringById.get(entry?.id);
+      return restored ? { ...entry, status: restored.status, resolution: restored.resolution } : entry;
+    }),
+  });
+}
+
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
   clearActiveModals("session_reset");
   await finalizeActiveSession();
@@ -7284,6 +7824,7 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   activeTodos = [];
   activeGoals = [];
   activePromptEntities = [];
+  sessionInputAdmission.restore([]);
   clearTutorMode();
   clearLearningMode();
   resetPlanRefs();
@@ -8086,12 +8627,127 @@ function closeInteraction(interactionId) {
   return interactionRuntime.close(interactionId);
 }
 
+function permissionRequestForGate(request) {
+  if (!request || !["run_command", "run_background"].includes(request.kind)) return null;
+  const operation = operationRuntime.getActive();
+  const payload = request.payload && typeof request.payload === "object" ? request.payload : {};
+  const command = typeof payload.command === "string" ? payload.command.trim() : "";
+  if (!command) return null;
+  return permissionFactRequest({
+    operationId: operation?.id ?? null,
+    sessionId: operation?.context?.conversationId ?? activeConversationId,
+    workspace: operation?.context?.workspace ?? workspaceDir,
+    toolName: request.kind,
+    args: { command },
+    command,
+    requiresApproval: true,
+  });
+}
+
+function configuredPermissionVerdict(request) {
+  const permissionRequest = permissionRequestForGate(request);
+  if (!permissionRequest) return null;
+  try {
+    // Config can be edited from the Dashboard or by an administrator while
+    // the process is alive. Refresh only at the authorization boundary.
+    permissionRuleRuntime.setRules(readPermissionRules(readConfig(configPath)));
+  } catch (error) {
+    console.error(`[launcher] permission rules refresh failed: ${error.message}`);
+    return null;
+  }
+  const result = permissionRuleRuntime.evaluate(permissionRequest);
+  if (!result.matched || !result.rule) return null;
+  const operation = operationRuntime.getActive();
+  if (operation?.context) {
+    recordOperationAuthorizationFact(operation.context, {
+      factId: result.rule.ruleId,
+      decision: result.decision,
+      scope: result.rule.scope,
+      toolName: permissionRequest.toolName,
+      // The durable receipt gets only a rule fingerprint, never the command
+      // or a path embedded in a configured argument pattern.
+      rule: { kind: "configured", value: result.rule.patternFingerprint },
+      reusable: result.decision !== "ask",
+      source: result.rule.source || "config",
+      reason: result.reason,
+      createdAt: result.rule.createdAt,
+    });
+  }
+  if (result.decision === "deny") {
+    return {
+      type: "deny",
+      authorizationRuleId: result.rule.ruleId,
+      denyContext: result.reason || "configured permission rule denied this command",
+    };
+  }
+  if (result.decision === "allow") {
+    return { type: "run_once", authorizationRuleId: result.rule.ruleId };
+  }
+  // An explicit ask rule is a barrier: auto/yolo/admin may not bypass it.
+  return { forceAsk: true, authorizationRuleId: result.rule.ruleId };
+}
+
+function recordPermissionAuditFact(event) {
+  const request = event?.payload ? {
+    kind: event.kind,
+    payload: event.payload,
+  } : null;
+  const permissionRequest = permissionRequestForGate(request);
+  if (!permissionRequest) return null;
+  const operation = operationRuntime.getActive();
+  const alwaysAllow = event.type === "tool.confirm.always_allow";
+  const decision = event.type === "tool.confirm.deny" ? "deny" : "allow";
+  const fact = permissionFactRuntime.record({
+    ...permissionRequest,
+    scope: alwaysAllow ? "project" : "operation",
+    decision,
+    rule: alwaysAllow
+      ? { kind: "prefix", value: event.prefix || permissionRequest.command.split(/\s+/u)[0] }
+      : { kind: "exact" },
+    reusable: alwaysAllow || decision === "deny",
+    source: "pause-gate",
+    reason: alwaysAllow ? "user-approved-project-prefix" : decision === "deny" ? "user-denied" : "user-approved-once",
+  });
+  if (operation?.context) recordOperationAuthorizationFact(operation.context, fact);
+  return fact;
+}
+
+function rememberedPermissionVerdict(request) {
+  const permissionRequest = permissionRequestForGate(request);
+  if (!permissionRequest) return null;
+  const result = permissionFactRuntime.evaluate(permissionRequest);
+  if (result.fact && operationRuntime.getActive()?.context) {
+    recordOperationAuthorizationFact(operationRuntime.getActive().context, result.fact);
+  }
+  if (result.decision === "allow") return { type: "run_once", authorizationFactId: result.fact?.factId ?? null };
+  if (result.decision === "deny") return { type: "deny", denyContext: "当前 operation 已记录相同请求的拒绝事实" };
+  return null;
+}
+
 // Register pauseGate listener — maps tool confirmation requests to dashboard modals.
 pauseGate.on((request) => {
   const { id, kind, payload } = request;
 
+  // Kimi-style configured rules are evaluated before remembered approvals and
+  // before edit-mode auto resolution. A static deny/ask remains authoritative
+  // even when the user is in yolo/admin mode.
+  const configured = configuredPermissionVerdict(request);
+  if (configured?.type === "deny" || configured?.type === "run_once") {
+    pauseGate.resolve(id, configured);
+    return;
+  }
+  const forceAsk = configured?.forceAsk === true;
+
+  // Reuse only explicitly reusable facts (project prefixes or same-operation
+  // denials). A one-time approval remains an audit fact and is never replayed.
+  const remembered = rememberedPermissionVerdict(request);
+  if (remembered) {
+    pauseGate.resolve(id, remembered);
+    return;
+  }
+
   // 1. Auto-resolve policy (e.g., plan_checkpoint auto-continues in auto/yolo/admin)
-  const auto = autoResolveVerdict(request, loadEditMode(configPath));
+  const auto = forceAsk ? null : autoResolveVerdict(request, loadEditMode(configPath));
   if (auto) {
     pauseGate.resolve(id, auto);
     return;
@@ -8143,6 +8799,12 @@ function appendAuditEntry(entry) {
 // Wire audit listener for tool confirmations (allow/deny/always_allow)
 pauseGate.setAuditListener((event) => {
   appendAuditEntry({ ts: Date.now(), action: "tool-confirm", payload: event });
+  try {
+    const fact = recordPermissionAuditFact(event);
+    if (fact) console.error(`[launcher] permission fact recorded: ${fact.scope}/${fact.decision}/${fact.toolName}`);
+  } catch (error) {
+    console.error(`[launcher] permission fact recording failed: ${error.message}`);
+  }
 });
 
 // ── Slash command registry ──────────────────────────────────────
@@ -8248,6 +8910,7 @@ const ctx = {
   getSessionName: () => "desktop",
   getPersistentStorageIssues: () => runtimeIssues.listUserActionable(),
   getRuntimeCapabilities: () => runtimeCapabilities.listCapabilities(),
+  getToolActivationPolicy: () => publicToolActivationPolicy(currentToolActivationPolicy()),
   repairRuntimeCapability: (runtimeId) => runtimeCapabilities.repairCapability(runtimeId, {
     operationId: operationRuntime.getActive()?.id ?? null,
     sessionId: activeConversationId,
@@ -8464,6 +9127,16 @@ const ctx = {
     provenance: providerProvenance,
     env: process.env,
   }),
+  getPermissionFacts: () => permissionFactRuntime.list({
+    sessionId: activeConversationId,
+    workspace: workspaceDir,
+  }),
+  getPermissionRules: () => {
+    try {
+      permissionRuleRuntime.setRules(readPermissionRules(readConfig(configPath)));
+    } catch {}
+    return permissionRuleRuntime.list();
+  },
   recordProviderProvenance,
   resolveShellConfirm: (choice, gateId) => {
     const prefix = activeModal?.allowPrefix ?? "";
@@ -8760,6 +9433,9 @@ const ctx = {
   // race conditions where two rapid calls both pass the busy check.
   submitPrompt: async (text, sessionName, images, opts = {}) => {
     const requestId = typeof opts.requestId === "string" ? opts.requestId.trim().slice(0, 160) : "";
+    const admittedInputId = typeof opts.admittedInputId === "string" ? opts.admittedInputId.trim().slice(0, 160) : "";
+    const dispatchToken = typeof opts.dispatchToken === "string" ? opts.dispatchToken.trim().slice(0, 200) : "";
+    const requestedDelivery = opts.delivery === "steer" || opts.delivery === "queue" ? opts.delivery : null;
     const receiptDecision = promptRequestReceiptDecision(acceptedPromptRequest(requestId), launcherBootId);
     if (receiptDecision.action === "reuse-completion") {
       return {
@@ -8797,10 +9473,65 @@ const ctx = {
       };
     }
     if (busy) {
+      if (admittedInputId) {
+        return { accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy while an admitted prompt is being dispatched" };
+      }
+      if (requestedDelivery) {
+        const activeOperation = operationRuntime?.getActive?.();
+        const inlineImages = Array.isArray(images) ? images : [];
+        const queuedText = String(text ?? "").trim();
+        if (sessionName || queuedText.startsWith("/")) {
+          return { accepted: false, code: "SESSION_INPUT_COMMAND_UNSUPPORTED", reason: "运行中的本地命令和会话切换不能排队，请等待当前任务结束后重新执行。" };
+        }
+        const incomingAttachmentIds = Array.isArray(opts.attachmentIds)
+          ? [...new Set(opts.attachmentIds.filter((id) => /^att_[0-9a-f-]{20,}$/i.test(String(id ?? ""))))]
+          : [];
+        if (inlineImages.length > 0) {
+          return { accepted: false, code: "SESSION_INPUT_MEDIA_REQUIRES_ATTACHMENT", reason: "忙碌任务中的排队输入请先上传附件，再提交附件 ID。" };
+        }
+        const admitted = sessionInputAdmission.admit({
+          id: opts.inputId || requestId || undefined,
+          requestId: requestId || null,
+          sessionId: activeConversationId,
+          operationId: activeOperation?.id ?? null,
+          workspace: workspaceDir,
+          text,
+          attachments: incomingAttachmentIds,
+          delivery: requestedDelivery,
+        });
+        if (!admitted.ok) return { accepted: false, code: admitted.code, reason: admitted.error };
+        return {
+          accepted: true,
+          queued: true,
+          delivery: requestedDelivery,
+          inputId: admitted.input.id,
+          duplicate: admitted.duplicate === true,
+          status: admitted.input.status,
+          requestId: requestId || null,
+        };
+      }
       return { accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy with a turn" };
     }
     if (sessionMutationInFlight) {
       return { accepted: false, busy: true, code: "SESSION_MUTATION_ACTIVE", reason: "session recovery is in progress" };
+    }
+
+    if (admittedInputId) {
+      const admitted = sessionInputAdmission.list(activeConversationId)
+        .find((entry) => entry.id === admittedInputId);
+       if (!admitted || !["promoted", "dispatching"].includes(admitted.status) || admitted.delivery !== "queue") {
+         return { accepted: false, code: "SESSION_INPUT_NOT_DISPATCHABLE", reason: "排队输入已失效或不属于当前会话。" };
+       }
+       if (admitted.status === "dispatching" && (!dispatchToken || admitted.dispatchToken !== dispatchToken)) {
+         return { accepted: false, code: "SESSION_INPUT_REPLAY", reason: "排队输入已经预约派发，缺少有效的一次性派发令牌。" };
+       }
+       if (admitted.requestId && requestId && admitted.requestId !== requestId) {
+         return { accepted: false, code: "SESSION_INPUT_REPLAY", reason: "排队输入已绑定其他请求，禁止使用新的请求标识重复派发。" };
+       }
+      if (admitted.workspace && admitted.workspace !== sessionInputAdmission.workspaceKey(workspaceDir)) {
+        sessionInputAdmission.resolve(admitted.id, "interrupted", "workspace_changed");
+        return { accepted: false, code: "SESSION_INPUT_WORKSPACE_CHANGED", reason: "排队输入所属工作区已变化，未自动执行。" };
+      }
     }
 
     const trimmed = (text || "").trim();
@@ -8987,8 +9718,18 @@ ${modeList}
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
+          // A named-session switch replaces the admission ledger scope just
+          // like it replaces the model history. Restore the target session's
+          // durable inputs before any queued drain can run.
+          sessionInputAdmission.restore(sessionMeta.promptInputs);
           interactionRuntime.restore(sessionMeta.interactions, { replaceSessionId: activeConversationId });
           refreshOperationContextScope(operation);
+          const reboundSessionRun = bindOperationSessionRun(operation, { replace: true });
+          if (!reboundSessionRun.accepted || !reboundSessionRun.run?.runId) {
+            const error = new Error(reboundSessionRun.code || "SESSION_RUN_ACTIVE");
+            error.code = reboundSessionRun.code || "SESSION_RUN_ACTIVE";
+            throw error;
+          }
           activeContextRecoveryHandle = typeof sessionMeta.contextRecoveryHandle === "string" && sessionMeta.contextRecoveryHandle.trim()
             ? sessionMeta.contextRecoveryHandle.trim()
             : null;
@@ -9616,7 +10357,10 @@ ${modeList}
       // When committed=true, the outer finally skips busy-reset because
       // the fire-and-forget's own finally handles it.
       committed = true;
-      (async () => {
+      dashboardEventContext.run({
+        operationId: operation.id,
+        sessionId: operation.context?.conversationId ?? activeConversationId,
+      }, async () => {
         if (pendingUploads.length > 0) {
           await attachmentRuntime.releasePendingUploads(pendingUploads).catch((error) => {
             console.error(`[launcher] committed media upload cleanup failed: ${error.message}`);
@@ -9634,9 +10378,23 @@ ${modeList}
         let contextRecoveryHandle = null;
         let isolationRestoreError = null;
         let finalizationPersistenceError = null;
+        let finalizationPersisted = false;
         let executionStarted = false;
+        let contextRequestSequence = 0;
+        let latestMeasuredContext = null;
         const loopTelemetry = createLoopTelemetry({ startedAt: turnStartedAt });
-        const turnReceipt = createTurnReceipt({ turnId: assistantId, requestId, startedAt: turnStartedAt });
+        const turnReceipt = createTurnReceipt({
+          turnId: assistantId,
+          requestId,
+          operationId: operation.id,
+          sessionId: operation.context?.conversationId ?? activeConversationId,
+          startedAt: turnStartedAt,
+        });
+        const contextCalibrationScope = {
+          operationId: operation.id,
+          sessionId: operation.context?.conversationId ?? activeConversationId,
+          model: loop?.model ?? effectiveModelConfig(config).model,
+        };
         if (attachmentWarnings.length > 0) {
           turnReceipt.recordMedia({
             mediaReduced: true,
@@ -9663,6 +10421,7 @@ ${modeList}
         let taskWarnings = [];
         let contextWarningEmitted = false;
         let taskState = null;
+        let artifactDeliveryActive = false;
         let artifactFiles = [];
         let loopInput = text;
         let augmentedLoopInput = null;
@@ -9678,6 +10437,7 @@ ${modeList}
           if (absolute) artifactBaselines.set(process.platform === "win32" ? absolute.toLowerCase() : absolute, baseline);
         }
         operation.context.artifactBaseline = [...artifactBaselines.entries()].map(([path, baseline]) => ({ path, baseline }));
+        operation.context.calibrationUntrusted = false;
         const requestedExistingOutputKeys = new Set();
         const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
         const turnArtifactPaths = new Set();
@@ -9738,11 +10498,92 @@ ${modeList}
           while (true) {
             let budgetForcedSummary = false;
             let sawToolActivity = false;
-            const modelContextProjection = projectModelContext({
-              history: loop?.log?.toMessages?.() ?? [],
+            const providerCapabilities = resolveProviderModelCapabilities(getActiveProvider(config), loop?.model);
+            const baseContextBudget = loop?.contextStatus?.() ?? {};
+            const calibrationHistory = buildContextCalibrationMessages(
+              loop,
+              loopInput,
+              materializedImages,
+              materializedMediaParts,
+            );
+            if (!operation.controller.signal.aborted && operation.context?.sessionRun?.runId) {
+              const fence = sessionRunCoordinator.assertCurrent(operation.context.sessionRun.runId, {
+                sessionId: activeConversationId,
+                workspace: workspaceDir,
+              });
+              if (!fence.ok) {
+                operation.finalState = "unknown";
+                const error = new Error(fence.reason || "session location changed while the operation was running");
+                error.code = fence.code || "SESSION_LOCATION_CHANGED";
+                error.recovery = {
+                  expected: fence.expected ?? null,
+                  actual: fence.actual ?? null,
+                };
+                throw error;
+              }
+            }
+            const systemContextEntries = calibrationHistory
+              .filter((entry) => entry?.role === "system")
+              .map((entry) => typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content ?? ""))
+              .filter(Boolean);
+            const contextEpoch = contextEpochRuntime.prepare({
+              sessionId: operation.context?.conversationId ?? activeConversationId,
+              workspace: workspaceDir,
+              baseline: systemContextEntries[0] ?? "",
+              snapshot: {
+                system: systemContextEntries.map((entry) => entry.slice(0, 32_000)),
+                model: loop?.model ?? null,
+                provider: getActiveProvider(config)?.type ?? null,
+                modalities: providerCapabilities.inputModalities ?? [],
+              },
+              baselineSeq: contextRequestSequence,
+            });
+            if (contextEpoch.action === "blocked") {
+              operation.finalState = "unknown";
+              const error = new Error(contextEpoch.reason || "context epoch location changed");
+              error.code = contextEpoch.code || "CONTEXT_EPOCH_LOCATION_CHANGED";
+              throw error;
+            }
+            operation.context.contextEpoch = contextEpoch.epoch;
+            if (contextEpoch.action === "replaced") operation.context.calibrationUntrusted = true;
+            const requestShapeFingerprint = contextRequestShapeFingerprint({
+              toolSpecs: Array.isArray(loop?.prefix?.toolSpecs) ? loop.prefix.toolSpecs : [],
+            });
+            const baseModelContextProjection = projectModelContext({
+              history: calibrationHistory,
               operation: operation.context,
-              providerCapabilities: resolveProviderModelCapabilities(getActiveProvider(config), loop?.model),
-              contextBudget: loop?.contextStatus?.() ?? {},
+              providerCapabilities,
+              contextBudget: baseContextBudget,
+            });
+            const measuredContext = contextSizeCalibration.get({
+              ...contextCalibrationScope,
+              model: loop?.model ?? contextCalibrationScope.model,
+              history: calibrationHistory,
+              requestShapeFingerprint,
+            });
+            const measuredContextBudget = measuredContext
+              ? {
+                ...baseContextBudget,
+                measuredPromptTokens: measuredContext.measuredPromptTokens,
+                measuredMessageCount: measuredContext.measuredMessageCount,
+                measuredRequestId: measuredContext.requestId,
+                measuredAt: measuredContext.measuredAt,
+              }
+              : baseContextBudget;
+            const modelContextProjection = measuredContext
+              ? projectModelContext({
+                history: calibrationHistory,
+                operation: operation.context,
+                providerCapabilities,
+                contextBudget: measuredContextBudget,
+              })
+              : baseModelContextProjection;
+            const contextMeasurementRequest = contextSizeCalibration.begin({
+              ...contextCalibrationScope,
+              model: loop?.model ?? contextCalibrationScope.model,
+              requestId: `${requestId || operation.id}:context:${++contextRequestSequence}`,
+              history: calibrationHistory,
+              requestShapeFingerprint,
             });
             if (modelContextProjection.error && !contextWarningEmitted && opts.isolated !== true) {
               contextWarningEmitted = true;
@@ -9759,12 +10600,30 @@ ${modeList}
               requestId: requestId || operation.id,
               receipt: turnReceipt,
               contextProjection: modelContextProjection,
+              contextEpoch: operation.context.contextEpoch,
               publish: opts.isolated === true ? null : (event) => broadcastDashboardEvent(event),
             };
             for await (const ev of modelRequestObserver.iterate(requestContext, () => loop.step(loopInput))) {
               operation.progress = loopTelemetry.observe(ev);
+              const phaseUpdate = turnReceipt.observePhase(ev);
+              if (phaseUpdate.accepted && phaseUpdate.changed && opts.isolated !== true) {
+                broadcastDashboardEvent({ kind: "execution-phase", ...phaseUpdate.state });
+              }
+              if (ev.role === "context_compacted") {
+                contextEpochRuntime.requestReplacement(operation.context?.conversationId ?? activeConversationId, "compaction");
+                contextSizeCalibration.invalidate(contextCalibrationScope, "compaction");
+                latestMeasuredContext = null;
+              }
+              if (["output_recovery", "output_recovery_required"].includes(ev.role)) {
+                operation.context.calibrationUntrusted = true;
+              }
+              let normalizedToolOutcome = null;
               if (["tool_queued", "tool_start", "tool"].includes(ev.role)) {
                 const progressEvent = projectToolProgressEvent(ev, { assistantId });
+                if (ev.role === "tool") {
+                  normalizedToolOutcome = normalizeToolOutcome(ev.content, { status: ev.toolStatus });
+                  for (const warning of normalizedToolOutcome.warnings ?? []) turnReceipt.recordWarning(warning);
+                }
                 turnReceipt.observeToolProgress({
                   toolCallId: progressEvent?.toolCallId ?? ev.callId,
                   name: progressEvent?.toolName ?? ev.toolName,
@@ -9775,7 +10634,32 @@ ${modeList}
               if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);
               if (ev.role === "tool") {
                 sawToolActivity = true;
-                const toolSucceeded = toolResultSucceeded(ev.content, { status: ev.toolStatus });
+                const toolSucceeded = normalizedToolOutcome?.ok === true && toolResultSucceeded(ev.content, { status: ev.toolStatus });
+                if (!toolSucceeded) {
+                  const failure = recordOperationToolFailure(operation.context, {
+                    toolCallId: ev.callId ?? ev.toolCallId,
+                    toolName: ev.toolName,
+                    args: ev.toolArgs,
+                    outcome: normalizedToolOutcome,
+                    attempt: ev.attempt,
+                    maxAttempts: modelRuntimeOptions(effectiveModelConfig(config)).sameFailureClassLimit ?? 2,
+                  });
+                  turnReceipt.recordToolFailure(failure);
+                } else {
+                  const priorFailure = recordOperationToolSuccess(operation.context, {
+                    toolName: ev.toolName,
+                    args: ev.toolArgs,
+                  });
+                  if (priorFailure) {
+                    const recovery = recordOperationRecovery(operation.context, {
+                      toolCallId: ev.callId ?? ev.toolCallId,
+                      toolName: ev.toolName,
+                      recovery: "tool_succeeded_after_failure",
+                      fromFingerprint: priorFailure.fingerprint,
+                    });
+                    turnReceipt.recordRecovery(recovery);
+                  }
+                }
                 if (ev.toolName === "submit_plan" && !toolSucceeded) pendingPlan = null;
                 const toolArgs = parseMaybeJsonObject(ev.toolArgs);
                 const mutatingTool = /^(?:write_file|append_file|edit_file|multi_edit|save_file|save_last_assistant_response|mark_step_complete)$/i.test(String(ev.toolName || ""))
@@ -9795,7 +10679,7 @@ ${modeList}
                   const info = generatedArtifactFileInfo(artifactPath);
                   const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
                   const isRequestedExistingOutput = requestedExistingOutputKeys.has(key);
-                  if (!info || info.size <= 0 || (!isRequestedExistingOutput && info.mtimeMs < turnStartedAt - 2000)) continue;
+                  if (!info || info.size <= 0 || (!isRequestedExistingOutput && info.mtimeMs < turnStartedAt)) continue;
                   if (turnArtifactPaths.has(key)) continue;
                   const baseline = artifactBaselines.get(key);
                   const changedThisTurn = !baseline || info.mtimeMs > baseline.mtimeMs || info.size !== baseline.size;
@@ -9862,7 +10746,10 @@ ${modeList}
                 } catch {}
               }
 
-              const dashev = loopEventToDashboard(ev, assistantId);
+              const dashev = loopEventToDashboard(ev, assistantId, {
+                operationId: operation.id,
+                sessionId: operation.context?.conversationId ?? activeConversationId,
+              });
               if (dashev) dashev.progress = loopTelemetry.snapshot();
               if (dashev?.toolCallId && dashev?.status) {
                 void runtimeLifecycleHooks.emit(`tool.${dashev.status}`, {
@@ -9880,7 +10767,18 @@ ${modeList}
               if (opts.isolated !== true) broadcastDashboardEvent(dashev);
 
               if (ev.role === "assistant_delta") {
-                assistantText += ev.content ?? "";
+                if (dashev?.streamReset === true) assistantText = "";
+                if (dashev?.kind === "resync-required") {
+                  // The streamed prefix is no longer trustworthy after an
+                  // offset gap. Wait for the canonical final event instead of
+                  // persisting a potentially duplicated or stale prefix.
+                  assistantText = "";
+                } else if (dashev?.kind === "assistant_delta") {
+                  // Accumulate only deltas accepted by the projector. This
+                  // prevents duplicate/late chunks from being persisted even
+                  // when the raw model event is still present in the loop.
+                  assistantText += dashev.contentDelta ?? "";
+                }
               }
               if (ev.role === "error") {
                 // A protocol or transport failure invalidates streamed partial text.
@@ -9890,6 +10788,29 @@ ${modeList}
                 turnError ??= new Error(modelError);
               }
               if (ev.role === "assistant_final") {
+                const actualRequestShapeFingerprint = contextRequestShapeFingerprint({
+                  toolSpecs: Array.isArray(loop?.prefix?.toolSpecs) ? loop.prefix.toolSpecs : [],
+                });
+                const measured = operation.context?.calibrationUntrusted === true
+                  ? (contextSizeCalibration.invalidate(contextCalibrationScope, "request_shape_changed"), { accepted: false, reason: "request_shape_changed" })
+                  : contextSizeCalibration.record({
+                    ...contextCalibrationScope,
+                    model: loop?.model ?? contextCalibrationScope.model,
+                    requestId: contextMeasurementRequest.requestId,
+                    historyFingerprint: contextMeasurementRequest.historyFingerprint,
+                    requestShapeFingerprint: actualRequestShapeFingerprint,
+                    usage: ev.usage,
+                  });
+                if (operation.context) operation.context.calibrationUntrusted = false;
+                if (measured.accepted) {
+                  latestMeasuredContext = {
+                    source: "measured",
+                    promptTokens: measured.promptTokens,
+                    messageCount: measured.messageCount,
+                    requestId: measured.requestId,
+                    measuredAt: measured.measuredAt,
+                  };
+                }
                 modelRequestObserver.onResult(normalizeProviderResult({
                   requestId: requestId || operation.id,
                   attempt: ev.attempt,
@@ -9930,6 +10851,8 @@ ${modeList}
             turnReceipt.recordContext({
               ...projectedContextStatus,
               estimatedTokens: Math.max(projectedContextStatus.estimatedTokens ?? 0, modelContextProjection.estimatedTokens),
+              estimatedTokensSource: latestMeasuredContext?.source ?? modelContextProjection.measurement?.source ?? "estimated",
+              measurement: latestMeasuredContext ?? modelContextProjection.measurement ?? null,
               resourceRefs: [...(projectedContextStatus.resourceRefs ?? []), ...modelContextProjection.resources.map((item) => item.resourceId)],
               contextOverflow: Boolean(modelContextProjection.error),
               droppedItems: modelContextProjection.droppedItems,
@@ -10060,7 +10983,7 @@ ${modeList}
             }
             break;
           }
-          const artifactDeliveryActive = shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && activePlanBelongsToRequest(activeTurnRequestId) });
+          artifactDeliveryActive = shouldEnforceArtifactDelivery({ required: artifactRequest.required, planningOnly: planningOnlyRequest, executionStarted, planApproved: !planningOnlyRequest && activePlanBelongsToRequest(activeTurnRequestId) });
           if (artifactRequest.required && artifactDeliveryActive && turnArtifactPaths.size === 0 && !operation.controller.signal.aborted) {
             artifactIncomplete = true;
             if (requestedOutputPaths.length > 0) {
@@ -10092,7 +11015,17 @@ ${modeList}
             activeContextRecoveryHandle = null;
             contextRecoveryHandle = null;
           }
-          taskWarnings = detectTaskWarnings(assistantText);
+          const toolFailureWarnings = (operation.context?.toolFailures ?? [])
+            .slice(-4)
+            .map((failure) => {
+              const action = failure.repeatFailureBlocked ? "同类失败已达到建议上限，请切换工具或调整参数" : failure.retryable ? "可重试或切换工具" : "请检查工具结果";
+              return `${failure.toolName} 工具失败（${failure.code}），${action}`;
+            });
+          const recoveryWarnings = (operation.context?.recoveries ?? []).length > 0
+            ? [`已从工具失败中恢复 ${operation.context.recoveries.length} 次`]
+            : [];
+           taskWarnings = detectTaskWarnings(assistantText);
+           taskWarnings = [...new Set([...taskWarnings, ...(turnReceipt.snapshot().warnings ?? []), ...toolFailureWarnings, ...recoveryWarnings])].slice(0, 8);
           taskState = deriveTaskState({
             planningOnly: planningOnlyRequest,
             executionStarted,
@@ -10102,13 +11035,10 @@ ${modeList}
             warnings: taskWarnings,
           });
           for (const runtime of operation.context?.runtimeEnvironments ?? []) turnReceipt.recordRuntime(runtime);
-          turnReceipt.complete({
-            ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
-            taskState,
-            artifactIncomplete,
-            interventionPaused,
-            continuationNeeded,
-          });
+          // Final completion is committed after cleanup and the artifact
+          // rescan below.  Publishing a terminal receipt here would allow a
+          // later cleanup failure or missing artifact to be hidden by an
+          // already-committed "completed" phase.
           if (taskWarnings.length > 0 && !interventionPaused && !artifactIncomplete) {
             broadcastDashboardEvent({
               kind: "warning",
@@ -10117,10 +11047,14 @@ ${modeList}
             });
           }
           artifactFiles = Array.from(turnArtifactFiles.values());
-          dashboardMessageOffsets.delete(assistantId);
+          dashboardAssistantStreams.reset(assistantId, {
+            operationId: operation.id,
+            sessionId: operation.context?.conversationId ?? activeConversationId,
+          });
           // Push only once, after the loop finishes, to avoid duplicates
           // from multi-iteration tool-call turns and DeepSeek thinking phases
           if (assistantText && opts.isolated !== true) {
+            turnReceipt.recordAuthorizationFacts(operation.context?.authorizationFacts);
             const receiptSnapshot = turnReceipt.snapshot();
             pushMessage({
               id: assistantId,
@@ -10215,7 +11149,78 @@ ${modeList}
               }
               if (opts.isolated !== true) {
                 for (const runtime of operation.context?.runtimeEnvironments ?? []) turnReceipt.recordRuntime(runtime);
+                const previousArtifactState = turnReceipt.snapshot().artifactEvidence.map((entry) => ({
+                  status: entry.status,
+                  verified: entry.verified,
+                  files: (entry.files ?? []).map((file) => ({ path: file.path, status: file.status, size: file.size, mtimeMs: file.mtimeMs })),
+                }));
+                const previousTaskState = taskState;
+                 const preservedArtifactPaths = requestedOutputPaths
+                   .map((path) => rememberGeneratedArtifactPath(path))
+                   .filter(Boolean);
+                 const rescannedArtifactEvidence = filterTemporaryArtifactEvidence(
+                   rescanArtifactEvidence(turnReceipt.snapshot().artifactEvidence),
+                   { preservePaths: preservedArtifactPaths },
+                 );
+                turnReceipt.replaceArtifactEvidence(rescannedArtifactEvidence);
+                const finalArtifactFiles = rescannedArtifactEvidence.flatMap((entry) => entry.files ?? []);
+                artifactFiles = finalArtifactFiles;
+                const requestedArtifactKeys = new Set(requestedOutputPaths
+                  .map((path) => rememberGeneratedArtifactPath(path))
+                  .filter(Boolean)
+                  .map((path) => process.platform === "win32" ? path.toLowerCase() : path));
+                const finalArtifactVerified = requestedArtifactKeys.size > 0
+                  ? [...requestedArtifactKeys].every((key) => finalArtifactFiles.some((file) => {
+                    const fileKey = process.platform === "win32" ? String(file.path ?? "").toLowerCase() : String(file.path ?? "");
+                    return fileKey === key && file.status === "verified";
+                  }))
+                  : finalArtifactFiles.some((file) => file.status === "verified");
+                if (artifactRequest.required && artifactDeliveryActive && !finalArtifactVerified && !operation.controller.signal.aborted) {
+                  artifactIncomplete = true;
+                  if (!taskWarnings.includes("最终产物校验未通过，任务未确认完成")) taskWarnings = [...taskWarnings, "最终产物校验未通过，任务未确认完成"].slice(0, 8);
+                  taskState = deriveTaskState({
+                    planningOnly: planningOnlyRequest,
+                    executionStarted,
+                    interventionPaused,
+                    continuationNeeded,
+                    artifactIncomplete,
+                    warnings: taskWarnings,
+                  });
+                }
+                turnReceipt.recordAuthorizationFacts(operation.context?.authorizationFacts);
+                for (const repeat of operation.context?.toolRepeats ?? []) turnReceipt.recordToolRepeat(repeat);
+                turnReceipt.complete({
+                  ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
+                  taskState,
+                  artifactIncomplete,
+                  interventionPaused,
+                  continuationNeeded,
+                });
                 const finalizationReceipt = turnReceipt.snapshot();
+                const nextArtifactState = finalizationReceipt.artifactEvidence.map((entry) => ({
+                  status: entry.status,
+                  verified: entry.verified,
+                  files: (entry.files ?? []).map((file) => ({ path: file.path, status: file.status, size: file.size, mtimeMs: file.mtimeMs })),
+                }));
+                if (assistantText && (previousTaskState !== taskState || JSON.stringify(previousArtifactState) !== JSON.stringify(nextArtifactState))) {
+                  broadcastDashboardEvent({
+                    kind: "assistant_final",
+                    id: assistantId,
+                    correction: true,
+                    revision: "artifact-rescan",
+                    text: assistantText,
+                    forcedSummary: continuationNeeded,
+                    planIncomplete: continuationNeeded,
+                    artifactIncomplete,
+                    taskState,
+                    warnings: taskWarnings,
+                    artifactFiles,
+                    interventionChoice,
+                    recoveryHandle: contextRecoveryHandle,
+                    progress: loopTelemetry.snapshot(),
+                    receipt: finalizationReceipt,
+                  });
+                }
                 let persisted = false;
                 try {
                   persisted = await persistActiveTurnFinalization({
@@ -10237,17 +11242,12 @@ ${modeList}
                 } catch (error) {
                   console.error(`[launcher] final turn persistence threw: ${error.message}`);
                 }
+                finalizationPersisted = persisted;
                 if (!persisted) {
                   finalizationPersistenceError = "本轮执行事实无法持久化，结果状态未知";
                   taskState = "unknown";
                   turnReceipt.recordError(finalizationPersistenceError, { source: "session-runtime" });
-                  turnReceipt.complete({
-                    ok: false,
-                    taskState: "unknown",
-                    artifactIncomplete,
-                    interventionPaused,
-                    continuationNeeded,
-                  });
+                  turnReceipt.markUnknown(finalizationPersistenceError);
                   trackPersistentStorageIssue("active-session", activeSessionFile, finalizationPersistenceError, "error");
                   broadcastDashboardEvent({ kind: "error", id: `${assistantId}-finalization-persistence-error`, text: finalizationPersistenceError });
                   // Reuse the final assistant identity so the Dashboard
@@ -10255,6 +11255,8 @@ ${modeList}
                   broadcastDashboardEvent({
                     kind: "assistant_final",
                     id: assistantId,
+                    correction: true,
+                    revision: "finalization-persistence",
                     text: assistantText,
                     taskState: "unknown",
                     artifactIncomplete,
@@ -10268,9 +11270,15 @@ ${modeList}
                 await writeActiveSessionMeta({ contextRecoveryHandle: activeContextRecoveryHandle });
               }
             } catch (cleanupError) {
-              isolationRestoreError ??= `后台任务清理失败：${cleanupError.message}`;
-              trackPersistentStorageIssue("active-session", activeSessionFile, isolationRestoreError, "error");
-              console.error(`[launcher] ${isolationRestoreError}`);
+              const cleanupMessage = `后台任务清理失败：${cleanupError.message}`;
+              if (finalizationPersisted) {
+                taskWarnings = [...new Set([...taskWarnings, cleanupMessage])].slice(0, 8);
+                console.error(`[launcher] ${cleanupMessage}；最终执行事实已持久化`);
+              } else {
+                isolationRestoreError ??= cleanupMessage;
+                trackPersistentStorageIssue("active-session", activeSessionFile, isolationRestoreError, "error");
+                console.error(`[launcher] ${isolationRestoreError}`);
+              }
             }
 
             if (opts.readonly === true) {
@@ -10296,21 +11304,31 @@ ${modeList}
               ?? (continuationNeeded ? "task requires continuation" : null)
               ?? finalizationPersistenceError
               ?? isolationRestoreError;
+            const mappedFinalState = operation.controller.signal.aborted
+              ? "cancelled"
+              : finalizationPersistenceError
+                ? "unknown"
+                : !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError
+                  ? "completed"
+                  : taskState === "needs_intervention" || taskState === "incomplete"
+                    ? "unknown"
+                    : "failed";
+            const finalState = operation.finalState ?? mappedFinalState;
             const completion = {
-              ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !finalizationPersistenceError && !operation.controller.signal.aborted,
+              ok: finalState !== "unknown" && !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !finalizationPersistenceError && !operation.controller.signal.aborted,
               cancelled: operation.controller.signal.aborted,
-              error: completionError,
+              error: completionError ?? (finalState === "unknown" ? "本轮执行结果无法确认，未自动重试。" : null),
               assistantText,
               assistantMessageId: assistantId,
               userMessageId: userMsgId,
-              taskState: taskState || deriveTaskState({
+              taskState: taskState || (finalState === "unknown" ? "unknown" : deriveTaskState({
                 planningOnly: planningOnlyRequest,
                 executionStarted,
                 interventionPaused,
                 continuationNeeded,
                 artifactIncomplete,
                 warnings: taskWarnings,
-              }),
+              })),
               warnings: taskWarnings,
               artifactFiles,
               interventionChoice,
@@ -10319,15 +11337,7 @@ ${modeList}
               loopTelemetry: loopTelemetry.snapshot(),
               receipt: turnReceipt.snapshot(),
             };
-            operation.finalState = completion.cancelled
-              ? "cancelled"
-              : finalizationPersistenceError
-                ? "unknown"
-              : completion.ok
-                ? "completed"
-                : completion.taskState === "needs_intervention" || completion.taskState === "incomplete"
-                  ? "unknown"
-                  : "failed";
+            operation.finalState = finalState;
             if (!completion.ok && completion.error) operation.context.error = String(completion.error).slice(0, 320);
             let completionReceiptError = null;
             try {
@@ -10350,11 +11360,15 @@ ${modeList}
             busy = false;
             broadcastDashboardEvent({ kind: "busy-change", busy: false });
             try { detachExternalSignal(); } catch { /* Cleanup must not keep the UI busy. */ }
-            try { finishActiveOperation(operation); } catch (error) { console.error(`[launcher] active operation cleanup failed: ${error.message}`); }
+            try { contextSizeCalibration.clear(contextCalibrationScope); } catch {}
+            try {
+              const finished = finishActiveOperation(operation);
+              if (finished) scheduleQueuedSessionInputDrain(operation);
+            } catch (error) { console.error(`[launcher] active operation cleanup failed: ${error.message}`); }
             if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
           }
         }
-      })();
+      });
 
       return acceptedResult;
     } finally {

@@ -1105,6 +1105,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   if (eventGuardRef.current === null) eventGuardRef.current = createDashboardEventGuard();
   const executionStateRef = A2(null);
   if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const resyncRunnerRef = A2(null);
   const eventBatcherRef = A2(null);
   const [statusLine, setStatusLine] = d2(null);
   const [modal, setModal] = d2(null);
@@ -1164,6 +1165,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
   const [activeConversationId, setActiveConversationId] = d2(null);
+  const activeConversationIdRef = A2(activeConversationId);
+  activeConversationIdRef.current = activeConversationId;
   const [recentWss, setRecentWss] = d2([]);
   const [workspaceSelection, setWorkspaceSelection] = d2(null);
   y2(() => {
@@ -1762,8 +1765,12 @@ const [providerCaps, setProviderCaps] = d2(null);
     streamBufRef.current = null;
   }, []);
   const refetchCanonicalState = q2(async () => {
+    const expectedSessionId = activeConversationIdRef.current;
+    const isCurrentSession = () => String(activeConversationIdRef.current ?? "") === String(expectedSessionId ?? "");
+    let canonicalLoaded = false;
     try {
       const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
+      if (!isCurrentSession()) return false;
       setMessages(data.messages ?? []);
       setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
       setBusy(Boolean(data.busy));
@@ -1772,18 +1779,23 @@ const [providerCaps, setProviderCaps] = d2(null);
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
+      // Replacing the canonical snapshot also replaces the reducer cursor.
+      executionStateRef.current = createDashboardReducerState();
+      canonicalLoaded = true;
     } catch {
+      return false;
     }
     try {
       const m3 = await api("/modal");
-      setModal(m3.modal ?? null);
+      if (isCurrentSession()) setModal(m3.modal ?? null);
     } catch {
     }
     try {
       const retrieval = await api("/index-retrieval-mode");
-      setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
+      if (isCurrentSession()) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
     } catch {
     }
+    return canonicalLoaded && isCurrentSession();
   }, [cancelStreamingRaf]);
   y2(() => {
     let disposed = false;
@@ -1791,6 +1803,11 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (dash.kind === "ping") return;
       const reduced = reduceDashboardEvent(executionStateRef.current, dash);
       executionStateRef.current = reduced.state;
+      if (reduced.duplicate) return;
+      if (reduced.resyncRequired) {
+        resyncRunnerRef.current?.(dash);
+        return;
+      }
       if (dash.kind === "todo-update") {
         setTodos(Object.values(reduced.state.todos));
       }
@@ -1834,6 +1851,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "assistant_delta") {
+        if (dash.streamReset === true) {
+          cancelStreamingRaf();
+          streamBufRef.current = null;
+        }
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
@@ -2014,20 +2035,39 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
     };
-    const resyncDashboardEvents = async () => {
+    const resyncDashboardEvents = async (triggerEvent = null) => {
       if (resyncingEventsRef.current) return;
       resyncingEventsRef.current = true;
+      const previousState = executionStateRef.current;
       try {
-        await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+        const [canonicalLoaded] = await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+        if (canonicalLoaded !== true || disposed) {
+          if (!disposed) setError(t4("chat.eventStreamError"));
+          return;
+        }
+        const buffered = bufferedDashboardEventsRef.current.splice(0)
+          .sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
+        const firstBuffered = buffered.find((event) => Number.isSafeInteger(Number(event?.eventSeq)));
+        const triggerCursorMatch = /^([^:]+):(\d+)$/u.exec(String(triggerEvent?.latestCursor ?? ""));
+        const triggerSeq = Number.isSafeInteger(Number(triggerEvent?.eventSeq))
+          ? Number(triggerEvent.eventSeq)
+          : triggerCursorMatch ? Number(triggerCursorMatch[2]) : null;
+        executionStateRef.current = createDashboardReducerState({
+          // Service restart changes the epoch. Keep the triggering epoch even
+          // when no event arrived while the canonical snapshot was loading.
+          epoch: firstBuffered?.eventEpoch ?? triggerEvent?.eventEpoch ?? previousState?.epoch ?? null,
+          lastSeq: firstBuffered
+            ? Math.max(0, Number(firstBuffered.eventSeq) - 1)
+            : triggerSeq ?? previousState?.lastSeq ?? 0,
+        });
+        for (const event of buffered) applyDashboardEvent(event);
       } finally {
         if (!disposed) {
-          const buffered = bufferedDashboardEventsRef.current.splice(0)
-            .sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
           resyncingEventsRef.current = false;
-          for (const event of buffered) applyDashboardEvent(event);
         }
       }
     };
+    resyncRunnerRef.current = resyncDashboardEvents;
     const eventBatcher = createDashboardEventBatcher({
       onFlush: (events) => {
         if (disposed) return;
@@ -2040,7 +2080,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       const eventSessionId = String(dash.sessionId ?? "").trim();
       if (eventSessionId && activeConversationId && eventSessionId !== String(activeConversationId)) return;
       if (dash.kind === "resync-required") {
-        void resyncDashboardEvents();
+        void resyncDashboardEvents(dash);
         return;
       }
       if (resyncingEventsRef.current) {
@@ -2066,6 +2106,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       unsubscribeStatus();
       eventBatcher.dispose();
       eventBatcherRef.current = null;
+      resyncRunnerRef.current = null;
+      resyncingEventsRef.current = false;
+      bufferedDashboardEventsRef.current.splice(0);
       cancelStreamingRaf();
     };
   }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend, activeConversationId]);
@@ -2074,6 +2117,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     // conversation. Canonical state loading will repopulate the new session.
     eventBatcherRef.current?.discard();
     bufferedDashboardEventsRef.current.splice(0);
+    resyncingEventsRef.current = false;
     executionStateRef.current = createDashboardReducerState();
     eventGuardRef.current?.reset();
   }, [activeConversationId]);

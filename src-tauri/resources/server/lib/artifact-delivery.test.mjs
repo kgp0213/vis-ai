@@ -6,6 +6,7 @@ import {
   artifactDeliveryRetryPrompt,
   artifactMissingNotice,
   artifactPathsFromToolOutput,
+  filterTemporaryArtifactEvidence,
   detectArtifactRequest,
   isPlanOnlyRequest,
   latestAssistantResponse,
@@ -163,4 +164,19 @@ test("artifact completion rejects failed tool results", () => {
   assert.equal(toolResultSucceeded('{"ok":true,"exitCode":null}'), true);
   assert.equal(toolResultSucceeded("", { status: "succeeded" }), true);
   assert.equal(toolResultSucceeded("completed", { status: "failed" }), false);
+});
+
+test("final artifact evidence drops deleted temporary scripts but keeps requested script outputs", () => {
+  const entries = [{
+    paths: ["C:\\work\\scratch.py", "C:\\work\\report.md"],
+    files: [
+      { path: "C:\\work\\scratch.py", status: "missing", verification: "missing" },
+      { path: "C:\\work\\report.md", status: "verified", verification: "current-turn-write" },
+    ],
+    status: "missing",
+  }];
+  const filtered = filterTemporaryArtifactEvidence(entries, { preservePaths: ["C:\\work\\report.md"] });
+  assert.deepEqual(filtered[0].paths, ["C:\\work\\report.md"]);
+  assert.deepEqual(filtered[0].files.map((file) => file.path), ["C:\\work\\report.md"]);
+  assert.deepEqual(filterTemporaryArtifactEvidence([{ paths: ["C:\\work\\scratch.py"], files: [{ path: "C:\\work\\scratch.py", status: "missing" }] }]), []);
 });

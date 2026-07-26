@@ -9,6 +9,8 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
   receipt.observeTool({ name: "read_file", succeeded: true, result: "ok" });
   receipt.observeTool({ name: "write_file", succeeded: false, result: "failed" });
   receipt.recordError("embedding provider returned an invalid response", { source: "model-loop" });
+  receipt.recordWarning("工具参数被宿主纠正");
+  receipt.recordWarning("工具参数被宿主纠正");
   receipt.recordArtifact({
     paths: ["C:\\work\\out.md"],
     files: [{ path: "C:\\work\\out.md", size: 42, mtimeMs: 10, ext: ".md", changedThisTurn: true, verification: "current-turn-write" }],
@@ -43,6 +45,7 @@ test("turn receipt aggregates bounded execution facts and deduplicates active in
     message: "embedding provider returned an invalid response",
     recordedAt: snapshot.errors[0].recordedAt,
   });
+  assert.deepEqual(snapshot.warnings, ["工具参数被宿主纠正"]);
 });
 
 test("turn receipt distinguishes missing artifacts from present but unverified files", () => {
@@ -112,4 +115,92 @@ test("turn receipt records runtime reuse without persisting local executable pat
   assert.equal(snapshot.runtime[0].reused, true);
   assert.equal(snapshot.runtime[0].bindings, undefined);
   assert.equal(JSON.stringify(snapshot).includes("C:\\private"), false);
+});
+
+test("turn receipt stores structured tool failure and recovery facts", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-failure" });
+  receipt.recordToolFailure({
+    toolCallId: "call-1",
+    toolName: "run_command",
+    category: "environment",
+    code: "runtime_not_found",
+    retryable: true,
+    argsFingerprint: "sha256:args",
+    fingerprint: "sha256:failure",
+    message: "Python was not found",
+    repeatFailureBlocked: true,
+  });
+  receipt.recordRecovery({ toolCallId: "call-2", toolName: "run_command", recovery: "selected_registered_runtime", fromFingerprint: "sha256:failure" });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.toolFailures[0].code, "runtime_not_found");
+  assert.equal(snapshot.toolFailures[0].repeatFailureBlocked, true);
+  assert.equal(snapshot.recoveries[0].recovery, "selected_registered_runtime");
+  assert.doesNotMatch(JSON.stringify(snapshot), /python build\.py/);
+});
+
+test("turn receipt stores replayable authorization facts without raw arguments", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-auth", requestId: "req-auth" });
+  receipt.recordAuthorizationFact({
+    factId: "auth:1",
+    decision: "allow",
+    scope: "project",
+    toolName: "run_command",
+    rule: { kind: "prefix", value: "npm" },
+    argsFingerprint: "sha256:args",
+    reusable: true,
+  });
+  receipt.recordAuthorizationFact({
+    factId: "auth:1",
+    decision: "allow",
+    scope: "project",
+    toolName: "run_command",
+    rule: { kind: "prefix", value: "npm" },
+    reusable: true,
+  });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.authorizationFacts.length, 1);
+  assert.equal(snapshot.authorizationFacts[0].reusable, true);
+  assert.equal("command" in snapshot.authorizationFacts[0], false);
+});
+
+test("turn receipt persists an explicit execution phase without changing model history", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-phase", operationId: "op-phase", sessionId: "session-phase" });
+  receipt.observePhase({ role: "assistant_final" });
+  receipt.observePhase({ role: "tool_start", callId: "call-phase", stepId: "step-phase" });
+  receipt.complete({ ok: true, taskState: "completed" });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.phase.phase, "ended");
+  assert.equal(snapshot.phase.terminalState, "completed");
+  assert.equal(snapshot.phase.operationId, "op-phase");
+  assert.equal(snapshot.phase.toolCallId, "call-phase");
+});
+
+test("unknown tool results are terminal and reject late success updates", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-unknown" });
+  receipt.observeToolProgress({ toolCallId: "call-1", name: "run_command", status: "unknown" });
+  receipt.observeToolProgress({ toolCallId: "call-1", name: "run_command", status: "succeeded", result: "late" });
+  const call = receipt.snapshot().toolCalls.find((item) => item.toolCallId === "call-1");
+  assert.equal(call.status, "unknown");
+  assert.equal(call.result, null);
+  assert.equal(receipt.snapshot().tools.results, 1);
+});
+
+test("completion maps incomplete outcomes to unknown and does not accept late replacement", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-incomplete" });
+  assert.equal(receipt.complete({ ok: false, taskState: "incomplete" }), true);
+  assert.equal(receipt.complete({ ok: true, taskState: "completed" }), false);
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.phase.terminalState, "unknown");
+  assert.equal(snapshot.completion.taskState, "incomplete");
+});
+
+test("persistence failure downgrades a provisional completion to unknown", () => {
+  const receipt = createTurnReceipt({ operationId: "op-persist", turnId: "turn-persist" });
+  assert.equal(receipt.complete({ ok: true, taskState: "completed" }), true);
+  receipt.markUnknown("final receipt was not persisted");
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.phase.terminalState, "unknown");
+  assert.equal(snapshot.completion.ok, false);
+  assert.equal(snapshot.completion.taskState, "unknown");
+  assert.match(snapshot.phase.reason, /not persisted/);
 });

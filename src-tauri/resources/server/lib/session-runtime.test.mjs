@@ -128,6 +128,113 @@ test("session runtime preserves final receipt facts across model-history synchro
   }
 });
 
+test("session finalization ignores a late lower-certainty result", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([{ role: "user", content: "finish this" }, { role: "assistant", content: "done" }]);
+    const base = {
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "finish this" },
+      assistant: { messageId: "assistant-idempotent", turnId: "turn-idempotent", text: "done" },
+      operationId: "op-idempotent",
+    };
+    assert.equal(await harness.runtime.persistTurnFinalization({ ...base, receipt: { completion: { ok: true, taskState: "completed" } }, taskState: "completed" }), true);
+    assert.equal(await harness.runtime.persistTurnFinalization({ ...base, receipt: { completion: { ok: false, taskState: "unknown" } }, taskState: "unknown" }), true);
+    const entries = (await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const assistant = entries.find((entry) => entry.id === "assistant-idempotent");
+    assert.equal(assistant.taskState, "completed");
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session finalization matches the terminal assistant fact before a same-operation user input", async () => {
+  const harness = await createHarness();
+  try {
+    await harness.runtime.appendMessage({
+      role: "user",
+      text: "追加指令",
+      id: "input-steer-1",
+      turnId: "turn-steer",
+      operationId: "op-shared",
+    });
+    harness.setLoopMessages([
+      { role: "user", content: "原始请求" },
+      { role: "user", content: "追加指令", id: "input-steer-1", turnId: "turn-steer", operationId: "op-shared" },
+      { role: "assistant", content: "完成结果", id: "assistant-shared", turnId: "turn-shared", operationId: "op-shared" },
+    ]);
+    const base = {
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "原始请求" },
+      assistant: { messageId: "assistant-shared", turnId: "turn-shared", text: "完成结果" },
+      operationId: "op-shared",
+    };
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      ...base,
+      receipt: { completion: { ok: true, taskState: "completed" } },
+      taskState: "completed",
+    }), true);
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      ...base,
+      receipt: { completion: { ok: false, taskState: "unknown" } },
+      taskState: "unknown",
+    }), true);
+    const entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const assistant = entries.find((entry) => entry.id === "assistant-shared");
+    assert.equal(assistant.taskState, "completed");
+    assert.equal(entries.find((entry) => entry.id === "input-steer-1").taskState, undefined);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session finalization recognizes legacy completion.ok and never rewrites terminal facts", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([{ role: "user", content: "legacy result" }, { role: "assistant", content: "done" }]);
+    const base = {
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "legacy result" },
+      assistant: { messageId: "assistant-legacy", turnId: "turn-legacy", text: "done" },
+      operationId: "op-legacy",
+    };
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      ...base,
+      receipt: { completion: { ok: true } },
+    }), true);
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      ...base,
+      receipt: { completion: { ok: false, taskState: "unknown" } },
+      taskState: "unknown",
+    }), true);
+    let entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(entries.find((entry) => entry.id === "assistant-legacy").receipt.completion.ok, true);
+
+    const failedBase = {
+      ...base,
+      assistant: { messageId: "assistant-failed", turnId: "turn-failed", text: "failed" },
+      operationId: "op-failed",
+    };
+    await harness.runtime.persistTurnFinalization({
+      ...failedBase,
+      receipt: { completion: { ok: false, taskState: "failed" } },
+      taskState: "failed",
+    });
+    await harness.runtime.persistTurnFinalization({
+      ...failedBase,
+      receipt: { completion: { ok: true, taskState: "completed" } },
+      taskState: "completed",
+    });
+    entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(entries.find((entry) => entry.id === "assistant-failed").taskState, "failed");
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
 test("session runtime stores empty-text terminal facts without a visible blank assistant", async () => {
   const harness = await createHarness();
   try {
@@ -154,6 +261,58 @@ test("session runtime stores empty-text terminal facts without a visible blank a
     const afterSync = (await readFile(harness.activeSessionFile, "utf8"))
       .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     assert.equal(afterSync.filter((entry) => entry.role === "execution").length, 1);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session finalization never overwrites an earlier assistant when the final text has a new identity", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([
+      { role: "user", content: "old request" },
+      { role: "assistant", content: "old answer" },
+      { role: "user", content: "new request" },
+    ]);
+    await harness.runtime.persistTurnFinalization({
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "new request" },
+      assistant: { messageId: "assistant-new", turnId: "turn-new", text: "new answer" },
+      operationId: "op-new",
+      receipt: { completion: { ok: true, taskState: "completed" } },
+      taskState: "completed",
+    });
+    const entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(entries.filter((entry) => entry.role === "assistant").length, 2);
+    assert.equal(entries.some((entry) => entry.content === "old answer"), true);
+    assert.equal(entries.some((entry) => entry.id === "assistant-new" && entry.content === "new answer"), true);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session finalization does not use matching text from an earlier turn as the target", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([
+      { role: "user", content: "old request" },
+      { role: "assistant", content: "same answer" },
+      { role: "user", content: "new request" },
+    ]);
+    await harness.runtime.persistTurnFinalization({
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "new request" },
+      assistant: { messageId: "assistant-new", turnId: "turn-new", text: "same answer" },
+      operationId: "op-new",
+      receipt: { completion: { ok: true, taskState: "completed" } },
+      taskState: "completed",
+    });
+    const entries = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(entries.filter((entry) => entry.role === "assistant").length, 2);
+    assert.equal(entries.some((entry) => entry.content === "same answer" && entry.id === "assistant-new"), true);
+    assert.equal(entries.some((entry) => entry.content === "same answer" && !entry.id), true);
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }
@@ -255,6 +414,34 @@ test("session runtime repairs malformed JSONL and restores model/dashboard proje
     ]);
     const repaired = await readFile(harness.activeSessionFile, "utf8");
     assert.equal(repaired.includes("malformed"), false);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session runtime closes an interrupted tool call during active-session recovery", async () => {
+  const harness = await createHarness();
+  try {
+    await writeFile(harness.activeSessionFile, [
+      JSON.stringify({ role: "user", content: "inspect this" }),
+      JSON.stringify({
+        role: "assistant",
+        content: "I will inspect it",
+        turnId: "turn-crashed",
+        operationId: "operation-crashed",
+        tool_calls: [{ id: "call-crashed", type: "function", function: { name: "read_file", arguments: "{}" } }],
+      }),
+      "",
+    ].join("\n"), "utf8");
+
+    assert.equal(await harness.runtime.load(), true);
+    const persisted = (await readFile(harness.activeSessionFile, "utf8"))
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const tool = persisted.find((entry) => entry.tool_call_id === "call-crashed");
+    assert.equal(tool.toolStatus, "unknown");
+    assert.equal(JSON.parse(tool.content).error.code, "tool_interrupted");
+    assert.ok(harness.loop.log.toMessages().some((entry) => entry.role === "tool" && entry.tool_call_id === "call-crashed"));
+    assert.ok(harness.issues.some(([kind, message, level]) => kind === "active-session-recovery" && /call-crashed/.test(message) && level === "warning"));
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }

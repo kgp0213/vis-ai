@@ -111,3 +111,75 @@ test("legacy transcript projection remains compatible when entity metadata is ab
   assert.deepEqual(snapshot.todos, []);
   assert.deepEqual(snapshot.prompts, []);
 });
+
+test("uses persisted turn and message identities when projecting a transcript", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "stable request" },
+    { role: "assistant", id: "assistant-stable", messageId: "assistant-stable", turnId: "turn-stable", content: "done" },
+  ]);
+  assert.equal(snapshot.items[0].turnId, "turn-stable");
+  assert.equal(snapshot.items[0].messageId, "assistant-stable");
+  assert.equal(snapshot.items[0].steps[0].stepId, "turn-stable.s1");
+  assert.equal(snapshot.items[0].steps[0].frames[0].frameId, "turn-stable.s1.text");
+});
+
+test("projects the persisted execution phase as a turn fact", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "run" },
+    {
+      role: "assistant",
+      content: "done",
+      receipt: {
+        phase: { phase: "ended", terminalState: "completed", operationId: "op-1" },
+      },
+    },
+  ]);
+  assert.equal(snapshot.items[0].phase.phase, "ended");
+  assert.equal(snapshot.items[0].phase.terminalState, "completed");
+});
+
+test("keeps retry and request facts on the Step projection without exposing extra model prompts", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "retry this" },
+    {
+      role: "assistant",
+      turnId: "turn-retry",
+      stepId: "turn-retry.s1",
+      attempt: 2,
+      content: "done",
+      usage: { inputTokens: 10, outputTokens: 4 },
+      receipt: { modelRetries: [{ attempt: 2, maxAttempts: 4, reason: "429", statusCode: 429 }] },
+    },
+  ]);
+  const step = snapshot.items[0].steps[0];
+  assert.equal(step.attempt, 2);
+  assert.deepEqual(step.retry, { attempt: 2, maxAttempts: 4, reason: "429", statusCode: 429 });
+  assert.deepEqual(step.usage, { inputTokens: 10, outputTokens: 4 });
+});
+
+test("projects no-text execution facts and completion state from the receipt", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "run" },
+    {
+      role: "execution",
+      operationId: "op-empty",
+      turnId: "turn-empty",
+      taskState: "unknown",
+      receipt: { requestId: "req-empty", completion: { ok: false, taskState: "unknown" } },
+    },
+  ]);
+  assert.equal(snapshot.items[0].turnId, "turn-empty");
+  assert.equal(snapshot.items[0].state, "unknown");
+  assert.equal(snapshot.items[0].explicitState, "unknown");
+  assert.equal(snapshot.receipts[0].requestId, "req-empty");
+});
+
+test("uses persisted turn ids as pagination cursors", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "run" },
+    { role: "assistant", turnId: "turn-stable", content: "done" },
+  ]);
+  const tail = paginateExecutionTranscript(snapshot, { limit: 1 });
+  assert.equal(tail.cursor, "turn-stable");
+  assert.notEqual(paginateExecutionTranscript(snapshot, { beforeTurn: tail.cursor, limit: 1 }).resyncRequired, true);
+});

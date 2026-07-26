@@ -28,8 +28,14 @@ test("intentional application shutdown cannot restart the managed server", () =>
 test("server stderr capture creates a durable diagnostic file before launch", () => {
   assert.match(desktop, /let stderr_log_path = server_stderr_log_path\(\)/);
   assert.match(desktop, /OpenOptions::new\(\)[\s\S]*?\.create\(true\)[\s\S]*?\.append\(true\)/);
+  assert.match(desktop, /fn append_server_stderr_log\(message: &str\)/);
+  assert.match(desktop, /fn stable_exit_status\(status: &ExitStatus\)/);
   assert.match(desktop, /launcher stderr capture starting/);
+  assert.match(desktop, /launcher process spawned pid=/);
   assert.match(desktop, /launcher stderr stream closed/);
+  assert.match(desktop, /classification=\{status_class\}/);
+  assert.match(desktop, /exit_status\}/);
+  assert.match(desktop, /server exited during application shutdown/);
 });
 
 test("startup loader waits for a rendered dashboard readiness handshake", () => {

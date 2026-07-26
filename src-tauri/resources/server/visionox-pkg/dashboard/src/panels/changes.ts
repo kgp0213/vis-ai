@@ -1010,6 +1010,7 @@ function ChatPane(props) {
   const [todoExpanded, setTodoExpanded] = d2(false);
   const executionStateRef = A2(null);
   if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const resyncingRef = A2(false);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const streamBufRef = A2(null);
@@ -1090,14 +1091,31 @@ function ChatPane(props) {
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTool(null);
+      executionStateRef.current = createDashboardReducerState();
     } catch {
     }
   }, [cancelStreamingRaf]);
   y2(() => {
+    const requestResync = () => {
+      if (resyncingRef.current) return;
+      resyncingRef.current = true;
+      void refetchCanonicalState().finally(() => {
+        resyncingRef.current = false;
+      });
+    };
     const onDash = (dash) => {
       if (dash.kind === "ping") return;
+      if (dash.kind === "resync-required") {
+        requestResync();
+        return;
+      }
       const reduced = reduceDashboardEvent(executionStateRef.current, dash);
       executionStateRef.current = reduced.state;
+      if (reduced.duplicate) return;
+      if (reduced.resyncRequired) {
+        requestResync();
+        return;
+      }
       if (dash.kind === "todo-update") setTodos(Object.values(reduced.state.todos));
       if (dash.kind === "busy-change") {
         setBusy(dash.busy);
@@ -1108,6 +1126,10 @@ function ChatPane(props) {
         return;
       }
       if (dash.kind === "assistant_delta") {
+        if (dash.streamReset === true) {
+          cancelStreamingRaf();
+          streamBufRef.current = null;
+        }
         const cur = streamBufRef.current;
         const baseId = cur?.id === dash.id ? cur : null;
         streamBufRef.current = {
@@ -1123,10 +1145,14 @@ function ChatPane(props) {
       if (dash.kind === "assistant_final") {
         cancelStreamingRaf();
         setStreaming(null);
-        setMessages((prev) => [
-          ...prev,
-          { id: dash.id, role: "assistant", text: dash.text, reasoning: dash.reasoning }
-        ]);
+        const nextMessage = { id: dash.id, role: "assistant", text: dash.text, reasoning: dash.reasoning };
+        setMessages((prev) => {
+          const index = prev.findIndex((item) => String(item?.id ?? "") === String(dash.id ?? ""));
+          if (index < 0) return [...prev, nextMessage];
+          const copy = [...prev];
+          copy[index] = { ...copy[index], ...nextMessage };
+          return copy;
+        });
         return;
       }
       if (dash.kind === "tool_start") {
@@ -1135,10 +1161,14 @@ function ChatPane(props) {
       }
       if (dash.kind === "tool") {
         setActiveTool((cur) => cur && cur.id === dash.id ? null : cur);
-        setMessages((prev) => [
-          ...prev,
-          { id: dash.id, role: "tool", text: dash.content, toolName: dash.toolName, toolArgs: dash.args }
-        ]);
+        const nextTool = { id: dash.id, role: "tool", text: dash.content, toolName: dash.toolName, toolArgs: dash.args };
+        setMessages((prev) => {
+          const index = prev.findIndex((item) => String(item?.id ?? "") === String(dash.id ?? ""));
+          if (index < 0) return [...prev, nextTool];
+          const copy = [...prev];
+          copy[index] = { ...copy[index], ...nextTool };
+          return copy;
+        });
         return;
       }
       if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info") {

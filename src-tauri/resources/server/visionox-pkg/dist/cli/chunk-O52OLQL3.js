@@ -1187,6 +1187,7 @@ function registerShellTools(registry, opts) {
   const jobs = opts.jobs ?? new JobRegistry();
   const getOperationId = typeof opts.getOperationId === "function" ? opts.getOperationId : () => null;
   const getEnvironment = typeof opts.getEnvironment === "function" ? opts.getEnvironment : () => ({});
+  const normalizeCommand = typeof opts.normalizeCommand === "function" ? opts.normalizeCommand : null;
   const getExtraAllowed = typeof opts.extraAllowed === "function" ? opts.extraAllowed : (() => {
     const snapshot2 = opts.extraAllowed ?? [];
     return () => snapshot2;
@@ -1243,7 +1244,10 @@ function registerShellTools(registry, opts) {
           addProjectShellAllowed(rootDir, choice.prefix);
         }
       }
-      const result = await runCommand(cmd, {
+      const executionCommand = normalizeCommand
+        ? String(await normalizeCommand(cmd, { args, signal: ctx?.signal, operationId: getOperationId(ctx?.signal) }) ?? cmd)
+        : cmd;
+      const result = await runCommand(executionCommand, {
         cwd: rootDir,
         timeoutSec: effectiveTimeout,
         maxOutputChars,
@@ -1298,7 +1302,10 @@ function registerShellTools(registry, opts) {
           addProjectShellAllowed(rootDir, choice.prefix);
         }
       }
-      const result = await jobs.start(cmd, {
+      const executionCommand = normalizeCommand
+        ? String(await normalizeCommand(cmd, { args, signal: ctx?.signal, operationId: getOperationId(ctx?.signal) }) ?? cmd)
+        : cmd;
+      const result = await jobs.start(executionCommand, {
         cwd: rootDir,
         env: await getEnvironment({ toolName: "run_background", command: cmd, args, signal: ctx?.signal, operationId: getOperationId(ctx?.signal) }),
         waitSec: args.waitSec,

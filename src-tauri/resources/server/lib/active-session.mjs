@@ -74,6 +74,91 @@ export function activeEntriesForModel(entries) {
     });
 }
 
+/**
+ * Close tool calls that were left open by a crashed process. This mirrors the
+ * recovery boundary used by the reference runtimes: the model receives an
+ * explicit unknown tool result instead of silently replaying a side effect.
+ * The operation is a pure history projection; it never executes a tool.
+ */
+export function recoverInterruptedToolCalls(entries, { now = () => new Date().toISOString() } = {}) {
+  const source = Array.isArray(entries) ? entries : [];
+  const pending = [];
+
+  const scopeMatches = (assistant, tool) => {
+    const assistantTurn = String(assistant?.turnId ?? "").trim();
+    const toolTurn = String(tool?.turnId ?? "").trim();
+    const assistantOperation = String(assistant?.operationId ?? "").trim();
+    const toolOperation = String(tool?.operationId ?? "").trim();
+    if (assistantTurn && toolTurn && assistantTurn !== toolTurn) return false;
+    if (assistantOperation && toolOperation && assistantOperation !== toolOperation) return false;
+    return true;
+  };
+
+  // Keep completion scoped to the assistant message that declared the call.
+  // Providers may reuse a call id in a later Turn; a process-wide Set would
+  // incorrectly treat that later call as already completed.
+  for (let index = 0; index < source.length; index++) {
+    const entry = source[index];
+    if (entry?.role === "assistant" && Array.isArray(entry.tool_calls)) {
+      const calls = entry.tool_calls
+        .map((call) => String(call?.id ?? call?.tool_call_id ?? "").trim())
+        .filter(Boolean);
+      if (calls.length > 0) pending.push({ entry, index, calls: new Set(calls), completed: new Set() });
+      continue;
+    }
+    if (entry?.role !== "tool") continue;
+    const toolCallId = String(entry.tool_call_id ?? entry.toolCallId ?? "").trim();
+    if (!toolCallId) continue;
+    for (let pendingIndex = pending.length - 1; pendingIndex >= 0; pendingIndex--) {
+      const candidate = pending[pendingIndex];
+      if (!candidate.calls.has(toolCallId) || !scopeMatches(candidate.entry, entry)) continue;
+      candidate.completed.add(toolCallId);
+      break;
+    }
+  }
+  const recovered = [];
+  const warnings = [];
+  let changed = false;
+
+  for (let index = 0; index < source.length; index++) {
+    const entry = source[index];
+    recovered.push(entry);
+    if (entry?.role !== "assistant" || !Array.isArray(entry.tool_calls)) continue;
+    const record = pending.find((candidate) => candidate.index === index);
+    const completed = record?.completed ?? new Set();
+    const covered = new Set(completed);
+    for (const call of entry.tool_calls) {
+      const toolCallId = String(call?.id ?? call?.tool_call_id ?? "").trim();
+      if (!toolCallId || covered.has(toolCallId)) continue;
+      covered.add(toolCallId);
+      changed = true;
+      warnings.push(`tool ${toolCallId} was marked unknown after process recovery`);
+      const recoveryScope = `${String(entry.turnId ?? entry.operationId ?? "scope").replace(/[^a-zA-Z0-9._-]+/gu, "_").slice(0, 72) || "scope"}-${index}`;
+      recovered.push({
+        id: `recovery-tool-${recoveryScope}-${toolCallId}`,
+        role: "tool",
+        content: JSON.stringify({
+          ok: false,
+          error: {
+            code: "tool_interrupted",
+            message: "Tool execution was interrupted before a result was recorded.",
+            retryable: false,
+          },
+        }),
+        tool_call_id: toolCallId,
+        toolStatus: "unknown",
+        isError: true,
+        recoveryWarning: "tool execution was interrupted before a result was recorded",
+        ...(entry.turnId ? { turnId: String(entry.turnId) } : {}),
+        ...(entry.operationId ? { operationId: String(entry.operationId) } : {}),
+        recoveredAt: now(),
+      });
+    }
+  }
+
+  return { entries: recovered, changed, warnings: [...new Set(warnings)] };
+}
+
 export function activeEntriesForDashboard(entries, now = Date.now()) {
   let sequence = 0;
   const visible = [];

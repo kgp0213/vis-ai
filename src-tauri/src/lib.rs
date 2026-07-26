@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
@@ -175,6 +175,29 @@ fn diagnostics_log_path() -> PathBuf {
 
 fn server_stderr_log_path() -> PathBuf {
     visionox_log_dir().join("visionox-server-stderr.log")
+}
+
+fn append_server_stderr_log(message: &str) {
+    let path = server_stderr_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+    let _ = writeln!(file, "[{ts}] {}", redact_log_line(message));
+}
+
+fn stable_exit_status(status: &ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| format!("exit_code={code}"))
+        .unwrap_or_else(|| format!("exit_status={status:?}"))
 }
 
 fn init_diagnostics_log() -> PathBuf {
@@ -491,30 +514,47 @@ fn log_runtime_file(label: &str, path: &Path) {
 
 fn log_child_status(child: &mut Child, reason: &str) {
     match child.try_wait() {
-        Ok(Some(status)) => log_diag(&format!(
-            "[rust] launcher exited before dashboard URL ({reason}): {status}"
-        )),
+        Ok(Some(status)) => {
+            let message = format!(
+                "[rust] launcher exited before dashboard URL ({reason}): {}",
+                stable_exit_status(&status)
+            );
+            append_server_stderr_log(&message);
+            log_diag(&message);
+        }
         Ok(None) => {
-            log_diag(&format!(
+            let message = format!(
                 "[rust] launcher still running without dashboard URL ({reason}); killing child"
-            ));
+            );
+            append_server_stderr_log(&message);
+            log_diag(&message);
             if let Err(e) = child.kill() {
-                log_diag(&format!(
-                    "[rust] failed to kill launcher after {reason}: {e}"
-                ));
+                let message = format!("[rust] failed to kill launcher after {reason}: {e}");
+                append_server_stderr_log(&message);
+                log_diag(&message);
             }
             match child.wait() {
-                Ok(status) => log_diag(&format!(
-                    "[rust] launcher status after kill ({reason}): {status}"
-                )),
-                Err(e) => log_diag(&format!(
-                    "[rust] failed to wait for launcher after kill ({reason}): {e}"
-                )),
+                Ok(status) => {
+                    let message = format!(
+                        "[rust] launcher status after kill ({reason}): {}",
+                        stable_exit_status(&status)
+                    );
+                    append_server_stderr_log(&message);
+                    log_diag(&message);
+                }
+                Err(e) => {
+                    let message =
+                        format!("[rust] failed to wait for launcher after kill ({reason}): {e}");
+                    append_server_stderr_log(&message);
+                    log_diag(&message);
+                }
             }
         }
-        Err(e) => log_diag(&format!(
-            "[rust] failed to query launcher exit status ({reason}): {e}"
-        )),
+        Err(e) => {
+            let message = format!("[rust] failed to query launcher exit status ({reason}): {e}");
+            append_server_stderr_log(&message);
+            log_diag(&message);
+        }
     }
 }
 
@@ -569,21 +609,7 @@ fn spawn_server_blocking(
         let _ = std::fs::create_dir_all(parent);
     }
     rotate_log_if_needed(&stderr_log_path, LOG_ROTATE_BYTES);
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&stderr_log_path)
-    {
-        Ok(mut file) => {
-            use std::io::Write;
-            let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
-            let _ = writeln!(file, "[{ts}] [rust] launcher stderr capture starting");
-        }
-        Err(error) => log_diag(&format!(
-            "[rust] failed to initialize server stderr log {}: {error}",
-            stderr_log_path.display()
-        )),
-    }
+    append_server_stderr_log("[rust] launcher stderr capture starting");
 
     let mut child = Command::new(&node_path);
     let runtime_path = std::env::join_paths(
@@ -604,14 +630,15 @@ fn spawn_server_blocking(
     let mut child = match child.spawn() {
         Ok(c) => c,
         Err(e) => {
-            log_diag(&format!("[rust] failed to spawn launcher process: {e}"));
+            let message = format!("[rust] failed to spawn launcher process: {e}");
+            append_server_stderr_log(&message);
+            log_diag(&message);
             return Err(e.into());
         }
     };
-    log_diag(&format!(
-        "[rust] launcher process spawned pid={}",
-        child.id()
-    ));
+    let spawn_message = format!("[rust] launcher process spawned pid={}", child.id());
+    append_server_stderr_log(&spawn_message);
+    log_diag(&spawn_message);
 
     // P1-2: assign to job object immediately to prevent orphan processes
     if let Err(e) = job.assign(child.id()) {
@@ -1206,17 +1233,26 @@ pub fn run() -> anyhow::Result<()> {
                                             // misclassified exit code 259 (STILL_ACTIVE) as "running"
                                             // forever — the blocking wait fixes that on both platforms.
                                             let exit_status = wait_for_child_exit(child_pid);
+                                            let status_class = if exit_status.starts_with("exit_code=0") {
+                                                "normal"
+                                            } else {
+                                                "abnormal"
+                                            };
 
                                             if shutting_down_for_monitor.load(Ordering::Acquire) {
-                                                log_diag(&format!(
-                                                    "[rust] child process exited during application shutdown — pid={child_pid}, {exit_status}"
-                                                ));
+                                                let message = format!(
+                                                    "[rust] child process exited during application shutdown — launcher pid={child_pid}, classification={status_class}, {exit_status}"
+                                                );
+                                                append_server_stderr_log(&message);
+                                                log_diag(&message);
                                                 break;
                                             }
 
-                                            log_diag(&format!(
-                                                "[rust] child process exited unexpectedly after navigation — pid={child_pid}, {exit_status}"
-                                            ));
+                                            let message = format!(
+                                                "[rust] launcher exited unexpectedly after navigation — pid={child_pid}, classification={status_class}, {exit_status}"
+                                            );
+                                            append_server_stderr_log(&message);
+                                            log_diag(&message);
                                             let prior_attempt = restart_attempt;
                                             restart_attempt = restart_attempt_after_uptime(
                                                 restart_attempt,
@@ -1437,22 +1473,36 @@ pub fn run() -> anyhow::Result<()> {
                         loop {
                             match child.try_wait() {
                                 Ok(Some(status)) => {
-                                    log_diag(&format!(
-                                        "[tauri] server exited with {status:?}"
-                                    ));
+                                    let message = format!(
+                                        "[tauri] server exited during application shutdown — {}",
+                                        stable_exit_status(&status)
+                                    );
+                                    append_server_stderr_log(&message);
+                                    log_diag(&message);
                                     break;
                                 }
                                 Ok(None) => {
                                     if deadline.elapsed() > Duration::from_secs(SHUTDOWN_GRACE_PERIOD_SECS) {
-                                        log_diag(&format!("[tauri] server did not exit within {SHUTDOWN_GRACE_PERIOD_SECS}s, forcing kill"));
+                                        let message = format!("[tauri] server did not exit within {SHUTDOWN_GRACE_PERIOD_SECS}s, forcing kill");
+                                        append_server_stderr_log(&message);
+                                        log_diag(&message);
                                         let _ = child.kill();
-                                        let _ = child.wait();
+                                        if let Ok(status) = child.wait() {
+                                            let message = format!(
+                                                "[tauri] server status after forced kill — {}",
+                                                stable_exit_status(&status)
+                                            );
+                                            append_server_stderr_log(&message);
+                                            log_diag(&message);
+                                        }
                                         break;
                                     }
                                     std::thread::sleep(Duration::from_millis(SHUTDOWN_POLL_INTERVAL_MS));
                                 }
                                 Err(e) => {
-                                    log_diag(&format!("[tauri] try_wait error: {e}"));
+                                    let message = format!("[tauri] try_wait error: {e}");
+                                    append_server_stderr_log(&message);
+                                    log_diag(&message);
                                     break;
                                 }
                             }

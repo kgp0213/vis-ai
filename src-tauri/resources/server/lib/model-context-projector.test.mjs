@@ -32,3 +32,38 @@ test("projection compacts old tool results and reports overflow without claiming
   assert.equal(result.error, null);
   assert.equal(result.messages.at(-1).content, "继续");
 });
+
+test("uses provider-measured prefix tokens for an append-only context", () => {
+  const history = [
+    { role: "user", content: "a".repeat(100) },
+    { role: "assistant", content: "b".repeat(100) },
+    { role: "user", content: "c" },
+  ];
+  const result = projectModelContext({
+    history,
+    providerCapabilities: { maxContextTokens: 1000 },
+    contextBudget: {
+      measuredPromptTokens: 80,
+      measuredMessageCount: 2,
+      measuredRequestId: "ctx-1",
+      measuredAt: "2026-07-26T00:00:00.000Z",
+    },
+  });
+  assert.equal(result.measurement.source, "measured");
+  assert.equal(result.measurement.promptTokens, 80);
+  assert.equal(result.estimatedTokens, 81);
+});
+
+test("does not apply a measured prefix after projection drops messages", () => {
+  const result = projectModelContext({
+    history: [
+      { role: "user", content: "x".repeat(200) },
+      { role: "tool", content: "y".repeat(200) },
+      { role: "user", content: "latest" },
+    ],
+    providerCapabilities: { maxContextTokens: 20 },
+    contextBudget: { measuredPromptTokens: 500, measuredMessageCount: 2 },
+  });
+  assert.equal(result.measurement, null);
+  assert.equal(result.compaction.applied, true);
+});

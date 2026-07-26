@@ -9,6 +9,7 @@ function clone(value) {
 }
 
 export function createOperationSteeringRuntime({
+  initial = [],
   maxQueued = DEFAULT_MAX_QUEUED,
   maxChars = DEFAULT_MAX_CHARS,
   idFactory = randomUUID,
@@ -100,11 +101,51 @@ export function createOperationSteeringRuntime({
     return clone(changed);
   }
 
+  /**
+   * Restore only the lifecycle projection after a process restart. Pending
+   * instructions intentionally become not_applied: the instruction body is
+   * not persisted, and replaying an unknown steering side effect would violate
+   * operation/session isolation. This mirrors PromptService's explicit abort
+   * boundary without creating another model execution path.
+   */
+  function restore(rawEntries = [], { reason = "process_restarted" } = {}) {
+    entriesByOperation.clear();
+    const restored = Array.isArray(rawEntries) ? rawEntries : [];
+    for (const raw of restored) {
+      const operationId = String(raw?.operationId ?? "").trim();
+      const id = String(raw?.id ?? "").trim();
+      if (!operationId || !id) continue;
+      const status = String(raw?.status ?? "").trim();
+      const entry = {
+        id,
+        operationId,
+        sessionId: raw?.sessionId ? String(raw.sessionId) : null,
+        workspace: raw?.workspace ? String(raw.workspace) : null,
+        instruction: "",
+        status: status === "queued" ? "not_applied" : status || "not_applied",
+        createdAt: String(raw?.createdAt ?? now()),
+        resolution: status === "queued"
+          ? { resolvedAt: now(), reason: String(reason || "process_restarted").slice(0, 160) }
+          : (raw?.resolution && typeof raw.resolution === "object" ? { ...raw.resolution } : null),
+      };
+      const list = entries(operationId);
+      list.push(entry);
+      if (list.length > HISTORY_LIMIT) list.splice(0, list.length - HISTORY_LIMIT);
+    }
+    return [...entriesByOperation.values()].flat().map((entry) => {
+      const { instruction, ...safeEntry } = entry;
+      return { ...clone(safeEntry), instructionLength: Number(rawEntries.find((raw) => raw?.id === entry.id)?.instructionLength) || 0 };
+    });
+  }
+
+  if (Array.isArray(initial) && initial.length > 0) restore(initial);
+
   return {
     cancel,
     close,
     consume,
     enqueue,
     list: (operationId) => clone(entries(operationId)),
+    restore,
   };
 }

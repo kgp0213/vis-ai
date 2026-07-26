@@ -22837,6 +22837,7 @@ function createDashboardReducerState(seed) {
     epoch: seed?.epoch ?? null,
     lastSeq: seed?.lastSeq ?? 0,
     seen: new Set(seed?.seen ?? []),
+    streamOffsets: { ...seed?.streamOffsets ?? {} },
     messages: { ...seed?.messages ?? {} },
     tools: { ...seed?.tools ?? {} },
     interactions: { ...seed?.interactions ?? {} },
@@ -22870,11 +22871,61 @@ function applyDashboardEvent(input, event) {
   if (epoch && state.epoch && epoch !== state.epoch) return { state, changed: false, resyncRequired: true, anomaly: "epoch-changed" };
   if (epoch) state.epoch = epoch;
   const seq = Number(event.eventSeq);
-  if (Number.isSafeInteger(seq) && seq > state.lastSeq + 1) state.anomalies.push({ type: "event-gap", expected: state.lastSeq + 1, received: seq });
+  const firstSeq = firstEventSequence(event);
+  if (Number.isSafeInteger(seq) && firstSeq !== null && firstSeq > state.lastSeq + 1) {
+    state.anomalies.push({ type: "event-gap", expected: state.lastSeq + 1, received: firstSeq });
+    state.lastSeq = Math.max(state.lastSeq, seq);
+    return { state, changed: false, resyncRequired: true, anomaly: "event-gap" };
+  }
   if (Number.isSafeInteger(seq)) state.lastSeq = Math.max(state.lastSeq, seq);
   for (const id2 of eventIds) state.seen.add(id2);
   while (state.seen.size > 4096) state.seen.delete(state.seen.values().next().value);
   const kind = String(event.kind ?? "");
+  if (kind === "assistant_delta") {
+    const messageId = String(event.messageId ?? event.id ?? "");
+    if (!messageId) return { state, changed: false, anomaly: "delta-missing-message" };
+    const previous2 = state.streamOffsets[messageId] ?? { content: 0, reasoning: 0, token: null, attempt: 1 };
+    const attempt = Math.max(1, Number.isSafeInteger(Number(event.attempt)) ? Number(event.attempt) : previous2.attempt);
+    if (attempt < previous2.attempt) {
+      state.anomalies.push({ type: "stale-attempt", entityId: messageId, expected: previous2.attempt, received: attempt });
+      return { state, changed: false, duplicate: true, anomaly: "stale-attempt" };
+    }
+    const reset = event.streamReset === true || attempt > previous2.attempt;
+    const content = String(event.contentDelta ?? "");
+    const reasoning = String(event.reasoningDelta ?? "");
+    const token = event.streamId ?? event.stepId ?? event.turnId ?? previous2.token ?? null;
+    const enforceOffsets = event.streamId != null || event.stepId != null || event.turnId != null || event.attempt !== void 0 || event.streamReset === true;
+    const expectedContent = reset ? 0 : previous2.content;
+    const expectedReasoning = reset ? 0 : previous2.reasoning;
+    const contentOffset = Number(event.offset);
+    const reasoningOffset = Number(event.reasoningOffset);
+    const check = (value, supplied, expected, field) => {
+      if (!value || !enforceOffsets || !Number.isSafeInteger(supplied) || supplied < 0) return "ok";
+      if (supplied === 0 && expected > 0 && token !== previous2.token && !reset) return "ok";
+      if (supplied < expected) return "duplicate";
+      if (supplied > expected) {
+        state.anomalies.push({ type: "delta-gap", entityId: messageId, field, expected, received: supplied });
+        return "gap";
+      }
+      return "ok";
+    };
+    const contentStatus = check(content, contentOffset, expectedContent, "content");
+    const reasoningStatus = check(reasoning, reasoningOffset, expectedReasoning, "reasoning");
+    if (contentStatus === "gap" || reasoningStatus === "gap") return { state, changed: false, resyncRequired: true, anomaly: "delta-gap" };
+    const acceptedContent = contentStatus === "duplicate" ? "" : content;
+    const acceptedReasoning = reasoningStatus === "duplicate" ? "" : reasoning;
+    if (!acceptedContent && !acceptedReasoning) return { state, changed: false, duplicate: true };
+    state.streamOffsets = {
+      ...state.streamOffsets,
+      [messageId]: {
+        content: expectedContent + acceptedContent.length,
+        reasoning: expectedReasoning + acceptedReasoning.length,
+        token: token === null ? null : String(token),
+        attempt
+      }
+    };
+    return { state, changed: true };
+  }
   if (kind === "todo-update") {
     const previousTodos = state.todos;
     const nextTodos = {};
@@ -22934,6 +22985,15 @@ function eventChars(event) {
   } catch {
     return 0;
   }
+}
+function firstEventSequence(event) {
+  const values = [Number(event?.eventSeq)];
+  for (const id of Array.isArray(event?.coalescedEventIds) ? event.coalescedEventIds : []) {
+    const match = /:\d+$/u.exec(String(id ?? ""));
+    if (match) values.push(Number(match[0].slice(1)));
+  }
+  const valid = values.filter((value) => Number.isSafeInteger(value) && value >= 0);
+  return valid.length > 0 ? Math.min(...valid) : null;
 }
 function streamIdentityMatches(left, right) {
   if (String(left?.kind ?? "") !== String(right?.kind ?? "")) return false;
@@ -22997,6 +23057,10 @@ function splitDelta(event, maxChars) {
   const chunks = [];
   for (let offset = 0; offset < longest; offset += maxChars) {
     const chunk = { ...event };
+    if (event.eventId) {
+      chunk.eventId = `${event.eventId}:chunk:${Math.floor(offset / maxChars) + 1}`;
+      chunk.coalescedEventIds = [event.eventId];
+    }
     for (const field of fields) {
       const value = String(event[field]);
       const start = Math.min(offset, value.length);
@@ -24493,6 +24557,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   if (eventGuardRef.current === null) eventGuardRef.current = createDashboardEventGuard();
   const executionStateRef = A2(null);
   if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const resyncRunnerRef = A2(null);
   const eventBatcherRef = A2(null);
   const [statusLine, setStatusLine] = d2(null);
   const [modal, setModal] = d2(null);
@@ -24551,6 +24616,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
   const [activeConversationId, setActiveConversationId] = d2(null);
+  const activeConversationIdRef = A2(activeConversationId);
+  activeConversationIdRef.current = activeConversationId;
   const [recentWss, setRecentWss] = d2([]);
   const [workspaceSelection, setWorkspaceSelection] = d2(null);
   y2(() => {
@@ -25151,8 +25218,12 @@ ${workspaceDir || ""}`;
     streamBufRef.current = null;
   }, []);
   const refetchCanonicalState = q2(async () => {
+    const expectedSessionId = activeConversationIdRef.current;
+    const isCurrentSession = () => String(activeConversationIdRef.current ?? "") === String(expectedSessionId ?? "");
+    let canonicalLoaded = false;
     try {
       const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
+      if (!isCurrentSession()) return false;
       setMessages(data.messages ?? []);
       setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
       setBusy(Boolean(data.busy));
@@ -25161,18 +25232,22 @@ ${workspaceDir || ""}`;
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
+      executionStateRef.current = createDashboardReducerState();
+      canonicalLoaded = true;
     } catch {
+      return false;
     }
     try {
       const m3 = await api("/modal");
-      setModal(m3.modal ?? null);
+      if (isCurrentSession()) setModal(m3.modal ?? null);
     } catch {
     }
     try {
       const retrieval = await api("/index-retrieval-mode");
-      setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
+      if (isCurrentSession()) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
     } catch {
     }
+    return canonicalLoaded && isCurrentSession();
   }, [cancelStreamingRaf]);
   y2(() => {
     let disposed = false;
@@ -25180,6 +25255,11 @@ ${workspaceDir || ""}`;
       if (dash.kind === "ping") return;
       const reduced = applyDashboardEvent(executionStateRef.current, dash);
       executionStateRef.current = reduced.state;
+      if (reduced.duplicate) return;
+      if (reduced.resyncRequired) {
+        resyncRunnerRef.current?.(dash);
+        return;
+      }
       if (dash.kind === "todo-update") {
         setTodos(Object.values(reduced.state.todos));
       }
@@ -25223,6 +25303,10 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "assistant_delta") {
+        if (dash.streamReset === true) {
+          cancelStreamingRaf();
+          streamBufRef.current = null;
+        }
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
@@ -25404,19 +25488,34 @@ ${workspaceDir || ""}`;
         return;
       }
     };
-    const resyncDashboardEvents = async () => {
+    const resyncDashboardEvents = async (triggerEvent = null) => {
       if (resyncingEventsRef.current) return;
       resyncingEventsRef.current = true;
+      const previousState = executionStateRef.current;
       try {
-        await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+        const [canonicalLoaded] = await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+        if (canonicalLoaded !== true || disposed) {
+          if (!disposed) setError(t4("chat.eventStreamError"));
+          return;
+        }
+        const buffered = bufferedDashboardEventsRef.current.splice(0).sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
+        const firstBuffered = buffered.find((event) => Number.isSafeInteger(Number(event?.eventSeq)));
+        const triggerCursorMatch = /^([^:]+):(\d+)$/u.exec(String(triggerEvent?.latestCursor ?? ""));
+        const triggerSeq = Number.isSafeInteger(Number(triggerEvent?.eventSeq)) ? Number(triggerEvent.eventSeq) : triggerCursorMatch ? Number(triggerCursorMatch[2]) : null;
+        executionStateRef.current = createDashboardReducerState({
+          // Service restart changes the epoch. Keep the triggering epoch even
+          // when no event arrived while the canonical snapshot was loading.
+          epoch: firstBuffered?.eventEpoch ?? triggerEvent?.eventEpoch ?? previousState?.epoch ?? null,
+          lastSeq: firstBuffered ? Math.max(0, Number(firstBuffered.eventSeq) - 1) : triggerSeq ?? previousState?.lastSeq ?? 0
+        });
+        for (const event of buffered) applyDashboardEvent2(event);
       } finally {
         if (!disposed) {
-          const buffered = bufferedDashboardEventsRef.current.splice(0).sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
           resyncingEventsRef.current = false;
-          for (const event of buffered) applyDashboardEvent2(event);
         }
       }
     };
+    resyncRunnerRef.current = resyncDashboardEvents;
     const eventBatcher = createDashboardEventBatcher({
       onFlush: (events) => {
         if (disposed) return;
@@ -25429,7 +25528,7 @@ ${workspaceDir || ""}`;
       const eventSessionId = String(dash.sessionId ?? "").trim();
       if (eventSessionId && activeConversationId && eventSessionId !== String(activeConversationId)) return;
       if (dash.kind === "resync-required") {
-        void resyncDashboardEvents();
+        void resyncDashboardEvents(dash);
         return;
       }
       if (resyncingEventsRef.current) {
@@ -25455,12 +25554,16 @@ ${workspaceDir || ""}`;
       unsubscribeStatus();
       eventBatcher.dispose();
       eventBatcherRef.current = null;
+      resyncRunnerRef.current = null;
+      resyncingEventsRef.current = false;
+      bufferedDashboardEventsRef.current.splice(0);
       cancelStreamingRaf();
     };
   }, [refetchCanonicalState, refreshBackgroundJobs, cancelStreamingRaf, preserveVisibleHistoryOnAppend, activeConversationId]);
   y2(() => {
     eventBatcherRef.current?.discard();
     bufferedDashboardEventsRef.current.splice(0);
+    resyncingEventsRef.current = false;
     executionStateRef.current = createDashboardReducerState();
     eventGuardRef.current?.reset();
   }, [activeConversationId]);

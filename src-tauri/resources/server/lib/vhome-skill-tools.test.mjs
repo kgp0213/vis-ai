@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeSendAuthorization, createSendAuthorization } from "./message-send-policy.mjs";
+import { createHostToolBroker } from "./host-tool-broker.mjs";
 import { createVHomeSkillDraftStore } from "./vhome-skill-drafts.mjs";
 import { registerVHomeSkillTools } from "./vhome-skill-tools.mjs";
 
@@ -43,6 +44,7 @@ function setup(options = {}) {
     getSendContext: () => ({ ...sendContext }),
     consumeSendAuthorization: options.consumeSendAuthorization ?? ((authorization, request) => consumeSendAuthorization(authorization, request)),
     reviewMessageRisk: options.reviewMessageRisk ?? (async () => ({ level: "safe", confidence: 0.99, categories: ["routine"], reason: "普通工作消息" })),
+    effectBroker: options.effectBroker ?? null,
   });
   return { root, specs, store, installed, writes, executions, sendContext };
 }
@@ -153,6 +155,41 @@ test("dws_write stops after structured authorization send limit", async () => {
     const second = JSON.parse(await tool.fn({ ...input, text: "通知二" }, {}));
     assert.equal(second.pendingConfirmation, true);
     assert.equal(state.writes.length, 1);
+  } finally { rmSync(state.root, { recursive: true, force: true }); }
+});
+
+test("dws_write uses a stable host effect for repeated tool-call delivery", async () => {
+  const effectCalls = [];
+  const effectBroker = createHostToolBroker({
+    operations: {
+      dws_write: {
+        effect: true,
+        execute: async (args, context) => {
+          effectCalls.push({ args, context });
+          return { ok: true, data: { messageId: "msg-effect" }, error: null, meta: {} };
+        },
+      },
+    },
+  });
+  const state = setup({
+    effectBroker,
+    sendContext: {
+      operationId: "operation-effect",
+      userPrompt: "明确给测试联系人发送通知",
+      sendAuthorization: createSendAuthorization({ operationId: "operation-effect", source: "chat", userPrompt: "明确给测试联系人发送通知" }),
+    },
+  });
+  try {
+    const input = { action: "send_message", targetType: "user", targetId: "user-1", targetLabel: "测试联系人", text: "通知" };
+    const first = JSON.parse(await state.specs.get("dws_write").fn(input, { toolCallId: "call-effect" }));
+    const second = JSON.parse(await state.specs.get("dws_write").fn(input, { toolCallId: "call-effect" }));
+    assert.equal(first.sent, true);
+    assert.equal(second.sent, true);
+    assert.equal(effectCalls.length, 1);
+    await assert.rejects(
+      () => state.specs.get("dws_write").fn({ ...input, text: "改过的通知" }, { toolCallId: "call-effect" }),
+      (error) => error.code === "EFFECT_IDEMPOTENCY_CONFLICT",
+    );
   } finally { rmSync(state.root, { recursive: true, force: true }); }
 });
 

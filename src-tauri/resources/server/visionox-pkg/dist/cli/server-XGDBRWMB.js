@@ -5331,7 +5331,7 @@ async function handleSubmit(method, _rest, body, ctx) {
       }
     };
   }
-  const { prompt, session, images, attachments, requestId, skillInvocation } = parseBody11(body);
+  const { prompt, session, images, attachments, requestId, skillInvocation, delivery, inputId, admittedInputId } = parseBody11(body);
   let parsedImages = null;
   if (Array.isArray(images) && images.length > 0) {
     parsedImages = images.filter(function(i) { return typeof i === "string" && i.startsWith("data:image/"); });
@@ -5344,6 +5344,9 @@ async function handleSubmit(method, _rest, body, ctx) {
     return { status: 400, body: { error: "prompt (non-empty string) required" } };
   }
   const parsedRequestId = typeof requestId === "string" ? requestId.trim().slice(0, 160) : null;
+  const parsedDelivery = delivery === "steer" || delivery === "queue" ? delivery : null;
+  const parsedInputId = typeof inputId === "string" ? inputId.trim().slice(0, 160) : null;
+  const parsedAdmittedInputId = typeof admittedInputId === "string" ? admittedInputId.trim().slice(0, 160) : null;
   if (/^document-handoff-/.test(parsedRequestId ?? "")) {
     return { status: 400, body: { error: "requestId uses a reserved internal handoff namespace" } };
   }
@@ -5359,7 +5362,10 @@ async function handleSubmit(method, _rest, body, ctx) {
   const result = await ctx.submitPrompt(prompt, session || null, parsedImages, {
     requestId: parsedRequestId,
     attachmentIds: parsedAttachments,
-    skillInvocation: parsedSkillInvocation
+    skillInvocation: parsedSkillInvocation,
+    ...(parsedDelivery ? { delivery: parsedDelivery } : {}),
+    ...(parsedInputId ? { inputId: parsedInputId } : {}),
+    ...(parsedAdmittedInputId ? { admittedInputId: parsedAdmittedInputId } : {})
   });
   if (!result.accepted) {
     const busy = result.busy === true || result.code === "LOOP_BUSY";

@@ -13,6 +13,13 @@ function json(value) {
   return JSON.stringify(value);
 }
 
+function deterministicUuid(seed) {
+  const hex = createHash("sha256").update(String(seed)).digest("hex").slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = ((Number.parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8).join("")}-${hex.slice(8, 12).join("")}-${hex.slice(12, 16).join("")}-${hex.slice(16, 20).join("")}-${hex.slice(20).join("")}`;
+}
+
 function requiredText(value, name, maxLength) {
   const text = String(value ?? "").trim();
   if (!text) throw new Error(`${name} is required`);
@@ -185,6 +192,7 @@ export function registerVHomeSkillTools(registry, options) {
     getSendContext = () => ({}),
     reviewMessageRisk,
     consumeSendAuthorization,
+    effectBroker = null,
   } = options;
   let authorizedOperationId = null;
   const authorizedDwsScopes = new Set();
@@ -250,10 +258,38 @@ export function registerVHomeSkillTools(registry, options) {
       required: ["action", "targetType", "targetId"],
     },
     fn: async (input, ctx) => {
-      const prepared = prepareDwsWrite(input);
       const sendContext = getSendContext() ?? {};
       if (ctx?.signal?.aborted || sendContext.signal?.aborted) {
         return json({ sent: false, cancelled: true, error: "the current operation was cancelled before sending" });
+      }
+      const effectTaskId = String(sendContext.operationId ?? ctx?.operationId ?? "").trim();
+      const effectUnitId = String(ctx?.toolCallId ?? ctx?.turnId ?? "").trim();
+      const preparedTargetType = String(input?.targetType ?? "");
+      const preparedTargetId = String(input?.targetId ?? "");
+      const effectContext = effectTaskId && effectUnitId
+        ? {
+          taskId: effectTaskId,
+          unitId: effectUnitId,
+          effectKey: `send:${preparedTargetType}:${preparedTargetId}`,
+          operationId: effectTaskId,
+          sessionId: sendContext.operationContext?.conversationId ?? sendContext.sessionId ?? null,
+          workspace: sendContext.operationContext?.workspace ?? sendContext.workspace ?? null,
+          signal: ctx?.signal ?? sendContext.signal ?? null,
+        }
+        : null;
+      const prepared = prepareDwsWrite(input, {
+        uuidFactory: effectContext
+          ? () => deterministicUuid(`${effectContext.taskId}\0${effectContext.unitId}\0${effectContext.effectKey}`)
+          : undefined,
+      });
+      const priorEffect = effectContext && effectBroker?.getEffectFor
+        ? await effectBroker.getEffectFor("dws_write", effectContext)
+        : null;
+      // A previously confirmed effect is safe to project again without asking
+      // for a second user authorization. The broker still verifies argsHash.
+      if (priorEffect?.state === "confirmed" && effectBroker && effectContext) {
+        const result = await effectBroker.invoke("dws_write", prepared.args, effectContext);
+        return json({ sent: result.ok, data: result.data, error: result.error, meta: result.meta, targetType: prepared.targetType, targetId: prepared.targetId, confirmation: "already-confirmed", risk: { level: "already-confirmed", reason: "同一工具调用已确认" } });
       }
       const policy = await decideMessageSendPolicy({
         messageType: prepared.messageType,
@@ -303,7 +339,11 @@ export function registerVHomeSkillTools(registry, options) {
         return json({ sent: false, cancelled: true, risk: policy, error: "attachment changed before sending; please prepare it again" });
       }
 
-      if (policy.authorization?.valid && typeof consumeSendAuthorization === "function") {
+      const effectAlreadySettled = Boolean(priorEffect);
+      // A repeated provider/tool call must not consume the same user approval
+      // twice. Unknown/dispatched effects still flow to the broker, which will
+      // require explicit confirmation instead of replaying the side effect.
+      if (!effectAlreadySettled && policy.authorization?.valid && typeof consumeSendAuthorization === "function") {
         const consumed = consumeSendAuthorization(sendContext.sendAuthorization, {
           operationId: sendContext.operationId,
           source: sendContext.source,
@@ -315,7 +355,15 @@ export function registerVHomeSkillTools(registry, options) {
         if (!consumed?.ok) return json({ sent: false, cancelled: true, risk: policy, error: consumed.reason || "send authorization is no longer valid" });
       }
 
-      const result = await runDwsWrite(prepared.args, { executable: dwsExecutable, signal: ctx?.signal });
+      let result;
+      if (effectBroker && effectContext) {
+        result = await effectBroker.invoke("dws_write", prepared.args, effectContext);
+      } else {
+        // Legacy callers/tests may not provide a stable tool-call identity.
+        // Without one, refusing to synthesize an idempotency key is safer than
+        // caching unrelated messages under one effect.
+        result = await runDwsWrite(prepared.args, { executable: dwsExecutable, signal: ctx?.signal });
+      }
       return json({ sent: result.ok, data: result.data, error: result.error, meta: result.meta, targetType: prepared.targetType, targetId: prepared.targetId, confirmation: policy.confirm ? "confirmed" : "not-required", risk: policy });
     },
   });
@@ -470,12 +518,18 @@ export function registerVHomeSkillTools(registry, options) {
           allowCustom: false,
         },
       });
+      if (ctx?.signal?.aborted) {
+        return json({ installed: false, cancelled: true, draftRetained: true, code: "OPERATION_CANCELLED" });
+      }
       if (verdict?.type !== "pick" || verdict.optionId !== "A") {
         return json({ installed: false, cancelled: true, draftRetained: true });
       }
 
       const tempDir = mkdtempSync(join(tmpdir(), "visionox-vhome-skill-install-"));
       try {
+        if (ctx?.signal?.aborted) {
+          return json({ installed: false, cancelled: true, draftRetained: true, code: "OPERATION_CANCELLED" });
+        }
         writeVHomeSkillDirectory(tempDir, draft);
         const result = installSkillDir(draft.name, tempDir, { overwrite: updating });
         if (!result?.installed) return json({ installed: false, error: result?.error ?? "installation failed" });

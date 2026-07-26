@@ -480,7 +480,7 @@ describe("V来家 integration", () => {
     assert.match(app, /const nextStatus = await api\("\/vhome\/login"[\s\S]*?replaceVHomeStatus\(nextStatus\)[\s\S]*?setVhomeMenuOpen\(true\)[\s\S]*?finishVHomeLogin\(nextStatus\)/);
     assert.match(app, /class="vhome-control"/);
     assert.match(app, /授权等待期间可以继续使用 AI 和其他本地功能/);
-    assert.match(app, /copyVHomeValue\(vhomeLoginUrl, "授权链接"\)/);
+    assert.match(app, /copyVHomeValue\(vhomeLoginUrl, t4\("appPanel\.authLink"\)\)/);
     assert.match(app, /openVHomeAuthorization\("edge"\)/);
     assert.match(app, /const vhomeAuthorizationReady = Boolean/);
     assert.match(app, /const vhomeControlRef = A2\(null\)/);
@@ -495,11 +495,11 @@ describe("V来家 integration", () => {
     assert.match(app, /正在获取授权链接，请稍候/);
     assert.match(app, /function vhomeLoginFailureMessage/);
     assert.match(app, /无法连接 V来家授权服务，请检查网络、代理或防火墙后重试/);
-    assert.match(app, /DWS 诊断：\$\{vhomeLoginDetail\}/);
+    assert.match(app, /t4\("appPanel\.dwsDiag"\)\}\$\{vhomeLoginDetail\}/);
     assert.doesNotMatch(app, /授权未完成，请重新生成授权链接/);
     assert.match(app, /vhomeAuthorizationReady && vhomeLoginActive && !vhomeLoginExpired/);
-    assert.match(app, />我已完成授权</);
-    assert.match(app, />重新生成链接</);
+    assert.match(app, /t4\("appPanel\.authDone"\)/);
+    assert.match(app, /t4\("appPanel\.regenLink"\)/);
     assert.match(app, /title=\$\{sidebarIdentityTitle\}>\$\{sidebarIdentity\}/);
     assert.match(launcher, /createVHomeIntegration\(\{ executable: dwsExecutable, logger: console \}\)/);
     assert.match(launcher, /getSendContext: \(\) => \(\{ \.\.\.activeMessageSendContext, operationContext: operationRuntime\.getActive\(\)\?\.context \?\? null \}\)/);

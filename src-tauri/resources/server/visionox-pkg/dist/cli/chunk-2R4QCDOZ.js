@@ -6343,6 +6343,10 @@ var ToolRegistry = class {
   setResultAugmenter(fn) {
     this._resultAugmenter = fn;
   }
+  /** Return the current post-dispatch augmenter so host integrations can compose with it. */
+  getResultAugmenter() {
+    return this._resultAugmenter;
+  }
   /** True when an augmenter is already wired — lets late-installing callers skip clobbering an earlier one. */
   get hasResultAugmenter() {
     return this._resultAugmenter !== null;
@@ -6429,7 +6433,7 @@ var ToolRegistry = class {
     }
     if (this._interceptor) {
       try {
-        const short = await this._interceptor(name, args);
+        const short = await this._interceptor(name, args, opts);
         if (typeof short === "string") return short;
       } catch (err) {
         return JSON.stringify({
@@ -6482,7 +6486,7 @@ var ToolRegistry = class {
     if (rawResultAnnotation) finalResult = `${finalResult}\n\n${rawResultAnnotation}`;
     if (this._resultAugmenter) {
       try {
-        return this._resultAugmenter(name, args, finalResult);
+        return this._resultAugmenter(name, args, finalResult, opts);
       } catch {
       }
     }

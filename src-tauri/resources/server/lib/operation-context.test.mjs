@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { closeOperationContext, createOperationContext, isOperationContextActive, requestOperationStop } from "./operation-context.mjs";
+import { closeOperationContext, createOperationContext, isOperationContextActive, recordOperationAuthorizationFact, recordOperationRecovery, recordOperationToolFailure, recordOperationToolSuccess, requestOperationStop, shouldBlockRepeatedToolFailure } from "./operation-context.mjs";
 
 test("operation context carries stable execution identity and starts active", () => {
   const controller = new AbortController();
@@ -49,4 +49,76 @@ test("terminal operation state is idempotent and cannot be overwritten by late c
   closeOperationContext(context, "completed", "2026-07-24T00:04:00.000Z");
   assert.equal(context.state, "unknown");
   assert.equal(context.closedAt, "2026-07-24T00:03:00.000Z");
+});
+
+test("operation context records bounded failure fingerprints and recovery facts", () => {
+  const context = createOperationContext({ operationId: "operation-5", kind: "chat" });
+  const outcome = { category: "environment", code: "runtime_not_found", retryable: true, exitCode: 9009, message: "Python was not found" };
+  const first = recordOperationToolFailure(context, { toolCallId: "call-1", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  const second = recordOperationToolFailure(context, { toolCallId: "call-2", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  assert.equal(first.repeatFailureBlocked, false);
+  assert.equal(second.repeatFailureBlocked, true);
+  assert.equal(context.toolFailures.length, 2);
+  assert.equal(context.toolFailures[0].argsFingerprint, context.toolFailures[1].argsFingerprint);
+  const recovery = recordOperationRecovery(context, { toolCallId: "call-3", toolName: "run_command", recovery: "selected_registered_runtime", fromFingerprint: first.fingerprint });
+  assert.equal(recovery.recovery, "selected_registered_runtime");
+  assert.equal(context.recoveries.length, 1);
+});
+
+test("repeated failure checks are idempotent and block only after the configured limit", () => {
+  const context = createOperationContext({ operationId: "operation-6", kind: "chat" });
+  const outcome = { category: "environment", code: "runtime_not_found", retryable: true, exitCode: 9009, message: "Python was not found" };
+  const first = recordOperationToolFailure(context, { toolCallId: "call-1", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 }).blocked, false);
+  const duplicate = recordOperationToolFailure(context, { toolCallId: "call-1", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  assert.equal(duplicate.count, first.count);
+  assert.equal(context.toolFailures.length, 1);
+  recordOperationToolFailure(context, { toolCallId: "call-2", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  const blocked = shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.failure.fingerprint, first.fingerprint);
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python other.py" }, maxAttempts: 2 }).blocked, false);
+});
+
+test("successful recovery resets only the active consecutive failure counter", () => {
+  const context = createOperationContext({ operationId: "operation-7", kind: "chat" });
+  const outcome = { category: "environment", code: "runtime_not_found", retryable: true, exitCode: 9009, message: "Python was not found" };
+  const first = recordOperationToolFailure(context, { toolCallId: "call-1", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  recordOperationToolFailure(context, { toolCallId: "call-2", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 }).blocked, true);
+
+  recordOperationRecovery(context, { toolCallId: "call-3", toolName: "run_command", recovery: "selected_registered_runtime", fromFingerprint: first.fingerprint });
+  assert.equal(context.failureFingerprints[first.fingerprint], 0);
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 }).blocked, false);
+
+  recordOperationToolFailure(context, { toolCallId: "call-4", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 }).blocked, false);
+});
+
+test("success for a different tool argument does not reset the failed invocation", () => {
+  const context = createOperationContext({ operationId: "operation-8", kind: "chat" });
+  const outcome = { category: "environment", code: "runtime_not_found", retryable: true, exitCode: 9009 };
+  const first = recordOperationToolFailure(context, { toolCallId: "call-1", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  recordOperationToolFailure(context, { toolCallId: "call-2", toolName: "run_command", args: { command: "python build.py" }, outcome, maxAttempts: 2 });
+  assert.equal(recordOperationToolSuccess(context, { toolName: "run_command", args: { command: "python test.py" } }), null);
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 }).blocked, true);
+  assert.equal(recordOperationToolSuccess(context, { toolName: "run_command", args: { command: "python build.py" } }).fingerprint, first.fingerprint);
+  assert.equal(shouldBlockRepeatedToolFailure(context, { toolName: "run_command", args: { command: "python build.py" }, maxAttempts: 2 }).blocked, false);
+});
+
+test("operation context records deduplicated sanitized authorization facts", () => {
+  const context = createOperationContext({ operationId: "operation-auth", kind: "chat" });
+  const fact = recordOperationAuthorizationFact(context, {
+    factId: "auth:1",
+    decision: "allow",
+    scope: "project",
+    toolName: "run_command",
+    rule: { kind: "prefix", value: "npm" },
+    argsFingerprint: "sha256:args",
+    reusable: true,
+  });
+  recordOperationAuthorizationFact(context, fact);
+  assert.equal(context.authorizationFacts.length, 1);
+  assert.equal(context.authorizationFacts[0].rule.value, "npm");
+  assert.equal("command" in context.authorizationFacts[0], false);
 });

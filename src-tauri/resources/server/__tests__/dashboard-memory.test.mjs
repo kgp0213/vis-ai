@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+
+const source = readFileSync(new URL("../visionox-pkg/dashboard/src/panels/memory.ts", import.meta.url), "utf8");
+
+test("记忆管理统一长期、场景和会话记忆，不再暴露原始文件编辑器", () => {
+  assert.match(source, /class="memory-manager"/);
+  assert.match(source, /t4\("memPanel\.searchPlaceholder"\)/);
+  assert.match(source, /\["session",\s*t4\("memPanel\.scopeSession"\)\]/);
+  assert.match(source, /\/mode-memory\/\$\{encodeURIComponent\(open\.name\)\}/);
+  assert.match(source, /\/memory\/session\/\$\{encodeURIComponent\(open\.name\)\}/);
+  assert.match(source, /overwrite: true/);
+  assert.match(source, /t4\("memPanel\.detailDirty"\)/);
+  assert.match(source, /t4\("memPanel\.actualInject"/);
+  assert.match(source, /t4\("memPanel\.budgetDedup"\)/);
+  assert.match(source, /t4\("memPanel\.stateFullInject"\)/);
+  assert.match(source, /t4\("memPanel\.diagSensitive"\)/);
+  assert.match(source, /t4\("memPanel\.diagAction"\)/);
+  assert.match(source, /t4\("memPanel\.footCreated",\s*\{[\s\S]*?source:/);
+  assert.doesNotMatch(source, /工作场景记忆请在 Settings/);
+  assert.doesNotMatch(source, /placeholder="文件名，可留空自动生成"/);
+  assert.match(source, /\[\["all",\s*t4\("memPanel\.filterAll"\)\][\s\S]*?\["mode",\s*t4\("memPanel\.filterMode"\)\]/);
+  assert.match(source, /newMode/);
+  assert.match(source, /copyModeMemory/);
+  assert.match(source, /batchModeMemories/);
+  assert.match(source, /\["soul",\s*t4\("memPanel\.scopeSoul"\)\]/);
+  assert.match(source, /\/memory\/soul/);
+  assert.match(source, /t4\("memPanel\.soulNoDelete"\)/);
+  assert.match(source, /t4\("memPanel\.soulBasic"\)/);
+  assert.match(source, /t4\("memPanel\.soulAdvanced"\)/);
+  assert.match(source, /t4\("memPanel\.finalPreview"\)/);
+  assert.match(source, /t4\("memPanel\.applyNow"\)/);
+  assert.match(source, /t4\("memPanel\.restoreVersion"\)/);
+  assert.match(source, /t4\("memPanel\.restoreThis"\)/);
+  assert.match(source, /\["trash",\s*t4\("memPanel\.scopeTrash"\)\]/);
+  assert.match(source, /t4\("memPanel\.pendingDesc"\)/);
+  assert.match(source, /\/mode-memory\/batch/);
+  assert.match(source, /\/move/);
+});

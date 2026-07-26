@@ -108,6 +108,20 @@ function estimateMessages(messages) {
   return estimateContextTokens(messages.reduce((sum, message) => sum + contentText(message.content).length + JSON.stringify(message.tool_calls ?? "").length, 0));
 }
 
+function estimateMessagesWithMeasuredPrefix(messages, contextBudget = {}, droppedItems = []) {
+  const measuredTokens = Number(contextBudget?.measuredPromptTokens);
+  const measuredCount = Number(contextBudget?.measuredMessageCount);
+  if (!Number.isFinite(measuredTokens) || measuredTokens < 0
+    || !Number.isSafeInteger(measuredCount) || measuredCount < 0
+    || droppedItems.length > 0 || measuredCount > messages.length) {
+    return { tokens: estimateMessages(messages), applied: false };
+  }
+  return {
+    tokens: Math.max(0, Math.floor(measuredTokens)) + estimateMessages(messages.slice(measuredCount)),
+    applied: true,
+  };
+}
+
 /**
  * Projects durable history into the model-facing request view. This is a pure
  * read operation: it never mutates history, schedules work, or calls a model.
@@ -121,14 +135,15 @@ export function projectModelContext({ history = [], operation = {}, providerCapa
   const budget = Math.max(1, maxTokens - reservedTokens);
   const retained = [...messages];
   const droppedItems = [];
-  while (retained.length > 1 && estimateMessages(retained) > budget) {
+  while (retained.length > 1 && estimateMessagesWithMeasuredPrefix(retained, contextBudget, droppedItems).tokens > budget) {
     let index = retained.findIndex((message, position) => !isProtected(message, position, retained) && message.role === "tool");
     if (index < 0) index = retained.findIndex((message, position) => !isProtected(message, position, retained));
     if (index < 0) break;
     const [removed] = retained.splice(index, 1);
     droppedItems.push({ index, role: removed.role, chars: contentText(removed.content).length, reason: "context_budget" });
   }
-  const estimatedTokens = estimateMessages(retained);
+  const measuredEstimate = estimateMessagesWithMeasuredPrefix(retained, contextBudget, droppedItems);
+  const estimatedTokens = measuredEstimate.tokens;
   const overflow = estimatedTokens > budget;
   const warnings = [];
   if (droppedItems.length > 0) warnings.push({ code: "context_compacted", message: `已从模型上下文移除 ${droppedItems.length} 条低优先级记录。` });
@@ -139,6 +154,15 @@ export function projectModelContext({ history = [], operation = {}, providerCapa
     resources: [...refs].slice(0, MAX_RESOURCE_REFS).map((id) => ({ resourceId: id })),
     droppedItems,
     compaction: { applied: droppedItems.length > 0, budgetTokens: budget, protectedTail: Math.min(4, retained.length) },
+    measurement: measuredEstimate.applied
+      ? {
+        source: "measured",
+        promptTokens: Math.max(0, Math.floor(Number(contextBudget.measuredPromptTokens))),
+        messageCount: Math.max(0, Math.floor(Number(contextBudget.measuredMessageCount))),
+        requestId: safeId(contextBudget.measuredRequestId),
+        measuredAt: contextBudget.measuredAt ?? null,
+      }
+      : null,
     warnings,
     error: overflow ? { code: "context_overflow", title: "上下文容量不足", retryable: false, action: "缩小范围或继续读取资源" } : null,
     views: { model: retained, full: fullMessages },

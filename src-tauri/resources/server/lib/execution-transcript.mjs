@@ -63,7 +63,7 @@ function toolFrameFrom(entry, fallbackId, index, turnId = "session") {
   const state = normalizeToolState(entry);
   return {
     kind: "tool",
-    frameId: `tool:${turnId}:${toolCallId}:${index}`,
+    frameId: `tool:${turnId}:${toolCallId}`,
     toolCallId,
     name: String(entry?.toolName ?? entry?.tool_name ?? entry?.name ?? "tool"),
     state: TERMINAL_TOOL_STATES.has(state) ? state : "running",
@@ -83,6 +83,9 @@ function newTurn(id, prompt, entry, ordinal) {
     ordinal,
     state: "unknown",
     prompt: prompt || null,
+    ...(entry?.messageId || entry?.id ? { messageId: safeId(entry.messageId ?? entry.id, null) } : {}),
+    ...(entry?.operationId ? { operationId: safeId(entry.operationId, null) } : {}),
+    ...(entry?.phase || entry?.receipt?.phase ? { phase: entry.phase ?? entry.receipt.phase } : {}),
     startedAt: entry?.createdAt ?? entry?.timestamp ?? null,
     endedAt: null,
     steps: [],
@@ -90,6 +93,29 @@ function newTurn(id, prompt, entry, ordinal) {
     hasAssistant: false,
     hasUnresolvedTool: false,
   };
+}
+
+function rekeyTurn(turn, nextId, toolFrames) {
+  const normalized = safeId(nextId, turn?.turnId ?? "session");
+  if (!turn || !normalized || normalized === turn.turnId) return;
+  const previousId = turn.turnId;
+  turn.turnId = normalized;
+  for (const step of turn.steps) {
+    step.stepId = `${normalized}.s${step.ordinal}`;
+    for (const frame of step.frames) {
+      if (frame.kind === "tool") {
+        const previousKey = scopedToolFrameKey(previousId, frame.toolCallId);
+        const nextKey = scopedToolFrameKey(normalized, frame.toolCallId);
+        if (toolFrames.get(previousKey) === frame) {
+          toolFrames.delete(previousKey);
+          toolFrames.set(nextKey, frame);
+        }
+        frame.frameId = `tool:${normalized}:${frame.toolCallId}`;
+      } else {
+        frame.frameId = `${step.stepId}.${frame.kind}`;
+      }
+    }
+  }
 }
 
 function closeTurn(turn, state = "unknown", endedAt = null) {
@@ -145,23 +171,82 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
     finishTurn();
     turnOrdinal += 1;
     const prompt = textOf(entry.content ?? entry.text);
-    turn = newTurn(`t${turnOrdinal}`, prompt, entry, turnOrdinal);
+    const persistedTurnId = entry?.turnId ?? (entry?.operationId ? `turn:${entry.operationId}` : null);
+    turn = newTurn(safeId(persistedTurnId, `t${turnOrdinal}`), prompt, entry, turnOrdinal);
     items.push(turn);
   };
-  const ensureTurn = () => {
+  const ensureTurn = (entry = null) => {
     if (!turn) {
       turnOrdinal += 1;
-      turn = newTurn(`t${turnOrdinal}`, "", null, turnOrdinal);
+      const persistedTurnId = entry?.turnId ?? (entry?.operationId ? `turn:${entry.operationId}` : null);
+      turn = newTurn(safeId(persistedTurnId, `t${turnOrdinal}`), "", entry, turnOrdinal);
       items.push(turn);
     }
     return turn;
   };
-  const addStep = () => {
+  const addStep = (entry = null) => {
     const current = ensureTurn();
     stepOrdinal += 1;
-    const step = { kind: "step", stepId: `${current.turnId}.s${stepOrdinal}`, ordinal: stepOrdinal, state: "running", frames: [] };
+    const stepId = safeId(entry?.stepId, `${current.turnId}.s${stepOrdinal}`);
+    const retry = entry?.retry && typeof entry.retry === "object"
+      ? entry.retry
+      : Array.isArray(entry?.receipt?.modelRetries) ? entry.receipt.modelRetries.at(-1) : null;
+    const step = {
+      kind: "step",
+      stepId,
+      ordinal: stepOrdinal,
+      state: "running",
+      ...(Number.isSafeInteger(Number(entry?.attempt)) && Number(entry.attempt) > 0 ? { attempt: Number(entry.attempt) } : {}),
+      ...(retry ? { retry: {
+        attempt: Math.max(1, Number(retry.attempt) || 1),
+        maxAttempts: Math.max(1, Number(retry.maxAttempts) || 1),
+        reason: String(retry.reason ?? "retry").slice(0, 320),
+        statusCode: Number.isInteger(Number(retry.statusCode)) ? Number(retry.statusCode) : null,
+      } } : {}),
+      ...(entry?.usage && typeof entry.usage === "object" ? { usage: { ...entry.usage } } : {}),
+      ...(entry?.finishReason ? { finishReason: String(entry.finishReason).slice(0, 120) } : {}),
+      frames: [],
+    };
     current.steps.push(step);
     return step;
+  };
+
+  const applyPersistedFacts = (entry, current) => {
+    if (!current || !entry || typeof entry !== "object") return;
+    if (entry.messageId || entry.id) current.messageId = safeId(entry.messageId ?? entry.id, current.messageId ?? null);
+    if (entry.operationId) current.operationId = safeId(entry.operationId, current.operationId ?? null);
+    if (entry.phase || entry.receipt?.phase) current.phase = entry.phase ?? entry.receipt.phase;
+    const explicitState = entry.taskState
+      ?? entry.state
+      ?? entry.receipt?.taskState
+      ?? entry.receipt?.completion?.taskState
+      ?? null;
+    if (explicitState) current.explicitState = explicitState;
+    if (entry.receipt && typeof entry.receipt === "object") {
+      const receiptId = safeId(
+        entry.receipt.turnId ?? entry.receipt.requestId ?? entry.operationId,
+        `receipt-${messageOrdinal + 1}`,
+      );
+      receipts.set(receiptId, { id: receiptId, ...entry.receipt });
+      for (const evidence of Array.isArray(entry.receipt.artifactEvidence) ? entry.receipt.artifactEvidence : []) {
+        for (const file of Array.isArray(evidence?.files) ? evidence.files : []) {
+          const artifact = artifactEntity({ ...file, verified: evidence.verified, role: "artifact" }, artifacts.size, sessionId);
+          artifacts.set(artifact.id, artifact);
+        }
+      }
+    }
+    if (entry.receipt?.intervention?.interactionId) {
+      const interactionId = safeId(entry.receipt.intervention.interactionId, `interaction-${messageOrdinal}`);
+      interactions.set(interactionId, {
+        id: interactionId,
+        state: entry.receipt.intervention.active ? "pending" : "resolved",
+        turnId: current.turnId,
+      });
+    }
+    for (const rawArtifact of Array.isArray(entry.artifactFiles) ? entry.artifactFiles : []) {
+      const artifact = artifactEntity(rawArtifact, artifacts.size, sessionId);
+      artifacts.set(artifact.id, artifact);
+    }
   };
 
   for (const raw of Array.isArray(entries) ? entries : []) {
@@ -183,9 +268,11 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
       continue;
     }
     if (entry.role === "assistant") {
-      ensureTurn();
+      ensureTurn(entry);
+      if (entry.turnId) rekeyTurn(turn, entry.turnId, toolFrames);
+      applyPersistedFacts(entry, turn);
       turn.hasAssistant = true;
-      const step = addStep();
+      const step = addStep(entry);
       const text = textOf(entry.content ?? entry.text);
       if (text) {
         const textPreview = text.slice(0, 12000);
@@ -204,27 +291,12 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
         toolFrames.set(scopedToolFrameKey(turn.turnId, frame.toolCallId), frame);
         messageOrdinal += 1;
       }
-      if (entry.receipt?.intervention?.interactionId) {
-        const interactionId = safeId(entry.receipt.intervention.interactionId, `interaction-${messageOrdinal}`);
-        interactions.set(interactionId, { id: interactionId, state: entry.receipt.intervention.active ? "pending" : "resolved", turnId: turn?.turnId ?? null });
-      }
-      if (entry.receipt && typeof entry.receipt === "object") {
-        const receiptId = safeId(entry.receipt.turnId ?? entry.receipt.requestId, `receipt-${messageOrdinal + 1}`);
-        receipts.set(receiptId, { id: receiptId, ...entry.receipt });
-        for (const evidence of Array.isArray(entry.receipt.artifactEvidence) ? entry.receipt.artifactEvidence : []) {
-          for (const file of Array.isArray(evidence?.files) ? evidence.files : []) {
-            const artifact = artifactEntity({ ...file, verified: evidence.verified, role: "artifact" }, artifacts.size, sessionId);
-            artifacts.set(artifact.id, artifact);
-          }
-        }
-      }
-      for (const rawArtifact of Array.isArray(entry.artifactFiles) ? entry.artifactFiles : []) {
-        const artifact = artifactEntity(rawArtifact, artifacts.size, sessionId);
-        artifacts.set(artifact.id, artifact);
-      }
-      if (entry.taskState || entry.state || entry.receipt?.taskState) {
-        turn.explicitState = entry.taskState ?? entry.state ?? entry.receipt.taskState;
-      }
+      continue;
+    }
+    if (entry.role === "execution") {
+      const current = ensureTurn(entry);
+      if (entry.turnId) rekeyTurn(current, entry.turnId, toolFrames);
+      applyPersistedFacts(entry, current);
       continue;
     }
     if (entry.role === "tool") {
@@ -315,6 +387,6 @@ export function paginateExecutionTranscript(snapshot, { beforeTurn = null, after
     items: selected,
     hasMoreOlder: first !== undefined && items.some((item) => compareOrdinal(item, first) < 0),
     hasMoreNewer: last !== undefined && items.some((item) => compareOrdinal(item, last) > 0),
-    cursor: last === undefined ? null : `t${last}`,
+    cursor: last === undefined ? null : String(selected.at(-1)?.turnId ?? `t${last}`),
   };
 }

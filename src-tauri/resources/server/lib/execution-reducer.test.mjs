@@ -21,6 +21,26 @@ test("text deltas are offset idempotent and expose gaps", () => {
   assert.equal(gap.resyncRequired, true);
 });
 
+test("retry attempts reset the message stream without creating a second message", () => {
+  let state = createExecutionState();
+  state = applyExecutionEvent(state, {
+    eventEpoch: "e", eventSeq: 1, eventId: "e:1", kind: "text.delta",
+    payload: { messageId: "m", attempt: 1, stepId: "s1", offset: 0, delta: "bad" },
+  }).state;
+  const retry = applyExecutionEvent(state, {
+    eventEpoch: "e", eventSeq: 2, eventId: "e:2", kind: "text.delta",
+    payload: { messageId: "m", attempt: 2, stepId: "s2", streamReset: true, offset: 0, delta: "good" },
+  });
+  assert.equal(retry.state.messages.m.content, "good");
+  assert.equal(retry.state.messages.m.attempt, 2);
+  const stale = applyExecutionEvent(retry.state, {
+    eventEpoch: "e", eventSeq: 3, eventId: "e:3", kind: "text.delta",
+    payload: { messageId: "m", attempt: 1, stepId: "s1", offset: 0, delta: "stale" },
+  });
+  assert.equal(stale.state.messages.m.content, "good");
+  assert.equal(stale.changed, false);
+});
+
 test("late events cannot reopen terminal entities", () => {
   const result = reduceExecutionEvents([
     { eventEpoch: "e", eventSeq: 1, eventId: "e:1", kind: "tool.succeeded", entityId: "call", payload: {} },

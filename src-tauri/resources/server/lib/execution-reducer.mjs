@@ -69,14 +69,27 @@ function appendDelta(state, payload, field, kind) {
   const id = normalizeExecutionId(payload.messageId ?? payload.entityId ?? payload.id, null);
   if (!id) return { changed: false, anomaly: "delta-missing-entity" };
   const key = kind === "reasoning" ? "messages" : "messages";
-  const previous = state[key][id] ?? { id, state: "running", content: "", reasoning: "", offsets: {} };
-  const offset = Number.isSafeInteger(Number(payload.offset)) && Number(payload.offset) >= 0 ? Number(payload.offset) : previous.offsets?.[field] ?? previous[field]?.length ?? 0;
-  const currentText = String(previous[field] ?? "");
-  const currentOffset = Number(previous.offsets?.[field] ?? currentText.length);
-  if (offset < currentOffset) return { changed: false };
-  if (offset > currentOffset) return { changed: false, anomaly: "delta-gap", resyncRequired: true };
+  const previous = state[key][id] ?? { id, state: "running", content: "", reasoning: "", offsets: {}, attempt: 1, streamToken: null };
+  const attempt = Math.max(1, Number.isSafeInteger(Number(payload.attempt)) ? Number(payload.attempt) : Number(previous.attempt) || 1);
+  if (attempt < (Number(previous.attempt) || 1)) return { changed: false };
+  const previousStreamToken = previous.streamToken ?? null;
+  const streamToken = payload.streamId ?? payload.stepId ?? payload.turnId ?? previousStreamToken;
+  const reset = payload.streamReset === true || attempt > (Number(previous.attempt) || 1);
+  const base = reset
+    ? { ...previous, content: "", reasoning: "", offsets: {}, attempt, streamToken }
+    : { ...previous, attempt, streamToken };
+  // Persisted execution events have always treated offsets as authoritative;
+  // an omitted offset falls back to the current length below for legacy logs.
+  const enforceOffsets = true;
+  const offset = Number.isSafeInteger(Number(payload.offset)) && Number(payload.offset) >= 0 ? Number(payload.offset) : base.offsets?.[field] ?? base[field]?.length ?? 0;
+  const currentText = String(base[field] ?? "");
+  const currentOffset = Number(base.offsets?.[field] ?? currentText.length);
+  const newStep = streamToken !== null && previousStreamToken !== null && String(streamToken) !== String(previousStreamToken);
+  const effectiveOffset = enforceOffsets && offset === 0 && currentOffset > 0 && newStep && !reset ? currentOffset : offset;
+  if (enforceOffsets && effectiveOffset < currentOffset) return { changed: false };
+  if (enforceOffsets && effectiveOffset > currentOffset) return { changed: false, anomaly: "delta-gap", resyncRequired: true };
   const nextText = currentText + String(payload.delta ?? payload.text ?? "");
-  const next = { ...previous, [field]: nextText, offsets: { ...(previous.offsets ?? {}), [field]: nextText.length } };
+  const next = { ...base, [field]: nextText, offsets: { ...(base.offsets ?? {}), [field]: nextText.length } };
   state[key] = { ...state[key], [id]: next };
   return { changed: true };
 }

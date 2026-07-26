@@ -150,8 +150,7 @@ test("background task panel does not reactivate the retired document worker", ()
   assert.match(app, /function backgroundJobNeedsAttention/);
   assert.match(app, /function documentHandoffNotice/);
   assert.match(app, /legacy_unassigned/);
-  assert.match(app, /待处理 \$\{displayJobs\.filter\(\(job\) => backgroundJobGroup\(job\) === "attention"\)\.length\}/);
-  assert.match(app, /运行中 \$\{displayJobs\.filter\(\(job\) => backgroundJobGroup\(job\) === "active"\)\.length\} · 待处理/);
+  assert.match(app, /t4\("chat\.bgJobsHeaderMeta", \{ active: displayJobs\.filter\(\(job\) => backgroundJobGroup\(job\) === "active"\)\.length, attention: displayJobs\.filter\(\(job\) => backgroundJobGroup\(job\) === "attention"\)\.length, total: displayJobs\.length \}\)/);
   assert.match(app, /function documentJobProgressLabel/);
   assert.match(app, /documentJobStageLabel/);
   assert.match(app, /已完成，需复核/);
@@ -168,7 +167,7 @@ test("background task panel does not reactivate the retired document worker", ()
   assert.match(app, /class="background-jobs-detail"/);
   assert.match(app, /class="background-jobs-header"/);
   assert.match(app, /class="background-jobs-close"/);
-  assert.match(app, /<span>返回对话<\/span>/);
+  assert.match(app, /<span>\$\{t4\("chat\.bgJobsClose"\)\}<\/span>/);
   assert.match(app, /const closeBackgroundWorkbench = q2/);
   assert.match(app, /const backgroundJobDetailRequestRef = A2\(0\)/);
   assert.match(app, /const detailMatchesSelection = detail && String\(detail\.id \?\? ""\) === String\(selectedId \?\? ""\)/);
@@ -199,8 +198,8 @@ test("background task panel does not reactivate the retired document worker", ()
   assert.doesNotMatch(app, /bottom:100%;right:0;width:420px;max-height:280px/);
   assert.match(app, /encodeURIComponent\(id\)/);
   assert.match(app, /progress\.percent/);
-  assert.match(app, /"job-timeout": "本次执行总时限已到"/);
-  assert.match(app, /"job-call-budget": "本次执行调用预算已用尽"/);
+  assert.match(app, /stageJobTimeout: "本次执行总时限已到"/);
+  assert.match(app, /stageJobCallBudget: "本次执行调用预算已用尽"/);
   assert.match(app, /executionModelCalls/);
   assert.match(app, /taskModelCallLimit/);
   assert.match(app, /detail\?\.job\?\.preview/);
