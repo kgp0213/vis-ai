@@ -1,47 +1,77 @@
-# Dashboard UI 首批落地 — 概览
+# 过程信息统一容器 — ProcessCard 落地
 
-日期：2026-07-26 · 范围：复盘修订版 P0/P1 中的「规格 → 计划 → 落地」首批三项
+日期：2026-07-27 · 范围：把对话框里"任务过程"信息（工具调用 / 深度思考）统一进同一种容器语言
 
-## 完成内容
+## 背景与设计原则
 
-### 1. 共享 UI 原语（`src/ui/`）
-新建统一组件库，全部令牌化、随 9 套主题自适应：
+用户提供 WorkBuddy 同一任务不同阶段的截图（任务列表 + 工具卡片），指出其本质是**过程信息的生命周期管理**。提炼 4 条原则作为本次设计依据：
 
-| 组件 | 文件 | 说明 |
-|------|------|------|
-| Select | `src/ui/Select.ts` | 替换全站 30 处原生 `<select>`；支持 meta 描述 / 禁用项 / 可选搜索 / 键盘 ↑↓ Enter Esc / `aria-haspopup=listbox` / 外点关闭 |
-| Switch | `src/ui/Switch.ts` | 真开关（`role="switch"` + `aria-checked`），替换 settings 按钮式开关 |
-| SectionHeader / FieldRow | `src/ui/SectionHeader.ts` | 分区标题 + 110px 标签字段行，收敛各面板手搓实现 |
-| EmptyState / Skeleton | `src/ui/EmptyState.ts` | 空态 + shimmer 骨架屏（含 prefers-reduced-motion） |
-| CmdPalette | `src/ui/CmdPalette.ts` | 命令面板（见下） |
-| 图标 | `src/ui/icons.ts` | currentColor 线性 SVG 图标族（见下） |
-| 出口 | `src/ui/index.ts` | 统一 re-export |
+1. **单一焦点** — 任一时刻只有"当前步"高亮，其余弱化。
+2. **热度衰减** — 细节量随与"此刻"的距离递减：当前步展开细节，已完成步一行，整组完成后收敛成计数。
+3. **让位而非消失** — 正文出现时过程主动收敛成一行，但保留可展开的审计能力。
+4. **异常粘性** — 失败的步骤/组永不自动收敛，必须保持可见。
 
-样式：`app.css` 尾部追加 "Shared UI Primitives" 区块（`.ui-select*` / `.ui-switch*` / `.ui-section-h` / `.ui-field-*` / `.ui-empty*` / `.ui-skeleton*`）。
+我们的缺口：reasoning（`reasoning-live-tail`）/ 计划（右侧栏 step-dot）/ 工具（ToolDock）三套过程信息三种割裂样式。
 
-### 2. 命令面板 Cmd K（死代码接线）
-此前 `app.css` 1639–1738 行的 `.cmd-palette` 系列样式完整存在但无任何组件接线。本轮：
-- `CmdPalette` 组件：搜索过滤（名称/描述/分组）、↑↓/Enter/Esc/Home/End、选中项 `scrollIntoView`、外点关闭、空态提示。
-- `app.css` 补 `.cmd-overlay`（fixed 遮罩、12vh 顶对齐）+ `.cmd-empty`。
-- `app.ts`：抽出 `applyTheme` helper（侧栏原生 select 的 onChange 同步复用，消除双轨）；注入 `cmdItems`（13 面板「跳转」组 + 9 套主题「动作」组 + 「打开 MD」）；全局 Cmd/Ctrl+K 切换（全站无快捷键冲突）。Esc 已 `preventDefault + stopPropagation`，不触发聊天面板的关闭逻辑。
+## 方案：抽取 ProcessCard 共享原语
 
-### 3. 输入框 emoji SVG 化 + 右侧操作统一
-- 四个上下文 chip（🤖 模型 / 💻 工作空间 / 📋 后台 / 🔍 索引）与 ➕ 菜单（📎 附件 / 🔧 技能）全部换成 `icons.ts` 的 currentColor 线性 SVG —— 可换色、跨平台字形一致、基线对齐。
-- 「优化提示词」从 28px 文字按钮改为 32px 圆形 icon 按钮，与 ➕ / 发送 同族；优化中显示旋转 spinner；`.composer-optimize` 样式重写（含 prefers-reduced-motion）。
+新增 `src/ui/process-card.ts`，把"过程容器"抽成统一原语：
 
-## 验证
-每个阶段均执行：
 ```
-npm run dashboard:build          → exit 0
-node scripts/check-dashboard-build.js → [dashboard-build] verified
+┌─ process-card（浅灰底块 + 圆角边框，与正文分层）─┐
+│ ▶ [图标] 标题 · 计数/状态              [chevron] │  ← 标题行（可折叠）
+│ ─────────────────────────────────────────────  │
+│ ✓ read_file   a.ts                （done，弱化） │
+│ ✓ edit_file   b.ts                               │
+│ ❀ run_command npm run build       （active 高亮）│
+│   ⎿ 输出尾部 2-3 行（就地展开"酌情细节"）         │
+└────────────────────────────────────────────────┘
 ```
-哈希：#2 `6937a3689a4d/24e03604f327` · #3 `2bfd38556392/3ac14e3f4b78` · #4 `37e500ac4bb3/9b42fa00da32`。
-产物 `dashboard/dist/app.js`(1.2 MB) / `dashboard/app.css`(181 KB) 已更新。**未提交 git**。
+
+- **状态行**（`ProcessRow`）：`{ id, status: pending/active/done/failed, label, target?, detail? }` 数据驱动，本原语统一渲染。
+- **三态卡片**：`running`（当前步高亮+展开细节）/ `settled`（收敛成一行，可展开审计）/ `failed`（失败粘性保持展开）。
+- **状态图标**：复用 `icons.ts` 新增 `IconCheck/IconX/IconDot/IconChevron/IconTool`（currentColor 线性 SVG，9 主题自适应）。
+
+## 迁移与落地
+
+**1. ToolDock → ProcessCard（chat-internals.ts `ToolGroup`）**
+- 滚动字幕纯文本 → 升级为**状态行列表**：每步一行（状态图标 + 名称 + target），当前步下方缩进子区显示输出尾部 3 行（`TOOL_ROW_DETAIL_TAIL_LINES`）。
+- `toolRowsFromItems()` 把工具消息映射为 `ProcessRow`；`toolRowStatus()` 映射四态。
+
+**2. 事件驱动收敛（替代固定 2.6s 定时器）**
+- 收敛时机：`taskActive` 翻 false **且** 下一条 assistant 正文已出现（`followedByAnswer`，chat.ts 在 renderUnits 循环计算）→ 过程让位正文。
+- 兜底：正文迟迟不来时 8s 最大延迟强制收敛（`TOOL_SETTLE_FALLBACK_MS`）。
+- **失败粘性**：组内有失败步则永不自动收敛。
+
+**3. reasoning → ProcessCard 壳（chat-internals.ts `ChatMessage`）**
+- 深度思考的 live（流式）与 details（完成后）两种形态统一包进 `.process-card` 容器，与工具卡视觉一致；保留 `reasoning-live-tail` 流式钉底行为。
 
 ## 变更文件
-- 新增：`src/ui/Select.ts` `Switch.ts` `SectionHeader.ts` `EmptyState.ts` `CmdPalette.ts` `icons.ts` `index.ts`
-- 修改：`src/app.css`（原语样式 + cmd-overlay + composer-optimize）· `src/app.ts`（CmdPalette 接线 + applyTheme）· `src/panels/chat.ts`（图标替换 + 优化按钮）
+- `src/ui/process-card.ts`（新增）— ProcessCard 原语 + ProcessRow 类型。
+- `src/ui/icons.ts` — 新增 IconCheck/IconX/IconDot/IconChevron/IconTool。
+- `src/ui/index.ts` — 出口新增 ProcessCard + 5 图标。
+- `src/components/chat-internals.ts` — ToolGroup 重写（状态行 + 事件收敛 + 失败粘性）；reasoning 包进 ProcessCard；导入 ui 原语。
+- `src/panels/chat.ts` — renderUnits 循环计算 `followedByAnswer` 传入 ToolGroup；`setAllToolGroupsOpen` 选择器加 `details.process-card-details` 兼容。
+- `src/app.css` — 新增 ProcessCard 样式区（`.process-card`/`.process-row-*`/`.process-card-reasoning` + `processCardIn` keyframes + reduced-motion）。**全走 design tokens，零硬编码 hex，9 主题自适应。**
 
-## 下一步
-- 逐面板把 30 处原生 `<select>` 换成共享 Select（settings 7 / tasks 11 / memory 6 …）。
-- i18n 收敛：600+ 行硬编码中文接入 `t4()`。
+## i18n
+零增量。复用现有 key：`toolUsingLiveStep` / `toolUsedCount` / `toolFailedCountSuffix` / `reasoningProcess` / `reasoningThinking` / `reasoningTurnLive` / `reasoningTurnsPrefix` / `reasoningChars`。
+
+## 验证
+```
+npm run dashboard:build               → exit 0
+node scripts/check-dashboard-build.js → [dashboard-build] verified be1c7ba9fa61 b69dfaa06f57
+```
+- 生成物 `dist/app.js` 含 process-card/ProcessCard/followedByAnswer/toolRowsFromItems（30 处命中）。
+- 生成物 `app.css` 含 process-card/process-row（38 处命中），新增块 grep 校验**零硬编码颜色**。
+- i18n 复用 key 5 处确认存在。
+- 兼容性：Expand/Collapse All 菜单同时覆盖旧 `.tool-log`（单条 ToolCard）与新 `.process-card-details`。
+
+**未提交 git**（沿用 §104 不自动推送、§11 只提交当前任务文件，待用户指示）。
+
+## 待用户验收
+真实壳内跑多步工具任务：进行中看状态行列表 + 当前步细节展开、正文出现时过程收敛成一行、点击展开可审计、失败步保持展开。
+
+## 后续（未做，待拍板）
+- "过程显示：简洁 / 标准 / 详细"三档设置项。
+- 计划卡（`ActivePlanCard`，右侧栏 step-dot）也迁入 ProcessCard 壳，彻底统一三套语言。

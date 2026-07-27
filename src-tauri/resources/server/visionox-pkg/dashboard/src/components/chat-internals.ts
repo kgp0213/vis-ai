@@ -5,6 +5,7 @@ import { memo as preactMemo } from "preact/compat";
 import { useEffect as y2, useRef as A2, useState as d2 } from "preact/hooks";
 import { html as html4 } from "../lib/html.js";
 import { t as t4, useLang } from "../i18n/index.js";
+import { ProcessCard, IconTool, IconChevron } from "../ui/index.js";
 import {
   escapeHtml,
   hlLine,
@@ -204,50 +205,88 @@ function briefToolLabel(msg) {
   const target = args?.path ?? args?.file_path ?? args?.filename ?? args?.command ?? null;
   return { name, target: typeof target === "string" ? target : null };
 }
-function ToolGroup({ items, taskActive = false, searchHitIds = null }) {
+// 工具组 → ProcessCard 的状态行映射：把连续工具调用渲染成"状态行列表"，
+// 当前步就地展开输出尾部作为"酌情细节"，已完成/待办步收敛成一行。
+// 热度衰减：当前步 100% 细节，其余一行；整组完成后整卡收敛成一行计数（可展开审计）。
+const TOOL_ROW_DETAIL_TAIL_LINES = 3;
+const TOOL_SETTLE_FALLBACK_MS = 8000;
+function toolRowStatus(status) {
+  if (["queued", "running"].includes(status)) return "active";
+  if (["failed", "cancelled"].includes(status)) return "failed";
+  return "done";
+}
+function toolRowsFromItems(items) {
+  return items.map((m3) => {
+    const brief = briefToolLabel(m3);
+    const status = toolRowStatus(m3.toolStatus);
+    return {
+      id: String(m3.id ?? brief.name),
+      status,
+      label: brief.name,
+      target: brief.target,
+      detail: status === "active" ? (m3.text ?? "") : null,
+    };
+  });
+}
+function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false }) {
   useLang();
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
   const doneItems = items.filter((m3) => !isActiveStatus(m3.toolStatus));
   const failedItems = doneItems.filter((m3) => ["failed", "cancelled"].includes(m3.toolStatus));
+  const hasFailed = failedItems.length > 0;
   const hitSet = searchHitIds ? new Set(searchHitIds) : null;
   const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
-  const statusIcon = (status) => {
-    if (["queued", "running"].includes(status)) return html4`<span class="spinner tool-log-spinner"></span>`;
-    if (status === "failed" || status === "cancelled") return html4`<span class="tool-log-icon-failed">✗</span>`;
-    return html4`<span class="tool-log-icon-ok">✓</span>`;
-  };
-  const renderRow = (m3) => {
-    const brief = briefToolLabel(m3);
-    const hasDetail = Boolean((m3.text ?? "").trim()) || Boolean(m3.toolArgs);
-    const summaryInner = html4`
-      ${statusIcon(m3.toolStatus)}
-      <span class="tool-log-name">${brief.name}</span>
-      ${brief.target ? html4`<span class="tool-log-brief" title=${brief.target}>${brief.target}</span>` : null}
-    `;
-    if (!hasDetail) {
-      return html4`<div key=${m3.id} data-msg-id=${m3.id ?? ""} class=${`tool-log-row ${hitSet?.has(String(m3.id)) ? "search-hit" : ""}`}>${summaryInner}</div>`;
+
+  // 事件驱动收敛：任务不再 active，且（下一条 assistant 正文已出现 followedByAnswer
+  // 或兜底超时）→ 收敛。异常粘性：只要组内有失败步，永不自动收敛。
+  const [settled, setSettled] = d2(!taskActive);
+  const wasActiveRef = A2(taskActive);
+  y2(() => {
+    if (taskActive) {
+      wasActiveRef.current = true;
+      if (settled) setSettled(false);
+      return void 0;
     }
-    return html4`
-      <details key=${m3.id} data-msg-id=${m3.id ?? ""} class=${`tool-log-row ${hitSet?.has(String(m3.id)) ? "search-hit" : ""}`}>
-        <summary>${summaryInner}</summary>
-        <div class="tool-log-detail">
-          ${m3.toolArgs ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(typeof m3.toolArgs === "string" ? m3.toolArgs : JSON.stringify(parseToolArgs(m3.toolArgs) ?? m3.toolArgs, null, 2))}</pre></details>` : null}
-          ${(m3.text ?? "").trim() ? renderCollapsibleToolOutput(m3.text) : null}
-        </div>
-      </details>
-    `;
-  };
+    if (!wasActiveRef.current) return void 0;
+    if (hasFailed) { wasActiveRef.current = false; return void 0; } // 失败粘性：不收敛
+    const shouldSettle = followedByAnswer;
+    if (!shouldSettle) {
+      // 正文还没来：设一个兜底最大延迟，避免无后续正文时永不收敛。
+      const fallback = setTimeout(() => { wasActiveRef.current = false; setSettled(true); }, TOOL_SETTLE_FALLBACK_MS);
+      return () => clearTimeout(fallback);
+    }
+    wasActiveRef.current = false;
+    setSettled(true);
+    return void 0;
+  }, [taskActive, followedByAnswer, hasFailed, settled]);
+
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
-  const summaryLabel = taskActive
-    ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}${currentBrief ? html4` · ${currentBrief.name}` : null}</span>`
-    : html4`${t4("chat.toolUsedCount", { count: items.length })}${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : null}`;
+  const rows = toolRowsFromItems(items);
+  const cardState = hasFailed ? "failed" : (taskActive || !settled) ? "running" : "settled";
+
+  const title = taskActive
+    ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}`
+    : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
+  const meta = hasFailed
+    ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>`
+    : (taskActive && currentBrief ? html4`${currentBrief.name}` : null);
+
+  // 搜索命中时强制展开；running 且未收敛时默认展开（用户要看过程）；settled 默认折叠（让位正文）。
+  const openAttr = hasHit ? true : (cardState === "running" ? true : void 0);
+
   return html4`
-    <details class=${`tool-log ${taskActive ? "tool-log-running" : ""} ${!taskActive && failedItems.length > 0 ? "tool-log-has-failed" : ""}`} open=${hasHit || void 0}>
-      <summary>${summaryLabel}</summary>
-      <div class="tool-log-list">${items.map((m3) => renderRow(m3))}</div>
-    </details>
+    <${ProcessCard}
+      icon=${html4`<${IconTool} size=${13} />`}
+      title=${title}
+      meta=${meta}
+      state=${cardState}
+      rows=${rows}
+      open=${openAttr}
+      maxDetailLines=${TOOL_ROW_DETAIL_TAIL_LINES}
+      ariaLabel=${t4("chat.toolUsedCount", { count: items.length })}
+    />
   `;
 }
 function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings) {
@@ -359,16 +398,24 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
                 : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
-          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</div>
-          <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
+          <div class="process-card process-card-running process-card-reasoning">
+            <div class="process-card-summary process-card-summary-static">
+              <span class="process-card-icon"><span class="spinner process-row-spinner"></span></span>
+              <span class="process-card-title">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</span>
+            </div>
+            <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
+          </div>
         ` : null : html4`
-          <details class="reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
-            <summary class="reasoning-summary">
-              <span class="reasoning-summary-label">${t4("chat.reasoningProcess")}</span>
-              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
-            </summary>
-            <div class="reasoning">${msg.reasoning}</div>
-          </details>
+          <div class="process-card process-card-settled process-card-reasoning">
+            <details class="process-card-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
+              <summary class="process-card-summary">
+                <span class="process-card-title">${t4("chat.reasoningProcess")}</span>
+                <span class="process-card-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
+                <span class="process-card-chevron"><${IconChevron} size=${13} /></span>
+              </summary>
+              <div class="reasoning">${msg.reasoning}</div>
+            </details>
+          </div>
         ` : null}
         ${renderMessageBody(msg.text, role)}
         ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings) : null}

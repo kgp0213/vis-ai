@@ -64,3 +64,31 @@ export function IconSkill({ size }: IconProps = {}) {
     <path d="M9.7 2.3a3.5 3.5 0 0 0-4.4 4.4L2 10l4 4 3.3-3.3a3.5 3.5 0 0 0 4.4-4.4L11 9 9 7l2.7-2.7a3.5 3.5 0 0 0-2-2z" />
   `, size);
 }
+
+// —— 过程状态图标（ProcessCard 状态行用）——
+// 完成：对勾
+export function IconCheck({ size }: IconProps = {}) {
+  return base(html`<path d="M3 8.5l3.2 3.2L13 5" />`, size);
+}
+
+// 失败 / 取消：叉
+export function IconX({ size }: IconProps = {}) {
+  return base(html`<path d="M4 4l8 8M12 4l-8 8" />`, size);
+}
+
+// 待办：空心圆点
+export function IconDot({ size }: IconProps = {}) {
+  return base(html`<circle cx="8" cy="8" r="3.2" />`, size);
+}
+
+// 折叠箭头（向下，随 details 开合旋转）
+export function IconChevron({ size }: IconProps = {}) {
+  return base(html`<path d="M4 6l4 4 4-4" />`, size);
+}
+
+// 工具：扳手 + 螺丝刀交叉（ProcessCard 工具组标题用）
+export function IconTool({ size }: IconProps = {}) {
+  return base(html`
+    <path d="M9.7 2.3a3.5 3.5 0 0 0-4.4 4.4L2 10l4 4 3.3-3.3a3.5 3.5 0 0 0 4.4-4.4L11 9 9 7l2.7-2.7a3.5 3.5 0 0 0-2-2z" />
+  `, size);
+}

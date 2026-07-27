@@ -1584,7 +1584,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     });
   }, []);
   const setAllToolGroupsOpen = (open) => {
-    feedRef.current?.querySelectorAll("details.tool-log").forEach((node) => {
+    feedRef.current?.querySelectorAll("details.tool-log, details.process-card-details").forEach((node) => {
       node.open = open;
     });
   };
@@ -4137,16 +4137,19 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
         </div>
       ` : null}
       ${renderUnits.map(
-    (unit) => {
+    (unit, unitIndex) => {
       if (unit.kind !== "toolGroup") {
         return renderChatMessage(unit.msg, unit.index);
       }
       const hitIds = unit.items.filter((item) => item.index === searchMatchIndex || Boolean(highlightMessageId && item.msg.id === highlightMessageId)).map((item) => String(item.msg.id));
+      // 事件驱动收敛信号：该工具组之后是否已跟着一条 assistant 正文（过程让位正文）。
+      const followedByAnswer = renderUnits.slice(unitIndex + 1).some((u) => u.kind === "msg" && u.msg.role === "assistant" && (u.msg.text ?? "").trim());
       return html4`<${ToolGroup}
                     key=${unit.id}
                     items=${unit.items.map((item) => item.msg)}
                     taskActive=${taskActive}
                     searchHitIds=${hitIds.length > 0 ? hitIds : null}
+                    followedByAnswer=${followedByAnswer}
                   />`;
     }
   )}

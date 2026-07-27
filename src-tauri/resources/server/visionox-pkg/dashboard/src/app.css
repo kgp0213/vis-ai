@@ -3221,6 +3221,301 @@ div.tool-log-row {
   border-radius: 4px;
 }
 
+/* Tool dock：工作过程原位容器。进行中显示固定高度滚动字幕，
+   完成后延迟淡出收敛成单行，明细始终可展开审计。 */
+.tool-dock {
+  margin: 2px 0 2px 36px;
+}
+
+.tool-dock .tool-log {
+  margin: 0;
+}
+
+.tool-log-live-tail {
+  max-height: 96px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  margin: 2px 0 2px 16px;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  animation: toolLiveIn var(--duration-normal) ease-out;
+}
+
+.tool-dock-running .tool-log-live-tail {
+  border-left-color: var(--accent-primary);
+}
+
+/* 收敛态：字幕区已移除（React 不渲染），此处仅兜底过渡 */
+.tool-dock-settled .tool-log > summary {
+  color: var(--text-tertiary);
+}
+
+.tool-dock-has-failed .tool-log > summary {
+  color: var(--color-warning);
+}
+
+@keyframes toolLiveIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-log-live-tail {
+    animation: none;
+  }
+}
+
+/* ============================================================
+   ProcessCard —— 过程信息统一容器
+   浅灰底块 + 标题行（图标/名称/计数/折叠箭头）+ 状态行列表。
+   用于工具组、深度思考等"任务过程"信息，与正文清晰分层。
+   三态：running（进行中，当前步高亮展开细节）/
+         settled（完成，收敛成一行可展开审计）/
+         failed（失败粘性，保持展开）。
+   ============================================================ */
+.process-card {
+  margin: 2px 0 2px 36px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg-2, transparent));
+  overflow: hidden;
+  animation: processCardIn var(--duration-normal) ease-out;
+}
+
+.process-card-details {
+  margin: 0;
+}
+
+.process-card-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.process-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.process-card-summary:hover {
+  color: var(--text-primary);
+}
+
+.process-card-summary:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.process-card-summary-static {
+  cursor: default;
+}
+
+.process-card-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.process-card-running .process-card-icon {
+  color: var(--accent-primary);
+}
+
+.process-card-title {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.process-card-settled .process-card-title {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.process-card-meta {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.process-card-meta-failed {
+  color: var(--color-warning);
+  font-size: var(--text-xs);
+}
+
+.process-card-chevron {
+  margin-left: auto;
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+
+.process-card-details[open] .process-card-chevron {
+  transform: rotate(180deg);
+}
+
+/* 状态行列表 */
+.process-card-body {
+  padding: 0 var(--space-3) var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.process-row {
+  padding: var(--space-1) 0;
+}
+
+.process-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 20px;
+}
+
+.process-row-mark {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 14px;
+  justify-content: center;
+}
+
+.process-row-mark-done {
+  color: var(--c-ok);
+}
+
+.process-row-mark-failed {
+  color: var(--c-err);
+}
+
+.process-row-mark-pending {
+  color: var(--text-tertiary);
+  opacity: 0.6;
+}
+
+.process-row-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-width: 1.5px;
+  border-color: var(--accent-primary);
+  border-top-color: transparent;
+}
+
+.process-row-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.process-row-active .process-row-label {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.process-row-done .process-row-label,
+.process-row-pending .process-row-label {
+  color: var(--text-tertiary);
+}
+
+.process-row-failed .process-row-label {
+  color: var(--c-err);
+}
+
+.process-row-target {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+/* 当前步就地展开的细节（输出尾部等"酌情细节"） */
+.process-row-detail {
+  margin: var(--space-1) 0 var(--space-1) 22px;
+  padding: var(--space-1) var(--space-2);
+  border-left: 2px solid var(--accent-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--text-tertiary);
+  max-height: 72px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.process-row-detail-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 失败粘性：整组保持展开提示 */
+.process-card-failed {
+  border-color: var(--color-warning);
+}
+
+.process-card-failed .process-card-title {
+  color: var(--color-warning);
+}
+
+/* reasoning 复用容器：去掉卡片左边距，与正文对齐 */
+.process-card-reasoning {
+  margin-left: 0;
+  margin-top: var(--space-2);
+}
+
+.process-card-reasoning .reasoning-live-tail {
+  margin: 0;
+  border-left: none;
+  border-top: 1px solid var(--border-subtle);
+  max-height: 120px;
+}
+
+.process-card-reasoning .reasoning {
+  padding: var(--space-2) var(--space-3);
+}
+
+@keyframes processCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .process-card {
+    animation: none;
+  }
+  .process-card-chevron {
+    transition: none;
+  }
+}
+
 @keyframes toolLogSpin {
   to {
     transform: rotate(360deg);

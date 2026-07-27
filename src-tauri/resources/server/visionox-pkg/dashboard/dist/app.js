@@ -21133,6 +21133,446 @@ var lexer = _Lexer.lex;
 // dashboard/src/lib/html.ts
 var html4 = htm_module_default.bind(k);
 
+// dashboard/src/ui/Select.ts
+function Select({
+  value,
+  options: options2 = [],
+  onChange,
+  placeholder = t4("uiPrim.selectPlaceholder"),
+  disabled = false,
+  searchable = false,
+  ariaLabel = t4("uiPrim.selectAria"),
+  width = null
+}) {
+  const [open, setOpen] = d2(false);
+  const [query, setQuery] = d2("");
+  const [active, setActive] = d2(0);
+  const rootRef = A2(null);
+  const listRef = A2(null);
+  const searchRef = A2(null);
+  const norm = (options2 || []).map((o3) => typeof o3 === "string" ? { value: o3, label: o3 } : o3);
+  const filtered = query.trim() ? norm.filter((o3) => `${o3.label} ${o3.meta ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())) : norm;
+  const enabled = filtered.filter((o3) => !o3.disabled);
+  const current = norm.find((o3) => o3.value === value);
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+  };
+  const openMenu = () => {
+    if (disabled) return;
+    setOpen(true);
+    const idx = Math.max(0, filtered.findIndex((o3) => o3.value === value && !o3.disabled));
+    setActive(idx);
+  };
+  const pick = (o3) => {
+    if (!o3 || o3.disabled) return;
+    if (o3.value !== value) onChange?.(o3.value);
+    close();
+  };
+  y2(() => {
+    if (!open) return;
+    const onDoc = (e3) => {
+      if (rootRef.current && !rootRef.current.contains(e3.target)) close();
+    };
+    const onEsc = (e3) => {
+      if (e3.key === "Escape") {
+        e3.preventDefault();
+        e3.stopPropagation();
+        close();
+      }
+    };
+    document.addEventListener("pointerdown", onDoc, true);
+    document.addEventListener("keydown", onEsc, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDoc, true);
+      document.removeEventListener("keydown", onEsc, true);
+    };
+  }, [open]);
+  y2(() => {
+    if (!open) return;
+    if (searchable) searchRef.current?.focus();
+    const sel = listRef.current?.querySelector(".ui-select-option.sel");
+    sel?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+  const moveActive = (dir) => {
+    if (enabled.length === 0) return;
+    let i3 = active;
+    for (let step = 0; step < filtered.length; step++) {
+      i3 = (i3 + dir + filtered.length) % filtered.length;
+      if (!filtered[i3].disabled) break;
+    }
+    setActive(i3);
+    listRef.current?.children?.[i3]?.scrollIntoView?.({ block: "nearest" });
+  };
+  const onKeyDown = (e3) => {
+    if (!open) {
+      if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e3.key)) {
+        e3.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    if (e3.key === "ArrowDown") {
+      e3.preventDefault();
+      moveActive(1);
+    } else if (e3.key === "ArrowUp") {
+      e3.preventDefault();
+      moveActive(-1);
+    } else if (e3.key === "Enter") {
+      e3.preventDefault();
+      pick(filtered[active]);
+    } else if (e3.key === "Home") {
+      e3.preventDefault();
+      setActive(0);
+    } else if (e3.key === "End") {
+      e3.preventDefault();
+      setActive(filtered.length - 1);
+    }
+  };
+  return html4`
+    <div class="ui-select" ref=${rootRef} style=${width ? `width:${width}` : null} onKeyDown=${onKeyDown}>
+      <button
+        type="button"
+        class=${`ui-select-trigger ${open ? "open" : ""}`}
+        aria-haspopup="listbox"
+        aria-expanded=${open}
+        aria-label=${ariaLabel}
+        disabled=${disabled}
+        onClick=${() => open ? close() : openMenu()}
+      >
+        <span class=${`ui-select-value ${current ? "" : "placeholder"}`}>${current ? current.label : placeholder}</span>
+        <span class="ui-select-chev" aria-hidden="true">▾</span>
+      </button>
+      ${open ? html4`
+        <div class="ui-select-menu" role="listbox" aria-label=${ariaLabel}>
+          ${searchable ? html4`
+            <div class="ui-select-search">
+              <input
+                ref=${searchRef}
+                type="text"
+                value=${query}
+                placeholder=${t4("uiPrim.selectSearch")}
+                onInput=${(e3) => {
+    setQuery(e3.target.value);
+    setActive(0);
+  }}
+              />
+            </div>
+          ` : null}
+          <div class="ui-select-list" ref=${listRef}>
+            ${filtered.length === 0 ? html4`<div class="ui-select-empty">${t4("uiPrim.selectEmpty")}</div>` : filtered.map((o3, i3) => html4`
+              <div
+                key=${o3.value}
+                role="option"
+                aria-selected=${o3.value === value}
+                class=${`ui-select-option ${o3.value === value ? "sel" : ""} ${i3 === active ? "active" : ""} ${o3.disabled ? "disabled" : ""}`}
+                onMouseEnter=${() => !o3.disabled && setActive(i3)}
+                onMouseDown=${(e3) => {
+    e3.preventDefault();
+    pick(o3);
+  }}
+              >
+                <span class="ui-select-check" aria-hidden="true">${o3.value === value ? "✓" : ""}</span>
+                <span class="ui-select-name">${o3.label}</span>
+                ${o3.meta ? html4`<span class="ui-select-meta">${o3.meta}</span>` : null}
+              </div>
+            `)}
+          </div>
+        </div>
+      ` : null}
+    </div>
+  `;
+}
+
+// dashboard/src/ui/Switch.ts
+function Switch({ checked = false, onChange, disabled = false, label = "", ariaLabel = null }) {
+  const toggle = () => {
+    if (disabled) return;
+    onChange?.(!checked);
+  };
+  return html4`
+    <button
+      type="button"
+      role="switch"
+      aria-checked=${checked ? "true" : "false"}
+      aria-label=${ariaLabel ?? label ?? t4("uiPrim.switchAria")}
+      class=${`ui-switch ${checked ? "on" : ""}`}
+      disabled=${disabled}
+      onClick=${toggle}
+    >
+      <span class="ui-switch-knob"></span>
+    </button>
+    ${label ? html4`<span class="ui-switch-label" onClick=${toggle}>${label}</span>` : null}
+  `;
+}
+
+// dashboard/src/ui/SectionHeader.ts
+function SectionHeader({ title }) {
+  return html4`<h3 class="ui-section-h">${title}</h3>`;
+}
+function FieldRow({ label, note = null, children }) {
+  return html4`
+    <div class="ui-field-row">
+      <span class="ui-field-label">${label}</span>
+      <div class="ui-field-control">${children}</div>
+      ${note ? html4`<span class="ui-field-note">${note}</span>` : null}
+    </div>
+  `;
+}
+
+// dashboard/src/ui/EmptyState.ts
+function EmptyState({ icon = "∅", title, desc = null, action = null }) {
+  return html4`
+    <div class="ui-empty">
+      <div class="ui-empty-icon" aria-hidden="true">${icon}</div>
+      <div class="ui-empty-title">${title}</div>
+      ${desc ? html4`<div class="ui-empty-desc">${desc}</div>` : null}
+      ${action ? html4`<div class="ui-empty-action">${action}</div>` : null}
+    </div>
+  `;
+}
+function Skeleton({ lines = 3, widths = null }) {
+  const arr = Array.from({ length: Math.max(1, lines) });
+  return html4`
+    <div class="ui-skeleton" aria-hidden="true">
+      ${arr.map((_3, i3) => {
+    const w4 = widths && widths[i3] != null ? widths[i3] : i3 === arr.length - 1 ? "72%" : `${88 - i3 * 6}%`;
+    return html4`<div class="ui-skeleton-line" style=${`width:${w4}`}></div>`;
+  })}
+    </div>
+  `;
+}
+
+// dashboard/src/ui/CmdPalette.ts
+function CmdPalette({ open, onClose, items = [], placeholder = t4("uiPrim.cmdPlaceholder"), ariaLabel = t4("uiPrim.cmdAria") }) {
+  const [query, setQuery] = d2("");
+  const [sel, setSel] = d2(0);
+  const inputRef = A2(null);
+  const listRef = A2(null);
+  y2(() => {
+    if (!open) return;
+    setQuery("");
+    setSel(0);
+    const id = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+  const q4 = query.trim().toLowerCase();
+  const filtered = q4 ? items.filter((it) => (it.name + " " + (it.desc ?? "") + " " + (it.section ?? "")).toLowerCase().includes(q4)) : items;
+  y2(() => {
+    setSel(0);
+  }, [q4]);
+  y2(() => {
+    if (!open) return;
+    listRef.current?.querySelector(".cmd-row.sel")?.scrollIntoView({ block: "nearest" });
+  }, [sel, open, filtered.length]);
+  if (!open) return null;
+  const exec = (item) => {
+    if (!item) return;
+    onClose?.();
+    setTimeout(() => item.run?.(), 0);
+  };
+  const onKeyDown = (e3) => {
+    if (e3.key === "Escape") {
+      e3.preventDefault();
+      e3.stopPropagation();
+      onClose?.();
+      return;
+    }
+    if (e3.key === "ArrowDown") {
+      e3.preventDefault();
+      setSel((s3) => Math.min(s3 + 1, filtered.length - 1));
+      return;
+    }
+    if (e3.key === "ArrowUp") {
+      e3.preventDefault();
+      setSel((s3) => Math.max(s3 - 1, 0));
+      return;
+    }
+    if (e3.key === "Home") {
+      e3.preventDefault();
+      setSel(0);
+      return;
+    }
+    if (e3.key === "End") {
+      e3.preventDefault();
+      setSel(Math.max(0, filtered.length - 1));
+      return;
+    }
+    if (e3.key === "Enter") {
+      e3.preventDefault();
+      exec(filtered[sel]);
+      return;
+    }
+  };
+  let lastSection = null;
+  return html4`
+    <div class="cmd-overlay" role="presentation" onPointerDown=${(e3) => {
+    if (e3.target === e3.currentTarget) onClose?.();
+  }}>
+      <div class="cmd-palette" role="dialog" aria-modal="true" aria-label=${ariaLabel} onKeyDown=${onKeyDown}>
+        <div class="cmd-input-row">
+          <span class="g" aria-hidden="true">›</span>
+          <input
+            ref=${inputRef}
+            type="text"
+            value=${query}
+            placeholder=${placeholder}
+            aria-label=${placeholder}
+            onInput=${(e3) => setQuery(e3.currentTarget.value)}
+          />
+          <span class="kbd">esc</span>
+        </div>
+        <div class="cmd-list" role="listbox" aria-label=${ariaLabel} ref=${listRef}>
+          ${filtered.length === 0 ? html4`<div class="cmd-empty">${t4("uiPrim.cmdEmpty")}</div>` : null}
+          ${filtered.map((it, i3) => {
+    const showHead = it.section !== lastSection;
+    lastSection = it.section;
+    return html4`
+              ${showHead ? html4`<div class="cmd-section-h">${it.section}</div>` : null}
+              <div
+                key=${it.id}
+                class=${`cmd-row ${i3 === sel ? "sel" : ""}`}
+                role="option"
+                aria-selected=${i3 === sel}
+                onPointerEnter=${() => setSel(i3)}
+                onClick=${() => exec(it)}
+              >
+                <span class="g" aria-hidden="true">${it.glyph ?? "›"}</span>
+                <span class="name">${it.name}</span>
+                ${it.desc ? html4`<span class="desc">${it.desc}</span>` : null}
+                ${it.kbd ? html4`<span class="kbd">${it.kbd}</span>` : null}
+              </div>
+            `;
+  })}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// dashboard/src/ui/icons.ts
+function base(children, size = 14) {
+  return html4`<svg viewBox="0 0 16 16" width=${size} height=${size} aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">${children}</svg>`;
+}
+function IconModel({ size } = {}) {
+  return base(html4`
+    <rect x="4" y="4" width="8" height="8" rx="1.5" />
+    <path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2" />
+  `, size);
+}
+function IconWorkspace({ size } = {}) {
+  return base(html4`
+    <rect x="2" y="3" width="12" height="8.5" rx="1.5" />
+    <path d="M6 14h4M8 11.5V14" />
+  `, size);
+}
+function IconJobs({ size } = {}) {
+  return base(html4`
+    <path d="M5.5 4h8M5.5 8h8M5.5 12h8" />
+    <circle cx="2.75" cy="4" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="2.75" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    <circle cx="2.75" cy="12" r="0.9" fill="currentColor" stroke="none" />
+  `, size);
+}
+function IconSearch({ size } = {}) {
+  return base(html4`
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M10.5 10.5 14 14" />
+  `, size);
+}
+function IconWand({ size } = {}) {
+  return base(html4`
+    <path d="M3 13 10.5 5.5" />
+    <path d="M11.5 2v2M13.5 4h2M11.5 6v2M9.5 4h-2" stroke-width="1.2" />
+  `, size);
+}
+function IconAttach({ size } = {}) {
+  return base(html4`
+    <path d="M12.5 7.5 7 13a3 3 0 0 1-4.2-4.2l5.6-5.6a2 2 0 0 1 2.8 2.8l-5.6 5.6a1 1 0 0 1-1.4-1.4l5-5" />
+  `, size);
+}
+function IconSkill({ size } = {}) {
+  return base(html4`
+    <path d="M9.7 2.3a3.5 3.5 0 0 0-4.4 4.4L2 10l4 4 3.3-3.3a3.5 3.5 0 0 0 4.4-4.4L11 9 9 7l2.7-2.7a3.5 3.5 0 0 0-2-2z" />
+  `, size);
+}
+function IconCheck({ size } = {}) {
+  return base(html4`<path d="M3 8.5l3.2 3.2L13 5" />`, size);
+}
+function IconX({ size } = {}) {
+  return base(html4`<path d="M4 4l8 8M12 4l-8 8" />`, size);
+}
+function IconDot({ size } = {}) {
+  return base(html4`<circle cx="8" cy="8" r="3.2" />`, size);
+}
+function IconChevron({ size } = {}) {
+  return base(html4`<path d="M4 6l4 4 4-4" />`, size);
+}
+function IconTool({ size } = {}) {
+  return base(html4`
+    <path d="M9.7 2.3a3.5 3.5 0 0 0-4.4 4.4L2 10l4 4 3.3-3.3a3.5 3.5 0 0 0 4.4-4.4L11 9 9 7l2.7-2.7a3.5 3.5 0 0 0-2-2z" />
+  `, size);
+}
+
+// dashboard/src/ui/process-card.ts
+var DEFAULT_DETAIL_LINES = 3;
+function statusMark(status) {
+  switch (status) {
+    case "active":
+      return html4`<span class="spinner process-row-spinner" aria-hidden="true"></span>`;
+    case "failed":
+      return html4`<span class="process-row-mark process-row-mark-failed"><${IconX} size=${12} /></span>`;
+    case "done":
+      return html4`<span class="process-row-mark process-row-mark-done"><${IconCheck} size=${12} /></span>`;
+    default:
+      return html4`<span class="process-row-mark process-row-mark-pending"><${IconDot} size=${12} /></span>`;
+  }
+}
+function renderRow(row, maxDetailLines) {
+  const detail = (row.detail ?? "").trim();
+  const detailLines = row.status === "active" && detail ? detail.split(/\r?\n/).filter((l3) => l3.trim()).slice(-maxDetailLines) : [];
+  return html4`
+    <div key=${row.id} class=${`process-row process-row-${row.status}`} data-row-id=${row.id}>
+      <div class="process-row-head">
+        ${statusMark(row.status)}
+        <span class="process-row-label">${row.label}</span>
+        ${row.target ? html4`<span class="process-row-target" title=${row.target}>${row.target}</span>` : null}
+      </div>
+      ${detailLines.length > 0 ? html4`
+        <div class="process-row-detail">${detailLines.map((l3) => html4`<div class="process-row-detail-line">${l3}</div>`)}</div>
+      ` : null}
+    </div>
+  `;
+}
+function ProcessCard({
+  icon,
+  title,
+  meta,
+  state,
+  rows,
+  open,
+  defaultOpen = false,
+  maxDetailLines = DEFAULT_DETAIL_LINES,
+  ariaLabel
+}) {
+  const openAttr = open !== void 0 ? open : defaultOpen || void 0;
+  return html4`
+    <div class=${`process-card process-card-${state}`} role="group" aria-label=${ariaLabel}>
+      <details class="process-card-details" open=${openAttr}>
+        <summary class="process-card-summary">
+          ${icon ? html4`<span class="process-card-icon">${icon}</span>` : null}
+          <span class="process-card-title">${title}</span>
+          ${meta ? html4`<span class="process-card-meta">${meta}</span>` : null}
+          <span class="process-card-chevron"><${IconChevron} size=${13} /></span>
+        </summary>
+        <div class="process-card-body">
+          ${rows.map((r3) => renderRow(r3, maxDetailLines))}
+        </div>
+      </details>
+    </div>
+  `;
+}
+
 // node_modules/highlight.js/es/common.js
 var import_common = __toESM(require_common(), 1);
 var common_default = import_common.default;
@@ -21895,48 +22335,78 @@ function briefToolLabel(msg) {
   const target = args?.path ?? args?.file_path ?? args?.filename ?? args?.command ?? null;
   return { name, target: typeof target === "string" ? target : null };
 }
-function ToolGroup({ items, taskActive = false, searchHitIds = null }) {
+var TOOL_ROW_DETAIL_TAIL_LINES = 3;
+var TOOL_SETTLE_FALLBACK_MS = 8e3;
+function toolRowStatus(status) {
+  if (["queued", "running"].includes(status)) return "active";
+  if (["failed", "cancelled"].includes(status)) return "failed";
+  return "done";
+}
+function toolRowsFromItems(items) {
+  return items.map((m3) => {
+    const brief = briefToolLabel(m3);
+    const status = toolRowStatus(m3.toolStatus);
+    return {
+      id: String(m3.id ?? brief.name),
+      status,
+      label: brief.name,
+      target: brief.target,
+      detail: status === "active" ? m3.text ?? "" : null
+    };
+  });
+}
+function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false }) {
   useLang();
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
   const doneItems = items.filter((m3) => !isActiveStatus(m3.toolStatus));
   const failedItems = doneItems.filter((m3) => ["failed", "cancelled"].includes(m3.toolStatus));
+  const hasFailed = failedItems.length > 0;
   const hitSet = searchHitIds ? new Set(searchHitIds) : null;
   const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
-  const statusIcon = (status) => {
-    if (["queued", "running"].includes(status)) return html4`<span class="spinner tool-log-spinner"></span>`;
-    if (status === "failed" || status === "cancelled") return html4`<span class="tool-log-icon-failed">✗</span>`;
-    return html4`<span class="tool-log-icon-ok">✓</span>`;
-  };
-  const renderRow = (m3) => {
-    const brief = briefToolLabel(m3);
-    const hasDetail = Boolean((m3.text ?? "").trim()) || Boolean(m3.toolArgs);
-    const summaryInner = html4`
-      ${statusIcon(m3.toolStatus)}
-      <span class="tool-log-name">${brief.name}</span>
-      ${brief.target ? html4`<span class="tool-log-brief" title=${brief.target}>${brief.target}</span>` : null}
-    `;
-    if (!hasDetail) {
-      return html4`<div key=${m3.id} data-msg-id=${m3.id ?? ""} class=${`tool-log-row ${hitSet?.has(String(m3.id)) ? "search-hit" : ""}`}>${summaryInner}</div>`;
+  const [settled, setSettled] = d2(!taskActive);
+  const wasActiveRef = A2(taskActive);
+  y2(() => {
+    if (taskActive) {
+      wasActiveRef.current = true;
+      if (settled) setSettled(false);
+      return void 0;
     }
-    return html4`
-      <details key=${m3.id} data-msg-id=${m3.id ?? ""} class=${`tool-log-row ${hitSet?.has(String(m3.id)) ? "search-hit" : ""}`}>
-        <summary>${summaryInner}</summary>
-        <div class="tool-log-detail">
-          ${m3.toolArgs ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(typeof m3.toolArgs === "string" ? m3.toolArgs : JSON.stringify(parseToolArgs(m3.toolArgs) ?? m3.toolArgs, null, 2))}</pre></details>` : null}
-          ${(m3.text ?? "").trim() ? renderCollapsibleToolOutput(m3.text) : null}
-        </div>
-      </details>
-    `;
-  };
+    if (!wasActiveRef.current) return void 0;
+    if (hasFailed) {
+      wasActiveRef.current = false;
+      return void 0;
+    }
+    const shouldSettle = followedByAnswer;
+    if (!shouldSettle) {
+      const fallback = setTimeout(() => {
+        wasActiveRef.current = false;
+        setSettled(true);
+      }, TOOL_SETTLE_FALLBACK_MS);
+      return () => clearTimeout(fallback);
+    }
+    wasActiveRef.current = false;
+    setSettled(true);
+    return void 0;
+  }, [taskActive, followedByAnswer, hasFailed, settled]);
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
-  const summaryLabel = taskActive ? html4`<span class="tool-log-live"><span class="spinner tool-log-spinner"></span>${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}${currentBrief ? html4` · ${currentBrief.name}` : null}</span>` : html4`${t4("chat.toolUsedCount", { count: items.length })}${failedItems.length > 0 ? html4` · <span class="tool-log-icon-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : null}`;
+  const rows = toolRowsFromItems(items);
+  const cardState = hasFailed ? "failed" : taskActive || !settled ? "running" : "settled";
+  const title = taskActive ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}` : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
+  const meta = hasFailed ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : taskActive && currentBrief ? html4`${currentBrief.name}` : null;
+  const openAttr = hasHit ? true : cardState === "running" ? true : void 0;
   return html4`
-    <details class=${`tool-log ${taskActive ? "tool-log-running" : ""} ${!taskActive && failedItems.length > 0 ? "tool-log-has-failed" : ""}`} open=${hasHit || void 0}>
-      <summary>${summaryLabel}</summary>
-      <div class="tool-log-list">${items.map((m3) => renderRow(m3))}</div>
-    </details>
+    <${ProcessCard}
+      icon=${html4`<${IconTool} size=${13} />`}
+      title=${title}
+      meta=${meta}
+      state=${cardState}
+      rows=${rows}
+      open=${openAttr}
+      maxDetailLines=${TOOL_ROW_DETAIL_TAIL_LINES}
+      ariaLabel=${t4("chat.toolUsedCount", { count: items.length })}
+    />
   `;
 }
 function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings) {
@@ -22046,16 +22516,24 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
       ${avatar ? html4`<img key=${avatar} class="avatar" src=${avatar} width="28" height="28" alt="" loading="lazy" decoding="async" onError=${onAvatarError} />` : html4`<div class="glyph">·</div>`}
       <div class="body">
         ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
-          <div class="reasoning-live-header">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</div>
-          <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
+          <div class="process-card process-card-running process-card-reasoning">
+            <div class="process-card-summary process-card-summary-static">
+              <span class="process-card-icon"><span class="spinner process-row-spinner"></span></span>
+              <span class="process-card-title">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</span>
+            </div>
+            <div class="reasoning reasoning-live-tail" ref=${reasoningRef}>${liveReasoningText}</div>
+          </div>
         ` : null : html4`
-          <details class="reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
-            <summary class="reasoning-summary">
-              <span class="reasoning-summary-label">${t4("chat.reasoningProcess")}</span>
-              <span class="reasoning-summary-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
-            </summary>
-            <div class="reasoning">${msg.reasoning}</div>
-          </details>
+          <div class="process-card process-card-settled process-card-reasoning">
+            <details class="process-card-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
+              <summary class="process-card-summary">
+                <span class="process-card-title">${t4("chat.reasoningProcess")}</span>
+                <span class="process-card-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
+                <span class="process-card-chevron"><${IconChevron} size=${13} /></span>
+              </summary>
+              <div class="reasoning">${msg.reasoning}</div>
+            </details>
+          </div>
         ` : null}
         ${renderMessageBody(msg.text, role)}
         ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings) : null}
@@ -23130,370 +23608,6 @@ function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3,
       disposed = true;
     }
   };
-}
-
-// dashboard/src/ui/Select.ts
-function Select({
-  value,
-  options: options2 = [],
-  onChange,
-  placeholder = t4("uiPrim.selectPlaceholder"),
-  disabled = false,
-  searchable = false,
-  ariaLabel = t4("uiPrim.selectAria"),
-  width = null
-}) {
-  const [open, setOpen] = d2(false);
-  const [query, setQuery] = d2("");
-  const [active, setActive] = d2(0);
-  const rootRef = A2(null);
-  const listRef = A2(null);
-  const searchRef = A2(null);
-  const norm = (options2 || []).map((o3) => typeof o3 === "string" ? { value: o3, label: o3 } : o3);
-  const filtered = query.trim() ? norm.filter((o3) => `${o3.label} ${o3.meta ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())) : norm;
-  const enabled = filtered.filter((o3) => !o3.disabled);
-  const current = norm.find((o3) => o3.value === value);
-  const close = () => {
-    setOpen(false);
-    setQuery("");
-  };
-  const openMenu = () => {
-    if (disabled) return;
-    setOpen(true);
-    const idx = Math.max(0, filtered.findIndex((o3) => o3.value === value && !o3.disabled));
-    setActive(idx);
-  };
-  const pick = (o3) => {
-    if (!o3 || o3.disabled) return;
-    if (o3.value !== value) onChange?.(o3.value);
-    close();
-  };
-  y2(() => {
-    if (!open) return;
-    const onDoc = (e3) => {
-      if (rootRef.current && !rootRef.current.contains(e3.target)) close();
-    };
-    const onEsc = (e3) => {
-      if (e3.key === "Escape") {
-        e3.preventDefault();
-        e3.stopPropagation();
-        close();
-      }
-    };
-    document.addEventListener("pointerdown", onDoc, true);
-    document.addEventListener("keydown", onEsc, true);
-    return () => {
-      document.removeEventListener("pointerdown", onDoc, true);
-      document.removeEventListener("keydown", onEsc, true);
-    };
-  }, [open]);
-  y2(() => {
-    if (!open) return;
-    if (searchable) searchRef.current?.focus();
-    const sel = listRef.current?.querySelector(".ui-select-option.sel");
-    sel?.scrollIntoView({ block: "nearest" });
-  }, [open]);
-  const moveActive = (dir) => {
-    if (enabled.length === 0) return;
-    let i3 = active;
-    for (let step = 0; step < filtered.length; step++) {
-      i3 = (i3 + dir + filtered.length) % filtered.length;
-      if (!filtered[i3].disabled) break;
-    }
-    setActive(i3);
-    listRef.current?.children?.[i3]?.scrollIntoView?.({ block: "nearest" });
-  };
-  const onKeyDown = (e3) => {
-    if (!open) {
-      if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e3.key)) {
-        e3.preventDefault();
-        openMenu();
-      }
-      return;
-    }
-    if (e3.key === "ArrowDown") {
-      e3.preventDefault();
-      moveActive(1);
-    } else if (e3.key === "ArrowUp") {
-      e3.preventDefault();
-      moveActive(-1);
-    } else if (e3.key === "Enter") {
-      e3.preventDefault();
-      pick(filtered[active]);
-    } else if (e3.key === "Home") {
-      e3.preventDefault();
-      setActive(0);
-    } else if (e3.key === "End") {
-      e3.preventDefault();
-      setActive(filtered.length - 1);
-    }
-  };
-  return html4`
-    <div class="ui-select" ref=${rootRef} style=${width ? `width:${width}` : null} onKeyDown=${onKeyDown}>
-      <button
-        type="button"
-        class=${`ui-select-trigger ${open ? "open" : ""}`}
-        aria-haspopup="listbox"
-        aria-expanded=${open}
-        aria-label=${ariaLabel}
-        disabled=${disabled}
-        onClick=${() => open ? close() : openMenu()}
-      >
-        <span class=${`ui-select-value ${current ? "" : "placeholder"}`}>${current ? current.label : placeholder}</span>
-        <span class="ui-select-chev" aria-hidden="true">▾</span>
-      </button>
-      ${open ? html4`
-        <div class="ui-select-menu" role="listbox" aria-label=${ariaLabel}>
-          ${searchable ? html4`
-            <div class="ui-select-search">
-              <input
-                ref=${searchRef}
-                type="text"
-                value=${query}
-                placeholder=${t4("uiPrim.selectSearch")}
-                onInput=${(e3) => {
-    setQuery(e3.target.value);
-    setActive(0);
-  }}
-              />
-            </div>
-          ` : null}
-          <div class="ui-select-list" ref=${listRef}>
-            ${filtered.length === 0 ? html4`<div class="ui-select-empty">${t4("uiPrim.selectEmpty")}</div>` : filtered.map((o3, i3) => html4`
-              <div
-                key=${o3.value}
-                role="option"
-                aria-selected=${o3.value === value}
-                class=${`ui-select-option ${o3.value === value ? "sel" : ""} ${i3 === active ? "active" : ""} ${o3.disabled ? "disabled" : ""}`}
-                onMouseEnter=${() => !o3.disabled && setActive(i3)}
-                onMouseDown=${(e3) => {
-    e3.preventDefault();
-    pick(o3);
-  }}
-              >
-                <span class="ui-select-check" aria-hidden="true">${o3.value === value ? "✓" : ""}</span>
-                <span class="ui-select-name">${o3.label}</span>
-                ${o3.meta ? html4`<span class="ui-select-meta">${o3.meta}</span>` : null}
-              </div>
-            `)}
-          </div>
-        </div>
-      ` : null}
-    </div>
-  `;
-}
-
-// dashboard/src/ui/Switch.ts
-function Switch({ checked = false, onChange, disabled = false, label = "", ariaLabel = null }) {
-  const toggle = () => {
-    if (disabled) return;
-    onChange?.(!checked);
-  };
-  return html4`
-    <button
-      type="button"
-      role="switch"
-      aria-checked=${checked ? "true" : "false"}
-      aria-label=${ariaLabel ?? label ?? t4("uiPrim.switchAria")}
-      class=${`ui-switch ${checked ? "on" : ""}`}
-      disabled=${disabled}
-      onClick=${toggle}
-    >
-      <span class="ui-switch-knob"></span>
-    </button>
-    ${label ? html4`<span class="ui-switch-label" onClick=${toggle}>${label}</span>` : null}
-  `;
-}
-
-// dashboard/src/ui/SectionHeader.ts
-function SectionHeader({ title }) {
-  return html4`<h3 class="ui-section-h">${title}</h3>`;
-}
-function FieldRow({ label, note = null, children }) {
-  return html4`
-    <div class="ui-field-row">
-      <span class="ui-field-label">${label}</span>
-      <div class="ui-field-control">${children}</div>
-      ${note ? html4`<span class="ui-field-note">${note}</span>` : null}
-    </div>
-  `;
-}
-
-// dashboard/src/ui/EmptyState.ts
-function EmptyState({ icon = "∅", title, desc = null, action = null }) {
-  return html4`
-    <div class="ui-empty">
-      <div class="ui-empty-icon" aria-hidden="true">${icon}</div>
-      <div class="ui-empty-title">${title}</div>
-      ${desc ? html4`<div class="ui-empty-desc">${desc}</div>` : null}
-      ${action ? html4`<div class="ui-empty-action">${action}</div>` : null}
-    </div>
-  `;
-}
-function Skeleton({ lines = 3, widths = null }) {
-  const arr = Array.from({ length: Math.max(1, lines) });
-  return html4`
-    <div class="ui-skeleton" aria-hidden="true">
-      ${arr.map((_3, i3) => {
-    const w4 = widths && widths[i3] != null ? widths[i3] : i3 === arr.length - 1 ? "72%" : `${88 - i3 * 6}%`;
-    return html4`<div class="ui-skeleton-line" style=${`width:${w4}`}></div>`;
-  })}
-    </div>
-  `;
-}
-
-// dashboard/src/ui/CmdPalette.ts
-function CmdPalette({ open, onClose, items = [], placeholder = t4("uiPrim.cmdPlaceholder"), ariaLabel = t4("uiPrim.cmdAria") }) {
-  const [query, setQuery] = d2("");
-  const [sel, setSel] = d2(0);
-  const inputRef = A2(null);
-  const listRef = A2(null);
-  y2(() => {
-    if (!open) return;
-    setQuery("");
-    setSel(0);
-    const id = requestAnimationFrame(() => inputRef.current?.focus());
-    return () => cancelAnimationFrame(id);
-  }, [open]);
-  const q4 = query.trim().toLowerCase();
-  const filtered = q4 ? items.filter((it) => (it.name + " " + (it.desc ?? "") + " " + (it.section ?? "")).toLowerCase().includes(q4)) : items;
-  y2(() => {
-    setSel(0);
-  }, [q4]);
-  y2(() => {
-    if (!open) return;
-    listRef.current?.querySelector(".cmd-row.sel")?.scrollIntoView({ block: "nearest" });
-  }, [sel, open, filtered.length]);
-  if (!open) return null;
-  const exec = (item) => {
-    if (!item) return;
-    onClose?.();
-    setTimeout(() => item.run?.(), 0);
-  };
-  const onKeyDown = (e3) => {
-    if (e3.key === "Escape") {
-      e3.preventDefault();
-      e3.stopPropagation();
-      onClose?.();
-      return;
-    }
-    if (e3.key === "ArrowDown") {
-      e3.preventDefault();
-      setSel((s3) => Math.min(s3 + 1, filtered.length - 1));
-      return;
-    }
-    if (e3.key === "ArrowUp") {
-      e3.preventDefault();
-      setSel((s3) => Math.max(s3 - 1, 0));
-      return;
-    }
-    if (e3.key === "Home") {
-      e3.preventDefault();
-      setSel(0);
-      return;
-    }
-    if (e3.key === "End") {
-      e3.preventDefault();
-      setSel(Math.max(0, filtered.length - 1));
-      return;
-    }
-    if (e3.key === "Enter") {
-      e3.preventDefault();
-      exec(filtered[sel]);
-      return;
-    }
-  };
-  let lastSection = null;
-  return html4`
-    <div class="cmd-overlay" role="presentation" onPointerDown=${(e3) => {
-    if (e3.target === e3.currentTarget) onClose?.();
-  }}>
-      <div class="cmd-palette" role="dialog" aria-modal="true" aria-label=${ariaLabel} onKeyDown=${onKeyDown}>
-        <div class="cmd-input-row">
-          <span class="g" aria-hidden="true">›</span>
-          <input
-            ref=${inputRef}
-            type="text"
-            value=${query}
-            placeholder=${placeholder}
-            aria-label=${placeholder}
-            onInput=${(e3) => setQuery(e3.currentTarget.value)}
-          />
-          <span class="kbd">esc</span>
-        </div>
-        <div class="cmd-list" role="listbox" aria-label=${ariaLabel} ref=${listRef}>
-          ${filtered.length === 0 ? html4`<div class="cmd-empty">${t4("uiPrim.cmdEmpty")}</div>` : null}
-          ${filtered.map((it, i3) => {
-    const showHead = it.section !== lastSection;
-    lastSection = it.section;
-    return html4`
-              ${showHead ? html4`<div class="cmd-section-h">${it.section}</div>` : null}
-              <div
-                key=${it.id}
-                class=${`cmd-row ${i3 === sel ? "sel" : ""}`}
-                role="option"
-                aria-selected=${i3 === sel}
-                onPointerEnter=${() => setSel(i3)}
-                onClick=${() => exec(it)}
-              >
-                <span class="g" aria-hidden="true">${it.glyph ?? "›"}</span>
-                <span class="name">${it.name}</span>
-                ${it.desc ? html4`<span class="desc">${it.desc}</span>` : null}
-                ${it.kbd ? html4`<span class="kbd">${it.kbd}</span>` : null}
-              </div>
-            `;
-  })}
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-// dashboard/src/ui/icons.ts
-function base(children, size = 14) {
-  return html4`<svg viewBox="0 0 16 16" width=${size} height=${size} aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">${children}</svg>`;
-}
-function IconModel({ size } = {}) {
-  return base(html4`
-    <rect x="4" y="4" width="8" height="8" rx="1.5" />
-    <path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2" />
-  `, size);
-}
-function IconWorkspace({ size } = {}) {
-  return base(html4`
-    <rect x="2" y="3" width="12" height="8.5" rx="1.5" />
-    <path d="M6 14h4M8 11.5V14" />
-  `, size);
-}
-function IconJobs({ size } = {}) {
-  return base(html4`
-    <path d="M5.5 4h8M5.5 8h8M5.5 12h8" />
-    <circle cx="2.75" cy="4" r="0.9" fill="currentColor" stroke="none" />
-    <circle cx="2.75" cy="8" r="0.9" fill="currentColor" stroke="none" />
-    <circle cx="2.75" cy="12" r="0.9" fill="currentColor" stroke="none" />
-  `, size);
-}
-function IconSearch({ size } = {}) {
-  return base(html4`
-    <circle cx="7" cy="7" r="4.5" />
-    <path d="M10.5 10.5 14 14" />
-  `, size);
-}
-function IconWand({ size } = {}) {
-  return base(html4`
-    <path d="M3 13 10.5 5.5" />
-    <path d="M11.5 2v2M13.5 4h2M11.5 6v2M9.5 4h-2" stroke-width="1.2" />
-  `, size);
-}
-function IconAttach({ size } = {}) {
-  return base(html4`
-    <path d="M12.5 7.5 7 13a3 3 0 0 1-4.2-4.2l5.6-5.6a2 2 0 0 1 2.8 2.8l-5.6 5.6a1 1 0 0 1-1.4-1.4l5-5" />
-  `, size);
-}
-function IconSkill({ size } = {}) {
-  return base(html4`
-    <path d="M9.7 2.3a3.5 3.5 0 0 0-4.4 4.4L2 10l4 4 3.3-3.3a3.5 3.5 0 0 0 4.4-4.4L11 9 9 7l2.7-2.7a3.5 3.5 0 0 0-2-2z" />
-  `, size);
 }
 
 // dashboard/src/panels/chat.ts
@@ -25037,7 +25151,7 @@ ${workspaceDir || ""}`;
     });
   }, []);
   const setAllToolGroupsOpen = (open) => {
-    feedRef.current?.querySelectorAll("details.tool-log").forEach((node) => {
+    feedRef.current?.querySelectorAll("details.tool-log, details.process-card-details").forEach((node) => {
       node.open = open;
     });
   };
@@ -27729,16 +27843,18 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
         </div>
       ` : null}
       ${renderUnits.map(
-    (unit) => {
+    (unit, unitIndex) => {
       if (unit.kind !== "toolGroup") {
         return renderChatMessage(unit.msg, unit.index);
       }
       const hitIds = unit.items.filter((item) => item.index === searchMatchIndex || Boolean(highlightMessageId && item.msg.id === highlightMessageId)).map((item) => String(item.msg.id));
+      const followedByAnswer = renderUnits.slice(unitIndex + 1).some((u3) => u3.kind === "msg" && u3.msg.role === "assistant" && (u3.msg.text ?? "").trim());
       return html4`<${ToolGroup}
                     key=${unit.id}
                     items=${unit.items.map((item) => item.msg)}
                     taskActive=${taskActive}
                     searchHitIds=${hitIds.length > 0 ? hitIds : null}
+                    followedByAnswer=${followedByAnswer}
                   />`;
     }
   )}
