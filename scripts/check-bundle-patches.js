@@ -896,7 +896,10 @@ const required = [
   },
   {
     file: "src-tauri/resources/server/lib/active-session.mjs",
-    markers: ["activeEntriesForDashboard", 'entry.role === "tool") continue', "系统自动续跑"],
+    // The dashboard projection now keeps tool results as auditable process
+    // messages. Accept the new projection marker while retaining the stable
+    // function and recovery-prompt anchors.
+    markers: ["activeEntriesForDashboard", "toolStatusFromResult", "系统自动续跑"],
     forbidden: ["reasoning: entry.reasoning ?? entry.reasoning_content"],
   },
   {

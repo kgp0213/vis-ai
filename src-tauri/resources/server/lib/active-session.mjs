@@ -163,6 +163,39 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
   let sequence = 0;
   const visible = [];
   let pendingAssistant = null;
+  const source = Array.isArray(entries) ? entries : [];
+
+  // Index tool call declarations (name + arguments) by call id so restored
+  // tool results can show both the invocation and its output. The dashboard
+  // renders consecutive tool messages as an auditable process card; dropping
+  // them would make historical sessions look like they did no work.
+  const toolCallById = new Map();
+  for (const entry of source) {
+    if (entry?.role !== "assistant" || !Array.isArray(entry.tool_calls)) continue;
+    for (const call of entry.tool_calls) {
+      const callId = String(call?.id ?? call?.tool_call_id ?? "").trim();
+      if (!callId) continue;
+      const name = typeof call?.function?.name === "string" ? call.function.name : (typeof call?.name === "string" ? call.name : "");
+      const args = typeof call?.function?.arguments === "string"
+        ? call.function.arguments
+        : (call?.function?.arguments != null ? JSON.stringify(call.function.arguments) : (call?.arguments != null ? (typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments)) : undefined));
+      toolCallById.set(callId, { name: name || undefined, args });
+    }
+  }
+
+  const toolStatusFromResult = (entry, text) => {
+    if (entry?.isError === true) return "failed";
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (trimmed.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && parsed.ok === false) return "failed";
+      } catch {
+        // Non-JSON tool output; fall through to done.
+      }
+    }
+    return "done";
+  };
 
   const restoredEntry = (entry, text) => {
     sequence += 1;
@@ -172,6 +205,7 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
       text,
       toolName: entry.toolName ?? entry.name,
       toolArgs: entry.toolArgs,
+      ...(typeof entry.toolStatus === "string" ? { toolStatus: entry.toolStatus } : {}),
       images: Array.isArray(entry.images) ? entry.images : undefined,
       attachments: Array.isArray(entry.attachments) ? entry.attachments : undefined,
       ...(entry.turnId ? { turnId: String(entry.turnId) } : {}),
@@ -191,11 +225,22 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
     pendingAssistant = null;
   };
 
-  for (const entry of Array.isArray(entries) ? entries : []) {
+  for (const entry of source) {
     if (!entry || !DASHBOARD_ROLES.has(entry.role)) continue;
     const text = contentText(entry.content !== undefined ? entry.content : entry.text);
 
-    if (entry.role === "tool") continue;
+    if (entry.role === "tool") {
+      flushAssistant();
+      const callId = String(entry.tool_call_id ?? entry.toolCallId ?? "").trim();
+      const call = callId ? toolCallById.get(callId) : undefined;
+      visible.push(restoredEntry({
+        ...entry,
+        toolName: entry.toolName ?? entry.name ?? call?.name,
+        toolArgs: entry.toolArgs ?? call?.args,
+        toolStatus: entry.toolStatus ?? toolStatusFromResult(entry, text),
+      }, text));
+      continue;
+    }
     if (entry.role === "assistant") {
       if (!text || (Array.isArray(entry.tool_calls) && entry.tool_calls.length > 0)) continue;
       // Keep replacing the candidate until the logical user turn ends. This
