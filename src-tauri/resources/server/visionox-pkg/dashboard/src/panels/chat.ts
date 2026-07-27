@@ -1078,6 +1078,23 @@ function ChatPanel({ userAvatar = null } = {}) {
     } catch (e) {
     }
   };
+  // 过程显示三档：compact=全程单行卡；standard=状态行+事件驱动收敛；detailed=不收敛、明细常驻展开。
+  const [processDisplay, setProcessDisplay] = d2(() => {
+    try {
+      const stored = localStorage.getItem("visionox-process-display");
+      return stored === "compact" || stored === "detailed" ? stored : "standard";
+    } catch (e) {
+      return "standard";
+    }
+  });
+  const changeProcessDisplay = (mode) => {
+    const next = mode === "compact" || mode === "detailed" ? mode : "standard";
+    setProcessDisplay(next);
+    try {
+      localStorage.setItem("visionox-process-display", next);
+    } catch (e) {
+    }
+  };
   const [activeTools, setActiveTools] = d2([]);
   const [completedSteps, setCompletedSteps] = d2(0);
   const [busy, setBusy] = d2(false);
@@ -3723,6 +3740,7 @@ const [providerCaps, setProviderCaps] = d2(null);
             taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
             reasoningDisplay=${reasoningDisplay}
+            processDisplay=${processDisplay}
             innerRef=${feedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
@@ -4006,6 +4024,12 @@ const [providerCaps, setProviderCaps] = d2(null);
                       ${[["live", t4("chat.reasoningLive")], ["status", t4("chat.reasoningStatusOnly")], ["hidden", t4("chat.reasoningHidden")]].map(([mode, label]) => html4`<button type="button" key=${mode} class=${`model-choice ${reasoningDisplay === mode || mode === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode)}>${label}</button>`)}
                     </div>
                   </div>
+                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title=${t4("chat.processDisplayTitle")}>${t4("chat.processDisplayLabel")}</label>
+                    <div class="model-choice-row">
+                      ${[["compact", t4("chat.processCompact")], ["standard", t4("chat.processStandard")], ["detailed", t4("chat.processDetailed")]].map(([mode, label]) => html4`<button type="button" key=${mode} class=${`model-choice ${processDisplay === mode ? "active" : ""}`} onClick=${() => changeProcessDisplay(mode)}>${label}</button>`)}
+                    </div>
+                  </div>
                 </div>
               ` : null}
               <div class="composer-bar-status">
@@ -4079,7 +4103,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -4150,6 +4174,7 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
                     taskActive=${taskActive}
                     searchHitIds=${hitIds.length > 0 ? hitIds : null}
                     followedByAnswer=${followedByAnswer}
+                    processDisplay=${processDisplay}
                   />`;
     }
   )}

@@ -3330,6 +3330,15 @@ div.tool-log-row {
   cursor: default;
 }
 
+/* 简洁档单行卡：summary 不可交互（无 hover 变色、无 pointer） */
+.process-card-static .process-card-summary {
+  cursor: default;
+}
+
+.process-card-static .process-card-summary:hover {
+  color: var(--text-secondary);
+}
+
 .process-card-icon {
   display: inline-flex;
   align-items: center;

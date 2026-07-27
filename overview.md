@@ -1,6 +1,26 @@
-# 过程信息统一容器 — ProcessCard 落地
+# 过程信息统一容器 — ProcessCard + 三档过程显示
 
-日期：2026-07-27 · 范围：把对话框里"任务过程"信息（工具调用 / 深度思考）统一进同一种容器语言
+日期：2026-07-27 · 范围：把对话框里"任务过程"信息（工具调用 / 深度思考）统一进同一种容器语言，并提供用户可控的显示详略
+
+## 本轮新增：过程显示三档（简洁 / 标准 / 详细）
+
+不同用户对"过程冲淡正文"的耐受度差异很大，一刀切的收敛策略必然有人不满意。因此在 composer 弹层新增"过程显示"设置（`localStorage["visionox-process-display"]`），与"思考过程显示"并列：
+
+| 档位 | 行为 |
+|---|---|
+| **简洁 compact** | 过程卡全程只显示一行摘要（无 chevron、不可展开的状态行），视觉最克制 |
+| **标准 standard** | 现状：状态行列表 + 当前步细节，正文出现后事件驱动收敛成一行 |
+| **详细 detailed** | 永不自动收敛、步骤明细常驻展开，适合紧盯执行过程的场景 |
+
+失败粘性在三档下都成立：只要组内有失败步，始终可展开查看。
+
+实现要点：
+- `ProcessCard` 原语新增 `collapsible` 能力——`false` 时渲染纯单行卡（无 chevron、无 details 开合），CSS 侧 `.process-card-static` 去掉 hover 交互感。
+- `ToolGroup` 接 `processDisplay` prop：compact 时不生成状态行、detailed 时跳过收敛。
+- 接线链：ChatPanel（localStorage state）→ ChatFeed → ToolGroup；composer 弹层复用 `model-choice` 按钮组样式，与 reasoningDisplay 同一范式。
+- i18n：双语各 5 个新 key（`processDisplayLabel/Title` + `processCompact/Standard/Detailed`），zh 用 \u 转义存储。
+
+## 上一轮：ProcessCard 统一容器（已提交 e73d90ff）
 
 ## 背景与设计原则
 

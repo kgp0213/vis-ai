@@ -15046,6 +15046,11 @@ var en = {
     reasoningLive: "Live",
     reasoningStatusOnly: "Status only",
     reasoningHidden: "Hidden",
+    processDisplayLabel: "Process display",
+    processDisplayTitle: "Controls how task progress (tool calls, work steps) is shown: Compact shows a single summary line; Standard shows the step list and auto-collapses once the reply appears; Detailed always stays expanded.",
+    processCompact: "Compact",
+    processStandard: "Standard",
+    processDetailed: "Detailed",
     retrievalRunning: "Recalling...",
     retrievalEmpty: "No relevant content found",
     retrievalTimeout: "Recall timed out",
@@ -16886,6 +16891,11 @@ var zhCN = {
     reasoningLive: "实时显示",
     reasoningStatusOnly: "仅状态行",
     reasoningHidden: "完全隐藏",
+    processDisplayLabel: "过程显示",
+    processDisplayTitle: "控制任务过程信息（工具调用、工作步骤）的展示详略：简洁只显示一行摘要；标准展示步骤列表并在正文出现后自动收敛；详细始终展开且不自动收敛。",
+    processCompact: "简洁",
+    processStandard: "标准",
+    processDetailed: "详细",
     retrievalRunning: "召回中...",
     retrievalEmpty: "未找到相关内容",
     retrievalTimeout: "召回超时",
@@ -21553,16 +21563,27 @@ function ProcessCard({
   open,
   defaultOpen = false,
   maxDetailLines = DEFAULT_DETAIL_LINES,
-  ariaLabel
+  ariaLabel,
+  collapsible = true
 }) {
   const openAttr = open !== void 0 ? open : defaultOpen || void 0;
+  const head = html4`
+    ${icon ? html4`<span class="process-card-icon">${icon}</span>` : null}
+    <span class="process-card-title">${title}</span>
+    ${meta ? html4`<span class="process-card-meta">${meta}</span>` : null}
+  `;
+  if (!collapsible) {
+    return html4`
+      <div class=${`process-card process-card-${state} process-card-static`} role="group" aria-label=${ariaLabel}>
+        <div class="process-card-summary">${head}</div>
+      </div>
+    `;
+  }
   return html4`
     <div class=${`process-card process-card-${state}`} role="group" aria-label=${ariaLabel}>
       <details class="process-card-details" open=${openAttr}>
         <summary class="process-card-summary">
-          ${icon ? html4`<span class="process-card-icon">${icon}</span>` : null}
-          <span class="process-card-title">${title}</span>
-          ${meta ? html4`<span class="process-card-meta">${meta}</span>` : null}
+          ${head}
           <span class="process-card-chevron"><${IconChevron} size=${13} /></span>
         </summary>
         <div class="process-card-body">
@@ -22355,7 +22376,7 @@ function toolRowsFromItems(items) {
     };
   });
 }
-function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false }) {
+function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false, processDisplay = "standard" }) {
   useLang();
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
@@ -22377,6 +22398,10 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       wasActiveRef.current = false;
       return void 0;
     }
+    if (processDisplay === "detailed") {
+      wasActiveRef.current = false;
+      return void 0;
+    }
     const shouldSettle = followedByAnswer;
     if (!shouldSettle) {
       const fallback = setTimeout(() => {
@@ -22388,14 +22413,15 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     wasActiveRef.current = false;
     setSettled(true);
     return void 0;
-  }, [taskActive, followedByAnswer, hasFailed, settled]);
+  }, [taskActive, followedByAnswer, hasFailed, settled, processDisplay]);
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
-  const rows = toolRowsFromItems(items);
+  const compact = processDisplay === "compact";
+  const rows = compact ? [] : toolRowsFromItems(items);
   const cardState = hasFailed ? "failed" : taskActive || !settled ? "running" : "settled";
   const title = taskActive ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}` : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
   const meta = hasFailed ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : taskActive && currentBrief ? html4`${currentBrief.name}` : null;
-  const openAttr = hasHit ? true : cardState === "running" ? true : void 0;
+  const openAttr = compact ? void 0 : hasHit ? true : processDisplay === "detailed" ? true : cardState === "running" ? true : void 0;
   return html4`
     <${ProcessCard}
       icon=${html4`<${IconTool} size=${13} />`}
@@ -22406,6 +22432,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       open=${openAttr}
       maxDetailLines=${TOOL_ROW_DETAIL_TAIL_LINES}
       ariaLabel=${t4("chat.toolUsedCount", { count: items.length })}
+      collapsible=${!compact}
     />
   `;
 }
@@ -24641,6 +24668,22 @@ function ChatPanel({ userAvatar = null } = {}) {
     setReasoningDisplay(next);
     try {
       localStorage.setItem("visionox-reasoning-display", next);
+    } catch (e3) {
+    }
+  };
+  const [processDisplay, setProcessDisplay] = d2(() => {
+    try {
+      const stored = localStorage.getItem("visionox-process-display");
+      return stored === "compact" || stored === "detailed" ? stored : "standard";
+    } catch (e3) {
+      return "standard";
+    }
+  });
+  const changeProcessDisplay = (mode2) => {
+    const next = mode2 === "compact" || mode2 === "detailed" ? mode2 : "standard";
+    setProcessDisplay(next);
+    try {
+      localStorage.setItem("visionox-process-display", next);
     } catch (e3) {
     }
   };
@@ -27304,6 +27347,7 @@ ${workspaceDir || ""}`;
             taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
             reasoningDisplay=${reasoningDisplay}
+            processDisplay=${processDisplay}
             innerRef=${feedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
@@ -27692,6 +27736,12 @@ ${workspaceDir || ""}`;
                       ${[["live", t4("chat.reasoningLive")], ["status", t4("chat.reasoningStatusOnly")], ["hidden", t4("chat.reasoningHidden")]].map(([mode2, label]) => html4`<button type="button" key=${mode2} class=${`model-choice ${reasoningDisplay === mode2 || mode2 === "live" && reasoningDisplay === "expanded" ? "active" : ""}`} onClick=${() => changeReasoningDisplay(mode2)}>${label}</button>`)}
                     </div>
                   </div>
+                  <div style="padding:8px;border-bottom:1px solid var(--border-default);">
+                    <label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:4px;" title=${t4("chat.processDisplayTitle")}>${t4("chat.processDisplayLabel")}</label>
+                    <div class="model-choice-row">
+                      ${[["compact", t4("chat.processCompact")], ["standard", t4("chat.processStandard")], ["detailed", t4("chat.processDetailed")]].map(([mode2, label]) => html4`<button type="button" key=${mode2} class=${`model-choice ${processDisplay === mode2 ? "active" : ""}`} onClick=${() => changeProcessDisplay(mode2)}>${label}</button>`)}
+                    </div>
+                  </div>
                 </div>
               ` : null}
               <div class="composer-bar-status">
@@ -27786,7 +27836,7 @@ ${workspaceDir || ""}`;
     </div>
   `;
 }
-var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -27855,6 +27905,7 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
                     taskActive=${taskActive}
                     searchHitIds=${hitIds.length > 0 ? hitIds : null}
                     followedByAnswer=${followedByAnswer}
+                    processDisplay=${processDisplay}
                   />`;
     }
   )}

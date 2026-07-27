@@ -228,7 +228,7 @@ function toolRowsFromItems(items) {
     };
   });
 }
-function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false }) {
+function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false, processDisplay = "standard" }) {
   useLang();
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
@@ -238,6 +238,8 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const hitSet = searchHitIds ? new Set(searchHitIds) : null;
   const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
 
+  // 三档过程显示：compact=全程单行卡（不展开状态行）；standard=状态行+事件驱动收敛（现状）；
+  // detailed=永不自动收敛、步骤明细常驻展开。失败粘性在三档下都成立（失败组始终可展开）。
   // 事件驱动收敛：任务不再 active，且（下一条 assistant 正文已出现 followedByAnswer
   // 或兜底超时）→ 收敛。异常粘性：只要组内有失败步，永不自动收敛。
   const [settled, setSettled] = d2(!taskActive);
@@ -250,6 +252,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     }
     if (!wasActiveRef.current) return void 0;
     if (hasFailed) { wasActiveRef.current = false; return void 0; } // 失败粘性：不收敛
+    if (processDisplay === "detailed") { wasActiveRef.current = false; return void 0; } // 详细档：不收敛
     const shouldSettle = followedByAnswer;
     if (!shouldSettle) {
       // 正文还没来：设一个兜底最大延迟，避免无后续正文时永不收敛。
@@ -259,11 +262,13 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     wasActiveRef.current = false;
     setSettled(true);
     return void 0;
-  }, [taskActive, followedByAnswer, hasFailed, settled]);
+  }, [taskActive, followedByAnswer, hasFailed, settled, processDisplay]);
 
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
-  const rows = toolRowsFromItems(items);
+  // 简洁档：不渲染状态行列表，卡片全程只有标题行（单行），视觉最克制。
+  const compact = processDisplay === "compact";
+  const rows = compact ? [] : toolRowsFromItems(items);
   const cardState = hasFailed ? "failed" : (taskActive || !settled) ? "running" : "settled";
 
   const title = taskActive
@@ -273,8 +278,12 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>`
     : (taskActive && currentBrief ? html4`${currentBrief.name}` : null);
 
-  // 搜索命中时强制展开；running 且未收敛时默认展开（用户要看过程）；settled 默认折叠（让位正文）。
-  const openAttr = hasHit ? true : (cardState === "running" ? true : void 0);
+  // 搜索命中时强制展开；详细档常驻展开；running 且未收敛时默认展开（用户要看过程）；
+  // settled 默认折叠（让位正文）。简洁档不传 open（始终单行）。
+  const openAttr = compact ? void 0
+    : hasHit ? true
+    : processDisplay === "detailed" ? true
+    : (cardState === "running" ? true : void 0);
 
   return html4`
     <${ProcessCard}
@@ -286,6 +295,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       open=${openAttr}
       maxDetailLines=${TOOL_ROW_DETAIL_TAIL_LINES}
       ariaLabel=${t4("chat.toolUsedCount", { count: items.length })}
+      collapsible=${!compact}
     />
   `;
 }

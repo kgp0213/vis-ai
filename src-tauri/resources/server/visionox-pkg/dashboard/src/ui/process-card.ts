@@ -45,6 +45,7 @@ type ProcessCardProps = {
   defaultOpen?: boolean;                // 非受控时的初始展开
   maxDetailLines?: number;              // active 行 detail 最多渲染行数
   ariaLabel?: string;
+  collapsible?: boolean;                // false 时渲染为纯单行卡（无 chevron、不可展开）
 };
 
 const DEFAULT_DETAIL_LINES = 3;
@@ -91,15 +92,27 @@ export function ProcessCard({
   defaultOpen = false,
   maxDetailLines = DEFAULT_DETAIL_LINES,
   ariaLabel,
+  collapsible = true,
 }: ProcessCardProps) {
   const openAttr = open !== void 0 ? open : defaultOpen || void 0;
+  const head = html`
+    ${icon ? html`<span class="process-card-icon">${icon}</span>` : null}
+    <span class="process-card-title">${title}</span>
+    ${meta ? html`<span class="process-card-meta">${meta}</span>` : null}
+  `;
+  // 不可折叠（简洁档）：纯单行卡，无 chevron、无 details 开合。
+  if (!collapsible) {
+    return html`
+      <div class=${`process-card process-card-${state} process-card-static`} role="group" aria-label=${ariaLabel}>
+        <div class="process-card-summary">${head}</div>
+      </div>
+    `;
+  }
   return html`
     <div class=${`process-card process-card-${state}`} role="group" aria-label=${ariaLabel}>
       <details class="process-card-details" open=${openAttr}>
         <summary class="process-card-summary">
-          ${icon ? html`<span class="process-card-icon">${icon}</span>` : null}
-          <span class="process-card-title">${title}</span>
-          ${meta ? html`<span class="process-card-meta">${meta}</span>` : null}
+          ${head}
           <span class="process-card-chevron"><${IconChevron} size=${13} /></span>
         </summary>
         <div class="process-card-body">
