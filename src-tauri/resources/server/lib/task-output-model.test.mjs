@@ -41,6 +41,7 @@ test("projects a persisted terminal task as a bounded, recoverable model result"
   assert.equal(result.outputSizeBytes, 108);
   assert.equal(result.outputPreviewBytes, Buffer.byteLength("line 9\nerror\n", "utf8"));
   assert.equal(result.outputTruncated, true);
+  assert.equal(result.outputGapDetected, false);
   assert.equal(result.fullOutputAvailable, true);
   assert.equal(result.nextOffsetBytes, 108);
   assert.equal(result.complete, true);
@@ -102,6 +103,7 @@ test("projects task listings without workspace paths", () => {
     running: false,
     outputSizeBytes: 10,
     outputTruncated: false,
+    outputGapDetected: false,
   }]);
   assert.equal(JSON.stringify(rows).includes("private/workspace"), false);
 });

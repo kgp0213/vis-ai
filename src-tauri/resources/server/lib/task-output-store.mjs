@@ -8,6 +8,7 @@ const TASK_ID_RE = /^bg-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const TASK_STATUSES = new Set(["running", "completed", "failed", "timed_out", "killed", "lost", "unknown"]);
 const DEFAULT_MAX_READ_BYTES = 64_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
+const OUTPUT_DROP_MARKER_RE = /^\[\u2026 older output dropped \u2026\]\r?\n?/u;
 
 function text(value, fallback = "") {
   const normalized = String(value ?? "").trim();
@@ -23,6 +24,55 @@ function safeTaskId(value) {
   const taskId = text(value);
   if (!TASK_ID_RE.test(taskId)) throw new TypeError(`invalid task id: ${taskId || "<empty>"}`);
   return taskId;
+}
+
+function stripOutputDropMarker(value) {
+  const source = String(value ?? "");
+  const match = source.match(OUTPUT_DROP_MARKER_RE);
+  return {
+    content: match ? source.slice(match[0].length) : source,
+    markerPresent: match !== null,
+  };
+}
+
+/**
+ * Return the largest suffix of `existing` that is a prefix of `incoming`.
+ * JobRegistry exposes a moving ring buffer, so this lets repeated snapshots
+ * append only bytes that were not already made durable. KMP keeps this
+ * bounded and linear even when a task emits several megabytes.
+ */
+function longestSuffixPrefixOverlap(existing, incoming) {
+  const pattern = Buffer.isBuffer(incoming) ? incoming : Buffer.from(incoming ?? "");
+  const source = Buffer.isBuffer(existing) ? existing : Buffer.from(existing ?? "");
+  if (pattern.length === 0 || source.length === 0) return 0;
+
+  const prefix = new Uint32Array(pattern.length);
+  for (let i = 1, length = 0; i < pattern.length; i += 1) {
+    while (length > 0 && pattern[i] !== pattern[length]) length = prefix[length - 1];
+    if (pattern[i] === pattern[length]) length += 1;
+    prefix[i] = length;
+  }
+
+  let matched = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    while (matched > 0 && source[i] !== pattern[matched]) matched = prefix[matched - 1];
+    if (source[i] === pattern[matched]) matched += 1;
+    if (matched === pattern.length) {
+      if (i === source.length - 1) return matched;
+      matched = prefix[matched - 1];
+    }
+  }
+  return matched;
+}
+
+function utf8TailByCodeUnits(value, units) {
+  const source = String(value ?? "");
+  const count = Math.max(0, finiteInteger(units, source.length) ?? source.length);
+  if (count >= source.length) return source;
+  let start = Math.max(0, source.length - count);
+  // Do not split a UTF-16 surrogate pair before converting the tail to UTF-8.
+  if (start > 0 && start < source.length && /[\uDC00-\uDFFF]/u.test(source[start])) start += 1;
+  return source.slice(start);
 }
 
 function statusFor(input) {
@@ -51,7 +101,11 @@ function normalizeRecord(input, now, previous = null) {
   const outputBytes = output === null
     ? previous?.outputBytes ?? 0
     : finiteInteger(input.storedOutputBytes, observedOutputBytes) ?? observedOutputBytes;
-  const reportedBytes = Math.max(observedOutputBytes, finiteInteger(input.totalBytesWritten, previous?.reportedBytes ?? observedOutputBytes) ?? observedOutputBytes);
+  const reportedUnits = Math.max(
+    previous?.reportedUnits ?? previous?.reportedBytes ?? 0,
+    finiteInteger(input.reportedUnits, finiteInteger(input.totalBytesWritten, previous?.reportedUnits ?? previous?.reportedBytes ?? observedOutputBytes) ?? observedOutputBytes) ?? 0,
+  );
+  const reportedBytes = Math.max(observedOutputBytes, reportedUnits);
   const outputTruncated = input.outputTruncated === true
     || previous?.outputTruncated === true
     || (output?.includes("older output dropped") ?? false)
@@ -82,8 +136,13 @@ function normalizeRecord(input, now, previous = null) {
     startedAt,
     endedAt,
     reportedBytes,
+    // JobRegistry historically calls this counter bytes even though its
+    // vendored implementation increments JavaScript string units. Keep both
+    // names for compatibility while using the precise value for merging.
+    reportedUnits,
     outputBytes,
     outputTruncated,
+    outputGapDetected: input.outputGapDetected === true || previous?.outputGapDetected === true,
     outputResourceId: `task-output:${taskId}`,
     updatedAt: input.updatedAt ?? now,
   };
@@ -212,16 +271,91 @@ export function createTaskOutputStore({ rootDir, now = () => new Date().toISOStr
     let outputBuffer = null;
     let nextInput = input;
     if (typeof input.output === "string") {
-      const bytes = Buffer.from(input.output, "utf8");
-      const start = bytes.length > outputLimit ? bytes.length - outputLimit : 0;
+      const snapshot = stripOutputDropMarker(input.output);
+      const rawIncoming = Buffer.from(input.output, "utf8");
+      const incoming = Buffer.from(snapshot.content, "utf8");
+      let existing = Buffer.alloc(0);
+      try { existing = await readFile(outputPath(tasksRoot, taskId)); } catch {}
+
+      const currentUnits = finiteInteger(input.totalBytesWritten, null);
+      const previousUnits = previous?.reportedUnits
+        ?? existing.toString("utf8").length;
+      const legacyCounterUnknown = Boolean(previous
+        && previous.reportedUnits === undefined
+        && previous.reportedBytes !== undefined);
+      const overlap = longestSuffixPrefixOverlap(existing, incoming);
+      let appended = Buffer.alloc(0);
+      let outputGapDetected = false;
+
+      if (existing.length === 0) {
+        // Keep the first observed marker as ordinary output. A child process
+        // can emit the same literal text, and the host has no out-of-band
+        // rollover bit from the vendored JobRegistry.
+        appended = rawIncoming;
+      } else if (overlap > 0) {
+        const deltaUnits = currentUnits === null ? null : currentUnits - previousUnits;
+        if (snapshot.markerPresent && overlap === incoming.length
+          && ((deltaUnits !== null && deltaUnits > 0) || legacyCounterUnknown)) {
+          const tail = legacyCounterUnknown
+            ? snapshot.content
+            : utf8TailByCodeUnits(snapshot.content, deltaUnits);
+          appended = Buffer.from(tail, "utf8");
+          outputGapDetected = legacyCounterUnknown
+            || (deltaUnits !== null && deltaUnits > snapshot.content.length);
+        } else {
+          appended = incoming.subarray(overlap);
+        }
+      } else {
+        // A ring-buffer overflow inserts a synthetic marker and can remove
+        // the bytes that would otherwise prove overlap. Use the cumulative
+        // source counter to retain only the newly observed tail; if more
+        // output was produced than the snapshot can contain, record the gap.
+        const deltaUnits = currentUnits === null ? null : currentUnits - previousUnits;
+        if (legacyCounterUnknown && incoming.length > 0) {
+          // Records written before reportedUnits was introduced have a
+          // UTF-8-byte counter, while JobRegistry reports UTF-16 units. Do
+          // not compare those units; preserve this new window and surface a
+          // conservative gap instead.
+          appended = incoming;
+          outputGapDetected = true;
+        } else if (deltaUnits !== null && deltaUnits > 0) {
+          const tail = utf8TailByCodeUnits(snapshot.content, deltaUnits);
+          appended = Buffer.from(tail, "utf8");
+          outputGapDetected = deltaUnits > snapshot.content.length;
+        } else if (currentUnits === null && incoming.length > 0) {
+          // Legacy callers do not expose a cumulative counter. Preserve the
+          // snapshot rather than silently dropping a changed output window.
+          appended = incoming;
+          outputGapDetected = true;
+        }
+      }
+
+      const merged = appended.length > 0 ? Buffer.concat([existing, appended]) : existing;
+      const start = merged.length > outputLimit ? merged.length - outputLimit : 0;
       let safeStart = start;
-      while (safeStart < bytes.length && (bytes[safeStart] & 0xc0) === 0x80) safeStart += 1;
-      outputBuffer = bytes.subarray(safeStart);
+      while (safeStart < merged.length && (merged[safeStart] & 0xc0) === 0x80) safeStart += 1;
+      outputBuffer = merged.subarray(safeStart);
+      const localTruncation = safeStart > 0;
+      const outputChanged = !existing.equals(outputBuffer);
       nextInput = {
         ...input,
         storedOutputBytes: outputBuffer.length,
-        outputTruncated: input.outputTruncated === true || safeStart > 0,
+        reportedUnits: currentUnits === null
+          ? previousUnits + appended.toString("utf8").length
+          : Math.max(previousUnits, currentUnits),
+        outputTruncated: input.outputTruncated === true
+          || previous?.outputTruncated === true
+          || snapshot.markerPresent
+          || localTruncation
+          || outputGapDetected,
+        outputGapDetected: input.outputGapDetected === true
+          || previous?.outputGapDetected === true
+          || outputGapDetected,
       };
+      // Repeated snapshots are common while polling. Avoid touching the log
+      // file when the merged bytes are identical, while still refreshing the
+      // metadata record and lifecycle state.
+      if (!outputChanged) outputBuffer = null;
     }
     const record = normalizeRecord(nextInput, now(), previous);
     // Commit output before metadata. If metadata replacement is interrupted,

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -79,6 +79,127 @@ test("updates a task atomically without duplicate records and rejects unsafe ids
     const files = await readFile(join(root, "tasks", "bg-3.json"), "utf8");
     assert.match(files, /"schemaVersion":\s*1/u);
   });
+});
+
+test("appends overlapping polling snapshots without replacing durable history", async () => {
+  await withStore(async (store) => {
+    await store.save({ taskId: "bg-append", running: true, output: "one\n", totalBytesWritten: 4 });
+    await store.save({ taskId: "bg-append", running: true, output: "one\ntwo\n", totalBytesWritten: 8 });
+    await store.save({ taskId: "bg-append", running: true, output: "one\ntwo\nthree\n", totalBytesWritten: 14 });
+    // The same snapshot is emitted by both the change listener and the
+    // periodic persistence timer. It must not duplicate the final line.
+    await store.save({ taskId: "bg-append", running: true, output: "one\ntwo\nthree\n", totalBytesWritten: 14 });
+
+    const detail = await store.get("bg-append");
+    assert.equal(detail.outputTail, "one\ntwo\nthree\n");
+    assert.equal(detail.outputBytes, Buffer.byteLength("one\ntwo\nthree\n", "utf8"));
+    assert.equal(detail.outputTruncated, false);
+  });
+});
+
+test("keeps durable history when a ring snapshot has dropped older output", async () => {
+  await withStore(async (store) => {
+    await store.save({ taskId: "bg-ring", running: true, output: "old-1\nold-2\n", totalBytesWritten: 12 });
+    await store.save({
+      taskId: "bg-ring",
+      running: true,
+      output: "[… older output dropped …]\nnew-1\nnew-2\n",
+      totalBytesWritten: 24,
+    });
+
+    const detail = await store.get("bg-ring");
+    assert.equal(detail.outputTail, "old-1\nold-2\nnew-1\nnew-2\n");
+    assert.equal(detail.outputTruncated, true);
+    assert.equal(detail.outputGapDetected, false);
+  });
+});
+
+test("does not duplicate a repeated trailing line after ring rollover", async () => {
+  await withStore(async (store) => {
+    await store.save({ taskId: "bg-ring-repeat", running: true, output: "tick\n", totalBytesWritten: 5 });
+    await store.save({
+      taskId: "bg-ring-repeat",
+      running: true,
+      output: "[… older output dropped …]\ntick\n",
+      totalBytesWritten: 10,
+    });
+
+    const detail = await store.get("bg-ring-repeat");
+    assert.equal(detail.outputTail, "tick\ntick\n");
+    assert.equal(detail.outputGapDetected, false);
+  });
+});
+
+test("keeps a literal drop-marker line from a child process", async () => {
+  await withStore(async (store) => {
+    await store.save({
+      taskId: "bg-marker-text",
+      running: false,
+      exitCode: 0,
+      output: "[… older output dropped …]\nuser text\n",
+      totalBytesWritten: 37,
+    });
+
+    const detail = await store.get("bg-marker-text");
+    assert.equal(detail.outputTail, "[… older output dropped …]\nuser text\n");
+    assert.equal(detail.outputTruncated, true);
+  });
+});
+
+test("conservatively repairs a pre-reportedUnits non-ASCII record", async () => {
+  await withStore(async (store, root) => {
+    await store.save({ taskId: "bg-legacy-cjk", running: true, output: "中文旧\n", totalBytesWritten: 4 });
+    const recordPath = join(root, "tasks", "bg-legacy-cjk.json");
+    const legacy = JSON.parse(await readFile(recordPath, "utf8"));
+    delete legacy.reportedUnits;
+    await writeFile(recordPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+
+    await store.save({
+      taskId: "bg-legacy-cjk",
+      running: false,
+      exitCode: 0,
+      output: "[… older output dropped …]\n新\n",
+      totalBytesWritten: 6,
+    });
+
+    const detail = await store.get("bg-legacy-cjk");
+    assert.equal(detail.outputTail, "中文旧\n新\n");
+    assert.equal(detail.outputGapDetected, true);
+    assert.equal(detail.outputTruncated, true);
+  });
+});
+
+test("records an output gap when more data arrived than the ring snapshot contains", async () => {
+  await withStore(async (store) => {
+    await store.save({ taskId: "bg-gap", running: true, output: "start\n", totalBytesWritten: 6 });
+    await store.save({
+      taskId: "bg-gap",
+      running: true,
+      output: "[… older output dropped …]\nlast\n",
+      // The ring only exposes four source characters, but twelve arrived.
+      totalBytesWritten: 18,
+    });
+
+    const detail = await store.get("bg-gap");
+    assert.equal(detail.outputTail, "start\nlast\n");
+    assert.equal(detail.outputTruncated, true);
+    assert.equal(detail.outputGapDetected, true);
+  });
+});
+
+test("enforces the durable output limit and exposes truncation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-task-output-limit-"));
+  try {
+    const store = createTaskOutputStore({ rootDir: root, maxOutputBytes: 12, now: () => "2026-07-27T00:00:00.000Z" });
+    await store.save({ taskId: "bg-limit", running: false, output: "1234567890", totalBytesWritten: 10 });
+    await store.save({ taskId: "bg-limit", running: false, output: "1234567890abcdefghij", totalBytesWritten: 20, exitCode: 0 });
+    const detail = await store.get("bg-limit");
+    assert.equal(detail.outputTail, "90abcdefghij");
+    assert.equal(detail.outputBytes <= 12, true);
+    assert.equal(detail.outputTruncated, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("finds the latest persisted record by legacy numeric job id", async () => {

@@ -2127,6 +2127,28 @@ function installPersistentBackgroundTools() {
         if (!liveTaskIsVisible(reference.jobId, scope)) return taskNotFoundResult(args?.jobId);
         const live = jobs.read(reference.jobId);
         if (live) {
+          // Make the durable append log the source of truth even while the
+          // process is still running. JobRegistry keeps only a bounded ring;
+          // persisting this snapshot before reading prevents older output from
+          // disappearing between polls. A persistence failure remains
+          // observable and falls back to the live window below.
+          try {
+            await persistBackgroundJob(live);
+            const durableLive = await findPersistedTask(reference, scope);
+            if (durableLive) {
+              const window = await readPersistedTaskWindow(durableLive, args?.since);
+              return formatTaskOutputText(projectTaskOutput({
+                task: durableLive,
+                window,
+                reference,
+                since: args?.since,
+                tailLines: args?.tailLines,
+                fullOutputAvailable: Number(window.totalBytes) > 0 || Number(durableLive.outputBytes) > 0,
+              }));
+            }
+          } catch (error) {
+            console.error(`[launcher] live background output persistence skipped: ${error.message}`);
+          }
           const projected = projectTaskOutput({
             task: {
               taskId: durableBackgroundTaskId(reference.jobId),

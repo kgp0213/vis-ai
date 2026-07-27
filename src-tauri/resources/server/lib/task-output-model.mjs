@@ -100,6 +100,7 @@ export function projectTaskOutput({ task = {}, window = {}, reference = null, si
     outputSizeBytes: totalBytes,
     outputPreviewBytes: Buffer.byteLength(output, "utf8"),
     outputTruncated,
+    outputGapDetected: task.outputGapDetected === true,
     fullOutputAvailable: fullOutputAvailable ?? totalBytes > 0,
     offsetBytes,
     nextOffsetBytes,
@@ -129,6 +130,7 @@ export function projectBackgroundTaskList(tasks = []) {
       running: task?.running === true,
       outputSizeBytes: Math.max(0, finiteInteger(task?.outputBytes, finiteInteger(task?.byteLength, 0)) ?? 0),
       outputTruncated: task?.outputTruncated === true,
+      outputGapDetected: task?.outputGapDetected === true,
     };
     if (row.taskId === null) delete row.taskId;
     if (row.jobId === null) delete row.jobId;
