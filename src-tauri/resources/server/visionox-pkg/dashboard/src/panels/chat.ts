@@ -1319,7 +1319,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   const stopBackgroundJob = q2(async (id) => {
     try {
-      if (String(id).startsWith("document:")) {
+      if (String(id).startsWith("document:") || String(id).startsWith("bg-")) {
         await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: { action: "stop" } });
       } else {
         await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -1339,7 +1339,11 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [refreshBackgroundJobs]);
   const deleteBackgroundJobRecord = q2(async (id) => {
     try {
-      await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (String(id).startsWith("bg-")) {
+        await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "POST", body: { action: "delete_record" } });
+      } else {
+        await api(`/background-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
       if (selectedBackgroundJobId === id) {
         setSelectedBackgroundJobId(null);
         setBackgroundJobDetail(null);
@@ -1559,6 +1563,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const autoScrollInFlight = A2(false);
+  const lastScrollTopRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
   const topLoadArmedRef = A2(true);
@@ -1566,6 +1571,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [hasNewBelow, setHasNewBelow] = d2(false);
   const [feedMenu, setFeedMenu] = d2(null);
   const pinFeedToBottom = q2(() => {
+    if (!shouldAutoScroll.current) return;
     const el = feedRef.current;
     if (!el) return;
     autoScrollInFlight.current = true;
@@ -3173,9 +3179,19 @@ const [providerCaps, setProviderCaps] = d2(null);
       void loadEarlierMessagesRef.current?.();
     };
     const onScroll = () => {
-      if (autoScrollInFlight.current) return;
-      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      shouldAutoScroll.current = distFromBottom < 80;
+      if (autoScrollInFlight.current) {
+        lastScrollTopRef.current = el.scrollTop;
+        return;
+      }
+      const currentTop = el.scrollTop;
+      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+      const scrollingUp = currentTop < lastScrollTopRef.current - 1;
+      if (scrollingUp) {
+        shouldAutoScroll.current = false;
+      } else if (distFromBottom < 80) {
+        shouldAutoScroll.current = true;
+      }
+      lastScrollTopRef.current = currentTop;
       if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD * 2) topLoadArmedRef.current = true;
       maybeLoadEarlier();
     };
