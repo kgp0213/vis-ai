@@ -160,6 +160,7 @@ const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToo
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
+const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
 const { normalizeProviderResult } = await importEarly("./lib/provider-result.mjs");
@@ -1810,6 +1811,13 @@ async function registerWorkspaceTools(tools, rootDir, opts = {}) {
 // ── Create registry & register all tools ────────────────────────
 const tools = new ToolRegistry();
 const jobs = new JobRegistry();
+const taskOutputStore = createTaskOutputStore({
+  rootDir: resolve(visionoxDataDir, "background-tasks"),
+});
+const recoveredBackgroundTasks = await taskOutputStore.recoverRunning("process_restarted");
+if (recoveredBackgroundTasks.updated > 0) {
+  console.error(`[launcher] marked ${recoveredBackgroundTasks.updated} background task(s) lost after restart`);
+}
 async function readToolOutputResource(args = {}) {
   const resourceId = String(args.resourceId ?? "").trim();
   if (!resourceId || basename(resourceId) !== resourceId || !/^tool-output-[A-Za-z0-9-]+\.txt$/.test(resourceId)) {
@@ -7321,9 +7329,68 @@ function loopEventToDashboard(ev, assistantId, streamContext = {}) {
 let busy = false;
 let pendingModelSwitch = null;
 
+function durableBackgroundTaskId(jobId) {
+  return `bg-${launcherBootId}-${String(jobId).replace(/[^A-Za-z0-9._-]+/gu, "-")}`;
+}
+
+async function persistBackgroundJob(jobLike) {
+  const jobId = jobLike?.id;
+  if (!Number.isSafeInteger(Number(jobId))) return null;
+  const id = Number(jobId);
+  const live = typeof jobs.read === "function" ? jobs.read(id) : null;
+  const snapshot = live ?? jobLike;
+  const operationId = snapshot?.ownerId ?? jobLike?.ownerId ?? null;
+  const operation = operationId ? operationById.get(String(operationId)) : null;
+  return taskOutputStore.save({
+    taskId: durableBackgroundTaskId(id),
+    jobId: id,
+    operationId: operationId ? String(operationId) : null,
+    sessionId: operation?.context?.conversationId ?? operationSessionIds.get(String(operationId)) ?? null,
+    // The task store treats this as an immutable first-write snapshot. Do
+    // not derive it from a later global workspace after the operation ends.
+    workspace: operation?.context?.workspace ?? snapshot?.workspace ?? jobLike?.workspace ?? workspaceDir,
+    lifecycle: snapshot?.lifecycle ?? jobLike?.lifecycle ?? "task",
+    running: snapshot?.running === true,
+    command: snapshot?.command ?? jobLike?.command ?? null,
+    pid: snapshot?.pid ?? jobLike?.pid ?? null,
+    exitCode: snapshot?.exitCode ?? jobLike?.exitCode ?? null,
+    spawnError: snapshot?.spawnError ?? jobLike?.spawnError ?? null,
+    output: typeof snapshot?.output === "string" ? snapshot.output : undefined,
+    // JobRegistry.read() exposes byteLength for the current string buffer;
+    // the metadata snapshot carries the cumulative counter. Prefer the
+    // latter so bounded-buffer truncation remains observable.
+    totalBytesWritten: jobLike?.totalBytesWritten ?? snapshot?.totalBytesWritten
+      ?? (typeof snapshot?.output === "string" ? Buffer.byteLength(snapshot.output, "utf8") : null),
+    ...(snapshot?.running === false ? { endedAt: new Date().toISOString() } : {}),
+  });
+}
+
+async function syncRunningBackgroundTasks() {
+  for (const job of jobs.listMetadata?.() ?? []) {
+    try { await persistBackgroundJob(job); } catch (error) {
+      console.error(`[launcher] background task persistence skipped: ${error.message}`);
+    }
+  }
+}
+
 jobs.setChangeListener?.((change) => {
   broadcastDashboardEvent({ kind: "background-job-change", ...change });
+  void queueBackgroundPersistence(() => persistBackgroundJob(change?.job)).catch((error) => {
+    console.error(`[launcher] background task persistence failed: ${error.message}`);
+  });
 });
+let backgroundPersistenceClosed = false;
+let backgroundPersistenceQueue = Promise.resolve();
+function queueBackgroundPersistence(work) {
+  if (backgroundPersistenceClosed) return Promise.resolve(null);
+  const next = backgroundPersistenceQueue.then(work);
+  backgroundPersistenceQueue = next.catch(() => {});
+  return next;
+}
+const backgroundTaskPersistenceTimer = setInterval(() => {
+  void queueBackgroundPersistence(syncRunningBackgroundTasks);
+}, 1000);
+backgroundTaskPersistenceTimer.unref?.();
 
 // OpenCode-style process-local Session lanes. The existing operation runtime
 // remains the only model-loop owner; this coordinator only coalesces repeated
@@ -9357,11 +9424,47 @@ const ctx = {
   forkSession,
   getActiveOperation: () => publicActiveOperation(),
   // The dashboard exposes only the ordinary process/schedule job registry.
-  listBackgroundJobs: async () => ({ jobs: jobs.listMetadata(), pendingDeliveries: [] }),
-  getBackgroundJob: async (id) => jobs.read(Number(id)),
-  stopBackgroundJob: async (id) => jobs.stop(Number(id)),
+  listBackgroundJobs: async () => {
+    const liveJobs = jobs.listMetadata?.() ?? [];
+    const currentTaskIds = new Set(liveJobs.map((job) => durableBackgroundTaskId(job?.id)));
+    const durableJobs = (await taskOutputStore.list({ workspace: workspaceDir }))
+      .filter((job) => !currentTaskIds.has(job.taskId))
+      .map((job) => ({ ...job, id: job.taskId }));
+    return { jobs: [...liveJobs, ...durableJobs], pendingDeliveries: [] };
+  },
+  getBackgroundJob: async (id) => {
+    const numericId = Number(id);
+    if (Number.isSafeInteger(numericId)) {
+      const live = jobs.read(numericId);
+      if (live) return live;
+      return taskOutputStore.getByJobId(numericId, { workspace: workspaceDir });
+    }
+    return taskOutputStore.get(String(id), { workspace: workspaceDir });
+  },
+  stopBackgroundJob: async (id) => {
+    const numericId = Number(id);
+    if (!Number.isSafeInteger(numericId)) return null;
+    const live = jobs.read(numericId);
+    if (live) return jobs.stop(numericId);
+    return taskOutputStore.getByJobId(numericId, { workspace: workspaceDir });
+  },
   controlBackgroundJob: async (id, action, controlOptions = {}) => {
-    if (action === "stop" || action === "cancel") return jobs.stop(Number(id));
+    if (["delete", "delete_record", "abandon"].includes(action) && typeof id === "string" && id.startsWith("bg-")) {
+      return taskOutputStore.remove(id, { workspace: workspaceDir });
+    }
+    if (action === "stop" || action === "cancel") {
+      const numericId = Number(id);
+      if (!Number.isSafeInteger(numericId)) {
+        const historical = await taskOutputStore.get(String(id), { workspace: workspaceDir });
+        return historical
+          ? { ok: false, status: historical.status, error: "background job is no longer running", job: historical }
+          : null;
+      }
+      const live = jobs.read(numericId);
+      if (live) return jobs.stop(numericId);
+      const historical = await taskOutputStore.getByJobId(numericId, { workspace: workspaceDir });
+      return historical ? { ok: false, status: "lost", error: "background job is no longer running", job: historical } : null;
+    }
     return { ok: false, error: `unsupported generic background action: ${action}` };
   },
 
@@ -11482,15 +11585,25 @@ try {
   });
 
   // ── Keep running until terminated ──────────────────────────
+  let cleanupStarted = false;
   const cleanup = () => {
+    if (cleanupStarted) return;
+    cleanupStarted = true;
     console.error("[launcher] shutting down...");
+    clearInterval(backgroundTaskPersistenceTimer);
+    backgroundPersistenceClosed = true;
+    jobs.setChangeListener?.(null);
     try { eventSink?.close(); } catch {}
     for (const timer of scheduleTimers.values()) clearTimeout(timer);
     scheduleTimers.clear();
     // Flush the active-session append stream before exiting so buffered
     // messages are not lost. closeActiveSessionStream resolves immediately
     // when no stream was opened.
-    closeActiveSessionStream()
+    Promise.all([
+      closeActiveSessionStream(),
+      backgroundPersistenceQueue,
+    ])
+      .then(() => taskOutputStore.flush())
       .then(() => close())
       .then(() => process.exit(0))
       .catch(() => process.exit(1));
