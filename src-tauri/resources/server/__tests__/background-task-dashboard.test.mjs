@@ -4,6 +4,14 @@ import { readFile } from "node:fs/promises";
 
 const dashboardAppUrl = new URL("../visionox-pkg/dashboard/dist/app.js", import.meta.url);
 const dashboardChatSourceUrl = new URL("../visionox-pkg/dashboard/src/panels/chat.ts", import.meta.url);
+const launcherSourceUrl = new URL("../launcher.mjs", import.meta.url);
+
+test("实时后台输出持久化失败时不会用旧记录覆盖当前快照", async () => {
+  const launcher = await readFile(launcherSourceUrl, "utf8");
+  assert.match(launcher, /const persistedSnapshot = await persistBackgroundJob\(\{\s*\.\.\.live,\s*id: reference\.jobId,\s*\}\);/u);
+  assert.match(launcher, /const durableLive = persistedSnapshot\s*\? await findPersistedTask\(reference, scope\)\s*:\s*null;/u);
+  assert.match(launcher, /if \(persistedSnapshot && durableLive\) \{/u);
+});
 
 test("后台工作台兼容通用任务投影并在恢复可见性时重新同步", async () => {
   const source = await readFile(dashboardAppUrl, "utf8");

@@ -2133,9 +2133,17 @@ function installPersistentBackgroundTools() {
           // disappearing between polls. A persistence failure remains
           // observable and falls back to the live window below.
           try {
-            await persistBackgroundJob(live);
-            const durableLive = await findPersistedTask(reference, scope);
-            if (durableLive) {
+            // jobs.read() returns the task payload without the registry id;
+            // inject the already validated id so a null save cannot make an
+            // older durable record look like the current live snapshot.
+            const persistedSnapshot = await persistBackgroundJob({
+              ...live,
+              id: reference.jobId,
+            });
+            const durableLive = persistedSnapshot
+              ? await findPersistedTask(reference, scope)
+              : null;
+            if (persistedSnapshot && durableLive) {
               const window = await readPersistedTaskWindow(durableLive, args?.since);
               return formatTaskOutputText(projectTaskOutput({
                 task: durableLive,
