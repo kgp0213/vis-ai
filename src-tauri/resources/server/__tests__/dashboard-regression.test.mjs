@@ -863,11 +863,11 @@ describe("Dashboard 回归护栏", () => {
     assert.doesNotMatch(app, /class="fold-mark" style="left:50%"/);
   });
 
-  test("刷新和加载历史会话只恢复稳定对话，模型仍保留完整工具上下文", () => {
+  test("刷新和加载历史会话恢复稳定对话与工具事实，模型仍保留完整工具上下文", () => {
     const launcher = readFileSync(launcherUrl, "utf8");
     const activeSession = readFileSync(new URL("../lib/active-session.mjs", import.meta.url), "utf8");
 
-    assert.match(activeSession, /entry\.role === "tool"\) continue/);
+    assert.match(activeSession, /toolStatusFromResult/);
     assert.match(activeSession, /entry\.tool_calls/);
     assert.match(activeSession, /系统自动续跑/);
     assert.doesNotMatch(activeSession, /reasoning:\s*entry\.reasoning/);
