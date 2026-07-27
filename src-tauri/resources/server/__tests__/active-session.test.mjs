@@ -141,7 +141,7 @@ describe("active session recovery", () => {
     assert.deepEqual(dashboard[0].warnings, ["output verification failed"]);
   });
 
-  test("refresh keeps the user turn and final answer but hides reasoning and tool activity", () => {
+  test("refresh keeps the user turn, tool fact and final answer while hiding reasoning", () => {
     const entries = [
       { role: "user", content: "create a deck" },
       {
@@ -161,12 +161,13 @@ describe("active session recovery", () => {
     const dashboard = activeEntriesForDashboard(entries, 123);
     assert.deepEqual(dashboard.map((entry) => [entry.role, entry.text]), [
       ["user", "create a deck"],
+      ["tool", "source text"],
       ["assistant", "Deck created: report.pptx"],
     ]);
     assert.equal(Object.hasOwn(dashboard[1], "reasoning"), false);
   });
 
-  test("refresh collapses forced summaries and internal auto-continuation prompts", () => {
+  test("refresh collapses forced summaries while preserving tool facts", () => {
     const entries = [
       { role: "user", content: "finish the approved plan" },
       { role: "assistant", content: "[tool budget exhausted] partial progress" },
@@ -183,6 +184,7 @@ describe("active session recovery", () => {
     const dashboard = activeEntriesForDashboard(entries, 456);
     assert.deepEqual(dashboard.map((entry) => entry.text), [
       "finish the approved plan",
+      "ok",
       "All plan steps completed",
     ]);
   });
@@ -229,7 +231,7 @@ describe("active session recovery", () => {
     ]);
   });
 
-  test("refresh hides an interrupted turn's temporary reasoning and tool output", () => {
+  test("refresh hides interrupted reasoning but keeps the tool fact", () => {
     const entries = [
       { role: "user", content: "inspect the file" },
       {
@@ -242,7 +244,10 @@ describe("active session recovery", () => {
     ];
 
     const dashboard = activeEntriesForDashboard(entries, 789);
-    assert.deepEqual(dashboard.map((entry) => [entry.role, entry.text]), [["user", "inspect the file"]]);
+    assert.deepEqual(dashboard.map((entry) => [entry.role, entry.text]), [
+      ["user", "inspect the file"],
+      ["tool", "partial output"],
+    ]);
   });
 
   test("serializes normalized entries as newline-terminated JSONL", () => {

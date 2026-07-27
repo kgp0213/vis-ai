@@ -230,9 +230,12 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
     const text = contentText(entry.content !== undefined ? entry.content : entry.text);
 
     if (entry.role === "tool") {
-      flushAssistant();
       const callId = String(entry.tool_call_id ?? entry.toolCallId ?? "").trim();
       const call = callId ? toolCallById.get(callId) : undefined;
+      // A tool result belongs to the assistant declaration immediately before
+      // it. Keep an earlier pending summary collapsed when the call is known;
+      // orphaned legacy tool rows still flush the summary to preserve order.
+      if (!call) flushAssistant();
       visible.push(restoredEntry({
         ...entry,
         toolName: entry.toolName ?? entry.name ?? call?.name,
