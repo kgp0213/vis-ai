@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { activeEntriesForDashboard } from "./active-session.mjs";
+import { activeEntriesForDashboard, activeEntriesForModel } from "./active-session.mjs";
 
 const NOW = 1700000000000;
 
@@ -93,4 +93,20 @@ test("still hides internal user prompts while exposing the surrounding tool work
   const visible = activeEntriesForDashboard(entries, NOW);
   assert.deepEqual(visible.map((v) => v.role), ["user", "tool", "assistant"]);
   assert.equal(visible.find((v) => v.role === "user").text, "真实问题");
+});
+
+test("keeps background task notifications in model history while hiding them from Dashboard", () => {
+  const notification = {
+    role: "user",
+    content: "[VISIONOX_BACKGROUND_TASK_NOTIFICATION] status: completed",
+    internal: true,
+    modelVisible: true,
+    dashboardHidden: true,
+    notificationId: "task:bg-1:completed",
+    backgroundTaskNotification: { notificationId: "task:bg-1:completed", taskId: "bg-1", status: "completed" },
+  };
+  const model = activeEntriesForModel([notification]);
+  assert.equal(model.length, 1);
+  assert.equal(model[0].backgroundTaskNotification.taskId, "bg-1");
+  assert.deepEqual(activeEntriesForDashboard([notification], NOW), []);
 });

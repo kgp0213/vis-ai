@@ -183,3 +183,27 @@ test("uses persisted turn ids as pagination cursors", () => {
   assert.equal(tail.cursor, "turn-stable");
   assert.notEqual(paginateExecutionTranscript(snapshot, { beforeTurn: tail.cursor, limit: 1 }).resyncRequired, true);
 });
+
+test("keeps background task terminal facts separate from visible user messages", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "启动构建" },
+    {
+      role: "user",
+      content: "[VISIONOX_BACKGROUND_TASK_NOTIFICATION] status: failed",
+      internal: true,
+      modelVisible: true,
+      dashboardHidden: true,
+      notificationId: "task:bg-1:failed",
+      backgroundTaskNotification: {
+        notificationId: "task:bg-1:failed",
+        taskId: "bg-1",
+        status: "failed",
+        jobId: 3,
+        sourceOperationId: "op-1",
+      },
+    },
+  ], { sessionId: "s-1" });
+  assert.equal(snapshot.taskNotifications.length, 1);
+  assert.equal(snapshot.taskNotifications[0].taskId, "bg-1");
+  assert.equal(snapshot.items.length, 1);
+});

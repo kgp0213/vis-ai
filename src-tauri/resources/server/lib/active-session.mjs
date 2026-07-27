@@ -23,7 +23,10 @@ function normalizeEntry(value) {
 
 function isInternalUserEntry(entry) {
   if (entry?.role !== "user") return false;
-  if (entry.internal === true) return true;
+  // Background task notifications are model-visible facts. They remain
+  // hidden from the user-facing message list without being stripped from
+  // recovered model history.
+  if (entry.internal === true && entry.modelVisible !== true) return true;
   const content = entry.content !== undefined ? entry.content : entry.text;
   return INTERNAL_USER_PROMPT_RE.test(contentText(content).trim());
 }
@@ -54,6 +57,9 @@ export function activeEntriesForModel(entries) {
         role: entry.role,
         content: entry.content !== undefined ? entry.content : entry.text ?? "",
       };
+      for (const key of ["internal", "modelVisible", "dashboardHidden", "source", "notificationId", "backgroundTaskNotification"]) {
+        if (entry[key] !== undefined) modelEntry[key] = entry[key];
+      }
       if (entry.role === "user" && Array.isArray(entry.attachments) && entry.attachments.length > 0) {
         const refs = entry.attachments
           .map((attachment) => typeof attachment === "string" ? attachment : attachment?.id)
@@ -227,6 +233,7 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
 
   for (const entry of source) {
     if (!entry || !DASHBOARD_ROLES.has(entry.role)) continue;
+    if (entry.dashboardHidden === true) continue;
     const text = contentText(entry.content !== undefined ? entry.content : entry.text);
 
     if (entry.role === "tool") {

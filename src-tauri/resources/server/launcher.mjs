@@ -162,6 +162,7 @@ const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs"
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
 const { formatTaskOutputText, normalizeBackgroundTaskReference, projectBackgroundTaskList, projectTaskOutput } = await importEarly("./lib/task-output-model.mjs");
+const { createBackgroundTaskNotificationRuntime, formatBackgroundTaskNotification } = await importEarly("./lib/background-task-notification.mjs");
 const { createBackgroundTaskScopeRegistry } = await importEarly("./lib/background-task-scope.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
@@ -1821,6 +1822,7 @@ const jobs = new JobRegistry();
 const taskOutputStore = createTaskOutputStore({
   rootDir: resolve(visionoxDataDir, "background-tasks"),
 });
+const backgroundTaskNotifications = createBackgroundTaskNotificationRuntime();
 const recoveredBackgroundTasks = await taskOutputStore.recoverRunning("process_restarted");
 if (recoveredBackgroundTasks.updated > 0) {
   console.error(`[launcher] marked ${recoveredBackgroundTasks.updated} background task(s) lost after restart`);
@@ -5203,6 +5205,47 @@ function buildLoop(client, rootDir) {
           throw new Error(`SESSION_INPUT_DELIVERY_FAILED: ${error.message || String(error)}`);
         }
       }
+      const taskNotifications = backgroundTaskNotifications.claim({
+        sessionId,
+        workspace: workspaceDir,
+        limit: 4,
+      });
+      for (const notification of taskNotifications) {
+        const messageId = `background-task-${String(notification.notificationId).replace(/[^A-Za-z0-9._:-]+/gu, "-")}`;
+        const { workspace: _workspace, ...persistedNotification } = notification;
+        const historyMessage = {
+          id: messageId,
+          role: "user",
+          content: formatBackgroundTaskNotification(notification),
+          internal: true,
+          modelVisible: true,
+          dashboardHidden: true,
+          source: "background-task",
+          notificationId: notification.notificationId,
+          backgroundTaskNotification: persistedNotification,
+          operationId: operation.id,
+          turnId: String(turn),
+        };
+        try {
+          const persisted = await appendActiveMessage(historyMessage);
+          if (persisted === false) throw new Error("active session task notification append was rejected");
+          if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
+          loop.appendAndPersist(historyMessage);
+          backgroundTaskNotifications.acknowledge(notification.notificationId);
+          broadcastDashboardEvent({
+            kind: "background-task-notification",
+            notificationId: notification.notificationId,
+            taskId: notification.taskId,
+            status: notification.status,
+            delivered: true,
+            operationId: operation.id,
+            sessionId,
+          });
+        } catch (error) {
+          backgroundTaskNotifications.release(notification.notificationId);
+          throw new Error(`BACKGROUND_TASK_NOTIFICATION_DELIVERY_FAILED: ${error.message || String(error)}`);
+        }
+      }
       const queued = operationSteeringRuntime?.consume(operation.id) ?? [];
       if ((queued.length > 0 || admitted.length > 0) && operation.context) operation.context.calibrationUntrusted = true;
       await runtimeLifecycleHooks?.emit?.("model.request.before", {
@@ -7714,6 +7757,53 @@ async function persistBackgroundJob(jobLike) {
   });
 }
 
+function backgroundTaskNotificationScope(job = {}) {
+  const jobId = Number.isSafeInteger(Number(job.id ?? job.jobId)) ? Number(job.id ?? job.jobId) : null;
+  const ownerId = job.ownerId == null ? null : String(job.ownerId);
+  const operation = operationLocationSnapshot(ownerId);
+  const remembered = jobId === null ? null : liveBackgroundTaskScopes.get(jobId);
+  const scope = operation ?? remembered;
+  if (!scope?.sessionId || !scope?.workspace) return null;
+  return {
+    operationId: scope.operationId ?? ownerId,
+    sessionId: scope.sessionId,
+    workspace: scope.workspace,
+  };
+}
+
+async function enqueueBackgroundTaskNotification(job = {}) {
+  if (String(job.action ?? "").toLowerCase() === "started") return null;
+  const rawJob = job.job && typeof job.job === "object" ? job.job : job;
+  if (rawJob.running === true || String(rawJob.lifecycle ?? "task").toLowerCase() === "service") return null;
+  const scope = backgroundTaskNotificationScope(rawJob);
+  if (!scope) {
+    console.error(`[launcher] background task notification skipped: scope unavailable for job ${rawJob.id ?? rawJob.jobId ?? "unknown"}`);
+    return null;
+  }
+  const jobId = Number.isSafeInteger(Number(rawJob.id ?? rawJob.jobId)) ? Number(rawJob.id ?? rawJob.jobId) : null;
+  const persisted = jobId === null ? null : await taskOutputStore.getByJobId(jobId, scope);
+  const source = {
+    ...rawJob,
+    ...(persisted ?? {}),
+    taskId: persisted?.taskId ?? (jobId === null ? null : durableBackgroundTaskId(jobId)),
+    jobId,
+  };
+  const result = backgroundTaskNotifications.enqueue(source, scope);
+  if (result.accepted) {
+    const notification = result.notification;
+    broadcastDashboardEvent({
+      kind: "background-task-notification",
+      notificationId: notification.notificationId,
+      taskId: notification.taskId,
+      status: notification.status,
+      delivered: false,
+      operationId: scope.operationId ?? null,
+      sessionId: scope.sessionId,
+    });
+  }
+  return result;
+}
+
 async function syncRunningBackgroundTasks() {
   const liveJobs = jobs.listMetadata?.() ?? [];
   rememberLiveBackgroundTasks(liveJobs);
@@ -7727,7 +7817,10 @@ async function syncRunningBackgroundTasks() {
 jobs.setChangeListener?.((change) => {
   rememberLiveBackgroundTask(change?.job);
   broadcastDashboardEvent({ kind: "background-job-change", ...change });
-  void queueBackgroundPersistence(() => persistBackgroundJob(change?.job)).catch((error) => {
+  void queueBackgroundPersistence(async () => {
+    await persistBackgroundJob(change?.job);
+    if (change?.action !== "started") await enqueueBackgroundTaskNotification(change);
+  }).catch((error) => {
     console.error(`[launcher] background task persistence failed: ${error.message}`);
   });
 });
@@ -11923,6 +12016,24 @@ refreshAllScheduleTimers();
 
 // ── Restore active session (crash recovery) ─────────────────────
 const restoredActiveSession = await loadActiveSession();
+// Rebuild terminal background-task notifications from the recovered model
+// history first, then offer only same-session lost tasks that were not already
+// acknowledged. This mirrors Kimi Code's restore path without replaying work.
+backgroundTaskNotifications.restoreDelivered(loop?.log?.toMessages?.() ?? []);
+for (const recoveredTask of recoveredBackgroundTasks.tasks ?? []) {
+  if (recoveredTask?.status !== "lost") continue;
+  const persisted = await taskOutputStore.get(recoveredTask.taskId, {
+    sessionId: activeConversationId,
+    workspace: workspaceDir,
+  });
+  if (persisted) {
+    backgroundTaskNotifications.enqueue(persisted, {
+      operationId: persisted.operationId,
+      sessionId: activeConversationId,
+      workspace: workspaceDir,
+    });
+  }
+}
 
 // ── Initial welcome message ──────────────────────────────────────
 if (!restoredActiveSession) {

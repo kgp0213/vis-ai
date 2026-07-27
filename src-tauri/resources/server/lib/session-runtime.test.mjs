@@ -93,6 +93,30 @@ test("session runtime appends and synchronizes model history", async () => {
   }
 });
 
+test("session runtime preserves model-visible hidden task notification metadata", async () => {
+  const harness = await createHarness();
+  try {
+    await harness.runtime.appendMessage({
+      role: "user",
+      id: "background-task-bg-1-completed",
+      text: "[VISIONOX_BACKGROUND_TASK_NOTIFICATION] status: completed",
+      internal: true,
+      modelVisible: true,
+      dashboardHidden: true,
+      source: "background-task",
+      notificationId: "task:bg-1:completed",
+      backgroundTaskNotification: { notificationId: "task:bg-1:completed", taskId: "bg-1", status: "completed" },
+    });
+    await harness.runtime.close();
+    const entry = JSON.parse((await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).find(Boolean));
+    assert.equal(entry.modelVisible, true);
+    assert.equal(entry.dashboardHidden, true);
+    assert.equal(entry.backgroundTaskNotification.taskId, "bg-1");
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
 test("session runtime preserves final receipt facts across model-history synchronization", async () => {
   const harness = await createHarness();
   try {

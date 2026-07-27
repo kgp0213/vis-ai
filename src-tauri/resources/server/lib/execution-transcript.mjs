@@ -147,6 +147,7 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
   const goalEntities = new Map();
   const todoEntities = new Map();
   const promptEntities = new Map();
+  const taskNotifications = new Map();
   let turn = null;
   let turnOrdinal = 0;
   let stepOrdinal = 0;
@@ -253,6 +254,21 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
     if (!raw || typeof raw !== "object") continue;
     const entry = raw;
     if (entry.role === "user") {
+      if (entry.backgroundTaskNotification && typeof entry.backgroundTaskNotification === "object") {
+        const fact = entry.backgroundTaskNotification;
+        const id = safeId(fact.notificationId ?? entry.notificationId, `task-notification-${messageOrdinal + 1}`);
+        taskNotifications.set(id, {
+          id,
+          notificationId: id,
+          taskId: safeId(fact.taskId, null),
+          jobId: Number.isSafeInteger(Number(fact.jobId)) ? Number(fact.jobId) : null,
+          status: String(fact.status ?? "unknown"),
+          sessionId: sessionId ?? null,
+          operationId: safeId(fact.sourceOperationId ?? entry.operationId, null),
+          createdAt: fact.createdAt ?? entry.createdAt ?? null,
+        });
+        continue;
+      }
       if (isInternalUser(entry)) continue;
       startTurn(entry);
       for (const rawAttachment of Array.isArray(entry.attachments) ? entry.attachments : []) {
@@ -344,6 +360,7 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
     goals: [...goalEntities.values()],
     todos: [...todoEntities.values()],
     prompts: [...promptEntities.values()],
+    taskNotifications: [...taskNotifications.values()],
     hasMoreOlder: false,
   };
 }

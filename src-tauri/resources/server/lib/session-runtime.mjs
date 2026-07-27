@@ -163,6 +163,14 @@ export function createSessionRuntime({
         ...(message.reasoning ? { reasoning: message.reasoning } : {}),
         ...(message.toolName ? { toolName: message.toolName } : {}),
         ...(message.toolArgs !== undefined ? { toolArgs: message.toolArgs } : {}),
+        ...(message.internal === true ? { internal: true } : {}),
+        ...(message.modelVisible === true ? { modelVisible: true } : {}),
+        ...(message.dashboardHidden === true ? { dashboardHidden: true } : {}),
+        ...(message.source ? { source: String(message.source).slice(0, 120) } : {}),
+        ...(message.notificationId ? { notificationId: String(message.notificationId).slice(0, 240) } : {}),
+        ...(message.backgroundTaskNotification && typeof message.backgroundTaskNotification === "object"
+          ? { backgroundTaskNotification: { ...message.backgroundTaskNotification } }
+          : {}),
         ...(message.receipt && typeof message.receipt === "object" ? { receipt: message.receipt } : {}),
         ...(message.taskState ? { taskState: message.taskState } : {}),
         ...(message.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
