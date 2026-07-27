@@ -409,7 +409,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
       <div class="body">
         ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
           <div class="process-card process-card-running process-card-reasoning">
-            <div class="process-card-summary process-card-summary-static">
+            <div class="process-card-summary process-card-summary-static reasoning-live-header">
               <span class="process-card-icon"><span class="spinner process-row-spinner"></span></span>
               <span class="process-card-title">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</span>
             </div>
@@ -417,8 +417,8 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
           </div>
         ` : null : html4`
           <div class="process-card process-card-settled process-card-reasoning">
-            <details class="process-card-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
-              <summary class="process-card-summary">
+            <details class="process-card-details reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
+              <summary class="process-card-summary reasoning-summary">
                 <span class="process-card-title">${t4("chat.reasoningProcess")}</span>
                 <span class="process-card-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
                 <span class="process-card-chevron"><${IconChevron} size=${13} /></span>

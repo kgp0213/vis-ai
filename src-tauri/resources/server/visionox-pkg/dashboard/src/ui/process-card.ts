@@ -55,9 +55,9 @@ function statusMark(status: ProcessRowStatus) {
     case "active":
       return html`<span class="spinner process-row-spinner" aria-hidden="true"></span>`;
     case "failed":
-      return html`<span class="process-row-mark process-row-mark-failed"><${IconX} size=${12} /></span>`;
+      return html`<span class="process-row-mark process-row-mark-failed tool-log-icon-failed"><${IconX} size=${12} /></span>`;
     case "done":
-      return html`<span class="process-row-mark process-row-mark-done"><${IconCheck} size=${12} /></span>`;
+      return html`<span class="process-row-mark process-row-mark-done tool-log-icon-ok"><${IconCheck} size=${12} /></span>`;
     default:
       return html`<span class="process-row-mark process-row-mark-pending"><${IconDot} size=${12} /></span>`;
   }
@@ -69,14 +69,14 @@ function renderRow(row: ProcessRow, maxDetailLines: number) {
     ? detail.split(/\r?\n/).filter((l) => l.trim()).slice(-maxDetailLines)
     : [];
   return html`
-    <div key=${row.id} class=${`process-row process-row-${row.status}`} data-row-id=${row.id}>
+    <div key=${row.id} class=${`process-row process-row-${row.status} tool-log-row`} data-row-id=${row.id}>
       <div class="process-row-head">
         ${statusMark(row.status)}
-        <span class="process-row-label">${row.label}</span>
+        <span class="process-row-label tool-log-name">${row.label}</span>
         ${row.target ? html`<span class="process-row-target" title=${row.target}>${row.target}</span>` : null}
       </div>
       ${detailLines.length > 0 ? html`
-        <div class="process-row-detail">${detailLines.map((l) => html`<div class="process-row-detail-line">${l}</div>`)}</div>
+        <div class="process-row-detail tool-log-detail">${detailLines.map((l) => html`<div class="process-row-detail-line">${l}</div>`)}</div>
       ` : null}
     </div>
   `;
@@ -103,14 +103,14 @@ export function ProcessCard({
   // 不可折叠（简洁档）：纯单行卡，无 chevron、无 details 开合。
   if (!collapsible) {
     return html`
-      <div class=${`process-card process-card-${state} process-card-static`} role="group" aria-label=${ariaLabel}>
+      <div class=${`process-card process-card-${state} process-card-static ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-legacy-selector="details.tool-log">
         <div class="process-card-summary">${head}</div>
       </div>
     `;
   }
   return html`
-    <div class=${`process-card process-card-${state}`} role="group" aria-label=${ariaLabel}>
-      <details class="process-card-details" open=${openAttr}>
+    <div class=${`process-card process-card-${state} ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel}>
+      <details class="process-card-details" data-legacy-selector="details.tool-log" open=${openAttr}>
         <summary class="process-card-summary">
           ${head}
           <span class="process-card-chevron"><${IconChevron} size=${13} /></span>

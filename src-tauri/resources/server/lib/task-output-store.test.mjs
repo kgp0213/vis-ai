@@ -92,6 +92,21 @@ test("finds the latest persisted record by legacy numeric job id", async () => {
   });
 });
 
+test("aligns arbitrary tail offsets to UTF-8 code-point boundaries", async () => {
+  await withStore(async (store) => {
+    const output = `中${"a".repeat(32_765)}\n`;
+    await store.save({ taskId: "bg-utf8-tail", running: false, exitCode: 0, output });
+
+    const totalBytes = Buffer.byteLength(output, "utf8");
+    const tailStart = totalBytes - 32 * 1024;
+    const window = await store.read("bg-utf8-tail", { offsetBytes: tailStart, maxBytes: 32 * 1024 });
+    assert.doesNotMatch(window.content, /^�/u);
+    assert.ok(window.offsetBytes >= tailStart);
+    assert.equal(window.nextOffsetBytes, totalBytes);
+    assert.equal(window.complete, true);
+  });
+});
+
 test("keeps the first workspace snapshot and isolates lookup and deletion", async () => {
   await withStore(async (store) => {
     await store.save({

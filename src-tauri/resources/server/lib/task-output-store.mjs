@@ -158,13 +158,27 @@ async function readWindow(tasksRoot, taskId, offsetBytes, maxBytes) {
     if (start >= size) return { offsetBytes: start, nextOffsetBytes: start, totalBytes: size, content: "", complete: true, eof: true };
     const buffer = Buffer.allocUnsafe(Math.min(size - start, limit + 3));
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
-    const safeBytes = bytesRead > 0 ? Math.min(bytesRead, utf8SafePrefixLength(buffer.subarray(0, bytesRead), limit)) : 0;
-    const nextOffsetBytes = start + safeBytes;
+    // A caller may provide an arbitrary byte cursor (for example a preview
+    // tail). Do not decode from the middle of a multi-byte UTF-8 code point;
+    // advance to the next code-point boundary while keeping the cursor
+    // monotonic. Normal incremental cursors are already aligned and incur no
+    // skip.
+    let leadingContinuationBytes = 0;
+    while (leadingContinuationBytes < Math.min(bytesRead, 3)
+      && (buffer[leadingContinuationBytes] & 0xc0) === 0x80) {
+      leadingContinuationBytes += 1;
+    }
+    const alignedStart = start + leadingContinuationBytes;
+    const contentBuffer = buffer.subarray(leadingContinuationBytes, bytesRead);
+    const safeBytes = contentBuffer.length > 0
+      ? Math.min(contentBuffer.length, utf8SafePrefixLength(contentBuffer, limit))
+      : 0;
+    const nextOffsetBytes = alignedStart + safeBytes;
     return {
-      offsetBytes: start,
+      offsetBytes: alignedStart,
       nextOffsetBytes,
       totalBytes: size,
-      content: buffer.subarray(0, safeBytes).toString("utf8"),
+      content: contentBuffer.subarray(0, safeBytes).toString("utf8"),
       complete: nextOffsetBytes >= size,
       eof: nextOffsetBytes >= size,
     };

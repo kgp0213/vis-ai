@@ -161,6 +161,8 @@ const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-ou
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
+const { formatTaskOutputText, normalizeBackgroundTaskReference, projectBackgroundTaskList, projectTaskOutput } = await importEarly("./lib/task-output-model.mjs");
+const { createBackgroundTaskScopeRegistry } = await importEarly("./lib/background-task-scope.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
 const { normalizeProviderResult } = await importEarly("./lib/provider-result.mjs");
@@ -331,10 +333,15 @@ let sessionMutationInFlight = false;
 // operation is unwinding retain their original conversation identity after a
 // session switch. The ledger contains no message content or credentials.
 const operationSessionIds = new Map();
+const operationWorkspaceIds = new Map();
 // Tool contexts normally carry the operation AbortSignal, but recovery paths
 // may only preserve operationId. Keep a bounded identity map so those paths
 // cannot fall back to whichever operation happens to be active.
 const operationById = new Map();
+// JobRegistry retains numeric jobs for a bounded period, while the active
+// conversation and workspace can change immediately. Keep each live job's
+// immutable location snapshot so reads/stops cannot cross session boundaries.
+const liveBackgroundTaskScopes = createBackgroundTaskScopeRegistry();
 // A paused context-input transaction is scoped to the visible conversation so
 // a later turn (or a restart) can explicitly recover the same cached input.
 let activeContextRecoveryHandle = null;
@@ -1959,6 +1966,314 @@ tools.setToolInterceptor(async (name, args, dispatchOptions = {}) => {
   return undefined;
 });
 
+const MODEL_TASK_OUTPUT_BYTES = 32 * 1024;
+
+function backgroundTaskScope(signal) {
+  const operation = operationForSignal(signal);
+  if (!operation) return null;
+  return {
+    operationId: operation.id,
+    workspace: operation.context?.workspace ?? null,
+    sessionId: operation.context?.conversationId ?? null,
+  };
+}
+
+function visibleBackgroundTaskScope() {
+  const scope = {
+    workspace: workspaceDir,
+    sessionId: activeConversationId,
+  };
+  return scope.workspace && scope.sessionId ? scope : null;
+}
+
+function operationLocationSnapshot(operationId) {
+  const id = operationId == null ? null : String(operationId);
+  if (!id) return null;
+  const operation = operationById.get(id);
+  const sessionId = operation?.context?.conversationId ?? operationSessionIds.get(id) ?? null;
+  const workspace = operation?.context?.workspace ?? operationWorkspaceIds.get(id) ?? null;
+  if (!sessionId || !workspace) return null;
+  return { operationId: id, sessionId, workspace };
+}
+
+function rememberLiveBackgroundTask(job) {
+  const jobId = job?.id ?? job?.jobId;
+  if (!Number.isSafeInteger(Number(jobId))) return null;
+  const operationId = job?.ownerId == null ? null : String(job.ownerId);
+  const operation = operationLocationSnapshot(operationId);
+  const fallback = operation ?? ((job?.sessionId && job?.workspace) ? {
+    operationId,
+    sessionId: job?.sessionId,
+    workspace: job?.workspace,
+  } : liveBackgroundTaskScopes.get(jobId));
+  return liveBackgroundTaskScopes.remember(jobId, fallback);
+}
+
+function rememberLiveBackgroundTasks(jobsList = []) {
+  for (const job of jobsList) rememberLiveBackgroundTask(job);
+}
+
+function liveTaskIsVisible(jobId, scope) {
+  return liveBackgroundTaskScopes.matches(jobId, scope);
+}
+
+function taskScopeUnavailableResult() {
+  return JSON.stringify({
+    ok: false,
+    code: "background_task_scope_unavailable",
+    title: "后台任务作用域不可确认",
+    message: "当前请求没有可验证的会话和工作区绑定，已拒绝读取或控制后台任务。",
+    retryable: false,
+    action: "retry_in_current_operation",
+  });
+}
+
+function liveTaskOutputWindow(snapshot, since) {
+  const raw = String(snapshot?.output ?? "");
+  const bytes = Buffer.from(raw, "utf8");
+  const requested = Number.isSafeInteger(since) && since >= 0 ? since : null;
+  let offsetBytes = requested ?? 0;
+  if (offsetBytes > bytes.length) offsetBytes = bytes.length;
+  // A byte cursor can land in the middle of a UTF-8 sequence. Advance to the
+  // next code-point boundary so incremental reads never emit replacement chars.
+  while (offsetBytes < bytes.length && (bytes[offsetBytes] & 0xc0) === 0x80) offsetBytes += 1;
+  const content = bytes.subarray(offsetBytes).toString("utf8");
+  const nextOffsetBytes = bytes.length;
+  return {
+    offsetBytes,
+    nextOffsetBytes,
+    totalBytes: bytes.length,
+    content,
+    complete: snapshot?.running !== true && nextOffsetBytes >= bytes.length,
+  };
+}
+
+async function readPersistedTaskWindow(task, since) {
+  const requested = Number.isSafeInteger(since) && since >= 0 ? since : null;
+  if (requested !== null) {
+    return taskOutputStore.read(task.taskId, {
+      offsetBytes: requested,
+      maxBytes: MODEL_TASK_OUTPUT_BYTES,
+    });
+  }
+  // Probe the file size first, then read a bounded tail. This preserves the
+  // Kimi Code contract: a preview is cheap while the complete log remains
+  // available through repeated byte-offset reads without rerunning the task.
+  const probe = await taskOutputStore.read(task.taskId, { offsetBytes: 0, maxBytes: 1 });
+  const start = Math.max(0, Number(probe.totalBytes) - MODEL_TASK_OUTPUT_BYTES);
+  return taskOutputStore.read(task.taskId, {
+    offsetBytes: start,
+    maxBytes: MODEL_TASK_OUTPUT_BYTES,
+  });
+}
+
+function taskNotFoundResult(reference) {
+  return JSON.stringify({
+    ok: false,
+    code: "task_not_found",
+    title: "后台任务不存在",
+    message: `任务 ${String(reference ?? "")} 不存在，可能已被清理。`,
+    retryable: false,
+    action: "list_jobs",
+  });
+}
+
+async function findPersistedTask(reference, scope) {
+  if (!scope) return null;
+  if (reference?.kind === "task") return taskOutputStore.get(reference.taskId, scope);
+  if (reference?.kind === "job") return taskOutputStore.getByJobId(reference.jobId, scope);
+  return null;
+}
+
+/**
+ * Re-apply the host-owned background tools after workspace registration.
+ * The vendored registry is intentionally left untouched; ToolRegistry's
+ * normal last-registration-wins behavior gives the host a durable adapter.
+ */
+function installPersistentBackgroundTools() {
+  tools.register({
+    name: "job_output",
+    description: "Read a background job from the live process or its persisted log, including after a launcher restart. Accepts the numeric jobId returned by run_background or the durable bg-* taskId. Use since as the nextOffsetBytes from the previous result for bounded UTF-8 paging; this never reruns the command.",
+    readOnly: true,
+    parallelSafe: true,
+    stormExempt: true,
+    parameters: {
+      type: "object",
+      properties: {
+        jobId: {
+          type: ["integer", "string"],
+          description: "Legacy numeric job id or durable bg-* task id returned by list_jobs.",
+        },
+        since: {
+          type: "integer",
+          minimum: 0,
+          description: "Byte offset returned as nextOffsetBytes by the previous call.",
+        },
+        tailLines: {
+          type: "integer",
+          minimum: 0,
+          description: "When since is omitted, cap the preview to the last N lines. Default 80; 0 means no line cap.",
+        },
+      },
+      required: ["jobId"],
+    },
+    fn: async (args, toolCtx) => {
+      const reference = normalizeBackgroundTaskReference(args?.jobId);
+      if (!reference) return taskNotFoundResult(args?.jobId);
+      const scope = backgroundTaskScope(toolCtx?.signal);
+      if (!scope) return taskScopeUnavailableResult();
+      if (reference.kind === "job") {
+        rememberLiveBackgroundTask((jobs.listMetadata?.() ?? []).find((job) => Number(job?.id) === reference.jobId));
+        if (!liveTaskIsVisible(reference.jobId, scope)) return taskNotFoundResult(args?.jobId);
+        const live = jobs.read(reference.jobId);
+        if (live) {
+          const projected = projectTaskOutput({
+            task: {
+              taskId: durableBackgroundTaskId(reference.jobId),
+              jobId: reference.jobId,
+              ...live,
+              outputTruncated: String(live.output ?? "").includes("older output dropped"),
+            },
+            window: liveTaskOutputWindow(live, args?.since),
+            reference,
+            since: args?.since,
+            tailLines: args?.tailLines,
+            fullOutputAvailable: Buffer.byteLength(String(live.output ?? ""), "utf8") > 0,
+          });
+          return formatTaskOutputText(projected);
+        }
+      }
+      const persisted = await findPersistedTask(reference, scope);
+      if (!persisted) return taskNotFoundResult(args?.jobId);
+      const window = await readPersistedTaskWindow(persisted, args?.since);
+      return formatTaskOutputText(projectTaskOutput({
+        task: persisted,
+        window,
+        reference,
+        since: args?.since,
+        tailLines: args?.tailLines,
+        fullOutputAvailable: Number(window.totalBytes) > 0 || Number(persisted.outputBytes) > 0,
+      }));
+    },
+  });
+
+  tools.register({
+    name: "list_jobs",
+    description: "List live and persisted background jobs in the current workspace/session. Persisted jobs remain inspectable after a launcher restart and include both taskId and legacy jobId when available.",
+    readOnly: true,
+    parallelSafe: true,
+    stormExempt: true,
+    parameters: { type: "object", properties: {} },
+    fn: async (_args, toolCtx) => {
+      const scope = backgroundTaskScope(toolCtx?.signal);
+      if (!scope) return taskScopeUnavailableResult();
+      const liveMetadata = jobs.listMetadata?.() ?? [];
+      rememberLiveBackgroundTasks(liveMetadata);
+      const live = (jobs.listMetadata?.() ?? []).map((job) => ({
+        ...job,
+        taskId: durableBackgroundTaskId(job.id),
+        jobId: job.id,
+        outputBytes: job.totalBytesWritten ?? job.outputBytes ?? job.byteLength ?? 0,
+      })).filter((job) => liveTaskIsVisible(job.jobId, scope));
+      const activeTaskIds = new Set(live.map((job) => job.taskId));
+      const persisted = (await taskOutputStore.list(scope))
+        .filter((job) => !activeTaskIds.has(job.taskId));
+      return JSON.stringify({ ok: true, jobs: projectBackgroundTaskList([...live, ...persisted]) });
+    },
+  });
+
+  tools.register({
+    name: "wait_for_job",
+    description: "Wait for a live background job to exit, or immediately return the terminal snapshot of a persisted job after restart. The call is bounded and never reruns the command.",
+    readOnly: true,
+    parallelSafe: true,
+    stormExempt: true,
+    parameters: {
+      type: "object",
+      properties: {
+        jobId: { type: ["integer", "string"], description: "Legacy numeric job id or durable bg-* task id." },
+        timeoutMs: { type: "integer", minimum: 0, maximum: 300000, description: "Maximum wait for a live job." },
+        waitFor: { type: "string", enum: ["exit", "output-or-exit"], description: "Wake on exit or new output." },
+      },
+      required: ["jobId"],
+    },
+    fn: async (args, toolCtx) => {
+      const reference = normalizeBackgroundTaskReference(args?.jobId);
+      if (!reference) return taskNotFoundResult(args?.jobId);
+      const scope = backgroundTaskScope(toolCtx?.signal);
+      if (!scope) return taskScopeUnavailableResult();
+      if (reference.kind === "job") {
+        rememberLiveBackgroundTask((jobs.listMetadata?.() ?? []).find((job) => Number(job?.id) === reference.jobId));
+        if (!liveTaskIsVisible(reference.jobId, scope)) return taskNotFoundResult(args?.jobId);
+        const live = jobs.read(reference.jobId);
+        if (live) {
+          const waited = await jobs.waitForJob(reference.jobId, {
+            timeoutMs: args?.timeoutMs,
+            waitFor: args?.waitFor,
+            signal: toolCtx?.signal,
+          });
+          const snapshot = jobs.read(reference.jobId) ?? live;
+          return {
+            ok: true,
+            taskId: durableBackgroundTaskId(reference.jobId),
+            jobId: reference.jobId,
+            exited: waited?.exited === true,
+            exitCode: waited?.exitCode ?? snapshot.exitCode ?? null,
+            status: snapshot.running ? "running" : Number(snapshot.exitCode) === 0 ? "completed" : "failed",
+            retrievalStatus: waited?.exited === true ? "success" : "timeout",
+            latestOutput: waited?.latestOutput ?? snapshot.output ?? "",
+          };
+        }
+      }
+      const persisted = await findPersistedTask(reference, scope);
+      if (!persisted) return taskNotFoundResult(args?.jobId);
+      const window = await readPersistedTaskWindow(persisted);
+      return {
+        ok: true,
+        taskId: persisted.taskId,
+        jobId: persisted.jobId,
+        exited: persisted.running !== true,
+        exitCode: persisted.exitCode ?? null,
+        status: persisted.status,
+        retrievalStatus: persisted.running === true ? "timeout" : "success",
+        latestOutput: window.content ?? "",
+        nextOffsetBytes: window.nextOffsetBytes,
+      };
+    },
+  });
+
+  tools.register({
+    name: "stop_job",
+    description: "Stop a live background job, or report the terminal state of a persisted job. Persisted jobs are never rerun or deleted by this call.",
+    parameters: {
+      type: "object",
+      properties: { jobId: { type: ["integer", "string"] } },
+      required: ["jobId"],
+    },
+    fn: async (args, toolCtx) => {
+      const reference = normalizeBackgroundTaskReference(args?.jobId);
+      if (!reference) return taskNotFoundResult(args?.jobId);
+      const scope = backgroundTaskScope(toolCtx?.signal);
+      if (!scope) return taskScopeUnavailableResult();
+      if (reference.kind === "job") {
+        rememberLiveBackgroundTask((jobs.listMetadata?.() ?? []).find((job) => Number(job?.id) === reference.jobId));
+        if (!liveTaskIsVisible(reference.jobId, scope)) return taskNotFoundResult(args?.jobId);
+        const live = jobs.read(reference.jobId);
+        if (live) return jobs.stop(reference.jobId);
+      }
+      const persisted = await findPersistedTask(reference, scope);
+      if (!persisted) return taskNotFoundResult(args?.jobId);
+      return {
+        ok: false,
+        taskId: persisted.taskId,
+        jobId: persisted.jobId,
+        status: persisted.status,
+        error: "background job is no longer running",
+      };
+    },
+  });
+}
+
 // Workspace-dependent tools — registered via shared function
 const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
   jobs,
@@ -1968,6 +2283,7 @@ const wsResult = await registerWorkspaceTools(tools, workspaceDir, {
 });
 wsToolNames = wsResult.toolNames;
 hasSemanticSearch = wsResult.hasSemantic;
+installPersistentBackgroundTools();
 const runCommandDefinition = tools.get("run_command");
 if (runCommandDefinition?.readOnlyCheck) {
   const originalReadOnlyCheck = runCommandDefinition.readOnlyCheck;
@@ -3421,6 +3737,7 @@ workspaceRuntime = createWorkspaceRuntime({
     });
     wsToolNames = result.toolNames;
     hasSemanticSearch = result.hasSemantic;
+    installPersistentBackgroundTools();
     return result;
   },
   rebuildLoop: async (rootDir) => {
@@ -7339,16 +7656,18 @@ async function persistBackgroundJob(jobLike) {
   const id = Number(jobId);
   const live = typeof jobs.read === "function" ? jobs.read(id) : null;
   const snapshot = live ?? jobLike;
+  rememberLiveBackgroundTask(jobLike);
   const operationId = snapshot?.ownerId ?? jobLike?.ownerId ?? null;
   const operation = operationId ? operationById.get(String(operationId)) : null;
+  const rememberedScope = liveBackgroundTaskScopes.get(id);
   return taskOutputStore.save({
     taskId: durableBackgroundTaskId(id),
     jobId: id,
     operationId: operationId ? String(operationId) : null,
-    sessionId: operation?.context?.conversationId ?? operationSessionIds.get(String(operationId)) ?? null,
+    sessionId: operation?.context?.conversationId ?? rememberedScope?.sessionId ?? operationSessionIds.get(String(operationId)) ?? null,
     // The task store treats this as an immutable first-write snapshot. Do
     // not derive it from a later global workspace after the operation ends.
-    workspace: operation?.context?.workspace ?? snapshot?.workspace ?? jobLike?.workspace ?? workspaceDir,
+    workspace: operation?.context?.workspace ?? rememberedScope?.workspace ?? snapshot?.workspace ?? jobLike?.workspace ?? null,
     lifecycle: snapshot?.lifecycle ?? jobLike?.lifecycle ?? "task",
     running: snapshot?.running === true,
     command: snapshot?.command ?? jobLike?.command ?? null,
@@ -7366,7 +7685,9 @@ async function persistBackgroundJob(jobLike) {
 }
 
 async function syncRunningBackgroundTasks() {
-  for (const job of jobs.listMetadata?.() ?? []) {
+  const liveJobs = jobs.listMetadata?.() ?? [];
+  rememberLiveBackgroundTasks(liveJobs);
+  for (const job of liveJobs) {
     try { await persistBackgroundJob(job); } catch (error) {
       console.error(`[launcher] background task persistence skipped: ${error.message}`);
     }
@@ -7374,6 +7695,7 @@ async function syncRunningBackgroundTasks() {
 }
 
 jobs.setChangeListener?.((change) => {
+  rememberLiveBackgroundTask(change?.job);
   broadcastDashboardEvent({ kind: "background-job-change", ...change });
   void queueBackgroundPersistence(() => persistBackgroundJob(change?.job)).catch((error) => {
     console.error(`[launcher] background task persistence failed: ${error.message}`);
@@ -7507,6 +7829,7 @@ const bindOperationSessionRun = (operation, { replace = false } = {}) => {
     return sessionRun;
   }
   operationSessionIds.set(operation.id, operation.context?.conversationId ?? activeConversationId);
+  operationWorkspaceIds.set(operation.id, operation.context?.workspace ?? workspaceDir);
   operation.context.sessionRun = {
     runId: sessionRun.run.runId,
     sessionId: sessionRun.run.sessionId,
@@ -7522,6 +7845,7 @@ const beginActiveOperation = (kind) => {
   }
   operationById.set(operation.id, operation);
   while (operationSessionIds.size > 128) operationSessionIds.delete(operationSessionIds.keys().next().value);
+  while (operationWorkspaceIds.size > 128) operationWorkspaceIds.delete(operationWorkspaceIds.keys().next().value);
   while (operationById.size > 128) operationById.delete(operationById.keys().next().value);
   operationBySignal.set(operation.controller.signal, operation);
   operation.context.runtimeBindings = defaultRuntimeBindings();
@@ -9425,44 +9749,60 @@ const ctx = {
   getActiveOperation: () => publicActiveOperation(),
   // The dashboard exposes only the ordinary process/schedule job registry.
   listBackgroundJobs: async () => {
-    const liveJobs = jobs.listMetadata?.() ?? [];
+    const scope = visibleBackgroundTaskScope();
+    if (!scope) return { jobs: [], pendingDeliveries: [] };
+    const liveMetadata = jobs.listMetadata?.() ?? [];
+    rememberLiveBackgroundTasks(liveMetadata);
+    const liveJobs = liveMetadata.filter((job) => liveTaskIsVisible(job?.id, scope));
     const currentTaskIds = new Set(liveJobs.map((job) => durableBackgroundTaskId(job?.id)));
-    const durableJobs = (await taskOutputStore.list({ workspace: workspaceDir }))
+    const durableJobs = (await taskOutputStore.list(scope))
       .filter((job) => !currentTaskIds.has(job.taskId))
       .map((job) => ({ ...job, id: job.taskId }));
     return { jobs: [...liveJobs, ...durableJobs], pendingDeliveries: [] };
   },
   getBackgroundJob: async (id) => {
+    const scope = visibleBackgroundTaskScope();
+    if (!scope) return null;
     const numericId = Number(id);
     if (Number.isSafeInteger(numericId)) {
+      rememberLiveBackgroundTask((jobs.listMetadata?.() ?? []).find((job) => Number(job?.id) === numericId));
+      if (!liveTaskIsVisible(numericId, scope)) return null;
       const live = jobs.read(numericId);
       if (live) return live;
-      return taskOutputStore.getByJobId(numericId, { workspace: workspaceDir });
+      return taskOutputStore.getByJobId(numericId, scope);
     }
-    return taskOutputStore.get(String(id), { workspace: workspaceDir });
+    return taskOutputStore.get(String(id), scope);
   },
   stopBackgroundJob: async (id) => {
+    const scope = visibleBackgroundTaskScope();
+    if (!scope) return null;
     const numericId = Number(id);
     if (!Number.isSafeInteger(numericId)) return null;
+    rememberLiveBackgroundTask((jobs.listMetadata?.() ?? []).find((job) => Number(job?.id) === numericId));
+    if (!liveTaskIsVisible(numericId, scope)) return null;
     const live = jobs.read(numericId);
     if (live) return jobs.stop(numericId);
-    return taskOutputStore.getByJobId(numericId, { workspace: workspaceDir });
+    return taskOutputStore.getByJobId(numericId, scope);
   },
   controlBackgroundJob: async (id, action, controlOptions = {}) => {
+    const scope = visibleBackgroundTaskScope();
+    if (!scope) return { ok: false, error: "background task scope unavailable" };
     if (["delete", "delete_record", "abandon"].includes(action) && typeof id === "string" && id.startsWith("bg-")) {
-      return taskOutputStore.remove(id, { workspace: workspaceDir });
+      return taskOutputStore.remove(id, scope);
     }
     if (action === "stop" || action === "cancel") {
       const numericId = Number(id);
       if (!Number.isSafeInteger(numericId)) {
-        const historical = await taskOutputStore.get(String(id), { workspace: workspaceDir });
+        const historical = await taskOutputStore.get(String(id), scope);
         return historical
           ? { ok: false, status: historical.status, error: "background job is no longer running", job: historical }
           : null;
       }
+      rememberLiveBackgroundTask((jobs.listMetadata?.() ?? []).find((job) => Number(job?.id) === numericId));
+      if (!liveTaskIsVisible(numericId, scope)) return null;
       const live = jobs.read(numericId);
       if (live) return jobs.stop(numericId);
-      const historical = await taskOutputStore.getByJobId(numericId, { workspace: workspaceDir });
+      const historical = await taskOutputStore.getByJobId(numericId, scope);
       return historical ? { ok: false, status: "lost", error: "background job is no longer running", job: historical } : null;
     }
     return { ok: false, error: `unsupported generic background action: ${action}` };
@@ -9744,6 +10084,8 @@ ${modeList}
       sendAuthorization: activeMessageSendContext.sendAuthorization,
       conversationScope: activeMessageSendContext.conversationScope,
     });
+    operationSessionIds.set(operation.id, operation.context.conversationId);
+    operationWorkspaceIds.set(operation.id, operation.context.workspace);
     const stopFromExternalSignal = () => {
       if (operation.controller.signal.aborted) return;
       operationRuntime.stop(operation, "external_abort");

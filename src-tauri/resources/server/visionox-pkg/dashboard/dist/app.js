@@ -21531,9 +21531,9 @@ function statusMark(status) {
     case "active":
       return html4`<span class="spinner process-row-spinner" aria-hidden="true"></span>`;
     case "failed":
-      return html4`<span class="process-row-mark process-row-mark-failed"><${IconX} size=${12} /></span>`;
+      return html4`<span class="process-row-mark process-row-mark-failed tool-log-icon-failed"><${IconX} size=${12} /></span>`;
     case "done":
-      return html4`<span class="process-row-mark process-row-mark-done"><${IconCheck} size=${12} /></span>`;
+      return html4`<span class="process-row-mark process-row-mark-done tool-log-icon-ok"><${IconCheck} size=${12} /></span>`;
     default:
       return html4`<span class="process-row-mark process-row-mark-pending"><${IconDot} size=${12} /></span>`;
   }
@@ -21542,14 +21542,14 @@ function renderRow(row, maxDetailLines) {
   const detail = (row.detail ?? "").trim();
   const detailLines = row.status === "active" && detail ? detail.split(/\r?\n/).filter((l3) => l3.trim()).slice(-maxDetailLines) : [];
   return html4`
-    <div key=${row.id} class=${`process-row process-row-${row.status}`} data-row-id=${row.id}>
+    <div key=${row.id} class=${`process-row process-row-${row.status} tool-log-row`} data-row-id=${row.id}>
       <div class="process-row-head">
         ${statusMark(row.status)}
-        <span class="process-row-label">${row.label}</span>
+        <span class="process-row-label tool-log-name">${row.label}</span>
         ${row.target ? html4`<span class="process-row-target" title=${row.target}>${row.target}</span>` : null}
       </div>
       ${detailLines.length > 0 ? html4`
-        <div class="process-row-detail">${detailLines.map((l3) => html4`<div class="process-row-detail-line">${l3}</div>`)}</div>
+        <div class="process-row-detail tool-log-detail">${detailLines.map((l3) => html4`<div class="process-row-detail-line">${l3}</div>`)}</div>
       ` : null}
     </div>
   `;
@@ -21574,14 +21574,14 @@ function ProcessCard({
   `;
   if (!collapsible) {
     return html4`
-      <div class=${`process-card process-card-${state} process-card-static`} role="group" aria-label=${ariaLabel}>
+      <div class=${`process-card process-card-${state} process-card-static ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-legacy-selector="details.tool-log">
         <div class="process-card-summary">${head}</div>
       </div>
     `;
   }
   return html4`
-    <div class=${`process-card process-card-${state}`} role="group" aria-label=${ariaLabel}>
-      <details class="process-card-details" open=${openAttr}>
+    <div class=${`process-card process-card-${state} ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel}>
+      <details class="process-card-details" data-legacy-selector="details.tool-log" open=${openAttr}>
         <summary class="process-card-summary">
           ${head}
           <span class="process-card-chevron"><${IconChevron} size=${13} /></span>
@@ -22544,7 +22544,7 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
       <div class="body">
         ${msg.reasoning && reasoningDisplay !== "hidden" ? reasoningLive ? reasoningDisplay === "live" ? html4`
           <div class="process-card process-card-running process-card-reasoning">
-            <div class="process-card-summary process-card-summary-static">
+            <div class="process-card-summary process-card-summary-static reasoning-live-header">
               <span class="process-card-icon"><span class="spinner process-row-spinner"></span></span>
               <span class="process-card-title">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnLive", { n: msg.reasoningTurns }) : t4("chat.reasoningThinking")}</span>
             </div>
@@ -22552,8 +22552,8 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
           </div>
         ` : null : html4`
           <div class="process-card process-card-settled process-card-reasoning">
-            <details class="process-card-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
-              <summary class="process-card-summary">
+            <details class="process-card-details reasoning-details" open=${reasoningOpen} onToggle=${onReasoningToggle}>
+              <summary class="process-card-summary reasoning-summary">
                 <span class="process-card-title">${t4("chat.reasoningProcess")}</span>
                 <span class="process-card-meta">${msg.reasoningTurns > 1 ? t4("chat.reasoningTurnsPrefix", { n: msg.reasoningTurns }) : ""}${t4("chat.reasoningChars", { n: reasoningLength.toLocaleString() })}</span>
                 <span class="process-card-chevron"><${IconChevron} size=${13} /></span>

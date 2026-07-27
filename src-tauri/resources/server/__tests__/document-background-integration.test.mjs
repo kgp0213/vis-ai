@@ -208,11 +208,11 @@ test("background task panel does not reactivate the retired document worker", ()
   assert.match(server, /request\.expectedRevision/);
   assert.match(server, /generic background jobs require an explicit POST action/);
   assert.match(launcher, /listBackgroundJobs: async \(\) => \{/);
-  assert.match(launcher, /const durableJobs = \(await taskOutputStore\.list\(\{ workspace: workspaceDir \}\)\)/);
+  assert.match(launcher, /const durableJobs = \(await taskOutputStore\.list\(scope\)\)/);
   assert.match(launcher, /const currentTaskIds = new Set\(liveJobs\.map\(\(job\) => durableBackgroundTaskId\(job\?\.id\)\)\)/);
   assert.match(launcher, /getBackgroundJob: async \(id\) => \{/);
-  assert.match(launcher, /taskOutputStore\.getByJobId\(numericId, \{ workspace: workspaceDir \}\)/);
-  assert.match(launcher, /taskOutputStore\.remove\(id, \{ workspace: workspaceDir \}\)/);
+  assert.match(launcher, /taskOutputStore\.getByJobId\(numericId, scope\)/);
+  assert.match(launcher, /taskOutputStore\.remove\(id, scope\)/);
   assert.doesNotMatch(launcher, /documentMarkdownManager|documentHandoffCoordinator|createDocumentMarkdownManager/);
   assert.doesNotMatch(launcher, /get_document_job_status|organize_document_to_markdown|organize_pdf_to_markdown/);
   assert.match(launcher, /registerShellTools\(tools/);
