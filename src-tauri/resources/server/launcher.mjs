@@ -162,7 +162,7 @@ const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs"
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
 const { formatTaskOutputText, normalizeBackgroundTaskReference, projectBackgroundTaskList, projectTaskOutput } = await importEarly("./lib/task-output-model.mjs");
-const { createBackgroundTaskNotificationRuntime, formatBackgroundTaskNotification } = await importEarly("./lib/background-task-notification.mjs");
+const { createBackgroundTaskNotificationRuntime, deriveBackgroundTaskStatus, formatBackgroundTaskNotification } = await importEarly("./lib/background-task-notification.mjs");
 const { createBackgroundTaskScopeRegistry } = await importEarly("./lib/background-task-scope.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
@@ -2028,6 +2028,22 @@ function taskScopeUnavailableResult() {
     retryable: false,
     action: "retry_in_current_operation",
   });
+}
+
+async function restorePendingBackgroundTaskNotifications(scope) {
+  if (!scope?.sessionId || !scope?.workspace) return;
+  const pending = await taskOutputStore.listPendingNotifications({
+    sessionId: scope.sessionId,
+    workspace: scope.workspace,
+  });
+  for (const persisted of pending) {
+    if (!persisted) continue;
+    backgroundTaskNotifications.enqueue(persisted, {
+      operationId: persisted.operationId ?? scope.operationId ?? null,
+      sessionId: scope.sessionId,
+      workspace: scope.workspace,
+    });
+  }
 }
 
 function liveTaskOutputWindow(snapshot, since) {
@@ -5205,6 +5221,11 @@ function buildLoop(client, rootDir) {
           throw new Error(`SESSION_INPUT_DELIVERY_FAILED: ${error.message || String(error)}`);
         }
       }
+      await restorePendingBackgroundTaskNotifications({
+        operationId: operation.id,
+        sessionId,
+        workspace: workspaceDir,
+      });
       const taskNotifications = backgroundTaskNotifications.claim({
         sessionId,
         workspace: workspaceDir,
@@ -5232,6 +5253,11 @@ function buildLoop(client, rootDir) {
           if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
           loop.appendAndPersist(historyMessage);
           backgroundTaskNotifications.acknowledge(notification.notificationId);
+          try {
+            await taskOutputStore.acknowledgeNotification(notification.taskId, notification.notificationId);
+          } catch (error) {
+            console.error(`[launcher] background task notification durable ack failed: ${error.message}`);
+          }
           broadcastDashboardEvent({
             kind: "background-task-notification",
             notificationId: notification.notificationId,
@@ -7723,6 +7749,10 @@ function durableBackgroundTaskId(jobId) {
   return `bg-${launcherBootId}-${String(jobId).replace(/[^A-Za-z0-9._-]+/gu, "-")}`;
 }
 
+function backgroundTaskNotificationId(taskId, status) {
+  return `task:${String(taskId)}:${String(status)}`;
+}
+
 async function persistBackgroundJob(jobLike) {
   const jobId = jobLike?.id;
   if (!Number.isSafeInteger(Number(jobId))) return null;
@@ -7733,8 +7763,10 @@ async function persistBackgroundJob(jobLike) {
   const operationId = snapshot?.ownerId ?? jobLike?.ownerId ?? null;
   const operation = operationId ? operationById.get(String(operationId)) : null;
   const rememberedScope = liveBackgroundTaskScopes.get(id);
+  const taskId = durableBackgroundTaskId(id);
+  const status = deriveBackgroundTaskStatus(snapshot ?? jobLike);
   return taskOutputStore.save({
-    taskId: durableBackgroundTaskId(id),
+    taskId,
     jobId: id,
     operationId: operationId ? String(operationId) : null,
     sessionId: operation?.context?.conversationId ?? rememberedScope?.sessionId ?? operationSessionIds.get(String(operationId)) ?? null,
@@ -7754,6 +7786,7 @@ async function persistBackgroundJob(jobLike) {
     totalBytesWritten: jobLike?.totalBytesWritten ?? snapshot?.totalBytesWritten
       ?? (typeof snapshot?.output === "string" ? Buffer.byteLength(snapshot.output, "utf8") : null),
     ...(snapshot?.running === false ? { endedAt: new Date().toISOString() } : {}),
+    ...(status !== "running" ? { notificationId: backgroundTaskNotificationId(taskId, status) } : {}),
   });
 }
 
@@ -7782,6 +7815,9 @@ async function enqueueBackgroundTaskNotification(job = {}) {
   }
   const jobId = Number.isSafeInteger(Number(rawJob.id ?? rawJob.jobId)) ? Number(rawJob.id ?? rawJob.jobId) : null;
   const persisted = jobId === null ? null : await taskOutputStore.getByJobId(jobId, scope);
+  if (persisted?.notificationAckedAt) {
+    return { accepted: false, duplicate: true, acknowledged: true, notificationId: persisted.notificationId };
+  }
   const source = {
     ...rawJob,
     ...(persisted ?? {}),
@@ -7800,6 +7836,16 @@ async function enqueueBackgroundTaskNotification(job = {}) {
       operationId: scope.operationId ?? null,
       sessionId: scope.sessionId,
     });
+    if (result.overflow?.count > 0) {
+      console.error(`[launcher] background task notification queue overflowed: dropped=${result.overflow.count}`);
+      broadcastDashboardEvent({
+        kind: "background-task-notification-overflow",
+        droppedCount: result.overflow.count,
+        notificationIds: result.overflow.notificationIds,
+        operationId: scope.operationId ?? null,
+        sessionId: scope.sessionId,
+      });
+    }
   }
   return result;
 }
@@ -12017,22 +12063,20 @@ refreshAllScheduleTimers();
 // ── Restore active session (crash recovery) ─────────────────────
 const restoredActiveSession = await loadActiveSession();
 // Rebuild terminal background-task notifications from the recovered model
-// history first, then offer only same-session lost tasks that were not already
-// acknowledged. This mirrors Kimi Code's restore path without replaying work.
+// history first, then restore every same-session terminal fact whose durable
+// outbox acknowledgement is still missing. This never replays work.
 backgroundTaskNotifications.restoreDelivered(loop?.log?.toMessages?.() ?? []);
-for (const recoveredTask of recoveredBackgroundTasks.tasks ?? []) {
-  if (recoveredTask?.status !== "lost") continue;
-  const persisted = await taskOutputStore.get(recoveredTask.taskId, {
+const pendingBackgroundNotifications = await taskOutputStore.listPendingNotifications({
+  sessionId: activeConversationId,
+  workspace: workspaceDir,
+});
+for (const persisted of pendingBackgroundNotifications) {
+  if (!persisted) continue;
+  backgroundTaskNotifications.enqueue(persisted, {
+    operationId: persisted.operationId,
     sessionId: activeConversationId,
     workspace: workspaceDir,
   });
-  if (persisted) {
-    backgroundTaskNotifications.enqueue(persisted, {
-      operationId: persisted.operationId,
-      sessionId: activeConversationId,
-      workspace: workspaceDir,
-    });
-  }
 }
 
 // ── Initial welcome message ──────────────────────────────────────

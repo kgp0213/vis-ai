@@ -239,8 +239,11 @@ export function createAttachmentRuntime({
   async function discardUpload(upload) {
     if (!upload) return;
     clearUploadExpiry(upload);
+    if (!upload.cleanupPromise) {
+      upload.cleanupPromise = rm(upload.path, { force: true }).catch(() => {});
+    }
+    await upload.cleanupPromise;
     if (uploads.get(upload.id) === upload) uploads.delete(upload.id);
-    await rm(upload.path, { force: true }).catch(() => {});
   }
 
   async function expireUploadIfNeeded(upload) {
@@ -678,7 +681,10 @@ export function createAttachmentRuntime({
     const upload = uploads.get(safeString(id));
     if (!upload) throw new Error("附件上传不存在或已过期");
     if (await expireUploadIfNeeded(upload)) throw new Error("附件上传不存在或已过期");
-    if (upload.cancelled) throw new Error("附件上传已取消");
+    if (upload.cancelled) {
+      await upload.cleanupPromise;
+      throw new Error("附件上传已取消");
+    }
     if (upload.busy) throw new Error("附件上传正在处理上一分块");
     const payload = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes ?? []);
     if (payload.length === 0) throw new Error("附件上传分块为空");
@@ -703,7 +709,10 @@ export function createAttachmentRuntime({
     const upload = uploads.get(safeString(id));
     if (!upload) throw new Error("附件上传不存在或已过期");
     if (await expireUploadIfNeeded(upload)) throw new Error("附件上传不存在或已过期");
-    if (upload.cancelled) throw new Error("附件上传已取消");
+    if (upload.cancelled) {
+      await upload.cleanupPromise;
+      throw new Error("附件上传已取消");
+    }
     if (upload.busy) throw new Error("附件上传仍在写入");
     if (upload.received !== upload.size) throw new Error(`附件上传不完整：${upload.received}/${upload.size} 字节`);
     clearUploadExpiry(upload);

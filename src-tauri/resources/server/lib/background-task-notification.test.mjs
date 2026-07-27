@@ -57,3 +57,24 @@ test("service tasks and restored notifications do not re-enter the queue", () =>
   runtime.restoreDelivered([{ backgroundTaskNotification: { notificationId: item.notificationId } }]);
   assert.equal(runtime.claim({ sessionId: "s", workspace: "C:/w" }).length, 0);
 });
+
+test("notification overflow remains recoverable instead of being silently discarded", () => {
+  const runtime = createBackgroundTaskNotificationRuntime({ maxPending: 1 });
+  runtime.enqueue({ taskId: "bg-overflow-1", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  const second = runtime.enqueue({ taskId: "bg-overflow-2", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  assert.deepEqual(second.overflow, {
+    count: 1,
+    notificationIds: ["task:bg-overflow-1:failed"],
+  });
+  assert.equal(runtime.enqueue({ taskId: "bg-overflow-1", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" }).duplicate, true);
+  const claimed = runtime.claim({ sessionId: "s", workspace: "C:/w", limit: 2 });
+  assert.deepEqual(claimed.map((item) => item.taskId), ["bg-overflow-2", "bg-overflow-1"]);
+  const third = runtime.enqueue({ taskId: "bg-overflow-3", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  assert.equal(third.accepted, true);
+  const fourth = runtime.enqueue({ taskId: "bg-overflow-4", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  assert.equal(fourth.accepted, true);
+  const fifth = runtime.enqueue({ taskId: "bg-overflow-5", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  assert.equal(fifth.accepted, false);
+  assert.equal(fifth.overflow.durableRecoveryRequired, true);
+  assert.equal(runtime.snapshot().overflowedCount <= 1, true);
+});

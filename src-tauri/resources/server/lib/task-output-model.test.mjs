@@ -107,3 +107,20 @@ test("projects task listings without workspace paths", () => {
   }]);
   assert.equal(JSON.stringify(rows).includes("private/workspace"), false);
 });
+
+test("redacts secrets from task commands and output projections", () => {
+  const result = projectTaskOutput({
+    task: {
+      taskId: "bg-secret",
+      command: "node --api-key secret-token build.js",
+      spawnError: "Bearer secret-token",
+      status: "failed",
+    },
+    window: { content: "password=secret-token\n", totalBytes: 21, nextOffsetBytes: 21, complete: true },
+    reference: "bg-secret",
+  });
+
+  assert.doesNotMatch(JSON.stringify(result), /secret-token/u);
+  assert.match(JSON.stringify(result), /REDACTED/u);
+  assert.equal(result.nextOffsetBytes, 21);
+});

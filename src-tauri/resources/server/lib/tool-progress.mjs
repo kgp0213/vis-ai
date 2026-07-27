@@ -16,22 +16,30 @@ const RUNTIME_DIAGNOSTICS = [
   { pattern: /Setting up fake worker failed|Received protocol ['"]c:/iu, category: "environment", code: "runtime_incompatible", retryable: true, action: "normalize_windows_worker_url" },
 ];
 
-function redactString(value, limit = 4000) {
+function maskSecret(value, preserveLength = false) {
+  if (!preserveLength) return "[REDACTED]";
+  const length = String(value ?? "").length;
+  if (length >= "[REDACTED]".length) return `[REDACTED]${"*".repeat(length - "[REDACTED]".length)}`;
+  return "*".repeat(length);
+}
+
+function redactString(value, limit = 4000, preserveLength = false) {
   return String(value ?? "")
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/-]+/gi, "$1 [REDACTED]")
-    .replace(/\b((?:aws[_ -]?)?secret[_ -]?access[_ -]?key|(?:aws[_ -]?)?access[_ -]?key[_ -]?id|api[_ -]?key|client[_ -]?secret|private[_ -]?key|credentials?|token|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/\b(Bearer|Basic)\s+([A-Za-z0-9._~+\/-]+)/gi, (_match, scheme, secret) => `${scheme} ${maskSecret(secret, preserveLength)}`)
+    .replace(/\b((?:aws[_ -]?)?secret[_ -]?access[_ -]?key|(?:aws[_ -]?)?access[_ -]?key[_ -]?id|api[_ -]?key|client[_ -]?secret|private[_ -]?key|credentials?|token|password|secret)\s*([:=])\s*([^\s,;]+)/gi, (_match, label, separator, secret) => `${label}${separator}${maskSecret(secret, preserveLength)}`)
+    .replace(/(--?(?:api[-_ ]?key|client[-_ ]?secret|private[-_ ]?key|token|password|secret))\s+([^\s,;]+)/gi, (_match, label, secret) => `${label} ${maskSecret(secret, preserveLength)}`)
     .slice(0, limit);
 }
 
-export function redactToolProgressValue(value, { maxDepth = 6, maxText = 4000 } = {}, depth = 0, seen = new WeakSet()) {
-  if (typeof value === "string") return redactString(value, maxText);
+export function redactToolProgressValue(value, { maxDepth = 6, maxText = 4000, preserveLength = false } = {}, depth = 0, seen = new WeakSet()) {
+  if (typeof value === "string") return redactString(value, maxText, preserveLength);
   if (value === null || value === undefined || typeof value !== "object") return value;
   if (depth >= maxDepth || seen.has(value)) return "[TRUNCATED]";
   seen.add(value);
-  if (Array.isArray(value)) return value.slice(0, 64).map((item) => redactToolProgressValue(item, { maxDepth, maxText }, depth + 1, seen));
+  if (Array.isArray(value)) return value.slice(0, 64).map((item) => redactToolProgressValue(item, { maxDepth, maxText, preserveLength }, depth + 1, seen));
   const result = {};
   for (const [key, item] of Object.entries(value).slice(0, 64)) {
-    result[key] = SENSITIVE_KEY.test(key) ? "[REDACTED]" : redactToolProgressValue(item, { maxDepth, maxText }, depth + 1, seen);
+    result[key] = SENSITIVE_KEY.test(key) ? "[REDACTED]" : redactToolProgressValue(item, { maxDepth, maxText, preserveLength }, depth + 1, seen);
   }
   return result;
 }

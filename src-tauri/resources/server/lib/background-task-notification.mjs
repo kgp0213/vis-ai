@@ -76,6 +76,7 @@ export function createBackgroundTaskNotificationRuntime({
   const pending = new Map();
   const inFlight = new Map();
   const delivered = new Set();
+  const overflowed = new Map();
   const pendingLimit = Math.max(1, Math.min(MAX_PENDING, Number(maxPending) || MAX_PENDING));
 
   function enqueue(raw = {}, scope = {}) {
@@ -85,12 +86,40 @@ export function createBackgroundTaskNotificationRuntime({
     const notification = normalizeNotification(raw, scope, now);
     if (!notification) return { accepted: false, ignored: true, reason: "not_terminal" };
     const id = notification.notificationId;
-    if (delivered.has(id) || pending.has(id) || inFlight.has(id)) {
+    if (delivered.has(id) || pending.has(id) || inFlight.has(id) || overflowed.has(id)) {
       return { accepted: false, duplicate: true, notification: clone(notification) };
     }
+    if (pending.size >= pendingLimit && overflowed.size >= pendingLimit) {
+      return {
+        accepted: false,
+        overflow: {
+          count: 1,
+          notificationIds: [id],
+          durableRecoveryRequired: true,
+        },
+      };
+    }
     pending.set(id, notification);
-    while (pending.size > pendingLimit) pending.delete(pending.keys().next().value);
-    return { accepted: true, notification: clone(notification) };
+    const dropped = [];
+    while (pending.size > pendingLimit) {
+      const oldest = pending.keys().next().value;
+      const droppedNotification = pending.get(oldest);
+      pending.delete(oldest);
+      if (droppedNotification) {
+        overflowed.set(oldest, droppedNotification);
+        dropped.push(clone(droppedNotification));
+      }
+    }
+    return {
+      accepted: true,
+      notification: clone(notification),
+      ...(dropped.length > 0 ? {
+        overflow: {
+          count: dropped.length,
+          notificationIds: dropped.map((item) => item.notificationId),
+        },
+      } : {}),
+    };
   }
 
   function claim({ sessionId = null, workspace = null, limit = 4 } = {}) {
@@ -101,6 +130,14 @@ export function createBackgroundTaskNotificationRuntime({
       if (sessionId && notification.sessionId && notification.sessionId !== String(sessionId)) continue;
       if (!sameWorkspace(workspace, notification.workspace)) continue;
       pending.delete(id);
+      inFlight.set(id, notification);
+      claimed.push(clone(notification));
+    }
+    for (const [id, notification] of overflowed) {
+      if (claimed.length >= max) break;
+      if (sessionId && notification.sessionId && notification.sessionId !== String(sessionId)) continue;
+      if (!sameWorkspace(workspace, notification.workspace)) continue;
+      overflowed.delete(id);
       inFlight.set(id, notification);
       claimed.push(clone(notification));
     }
@@ -133,6 +170,7 @@ export function createBackgroundTaskNotificationRuntime({
       delivered.add(id);
       pending.delete(id);
       inFlight.delete(id);
+      overflowed.delete(id);
     }
   }
 
@@ -141,6 +179,8 @@ export function createBackgroundTaskNotificationRuntime({
       pending: [...pending.values()].map(clone),
       inFlight: [...inFlight.values()].map(clone),
       delivered: [...delivered],
+      overflowed: [...overflowed.values()].map(clone),
+      overflowedCount: overflowed.size,
     };
   }
 

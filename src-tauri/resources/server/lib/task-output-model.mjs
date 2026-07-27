@@ -1,3 +1,5 @@
+import { redactToolProgressValue } from "./tool-progress.mjs";
+
 const TASK_ID_RE = /^bg-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "timed_out", "killed", "lost", "unknown"]);
 const DEFAULT_TAIL_LINES = 80;
@@ -9,6 +11,12 @@ function finiteInteger(value, fallback = null) {
 
 function optionalString(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function safeVisibleText(value, maxText = 4000, preserveLength = false) {
+  return typeof value === "string"
+    ? redactToolProgressValue(value, { maxText, preserveLength })
+    : value;
 }
 
 function taskStatus(task) {
@@ -69,8 +77,11 @@ function baseTaskProjection(task, reference) {
     retrievalStatus: retrievalStatus(status, false),
     terminalReason: terminalReason(status, task),
   };
-  for (const key of ["lifecycle", "command", "pid", "exitCode", "spawnError", "stopReason"]) {
+  for (const key of ["lifecycle", "pid", "exitCode"]) {
     if (task?.[key] !== undefined && task?.[key] !== null) projected[key] = task[key];
+  }
+  for (const key of ["command", "spawnError", "stopReason"]) {
+    if (task?.[key] !== undefined && task?.[key] !== null) projected[key] = safeVisibleText(String(task[key]), 1200);
   }
   return projected;
 }
@@ -83,7 +94,8 @@ function baseTaskProjection(task, reference) {
 export function projectTaskOutput({ task = {}, window = {}, reference = null, since = undefined, tailLines = DEFAULT_TAIL_LINES, block = false, fullOutputAvailable = undefined } = {}) {
   const status = taskStatus(task);
   const sinceOffset = finiteInteger(since, null);
-  const raw = String(window.content ?? "");
+  const rawSource = String(window.content ?? "");
+  const raw = safeVisibleText(rawSource, rawSource.length, true);
   const output = sinceOffset === null ? tailByLines(raw, tailLines) : raw;
   const totalBytes = Math.max(
     0,
@@ -125,7 +137,7 @@ export function projectBackgroundTaskList(tasks = []) {
     const row = {
       taskId: optionalString(task?.taskId),
       jobId: finiteInteger(task?.jobId, null),
-      command: optionalString(task?.command),
+      command: optionalString(safeVisibleText(task?.command, 1200)),
       status,
       running: task?.running === true,
       outputSizeBytes: Math.max(0, finiteInteger(task?.outputBytes, finiteInteger(task?.byteLength, 0)) ?? 0),

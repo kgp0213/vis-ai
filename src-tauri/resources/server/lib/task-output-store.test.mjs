@@ -58,6 +58,7 @@ test("marks running tasks lost after restart and preserves the diagnostic tail",
     assert.equal(recovered.tasks[0].status, "lost");
     assert.equal(recovered.tasks[0].running, false);
     assert.equal(recovered.tasks[0].stopReason, "process_restarted");
+    assert.equal(recovered.tasks[0].notificationId, "task:bg-2:lost");
 
     const detail = await store.get("bg-2");
     assert.equal(detail.status, "lost");
@@ -78,6 +79,26 @@ test("updates a task atomically without duplicate records and rejects unsafe ids
     await assert.rejects(() => store.read("../escape"), /invalid task id/u);
     const files = await readFile(join(root, "tasks", "bg-3.json"), "utf8");
     assert.match(files, /"schemaVersion":\s*1/u);
+  });
+});
+
+test("persists and acknowledges terminal notification facts", async () => {
+  await withStore(async (store) => {
+    await store.save({
+      taskId: "bg-notify",
+      jobId: 9,
+      sessionId: "session-notify",
+      workspace: "C:/notify",
+      running: false,
+      exitCode: 1,
+      notificationId: "task:bg-notify:failed",
+      output: "failed\n",
+    });
+    const pending = await store.listPendingNotifications({ sessionId: "session-notify", workspace: "C:/notify" });
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].notificationId, "task:bg-notify:failed");
+    assert.equal(await store.acknowledgeNotification("bg-notify", "task:bg-notify:failed"), true);
+    assert.equal((await store.listPendingNotifications({ sessionId: "session-notify", workspace: "C:/notify" })).length, 0);
   });
 });
 

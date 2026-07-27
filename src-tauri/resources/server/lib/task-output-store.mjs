@@ -144,6 +144,8 @@ function normalizeRecord(input, now, previous = null) {
     outputTruncated,
     outputGapDetected: input.outputGapDetected === true || previous?.outputGapDetected === true,
     outputResourceId: `task-output:${taskId}`,
+    notificationId: input.notificationId ?? previous?.notificationId ?? null,
+    notificationAckedAt: input.notificationAckedAt ?? previous?.notificationAckedAt ?? null,
     updatedAt: input.updatedAt ?? now,
   };
 }
@@ -390,6 +392,30 @@ export function createTaskOutputStore({ rootDir, now = () => new Date().toISOStr
     return match ? get(match.taskId, { id: match.jobId ?? match.taskId, ...scope }) : null;
   };
 
+  const acknowledgeNotification = (taskId, notificationId) => enqueue(async () => {
+    const safeId = safeTaskId(taskId);
+    const previous = await readRecord(tasksRoot, safeId);
+    if (!previous || (notificationId && previous.notificationId !== String(notificationId))) return false;
+    const next = normalizeRecord({
+      ...previous,
+      notificationAckedAt: now(),
+      updatedAt: now(),
+    }, now(), previous);
+    await atomicWriteFile(recordPath(tasksRoot, safeId), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    return true;
+  });
+
+  const listPendingNotifications = async (scope = {}) => {
+    await writeQueue;
+    const records = (await listRecords(tasksRoot))
+      .filter((record) => TASK_STATUSES.has(record.status)
+        && record.status !== "running"
+        && record.notificationId
+        && !record.notificationAckedAt
+        && recordMatchesScope(record, scope));
+    return Promise.all(records.map((record) => get(record.taskId, scope)));
+  };
+
   const read = async (taskId, options = {}) => {
     const safeId = safeTaskId(taskId);
     await writeQueue;
@@ -411,6 +437,7 @@ export function createTaskOutputStore({ rootDir, now = () => new Date().toISOStr
         status: "lost",
         running: false,
         stopReason: text(reason, "process_restarted"),
+        notificationId: `task:${record.taskId}:lost`,
         endedAt: now(),
         updatedAt: now(),
       }, now(), record);
@@ -437,6 +464,8 @@ export function createTaskOutputStore({ rootDir, now = () => new Date().toISOStr
     list,
     get,
     getByJobId,
+    acknowledgeNotification,
+    listPendingNotifications,
     read,
     recoverRunning,
     remove,

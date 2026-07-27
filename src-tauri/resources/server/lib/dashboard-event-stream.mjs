@@ -58,8 +58,13 @@ export function createDashboardEventStream({ epoch = randomUUID(), capacity = DE
       ring.push(delivered);
       if (ring.length > capacity) ring.shift();
     }
-    for (const handler of subscribers) {
-      try { handler(delivered); } catch { /* A Dashboard subscriber cannot stop the runtime. */ }
+    for (const subscriber of [...subscribers]) {
+      if (!subscriber.active) continue;
+      if (subscriber.replaying) {
+        subscriber.queued.push(delivered);
+        continue;
+      }
+      try { subscriber.handler(delivered); } catch { /* A Dashboard subscriber cannot stop the runtime. */ }
     }
     return delivered;
   }
@@ -88,16 +93,43 @@ export function createDashboardEventStream({ epoch = randomUUID(), capacity = DE
 
   function subscribe(handler, { cursor: requestedCursor = null } = {}) {
     if (typeof handler !== "function") throw new TypeError("dashboard event subscriber must be a function");
-    subscribers.add(handler);
-    if (requestedCursor) {
-      const snapshot = replay(requestedCursor);
-      if (snapshot.ok) {
-        for (const event of snapshot.events) handler(event);
-      } else {
-        handler({ kind: "resync-required", ...snapshot });
-      }
+    const subscriber = {
+      handler,
+      active: true,
+      replaying: Boolean(requestedCursor),
+      queued: [],
+    };
+    subscribers.add(subscriber);
+    if (!requestedCursor) return () => {
+      subscriber.active = false;
+      subscribers.delete(subscriber);
+    };
+
+    const deliver = (event) => {
+      if (!subscriber.active) return;
+      try { subscriber.handler(event); } catch { /* A Dashboard subscriber cannot stop the runtime. */ }
+    };
+    const snapshot = replay(requestedCursor);
+    if (snapshot.ok) {
+      for (const event of snapshot.events) deliver(event);
+    } else {
+      deliver({ kind: "resync-required", ...snapshot });
     }
-    return () => subscribers.delete(handler);
+    if (subscriber.active) {
+      // Keep the barrier active while draining. A replay handler may publish
+      // synchronously; those events must remain behind every already queued
+      // event instead of being delivered in the middle of the drain.
+      while (subscriber.active && subscriber.queued.length > 0) {
+        const queued = subscriber.queued;
+        subscriber.queued = [];
+        for (const event of queued) deliver(event);
+      }
+      subscriber.replaying = false;
+    }
+    return () => {
+      subscriber.active = false;
+      subscribers.delete(subscriber);
+    };
   }
 
   return {

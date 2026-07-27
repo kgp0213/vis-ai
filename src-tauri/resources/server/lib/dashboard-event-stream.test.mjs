@@ -50,3 +50,25 @@ test("dashboard event stream sends a snapshot before subscribing without a race"
 
   assert.deepEqual(received.map((event) => event.id), ["one", "two"]);
 });
+
+test("dashboard event stream queues reentrant live events behind replay", () => {
+  const stream = createDashboardEventStream({ epoch: "epoch-reentrant" });
+  stream.publish({ kind: "user", id: "one" });
+  stream.publish({ kind: "assistant_final", id: "two" });
+  const received = [];
+  let published = false;
+  let queuedPublished = false;
+  stream.subscribe((event) => {
+    received.push(event.id ?? event.kind);
+    if (!published && event.id === "one") {
+      published = true;
+      stream.publish({ kind: "warning", id: "three" });
+    }
+    if (!queuedPublished && event.id === "three") {
+      queuedPublished = true;
+      stream.publish({ kind: "warning", id: "four" });
+    }
+  }, { cursor: "epoch-reentrant:0" });
+
+  assert.deepEqual(received, ["one", "two", "three", "four"]);
+});
