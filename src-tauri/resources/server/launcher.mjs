@@ -169,7 +169,7 @@ const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs"
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
 const { formatTaskOutputText, normalizeBackgroundTaskReference, projectBackgroundTaskList, projectTaskOutput } = await importEarly("./lib/task-output-model.mjs");
-const { createBackgroundTaskNotificationRuntime, deriveBackgroundTaskStatus, formatBackgroundTaskNotification } = await importEarly("./lib/background-task-notification.mjs");
+const { createBackgroundTaskNotificationRuntime, deriveBackgroundTaskStatus, formatBackgroundTaskNotification, isProcessRestartedRecovery, notificationEnqueueScope } = await importEarly("./lib/background-task-notification.mjs");
 const { createBackgroundTaskScopeRegistry } = await importEarly("./lib/background-task-scope.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
@@ -2087,11 +2087,9 @@ async function restorePendingBackgroundTaskNotifications(scope) {
   });
   for (const persisted of pending) {
     if (!persisted) continue;
-    backgroundTaskNotifications.enqueue(persisted, {
-      operationId: persisted.operationId ?? scope.operationId ?? null,
-      sessionId: scope.sessionId,
-      workspace: scope.workspace,
-    });
+    // Restart-recovered lost facts are rebound to this live operation by
+    // notificationEnqueueScope; everything else keeps its original binding.
+    backgroundTaskNotifications.enqueue(persisted, notificationEnqueueScope(persisted, scope));
   }
 }
 
@@ -12453,6 +12451,11 @@ const pendingBackgroundNotifications = await taskOutputStore.listPendingNotifica
 });
 for (const persisted of pendingBackgroundNotifications) {
   if (!persisted) continue;
+  // Restart-recovered lost facts are skipped here: no live operation exists
+  // yet, and enqueueing with the dead operation binding would poison the
+  // dedupe set. restorePendingBackgroundTaskNotifications rebinds and
+  // enqueues them at the first model request boundary instead.
+  if (isProcessRestartedRecovery(persisted)) continue;
   backgroundTaskNotifications.enqueue(persisted, {
     operationId: persisted.operationId,
     sessionId: activeConversationId,

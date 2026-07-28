@@ -59,3 +59,12 @@ test("后台工作台兼容通用任务投影并在恢复可见性时重新同�
   assert.match(chatPanel, /window\.addEventListener\("focus", refreshOnFocus\)/);
   assert.match(chatPanel, /document\.addEventListener\("visibilitychange", refreshOnVisibility\)/);
 });
+
+test("崩溃恢复的 lost 通知改挂到 live operation，启动时不再用死 operation 绑定入队", async () => {
+  const launcher = await readFile(launcherSourceUrl, "utf8");
+  // 模型边界恢复点：统一经 notificationEnqueueScope 决定绑定（lost+process_restarted 改挂 live operation）
+  assert.match(launcher, /backgroundTaskNotifications\.enqueue\(persisted, notificationEnqueueScope\(persisted, scope\)\);/u);
+  // 启动恢复点：跳过崩溃恢复的 lost 记录，避免死 operation 绑定污染去重集合
+  assert.match(launcher, /if \(isProcessRestartedRecovery\(persisted\)\) continue;/u);
+  assert.match(launcher, /isProcessRestartedRecovery, notificationEnqueueScope \} = await importEarly\("\.\/lib\/background-task-notification\.mjs"\)/u);
+});

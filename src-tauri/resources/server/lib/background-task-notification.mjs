@@ -34,6 +34,31 @@ export function deriveBackgroundTaskStatus(job = {}) {
   return "unknown";
 }
 
+export const PROCESS_RESTARTED_STOP_REASON = "process_restarted";
+
+// A task marked lost by crash recovery carries the dead operation's binding.
+// The claim filter pins delivery to sourceOperationId, so such a notification
+// could never be claimed by any post-restart operation.
+export function isProcessRestartedRecovery(record = {}) {
+  return text(record.stopReason, 240) === PROCESS_RESTARTED_STOP_REASON
+    && text(record.status, 80)?.toLowerCase() === "lost";
+}
+
+// Decide the enqueue scope for a persisted terminal fact. Restart-recovered
+// lost notifications are rebound to the live operation of the same session and
+// workspace; every other fact keeps its original operation binding so the
+// cross-operation leak guard stays intact.
+export function notificationEnqueueScope(persisted = {}, scope = {}) {
+  const operationId = isProcessRestartedRecovery(persisted)
+    ? text(scope.operationId, 180)
+    : (text(persisted.operationId, 180) ?? text(scope.operationId, 180));
+  return {
+    operationId,
+    sessionId: scope.sessionId ?? null,
+    workspace: scope.workspace ?? null,
+  };
+}
+
 function notificationId(taskId, status) {
   return `task:${taskId}:${status}`;
 }
@@ -78,6 +103,29 @@ export function createBackgroundTaskNotificationRuntime({
   const delivered = new Set();
   const overflowed = new Map();
   const pendingLimit = Math.max(1, Math.min(MAX_PENDING, Number(maxPending) || MAX_PENDING));
+  const inFlightLimit = pendingLimit * 2;
+  const deliveredLimit = pendingLimit * 4;
+
+  function rememberDelivered(id) {
+    delivered.delete(id);
+    delivered.add(id);
+    while (delivered.size > deliveredLimit) {
+      delivered.delete(delivered.values().next().value);
+    }
+  }
+
+  function enqueuePending(notification) {
+    const id = notification.notificationId;
+    if (pending.size >= pendingLimit && overflowed.size >= pendingLimit) return false;
+    pending.set(id, notification);
+    while (pending.size > pendingLimit) {
+      const oldest = pending.keys().next().value;
+      const droppedNotification = pending.get(oldest);
+      pending.delete(oldest);
+      if (droppedNotification) overflowed.set(oldest, droppedNotification);
+    }
+    return true;
+  }
 
   function enqueue(raw = {}, scope = {}) {
     if (String(raw.lifecycle ?? "task").toLowerCase() === "service") {
@@ -99,15 +147,13 @@ export function createBackgroundTaskNotificationRuntime({
         },
       };
     }
-    pending.set(id, notification);
     const dropped = [];
-    while (pending.size > pendingLimit) {
-      const oldest = pending.keys().next().value;
-      const droppedNotification = pending.get(oldest);
-      pending.delete(oldest);
-      if (droppedNotification) {
-        overflowed.set(oldest, droppedNotification);
-        dropped.push(clone(droppedNotification));
+    const pendingBefore = new Set(pending.keys());
+    enqueuePending(notification);
+    for (const oldest of pendingBefore) {
+      if (!pending.has(oldest)) {
+        const droppedNotification = overflowed.get(oldest);
+        if (droppedNotification) dropped.push(clone(droppedNotification));
       }
     }
     return {
@@ -124,7 +170,13 @@ export function createBackgroundTaskNotificationRuntime({
 
   function claim({ operationId = null, sessionId = null, workspace = null, limit = 4 } = {}) {
     const claimed = [];
-    const max = Math.max(1, Math.min(8, Number(limit) || 4));
+    // A claimed notification remains in memory until the model persists and
+    // acknowledges it. Bound that in-flight set as well as pending/overflowed
+    // so a stalled model boundary cannot turn repeated claims into an
+    // unbounded notification queue.
+    const available = Math.max(0, inFlightLimit - inFlight.size);
+    if (available === 0) return claimed;
+    const max = Math.min(available, Math.max(1, Math.min(8, Number(limit) || 4)));
     const expectedOperationId = text(operationId, 180);
     const matchesOperation = (notification) => {
       // Legacy notifications without an operation binding stay pending when
@@ -159,7 +211,7 @@ export function createBackgroundTaskNotificationRuntime({
     const notification = inFlight.get(key);
     if (!notification) return delivered.has(key);
     inFlight.delete(key);
-    delivered.add(key);
+    rememberDelivered(key);
     return true;
   }
 
@@ -167,8 +219,8 @@ export function createBackgroundTaskNotificationRuntime({
     const key = text(id, 240);
     const notification = key ? inFlight.get(key) : null;
     if (!notification) return false;
+    if (!enqueuePending(notification)) return false;
     inFlight.delete(key);
-    pending.set(key, notification);
     return true;
   }
 
@@ -176,7 +228,7 @@ export function createBackgroundTaskNotificationRuntime({
     for (const entry of Array.isArray(entries) ? entries : []) {
       const id = text(entry?.backgroundTaskNotification?.notificationId ?? entry?.notificationId, 240);
       if (!id) continue;
-      delivered.add(id);
+      rememberDelivered(id);
       pending.delete(id);
       inFlight.delete(id);
       overflowed.delete(id);

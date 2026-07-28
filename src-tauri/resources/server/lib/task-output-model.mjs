@@ -103,7 +103,13 @@ export function projectTaskOutput({ task = {}, window = {}, reference = null, si
     finiteInteger(window.totalBytes, finiteInteger(task.outputBytes, finiteInteger(task.byteLength, Buffer.byteLength(raw, "utf8")))) ?? 0,
   );
   const offsetBytes = Math.max(0, finiteInteger(window.offsetBytes, sinceOffset ?? 0) ?? 0);
-  const nextOffsetBytes = Math.max(offsetBytes, finiteInteger(window.nextOffsetBytes, offsetBytes + Buffer.byteLength(raw, "utf8")) ?? offsetBytes);
+  // The cursor describes the persisted source stream, while `raw` is a
+  // redacted model-facing projection. Redaction can change UTF-8 byte length
+  // (for example, replacing emoji secrets with ASCII markers), so never
+  // derive a source cursor from the projected text when the store did not
+  // provide one explicitly.
+  const sourceBytes = Buffer.byteLength(rawSource, "utf8");
+  const nextOffsetBytes = Math.max(offsetBytes, finiteInteger(window.nextOffsetBytes, offsetBytes + sourceBytes) ?? offsetBytes);
   const lineTrimmed = sinceOffset === null && output !== raw;
   const outputTruncated = task.outputTruncated === true || lineTrimmed || (sinceOffset === null && offsetBytes > 0);
   const result = {
