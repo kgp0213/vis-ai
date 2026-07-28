@@ -140,7 +140,22 @@ test("bounds claimed notifications until the model acknowledges them", () => {
   assert.equal(claimed.taskId, "bg-in-flight-1");
 
   runtime.enqueue({ taskId: "bg-in-flight-2", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  const [second] = runtime.claim({ sessionId: "s", workspace: "C:/w" });
+  assert.equal(second.taskId, "bg-in-flight-2");
+  runtime.enqueue({ taskId: "bg-in-flight-3", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
   assert.deepEqual(runtime.claim({ sessionId: "s", workspace: "C:/w" }), []);
-  assert.equal(runtime.snapshot().inFlight.length, 1);
+  assert.equal(runtime.snapshot().inFlight.length, 2);
   assert.equal(runtime.snapshot().pending.length + runtime.snapshot().overflowedCount <= 2, true);
+});
+
+test("bounds acknowledged notification ids used for in-process deduplication", () => {
+  const runtime = createBackgroundTaskNotificationRuntime({ maxPending: 1 });
+  for (let index = 1; index <= 8; index += 1) {
+    const taskId = `bg-delivered-${index}`;
+    runtime.enqueue({ taskId, running: false, exitCode: 0 }, { sessionId: "s", workspace: "C:/w" });
+    const [notification] = runtime.claim({ sessionId: "s", workspace: "C:/w" });
+    runtime.acknowledge(notification.notificationId);
+  }
+
+  assert.equal(runtime.snapshot().delivered.length <= 4, true);
 });
