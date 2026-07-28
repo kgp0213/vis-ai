@@ -242,6 +242,32 @@ export function createPlanRuntime({
     try { return persist(); } catch { return false; }
   }
 
+  function bindActivePlanIdentity({ requestId = null, planId = null } = {}) {
+    ensureSession();
+    if (!active) return false;
+    const nextRequestId = text(requestId);
+    const nextPlanId = text(planId);
+    if (nextRequestId) active.requestId = nextRequestId;
+    if (nextPlanId) active.planId = nextPlanId;
+    try {
+      return persist();
+    } catch {
+      return false;
+    }
+  }
+
+  function hasActiveStep(stepId) {
+    ensureSession();
+    const id = text(stepId);
+    return Boolean(active?.steps?.some((step) => step.id === id));
+  }
+
+  function belongsToRequest(requestId) {
+    ensureSession();
+    const id = text(requestId);
+    return Boolean(id && active?.requestId && active.requestId === id);
+  }
+
   function reset() {
     boundSession = null;
     pending = null;
@@ -269,6 +295,9 @@ export function createPlanRuntime({
     markStepDone,
     setRevision,
     acceptRevision,
+    bindActivePlanIdentity,
+    hasActiveStep,
+    belongsToRequest,
     reset,
     cancel,
     snapshot,

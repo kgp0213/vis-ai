@@ -133,11 +133,16 @@ var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx"
 function captureChatScrollAnchor(feed) {
   if (!feed) return null;
   const feedTop = feed.getBoundingClientRect().top;
-  const nodes = feed.querySelectorAll(".chat-msg[data-msg-id]");
+  const nodes = feed.querySelectorAll(".chat-msg[data-msg-id], .process-card[data-process-anchor-id]");
   for (const node of nodes) {
     const rect = node.getBoundingClientRect();
     if (rect.bottom >= feedTop) {
-      return { id: node.dataset.msgId, offset: rect.top - feedTop };
+      const isProcess = Boolean(node.dataset.processAnchorId);
+      return {
+        kind: isProcess ? "process" : "message",
+        id: isProcess ? node.dataset.processAnchorId : node.dataset.msgId,
+        offset: rect.top - feedTop,
+      };
     }
   }
   return { id: null, scrollHeight: feed.scrollHeight, scrollTop: feed.scrollTop };
@@ -147,7 +152,8 @@ function restoreChatScrollAnchor(feed, anchor, done) {
     try {
       if (!feed || !anchor) return;
       if (anchor.id) {
-        const node = Array.from(feed.querySelectorAll(".chat-msg[data-msg-id]")).find((item) => item.dataset.msgId === anchor.id);
+        const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
+        const node = Array.from(feed.querySelectorAll(selector)).find((item) => anchor.kind === "process" ? item.dataset.processAnchorId === anchor.id : item.dataset.msgId === anchor.id);
         if (node) {
           const feedTop = feed.getBoundingClientRect().top;
           feed.scrollTop += node.getBoundingClientRect().top - feedTop - anchor.offset;
@@ -1591,23 +1597,50 @@ const [providerCaps, setProviderCaps] = d2(null);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const autoScrollInFlight = A2(false);
+  const autoScrollTokenRef = A2(0);
+  const autoScrollFrameRef = A2(null);
   const lastScrollTopRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
-  const topLoadArmedRef = A2(true);
+  const topLoadIntentRef = A2(false);
+  // 只有用户先离开顶部后才允许触发历史加载；初始化时 scrollTop=0
+  // 不是用户滚动意图，不能因此把隐藏窗口一次性全部展开。
+  const topLoadArmedRef = A2(false);
   const loadEarlierMessagesRef = A2(null);
   const [hasNewBelow, setHasNewBelow] = d2(false);
   const [feedMenu, setFeedMenu] = d2(null);
+  const cancelAutoScroll = q2(() => {
+    autoScrollTokenRef.current += 1;
+    if (autoScrollFrameRef.current !== null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+    shouldAutoScroll.current = false;
+    autoScrollInFlight.current = false;
+    if (feedRef.current) lastScrollTopRef.current = feedRef.current.scrollTop;
+  }, []);
   const pinFeedToBottom = q2(() => {
     if (!shouldAutoScroll.current) return;
     const el = feedRef.current;
     if (!el) return;
+    const token = autoScrollTokenRef.current + 1;
+    autoScrollTokenRef.current = token;
+    if (autoScrollFrameRef.current !== null) cancelAnimationFrame(autoScrollFrameRef.current);
     autoScrollInFlight.current = true;
-    el.scrollTop = el.scrollHeight;
-    requestAnimationFrame(() => {
+    const applyScroll = () => {
+      if (token !== autoScrollTokenRef.current || !shouldAutoScroll.current) {
+        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
+        return false;
+      }
       el.scrollTop = el.scrollHeight;
+      return true;
+    };
+    if (!applyScroll()) return;
+    autoScrollFrameRef.current = requestAnimationFrame(() => {
+      autoScrollFrameRef.current = null;
+      if (!applyScroll()) return;
       setTimeout(() => {
-        autoScrollInFlight.current = false;
+        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
       }, 0);
     });
   }, []);
@@ -1655,7 +1688,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (index >= 0) setVisibleMessageCount((count) => Math.max(count, messages.length - index));
       return;
     }
-    shouldAutoScroll.current = false;
+    cancelAutoScroll();
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
     setJumpMessageId(null);
@@ -1669,7 +1702,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
     return () => clearTimeout(id);
-  }, [jumpMessageId, messages, streaming, visibleMessageCount]);
+  }, [cancelAutoScroll, jumpMessageId, messages, streaming, visibleMessageCount]);
   y2(() => {
     let cancelled = false;
     if (streaming) return () => {
@@ -2028,7 +2061,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         setTodos([]);
         setPlanContinuation(null);
         setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-        topLoadArmedRef.current = true;
+        topLoadArmedRef.current = false;
+        topLoadIntentRef.current = false;
         return;
       }
       if (dash.kind === "config-changed") {
@@ -2767,7 +2801,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = true;
+      topLoadArmedRef.current = false;
+      topLoadIntentRef.current = false;
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -2828,7 +2863,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = true;
+      topLoadArmedRef.current = false;
+      topLoadIntentRef.current = false;
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -3211,38 +3247,76 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (bootError) return;
     const el = feedRef.current;
     if (!el) return;
+    // ChatFeed can be temporarily unmounted by the background workbench.
+    // Re-arm scroll listeners against the new element without carrying a
+    // previous element's scroll position or top-load intent across it.
+    topLoadArmedRef.current = false;
+    topLoadIntentRef.current = false;
+    scrollbarDraggingRef.current = false;
+    lastScrollTopRef.current = el.scrollTop;
     const maybeLoadEarlier = () => {
       if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
       topLoadArmedRef.current = false;
+      topLoadIntentRef.current = false;
       void loadEarlierMessagesRef.current?.();
     };
     const onScroll = () => {
-      if (autoScrollInFlight.current) {
-        lastScrollTopRef.current = el.scrollTop;
-        return;
-      }
       const currentTop = el.scrollTop;
-      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+      // 用户主动上滚一定表现为 scrollTop 变小；程序钉底只会让它变大。
+      // 因此即便正处于程序钉底（autoScrollInFlight），只要检测到上滚，
+      // 也必须视为用户意图并解除钉底——否则流式期间 autoScrollInFlight 几乎
+      // 恒为 true，会把用户的上滚事件吞掉，导致"滚上去又弹下来"。
       const scrollingUp = currentTop < lastScrollTopRef.current - 1;
       if (scrollingUp) {
-        shouldAutoScroll.current = false;
-      } else if (distFromBottom < 80) {
+        if (topLoadIntentRef.current) {
+          topLoadArmedRef.current = true;
+          topLoadIntentRef.current = false;
+        }
+        cancelAutoScroll();
+        lastScrollTopRef.current = currentTop;
+        maybeLoadEarlier();
+        return;
+      }
+      if (autoScrollInFlight.current) {
+        lastScrollTopRef.current = currentTop;
+        return;
+      }
+      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+      if (distFromBottom < 80) {
         shouldAutoScroll.current = true;
       }
       lastScrollTopRef.current = currentTop;
-      if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD * 2) topLoadArmedRef.current = true;
       maybeLoadEarlier();
+    };
+    const onWheel = (event) => {
+      if (Number(event.deltaY) < 0) {
+        topLoadIntentRef.current = true;
+        cancelAutoScroll();
+        // At the exact top a wheel gesture may not emit a scroll event. The
+        // wheel itself is still an explicit user request for earlier history.
+        if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD && !scrollbarDraggingRef.current) {
+          topLoadArmedRef.current = true;
+          topLoadIntentRef.current = false;
+          maybeLoadEarlier();
+        }
+      }
     };
     const onPointerDown = (event) => {
       const rect = el.getBoundingClientRect();
       const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
       if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
         scrollbarDraggingRef.current = true;
+        topLoadIntentRef.current = true;
+        cancelAutoScroll();
       }
     };
     const onPointerUp = () => {
       if (!scrollbarDraggingRef.current) return;
       scrollbarDraggingRef.current = false;
+      if (topLoadIntentRef.current) {
+        topLoadArmedRef.current = true;
+        topLoadIntentRef.current = false;
+      }
       maybeLoadEarlier();
     };
     const onContextMenu = (event) => {
@@ -3253,18 +3327,20 @@ const [providerCaps, setProviderCaps] = d2(null);
       });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("pointerdown", onPointerDown, { passive: true });
     el.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [bootError]);
+  }, [bootError, cancelAutoScroll, showBackgroundJobs]);
   y2(() => {
     if (!shouldAutoScroll.current) {
       if (messages.length > 0) setHasNewBelow(true);
@@ -4187,6 +4263,7 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
                     searchHitIds=${hitIds.length > 0 ? hitIds : null}
                     followedByAnswer=${followedByAnswer}
                     processDisplay=${processDisplay}
+                    groupId=${unit.id}
                   />`;
     }
   )}

@@ -229,7 +229,7 @@ function toolRowsFromItems(items) {
     };
   });
 }
-function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false, processDisplay = "standard" }) {
+function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false, processDisplay = "standard", groupId = null }) {
   useLang();
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
@@ -301,6 +301,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       open=${openAttr}
       maxDetailLines=${TOOL_ROW_DETAIL_TAIL_LINES}
       ariaLabel=${t4("chat.toolUsedCount", { count: items.length })}
+      anchorId=${groupId}
       collapsible=${!compact}
     />
   `;

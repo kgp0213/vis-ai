@@ -12,6 +12,21 @@ function frameValue(value: any): string {
   return String(value ?? "").trim();
 }
 
+function toolCallValue(message: any): string {
+  return frameValue(message?.toolCallId ?? message?.tool_call_id ?? message?.id);
+}
+
+function stableGroupId(key: string, items: any[]): string {
+  if (!key.startsWith("legacy:")) return `tg-${key}`;
+  // A paginated legacy group may gain items at its beginning. Anchor it to
+  // the tail call, which remains present across that prepend, instead of the
+  // first visible item whose identity changes when history is loaded. Current
+  // events carry turn/step IDs and use the branch above, so live appends keep
+  // their group identity as well.
+  const tailCallId = toolCallValue(items.at(-1)?.msg);
+  return `tg-${tailCallId || key}`;
+}
+
 export function toolFrameMatches(left: any, right: any): boolean {
   const leftId = frameValue(left?.id);
   const rightId = frameValue(right?.id);
@@ -43,7 +58,7 @@ export function groupToolMessages(messages: any[] = []) {
     }
     const hasTurn = Boolean(String(msg.turnId ?? "").trim());
     const hasStep = Boolean(String(msg.stepId ?? "").trim());
-    const toolCallId = String(msg.toolCallId ?? msg.tool_call_id ?? msg.id ?? "").trim();
+    const toolCallId = toolCallValue(msg);
     const key = hasTurn || hasStep
       ? `identified:${String(msg.turnId ?? "legacy")}::${String(msg.stepId ?? `tool:${toolCallId || index}`)}`
       : (fallbackGroupKey ?? `legacy:${fallbackSequence + 1}`);
@@ -68,14 +83,17 @@ export function groupToolMessages(messages: any[] = []) {
       } else {
         previous.items.push({ msg, index });
       }
+      previous.id = stableGroupId(previous.key, previous.items);
       continue;
     }
-    units.push({
+    const group = {
       kind: "toolGroup",
-      id: `tg-${String(msg.turnId ?? "legacy")}-${String(msg.stepId ?? fallbackSequence)}-${toolCallId || index}`,
+      id: "",
       key,
       items: [{ msg, index }],
-    });
+    };
+    group.id = stableGroupId(group.key, group.items);
+    units.push(group);
   }
   return units;
 }

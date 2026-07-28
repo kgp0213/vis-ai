@@ -62,6 +62,32 @@ test("legacy contiguous tools remain compatible without crossing messages", asyn
   assert.deepEqual(units.filter((unit) => unit.kind === "toolGroup").map((unit) => unit.items.length), [2, 1]);
 });
 
+test("legacy group identity stays stable when history prepends its earlier tools", async () => {
+  const { groupToolMessages } = await loadGrouping();
+  const partial = groupToolMessages([
+    { role: "tool", id: "call-b", toolCallId: "call-b" },
+    { role: "tool", id: "call-c", toolCallId: "call-c" },
+  ]);
+  const complete = groupToolMessages([
+    { role: "tool", id: "call-a", toolCallId: "call-a" },
+    { role: "tool", id: "call-b", toolCallId: "call-b" },
+    { role: "tool", id: "call-c", toolCallId: "call-c" },
+  ]);
+  assert.equal(partial[0].id, complete[0].id);
+});
+
+test("identified group identity stays stable when a live tool is appended", async () => {
+  const { groupToolMessages } = await loadGrouping();
+  const first = groupToolMessages([
+    { role: "tool", toolCallId: "call-a", turnId: "turn-1", stepId: "step-1" },
+  ]);
+  const appended = groupToolMessages([
+    { role: "tool", toolCallId: "call-a", turnId: "turn-1", stepId: "step-1" },
+    { role: "tool", toolCallId: "call-b", turnId: "turn-1", stepId: "step-1" },
+  ]);
+  assert.equal(first[0].id, appended[0].id);
+});
+
 test("tool frame identity isolates a reused provider call id across turns", async () => {
   const { toolFrameMatches } = await loadGrouping();
   const first = { id: "assistant-1-tool-call-1", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" };

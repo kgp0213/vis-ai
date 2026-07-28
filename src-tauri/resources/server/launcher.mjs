@@ -5605,7 +5605,7 @@ function approvedActivePlanSnapshot() {
 
 function activePlanBelongsToRequest(requestId) {
   const current = String(requestId || "").trim();
-  return Boolean(current && activePlanSteps && activePlanRequestId === current);
+  return Boolean(current && planRuntime?.belongsToRequest?.(current));
 }
 
 function isExplicitPlanResumeRequest(text) {
@@ -5657,7 +5657,7 @@ function markStepDone(stepId, evidenceRefs = [], { source = "manual" } = {}) {
 
 function completeActivePlanStep(stepId) {
   hydrateActivePlanFromDisk();
-  if (!activePlanSteps || !activeCompletedIds) {
+  if (!activePlanSteps || !activeCompletedIds || !planRuntime?.hasActiveStep?.(stepId)) {
     return { ok: false, error: "no active plan" };
   }
   if (!activePlanSteps.some((step) => step.id === stepId)) {
@@ -11094,8 +11094,14 @@ ${modeList}
 
       hydrateActivePlanFromDisk();
       if (activePlanSteps && isExplicitPlanResumeRequest(text)) {
-        activePlanRequestId = activeTurnRequestId;
-        activePlanId ||= randomUUID();
+        const resumeRequestId = activeTurnRequestId;
+        const resumePlanId = activePlanId || randomUUID();
+        if (planRuntime?.bindActivePlanIdentity?.({ requestId: resumeRequestId, planId: resumePlanId }) !== true) {
+          const reason = "当前计划身份绑定失败，无法安全恢复。";
+          try { rememberFailedPromptRequest(requestId, reason); } catch {}
+          return { accepted: false, requestId: requestId || null, reason };
+        }
+        syncPlanRefsFromRuntime(planRuntime.snapshot());
         if (!persistActivePlan()) {
           const reason = "无法把当前请求绑定到待恢复计划，任务未启动。";
           try { rememberFailedPromptRequest(requestId, reason); } catch {}

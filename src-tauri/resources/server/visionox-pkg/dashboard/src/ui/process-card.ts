@@ -45,6 +45,7 @@ type ProcessCardProps = {
   defaultOpen?: boolean;                // 非受控时的初始展开
   maxDetailLines?: number;              // active 行 detail 最多渲染行数
   ariaLabel?: string;
+  anchorId?: string | null;              // 分页恢复时定位过程卡片
   collapsible?: boolean;                // false 时渲染为纯单行卡（无 chevron、不可展开）
 };
 
@@ -92,6 +93,7 @@ export function ProcessCard({
   defaultOpen = false,
   maxDetailLines = DEFAULT_DETAIL_LINES,
   ariaLabel,
+  anchorId = null,
   collapsible = true,
 }: ProcessCardProps) {
   const openAttr = open !== void 0 ? open : defaultOpen || void 0;
@@ -103,13 +105,13 @@ export function ProcessCard({
   // 不可折叠（简洁档）：纯单行卡，无 chevron、无 details 开合。
   if (!collapsible) {
     return html`
-      <div class=${`process-card process-card-${state} process-card-static ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-legacy-selector="details.tool-log">
+      <div class=${`process-card process-card-${state} process-card-static ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-process-anchor-id=${anchorId || void 0} data-legacy-selector="details.tool-log">
         <div class="process-card-summary">${head}</div>
       </div>
     `;
   }
   return html`
-    <div class=${`process-card process-card-${state} ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel}>
+    <div class=${`process-card process-card-${state} ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-process-anchor-id=${anchorId || void 0}>
       <details class="process-card-details" data-legacy-selector="details.tool-log" open=${openAttr}>
         <summary class="process-card-summary">
           ${head}

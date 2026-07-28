@@ -2766,6 +2766,11 @@ textarea {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 禁用浏览器原生滚动锚定：滚动位置由 capture/restoreChatScrollAnchor
+     与 shouldAutoScroll/MutationObserver 钉底精确管理。原生锚定会在顶部分页
+     prepend 早期消息时额外把视口内容"吸"回，与手写锚定叠加造成滚轮上不去、
+     拖滚动条弹回。 */
+  overflow-anchor: none;
   scrollbar-gutter: stable;
   padding: var(--space-3);
   display: flex;
@@ -3677,7 +3682,9 @@ div.tool-log-row {
 }
 
 .chat-msg.message-streaming {
-  overflow-anchor: auto;
+  /* 容器 .chat-feed 已 overflow-anchor:none，此处显式跟随，避免该子元素
+     被选为原生锚点与手写锚定叠加。 */
+  overflow-anchor: none;
 }
 
 .tool-progress-status {

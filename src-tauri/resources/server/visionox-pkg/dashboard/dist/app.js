@@ -21574,6 +21574,7 @@ function ProcessCard({
   defaultOpen = false,
   maxDetailLines = DEFAULT_DETAIL_LINES,
   ariaLabel,
+  anchorId = null,
   collapsible = true
 }) {
   const openAttr = open !== void 0 ? open : defaultOpen || void 0;
@@ -21584,13 +21585,13 @@ function ProcessCard({
   `;
   if (!collapsible) {
     return html4`
-      <div class=${`process-card process-card-${state} process-card-static ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-legacy-selector="details.tool-log">
+      <div class=${`process-card process-card-${state} process-card-static ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-process-anchor-id=${anchorId || void 0} data-legacy-selector="details.tool-log">
         <div class="process-card-summary">${head}</div>
       </div>
     `;
   }
   return html4`
-    <div class=${`process-card process-card-${state} ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel}>
+    <div class=${`process-card process-card-${state} ${state === "running" ? "tool-log-running" : ""}`} role="group" aria-label=${ariaLabel} data-process-anchor-id=${anchorId || void 0}>
       <details class="process-card-details" data-legacy-selector="details.tool-log" open=${openAttr}>
         <summary class="process-card-summary">
           ${head}
@@ -21613,6 +21614,14 @@ function toolGroupAttention(messages = []) {
 }
 function frameValue(value) {
   return String(value ?? "").trim();
+}
+function toolCallValue(message) {
+  return frameValue(message?.toolCallId ?? message?.tool_call_id ?? message?.id);
+}
+function stableGroupId(key, items) {
+  if (!key.startsWith("legacy:")) return `tg-${key}`;
+  const tailCallId = toolCallValue(items.at(-1)?.msg);
+  return `tg-${tailCallId || key}`;
 }
 function toolFrameMatches(left, right) {
   const leftId = frameValue(left?.id);
@@ -21642,7 +21651,7 @@ function groupToolMessages(messages = []) {
     }
     const hasTurn = Boolean(String(msg.turnId ?? "").trim());
     const hasStep = Boolean(String(msg.stepId ?? "").trim());
-    const toolCallId = String(msg.toolCallId ?? msg.tool_call_id ?? msg.id ?? "").trim();
+    const toolCallId = toolCallValue(msg);
     const key = hasTurn || hasStep ? `identified:${String(msg.turnId ?? "legacy")}::${String(msg.stepId ?? `tool:${toolCallId || index}`)}` : fallbackGroupKey ?? `legacy:${fallbackSequence + 1}`;
     if (!hasTurn && !hasStep && !fallbackGroupKey) {
       fallbackSequence += 1;
@@ -21663,14 +21672,17 @@ function groupToolMessages(messages = []) {
       } else {
         previous.items.push({ msg, index });
       }
+      previous.id = stableGroupId(previous.key, previous.items);
       continue;
     }
-    units.push({
+    const group = {
       kind: "toolGroup",
-      id: `tg-${String(msg.turnId ?? "legacy")}-${String(msg.stepId ?? fallbackSequence)}-${toolCallId || index}`,
+      id: "",
       key,
       items: [{ msg, index }]
-    });
+    };
+    group.id = stableGroupId(group.key, group.items);
+    units.push(group);
   }
   return units;
 }
@@ -22457,7 +22469,7 @@ function toolRowsFromItems(items) {
     };
   });
 }
-function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false, processDisplay = "standard" }) {
+function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByAnswer = false, processDisplay = "standard", groupId = null }) {
   useLang();
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
@@ -22515,6 +22527,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       open=${openAttr}
       maxDetailLines=${TOOL_ROW_DETAIL_TAIL_LINES}
       ariaLabel=${t4("chat.toolUsedCount", { count: items.length })}
+      anchorId=${groupId}
       collapsible=${!compact}
     />
   `;
@@ -23928,11 +23941,16 @@ var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx"
 function captureChatScrollAnchor(feed) {
   if (!feed) return null;
   const feedTop = feed.getBoundingClientRect().top;
-  const nodes = feed.querySelectorAll(".chat-msg[data-msg-id]");
+  const nodes = feed.querySelectorAll(".chat-msg[data-msg-id], .process-card[data-process-anchor-id]");
   for (const node of nodes) {
     const rect = node.getBoundingClientRect();
     if (rect.bottom >= feedTop) {
-      return { id: node.dataset.msgId, offset: rect.top - feedTop };
+      const isProcess = Boolean(node.dataset.processAnchorId);
+      return {
+        kind: isProcess ? "process" : "message",
+        id: isProcess ? node.dataset.processAnchorId : node.dataset.msgId,
+        offset: rect.top - feedTop
+      };
     }
   }
   return { id: null, scrollHeight: feed.scrollHeight, scrollTop: feed.scrollTop };
@@ -23942,7 +23960,8 @@ function restoreChatScrollAnchor(feed, anchor, done) {
     try {
       if (!feed || !anchor) return;
       if (anchor.id) {
-        const node = Array.from(feed.querySelectorAll(".chat-msg[data-msg-id]")).find((item) => item.dataset.msgId === anchor.id);
+        const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
+        const node = Array.from(feed.querySelectorAll(selector)).find((item) => anchor.kind === "process" ? item.dataset.processAnchorId === anchor.id : item.dataset.msgId === anchor.id);
         if (node) {
           const feedTop = feed.getBoundingClientRect().top;
           feed.scrollTop += node.getBoundingClientRect().top - feedTop - anchor.offset;
@@ -25371,23 +25390,48 @@ ${workspaceDir || ""}`;
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const autoScrollInFlight = A2(false);
+  const autoScrollTokenRef = A2(0);
+  const autoScrollFrameRef = A2(null);
   const lastScrollTopRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
-  const topLoadArmedRef = A2(true);
+  const topLoadIntentRef = A2(false);
+  const topLoadArmedRef = A2(false);
   const loadEarlierMessagesRef = A2(null);
   const [hasNewBelow, setHasNewBelow] = d2(false);
   const [feedMenu, setFeedMenu] = d2(null);
+  const cancelAutoScroll = q2(() => {
+    autoScrollTokenRef.current += 1;
+    if (autoScrollFrameRef.current !== null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+    shouldAutoScroll.current = false;
+    autoScrollInFlight.current = false;
+    if (feedRef.current) lastScrollTopRef.current = feedRef.current.scrollTop;
+  }, []);
   const pinFeedToBottom = q2(() => {
     if (!shouldAutoScroll.current) return;
     const el = feedRef.current;
     if (!el) return;
+    const token = autoScrollTokenRef.current + 1;
+    autoScrollTokenRef.current = token;
+    if (autoScrollFrameRef.current !== null) cancelAnimationFrame(autoScrollFrameRef.current);
     autoScrollInFlight.current = true;
-    el.scrollTop = el.scrollHeight;
-    requestAnimationFrame(() => {
+    const applyScroll = () => {
+      if (token !== autoScrollTokenRef.current || !shouldAutoScroll.current) {
+        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
+        return false;
+      }
       el.scrollTop = el.scrollHeight;
+      return true;
+    };
+    if (!applyScroll()) return;
+    autoScrollFrameRef.current = requestAnimationFrame(() => {
+      autoScrollFrameRef.current = null;
+      if (!applyScroll()) return;
       setTimeout(() => {
-        autoScrollInFlight.current = false;
+        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
       }, 0);
     });
   }, []);
@@ -25435,7 +25479,7 @@ ${workspaceDir || ""}`;
       if (index >= 0) setVisibleMessageCount((count) => Math.max(count, messages.length - index));
       return;
     }
-    shouldAutoScroll.current = false;
+    cancelAutoScroll();
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
     setJumpMessageId(null);
@@ -25449,7 +25493,7 @@ ${workspaceDir || ""}`;
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
     return () => clearTimeout(id);
-  }, [jumpMessageId, messages, streaming, visibleMessageCount]);
+  }, [cancelAutoScroll, jumpMessageId, messages, streaming, visibleMessageCount]);
   y2(() => {
     let cancelled = false;
     if (streaming) return () => {
@@ -25807,7 +25851,8 @@ ${workspaceDir || ""}`;
         setTodos([]);
         setPlanContinuation(null);
         setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-        topLoadArmedRef.current = true;
+        topLoadArmedRef.current = false;
+        topLoadIntentRef.current = false;
         return;
       }
       if (dash.kind === "config-changed") {
@@ -26545,7 +26590,8 @@ ${workspaceDir || ""}`;
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = true;
+      topLoadArmedRef.current = false;
+      topLoadIntentRef.current = false;
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -26606,7 +26652,8 @@ ${workspaceDir || ""}`;
       setMessages([]);
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = true;
+      topLoadArmedRef.current = false;
+      topLoadIntentRef.current = false;
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -27012,38 +27059,67 @@ ${workspaceDir || ""}`;
     if (bootError) return;
     const el = feedRef.current;
     if (!el) return;
+    topLoadArmedRef.current = false;
+    topLoadIntentRef.current = false;
+    scrollbarDraggingRef.current = false;
+    lastScrollTopRef.current = el.scrollTop;
     const maybeLoadEarlier = () => {
       if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
       topLoadArmedRef.current = false;
+      topLoadIntentRef.current = false;
       void loadEarlierMessagesRef.current?.();
     };
     const onScroll = () => {
-      if (autoScrollInFlight.current) {
-        lastScrollTopRef.current = el.scrollTop;
-        return;
-      }
       const currentTop = el.scrollTop;
-      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
       const scrollingUp = currentTop < lastScrollTopRef.current - 1;
       if (scrollingUp) {
-        shouldAutoScroll.current = false;
-      } else if (distFromBottom < 80) {
+        if (topLoadIntentRef.current) {
+          topLoadArmedRef.current = true;
+          topLoadIntentRef.current = false;
+        }
+        cancelAutoScroll();
+        lastScrollTopRef.current = currentTop;
+        maybeLoadEarlier();
+        return;
+      }
+      if (autoScrollInFlight.current) {
+        lastScrollTopRef.current = currentTop;
+        return;
+      }
+      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+      if (distFromBottom < 80) {
         shouldAutoScroll.current = true;
       }
       lastScrollTopRef.current = currentTop;
-      if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD * 2) topLoadArmedRef.current = true;
       maybeLoadEarlier();
+    };
+    const onWheel = (event) => {
+      if (Number(event.deltaY) < 0) {
+        topLoadIntentRef.current = true;
+        cancelAutoScroll();
+        if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD && !scrollbarDraggingRef.current) {
+          topLoadArmedRef.current = true;
+          topLoadIntentRef.current = false;
+          maybeLoadEarlier();
+        }
+      }
     };
     const onPointerDown = (event) => {
       const rect = el.getBoundingClientRect();
       const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
       if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
         scrollbarDraggingRef.current = true;
+        topLoadIntentRef.current = true;
+        cancelAutoScroll();
       }
     };
     const onPointerUp = () => {
       if (!scrollbarDraggingRef.current) return;
       scrollbarDraggingRef.current = false;
+      if (topLoadIntentRef.current) {
+        topLoadArmedRef.current = true;
+        topLoadIntentRef.current = false;
+      }
       maybeLoadEarlier();
     };
     const onContextMenu = (event) => {
@@ -27054,18 +27130,20 @@ ${workspaceDir || ""}`;
       });
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("pointerdown", onPointerDown, { passive: true });
     el.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [bootError]);
+  }, [bootError, cancelAutoScroll, showBackgroundJobs]);
   y2(() => {
     if (!shouldAutoScroll.current) {
       if (messages.length > 0) setHasNewBelow(true);
@@ -28104,6 +28182,7 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
                     searchHitIds=${hitIds.length > 0 ? hitIds : null}
                     followedByAnswer=${followedByAnswer}
                     processDisplay=${processDisplay}
+                    groupId=${unit.id}
                   />`;
     }
   )}

@@ -82,6 +82,22 @@ test("model step completion requires evidence and archives only after every requ
   assert.equal(harness.goals[0].status, "completed");
 });
 
+test("plan runtime owns active identity and step membership checks", () => {
+  const harness = createHarness();
+  harness.runtime.setPending({
+    planId: "plan-1",
+    requestId: "request-1",
+    steps: [{ id: "step-1", title: "Read", action: "read" }],
+  });
+  assert.equal(harness.runtime.activatePending(), true);
+  assert.equal(harness.runtime.belongsToRequest("request-1"), true);
+  assert.equal(harness.runtime.hasActiveStep("step-1"), true);
+  assert.equal(harness.runtime.bindActivePlanIdentity({ requestId: "request-2", planId: "plan-2" }), true);
+  assert.equal(harness.runtime.belongsToRequest("request-1"), false);
+  assert.equal(harness.runtime.belongsToRequest("request-2"), true);
+  assert.equal(harness.runtime.snapshot().planId, "plan-2");
+});
+
 test("plan runtime applies an accepted revision without losing completed steps", () => {
   const harness = createHarness();
   harness.runtime.setPending({ steps, summary: "Original", planId: "plan", requestId: "request" });
