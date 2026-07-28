@@ -124,3 +124,21 @@ test("redacts secrets from task commands and output projections", () => {
   assert.match(JSON.stringify(result), /REDACTED/u);
   assert.equal(result.nextOffsetBytes, 21);
 });
+
+test("uses source UTF-8 bytes for an incremental cursor when redaction changes byte length", () => {
+  const source = "password=😀😀😀😀😀😀😀😀😀😀\\n";
+  const result = projectTaskOutput({
+    task: { taskId: "bg-unicode-secret", status: "running", running: true },
+    window: {
+      content: source,
+      offsetBytes: 0,
+      totalBytes: Buffer.byteLength(source, "utf8"),
+    },
+    reference: "bg-unicode-secret",
+    since: 0,
+  });
+
+  assert.equal(result.nextOffsetBytes, Buffer.byteLength(source, "utf8"));
+  assert.equal(result.outputTruncated, false);
+  assert.equal(result.complete, true);
+});
