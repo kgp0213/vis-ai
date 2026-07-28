@@ -44,7 +44,11 @@ export interface DashboardBatcher {
 export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard {
   const eventIds = new Set<string>();
   const terminalTools = new Map<string, TerminalState>();
-  const terminalMessages = new Map<string, { fingerprint: string; eventEpoch: string | null; eventSeq: number | null; revision: string | null }>();
+  const terminalMessages = new Map<string, { fingerprint: string; eventEpoch: string | null; eventSeq: number | null; revision: string | null; authoritative: boolean; stateRank: number }>();
+  const finalStateRank = (event: any): number => {
+    const state = String(event?.executionState ?? event?.taskState ?? "").toLowerCase();
+    return ({ unknown: 1, incomplete: 2, failed: 3, cancelled: 3, completed_with_warnings: 4, completed: 5 } as Record<string, number>)[state] ?? 0;
+  };
 
   const assistantFinalFingerprint = (event: any): string => {
     try {
@@ -96,7 +100,7 @@ export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard
         if (TERMINAL_TOOL_STATES.has(status as TerminalState)) terminalTools.set(terminalToolKey, status as TerminalState);
       }
 
-      if (event.kind === "assistant_final" && event.id) {
+      if ((event.kind === "assistant_final" || event.kind === "turn_finalized") && event.id) {
         const id = String(event.id);
         const fingerprint = assistantFinalFingerprint(event);
         const previous = terminalMessages.get(id);
@@ -104,12 +108,24 @@ export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard
         const nextSeq = Number.isSafeInteger(Number(event.eventSeq)) ? Number(event.eventSeq) : null;
         const revision = event.revision ? String(event.revision) : null;
         const correction = event.correction === true || Boolean(revision);
+        const authoritative = event.kind === "turn_finalized";
         if (previous) {
           if (nextEpoch && previous.eventEpoch === nextEpoch && nextSeq !== null && previous.eventSeq !== null && nextSeq <= previous.eventSeq) return false;
-          if (!correction) return false;
+          // The legacy assistant_final is a display compatibility event and
+          // must not block the authoritative turn_finalized that follows it.
+          if (previous.authoritative && !authoritative) return false;
+          if (authoritative && previous.authoritative && finalStateRank(event) < previous.stateRank) return false;
+          if (!correction && previous.authoritative && authoritative) return false;
           if (revision && revision === previous.revision && fingerprint === previous.fingerprint) return false;
         }
-        terminalMessages.set(id, { fingerprint, eventEpoch: nextEpoch, eventSeq: nextSeq, revision });
+        terminalMessages.set(id, {
+          fingerprint,
+          eventEpoch: nextEpoch,
+          eventSeq: nextSeq,
+          revision,
+          authoritative: previous?.authoritative === true || authoritative,
+          stateRank: Math.max(previous?.stateRank ?? 0, finalStateRank(event)),
+        });
       }
       if (event.kind === "messages-reset") {
         terminalTools.clear();
@@ -249,6 +265,32 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       },
     };
     return { state, changed: true };
+  }
+  if (["assistant_content_final", "assistant_final", "turn_finalized"].includes(kind)) {
+    const messageId = String(event.messageId ?? event.id ?? "").trim();
+    if (!messageId) return { state, changed: false, anomaly: "final-missing-message" };
+    const previous = state.messages[messageId];
+    const next = {
+      ...(previous ?? { id: messageId, role: "assistant" }),
+      id: messageId,
+      role: "assistant",
+      ...(event.text !== undefined ? { text: String(event.text ?? "") } : {}),
+      ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
+      ...(event.operationId !== undefined ? { operationId: String(event.operationId) } : {}),
+      ...(kind === "turn_finalized" ? {
+        finalized: true,
+        taskState: event.taskState,
+        executionState: event.executionState,
+        goalState: event.goalState,
+        taskContract: event.taskContract,
+        evidenceRefs: event.evidenceRefs,
+        receipt: event.receipt,
+        warnings: Array.isArray(event.warnings) ? event.warnings : [],
+        artifactIncomplete: event.artifactIncomplete === true,
+      } : {}),
+    };
+    state.messages = { ...state.messages, [messageId]: next };
+    return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
   }
   if (kind === "todo-update") {
     const previousTodos = state.todos;

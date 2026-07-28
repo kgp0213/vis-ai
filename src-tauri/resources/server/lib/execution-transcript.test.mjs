@@ -193,6 +193,34 @@ test("projects no-text execution facts and completion state from the receipt", (
   assert.equal(snapshot.receipts[0].requestId, "req-empty");
 });
 
+test("restores task contract, split states and evidence from persisted execution facts", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "生成结果", operationId: "op-facts" },
+    {
+      role: "execution",
+      operationId: "op-facts",
+      turnId: "turn-facts",
+      executionState: "completed_with_warnings",
+      goalState: "verified",
+      taskContract: { contractVersion: 1, executionRequired: true, expectedOutputs: [{ id: "out-1" }] },
+      evidenceRefs: [{ evidenceId: "artifact-1", type: "artifact", verified: true }],
+      warnings: ["工具曾经失败，已恢复"],
+      receipt: {
+        executionState: "completed_with_warnings",
+        goalState: "verified",
+        taskContract: { contractVersion: 1, executionRequired: true },
+        evidenceRefs: [{ evidenceId: "artifact-1", type: "artifact", verified: true }],
+      },
+    },
+  ]);
+  const turn = snapshot.items[0];
+  assert.equal(turn.executionState, "completed_with_warnings");
+  assert.equal(turn.goalState, "verified");
+  assert.equal(turn.taskContract.expectedOutputs[0].id, "out-1");
+  assert.equal(turn.evidenceRefs[0].evidenceId, "artifact-1");
+  assert.deepEqual(turn.warnings, ["工具曾经失败，已恢复"]);
+});
+
 test("uses persisted turn ids as pagination cursors", () => {
   const snapshot = projectExecutionTranscript([
     { role: "user", content: "run" },

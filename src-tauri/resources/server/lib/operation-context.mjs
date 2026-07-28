@@ -5,6 +5,7 @@ const MAX_TOOL_FAILURES = 32;
 const MAX_RECOVERIES = 32;
 const MAX_FAILURE_FINGERPRINTS = 64;
 const MAX_AUTHORIZATION_FACTS = 32;
+const MAX_TOOL_SUCCESSES = 64;
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").trim().slice(0, limit);
@@ -54,6 +55,7 @@ export function createOperationContext({ operationId, kind, conversationId = nul
     runtimeBindings: {},
     runtimeEnvironments: [],
     toolFailures: [],
+    toolSuccesses: [],
     recoveries: [],
     toolRepeats: [],
     authorizationFacts: [],
@@ -61,6 +63,28 @@ export function createOperationContext({ operationId, kind, conversationId = nul
     artifactBaseline: [],
     receipt: null,
   };
+}
+
+export function recordOperationToolSuccessFact(context, {
+  toolCallId = null,
+  toolName = null,
+  args = null,
+  recordedAt = new Date().toISOString(),
+} = {}) {
+  if (!context || typeof context !== "object") return null;
+  const fact = {
+    toolCallId: boundedText(toolCallId, 180) || null,
+    toolName: boundedText(toolName, 120) || "tool",
+    argsFingerprint: argsFingerprint(args),
+    status: "succeeded",
+    recordedAt,
+  };
+  const duplicate = [...(Array.isArray(context.toolSuccesses) ? context.toolSuccesses : [])]
+    .reverse()
+    .find((item) => item.toolCallId && fact.toolCallId && item.toolCallId === fact.toolCallId);
+  if (duplicate) return duplicate;
+  context.toolSuccesses = [...(Array.isArray(context.toolSuccesses) ? context.toolSuccesses : []), fact].slice(-MAX_TOOL_SUCCESSES);
+  return fact;
 }
 
 export function recordOperationAuthorizationFact(context, fact = {}) {

@@ -138,9 +138,12 @@ const { loadSkillIntegrations, readRuntimeVersions, renderSkillScheduleTask, res
 const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-drafts.mjs");
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
 const { createSessionRunCoordinator } = await importEarly("./lib/session-run-coordinator.mjs");
+const { createTurnCoordinator } = await importEarly("./lib/turn-coordinator.mjs");
+const { createPlanRuntime } = await importEarly("./lib/plan-runtime.mjs");
+const { createFinalizationOrchestrator, evaluateTurnFinalization } = await importEarly("./lib/finalization-orchestrator.mjs");
 const { createContextEpochRuntime } = await importEarly("./lib/context-epoch.mjs");
 const { createFileEffectStore, createHostToolBroker } = await importEarly("./lib/host-tool-broker.mjs");
-const { recordOperationAuthorizationFact, recordOperationRecovery, recordOperationToolFailure, recordOperationToolSuccess, shouldBlockRepeatedToolFailure } = await importEarly("./lib/operation-context.mjs");
+const { recordOperationAuthorizationFact, recordOperationRecovery, recordOperationToolFailure, recordOperationToolSuccess, recordOperationToolSuccessFact, shouldBlockRepeatedToolFailure } = await importEarly("./lib/operation-context.mjs");
 const { createPermissionFactRuntime, permissionFactRequest } = await importEarly("./lib/permission-fact-runtime.mjs");
 const { createPermissionRuleRuntime, readPermissionRules } = await importEarly("./lib/permission-rule-runtime.mjs");
 const { planToolCallBatches } = await importEarly("./lib/parallel-tool-scheduler.mjs");
@@ -160,6 +163,8 @@ const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly(".
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, filterTemporaryArtifactEvidence, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
+const { createTaskContract } = await importEarly("./lib/task-contract.mjs");
+const { verifyGoalContract } = await importEarly("./lib/goal-verification-runtime.mjs");
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
@@ -333,6 +338,11 @@ const dashboardEventContext = new AsyncLocalStorage();
 // must never inject a result into a different conversation after /new or a
 // session switch.
 let activeConversationId = randomUUID();
+// Human-readable saved-session name. The conversation id remains the stable
+// runtime identity; Plan files use this name when a named session is active.
+// A literal default avoids referencing the later DESKTOP_SESSION_NAME const
+// during module initialization.
+let activeSessionName = "desktop";
 let activeTodos = [];
 let activeGoals = [];
 let activePromptEntities = [];
@@ -691,7 +701,8 @@ async function materializeAttachmentPreviews(attachments, context = {}) {
 }
 const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
-const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives } = createPlanStore(sessionsDir);
+const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives, migrateLegacyPlan } = createPlanStore(sessionsDir);
+let planRuntime = null;
 const skillsRoot = resolve(visionoxDataDir, "skills");
 const vhomeSkillDraftStore = createVHomeSkillDraftStore(resolve(visionoxDataDir, "vhome-skill-drafts.json"));
 const BOOTSTRAP_SKILLS_DISABLED_DIR = resolve(skillsRoot, ".disabled");
@@ -2494,6 +2505,18 @@ if (searchEnabled(configPath)) {
 }
 
 // Utility tools (not workspace-dependent)
+function currentPlanStepEvidence() {
+  const operation = operationRuntime?.getActive?.();
+  const facts = Array.isArray(operation?.context?.toolSuccesses) ? operation.context.toolSuccesses : [];
+  return facts.slice(-32).map((fact) => ({
+    evidenceId: fact.toolCallId || `tool-${fact.recordedAt}`,
+    type: "tool_read",
+    toolCallId: fact.toolCallId,
+    toolName: fact.toolName,
+    verified: fact.status === "succeeded",
+  }));
+}
+
 registerPlanTool(tools, {
   onPlanSubmitted: (plan, steps, summary) => {
     // Stash the plan in memory; it will be persisted on the first
@@ -2501,13 +2524,15 @@ registerPlanTool(tools, {
     // starts executing). If the user cancels, onStepCompleted is never
     // called so nothing hits disk — matching TUI behaviour.
     const structuredSteps = Array.isArray(steps) && steps.length > 0 ? steps : [];
-    pendingPlan = {
+    const planState = {
       steps: structuredSteps,
       summary,
       body: plan,
       planId: randomUUID(),
       requestId: activeTurnRequestId,
     };
+    planRuntime?.setPending(planState);
+    syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? planState);
   },
   onStepCompleted: (update) => {
     // Non-dashboard confirmation gates can approve plans without passing
@@ -2519,12 +2544,19 @@ registerPlanTool(tools, {
     if (!isKnownPlanStep(activePlanSteps, update?.stepId)) {
       throw new Error(`mark_step_complete: stepId "${update?.stepId ?? ""}" is not in the active plan.`);
     }
+    const evidenceRefs = Array.isArray(update?.evidenceRefs) && update.evidenceRefs.length > 0
+      ? update.evidenceRefs
+      : currentPlanStepEvidence();
+    if (evidenceRefs.length === 0) {
+      throw new Error("mark_step_complete: 宿主没有找到可验证的工具证据；请先完成并检查该步骤，再提交完成标记。");
+    }
+    update.evidenceRefs = evidenceRefs;
     const checkpointTotal = activePlanSteps?.length ?? 0;
     const completedIds = normalizeCompletedStepIds(activePlanSteps, [...(activeCompletedIds ?? [])]);
     const checkpointCompleted = completedIds.includes(update.stepId)
       ? completedIds.length
       : completedIds.length + 1;
-    if (update?.stepId && activeCompletedIds && !markStepDone(update.stepId)) {
+    if (update?.stepId && activeCompletedIds && !markStepDone(update.stepId, evidenceRefs, { source: "model" })) {
       throw new Error("mark_step_complete: plan progress could not be persisted; the step remains incomplete.");
     }
     // Notify dashboard that a step was completed (for live UI updates).
@@ -2542,6 +2574,7 @@ registerPlanTool(tools, {
   },
   onPlanRevisionProposed: (reason, remainingSteps, summary) => {
     pendingPlanRevision = { reason, remainingSteps, summary };
+    planRuntime?.setRevision(pendingPlanRevision);
   },
 });
 const markStepCompleteTool = tools.get("mark_step_complete");
@@ -5492,11 +5525,10 @@ let pendingPlanRevision = null;// committed only after the user accepts the revi
 
 /** Get the current session name for plan file paths. */
 function currentSessionName() {
-  return DESKTOP_SESSION_NAME;
+  return activeSessionName || activeConversationId || DESKTOP_SESSION_NAME;
 }
 
-/** Reset in-memory plan refs (called on /new, session switch, or cancel). */
-function resetPlanRefs() {
+function syncPlanRefsFromRuntime(snapshot) {
   pendingPlan = null;
   activePlanSteps = null;
   activeCompletedIds = null;
@@ -5505,64 +5537,56 @@ function resetPlanRefs() {
   activePlanUpdatedAt = null;
   activePlanId = null;
   activePlanRequestId = null;
+  if (!snapshot) return null;
+  if (snapshot.status === "pending") {
+    pendingPlan = {
+      steps: snapshot.steps ?? [],
+      summary: snapshot.summary,
+      body: snapshot.body,
+      planId: snapshot.planId,
+      requestId: snapshot.requestId,
+    };
+  } else {
+    activePlanSteps = snapshot.steps ?? [];
+    activeCompletedIds = new Set(snapshot.completedStepIds ?? []);
+    activePlanSummary = snapshot.summary ?? null;
+    activePlanBody = snapshot.body ?? null;
+    activePlanUpdatedAt = snapshot.updatedAt ?? null;
+    activePlanId = snapshot.planId ?? null;
+    activePlanRequestId = snapshot.requestId ?? null;
+  }
+  return snapshot;
+}
+
+planRuntime = createPlanRuntime({
+  store: { loadPlanState, savePlanState, clearPlanState, archivePlanState },
+  getSessionName: currentSessionName,
+  getConversationId: () => activeConversationId,
+  onGoalsChanged: (goals) => {
+    activeGoals = Array.isArray(goals) ? goals.map((goal) => normalizeGoal({ ...goal, sessionId: goal.sessionId ?? activeConversationId })) : [];
+    void writeActiveSessionMeta?.({ goals: activeGoals });
+  },
+});
+
+/** Reset in-memory plan refs (called on /new, session switch, or cancel). */
+function resetPlanRefs() {
+  syncPlanRefsFromRuntime(planRuntime?.reset?.() ?? null);
   pendingPlanRevision = null;
 }
 
 /** Restore a persisted active plan after launcher restart. */
 function hydrateActivePlanFromDisk() {
-  if (activePlanSteps) return;
-  const session = currentSessionName();
-  const stored = loadPlanState(session);
-  if (!stored) return;
-  activePlanSteps = stored.steps;
-  activeCompletedIds = new Set(normalizeCompletedStepIds(stored.steps, stored.completedStepIds));
-  activePlanBody = stored.body ?? null;
-  activePlanSummary = stored.summary ?? null;
-  activePlanUpdatedAt = stored.updatedAt ?? null;
-  activePlanId = stored.planId ?? null;
-  activePlanRequestId = stored.requestId ?? null;
-  console.error(`[launcher] active plan restored (${activePlanSteps.length} steps) for session ${session}`);
+  if (activePlanSteps || pendingPlan) return;
+  const snapshot = planRuntime?.snapshot?.() ?? null;
+  if (snapshot?.status === "active") console.error(`[launcher] active plan restored (${snapshot.totalSteps} steps) for session ${snapshot.session}`);
+  syncPlanRefsFromRuntime(snapshot);
 }
 
 /** Snapshot used by the dashboard plans panel. */
 function getActivePlanSnapshot() {
-  if (pendingPlan && !activePlanSteps) {
-    return {
-      session: currentSessionName(),
-      status: "pending",
-      path: null,
-      completedAt: null,
-      updatedAt: null,
-      totalSteps: pendingPlan.steps.length,
-      completedSteps: 0,
-      completionRatio: 0,
-      steps: pendingPlan.steps,
-      completedStepIds: [],
-      body: pendingPlan.body,
-      summary: pendingPlan.summary,
-      planId: pendingPlan.planId,
-      requestId: pendingPlan.requestId,
-    };
-  }
-  hydrateActivePlanFromDisk();
-  if (!activePlanSteps || !activeCompletedIds) return null;
-  const completedStepIds = normalizeCompletedStepIds(activePlanSteps, [...activeCompletedIds]);
-  return {
-    session: currentSessionName(),
-    status: "active",
-    path: null,
-    completedAt: activePlanUpdatedAt,
-    updatedAt: activePlanUpdatedAt,
-    totalSteps: activePlanSteps.length,
-    completedSteps: completedStepIds.length,
-    completionRatio: activePlanSteps.length > 0 ? completedStepIds.length / activePlanSteps.length : 0,
-    steps: activePlanSteps,
-    completedStepIds,
-    body: activePlanBody,
-    summary: activePlanSummary,
-    planId: activePlanId,
-    requestId: activePlanRequestId,
-  };
+  const snapshot = planRuntime?.snapshot?.() ?? null;
+  syncPlanRefsFromRuntime(snapshot);
+  return snapshot;
 }
 
 const MAX_PLAN_AUTO_CONTINUATIONS = 2;
@@ -5602,20 +5626,10 @@ function planAutoContinuationPrompt(plan, attempt, reason = "budget") {
 
 /** Persist the active plan to disk. Called on first mark_step_complete. */
 function persistActivePlan() {
-  if (!activePlanSteps) return false;
-  const session = currentSessionName();
   try {
-    const completedStepIds = normalizeCompletedStepIds(activePlanSteps, [...(activeCompletedIds ?? [])]);
-    activeCompletedIds = new Set(completedStepIds);
-    savePlanState(session, activePlanSteps, completedStepIds, {
-      body: activePlanBody,
-      summary: activePlanSummary,
-      planId: activePlanId,
-      requestId: activePlanRequestId,
-    });
-    const stored = loadPlanState(session);
-    activePlanUpdatedAt = stored?.updatedAt ?? new Date().toISOString();
-    return true;
+    const result = planRuntime?.persist?.() === true;
+    syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
+    return result;
   } catch (err) {
     console.error(`[launcher] persistActivePlan failed: ${err.message}`);
     return false;
@@ -5624,65 +5638,21 @@ function persistActivePlan() {
 
 /** Promote an approved pending plan, replacing any older unfinished plan. */
 function activatePendingPlan() {
-  if (!pendingPlan) return false;
-  const nextPlan = pendingPlan;
-  pendingPlan = null;
-  activePlanSteps = nextPlan.steps;
-  activeCompletedIds = new Set();
-  activePlanBody = nextPlan.body;
-  activePlanSummary = nextPlan.summary;
-  activePlanUpdatedAt = null;
-  activePlanId = nextPlan.planId;
-  activePlanRequestId = nextPlan.requestId;
-  activeGoals = [normalizeGoal({
-    id: activePlanId || `goal:${activeConversationId}`,
-    title: activePlanSummary || activePlanSteps?.[0]?.title || "当前计划",
-    status: "active",
-    sessionId: activeConversationId,
-    updatedAt: new Date().toISOString(),
-  })];
-  pendingPlanRevision = null;
-  if (!persistActivePlan()) {
-    pendingPlan = nextPlan;
-    activePlanSteps = null;
-    activeCompletedIds = null;
-    activePlanBody = null;
-    activePlanSummary = null;
-    activePlanId = null;
-    activePlanRequestId = null;
-    activeGoals = [];
-    return false;
+  const activated = planRuntime?.activatePending?.() === true;
+  syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
+  if (activated) {
+    pendingPlanRevision = null;
+    console.error(`[launcher] plan activated (${activePlanSteps?.length ?? 0} steps) for session ${currentSessionName()}`);
+    broadcastDashboardEvent({ kind: "plan-activated", session: currentSessionName() });
   }
-  void writeActiveSessionMeta({ goals: activeGoals });
-  console.error(`[launcher] plan activated (${activePlanSteps.length} steps) for session ${currentSessionName()}`);
-  broadcastDashboardEvent({ kind: "plan-activated", session: currentSessionName() });
-  return true;
+  return activated;
 }
 
-/** Mark a step complete; archive the plan if all steps are done. */
-function markStepDone(stepId) {
-  hydrateActivePlanFromDisk();
-  if (!activePlanSteps || !activeCompletedIds || !isKnownPlanStep(activePlanSteps, stepId)) return false;
-  activeCompletedIds.add(stepId);
-  if (!persistActivePlan()) {
-    activeCompletedIds.delete(stepId);
-    return false;
-  }
-  if (isPlanComplete(activePlanSteps, [...activeCompletedIds])) {
-    const session = currentSessionName();
-    activeGoals = activeGoals.map((goal) => ({ ...goal, status: "completed", updatedAt: new Date().toISOString() }));
-    void writeActiveSessionMeta({ goals: activeGoals });
-    try {
-      archivePlanState(session);
-      console.error(`[launcher] plan archived (${activeCompletedIds.size}/${activePlanSteps.length} steps) for session ${session}`);
-      broadcastDashboardEvent({ kind: "plan-archived", session });
-      resetPlanRefs();
-    } catch (err) {
-      console.error(`[launcher] archivePlanState failed: ${err.message}`);
-      return false;
-    }
-  }
-  return true;
+/** Mark a step complete; model-driven completion requires host evidence. */
+function markStepDone(stepId, evidenceRefs = [], { source = "manual" } = {}) {
+  const completed = planRuntime?.markStepDone?.(stepId, evidenceRefs, { source }) === true;
+  syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
+  return completed;
 }
 
 function completeActivePlanStep(stepId) {
@@ -5702,6 +5672,15 @@ function completeActivePlanStep(stepId) {
 
 function cancelActivePlan() {
   const session = currentSessionName();
+  if (planRuntime) {
+    const cancelled = planRuntime.cancel();
+    syncPlanRefsFromRuntime(planRuntime.snapshot());
+    if (cancelled) {
+      trackPersistentStorageIssue(`active-plan:${session}`, resolve(sessionsDir, `${session}.plan.json`), null);
+      broadcastDashboardEvent({ kind: "plan-cancelled", session });
+      return { ok: true };
+    }
+  }
   try {
     clearPlanState(session);
     trackPersistentStorageIssue(`active-plan:${session}`, resolve(sessionsDir, `${session}.plan.json`), null);
@@ -7787,6 +7766,30 @@ function broadcastDashboardEvent(ev) {
   });
 }
 
+// Kimi Code-style separation: content completion is a display fact; only the
+// later turn_finalized event is authoritative for execution and goal status.
+function broadcastAssistantContentFinal(payload = {}) {
+  const content = { ...payload };
+  const assistantId = content.id ?? content.messageId ?? null;
+  const assistantText = typeof content.text === "string" ? content.text : "";
+  delete content.id;
+  delete content.text;
+  delete content.taskState;
+  delete content.executionState;
+  delete content.goalState;
+  delete content.receipt;
+  delete content.artifactEvidence;
+  delete content.warnings;
+  broadcastDashboardEvent({ kind: "assistant_content_final", id: assistantId, text: assistantText, ...content });
+  // Legacy Dashboard compatibility. It intentionally carries no terminal
+  // status, so new clients can distinguish it from turn_finalized.
+  broadcastDashboardEvent({ kind: "assistant_final", id: assistantId, text: assistantText, ...content, compatibility: true });
+}
+
+function broadcastTurnFinalized(payload = {}) {
+  broadcastDashboardEvent({ kind: "turn_finalized", ...payload });
+}
+
 const dashboardAssistantStreams = createAssistantStreamProjector();
 
 // Mirrors loopEventToDashboard() from chunk-VM6A6QLY.js
@@ -7990,6 +7993,12 @@ const sessionRunCoordinator = createSessionRunCoordinator({
     }
   },
 });
+const turnCoordinator = createTurnCoordinator({
+  getLocation: () => ({ sessionId: activeConversationId, workspace: workspaceDir }),
+  onEvent: (event) => {
+    if (event.kind === "turn.finished") broadcastDashboardEvent({ kind: "turn-coordinator", ...event });
+  },
+});
 
 // Context Epoch keeps the model-visible system baseline separate from the
 // append-only session history. It is intentionally process-local here; the
@@ -8080,6 +8089,10 @@ const bindOperationSessionRun = (operation, { replace = false } = {}) => {
   const previousRunId = operation.context?.sessionRun?.runId;
   if (replace && previousRunId) {
     sessionRunCoordinator.finish(previousRunId, "cancelled", { operationId: operation.id, reason: "session_rebound" });
+    if (operation.context?.turn?.turnId) {
+      turnCoordinator.finish(operation.context.turn.turnId, "unknown", { operationId: operation.id, reason: "session_rebound" });
+      operation.context.turn.state = "unknown";
+    }
   }
   const sessionRun = sessionRunCoordinator.begin({
     sessionId: operation.context?.conversationId ?? activeConversationId,
@@ -8093,12 +8106,31 @@ const bindOperationSessionRun = (operation, { replace = false } = {}) => {
     operationRuntime.finish(operation, "unknown");
     return sessionRun;
   }
+  const turn = turnCoordinator.begin({
+    sessionId: operation.context?.conversationId ?? activeConversationId,
+    workspace: operation.context?.workspace ?? workspaceDir,
+    operationId: operation.id,
+    requestId: activeTurnRequestId || operation.id,
+    turnId: activeTurnRequestId || operation.id,
+  });
+  if (!turn.accepted || !turn.turn?.turnId) {
+    sessionRunCoordinator.finish(sessionRun.run.runId, "unknown", { reason: turn.code || "turn_admission_failed" });
+    operation.finalState = "unknown";
+    operationRuntime.finish(operation, "unknown");
+    return { accepted: false, code: turn.code || "TURN_ACTIVE" };
+  }
   operationSessionIds.set(operation.id, operation.context?.conversationId ?? activeConversationId);
   operationWorkspaceIds.set(operation.id, operation.context?.workspace ?? workspaceDir);
   operation.context.sessionRun = {
     runId: sessionRun.run.runId,
     sessionId: sessionRun.run.sessionId,
     locationFingerprint: sessionRun.run.locationFingerprint,
+  };
+  operation.context.turn = {
+    turnId: turn.turn.turnId,
+    sessionId: turn.turn.sessionId,
+    workspace: turn.turn.workspace,
+    state: "running",
   };
   return sessionRun;
 };
@@ -8122,6 +8154,10 @@ const finishActiveOperation = (operation) => {
     ?? (operation?.controller?.signal?.aborted ? "cancelled" : "completed");
   if (operation?.context?.sessionRun?.runId) {
     sessionRunCoordinator.finish(operation.context.sessionRun.runId, runState, { operationId: operation.id });
+  }
+  if (operation?.context?.turn?.turnId) {
+    turnCoordinator.finish(operation.context.turn.turnId, runState, { operationId: operation.id });
+    operation.context.turn.state = runState;
   }
   const finished = operationRuntime.finish(operation, runState);
   if (finished) {
@@ -8368,6 +8404,7 @@ const sessionRuntime = createSessionRuntime({
   setNextMessageId: (value) => { nextMsgId = value; },
   getLoop: () => loop,
   getConversationId: () => activeConversationId,
+  getSessionName: () => activeSessionName,
   getContextRecoveryHandle: () => activeContextRecoveryHandle,
   getWorkspace: () => workspaceDir,
   getMode: () => config.mode || "general",
@@ -8395,6 +8432,11 @@ const sessionRuntime = createSessionRuntime({
     activeConversationId = typeof meta.conversationId === "string" && meta.conversationId.trim()
       ? meta.conversationId.trim()
       : activeConversationId;
+    if (Object.prototype.hasOwnProperty.call(meta || {}, "sessionName")) {
+      activeSessionName = typeof meta.sessionName === "string" && isValidSessionName(meta.sessionName)
+        ? meta.sessionName
+        : null;
+    }
     activeContextRecoveryHandle = typeof meta.contextRecoveryHandle === "string" && meta.contextRecoveryHandle.trim()
       ? meta.contextRecoveryHandle.trim()
       : null;
@@ -8453,6 +8495,14 @@ const clearActiveSession = () => sessionRuntime.clear();
 const writeActiveSessionMeta = (patch = {}) => sessionRuntime.writeMeta(patch);
 const persistActiveConversationIdentity = () => sessionRuntime.persistConversationIdentity();
 const loadActiveSession = () => sessionRuntime.load();
+const finalizationOrchestrator = createFinalizationOrchestrator({
+  persistTurnFinalization: persistActiveTurnFinalization,
+  publishTurnFinalized: (event) => broadcastTurnFinalized(event),
+  onPersistenceFailure: (error) => {
+    const message = error?.message || String(error || "本轮执行事实无法持久化，结果状态未知");
+    trackPersistentStorageIssue("active-session", activeSessionFile, message, "error");
+  },
+});
 
 // Steering instructions are intentionally not replayed after a process
 // restart. Keep the durable prompt entity, but close any queued instruction
@@ -8476,7 +8526,9 @@ if (staleQueuedSteering.length > 0) {
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
   clearActiveModals("session_reset");
   await finalizeActiveSession();
+  const previousPlanSession = currentSessionName();
   activeConversationId = randomUUID();
+  activeSessionName = null;
   activeContextRecoveryHandle = null;
   preparedDocumentRegistry.clear({ notifyChange: false });
   if (loop) loop.clearLog();
@@ -8489,7 +8541,7 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   clearLearningMode();
   resetPlanRefs();
   generatedArtifactPaths.clear();
-  const planSession = currentSessionName();
+  const planSession = previousPlanSession;
   try {
     clearPlanState(planSession);
     trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), null);
@@ -9571,7 +9623,7 @@ const ctx = {
   getPlanMode: () => false,
   getPendingEditCount: () => 0,
   getLatestVersion: () => latestVersion,
-  getSessionName: () => "desktop",
+  getSessionName: () => currentSessionName(),
   getPersistentStorageIssues: () => runtimeIssues.listUserActionable(),
   getRuntimeCapabilities: () => runtimeCapabilities.listCapabilities(),
   getToolActivationPolicy: () => publicToolActivationPolicy(currentToolActivationPolicy()),
@@ -9838,13 +9890,9 @@ const ctx = {
     const verdict = choice === "accept" ? { type: "accepted" } : { type: "rejected" };
     const resolved = resolveActiveGate("revision", gateId, verdict);
     if (!resolved) return false;
-    if (choice === "accept" && pendingPlanRevision && activePlanSteps && activeCompletedIds) {
-      activePlanSteps = [
-        ...activePlanSteps.filter((step) => activeCompletedIds.has(step.id)),
-        ...pendingPlanRevision.remainingSteps,
-      ];
-      if (pendingPlanRevision.summary) activePlanSummary = pendingPlanRevision.summary;
-      persistActivePlan();
+    if (choice === "accept" && pendingPlanRevision) {
+      planRuntime?.acceptRevision?.();
+      syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
     }
     pendingPlanRevision = null;
     return true;
@@ -10426,6 +10474,10 @@ ${modeList}
       if (sessionName && loop) {
         clearActiveModals("session_switched");
         await finalizeActiveSession();
+        // Drop only in-memory Plan references. The previous session's plan
+        // remains on disk under its own key and can be restored when that
+        // session is selected again.
+        resetPlanRefs();
       }
 
       // ── Session resume: load historical messages ──────────────
@@ -10435,6 +10487,7 @@ ${modeList}
         try {
           const sessionFile = resumeSessionFile || sessionJsonlPath(sessionName);
           const sessionMeta = resumeSessionSnapshot?.meta ?? readSessionMeta(sessionName);
+          activeSessionName = sessionName;
           activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
@@ -11177,9 +11230,12 @@ ${modeList}
             verified: Boolean(binding.readablePath && existsSync(binding.readablePath)),
           });
         }
-        let taskWarnings = [];
-        let contextWarningEmitted = false;
-        let taskState = null;
+         let taskWarnings = [];
+         let contextWarningEmitted = false;
+         let taskState = null;
+         let executionState = "running";
+         let goalState = "unknown";
+         let goalEvidenceRefs = [];
         let artifactDeliveryActive = false;
         let artifactFiles = [];
         let loopInput = text;
@@ -11188,7 +11244,20 @@ ${modeList}
           ? { required: false, savePreviousResponse: false }
           : detectArtifactRequest(text);
         const planningOnlyRequest = isPlanOnlyRequest(text);
-        const requestedOutputPaths = artifactRequest.required ? requestedOutputArtifactPaths(text) : [];
+         const requestedOutputPaths = artifactRequest.required ? requestedOutputArtifactPaths(text) : [];
+         const taskContract = createTaskContract({
+           operationId: operation.id,
+           sessionId: operation.context?.conversationId ?? activeConversationId,
+           workspaceFingerprint: operation.context?.workspaceFingerprint ?? null,
+           intent: opts.internalHandoff === true ? String(opts.originalUserPrompt || text || "") : text,
+           expectedOutputs: requestedOutputPaths.map((path, index) => ({ id: `artifact-${index + 1}`, kind: "artifact", path, description: `生成并验证 ${path}`, required: true })),
+           sideEffects: operation.context?.sendAuthorization ? ["external"] : [],
+           requiresApproval: Boolean(operation.context?.sendAuthorization),
+           kind: artifactRequest.required ? "artifact" : operation.kind,
+           executionRequired: artifactRequest.required || undefined,
+         });
+         operation.context.taskContract = taskContract;
+         turnReceipt.recordTaskContract(taskContract);
         const artifactBaselines = new Map();
         for (const requestedPath of requestedOutputPaths) {
           const absolute = rememberGeneratedArtifactPath(requestedPath);
@@ -11446,6 +11515,11 @@ ${modeList}
                   });
                   turnReceipt.recordToolFailure(failure);
                 } else {
+                  recordOperationToolSuccessFact(operation.context, {
+                    toolCallId: ev.callId ?? ev.toolCallId,
+                    toolName: ev.toolName,
+                    args: ev.toolArgs,
+                  });
                   const priorFailure = recordOperationToolSuccess(operation.context, {
                     toolName: ev.toolName,
                     args: ev.toolArgs,
@@ -11903,20 +11977,17 @@ ${modeList}
               warnings: taskWarnings,
               receipt: receiptSnapshot,
             });
-            broadcastDashboardEvent({
-              kind: "assistant_final",
+            broadcastAssistantContentFinal({
               id: assistantId,
               text: assistantText,
+              turnId: requestId || operation.id,
+              operationId: operation.id,
               forcedSummary: continuationNeeded,
               planIncomplete: continuationNeeded,
-              artifactIncomplete,
-              taskState,
-              warnings: taskWarnings,
               artifactFiles,
               interventionChoice,
               recoveryHandle: contextRecoveryHandle,
               progress: loopTelemetry.snapshot(),
-              receipt: receiptSnapshot,
             });
           }
         } catch (err) {
@@ -11997,13 +12068,7 @@ ${modeList}
               }
               if (opts.isolated !== true) {
                 for (const runtime of operation.context?.runtimeEnvironments ?? []) turnReceipt.recordRuntime(runtime);
-                const previousArtifactState = turnReceipt.snapshot().artifactEvidence.map((entry) => ({
-                  status: entry.status,
-                  verified: entry.verified,
-                  files: (entry.files ?? []).map((file) => ({ path: file.path, status: file.status, size: file.size, mtimeMs: file.mtimeMs })),
-                }));
-                const previousTaskState = taskState;
-                 const preservedArtifactPaths = requestedOutputPaths
+                  const preservedArtifactPaths = requestedOutputPaths
                    .map((path) => rememberGeneratedArtifactPath(path))
                    .filter(Boolean);
                  const rescannedArtifactEvidence = filterTemporaryArtifactEvidence(
@@ -12027,6 +12092,32 @@ ${modeList}
                   artifactIncomplete = true;
                   if (!taskWarnings.includes("最终产物校验未通过，任务未确认完成")) taskWarnings = [...taskWarnings, "最终产物校验未通过，任务未确认完成"].slice(0, 8);
                 }
+                const executionFactState = operation.controller.signal.aborted
+                  ? "cancelled"
+                  : turnError || isolationRestoreError
+                    ? "failed"
+                    : operation.context?.boundaryDeliveryUnknown === true
+                      ? "unknown"
+                      : "completed";
+                const goalVerification = verifyGoalContract({
+                  contract: taskContract,
+                  executionState: executionFactState,
+                  toolFacts: turnReceipt.snapshot().toolCalls,
+                  receipt: turnReceipt.snapshot(),
+                  artifactEvidence: rescannedArtifactEvidence,
+                });
+                executionState = goalVerification.executionState;
+                goalState = continuationNeeded || artifactIncomplete ? "incomplete" : goalVerification.goalState;
+                goalEvidenceRefs = goalVerification.evidenceRefs;
+                taskWarnings = [...new Set([
+                  ...taskWarnings,
+                  ...(goalVerification.warnings ?? []).map((warning) => warning?.message || String(warning)),
+                ])].slice(0, 8);
+                turnReceipt.recordGoalVerification({
+                  ...goalVerification,
+                  goalState,
+                  warnings: [],
+                });
                 const artifactRequiredForOutcome = artifactRequest.required && artifactDeliveryActive;
                 const terminalFact = !turnError
                   && !isolationRestoreError
@@ -12048,83 +12139,69 @@ ${modeList}
                   terminalFact,
                   resultUnknown: Boolean(turnError || isolationRestoreError || operation.context?.boundaryDeliveryUnknown),
                 });
-                turnReceipt.recordAuthorizationFacts(operation.context?.authorizationFacts);
-                for (const repeat of operation.context?.toolRepeats ?? []) turnReceipt.recordToolRepeat(repeat);
-                turnReceipt.complete({
-                  ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && operation.context?.boundaryDeliveryUnknown !== true && !operation.controller.signal.aborted,
-                  taskState,
-                  artifactIncomplete,
-                  interventionPaused,
-                  continuationNeeded,
-                });
-                const finalizationReceipt = turnReceipt.snapshot();
-                const nextArtifactState = finalizationReceipt.artifactEvidence.map((entry) => ({
-                  status: entry.status,
-                  verified: entry.verified,
-                  files: (entry.files ?? []).map((file) => ({ path: file.path, status: file.status, size: file.size, mtimeMs: file.mtimeMs })),
-                }));
-                if (assistantText && (previousTaskState !== taskState || JSON.stringify(previousArtifactState) !== JSON.stringify(nextArtifactState))) {
-                  broadcastDashboardEvent({
-                    kind: "assistant_final",
-                    id: assistantId,
-                    correction: true,
-                    revision: "artifact-rescan",
-                    text: assistantText,
-                    forcedSummary: continuationNeeded,
-                    planIncomplete: continuationNeeded,
+                if (goalState === "unknown") taskState = "unknown";
+                else if (goalState === "incomplete" && taskState === "completed") taskState = "incomplete";
+                const finalizationEvaluation = {
+                  ...evaluateTurnFinalization({
+                    taskContract,
+                    executionFactState: executionState,
+                    toolFacts: turnReceipt.snapshot().toolCalls,
+                    receipt: turnReceipt.snapshot(),
+                    artifactEvidence: rescannedArtifactEvidence,
+                    artifactRequired: artifactRequiredForOutcome,
+                    artifactVerified: !artifactRequiredForOutcome || finalArtifactVerified,
+                    executionStarted,
                     artifactIncomplete,
-                    taskState,
+                    continuationNeeded,
+                    interventionPaused,
                     warnings: taskWarnings,
-                    artifactFiles,
-                    interventionChoice,
-                    recoveryHandle: contextRecoveryHandle,
-                    progress: loopTelemetry.snapshot(),
-                    receipt: finalizationReceipt,
-                  });
-                }
-                let persisted = false;
-                try {
-                  persisted = await persistActiveTurnFinalization({
+                  }),
+                  taskState,
+                  executionState,
+                  goalState,
+                  evidenceRefs: goalEvidenceRefs,
+                  warnings: taskWarnings,
+                  completionOk: (executionState === "completed" || executionState === "completed_with_warnings") && goalState === "verified",
+                };
+                const finalizationResult = await finalizationOrchestrator.finalize({
+                  evaluation: finalizationEvaluation,
+                  receipt: turnReceipt,
+                  persistence: {
                     modelEntries: loop?.log?.toMessages?.() ?? [],
                     pendingUser: { text, attachments: attachmentRecords },
-                    assistant: {
-                      messageId: assistantId,
-                      turnId: requestId || operation.id,
-                      text: assistantText,
-                    },
+                    assistant: { messageId: assistantId, turnId: requestId || operation.id, text: assistantText },
                     operationId: operation.id,
-                    receipt: finalizationReceipt,
-                    taskState,
+                    taskContract,
                     artifactIncomplete,
-                    artifactEvidence: finalizationReceipt.artifactEvidence,
-                    warnings: taskWarnings,
                     interventionChoice,
-                  });
-                } catch (error) {
-                  console.error(`[launcher] final turn persistence threw: ${error.message}`);
-                }
-                finalizationPersisted = persisted;
-                if (!persisted) {
+                    authorizationFacts: operation.context?.authorizationFacts,
+                    toolRepeats: operation.context?.toolRepeats,
+                    continuationNeeded,
+                    interventionPaused,
+                  },
+                  event: {
+                  id: assistantId,
+                  messageId: assistantId,
+                  turnId: requestId || operation.id,
+                  operationId: operation.id,
+                  text: assistantText,
+                  taskContract,
+                  artifactIncomplete,
+                  artifactFiles,
+                  interventionChoice,
+                  recoveryHandle: contextRecoveryHandle,
+                  progress: loopTelemetry.snapshot(),
+                  },
+                });
+                finalizationPersisted = finalizationResult.persisted;
+                taskState = finalizationResult.taskState;
+                executionState = finalizationResult.executionState;
+                goalState = finalizationResult.goalState;
+                goalEvidenceRefs = finalizationResult.evidenceRefs ?? goalEvidenceRefs;
+                taskWarnings = finalizationResult.warnings ?? taskWarnings;
+                if (!finalizationPersisted) {
                   finalizationPersistenceError = "本轮执行事实无法持久化，结果状态未知";
-                  taskState = "unknown";
-                  turnReceipt.recordError(finalizationPersistenceError, { source: "session-runtime" });
-                  turnReceipt.markUnknown(finalizationPersistenceError);
-                  trackPersistentStorageIssue("active-session", activeSessionFile, finalizationPersistenceError, "error");
                   broadcastDashboardEvent({ kind: "error", id: `${assistantId}-finalization-persistence-error`, text: finalizationPersistenceError });
-                  // Reuse the final assistant identity so the Dashboard
-                  // reducer replaces the earlier optimistic completion.
-                  broadcastDashboardEvent({
-                    kind: "assistant_final",
-                    id: assistantId,
-                    correction: true,
-                    revision: "finalization-persistence",
-                    text: assistantText,
-                    taskState: "unknown",
-                    artifactIncomplete,
-                    warnings: [...taskWarnings, finalizationPersistenceError].slice(0, 8),
-                    interventionChoice,
-                    receipt: turnReceipt.snapshot(),
-                  });
                 }
               }
               if (opts.isolated !== true && opts.internalHandoff !== true) {
@@ -12134,6 +12211,43 @@ ${modeList}
               const cleanupMessage = `后台任务清理失败：${cleanupError.message}`;
               if (finalizationPersisted) {
                 taskWarnings = [...new Set([...taskWarnings, cleanupMessage])].slice(0, 8);
+                turnReceipt.recordWarning(cleanupMessage);
+                try {
+                  await persistActiveTurnFinalization({
+                    modelEntries: loop?.log?.toMessages?.() ?? [],
+                    pendingUser: { text, attachments: attachmentRecords },
+                    assistant: { messageId: assistantId, turnId: requestId || operation.id, text: assistantText },
+                    operationId: operation.id,
+                    receipt: turnReceipt.snapshot(),
+                    taskState,
+                    executionState,
+                    goalState,
+                    taskContract,
+                    evidenceRefs: goalEvidenceRefs,
+                    artifactIncomplete,
+                    artifactEvidence: turnReceipt.snapshot().artifactEvidence,
+                    warnings: taskWarnings,
+                    interventionChoice,
+                    allowWarningCorrection: true,
+                  });
+                  broadcastTurnFinalized({
+                    id: assistantId,
+                    messageId: assistantId,
+                    turnId: requestId || operation.id,
+                    operationId: operation.id,
+                    revision: 2,
+                    correction: true,
+                    text: assistantText,
+                    taskState,
+                    executionState,
+                    goalState,
+                    warnings: taskWarnings,
+                    receipt: turnReceipt.snapshot(),
+                    persisted: true,
+                  });
+                } catch (correctionError) {
+                  console.error(`[launcher] cleanup warning correction persistence failed: ${correctionError.message}`);
+                }
                 console.error(`[launcher] ${cleanupMessage}；最终执行事实已持久化`);
               } else {
                 isolationRestoreError ??= cleanupMessage;
@@ -12315,6 +12429,14 @@ refreshAllScheduleTimers();
 
 // ── Restore active session (crash recovery) ─────────────────────
 const restoredActiveSession = await loadActiveSession();
+try {
+  const migration = migrateLegacyPlan(DESKTOP_SESSION_NAME, currentSessionName());
+  if (migration.migrated || migration.archived) {
+    console.error(`[launcher] legacy desktop plan migration: ${migration.migrated ? "migrated" : "archived"} -> ${currentSessionName()}`);
+  }
+} catch (error) {
+  console.error(`[launcher] legacy desktop plan migration failed: ${error.message}`);
+}
 // Rebuild terminal background-task notifications from the recovered model
 // history first, then restore every same-session terminal fact whose durable
 // outbox acknowledgement is still missing. This never replays work.

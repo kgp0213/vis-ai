@@ -36,6 +36,7 @@ const FINALIZATION_RANK = Object.freeze({
 
 function persistedTaskState(entry) {
   const value = entry?.taskState
+    ?? entry?.executionState
     ?? entry?.state
     ?? entry?.receipt?.taskState
     ?? entry?.receipt?.completion?.taskState
@@ -90,6 +91,7 @@ export function createSessionRuntime({
   setNextMessageId,
   getLoop = () => null,
   getConversationId = () => null,
+  getSessionName = () => null,
   getWorkspace = () => null,
   getMode = () => "general",
   modeSummary = (mode) => ({ label: mode, description: "" }),
@@ -171,8 +173,12 @@ export function createSessionRuntime({
         ...(message.backgroundTaskNotification && typeof message.backgroundTaskNotification === "object"
           ? { backgroundTaskNotification: { ...message.backgroundTaskNotification } }
           : {}),
-        ...(message.receipt && typeof message.receipt === "object" ? { receipt: message.receipt } : {}),
-        ...(message.taskState ? { taskState: message.taskState } : {}),
+         ...(message.receipt && typeof message.receipt === "object" ? { receipt: message.receipt } : {}),
+         ...(message.taskState ? { taskState: message.taskState } : {}),
+         ...(message.executionState ? { executionState: String(message.executionState).slice(0, 80) } : {}),
+         ...(message.goalState ? { goalState: String(message.goalState).slice(0, 80) } : {}),
+         ...(message.taskContract && typeof message.taskContract === "object" ? { taskContract: message.taskContract } : {}),
+         ...(Array.isArray(message.evidenceRefs) && message.evidenceRefs.length > 0 ? { evidenceRefs: message.evidenceRefs.slice(-64) } : {}),
         ...(message.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
         ...(Array.isArray(message.artifactEvidence) && message.artifactEvidence.length > 0 ? { artifactEvidence: message.artifactEvidence } : {}),
         ...(message.interventionChoice ? { interventionChoice: message.interventionChoice } : {}),
@@ -238,6 +244,7 @@ export function createSessionRuntime({
         ...current,
         ...patch,
         conversationId: patch.conversationId || current.conversationId || getConversationId(),
+        sessionName: getSessionName(),
         mode,
         modeLabel: modeInfo.label,
         modeDescription: modeInfo.description,
@@ -289,7 +296,7 @@ export function createSessionRuntime({
       } catch {
         existingEntries = [];
       }
-      const durableKeys = ["id", "messageId", "turnId", "operationId", "receipt", "taskState", "artifactIncomplete", "artifactEvidence", "warnings", "interventionChoice"];
+      const durableKeys = ["id", "messageId", "turnId", "operationId", "receipt", "taskState", "executionState", "goalState", "taskContract", "evidenceRefs", "artifactIncomplete", "artifactEvidence", "warnings", "interventionChoice"];
       const durableEntries = existingEntries.filter((entry) => (entry?.role === "assistant" || entry?.role === "execution") && durableKeys.some((key) => entry[key] !== undefined));
       const mergedEntries = [...nextEntries];
       for (const existing of durableEntries) {
@@ -333,10 +340,15 @@ export function createSessionRuntime({
     operationId = null,
     receipt = null,
     taskState = null,
+    executionState = null,
+    goalState = null,
+    taskContract = null,
+    evidenceRefs = [],
     artifactIncomplete = false,
     artifactEvidence = [],
     warnings = [],
     interventionChoice = null,
+    allowWarningCorrection = false,
   } = {}) {
     return enqueuePersistence(async () => {
       try {
@@ -360,7 +372,7 @@ export function createSessionRuntime({
           const text = typeof assistant.text === "string" ? assistant.text : "";
           const messageId = assistant.messageId ? String(assistant.messageId) : null;
           const turnId = assistant.turnId ? String(assistant.turnId) : null;
-          const incomingState = String(taskState ?? receipt?.taskState ?? receipt?.completion?.taskState ?? "unknown").trim().toLowerCase();
+           const incomingState = String(executionState ?? taskState ?? receipt?.executionState ?? receipt?.taskState ?? receipt?.completion?.executionState ?? receipt?.completion?.taskState ?? "unknown").trim().toLowerCase();
           let persistedEntries = [];
           try {
             persistedEntries = parseActiveSessionJsonl(await readFile(activeSessionFile, "utf8")).entries;
@@ -371,6 +383,30 @@ export function createSessionRuntime({
             .reverse()
             .find((entry) => finalizationIdentityMatches(entry, { messageId, turnId, operationId }));
           if (shouldIgnoreLateFinalization(existingFinalization, incomingState)) {
+            if (allowWarningCorrection && existingFinalization && warnings.length > 0) {
+              const mergedWarnings = [...new Set([
+                ...(Array.isArray(existingFinalization.warnings) ? existingFinalization.warnings : []),
+                ...warnings,
+              ])].slice(0, 16);
+              let targetIndex = entries.findIndex((entry) => finalizationIdentityMatches(entry, { messageId, turnId, operationId }));
+              if (targetIndex < 0 && persistedEntries.length > 0) {
+                entries = persistedEntries.map((entry) => ({ ...entry }));
+                targetIndex = entries.findIndex((entry) => finalizationIdentityMatches(entry, { messageId, turnId, operationId }));
+              }
+              if (targetIndex >= 0) {
+                const current = entries[targetIndex];
+                const nextReceipt = current.receipt && typeof current.receipt === "object"
+                  ? { ...current.receipt, warnings: mergedWarnings }
+                  : current.receipt;
+                entries[targetIndex] = {
+                  ...current,
+                  warnings: mergedWarnings,
+                  ...(nextReceipt ? { receipt: nextReceipt } : {}),
+                };
+                await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));
+                if (!await writeMetaNow({ messageCount: entries.length })) throw new Error("active session metadata could not be saved");
+              }
+            }
             transaction.commit("finalized");
             return true;
           }
@@ -379,8 +415,12 @@ export function createSessionRuntime({
             ...(messageId ? { messageId } : {}),
             ...(turnId ? { turnId } : {}),
             ...(operationId ? { operationId: String(operationId) } : {}),
-            ...(receipt && typeof receipt === "object" ? { receipt } : {}),
-            ...(typeof taskState === "string" && taskState ? { taskState } : {}),
+             ...(receipt && typeof receipt === "object" ? { receipt } : {}),
+             ...(typeof taskState === "string" && taskState ? { taskState } : {}),
+             ...(typeof executionState === "string" && executionState ? { executionState } : {}),
+             ...(typeof goalState === "string" && goalState ? { goalState } : {}),
+             ...(taskContract && typeof taskContract === "object" ? { taskContract } : {}),
+             ...(Array.isArray(evidenceRefs) ? { evidenceRefs: evidenceRefs.slice(-64) } : {}),
             artifactIncomplete: artifactIncomplete === true,
             artifactEvidence: Array.isArray(artifactEvidence) ? artifactEvidence : [],
             warnings: Array.isArray(warnings) ? warnings : [],

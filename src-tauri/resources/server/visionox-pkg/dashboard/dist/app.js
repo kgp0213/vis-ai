@@ -15225,6 +15225,10 @@ var en = {
     receiptRecoveryTimes: "{count} times",
     receiptArtifact: "Artifact",
     receiptArtifactIncomplete: "Incomplete or pending verification",
+    receiptGoal: "Goal",
+    goalVerified: "Goal verified",
+    goalIncomplete: "Goal incomplete",
+    goalUnknown: "Goal could not be confirmed",
     receiptMedia: "Media",
     receiptMediaReduced: "Downgraded, omitted {count}",
     receiptIntervention: "Intervention",
@@ -17071,6 +17075,10 @@ var zhCN = {
     receiptRecoveryTimes: "{count} 次",
     receiptArtifact: "产物",
     receiptArtifactIncomplete: "未完成或待验证",
+    receiptGoal: "目标",
+    goalVerified: "目标已验证",
+    goalIncomplete: "目标未完成",
+    goalUnknown: "目标无法确认",
     receiptMedia: "媒体",
     receiptMediaReduced: "已降级，省略 {count}",
     receiptIntervention: "干预",
@@ -22511,7 +22519,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     />
   `;
 }
-function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings) {
+function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings, executionState, goalState) {
   if (!receipt || typeof receipt !== "object") return null;
   const completion = receipt.completion || {};
   const tools = receipt.tools || {};
@@ -22521,6 +22529,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
   const failures = Array.isArray(receipt.toolFailures) ? receipt.toolFailures : [];
   const recoveries = Array.isArray(receipt.recoveries) ? receipt.recoveries : [];
   const state = taskState || completion.taskState || (completion.ok ? "completed" : "unknown");
+  const goal = goalState || receipt.goalState || completion.goalState || (state === "completed" || state === "completed_with_warnings" ? "verified" : "unknown");
   const artifactStatusLabel = {
     verified: t4("chat.artifactVerified"),
     present_unverified: t4("chat.artifactPresentUnverified"),
@@ -22538,6 +22547,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
         ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${failures.at(-1).code}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
         ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${recoveries.at(-1).recovery}` : ""}</span>` : null}
         <span>${t4("chat.receiptArtifact")}</span><span>${artifactIncomplete ? t4("chat.receiptArtifactIncomplete") : artifactStatusLabel}</span>
+        <span>${t4("chat.receiptGoal")}</span><span>${goal === "verified" ? t4("chat.goalVerified") : goal === "incomplete" ? t4("chat.goalIncomplete") : t4("chat.goalUnknown")}</span>
         ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
         ${intervention.shown > 0 ? html4`<span>${t4("chat.receiptIntervention")}</span><span>${t4("chat.receiptInterventionShown", { count: intervention.shown })}${interventionChoice ? ` · ${t4("chat.receiptChoice", { choice: interventionChoice })}` : ""}</span>` : null}
         ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
@@ -22638,7 +22648,7 @@ var ChatMessage = N22(function ChatMessage2({ msg, streaming, index, searchMatch
           </div>
         ` : null}
         ${renderMessageBody(msg.text, role)}
-        ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings) : null}
+        ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings, msg.executionState, msg.goalState) : null}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) {
     return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`;
   })}</div>` : null}
@@ -23351,6 +23361,10 @@ function createDashboardEventGuard(maxEvents = 4096) {
   const eventIds = /* @__PURE__ */ new Set();
   const terminalTools = /* @__PURE__ */ new Map();
   const terminalMessages = /* @__PURE__ */ new Map();
+  const finalStateRank = (event) => {
+    const state = String(event?.executionState ?? event?.taskState ?? "").toLowerCase();
+    return { unknown: 1, incomplete: 2, failed: 3, cancelled: 3, completed_with_warnings: 4, completed: 5 }[state] ?? 0;
+  };
   const assistantFinalFingerprint = (event) => {
     try {
       return JSON.stringify({
@@ -23391,7 +23405,7 @@ function createDashboardEventGuard(maxEvents = 4096) {
         }
         if (TERMINAL_TOOL_STATES.has(status)) terminalTools.set(terminalToolKey, status);
       }
-      if (event.kind === "assistant_final" && event.id) {
+      if ((event.kind === "assistant_final" || event.kind === "turn_finalized") && event.id) {
         const id = String(event.id);
         const fingerprint = assistantFinalFingerprint(event);
         const previous = terminalMessages.get(id);
@@ -23399,12 +23413,22 @@ function createDashboardEventGuard(maxEvents = 4096) {
         const nextSeq = Number.isSafeInteger(Number(event.eventSeq)) ? Number(event.eventSeq) : null;
         const revision = event.revision ? String(event.revision) : null;
         const correction = event.correction === true || Boolean(revision);
+        const authoritative = event.kind === "turn_finalized";
         if (previous) {
           if (nextEpoch && previous.eventEpoch === nextEpoch && nextSeq !== null && previous.eventSeq !== null && nextSeq <= previous.eventSeq) return false;
-          if (!correction) return false;
+          if (previous.authoritative && !authoritative) return false;
+          if (authoritative && previous.authoritative && finalStateRank(event) < previous.stateRank) return false;
+          if (!correction && previous.authoritative && authoritative) return false;
           if (revision && revision === previous.revision && fingerprint === previous.fingerprint) return false;
         }
-        terminalMessages.set(id, { fingerprint, eventEpoch: nextEpoch, eventSeq: nextSeq, revision });
+        terminalMessages.set(id, {
+          fingerprint,
+          eventEpoch: nextEpoch,
+          eventSeq: nextSeq,
+          revision,
+          authoritative: previous?.authoritative === true || authoritative,
+          stateRank: Math.max(previous?.stateRank ?? 0, finalStateRank(event))
+        });
       }
       if (event.kind === "messages-reset") {
         terminalTools.clear();
@@ -23526,6 +23550,32 @@ function applyDashboardEvent(input, event) {
       }
     };
     return { state, changed: true };
+  }
+  if (["assistant_content_final", "assistant_final", "turn_finalized"].includes(kind)) {
+    const messageId = String(event.messageId ?? event.id ?? "").trim();
+    if (!messageId) return { state, changed: false, anomaly: "final-missing-message" };
+    const previous2 = state.messages[messageId];
+    const next = {
+      ...previous2 ?? { id: messageId, role: "assistant" },
+      id: messageId,
+      role: "assistant",
+      ...event.text !== void 0 ? { text: String(event.text ?? "") } : {},
+      ...event.turnId !== void 0 ? { turnId: String(event.turnId) } : {},
+      ...event.operationId !== void 0 ? { operationId: String(event.operationId) } : {},
+      ...kind === "turn_finalized" ? {
+        finalized: true,
+        taskState: event.taskState,
+        executionState: event.executionState,
+        goalState: event.goalState,
+        taskContract: event.taskContract,
+        evidenceRefs: event.evidenceRefs,
+        receipt: event.receipt,
+        warnings: Array.isArray(event.warnings) ? event.warnings : [],
+        artifactIncomplete: event.artifactIncomplete === true
+      } : {}
+    };
+    state.messages = { ...state.messages, [messageId]: next };
+    return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
   }
   if (kind === "todo-update") {
     const previousTodos = state.todos;
@@ -25647,7 +25697,8 @@ ${workspaceDir || ""}`;
         }
         return;
       }
-      if (dash.kind === "assistant_final") {
+      if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
+        const isFinalized = dash.kind === "turn_finalized";
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
         cancelStreamingRaf();
@@ -25657,14 +25708,23 @@ ${workspaceDir || ""}`;
         const nextMessage = {
           id: dash.id,
           role: "assistant",
-          text: dash.text,
+          text: dash.text ?? "",
           reasoning: dash.reasoning ?? completedStream?.reasoning,
           reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-          receipt: dash.receipt,
-          taskState: dash.taskState,
-          artifactIncomplete: dash.artifactIncomplete === true,
-          interventionChoice: dash.interventionChoice,
-          warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+          ...dash.turnId ? { turnId: dash.turnId } : {},
+          ...dash.operationId ? { operationId: dash.operationId } : {},
+          ...isFinalized ? {
+            finalized: true,
+            receipt: dash.receipt,
+            taskState: dash.taskState,
+            executionState: dash.executionState,
+            goalState: dash.goalState,
+            taskContract: dash.taskContract,
+            evidenceRefs: dash.evidenceRefs,
+            artifactIncomplete: dash.artifactIncomplete === true,
+            interventionChoice: dash.interventionChoice,
+            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+          } : {}
         };
         let inserted = false;
         setMessages((prev) => {

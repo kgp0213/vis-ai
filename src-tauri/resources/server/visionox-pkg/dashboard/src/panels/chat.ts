@@ -1919,7 +1919,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         }
         return;
       }
-      if (dash.kind === "assistant_final") {
+      if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
+        const isFinalized = dash.kind === "turn_finalized";
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
         cancelStreamingRaf();
@@ -1929,14 +1930,23 @@ const [providerCaps, setProviderCaps] = d2(null);
         const nextMessage = {
           id: dash.id,
           role: "assistant",
-          text: dash.text,
+          text: dash.text ?? "",
           reasoning: dash.reasoning ?? completedStream?.reasoning,
           reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-          receipt: dash.receipt,
-          taskState: dash.taskState,
-          artifactIncomplete: dash.artifactIncomplete === true,
-          interventionChoice: dash.interventionChoice,
-          warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+          ...(dash.turnId ? { turnId: dash.turnId } : {}),
+          ...(dash.operationId ? { operationId: dash.operationId } : {}),
+          ...(isFinalized ? {
+            finalized: true,
+            receipt: dash.receipt,
+            taskState: dash.taskState,
+            executionState: dash.executionState,
+            goalState: dash.goalState,
+            taskContract: dash.taskContract,
+            evidenceRefs: dash.evidenceRefs,
+            artifactIncomplete: dash.artifactIncomplete === true,
+            interventionChoice: dash.interventionChoice,
+            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
+          } : {})
         };
         let inserted = false;
         setMessages((prev) => {

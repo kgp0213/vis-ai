@@ -1,9 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "./atomic-file.mjs";
 
 const PLAN_VERSION = 2;
+
+const PLAN_STEP_STATES = new Set(["pending", "in_progress", "completed", "blocked"]);
 
 function safeSessionName(value) {
   const name = String(value || "desktop").replace(/[\\/:*?"<>|]/g, "_").trim();
@@ -14,7 +16,16 @@ function normalizePlan(parsed, path = null) {
   if (!parsed || ![1, PLAN_VERSION].includes(parsed.version)) throw new Error("unsupported plan schema");
   if (!Array.isArray(parsed.steps) || !Array.isArray(parsed.completedStepIds)) throw new Error("invalid plan structure");
   const steps = parsed.steps.filter((step) => step && typeof step.id === "string" && step.id && typeof step.title === "string" && step.title && typeof step.action === "string" && step.action)
-    .map((step) => ({ id: step.id, title: step.title, action: step.action, ...(new Set(["low", "med", "high"]).has(step.risk) ? { risk: step.risk } : {}) }));
+    .map((step) => ({
+      id: step.id,
+      title: step.title,
+      action: step.action,
+      ...(new Set(["low", "med", "high"]).has(step.risk) ? { risk: step.risk } : {}),
+      status: PLAN_STEP_STATES.has(step.status) ? step.status : (parsed.completedStepIds.includes(step.id) ? "completed" : "pending"),
+      ...(Array.isArray(step.acceptanceCriteria) ? { acceptanceCriteria: step.acceptanceCriteria.filter((item) => typeof item === "string" && item.trim()).map((item) => item.trim().slice(0, 600)).slice(0, 16) } : {}),
+      ...(Array.isArray(step.evidenceRefs) ? { evidenceRefs: step.evidenceRefs.filter((item) => item && typeof item === "object").slice(0, 32).map((item) => ({ ...item })) } : {}),
+      ...(typeof step.blockedReason === "string" && step.blockedReason.trim() ? { blockedReason: step.blockedReason.trim().slice(0, 1000) } : {}),
+    }));
   if (steps.length === 0) throw new Error("plan has no valid steps");
   const completedStepIds = parsed.completedStepIds.filter((id) => typeof id === "string" && id);
   const updatedAt = typeof parsed.updatedAt === "string" && !Number.isNaN(Date.parse(parsed.updatedAt))
@@ -75,6 +86,43 @@ export function createPlanStore(sessionsDir, { logger = console } = {}) {
     return archive;
   }
 
+  function migrationMarkerPath(legacySession) {
+    return resolve(sessionsDir, `${safeSessionName(legacySession)}.plan.migration.json`);
+  }
+
+  /**
+   * Migrate the historical fixed desktop plan exactly once. The original is
+   * copied to a timestamped legacy archive before the active file is removed,
+   * so an interrupted migration never destroys the only copy.
+   */
+  function migrateLegacyPlan(legacySession, targetSession) {
+    const legacy = activePath(legacySession);
+    const target = activePath(targetSession);
+    const marker = migrationMarkerPath(legacySession);
+    if (existsSync(marker) || legacySession === targetSession || !existsSync(legacy)) return { migrated: false, reason: "not-needed" };
+    mkdirSync(sessionsDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backup = resolve(sessionsDir, `${safeSessionName(legacySession)}.plan.${stamp}-legacy.json`);
+    try {
+      const state = loadPlanState(legacySession);
+      copyFileSync(legacy, backup);
+      if (existsSync(target)) {
+        // A real target plan wins. Keep the old plan in the archive for an
+        // explicit user recovery instead of overwriting active work.
+        rmSync(legacy, { force: true });
+        atomicWriteFileSync(marker, `${JSON.stringify({ version: 1, status: "archived", targetSession, backup, migratedAt: new Date().toISOString() }, null, 2)}\n`);
+        return { migrated: false, archived: true, backup };
+      }
+      savePlanState(targetSession, state.steps, state.completedStepIds, state);
+      rmSync(legacy, { force: true });
+      atomicWriteFileSync(marker, `${JSON.stringify({ version: 1, status: "migrated", targetSession, backup, migratedAt: new Date().toISOString() }, null, 2)}\n`);
+      return { migrated: true, targetSession, backup };
+    } catch (error) {
+      logger.warn?.(`[plan-store] legacy plan migration skipped: ${error.message}`);
+      return { migrated: false, reason: "invalid", error: error.message, backup: existsSync(backup) ? backup : null };
+    }
+  }
+
   function listAllPlanArchives() {
     if (!existsSync(sessionsDir)) return [];
     const out = [];
@@ -101,5 +149,5 @@ export function createPlanStore(sessionsDir, { logger = console } = {}) {
     return out.sort((a, b) => b.completedAt.localeCompare(a.completedAt));
   }
 
-  return { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives };
+  return { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives, migrateLegacyPlan };
 }

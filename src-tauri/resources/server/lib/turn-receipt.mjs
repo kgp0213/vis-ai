@@ -60,6 +60,10 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     mediaRecovery: null,
     mediaWarnings: [],
     intervention: { active: false, shown: 0, resolved: 0, fingerprint: null, choice: null },
+    taskContract: null,
+    executionState: "running",
+    goalState: "unknown",
+    evidenceRefs: [],
     completion: null,
   };
 
@@ -127,6 +131,22 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     const warning = boundedText(value, 500).trim();
     if (!warning || state.warnings.includes(warning)) return;
     state.warnings = [...state.warnings, warning].slice(-8);
+  }
+
+  function recordTaskContract(contract) {
+    if (!contract || typeof contract !== "object") return;
+    state.taskContract = JSON.parse(JSON.stringify(contract));
+  }
+
+  function recordGoalVerification(result = {}) {
+    const executionState = boundedText(result.executionState, 80).toLowerCase();
+    const goalState = boundedText(result.goalState, 80).toLowerCase();
+    if (executionState) state.executionState = executionState;
+    if (goalState) state.goalState = goalState;
+    if (Array.isArray(result.evidenceRefs)) state.evidenceRefs = result.evidenceRefs.slice(-64).map((entry) => ({ ...entry }));
+    if (Array.isArray(result.warnings)) {
+      for (const warning of result.warnings) recordWarning(warning);
+    }
   }
 
   function recordToolFailure(failure = {}) {
@@ -474,6 +494,8 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     state.completion = {
       ok: value.ok === true,
       taskState: boundedText(value.taskState, 80) || null,
+      executionState: boundedText(value.executionState ?? state.executionState, 80) || null,
+      goalState: boundedText(value.goalState ?? state.goalState, 80) || null,
       artifactIncomplete: value.artifactIncomplete === true,
       interventionPaused: value.interventionPaused === true,
       continuationNeeded: value.continuationNeeded === true,
@@ -516,6 +538,8 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     observeToolStart,
     recordError,
     recordWarning,
+    recordTaskContract,
+    recordGoalVerification,
     recordToolFailure,
     recordRecovery,
     recordToolRepeat,

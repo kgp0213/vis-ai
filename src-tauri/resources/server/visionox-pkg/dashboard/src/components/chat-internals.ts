@@ -305,7 +305,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     />
   `;
 }
-function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings) {
+function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interventionChoice, warnings, executionState, goalState) {
   if (!receipt || typeof receipt !== "object") return null;
   const completion = receipt.completion || {};
   const tools = receipt.tools || {};
@@ -315,6 +315,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
   const failures = Array.isArray(receipt.toolFailures) ? receipt.toolFailures : [];
   const recoveries = Array.isArray(receipt.recoveries) ? receipt.recoveries : [];
   const state = taskState || completion.taskState || (completion.ok ? "completed" : "unknown");
+  const goal = goalState || receipt.goalState || completion.goalState || (state === "completed" || state === "completed_with_warnings" ? "verified" : "unknown");
   const artifactStatusLabel = {
     verified: t4("chat.artifactVerified"),
     present_unverified: t4("chat.artifactPresentUnverified"),
@@ -332,6 +333,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
         ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${failures.at(-1).code}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
         ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${recoveries.at(-1).recovery}` : ""}</span>` : null}
         <span>${t4("chat.receiptArtifact")}</span><span>${artifactIncomplete ? t4("chat.receiptArtifactIncomplete") : artifactStatusLabel}</span>
+        <span>${t4("chat.receiptGoal")}</span><span>${goal === "verified" ? t4("chat.goalVerified") : goal === "incomplete" ? t4("chat.goalIncomplete") : t4("chat.goalUnknown")}</span>
         ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
         ${intervention.shown > 0 ? html4`<span>${t4("chat.receiptIntervention")}</span><span>${t4("chat.receiptInterventionShown", { count: intervention.shown })}${interventionChoice ? ` · ${t4("chat.receiptChoice", { choice: interventionChoice })}` : ""}</span>` : null}
         ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
@@ -434,7 +436,7 @@ var ChatMessage = N2(function ChatMessage2({ msg, streaming, index, searchMatch,
           </div>
         ` : null}
         ${renderMessageBody(msg.text, role)}
-        ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings) : null}
+        ${role === "assistant" && !streaming ? renderExecutionReceipt(msg.receipt, msg.taskState, msg.artifactIncomplete, msg.interventionChoice, msg.warnings, msg.executionState, msg.goalState) : null}
         ${msg.images && msg.images.length > 0 ? html4`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${msg.images.map(function(imgUrl) { return html4`<a href=${imgUrl} target="_blank" rel="noopener noreferrer" style="display:block;max-width:220px;border-radius:6px;overflow:hidden;border:1px solid var(--border-subtle,#2a2e38)"><img src=${imgUrl} style="width:100%;height:auto;display:block" /></a>`; })}</div>` : null}
         ${streaming ? html4`<span class="chat-streaming-cursor"></span>` : null}
         ${actions}

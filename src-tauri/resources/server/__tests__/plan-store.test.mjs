@@ -40,4 +40,34 @@ describe("active plan store", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("migrates the legacy desktop plan once without overwriting a target plan", () => {
+    const root = mkdtempSync(join(tmpdir(), "visionox-plan-migration-"));
+    try {
+      const store = createPlanStore(root);
+      store.savePlanState("desktop", steps, [], { summary: "legacy" });
+      const first = store.migrateLegacyPlan("desktop", "session-a");
+      assert.equal(first.migrated, true);
+      assert.equal(store.loadPlanState("desktop"), null);
+      assert.equal(store.loadPlanState("session-a").summary, "legacy");
+      assert.equal(store.migrateLegacyPlan("desktop", "session-b").migrated, false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves step verification metadata and archives legacy plan when target exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "visionox-plan-migration-target-"));
+    try {
+      const store = createPlanStore(root);
+      store.savePlanState("desktop", [{ ...steps[0], acceptanceCriteria: ["read file"], evidenceRefs: [{ type: "tool_read", verified: true }] }], [], { summary: "legacy" });
+      store.savePlanState("session-a", steps, [], { summary: "current" });
+      const result = store.migrateLegacyPlan("desktop", "session-a");
+      assert.equal(result.archived, true);
+      assert.equal(store.loadPlanState("session-a").summary, "current");
+      assert.equal(store.listAllPlanArchives().length, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

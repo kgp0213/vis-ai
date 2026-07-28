@@ -126,6 +126,15 @@ test("rejects out-of-order assistant corrections while allowing a newer revision
   assert.equal(guard.accept({ kind: "assistant_final", id: "m1", eventEpoch: "e", eventSeq: 11, eventId: "e:11", correction: true, revision: "finalization-persistence", text: "newer" }), true);
 });
 
+test("accepts authoritative finalization after compatibility content and rejects a late downgrade", async () => {
+  const { createDashboardEventGuard } = await loadReducer();
+  const guard = createDashboardEventGuard();
+  assert.equal(guard.accept({ kind: "assistant_final", id: "m-final", eventEpoch: "e", eventSeq: 1, eventId: "e:1", text: "done" }), true);
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-final", eventEpoch: "e", eventSeq: 2, eventId: "e:2", text: "done", executionState: "completed", goalState: "verified" }), true);
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-final", eventEpoch: "e", eventSeq: 3, eventId: "e:3", text: "done", executionState: "unknown", goalState: "unknown" }), false);
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-final", eventEpoch: "e", eventSeq: 4, eventId: "e:4", revision: "cleanup-warning", correction: true, text: "done", executionState: "completed", goalState: "verified", warnings: ["cleanup"] }), true);
+});
+
 test("scopes terminal tool protection to the turn and step", async () => {
   const { createDashboardEventGuard } = await loadReducer();
   const guard = createDashboardEventGuard();

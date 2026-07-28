@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { closeOperationContext, createOperationContext, isOperationContextActive, recordOperationAuthorizationFact, recordOperationRecovery, recordOperationToolFailure, recordOperationToolSuccess, requestOperationStop, shouldBlockRepeatedToolFailure } from "./operation-context.mjs";
+import { closeOperationContext, createOperationContext, isOperationContextActive, recordOperationAuthorizationFact, recordOperationRecovery, recordOperationToolFailure, recordOperationToolSuccess, recordOperationToolSuccessFact, requestOperationStop, shouldBlockRepeatedToolFailure } from "./operation-context.mjs";
 
 test("operation context carries stable execution identity and starts active", () => {
   const controller = new AbortController();
@@ -121,4 +121,28 @@ test("operation context records deduplicated sanitized authorization facts", () 
   assert.equal(context.authorizationFacts.length, 1);
   assert.equal(context.authorizationFacts[0].rule.value, "npm");
   assert.equal("command" in context.authorizationFacts[0], false);
+});
+
+test("operation context records deduplicated tool success facts without raw output", () => {
+  const context = createOperationContext({ operationId: "operation-success-fact", kind: "chat" });
+  const first = recordOperationToolSuccessFact(context, {
+    toolCallId: "call-success-1",
+    toolName: "run_command",
+    args: { command: "python build.py", env: { SECRET: "hidden" } },
+    recordedAt: "2026-07-28T00:00:00.000Z",
+  });
+  const duplicate = recordOperationToolSuccessFact(context, {
+    toolCallId: "call-success-1",
+    toolName: "run_command",
+    args: { command: "python build.py", env: { SECRET: "changed" } },
+    recordedAt: "2026-07-28T00:01:00.000Z",
+  });
+
+  assert.equal(first.status, "succeeded");
+  assert.equal(first.toolCallId, "call-success-1");
+  assert.match(first.argsFingerprint, /^sha256:[0-9a-f]{64}$/);
+  assert.equal("resultPreview" in first, false);
+  assert.equal(duplicate, first);
+  assert.equal(context.toolSuccesses.length, 1);
+  assert.equal(JSON.stringify(context.toolSuccesses).includes("hidden"), false);
 });

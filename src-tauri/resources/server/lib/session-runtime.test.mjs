@@ -17,6 +17,7 @@ async function createHarness(options = {}) {
   const messages = [];
   let nextMessageId = 1;
   let conversationId = "conversation-1";
+  let sessionName = null;
   let todos = [];
   let goals = [];
   let prompts = [];
@@ -44,6 +45,7 @@ async function createHarness(options = {}) {
     setNextMessageId: (value) => { nextMessageId = value; },
     getLoop: () => loop,
     getConversationId: () => conversationId,
+    getSessionName: () => sessionName,
     getWorkspace: () => root,
     getMode: () => "general",
     modeSummary: () => ({ label: "通用", description: "test" }),
@@ -67,11 +69,25 @@ async function createHarness(options = {}) {
     runtime,
     setLoopMessages(value) { loopMessages = value; },
     setConversationId(value) { conversationId = value; },
+    setSessionName(value) { sessionName = value; },
     setTodos(value) { todos = value; },
     setGoals(value) { goals = value; },
     setPrompts(value) { prompts = value; },
   };
 }
+
+test("session runtime persists the active named-session binding in metadata", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setSessionName("named-session");
+    harness.runtime.appendMessage({ role: "user", text: "hello" });
+    await harness.runtime.writeMeta({ messageCount: 1 });
+    const meta = JSON.parse(await readFile(harness.activeSessionMetaFile, "utf8"));
+    assert.equal(meta.sessionName, "named-session");
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
 
 test("session runtime appends and synchronizes model history", async () => {
   const harness = await createHarness();
@@ -167,6 +183,35 @@ test("session finalization ignores a late lower-certainty result", async () => {
     const entries = (await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     const assistant = entries.find((entry) => entry.id === "assistant-idempotent");
     assert.equal(assistant.taskState, "completed");
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("session finalization can append a cleanup warning without downgrading the terminal fact", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([{ role: "user", content: "write result" }, { role: "assistant", content: "done" }]);
+    const base = {
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "write result" },
+      assistant: { messageId: "assistant-warning", turnId: "turn-warning", text: "done" },
+      operationId: "op-warning",
+      receipt: { completion: { ok: true, taskState: "completed" }, warnings: [] },
+      taskState: "completed",
+    };
+    assert.equal(await harness.runtime.persistTurnFinalization(base), true);
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      ...base,
+      warnings: ["cleanup failed"],
+      receipt: { ...base.receipt, warnings: ["cleanup failed"] },
+      allowWarningCorrection: true,
+    }), true);
+    const entries = (await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const assistant = entries.find((entry) => entry.id === "assistant-warning");
+    assert.equal(assistant.taskState, "completed");
+    assert.deepEqual(assistant.warnings, ["cleanup failed"]);
+    assert.deepEqual(assistant.receipt.warnings, ["cleanup failed"]);
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }

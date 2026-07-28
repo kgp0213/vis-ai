@@ -104,6 +104,11 @@ function newTurn(id, prompt, entry, ordinal) {
     endedAt: null,
     steps: [],
     explicitState: entry?.taskState ?? entry?.state ?? entry?.receipt?.taskState ?? null,
+    executionState: entry?.executionState ?? entry?.receipt?.executionState ?? null,
+    goalState: entry?.goalState ?? entry?.receipt?.goalState ?? null,
+    taskContract: entry?.taskContract && typeof entry.taskContract === "object" ? { ...entry.taskContract } : null,
+    evidenceRefs: Array.isArray(entry?.evidenceRefs) ? entry.evidenceRefs.slice(-64) : [],
+    warnings: Array.isArray(entry?.warnings) ? entry.warnings.slice(-16) : [],
     hasAssistant: false,
     hasUnresolvedTool: false,
     hasExecutionFacts: Boolean(entry?.operationId || entry?.taskState || entry?.receipt || entry?.artifactFiles),
@@ -238,6 +243,11 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
       current.operationId = safeId(entry.operationId, current.operationId ?? null);
       current.hasExecutionFacts = true;
     }
+    if (entry.executionState || entry.receipt?.executionState) current.executionState = entry.executionState ?? entry.receipt.executionState;
+    if (entry.goalState || entry.receipt?.goalState) current.goalState = entry.goalState ?? entry.receipt.goalState;
+    if (entry.taskContract && typeof entry.taskContract === "object") current.taskContract = { ...entry.taskContract };
+    if (Array.isArray(entry.evidenceRefs)) current.evidenceRefs = entry.evidenceRefs.slice(-64);
+    if (Array.isArray(entry.warnings)) current.warnings = entry.warnings.slice(-16);
     if (entry.phase || entry.receipt?.phase) current.phase = entry.phase ?? entry.receipt.phase;
     const explicitState = entry.taskState
       ?? entry.state
@@ -252,6 +262,17 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
         `receipt-${messageOrdinal + 1}`,
       );
       receipts.set(receiptId, { id: receiptId, ...entry.receipt });
+      if (entry.receipt.executionState) current.executionState = entry.receipt.executionState;
+      if (entry.receipt.goalState) current.goalState = entry.receipt.goalState;
+      if (entry.receipt.taskContract && typeof entry.receipt.taskContract === "object") current.taskContract = {
+        ...(current.taskContract ?? {}),
+        ...entry.receipt.taskContract,
+        ...(Array.isArray(current.taskContract?.expectedOutputs) && !Array.isArray(entry.receipt.taskContract.expectedOutputs)
+          ? { expectedOutputs: current.taskContract.expectedOutputs }
+          : {}),
+      };
+      if (Array.isArray(entry.receipt.evidenceRefs)) current.evidenceRefs = entry.receipt.evidenceRefs.slice(-64);
+      if (Array.isArray(entry.receipt.warnings)) current.warnings = entry.receipt.warnings.slice(-16);
       for (const evidence of Array.isArray(entry.receipt.artifactEvidence) ? entry.receipt.artifactEvidence : []) {
         for (const file of Array.isArray(evidence?.files) ? evidence.files : []) {
           const artifact = artifactEntity({ ...file, verified: evidence.verified, role: "artifact" }, artifacts.size, sessionId);

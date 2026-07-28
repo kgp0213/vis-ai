@@ -175,6 +175,23 @@ test("turn receipt persists an explicit execution phase without changing model h
   assert.equal(snapshot.phase.toolCallId, "call-phase");
 });
 
+test("turn receipt stores task contract and host goal verification facts", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-contract", operationId: "op-contract" });
+  receipt.recordTaskContract({ contractVersion: 1, intent: "生成文件", expectedOutputs: [{ id: "out" }] });
+  receipt.recordGoalVerification({
+    executionState: "completed_with_warnings",
+    goalState: "verified",
+    evidenceRefs: [{ evidenceId: "artifact-1", type: "artifact", verified: true }],
+    warnings: [{ code: "tool_recovery", message: "恢复后继续" }],
+  });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.taskContract.intent, "生成文件");
+  assert.equal(snapshot.executionState, "completed_with_warnings");
+  assert.equal(snapshot.goalState, "verified");
+  assert.equal(snapshot.evidenceRefs[0].verified, true);
+  assert.equal(snapshot.warnings.length, 1);
+});
+
 test("unknown tool results are terminal and reject late success updates", () => {
   const receipt = createTurnReceipt({ turnId: "turn-unknown" });
   receipt.observeToolProgress({ toolCallId: "call-1", name: "run_command", status: "unknown" });
