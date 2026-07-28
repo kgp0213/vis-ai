@@ -122,11 +122,19 @@ export function createBackgroundTaskNotificationRuntime({
     };
   }
 
-  function claim({ sessionId = null, workspace = null, limit = 4 } = {}) {
+  function claim({ operationId = null, sessionId = null, workspace = null, limit = 4 } = {}) {
     const claimed = [];
     const max = Math.max(1, Math.min(8, Number(limit) || 4));
+    const expectedOperationId = text(operationId, 180);
+    const matchesOperation = (notification) => {
+      // Legacy notifications without an operation binding stay pending when
+      // a caller supplies an operation; this prevents cross-operation leaks.
+      if (!expectedOperationId) return true;
+      return notification.sourceOperationId === expectedOperationId;
+    };
     for (const [id, notification] of pending) {
       if (claimed.length >= max) break;
+      if (!matchesOperation(notification)) continue;
       if (sessionId && notification.sessionId && notification.sessionId !== String(sessionId)) continue;
       if (!sameWorkspace(workspace, notification.workspace)) continue;
       pending.delete(id);
@@ -135,6 +143,7 @@ export function createBackgroundTaskNotificationRuntime({
     }
     for (const [id, notification] of overflowed) {
       if (claimed.length >= max) break;
+      if (!matchesOperation(notification)) continue;
       if (sessionId && notification.sessionId && notification.sessionId !== String(sessionId)) continue;
       if (!sameWorkspace(workspace, notification.workspace)) continue;
       overflowed.delete(id);

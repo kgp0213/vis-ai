@@ -513,6 +513,7 @@ export const zhCN = {
     stateIncomplete: "未完成",
     stateCompletedWarn: "已完成但有提醒",
     statePendingConfirm: "结果待确认",
+    stateUnknown: "结果无法确认",
     receiptRecent: "最近 {name}",
     receiptRetryable: "可恢复",
     receiptRepeatBlocked: "同类失败已达到建议上限",

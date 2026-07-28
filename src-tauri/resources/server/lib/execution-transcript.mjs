@@ -1,5 +1,6 @@
 import { redactToolProgressValue } from "./tool-progress.mjs";
 import { normalizeGoal, normalizePromptSteering, normalizeTodo } from "./execution-entities.mjs";
+import { normalizeResourceReference } from "./resource-reference.mjs";
 
 const INTERNAL_USER_PROMPT_RE = /^\[(?:系统自动续跑\s+\d+\/\d+|系统后台任务接管\s+document:[^\]]+|系统通用复杂任务调度|系统步骤检查点)\]/u;
 const TERMINAL_TOOL_STATES = new Set(["succeeded", "failed", "cancelled", "unknown"]);
@@ -27,13 +28,26 @@ function isInternalUser(entry) {
 function attachmentEntity(value, index, sessionId) {
   const source = typeof value === "string" ? { id: value } : value;
   const id = safeId(source?.id, `att-${index + 1}`);
+  const size = Number.isFinite(Number(source?.size)) ? Math.max(0, Number(source.size)) : 0;
+  const resource = normalizeResourceReference({
+    resourceId: id,
+    kind: source?.resource?.kind ?? source?.kind ?? source?.mimeType?.split("/")[0] ?? "attachment",
+    preview: source?.resource?.preview ?? source?.name ?? "",
+    totalBytes: source?.resource?.totalBytes ?? size,
+    offsetBytes: source?.resource?.offsetBytes ?? 0,
+    nextOffsetBytes: source?.resource?.nextOffsetBytes ?? 0,
+    complete: source?.resource?.complete === true,
+    expiresAt: source?.resource?.expiresAt,
+    readAction: source?.resource?.readAction ?? "attachment_content",
+  });
   return {
     id,
     kind: source?.kind ?? source?.mimeType?.split("/")[0] ?? "file",
     mimeType: source?.mimeType ?? null,
     name: source?.name ?? null,
-    size: Number.isFinite(Number(source?.size)) ? Math.max(0, Number(source.size)) : null,
+    size: Number.isFinite(Number(source?.size)) ? size : null,
     sessionId: sessionId ?? null,
+    resource,
   };
 }
 
@@ -92,6 +106,7 @@ function newTurn(id, prompt, entry, ordinal) {
     explicitState: entry?.taskState ?? entry?.state ?? entry?.receipt?.taskState ?? null,
     hasAssistant: false,
     hasUnresolvedTool: false,
+    hasExecutionFacts: Boolean(entry?.operationId || entry?.taskState || entry?.receipt || entry?.artifactFiles),
   };
 }
 
@@ -131,6 +146,10 @@ function inferTurnState(turn) {
     return explicit;
   }
   if (!turn?.hasAssistant || turn?.hasUnresolvedTool) return "unknown";
+  // Legacy assistant-only conversations may still use the historical display
+  // inference. Once a turn carries execution facts, however, text alone is
+  // not evidence that the operation or its artifacts completed.
+  if (turn?.hasExecutionFacts) return "unknown";
   return "completed";
 }
 
@@ -215,15 +234,19 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
   const applyPersistedFacts = (entry, current) => {
     if (!current || !entry || typeof entry !== "object") return;
     if (entry.messageId || entry.id) current.messageId = safeId(entry.messageId ?? entry.id, current.messageId ?? null);
-    if (entry.operationId) current.operationId = safeId(entry.operationId, current.operationId ?? null);
+    if (entry.operationId) {
+      current.operationId = safeId(entry.operationId, current.operationId ?? null);
+      current.hasExecutionFacts = true;
+    }
     if (entry.phase || entry.receipt?.phase) current.phase = entry.phase ?? entry.receipt.phase;
     const explicitState = entry.taskState
       ?? entry.state
       ?? entry.receipt?.taskState
       ?? entry.receipt?.completion?.taskState
-      ?? null;
+      ?? (entry.receipt?.completion?.ok === true ? "completed" : entry.receipt?.completion?.ok === false ? "unknown" : null);
     if (explicitState) current.explicitState = explicitState;
     if (entry.receipt && typeof entry.receipt === "object") {
+      current.hasExecutionFacts = true;
       const receiptId = safeId(
         entry.receipt.turnId ?? entry.receipt.requestId ?? entry.operationId,
         `receipt-${messageOrdinal + 1}`,
@@ -245,6 +268,7 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
       });
     }
     for (const rawArtifact of Array.isArray(entry.artifactFiles) ? entry.artifactFiles : []) {
+      current.hasExecutionFacts = true;
       const artifact = artifactEntity(rawArtifact, artifacts.size, sessionId);
       artifacts.set(artifact.id, artifact);
     }
@@ -302,6 +326,7 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
         });
       }
       for (const call of Array.isArray(entry.tool_calls) ? entry.tool_calls : []) {
+        turn.hasExecutionFacts = true;
         const frame = toolFrameFrom({ ...call, toolCallId: call.id, toolName: call.function?.name, content: "" }, `call-${messageOrdinal}`, messageOrdinal, turn.turnId);
         step.frames.push(frame);
         toolFrames.set(scopedToolFrameKey(turn.turnId, frame.toolCallId), frame);
@@ -311,12 +336,14 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
     }
     if (entry.role === "execution") {
       const current = ensureTurn(entry);
+      current.hasExecutionFacts = true;
       if (entry.turnId) rekeyTurn(current, entry.turnId, toolFrames);
       applyPersistedFacts(entry, current);
       continue;
     }
     if (entry.role === "tool") {
       const current = ensureTurn();
+      current.hasExecutionFacts = true;
       const frame = toolFrameFrom(entry, `tool-${messageOrdinal}`, messageOrdinal, current.turnId);
       const existing = toolFrames.get(scopedToolFrameKey(current.turnId, frame.toolCallId));
       if (existing) {

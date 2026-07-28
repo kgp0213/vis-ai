@@ -1,4 +1,5 @@
 import { redactToolProgressValue } from "./tool-progress.mjs";
+import { normalizeResourceReference } from "./resource-reference.mjs";
 
 const TASK_ID_RE = /^bg-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "timed_out", "killed", "lost", "unknown"]);
@@ -119,6 +120,16 @@ export function projectTaskOutput({ task = {}, window = {}, reference = null, si
     complete: window.complete === true || nextOffsetBytes >= totalBytes,
     output,
   };
+  result.resource = normalizeResourceReference({
+    resourceId: task?.outputResourceId ?? (reference?.taskId ? `task-output:${reference.taskId}` : null),
+    kind: "task-output",
+    preview: output,
+    totalBytes,
+    offsetBytes,
+    nextOffsetBytes,
+    complete: result.complete,
+    readAction: "job_output",
+  });
   if (block === true && status === "running") {
     result.nextStep = "任务仍在运行；不要重复阻塞等待，继续其他工作或等待完成通知。";
   }

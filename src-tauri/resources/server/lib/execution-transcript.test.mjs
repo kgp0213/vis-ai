@@ -5,7 +5,7 @@ import { paginateExecutionTranscript, projectExecutionTranscript } from "./execu
 
 test("projects a legacy JSONL conversation into turn, step and tool frames", () => {
   const transcript = projectExecutionTranscript([
-    { role: "user", content: "读取文件并总结", attachments: [{ id: "att-1", kind: "file", name: "a.txt" }] },
+    { role: "user", content: "读取文件并总结", attachments: [{ id: "att-1", kind: "file", name: "a.txt", size: 120 }] },
     { role: "assistant", content: "我先读取文件", tool_calls: [{ id: "call-1", function: { name: "read_file" } }] },
     { role: "tool", toolCallId: "call-1", toolName: "read_file", content: "文件内容", toolStatus: "succeeded" },
     { role: "assistant", content: "已完成总结" },
@@ -21,6 +21,9 @@ test("projects a legacy JSONL conversation into turn, step and tool frames", () 
   assert.equal(toolFrames.length, 1);
   assert.equal(toolFrames[0].state, "succeeded");
   assert.equal(transcript.attachments[0].sessionId, "session-1");
+  assert.equal(transcript.attachments[0].resource.resourceId, "att-1");
+  assert.equal(transcript.attachments[0].resource.totalBytes, 120);
+  assert.equal(transcript.attachments[0].resource.readAction, "attachment_content");
 });
 
 test("scopes reused provider tool call ids to their turn", () => {
@@ -80,6 +83,22 @@ test("does not infer completion for an unfinished turn and marks display truncat
   const frame = snapshot.items[0].steps[0].frames.find((item) => item.kind === "text");
   assert.equal(frame.truncated, true);
   assert.equal(frame.textLength, 12_100);
+});
+
+test("does not infer task completion from assistant text when execution facts lack a terminal receipt", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "生成文件", operationId: "op-no-receipt" },
+    { role: "assistant", operationId: "op-no-receipt", content: "已经生成" },
+  ]);
+  assert.equal(snapshot.items[0].state, "unknown");
+});
+
+test("accepts an explicit successful receipt as the execution terminal fact", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "执行检查", operationId: "op-receipt" },
+    { role: "assistant", operationId: "op-receipt", content: "已完成", receipt: { completion: { ok: true } } },
+  ]);
+  assert.equal(snapshot.items[0].state, "completed");
 });
 
 test("projects artifact and receipt facts separately from display text", () => {

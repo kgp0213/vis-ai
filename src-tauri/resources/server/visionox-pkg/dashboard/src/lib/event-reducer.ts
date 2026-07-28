@@ -76,9 +76,24 @@ export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard
       const toolCallId = String(event.toolCallId ?? event.id ?? "");
       const status = String(event.status ?? "");
       if ((event.kind === "tool" || event.kind === "tool_start") && toolCallId) {
-        const previous = terminalTools.get(toolCallId);
-        if (previous && TERMINAL_TOOL_STATES.has(previous)) return false;
-        if (TERMINAL_TOOL_STATES.has(status as TerminalState)) terminalTools.set(toolCallId, status as TerminalState);
+        // A provider may reuse a call id in a later turn. Scope terminal
+        // protection to the execution frame so a prior turn cannot reject a
+        // valid queued/running event from the new turn.
+        const terminalToolKey = JSON.stringify([
+          String(event.turnId ?? "legacy"),
+          String(event.stepId ?? ""),
+          toolCallId,
+        ]);
+        const previous = terminalTools.get(terminalToolKey);
+        const recoveryStatus = ["queued", "running", "recovered"].includes(status);
+        // A failed tool may have an explicit retry/recovery frame with the
+        // same stable call id. Reopen only that failure boundary; once a
+        // frame succeeds, late updates remain rejected.
+        if (previous && TERMINAL_TOOL_STATES.has(previous)) {
+          if (previous !== "failed" || !recoveryStatus) return false;
+          terminalTools.delete(terminalToolKey);
+        }
+        if (TERMINAL_TOOL_STATES.has(status as TerminalState)) terminalTools.set(terminalToolKey, status as TerminalState);
       }
 
       if (event.kind === "assistant_final" && event.id) {
@@ -112,6 +127,7 @@ export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard
 }
 
 const terminalStates = new Set(["completed", "succeeded", "failed", "cancelled", "unknown"]);
+const failedRecoveryStates = new Set(["queued", "running", "recovered"]);
 
 export function createDashboardReducerState(seed?: Partial<DashboardReducerState>): DashboardReducerState {
   return {
@@ -142,6 +158,18 @@ function entityBucket(kind: string, event: any): keyof Pick<DashboardReducerStat
   if (explicit === "todo" || event?.kind === "todo-update" || event?.kind?.startsWith("todo.")) return "todos";
   if (explicit === "prompt" || event?.kind === "prompt-update" || event?.kind === "operation-steering" || event?.kind?.startsWith("prompt.")) return "prompts";
   return null;
+}
+
+function entityIdFor(bucket: ReturnType<typeof entityBucket>, event: any, payload: any): string {
+  const supplied = String(event.entityId ?? event.toolCallId ?? event.interactionId ?? event.attachmentId ?? event.artifactId ?? event.id ?? payload?.id ?? "");
+  if (bucket !== "tools") return supplied;
+  const callId = String(event.toolCallId ?? payload?.toolCallId ?? event.id ?? payload?.id ?? "").trim();
+  const turnId = String(event.turnId ?? payload?.turnId ?? "").trim();
+  const stepId = String(event.stepId ?? payload?.stepId ?? "").trim();
+  const suppliedEntityId = String(event.entityId ?? "").trim();
+  const scopeIsMissing = !suppliedEntityId || suppliedEntityId === callId;
+  if (callId && (turnId || stepId) && scopeIsMissing) return JSON.stringify([turnId || "legacy", stepId || "legacy", callId]);
+  return supplied;
 }
 
 export function applyDashboardEvent(input: DashboardReducerState, event: any): { state: DashboardReducerState; changed: boolean; duplicate?: boolean; resyncRequired?: boolean; anomaly?: string } {
@@ -255,11 +283,14 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
   const entityPayload = kind === "operation-steering" && event.steering && typeof event.steering === "object"
     ? event.prompt ?? event.steering
     : payload;
-  const id = String(event.entityId ?? event.toolCallId ?? event.interactionId ?? event.attachmentId ?? event.artifactId ?? event.id ?? entityPayload?.id ?? "");
+  const id = entityIdFor(bucket, event, entityPayload);
   if (!bucket || !id) return { state, changed: false };
   const previous = state[bucket][id];
   const requestedState = String(entityPayload.state ?? payload.state ?? event.status ?? (String(event.kind).split(".").at(-1) ?? ""));
-  if (previous && terminalStates.has(String(previous.state)) && requestedState && requestedState !== previous.state) {
+  const canReopenFailedTool = bucket === "tools"
+    && String(previous?.state ?? "") === "failed"
+    && failedRecoveryStates.has(requestedState);
+  if (previous && terminalStates.has(String(previous.state)) && requestedState && requestedState !== previous.state && !canReopenFailedTool) {
     state.anomalies.push({ type: "late-terminal-update", entityId: id, state: requestedState });
     return { state, changed: false, anomaly: "late-terminal-update" };
   }
@@ -386,19 +417,50 @@ function splitDelta(event: any, maxChars: number): any[] {
 /** Coalesces contiguous transient deltas; control/terminal events remain barriers. */
 export function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24000, delayMs = 16 } : { onFlush: (events: any[]) => void; maxEvents?: number; maxChars?: number; delayMs?: number }): DashboardBatcher {
   const queue: any[] = [];
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timer: any = null;
+  let timerKind: "raf" | "timeout" | null = null;
   let disposed = false;
   const eventLimit = Math.max(1, maxEvents);
   const charLimit = Math.max(1, maxChars);
   const flush = () => {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+      else clearTimeout(timer);
+    }
     timer = null;
+    timerKind = null;
     if (disposed || queue.length === 0) return;
-    const batch = queue.splice(0);
+    const batch: any[] = [];
+    let chars = 0;
+    while (queue.length > 0 && batch.length < eventLimit) {
+      const next = queue[0];
+      const nextChars = eventChars(next);
+      if (batch.length > 0 && chars + nextChars > charLimit) break;
+      batch.push(queue.shift());
+      chars += nextChars;
+    }
     onFlush(batch);
+    if (queue.length > 0 && !disposed) schedule();
+  };
+  const flushAll = () => {
+    if (timer) {
+      if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+      else clearTimeout(timer);
+    }
+    timer = null;
+    timerKind = null;
+    if (disposed || queue.length === 0) return;
+    onFlush(queue.splice(0));
   };
   const schedule = () => {
     if (timer || disposed) return;
+    const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
+    if (visible && typeof requestAnimationFrame === "function") {
+      timerKind = "raf";
+      timer = requestAnimationFrame(() => flush());
+      return;
+    }
+    timerKind = "timeout";
     timer = setTimeout(flush, Math.max(0, delayMs));
   };
   return {
@@ -408,7 +470,9 @@ export function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars 
       const chunks = DELTA_KINDS.has(kind) ? splitDelta(event, charLimit) : [event];
       for (const chunk of chunks) {
         const isDelta = DELTA_KINDS.has(String(chunk.kind ?? ""));
-        if (!isDelta) flush();
+        // Control and terminal events are ordering barriers: all queued
+        // deltas must be delivered before the control event is observed.
+        if (!isDelta) flushAll();
         const previous = queue.at(-1);
         if (isDelta && previous && canMergeDelta(previous, chunk)) {
           queue[queue.length - 1] = mergeDelta(previous, chunk);
@@ -423,8 +487,12 @@ export function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars 
     },
     flush,
     discard(predicate) {
-      if (timer) clearTimeout(timer);
+      if (timer) {
+        if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+        else clearTimeout(timer);
+      }
       timer = null;
+      timerKind = null;
       if (typeof predicate !== "function") {
         queue.splice(0);
         return;
@@ -436,8 +504,14 @@ export function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars 
     },
     dispose() {
       if (disposed) return;
-      flush();
+      flushAll();
       disposed = true;
+      if (timer) {
+        if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+        else clearTimeout(timer);
+        timer = null;
+        timerKind = null;
+      }
     },
   };
 }

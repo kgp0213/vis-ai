@@ -23,6 +23,7 @@ import { html as html4 } from "../lib/html.js";
 import { confirmExternalArtifactOpen, showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
 import { applyDashboardEvent as reduceDashboardEvent, createDashboardEventBatcher, createDashboardEventGuard, createDashboardReducerState } from "../lib/event-reducer.js";
+import { groupToolMessages, toolFrameMatches } from "../lib/chat-turn-rendering.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { IconModel, IconWorkspace, IconJobs, IconSearch, IconWand, IconAttach, IconSkill } from "../ui/index.js";
 const N2: any = preactMemo;
@@ -169,6 +170,8 @@ function upsertToolProgress(items, dash) {
   const next = {
     id,
     toolCallId,
+    turnId: dash.turnId || null,
+    stepId: dash.stepId || null,
     role: "tool",
     text: dash.content || "",
     toolName: dash.toolName,
@@ -181,7 +184,7 @@ function upsertToolProgress(items, dash) {
     diagnosticMessage: dash.message || null,
     repeatFailureBlocked: dash.repeatFailureBlocked === true,
   };
-  const index = items.findIndex((item) => String(item.toolCallId || item.id) === toolCallId || item.id === id);
+  const index = items.findIndex((item) => toolFrameMatches(item, next));
   if (index < 0) return [...items, next];
   const copy = [...items];
   copy[index] = { ...copy[index], ...next, text: next.text || copy[index].text || "" };
@@ -191,8 +194,16 @@ function upsertToolProgress(items, dash) {
 function upsertActiveTool(items, dash) {
   const toolCallId = String(dash.toolCallId || dash.id || "");
   if (!toolCallId) return items;
-  const next = { id: dash.id, toolCallId, toolName: dash.toolName, args: dash.args, status: dash.status || "running" };
-  const index = items.findIndex((item) => item.toolCallId === toolCallId);
+  const next = {
+    id: dash.id,
+    toolCallId,
+    turnId: dash.turnId || null,
+    stepId: dash.stepId || null,
+    toolName: dash.toolName,
+    args: dash.args,
+    status: dash.status || "running",
+  };
+  const index = items.findIndex((item) => toolFrameMatches(item, next));
   if (index < 0) return [...items, next];
   const copy = [...items];
   copy[index] = { ...copy[index], ...next };
@@ -4120,21 +4131,12 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
   const remoteHiddenCount = Math.max(0, totalMessages - messages.length);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
   const displayTotal = Math.max(totalMessages, allMessages.length);
-  // 连续的工具消息合并为一个工作步骤组，单条工具消息保持原样渲染
-  const renderUnits = [];
-  renderedMessages.forEach((m3, i3) => {
-    const globalIndex = i3 + hiddenCount;
-    if (m3.role === "tool") {
-      const last = renderUnits[renderUnits.length - 1];
-      if (last?.kind === "toolGroup") {
-        last.items.push({ msg: m3, index: globalIndex });
-      } else {
-        renderUnits.push({ kind: "toolGroup", id: `tg-${m3.id ?? globalIndex}`, items: [{ msg: m3, index: globalIndex }] });
-      }
-    } else {
-      renderUnits.push({ kind: "msg", msg: m3, index: globalIndex });
-    }
-  });
+  // Prefer stable turn/step identities; legacy messages retain contiguous
+  // grouping only when no identity is available.
+  const renderUnits = groupToolMessages(renderedMessages).map((unit) => ({
+    ...unit,
+    items: unit.items?.map((item) => ({ ...item, index: item.index + hiddenCount })),
+  }));
   const renderChatMessage = (m3, globalIndex) => html4`
                 <${ChatMessage}
                   key=${m3.id}

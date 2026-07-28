@@ -30,6 +30,18 @@ test("queues terminal facts by session and workspace and deduplicates them", () 
   assert.equal(runtime.claim({ sessionId: "s", workspace: "C:/Work" }).length, 0);
 });
 
+test("does not let a later operation claim an earlier operation notification", () => {
+  const runtime = createBackgroundTaskNotificationRuntime();
+  runtime.enqueue(
+    { taskId: "bg-cross-operation", running: false, exitCode: 0 },
+    { operationId: "op-a", sessionId: "s", workspace: "C:/work" },
+  );
+
+  assert.equal(runtime.claim({ operationId: "op-b", sessionId: "s", workspace: "C:/work" }).length, 0);
+  const [claimed] = runtime.claim({ operationId: "op-a", sessionId: "s", workspace: "C:/work" });
+  assert.equal(claimed?.sourceOperationId, "op-a");
+});
+
 test("failed notification can be released after persistence failure and redacts output", () => {
   const runtime = createBackgroundTaskNotificationRuntime();
   const queued = runtime.enqueue({

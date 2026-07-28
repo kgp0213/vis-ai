@@ -218,5 +218,6 @@ test("background task panel does not reactivate the retired document worker", ()
   assert.match(launcher, /registerShellTools\(tools/);
   assert.match(launcher, /当前会话上下文清理失败/);
   assert.match(launcher, /new CacheFirstLoop\(/);
-  assert.match(launcher, /for await \(const ev of modelRequestObserver\.iterate\(requestContext, \(\) => loop\.step\(loopInput\)\)\)/);
+  assert.match(launcher, /for await \(const ev of modelRequestObserver\.iterate\(requestContext, \(\) => invokeLoopStepWithProviderProjection\(/);
+  assert.match(launcher, /invokeLoopStepWithProviderProjection,[\s\S]{0,120}projectProviderRequest,[\s\S]{0,120}= await importEarly\("\.\/lib\/provider-request-projector\.mjs"\)/);
 });

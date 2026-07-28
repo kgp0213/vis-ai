@@ -20,14 +20,24 @@ function pathsFor(args = {}) {
   return [...new Set(values.map((value) => text(value).replace(/\\/g, "/").replace(/\/+$/u, "").toLowerCase()).filter(Boolean))];
 }
 
+function normalizedList(values) {
+  return [...new Set((Array.isArray(values) ? values : [values])
+    .map((value) => text(value).replace(/\\/g, "/").replace(/\/+$/u, "").toLowerCase())
+    .filter(Boolean))];
+}
+
 export function toolResourceClaims(call = {}) {
   const name = text(call.name ?? call.toolName ?? call.function?.name).toLowerCase();
   const args = parseCallArgs(call);
   const paths = pathsFor(args);
   const recipients = [args.to, args.recipient, args.chatId, args.conversationId].map(text).filter(Boolean);
   const attachments = (Array.isArray(args.attachments) ? args.attachments : []).map((item) => text(item?.sha256 ?? item?.id ?? item)).filter(Boolean);
+  const workspace = text(call.workspace ?? call.workspaceSnapshot ?? args.workspace ?? args.cwd).replace(/\\/g, "/").replace(/\/+$/u, "").toLowerCase();
+  const dlpBindings = normalizedList(call.dlpBindingId ?? call.dlpBinding ?? args.documentRef ?? args.plaintextBindingId);
+  const mcpServers = normalizedList(call.mcpServer ?? call.mcpServerName ?? call.serverName ?? args.mcpServer);
+  const effectTypes = normalizedList(call.effectType ?? call.sideEffectType ?? args.effectType);
   const readOnly = READ_ONLY_TOOLS.has(name) && call.effect !== true && call.write !== true;
-  return { name, paths, recipients, attachments, readOnly, declared: paths.length > 0 || recipients.length > 0 || attachments.length > 0 };
+  return { name, paths, recipients, attachments, workspace, dlpBindings, mcpServers, effectTypes, readOnly, declared: paths.length > 0 || recipients.length > 0 || attachments.length > 0 || Boolean(workspace) || dlpBindings.length > 0 || mcpServers.length > 0 || effectTypes.length > 0 };
 }
 
 function pathOverlaps(left, right) {
@@ -42,6 +52,10 @@ export function toolClaimsConflict(left, right) {
   if (a.paths.some((path) => b.paths.some((other) => pathOverlaps(path, other)))) return true;
   if (a.recipients.some((recipient) => b.recipients.includes(recipient))) return true;
   if (a.attachments.some((item) => b.attachments.includes(item))) return true;
+  if (a.workspace && b.workspace && a.workspace !== b.workspace) return true;
+  if (a.dlpBindings.some((item) => b.dlpBindings.includes(item))) return true;
+  if (a.mcpServers.some((item) => b.mcpServers.includes(item))) return true;
+  if (a.effectTypes.some((item) => b.effectTypes.includes(item))) return true;
   return false;
 }
 

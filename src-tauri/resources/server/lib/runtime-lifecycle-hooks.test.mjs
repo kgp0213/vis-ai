@@ -35,6 +35,9 @@ describe("runtime lifecycle hooks", () => {
     assert.equal(calls, 0);
     assert.equal(outcome.completed, 0);
     assert.equal(hooks.supportedEvents().includes("tool.cancelled"), true);
+    for (const event of ["tool.queued", "tool.running", "tool.succeeded", "tool.failed", "tool.cancelled", "tool.unknown", "tool.recovered", "tool.repeat"]) {
+      assert.doesNotThrow(() => hooks.register(event, `observer-${event}`, async () => {}));
+    }
   });
 
   test("supports cancellable policy boundary hooks without exposing decisions to the loop", async () => {

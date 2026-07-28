@@ -5,10 +5,12 @@ const MAX_ARTIFACT_EVENTS = 16;
 const MAX_ERROR_EVENTS = 8;
 const MAX_MODEL_RETRIES = 12;
 const MAX_PROVIDER_RESULTS = 16;
+const MAX_PROVIDER_PROJECTIONS = 16;
 const MAX_TOOL_FAILURES = 32;
 const MAX_RECOVERIES = 32;
 const MAX_TOOL_REPEATS = 16;
 const MAX_AUTHORIZATION_FACTS = 32;
+const MAX_LIFECYCLE_HOOKS = 32;
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").slice(0, limit);
@@ -32,6 +34,8 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     version: 1,
     turnId: turnId ? String(turnId) : null,
     requestId: requestId ? String(requestId) : null,
+    operationId: operationId ? String(operationId) : null,
+    sessionId: sessionId ? String(sessionId) : null,
     startedAt,
     phase: phaseTracker.snapshot(),
     tools: { dispatches: 0, results: 0, successes: 0, failures: 0, lastName: null },
@@ -41,9 +45,11 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     recoveries: [],
     toolRepeats: [],
     authorizationFacts: [],
+    lifecycleHooks: [],
     errors: [],
     modelRetries: [],
     providerResults: [],
+    providerProjections: [],
     artifactEvidence: [],
     warnings: [],
     documentBindings: [],
@@ -200,6 +206,31 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     for (const fact of Array.isArray(facts) ? facts : []) recordAuthorizationFact(fact);
   }
 
+  function recordLifecycleHook(fact = {}) {
+    if (!fact || typeof fact !== "object") return;
+    const statuses = Array.isArray(fact.result?.results)
+      ? fact.result.results.map((item) => boundedText(item?.status, 24) || "unknown")
+      : [];
+    const next = {
+      event: boundedText(fact.event, 80) || "unknown",
+      operationId: boundedText(fact.operationId, 180) || state.operationId || null,
+      toolCallId: boundedText(fact.toolCallId, 180) || null,
+      turnId: boundedText(fact.turnId, 180) || state.turnId || null,
+      stepId: boundedText(fact.stepId, 180) || null,
+      attempt: Math.max(1, Number(fact.attempt) || 1),
+      statuses,
+      ignoredDecision: fact.ignoredDecision === true,
+      recordedAt: boundedText(fact.recordedAt, 40) || new Date().toISOString(),
+    };
+    const duplicate = state.lifecycleHooks.some((item) => (
+      item.event === next.event
+      && item.toolCallId === next.toolCallId
+      && item.attempt === next.attempt
+      && JSON.stringify(item.statuses) === JSON.stringify(next.statuses)
+    ));
+    if (!duplicate) state.lifecycleHooks = [...state.lifecycleHooks, next].slice(-MAX_LIFECYCLE_HOOKS);
+  }
+
   function recordModelRetry(event = {}) {
     const retry = {
       requestId: boundedText(event.requestId, 160) || state.requestId,
@@ -235,6 +266,34 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     state.providerResults.push(normalized);
     if (state.providerResults.length > MAX_PROVIDER_RESULTS) state.providerResults.shift();
     return true;
+  }
+
+  function recordProviderProjection(projection = {}) {
+    if (!projection || typeof projection !== "object") return;
+    const anomalies = (Array.isArray(projection.anomalies) ? projection.anomalies : [])
+      .filter((item) => item && typeof item === "object")
+      .slice(0, 32)
+      .map((item) => ({
+        code: boundedText(item.code, 100) || "provider_request_anomaly",
+        toolCallId: boundedText(item.toolCallId, 180) || null,
+        changed: item.changed === true,
+        detail: item.detail && typeof item.detail === "object" ? { ...item.detail } : null,
+      }));
+    if (anomalies.length === 0 && projection.changed !== true) return;
+    const next = {
+      requestId: boundedText(projection.requestId, 160) || state.requestId,
+      operationId: boundedText(projection.operationId, 160) || null,
+      mode: boundedText(projection.mode, 32) || "observe",
+      changed: projection.changed === true,
+      anomalies,
+      recordedAt: new Date().toISOString(),
+    };
+    const duplicate = state.providerProjections.some((item) => (
+      item.requestId === next.requestId
+      && JSON.stringify(item.anomalies) === JSON.stringify(next.anomalies)
+      && item.changed === next.changed
+    ));
+    if (!duplicate) state.providerProjections = [...state.providerProjections, next].slice(-MAX_PROVIDER_PROJECTIONS);
   }
 
   function recordArtifact({ paths = [], files = [], producer = "unknown", verified = false, status = null, reason = "" } = {}) {
@@ -462,8 +521,10 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     recordToolRepeat,
     recordAuthorizationFact,
     recordAuthorizationFacts,
+    recordLifecycleHook,
     recordModelRetry,
     recordProviderResult,
+    recordProviderProjection,
     recordArtifact,
     replaceArtifactEvidence,
     recordDocumentBinding,

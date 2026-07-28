@@ -507,6 +507,36 @@ test("resource-backed tool output is not treated as an unmaterialized context tr
   });
 });
 
+test("resource reads use the shared bounded cursor contract", async () => {
+  await withStore(async (store, root) => {
+    const resourceDir = join(root, "tool-results");
+    const resourceId = "tool-output-bounded.txt";
+    const resourcePath = join(resourceDir, resourceId);
+    await mkdir(resourceDir, { recursive: true });
+    await writeFile(resourcePath, "x".repeat(100), "utf8");
+    store.beginTurn({ turnId: "turn-resource-bounded", requiresArtifact: true, requiresCompleteCoverage: true });
+    store.captureInput({
+      source: "tool:run_command",
+      content: `[TOOL_OUTPUT_RESOURCE] ${JSON.stringify({ resourceId, path: resourcePath, bytes: 100 })}\npreview`,
+    });
+
+    const read = store.noteResourceRead({
+      resourceId,
+      offsetBytes: 0,
+      nextOffsetBytes: 1_000,
+      totalBytes: 100,
+      complete: false,
+    });
+    assert.equal(read.ok, true);
+    assert.equal(read.nextOffsetBytes, 100);
+    assert.equal(read.complete, true);
+    assert.equal(read.resource.resourceId, resourceId);
+    assert.equal(read.resource.totalBytes, 100);
+    assert.equal(read.resource.nextOffsetBytes, 100);
+    assert.equal(store.status().readLease.nextOffset, 100);
+  });
+});
+
 test("verified command artifact settles the resource it explicitly consumed", async () => {
   await withStore(async (store, root) => {
     const resourceDir = join(root, "tool-results");

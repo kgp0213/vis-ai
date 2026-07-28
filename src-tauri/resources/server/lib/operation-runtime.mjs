@@ -1,8 +1,22 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { closeOperationContext, createOperationContext, requestOperationStop } from "./operation-context.mjs";
 
 const TERMINAL_STATES = new Set(["completed", "cancelled", "failed", "unknown"]);
+
+function safeWorkspace(value) {
+  if (!value) return null;
+  if (typeof value === "object") {
+    return {
+      id: String(value.id ?? value.snapshotId ?? value.fingerprint ?? "").slice(0, 160) || null,
+      path: null,
+    };
+  }
+  return {
+    id: `sha256:${createHash("sha256").update(String(value), "utf8").digest("hex")}`,
+    path: null,
+  };
+}
 
 export function createOperationRuntime({
   broadcast = () => {},
@@ -83,6 +97,20 @@ export function createOperationRuntime({
     operation.state = "stopping";
     operation.stopRequestedAt = requestedAt;
     requestOperationStop(operation.context, reason, requestedAt);
+    // Lifecycle policy hooks are observation-only. Run the stop boundary
+    // before aborting so they can record whether an in-flight step should be
+    // allowed to unwind, but never consume their return value to continue or
+    // block the ordinary model/tool loop.
+    if (typeof lifecycle?.runBoundary === "function") {
+      void Promise.resolve(lifecycle.runBoundary("shouldContinueAfterStop", {
+        operationId: operation.id,
+        sessionId: operation.context?.conversationId ?? null,
+        workspace: safeWorkspace(operation.context?.workspace),
+        state: operation.state,
+        reason: String(reason || "user_cancelled").slice(0, 160),
+        requestedAt,
+      }, { signal: operation.controller.signal })).catch(onError);
+    }
     try {
       revokeAuthorization(operation);
     } catch (error) {

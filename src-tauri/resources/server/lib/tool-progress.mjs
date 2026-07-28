@@ -192,9 +192,14 @@ export function projectToolProgressEvent(event, { assistantId = "assistant" } = 
   const toolCallId = String(event.callId ?? event.toolCallId ?? event.id ?? "unknown");
   const id = `${assistantId}-tool-${toolCallId}`;
   return {
-    kind: status === "succeeded" || status === "failed" || status === "cancelled" ? "tool" : "tool_start",
+    kind: ["succeeded", "failed", "cancelled", "unknown"].includes(status) ? "tool" : "tool_start",
     id,
     toolCallId,
+    // A model turn is the stable outer boundary. When the vendored event
+    // carries a step identity, preserve it; otherwise the tool call itself is
+    // the safest step fallback and keeps retries in one UI group.
+    turnId: String(event.turnId ?? event.turn ?? assistantId),
+    stepId: String(event.stepId ?? event.toolStepId ?? toolCallId),
     status,
     toolName: String(event.toolName).slice(0, 160),
     args: safeArgs(event.toolArgs),

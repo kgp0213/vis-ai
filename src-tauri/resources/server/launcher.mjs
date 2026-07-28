@@ -145,10 +145,12 @@ const { createPermissionFactRuntime, permissionFactRequest } = await importEarly
 const { createPermissionRuleRuntime, readPermissionRules } = await importEarly("./lib/permission-rule-runtime.mjs");
 const { planToolCallBatches } = await importEarly("./lib/parallel-tool-scheduler.mjs");
 const { createOperationSteeringRuntime } = await importEarly("./lib/operation-steering.mjs");
+const { createModelBoundaryFence, projectBoundaryDeliveries } = await importEarly("./lib/model-boundary-fence.mjs");
 const { createSessionInputAdmission } = await importEarly("./lib/session-input-admission.mjs");
 const { createProgressiveToolDiscovery } = await importEarly("./lib/progressive-tool-discovery.mjs");
 const { explainToolActivation, filterToolSpecsByActivation, publicToolActivationPolicy, resolveToolActivationPolicy } = await importEarly("./lib/tool-activation-policy.mjs");
 const { createRuntimeLifecycleHooks } = await importEarly("./lib/runtime-lifecycle-hooks.mjs");
+const { createRuntimeLifecycleBoundary } = await importEarly("./lib/runtime-lifecycle-boundary.mjs");
 const { normalizeToolOutcome, projectToolProgressEvent } = await importEarly("./lib/tool-progress.mjs");
 const { createToolRepeatRuntime } = await importEarly("./lib/tool-repeat-runtime.mjs");
 const { createInteractionRuntime } = await importEarly("./lib/interaction-runtime.mjs");
@@ -167,6 +169,11 @@ const { createBackgroundTaskScopeRegistry } = await importEarly("./lib/backgroun
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
 const { normalizeProviderResult } = await importEarly("./lib/provider-result.mjs");
+const {
+  invokeLoopStepWithProviderProjection,
+  projectProviderRequest,
+} = await importEarly("./lib/provider-request-projector.mjs");
+const { normalizeResourceReference } = await importEarly("./lib/resource-reference.mjs");
 const { buildReportMapMessages, buildReportReduceMessages, createReportChunks, DEFAULT_REPORT_CHUNK_MAX_CHARS, reconcileReportCoverage } = await importEarly("./lib/report-workflow.mjs");
 const { assertReportSourceIntegrity, scanReportJsonlMessages } = await importEarly("./lib/report-session-source.mjs");
 const { modelConfigFingerprint } = await importEarly("./lib/model-config-fingerprint.mjs");
@@ -1830,19 +1837,32 @@ if (recoveredBackgroundTasks.updated > 0) {
 async function readToolOutputResource(args = {}) {
   const resourceId = String(args.resourceId ?? "").trim();
   if (!resourceId || basename(resourceId) !== resourceId || !/^tool-output-[A-Za-z0-9-]+\.txt$/.test(resourceId)) {
-    return { ok: false, error: "invalid tool output resource id" };
+    return {
+      ok: false,
+      code: "resource_invalid",
+      category: "resource",
+      retryable: false,
+      error: "invalid tool output resource id",
+    };
   }
   const resourcePath = resolve(toolOutputResourceRoot, resourceId);
   const rootPrefix = `${resolve(toolOutputResourceRoot)}${sep}`;
   if (!(resourcePath === resolve(toolOutputResourceRoot) || resourcePath.startsWith(rootPrefix)) || !existsSync(resourcePath)) {
-    return { ok: false, error: "tool output resource not found" };
+    return {
+      ok: false,
+      resourceId,
+      code: "resource_missing",
+      category: "resource",
+      retryable: false,
+      error: "tool output resource not found or expired",
+    };
   }
-  const offset = Math.max(0, Number(args.offsetBytes) || 0);
   const maxBytes = Math.max(1, Math.min(64_000, Number(args.maxBytes) || 24_000));
   let handle;
   try {
     handle = await openFile(resourcePath, "r");
     const info = await handle.stat();
+    const offset = Math.min(Math.max(0, Number(args.offsetBytes) || 0), info.size);
     const buffer = Buffer.alloc(Math.min(maxBytes + 3, Math.max(0, info.size - offset)));
     const result = buffer.length > 0 ? await handle.read(buffer, 0, buffer.length, offset) : { bytesRead: 0 };
     const bytesRead = result.bytesRead ?? 0;
@@ -1850,6 +1870,7 @@ async function readToolOutputResource(args = {}) {
       ? Math.min(bytesRead, Math.max(1, utf8SafePrefixLength(buffer.subarray(0, bytesRead), maxBytes)))
       : 0;
     const nextOffsetBytes = offset + safeBytes;
+    const content = buffer.subarray(0, safeBytes).toString("utf8");
     return {
       ok: true,
       resourceId,
@@ -1857,10 +1878,27 @@ async function readToolOutputResource(args = {}) {
       nextOffsetBytes,
       totalBytes: info.size,
       complete: nextOffsetBytes >= info.size,
-      content: buffer.subarray(0, safeBytes).toString("utf8"),
+      content,
+      resource: normalizeResourceReference({
+        resourceId,
+        kind: "tool-output",
+        preview: content,
+        totalBytes: info.size,
+        offsetBytes: offset,
+        nextOffsetBytes,
+        complete: nextOffsetBytes >= info.size,
+        readAction: "read_tool_output",
+      }),
     };
   } catch (error) {
-    return { ok: false, resourceId, error: String(error?.message || error) };
+    return {
+      ok: false,
+      resourceId,
+      code: "resource_read_failed",
+      category: "resource",
+      retryable: true,
+      error: String(error?.message || error),
+    };
   } finally {
     try { await handle?.close(); } catch {}
   }
@@ -2163,6 +2201,7 @@ function installPersistentBackgroundTools() {
               : null;
             if (persistedSnapshot && durableLive) {
               const window = await readPersistedTaskWindow(durableLive, args?.since);
+              if (window?.ok === false) return JSON.stringify(window);
               return formatTaskOutputText(projectTaskOutput({
                 task: durableLive,
                 window,
@@ -2194,6 +2233,7 @@ function installPersistentBackgroundTools() {
       const persisted = await findPersistedTask(reference, scope);
       if (!persisted) return taskNotFoundResult(args?.jobId);
       const window = await readPersistedTaskWindow(persisted, args?.since);
+      if (window?.ok === false) return JSON.stringify(window);
       return formatTaskOutputText(projectTaskOutput({
         task: persisted,
         window,
@@ -5154,6 +5194,10 @@ function buildLoop(client, rootDir) {
     beforeModelRequest: async ({ turn, iteration, signal }) => {
       const operation = operationRuntime?.getActive?.();
       if (!operation || signal?.aborted) return null;
+      const boundary = modelBoundaryFence.open(operation.id);
+      if (boundary.compacting && boundary.queued.length > 0) {
+        operation.context.boundaryQueueReleased = (operation.context.boundaryQueueReleased ?? 0) + boundary.queued.length;
+      }
       toolRepeatRuntime?.beginRequest(operation.id);
       const sessionId = operation.context?.conversationId ?? activeConversationId;
       const admitted = sessionInputAdmission.promoteSteers(sessionId, {
@@ -5169,121 +5213,171 @@ function buildLoop(client, rootDir) {
       if (admissionError && hasPendingSteer) {
         throw new Error(`${admissionError.code}: ${admissionError.error}`);
       }
-      for (const input of admitted) {
-        const messageId = `input-${input.id}`;
-        try {
-          const historyMessage = {
-            id: messageId,
-            role: "user",
-            content: input.text,
-            operationId: operation.id,
-            turnId: String(turn),
-            ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
-          };
-          if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
-          // The vendored loop is built without a durable session name in this
-          // host, so its appendAndPersist method only updates in-memory
-          // history. Persist the same stable user record through the owning
-          // session runtime before crossing the model request boundary.
-          const persisted = await appendActiveMessage(historyMessage);
-          if (persisted === false) throw new Error("active session input append was rejected");
-          loop.appendAndPersist(historyMessage);
-          pushMessage({
-            id: messageId,
-            role: "user",
-            text: input.text,
-            operationId: operation.id,
-            turnId: String(turn),
-            ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
-          });
-          broadcastDashboardEvent({
-            kind: "user",
-            id: messageId,
-            text: input.text,
-            operationId: operation.id,
-            sessionId,
-            ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
-            admittedInputId: input.id,
-          });
-        } catch (error) {
-          const requeued = sessionInputAdmission.requeuePromoted(input.id, {
-            operationId: operation.id,
-            clearOperation: true,
-            reason: "model_history_persist_failed",
-          });
-          console.error(`[launcher] admitted session input ${input.id} could not enter model history: ${error.message}`);
-          if (!requeued?.ok) {
-            throw new Error(`${requeued?.code || "SESSION_INPUT_REQUEUE_FAILED"}: ${requeued?.error || "session input could not be returned to the durable queue"}`);
-          }
-          // Do not inject a one-request in-memory fallback. The durable
-          // admission remains retryable and the current model request must not
-          // proceed with history that cannot be saved.
-          throw new Error(`SESSION_INPUT_DELIVERY_FAILED: ${error.message || String(error)}`);
-        }
-      }
       await restorePendingBackgroundTaskNotifications({
         operationId: operation.id,
         sessionId,
         workspace: workspaceDir,
       });
       const taskNotifications = backgroundTaskNotifications.claim({
+        operationId: operation.id,
         sessionId,
         workspace: workspaceDir,
         limit: 4,
       });
-      for (const notification of taskNotifications) {
-        const messageId = `background-task-${String(notification.notificationId).replace(/[^A-Za-z0-9._:-]+/gu, "-")}`;
-        const { workspace: _workspace, ...persistedNotification } = notification;
-        const historyMessage = {
-          id: messageId,
-          role: "user",
-          content: formatBackgroundTaskNotification(notification),
-          internal: true,
-          modelVisible: true,
-          dashboardHidden: true,
-          source: "background-task",
-          notificationId: notification.notificationId,
-          backgroundTaskNotification: persistedNotification,
-          operationId: operation.id,
-          turnId: String(turn),
-        };
-        try {
-          const persisted = await appendActiveMessage(historyMessage);
-          if (persisted === false) throw new Error("active session task notification append was rejected");
-          if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
-          loop.appendAndPersist(historyMessage);
-          backgroundTaskNotifications.acknowledge(notification.notificationId);
-          try {
-            await taskOutputStore.acknowledgeNotification(notification.taskId, notification.notificationId);
-          } catch (error) {
-            console.error(`[launcher] background task notification durable ack failed: ${error.message}`);
-          }
-          broadcastDashboardEvent({
-            kind: "background-task-notification",
-            notificationId: notification.notificationId,
-            taskId: notification.taskId,
-            status: notification.status,
-            delivered: true,
-            operationId: operation.id,
-            sessionId,
-          });
-        } catch (error) {
+      const pendingSteering = (operationSteeringRuntime?.list(operation.id) ?? [])
+        .filter((entry) => entry.status === "queued");
+      const boundaryDeliveries = projectBoundaryDeliveries({
+        entries: boundary.queued,
+        overflowed: boundary.overflowed,
+        overflowCount: boundary.overflowCount,
+        steering: pendingSteering,
+        sessionInputs: admitted,
+        notifications: taskNotifications,
+      });
+      if (operation.context) {
+        if (boundaryDeliveries.resultUnknown) operation.context.boundaryDeliveryUnknown = true;
+        operation.context.boundaryDeliveryOrder = boundaryDeliveries.items.map((item) => ({
+          sequence: item.sequence,
+          type: item.type,
+          entityId: item.entityId,
+        }));
+        const diagnosticAnomalies = boundaryDeliveries.anomalies
+          .filter((anomaly) => anomaly.code !== "boundary_delivery_deferred");
+        if (diagnosticAnomalies.length > 0) {
+          operation.context.boundaryDeliveryAnomalies = [
+            ...(operation.context.boundaryDeliveryAnomalies ?? []),
+            ...diagnosticAnomalies,
+          ].slice(-32);
+        }
+      }
+      if (boundaryDeliveries.blocked) {
+        for (const notification of taskNotifications) {
           backgroundTaskNotifications.release(notification.notificationId);
-          throw new Error(`BACKGROUND_TASK_NOTIFICATION_DELIVERY_FAILED: ${error.message || String(error)}`);
+        }
+        for (const input of admitted) {
+          sessionInputAdmission.requeuePromoted(input.id, {
+            operationId: operation.id,
+            clearOperation: true,
+            reason: "boundary_queue_overflow",
+          });
+        }
+        const error = new Error("MODEL_BOUNDARY_OVERFLOW: model-boundary inputs could not be delivered in a verifiable order");
+        error.code = "MODEL_BOUNDARY_OVERFLOW";
+        error.retryable = false;
+        throw error;
+      }
+      const instructions = [];
+      for (const delivery of boundaryDeliveries.items) {
+        if (delivery.type === "steering") {
+          instructions.push(delivery.payload.instruction);
+          continue;
+        }
+        if (delivery.type === "steer") {
+          const input = delivery.payload;
+          const messageId = `input-${input.id}`;
+          try {
+            const historyMessage = {
+              id: messageId,
+              role: "user",
+              content: input.text,
+              operationId: operation.id,
+              turnId: String(turn),
+              ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+            };
+            if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
+            // The vendored loop is built without a durable session name in this
+            // host, so its appendAndPersist method only updates in-memory
+            // history. Persist the same stable user record through the owning
+            // session runtime before crossing the model request boundary.
+            const persisted = await appendActiveMessage(historyMessage);
+            if (persisted === false) throw new Error("active session input append was rejected");
+            loop.appendAndPersist(historyMessage);
+            pushMessage({
+              id: messageId,
+              role: "user",
+              text: input.text,
+              operationId: operation.id,
+              turnId: String(turn),
+              ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+            });
+            broadcastDashboardEvent({
+              kind: "user",
+              id: messageId,
+              text: input.text,
+              operationId: operation.id,
+              sessionId,
+              ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+              admittedInputId: input.id,
+            });
+          } catch (error) {
+            const requeued = sessionInputAdmission.requeuePromoted(input.id, {
+              operationId: operation.id,
+              clearOperation: true,
+              reason: "model_history_persist_failed",
+            });
+            console.error(`[launcher] admitted session input ${input.id} could not enter model history: ${error.message}`);
+            if (!requeued?.ok) {
+              throw new Error(`${requeued?.code || "SESSION_INPUT_REQUEUE_FAILED"}: ${requeued?.error || "session input could not be returned to the durable queue"}`);
+            }
+            throw new Error(`SESSION_INPUT_DELIVERY_FAILED: ${error.message || String(error)}`);
+          }
+          continue;
+        }
+        if (delivery.type === "background") {
+          const notification = delivery.payload;
+          const messageId = `background-task-${String(notification.notificationId).replace(/[^A-Za-z0-9._:-]+/gu, "-")}`;
+          const { workspace: _workspace, ...persistedNotification } = notification;
+          const historyMessage = {
+            id: messageId,
+            role: "user",
+            content: formatBackgroundTaskNotification(notification),
+            internal: true,
+            modelVisible: true,
+            dashboardHidden: true,
+            source: "background-task",
+            notificationId: notification.notificationId,
+            backgroundTaskNotification: persistedNotification,
+            operationId: operation.id,
+            turnId: String(turn),
+          };
+          try {
+            const persisted = await appendActiveMessage(historyMessage);
+            if (persisted === false) throw new Error("active session task notification append was rejected");
+            if (typeof loop?.appendAndPersist !== "function") throw new Error("model history append is unavailable");
+            loop.appendAndPersist(historyMessage);
+            backgroundTaskNotifications.acknowledge(notification.notificationId);
+            try {
+              await taskOutputStore.acknowledgeNotification(notification.taskId, notification.notificationId);
+            } catch (error) {
+              console.error(`[launcher] background task notification durable ack failed: ${error.message}`);
+            }
+            broadcastDashboardEvent({
+              kind: "background-task-notification",
+              notificationId: notification.notificationId,
+              taskId: notification.taskId,
+              status: notification.status,
+              delivered: true,
+              operationId: operation.id,
+              sessionId,
+            });
+          } catch (error) {
+            backgroundTaskNotifications.release(notification.notificationId);
+            throw new Error(`BACKGROUND_TASK_NOTIFICATION_DELIVERY_FAILED: ${error.message || String(error)}`);
+          }
         }
       }
       const queued = operationSteeringRuntime?.consume(operation.id) ?? [];
-      if ((queued.length > 0 || admitted.length > 0) && operation.context) operation.context.calibrationUntrusted = true;
+      if ((queued.length > 0 || admitted.length > 0 || taskNotifications.length > 0) && operation.context) {
+        operation.context.calibrationUntrusted = true;
+      }
       await runtimeLifecycleHooks?.emit?.("model.request.before", {
         operationId: operation.id,
         turn,
         iteration,
         steeringIds: queued.map((entry) => entry.id),
         admittedInputIds: admitted.map((entry) => entry.id),
+        boundaryDeliveryOrder: operation.context?.boundaryDeliveryOrder ?? [],
       });
-      const instructions = [
-        ...queued.map((entry) => entry.instruction),
-      ];
       return instructions.length > 0 ? { instructions } : null;
     },
   });
@@ -7676,6 +7770,7 @@ const operationSteeringRuntime = createOperationSteeringRuntime({
     broadcastDashboardEvent(prompt ? { ...event, entityType: "prompt", entityId: prompt.id, prompt } : event);
   },
 });
+const modelBoundaryFence = createModelBoundaryFence();
 
 function broadcastDashboardEvent(ev) {
   if (!ev || typeof ev !== "object") return dashboardEventStream.publish(ev);
@@ -7827,6 +7922,7 @@ async function enqueueBackgroundTaskNotification(job = {}) {
   const result = backgroundTaskNotifications.enqueue(source, scope);
   if (result.accepted) {
     const notification = result.notification;
+    if (scope.operationId) modelBoundaryFence.enqueue(scope.operationId, { type: "background", entityId: notification.notificationId });
     broadcastDashboardEvent({
       kind: "background-task-notification",
       notificationId: notification.notificationId,
@@ -8037,6 +8133,10 @@ const finishActiveOperation = (operation) => {
   if (finished) {
     operationSteeringRuntime.close(operation.id, { reason: `operation_${operation.state}` });
     sessionInputAdmission.closeOperation(operation.id, { reason: `operation_${operation.state}` });
+    modelBoundaryFence.close(operation.id, {
+      reason: `operation_${operation.state}`,
+      status: operation.state === "cancelled" ? "cancelled" : "not_applied",
+    });
   }
   return finished;
 };
@@ -9264,7 +9364,10 @@ function recordPermissionAuditFact(event) {
     rule: alwaysAllow
       ? { kind: "prefix", value: event.prefix || permissionRequest.command.split(/\s+/u)[0] }
       : { kind: "exact" },
-    reusable: alwaysAllow || decision === "deny",
+    // A run-once decision is reusable only through this operation-scoped,
+    // exact-argument fact. It prevents duplicate cards for the same side
+    // effect while session/workspace/argument changes still require approval.
+    reusable: true,
     source: "pause-gate",
     reason: alwaysAllow ? "user-approved-project-prefix" : decision === "deny" ? "user-denied" : "user-approved-once",
   });
@@ -9298,8 +9401,9 @@ pauseGate.on((request) => {
   }
   const forceAsk = configured?.forceAsk === true;
 
-  // Reuse only explicitly reusable facts (project prefixes or same-operation
-  // denials). A one-time approval remains an audit fact and is never replayed.
+  // Reuse only explicitly reusable facts. A run-once approval is scoped to the
+  // same operation/session/workspace and exact arguments; it cannot leak into
+  // another task or authorize a changed side effect.
   const remembered = rememberedPermissionVerdict(request);
   if (remembered) {
     pauseGate.resolve(id, remembered);
@@ -9677,6 +9781,7 @@ const ctx = {
         workspace: operation.context?.workspace ?? workspaceDir,
         instruction: input.instruction,
       });
+      modelBoundaryFence.enqueue(operation.id, { type: "steering", entityId: queued.id });
       return { ok: true, queued };
     } catch (error) {
       return { ok: false, status: 400, error: error.message };
@@ -10112,6 +10217,7 @@ const ctx = {
           delivery: requestedDelivery,
         });
         if (!admitted.ok) return { accepted: false, code: admitted.code, reason: admitted.error };
+        if (activeOperation?.id) modelBoundaryFence.enqueue(activeOperation.id, { type: requestedDelivery, entityId: admitted.input.id });
         return {
           accepted: true,
           queued: true,
@@ -10993,6 +11099,7 @@ ${modeList}
         let isolationRestoreError = null;
         let finalizationPersistenceError = null;
         let finalizationPersisted = false;
+        let providerRequestStarted = false;
         let executionStarted = false;
         let contextRequestSequence = 0;
         let latestMeasuredContext = null;
@@ -11003,6 +11110,44 @@ ${modeList}
           operationId: operation.id,
           sessionId: operation.context?.conversationId ?? activeConversationId,
           startedAt: turnStartedAt,
+        });
+        const lifecycleBoundary = createRuntimeLifecycleBoundary({
+          lifecycle: runtimeLifecycleHooks,
+          onObservation: (fact) => {
+            try {
+              turnReceipt.recordLifecycleHook?.(fact);
+              const current = Array.isArray(operation.context.lifecycleHooks) ? operation.context.lifecycleHooks : [];
+              const safeFact = {
+                event: fact.event,
+                operationId: fact.operationId,
+                sessionId: fact.sessionId,
+                toolCallId: fact.toolCallId,
+                turnId: fact.turnId,
+                stepId: fact.stepId,
+                attempt: fact.attempt,
+                statuses: Array.isArray(fact.result?.results) ? fact.result.results.map((item) => String(item?.status || "unknown").slice(0, 24)) : [],
+                ignoredDecision: true,
+                recordedAt: fact.recordedAt,
+              };
+              const duplicate = current.some((item) => item.event === safeFact.event && item.toolCallId === safeFact.toolCallId && item.attempt === safeFact.attempt && JSON.stringify(item.statuses) === JSON.stringify(safeFact.statuses));
+              if (!duplicate) operation.context.lifecycleHooks = [...current, safeFact].slice(-64);
+              const failed = safeFact.statuses.some((status) => ["failed", "timeout", "cancelled"].includes(status));
+              if (failed) turnReceipt.recordWarning(`生命周期 Hook ${safeFact.event} 未完成，已忽略其决策并继续任务`);
+              if (opts.isolated !== true && safeFact.statuses.length > 0) {
+                broadcastDashboardEvent({
+                  kind: "lifecycle-hook",
+                  operationId: operation.id,
+                  sessionId: operation.context?.conversationId ?? activeConversationId,
+                  event: safeFact.event,
+                  toolCallId: safeFact.toolCallId,
+                  statuses: safeFact.statuses,
+                  ignoredDecision: true,
+                });
+              }
+            } catch (error) {
+              console.error(`[launcher] lifecycle hook fact recording failed: ${error.message}`);
+            }
+          },
         });
         const contextCalibrationScope = {
           operationId: operation.id,
@@ -11192,6 +11337,25 @@ ${modeList}
                 contextBudget: measuredContextBudget,
               })
               : baseModelContextProjection;
+            // The vendored loop performs its own healing immediately before
+            // sending. Keep a project-owned, read-only projection here so
+            // malformed exchanges become durable receipt facts instead of
+            // silent provider-side repairs.
+            const providerProjection = projectProviderRequest({
+              history: calibrationHistory,
+              providerCapabilities,
+              mode: providerCapabilities?.strictToolExchange === true ? "strict" : "observe",
+            });
+            turnReceipt.recordProviderProjection({
+              requestId: requestId || operation.id,
+              operationId: operation.id,
+              mode: providerCapabilities?.strictToolExchange === true ? "strict" : "observe",
+              changed: providerProjection.changed,
+              anomalies: providerProjection.anomalies,
+            });
+            for (const warning of providerProjection.warnings ?? []) {
+              turnReceipt.recordWarning(warning.message || warning.code);
+            }
             const contextMeasurementRequest = contextSizeCalibration.begin({
               ...contextCalibrationScope,
               model: loop?.model ?? contextCalibrationScope.model,
@@ -11214,16 +11378,38 @@ ${modeList}
               requestId: requestId || operation.id,
               receipt: turnReceipt,
               contextProjection: modelContextProjection,
+              providerProjection,
               contextEpoch: operation.context.contextEpoch,
               publish: opts.isolated === true ? null : (event) => broadcastDashboardEvent(event),
             };
-            for await (const ev of modelRequestObserver.iterate(requestContext, () => loop.step(loopInput))) {
+            providerRequestStarted = true;
+            for await (const ev of modelRequestObserver.iterate(requestContext, () => invokeLoopStepWithProviderProjection({
+              activeLoop: loop,
+              input: loopInput,
+              providerCapabilities,
+              turnReceipt,
+              requestId: requestId || operation.id,
+              operationId: operation.id,
+            }))) {
+              if (["tool_queued", "tool_start", "tool", "tool_cancelled"].includes(ev.role)) {
+                void lifecycleBoundary.observeToolEvent(ev, {
+                  operation,
+                  sessionId: operation.context?.conversationId ?? activeConversationId,
+                  workspace: workspaceDir,
+                  turnId: ev.turnId ?? assistantId,
+                  stepId: ev.stepId ?? ev.toolStepId ?? ev.callId ?? ev.toolCallId,
+                  signal: operation.controller.signal,
+                }).catch((error) => {
+                  console.error(`[launcher] lifecycle tool boundary failed: ${error.message}`);
+                });
+              }
               operation.progress = loopTelemetry.observe(ev);
               const phaseUpdate = turnReceipt.observePhase(ev);
               if (phaseUpdate.accepted && phaseUpdate.changed && opts.isolated !== true) {
                 broadcastDashboardEvent({ kind: "execution-phase", ...phaseUpdate.state });
               }
               if (ev.role === "context_compacted") {
+                modelBoundaryFence.begin(operation.id, "context_compacted");
                 contextEpochRuntime.requestReplacement(operation.context?.conversationId ?? activeConversationId, "compaction");
                 contextSizeCalibration.invalidate(contextCalibrationScope, "compaction");
                 latestMeasuredContext = null;
@@ -11451,6 +11637,21 @@ ${modeList}
                   // shorter intermediate reasoning/tool-use summaries.
                   assistantText = ev.content;
                 }
+                if (ev.repair && typeof ev.repair === "object") {
+                  const repairAnomalies = [];
+                  if (Number(ev.repair.scavenged) > 0) repairAnomalies.push({ code: "tool_exchange_scavenged", detail: { count: Number(ev.repair.scavenged) } });
+                  if (Number(ev.repair.truncationsFixed) > 0) repairAnomalies.push({ code: "tool_arguments_repaired", detail: { count: Number(ev.repair.truncationsFixed) } });
+                  if (Number(ev.repair.stormsBroken) > 0) repairAnomalies.push({ code: "tool_call_storm_repaired", detail: { count: Number(ev.repair.stormsBroken) } });
+                  if (repairAnomalies.length > 0) {
+                    turnReceipt.recordProviderProjection({
+                      requestId: requestId || operation.id,
+                      operationId: operation.id,
+                      mode: "vendored-repair",
+                      changed: true,
+                      anomalies: repairAnomalies,
+                    });
+                  }
+                }
               }
             }
 
@@ -11635,19 +11836,28 @@ ${modeList}
               const action = failure.repeatFailureBlocked ? "同类失败已达到建议上限，请切换工具或调整参数" : failure.retryable ? "可重试或切换工具" : "请检查工具结果";
               return `${failure.toolName} 工具失败（${failure.code}），${action}`;
             });
-          const recoveryWarnings = (operation.context?.recoveries ?? []).length > 0
-            ? [`已从工具失败中恢复 ${operation.context.recoveries.length} 次`]
-            : [];
+           const recoveryWarnings = (operation.context?.recoveries ?? []).length > 0
+             ? [`已从工具失败中恢复 ${operation.context.recoveries.length} 次`]
+             : [];
+           for (const anomaly of operation.context?.boundaryDeliveryAnomalies ?? []) {
+             const entity = anomaly.entityId ? ` ${anomaly.type}:${anomaly.entityId}` : "";
+             turnReceipt.recordWarning(`模型边界输入${anomaly.code === "boundary_delivery_unsequenced" ? "恢复后顺序无法确认" : "投递异常"}${entity}`);
+           }
            taskWarnings = detectTaskWarnings(assistantText);
            taskWarnings = [...new Set([...taskWarnings, ...(turnReceipt.snapshot().warnings ?? []), ...toolFailureWarnings, ...recoveryWarnings])].slice(0, 8);
-          taskState = deriveTaskState({
+           taskState = deriveTaskState({
             planningOnly: planningOnlyRequest,
             executionStarted,
             interventionPaused,
             continuationNeeded,
             artifactIncomplete,
             warnings: taskWarnings,
-          });
+            artifactRequired: artifactRequest.required && artifactDeliveryActive,
+             artifactVerified: false,
+             executionFacts: true,
+             terminalFact: false,
+             resultUnknown: operation.context?.boundaryDeliveryUnknown === true,
+           });
           for (const runtime of operation.context?.runtimeEnvironments ?? []) turnReceipt.recordRuntime(runtime);
           // Final completion is committed after cleanup and the artifact
           // rescan below.  Publishing a terminal receipt here would allow a
@@ -11711,6 +11921,23 @@ ${modeList}
           }
         } catch (err) {
           turnError = err;
+          if (providerRequestStarted && turnReceipt.snapshot().providerResults.length === 0) {
+            const statusCodeMatch = /(?:HTTP|status|statusCode)\D{0,12}(\d{3})/iu.exec(String(err?.message || err));
+            const statusCode = Number(err?.statusCode ?? err?.status ?? statusCodeMatch?.[1]);
+            const retryable = err?.retryable === true
+              || [408, 409, 425, 429].includes(statusCode)
+              || statusCode >= 500
+              || /(?:fetch|network|timeout|timed out|ECONN|ETIMEDOUT|EAI_AGAIN)/iu.test(String(err?.message || err));
+            turnReceipt.recordProviderResult(normalizeProviderResult({
+              requestId: requestId || operation.id,
+              attempt: Number(err?.attempt) || 1,
+              statusCode: Number.isInteger(statusCode) ? statusCode : null,
+              rawFinishReason: operation.controller.signal.aborted ? "cancelled" : (err?.code || err?.name || "error"),
+              traceId: err?.traceId || err?.requestId || null,
+              cancelled: operation.controller.signal.aborted,
+              retryable,
+            }));
+          }
           if (opts.isolated !== true) {
             broadcastDashboardEvent({
               kind: "error",
@@ -11720,6 +11947,13 @@ ${modeList}
           }
         } finally {
           try {
+            try {
+              await lifecycleBoundary.flush(operation.id);
+            } catch (hookFlushError) {
+              const message = `生命周期 Hook 事实收敛失败：${hookFlushError.message}`;
+              turnReceipt.recordWarning(message);
+              console.error(`[launcher] ${message}`);
+            }
             try {
               if (augmentedLoopInput && loop?.log?.toMessages) {
                 const restoredHistory = restoreOriginalUserInput(loop.log.toMessages(), augmentedLoopInput, text);
@@ -11792,19 +12026,32 @@ ${modeList}
                 if (artifactRequest.required && artifactDeliveryActive && !finalArtifactVerified && !operation.controller.signal.aborted) {
                   artifactIncomplete = true;
                   if (!taskWarnings.includes("最终产物校验未通过，任务未确认完成")) taskWarnings = [...taskWarnings, "最终产物校验未通过，任务未确认完成"].slice(0, 8);
-                  taskState = deriveTaskState({
-                    planningOnly: planningOnlyRequest,
-                    executionStarted,
-                    interventionPaused,
-                    continuationNeeded,
-                    artifactIncomplete,
-                    warnings: taskWarnings,
-                  });
                 }
+                const artifactRequiredForOutcome = artifactRequest.required && artifactDeliveryActive;
+                const terminalFact = !turnError
+                  && !isolationRestoreError
+                  && operation.context?.boundaryDeliveryUnknown !== true
+                  && !operation.controller.signal.aborted
+                  && !interventionPaused
+                  && !continuationNeeded
+                  && !artifactIncomplete;
+                taskState = deriveTaskState({
+                  planningOnly: planningOnlyRequest,
+                  executionStarted,
+                  interventionPaused,
+                  continuationNeeded,
+                  artifactIncomplete,
+                  warnings: taskWarnings,
+                  artifactRequired: artifactRequiredForOutcome,
+                  artifactVerified: !artifactRequiredForOutcome || finalArtifactVerified,
+                  executionFacts: true,
+                  terminalFact,
+                  resultUnknown: Boolean(turnError || isolationRestoreError || operation.context?.boundaryDeliveryUnknown),
+                });
                 turnReceipt.recordAuthorizationFacts(operation.context?.authorizationFacts);
                 for (const repeat of operation.context?.toolRepeats ?? []) turnReceipt.recordToolRepeat(repeat);
                 turnReceipt.complete({
-                  ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !operation.controller.signal.aborted,
+                  ok: !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && operation.context?.boundaryDeliveryUnknown !== true && !operation.controller.signal.aborted,
                   taskState,
                   artifactIncomplete,
                   interventionPaused,
@@ -11917,19 +12164,20 @@ ${modeList}
               ?? (interventionPaused ? "task paused for user intervention" : null)
               ?? (continuationNeeded ? "task requires continuation" : null)
               ?? finalizationPersistenceError
-              ?? isolationRestoreError;
+              ?? isolationRestoreError
+              ?? (operation.context?.boundaryDeliveryUnknown === true ? "model boundary input delivery could not be confirmed" : null);
             const mappedFinalState = operation.controller.signal.aborted
               ? "cancelled"
               : finalizationPersistenceError
                 ? "unknown"
-                : !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError
+                : !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && operation.context?.boundaryDeliveryUnknown !== true
                   ? "completed"
-                  : taskState === "needs_intervention" || taskState === "incomplete"
+                  : taskState === "needs_intervention" || taskState === "incomplete" || taskState === "unknown"
                     ? "unknown"
                     : "failed";
             const finalState = operation.finalState ?? mappedFinalState;
             const completion = {
-              ok: finalState !== "unknown" && !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && !finalizationPersistenceError && !operation.controller.signal.aborted,
+              ok: finalState !== "unknown" && !turnError && !artifactIncomplete && !interventionPaused && !continuationNeeded && !isolationRestoreError && operation.context?.boundaryDeliveryUnknown !== true && !finalizationPersistenceError && !operation.controller.signal.aborted,
               cancelled: operation.controller.signal.aborted,
               error: completionError ?? (finalState === "unknown" ? "本轮执行结果无法确认，未自动重试。" : null),
               assistantText,
@@ -11942,6 +12190,11 @@ ${modeList}
                 continuationNeeded,
                 artifactIncomplete,
                 warnings: taskWarnings,
+                artifactRequired: artifactRequest.required && artifactDeliveryActive,
+                artifactVerified: !(artifactRequest.required && artifactDeliveryActive) && finalState !== "unknown",
+                executionFacts: true,
+                terminalFact: finalState !== "unknown",
+                resultUnknown: finalState === "unknown",
               })),
               warnings: taskWarnings,
               artifactFiles,

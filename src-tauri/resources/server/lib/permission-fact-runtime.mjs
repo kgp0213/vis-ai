@@ -77,7 +77,9 @@ function safeRule(rule) {
 function scopeMatches(fact, request) {
   switch (fact.scope) {
     case "operation":
-      return Boolean(fact.operationId && text(request.operationId, 180) === fact.operationId);
+      return Boolean(fact.operationId && text(request.operationId, 180) === fact.operationId
+        && (!fact.sessionId || text(request.sessionId, 180) === fact.sessionId)
+        && (!fact.workspaceFingerprint || normalizeWorkspace(request.workspace) === fact.workspaceFingerprint));
     case "session":
       return Boolean(fact.sessionId && text(request.sessionId, 180) === fact.sessionId
         && (!fact.workspaceFingerprint || normalizeWorkspace(request.workspace) === fact.workspaceFingerprint));

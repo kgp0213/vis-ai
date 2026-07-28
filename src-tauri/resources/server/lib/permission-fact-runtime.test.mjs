@@ -26,6 +26,8 @@ test("permission facts match scoped exact arguments without persisting raw input
   });
   assert.equal(runtime.evaluate(request).decision, "allow");
   assert.equal(runtime.evaluate({ ...request, args: { ...request.args, content: "different" } }).decision, "ask");
+  assert.equal(runtime.evaluate({ ...request, sessionId: "session-2" }).decision, "ask");
+  assert.equal(runtime.evaluate({ ...request, workspace: "C:\\other" }).decision, "ask");
   assert.ok(saved.length > 0);
   assert.equal(JSON.stringify(saved.at(-1)).includes("secret content"), false);
   assert.equal(fact.workspaceFingerprint.includes("C:"), false);

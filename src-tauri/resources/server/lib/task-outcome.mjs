@@ -8,11 +8,27 @@ export function detectTaskWarnings(text) {
   return (matches.length > 0 ? matches : [value]).slice(0, 3).map((sentence) => sentence.slice(0, 300));
 }
 
-export function deriveTaskState({ planningOnly = false, executionStarted = false, interventionPaused = false, continuationNeeded = false, artifactIncomplete = false, warnings = [] } = {}) {
+export function deriveTaskState({
+  planningOnly = false,
+  executionStarted = false,
+  interventionPaused = false,
+  continuationNeeded = false,
+  artifactIncomplete = false,
+  warnings = [],
+  artifactRequired = false,
+  artifactVerified = false,
+  executionFacts = false,
+  terminalFact = true,
+  resultUnknown = false,
+} = {}) {
   if (interventionPaused) return "needs_intervention";
   if (artifactIncomplete) return "incomplete";
   if (continuationNeeded) return "incomplete";
   if (planningOnly && !executionStarted) return "awaiting_approval";
-  if (Array.isArray(warnings) && warnings.length > 0) return "completed_with_warnings";
+  if (resultUnknown || (executionFacts && !terminalFact)) return "unknown";
+  // A warning-only completion is valid only after required artifacts have
+  // passed the same host-side verification used by the final receipt.
+  if (Array.isArray(warnings) && warnings.length > 0 && (!artifactRequired || artifactVerified)) return "completed_with_warnings";
+  if (artifactRequired && !artifactVerified) return "unknown";
   return "completed";
 }

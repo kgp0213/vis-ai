@@ -204,3 +204,31 @@ test("persistence failure downgrades a provisional completion to unknown", () =>
   assert.equal(snapshot.completion.taskState, "unknown");
   assert.match(snapshot.phase.reason, /not persisted/);
 });
+
+test("turn receipt records lifecycle hook outcomes without raw tool arguments", () => {
+  const receipt = createTurnReceipt({ operationId: "op-hooks", sessionId: "session-hooks", turnId: "turn-hooks" });
+  receipt.recordLifecycleHook({
+    event: "prepareTool",
+    operationId: "op-hooks",
+    toolCallId: "call-hooks",
+    stepId: "step-hooks",
+    attempt: 1,
+    payload: { args: { command: "echo secret" } },
+    result: { results: [{ status: "timeout" }] },
+    ignoredDecision: true,
+  });
+  receipt.recordLifecycleHook({
+    event: "prepareTool",
+    operationId: "op-hooks",
+    toolCallId: "call-hooks",
+    stepId: "step-hooks",
+    attempt: 1,
+    result: { results: [{ status: "timeout" }] },
+    ignoredDecision: true,
+  });
+  const snapshot = receipt.snapshot();
+  assert.equal(snapshot.lifecycleHooks.length, 1);
+  assert.equal(snapshot.lifecycleHooks[0].event, "prepareTool");
+  assert.deepEqual(snapshot.lifecycleHooks[0].statuses, ["timeout"]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /echo secret/);
+});

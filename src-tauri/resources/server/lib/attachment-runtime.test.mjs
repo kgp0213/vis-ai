@@ -31,6 +31,9 @@ test("attachment runtime stores media outside the index and restores it", async 
   assert.equal(first.errors.length, 0);
   assert.equal(first.attachments.length, 1);
   assert.equal(first.attachments[0].mimeType, "image/png");
+  assert.equal(first.attachments[0].resource.resourceId, first.attachments[0].id);
+  assert.equal(first.attachments[0].resource.totalBytes, PNG.length);
+  assert.equal(first.attachments[0].resource.readAction, "attachment_content");
   assert.equal(await runtime.readDataUrl(first.attachments[0].id), DATA_URL);
 
   const index = await readFile(resolve(root, "index.json"), "utf8");
@@ -39,6 +42,7 @@ test("attachment runtime stores media outside the index and restores it", async 
 
   const restored = createAttachmentRuntime({ rootDir: root, atomicWriteFile });
   assert.equal(await restored.readDataUrl(first.attachments[0].id), DATA_URL);
+  assert.equal((await restored.getContentDescriptor(first.attachments[0].id)).resource.resourceId, first.attachments[0].id);
 });
 
 test("attachment runtime deduplicates bytes while retaining session references", async (t) => {

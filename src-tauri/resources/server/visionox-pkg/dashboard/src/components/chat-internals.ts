@@ -6,6 +6,7 @@ import { useEffect as y2, useRef as A2, useState as d2 } from "preact/hooks";
 import { html as html4 } from "../lib/html.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { ProcessCard, IconTool, IconChevron } from "../ui/index.js";
+import { toolGroupAttention } from "../lib/chat-turn-rendering.js";
 import {
   escapeHtml,
   hlLine,
@@ -94,8 +95,8 @@ function ToolCard({ msg }) {
   const args = parseToolArgs(msg.toolArgs);
   const name = msg.toolName ?? "tool";
   const path = args?.path ?? args?.file_path ?? args?.filename;
-  const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
-  const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled") }[progressStatus];
+  const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled", "unknown", "recovered"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
+  const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), recovered: t4("chat.statusCompletedWarnings"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled"), unknown: t4("chat.statusUnknown") }[progressStatus];
   const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
   const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage)
     ? html4`<div class="tool-card-diagnostic"><strong>${t4("chat.toolFailedContinue")}</strong>${msg.code ? html4`<span>${msg.code}</span>` : null}${msg.recommendedAction ? html4`<span>${msg.recommendedAction}</span>` : null}${msg.diagnosticMessage ? html4`<span>${msg.diagnosticMessage}</span>` : null}</div>`
@@ -212,7 +213,7 @@ const TOOL_ROW_DETAIL_TAIL_LINES = 3;
 const TOOL_SETTLE_FALLBACK_MS = 8000;
 function toolRowStatus(status) {
   if (["queued", "running"].includes(status)) return "active";
-  if (["failed", "cancelled"].includes(status)) return "failed";
+  if (["failed", "cancelled", "unknown"].includes(status)) return "failed";
   return "done";
 }
 function toolRowsFromItems(items) {
@@ -233,8 +234,10 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
   const doneItems = items.filter((m3) => !isActiveStatus(m3.toolStatus));
-  const failedItems = doneItems.filter((m3) => ["failed", "cancelled"].includes(m3.toolStatus));
-  const hasFailed = failedItems.length > 0;
+  const failedItems = doneItems.filter((m3) => ["failed", "cancelled", "unknown"].includes(m3.toolStatus));
+  const attention = toolGroupAttention(items);
+  const hasFailed = attention.hasFailure;
+  const hasRecovery = attention.hasRecovery;
   const hitSet = searchHitIds ? new Set(searchHitIds) : null;
   const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
 
@@ -251,7 +254,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       return void 0;
     }
     if (!wasActiveRef.current) return void 0;
-    if (hasFailed) { wasActiveRef.current = false; return void 0; } // 失败粘性：不收敛
+    if (attention.keepExpanded) { wasActiveRef.current = false; return void 0; } // 失败/恢复粘性：不收敛
     if (processDisplay === "detailed") { wasActiveRef.current = false; return void 0; } // 详细档：不收敛
     const shouldSettle = followedByAnswer;
     if (!shouldSettle) {
@@ -262,7 +265,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     wasActiveRef.current = false;
     setSettled(true);
     return void 0;
-  }, [taskActive, followedByAnswer, hasFailed, settled, processDisplay]);
+  }, [taskActive, followedByAnswer, attention.keepExpanded, hasFailed, settled, processDisplay]);
 
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
@@ -276,6 +279,8 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
   const meta = hasFailed
     ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>`
+    : hasRecovery
+      ? html4`<span class="process-card-meta-failed">${t4("chat.statusCompletedWarnings")}</span>`
     : (taskActive && currentBrief ? html4`${currentBrief.name}` : null);
 
   // 搜索命中时强制展开；详细档常驻展开；running 且未收敛时默认展开（用户要看过程）；
@@ -283,6 +288,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const openAttr = compact ? void 0
     : hasHit ? true
     : processDisplay === "detailed" ? true
+    : attention.keepExpanded ? true
     : (cardState === "running" ? true : void 0);
 
   return html4`
@@ -316,7 +322,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
     invalid: t4("chat.artifactInvalid"),
     unknown: t4("chat.artifactUnknown"),
   }[lastArtifact?.status] || t4("chat.artifactNone");
-  const stateLabel = state === "completed" ? t4("chat.stateCompleted") : state === "needs_intervention" ? t4("chat.stateNeedsIntervention") : state === "incomplete" ? t4("chat.stateIncomplete") : state === "completed_with_warnings" ? t4("chat.stateCompletedWarn") : t4("chat.statePendingConfirm");
+  const stateLabel = state === "completed" ? t4("chat.stateCompleted") : state === "needs_intervention" ? t4("chat.stateNeedsIntervention") : state === "incomplete" ? t4("chat.stateIncomplete") : state === "completed_with_warnings" ? t4("chat.stateCompletedWarn") : state === "unknown" ? t4("chat.stateUnknown") : t4("chat.statePendingConfirm");
   const stateClass = state === "completed" ? "ok" : state === "completed_with_warnings" ? "warn" : "err";
   return html4`
     <details class=${`execution-receipt execution-receipt-${stateClass}`}>

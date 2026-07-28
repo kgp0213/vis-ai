@@ -126,6 +126,67 @@ test("rejects out-of-order assistant corrections while allowing a newer revision
   assert.equal(guard.accept({ kind: "assistant_final", id: "m1", eventEpoch: "e", eventSeq: 11, eventId: "e:11", correction: true, revision: "finalization-persistence", text: "newer" }), true);
 });
 
+test("scopes terminal tool protection to the turn and step", async () => {
+  const { createDashboardEventGuard } = await loadReducer();
+  const guard = createDashboardEventGuard();
+  assert.equal(guard.accept({ kind: "tool", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1", status: "succeeded", eventId: "e:1" }), true);
+  // Reusing a provider call id in a new execution frame must be accepted.
+  assert.equal(guard.accept({ kind: "tool_start", toolCallId: "call-1", turnId: "turn-2", stepId: "step-2", status: "running", eventId: "e:2" }), true);
+  assert.equal(guard.accept({ kind: "tool", toolCallId: "call-1", turnId: "turn-2", stepId: "step-2", status: "succeeded", eventId: "e:3" }), true);
+  assert.equal(guard.accept({ kind: "tool", toolCallId: "call-1", turnId: "turn-2", stepId: "step-2", status: "failed", eventId: "e:4" }), false);
+});
+
+test("allows an explicit failed-to-recovered retry chain but blocks late updates after success", async () => {
+  const { createDashboardEventGuard } = await loadReducer();
+  const guard = createDashboardEventGuard();
+  const frame = { toolCallId: "call-retry", turnId: "turn-1", stepId: "step-1" };
+  assert.equal(guard.accept({ kind: "tool", ...frame, status: "failed", eventId: "e:r1" }), true);
+  assert.equal(guard.accept({ kind: "tool_start", ...frame, status: "running", eventId: "e:r2" }), true);
+  assert.equal(guard.accept({ kind: "tool", ...frame, status: "recovered", eventId: "e:r3" }), true);
+  assert.equal(guard.accept({ kind: "tool", ...frame, status: "succeeded", eventId: "e:r4" }), true);
+  assert.equal(guard.accept({ kind: "tool", ...frame, status: "failed", eventId: "e:r5" }), false);
+});
+
+test("reducer reopens only failed tools for an explicit recovery chain", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  const frame = { kind: "tool", toolCallId: "call-retry", turnId: "turn-1", stepId: "step-1" };
+  const frameId = JSON.stringify(["turn-1", "step-1", "call-retry"]);
+  let state = createDashboardReducerState();
+
+  for (const status of ["failed", "running", "recovered", "succeeded"]) {
+    const reduced = applyDashboardEvent(state, { ...frame, status });
+    assert.equal(reduced.changed, true, `${status} should update the existing tool frame`);
+    assert.equal(reduced.state.tools[frameId].id, frameId);
+    assert.equal(reduced.state.tools[frameId].state, status);
+    state = reduced.state;
+  }
+
+  const lateFailure = applyDashboardEvent(state, { ...frame, status: "failed" });
+  assert.equal(lateFailure.changed, false);
+  assert.equal(lateFailure.anomaly, "late-terminal-update");
+  assert.equal(lateFailure.state.tools[frameId].state, "succeeded");
+
+  const nextTurn = applyDashboardEvent(state, { ...frame, turnId: "turn-2", status: "running" });
+  assert.equal(nextTurn.changed, true);
+  assert.equal(nextTurn.state.tools[frameId].state, "succeeded");
+  assert.equal(nextTurn.state.tools[JSON.stringify(["turn-2", "step-1", "call-retry"])].state, "running");
+});
+
+test("does not collide when tool frame ids contain the reducer separator", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  let state = createDashboardReducerState();
+  state = applyDashboardEvent(state, {
+    kind: "tool", toolCallId: "call", turnId: "a:b", stepId: "c", status: "succeeded",
+  }).state;
+  const next = applyDashboardEvent(state, {
+    kind: "tool", toolCallId: "call", turnId: "a", stepId: "b:c", status: "running",
+  });
+
+  assert.equal(next.changed, true);
+  assert.equal(next.anomaly, undefined);
+  assert.equal(Object.keys(next.state.tools).length, 2);
+});
+
 test("tracks assistant delta offsets, drops duplicates, and requests resync for gaps", async () => {
   const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
   let state = createDashboardReducerState();

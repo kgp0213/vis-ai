@@ -14,6 +14,8 @@ describe("tool progress projection", () => {
     assert.equal(queued.id, running.id);
     assert.equal(running.id, done.id);
     assert.equal(done.toolCallId, "call-1");
+    assert.equal(done.turnId, "assistant-1");
+    assert.equal(done.stepId, "call-1");
     assert.equal(done.category, null);
     assert.deepEqual([queued.status, running.status, done.status], ["queued", "running", "succeeded"]);
     assert.doesNotMatch(JSON.stringify([queued, running, done]), /secret|private/);
@@ -173,6 +175,20 @@ describe("tool progress projection", () => {
     assert.equal(outcome.category, "permission");
     assert.equal(outcome.retryable, false);
     assert.equal(outcome.recommendedAction, "request_runtime_install_approval");
+  });
+
+  test("preserves resource failures as structured recoverable tool facts", () => {
+    const missing = normalizeToolOutcome(JSON.stringify({
+      ok: false,
+      code: "resource_missing",
+      category: "resource",
+      retryable: false,
+      error: "tool output resource not found or expired",
+    }));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.code, "resource_missing");
+    assert.equal(missing.category, "resource");
+    assert.equal(missing.retryable, false);
   });
 
   test("stores bounded per-call progress in the turn receipt", () => {

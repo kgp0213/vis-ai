@@ -15195,6 +15195,7 @@ var en = {
     stateIncomplete: "Incomplete",
     stateCompletedWarn: "Completed with warnings",
     statePendingConfirm: "Result pending confirmation",
+    stateUnknown: "Result could not be confirmed",
     receiptRecent: "latest {name}",
     receiptRetryable: "recoverable",
     receiptRepeatBlocked: "similar failures reached suggested limit",
@@ -17040,6 +17041,7 @@ var zhCN = {
     stateIncomplete: "未完成",
     stateCompletedWarn: "已完成但有提醒",
     statePendingConfirm: "结果待确认",
+    stateUnknown: "结果无法确认",
     receiptRecent: "最近 {name}",
     receiptRetryable: "可恢复",
     receiptRepeatBlocked: "同类失败已达到建议上限",
@@ -21594,6 +21596,77 @@ function ProcessCard({
   `;
 }
 
+// dashboard/src/lib/chat-turn-rendering.ts
+function toolGroupAttention(messages = []) {
+  const statuses = (Array.isArray(messages) ? messages : []).map((message) => String(message?.toolStatus ?? message?.status ?? "").trim().toLowerCase());
+  const hasFailure = statuses.some((status) => ["failed", "cancelled", "unknown"].includes(status));
+  const hasRecovery = statuses.includes("recovered");
+  return { hasFailure, hasRecovery, keepExpanded: hasFailure || hasRecovery };
+}
+function frameValue(value) {
+  return String(value ?? "").trim();
+}
+function toolFrameMatches(left, right) {
+  const leftId = frameValue(left?.id);
+  const rightId = frameValue(right?.id);
+  if (leftId && rightId && leftId === rightId) return true;
+  const leftCallId = frameValue(left?.toolCallId ?? left?.tool_call_id);
+  const rightCallId = frameValue(right?.toolCallId ?? right?.tool_call_id);
+  if (!leftCallId || leftCallId !== rightCallId) return false;
+  const leftTurn = frameValue(left?.turnId);
+  const rightTurn = frameValue(right?.turnId);
+  const leftStep = frameValue(left?.stepId);
+  const rightStep = frameValue(right?.stepId);
+  const leftScoped = Boolean(leftTurn || leftStep);
+  const rightScoped = Boolean(rightTurn || rightStep);
+  if (!leftScoped && !rightScoped) return true;
+  return leftScoped && rightScoped && leftTurn === rightTurn && leftStep === rightStep;
+}
+function groupToolMessages(messages = []) {
+  const units = [];
+  let fallbackSequence = 0;
+  let fallbackGroupKey = null;
+  for (const [index, msg] of (Array.isArray(messages) ? messages : []).entries()) {
+    if (msg?.role !== "tool") {
+      fallbackGroupKey = null;
+      units.push({ kind: "msg", msg, index });
+      continue;
+    }
+    const hasTurn = Boolean(String(msg.turnId ?? "").trim());
+    const hasStep = Boolean(String(msg.stepId ?? "").trim());
+    const toolCallId = String(msg.toolCallId ?? msg.tool_call_id ?? msg.id ?? "").trim();
+    const key = hasTurn || hasStep ? `identified:${String(msg.turnId ?? "legacy")}::${String(msg.stepId ?? `tool:${toolCallId || index}`)}` : fallbackGroupKey ?? `legacy:${fallbackSequence + 1}`;
+    if (!hasTurn && !hasStep && !fallbackGroupKey) {
+      fallbackSequence += 1;
+      fallbackGroupKey = key;
+    } else if (hasTurn || hasStep) {
+      fallbackGroupKey = null;
+    }
+    const previous = units.at(-1);
+    if (previous?.kind === "toolGroup" && previous.key === key) {
+      const existingIndex = toolCallId ? previous.items.findIndex((item) => String(item.msg?.toolCallId ?? item.msg?.tool_call_id ?? item.msg?.id ?? "").trim() === toolCallId) : -1;
+      if (existingIndex >= 0) {
+        const existing = previous.items[existingIndex];
+        previous.items[existingIndex] = {
+          ...existing,
+          msg: { ...existing.msg, ...msg },
+          index
+        };
+      } else {
+        previous.items.push({ msg, index });
+      }
+      continue;
+    }
+    units.push({
+      kind: "toolGroup",
+      id: `tg-${String(msg.turnId ?? "legacy")}-${String(msg.stepId ?? fallbackSequence)}-${toolCallId || index}`,
+      key,
+      items: [{ msg, index }]
+    });
+  }
+  return units;
+}
+
 // node_modules/highlight.js/es/common.js
 var import_common = __toESM(require_common(), 1);
 var common_default = import_common.default;
@@ -22250,8 +22323,8 @@ function ToolCard({ msg }) {
   const args = parseToolArgs(msg.toolArgs);
   const name = msg.toolName ?? "tool";
   const path = args?.path ?? args?.file_path ?? args?.filename;
-  const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
-  const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled") }[progressStatus];
+  const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled", "unknown", "recovered"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
+  const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), recovered: t4("chat.statusCompletedWarnings"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled"), unknown: t4("chat.statusUnknown") }[progressStatus];
   const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
   const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage) ? html4`<div class="tool-card-diagnostic"><strong>${t4("chat.toolFailedContinue")}</strong>${msg.code ? html4`<span>${msg.code}</span>` : null}${msg.recommendedAction ? html4`<span>${msg.recommendedAction}</span>` : null}${msg.diagnosticMessage ? html4`<span>${msg.diagnosticMessage}</span>` : null}</div>` : null;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
@@ -22360,7 +22433,7 @@ var TOOL_ROW_DETAIL_TAIL_LINES = 3;
 var TOOL_SETTLE_FALLBACK_MS = 8e3;
 function toolRowStatus(status) {
   if (["queued", "running"].includes(status)) return "active";
-  if (["failed", "cancelled"].includes(status)) return "failed";
+  if (["failed", "cancelled", "unknown"].includes(status)) return "failed";
   return "done";
 }
 function toolRowsFromItems(items) {
@@ -22381,8 +22454,10 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const isActiveStatus = (status) => ["queued", "running"].includes(status);
   const activeItems = items.filter((m3) => isActiveStatus(m3.toolStatus));
   const doneItems = items.filter((m3) => !isActiveStatus(m3.toolStatus));
-  const failedItems = doneItems.filter((m3) => ["failed", "cancelled"].includes(m3.toolStatus));
-  const hasFailed = failedItems.length > 0;
+  const failedItems = doneItems.filter((m3) => ["failed", "cancelled", "unknown"].includes(m3.toolStatus));
+  const attention = toolGroupAttention(items);
+  const hasFailed = attention.hasFailure;
+  const hasRecovery = attention.hasRecovery;
   const hitSet = searchHitIds ? new Set(searchHitIds) : null;
   const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
   const [settled, setSettled] = d2(!taskActive);
@@ -22394,7 +22469,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       return void 0;
     }
     if (!wasActiveRef.current) return void 0;
-    if (hasFailed) {
+    if (attention.keepExpanded) {
       wasActiveRef.current = false;
       return void 0;
     }
@@ -22413,15 +22488,15 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     wasActiveRef.current = false;
     setSettled(true);
     return void 0;
-  }, [taskActive, followedByAnswer, hasFailed, settled, processDisplay]);
+  }, [taskActive, followedByAnswer, attention.keepExpanded, hasFailed, settled, processDisplay]);
   const currentTool = activeItems.at(-1) ?? null;
   const currentBrief = currentTool ? briefToolLabel(currentTool) : null;
   const compact = processDisplay === "compact";
   const rows = compact ? [] : toolRowsFromItems(items);
   const cardState = hasFailed ? "failed" : taskActive || !settled ? "running" : "settled";
   const title = taskActive ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}` : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
-  const meta = hasFailed ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : taskActive && currentBrief ? html4`${currentBrief.name}` : null;
-  const openAttr = compact ? void 0 : hasHit ? true : processDisplay === "detailed" ? true : cardState === "running" ? true : void 0;
+  const meta = hasFailed ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : hasRecovery ? html4`<span class="process-card-meta-failed">${t4("chat.statusCompletedWarnings")}</span>` : taskActive && currentBrief ? html4`${currentBrief.name}` : null;
+  const openAttr = compact ? void 0 : hasHit ? true : processDisplay === "detailed" ? true : attention.keepExpanded ? true : cardState === "running" ? true : void 0;
   return html4`
     <${ProcessCard}
       icon=${html4`<${IconTool} size=${13} />`}
@@ -22453,7 +22528,7 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
     invalid: t4("chat.artifactInvalid"),
     unknown: t4("chat.artifactUnknown")
   }[lastArtifact?.status] || t4("chat.artifactNone");
-  const stateLabel = state === "completed" ? t4("chat.stateCompleted") : state === "needs_intervention" ? t4("chat.stateNeedsIntervention") : state === "incomplete" ? t4("chat.stateIncomplete") : state === "completed_with_warnings" ? t4("chat.stateCompletedWarn") : t4("chat.statePendingConfirm");
+  const stateLabel = state === "completed" ? t4("chat.stateCompleted") : state === "needs_intervention" ? t4("chat.stateNeedsIntervention") : state === "incomplete" ? t4("chat.stateIncomplete") : state === "completed_with_warnings" ? t4("chat.stateCompletedWarn") : state === "unknown" ? t4("chat.stateUnknown") : t4("chat.statePendingConfirm");
   const stateClass = state === "completed" ? "ok" : state === "completed_with_warnings" ? "warn" : "err";
   return html4`
     <details class=${`execution-receipt execution-receipt-${stateClass}`}>
@@ -23303,9 +23378,18 @@ function createDashboardEventGuard(maxEvents = 4096) {
       const toolCallId = String(event.toolCallId ?? event.id ?? "");
       const status = String(event.status ?? "");
       if ((event.kind === "tool" || event.kind === "tool_start") && toolCallId) {
-        const previous = terminalTools.get(toolCallId);
-        if (previous && TERMINAL_TOOL_STATES.has(previous)) return false;
-        if (TERMINAL_TOOL_STATES.has(status)) terminalTools.set(toolCallId, status);
+        const terminalToolKey = JSON.stringify([
+          String(event.turnId ?? "legacy"),
+          String(event.stepId ?? ""),
+          toolCallId
+        ]);
+        const previous = terminalTools.get(terminalToolKey);
+        const recoveryStatus = ["queued", "running", "recovered"].includes(status);
+        if (previous && TERMINAL_TOOL_STATES.has(previous)) {
+          if (previous !== "failed" || !recoveryStatus) return false;
+          terminalTools.delete(terminalToolKey);
+        }
+        if (TERMINAL_TOOL_STATES.has(status)) terminalTools.set(terminalToolKey, status);
       }
       if (event.kind === "assistant_final" && event.id) {
         const id = String(event.id);
@@ -23337,6 +23421,7 @@ function createDashboardEventGuard(maxEvents = 4096) {
   };
 }
 var terminalStates = /* @__PURE__ */ new Set(["completed", "succeeded", "failed", "cancelled", "unknown"]);
+var failedRecoveryStates = /* @__PURE__ */ new Set(["queued", "running", "recovered"]);
 function createDashboardReducerState(seed) {
   return {
     epoch: seed?.epoch ?? null,
@@ -23365,6 +23450,17 @@ function entityBucket(kind, event) {
   if (explicit === "todo" || event?.kind === "todo-update" || event?.kind?.startsWith("todo.")) return "todos";
   if (explicit === "prompt" || event?.kind === "prompt-update" || event?.kind === "operation-steering" || event?.kind?.startsWith("prompt.")) return "prompts";
   return null;
+}
+function entityIdFor(bucket, event, payload) {
+  const supplied = String(event.entityId ?? event.toolCallId ?? event.interactionId ?? event.attachmentId ?? event.artifactId ?? event.id ?? payload?.id ?? "");
+  if (bucket !== "tools") return supplied;
+  const callId = String(event.toolCallId ?? payload?.toolCallId ?? event.id ?? payload?.id ?? "").trim();
+  const turnId = String(event.turnId ?? payload?.turnId ?? "").trim();
+  const stepId = String(event.stepId ?? payload?.stepId ?? "").trim();
+  const suppliedEntityId = String(event.entityId ?? "").trim();
+  const scopeIsMissing = !suppliedEntityId || suppliedEntityId === callId;
+  if (callId && (turnId || stepId) && scopeIsMissing) return JSON.stringify([turnId || "legacy", stepId || "legacy", callId]);
+  return supplied;
 }
 function applyDashboardEvent(input, event) {
   const state = createDashboardReducerState(input);
@@ -23460,11 +23556,12 @@ function applyDashboardEvent(input, event) {
   const bucket = entityBucket(kind, event);
   const payload = event.payload && typeof event.payload === "object" ? event.payload : event;
   const entityPayload = kind === "operation-steering" && event.steering && typeof event.steering === "object" ? event.prompt ?? event.steering : payload;
-  const id = String(event.entityId ?? event.toolCallId ?? event.interactionId ?? event.attachmentId ?? event.artifactId ?? event.id ?? entityPayload?.id ?? "");
+  const id = entityIdFor(bucket, event, entityPayload);
   if (!bucket || !id) return { state, changed: false };
   const previous = state[bucket][id];
   const requestedState = String(entityPayload.state ?? payload.state ?? event.status ?? (String(event.kind).split(".").at(-1) ?? ""));
-  if (previous && terminalStates.has(String(previous.state)) && requestedState && requestedState !== previous.state) {
+  const canReopenFailedTool = bucket === "tools" && String(previous?.state ?? "") === "failed" && failedRecoveryStates.has(requestedState);
+  if (previous && terminalStates.has(String(previous.state)) && requestedState && requestedState !== previous.state && !canReopenFailedTool) {
     state.anomalies.push({ type: "late-terminal-update", entityId: id, state: requestedState });
     return { state, changed: false, anomaly: "late-terminal-update" };
   }
@@ -23582,18 +23679,49 @@ function splitDelta(event, maxChars) {
 function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3, delayMs = 16 }) {
   const queue = [];
   let timer = null;
+  let timerKind = null;
   let disposed = false;
   const eventLimit = Math.max(1, maxEvents);
   const charLimit = Math.max(1, maxChars);
   const flush = () => {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+      else clearTimeout(timer);
+    }
     timer = null;
+    timerKind = null;
     if (disposed || queue.length === 0) return;
-    const batch = queue.splice(0);
+    const batch = [];
+    let chars = 0;
+    while (queue.length > 0 && batch.length < eventLimit) {
+      const next = queue[0];
+      const nextChars = eventChars(next);
+      if (batch.length > 0 && chars + nextChars > charLimit) break;
+      batch.push(queue.shift());
+      chars += nextChars;
+    }
     onFlush(batch);
+    if (queue.length > 0 && !disposed) schedule();
+  };
+  const flushAll = () => {
+    if (timer) {
+      if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+      else clearTimeout(timer);
+    }
+    timer = null;
+    timerKind = null;
+    if (disposed || queue.length === 0) return;
+    onFlush(queue.splice(0));
   };
   const schedule = () => {
     if (timer || disposed) return;
+    const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
+    if (visible && typeof requestAnimationFrame === "function") {
+      timerKind = "raf";
+      timer = requestAnimationFrame(() => flush());
+      return;
+    }
+    timerKind = "timeout";
     timer = setTimeout(flush, Math.max(0, delayMs));
   };
   return {
@@ -23603,7 +23731,7 @@ function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3,
       const chunks = DELTA_KINDS.has(kind) ? splitDelta(event, charLimit) : [event];
       for (const chunk of chunks) {
         const isDelta = DELTA_KINDS.has(String(chunk.kind ?? ""));
-        if (!isDelta) flush();
+        if (!isDelta) flushAll();
         const previous = queue.at(-1);
         if (isDelta && previous && canMergeDelta(previous, chunk)) {
           queue[queue.length - 1] = mergeDelta(previous, chunk);
@@ -23618,8 +23746,12 @@ function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3,
     },
     flush,
     discard(predicate) {
-      if (timer) clearTimeout(timer);
+      if (timer) {
+        if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+        else clearTimeout(timer);
+      }
       timer = null;
+      timerKind = null;
       if (typeof predicate !== "function") {
         queue.splice(0);
         return;
@@ -23631,8 +23763,14 @@ function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3,
     },
     dispose() {
       if (disposed) return;
-      flush();
+      flushAll();
       disposed = true;
+      if (timer) {
+        if (timerKind === "raf" && typeof cancelAnimationFrame === "function") cancelAnimationFrame(timer);
+        else clearTimeout(timer);
+        timer = null;
+        timerKind = null;
+      }
     }
   };
 }
@@ -23776,6 +23914,8 @@ function upsertToolProgress(items, dash) {
   const next = {
     id,
     toolCallId,
+    turnId: dash.turnId || null,
+    stepId: dash.stepId || null,
     role: "tool",
     text: dash.content || "",
     toolName: dash.toolName,
@@ -23788,7 +23928,7 @@ function upsertToolProgress(items, dash) {
     diagnosticMessage: dash.message || null,
     repeatFailureBlocked: dash.repeatFailureBlocked === true
   };
-  const index = items.findIndex((item) => String(item.toolCallId || item.id) === toolCallId || item.id === id);
+  const index = items.findIndex((item) => toolFrameMatches(item, next));
   if (index < 0) return [...items, next];
   const copy = [...items];
   copy[index] = { ...copy[index], ...next, text: next.text || copy[index].text || "" };
@@ -23797,8 +23937,16 @@ function upsertToolProgress(items, dash) {
 function upsertActiveTool(items, dash) {
   const toolCallId = String(dash.toolCallId || dash.id || "");
   if (!toolCallId) return items;
-  const next = { id: dash.id, toolCallId, toolName: dash.toolName, args: dash.args, status: dash.status || "running" };
-  const index = items.findIndex((item) => item.toolCallId === toolCallId);
+  const next = {
+    id: dash.id,
+    toolCallId,
+    turnId: dash.turnId || null,
+    stepId: dash.stepId || null,
+    toolName: dash.toolName,
+    args: dash.args,
+    status: dash.status || "running"
+  };
+  const index = items.findIndex((item) => toolFrameMatches(item, next));
   if (index < 0) return [...items, next];
   const copy = [...items];
   copy[index] = { ...copy[index], ...next };
@@ -27853,20 +28001,10 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
   const remoteHiddenCount = Math.max(0, totalMessages - messages.length);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
   const displayTotal = Math.max(totalMessages, allMessages.length);
-  const renderUnits = [];
-  renderedMessages.forEach((m3, i3) => {
-    const globalIndex = i3 + hiddenCount;
-    if (m3.role === "tool") {
-      const last = renderUnits[renderUnits.length - 1];
-      if (last?.kind === "toolGroup") {
-        last.items.push({ msg: m3, index: globalIndex });
-      } else {
-        renderUnits.push({ kind: "toolGroup", id: `tg-${m3.id ?? globalIndex}`, items: [{ msg: m3, index: globalIndex }] });
-      }
-    } else {
-      renderUnits.push({ kind: "msg", msg: m3, index: globalIndex });
-    }
-  });
+  const renderUnits = groupToolMessages(renderedMessages).map((unit) => ({
+    ...unit,
+    items: unit.items?.map((item) => ({ ...item, index: item.index + hiddenCount }))
+  }));
   const renderChatMessage = (m3, globalIndex) => html4`
                 <${ChatMessage}
                   key=${m3.id}

@@ -82,6 +82,17 @@ test("updates a task atomically without duplicate records and rejects unsafe ids
   });
 });
 
+test("reports a missing output resource instead of returning an empty successful window", async () => {
+  await withStore(async (store, root) => {
+    await store.save({ taskId: "bg-missing", running: false, output: "durable output\n", exitCode: 0 });
+    await rm(join(root, "tasks", "bg-missing.log"), { force: true });
+    const result = await store.read("bg-missing", { offsetBytes: 0, maxBytes: 128 });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "resource_missing");
+    assert.equal(result.category, "resource");
+  });
+});
+
 test("persists and acknowledges terminal notification facts", async () => {
   await withStore(async (store) => {
     await store.save({

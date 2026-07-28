@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeResourceReference } from "./resource-reference.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -765,9 +766,21 @@ export function createContextInputTransactionStore(root, options = {}) {
     const resourceId = String(read.resourceId ?? "").trim();
     const entry = pendingInputs(state).find((item) => item.resourceId === resourceId);
     if (!entry) return { ok: false, error: "unknown tool output resource", resourceId };
-    const offsetBytes = Math.max(0, Number(read.offsetBytes) || 0);
-    const nextOffsetBytes = Math.max(offsetBytes, Number(read.nextOffsetBytes) || offsetBytes);
-    const totalBytes = Math.max(nextOffsetBytes, Number(read.totalBytes) || entry.chars);
+    const totalBytes = Math.max(0, Number(entry.chars) || 0, Number(read.totalBytes) || 0);
+    const resource = normalizeResourceReference({
+      resourceId,
+      kind: "context-input",
+      preview: read.preview ?? read.output ?? "",
+      totalBytes,
+      offsetBytes: read.offsetBytes,
+      nextOffsetBytes: read.nextOffsetBytes,
+      complete: read.complete === true,
+      expiresAt: read.expiresAt,
+      readAction: "read_tool_output",
+    });
+    if (!resource) return { ok: false, error: "invalid tool output resource", resourceId };
+    const offsetBytes = resource.offsetBytes;
+    const nextOffsetBytes = resource.nextOffsetBytes;
     const staleLease = state.readLease?.stale === true;
     if (!staleLease && state.readLease && (
       state.readLease.contextId !== entry.contextId
@@ -786,20 +799,27 @@ export function createContextInputTransactionStore(root, options = {}) {
       try { persist(); } catch {}
       return { ok: false, blocked: true, error: `next resource segment must start at offset ${coveredChars}`, resourceId, expectedOffsetBytes: coveredChars };
     }
-    entry.chars = Math.max(entry.chars, totalBytes);
+    entry.chars = Math.max(entry.chars, resource.totalBytes);
     state.readLease = {
       contextId: entry.contextId,
       resourceId,
       offset: offsetBytes,
       nextOffset: nextOffsetBytes,
       chars: Math.max(0, nextOffsetBytes - offsetBytes),
-      totalChars: totalBytes,
+      totalChars: resource.totalBytes,
       resource: true,
       issuedAt: new Date().toISOString(),
     };
     state.lastInterventionFingerprint = null;
     try { persist(); } catch {}
-    return { ok: true, resourceId, contextId: entry.contextId, complete: read.complete === true || nextOffsetBytes >= totalBytes, nextOffsetBytes };
+    return {
+      ok: true,
+      resourceId,
+      contextId: entry.contextId,
+      complete: resource.complete,
+      nextOffsetBytes,
+      resource,
+    };
   }
 
   function noteArtifactEvidence(evidence = {}) {
@@ -953,6 +973,15 @@ export function createContextInputTransactionStore(root, options = {}) {
       coveredChars: entry.coveredChars || 0,
       coverage: entry.coverage ?? "source",
       state: entry.state,
+      resource: entry.resourceId ? normalizeResourceReference({
+        resourceId: entry.resourceId,
+        kind: "tool-output",
+        totalBytes: entry.chars,
+        offsetBytes: entry.coveredChars || 0,
+        nextOffsetBytes: entry.coveredChars || 0,
+        complete: entry.state === "foldable",
+        readAction: "read_tool_output",
+      }) : null,
     }));
     const activeInputs = state.inputs.filter((entry) => !["invalid", "discarded"].includes(entry.state));
     const coverageInputs = activeInputs.filter((entry) => (entry.coverage ?? "source") !== "metadata");

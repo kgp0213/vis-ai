@@ -520,6 +520,7 @@ export const en = {
     stateIncomplete: "Incomplete",
     stateCompletedWarn: "Completed with warnings",
     statePendingConfirm: "Result pending confirmation",
+    stateUnknown: "Result could not be confirmed",
     receiptRecent: "latest {name}",
     receiptRetryable: "recoverable",
     receiptRepeatBlocked: "similar failures reached suggested limit",

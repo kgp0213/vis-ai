@@ -37,3 +37,9 @@ test("keeps conflict boundaries contiguous so the loop cannot skip calls", () =>
   ]);
   assert.deepEqual(result.batches.map((batch) => batch.map((call) => call.id)), [["a"], ["b", "c"]]);
 });
+
+test("serializes shared DLP, MCP and attachment resources", () => {
+  assert.equal(toolClaimsConflict({ name: "read_file", workspace: "C:/work", dlpBindingId: "doc-1", mcpServer: "files" }, { name: "read_file", workspace: "C:/work", dlpBindingId: "doc-1", mcpServer: "other" }), true);
+  assert.equal(toolClaimsConflict({ name: "read_media", args: { attachments: ["att-1"] } }, { name: "read_media", args: { attachments: ["att-1"] } }), true);
+  assert.equal(toolClaimsConflict({ name: "read_file", workspace: "C:/work", mcpServer: "files", args: { path: "C:/work/a" } }, { name: "read_file", workspace: "C:/work", mcpServer: "other", args: { path: "C:/work/b" } }), false);
+});

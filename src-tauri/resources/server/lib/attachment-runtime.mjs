@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFile, mkdir, open as openFile, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { normalizeResourceReference } from "./resource-reference.mjs";
+
 const INDEX_VERSION = 1;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const DEFAULT_UPLOAD_TTL_MS = 10 * 60 * 1000;
@@ -82,9 +84,25 @@ function normalizeContext(context = {}) {
   };
 }
 
+function attachmentResourceReference(record) {
+  return normalizeResourceReference({
+    resourceId: record.id,
+    kind: record.kind || "attachment",
+    preview: record.name,
+    totalBytes: record.size,
+    offsetBytes: 0,
+    nextOffsetBytes: 0,
+    complete: false,
+    readAction: "attachment_content",
+  });
+}
+
 function recordForPublic(record) {
   const { refs: _refs, ...publicRecord } = record;
-  return clone(publicRecord);
+  return clone({
+    ...publicRecord,
+    resource: attachmentResourceReference(record),
+  });
 }
 
 function recordForStorage(record) {
@@ -390,6 +408,7 @@ export function createAttachmentRuntime({
       mimeType: record.mimeType,
       etag: `"${record.sha256}"`,
       name: record.name,
+      resource: attachmentResourceReference(record),
     };
   }
 

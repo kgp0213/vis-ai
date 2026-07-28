@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { formatToolRepairNotice } from "../lib/tool-repair-notice.mjs";
 import { createContextInputTransactionStore } from "../lib/context-input-transaction.mjs";
+import { planToolCallBatches } from "../lib/parallel-tool-scheduler.mjs";
 
 const {
   CacheFirstLoop,
@@ -164,6 +165,54 @@ describe("agent runtime policy", () => {
     const progress = events.filter((event) => ["tool_queued", "tool_start", "tool"].includes(event.role));
     assert.deepEqual(progress.map((event) => event.callId), ["stable-call", "stable-call", "stable-call"]);
     assert.deepEqual(progress.map((event) => event.toolStatus), ["queued", "running", "succeeded"]);
+  });
+
+  test("ordinary CacheFirstLoop executes planner-approved disjoint reads concurrently", async () => {
+    const tools = new ToolRegistry();
+    let active = 0;
+    let maxActive = 0;
+    tools.register({
+      name: "read_file",
+      description: "test read",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      readOnly: true,
+      stormExempt: true,
+      fn: async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active -= 1;
+        return "ok";
+      },
+    });
+    let requests = 0;
+    let plannerCalls = 0;
+    const client = {
+      chat: async () => {
+        requests += 1;
+        return requests === 1
+          ? {
+            content: "",
+            toolCalls: [
+              toolCall("read-a", "read_file", { path: "C:/work/a.txt" }),
+              toolCall("read-b", "read_file", { path: "C:/work/b.txt" }),
+            ],
+            usage: {},
+            finishReason: "tool_calls",
+          }
+          : { content: "done", toolCalls: [], usage: {}, finishReason: "stop" };
+      },
+    };
+    const loop = makeLoop(client, tools, {
+      parallelBatchPlanner: (calls) => {
+        plannerCalls += 1;
+        return planToolCallBatches(calls, { maxParallel: 2 });
+      },
+    });
+    for await (const _event of loop.step("read both files")) { /* consume */ }
+
+    assert.equal(plannerCalls > 0, true);
+    assert.equal(maxActive, 2);
   });
 
   test("a repaired unterminated string cannot execute a mutating tool", async () => {

@@ -14,6 +14,13 @@ test("task outcome keeps planning and degraded completion distinct", () => {
   assert.equal(deriveTaskState({ continuationNeeded: true }), "incomplete");
   assert.equal(deriveTaskState({ continuationNeeded: true, interventionPaused: true }), "needs_intervention");
   assert.equal(deriveTaskState({ warnings: ["review required"] }), "completed_with_warnings");
+  assert.equal(deriveTaskState({ warnings: ["review required"], artifactRequired: true, artifactVerified: false }), "unknown");
+  assert.equal(deriveTaskState({ warnings: ["review required"], artifactRequired: true, artifactVerified: true }), "completed_with_warnings");
   assert.equal(deriveTaskState({ artifactIncomplete: true, warnings: ["review required"] }), "incomplete");
   assert.equal(deriveTaskState({ interventionPaused: true }), "needs_intervention");
+});
+
+test("execution facts without a terminal fact remain unknown", () => {
+  assert.equal(deriveTaskState({ executionStarted: true, executionFacts: true, terminalFact: false }), "unknown");
+  assert.equal(deriveTaskState({ executionStarted: true, executionFacts: true, terminalFact: true }), "completed");
 });

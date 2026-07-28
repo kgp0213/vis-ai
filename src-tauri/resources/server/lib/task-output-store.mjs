@@ -212,11 +212,11 @@ async function readWindow(tasksRoot, taskId, offsetBytes, maxBytes) {
   try {
     handle = await open(path, "r");
   } catch {
-    return { offsetBytes: start, nextOffsetBytes: start, totalBytes: 0, content: "", complete: true, eof: true };
+    return { available: false, offsetBytes: start, nextOffsetBytes: start, totalBytes: 0, content: "", complete: false, eof: true };
   }
   try {
     const size = (await handle.stat()).size;
-    if (start >= size) return { offsetBytes: start, nextOffsetBytes: start, totalBytes: size, content: "", complete: true, eof: true };
+    if (start >= size) return { available: true, offsetBytes: start, nextOffsetBytes: start, totalBytes: size, content: "", complete: true, eof: true };
     const buffer = Buffer.allocUnsafe(Math.min(size - start, limit + 3));
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
     // A caller may provide an arbitrary byte cursor (for example a preview
@@ -236,6 +236,7 @@ async function readWindow(tasksRoot, taskId, offsetBytes, maxBytes) {
       : 0;
     const nextOffsetBytes = alignedStart + safeBytes;
     return {
+      available: true,
       offsetBytes: alignedStart,
       nextOffsetBytes,
       totalBytes: size,
@@ -421,7 +422,18 @@ export function createTaskOutputStore({ rootDir, now = () => new Date().toISOStr
     await writeQueue;
     const record = await readRecord(tasksRoot, safeId);
     if (!record) return { ok: false, taskId: safeId, error: "task output not found" };
-    return { ok: true, taskId: safeId, ...record, ...await readWindow(tasksRoot, safeId, options.offsetBytes, options.maxBytes) };
+    const window = await readWindow(tasksRoot, safeId, options.offsetBytes, options.maxBytes);
+    if (window.available === false && (Number(record.outputBytes) > 0 || Number(record.reportedBytes) > 0)) {
+      return {
+        ok: false,
+        taskId: safeId,
+        code: "resource_missing",
+        category: "resource",
+        retryable: false,
+        error: "task output resource is missing or expired",
+      };
+    }
+    return { ok: true, taskId: safeId, ...record, ...window };
   };
 
   const recoverRunning = (reason = "process_restarted") => enqueue(async () => {

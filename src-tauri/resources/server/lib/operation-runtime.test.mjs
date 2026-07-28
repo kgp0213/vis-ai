@@ -111,3 +111,28 @@ test("operation lifecycle observers receive non-blocking start, stop and finish 
   assert.deepEqual(events.map((entry) => entry.event), ["operation.started", "operation.stopping", "operation.finished"]);
   assert.equal(events[2].payload.finalState, "cancelled");
 });
+
+test("operation stop observes shouldContinueAfterStop before aborting", async () => {
+  const observed = [];
+  const runtime = createOperationRuntime({
+    lifecycle: {
+      emit: async () => {},
+      runBoundary: async (event, payload) => {
+        observed.push({ event, payload });
+        return { event, results: [{ hook: "observer", status: "completed", value: { continue: true } }] };
+      },
+    },
+    getWorkspace: () => "C:/workspace-hooks",
+    idFactory: () => "operation-stop-hook",
+  });
+  const operation = runtime.begin("chat");
+  assert.equal(runtime.stop(operation, "user_cancelled"), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].event, "shouldContinueAfterStop");
+  assert.equal(observed[0].payload.operationId, operation.id);
+  assert.equal(observed[0].payload.reason, "user_cancelled");
+  assert.equal(observed[0].payload.workspace.path, null);
+  assert.match(observed[0].payload.workspace.id, /^sha256:/u);
+  assert.equal(operation.controller.signal.aborted, true);
+});
