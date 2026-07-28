@@ -5,6 +5,8 @@ import {
   createBackgroundTaskNotificationRuntime,
   deriveBackgroundTaskStatus,
   formatBackgroundTaskNotification,
+  isProcessRestartedRecovery,
+  notificationEnqueueScope,
 } from "./background-task-notification.mjs";
 
 test("derives terminal task status from exit, timeout and spawn facts", () => {
@@ -70,6 +72,46 @@ test("service tasks and restored notifications do not re-enter the queue", () =>
   assert.equal(runtime.claim({ sessionId: "s", workspace: "C:/w" }).length, 0);
 });
 
+test("restart-recovered lost notifications are rebound to the live operation", () => {
+  const recovered = {
+    taskId: "bg-lost-restart",
+    status: "lost",
+    running: false,
+    stopReason: "process_restarted",
+    operationId: "op-dead",
+    sessionId: "s",
+    workspace: "C:/w",
+  };
+  assert.equal(isProcessRestartedRecovery(recovered), true);
+  assert.equal(isProcessRestartedRecovery({ ...recovered, stopReason: "user_cancelled" }), false);
+  assert.equal(isProcessRestartedRecovery({ ...recovered, status: "failed" }), false);
+
+  // Crash-recovered facts take the live operation binding; ordinary terminal
+  // facts keep their original operation so the cross-operation guard holds.
+  assert.deepEqual(notificationEnqueueScope(recovered, { operationId: "op-live", sessionId: "s", workspace: "C:/w" }), {
+    operationId: "op-live",
+    sessionId: "s",
+    workspace: "C:/w",
+  });
+  assert.deepEqual(notificationEnqueueScope({ taskId: "bg-done", status: "completed", operationId: "op-a" }, { operationId: "op-b", sessionId: "s", workspace: "C:/w" }), {
+    operationId: "op-a",
+    sessionId: "s",
+    workspace: "C:/w",
+  });
+
+  // End to end: a rebound lost notification is claimable by the live
+  // operation and survives redelivery until acknowledged.
+  const runtime = createBackgroundTaskNotificationRuntime();
+  const enqueued = runtime.enqueue(recovered, notificationEnqueueScope(recovered, { operationId: "op-live", sessionId: "s", workspace: "C:/w" }));
+  assert.equal(enqueued.accepted, true);
+  assert.equal(runtime.claim({ operationId: "op-other", sessionId: "s", workspace: "C:/w" }).length, 0);
+  const [claimed] = runtime.claim({ operationId: "op-live", sessionId: "s", workspace: "C:/w" });
+  assert.equal(claimed?.status, "lost");
+  assert.equal(claimed?.sourceOperationId, "op-live");
+  assert.equal(runtime.acknowledge(claimed.notificationId), true);
+  assert.equal(runtime.claim({ operationId: "op-live", sessionId: "s", workspace: "C:/w" }).length, 0);
+});
+
 test("notification overflow remains recoverable instead of being silently discarded", () => {
   const runtime = createBackgroundTaskNotificationRuntime({ maxPending: 1 });
   runtime.enqueue({ taskId: "bg-overflow-1", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
@@ -89,4 +131,16 @@ test("notification overflow remains recoverable instead of being silently discar
   assert.equal(fifth.accepted, false);
   assert.equal(fifth.overflow.durableRecoveryRequired, true);
   assert.equal(runtime.snapshot().overflowedCount <= 1, true);
+});
+
+test("bounds claimed notifications until the model acknowledges them", () => {
+  const runtime = createBackgroundTaskNotificationRuntime({ maxPending: 1 });
+  runtime.enqueue({ taskId: "bg-in-flight-1", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  const [claimed] = runtime.claim({ sessionId: "s", workspace: "C:/w" });
+  assert.equal(claimed.taskId, "bg-in-flight-1");
+
+  runtime.enqueue({ taskId: "bg-in-flight-2", running: false, exitCode: 1 }, { sessionId: "s", workspace: "C:/w" });
+  assert.deepEqual(runtime.claim({ sessionId: "s", workspace: "C:/w" }), []);
+  assert.equal(runtime.snapshot().inFlight.length, 1);
+  assert.equal(runtime.snapshot().pending.length + runtime.snapshot().overflowedCount <= 2, true);
 });
