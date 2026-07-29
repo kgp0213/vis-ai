@@ -718,6 +718,7 @@ describe("Dashboard 回归护栏", () => {
     const css = readFileSync(new URL("../visionox-pkg/dashboard/app.css", import.meta.url), "utf8");
     const launcher = readFileSync(launcherUrl, "utf8");
     const inputHandler = /const onInput = q2\([\s\S]*?\n  \);/.exec(app)?.[0] ?? "";
+    const inputSetter = /const setChatInput = q2\([\s\S]*?\n  \}, \[[^\n]*\]\);/.exec(app)?.[0] ?? "";
 
     assert.match(app, /CHAT_MESSAGE_PAGE_SIZE = 60/);
     assert.match(app, /CHAT_TOP_LOAD_THRESHOLD = 96/);
@@ -746,7 +747,9 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /topLoadArmedRef/);
     assert.match(app, /t4\("chat\.shownOfTotal", \{ shown: renderedMessages\.length, total: displayTotal \}\)/);
     assert.match(app, /const inputValueRef = A2/);
-    assert.match(inputHandler, /inputValueRef\.current = v3/);
+    assert.match(inputHandler, /setChatInput\(v3\)/);
+    assert.match(inputSetter, /inputValueRef\.current = text/);
+    assert.doesNotMatch(inputSetter, /setPromptDraftRevision/);
     assert.doesNotMatch(inputHandler, /setInput\(v3\)/);
     assert.match(launcher, /DASHBOARD_MESSAGE_WINDOW = 60/);
     assert.match(launcher, /messages\.slice\(-DASHBOARD_MESSAGE_WINDOW\)/);
