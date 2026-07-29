@@ -22,7 +22,7 @@ function createHarness(overrides = {}) {
       providerCapabilities: { maxOutputTokens: 4096 },
     }),
     isTaskBusy: () => false,
-    slashCommands: [{ name: "new", aliases: ["n"] }, { name: "help" }],
+    slashCommands: [{ name: "new", aliases: ["n"] }, { name: "help", aliases: ["?"] }],
     audit: (entry) => audits.push(entry),
     timeoutMs: 5_000,
     ...overrides,
@@ -34,6 +34,9 @@ describe("prompt optimization runtime", () => {
   test("classifies registered commands and preserves a leading Skill invocation", () => {
     assert.deepEqual(classifyPromptOptimizationInput("/new", {
       slashCommands: [{ name: "new", aliases: ["n"] }],
+    }).kind, "command");
+    assert.equal(classifyPromptOptimizationInput("/?", {
+      slashCommands: [{ name: "help", aliases: ["?"] }],
     }).kind, "command");
     assert.equal(classifyPromptOptimizationInput("/unknown", {
       slashCommands: [{ name: "new" }],
@@ -158,6 +161,24 @@ describe("prompt optimization runtime", () => {
     assert.deepEqual(runtime.cancel("cancel-me"), { requestId: "cancel-me", cancelled: true });
     assert.deepEqual(runtime.cancel("cancel-me"), { requestId: "cancel-me", cancelled: true });
     await assert.rejects(pending, (error) => error.code === "prompt_optimization_cancelled" && error.status === 499);
+  });
+
+  test("remembers cancellation that arrives before Provider admission", async () => {
+    const { runtime, requests } = createHarness();
+    assert.deepEqual(runtime.cancel("cancel-before-post"), {
+      requestId: "cancel-before-post",
+      cancelled: true,
+    });
+    assert.deepEqual(runtime.cancel("cancel-before-post"), {
+      requestId: "cancel-before-post",
+      cancelled: true,
+    });
+
+    await assert.rejects(
+      runtime.optimize({ prompt: "不应进入模型", requestId: "cancel-before-post", draftRevision: 1 }),
+      (error) => error.code === "prompt_optimization_cancelled" && error.status === 499,
+    );
+    assert.equal(requests.length, 0);
   });
 
   test("normalizes Provider failures without auditing prompt text or credentials", async () => {

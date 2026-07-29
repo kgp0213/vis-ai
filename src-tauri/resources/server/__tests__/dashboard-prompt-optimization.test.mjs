@@ -17,6 +17,7 @@ describe("Dashboard prompt optimization", () => {
   test("classifies registered slash commands and leading Skill prefixes", () => {
     const commands = [{ cmd: "new" }, { cmd: "help", aliases: ["?"] }];
     assert.equal(classifyPromptOptimizationDraft("/new", commands).kind, "command");
+    assert.equal(classifyPromptOptimizationDraft("/?", commands).kind, "command");
     assert.equal(classifyPromptOptimizationDraft("/unknown", commands).kind, "prompt");
     assert.deepEqual(classifyPromptOptimizationDraft("@pdf  转换文件", commands), {
       kind: "skill",
@@ -67,6 +68,8 @@ describe("Dashboard prompt optimization", () => {
     assert.match(chatSource, /const promptDraftRevisionRef = A2\(0\)/);
     assert.match(chatSource, /promptDraftRevisionRef\.current \+= 1/);
     assert.match(chatSource, /api\(`\/optimize-prompt\/\$\{encodeURIComponent\(flight\.requestId\)\}`,[\s\S]{0,160}method: "DELETE"/u);
+    assert.match(chatSource, /flight\.cancelPromise\s*=\s*api\(`\/optimize-prompt/u);
+    assert.match(chatSource, /result\?\.cancelled\s*!==\s*true/u);
     assert.match(chatSource, /promptOptimizationResponseIsCurrent\(/);
     assert.match(chatSource, /class="prompt-optimization-preview"/);
     assert.match(chatSource, /applyPromptOptimization/);
@@ -79,7 +82,7 @@ describe("Dashboard prompt optimization", () => {
     const sendStart = chatSource.indexOf("const send = q2(async () => {");
     const sendEnd = chatSource.indexOf("const saveSkillCredential", sendStart);
     const send = chatSource.slice(sendStart, sendEnd);
-    assert.match(send, /cancelPromptOptimizationRequest\("cancelled"\)/);
+    assert.match(send, /await cancelPromptOptimizationRequest\("cancelled"\)/);
     assert.match(send, /setPromptOptimizationRestore\(null\)/);
   });
 
