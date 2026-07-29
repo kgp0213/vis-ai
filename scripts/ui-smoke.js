@@ -734,6 +734,105 @@ try {
   if (pastePerformance.dispatchMs > 25) throw new Error(`plain path paste exceeded 25ms: ${pastePerformance.dispatchMs.toFixed(2)}ms`);
   console.log(`[ui-smoke] plain Windows path paste stayed local (${pastePerformance.dispatchMs.toFixed(2)}ms)`);
 
+  const originalPrompt = "请整理发布检查步骤";
+  const optimizedPrompt = "请按顺序整理发布检查步骤，并列出每一步的验收结果。";
+  await evaluate(cdp, `(() => {
+    window.__promptOptimizationOriginalFetch = window.fetch.bind(window);
+    window.__promptOptimizationMode = 'success';
+    window.__promptOptimizationPostCalls = 0;
+    window.__promptOptimizationDeleteAttempts = 0;
+    window.__promptOptimizationSubmitCalls = 0;
+    window.fetch = async (input, init = {}) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      const method = String(init.method || input?.method || 'GET').toUpperCase();
+      if (url.pathname.endsWith('/api/submit')) {
+        window.__promptOptimizationSubmitCalls += 1;
+        return new Response(JSON.stringify({ accepted: false, reason: 'unexpected submit' }), { status: 409, headers: { 'content-type': 'application/json' } });
+      }
+      if (method === 'POST' && url.pathname.endsWith('/api/optimize-prompt')) {
+        window.__promptOptimizationPostCalls += 1;
+        const request = JSON.parse(String(init.body || '{}'));
+        if (window.__promptOptimizationMode === 'cancel') {
+          return new Promise((resolve, reject) => {
+            const abort = () => reject(new DOMException('Aborted', 'AbortError'));
+            if (init.signal?.aborted) abort();
+            else init.signal?.addEventListener('abort', abort, { once: true });
+          });
+        }
+        return new Response(JSON.stringify({
+          requestId: request.requestId,
+          draftRevision: request.draftRevision,
+          original: request.prompt,
+          optimized: ${JSON.stringify(optimizedPrompt)},
+          warnings: [],
+          protectedFacts: [],
+          unchanged: false,
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (method === 'DELETE' && url.pathname.includes('/api/optimize-prompt/')) {
+        window.__promptOptimizationDeleteAttempts += 1;
+        if (window.__promptOptimizationDeleteAttempts === 1) {
+          return new Response(JSON.stringify({ error: 'cancel unavailable', message: 'cancel unavailable', code: 'cancel_test_failure' }), { status: 503, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ cancelled: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return window.__promptOptimizationOriginalFetch(input, init);
+    };
+    const input = document.querySelector('.chat-input-area textarea');
+    input.value = ${JSON.stringify(originalPrompt)};
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: input.value }));
+  })()`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.composer-optimize')?.disabled`, Boolean);
+  await evaluate(cdp, `document.querySelector('.composer-optimize')?.click()`);
+  const optimizationPreview = await waitForBrowserValue(cdp, `(() => ({
+    visible: Boolean(document.querySelector('.prompt-optimization-preview')),
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    columns: [...document.querySelectorAll('.prompt-optimization-preview pre')].map((item) => item.textContent),
+    submits: window.__promptOptimizationSubmitCalls,
+  }))()`, (value) => value.visible);
+  if (optimizationPreview.value !== originalPrompt || optimizationPreview.columns[0] !== originalPrompt || optimizationPreview.columns[1] !== optimizedPrompt || optimizationPreview.submits !== 0) {
+    throw new Error(`prompt optimization preview changed or submitted the draft: ${JSON.stringify(optimizationPreview)}`);
+  }
+  await evaluate(cdp, `document.querySelector('.prompt-optimization-actions .primary')?.click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    restore: Boolean(document.querySelector('.prompt-optimization-restore')),
+    submits: window.__promptOptimizationSubmitCalls,
+  }))()`, (value) => value.value === optimizedPrompt && value.restore && value.submits === 0);
+  await evaluate(cdp, `document.querySelector('.prompt-optimization-restore button')?.click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    restore: Boolean(document.querySelector('.prompt-optimization-restore')),
+    submits: window.__promptOptimizationSubmitCalls,
+  }))()`, (value) => value.value === originalPrompt && !value.restore && value.submits === 0);
+  console.log("[ui-smoke] prompt optimization preview, apply and restore stayed isolated from submit");
+
+  await evaluate(cdp, `(() => {
+    window.__promptOptimizationMode = 'cancel';
+    document.querySelector('.composer-optimize')?.click();
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.prompt-optimization-status')) && window.__promptOptimizationPostCalls === 2`, Boolean);
+  await evaluate(cdp, `document.querySelector('.prompt-optimization-status button')?.click()`);
+  await waitForBrowserValue(cdp, `window.__promptOptimizationDeleteAttempts`, (value) => value === 1);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.prompt-optimization-status button'))`, Boolean);
+  await evaluate(cdp, `document.querySelector('.prompt-optimization-status button')?.click()`);
+  const cancellationRetry = await waitForBrowserValue(cdp, `(() => ({
+    attempts: window.__promptOptimizationDeleteAttempts,
+    requesting: Boolean(document.querySelector('.prompt-optimization-status')),
+    submits: window.__promptOptimizationSubmitCalls,
+    error: document.querySelector('.notice.err')?.textContent ?? '',
+  }))()`, (value) => value.attempts === 2 && !value.requesting && !value.error);
+  if (cancellationRetry.submits !== 0) throw new Error(`prompt optimization cancellation submitted the draft: ${JSON.stringify(cancellationRetry)}`);
+  await evaluate(cdp, `(() => {
+    window.fetch = window.__promptOptimizationOriginalFetch;
+    delete window.__promptOptimizationOriginalFetch;
+    delete window.__promptOptimizationMode;
+    delete window.__promptOptimizationPostCalls;
+    delete window.__promptOptimizationDeleteAttempts;
+    delete window.__promptOptimizationSubmitCalls;
+  })()`);
+  console.log("[ui-smoke] prompt optimization cancellation retried after a transient DELETE failure");
+
   await evaluate(cdp, `(() => {
     const chip = [...document.querySelectorAll('.composer-chip-ghost')].find((item) => item.textContent.includes('模型'));
     if (!chip) throw new Error('model picker not found');
