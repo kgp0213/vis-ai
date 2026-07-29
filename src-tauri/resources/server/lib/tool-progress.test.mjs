@@ -1,10 +1,25 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeToolOutcome, projectToolProgressEvent, redactToolProgressValue } from "./tool-progress.mjs";
+import { normalizeToolOutcome, projectToolProgressEvent, redactToolProgressValue, toolFrameEntityId } from "./tool-progress.mjs";
 import { createTurnReceipt } from "./turn-receipt.mjs";
 
 describe("tool progress projection", () => {
+  test("scopes a reused provider call id by turn and step", () => {
+    assert.equal(
+      toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" }),
+      JSON.stringify(["turn-1", "step-1", "call-1"]),
+    );
+    assert.equal(
+      toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-2", stepId: "step-1" }),
+      JSON.stringify(["turn-2", "step-1", "call-1"]),
+    );
+    assert.equal(
+      toolFrameEntityId({ entityId: "host-frame", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" }),
+      "host-frame",
+    );
+  });
+
   test("keeps one stable identity across queued, running and terminal facts", () => {
     const base = { toolName: "send", toolArgs: JSON.stringify({ apiKey: "secret", path: "C:/work/a.txt" }), callId: "call-1" };
     const queued = projectToolProgressEvent({ ...base, role: "tool_queued", toolStatus: "queued" }, { assistantId: "assistant-1" });
@@ -15,10 +30,22 @@ describe("tool progress projection", () => {
     assert.equal(running.id, done.id);
     assert.equal(done.toolCallId, "call-1");
     assert.equal(done.turnId, "assistant-1");
-    assert.equal(done.stepId, "call-1");
+    // 无步骤身份时回退到回合级固定步骤：同一回合的连续调用在 Dashboard
+    // 聚合为一张工具卡，"正在使用工具·第 N 步"随调用数递增；若回退到
+    // toolCallId，每次调用都会被拆成独立卡片，步骤号恒为 1。
+    assert.equal(done.stepId, "assistant-1.s-live");
     assert.equal(done.category, null);
     assert.deepEqual([queued.status, running.status, done.status], ["queued", "running", "succeeded"]);
     assert.doesNotMatch(JSON.stringify([queued, running, done]), /secret|private/);
+  });
+
+  test("falls back to one turn-scoped step so consecutive calls share a Dashboard group", () => {
+    const first = projectToolProgressEvent({ role: "tool_start", toolName: "probe", callId: "call-a" }, { assistantId: "assistant-1" });
+    const second = projectToolProgressEvent({ role: "tool_start", toolName: "read", callId: "call-b" }, { assistantId: "assistant-1" });
+    const realStep = projectToolProgressEvent({ role: "tool_start", toolName: "probe", callId: "call-c", stepId: "turn-1.s2" }, { assistantId: "assistant-1" });
+    assert.equal(first.stepId, second.stepId);
+    assert.notEqual(first.stepId, first.toolCallId);
+    assert.equal(realStep.stepId, "turn-1.s2");
   });
 
   test("redacts nested credentials while preserving useful non-secret facts", () => {

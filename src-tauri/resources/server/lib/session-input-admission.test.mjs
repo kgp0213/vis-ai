@@ -74,6 +74,79 @@ test("closing an operation publishes interruption only after persistence succeed
   assert.equal(events.filter((event) => event.kind === "session-input-resolved").length, 1);
 });
 
+test("a normally finished operation converts an undelivered steer into a durable next-turn queue input", () => {
+  const events = [];
+  const runtime = createSessionInputAdmission({ onEvent: (event) => events.push(event) });
+  runtime.admit({ id: "s-late", sessionId: "session-1", operationId: "op-1", text: "交付后台结果", delivery: "steer" });
+
+  const changed = runtime.closeOperation("op-1", {
+    reason: "operation_completed",
+    requeueUndelivered: true,
+  });
+
+  assert.equal(changed[0].status, "admitted");
+  assert.equal(changed[0].delivery, "queue");
+  assert.equal(changed[0].operationId, null);
+  assert.equal(runtime.list("session-1", { includeTerminal: false })[0].id, "s-late");
+  assert.equal(events.at(-1).kind, "session-input-requeued");
+});
+
+test("restart recovery requeues inputs stranded at promoted or dispatching boundaries", () => {
+  const persisted = [];
+  const initial = [
+      {
+        id: "steer-promoted",
+        sessionId: "session-1",
+        operationId: "op-dead",
+        workspace: "C:/work",
+        text: "continue after the background task",
+        delivery: "steer",
+        status: "promoted",
+        admittedSeq: 1,
+        promotedSeq: 2,
+      },
+      {
+        id: "queue-dispatching",
+        sessionId: "session-1",
+        operationId: "op-dead",
+        workspace: "C:/work",
+        requestId: "request-queue",
+        text: "queued user follow-up",
+        delivery: "queue",
+        status: "dispatching",
+        dispatchToken: "dispatch-dead",
+        admittedSeq: 3,
+        promotedSeq: 4,
+      },
+      {
+        id: "already-dispatched",
+        sessionId: "session-1",
+        workspace: "C:/work",
+        text: "completed admission",
+        delivery: "queue",
+        status: "dispatched",
+        admittedSeq: 5,
+      },
+    ];
+  const runtime = createSessionInputAdmission({
+    initial,
+    now: () => "2026-07-28T00:00:00.000Z",
+    onChange: (entries) => persisted.push(entries),
+  });
+
+  const pending = runtime.list("session-1", { includeTerminal: false });
+  assert.deepEqual(pending.map((entry) => entry.id), ["steer-promoted", "queue-dispatching"]);
+  for (const entry of pending) {
+    assert.equal(entry.status, "admitted");
+    assert.equal(entry.delivery, "queue");
+    assert.equal(entry.operationId, null);
+    assert.equal(entry.dispatchToken, null);
+    assert.equal(entry.resolution.reason, "process_restarted_before_delivery_confirmed");
+  }
+  assert.equal(runtime.list("session-1").find((entry) => entry.id === "already-dispatched")?.status, "dispatched");
+  assert.equal(persisted.length, 1);
+});
+
 test("requeues promoted input after model history persistence failure", () => {
   const events = [];
   const runtime = createSessionInputAdmission({ onEvent: (event) => events.push(event) });
@@ -122,6 +195,22 @@ test("dispatch resolution persistence failure becomes an observable unknown fact
   assert.equal(resolved.code, "SESSION_INPUT_PERSIST_FAILED");
   assert.equal(resolved.input.status, "unknown");
   assert.equal(runtime.list("session-1", { includeTerminal: true })[0].status, "unknown");
+});
+
+test("steer delivery resolution persistence failure becomes unknown instead of replayable", () => {
+  let fail = false;
+  const runtime = createSessionInputAdmission({
+    onChange: () => { if (fail) throw new Error("metadata unavailable"); },
+  });
+  runtime.admit({ id: "s-fail", sessionId: "session-1", operationId: "op-1", text: "already in model history", delivery: "steer" });
+  runtime.promoteSteers("session-1", { operationId: "op-1" });
+  fail = true;
+
+  const resolved = runtime.resolve("s-fail", "dispatched", "model_history_persisted", { operationId: "op-1" });
+  assert.equal(resolved.ok, false);
+  assert.equal(resolved.uncertain, true);
+  assert.equal(resolved.input.status, "unknown");
+  assert.equal(runtime.list("session-1", { includeTerminal: false }).length, 0);
 });
 
 test("restores durable facts without allowing invalid entries", () => {

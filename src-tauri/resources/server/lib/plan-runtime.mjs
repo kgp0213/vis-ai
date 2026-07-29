@@ -22,6 +22,62 @@ function normalizeSteps(value) {
     }));
 }
 
+const HOST_EVIDENCE_SOURCES = new Set([
+  "host_tool",
+  "artifact_scan",
+  "test_result",
+  "provider_result",
+  "user_confirmation",
+]);
+
+function isHostIssuedEvidence(entry) {
+  if (!entry || typeof entry !== "object" || entry.verified !== true) return false;
+  const evidenceId = text(entry.evidenceId ?? entry.id);
+  const source = text(entry.source ?? entry.type).toLowerCase();
+  // `issuedByHost` is deliberately required. A model can describe a host
+  // evidence type, but only the runtime may sign a fact for Plan completion.
+  return Boolean(evidenceId && entry.issuedByHost === true && HOST_EVIDENCE_SOURCES.has(source));
+}
+
+export function projectPlanStepEvidence({
+  facts = [],
+  plan = null,
+  stepId = null,
+  operationId = null,
+  requestId = null,
+  sessionId = null,
+  afterEvidenceSeq = 0,
+} = {}) {
+  const completedStepIds = new Set(normalizeCompletedStepIds(plan?.steps, plan?.completedStepIds));
+  const expectedStep = plan?.steps?.find((step) => !completedStepIds.has(step.id) && step.status !== "completed") ?? null;
+  if (!expectedStep || text(stepId) !== expectedStep.id) return [];
+  const consumedEvidenceIds = new Set((plan.steps ?? []).flatMap((step) => (
+    step.status === "completed" || completedStepIds.has(step.id)
+      ? (step.evidenceRefs ?? []).map((ref) => text(ref?.evidenceId)).filter(Boolean)
+      : []
+  )));
+  return (Array.isArray(facts) ? facts : [])
+    .filter((fact) => fact?.status === "succeeded")
+    .filter((fact) => !["submit_plan", "mark_step_complete"].includes(text(fact.toolName).toLowerCase()))
+    .filter((fact) => Number(fact?.evidenceSeq) > Math.max(0, Number(afterEvidenceSeq) || 0))
+    .filter((fact) => !consumedEvidenceIds.has(text(fact.toolCallId, `tool-${fact.recordedAt}`)))
+    .slice(-32)
+    .map((fact) => ({
+      evidenceId: text(fact.toolCallId, `tool-${fact.recordedAt}`),
+      type: "tool_read",
+      source: "host_tool",
+      issuedByHost: true,
+      verified: true,
+      evidenceSeq: Number(fact.evidenceSeq),
+      stepId: expectedStep.id,
+      operationId: text(operationId) || null,
+      requestId: text(requestId) || null,
+      sessionId: text(sessionId) || null,
+      toolCallId: text(fact.toolCallId) || null,
+      toolName: text(fact.toolName) || "tool",
+    }));
+}
+
 function planGoal({ planId, summary, steps, sessionId, status, updatedAt }) {
   return {
     id: text(planId, `goal:${sessionId}`),
@@ -49,17 +105,22 @@ export function createPlanRuntime({
   }
 
   let boundSession = null;
+  let explicitSession = null;
   let pending = null;
   let active = null;
   let revision = null;
   let goals = [];
 
   function session() {
-    return text(getSessionName(), "desktop");
+    return text(explicitSession, text(getSessionName(), "desktop"));
   }
 
   function emit(event) {
     try { onEvent(event); } catch { /* dashboard observers cannot block Plan state */ }
+  }
+
+  function emitPlan(event) {
+    emit({ ...event, plan: snapshot() });
   }
 
   function setGoals(next) {
@@ -145,17 +206,29 @@ export function createPlanRuntime({
     return snapshot();
   }
 
+  function discardPending(reason = "discarded") {
+    ensureSession();
+    if (!pending) return false;
+    pending = null;
+    emitPlan({ kind: "plan-pending-discarded", session: boundSession, reason: text(reason, "discarded") });
+    return true;
+  }
+
   function persist() {
     if (!active) return false;
     const completedStepIds = normalizeCompletedStepIds(active.steps, active.completedStepIds);
-    active.completedStepIds = completedStepIds;
-    active.updatedAt = now();
-    store.savePlanState(boundSession, active.steps, completedStepIds, {
-      body: active.body,
-      summary: active.summary,
-      planId: active.planId,
-      requestId: active.requestId,
+    const next = {
+      ...active,
+      completedStepIds,
+      updatedAt: now(),
+    };
+    store.savePlanState(boundSession, next.steps, completedStepIds, {
+      body: next.body,
+      summary: next.summary,
+      planId: next.planId,
+      requestId: next.requestId,
     });
+    active = next;
     return true;
   }
 
@@ -182,40 +255,43 @@ export function createPlanRuntime({
       return false;
     }
     setGoals([planGoal({ planId: active.planId, summary: active.summary, steps: active.steps, sessionId: getConversationId(), status: "active", updatedAt: active.updatedAt })]);
-    emit({ kind: "plan-activated", session: boundSession });
+    emitPlan({ kind: "plan-activated", session: boundSession });
     return true;
   }
 
   function markStepDone(stepId, evidenceRefs = [], { source = "manual" } = {}) {
     ensureSession();
     if (!active || !isKnownPlanStep(active.steps, stepId)) return false;
+    const previousActive = clone(active);
     const refs = (Array.isArray(evidenceRefs) ? evidenceRefs : [])
-      .filter((entry) => entry && typeof entry === "object" && entry.verified !== false)
+      .filter(isHostIssuedEvidence)
       .slice(-32)
       .map(clone);
-    if (source === "model" && refs.length === 0) return false;
+    // Every completion path, including the legacy manual path, needs a
+    // host-issued fact. Model proposals are recorded by the caller but can
+    // never promote a step by supplying arbitrary evidence JSON.
+    if (refs.length === 0) return false;
     const step = active.steps.find((entry) => entry.id === stepId);
     if (step) {
       step.status = "completed";
       if (refs.length > 0) step.evidenceRefs = refs;
       delete step.blockedReason;
     }
-    const previous = [...active.completedStepIds];
-    active.completedStepIds = [...new Set([...previous, stepId])];
+    active.completedStepIds = [...new Set([...active.completedStepIds, stepId])];
     try {
       persist();
     } catch {
-      active.completedStepIds = previous;
+      active = previousActive;
       return false;
     }
     if (isPlanComplete(active.steps, active.completedStepIds)) {
       setGoals(goals.map((goal) => ({ ...goal, status: "completed", updatedAt: now() })));
       try { store.archivePlanState?.(boundSession); } catch { return false; }
-      emit({ kind: "plan-archived", session: boundSession });
       active = null;
+      emitPlan({ kind: "plan-archived", session: boundSession });
       return true;
     }
-    emit({ kind: "plan-step-complete", session: boundSession, stepId });
+    emitPlan({ kind: "plan-step-complete", session: boundSession, stepId });
     return true;
   }
 
@@ -229,9 +305,33 @@ export function createPlanRuntime({
     return clone(revision);
   }
 
+  function discardRevision(reason = "discarded") {
+    ensureSession();
+    if (!revision) return false;
+    revision = null;
+    emitPlan({ kind: "plan-revision-discarded", session: boundSession, reason: text(reason, "discarded") });
+    return true;
+  }
+
+  function bindSession(sessionName) {
+    const next = text(sessionName);
+    if (!next) return snapshot();
+    explicitSession = next;
+    if (boundSession !== next) {
+      boundSession = next;
+      pending = null;
+      active = null;
+      revision = null;
+      hydrate();
+    }
+    return snapshot();
+  }
+
   function acceptRevision() {
     ensureSession();
     if (!revision || !active) return false;
+    const previousActive = clone(active);
+    const previousRevision = clone(revision);
     const completed = new Set(active.completedStepIds);
     active.steps = [
       ...active.steps.filter((step) => completed.has(step.id)),
@@ -239,12 +339,21 @@ export function createPlanRuntime({
     ];
     if (revision.summary) active.summary = revision.summary;
     revision = null;
-    try { return persist(); } catch { return false; }
+    try {
+      const persisted = persist();
+      if (persisted) emitPlan({ kind: "plan-revised", session: boundSession });
+      return persisted;
+    } catch {
+      active = previousActive;
+      revision = previousRevision;
+      return false;
+    }
   }
 
   function bindActivePlanIdentity({ requestId = null, planId = null } = {}) {
     ensureSession();
     if (!active) return false;
+    const previousActive = clone(active);
     const nextRequestId = text(requestId);
     const nextPlanId = text(planId);
     if (nextRequestId) active.requestId = nextRequestId;
@@ -252,6 +361,7 @@ export function createPlanRuntime({
     try {
       return persist();
     } catch {
+      active = previousActive;
       return false;
     }
   }
@@ -269,6 +379,7 @@ export function createPlanRuntime({
   }
 
   function reset() {
+    explicitSession = null;
     boundSession = null;
     pending = null;
     active = null;
@@ -285,15 +396,18 @@ export function createPlanRuntime({
     pending = null;
     active = null;
     revision = null;
-    emit({ kind: "plan-cancelled", session: boundSession });
+    emitPlan({ kind: "plan-cancelled", session: boundSession });
     return true;
   }
 
   return {
+    bindSession,
     setPending,
+    discardPending,
     activatePending,
     markStepDone,
     setRevision,
+    discardRevision,
     acceptRevision,
     bindActivePlanIdentity,
     hasActiveStep,

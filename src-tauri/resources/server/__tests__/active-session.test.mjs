@@ -118,6 +118,8 @@ describe("active session recovery", () => {
       tools: { results: 2, successes: 1, failures: 1, lastName: "write_file" },
       completion: { ok: false, taskState: "incomplete" },
     };
+    const taskContract = { contractVersion: 1, executionRequired: true };
+    const evidenceRefs = [{ evidenceId: "artifact-1", type: "artifact", verified: false }];
     const entries = [{
       role: "assistant",
       content: "The requested output is incomplete.",
@@ -125,6 +127,10 @@ describe("active session recovery", () => {
       operationId: "operation-1",
       receipt,
       taskState: "incomplete",
+      executionState: "completed",
+      goalState: "incomplete",
+      taskContract,
+      evidenceRefs,
       artifactIncomplete: true,
       interventionChoice: "retry",
       warnings: ["output verification failed"],
@@ -136,6 +142,10 @@ describe("active session recovery", () => {
     assert.equal(dashboard[0].turnId, "turn-1");
     assert.equal(dashboard[0].operationId, "operation-1");
     assert.equal(dashboard[0].taskState, "incomplete");
+    assert.equal(dashboard[0].executionState, "completed");
+    assert.equal(dashboard[0].goalState, "incomplete");
+    assert.deepEqual(dashboard[0].taskContract, taskContract);
+    assert.deepEqual(dashboard[0].evidenceRefs, evidenceRefs);
     assert.equal(dashboard[0].artifactIncomplete, true);
     assert.equal(dashboard[0].interventionChoice, "retry");
     assert.deepEqual(dashboard[0].warnings, ["output verification failed"]);
@@ -150,7 +160,7 @@ describe("active session recovery", () => {
         reasoning_content: "private reasoning",
         tool_calls: [{ id: "call-1", type: "function", function: { name: "read_file", arguments: "{}" } }],
       },
-      { role: "tool", tool_call_id: "call-1", name: "read_file", content: "source text" },
+      { role: "tool", tool_call_id: "call-1", name: "read_file", turnId: "turn-1", stepId: "step-1", content: "source text" },
       {
         role: "assistant",
         content: "Deck created: report.pptx",
@@ -165,6 +175,9 @@ describe("active session recovery", () => {
       ["assistant", "Deck created: report.pptx"],
     ]);
     assert.equal(Object.hasOwn(dashboard[1], "reasoning"), false);
+    assert.equal(dashboard[1].toolCallId, "call-1");
+    assert.equal(dashboard[1].turnId, "turn-1");
+    assert.equal(dashboard[1].stepId, "step-1");
   });
 
   test("refresh collapses forced summaries while preserving tool facts", () => {

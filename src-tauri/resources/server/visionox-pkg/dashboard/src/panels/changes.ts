@@ -14,7 +14,8 @@ import { primaryBalance } from "../lib/format.js";
 import { useLineComments } from "../lib/line-comments.js";
 import { useReviewDiffs } from "../lib/review-diffs.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
-import { applyDashboardEvent as reduceDashboardEvent, createDashboardReducerState } from "../lib/event-reducer.js";
+import { applyDashboardEvent as reduceDashboardEvent, createDashboardReducerState, createDashboardReducerStateFromSnapshot, mergeCanonicalMessagePage } from "../lib/event-reducer.js";
+import { mergeSnapshotToolsIntoMessages } from "../lib/chat-turn-rendering.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { Select } from "../ui/index.js";
 
@@ -1010,6 +1011,7 @@ function ChatPane(props) {
   const [todoExpanded, setTodoExpanded] = d2(false);
   const executionStateRef = A2(null);
   if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const activeSessionIdRef = A2(null);
   const resyncingRef = A2(false);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
@@ -1039,8 +1041,19 @@ function ChatPane(props) {
       try {
         const data = await api("/messages");
         if (!cancelled) {
-          setMessages(data.messages ?? []);
-          setBusy(Boolean(data.busy));
+          const snapshotState = data.snapshot
+            ? createDashboardReducerStateFromSnapshot(data.snapshot)
+            : createDashboardReducerState();
+          activeSessionIdRef.current = String(data.snapshot?.sessionId ?? "").trim() || null;
+          executionStateRef.current = snapshotState;
+          setMessages(data.snapshot
+            ? mergeSnapshotToolsIntoMessages(
+              mergeCanonicalMessagePage(data.messages, snapshotState.messages),
+              Object.values(snapshotState.tools),
+            )
+            : data.messages ?? []);
+          setBusy(data.snapshot ? snapshotState.busy : Boolean(data.busy));
+          setTodos(Object.values(snapshotState.todos));
         }
       } catch {
         if (!cancelled) setMessages([]);
@@ -1086,12 +1099,22 @@ function ChatPane(props) {
   const refetchCanonicalState = q2(async () => {
     try {
       const data = await api("/messages");
-      setMessages(data.messages ?? []);
-      setBusy(Boolean(data.busy));
+      const snapshotState = data.snapshot
+        ? createDashboardReducerStateFromSnapshot(data.snapshot)
+        : createDashboardReducerState();
+      activeSessionIdRef.current = String(data.snapshot?.sessionId ?? "").trim() || null;
+      setMessages(data.snapshot
+        ? mergeSnapshotToolsIntoMessages(
+          mergeCanonicalMessagePage(data.messages, snapshotState.messages),
+          Object.values(snapshotState.tools),
+        )
+        : data.messages ?? []);
+      setBusy(data.snapshot ? snapshotState.busy : Boolean(data.busy));
+      setTodos(Object.values(snapshotState.todos));
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTool(null);
-      executionStateRef.current = createDashboardReducerState();
+      executionStateRef.current = snapshotState;
     } catch {
     }
   }, [cancelStreamingRaf]);
@@ -1105,6 +1128,9 @@ function ChatPane(props) {
     };
     const onDash = (dash) => {
       if (dash.kind === "ping") return;
+      const dashSessionId = String(dash.sessionId ?? "").trim();
+      const activeSessionId = activeSessionIdRef.current;
+      if (dashSessionId && activeSessionId && dashSessionId !== activeSessionId) return;
       if (dash.kind === "resync-required") {
         requestResync();
         return;
@@ -1118,11 +1144,13 @@ function ChatPane(props) {
       }
       if (dash.kind === "todo-update") setTodos(Object.values(reduced.state.todos));
       if (dash.kind === "busy-change") {
-        setBusy(dash.busy);
+        setBusy(reduced.state.busy);
         return;
       }
       if (dash.kind === "user") {
-        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
+        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        if (!projectedMessage) return;
+        setMessages((prev) => prev.some((item) => String(item?.id ?? "") === String(projectedMessage.id)) ? prev : [...prev, projectedMessage]);
         return;
       }
       if (dash.kind === "assistant_delta") {
@@ -1142,12 +1170,14 @@ function ChatPane(props) {
         }
         return;
       }
-      if (dash.kind === "assistant_final") {
+      if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
+        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        if (!projectedMessage) return;
         cancelStreamingRaf();
         setStreaming(null);
-        const nextMessage = { id: dash.id, role: "assistant", text: dash.text, reasoning: dash.reasoning };
+        const nextMessage = projectedMessage;
         setMessages((prev) => {
-          const index = prev.findIndex((item) => String(item?.id ?? "") === String(dash.id ?? ""));
+          const index = prev.findIndex((item) => String(item?.id ?? "") === String(projectedMessage.id ?? ""));
           if (index < 0) return [...prev, nextMessage];
           const copy = [...prev];
           copy[index] = { ...copy[index], ...nextMessage };
@@ -1156,14 +1186,18 @@ function ChatPane(props) {
         return;
       }
       if (dash.kind === "tool_start") {
-        setActiveTool({ id: dash.id, toolName: dash.toolName, args: dash.args });
+        const projectedTool = Object.values(reduced.state.tools).find((tool) => String(tool.toolCallId ?? tool.id ?? "") === String(dash.toolCallId ?? dash.id ?? "") && String(tool.turnId ?? "") === String(dash.turnId ?? "") && String(tool.stepId ?? "") === String(dash.stepId ?? ""));
+        if (!projectedTool) return;
+        setActiveTool(projectedTool);
         return;
       }
       if (dash.kind === "tool") {
-        setActiveTool((cur) => cur && cur.id === dash.id ? null : cur);
-        const nextTool = { id: dash.id, role: "tool", text: dash.content, toolName: dash.toolName, toolArgs: dash.args };
+        const projectedTool = Object.values(reduced.state.tools).find((tool) => String(tool.toolCallId ?? tool.id ?? "") === String(dash.toolCallId ?? dash.id ?? "") && String(tool.turnId ?? "") === String(dash.turnId ?? "") && String(tool.stepId ?? "") === String(dash.stepId ?? ""));
+        if (!projectedTool) return;
+        setActiveTool((cur) => cur && String(cur.id ?? "") === String(projectedTool.id ?? "") ? null : cur);
+        const nextTool = { ...projectedTool, role: "tool", text: projectedTool.content ?? "", toolArgs: projectedTool.args, toolStatus: projectedTool.status ?? projectedTool.state };
         setMessages((prev) => {
-          const index = prev.findIndex((item) => String(item?.id ?? "") === String(dash.id ?? ""));
+          const index = prev.findIndex((item) => String(item?.id ?? "") === String(projectedTool.id ?? ""));
           if (index < 0) return [...prev, nextTool];
           const copy = [...prev];
           copy[index] = { ...copy[index], ...nextTool };

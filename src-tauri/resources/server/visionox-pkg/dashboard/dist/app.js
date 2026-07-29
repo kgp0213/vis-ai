@@ -21637,7 +21637,37 @@ function toolFrameMatches(left, right) {
   const leftScoped = Boolean(leftTurn || leftStep);
   const rightScoped = Boolean(rightTurn || rightStep);
   if (!leftScoped && !rightScoped) return true;
-  return leftScoped && rightScoped && leftTurn === rightTurn && leftStep === rightStep;
+  if (!leftScoped || !rightScoped) return false;
+  if (leftTurn || rightTurn) {
+    if (!leftTurn || !rightTurn || leftTurn !== rightTurn) return false;
+    return !(leftStep && rightStep && leftStep !== rightStep);
+  }
+  return Boolean(leftStep && rightStep && leftStep === rightStep);
+}
+function mergeSnapshotToolsIntoMessages(messages = [], tools = []) {
+  const result = Array.isArray(messages) ? messages.map((message) => ({ ...message })) : [];
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    if (!tool || typeof tool !== "object") continue;
+    const toolCallId = toolCallValue(tool);
+    if (!toolCallId) continue;
+    const next = {
+      ...tool,
+      toolCallId,
+      role: "tool",
+      text: tool.content ?? tool.text ?? "",
+      toolArgs: tool.args ?? tool.toolArgs,
+      toolStatus: tool.status ?? tool.state ?? "unknown"
+    };
+    const existingIndex = result.findIndex((message) => toolFrameMatches(message, next));
+    if (existingIndex >= 0) {
+      result[existingIndex] = { ...result[existingIndex], ...next };
+      continue;
+    }
+    const turnId = frameValue(next.turnId);
+    const assistantIndex = turnId ? result.findIndex((message) => message?.role === "assistant" && frameValue(message.turnId) === turnId) : -1;
+    result.splice(assistantIndex >= 0 ? assistantIndex : result.length, 0, next);
+  }
+  return result;
 }
 function groupToolMessages(messages = []) {
   const units = [];
@@ -23473,8 +23503,202 @@ function createDashboardReducerState(seed) {
     goals: { ...seed?.goals ?? {} },
     todos: { ...seed?.todos ?? {} },
     prompts: { ...seed?.prompts ?? {} },
+    taskNotifications: { ...seed?.taskNotifications ?? {} },
+    plan: seed?.plan ? { ...seed.plan } : null,
+    operation: seed?.operation ? { ...seed.operation } : null,
+    admission: seed?.admission ? { ...seed.admission } : null,
+    busy: seed?.busy === true,
     anomalies: [...seed?.anomalies ?? []]
   };
+}
+function entityRecord(value) {
+  const entries = Array.isArray(value) ? value.map((item, index) => [String(item?.id ?? `entity-${index + 1}`), item]) : Object.entries(value && typeof value === "object" ? value : {});
+  const result = {};
+  for (const [key, raw] of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = String(raw.id ?? key).trim();
+    if (!id) continue;
+    result[id] = { ...raw, id };
+  }
+  return result;
+}
+function snapshotCursor(value) {
+  if (value && typeof value === "object") {
+    const seq2 = Number(value.seq);
+    return {
+      epoch: value.epoch ? String(value.epoch) : null,
+      lastSeq: Number.isSafeInteger(seq2) && seq2 >= 0 ? seq2 : 0
+    };
+  }
+  const cursor = String(value ?? "").trim();
+  const separator = cursor.lastIndexOf(":");
+  if (separator <= 0) return { epoch: cursor || null, lastSeq: 0 };
+  const seq = Number(cursor.slice(separator + 1));
+  return {
+    epoch: cursor.slice(0, separator) || null,
+    lastSeq: Number.isSafeInteger(seq) && seq >= 0 ? seq : 0
+  };
+}
+function createDashboardEventCursor(value) {
+  if (value && typeof value === "object" && "lastSeq" in value) {
+    const lastSeq = Number(value.lastSeq);
+    return {
+      epoch: value.epoch ? String(value.epoch) : null,
+      lastSeq: Number.isSafeInteger(lastSeq) && lastSeq >= 0 ? lastSeq : 0
+    };
+  }
+  return snapshotCursor(value);
+}
+function observeDashboardEventCursor(input, event) {
+  const cursor = createDashboardEventCursor(input);
+  if (!event || typeof event !== "object") return { cursor };
+  const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
+  const seq = Number(event.eventSeq);
+  const sequenced = event.eventSeq !== null && event.eventSeq !== void 0 && Number.isSafeInteger(seq) && seq >= 0;
+  if (epoch && cursor.epoch && epoch !== cursor.epoch) {
+    return {
+      cursor: { epoch, lastSeq: sequenced ? seq : 0 },
+      resyncRequired: true,
+      anomaly: "epoch-changed"
+    };
+  }
+  const next = { epoch: epoch ?? cursor.epoch, lastSeq: cursor.lastSeq };
+  const firstSeq = firstEventSequence(event);
+  if (sequenced && firstSeq !== null && firstSeq > cursor.lastSeq + 1) {
+    next.lastSeq = Math.max(next.lastSeq, seq);
+    return { cursor: next, resyncRequired: true, anomaly: "event-gap" };
+  }
+  if (sequenced) next.lastSeq = Math.max(next.lastSeq, seq);
+  return { cursor: next };
+}
+function createDashboardReducerStateFromSnapshot(snapshot = {}) {
+  const cursor = snapshotCursor(snapshot.eventCursor);
+  return createDashboardReducerState({
+    ...cursor,
+    messages: entityRecord(snapshot.messages),
+    tools: entityRecord(snapshot.tools),
+    interactions: entityRecord(snapshot.interactions),
+    attachments: entityRecord(snapshot.attachments),
+    artifacts: entityRecord(snapshot.artifacts),
+    goals: entityRecord(snapshot.goals),
+    todos: entityRecord(snapshot.todos),
+    prompts: entityRecord(snapshot.prompts),
+    taskNotifications: entityRecord(snapshot.taskNotifications),
+    plan: snapshot.plan ?? null,
+    operation: snapshot.operation ?? null,
+    admission: snapshot.admission ?? null,
+    busy: snapshot.busy === true
+  });
+}
+function mergeCanonicalMessagePage(compatibilityMessages = [], factMessages = []) {
+  const compatibility = Array.isArray(compatibilityMessages) ? compatibilityMessages : [];
+  const facts = Array.isArray(factMessages) ? factMessages : Object.values(factMessages ?? {});
+  if (facts.length === 0) return compatibility.map((message) => ({ ...message }));
+  const compatibilityById = new Map(
+    compatibility.filter((message) => message && typeof message === "object" && String(message.id ?? "").trim()).map((message) => [String(message.id), message])
+  );
+  return facts.filter((message) => message && typeof message === "object").map((message) => {
+    const id = String(message.id ?? "").trim();
+    return { ...id ? compatibilityById.get(id) : null, ...message, ...id ? { id } : {} };
+  });
+}
+function pageEntityKey(entity) {
+  if (String(entity?.role ?? "") === "tool") {
+    const toolCallId2 = String(entity?.toolCallId ?? entity?.tool_call_id ?? "").trim();
+    const turnId = String(entity?.turnId ?? "").trim();
+    if (toolCallId2 && turnId) return `tool:${JSON.stringify([turnId, toolCallId2])}`;
+  }
+  const id = String(entity?.id ?? "").trim();
+  if (id) return `id:${id}`;
+  if (String(entity?.role ?? "") !== "tool") return null;
+  const toolCallId = String(entity?.toolCallId ?? entity?.tool_call_id ?? "").trim();
+  if (!toolCallId) return null;
+  return `tool:${JSON.stringify([String(entity?.turnId ?? ""), String(entity?.stepId ?? ""), toolCallId])}`;
+}
+function mergeDashboardMessagePages(earlier = [], current = []) {
+  const currentByKey = /* @__PURE__ */ new Map();
+  for (const entity of Array.isArray(current) ? current : []) {
+    const key = pageEntityKey(entity);
+    if (key) currentByKey.set(key, entity);
+  }
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const entity of [...Array.isArray(earlier) ? earlier : [], ...Array.isArray(current) ? current : []]) {
+    if (!entity || typeof entity !== "object") continue;
+    const key = pageEntityKey(entity);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    result.push(key && currentByKey.has(key) ? { ...entity, ...currentByKey.get(key) } : { ...entity });
+  }
+  return result;
+}
+function toolsForMessagePage(messages, tools) {
+  const messageIds = new Set(messages.map((message) => String(message?.id ?? "").trim()).filter(Boolean));
+  const turnIds = new Set(messages.map((message) => String(message?.turnId ?? "").trim()).filter(Boolean));
+  const pageToolKeys = new Set(
+    messages.filter((message) => String(message?.role ?? "") === "tool").map((message) => pageEntityKey(message)).filter(Boolean)
+  );
+  return tools.filter((tool) => {
+    const turnId = String(tool?.turnId ?? "").trim();
+    const assistantId = String(tool?.assistantId ?? tool?.messageId ?? "").trim();
+    const key = pageEntityKey({ ...tool, role: "tool" });
+    return Boolean(
+      key && pageToolKeys.has(key) || turnId && (turnIds.has(turnId) || messageIds.has(turnId)) || assistantId && messageIds.has(assistantId)
+    );
+  });
+}
+function projectDashboardMessagePage(response = {}) {
+  const snapshot = response?.snapshot && typeof response.snapshot === "object" ? response.snapshot : null;
+  const state = snapshot ? createDashboardReducerStateFromSnapshot(snapshot) : createDashboardReducerState();
+  const compatibilityMessages = Array.isArray(response?.messages) ? response.messages : [];
+  const messages = snapshot ? mergeCanonicalMessagePage(compatibilityMessages, state.messages) : compatibilityMessages.map((message) => ({ ...message }));
+  const rawTotal = Number(snapshot?.messagePage?.totalMessages ?? response?.totalMessages ?? messages.length);
+  const totalMessages = Number.isSafeInteger(rawTotal) && rawTotal >= 0 ? rawTotal : messages.length;
+  const fallbackStart = Math.max(0, totalMessages - messages.length);
+  const rawStart = Number(snapshot?.messagePage?.startIndex ?? response?.startIndex ?? fallbackStart);
+  const startIndex = Number.isSafeInteger(rawStart) && rawStart >= 0 ? Math.min(rawStart, totalMessages) : fallbackStart;
+  const tools = snapshot ? toolsForMessagePage(messages, Object.values(state.tools)) : [];
+  return {
+    state,
+    messages,
+    tools,
+    totalMessages,
+    startIndex,
+    loadedCount: Math.max(0, totalMessages - startIndex),
+    hasMore: snapshot?.messagePage?.hasMore ?? response?.hasMore ?? startIndex > 0
+  };
+}
+function dashboardEventsAfterCursor(events = [], cursorLike) {
+  const cursor = createDashboardEventCursor({ epoch: cursorLike?.epoch ?? null, lastSeq: cursorLike?.lastSeq ?? 0 });
+  const seen = /* @__PURE__ */ new Set();
+  return (Array.isArray(events) ? events : []).map((event, index) => ({ event, index })).filter(({ event }) => {
+    if (!event || typeof event !== "object") return false;
+    const id = String(event.eventId ?? "");
+    if (id && seen.has(id)) return false;
+    if (id) seen.add(id);
+    const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
+    const seq = Number(event.eventSeq);
+    return !(epoch && cursor.epoch === epoch && Number.isSafeInteger(seq) && seq <= cursor.lastSeq);
+  }).sort((left, right) => {
+    const leftSeq = Number(left.event?.eventSeq);
+    const rightSeq = Number(right.event?.eventSeq);
+    if (Number.isSafeInteger(leftSeq) && Number.isSafeInteger(rightSeq) && leftSeq !== rightSeq) return leftSeq - rightSeq;
+    return left.index - right.index;
+  }).map(({ event }) => event);
+}
+function dashboardSnapshotResponseIsCurrent({
+  requestGeneration,
+  currentGeneration,
+  requestSessionId,
+  activeSessionId,
+  responseSessionId
+}) {
+  if (requestGeneration !== currentGeneration) return false;
+  const requested = String(requestSessionId ?? "").trim();
+  const active = String(activeSessionId ?? "").trim();
+  const response = String(responseSessionId ?? "").trim();
+  if (requested !== active) return false;
+  return !(response && active && response !== active);
 }
 function entityBucket(kind, event) {
   const explicit = String(event?.entityType ?? event?.entityKind ?? event?.payload?.entityType ?? "").toLowerCase();
@@ -23519,6 +23743,94 @@ function applyDashboardEvent(input, event) {
   for (const id2 of eventIds) state.seen.add(id2);
   while (state.seen.size > 4096) state.seen.delete(state.seen.values().next().value);
   const kind = String(event.kind ?? "");
+  if (kind === "busy-change") {
+    const next = event.busy === true;
+    const changed = state.busy !== next;
+    state.busy = next;
+    return { state, changed };
+  }
+  if (kind === "operation-change") {
+    const next = event.operation && typeof event.operation === "object" ? { ...event.operation } : null;
+    const changed = JSON.stringify(state.operation) !== JSON.stringify(next);
+    state.operation = next;
+    return { state, changed };
+  }
+  if (kind.startsWith("plan-") && Object.prototype.hasOwnProperty.call(event, "plan")) {
+    const next = event.plan && typeof event.plan === "object" ? { ...event.plan } : null;
+    const changed = JSON.stringify(state.plan) !== JSON.stringify(next);
+    state.plan = next;
+    return { state, changed };
+  }
+  if (kind === "user") {
+    const messageId = String(event.messageId ?? event.id ?? "").trim();
+    if (!messageId) return { state, changed: false, anomaly: "user-missing-message" };
+    const previous2 = state.messages[messageId];
+    const next = {
+      ...previous2 ?? { id: messageId },
+      id: messageId,
+      role: "user",
+      text: String(event.text ?? ""),
+      ...event.images !== void 0 ? { images: event.images } : {},
+      ...event.attachments !== void 0 ? { attachments: event.attachments } : {}
+    };
+    state.messages = { ...state.messages, [messageId]: next };
+    return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
+  }
+  if (["warning", "error", "info"].includes(kind)) {
+    const messageId = String(event.messageId ?? event.id ?? (event.eventId ? `notice:${event.eventId}` : "")).trim();
+    if (!messageId) return { state, changed: false, anomaly: "notice-missing-message" };
+    const previous2 = state.messages[messageId];
+    const next = {
+      ...previous2 ?? { id: messageId },
+      id: messageId,
+      role: kind,
+      text: String(event.text ?? "")
+    };
+    state.messages = { ...state.messages, [messageId]: next };
+    return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
+  }
+  if (kind === "background-task-notification") {
+    const id2 = String(event.notificationId ?? event.id ?? "").trim();
+    if (!id2) return { state, changed: false };
+    const previous2 = state.taskNotifications[id2];
+    const next = { ...previous2 ?? { id: id2 }, ...event, id: id2, state: event.status ?? previous2?.state };
+    state.taskNotifications = { ...state.taskNotifications, [id2]: next };
+    return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
+  }
+  if (kind === "artifact-created" && Array.isArray(event.files)) {
+    const nextArtifacts = { ...state.artifacts };
+    let changed = false;
+    for (const file of event.files) {
+      if (!file || typeof file !== "object") continue;
+      const id2 = String(file.id ?? file.artifactId ?? "").trim();
+      if (!id2) continue;
+      const next = { ...nextArtifacts[id2] ?? { id: id2 }, ...file, id: id2 };
+      if (JSON.stringify(nextArtifacts[id2]) !== JSON.stringify(next)) changed = true;
+      nextArtifacts[id2] = next;
+    }
+    state.artifacts = nextArtifacts;
+    return { state, changed };
+  }
+  if (kind === "messages-reset") {
+    const replace = (bucket2) => {
+      if (event[bucket2] !== void 0) state[bucket2] = entityRecord(event[bucket2]);
+    };
+    replace("messages");
+    replace("tools");
+    replace("interactions");
+    replace("attachments");
+    replace("artifacts");
+    replace("goals");
+    replace("todos");
+    replace("prompts");
+    if (event.taskNotifications !== void 0) state.taskNotifications = entityRecord(event.taskNotifications);
+    if (event.plan !== void 0) state.plan = event.plan && typeof event.plan === "object" ? { ...event.plan } : null;
+    if (event.operation !== void 0) state.operation = event.operation && typeof event.operation === "object" ? { ...event.operation } : null;
+    if (event.admission !== void 0) state.admission = event.admission && typeof event.admission === "object" ? { ...event.admission } : null;
+    if (event.busy !== void 0) state.busy = event.busy === true;
+    state.streamOffsets = {};
+    return { state, changed: true };
+  }
   if (kind === "assistant_delta") {
     const messageId = String(event.messageId ?? event.id ?? "");
     if (!messageId) return { state, changed: false, anomaly: "delta-missing-message" };
@@ -23573,16 +23885,18 @@ function applyDashboardEvent(input, event) {
       id: messageId,
       role: "assistant",
       ...event.text !== void 0 ? { text: String(event.text ?? "") } : {},
+      ...event.reasoning !== void 0 ? { reasoning: String(event.reasoning ?? "") } : {},
       ...event.turnId !== void 0 ? { turnId: String(event.turnId) } : {},
       ...event.operationId !== void 0 ? { operationId: String(event.operationId) } : {},
       ...kind === "turn_finalized" ? {
         finalized: true,
-        taskState: event.taskState,
-        executionState: event.executionState,
-        goalState: event.goalState,
-        taskContract: event.taskContract,
-        evidenceRefs: event.evidenceRefs,
-        receipt: event.receipt,
+        ...event.taskState !== void 0 ? { taskState: event.taskState } : {},
+        ...event.executionState !== void 0 ? { executionState: event.executionState } : {},
+        ...event.goalState !== void 0 ? { goalState: event.goalState } : {},
+        ...event.taskContract !== void 0 ? { taskContract: event.taskContract } : {},
+        ...event.evidenceRefs !== void 0 ? { evidenceRefs: event.evidenceRefs } : {},
+        ...event.receipt !== void 0 ? { receipt: event.receipt } : {},
+        ...event.interventionChoice !== void 0 ? { interventionChoice: event.interventionChoice } : {},
         warnings: Array.isArray(event.warnings) ? event.warnings : [],
         artifactIncomplete: event.artifactIncomplete === true
       } : {}
@@ -23622,7 +23936,8 @@ function applyDashboardEvent(input, event) {
   const id = entityIdFor(bucket, event, entityPayload);
   if (!bucket || !id) return { state, changed: false };
   const previous = state[bucket][id];
-  const requestedState = String(entityPayload.state ?? payload.state ?? event.status ?? (String(event.kind).split(".").at(-1) ?? ""));
+  const inferredState = kind.includes(".") ? kind.split(".").at(-1) ?? "" : "";
+  const requestedState = String(entityPayload.state ?? payload.state ?? event.status ?? inferredState);
   const canReopenFailedTool = bucket === "tools" && String(previous?.state ?? "") === "failed" && failedRecoveryStates.has(requestedState);
   if (previous && terminalStates.has(String(previous.state)) && requestedState && requestedState !== previous.state && !canReopenFailedTool) {
     state.anomalies.push({ type: "late-terminal-update", entityId: id, state: requestedState });
@@ -23935,6 +24250,7 @@ function providerModelTestSummary(providers) {
 var CHAT_RENDER_STEP = 30;
 var CHAT_MESSAGE_PAGE_SIZE = 60;
 var CHAT_TOP_LOAD_THRESHOLD = 96;
+var USER_SCROLL_INTENT_GRACE_MS = 300;
 var FILE_ARTIFACT_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "sh"]);
@@ -24020,6 +24336,13 @@ function upsertActiveTool(items, dash) {
   const copy = [...items];
   copy[index] = { ...copy[index], ...next };
   return copy;
+}
+function projectChatMessagePage(data) {
+  const page = projectDashboardMessagePage(data);
+  return {
+    ...page,
+    messages: mergeSnapshotToolsIntoMessages(page.messages, page.tools)
+  };
 }
 function chatDraftKey(workspaceDir, mode) {
   const ws = encodeURIComponent(workspaceDir || "default");
@@ -24931,6 +25254,12 @@ function ChatPanel({ userAvatar = null } = {}) {
   if (eventGuardRef.current === null) eventGuardRef.current = createDashboardEventGuard();
   const executionStateRef = A2(null);
   if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const globalEventCursorRef = A2(createDashboardEventCursor(null));
+  const snapshotSessionIdRef = A2(null);
+  const snapshotHydratingRef = A2(true);
+  const replayBufferedDashboardEventsRef = A2(null);
+  const canonicalProjectionGenerationRef = A2(0);
+  const canonicalMessageCountRef = A2(0);
   const resyncRunnerRef = A2(null);
   const eventBatcherRef = A2(null);
   const [statusLine, setStatusLine] = d2(null);
@@ -24989,9 +25318,17 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [turnStartedAt, setTurnStartedAt] = d2(null);
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
-  const [activeConversationId, setActiveConversationId] = d2(null);
+  const [activeConversationId, setActiveConversationIdState] = d2(null);
   const activeConversationIdRef = A2(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
+  const setActiveConversationId = q2((nextConversationId) => {
+    const next = nextConversationId == null ? null : String(nextConversationId);
+    if (String(activeConversationIdRef.current ?? "") !== String(next ?? "")) {
+      canonicalProjectionGenerationRef.current += 1;
+      activeConversationIdRef.current = next;
+    }
+    setActiveConversationIdState(next);
+  }, []);
   const [recentWss, setRecentWss] = d2([]);
   const [workspaceSelection, setWorkspaceSelection] = d2(null);
   y2(() => {
@@ -25066,6 +25403,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   var fileInputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
+  const sendInFlightRef = A2(false);
   const CHAT_QUEUE_LIMIT = 5;
   const draftKey = $2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
   const queueStorageKey = $2(() => workspaceDir && activeConversationId ? `${draftKey}:conversation:${activeConversationId}:queue` : null, [draftKey, workspaceDir, activeConversationId]);
@@ -25393,6 +25731,7 @@ ${workspaceDir || ""}`;
   const autoScrollTokenRef = A2(0);
   const autoScrollFrameRef = A2(null);
   const lastScrollTopRef = A2(0);
+  const lastScrollUpIntentAtRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
   const topLoadIntentRef = A2(false);
@@ -25576,30 +25915,55 @@ ${workspaceDir || ""}`;
   }, [messages, streaming, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
   y2(() => {
     let cancelled = false;
+    const requestGeneration = canonicalProjectionGenerationRef.current;
+    const requestSessionId = activeConversationIdRef.current;
+    let responseSessionId = null;
+    const requestIsCurrent = () => !cancelled && dashboardSnapshotResponseIsCurrent({
+      requestGeneration,
+      currentGeneration: canonicalProjectionGenerationRef.current,
+      requestSessionId,
+      activeSessionId: activeConversationIdRef.current,
+      responseSessionId
+    });
     (async () => {
       try {
         const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-        if (cancelled) return;
-        setMessages(data.messages ?? []);
-        setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
-        setBusy(Boolean(data.busy));
-        setOperation(data.operation ?? null);
+        responseSessionId = data.snapshot?.sessionId ?? null;
+        if (!requestIsCurrent()) return;
+        const page = projectChatMessagePage(data);
+        const snapshotState = page.state;
+        setMessages(page.messages);
+        canonicalMessageCountRef.current = page.loadedCount;
+        setTotalMessages(page.totalMessages);
+        setBusy(data.snapshot ? snapshotState.busy : Boolean(data.busy));
+        setOperation(data.snapshot ? snapshotState.operation : data.operation ?? null);
+        setTodos(Object.values(snapshotState.todos));
+        setActivePlan(snapshotState.plan);
+        setActiveTools(Object.values(snapshotState.tools).filter((tool) => ["queued", "running", "recovered"].includes(String(tool.state ?? tool.status ?? ""))));
+        executionStateRef.current = snapshotState;
+        globalEventCursorRef.current = createDashboardEventCursor(snapshotState);
+        snapshotSessionIdRef.current = responseSessionId ?? activeConversationIdRef.current ?? null;
       } catch (err) {
-        if (!cancelled) setBootError(err.message);
+        if (requestIsCurrent()) setBootError(err.message);
+      } finally {
+        if (requestIsCurrent()) {
+          snapshotHydratingRef.current = false;
+          replayBufferedDashboardEventsRef.current?.();
+        }
       }
       try {
         const m3 = await api("/modal");
-        if (!cancelled && m3.modal) setModal(m3.modal);
+        if (requestIsCurrent() && m3.modal) setModal(m3.modal);
       } catch {
       }
       try {
         const r3 = await api("/slash");
-        if (!cancelled) setSlashCommands(r3.commands);
+        if (requestIsCurrent()) setSlashCommands(r3.commands);
       } catch {
       }
       try {
         const retrieval = await api("/index-retrieval-mode");
-        if (!cancelled) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
+        if (requestIsCurrent()) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       } catch {
       }
     })();
@@ -25623,21 +25987,35 @@ ${workspaceDir || ""}`;
     streamBufRef.current = null;
   }, []);
   const refetchCanonicalState = q2(async () => {
+    const requestGeneration = canonicalProjectionGenerationRef.current;
     const expectedSessionId = activeConversationIdRef.current;
-    const isCurrentSession = () => String(activeConversationIdRef.current ?? "") === String(expectedSessionId ?? "");
+    const isCurrentSession = (responseSessionId = null) => dashboardSnapshotResponseIsCurrent({
+      requestGeneration,
+      currentGeneration: canonicalProjectionGenerationRef.current,
+      requestSessionId: expectedSessionId,
+      activeSessionId: activeConversationIdRef.current,
+      responseSessionId
+    });
     let canonicalLoaded = false;
     try {
       const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-      if (!isCurrentSession()) return false;
-      setMessages(data.messages ?? []);
-      setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
-      setBusy(Boolean(data.busy));
-      setOperation(data.operation ?? null);
+      if (!isCurrentSession(data.snapshot?.sessionId ?? null)) return false;
+      const page = projectChatMessagePage(data);
+      const snapshotState = page.state;
+      setMessages(page.messages);
+      canonicalMessageCountRef.current = page.loadedCount;
+      setTotalMessages(page.totalMessages);
+      setBusy(data.snapshot ? snapshotState.busy : Boolean(data.busy));
+      setOperation(data.snapshot ? snapshotState.operation : data.operation ?? null);
+      setTodos(Object.values(snapshotState.todos));
+      setActivePlan(snapshotState.plan);
       cancelStreamingRaf();
       setStreaming(null);
-      setActiveTools([]);
+      setActiveTools(Object.values(snapshotState.tools).filter((tool) => ["queued", "running", "recovered"].includes(String(tool.state ?? tool.status ?? ""))));
       setCompletedSteps(0);
-      executionStateRef.current = createDashboardReducerState();
+      executionStateRef.current = snapshotState;
+      globalEventCursorRef.current = createDashboardEventCursor(snapshotState);
+      snapshotSessionIdRef.current = data.snapshot?.sessionId ?? expectedSessionId ?? null;
       canonicalLoaded = true;
     } catch {
       return false;
@@ -25669,8 +26047,8 @@ ${workspaceDir || ""}`;
         setTodos(Object.values(reduced.state.todos));
       }
       if (dash.kind === "busy-change") {
-        setBusy(dash.busy);
-        if (!dash.busy) setSemanticRetrievalStatus((current) => current === "running" ? "idle" : current);
+        setBusy(reduced.state.busy);
+        if (!reduced.state.busy) setSemanticRetrievalStatus((current) => current === "running" ? "idle" : current);
         return;
       }
       if (dash.kind === "semantic-retrieval") {
@@ -25679,8 +26057,8 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "operation-change") {
-        setOperation(dash.operation ?? null);
-        if (dash.operation?.state === "cancelled") {
+        setOperation(reduced.state.operation);
+        if (reduced.state.operation?.state === "cancelled") {
           setActiveTools([]);
           setCompletedSteps(0);
           setSemanticRetrievalSources([]);
@@ -25696,15 +26074,25 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "user") {
+        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        if (!projectedMessage) return;
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("running");
         setShowRetrievalSources(false);
         setTodos((current) => current.length > 0 && current.every((todo) => todo.status === "completed") ? [] : current);
         setPlanContinuation(null);
         setCompletedSteps(0);
-        preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
-        setTotalMessages((count) => count + 1);
+        let inserted = false;
+        setMessages((prev) => {
+          if (prev.some((item) => String(item.id || "") === String(dash.id || ""))) return prev;
+          inserted = true;
+          canonicalMessageCountRef.current += 1;
+          return [...prev, projectedMessage];
+        });
+        if (inserted) {
+          preserveVisibleHistoryOnAppend();
+          setTotalMessages((count) => count + 1);
+        }
         return;
       }
       if (dash.kind === "assistant_delta") {
@@ -25743,6 +26131,8 @@ ${workspaceDir || ""}`;
       }
       if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
         const isFinalized = dash.kind === "turn_finalized";
+        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        if (!projectedMessage) return;
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
         cancelStreamingRaf();
@@ -25750,57 +26140,53 @@ ${workspaceDir || ""}`;
         setActiveTools([]);
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
         const nextMessage = {
-          id: dash.id,
-          role: "assistant",
-          text: dash.text ?? "",
-          reasoning: dash.reasoning ?? completedStream?.reasoning,
-          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-          ...dash.turnId ? { turnId: dash.turnId } : {},
-          ...dash.operationId ? { operationId: dash.operationId } : {},
-          ...isFinalized ? {
-            finalized: true,
-            receipt: dash.receipt,
-            taskState: dash.taskState,
-            executionState: dash.executionState,
-            goalState: dash.goalState,
-            taskContract: dash.taskContract,
-            evidenceRefs: dash.evidenceRefs,
-            artifactIncomplete: dash.artifactIncomplete === true,
-            interventionChoice: dash.interventionChoice,
-            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
-          } : {}
+          ...projectedMessage,
+          reasoning: projectedMessage.reasoning ?? completedStream?.reasoning,
+          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0
         };
         let inserted = false;
         setMessages((prev) => {
           const index = prev.findIndex((item) => String(item.id || "") === String(dash.id || ""));
           if (index < 0) {
+            const hasReceiptOnlyContent = isFinalized && Boolean(
+              projectedMessage.receipt || projectedMessage.taskState || projectedMessage.executionState || projectedMessage.goalState || Array.isArray(projectedMessage.warnings) && projectedMessage.warnings.length > 0
+            );
+            if (!String(projectedMessage.text ?? "").trim() && !hasReceiptOnlyContent) return prev;
             inserted = true;
+            if (dash.kind !== "turn_finalized") canonicalMessageCountRef.current += 1;
             return [...prev, nextMessage];
           }
           const copy = [...prev];
           copy[index] = { ...copy[index], ...nextMessage };
           return copy;
         });
-        if (inserted) setTotalMessages((count) => count + 1);
+        if (inserted && dash.kind !== "turn_finalized") setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
+        const projectedTool = Object.values(reduced.state.tools).find((tool) => toolFrameMatches(tool, dash));
+        if (!projectedTool) return;
         if (!dash.status || dash.status === "queued") preserveVisibleHistoryOnAppend();
         if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
-        setActiveTools((current) => upsertActiveTool(current, dash));
-        setMessages((current) => upsertToolProgress(current, dash));
+        setActiveTools((current) => upsertActiveTool(current, projectedTool));
+        setMessages((current) => upsertToolProgress(current, projectedTool));
         return;
       }
       if (dash.kind === "tool") {
+        const projectedTool = Object.values(reduced.state.tools).find((tool) => toolFrameMatches(tool, dash));
+        if (!projectedTool) return;
         if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
-        setActiveTools((current) => current.filter((item) => item.toolCallId !== String(dash.toolCallId || dash.id || "")));
+        setActiveTools((current) => current.filter((item) => !toolFrameMatches(item, projectedTool)));
         setCompletedSteps((count) => count + 1);
-        setMessages((current) => upsertToolProgress(current, dash));
+        setMessages((current) => upsertToolProgress(current, projectedTool));
         return;
       }
       if (dash.kind === "artifact-created") {
         const assistantId = String(dash.assistantId || "");
-        const files = Array.isArray(dash.files) ? dash.files.filter((file) => file?.path) : [];
+        const eventArtifacts = Array.isArray(dash.files) ? dash.files : [];
+        const artifactIds = new Set(eventArtifacts.map((file) => String(file?.id ?? "")).filter(Boolean));
+        const artifactPaths = new Set(eventArtifacts.map((file) => String(file?.path ?? "")).filter(Boolean));
+        const files = Object.values(reduced.state.artifacts).filter((file) => artifactIds.has(String(file.id ?? "")) || artifactPaths.has(String(file.path ?? ""))).filter((file) => file?.path);
         if (!assistantId || files.length === 0) return;
         setFileArtifactsByMessageId((prev) => {
           const merged = mergeFileArtifacts(prev[assistantId] || [], files);
@@ -25816,9 +26202,18 @@ ${workspaceDir || ""}`;
           setActiveTools([]);
           setCompletedSteps(0);
         }
-        preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [...prev, { id: dash.id, role: dash.kind, text: dash.text }]);
-        setTotalMessages((count) => count + 1);
+        const messageId = String(dash.messageId ?? dash.id ?? (dash.eventId ? `notice:${dash.eventId}` : ""));
+        const projectedMessage = reduced.state.messages[messageId];
+        if (!projectedMessage) return;
+        let inserted = false;
+        setMessages((prev) => {
+          if (prev.some((item) => String(item.id || "") === messageId)) return prev;
+          inserted = true;
+          return [...prev, projectedMessage];
+        });
+        if (inserted) {
+          preserveVisibleHistoryOnAppend();
+        }
         return;
       }
       if (dash.kind === "status") {
@@ -25827,20 +26222,21 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "messages-reset") {
-        executionStateRef.current = createDashboardReducerState();
-        setActiveTools([]);
+        setActiveTools(Object.values(reduced.state.tools).filter((tool) => ["queued", "running", "recovered"].includes(String(tool.state ?? tool.status ?? ""))));
         setCompletedSteps(0);
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("idle");
         setShowRetrievalSources(false);
         api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode))).catch(() => {
         });
-        setMessages(dash.messages.map((m3) => ({
-          id: m3.id || `hist-${Math.random()}`,
-          role: m3.role,
-          text: m3.text || ""
-        })));
-        setTotalMessages(dash.totalMessages ?? dash.messages.length);
+        const resetMessages = Object.values(reduced.state.messages).map((message) => ({
+          ...message,
+          id: message.id || `hist-${Math.random()}`,
+          text: message.text || ""
+        }));
+        setMessages(resetMessages);
+        canonicalMessageCountRef.current = resetMessages.length;
+        setTotalMessages(dash.totalMessages ?? resetMessages.length);
         setFileArtifacts([]);
         setFileArtifactsKey("");
         setFileArtifactsDismissed(false);
@@ -25848,7 +26244,10 @@ ${workspaceDir || ""}`;
         setFileArtifactsByMessageId({});
         setQueuedPrompts([]);
         setQueueSendingId(null);
-        setTodos([]);
+        setTodos(Object.values(reduced.state.todos));
+        setActivePlan(reduced.state.plan);
+        setBusy(reduced.state.busy);
+        setOperation(reduced.state.operation);
         setPlanContinuation(null);
         setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
         topLoadArmedRef.current = false;
@@ -25886,11 +26285,8 @@ ${workspaceDir || ""}`;
         });
         return;
       }
-      if (dash.kind === "plan-activated" || dash.kind === "plan-step-complete" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled") {
-        api("/plans").then((r3) => {
-          setActivePlan((r3.plans ?? []).find((p3) => ["active", "pending"].includes(planStatus(p3))) ?? null);
-        }).catch(() => {
-        });
+      if (dash.kind === "plan-activated" || dash.kind === "plan-step-complete" || dash.kind === "plan-revised" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled" || dash.kind === "plan-pending-discarded" || dash.kind === "plan-revision-discarded") {
+        setActivePlan(reduced.state.plan);
         return;
       }
       if (dash.kind === "modal-up") {
@@ -25904,34 +26300,6 @@ ${workspaceDir || ""}`;
         return;
       }
     };
-    const resyncDashboardEvents = async (triggerEvent = null) => {
-      if (resyncingEventsRef.current) return;
-      resyncingEventsRef.current = true;
-      const previousState = executionStateRef.current;
-      try {
-        const [canonicalLoaded] = await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
-        if (canonicalLoaded !== true || disposed) {
-          if (!disposed) setError(t4("chat.eventStreamError"));
-          return;
-        }
-        const buffered = bufferedDashboardEventsRef.current.splice(0).sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
-        const firstBuffered = buffered.find((event) => Number.isSafeInteger(Number(event?.eventSeq)));
-        const triggerCursorMatch = /^([^:]+):(\d+)$/u.exec(String(triggerEvent?.latestCursor ?? ""));
-        const triggerSeq = Number.isSafeInteger(Number(triggerEvent?.eventSeq)) ? Number(triggerEvent.eventSeq) : triggerCursorMatch ? Number(triggerCursorMatch[2]) : null;
-        executionStateRef.current = createDashboardReducerState({
-          // Service restart changes the epoch. Keep the triggering epoch even
-          // when no event arrived while the canonical snapshot was loading.
-          epoch: firstBuffered?.eventEpoch ?? triggerEvent?.eventEpoch ?? previousState?.epoch ?? null,
-          lastSeq: firstBuffered ? Math.max(0, Number(firstBuffered.eventSeq) - 1) : triggerSeq ?? previousState?.lastSeq ?? 0
-        });
-        for (const event of buffered) applyDashboardEvent2(event);
-      } finally {
-        if (!disposed) {
-          resyncingEventsRef.current = false;
-        }
-      }
-    };
-    resyncRunnerRef.current = resyncDashboardEvents;
     const eventBatcher = createDashboardEventBatcher({
       onFlush: (events) => {
         if (disposed) return;
@@ -25939,19 +26307,63 @@ ${workspaceDir || ""}`;
       }
     });
     eventBatcherRef.current = eventBatcher;
-    const onDash = (dash) => {
-      if (!eventGuardRef.current?.accept(dash)) return;
-      const eventSessionId = String(dash.sessionId ?? "").trim();
-      if (eventSessionId && activeConversationId && eventSessionId !== String(activeConversationId)) return;
+    const routeDashboardEvent = (dash) => {
       if (dash.kind === "resync-required") {
-        void resyncDashboardEvents(dash);
+        void resyncRunnerRef.current?.(dash);
         return;
       }
-      if (resyncingEventsRef.current) {
+      const observed = observeDashboardEventCursor(globalEventCursorRef.current, dash);
+      globalEventCursorRef.current = observed.cursor;
+      if (observed.resyncRequired) {
+        void resyncRunnerRef.current?.(dash);
+        return;
+      }
+      executionStateRef.current = createDashboardReducerState({
+        ...executionStateRef.current,
+        epoch: observed.cursor.epoch,
+        lastSeq: observed.cursor.lastSeq
+      });
+      const eventSessionId = String(dash.sessionId ?? "").trim();
+      const activeSessionId = String(activeConversationIdRef.current || snapshotSessionIdRef.current || "");
+      if (eventSessionId && activeSessionId && eventSessionId !== activeSessionId) return;
+      eventBatcher.enqueue(dash);
+    };
+    const replayBufferedDashboardEvents = (additionalEvents = []) => {
+      const buffered = bufferedDashboardEventsRef.current.splice(0);
+      const replay = dashboardEventsAfterCursor(
+        [...additionalEvents, ...buffered].filter((event) => event && event.kind !== "resync-required"),
+        executionStateRef.current
+      );
+      for (const event of replay) routeDashboardEvent(event);
+    };
+    replayBufferedDashboardEventsRef.current = replayBufferedDashboardEvents;
+    const resyncDashboardEvents = async (triggerEvent = null) => {
+      if (resyncingEventsRef.current) return;
+      resyncingEventsRef.current = true;
+      snapshotHydratingRef.current = true;
+      canonicalProjectionGenerationRef.current += 1;
+      try {
+        const [canonicalLoaded] = await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+        if (canonicalLoaded !== true || disposed) {
+          if (!disposed) setError(t4("chat.eventStreamError"));
+          return;
+        }
+        replayBufferedDashboardEvents(triggerEvent ? [triggerEvent] : []);
+      } finally {
+        if (!disposed) {
+          snapshotHydratingRef.current = false;
+          resyncingEventsRef.current = false;
+        }
+      }
+    };
+    resyncRunnerRef.current = resyncDashboardEvents;
+    const onDash = (dash) => {
+      if (!eventGuardRef.current?.accept(dash)) return;
+      if (snapshotHydratingRef.current || resyncingEventsRef.current) {
         bufferedDashboardEventsRef.current.push(dash);
         return;
       }
-      eventBatcher.enqueue(dash);
+      routeDashboardEvent(dash);
     };
     const unsubscribe = subscribeSse("*", onDash);
     const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
@@ -25971,6 +26383,7 @@ ${workspaceDir || ""}`;
       eventBatcher.dispose();
       eventBatcherRef.current = null;
       resyncRunnerRef.current = null;
+      replayBufferedDashboardEventsRef.current = null;
       resyncingEventsRef.current = false;
       bufferedDashboardEventsRef.current.splice(0);
       cancelStreamingRaf();
@@ -25980,8 +26393,13 @@ ${workspaceDir || ""}`;
     eventBatcherRef.current?.discard();
     bufferedDashboardEventsRef.current.splice(0);
     resyncingEventsRef.current = false;
-    executionStateRef.current = createDashboardReducerState();
+    executionStateRef.current = createDashboardReducerState(globalEventCursorRef.current);
+    snapshotSessionIdRef.current = activeConversationId ?? null;
     eventGuardRef.current?.reset();
+    if (activeConversationId) {
+      snapshotHydratingRef.current = true;
+      void resyncRunnerRef.current?.();
+    }
   }, [activeConversationId]);
   var handleFileChange = q2(async function(e3) {
     var files = e3.target.files;
@@ -26457,44 +26875,50 @@ ${workspaceDir || ""}`;
     })();
   }, [busy, queuePaused, queuedPrompts, queuePumpTick, submitPromptPayload, persistQueuedPrompt, deletePersistedQueuedPrompt]);
   const send = q2(async () => {
+    if (sendInFlightRef.current) return;
     const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
-    setError(null);
-    if (busy) {
-      if (await enqueuePrompt(text, images)) {
+    sendInFlightRef.current = true;
+    try {
+      setError(null);
+      if (busy) {
+        if (await enqueuePrompt(text, images)) {
+          setChatInput("");
+          pendingImagesRef.current = [];
+          setPendingImages([]);
+          setPopoverKind(null);
+          removeChatDraft(draftKey);
+        }
+        return;
+      }
+      const result = await submitPromptPayload({
+        text,
+        images,
+        attachments: images.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean)
+      });
+      if (result.ok) {
         setChatInput("");
         pendingImagesRef.current = [];
         setPendingImages([]);
-        setPopoverKind(null);
+        shouldAutoScroll.current = true;
         removeChatDraft(draftKey);
+      } else if (result.busy) {
+        if (await enqueuePrompt(text, images)) {
+          setChatInput("");
+          pendingImagesRef.current = [];
+          setPendingImages([]);
+          setPopoverKind(null);
+          removeChatDraft(draftKey);
+        }
+      } else if (result.credentialRequired) {
+        setSkillCredentialValue("");
+        setSkillCredentialSetup({ ...result.credentialRequired, payload: { text, images } });
+      } else {
+        setError(result.reason ?? "rejected");
       }
-      return;
-    }
-    const result = await submitPromptPayload({
-      text,
-      images,
-      attachments: images.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean)
-    });
-    if (result.ok) {
-      setChatInput("");
-      pendingImagesRef.current = [];
-      setPendingImages([]);
-      shouldAutoScroll.current = true;
-      removeChatDraft(draftKey);
-    } else if (result.busy) {
-      if (await enqueuePrompt(text, images)) {
-        setChatInput("");
-        pendingImagesRef.current = [];
-        setPendingImages([]);
-        setPopoverKind(null);
-        removeChatDraft(draftKey);
-      }
-    } else if (result.credentialRequired) {
-      setSkillCredentialValue("");
-      setSkillCredentialSetup({ ...result.credentialRequired, payload: { text, images } });
-    } else {
-      setError(result.reason ?? "rejected");
+    } finally {
+      sendInFlightRef.current = false;
     }
   }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput]);
   const saveSkillCredential = q2(async () => {
@@ -26572,6 +26996,7 @@ ${workspaceDir || ""}`;
       return;
     }
     if (!await confirmQueuedReset()) return;
+    canonicalProjectionGenerationRef.current += 1;
     try {
       if (wasBusy) {
         await api("/abort", { method: "POST" });
@@ -26588,6 +27013,7 @@ ${workspaceDir || ""}`;
       setSemanticRetrievalSources([]);
       setSemanticRetrievalStatus("idle");
       setMessages([]);
+      canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
@@ -26608,14 +27034,7 @@ ${workspaceDir || ""}`;
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
-      setTimeout(async () => {
-        try {
-          const r3 = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-          setMessages(r3.messages ?? []);
-          setTotalMessages(r3.totalMessages ?? r3.messages?.length ?? 0);
-        } catch {
-        }
-      }, 200);
+      setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
@@ -26643,6 +27062,7 @@ ${workspaceDir || ""}`;
   }, [workspaceDir]);
   const clearScrollback = q2(async () => {
     if (!await confirmQueuedReset()) return;
+    canonicalProjectionGenerationRef.current += 1;
     try {
       rotateUploadScope();
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
@@ -26650,6 +27070,7 @@ ${workspaceDir || ""}`;
       const nextOverview = await api("/overview").catch(() => null);
       setActiveConversationId(nextOverview?.conversationId ?? activeConversationId);
       setMessages([]);
+      canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
@@ -26670,14 +27091,7 @@ ${workspaceDir || ""}`;
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
-      setTimeout(async () => {
-        try {
-          const r3 = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-          setMessages(r3.messages ?? []);
-          setTotalMessages(r3.totalMessages ?? r3.messages?.length ?? 0);
-        } catch {
-        }
-      }, 200);
+      setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
@@ -27071,7 +27485,13 @@ ${workspaceDir || ""}`;
     };
     const onScroll = () => {
       const currentTop = el.scrollTop;
+      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
       const scrollingUp = currentTop < lastScrollTopRef.current - 1;
+      const userScrollIntentActive = Date.now() - lastScrollUpIntentAtRef.current <= USER_SCROLL_INTENT_GRACE_MS;
+      if (scrollingUp && shouldAutoScroll.current && distFromBottom < 80 && !userScrollIntentActive) {
+        lastScrollTopRef.current = currentTop;
+        return;
+      }
       if (scrollingUp) {
         if (topLoadIntentRef.current) {
           topLoadArmedRef.current = true;
@@ -27086,8 +27506,7 @@ ${workspaceDir || ""}`;
         lastScrollTopRef.current = currentTop;
         return;
       }
-      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
-      if (distFromBottom < 80) {
+      if (distFromBottom < 80 && !userScrollIntentActive) {
         shouldAutoScroll.current = true;
       }
       lastScrollTopRef.current = currentTop;
@@ -27095,6 +27514,7 @@ ${workspaceDir || ""}`;
     };
     const onWheel = (event) => {
       if (Number(event.deltaY) < 0) {
+        lastScrollUpIntentAtRef.current = Date.now();
         topLoadIntentRef.current = true;
         cancelAutoScroll();
         if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD && !scrollbarDraggingRef.current) {
@@ -27109,6 +27529,7 @@ ${workspaceDir || ""}`;
       const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
       if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
         scrollbarDraggingRef.current = true;
+        lastScrollUpIntentAtRef.current = Date.now();
         topLoadIntentRef.current = true;
         cancelAutoScroll();
       }
@@ -27513,17 +27934,33 @@ ${workspaceDir || ""}`;
       restoreChatScrollAnchor(feed, anchor, finishLoading);
       return;
     }
-    if (messages.length >= totalMessages) return;
+    if (canonicalMessageCountRef.current >= totalMessages) return;
+    const requestOffset = canonicalMessageCountRef.current;
+    const requestGeneration = canonicalProjectionGenerationRef.current;
+    const requestSessionId = activeConversationIdRef.current;
+    const requestIsCurrent = (responseSessionId = null) => dashboardSnapshotResponseIsCurrent({
+      requestGeneration,
+      currentGeneration: canonicalProjectionGenerationRef.current,
+      requestSessionId,
+      activeSessionId: activeConversationIdRef.current,
+      responseSessionId
+    });
     loadingEarlierRef.current = true;
     setLoadingEarlierMessages(true);
     try {
-      const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}&offset=${messages.length}`);
-      const earlier = Array.isArray(data.messages) ? data.messages : [];
+      const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}&offset=${requestOffset}`);
+      if (!requestIsCurrent(data.snapshot?.sessionId ?? null) || canonicalMessageCountRef.current !== requestOffset) {
+        finishLoading();
+        return;
+      }
+      const page = projectChatMessagePage(data);
+      const earlier = page.messages;
+      canonicalMessageCountRef.current = page.loadedCount;
       if (earlier.length > 0) {
-        setMessages((current) => [...earlier, ...current]);
+        setMessages((current) => mergeDashboardMessagePages(earlier, current));
         setVisibleMessageCount((count) => count + Math.min(CHAT_RENDER_STEP, earlier.length));
       }
-      setTotalMessages(data.totalMessages ?? totalMessages);
+      setTotalMessages(page.totalMessages);
       restoreChatScrollAnchor(feed, anchor, finishLoading);
     } catch (err) {
       setError(err.message);
@@ -27629,6 +28066,7 @@ ${workspaceDir || ""}`;
           />` : html4`<${ChatFeed}
             messages=${messages}
             totalMessages=${totalMessages}
+            canonicalMessageCount=${canonicalMessageCountRef.current}
             streaming=${streaming}
             taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
@@ -27657,7 +28095,7 @@ ${workspaceDir || ""}`;
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => {
     shouldAutoScroll.current = true;
     setHasNewBelow(false);
-    void refetchCanonicalState();
+    void resyncRunnerRef.current?.();
   })}>${t4("chat.feedRefresh")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>${t4("chat.feedCollapseAll")}</button>
@@ -28117,12 +28555,12 @@ ${workspaceDir || ""}`;
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} onNew=${newConversation} busy=${busy} />
         </div>
-        ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
+          ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
       </div>
     </div>
   `;
 }
-var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.length, canonicalMessageCount = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -28136,9 +28574,10 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
     }
   ] : messages;
   const hiddenCount = Math.max(0, allMessages.length - visibleCount);
-  const remoteHiddenCount = Math.max(0, totalMessages - messages.length);
+  const remoteHiddenCount = Math.max(0, totalMessages - canonicalMessageCount);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
-  const displayTotal = Math.max(totalMessages, allMessages.length);
+  const projectedTotal = totalMessages + Math.max(0, messages.length - canonicalMessageCount);
+  const displayTotal = Math.max(projectedTotal, allMessages.length);
   const renderUnits = groupToolMessages(renderedMessages).map((unit) => ({
     ...unit,
     items: unit.items?.map((item) => ({ ...item, index: item.index + hiddenCount }))

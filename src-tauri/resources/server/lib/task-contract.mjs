@@ -18,6 +18,9 @@ function normalizeExpectedOutput(value, index) {
     kind,
     description: text(source.description ?? source.title ?? "", 1000),
     ...(text(source.path, 2000) ? { path: text(source.path, 2000) } : {}),
+    ...(text(source.outputId, 240) ? { outputId: text(source.outputId, 240) } : {}),
+    ...(text(source.artifactId, 240) ? { artifactId: text(source.artifactId, 240) } : {}),
+    ...(text(source.resourceId, 240) ? { resourceId: text(source.resourceId, 240) } : {}),
     required: source.required !== false,
     ...(Array.isArray(source.acceptanceCriteria) ? {
       acceptanceCriteria: source.acceptanceCriteria.map((entry) => text(entry, 600)).filter(Boolean).slice(0, 16),

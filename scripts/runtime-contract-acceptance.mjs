@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { DeepSeekClient } from "../src-tauri/resources/server/visionox-pkg/dist/index.js";
+import { createAgentSessionRuntime } from "../src-tauri/resources/server/lib/agent-session-runtime.mjs";
+import { createOperationRuntime } from "../src-tauri/resources/server/lib/operation-runtime.mjs";
+import { createRuntimeFactStore } from "../src-tauri/resources/server/lib/runtime-fact-store.mjs";
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -74,13 +77,83 @@ export async function runRuntimeContractAcceptance() {
 
     let authFailed = false;
     try { await client.chat({ model: "auth-model", messages: [{ role: "user", content: "auth" }] }); } catch (error) { authFailed = /API 401/u.test(String(error?.message)); }
-    scenarios.push({ id: "auth-failure", status: authFailed ? "passed" : "failed" });
+    scenarios.push({ id: "auth-failure", status: authFailed ? "passed" : "failed", rootCause: "provider" });
 
-    const controller = new AbortController();
-    const cancelled = client.chat({ model: "cancel-model", messages: [{ role: "user", content: "cancel" }], signal: controller.signal })
+    const operationStates = [];
+    const operationRuntime = createOperationRuntime({
+      broadcast: (event) => operationStates.push(event.operation?.state),
+      getConversationId: () => "session-cancel",
+      getWorkspace: () => "C:/workspace-cancel",
+      idFactory: () => "operation-cancel",
+    });
+    const operation = operationRuntime.begin("chat");
+    const cancelled = client.chat({ model: "cancel-model", messages: [{ role: "user", content: "cancel" }], signal: operation.context.signal })
       .then(() => false, (error) => error?.name === "AbortError" || /abort/iu.test(String(error?.message)));
-    setTimeout(() => controller.abort(), 20);
-    scenarios.push({ id: "cancellation", status: await cancelled ? "passed" : "failed" });
+    setTimeout(() => operationRuntime.stop(operation, "acceptance_cancelled"), 20);
+    const requestCancelled = await cancelled;
+    operationRuntime.finish(operation, "cancelled");
+    scenarios.push({
+      id: "active-operation-cancellation",
+      status: requestCancelled && operation.controller.signal.aborted && operationRuntime.getActive() === null ? "passed" : "failed",
+      rootCause: "operation",
+      operationState: operationStates.at(-1) ?? null,
+    });
+
+    const stores = new Map();
+    for (const sessionId of ["session-old", "session-new"]) {
+      const store = createRuntimeFactStore({
+        file: join(root, `${sessionId}.facts.jsonl`),
+        sessionId,
+        epoch: `acceptance-${sessionId}`,
+      });
+      await store.load();
+      stores.set(sessionId, store);
+    }
+    let binding = { sessionId: "session-old", workspace: "C:/workspace-a" };
+    let finishOldTurn = null;
+    const sessionRuntime = createAgentSessionRuntime({
+      getActiveBinding: () => binding,
+      executeTurn: async (entry, controls) => {
+        finishOldTurn = async () => {
+          await stores.get(entry.sessionId).append({
+            type: "message.upsert",
+            entityId: "late-result",
+            payload: { id: "late-result", role: "assistant", text: "old session result", taskState: "completed" },
+          });
+          controls.complete({ ok: true, taskState: "completed" });
+        };
+        return { accepted: true, turnId: "turn-old" };
+      },
+    });
+    await sessionRuntime.submit({
+      inputId: "input-old",
+      requestId: "request-old",
+      sessionId: "session-old",
+      workspace: "C:/workspace-a",
+      text: "run",
+    });
+    binding = { sessionId: "session-new", workspace: "C:/workspace-b" };
+    await finishOldTurn();
+    await sessionRuntime.waitForIdle("session-old");
+    const oldSessionMessages = stores.get("session-old").snapshot().messages.length;
+    const newSessionMessages = stores.get("session-new").snapshot().messages.length;
+    scenarios.push({
+      id: "session-result-isolation",
+      status: oldSessionMessages === 1 && newSessionMessages === 0 ? "passed" : "failed",
+      rootCause: "session",
+      oldSessionMessages,
+      newSessionMessages,
+    });
+
+    const expectedArtifact = join(root, "missing-artifact.md");
+    let artifactMissing = false;
+    try { await access(expectedArtifact); } catch (error) { artifactMissing = error?.code === "ENOENT"; }
+    scenarios.push({
+      id: "artifact-verification",
+      status: reply.content === "stub-ok" && artifactMissing ? "passed" : "failed",
+      rootCause: "artifact",
+      artifactState: artifactMissing ? "missing" : "present",
+    });
   } finally {
     await close(server).catch(() => {});
     await rm(root, { recursive: true, force: true });

@@ -1012,15 +1012,39 @@ function normalizedPathSegment(value) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+// Keep compatibility lookups inside the operation workspace whenever the
+// caller supplied one. Explicit absolute paths may still target an external
+// document, but relative traversal must never expand outside that workspace.
+function rootedPathParts(absolutePath, rootDir, { allowExternal = true } = {}) {
+  const parsed = parse(absolutePath);
+  const candidateRoot = String(rootDir ?? "").trim();
+  if (candidateRoot) {
+    const workspaceRoot = resolve(candidateRoot);
+    const withinRoot = relative(workspaceRoot, absolutePath);
+    if (withinRoot && !withinRoot.startsWith("..") && !isAbsolute(withinRoot)) {
+      return {
+        root: workspaceRoot,
+        parts: withinRoot.split(/[\\/]+/).filter(Boolean),
+      };
+    }
+  }
+  if (!allowExternal) return { root: null, parts: [] };
+  return {
+    root: parsed.root,
+    parts: absolutePath.slice(parsed.root.length).split(/[\\/]+/).filter(Boolean),
+  };
+}
+
 function expandWhitespaceNormalizedPath(value, rootDir) {
   const raw = normalizeDrivePathInput(value);
   if (!looksLikePathString(raw) || hasPathWildcard(raw) || /[\r\n]/.test(raw)) return [];
   const absolute = resolveInputPath(raw, rootDir);
-  const parsed = parse(absolute);
-  const parts = absolute.slice(parsed.root.length).split(/[\\/]+/).filter(Boolean);
+  const { root, parts } = rootedPathParts(absolute, rootDir, {
+    allowExternal: isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw),
+  });
   if (parts.length === 0) return [];
 
-  let states = [{ path: parsed.root }];
+  let states = [{ path: root }];
   for (let index = 0; index < parts.length && states.length > 0; index++) {
     const segment = parts[index];
     const last = index === parts.length - 1;
@@ -1079,11 +1103,9 @@ function expandWildcardPath(value, rootDir) {
   const absPattern = isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw)
     ? resolve(raw)
     : resolve(rootDir ?? process.cwd(), raw);
-  const parsed = parse(absPattern);
-  const parts = absPattern
-    .slice(parsed.root.length)
-    .split(/[\\/]+/)
-    .filter(Boolean);
+  const { root, parts } = rootedPathParts(absPattern, rootDir, {
+    allowExternal: isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw),
+  });
   if (parts.length === 0) return [];
 
   const out = [];
@@ -1102,7 +1124,6 @@ function expandWildcardPath(value, rootDir) {
     }
   };
 
-  const root = parsed.root || ".";
   if (!safeStat(root)?.isDirectory()) return [];
   walk(root, 0);
   return Array.from(new Set(out.map((p) => resolve(p))));

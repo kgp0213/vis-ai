@@ -50,6 +50,26 @@ test("a task background job stops when its owner signal is aborted", async () =>
   assert.equal(jobs.list()[0].lifecycle, "task");
 });
 
+test("a runtime child error does not manufacture an exited job", async () => {
+  const jobs = new JobRegistry();
+  const started = await jobs.start(nodeCommand("setTimeout(()=>{},10000)"), {
+    cwd: process.cwd(),
+    waitSec: 0,
+    lifecycle: "task",
+  });
+  try {
+    const job = jobs.jobs.get(started.jobId);
+    job.child.emit("error", new Error("simulated runtime process error"));
+    const snapshot = jobs.list()[0];
+    assert.equal(snapshot.running, true);
+    assert.equal(snapshot.terminationPending, true);
+    assert.match(snapshot.spawnError, /simulated runtime process error/);
+    assert.doesNotThrow(() => process.kill(started.pid, 0));
+  } finally {
+    await jobs.stop(started.jobId, { graceMs: 0 });
+  }
+});
+
 test("background job metadata omits buffered output", async () => {
   const jobs = new JobRegistry();
   const started = await jobs.start(nodeCommand("console.log('large-output')"), {

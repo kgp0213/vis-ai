@@ -88,6 +88,20 @@ test("identified group identity stays stable when a live tool is appended", asyn
   assert.equal(first[0].id, appended[0].id);
 });
 
+test("turn-scoped live fallback step keeps consecutive calls in one group", async () => {
+  // Regression: tool-progress.mjs falls back to `${turnId}.s-live` when the
+  // vendored event has no step identity. Every call must land in one card so
+  // the live "step N" title increments instead of pinning at 1.
+  const { groupToolMessages } = await loadGrouping();
+  const units = groupToolMessages([
+    { role: "tool", toolCallId: "call-a", turnId: "assistant-1", stepId: "assistant-1.s-live" },
+    { role: "tool", toolCallId: "call-b", turnId: "assistant-1", stepId: "assistant-1.s-live" },
+    { role: "tool", toolCallId: "call-c", turnId: "assistant-1", stepId: "assistant-1.s-live" },
+  ]);
+  const groups = units.filter((unit) => unit.kind === "toolGroup");
+  assert.deepEqual(groups.map((unit) => unit.items.length), [3]);
+});
+
 test("tool frame identity isolates a reused provider call id across turns", async () => {
   const { toolFrameMatches } = await loadGrouping();
   const first = { id: "assistant-1-tool-call-1", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" };
@@ -97,10 +111,58 @@ test("tool frame identity isolates a reused provider call id across turns", asyn
   assert.equal(toolFrameMatches(first, retry), true);
   assert.equal(toolFrameMatches(first, reused), false);
   assert.equal(toolFrameMatches({ toolCallId: "legacy" }, { toolCallId: "legacy" }), true);
+  assert.equal(toolFrameMatches(
+    { toolCallId: "call-1", stepId: "step-1" },
+    { toolCallId: "call-1", turnId: "turn-2", stepId: "step-1" },
+  ), false);
+  assert.equal(toolFrameMatches(
+    { toolCallId: "call-1", turnId: "turn-1" },
+    { toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" },
+  ), true);
 });
 
 test("chat upserts active and completed tools through scoped frame identity", async () => {
   const chatSource = await readFile(new URL("../visionox-pkg/dashboard/src/panels/chat.ts", import.meta.url), "utf8");
-  assert.match(chatSource, /import \{ groupToolMessages, toolFrameMatches \}/u);
+  assert.match(chatSource, /import \{[^}]*groupToolMessages[^}]*toolFrameMatches[^}]*\}/u);
   assert.equal((chatSource.match(/findIndex\(\(item\) => toolFrameMatches\(item, next\)\)/gu) ?? []).length, 2);
+});
+
+test("restores terminal snapshot tools into their matching chat turn", async () => {
+  const { mergeSnapshotToolsIntoMessages } = await loadGrouping();
+  const messages = [
+    { id: "user-1", role: "user", text: "run", turnId: "turn-1" },
+    { id: "assistant-1", role: "assistant", text: "done", turnId: "turn-1" },
+  ];
+  const tools = [
+    { id: '["turn-1","step-1","call-1"]', toolCallId: "call-1", turnId: "turn-1", stepId: "step-1", state: "succeeded", content: "ok" },
+  ];
+
+  const restored = mergeSnapshotToolsIntoMessages(messages, tools);
+  assert.deepEqual(restored.map((item) => item.role), ["user", "tool", "assistant"]);
+  assert.equal(restored[1].toolStatus, "succeeded");
+  assert.equal(restored[1].text, "ok");
+});
+
+test("canonical snapshot tool replaces a restored row with the same Turn and call id", async () => {
+  const { mergeSnapshotToolsIntoMessages } = await loadGrouping();
+  const messages = [{
+    id: "restored-tool-123-1",
+    role: "tool",
+    toolCallId: "call-1",
+    turnId: "turn-1",
+    text: "legacy result",
+  }];
+  const tools = [{
+    id: '["turn-1","step-1","call-1"]',
+    toolCallId: "call-1",
+    turnId: "turn-1",
+    stepId: "step-1",
+    state: "succeeded",
+    content: "canonical result",
+  }];
+
+  const restored = mergeSnapshotToolsIntoMessages(messages, tools);
+  assert.equal(restored.length, 1);
+  assert.equal(restored[0].id, '["turn-1","step-1","call-1"]');
+  assert.equal(restored[0].text, "canonical result");
 });

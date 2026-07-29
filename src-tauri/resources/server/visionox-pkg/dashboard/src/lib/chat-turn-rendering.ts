@@ -43,7 +43,40 @@ export function toolFrameMatches(left: any, right: any): boolean {
   const leftScoped = Boolean(leftTurn || leftStep);
   const rightScoped = Boolean(rightTurn || rightStep);
   if (!leftScoped && !rightScoped) return true;
-  return leftScoped && rightScoped && leftTurn === rightTurn && leftStep === rightStep;
+  if (!leftScoped || !rightScoped) return false;
+  if (leftTurn || rightTurn) {
+    if (!leftTurn || !rightTurn || leftTurn !== rightTurn) return false;
+    return !(leftStep && rightStep && leftStep !== rightStep);
+  }
+  return Boolean(leftStep && rightStep && leftStep === rightStep);
+}
+
+export function mergeSnapshotToolsIntoMessages(messages: any[] = [], tools: any[] = []) {
+  const result = Array.isArray(messages) ? messages.map((message) => ({ ...message })) : [];
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    if (!tool || typeof tool !== "object") continue;
+    const toolCallId = toolCallValue(tool);
+    if (!toolCallId) continue;
+    const next = {
+      ...tool,
+      toolCallId,
+      role: "tool",
+      text: tool.content ?? tool.text ?? "",
+      toolArgs: tool.args ?? tool.toolArgs,
+      toolStatus: tool.status ?? tool.state ?? "unknown",
+    };
+    const existingIndex = result.findIndex((message) => toolFrameMatches(message, next));
+    if (existingIndex >= 0) {
+      result[existingIndex] = { ...result[existingIndex], ...next };
+      continue;
+    }
+    const turnId = frameValue(next.turnId);
+    const assistantIndex = turnId
+      ? result.findIndex((message) => message?.role === "assistant" && frameValue(message.turnId) === turnId)
+      : -1;
+    result.splice(assistantIndex >= 0 ? assistantIndex : result.length, 0, next);
+  }
+  return result;
 }
 
 export function groupToolMessages(messages: any[] = []) {

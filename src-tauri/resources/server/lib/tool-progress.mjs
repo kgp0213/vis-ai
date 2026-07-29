@@ -185,21 +185,39 @@ function outcomeForEvent(event) {
   return normalizeToolOutcome(event.content, { role: event.role, status: event.toolStatus });
 }
 
+export function toolFrameEntityId(event) {
+  const payload = event?.payload && typeof event.payload === "object" ? event.payload : null;
+  const supplied = String(event?.entityId ?? event?.toolCallId ?? event?.id ?? payload?.id ?? "");
+  const callId = String(event?.toolCallId ?? payload?.toolCallId ?? event?.id ?? payload?.id ?? "").trim();
+  const turnId = String(event?.turnId ?? payload?.turnId ?? "").trim();
+  const stepId = String(event?.stepId ?? payload?.stepId ?? "").trim();
+  const suppliedEntityId = String(event?.entityId ?? "").trim();
+  const scopeIsMissing = !suppliedEntityId || suppliedEntityId === callId;
+  if (callId && (turnId || stepId) && scopeIsMissing) {
+    return JSON.stringify([turnId || "legacy", stepId || "legacy", callId]);
+  }
+  return supplied;
+}
+
 export function projectToolProgressEvent(event, { assistantId = "assistant" } = {}) {
   const status = inferredStatus(event);
   if (!status || !event?.toolName) return null;
   const outcome = outcomeForEvent(event);
   const toolCallId = String(event.callId ?? event.toolCallId ?? event.id ?? "unknown");
   const id = `${assistantId}-tool-${toolCallId}`;
+  // A model turn is the stable outer boundary. When the vendored event
+  // carries a step identity, preserve it; otherwise fall back to a fixed
+  // turn-scoped step. Falling back to the tool call id would mint a fresh
+  // "step" per call, and the Dashboard (which groups by turnId+stepId) would
+  // split every call into its own card — the live "step N" counter would pin
+  // at 1 and the feed would flood with one-tool cards.
+  const turnId = String(event.turnId ?? event.turn ?? assistantId);
   return {
     kind: ["succeeded", "failed", "cancelled", "unknown"].includes(status) ? "tool" : "tool_start",
     id,
     toolCallId,
-    // A model turn is the stable outer boundary. When the vendored event
-    // carries a step identity, preserve it; otherwise the tool call itself is
-    // the safest step fallback and keeps retries in one UI group.
-    turnId: String(event.turnId ?? event.turn ?? assistantId),
-    stepId: String(event.stepId ?? event.toolStepId ?? toolCallId),
+    turnId,
+    stepId: String(event.stepId ?? event.toolStepId ?? `${turnId}.s-live`),
     status,
     toolName: String(event.toolName).slice(0, 160),
     args: safeArgs(event.toolArgs),

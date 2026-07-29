@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
@@ -252,6 +252,30 @@ test("prepareLocalDocument refuses ambiguous whitespace-normalized paths", async
     assert.equal(result.ok, false);
     assert.equal(result.candidateCount, 2);
     assert.deepEqual(new Set(result.candidates.map((path) => resolve(path))), new Set([resolve(first), resolve(second)]));
+  });
+});
+
+test("prepareLocalDocument does not expand relative traversal patterns outside rootDir", async () => {
+  await withTempDir(async (dir) => {
+    const outside = join(dirname(dir), `visionox-dlp-outside-${basename(dir)}`);
+    mkdirSync(outside, { recursive: true });
+    const source = join(outside, "external.pdf");
+    await writeFile(source, Buffer.from("%PDF-1.7"));
+    try {
+      const traversal = `${dir}${sep}..${sep}${basename(outside)}${sep}*.pdf`;
+      const result = await prepareLocalDocument(traversal, {
+        cfg: { dlp: { mode: "off" } },
+        env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+        logger: null,
+        registry: createPreparedDocumentRegistry(),
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.sourcePath, undefined);
+      assert.equal(result.candidates?.length ?? 0, 0);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });
 

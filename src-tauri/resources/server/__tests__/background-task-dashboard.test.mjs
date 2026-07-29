@@ -60,11 +60,14 @@ test("后台工作台兼容通用任务投影并在恢复可见性时重新同�
   assert.match(chatPanel, /document\.addEventListener\("visibilitychange", refreshOnVisibility\)/);
 });
 
-test("崩溃恢复的 lost 通知改挂到 live operation，启动时不再用死 operation 绑定入队", async () => {
+test("崩溃恢复的 lost 通知在启动时进入 Session inbox 并保留 operation 审计", async () => {
   const launcher = await readFile(launcherSourceUrl, "utf8");
   // 模型边界恢复点：统一经 notificationEnqueueScope 决定绑定（lost+process_restarted 改挂 live operation）
   assert.match(launcher, /backgroundTaskNotifications\.enqueue\(persisted, notificationEnqueueScope\(persisted, scope\)\);/u);
-  // 启动恢复点：跳过崩溃恢复的 lost 记录，避免死 operation 绑定污染去重集合
-  assert.match(launcher, /if \(isProcessRestartedRecovery\(persisted\)\) continue;/u);
-  assert.match(launcher, /isProcessRestartedRecovery, notificationEnqueueScope \} = await importEarly\("\.\/lib\/background-task-notification\.mjs"\)/u);
+  assert.match(launcher, /const restored = backgroundTaskNotifications\.snapshot\(\);[\s\S]{0,160}restored\.pending[\s\S]{0,80}restored\.overflowed/u);
+  // 启动和后续 Session 激活复用同一 durable outbox 恢复点；旧 operation
+  // 仅作审计，交付由当前 Session/workspace 领取。
+  assert.match(launcher, /async function wakePendingBackgroundTaskNotifications\(scope\) \{[\s\S]{0,400}await wakeAgentForBackgroundNotification\(notification, scope\)/u);
+  assert.match(launcher, /backgroundTaskNotifications\.restoreDelivered\([\s\S]{0,200}await wakePendingBackgroundTaskNotifications\(\{[\s\S]{0,160}sessionId:\s*activeConversationId[\s\S]{0,160}workspace:\s*workspaceDir/u);
+  assert.match(launcher, /formatBackgroundTaskNotification, notificationEnqueueScope \} = await importEarly\("\.\/lib\/background-task-notification\.mjs"\)/u);
 });

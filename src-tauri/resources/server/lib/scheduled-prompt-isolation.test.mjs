@@ -111,7 +111,7 @@ describe("scheduled prompt isolation", () => {
     assert.match(submitSource, /opts\.isolated === true \|\| opts\.internalHandoff === true/);
     assert.match(submitSource, /promptIsolation\.snapshot[\s\S]*assistantText/);
     assert.match(submitSource, /catch \(historyError\)[\s\S]*isolationRestoreError/);
-    assert.match(submitSource, /finally \{[\s\S]*busy = false;[\s\S]*finishActiveOperation\(operation\)/);
+    assert.match(submitSource, /finally \{[\s\S]*await finalizeOperationBoundary\(operation, \{ requestId \}\)/);
     assert.match(submitSource, /const retrievalHistory = opts\.isolated === true \|\| opts\.internalHandoff === true \? \[\] : messages\.slice\(-12\)/);
     assert.match(submitSource, /opts\.isolated === true[\s\S]*promptIsolation\?\.restore/);
   });

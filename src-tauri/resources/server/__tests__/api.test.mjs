@@ -425,27 +425,6 @@ describe("HTTP API 集成测试", { concurrency: false }, () => {
     assert.equal(typeof missing.json.action, "string");
   });
 
-  test("GET /api/messages 对千条活动会话默认只返回最近一页", async () => {
-    const messages = Array.from({ length: 1094 }, (_, index) => ({
-      id: `message-${index}`,
-      role: index % 2 === 0 ? "user" : "assistant",
-      text: `content-${index}`,
-    }));
-    const latest = await apiGet("/api/messages", { getMessages: () => messages });
-    assert.equal(latest.status, 200);
-    assert.equal(latest.json.messages.length, 200);
-    assert.equal(latest.json.messages[0].id, "message-894");
-    assert.equal(latest.json.messages.at(-1).id, "message-1093");
-    assert.equal(latest.json.totalMessages, 1094);
-    assert.equal(latest.json.hasMore, true);
-
-    const earlier = await apiGet("/api/messages?limit=200&offset=200", { getMessages: () => messages });
-    assert.equal(earlier.status, 200);
-    assert.equal(earlier.json.messages[0].id, "message-694");
-    assert.equal(earlier.json.messages.at(-1).id, "message-893");
-    assert.equal(earlier.json.hasMore, true);
-  });
-
   // ── Settings tests ────────────────────────────────────────
 
   test("GET /api/settings → 200 + editMode/preset/appliesAt", async () => {

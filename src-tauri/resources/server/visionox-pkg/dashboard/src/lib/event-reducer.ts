@@ -27,7 +27,41 @@ export interface DashboardReducerState {
   goals: Record<string, DashboardEntityState>;
   todos: Record<string, DashboardEntityState>;
   prompts: Record<string, DashboardEntityState>;
+  taskNotifications: Record<string, DashboardEntityState>;
+  plan: DashboardEntityState | null;
+  operation: DashboardEntityState | null;
+  admission: DashboardEntityState | null;
+  busy: boolean;
   anomalies: any[];
+}
+
+export interface DashboardSessionSnapshot {
+  schemaVersion?: number;
+  sessionId?: string;
+  eventCursor?: string | { epoch?: string; seq?: number } | null;
+  messages?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  tools?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  interactions?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  attachments?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  artifacts?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  goals?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  todos?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  prompts?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  taskNotifications?: DashboardEntityState[] | Record<string, DashboardEntityState>;
+  plan?: DashboardEntityState | null;
+  operation?: DashboardEntityState | null;
+  admission?: DashboardEntityState | null;
+  busy?: boolean;
+  messagePage?: {
+    totalMessages?: number;
+    startIndex?: number;
+    hasMore?: boolean;
+  };
+}
+
+export interface DashboardEventCursor {
+  epoch: string | null;
+  lastSeq: number;
 }
 
 export interface DashboardBatcher {
@@ -159,8 +193,266 @@ export function createDashboardReducerState(seed?: Partial<DashboardReducerState
     goals: { ...(seed?.goals ?? {}) },
     todos: { ...(seed?.todos ?? {}) },
     prompts: { ...(seed?.prompts ?? {}) },
+    taskNotifications: { ...(seed?.taskNotifications ?? {}) },
+    plan: seed?.plan ? { ...seed.plan } : null,
+    operation: seed?.operation ? { ...seed.operation } : null,
+    admission: seed?.admission ? { ...seed.admission } : null,
+    busy: seed?.busy === true,
     anomalies: [...(seed?.anomalies ?? [])],
   };
+}
+
+function entityRecord(value: unknown): Record<string, DashboardEntityState> {
+  const entries = Array.isArray(value)
+    ? value.map((item: any, index) => [String(item?.id ?? `entity-${index + 1}`), item])
+    : Object.entries(value && typeof value === "object" ? value as Record<string, unknown> : {});
+  const result: Record<string, DashboardEntityState> = {};
+  for (const [key, raw] of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = String((raw as any).id ?? key).trim();
+    if (!id) continue;
+    result[id] = { ...(raw as DashboardEntityState), id };
+  }
+  return result;
+}
+
+function snapshotCursor(value: DashboardSessionSnapshot["eventCursor"]): { epoch: string | null; lastSeq: number } {
+  if (value && typeof value === "object") {
+    const seq = Number(value.seq);
+    return {
+      epoch: value.epoch ? String(value.epoch) : null,
+      lastSeq: Number.isSafeInteger(seq) && seq >= 0 ? seq : 0,
+    };
+  }
+  const cursor = String(value ?? "").trim();
+  const separator = cursor.lastIndexOf(":");
+  if (separator <= 0) return { epoch: cursor || null, lastSeq: 0 };
+  const seq = Number(cursor.slice(separator + 1));
+  return {
+    epoch: cursor.slice(0, separator) || null,
+    lastSeq: Number.isSafeInteger(seq) && seq >= 0 ? seq : 0,
+  };
+}
+
+export function createDashboardEventCursor(value?: DashboardSessionSnapshot["eventCursor"] | DashboardEventCursor): DashboardEventCursor {
+  if (value && typeof value === "object" && "lastSeq" in value) {
+    const lastSeq = Number(value.lastSeq);
+    return {
+      epoch: value.epoch ? String(value.epoch) : null,
+      lastSeq: Number.isSafeInteger(lastSeq) && lastSeq >= 0 ? lastSeq : 0,
+    };
+  }
+  return snapshotCursor(value as DashboardSessionSnapshot["eventCursor"]);
+}
+
+/** Observes the process-wide SSE sequence without projecting Session payload. */
+export function observeDashboardEventCursor(
+  input: DashboardEventCursor,
+  event: any,
+): { cursor: DashboardEventCursor; resyncRequired?: boolean; anomaly?: string } {
+  const cursor = createDashboardEventCursor(input);
+  if (!event || typeof event !== "object") return { cursor };
+  const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
+  const seq = Number(event.eventSeq);
+  const sequenced = event.eventSeq !== null && event.eventSeq !== undefined && Number.isSafeInteger(seq) && seq >= 0;
+  if (epoch && cursor.epoch && epoch !== cursor.epoch) {
+    return {
+      cursor: { epoch, lastSeq: sequenced ? seq : 0 },
+      resyncRequired: true,
+      anomaly: "epoch-changed",
+    };
+  }
+  const next = { epoch: epoch ?? cursor.epoch, lastSeq: cursor.lastSeq };
+  const firstSeq = firstEventSequence(event);
+  if (sequenced && firstSeq !== null && firstSeq > cursor.lastSeq + 1) {
+    next.lastSeq = Math.max(next.lastSeq, seq);
+    return { cursor: next, resyncRequired: true, anomaly: "event-gap" };
+  }
+  if (sequenced) next.lastSeq = Math.max(next.lastSeq, seq);
+  return { cursor: next };
+}
+
+/** Builds the canonical client projection from an atomic Session snapshot. */
+export function createDashboardReducerStateFromSnapshot(snapshot: DashboardSessionSnapshot = {}): DashboardReducerState {
+  const cursor = snapshotCursor(snapshot.eventCursor);
+  return createDashboardReducerState({
+    ...cursor,
+    messages: entityRecord(snapshot.messages),
+    tools: entityRecord(snapshot.tools),
+    interactions: entityRecord(snapshot.interactions),
+    attachments: entityRecord(snapshot.attachments),
+    artifacts: entityRecord(snapshot.artifacts),
+    goals: entityRecord(snapshot.goals),
+    todos: entityRecord(snapshot.todos),
+    prompts: entityRecord(snapshot.prompts),
+    taskNotifications: entityRecord(snapshot.taskNotifications),
+    plan: snapshot.plan ?? null,
+    operation: snapshot.operation ?? null,
+    admission: snapshot.admission ?? null,
+    busy: snapshot.busy === true,
+  });
+}
+
+/**
+ * Uses the snapshot page as the authoritative boundary while filling any
+ * compatibility fields for entities that share the same stable id.
+ */
+export function mergeCanonicalMessagePage(
+  compatibilityMessages: DashboardEntityState[] = [],
+  factMessages: DashboardEntityState[] | Record<string, DashboardEntityState> = [],
+): DashboardEntityState[] {
+  const compatibility = Array.isArray(compatibilityMessages) ? compatibilityMessages : [];
+  const facts = Array.isArray(factMessages) ? factMessages : Object.values(factMessages ?? {});
+  if (facts.length === 0) return compatibility.map((message) => ({ ...message }));
+  const compatibilityById = new Map(
+    compatibility
+      .filter((message) => message && typeof message === "object" && String(message.id ?? "").trim())
+      .map((message) => [String(message.id), message]),
+  );
+  return facts
+    .filter((message) => message && typeof message === "object")
+    .map((message) => {
+      const id = String(message.id ?? "").trim();
+      return { ...(id ? compatibilityById.get(id) : null), ...message, ...(id ? { id } : {}) };
+    });
+}
+
+function pageEntityKey(entity: DashboardEntityState): string | null {
+  if (String(entity?.role ?? "") === "tool") {
+    const toolCallId = String(entity?.toolCallId ?? entity?.tool_call_id ?? "").trim();
+    const turnId = String(entity?.turnId ?? "").trim();
+    if (toolCallId && turnId) return `tool:${JSON.stringify([turnId, toolCallId])}`;
+  }
+  const id = String(entity?.id ?? "").trim();
+  if (id) return `id:${id}`;
+  if (String(entity?.role ?? "") !== "tool") return null;
+  const toolCallId = String(entity?.toolCallId ?? entity?.tool_call_id ?? "").trim();
+  if (!toolCallId) return null;
+  return `tool:${JSON.stringify([String(entity?.turnId ?? ""), String(entity?.stepId ?? ""), toolCallId])}`;
+}
+
+/** Prepends an older page while preserving the newer projection at overlaps. */
+export function mergeDashboardMessagePages(
+  earlier: DashboardEntityState[] = [],
+  current: DashboardEntityState[] = [],
+): DashboardEntityState[] {
+  const currentByKey = new Map<string, DashboardEntityState>();
+  for (const entity of Array.isArray(current) ? current : []) {
+    const key = pageEntityKey(entity);
+    if (key) currentByKey.set(key, entity);
+  }
+  const result: DashboardEntityState[] = [];
+  const seen = new Set<string>();
+  for (const entity of [...(Array.isArray(earlier) ? earlier : []), ...(Array.isArray(current) ? current : [])]) {
+    if (!entity || typeof entity !== "object") continue;
+    const key = pageEntityKey(entity);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    result.push(key && currentByKey.has(key) ? { ...entity, ...currentByKey.get(key) } : { ...entity });
+  }
+  return result;
+}
+
+function toolsForMessagePage(messages: DashboardEntityState[], tools: DashboardEntityState[]): DashboardEntityState[] {
+  const messageIds = new Set(messages.map((message) => String(message?.id ?? "").trim()).filter(Boolean));
+  const turnIds = new Set(messages.map((message) => String(message?.turnId ?? "").trim()).filter(Boolean));
+  const pageToolKeys = new Set(
+    messages
+      .filter((message) => String(message?.role ?? "") === "tool")
+      .map((message) => pageEntityKey(message))
+      .filter(Boolean),
+  );
+  return tools.filter((tool) => {
+    const turnId = String(tool?.turnId ?? "").trim();
+    const assistantId = String(tool?.assistantId ?? tool?.messageId ?? "").trim();
+    const key = pageEntityKey({ ...tool, role: "tool" });
+    return Boolean(
+      (key && pageToolKeys.has(key))
+      || (turnId && (turnIds.has(turnId) || messageIds.has(turnId)))
+      || (assistantId && messageIds.has(assistantId)),
+    );
+  });
+}
+
+/** Normalizes legacy `/messages` fields into the atomic snapshot page. */
+export function projectDashboardMessagePage(response: any = {}): {
+  state: DashboardReducerState;
+  messages: DashboardEntityState[];
+  tools: DashboardEntityState[];
+  totalMessages: number;
+  startIndex: number;
+  loadedCount: number;
+  hasMore: boolean;
+} {
+  const snapshot = response?.snapshot && typeof response.snapshot === "object" ? response.snapshot as DashboardSessionSnapshot : null;
+  const state = snapshot ? createDashboardReducerStateFromSnapshot(snapshot) : createDashboardReducerState();
+  const compatibilityMessages = Array.isArray(response?.messages) ? response.messages : [];
+  const messages = snapshot
+    ? mergeCanonicalMessagePage(compatibilityMessages, state.messages)
+    : compatibilityMessages.map((message: DashboardEntityState) => ({ ...message }));
+  const rawTotal = Number(snapshot?.messagePage?.totalMessages ?? response?.totalMessages ?? messages.length);
+  const totalMessages = Number.isSafeInteger(rawTotal) && rawTotal >= 0 ? rawTotal : messages.length;
+  const fallbackStart = Math.max(0, totalMessages - messages.length);
+  const rawStart = Number(snapshot?.messagePage?.startIndex ?? response?.startIndex ?? fallbackStart);
+  const startIndex = Number.isSafeInteger(rawStart) && rawStart >= 0
+    ? Math.min(rawStart, totalMessages)
+    : fallbackStart;
+  const tools = snapshot ? toolsForMessagePage(messages, Object.values(state.tools)) : [];
+  return {
+    state,
+    messages,
+    tools,
+    totalMessages,
+    startIndex,
+    loadedCount: Math.max(0, totalMessages - startIndex),
+    hasMore: snapshot?.messagePage?.hasMore ?? response?.hasMore ?? startIndex > 0,
+  };
+}
+
+/** Returns events not represented by the snapshot, in transport order. */
+export function dashboardEventsAfterCursor(events: any[] = [], cursorLike: DashboardEventCursor | DashboardReducerState): any[] {
+  const cursor = createDashboardEventCursor({ epoch: cursorLike?.epoch ?? null, lastSeq: cursorLike?.lastSeq ?? 0 });
+  const seen = new Set<string>();
+  return (Array.isArray(events) ? events : [])
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => {
+      if (!event || typeof event !== "object") return false;
+      const id = String(event.eventId ?? "");
+      if (id && seen.has(id)) return false;
+      if (id) seen.add(id);
+      const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
+      const seq = Number(event.eventSeq);
+      return !(epoch && cursor.epoch === epoch && Number.isSafeInteger(seq) && seq <= cursor.lastSeq);
+    })
+    .sort((left, right) => {
+      const leftSeq = Number(left.event?.eventSeq);
+      const rightSeq = Number(right.event?.eventSeq);
+      if (Number.isSafeInteger(leftSeq) && Number.isSafeInteger(rightSeq) && leftSeq !== rightSeq) return leftSeq - rightSeq;
+      return left.index - right.index;
+    })
+    .map(({ event }) => event);
+}
+
+/** Rejects delayed Snapshot responses after a Session or projection mutation. */
+export function dashboardSnapshotResponseIsCurrent({
+  requestGeneration,
+  currentGeneration,
+  requestSessionId,
+  activeSessionId,
+  responseSessionId,
+}: {
+  requestGeneration: number;
+  currentGeneration: number;
+  requestSessionId?: string | null;
+  activeSessionId?: string | null;
+  responseSessionId?: string | null;
+}): boolean {
+  if (requestGeneration !== currentGeneration) return false;
+  const requested = String(requestSessionId ?? "").trim();
+  const active = String(activeSessionId ?? "").trim();
+  const response = String(responseSessionId ?? "").trim();
+  if (requested !== active) return false;
+  return !(response && active && response !== active);
 }
 
 function entityBucket(kind: string, event: any): keyof Pick<DashboardReducerState, "messages" | "tools" | "interactions" | "attachments" | "artifacts" | "goals" | "todos" | "prompts"> | null {
@@ -213,6 +505,94 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
   while (state.seen.size > 4096) state.seen.delete(state.seen.values().next().value as string);
 
   const kind = String(event.kind ?? "");
+  if (kind === "busy-change") {
+    const next = event.busy === true;
+    const changed = state.busy !== next;
+    state.busy = next;
+    return { state, changed };
+  }
+  if (kind === "operation-change") {
+    const next = event.operation && typeof event.operation === "object" ? { ...event.operation } : null;
+    const changed = JSON.stringify(state.operation) !== JSON.stringify(next);
+    state.operation = next;
+    return { state, changed };
+  }
+  if (kind.startsWith("plan-") && Object.prototype.hasOwnProperty.call(event, "plan")) {
+    const next = event.plan && typeof event.plan === "object" ? { ...event.plan } : null;
+    const changed = JSON.stringify(state.plan) !== JSON.stringify(next);
+    state.plan = next;
+    return { state, changed };
+  }
+  if (kind === "user") {
+    const messageId = String(event.messageId ?? event.id ?? "").trim();
+    if (!messageId) return { state, changed: false, anomaly: "user-missing-message" };
+    const previous = state.messages[messageId];
+    const next = {
+      ...(previous ?? { id: messageId }),
+      id: messageId,
+      role: "user",
+      text: String(event.text ?? ""),
+      ...(event.images !== undefined ? { images: event.images } : {}),
+      ...(event.attachments !== undefined ? { attachments: event.attachments } : {}),
+    };
+    state.messages = { ...state.messages, [messageId]: next };
+    return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
+  }
+  if (["warning", "error", "info"].includes(kind)) {
+    const messageId = String(event.messageId ?? event.id ?? (event.eventId ? `notice:${event.eventId}` : "")).trim();
+    if (!messageId) return { state, changed: false, anomaly: "notice-missing-message" };
+    const previous = state.messages[messageId];
+    const next = {
+      ...(previous ?? { id: messageId }),
+      id: messageId,
+      role: kind,
+      text: String(event.text ?? ""),
+    };
+    state.messages = { ...state.messages, [messageId]: next };
+    return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
+  }
+  if (kind === "background-task-notification") {
+    const id = String(event.notificationId ?? event.id ?? "").trim();
+    if (!id) return { state, changed: false };
+    const previous = state.taskNotifications[id];
+    const next = { ...(previous ?? { id }), ...event, id, state: event.status ?? previous?.state };
+    state.taskNotifications = { ...state.taskNotifications, [id]: next };
+    return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
+  }
+  if (kind === "artifact-created" && Array.isArray(event.files)) {
+    const nextArtifacts = { ...state.artifacts };
+    let changed = false;
+    for (const file of event.files) {
+      if (!file || typeof file !== "object") continue;
+      const id = String(file.id ?? file.artifactId ?? "").trim();
+      if (!id) continue;
+      const next = { ...(nextArtifacts[id] ?? { id }), ...file, id };
+      if (JSON.stringify(nextArtifacts[id]) !== JSON.stringify(next)) changed = true;
+      nextArtifacts[id] = next;
+    }
+    state.artifacts = nextArtifacts;
+    return { state, changed };
+  }
+  if (kind === "messages-reset") {
+    const replace = (bucket: keyof Pick<DashboardReducerState, "messages" | "tools" | "interactions" | "attachments" | "artifacts" | "goals" | "todos" | "prompts">) => {
+      if (event[bucket] !== undefined) state[bucket] = entityRecord(event[bucket]);
+    };
+    replace("messages");
+    replace("tools");
+    replace("interactions");
+    replace("attachments");
+    replace("artifacts");
+    replace("goals");
+    replace("todos");
+    replace("prompts");
+    if (event.taskNotifications !== undefined) state.taskNotifications = entityRecord(event.taskNotifications);
+    if (event.plan !== undefined) state.plan = event.plan && typeof event.plan === "object" ? { ...event.plan } : null;
+    if (event.operation !== undefined) state.operation = event.operation && typeof event.operation === "object" ? { ...event.operation } : null;
+    if (event.admission !== undefined) state.admission = event.admission && typeof event.admission === "object" ? { ...event.admission } : null;
+    if (event.busy !== undefined) state.busy = event.busy === true;
+    state.streamOffsets = {};
+    return { state, changed: true };
+  }
   if (kind === "assistant_delta") {
     const messageId = String(event.messageId ?? event.id ?? "");
     if (!messageId) return { state, changed: false, anomaly: "delta-missing-message" };
@@ -275,16 +655,18 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       id: messageId,
       role: "assistant",
       ...(event.text !== undefined ? { text: String(event.text ?? "") } : {}),
+      ...(event.reasoning !== undefined ? { reasoning: String(event.reasoning ?? "") } : {}),
       ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
       ...(event.operationId !== undefined ? { operationId: String(event.operationId) } : {}),
       ...(kind === "turn_finalized" ? {
         finalized: true,
-        taskState: event.taskState,
-        executionState: event.executionState,
-        goalState: event.goalState,
-        taskContract: event.taskContract,
-        evidenceRefs: event.evidenceRefs,
-        receipt: event.receipt,
+        ...(event.taskState !== undefined ? { taskState: event.taskState } : {}),
+        ...(event.executionState !== undefined ? { executionState: event.executionState } : {}),
+        ...(event.goalState !== undefined ? { goalState: event.goalState } : {}),
+        ...(event.taskContract !== undefined ? { taskContract: event.taskContract } : {}),
+        ...(event.evidenceRefs !== undefined ? { evidenceRefs: event.evidenceRefs } : {}),
+        ...(event.receipt !== undefined ? { receipt: event.receipt } : {}),
+        ...(event.interventionChoice !== undefined ? { interventionChoice: event.interventionChoice } : {}),
         warnings: Array.isArray(event.warnings) ? event.warnings : [],
         artifactIncomplete: event.artifactIncomplete === true,
       } : {}),
@@ -328,7 +710,8 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
   const id = entityIdFor(bucket, event, entityPayload);
   if (!bucket || !id) return { state, changed: false };
   const previous = state[bucket][id];
-  const requestedState = String(entityPayload.state ?? payload.state ?? event.status ?? (String(event.kind).split(".").at(-1) ?? ""));
+  const inferredState = kind.includes(".") ? (kind.split(".").at(-1) ?? "") : "";
+  const requestedState = String(entityPayload.state ?? payload.state ?? event.status ?? inferredState);
   const canReopenFailedTool = bucket === "tools"
     && String(previous?.state ?? "") === "failed"
     && failedRecoveryStates.has(requestedState);

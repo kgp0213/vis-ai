@@ -22,8 +22,19 @@ import { fmtBytes, fmtCost, fmtUsd, primaryBalance } from "../lib/format.js";
 import { html as html4 } from "../lib/html.js";
 import { confirmExternalArtifactOpen, showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
-import { applyDashboardEvent as reduceDashboardEvent, createDashboardEventBatcher, createDashboardEventGuard, createDashboardReducerState } from "../lib/event-reducer.js";
-import { groupToolMessages, toolFrameMatches } from "../lib/chat-turn-rendering.js";
+import {
+  applyDashboardEvent as reduceDashboardEvent,
+  createDashboardEventBatcher,
+  createDashboardEventCursor,
+  createDashboardEventGuard,
+  createDashboardReducerState,
+  dashboardEventsAfterCursor,
+  dashboardSnapshotResponseIsCurrent,
+  mergeDashboardMessagePages,
+  observeDashboardEventCursor,
+  projectDashboardMessagePage,
+} from "../lib/event-reducer.js";
+import { groupToolMessages, mergeSnapshotToolsIntoMessages, toolFrameMatches } from "../lib/chat-turn-rendering.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { IconModel, IconWorkspace, IconJobs, IconSearch, IconWand, IconAttach, IconSkill } from "../ui/index.js";
 const N2: any = preactMemo;
@@ -127,6 +138,9 @@ function providerModelTestSummary(providers) {
 var CHAT_RENDER_STEP = 30;
 var CHAT_MESSAGE_PAGE_SIZE = 60;
 var CHAT_TOP_LOAD_THRESHOLD = 96;
+// 用户上滚手势的宽限期：手势刷新后这段时间内，钉底回臂与钳位免疫保持抑制，
+// 覆盖平滑滚动动画从滚轮事件到动画结束的完整时长。
+var USER_SCROLL_INTENT_GRACE_MS = 300;
 var FILE_ARTIFACT_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "sh"]);
@@ -214,6 +228,14 @@ function upsertActiveTool(items, dash) {
   const copy = [...items];
   copy[index] = { ...copy[index], ...next };
   return copy;
+}
+
+function projectChatMessagePage(data) {
+  const page = projectDashboardMessagePage(data);
+  return {
+    ...page,
+    messages: mergeSnapshotToolsIntoMessages(page.messages, page.tools),
+  };
 }
 function chatDraftKey(workspaceDir, mode) {
   const ws = encodeURIComponent(workspaceDir || "default");
@@ -1139,6 +1161,12 @@ function ChatPanel({ userAvatar = null } = {}) {
   if (eventGuardRef.current === null) eventGuardRef.current = createDashboardEventGuard();
   const executionStateRef = A2(null);
   if (executionStateRef.current === null) executionStateRef.current = createDashboardReducerState();
+  const globalEventCursorRef = A2(createDashboardEventCursor(null));
+  const snapshotSessionIdRef = A2(null);
+  const snapshotHydratingRef = A2(true);
+  const replayBufferedDashboardEventsRef = A2(null);
+  const canonicalProjectionGenerationRef = A2(0);
+  const canonicalMessageCountRef = A2(0);
   const resyncRunnerRef = A2(null);
   const eventBatcherRef = A2(null);
   const [statusLine, setStatusLine] = d2(null);
@@ -1198,9 +1226,17 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [turnStartedAt, setTurnStartedAt] = d2(null);
   const [nowTick, setNowTick] = d2(0);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
-  const [activeConversationId, setActiveConversationId] = d2(null);
+  const [activeConversationId, setActiveConversationIdState] = d2(null);
   const activeConversationIdRef = A2(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
+  const setActiveConversationId = q2((nextConversationId) => {
+    const next = nextConversationId == null ? null : String(nextConversationId);
+    if (String(activeConversationIdRef.current ?? "") !== String(next ?? "")) {
+      canonicalProjectionGenerationRef.current += 1;
+      activeConversationIdRef.current = next;
+    }
+    setActiveConversationIdState(next);
+  }, []);
   const [recentWss, setRecentWss] = d2([]);
   const [workspaceSelection, setWorkspaceSelection] = d2(null);
   y2(() => {
@@ -1275,6 +1311,8 @@ const [providerCaps, setProviderCaps] = d2(null);
   var fileInputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
+  // send() 重入守卫：一次提交 await 返回前忽略重复触发（双击发送/连按回车）。
+  const sendInFlightRef = A2(false);
   const CHAT_QUEUE_LIMIT = 5;
   const draftKey = T2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
   const queueStorageKey = T2(() => workspaceDir && activeConversationId
@@ -1600,6 +1638,11 @@ const [providerCaps, setProviderCaps] = d2(null);
   const autoScrollTokenRef = A2(0);
   const autoScrollFrameRef = A2(null);
   const lastScrollTopRef = A2(0);
+  // 最近一次用户上滚手势（滚轮上滚/抓滚动条）的时间戳。平滑滚动动画会把
+  // 一次滚轮拆成一串小步进 scroll 事件（首步可 ≤1px），手势活跃期内必须
+  // 抑制钉底回臂与钳位免疫，否则会与用户手势死锁：回臂→吞步进→钉底回拉
+  // 取消动画→下一格滚轮重复，滚轮永久失效。
+  const lastScrollUpIntentAtRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
   const topLoadIntentRef = A2(false);
@@ -1785,30 +1828,55 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [messages, streaming, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
   y2(() => {
     let cancelled = false;
+    const requestGeneration = canonicalProjectionGenerationRef.current;
+    const requestSessionId = activeConversationIdRef.current;
+    let responseSessionId = null;
+    const requestIsCurrent = () => !cancelled && dashboardSnapshotResponseIsCurrent({
+      requestGeneration,
+      currentGeneration: canonicalProjectionGenerationRef.current,
+      requestSessionId,
+      activeSessionId: activeConversationIdRef.current,
+      responseSessionId,
+    });
     (async () => {
       try {
         const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-        if (cancelled) return;
-        setMessages(data.messages ?? []);
-        setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
-        setBusy(Boolean(data.busy));
-        setOperation(data.operation ?? null);
+        responseSessionId = data.snapshot?.sessionId ?? null;
+        if (!requestIsCurrent()) return;
+        const page = projectChatMessagePage(data);
+        const snapshotState = page.state;
+        setMessages(page.messages);
+        canonicalMessageCountRef.current = page.loadedCount;
+        setTotalMessages(page.totalMessages);
+        setBusy(data.snapshot ? snapshotState.busy : Boolean(data.busy));
+        setOperation(data.snapshot ? snapshotState.operation : data.operation ?? null);
+        setTodos(Object.values(snapshotState.todos));
+        setActivePlan(snapshotState.plan);
+        setActiveTools(Object.values(snapshotState.tools).filter((tool) => ["queued", "running", "recovered"].includes(String(tool.state ?? tool.status ?? ""))));
+        executionStateRef.current = snapshotState;
+        globalEventCursorRef.current = createDashboardEventCursor(snapshotState);
+        snapshotSessionIdRef.current = responseSessionId ?? activeConversationIdRef.current ?? null;
       } catch (err) {
-        if (!cancelled) setBootError(err.message);
+        if (requestIsCurrent()) setBootError(err.message);
+      } finally {
+        if (requestIsCurrent()) {
+          snapshotHydratingRef.current = false;
+          replayBufferedDashboardEventsRef.current?.();
+        }
       }
       try {
         const m3 = await api("/modal");
-        if (!cancelled && m3.modal) setModal(m3.modal);
+        if (requestIsCurrent() && m3.modal) setModal(m3.modal);
       } catch {
       }
       try {
         const r3 = await api("/slash");
-        if (!cancelled) setSlashCommands(r3.commands);
+        if (requestIsCurrent()) setSlashCommands(r3.commands);
       } catch {
       }
       try {
         const retrieval = await api("/index-retrieval-mode");
-        if (!cancelled) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
+        if (requestIsCurrent()) setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode));
       } catch {
       }
     })();
@@ -1832,22 +1900,35 @@ const [providerCaps, setProviderCaps] = d2(null);
     streamBufRef.current = null;
   }, []);
   const refetchCanonicalState = q2(async () => {
+    const requestGeneration = canonicalProjectionGenerationRef.current;
     const expectedSessionId = activeConversationIdRef.current;
-    const isCurrentSession = () => String(activeConversationIdRef.current ?? "") === String(expectedSessionId ?? "");
+    const isCurrentSession = (responseSessionId = null) => dashboardSnapshotResponseIsCurrent({
+      requestGeneration,
+      currentGeneration: canonicalProjectionGenerationRef.current,
+      requestSessionId: expectedSessionId,
+      activeSessionId: activeConversationIdRef.current,
+      responseSessionId,
+    });
     let canonicalLoaded = false;
     try {
       const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-      if (!isCurrentSession()) return false;
-      setMessages(data.messages ?? []);
-      setTotalMessages(data.totalMessages ?? data.messages?.length ?? 0);
-      setBusy(Boolean(data.busy));
-      setOperation(data.operation ?? null);
+      if (!isCurrentSession(data.snapshot?.sessionId ?? null)) return false;
+      const page = projectChatMessagePage(data);
+      const snapshotState = page.state;
+      setMessages(page.messages);
+      canonicalMessageCountRef.current = page.loadedCount;
+      setTotalMessages(page.totalMessages);
+      setBusy(data.snapshot ? snapshotState.busy : Boolean(data.busy));
+      setOperation(data.snapshot ? snapshotState.operation : data.operation ?? null);
+      setTodos(Object.values(snapshotState.todos));
+      setActivePlan(snapshotState.plan);
       cancelStreamingRaf();
       setStreaming(null);
-      setActiveTools([]);
+      setActiveTools(Object.values(snapshotState.tools).filter((tool) => ["queued", "running", "recovered"].includes(String(tool.state ?? tool.status ?? ""))));
       setCompletedSteps(0);
-      // Replacing the canonical snapshot also replaces the reducer cursor.
-      executionStateRef.current = createDashboardReducerState();
+      executionStateRef.current = snapshotState;
+      globalEventCursorRef.current = createDashboardEventCursor(snapshotState);
+      snapshotSessionIdRef.current = data.snapshot?.sessionId ?? expectedSessionId ?? null;
       canonicalLoaded = true;
     } catch {
       return false;
@@ -1879,8 +1960,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         setTodos(Object.values(reduced.state.todos));
       }
       if (dash.kind === "busy-change") {
-        setBusy(dash.busy);
-        if (!dash.busy) setSemanticRetrievalStatus((current) => current === "running" ? "idle" : current);
+        setBusy(reduced.state.busy);
+        if (!reduced.state.busy) setSemanticRetrievalStatus((current) => current === "running" ? "idle" : current);
         return;
       }
       if (dash.kind === "semantic-retrieval") {
@@ -1889,8 +1970,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "operation-change") {
-        setOperation(dash.operation ?? null);
-        if (dash.operation?.state === "cancelled") {
+        setOperation(reduced.state.operation);
+        if (reduced.state.operation?.state === "cancelled") {
           setActiveTools([]);
           setCompletedSteps(0);
           setSemanticRetrievalSources([]);
@@ -1906,15 +1987,28 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "user") {
+        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        if (!projectedMessage) return;
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("running");
         setShowRetrievalSources(false);
         setTodos((current) => current.length > 0 && current.every((todo) => todo.status === "completed") ? [] : current);
         setPlanContinuation(null);
         setCompletedSteps(0);
-        preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [...prev, { id: dash.id, role: "user", text: dash.text, images: dash.images }]);
-        setTotalMessages((count) => count + 1);
+        // 幂等追加：重同步(canonical)与事件流可能携带同一条 user 消息
+        // （busy-change 先于 user 广播时会触发 event-gap 重放），按 id 去重，
+        // 避免同一消息渲染出两条气泡；totalMessages 只在真插入时 +1。
+        let inserted = false;
+        setMessages((prev) => {
+          if (prev.some((item) => String(item.id || "") === String(dash.id || ""))) return prev;
+          inserted = true;
+          canonicalMessageCountRef.current += 1;
+          return [...prev, projectedMessage];
+        });
+        if (inserted) {
+          preserveVisibleHistoryOnAppend();
+          setTotalMessages((count) => count + 1);
+        }
         return;
       }
       if (dash.kind === "assistant_delta") {
@@ -1954,6 +2048,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
         const isFinalized = dash.kind === "turn_finalized";
+        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        if (!projectedMessage) return;
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
         cancelStreamingRaf();
@@ -1961,57 +2057,59 @@ const [providerCaps, setProviderCaps] = d2(null);
         setActiveTools([]);
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
         const nextMessage = {
-          id: dash.id,
-          role: "assistant",
-          text: dash.text ?? "",
-          reasoning: dash.reasoning ?? completedStream?.reasoning,
+          ...projectedMessage,
+          reasoning: projectedMessage.reasoning ?? completedStream?.reasoning,
           reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-          ...(dash.turnId ? { turnId: dash.turnId } : {}),
-          ...(dash.operationId ? { operationId: dash.operationId } : {}),
-          ...(isFinalized ? {
-            finalized: true,
-            receipt: dash.receipt,
-            taskState: dash.taskState,
-            executionState: dash.executionState,
-            goalState: dash.goalState,
-            taskContract: dash.taskContract,
-            evidenceRefs: dash.evidenceRefs,
-            artifactIncomplete: dash.artifactIncomplete === true,
-            interventionChoice: dash.interventionChoice,
-            warnings: Array.isArray(dash.warnings) ? dash.warnings : []
-          } : {})
         };
         let inserted = false;
         setMessages((prev) => {
           const index = prev.findIndex((item) => String(item.id || "") === String(dash.id || ""));
           if (index < 0) {
+            const hasReceiptOnlyContent = isFinalized && Boolean(
+              projectedMessage.receipt
+              || projectedMessage.taskState
+              || projectedMessage.executionState
+              || projectedMessage.goalState
+              || (Array.isArray(projectedMessage.warnings) && projectedMessage.warnings.length > 0)
+            );
+            if (!String(projectedMessage.text ?? "").trim() && !hasReceiptOnlyContent) return prev;
             inserted = true;
+            if (dash.kind !== "turn_finalized") canonicalMessageCountRef.current += 1;
             return [...prev, nextMessage];
           }
           const copy = [...prev];
           copy[index] = { ...copy[index], ...nextMessage };
           return copy;
         });
-        if (inserted) setTotalMessages((count) => count + 1);
+        if (inserted && dash.kind !== "turn_finalized") setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
+        const projectedTool = Object.values(reduced.state.tools).find((tool) => toolFrameMatches(tool, dash));
+        if (!projectedTool) return;
         if (!dash.status || dash.status === "queued") preserveVisibleHistoryOnAppend();
         if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
-        setActiveTools((current) => upsertActiveTool(current, dash));
-        setMessages((current) => upsertToolProgress(current, dash));
+        setActiveTools((current) => upsertActiveTool(current, projectedTool));
+        setMessages((current) => upsertToolProgress(current, projectedTool));
         return;
       }
       if (dash.kind === "tool") {
+        const projectedTool = Object.values(reduced.state.tools).find((tool) => toolFrameMatches(tool, dash));
+        if (!projectedTool) return;
         if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
-        setActiveTools((current) => current.filter((item) => item.toolCallId !== String(dash.toolCallId || dash.id || "")));
+        setActiveTools((current) => current.filter((item) => !toolFrameMatches(item, projectedTool)));
         setCompletedSteps((count) => count + 1);
-        setMessages((current) => upsertToolProgress(current, dash));
+        setMessages((current) => upsertToolProgress(current, projectedTool));
         return;
       }
       if (dash.kind === "artifact-created") {
         const assistantId = String(dash.assistantId || "");
-        const files = Array.isArray(dash.files) ? dash.files.filter((file) => file?.path) : [];
+        const eventArtifacts = Array.isArray(dash.files) ? dash.files : [];
+        const artifactIds = new Set(eventArtifacts.map((file) => String(file?.id ?? "")).filter(Boolean));
+        const artifactPaths = new Set(eventArtifacts.map((file) => String(file?.path ?? "")).filter(Boolean));
+        const files = Object.values(reduced.state.artifacts)
+          .filter((file) => artifactIds.has(String(file.id ?? "")) || artifactPaths.has(String(file.path ?? "")))
+          .filter((file) => file?.path);
         if (!assistantId || files.length === 0) return;
         setFileArtifactsByMessageId((prev) => {
           const merged = mergeFileArtifacts(prev[assistantId] || [], files);
@@ -2027,9 +2125,18 @@ const [providerCaps, setProviderCaps] = d2(null);
           setActiveTools([]);
           setCompletedSteps(0);
         }
-        preserveVisibleHistoryOnAppend();
-        setMessages((prev) => [...prev, { id: dash.id, role: dash.kind, text: dash.text }]);
-        setTotalMessages((count) => count + 1);
+        const messageId = String(dash.messageId ?? dash.id ?? (dash.eventId ? `notice:${dash.eventId}` : ""));
+        const projectedMessage = reduced.state.messages[messageId];
+        if (!projectedMessage) return;
+        let inserted = false;
+        setMessages((prev) => {
+          if (prev.some((item) => String(item.id || "") === messageId)) return prev;
+          inserted = true;
+          return [...prev, projectedMessage];
+        });
+        if (inserted) {
+          preserveVisibleHistoryOnAppend();
+        }
         return;
       }
       if (dash.kind === "status") {
@@ -2038,19 +2145,20 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "messages-reset") {
-        executionStateRef.current = createDashboardReducerState();
-        setActiveTools([]);
+        setActiveTools(Object.values(reduced.state.tools).filter((tool) => ["queued", "running", "recovered"].includes(String(tool.state ?? tool.status ?? ""))));
         setCompletedSteps(0);
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("idle");
         setShowRetrievalSources(false);
         api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode))).catch(() => {});
-        setMessages(dash.messages.map((m) => ({
-          id: m.id || `hist-${Math.random()}`,
-          role: m.role,
-          text: m.text || ""
-        })));
-        setTotalMessages(dash.totalMessages ?? dash.messages.length);
+        const resetMessages = Object.values(reduced.state.messages).map((message) => ({
+          ...message,
+          id: message.id || `hist-${Math.random()}`,
+          text: message.text || ""
+        }));
+        setMessages(resetMessages);
+        canonicalMessageCountRef.current = resetMessages.length;
+        setTotalMessages(dash.totalMessages ?? resetMessages.length);
         setFileArtifacts([]);
         setFileArtifactsKey("");
         setFileArtifactsDismissed(false);
@@ -2058,7 +2166,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         setFileArtifactsByMessageId({});
         setQueuedPrompts([]);
         setQueueSendingId(null);
-        setTodos([]);
+        setTodos(Object.values(reduced.state.todos));
+        setActivePlan(reduced.state.plan);
+        setBusy(reduced.state.busy);
+        setOperation(reduced.state.operation);
         setPlanContinuation(null);
         setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
         topLoadArmedRef.current = false;
@@ -2096,10 +2207,8 @@ const [providerCaps, setProviderCaps] = d2(null);
         });
         return;
       }
-      if (dash.kind === "plan-activated" || dash.kind === "plan-step-complete" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled") {
-        api("/plans").then((r3) => {
-          setActivePlan((r3.plans ?? []).find((p3) => ["active", "pending"].includes(planStatus(p3))) ?? null);
-        }).catch(() => {});
+      if (dash.kind === "plan-activated" || dash.kind === "plan-step-complete" || dash.kind === "plan-revised" || dash.kind === "plan-archived" || dash.kind === "plan-cancelled" || dash.kind === "plan-pending-discarded" || dash.kind === "plan-revision-discarded") {
+        setActivePlan(reduced.state.plan);
         return;
       }
       if (dash.kind === "modal-up") {
@@ -2113,39 +2222,6 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
     };
-    const resyncDashboardEvents = async (triggerEvent = null) => {
-      if (resyncingEventsRef.current) return;
-      resyncingEventsRef.current = true;
-      const previousState = executionStateRef.current;
-      try {
-        const [canonicalLoaded] = await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
-        if (canonicalLoaded !== true || disposed) {
-          if (!disposed) setError(t4("chat.eventStreamError"));
-          return;
-        }
-        const buffered = bufferedDashboardEventsRef.current.splice(0)
-          .sort((left, right) => Number(left?.eventSeq ?? 0) - Number(right?.eventSeq ?? 0));
-        const firstBuffered = buffered.find((event) => Number.isSafeInteger(Number(event?.eventSeq)));
-        const triggerCursorMatch = /^([^:]+):(\d+)$/u.exec(String(triggerEvent?.latestCursor ?? ""));
-        const triggerSeq = Number.isSafeInteger(Number(triggerEvent?.eventSeq))
-          ? Number(triggerEvent.eventSeq)
-          : triggerCursorMatch ? Number(triggerCursorMatch[2]) : null;
-        executionStateRef.current = createDashboardReducerState({
-          // Service restart changes the epoch. Keep the triggering epoch even
-          // when no event arrived while the canonical snapshot was loading.
-          epoch: firstBuffered?.eventEpoch ?? triggerEvent?.eventEpoch ?? previousState?.epoch ?? null,
-          lastSeq: firstBuffered
-            ? Math.max(0, Number(firstBuffered.eventSeq) - 1)
-            : triggerSeq ?? previousState?.lastSeq ?? 0,
-        });
-        for (const event of buffered) applyDashboardEvent(event);
-      } finally {
-        if (!disposed) {
-          resyncingEventsRef.current = false;
-        }
-      }
-    };
-    resyncRunnerRef.current = resyncDashboardEvents;
     const eventBatcher = createDashboardEventBatcher({
       onFlush: (events) => {
         if (disposed) return;
@@ -2153,19 +2229,66 @@ const [providerCaps, setProviderCaps] = d2(null);
       },
     });
     eventBatcherRef.current = eventBatcher;
-    const onDash = (dash) => {
-      if (!eventGuardRef.current?.accept(dash)) return;
-      const eventSessionId = String(dash.sessionId ?? "").trim();
-      if (eventSessionId && activeConversationId && eventSessionId !== String(activeConversationId)) return;
+    const routeDashboardEvent = (dash) => {
       if (dash.kind === "resync-required") {
-        void resyncDashboardEvents(dash);
+        void resyncRunnerRef.current?.(dash);
         return;
       }
-      if (resyncingEventsRef.current) {
+      // eventSeq belongs to the process-wide transport, not to one Session.
+      // Observe it before payload filtering so another Session cannot create
+      // a false gap in the active Session projection.
+      const observed = observeDashboardEventCursor(globalEventCursorRef.current, dash);
+      globalEventCursorRef.current = observed.cursor;
+      if (observed.resyncRequired) {
+        void resyncRunnerRef.current?.(dash);
+        return;
+      }
+      executionStateRef.current = createDashboardReducerState({
+        ...executionStateRef.current,
+        epoch: observed.cursor.epoch,
+        lastSeq: observed.cursor.lastSeq,
+      });
+      const eventSessionId = String(dash.sessionId ?? "").trim();
+      const activeSessionId = String(activeConversationIdRef.current || snapshotSessionIdRef.current || "");
+      if (eventSessionId && activeSessionId && eventSessionId !== activeSessionId) return;
+      eventBatcher.enqueue(dash);
+    };
+    const replayBufferedDashboardEvents = (additionalEvents = []) => {
+      const buffered = bufferedDashboardEventsRef.current.splice(0);
+      const replay = dashboardEventsAfterCursor(
+        [...additionalEvents, ...buffered].filter((event) => event && event.kind !== "resync-required"),
+        executionStateRef.current,
+      );
+      for (const event of replay) routeDashboardEvent(event);
+    };
+    replayBufferedDashboardEventsRef.current = replayBufferedDashboardEvents;
+    const resyncDashboardEvents = async (triggerEvent = null) => {
+      if (resyncingEventsRef.current) return;
+      resyncingEventsRef.current = true;
+      snapshotHydratingRef.current = true;
+      canonicalProjectionGenerationRef.current += 1;
+      try {
+        const [canonicalLoaded] = await Promise.all([refetchCanonicalState(), refreshBackgroundJobs()]);
+        if (canonicalLoaded !== true || disposed) {
+          if (!disposed) setError(t4("chat.eventStreamError"));
+          return;
+        }
+        replayBufferedDashboardEvents(triggerEvent ? [triggerEvent] : []);
+      } finally {
+        if (!disposed) {
+          snapshotHydratingRef.current = false;
+          resyncingEventsRef.current = false;
+        }
+      }
+    };
+    resyncRunnerRef.current = resyncDashboardEvents;
+    const onDash = (dash) => {
+      if (!eventGuardRef.current?.accept(dash)) return;
+      if (snapshotHydratingRef.current || resyncingEventsRef.current) {
         bufferedDashboardEventsRef.current.push(dash);
         return;
       }
-      eventBatcher.enqueue(dash);
+      routeDashboardEvent(dash);
     };
     const unsubscribe = subscribeSse("*", onDash);
     const unsubscribeStatus = subscribeSseStatus(({ connected, reconnected }) => {
@@ -2185,6 +2308,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       eventBatcher.dispose();
       eventBatcherRef.current = null;
       resyncRunnerRef.current = null;
+      replayBufferedDashboardEventsRef.current = null;
       resyncingEventsRef.current = false;
       bufferedDashboardEventsRef.current.splice(0);
       cancelStreamingRaf();
@@ -2196,8 +2320,13 @@ const [providerCaps, setProviderCaps] = d2(null);
     eventBatcherRef.current?.discard();
     bufferedDashboardEventsRef.current.splice(0);
     resyncingEventsRef.current = false;
-    executionStateRef.current = createDashboardReducerState();
+    executionStateRef.current = createDashboardReducerState(globalEventCursorRef.current);
+    snapshotSessionIdRef.current = activeConversationId ?? null;
     eventGuardRef.current?.reset();
+    if (activeConversationId) {
+      snapshotHydratingRef.current = true;
+      void resyncRunnerRef.current?.();
+    }
   }, [activeConversationId]);
   var handleFileChange = q2(async function(e) {
     var files = e.target.files;
@@ -2668,44 +2797,53 @@ const [providerCaps, setProviderCaps] = d2(null);
     })();
   }, [busy, queuePaused, queuedPrompts, queuePumpTick, submitPromptPayload, persistQueuedPrompt, deletePersistedQueuedPrompt]);
   const send = q2(async () => {
+    // 重入守卫：上一次提交尚未返回时忽略重复触发（双击发送/连按回车）。
+    // 否则同一条内容会被二次提交，被服务端 LOOP_BUSY 拒绝后落入队列，
+    // 任务结束 drain 时在对话流中产生重复气泡。
+    if (sendInFlightRef.current) return;
     const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
-    setError(null);
-    if (busy) {
-      if (await enqueuePrompt(text, images)) {
+    sendInFlightRef.current = true;
+    try {
+      setError(null);
+      if (busy) {
+        if (await enqueuePrompt(text, images)) {
+          setChatInput("");
+          pendingImagesRef.current = [];
+          setPendingImages([]);
+          setPopoverKind(null);
+          removeChatDraft(draftKey);
+        }
+        return;
+      }
+      const result = await submitPromptPayload({
+        text,
+        images,
+        attachments: images.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean),
+      });
+      if (result.ok) {
         setChatInput("");
         pendingImagesRef.current = [];
         setPendingImages([]);
-        setPopoverKind(null);
+        shouldAutoScroll.current = true;
         removeChatDraft(draftKey);
+      } else if (result.busy) {
+        if (await enqueuePrompt(text, images)) {
+          setChatInput("");
+          pendingImagesRef.current = [];
+          setPendingImages([]);
+          setPopoverKind(null);
+          removeChatDraft(draftKey);
+        }
+      } else if (result.credentialRequired) {
+        setSkillCredentialValue("");
+        setSkillCredentialSetup({ ...result.credentialRequired, payload: { text, images } });
+      } else {
+        setError(result.reason ?? "rejected");
       }
-      return;
-    }
-    const result = await submitPromptPayload({
-      text,
-      images,
-      attachments: images.map((image) => typeof image === "object" ? image.attachmentId : null).filter(Boolean),
-    });
-    if (result.ok) {
-      setChatInput("");
-      pendingImagesRef.current = [];
-      setPendingImages([]);
-      shouldAutoScroll.current = true;
-      removeChatDraft(draftKey);
-    } else if (result.busy) {
-      if (await enqueuePrompt(text, images)) {
-        setChatInput("");
-        pendingImagesRef.current = [];
-        setPendingImages([]);
-        setPopoverKind(null);
-        removeChatDraft(draftKey);
-      }
-    } else if (result.credentialRequired) {
-      setSkillCredentialValue("");
-      setSkillCredentialSetup({ ...result.credentialRequired, payload: { text, images } });
-    } else {
-      setError(result.reason ?? "rejected");
+    } finally {
+      sendInFlightRef.current = false;
     }
   }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput]);
   const saveSkillCredential = q2(async () => {
@@ -2783,6 +2921,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       return;
     }
     if (!(await confirmQueuedReset())) return;
+    canonicalProjectionGenerationRef.current += 1;
     try {
       if (wasBusy) {
         await api("/abort", { method: "POST" });
@@ -2799,6 +2938,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setSemanticRetrievalSources([]);
       setSemanticRetrievalStatus("idle");
       setMessages([]);
+      canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
@@ -2819,14 +2959,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
-      setTimeout(async () => {
-        try {
-          const r3 = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-          setMessages(r3.messages ?? []);
-          setTotalMessages(r3.totalMessages ?? r3.messages?.length ?? 0);
-        } catch {
-        }
-      }, 200);
+      setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
@@ -2854,6 +2987,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [workspaceDir]);
   const clearScrollback = q2(async () => {
     if (!(await confirmQueuedReset())) return;
+    canonicalProjectionGenerationRef.current += 1;
     try {
       rotateUploadScope();
       await api("/submit", { method: "POST", body: { prompt: "/clear" } });
@@ -2861,6 +2995,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       const nextOverview = await api("/overview").catch(() => null);
       setActiveConversationId(nextOverview?.conversationId ?? activeConversationId);
       setMessages([]);
+      canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
@@ -2881,14 +3016,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       shouldAutoScroll.current = true;
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
-      setTimeout(async () => {
-        try {
-          const r3 = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}`);
-          setMessages(r3.messages ?? []);
-          setTotalMessages(r3.totalMessages ?? r3.messages?.length ?? 0);
-        } catch {
-        }
-      }, 200);
+      setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
@@ -3262,11 +3390,21 @@ const [providerCaps, setProviderCaps] = d2(null);
     };
     const onScroll = () => {
       const currentTop = el.scrollTop;
-      // 用户主动上滚一定表现为 scrollTop 变小；程序钉底只会让它变大。
-      // 因此即便正处于程序钉底（autoScrollInFlight），只要检测到上滚，
-      // 也必须视为用户意图并解除钉底——否则流式期间 autoScrollInFlight 几乎
-      // 恒为 true，会把用户的上滚事件吞掉，导致"滚上去又弹下来"。
+      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+      // scrollTop 变小有两种来源：用户主动上滚，或钉底状态下内容变矮
+      // （流式消息收敛为更短的最终文本、工具卡片折叠等）导致浏览器把
+      // scrollTop 向下钳位。钳位时视口仍贴着底部且钉底开关处于开启。
+      // 平滑滚动动画会把一次滚轮拆成一串小步进事件：首步 ≤1px 时下面的
+      // 回臂分支可能重新打开钉底，因此钳位免疫必须以"近期无上滚手势"
+      // （USER_SCROLL_INTENT_GRACE_MS）为前提——手势活跃期内的上滚步进
+      // 一律走用户分支，不得吞掉，否则钉底回拉会取消滚动动画、与手势
+      // 死锁（regression：任务终止后的收尾突变窗口内滚轮完全失效）。
       const scrollingUp = currentTop < lastScrollTopRef.current - 1;
+      const userScrollIntentActive = Date.now() - lastScrollUpIntentAtRef.current <= USER_SCROLL_INTENT_GRACE_MS;
+      if (scrollingUp && shouldAutoScroll.current && distFromBottom < 80 && !userScrollIntentActive) {
+        lastScrollTopRef.current = currentTop;
+        return;
+      }
       if (scrollingUp) {
         if (topLoadIntentRef.current) {
           topLoadArmedRef.current = true;
@@ -3281,8 +3419,9 @@ const [providerCaps, setProviderCaps] = d2(null);
         lastScrollTopRef.current = currentTop;
         return;
       }
-      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
-      if (distFromBottom < 80) {
+      // 亚像素步进（scrollingUp =false）也可能属于用户平滑滚动动画的首步；
+      // 手势活跃期内禁止回臂，否则钉底会在动画途中复活并死锁。
+      if (distFromBottom < 80 && !userScrollIntentActive) {
         shouldAutoScroll.current = true;
       }
       lastScrollTopRef.current = currentTop;
@@ -3290,6 +3429,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     };
     const onWheel = (event) => {
       if (Number(event.deltaY) < 0) {
+        lastScrollUpIntentAtRef.current = Date.now();
         topLoadIntentRef.current = true;
         cancelAutoScroll();
         // At the exact top a wheel gesture may not emit a scroll event. The
@@ -3306,6 +3446,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
       if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
         scrollbarDraggingRef.current = true;
+        lastScrollUpIntentAtRef.current = Date.now();
         topLoadIntentRef.current = true;
         cancelAutoScroll();
       }
@@ -3715,17 +3856,33 @@ const [providerCaps, setProviderCaps] = d2(null);
       restoreChatScrollAnchor(feed, anchor, finishLoading);
       return;
     }
-    if (messages.length >= totalMessages) return;
+    if (canonicalMessageCountRef.current >= totalMessages) return;
+    const requestOffset = canonicalMessageCountRef.current;
+    const requestGeneration = canonicalProjectionGenerationRef.current;
+    const requestSessionId = activeConversationIdRef.current;
+    const requestIsCurrent = (responseSessionId = null) => dashboardSnapshotResponseIsCurrent({
+      requestGeneration,
+      currentGeneration: canonicalProjectionGenerationRef.current,
+      requestSessionId,
+      activeSessionId: activeConversationIdRef.current,
+      responseSessionId,
+    });
     loadingEarlierRef.current = true;
     setLoadingEarlierMessages(true);
     try {
-      const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}&offset=${messages.length}`);
-      const earlier = Array.isArray(data.messages) ? data.messages : [];
+      const data = await api(`/messages?limit=${CHAT_MESSAGE_PAGE_SIZE}&offset=${requestOffset}`);
+      if (!requestIsCurrent(data.snapshot?.sessionId ?? null) || canonicalMessageCountRef.current !== requestOffset) {
+        finishLoading();
+        return;
+      }
+      const page = projectChatMessagePage(data);
+      const earlier = page.messages;
+      canonicalMessageCountRef.current = page.loadedCount;
       if (earlier.length > 0) {
-        setMessages((current) => [...earlier, ...current]);
+        setMessages((current) => mergeDashboardMessagePages(earlier, current));
         setVisibleMessageCount((count) => count + Math.min(CHAT_RENDER_STEP, earlier.length));
       }
-      setTotalMessages(data.totalMessages ?? totalMessages);
+      setTotalMessages(page.totalMessages);
       restoreChatScrollAnchor(feed, anchor, finishLoading);
     } catch (err) {
       setError(err.message);
@@ -3833,6 +3990,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           />` : html4`<${ChatFeed}
             messages=${messages}
             totalMessages=${totalMessages}
+            canonicalMessageCount=${canonicalMessageCountRef.current}
             streaming=${streaming}
             taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
@@ -3854,7 +4012,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           ` : null}
           ${feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { shouldAutoScroll.current = true; setHasNewBelow(false); void refetchCanonicalState(); })}>${t4("chat.feedRefresh")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { shouldAutoScroll.current = true; setHasNewBelow(false); void resyncRunnerRef.current?.(); })}>${t4("chat.feedRefresh")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>${t4("chat.feedCollapseAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void newConversation(); })}>${t4("chat.new")}</button>
@@ -4195,12 +4353,12 @@ const [providerCaps, setProviderCaps] = d2(null);
                 />` : null}
           <${ChatStatusBar} stats=${stats} model=${overviewModel} onNew=${newConversation} busy=${busy} />
         </div>
-        ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
+          ${!showBackgroundJobs && (activePlan || fileArtifacts.length && !fileArtifactsDismissed) ? html4`<${SideRail} activePlan=${activePlan} fileArtifacts=${fileArtifactsDismissed ? [] : fileArtifacts} artifactsSelected=${Boolean(fileArtifactsSelectedMessageId)} onFollowLatestArtifacts=${followLatestArtifacts} onDismissArtifacts=${dismissArtifacts} />` : null}
       </div>
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, canonicalMessageCount = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
   const allMessages = streaming ? [
     ...messages,
@@ -4214,9 +4372,10 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
     }
   ] : messages;
   const hiddenCount = Math.max(0, allMessages.length - visibleCount);
-  const remoteHiddenCount = Math.max(0, totalMessages - messages.length);
+  const remoteHiddenCount = Math.max(0, totalMessages - canonicalMessageCount);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
-  const displayTotal = Math.max(totalMessages, allMessages.length);
+  const projectedTotal = totalMessages + Math.max(0, messages.length - canonicalMessageCount);
+  const displayTotal = Math.max(projectedTotal, allMessages.length);
   // Prefer stable turn/step identities; legacy messages retain contiguous
   // grouping only when no identity is available.
   const renderUnits = groupToolMessages(renderedMessages).map((unit) => ({

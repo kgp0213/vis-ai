@@ -177,30 +177,29 @@ export function createBackgroundTaskNotificationRuntime({
     const available = Math.max(0, inFlightLimit - inFlight.size);
     if (available === 0) return claimed;
     const max = Math.min(available, Math.max(1, Math.min(8, Number(limit) || 4)));
-    const expectedOperationId = text(operationId, 180);
-    const matchesOperation = (notification) => {
-      // Legacy notifications without an operation binding stay pending when
-      // a caller supplies an operation; this prevents cross-operation leaks.
-      if (!expectedOperationId) return true;
-      return notification.sourceOperationId === expectedOperationId;
+    const deliveryOperationId = text(operationId, 180);
+    const expectedSessionId = text(sessionId, 200);
+    const expectedWorkspace = normalizeWorkspace(workspace);
+    const matchesScope = (notification) => {
+      if (expectedSessionId && notification.sessionId !== expectedSessionId) return false;
+      if (expectedWorkspace && notification.workspace !== expectedWorkspace) return false;
+      return true;
     };
     for (const [id, notification] of pending) {
       if (claimed.length >= max) break;
-      if (!matchesOperation(notification)) continue;
-      if (sessionId && notification.sessionId && notification.sessionId !== String(sessionId)) continue;
-      if (!sameWorkspace(workspace, notification.workspace)) continue;
+      if (!matchesScope(notification)) continue;
       pending.delete(id);
-      inFlight.set(id, notification);
-      claimed.push(clone(notification));
+      const delivery = { ...notification, deliveryOperationId };
+      inFlight.set(id, delivery);
+      claimed.push(clone(delivery));
     }
     for (const [id, notification] of overflowed) {
       if (claimed.length >= max) break;
-      if (!matchesOperation(notification)) continue;
-      if (sessionId && notification.sessionId && notification.sessionId !== String(sessionId)) continue;
-      if (!sameWorkspace(workspace, notification.workspace)) continue;
+      if (!matchesScope(notification)) continue;
       overflowed.delete(id);
-      inFlight.set(id, notification);
-      claimed.push(clone(notification));
+      const delivery = { ...notification, deliveryOperationId };
+      inFlight.set(id, delivery);
+      claimed.push(clone(delivery));
     }
     return claimed;
   }

@@ -139,7 +139,9 @@ const { createVHomeSkillDraftStore } = await importEarly("./lib/vhome-skill-draf
 const { createOperationRuntime } = await importEarly("./lib/operation-runtime.mjs");
 const { createSessionRunCoordinator } = await importEarly("./lib/session-run-coordinator.mjs");
 const { createTurnCoordinator } = await importEarly("./lib/turn-coordinator.mjs");
-const { createPlanRuntime } = await importEarly("./lib/plan-runtime.mjs");
+const { createAgentSessionRuntime } = await importEarly("./lib/agent-session-runtime.mjs");
+const { createRuntimeFactStore } = await importEarly("./lib/runtime-fact-store.mjs");
+const { createPlanRuntime, projectPlanStepEvidence } = await importEarly("./lib/plan-runtime.mjs");
 const { createFinalizationOrchestrator, evaluateTurnFinalization } = await importEarly("./lib/finalization-orchestrator.mjs");
 const { createContextEpochRuntime } = await importEarly("./lib/context-epoch.mjs");
 const { createFileEffectStore, createHostToolBroker } = await importEarly("./lib/host-tool-broker.mjs");
@@ -154,7 +156,7 @@ const { createProgressiveToolDiscovery } = await importEarly("./lib/progressive-
 const { explainToolActivation, filterToolSpecsByActivation, publicToolActivationPolicy, resolveToolActivationPolicy } = await importEarly("./lib/tool-activation-policy.mjs");
 const { createRuntimeLifecycleHooks } = await importEarly("./lib/runtime-lifecycle-hooks.mjs");
 const { createRuntimeLifecycleBoundary } = await importEarly("./lib/runtime-lifecycle-boundary.mjs");
-const { normalizeToolOutcome, projectToolProgressEvent } = await importEarly("./lib/tool-progress.mjs");
+const { normalizeToolOutcome, projectToolProgressEvent, toolFrameEntityId } = await importEarly("./lib/tool-progress.mjs");
 const { createToolRepeatRuntime } = await importEarly("./lib/tool-repeat-runtime.mjs");
 const { createInteractionRuntime } = await importEarly("./lib/interaction-runtime.mjs");
 const { createProviderProvenanceStore, providerDiagnostics } = await importEarly("./lib/provider-provenance.mjs");
@@ -169,7 +171,7 @@ const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs"
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
 const { formatTaskOutputText, normalizeBackgroundTaskReference, projectBackgroundTaskList, projectTaskOutput } = await importEarly("./lib/task-output-model.mjs");
-const { createBackgroundTaskNotificationRuntime, deriveBackgroundTaskStatus, formatBackgroundTaskNotification, isProcessRestartedRecovery, notificationEnqueueScope } = await importEarly("./lib/background-task-notification.mjs");
+const { createBackgroundTaskNotificationRuntime, deriveBackgroundTaskStatus, formatBackgroundTaskNotification, notificationEnqueueScope } = await importEarly("./lib/background-task-notification.mjs");
 const { createBackgroundTaskScopeRegistry } = await importEarly("./lib/background-task-scope.mjs");
 const { createModelRequestObserver } = await importEarly("./lib/model-request-observer.mjs");
 const { createAssistantStreamProjector } = await importEarly("./lib/assistant-stream-projector.mjs");
@@ -347,6 +349,22 @@ let activeTodos = [];
 let activeGoals = [];
 let activePromptEntities = [];
 let sessionMutationInFlight = false;
+let activeSessionMutationToken = null;
+
+function beginSessionMutation(reason = "session_mutation") {
+  if (activeSessionMutationToken) return null;
+  const token = Symbol(reason);
+  activeSessionMutationToken = token;
+  sessionMutationInFlight = true;
+  return token;
+}
+
+function endSessionMutation(token) {
+  if (!token || activeSessionMutationToken !== token) return false;
+  activeSessionMutationToken = null;
+  sessionMutationInFlight = false;
+  return true;
+}
 // Keep a bounded operation-to-session ledger so late events emitted while an
 // operation is unwinding retain their original conversation identity after a
 // session switch. The ledger contains no message content or credentials.
@@ -703,6 +721,7 @@ const SOUL_HOME = resolve(visionoxDataDir, "soul.md");
 const sessionsDir = resolve(visionoxDataDir, "sessions");
 const { loadPlanState, savePlanState, clearPlanState, archivePlanState, listAllPlanArchives, migrateLegacyPlan } = createPlanStore(sessionsDir);
 let planRuntime = null;
+let agentSessionRuntime = null;
 const skillsRoot = resolve(visionoxDataDir, "skills");
 const vhomeSkillDraftStore = createVHomeSkillDraftStore(resolve(visionoxDataDir, "vhome-skill-drafts.json"));
 const BOOTSTRAP_SKILLS_DISABLED_DIR = resolve(skillsRoot, ".disabled");
@@ -2080,17 +2099,36 @@ function taskScopeUnavailableResult() {
 }
 
 async function restorePendingBackgroundTaskNotifications(scope) {
-  if (!scope?.sessionId || !scope?.workspace) return;
+  if (!scope?.sessionId || !scope?.workspace) return [];
   const pending = await taskOutputStore.listPendingNotifications({
     sessionId: scope.sessionId,
     workspace: scope.workspace,
   });
+  const durableIds = new Set();
   for (const persisted of pending) {
     if (!persisted) continue;
+    if (persisted.notificationId) durableIds.add(String(persisted.notificationId));
     // Restart-recovered lost facts are rebound to this live operation by
     // notificationEnqueueScope; everything else keeps its original binding.
     backgroundTaskNotifications.enqueue(persisted, notificationEnqueueScope(persisted, scope));
   }
+  const restored = backgroundTaskNotifications.snapshot();
+  return [...restored.pending, ...restored.overflowed]
+    .filter((notification) => durableIds.has(String(notification.notificationId ?? "")));
+}
+
+async function wakePendingBackgroundTaskNotifications(scope) {
+  const notifications = await restorePendingBackgroundTaskNotifications(scope);
+  const results = [];
+  for (const notification of notifications) {
+    try {
+      results.push(await wakeAgentForBackgroundNotification(notification, scope));
+    } catch (error) {
+      console.error(`[launcher] durable background handoff could not be queued: ${error.message}`);
+      results.push({ accepted: false, error: error.message });
+    }
+  }
+  return results;
 }
 
 function liveTaskOutputWindow(snapshot, since) {
@@ -2503,16 +2541,45 @@ if (searchEnabled(configPath)) {
 }
 
 // Utility tools (not workspace-dependent)
-function currentPlanStepEvidence() {
+function bindPlanEvidenceCursor(planId, { force = false } = {}) {
   const operation = operationRuntime?.getActive?.();
+  const normalizedPlanId = String(planId ?? "").trim();
+  if (!operation?.context || !normalizedPlanId) return false;
+  if (!force && operation.context.planEvidencePlanId === normalizedPlanId) return true;
+  operation.context.planEvidencePlanId = normalizedPlanId;
+  operation.context.planEvidenceCursor = Math.max(0, Number(operation.context.toolSuccessSeq) || 0);
+  return true;
+}
+
+function advancePlanEvidenceCursor(evidenceRefs = []) {
+  const operation = operationRuntime?.getActive?.();
+  if (!operation?.context) return false;
+  const next = Math.max(
+    Math.max(0, Number(operation.context.planEvidenceCursor) || 0),
+    Math.max(0, Number(operation.context.toolSuccessSeq) || 0),
+    ...(Array.isArray(evidenceRefs) ? evidenceRefs : []).map((ref) => Math.max(0, Number(ref?.evidenceSeq) || 0)),
+  );
+  operation.context.planEvidenceCursor = next;
+  return true;
+}
+
+function currentPlanStepEvidence(stepId = null) {
+  const operation = operationRuntime?.getActive?.();
+  const plan = planRuntime?.snapshot?.() ?? null;
+  const requestedStepId = String(stepId ?? "").trim();
+  if (!operation || !plan || plan.status !== "active" || !requestedStepId) return [];
+  if (!activeTurnRequestId || !planRuntime?.belongsToRequest?.(activeTurnRequestId)) return [];
+  if (operation.context?.conversationId && activeConversationId && operation.context.conversationId !== activeConversationId) return [];
   const facts = Array.isArray(operation?.context?.toolSuccesses) ? operation.context.toolSuccesses : [];
-  return facts.slice(-32).map((fact) => ({
-    evidenceId: fact.toolCallId || `tool-${fact.recordedAt}`,
-    type: "tool_read",
-    toolCallId: fact.toolCallId,
-    toolName: fact.toolName,
-    verified: fact.status === "succeeded",
-  }));
+  return projectPlanStepEvidence({
+    facts,
+    plan,
+    stepId: requestedStepId,
+    operationId: operation.id,
+    requestId: activeTurnRequestId,
+    sessionId: operation.context?.conversationId ?? activeConversationId ?? null,
+    afterEvidenceSeq: operation.context?.planEvidenceCursor ?? 0,
+  });
 }
 
 registerPlanTool(tools, {
@@ -2530,49 +2597,43 @@ registerPlanTool(tools, {
       requestId: activeTurnRequestId,
     };
     planRuntime?.setPending(planState);
-    syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? planState);
+    bindPlanEvidenceCursor(planState.planId, { force: true });
   },
   onStepCompleted: (update) => {
     // Non-dashboard confirmation gates can approve plans without passing
     // through resolvePlanConfirm, so keep this activation fallback.
-    if (pendingPlan) {
-      const approvedPlan = pendingPlan;
+    let plan = planRuntime?.snapshot?.() ?? null;
+    if (plan?.status === "pending") {
       if (!activatePendingPlan()) throw new Error("mark_step_complete: the approved plan could not be persisted.");
+      plan = planRuntime?.snapshot?.() ?? null;
     }
-    if (!isKnownPlanStep(activePlanSteps, update?.stepId)) {
+    if (!isKnownPlanStep(plan?.steps, update?.stepId)) {
       throw new Error(`mark_step_complete: stepId "${update?.stepId ?? ""}" is not in the active plan.`);
     }
-    const evidenceRefs = Array.isArray(update?.evidenceRefs) && update.evidenceRefs.length > 0
-      ? update.evidenceRefs
-      : currentPlanStepEvidence();
+    // Evidence supplied by the model is only a proposal. The host signs the
+    // facts it observed for this operation and ignores untrusted references.
+    const completedIds = normalizeCompletedStepIds(plan?.steps, plan?.completedStepIds ?? []);
+    const nextStep = plan?.steps?.find((step) => !completedIds.includes(step.id) && step.status !== "completed");
+    if (!nextStep || nextStep.id !== update.stepId) {
+      throw new Error("mark_step_complete: 只能完成当前计划的下一个未完成步骤；请先完成前置步骤。");
+    }
+    const evidenceRefs = currentPlanStepEvidence(update.stepId);
     if (evidenceRefs.length === 0) {
       throw new Error("mark_step_complete: 宿主没有找到可验证的工具证据；请先完成并检查该步骤，再提交完成标记。");
     }
     update.evidenceRefs = evidenceRefs;
-    const checkpointTotal = activePlanSteps?.length ?? 0;
-    const completedIds = normalizeCompletedStepIds(activePlanSteps, [...(activeCompletedIds ?? [])]);
+    const checkpointTotal = plan?.steps?.length ?? 0;
     const checkpointCompleted = completedIds.includes(update.stepId)
       ? completedIds.length
       : completedIds.length + 1;
-    if (update?.stepId && activeCompletedIds && !markStepDone(update.stepId, evidenceRefs, { source: "model" })) {
+    if (update?.stepId && !markStepDone(update.stepId, evidenceRefs, { source: "model" })) {
       throw new Error("mark_step_complete: plan progress could not be persisted; the step remains incomplete.");
     }
-    // Notify dashboard that a step was completed (for live UI updates).
-    if (update?.stepId) {
-      broadcastDashboardEvent({
-        kind: "plan-step-complete",
-        stepId: update.stepId,
-        result: update.result,
-        title: update.title,
-        completed: checkpointCompleted,
-        total: checkpointTotal,
-      });
-    }
+    advancePlanEvidenceCursor(evidenceRefs);
     return { completed: checkpointCompleted, total: checkpointTotal };
   },
   onPlanRevisionProposed: (reason, remainingSteps, summary) => {
-    pendingPlanRevision = { reason, remainingSteps, summary };
-    planRuntime?.setRevision(pendingPlanRevision);
+    planRuntime?.setRevision({ reason, remainingSteps, summary });
   },
 });
 const markStepCompleteTool = tools.get("mark_step_complete");
@@ -5225,6 +5286,12 @@ function buildLoop(client, rootDir) {
     beforeModelRequest: async ({ turn, iteration, signal }) => {
       const operation = operationRuntime?.getActive?.();
       if (!operation || signal?.aborted) return null;
+      const coordinatedStep = operation.context?.turn?.turnId
+        ? turnCoordinator.step(operation.context.turn.turnId, {
+          stepId: `${operation.context.turn.turnId}.model-${Math.max(1, Number(iteration) || 1)}`,
+        })
+        : null;
+      if (coordinatedStep?.accepted) operation.context.turn.stepId = coordinatedStep.stepId;
       const boundary = modelBoundaryFence.open(operation.id);
       if (boundary.compacting && boundary.queued.length > 0) {
         operation.context.boundaryQueueReleased = (operation.context.boundaryQueueReleased ?? 0) + boundary.queued.length;
@@ -5323,6 +5390,15 @@ function buildLoop(client, rootDir) {
             const persisted = await appendActiveMessage(historyMessage);
             if (persisted === false) throw new Error("active session input append was rejected");
             loop.appendAndPersist(historyMessage);
+            const resolved = sessionInputAdmission.resolve(
+              input.id,
+              "dispatched",
+              "model_history_persisted",
+              { operationId: operation.id },
+            );
+            if (!resolved?.ok) {
+              throw new Error(`${resolved?.code || "SESSION_INPUT_RESOLUTION_FAILED"}: ${resolved?.error || "delivered input status could not be saved"}`);
+            }
             pushMessage({
               id: messageId,
               role: "user",
@@ -5505,61 +5581,22 @@ setInterval(() => { if (client) refreshBalance(); }, CONSTANTS.BALANCE_REFRESH_M
 let eventSink = null;
 let eventizer = null;
 
-// ── Plan state (mirrors TUI's planStepsRef/completedStepIdsRef) ──
-// Holds the in-memory plan between submit_plan approval and step completion.
-// Persisted to ~/.visionox/sessions/<session>.plan.json on first step_complete,
-// archived to <session>.plan.<ts>.done.json when all steps are done.
+// ── Plan state ──────────────────────────────────────────────────
+// PlanRuntime is the only writable owner. Launcher reads snapshots only and
+// keeps execution policy outside the state container.
 const DESKTOP_SESSION_NAME = "desktop";
-let pendingPlan = null;       // { steps, summary, body } — set by onPlanSubmitted, cleared on persist
-let activePlanSteps = null;   // [{id,title,action,risk?}] — persisted plan steps
-let activeCompletedIds = null;// Set<string> of completed step ids
-let activePlanSummary = null; // string
-let activePlanBody = null;    // string (markdown)
-let activePlanUpdatedAt = null;// ISO timestamp from the persisted plan file
-let activePlanId = null;       // stable id for the approved plan
-let activePlanRequestId = null;// request that created or explicitly resumed the plan
 let activeTurnRequestId = null;// request currently allowed to submit/advance a plan
-let pendingPlanRevision = null;// committed only after the user accepts the revision card
 
 /** Get the current session name for plan file paths. */
 function currentSessionName() {
   return activeSessionName || activeConversationId || DESKTOP_SESSION_NAME;
 }
 
-function syncPlanRefsFromRuntime(snapshot) {
-  pendingPlan = null;
-  activePlanSteps = null;
-  activeCompletedIds = null;
-  activePlanSummary = null;
-  activePlanBody = null;
-  activePlanUpdatedAt = null;
-  activePlanId = null;
-  activePlanRequestId = null;
-  if (!snapshot) return null;
-  if (snapshot.status === "pending") {
-    pendingPlan = {
-      steps: snapshot.steps ?? [],
-      summary: snapshot.summary,
-      body: snapshot.body,
-      planId: snapshot.planId,
-      requestId: snapshot.requestId,
-    };
-  } else {
-    activePlanSteps = snapshot.steps ?? [];
-    activeCompletedIds = new Set(snapshot.completedStepIds ?? []);
-    activePlanSummary = snapshot.summary ?? null;
-    activePlanBody = snapshot.body ?? null;
-    activePlanUpdatedAt = snapshot.updatedAt ?? null;
-    activePlanId = snapshot.planId ?? null;
-    activePlanRequestId = snapshot.requestId ?? null;
-  }
-  return snapshot;
-}
-
 planRuntime = createPlanRuntime({
   store: { loadPlanState, savePlanState, clearPlanState, archivePlanState },
   getSessionName: currentSessionName,
   getConversationId: () => activeConversationId,
+  onEvent: (event) => broadcastDashboardEvent(event),
   onGoalsChanged: (goals) => {
     activeGoals = Array.isArray(goals) ? goals.map((goal) => normalizeGoal({ ...goal, sessionId: goal.sessionId ?? activeConversationId })) : [];
     void writeActiveSessionMeta?.({ goals: activeGoals });
@@ -5568,23 +5605,12 @@ planRuntime = createPlanRuntime({
 
 /** Reset in-memory plan refs (called on /new, session switch, or cancel). */
 function resetPlanRefs() {
-  syncPlanRefsFromRuntime(planRuntime?.reset?.() ?? null);
-  pendingPlanRevision = null;
-}
-
-/** Restore a persisted active plan after launcher restart. */
-function hydrateActivePlanFromDisk() {
-  if (activePlanSteps || pendingPlan) return;
-  const snapshot = planRuntime?.snapshot?.() ?? null;
-  if (snapshot?.status === "active") console.error(`[launcher] active plan restored (${snapshot.totalSteps} steps) for session ${snapshot.session}`);
-  syncPlanRefsFromRuntime(snapshot);
+  return planRuntime?.reset?.() ?? null;
 }
 
 /** Snapshot used by the dashboard plans panel. */
 function getActivePlanSnapshot() {
-  const snapshot = planRuntime?.snapshot?.() ?? null;
-  syncPlanRefsFromRuntime(snapshot);
-  return snapshot;
+  return planRuntime?.snapshot?.() ?? null;
 }
 
 const MAX_PLAN_AUTO_CONTINUATIONS = 2;
@@ -5625,9 +5651,7 @@ function planAutoContinuationPrompt(plan, attempt, reason = "budget") {
 /** Persist the active plan to disk. Called on first mark_step_complete. */
 function persistActivePlan() {
   try {
-    const result = planRuntime?.persist?.() === true;
-    syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
-    return result;
+    return planRuntime?.persist?.() === true;
   } catch (err) {
     console.error(`[launcher] persistActivePlan failed: ${err.message}`);
     return false;
@@ -5637,34 +5661,53 @@ function persistActivePlan() {
 /** Promote an approved pending plan, replacing any older unfinished plan. */
 function activatePendingPlan() {
   const activated = planRuntime?.activatePending?.() === true;
-  syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
   if (activated) {
-    pendingPlanRevision = null;
-    console.error(`[launcher] plan activated (${activePlanSteps?.length ?? 0} steps) for session ${currentSessionName()}`);
-    broadcastDashboardEvent({ kind: "plan-activated", session: currentSessionName() });
+    const plan = planRuntime?.snapshot?.() ?? null;
+    bindPlanEvidenceCursor(plan?.planId);
+    console.error(`[launcher] plan activated (${plan?.steps?.length ?? 0} steps) for session ${currentSessionName()}`);
   }
   return activated;
 }
 
 /** Mark a step complete; model-driven completion requires host evidence. */
 function markStepDone(stepId, evidenceRefs = [], { source = "manual" } = {}) {
-  const completed = planRuntime?.markStepDone?.(stepId, evidenceRefs, { source }) === true;
-  syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
-  return completed;
+  return planRuntime?.markStepDone?.(stepId, evidenceRefs, { source }) === true;
 }
 
 function completeActivePlanStep(stepId) {
-  hydrateActivePlanFromDisk();
-  if (!activePlanSteps || !activeCompletedIds || !planRuntime?.hasActiveStep?.(stepId)) {
+  // Manual confirmation is a state transition, not a progress shortcut. If
+  // the current operation is still unwinding, a late tool success could be
+  // observed by the next step and become stale evidence.
+  if (busy || operationRuntime?.getActive?.()) {
+    return { ok: false, error: "当前任务仍在执行，工具事实稳定后才能手动完成计划步骤" };
+  }
+  const plan = getActivePlanSnapshot();
+  if (plan?.status !== "active" || !planRuntime?.hasActiveStep?.(stepId)) {
     return { ok: false, error: "no active plan" };
   }
-  if (!activePlanSteps.some((step) => step.id === stepId)) {
+  if (!plan.steps?.some((step) => step.id === stepId)) {
     return { ok: false, error: "step is not in the active plan" };
   }
-  if (!markStepDone(stepId)) {
+  const completedIds = normalizeCompletedStepIds(plan.steps, plan.completedStepIds ?? []);
+  const nextStep = plan.steps.find((step) => !completedIds.includes(step.id) && step.status !== "completed");
+  if (!nextStep || nextStep.id !== stepId) {
+    return { ok: false, error: "only the next incomplete plan step can be completed" };
+  }
+  const userConfirmation = {
+    evidenceId: `plan-confirmation:${plan.planId || "unknown"}:${stepId}`,
+    source: "user_confirmation",
+    type: "user_confirmation",
+    issuedByHost: true,
+    verified: true,
+    confirmation: "dashboard_plan_step_action",
+  };
+  if (!markStepDone(stepId, [userConfirmation], { source: "manual" })) {
     return { ok: false, error: "plan progress was not saved" };
   }
-  broadcastDashboardEvent({ kind: "plan-step-complete", stepId, manual: true });
+  // A dashboard confirmation consumes all host facts observed so far. This
+  // prevents the next model step from reusing tool evidence from the step the
+  // user just marked complete.
+  advancePlanEvidenceCursor();
   return { ok: true, plan: getActivePlanSnapshot() };
 }
 
@@ -5672,10 +5715,8 @@ function cancelActivePlan() {
   const session = currentSessionName();
   if (planRuntime) {
     const cancelled = planRuntime.cancel();
-    syncPlanRefsFromRuntime(planRuntime.snapshot());
     if (cancelled) {
       trackPersistentStorageIssue(`active-plan:${session}`, resolve(sessionsDir, `${session}.plan.json`), null);
-      broadcastDashboardEvent({ kind: "plan-cancelled", session });
       return { ok: true };
     }
   }
@@ -5689,7 +5730,7 @@ function cancelActivePlan() {
   activeGoals = activeGoals.map((goal) => ({ ...goal, status: "cancelled", updatedAt: new Date().toISOString() }));
   void writeActiveSessionMeta({ goals: activeGoals });
   resetPlanRefs();
-  broadcastDashboardEvent({ kind: "plan-cancelled", session });
+  broadcastDashboardEvent({ kind: "plan-cancelled", session, plan: null });
   return { ok: true };
 }
 
@@ -7738,6 +7779,169 @@ getLatestVersion().then((v) => { if (v) latestVersion = v; }).catch(() => {});
 
 // ── Event subscribers ───────────────────────────────────────────
 const dashboardEventStream = createDashboardEventStream();
+const runtimeFactsDir = resolve(visionoxDataDir, "runtime-facts");
+const runtimeFactStores = new Map();
+let runtimeFactPersistedCursor = `${dashboardEventStream.epoch}:0`;
+let runtimeFactPersistenceBlocked = false;
+let runtimeFactWriteTail = Promise.resolve();
+
+function runtimeFactFile(sessionId) {
+  const digest = createHash("sha256").update(String(sessionId), "utf8").digest("hex");
+  return resolve(runtimeFactsDir, `${digest}.facts.jsonl`);
+}
+
+async function runtimeFactStoreFor(sessionId) {
+  const id = String(sessionId ?? "").trim();
+  if (!id) throw new TypeError("runtime fact sessionId is required");
+  let pending = runtimeFactStores.get(id);
+  if (!pending) {
+    pending = (async () => {
+      const store = createRuntimeFactStore({
+        file: runtimeFactFile(id),
+        sessionId: id,
+        epoch: dashboardEventStream.epoch,
+      });
+      await store.load();
+      return store;
+    })();
+    runtimeFactStores.set(id, pending);
+    pending.catch(() => runtimeFactStores.delete(id));
+  }
+  return pending;
+}
+
+function runtimeFactsForDashboardEvent(event) {
+  const sessionId = String(event?.sessionId ?? "").trim();
+  const eventId = String(event?.eventId ?? "").trim();
+  if (!sessionId || !eventId) return [];
+  const base = {
+    sessionId,
+    operationId: event.operationId ?? null,
+    turnId: event.turnId ?? null,
+    stepId: event.stepId ?? null,
+  };
+  const fact = (type, entityId, payload, suffix = type) => ({
+    ...base,
+    factId: `dashboard:${eventId}:${suffix}`,
+    type,
+    entityId: entityId ? String(entityId) : null,
+    payload,
+  });
+  if (event.kind === "messages-reset") {
+    return [fact("messages.replace", null, {
+      items: Array.isArray(event.messages) ? event.messages : [],
+    })];
+  }
+  if (event.kind === "user") {
+    return [fact("message.upsert", event.id, {
+      id: event.id,
+      role: "user",
+      text: String(event.text ?? ""),
+      ...(Array.isArray(event.images) ? { images: event.images } : {}),
+      ...(Array.isArray(event.attachments) ? { attachments: event.attachments } : {}),
+    })];
+  }
+  if (["warning", "error", "info"].includes(event.kind)) {
+    const messageId = event.id ?? event.messageId ?? `notice:${eventId}`;
+    return [fact("message.upsert", messageId, {
+      id: messageId,
+      role: event.kind,
+      text: String(event.text ?? ""),
+    })];
+  }
+  if (["assistant_content_final", "assistant_final", "turn_finalized"].includes(event.kind)) {
+    return [fact("message.upsert", event.id ?? event.messageId, {
+      id: event.id ?? event.messageId,
+      role: "assistant",
+      ...(event.text !== undefined ? { text: String(event.text ?? "") } : {}),
+      ...(event.kind === "turn_finalized" ? {
+        finalized: true,
+        ...(event.taskState !== undefined ? { taskState: event.taskState } : {}),
+        ...(event.executionState !== undefined ? { executionState: event.executionState } : {}),
+        ...(event.goalState !== undefined ? { goalState: event.goalState } : {}),
+        ...(event.taskContract !== undefined ? { taskContract: event.taskContract } : {}),
+        ...(event.evidenceRefs !== undefined ? { evidenceRefs: event.evidenceRefs } : {}),
+        ...(event.receipt !== undefined ? { receipt: event.receipt } : {}),
+        warnings: Array.isArray(event.warnings) ? event.warnings : [],
+        artifactIncomplete: event.artifactIncomplete === true,
+        ...(event.interventionChoice !== undefined ? { interventionChoice: event.interventionChoice } : {}),
+      } : {}),
+    })];
+  }
+  if (["tool_start", "tool"].includes(event.kind)) {
+    const frameId = toolFrameEntityId(event);
+    return [fact("tool.upsert", frameId, {
+      ...event,
+      id: frameId,
+      state: event.status ?? event.state ?? (event.kind === "tool_start" ? "running" : "unknown"),
+    })];
+  }
+  if (event.kind === "operation-change") {
+    return [fact("operation.replace", event.operation?.id ?? event.operationId, event.operation ?? null)];
+  }
+  if (event.kind === "background-task-notification") {
+    return [fact("task-notification.upsert", event.notificationId, {
+      ...event,
+      id: event.notificationId,
+      state: event.status,
+    })];
+  }
+  if (event.kind?.startsWith("plan-") && Object.prototype.hasOwnProperty.call(event, "plan")) {
+    if (!event.plan) return [fact("plan.clear", null, {})];
+    return [fact("plan.replace", event.plan.planId ?? event.plan.id ?? null, event.plan)];
+  }
+  if (event.kind === "artifact-created") {
+    const files = Array.isArray(event.files) ? event.files : event.payload ? [event.payload] : [];
+    return files.filter((file) => file?.path || file?.id).map((file, index) => {
+      const id = String(file.id ?? createHash("sha256").update(String(file.path), "utf8").digest("hex"));
+      return fact("artifact.upsert", id, { ...file, id }, `artifact:${index}:${id}`);
+    });
+  }
+  if (event.entityType && event.entityId && event.payload && typeof event.payload === "object") {
+    const entityType = String(event.entityType).toLowerCase();
+    if (["interaction", "attachment", "goal", "todo", "prompt"].includes(entityType)) {
+      return [fact(`${entityType}.upsert`, event.entityId, event.payload)];
+    }
+  }
+  return [];
+}
+
+function queueRuntimeFactsFromDashboardEvent(event) {
+  const facts = runtimeFactsForDashboardEvent(event);
+  const sessionId = String(event?.sessionId ?? "").trim();
+  const eventId = String(event?.eventId ?? "").trim();
+  if (!sessionId || !eventId) return runtimeFactWriteTail;
+  const work = runtimeFactWriteTail.then(async () => {
+    if (facts.length > 0) {
+      const store = await runtimeFactStoreFor(sessionId);
+      for (const fact of facts) {
+        const result = await store.append(fact);
+        if (!result?.accepted && !result?.duplicate && result?.code !== "TERMINAL_STATE_DOWNGRADE") {
+          throw new Error(`runtime fact ${fact.factId} was rejected: ${result?.code || "unknown reason"}`);
+        }
+      }
+    }
+    if (!runtimeFactPersistenceBlocked) {
+      runtimeFactPersistedCursor = eventId;
+      trackPersistentStorageIssue(`runtime-facts:${sessionId}`, runtimeFactFile(sessionId), null);
+    }
+  });
+  runtimeFactWriteTail = work.catch((error) => {
+    runtimeFactPersistenceBlocked = true;
+    console.error(`[launcher] runtime fact append failed: ${error.message}`);
+    trackPersistentStorageIssue(`runtime-facts:${sessionId}`, runtimeFactFile(sessionId), error.message, "error");
+  });
+  return runtimeFactWriteTail;
+}
+
+async function flushRuntimeFacts() {
+  let observedTail;
+  do {
+    observedTail = runtimeFactWriteTail;
+    await observedTail;
+  } while (observedTail !== runtimeFactWriteTail);
+}
+
 const runtimeLifecycleHooks = createRuntimeLifecycleHooks({
   onIssue: (issue) => console.error(`[runtime-hook] ${issue.event}/${issue.hook}: ${issue.message}`),
 });
@@ -7757,11 +7961,13 @@ function broadcastDashboardEvent(ev) {
     ?? scoped?.sessionId
     ?? (operationId ? operationSessionIds.get(String(operationId)) : null)
     ?? activeConversationId;
-  return dashboardEventStream.publish({
+  const delivered = dashboardEventStream.publish({
     ...ev,
     ...(operationId ? { operationId: String(operationId) } : {}),
     ...(sessionId ? { sessionId: String(sessionId) } : {}),
   });
+  void queueRuntimeFactsFromDashboardEvent(delivered);
+  return delivered;
 }
 
 // Kimi Code-style separation: content completion is a display fact; only the
@@ -7785,6 +7991,24 @@ function broadcastAssistantContentFinal(payload = {}) {
 }
 
 function broadcastTurnFinalized(payload = {}) {
+  const messageId = String(payload.id ?? payload.messageId ?? "").trim();
+  const index = messageId ? messages.findIndex((message) => String(message.id ?? "") === messageId) : -1;
+  if (index >= 0) {
+    messages[index] = {
+      ...messages[index],
+      finalized: true,
+      ...(payload.text !== undefined ? { text: String(payload.text ?? "") } : {}),
+      ...(payload.taskState !== undefined ? { taskState: payload.taskState } : {}),
+      ...(payload.executionState !== undefined ? { executionState: payload.executionState } : {}),
+      ...(payload.goalState !== undefined ? { goalState: payload.goalState } : {}),
+      ...(payload.taskContract !== undefined ? { taskContract: payload.taskContract } : {}),
+      ...(payload.evidenceRefs !== undefined ? { evidenceRefs: payload.evidenceRefs } : {}),
+      ...(payload.receipt !== undefined ? { receipt: payload.receipt } : {}),
+      warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+      artifactIncomplete: payload.artifactIncomplete === true,
+      ...(payload.interventionChoice !== undefined ? { interventionChoice: payload.interventionChoice } : {}),
+    };
+  }
   broadcastDashboardEvent({ kind: "turn_finalized", ...payload });
 }
 
@@ -7793,7 +8017,11 @@ const dashboardAssistantStreams = createAssistantStreamProjector();
 // Mirrors loopEventToDashboard() from chunk-VM6A6QLY.js
 function loopEventToDashboard(ev, assistantId, streamContext = {}) {
   if (["tool_queued", "tool_start", "tool"].includes(ev.role)) {
-    return projectToolProgressEvent(ev, { assistantId });
+    return projectToolProgressEvent({
+      ...ev,
+      turnId: ev.turnId ?? streamContext.turnId,
+      stepId: ev.stepId ?? streamContext.stepId,
+    }, { assistantId });
   }
   const id = `${assistantId}-${ev.role}-${Date.now()}`;
   switch (ev.role) {
@@ -7933,6 +8161,9 @@ async function enqueueBackgroundTaskNotification(job = {}) {
       operationId: scope.operationId ?? null,
       sessionId: scope.sessionId,
     });
+    void wakeAgentForBackgroundNotification(notification, scope).catch((error) => {
+      console.error(`[launcher] background task handoff could not be queued: ${error.message}`);
+    });
     if (result.overflow?.count > 0) {
       console.error(`[launcher] background task notification queue overflowed: dropped=${result.overflow.count}`);
       broadcastDashboardEvent({
@@ -7945,6 +8176,46 @@ async function enqueueBackgroundTaskNotification(job = {}) {
     }
   }
   return result;
+}
+
+async function wakeAgentForBackgroundNotification(notification, scope) {
+  if (!agentSessionRuntime || !notification?.notificationId || !scope?.sessionId || !scope?.workspace) return null;
+  const runtimeState = agentSessionRuntime.snapshot(scope.sessionId);
+  const inputId = `background:${notification.notificationId}`;
+  const prompt = [
+    "[VISIONOX_BACKGROUND_TASK_WAKE]",
+    `notificationId: ${notification.notificationId}`,
+    "后台任务已经到达终态。请读取下一模型边界提供的结构化任务通知，继续完成原用户目标。",
+    "若结果失败、不完整或无法确认，必须向用户说明原因、影响和下一步；不要静默结束。",
+    "[/VISIONOX_BACKGROUND_TASK_WAKE]",
+  ].join("\n");
+  return agentSessionRuntime.submit({
+    schemaVersion: 1,
+    inputId,
+    requestId: inputId,
+    sessionId: scope.sessionId,
+    workspace: scope.workspace,
+    text: prompt,
+    attachments: [],
+    delivery: runtimeState.busy ? "steer" : "queue",
+    origin: {
+      kind: "background_task",
+      taskId: notification.taskId,
+      status: notification.status,
+      notificationId: notification.notificationId,
+      sourceOperationId: notification.sourceOperationId ?? scope.operationId ?? null,
+    },
+    invocation: {
+      text: prompt,
+      sessionName: null,
+      images: null,
+      opts: {
+        internalHandoff: true,
+        originalUserPrompt: prompt,
+        disableSemanticRetrieval: true,
+      },
+    },
+  });
 }
 
 async function syncRunningBackgroundTasks() {
@@ -8166,7 +8437,10 @@ const finishActiveOperation = (operation) => {
   if (finished) runtimeInstallApprovals.delete(operation.id);
   if (finished) {
     operationSteeringRuntime.close(operation.id, { reason: `operation_${operation.state}` });
-    sessionInputAdmission.closeOperation(operation.id, { reason: `operation_${operation.state}` });
+    sessionInputAdmission.closeOperation(operation.id, {
+      reason: `operation_${operation.state}`,
+      requeueUndelivered: operation.state !== "cancelled",
+    });
     modelBoundaryFence.close(operation.id, {
       reason: `operation_${operation.state}`,
       status: operation.state === "cancelled" ? "cancelled" : "not_applied",
@@ -8175,9 +8449,45 @@ const finishActiveOperation = (operation) => {
   return finished;
 };
 
-function scheduleQueuedSessionInputDrain(operation) {
-  const sessionId = operation?.context?.conversationId ?? null;
-  const workspace = operation?.context?.workspace ?? workspaceDir;
+async function finalizeOperationBoundary(operation, {
+  completion = null,
+  completeTurn = null,
+  requestId = null,
+} = {}) {
+  let finished = false;
+  try {
+    finished = finishActiveOperation(operation);
+  } catch (error) {
+    console.error(`[launcher] active operation cleanup failed: ${error.message}`);
+  }
+  await flushRuntimeFacts();
+  if (typeof completeTurn === "function") {
+    try {
+      completeTurn(completion);
+    } catch (error) {
+      console.error(`[launcher] submitPrompt completion callback failed: ${error.message}`);
+    }
+  }
+  busy = false;
+  broadcastDashboardEvent({ kind: "busy-change", busy: false });
+  if (finished || operationRuntime.getActive()?.id !== operation?.id) {
+    const operationSessionId = operation?.context?.conversationId ?? null;
+    const operationWorkspace = operation?.context?.workspace ?? workspaceDir;
+    scheduleQueuedSessionInputDrain(operation);
+    if (activeConversationId !== operationSessionId || !sameWorkspacePath(workspaceDir, operationWorkspace)) {
+      scheduleQueuedSessionInputDrain(operation, {
+        sessionId: activeConversationId,
+        workspace: workspaceDir,
+      });
+    }
+  }
+  if (activeTurnRequestId === (requestId || operation?.id)) activeTurnRequestId = null;
+  return finished;
+}
+
+function scheduleQueuedSessionInputDrain(operation, scope = {}) {
+  const sessionId = scope.sessionId ?? operation?.context?.conversationId ?? null;
+  const workspace = scope.workspace ?? operation?.context?.workspace ?? workspaceDir;
   if (!sessionId || !workspace) return;
   const next = sessionInputAdmission.promoteNextQueue(sessionId, {
     operationId: operation.id,
@@ -8364,7 +8674,8 @@ const interactionRuntime = createInteractionRuntime({
 // durable input ledger: promotion still happens at the existing loop's model
 // boundary and execution remains owned by the ordinary model loop.
 const sessionInputAdmission = createSessionInputAdmission({
-  initial: initialInteractionMetadata.ok ? initialInteractionMetadata.value?.promptInputs : [],
+  // applyLoadedMetadata restores this ledger after conversationId is bound.
+  // Recovering here would filter it through the temporary startup Session ID.
   onChange: (inputs) => {
     try {
       activeSessionMetaStore.update((current) => ({
@@ -8435,6 +8746,7 @@ const sessionRuntime = createSessionRuntime({
         ? meta.sessionName
         : null;
     }
+    planRuntime?.bindSession?.(currentSessionName());
     activeContextRecoveryHandle = typeof meta.contextRecoveryHandle === "string" && meta.contextRecoveryHandle.trim()
       ? meta.contextRecoveryHandle.trim()
       : null;
@@ -8522,50 +8834,56 @@ if (staleQueuedSteering.length > 0) {
 }
 
 async function resetActiveConversation({ withWelcome = true, reason = "new conversation" } = {}) {
-  clearActiveModals("session_reset");
-  await finalizeActiveSession();
-  const previousPlanSession = currentSessionName();
-  activeConversationId = randomUUID();
-  activeSessionName = null;
-  activeContextRecoveryHandle = null;
-  preparedDocumentRegistry.clear({ notifyChange: false });
-  if (loop) loop.clearLog();
-  clearSessionMemories();
-  activeTodos = [];
-  activeGoals = [];
-  activePromptEntities = [];
-  sessionInputAdmission.restore([]);
-  clearTutorMode();
-  clearLearningMode();
-  resetPlanRefs();
-  generatedArtifactPaths.clear();
-  const planSession = previousPlanSession;
+  const mutationToken = beginSessionMutation("reset");
+  if (!mutationToken) throw new Error("another session mutation is already in progress");
   try {
-    clearPlanState(planSession);
-    trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), null);
-  } catch (error) {
-    trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), `active plan cleanup failed: ${error.message}`);
-  }
-  if (client) {
-    loop = buildLoop(client, workspaceDir);
-    ctx.loop = loop;
-    console.error(`[launcher] loop rebuilt for ${reason} (mode: ${config.mode}, model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
-  }
-  if (eventizer) {
-    eventizer = new Eventizer();
-    try { eventSink?.append(eventizer.emitSessionOpened(0, "desktop", 0)); } catch {}
-  }
-  messages.length = 0;
-  nextMsgId = 1;
-  broadcastDashboardEvent({ kind: "todo-update", todos: [] });
-  broadcastDashboardEvent({ kind: "prompt-update", prompts: [] });
-  if (withWelcome) {
-    const welcomeId = `assistant-${Date.now()}`;
-    const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
-    pushMessage(welcomeMsg);
-    broadcastDashboardEvent({ kind: "messages-reset", messages: [welcomeMsg], totalMessages: 1 });
-  } else {
-    broadcastDashboardEvent({ kind: "messages-reset", messages: [], totalMessages: 0 });
+    clearActiveModals("session_reset");
+    await finalizeActiveSession();
+    const previousPlanSession = currentSessionName();
+    activeConversationId = randomUUID();
+    activeSessionName = null;
+    activeContextRecoveryHandle = null;
+    preparedDocumentRegistry.clear({ notifyChange: false });
+    if (loop) loop.clearLog();
+    clearSessionMemories();
+    activeTodos = [];
+    activeGoals = [];
+    activePromptEntities = [];
+    sessionInputAdmission.restore([]);
+    clearTutorMode();
+    clearLearningMode();
+    resetPlanRefs();
+    generatedArtifactPaths.clear();
+    const planSession = previousPlanSession;
+    try {
+      clearPlanState(planSession);
+      trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), null);
+    } catch (error) {
+      trackPersistentStorageIssue(`active-plan:${planSession}`, resolve(sessionsDir, `${planSession}.plan.json`), `active plan cleanup failed: ${error.message}`);
+    }
+    if (client) {
+      loop = buildLoop(client, workspaceDir);
+      ctx.loop = loop;
+      console.error(`[launcher] loop rebuilt for ${reason} (mode: ${config.mode}, model=${effectiveModelConfig(config).model}, effort=${config.reasoningEffort ?? "max"})`);
+    }
+    if (eventizer) {
+      eventizer = new Eventizer();
+      try { eventSink?.append(eventizer.emitSessionOpened(0, "desktop", 0)); } catch {}
+    }
+    messages.length = 0;
+    nextMsgId = 1;
+    broadcastDashboardEvent({ kind: "todo-update", todos: [] });
+    broadcastDashboardEvent({ kind: "prompt-update", prompts: [] });
+    if (withWelcome) {
+      const welcomeId = `assistant-${Date.now()}`;
+      const welcomeMsg = { id: welcomeId, role: "assistant", text: "我是你的AI助手，我可以帮你原理图检查、脚本分析、光学数据采集、编辑文件、执行命令、搜索网络。直接告诉我要做什么吧。" };
+      pushMessage(welcomeMsg);
+      broadcastDashboardEvent({ kind: "messages-reset", messages: [welcomeMsg], totalMessages: 1 });
+    } else {
+      broadcastDashboardEvent({ kind: "messages-reset", messages: [], totalMessages: 0 });
+    }
+  } finally {
+    endSessionMutation(mutationToken);
   }
 }
 
@@ -8697,11 +9015,12 @@ async function forkSession(sourceName, targetName, options = {}) {
   if (operationRuntime.getActive() || busy || sessionMutationInFlight) {
     return { ok: false, code: "OPERATION_ACTIVE", reason: "cannot fork a session while an operation is running" };
   }
-  sessionMutationInFlight = true;
+  const mutationToken = beginSessionMutation("fork");
+  if (!mutationToken) return { ok: false, code: "OPERATION_ACTIVE", reason: "another session mutation is in progress" };
   try {
     return await sessionRecoveryRuntime.fork(sourceName, targetName, options);
   } finally {
-    sessionMutationInFlight = false;
+    endSessionMutation(mutationToken);
   }
 }
 
@@ -9584,6 +9903,83 @@ function matchSlashCommand(entry, name) {
   return true; // prefix-or-exact
 }
 
+function uniqueSnapshotEntities(entries = []) {
+  const result = new Map();
+  for (const [index, entry] of entries.entries()) {
+    if (!entry || typeof entry !== "object") continue;
+    const id = String(entry.id ?? entry.attachmentId ?? entry.artifactId ?? `entity-${index + 1}`).trim();
+    if (!id) continue;
+    result.set(id, { ...entry, id });
+  }
+  return [...result.values()];
+}
+
+function mergeSnapshotMessages(compatibilityMessages = [], factMessages = []) {
+  const result = new Map();
+  for (const entry of [...compatibilityMessages, ...factMessages]) {
+    if (!entry || typeof entry !== "object") continue;
+    const id = String(entry.id ?? "").trim();
+    if (!id) continue;
+    result.set(id, { ...(result.get(id) ?? {}), ...entry, id });
+  }
+  return [...result.values()];
+}
+
+async function buildSessionSnapshot() {
+  for (;;) {
+    const sessionId = activeConversationId;
+    const store = await runtimeFactStoreFor(sessionId);
+    await flushRuntimeFacts();
+    if (sessionId !== activeConversationId) continue;
+
+    const facts = store.snapshot();
+    const eventCursor = runtimeFactPersistedCursor;
+    const messageSnapshot = messages.map((message) => structuredClone(message));
+    const attachmentSnapshot = uniqueSnapshotEntities(messageSnapshot.flatMap((message) => Array.isArray(message.attachments) ? message.attachments : []));
+    const generatedArtifacts = [...generatedArtifactPaths.values()].map((path) => ({
+      id: createHash("sha256").update(String(path), "utf8").digest("hex"),
+      path,
+      verified: existsSync(path),
+    }));
+    const notificationSnapshot = backgroundTaskNotifications.snapshot();
+    const activeOperation = publicActiveOperation();
+    const admission = agentSessionRuntime?.snapshot?.(sessionId) ?? {
+      sessionId,
+      workspace: workspaceDir,
+      busy: Boolean(activeOperation),
+      activeInputId: null,
+      queued: 0,
+      pendingActivation: false,
+    };
+    return {
+      ...facts,
+      schemaVersion: 1,
+      sessionId,
+      eventCursor,
+      messages: mergeSnapshotMessages(messageSnapshot, facts.messages),
+      tools: uniqueSnapshotEntities(facts.tools),
+      interactions: uniqueSnapshotEntities(interactionRuntime.list({ sessionId })),
+      attachments: uniqueSnapshotEntities([...facts.attachments, ...attachmentSnapshot]),
+      artifacts: uniqueSnapshotEntities([...facts.artifacts, ...generatedArtifacts]),
+      goals: uniqueSnapshotEntities(activeGoals),
+      todos: uniqueSnapshotEntities(activeTodos),
+      prompts: uniqueSnapshotEntities([...activePromptEntities, ...sessionInputAdmission.list(sessionId)]),
+      plan: getActivePlanSnapshot(),
+      taskNotifications: uniqueSnapshotEntities([
+        ...facts.taskNotifications,
+        ...[
+          ...notificationSnapshot.pending,
+          ...notificationSnapshot.inFlight,
+          ...notificationSnapshot.overflowed,
+        ].map((notification) => ({ ...notification, id: notification.notificationId })),
+      ]),
+      operation: activeOperation ?? facts.operation,
+      admission,
+      busy: Boolean(activeOperation || admission.busy || sessionMutationInFlight),
+    };
+  }
+}
+
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
   mode: "desktop",
@@ -9609,6 +10005,7 @@ const ctx = {
   // ── Getters ────────────────────────────────────────────────
   getCurrentCwd: () => workspaceDir,
   getConversationId: () => activeConversationId,
+  getSessionSnapshot: buildSessionSnapshot,
   getIndexRetrievalMode: () => ({ mode: indexRetrievalMode, semanticAvailable: hasSemanticSearch }),
   setIndexRetrievalMode: (mode) => {
     if (busy) return { ok: false, error: "index retrieval mode changes apply only while idle" };
@@ -9875,7 +10272,9 @@ const ctx = {
     if (resolved && choice === "approve") {
       activatePendingPlan();
     }
-    if (resolved && choice !== "approve") pendingPlan = null;
+    if (resolved && choice !== "approve") {
+      planRuntime?.discardPending?.("user_rejected");
+    }
     return resolved;
   },
   resolveCheckpointConfirm: (choice, text, gateId) => {
@@ -9888,11 +10287,17 @@ const ctx = {
     const verdict = choice === "accept" ? { type: "accepted" } : { type: "rejected" };
     const resolved = resolveActiveGate("revision", gateId, verdict);
     if (!resolved) return false;
-    if (choice === "accept" && pendingPlanRevision) {
-      planRuntime?.acceptRevision?.();
-      syncPlanRefsFromRuntime(planRuntime?.snapshot?.() ?? null);
+    if (choice === "accept") {
+      if (planRuntime?.acceptRevision?.() !== true) {
+        broadcastDashboardEvent({
+          kind: "error",
+          id: `plan-revision-${Date.now()}`,
+          text: "计划修订未能保存，原计划保持不变。请检查用户数据路径后重试。",
+        });
+      }
+    } else {
+      planRuntime?.discardRevision?.("user_rejected");
     }
-    pendingPlanRevision = null;
     return true;
   },
   setEditMode: (m) => {
@@ -10235,12 +10640,16 @@ const ctx = {
         reason: receiptDecision.reason || "上一次进程已接受请求，但结果未确认；请显式重新提交任务。",
       };
     }
+    if (sessionMutationInFlight) {
+      return { accepted: false, busy: true, code: "SESSION_MUTATION_ACTIVE", reason: "session recovery is in progress" };
+    }
     if (busy) {
       if (admittedInputId) {
         return { accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy while an admitted prompt is being dispatched" };
       }
       if (requestedDelivery) {
         const activeOperation = operationRuntime?.getActive?.();
+        const admittedDelivery = activeOperation?.id ? requestedDelivery : "queue";
         const inlineImages = Array.isArray(images) ? images : [];
         const queuedText = String(text ?? "").trim();
         if (sessionName || queuedText.startsWith("/")) {
@@ -10260,14 +10669,14 @@ const ctx = {
           workspace: workspaceDir,
           text,
           attachments: incomingAttachmentIds,
-          delivery: requestedDelivery,
+          delivery: admittedDelivery,
         });
         if (!admitted.ok) return { accepted: false, code: admitted.code, reason: admitted.error };
         if (activeOperation?.id) modelBoundaryFence.enqueue(activeOperation.id, { type: requestedDelivery, entityId: admitted.input.id });
         return {
           accepted: true,
           queued: true,
-          delivery: requestedDelivery,
+          delivery: admittedDelivery,
           inputId: admitted.input.id,
           duplicate: admitted.duplicate === true,
           status: admitted.input.status,
@@ -10275,9 +10684,6 @@ const ctx = {
         };
       }
       return { accepted: false, busy: true, code: "LOOP_BUSY", reason: "loop is busy with a turn" };
-    }
-    if (sessionMutationInFlight) {
-      return { accepted: false, busy: true, code: "SESSION_MUTATION_ACTIVE", reason: "session recovery is in progress" };
     }
 
     if (admittedInputId) {
@@ -10432,7 +10838,14 @@ ${modeList}
     let resumeSessionFile = null;
     let resumeSessionRaw = null;
     let resumeSessionSnapshot = null;
+    let sessionMutationToken = null;
     try {
+      if (sessionName && loop) {
+        sessionMutationToken = beginSessionMutation("session_switch");
+        if (!sessionMutationToken) {
+          return { accepted: false, code: "SESSION_MUTATION_ACTIVE", reason: "another session recovery is already in progress" };
+        }
+      }
       // ── Sync workspace if changed ─────────────────────────────
       await ctx.syncWorkspace({ applyPending: text.trim().toLowerCase() === "/new" || Boolean(sessionName) });
 
@@ -10485,10 +10898,21 @@ ${modeList}
         try {
           const sessionFile = resumeSessionFile || sessionJsonlPath(sessionName);
           const sessionMeta = resumeSessionSnapshot?.meta ?? readSessionMeta(sessionName);
-          activeSessionName = sessionName;
-          activeConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
+          const previousConversationId = activeConversationId;
+          const nextConversationId = typeof sessionMeta.conversationId === "string" && sessionMeta.conversationId.trim()
             ? sessionMeta.conversationId.trim()
             : randomUUID();
+          if (previousConversationId !== nextConversationId) {
+            broadcastDashboardEvent({
+              kind: "operation-change",
+              sessionId: previousConversationId,
+              operationId: operation.id,
+              operation: { ...publicActiveOperation(operation), state: "unknown", reason: "session_rebound" },
+            });
+          }
+          activeSessionName = sessionName;
+          activeConversationId = nextConversationId;
+          planRuntime?.bindSession?.(currentSessionName());
           // A named-session switch replaces the admission ledger scope just
           // like it replaces the model history. Restore the target session's
           // durable inputs before any queued drain can run.
@@ -10501,6 +10925,12 @@ ${modeList}
             error.code = reboundSessionRun.code || "SESSION_RUN_ACTIVE";
             throw error;
           }
+          broadcastDashboardEvent({
+            kind: "operation-change",
+            sessionId: activeConversationId,
+            operationId: operation.id,
+            operation: publicActiveOperation(operation),
+          });
           activeContextRecoveryHandle = typeof sessionMeta.contextRecoveryHandle === "string" && sessionMeta.contextRecoveryHandle.trim()
             ? sessionMeta.contextRecoveryHandle.trim()
             : null;
@@ -10562,6 +10992,13 @@ ${modeList}
             modeChanged: modeRestore.changed,
           });
           console.error(`[launcher] session loaded: ${sessionName} (ui=${dashboardEntries.length}, model=${modelEntries.length}, mode: ${modeRestore.mode}${modeRestore.changed ? `, restored from ${modeRestore.previous}` : ""})`);
+          endSessionMutation(sessionMutationToken);
+          sessionMutationToken = null;
+          await wakePendingBackgroundTaskNotifications({
+            operationId: operation.id,
+            sessionId: activeConversationId,
+            workspace: workspaceDir,
+          });
           if (!text || !text.trim()) {
             return { accepted: true, loaded: true, session: sessionName, mode: modeRestore.mode, modeChanged: modeRestore.changed };
           }
@@ -10857,8 +11294,6 @@ ${modeList}
           broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: errText });
         } finally {
           await syncActiveSessionFromLoop();
-          busy = false;
-          broadcastDashboardEvent({ kind: "busy-change", busy: false });
         }
         return { accepted: true };
       }
@@ -10996,8 +11431,7 @@ ${modeList}
           pushMessage({ id: errId, role: "assistant", text: `\u274C \u65C1\u8DEF\u63D0\u95EE\u5931\u8D25: ${err.message}` });
           broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: `\u274C \u65C1\u8DEF\u63D0\u95EE\u5931\u8D25: ${err.message}` });
         } finally {
-          busy = false;
-          broadcastDashboardEvent({ kind: "busy-change", busy: false });
+          // The outer operation boundary publishes idle after terminal facts.
         }
         return { accepted: true };
       }
@@ -11034,8 +11468,7 @@ ${modeList}
           pushMessage({ id: errId, role: "assistant", text: `\u274C \u62A5\u544A\u751F\u6210\u5931\u8D25: ${err.message}` });
           broadcastDashboardEvent({ kind: "assistant_final", id: errId, text: `\u274C \u62A5\u544A\u751F\u6210\u5931\u8D25: ${err.message}` });
         } finally {
-          busy = false;
-          broadcastDashboardEvent({ kind: "busy-change", busy: false });
+          // The outer operation boundary publishes idle after terminal facts.
         }
         return { accepted: true };
       }
@@ -11090,16 +11523,16 @@ ${modeList}
         return { accepted: false, requestId: requestId || null, reason };
       }
 
-      hydrateActivePlanFromDisk();
-      if (activePlanSteps && isExplicitPlanResumeRequest(text)) {
+      const activePlan = getActivePlanSnapshot();
+      if (activePlan?.status === "active" && isExplicitPlanResumeRequest(text)) {
         const resumeRequestId = activeTurnRequestId;
-        const resumePlanId = activePlanId || randomUUID();
+        const resumePlanId = activePlan.planId || randomUUID();
         if (planRuntime?.bindActivePlanIdentity?.({ requestId: resumeRequestId, planId: resumePlanId }) !== true) {
           const reason = "当前计划身份绑定失败，无法安全恢复。";
           try { rememberFailedPromptRequest(requestId, reason); } catch {}
           return { accepted: false, requestId: requestId || null, reason };
         }
-        syncPlanRefsFromRuntime(planRuntime.snapshot());
+        bindPlanEvidenceCursor(resumePlanId, { force: true });
         if (!persistActivePlan()) {
           const reason = "无法把当前请求绑定到待恢复计划，任务未启动。";
           try { rememberFailedPromptRequest(requestId, reason); } catch {}
@@ -11538,7 +11971,9 @@ ${modeList}
                     turnReceipt.recordRecovery(recovery);
                   }
                 }
-                if (ev.toolName === "submit_plan" && !toolSucceeded) pendingPlan = null;
+                if (ev.toolName === "submit_plan" && !toolSucceeded) {
+                  planRuntime?.discardPending?.("submit_plan_failed");
+                }
                 const toolArgs = parseMaybeJsonObject(ev.toolArgs);
                 const mutatingTool = /^(?:write_file|append_file|edit_file|multi_edit|save_file|save_last_assistant_response|mark_step_complete)$/i.test(String(ev.toolName || ""))
                   || (String(ev.toolName || "") === "run_command" && shellCommandHasSideEffects(toolArgs?.command));
@@ -11599,7 +12034,10 @@ ${modeList}
                   broadcastDashboardEvent({
                     kind: "artifact-created",
                     assistantId,
-                    files: newFiles,
+                    files: newFiles.map((file) => ({
+                      ...file,
+                      id: file.id ?? createHash("sha256").update(String(file.path), "utf8").digest("hex"),
+                    })),
                   });
                 }
               }
@@ -11627,6 +12065,8 @@ ${modeList}
               const dashev = loopEventToDashboard(ev, assistantId, {
                 operationId: operation.id,
                 sessionId: operation.context?.conversationId ?? activeConversationId,
+                turnId: operation.context?.turn?.turnId ?? requestId ?? operation.id,
+                stepId: operation.context?.turn?.stepId ?? null,
               });
               if (dashev) dashev.progress = loopTelemetry.snapshot();
               if (dashev?.toolCallId && dashev?.status) {
@@ -12333,24 +12773,16 @@ ${modeList}
               broadcastDashboardEvent({ kind: "error", id: `${assistantId}-completion-receipt-error`, text: completionReceiptError });
               console.error(`[launcher] failed to persist prompt completion receipt: ${error.message}`);
             }
-            if (completeTurn) {
-              try {
-                completeTurn(completionReceiptError
-                  ? { ...completion, ok: false, error: completionReceiptError, assistantText: "" }
-                  : completion);
-              } catch (err) {
-                console.error(`[launcher] submitPrompt completion callback failed: ${err.message}`);
-              }
-            }
-            busy = false;
-            broadcastDashboardEvent({ kind: "busy-change", busy: false });
+            const callbackCompletion = completionReceiptError
+              ? { ...completion, ok: false, error: completionReceiptError, assistantText: "" }
+              : completion;
             try { detachExternalSignal(); } catch { /* Cleanup must not keep the UI busy. */ }
             try { contextSizeCalibration.clear(contextCalibrationScope); } catch {}
-            try {
-              const finished = finishActiveOperation(operation);
-              if (finished) scheduleQueuedSessionInputDrain(operation);
-            } catch (error) { console.error(`[launcher] active operation cleanup failed: ${error.message}`); }
-            if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
+            await finalizeOperationBoundary(operation, {
+              completion: callbackCompletion,
+              completeTurn,
+              requestId,
+            });
           }
         }
       });
@@ -12359,6 +12791,10 @@ ${modeList}
     } finally {
       // Reset busy on any early-return path (session load, /new, no-loop, etc.)
       if (!committed) {
+        if (sessionMutationToken) {
+          endSessionMutation(sessionMutationToken);
+          sessionMutationToken = null;
+        }
         if (rollbackAttachmentIds.length > 0) {
           await attachmentRuntime.releaseAttachments(rollbackAttachmentIds, {
             sessionId: activeConversationId,
@@ -12369,10 +12805,7 @@ ${modeList}
         }
         if (promptIsolation?.enabled) promptIsolation.restore();
         detachExternalSignal();
-        busy = false;
-        broadcastDashboardEvent({ kind: "busy-change", busy: false });
-        finishActiveOperation(operation);
-        if (activeTurnRequestId === (requestId || operation.id)) activeTurnRequestId = null;
+        await finalizeOperationBoundary(operation, { requestId });
       }
     }
   },
@@ -12388,7 +12821,12 @@ ${modeList}
     return { accepted: busy, operation: publicActiveOperation() };
   },
 
-  isBusy: () => busy,
+  isBusy: () => Boolean(
+    busy
+    || operationRuntime.getActive()
+    || sessionMutationInFlight
+    || agentSessionRuntime?.snapshot?.(activeConversationId)?.busy,
+  ),
 
   getStats: () => {
     if (!loop) return null;
@@ -12423,6 +12861,117 @@ ${modeList}
   registerHook: (event, pattern, handler) => registerHook(event, pattern, handler),
 };
 
+const submitToOrdinaryModelLoop = ctx.submitPrompt.bind(ctx);
+
+function agentInputOrigin(sessionName, opts = {}) {
+  if (opts.origin && typeof opts.origin === "object") return { ...opts.origin };
+  if (opts.internalHandoff === true) return { kind: "background_task" };
+  if (opts.newConversation === true || opts.isolated === true) return { kind: "schedule" };
+  if (sessionName) return { kind: "recovery", sessionName };
+  if (opts.admittedInputId) return { kind: "queue", admittedInputId: opts.admittedInputId };
+  return { kind: "user" };
+}
+
+agentSessionRuntime = createAgentSessionRuntime({
+  getActiveBinding: () => ({ sessionId: activeConversationId, workspace: workspaceDir }),
+  executeTurn: async (entry, controls) => {
+    const invocation = entry.invocation && typeof entry.invocation === "object" ? entry.invocation : {};
+    const invokeOpts = invocation.opts && typeof invocation.opts === "object" ? invocation.opts : {};
+    const callerComplete = typeof invokeOpts.onComplete === "function" ? invokeOpts.onComplete : null;
+    let completed = false;
+    const completeRuntimeTurn = (completion, { notifyCaller = true } = {}) => {
+      if (completed) return false;
+      completed = true;
+      try {
+        if (notifyCaller) callerComplete?.(completion);
+      } finally {
+        controls.complete(completion);
+      }
+      return true;
+    };
+    const result = await submitToOrdinaryModelLoop(
+      invocation.text ?? entry.text,
+      invocation.sessionName ?? null,
+      invocation.images ?? null,
+      {
+        ...invokeOpts,
+        inputId: entry.inputId,
+        requestId: entry.requestId,
+        delivery: entry.delivery,
+        attachmentIds: entry.attachments,
+        origin: entry.origin,
+        onComplete: (completion) => completeRuntimeTurn(completion),
+      },
+    );
+    if (result?.completion) {
+      completeRuntimeTurn(result.completion);
+    } else if (result?.accepted !== true) {
+      completeRuntimeTurn({
+        ok: false,
+        taskState: "failed",
+        error: result?.reason || "输入未被普通模型循环接受",
+      }, { notifyCaller: false });
+    } else if (!result?.turnId || result?.duplicate === true) {
+      completeRuntimeTurn({
+        ok: result?.duplicate !== true,
+        taskState: result?.duplicate === true ? "unknown" : "completed",
+        error: result?.duplicate === true ? "请求已经在其他执行边界处理，当前结果无法重复确认。" : null,
+      });
+    }
+    return result;
+  },
+  steerTurn: async (entry) => {
+    const invocation = entry.invocation && typeof entry.invocation === "object" ? entry.invocation : {};
+    const invokeOpts = invocation.opts && typeof invocation.opts === "object" ? invocation.opts : {};
+    return submitToOrdinaryModelLoop(
+      invocation.text ?? entry.text,
+      invocation.sessionName ?? null,
+      invocation.images ?? null,
+      {
+        ...invokeOpts,
+        onComplete: undefined,
+        inputId: entry.inputId,
+        requestId: entry.requestId,
+        delivery: entry.delivery,
+        attachmentIds: entry.attachments,
+        origin: entry.origin,
+      },
+    );
+  },
+  onError: (error) => {
+    console.error(`[launcher] AgentSessionRuntime failed: ${error?.message || error}`);
+    broadcastDashboardEvent({
+      kind: "error",
+      id: `agent-session-runtime-${Date.now()}`,
+      text: `任务调度失败：${error?.message || error}。任务没有被静默丢弃，请检查后重试。`,
+    });
+  },
+});
+
+async function submitAgentInput(text, sessionName, images, opts = {}) {
+  if (sessionMutationInFlight) {
+    return { accepted: false, busy: true, code: "SESSION_MUTATION_ACTIVE", reason: "session recovery is in progress" };
+  }
+  const requestId = String(opts.requestId || opts.inputId || randomUUID()).trim().slice(0, 160);
+  const inputId = String(opts.inputId || requestId).trim().slice(0, 160);
+  const sessionId = String(opts.sessionId || activeConversationId).trim();
+  const workspace = String(opts.workspace || workspaceDir).trim();
+  return agentSessionRuntime.submit({
+    schemaVersion: 1,
+    inputId,
+    requestId,
+    sessionId,
+    workspace,
+    text: String(text ?? ""),
+    attachments: Array.isArray(opts.attachmentIds) ? opts.attachmentIds : [],
+    delivery: opts.delivery === "steer" ? "steer" : "queue",
+    origin: agentInputOrigin(sessionName, opts),
+    invocation: { text, sessionName, images, opts },
+  });
+}
+
+ctx.submitPrompt = submitAgentInput;
+
 // Sync preset → loop model on startup so the dashboard /overview
 // returns consistent preset and model fields from the first poll
 if (config.preset && config.preset !== "auto") {
@@ -12445,23 +12994,10 @@ try {
 // history first, then restore every same-session terminal fact whose durable
 // outbox acknowledgement is still missing. This never replays work.
 backgroundTaskNotifications.restoreDelivered(loop?.log?.toMessages?.() ?? []);
-const pendingBackgroundNotifications = await taskOutputStore.listPendingNotifications({
+await wakePendingBackgroundTaskNotifications({
   sessionId: activeConversationId,
   workspace: workspaceDir,
 });
-for (const persisted of pendingBackgroundNotifications) {
-  if (!persisted) continue;
-  // Restart-recovered lost facts are skipped here: no live operation exists
-  // yet, and enqueueing with the dead operation binding would poison the
-  // dedupe set. restorePendingBackgroundTaskNotifications rebinds and
-  // enqueues them at the first model request boundary instead.
-  if (isProcessRestartedRecovery(persisted)) continue;
-  backgroundTaskNotifications.enqueue(persisted, {
-    operationId: persisted.operationId,
-    sessionId: activeConversationId,
-    workspace: workspaceDir,
-  });
-}
 
 // ── Initial welcome message ──────────────────────────────────────
 if (!restoredActiveSession) {

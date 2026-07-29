@@ -722,7 +722,8 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /CHAT_MESSAGE_PAGE_SIZE = 60/);
     assert.match(app, /CHAT_TOP_LOAD_THRESHOLD = 96/);
     assert.match(app, /totalMessages/);
-    assert.match(app, /api\(`\/messages\?limit=\$\{CHAT_MESSAGE_PAGE_SIZE\}&offset=\$\{messages\.length\}`\)/);
+    assert.match(app, /const requestOffset = canonicalMessageCountRef\.current/);
+    assert.match(app, /api\(`\/messages\?limit=\$\{CHAT_MESSAGE_PAGE_SIZE\}&offset=\$\{requestOffset\}`\)/);
     assert.match(app, /captureChatScrollAnchor/);
     assert.match(app, /restoreChatScrollAnchor/);
     assert.match(app, /data-process-anchor-id/);
@@ -779,7 +780,7 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /setQueuePaused\(true\)/);
     assert.match(app, /chat\.queueResume/);
     assert.match(app, /operation\?\.state === "stopping"/);
-    assert.match(app, /dash\.operation\?\.state === "cancelled"/);
+    assert.match(app, /reduced\.state\.operation\?\.state === "cancelled"/);
   });
 
   test("五类交互卡片校验 gate、避免重复提交并保持计划事务一致", () => {
@@ -803,9 +804,9 @@ describe("Dashboard 回归护栏", () => {
     assert.match(server, /status: 409, body: \{ error: "modal is no longer active" \}/);
     assert.match(launcher, /const queuedModals = \[\]/);
     assert.match(launcher, /activeGateId !== gateId/);
-    assert.match(launcher, /pendingPlanRevision = \{ reason, remainingSteps, summary \}/);
+    assert.match(launcher, /planRuntime\?\.setRevision\(\{ reason, remainingSteps, summary \}\)/);
     assert.match(launcher, /if \(resolved && choice === "approve"\) \{[\s\S]{0,300}activatePendingPlan\(\)/);
-    assert.match(launcher, /if \(resolved && choice !== "approve"\) pendingPlan = null/);
+    assert.match(launcher, /if \(resolved && choice !== "approve"\) \{[\s\S]{0,200}planRuntime\?\.discardPending\?\.\("user_rejected"\)/);
     assert.match(launcher, /stepId .* is not in the active plan/);
     assert.match(chat, /dash\.kind === "plan-activated"/);
     assert.match(planTools, /onPlanSubmitted\?\.\(plan, steps, summary\)/);

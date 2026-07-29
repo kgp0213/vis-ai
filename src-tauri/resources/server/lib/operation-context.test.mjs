@@ -144,5 +144,7 @@ test("operation context records deduplicated tool success facts without raw outp
   assert.equal("resultPreview" in first, false);
   assert.equal(duplicate, first);
   assert.equal(context.toolSuccesses.length, 1);
+  assert.equal(context.toolSuccessSeq, 1);
+  assert.equal(first.evidenceSeq, 1);
   assert.equal(JSON.stringify(context.toolSuccesses).includes("hidden"), false);
 });

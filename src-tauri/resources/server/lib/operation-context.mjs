@@ -56,6 +56,8 @@ export function createOperationContext({ operationId, kind, conversationId = nul
     runtimeEnvironments: [],
     toolFailures: [],
     toolSuccesses: [],
+    toolSuccessSeq: 0,
+    planEvidenceCursor: 0,
     recoveries: [],
     toolRepeats: [],
     authorizationFacts: [],
@@ -72,17 +74,20 @@ export function recordOperationToolSuccessFact(context, {
   recordedAt = new Date().toISOString(),
 } = {}) {
   if (!context || typeof context !== "object") return null;
+  const duplicate = [...(Array.isArray(context.toolSuccesses) ? context.toolSuccesses : [])]
+    .reverse()
+    .find((item) => item.toolCallId && toolCallId && item.toolCallId === boundedText(toolCallId, 180));
+  if (duplicate) return duplicate;
+  const evidenceSeq = Math.max(0, Number(context.toolSuccessSeq) || 0) + 1;
   const fact = {
     toolCallId: boundedText(toolCallId, 180) || null,
     toolName: boundedText(toolName, 120) || "tool",
     argsFingerprint: argsFingerprint(args),
     status: "succeeded",
+    evidenceSeq,
     recordedAt,
   };
-  const duplicate = [...(Array.isArray(context.toolSuccesses) ? context.toolSuccesses : [])]
-    .reverse()
-    .find((item) => item.toolCallId && fact.toolCallId && item.toolCallId === fact.toolCallId);
-  if (duplicate) return duplicate;
+  context.toolSuccessSeq = evidenceSeq;
   context.toolSuccesses = [...(Array.isArray(context.toolSuccesses) ? context.toolSuccesses : []), fact].slice(-MAX_TOOL_SUCCESSES);
   return fact;
 }

@@ -277,3 +277,298 @@ test("requests canonical resync for an event sequence gap but accepts a contiguo
   assert.equal(contiguous.resyncRequired, undefined);
   assert.equal(contiguous.state.lastSeq, 2);
 });
+
+test("hydrates the reducer from a complete session snapshot and continues after its cursor", async () => {
+  const { applyDashboardEvent, createDashboardReducerStateFromSnapshot } = await loadReducer();
+  let state = createDashboardReducerStateFromSnapshot({
+    schemaVersion: 1,
+    sessionId: "session-a",
+    eventCursor: "epoch-a:7",
+    messages: [{ id: "m1", role: "assistant", text: "done", taskState: "completed" }],
+    tools: [{ id: "tool-1", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1", state: "succeeded" }],
+    interactions: [], attachments: [], artifacts: [], goals: [], todos: [], prompts: [],
+  });
+  assert.equal(state.epoch, "epoch-a");
+  assert.equal(state.lastSeq, 7);
+  assert.equal(state.messages.m1.taskState, "completed");
+  assert.equal(Object.values(state.tools)[0].state, "succeeded");
+
+  const next = applyDashboardEvent(state, {
+    kind: "artifact-created",
+    eventEpoch: "epoch-a",
+    eventSeq: 8,
+    eventId: "epoch-a:8",
+    artifactId: "artifact-1",
+    payload: { id: "artifact-1", path: "C:/work/report.md", verified: true },
+  });
+  assert.equal(next.resyncRequired, undefined);
+  assert.equal(next.state.artifacts["artifact-1"].verified, true);
+});
+
+test("uses the canonical snapshot page boundary when durable messages shift the legacy page", async () => {
+  const { mergeCanonicalMessagePage } = await loadReducer();
+  const legacyPage = [
+    { id: "m-1034", role: "user", text: "boundary" },
+    { id: "m-1035", role: "assistant", text: "compatibility" },
+  ];
+  const snapshotPage = [
+    { id: "m-1035", role: "assistant", text: "authoritative", taskState: "completed" },
+    { id: "m-durable-only", role: "assistant", text: "durable terminal", taskState: "completed" },
+  ];
+
+  assert.deepEqual(mergeCanonicalMessagePage(legacyPage, snapshotPage), [
+    { id: "m-1035", role: "assistant", text: "authoritative", taskState: "completed" },
+    { id: "m-durable-only", role: "assistant", text: "durable terminal", taskState: "completed" },
+  ]);
+});
+
+test("projects canonical page metadata and keeps fact-only tools on their matching page", async () => {
+  const { projectDashboardMessagePage } = await loadReducer();
+  const projected = projectDashboardMessagePage({
+    messages: [
+      { id: "m-1034", role: "assistant", text: "legacy boundary", turnId: "turn-old" },
+      { id: "m-1035", role: "assistant", text: "legacy latest", turnId: "turn-current" },
+    ],
+    totalMessages: 1036,
+    snapshot: {
+      eventCursor: "epoch-a:9",
+      messages: [
+        { id: "m-1035", role: "assistant", text: "canonical latest", turnId: "turn-current" },
+        { id: "m-durable-only", role: "assistant", text: "durable terminal", turnId: "turn-durable" },
+      ],
+      tools: [
+        { id: "tool-old", toolCallId: "call-old", turnId: "turn-old", stepId: "step-1", state: "succeeded" },
+        { id: "tool-current", toolCallId: "call-current", turnId: "turn-current", stepId: "step-1", state: "succeeded" },
+        { id: "tool-durable", toolCallId: "call-durable", turnId: "turn-durable", stepId: "step-1", state: "succeeded" },
+      ],
+      messagePage: { totalMessages: 1037, startIndex: 1035, hasMore: true },
+    },
+  });
+
+  assert.deepEqual(projected.messages.map((message) => message.id), ["m-1035", "m-durable-only"]);
+  assert.equal(projected.messages[0].text, "canonical latest");
+  assert.deepEqual(projected.tools.map((tool) => tool.id), ["tool-current", "tool-durable"]);
+  assert.deepEqual(
+    [projected.totalMessages, projected.startIndex, projected.loadedCount, projected.hasMore],
+    [1037, 1035, 2, true],
+  );
+});
+
+test("prepends canonical history pages without duplicating an overlapping boundary", async () => {
+  const { mergeDashboardMessagePages } = await loadReducer();
+  const current = [
+    { id: "m-2", role: "assistant", text: "new authoritative", taskState: "completed" },
+    { id: "m-3", role: "assistant", text: "latest" },
+  ];
+  const earlier = [
+    { id: "m-1", role: "user", text: "first" },
+    { id: "m-2", role: "assistant", text: "old boundary" },
+  ];
+
+  assert.deepEqual(mergeDashboardMessagePages(earlier, current), [
+    { id: "m-1", role: "user", text: "first" },
+    { id: "m-2", role: "assistant", text: "new authoritative", taskState: "completed" },
+    { id: "m-3", role: "assistant", text: "latest" },
+  ]);
+});
+
+test("deduplicates a restored tool row and canonical fact by Turn and call id", async () => {
+  const { mergeDashboardMessagePages } = await loadReducer();
+  const earlier = [{
+    id: "restored-tool-123-1",
+    role: "tool",
+    toolCallId: "call-1",
+    turnId: "turn-1",
+    text: "legacy result",
+  }];
+  const current = [{
+    id: "[\"turn-1\",\"step-1\",\"call-1\"]",
+    role: "tool",
+    toolCallId: "call-1",
+    turnId: "turn-1",
+    stepId: "step-1",
+    text: "canonical result",
+    toolStatus: "succeeded",
+  }];
+
+  assert.deepEqual(mergeDashboardMessagePages(earlier, current), current);
+});
+
+test("tracks the global SSE cursor across foreign sessions before reducing the active session", async () => {
+  const {
+    applyDashboardEvent,
+    createDashboardEventCursor,
+    createDashboardReducerState,
+    observeDashboardEventCursor,
+  } = await loadReducer();
+  let cursor = createDashboardEventCursor("epoch-a:7");
+  const foreign = observeDashboardEventCursor(cursor, {
+    kind: "status",
+    sessionId: "session-b",
+    eventEpoch: "epoch-a",
+    eventSeq: 8,
+    eventId: "epoch-a:8",
+  });
+  assert.equal(foreign.resyncRequired, undefined);
+  assert.equal(foreign.cursor.lastSeq, 8);
+  cursor = foreign.cursor;
+
+  const activeEvent = {
+    kind: "user",
+    sessionId: "session-a",
+    eventEpoch: "epoch-a",
+    eventSeq: 9,
+    eventId: "epoch-a:9",
+    id: "message-9",
+    text: "still contiguous globally",
+  };
+  const active = observeDashboardEventCursor(cursor, activeEvent);
+  assert.equal(active.resyncRequired, undefined);
+
+  const projection = applyDashboardEvent(
+    createDashboardReducerState({ epoch: cursor.epoch, lastSeq: cursor.lastSeq }),
+    activeEvent,
+  );
+  assert.equal(projection.resyncRequired, undefined);
+  assert.equal(projection.state.messages["message-9"].text, "still contiguous globally");
+});
+
+test("replays events that arrived after the initial snapshot cursor", async () => {
+  const {
+    applyDashboardEvent,
+    createDashboardReducerStateFromSnapshot,
+    dashboardEventsAfterCursor,
+  } = await loadReducer();
+  let state = createDashboardReducerStateFromSnapshot({
+    eventCursor: "epoch-a:5",
+    messages: [{ id: "m-5", role: "assistant", text: "snapshot" }],
+  });
+  const buffered = [
+    { kind: "warning", eventEpoch: "epoch-a", eventSeq: 5, eventId: "epoch-a:5-notice", id: "warning-5", text: "already represented by snapshot" },
+    { kind: "user", eventEpoch: "epoch-a", eventSeq: 6, eventId: "epoch-a:6", id: "m-6", text: "arrived while loading" },
+    { kind: "user", eventEpoch: "epoch-a", eventSeq: 6, eventId: "epoch-a:6", id: "m-6", text: "duplicate transport delivery" },
+    { kind: "assistant_final", eventEpoch: "epoch-a", eventSeq: 7, eventId: "epoch-a:7", id: "m-7", text: "finished" },
+  ];
+
+  const replay = dashboardEventsAfterCursor(buffered, state);
+  assert.deepEqual(replay.map((event) => event.eventId), ["epoch-a:6", "epoch-a:7"]);
+  for (const event of replay) state = applyDashboardEvent(state, event).state;
+  assert.equal(state.messages["warning-5"], undefined);
+  assert.equal(state.messages["m-6"].text, "arrived while loading");
+  assert.equal(state.messages["m-7"].text, "finished");
+  assert.equal(state.lastSeq, 7);
+});
+
+test("rejects a snapshot response after its Session or projection generation changes", async () => {
+  const { dashboardSnapshotResponseIsCurrent } = await loadReducer();
+  const base = {
+    requestGeneration: 3,
+    currentGeneration: 3,
+    requestSessionId: "session-a",
+    activeSessionId: "session-a",
+    responseSessionId: "session-a",
+  };
+
+  assert.equal(dashboardSnapshotResponseIsCurrent(base), true);
+  assert.equal(dashboardSnapshotResponseIsCurrent({ ...base, currentGeneration: 4 }), false);
+  assert.equal(dashboardSnapshotResponseIsCurrent({ ...base, activeSessionId: "session-b" }), false);
+  assert.equal(dashboardSnapshotResponseIsCurrent({ ...base, responseSessionId: "session-b" }), false);
+  assert.equal(dashboardSnapshotResponseIsCurrent({
+    requestGeneration: 1,
+    currentGeneration: 1,
+    requestSessionId: null,
+    activeSessionId: null,
+    responseSessionId: "session-a",
+  }), true);
+});
+
+test("projects replayable notices into the durable message projection", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  const warning = applyDashboardEvent(createDashboardReducerState({ epoch: "epoch-a", lastSeq: 7 }), {
+    kind: "warning",
+    eventEpoch: "epoch-a",
+    eventSeq: 8,
+    eventId: "epoch-a:8",
+    id: "warning-8",
+    text: "结果需要用户复核",
+  });
+
+  assert.deepEqual(warning.state.messages["warning-8"], {
+    id: "warning-8",
+    role: "warning",
+    text: "结果需要用户复核",
+  });
+  assert.equal(warning.state.lastSeq, 8);
+});
+
+test("messages reset replaces durable entities without discarding metadata or cursor", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  const state = createDashboardReducerState({ epoch: "epoch-a", lastSeq: 4 });
+  const reset = applyDashboardEvent(state, {
+    kind: "messages-reset",
+    eventEpoch: "epoch-a",
+    eventSeq: 5,
+    eventId: "epoch-a:5",
+    messages: [{ id: "m1", role: "assistant", text: "done", receipt: { ok: true }, attachments: [{ id: "att-1" }] }],
+    tools: [{ id: "tool-1", state: "succeeded" }],
+  });
+  assert.equal(reset.state.lastSeq, 5);
+  assert.deepEqual(reset.state.messages.m1.receipt, { ok: true });
+  assert.deepEqual(reset.state.messages.m1.attachments, [{ id: "att-1" }]);
+  assert.equal(reset.state.tools["tool-1"].state, "succeeded");
+});
+
+test("snapshot plus replay converges with a fresh durable snapshot", async () => {
+  const { applyDashboardEvent, createDashboardReducerStateFromSnapshot } = await loadReducer();
+  const taskContract = { contractVersion: 1, executionRequired: true };
+  const evidenceRefs = [{ evidenceId: "artifact-1", type: "artifact", verified: true }];
+  const initialSnapshot = {
+    schemaVersion: 1,
+    sessionId: "session-a",
+    eventCursor: "epoch-a:1",
+    messages: [{ id: "user-1", role: "user", text: "start" }],
+    tools: [], interactions: [], attachments: [], artifacts: [], goals: [], todos: [], prompts: [],
+    taskNotifications: [], plan: null, operation: { id: "op-1", state: "running" }, admission: null, busy: true,
+  };
+  const toolFrameId = JSON.stringify(["turn-1", "step-1", "call-1"]);
+  const events = [
+    { kind: "tool_start", eventEpoch: "epoch-a", eventSeq: 2, eventId: "epoch-a:2", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1", status: "running" },
+    { kind: "tool", eventEpoch: "epoch-a", eventSeq: 3, eventId: "epoch-a:3", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1", status: "succeeded", isError: false },
+    { kind: "artifact-created", eventEpoch: "epoch-a", eventSeq: 4, eventId: "epoch-a:4", artifactId: "artifact-1", payload: { id: "artifact-1", path: "C:/work/report.md", verified: true } },
+    { kind: "plan-activated", eventEpoch: "epoch-a", eventSeq: 5, eventId: "epoch-a:5", plan: { id: "plan-1", planId: "plan-1", status: "active", completedStepIds: [] } },
+    { kind: "turn_finalized", eventEpoch: "epoch-a", eventSeq: 6, eventId: "epoch-a:6", id: "assistant-1", text: "done", executionState: "completed", goalState: "verified", taskState: "completed", taskContract, evidenceRefs, interventionChoice: "continue", receipt: { ok: true }, warnings: [] },
+    { kind: "busy-change", eventEpoch: "epoch-a", eventSeq: 7, eventId: "epoch-a:7", busy: false },
+  ];
+  let replayed = createDashboardReducerStateFromSnapshot(initialSnapshot);
+  for (const event of events) replayed = applyDashboardEvent(replayed, event).state;
+
+  const finalSnapshot = {
+    ...initialSnapshot,
+    eventCursor: "epoch-a:7",
+    messages: [
+      initialSnapshot.messages[0],
+      { id: "assistant-1", role: "assistant", text: "done", finalized: true, taskState: "completed", executionState: "completed", goalState: "verified", taskContract, evidenceRefs, interventionChoice: "continue", receipt: { ok: true }, warnings: [], artifactIncomplete: false },
+    ],
+    tools: [{ ...events[1], id: toolFrameId, state: "succeeded" }],
+    artifacts: [{ id: "artifact-1", path: "C:/work/report.md", verified: true }],
+    plan: events[3].plan,
+    busy: false,
+  };
+  const refreshed = createDashboardReducerStateFromSnapshot(finalSnapshot);
+  for (const key of ["messages", "tools", "artifacts", "plan", "operation", "busy"]) {
+    assert.deepEqual(replayed[key], refreshed[key], `projection mismatch for ${key}`);
+  }
+});
+
+test("artifact events project every identified file through the reducer", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  const result = applyDashboardEvent(createDashboardReducerState(), {
+    kind: "artifact-created",
+    files: [
+      { id: "artifact-a", path: "C:/work/a.md", verified: true },
+      { id: "artifact-b", path: "C:/work/b.md", verified: false },
+    ],
+  });
+  assert.deepEqual(Object.keys(result.state.artifacts), ["artifact-a", "artifact-b"]);
+  assert.equal(result.state.artifacts["artifact-b"].path, "C:/work/b.md");
+});

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -40,6 +41,26 @@ async function waitForServer(url, timeoutMs = 15000) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(`server did not become ready: ${url}`);
+}
+
+async function waitForChildExit(proc, timeoutMs = 5000) {
+  if (proc.exitCode !== null || proc.signalCode !== null) return;
+  await Promise.race([
+    once(proc, "close"),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+async function removeTempTree(path) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt === 19) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
 
 async function request(method, url, ctx) {
@@ -108,7 +129,8 @@ test("真实 launcher 可执行 /skill list", { timeout: 30000 }, async () => {
       if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
       else proc.kill("SIGTERM");
     }
-    rmSync(home, { recursive: true, force: true });
+    await waitForChildExit(proc);
+    await removeTempTree(home);
   }
 });
 

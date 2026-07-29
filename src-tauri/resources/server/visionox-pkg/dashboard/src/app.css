@@ -3298,6 +3298,10 @@ div.tool-log-row {
   border-radius: 8px;
   background: var(--bg-elevated, var(--bg-2, transparent));
   overflow: hidden;
+  /* 禁止 flex 收缩：.chat-feed 是定高纵向 flex 容器，而 overflow:hidden 的
+     flex 子项自动最小高度按 0 计算，内容超出时卡片会被收缩成细条（内容被
+     overflow 裁掉），而不是让容器滚动。溢出应交给 overflow-y:auto 处理。 */
+  flex-shrink: 0;
   animation: processCardIn var(--duration-normal) ease-out;
 }
 

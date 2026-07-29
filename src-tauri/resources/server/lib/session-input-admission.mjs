@@ -173,6 +173,31 @@ export function createSessionInputAdmission({
     return snapshot();
   }
 
+  function recoverInterruptedEntries() {
+    const recovered = [];
+    for (const entry of entries.values()) {
+      if (!["promoted", "dispatching"].includes(entry.status)) continue;
+      const previousStatus = entry.status;
+      entry.status = ACTIVE_STATUS;
+      entry.delivery = "queue";
+      entry.operationId = null;
+      entry.dispatchToken = null;
+      entry.resolution = {
+        at: now(),
+        reason: "process_restarted_before_delivery_confirmed",
+      };
+      recovered.push({ entry, previousStatus });
+    }
+    if (recovered.length === 0) return [];
+    const saved = persist();
+    recovered.forEach(({ entry, previousStatus }) => publish("session-input-requeued", entry, {
+      previousStatus,
+      recovery: "process_restarted",
+      persisted: saved.ok,
+    }));
+    return recovered.map(({ entry }) => clone(entry));
+  }
+
   function rollback(before, previousSequence) {
     restoreSnapshot(before);
     sequence = previousSequence;
@@ -299,12 +324,12 @@ export function createSessionInputAdmission({
     const saved = persist();
     if (!saved.ok) {
       rollback(before, previousSequence);
-      // Once a queue reservation has crossed the dispatch boundary, the
-      // external submit may already have been accepted. If its terminal fact
-      // cannot be persisted, retaining `dispatching` would hide the input
-      // forever and invite an unsafe replay. Keep an in-memory unknown fact;
-      // later metadata writes can persist the snapshot when storage recovers.
-      if (before.find((candidate) => candidate.id === entry.id)?.status === "dispatching") {
+      // A dispatch reservation may already have entered submitPrompt, while a
+      // promoted steer may already be present in durable model history. Once
+      // either boundary is crossed, failed terminal persistence is uncertain:
+      // replaying automatically could duplicate user input or side effects.
+      const previousStatus = before.find((candidate) => candidate.id === entry.id)?.status;
+      if (["promoted", "dispatching"].includes(previousStatus)) {
         const uncertain = entries.get(entry.id);
         if (uncertain) {
           uncertain.status = "unknown";
@@ -381,7 +406,7 @@ export function createSessionInputAdmission({
     return { ok: true, input: clone(entry) };
   }
 
-  function closeOperation(operationId, { reason = "operation_finished" } = {}) {
+  function closeOperation(operationId, { reason = "operation_finished", requeueUndelivered = false } = {}) {
     const id = normalizeId(operationId);
     if (!id) return [];
     const before = snapshot();
@@ -389,7 +414,12 @@ export function createSessionInputAdmission({
     const changed = [];
     for (const entry of entries.values()) {
       if (entry.status !== ACTIVE_STATUS || entry.operationId !== id || entry.delivery !== "steer") continue;
-      entry.status = "interrupted";
+      if (requeueUndelivered) {
+        entry.delivery = "queue";
+        entry.operationId = null;
+      } else {
+        entry.status = "interrupted";
+      }
       entry.resolution = { at: now(), reason: text(reason, 240) || "operation_finished", operationId: id };
       changed.push(clone(entry));
     }
@@ -400,13 +430,17 @@ export function createSessionInputAdmission({
         return [];
       }
     }
-    changed.forEach((entry) => publish("session-input-resolved", entry));
+    changed.forEach((entry) => publish(
+      entry.status === ACTIVE_STATUS ? "session-input-requeued" : "session-input-resolved",
+      entry,
+    ));
     return changed;
   }
 
   function restore(rawEntries = []) {
     restoreSnapshot(rawEntries);
     lastPersistenceError = null;
+    recoverInterruptedEntries();
     return snapshot();
   }
 

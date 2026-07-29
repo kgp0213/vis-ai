@@ -205,6 +205,7 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
 
   const restoredEntry = (entry, text) => {
     sequence += 1;
+    const toolCallId = String(entry.toolCallId ?? entry.tool_call_id ?? "").trim();
     return {
       id: entry.id || `restored-${entry.role}-${now}-${sequence}`,
       role: entry.role,
@@ -215,9 +216,15 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
       images: Array.isArray(entry.images) ? entry.images : undefined,
       attachments: Array.isArray(entry.attachments) ? entry.attachments : undefined,
       ...(entry.turnId ? { turnId: String(entry.turnId) } : {}),
+      ...(entry.stepId ? { stepId: String(entry.stepId) } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
       ...(entry.operationId ? { operationId: String(entry.operationId) } : {}),
       ...(entry.receipt && typeof entry.receipt === "object" ? { receipt: entry.receipt } : {}),
       ...(typeof entry.taskState === "string" ? { taskState: entry.taskState } : {}),
+      ...(typeof entry.executionState === "string" ? { executionState: entry.executionState } : {}),
+      ...(typeof entry.goalState === "string" ? { goalState: entry.goalState } : {}),
+      ...(entry.taskContract && typeof entry.taskContract === "object" ? { taskContract: entry.taskContract } : {}),
+      ...(Array.isArray(entry.evidenceRefs) ? { evidenceRefs: entry.evidenceRefs.slice(-64) } : {}),
       ...(entry.artifactIncomplete === true ? { artifactIncomplete: true } : {}),
       ...(Array.isArray(entry.artifactEvidence) ? { artifactEvidence: entry.artifactEvidence } : {}),
       ...(typeof entry.interventionChoice === "string" ? { interventionChoice: entry.interventionChoice } : {}),

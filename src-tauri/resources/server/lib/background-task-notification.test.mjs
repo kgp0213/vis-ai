@@ -32,16 +32,17 @@ test("queues terminal facts by session and workspace and deduplicates them", () 
   assert.equal(runtime.claim({ sessionId: "s", workspace: "C:/Work" }).length, 0);
 });
 
-test("does not let a later operation claim an earlier operation notification", () => {
+test("lets a later operation in the same session deliver an earlier notification without losing origin audit", () => {
   const runtime = createBackgroundTaskNotificationRuntime();
   runtime.enqueue(
     { taskId: "bg-cross-operation", running: false, exitCode: 0 },
     { operationId: "op-a", sessionId: "s", workspace: "C:/work" },
   );
 
-  assert.equal(runtime.claim({ operationId: "op-b", sessionId: "s", workspace: "C:/work" }).length, 0);
-  const [claimed] = runtime.claim({ operationId: "op-a", sessionId: "s", workspace: "C:/work" });
+  const [claimed] = runtime.claim({ operationId: "op-b", sessionId: "s", workspace: "C:/work" });
   assert.equal(claimed?.sourceOperationId, "op-a");
+  assert.equal(claimed?.deliveryOperationId, "op-b");
+  assert.equal(runtime.claim({ operationId: "op-a", sessionId: "other", workspace: "C:/work" }).length, 0);
 });
 
 test("failed notification can be released after persistence failure and redacts output", () => {
@@ -86,8 +87,9 @@ test("restart-recovered lost notifications are rebound to the live operation", (
   assert.equal(isProcessRestartedRecovery({ ...recovered, stopReason: "user_cancelled" }), false);
   assert.equal(isProcessRestartedRecovery({ ...recovered, status: "failed" }), false);
 
-  // Crash-recovered facts take the live operation binding; ordinary terminal
-  // facts keep their original operation so the cross-operation guard holds.
+  // Crash-recovered facts take the live operation binding. Ordinary terminal
+  // facts retain their original operation as audit metadata but can be
+  // delivered by a later operation in the same Session.
   assert.deepEqual(notificationEnqueueScope(recovered, { operationId: "op-live", sessionId: "s", workspace: "C:/w" }), {
     operationId: "op-live",
     sessionId: "s",
@@ -104,10 +106,10 @@ test("restart-recovered lost notifications are rebound to the live operation", (
   const runtime = createBackgroundTaskNotificationRuntime();
   const enqueued = runtime.enqueue(recovered, notificationEnqueueScope(recovered, { operationId: "op-live", sessionId: "s", workspace: "C:/w" }));
   assert.equal(enqueued.accepted, true);
-  assert.equal(runtime.claim({ operationId: "op-other", sessionId: "s", workspace: "C:/w" }).length, 0);
-  const [claimed] = runtime.claim({ operationId: "op-live", sessionId: "s", workspace: "C:/w" });
+  const [claimed] = runtime.claim({ operationId: "op-other", sessionId: "s", workspace: "C:/w" });
   assert.equal(claimed?.status, "lost");
   assert.equal(claimed?.sourceOperationId, "op-live");
+  assert.equal(claimed?.deliveryOperationId, "op-other");
   assert.equal(runtime.acknowledge(claimed.notificationId), true);
   assert.equal(runtime.claim({ operationId: "op-live", sessionId: "s", workspace: "C:/w" }).length, 0);
 });

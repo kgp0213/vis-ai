@@ -1459,28 +1459,39 @@ function formatCommandResult(cmd, r) {
 // src/tools/jobs.ts
 function killProcessTree2(pid, signal) {
   if (process.platform === "win32") {
-    const args = ["/pid", String(pid), "/T"];
-    if (signal === "SIGKILL") args.push("/F");
-    try {
-      const killer = spawn3("taskkill", args, {
-        stdio: "ignore",
-        windowsHide: true
-      });
-      killer.on("error", () => {
-      });
-    } catch {
-    }
-    return;
+    // Windows has no useful graceful signal for a console process tree.
+    // Always force-terminate the complete tree and wait for taskkill itself
+    // to finish before the caller decides whether termination was confirmed.
+    const args = ["/T", "/F", "/PID", String(pid)];
+    return new Promise((resolve4) => {
+      let settled = false;
+      const done = (ok = false) => {
+        if (settled) return;
+        settled = true;
+        resolve4(ok);
+      };
+      try {
+        const killer = spawn3("taskkill", args, {
+          stdio: "ignore",
+          windowsHide: true
+        });
+        killer.once("error", () => done(false));
+        killer.once("close", (code) => done(code === 0));
+      } catch {
+        done(false);
+      }
+    });
   }
   try {
     process.kill(-pid, signal);
-    return;
+    return Promise.resolve(true);
   } catch {
   }
   try {
     process.kill(pid, signal);
   } catch {
   }
+  return Promise.resolve(true);
 }
 var DEFAULT_OUTPUT_CAP_BYTES = 64 * 1024;
 function unrefDelay(ms) {
@@ -1617,6 +1628,8 @@ var JobRegistry = class {
       ownerId: opts.ownerId ?? null,
       lifecycle: opts.lifecycle === "service" ? "service" : "task",
       child,
+      terminationPending: false,
+      stopPromise: null,
       readyPromise,
       signalReady: readyResolve,
       closedPromise,
@@ -1658,16 +1671,27 @@ ${job.output.slice(start)}`;
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
     child.on("error", (err) => {
-      job.running = false;
       job.spawnError = err.message;
       job.signalReady();
-      job.signalClosed();
+      if (job.pid === null) {
+        job.running = false;
+        job.signalClosed();
+        job.child = null;
+        this.pruneCompleted();
+        this.notifyChange(job, "failed");
+        return;
+      }
+      // A runtime ChildProcess error does not prove that a process with a PID
+      // exited. Preserve it for stop/shutdown and wait for exit/close facts.
+      job.terminationPending = true;
+      this.notifyChange(job, "termination-pending");
     });
     let onAbort = null;
     const settleClosed = (code) => {
       if (!job.running && job.exitCode !== null) return;
       job.running = false;
       job.exitCode = code;
+      job.terminationPending = false;
       job.signalReady();
       job.signalClosed();
       if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
@@ -1780,35 +1804,49 @@ ${job.output.slice(start)}`;
     const job = this.jobs.get(id);
     if (!job) return null;
     if (!job.running || !job.child) return snapshot(job);
+    if (job.stopPromise) return await job.stopPromise;
     const graceMs = Math.max(0, opts.graceMs ?? 2e3);
-    if (job.pid !== null) {
-      killProcessTree2(job.pid, "SIGTERM");
-    } else {
-      try {
-        job.child.kill("SIGTERM");
-      } catch {
-      }
-    }
-    await Promise.race([job.closedPromise, unrefDelay(graceMs)]);
-    if (job.running) {
+    job.stopPromise = (async () => {
       if (job.pid !== null) {
-        killProcessTree2(job.pid, "SIGKILL");
+        const treeKilled = await killProcessTree2(job.pid, "SIGTERM");
+        if (!treeKilled && job.running) {
+          try { job.child.kill("SIGKILL"); } catch { /* exit race */ }
+        }
       } else {
         try {
-          job.child.kill("SIGKILL");
+          job.child.kill("SIGTERM");
         } catch {
         }
       }
-      await Promise.race([job.closedPromise, unrefDelay(5e3)]);
+      await Promise.race([job.closedPromise, unrefDelay(graceMs)]);
       if (job.running) {
-        job.running = false;
-        job.signalClosed();
-        job.child = null;
-        this.pruneCompleted();
-        this.notifyChange(job, "finished");
+        if (job.pid !== null) {
+          const treeKilled = await killProcessTree2(job.pid, "SIGKILL");
+          if (!treeKilled && job.running) {
+            try { job.child.kill("SIGKILL"); } catch { /* exit race */ }
+          }
+        } else {
+          try {
+            job.child.kill("SIGKILL");
+          } catch {
+          }
+        }
+        await Promise.race([job.closedPromise, unrefDelay(5e3)]);
       }
+      if (job.running) {
+        // Do not manufacture a terminal state while the child is still
+        // alive. Keep the record observable as termination-pending so a
+        // later wait or shutdown can converge on the real exit event.
+        job.terminationPending = true;
+        this.notifyChange(job, "termination-pending");
+      }
+      return snapshot(job);
+    })();
+    try {
+      return await job.stopPromise;
+    } finally {
+      job.stopPromise = null;
     }
-    return snapshot(job);
   }
   list() {
     return [...this.jobs.values()].map(snapshot);
@@ -1828,34 +1866,42 @@ ${job.output.slice(start)}`;
     const start = Date.now();
     const runningJobs = [...this.jobs.values()].filter((j) => j.running && j.child);
     if (runningJobs.length === 0) return;
-    for (const job of runningJobs) {
-      if (job.pid !== null) killProcessTree2(job.pid, "SIGTERM");
+    await Promise.all(runningJobs.map(async (job) => {
+      if (job.pid !== null) {
+        const treeKilled = await killProcessTree2(job.pid, "SIGTERM");
+        if (!treeKilled && job.running) {
+          try { job.child?.kill("SIGKILL"); } catch { /* exit race */ }
+        }
+      }
       else
         try {
           job.child?.kill("SIGTERM");
         } catch {
         }
-    }
+    }));
     const allClose = Promise.all(runningJobs.map((j) => j.closedPromise));
     const elapsed = () => Date.now() - start;
     const graceMs = Math.min(1500, Math.max(0, deadlineMs / 2));
     await Promise.race([allClose, unrefDelay(graceMs)]);
-    for (const job of runningJobs) {
-      if (!job.running) continue;
-      if (job.pid !== null) killProcessTree2(job.pid, "SIGKILL");
+    await Promise.all(runningJobs.map(async (job) => {
+      if (!job.running) return;
+      if (job.pid !== null) {
+        const treeKilled = await killProcessTree2(job.pid, "SIGKILL");
+        if (!treeKilled && job.running) {
+          try { job.child?.kill("SIGKILL"); } catch { /* exit race */ }
+        }
+      }
       else
         try {
           job.child?.kill("SIGKILL");
         } catch {
         }
-    }
+    }));
     const remaining = Math.max(800, deadlineMs - elapsed());
     await Promise.race([allClose, unrefDelay(remaining)]);
     for (const job of runningJobs) {
       if (job.running) {
-        job.running = false;
-        job.signalClosed();
-        job.child = null;
+        job.terminationPending = true;
       }
     }
     this.pruneCompleted();
@@ -1879,7 +1925,8 @@ function snapshot(job) {
     running: job.running,
     spawnError: job.spawnError,
     ownerId: job.ownerId ?? null,
-    lifecycle: job.lifecycle === "service" ? "service" : "task"
+    lifecycle: job.lifecycle === "service" ? "service" : "task",
+    terminationPending: job.terminationPending === true
   };
 }
 function snapshotMetadata(job) {

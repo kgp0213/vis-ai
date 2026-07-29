@@ -2305,7 +2305,16 @@ async function handleMessages(method, _rest, _body, ctx, query = new URLSearchPa
   if (method !== "GET") {
     return { status: 405, body: { error: "GET only" } };
   }
-  const messages = ctx.getMessages ? ctx.getMessages() : [];
+  // VISIONOX_PATCH_SESSION_SNAPSHOT_V1
+  // Read the canonical snapshot first. Every compatibility field below is
+  // projected from that same Session binding so a concurrent switch cannot
+  // combine messages or operation state from two sessions.
+  const runtimeSnapshot = await ctx.getSessionSnapshot?.();
+  const hasRuntimeSnapshot = runtimeSnapshot && typeof runtimeSnapshot === "object";
+  const messages = hasRuntimeSnapshot
+    ? Array.isArray(runtimeSnapshot.messages) ? runtimeSnapshot.messages : []
+    : ctx.getMessages ? ctx.getMessages() : [];
+  const snapshotMessages = messages;
   const parsedLimit = Number.parseInt(query.get("limit") || "200", 10);
   const parsedOffset = Number.parseInt(query.get("offset") || "0", 10);
   const limit = Math.min(500, Math.max(1, Number.isFinite(parsedLimit) ? parsedLimit : 200));
@@ -2313,6 +2322,16 @@ async function handleMessages(method, _rest, _body, ctx, query = new URLSearchPa
   const end = Math.max(0, messages.length - offset);
   const start = Math.max(0, end - limit);
   const page = messages.slice(start, end);
+  const snapshotPage = page;
+  const snapshot = hasRuntimeSnapshot ? {
+    ...runtimeSnapshot,
+    messages: snapshotPage,
+    messagePage: {
+      totalMessages: snapshotMessages.length,
+      startIndex: start,
+      hasMore: start > 0
+    }
+  } : void 0;
   return {
     status: 200,
     body: {
@@ -2320,8 +2339,9 @@ async function handleMessages(method, _rest, _body, ctx, query = new URLSearchPa
       totalMessages: messages.length,
       startIndex: start,
       hasMore: start > 0,
-      busy: ctx.isBusy ? ctx.isBusy() : false,
-      operation: ctx.getActiveOperation ? ctx.getActiveOperation() : null
+      busy: hasRuntimeSnapshot ? runtimeSnapshot.busy === true : ctx.isBusy ? ctx.isBusy() : false,
+      operation: hasRuntimeSnapshot ? runtimeSnapshot.operation ?? null : ctx.getActiveOperation ? ctx.getActiveOperation() : null,
+      snapshot
     }
   };
 }

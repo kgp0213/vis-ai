@@ -23,6 +23,8 @@ function artifactEvidenceRefs(entries = []) {
         evidenceId: `${evidenceId}:${fileIndex + 1}`,
         type: "artifact",
         outputId: text(file?.outputId ?? evidence?.outputId, 160) || null,
+        artifactId: text(file?.artifactId ?? evidence?.artifactId, 240) || null,
+        resourceId: text(file?.resourceId ?? evidence?.resourceId, 240) || null,
         path: text(file?.path, 2000) || null,
         verified: verified && readable && (!status || VERIFIED_ARTIFACT_STATES.has(status) || status === "verified"),
         status: status || (verified ? "verified" : "present_unverified"),
@@ -52,13 +54,16 @@ function toolEvidenceRefs(toolFacts = []) {
 
 function matchesOutput(output, ref) {
   if (!output || !ref) return false;
-  if (ref.outputId && ref.outputId === output.id) return true;
+  if (ref.outputId && (ref.outputId === output.id || ref.outputId === output.outputId)) return true;
+  if (ref.artifactId && output.artifactId && ref.artifactId === output.artifactId) return true;
+  if (ref.resourceId && output.resourceId && ref.resourceId === output.resourceId) return true;
   if (output.path && ref.path) {
     const left = String(output.path).replaceAll("\\", "/").toLowerCase();
     const right = String(ref.path).replaceAll("\\", "/").toLowerCase();
     return left === right;
   }
-  if (output.kind && ref.type === output.kind) return true;
+  // A kind (for example, `artifact`) describes a category, not the user's
+  // requested output. It must never be sufficient to prove completion.
   return false;
 }
 

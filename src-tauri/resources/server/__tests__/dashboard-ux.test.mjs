@@ -93,7 +93,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatPanel, /reasoningStale/);
     assert.match(chatPanel, /reasoningTurns: completedStream\?\.reasoningTurns > 1/);
     assert.match(chatPanel, /const completedStream = streamBufRef\.current/);
-    assert.match(chatPanel, /reasoning: dash\.reasoning \?\? completedStream\?\.reasoning/);
+    assert.match(chatPanel, /reasoning: projectedMessage\.reasoning \?\? completedStream\?\.reasoning/);
     assert.match(composerBar, /class="composer-plus"/);
     assert.match(composerBar, /composer-plus-menu/);
     assert.match(composerBar, /promptOptimizing/);
@@ -160,7 +160,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatPanel, /t4\("chat\.feedRefresh"\)/);
     assert.match(chatPanel, /t4\("chat\.feedExpandAll"\)/);
     assert.match(chatPanel, /t4\("chat\.feedCollapseAll"\)/);
-    assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*shouldAutoScroll\.current = true;\s*setHasNewBelow\(false\);\s*void refetchCanonicalState\(\);?\s*\}\)/);
+    assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*shouldAutoScroll\.current = true;\s*setHasNewBelow\(false\);\s*void resyncRunnerRef\.current\?\.\(\);?\s*\}\)/);
     assert.match(chatPanel, /details\.tool-log/);
 
     // 跟随加固与新消息提示：内容增长即钉底，脱钩时给出回底入口
@@ -184,6 +184,32 @@ describe("Dashboard desktop UX", () => {
     assert.match(source, /messages-reset/);
     assert.match(app, /createDashboardEventGuard\(\)/);
     assert.match(app, /eventGuardRef\.current\?\.accept\(dash\)/);
+  });
+
+  test("renders durable Dashboard entities from the shared reducer projection", () => {
+    const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const changesSource = readFileSync(new URL("panels/changes.ts", dashboardSourceRootUrl), "utf8");
+    assert.match(chatSource, /setBusy\(reduced\.state\.busy\)/);
+    assert.match(chatSource, /setOperation\(reduced\.state\.operation\)/);
+    assert.match(chatSource, /const projectedMessage = reduced\.state\.messages/);
+    assert.match(chatSource, /const projectedTool = Object\.values\(reduced\.state\.tools\)/);
+    assert.match(chatSource, /setActivePlan\(reduced\.state\.plan\)/);
+    assert.doesNotMatch(chatSource, /setBusy\(dash\.busy\)/);
+    assert.doesNotMatch(chatSource, /setOperation\(dash\.operation/);
+    assert.match(changesSource, /createDashboardReducerStateFromSnapshot/);
+    assert.match(changesSource, /setBusy\(reduced\.state\.busy\)/);
+    assert.match(changesSource, /const projectedMessage = reduced\.state\.messages/);
+    assert.doesNotMatch(changesSource, /setBusy\(dash\.busy\)/);
+  });
+
+  test("hydrates terminal tools, preserves canonical pagination, and isolates Changes events by session", () => {
+    const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const changesSource = readFileSync(new URL("panels/changes.ts", dashboardSourceRootUrl), "utf8");
+    assert.match(chatSource, /mergeSnapshotToolsIntoMessages/);
+    assert.match(chatSource, /canonicalMessageCount=\$\{canonicalMessageCountRef\.current\}/);
+    assert.match(chatSource, /totalMessages - canonicalMessageCount/);
+    assert.match(changesSource, /const activeSessionIdRef = A2\(null\)/);
+    assert.match(changesSource, /dashSessionId && activeSessionId && dashSessionId !== activeSessionId/);
   });
 
   test("renders context-input intervention cards with an explicit status and recommendation", () => {
@@ -210,7 +236,32 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatSource, /eventBatcherRef\.current\?\.discard\(\)/);
     assert.match(chatSource, /executionStateRef\.current = createDashboardReducerState\(\)/);
     assert.match(chatSource, /eventSessionId/);
-    assert.match(chatSource, /eventSessionId && activeConversationId/);
+    assert.match(chatSource, /const activeSessionId = String\(activeConversationIdRef\.current \|\| snapshotSessionIdRef\.current \|\| ""\)/);
+    assert.match(chatSource, /eventSessionId && activeSessionId/);
+  });
+
+  test("tracks the global event cursor before session filtering and buffers initial hydration", () => {
+    const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const routing = chatSource.slice(chatSource.indexOf("const routeDashboardEvent = (dash) =>"), chatSource.indexOf("const unsubscribe = subscribeSse", chatSource.indexOf("const routeDashboardEvent = (dash) =>")));
+
+    assert.match(chatSource, /const globalEventCursorRef = A2/);
+    assert.match(chatSource, /const snapshotSessionIdRef = A2\(null\)/);
+    assert.match(chatSource, /const snapshotHydratingRef = A2\(true\)/);
+    assert.match(chatSource, /dashboardEventsAfterCursor/);
+    assert.match(routing, /observeDashboardEventCursor/);
+    assert.match(routing, /snapshotHydratingRef\.current/);
+    assert.ok(routing.indexOf("observeDashboardEventCursor") < routing.indexOf("eventSessionId && activeSessionId"));
+    assert.match(chatSource, /const canonicalProjectionGenerationRef = A2\(0\)/);
+    assert.match(chatSource, /dashboardSnapshotResponseIsCurrent/);
+    assert.match(chatSource, /const requestGeneration = canonicalProjectionGenerationRef\.current/);
+  });
+
+  test("uses SessionSnapshot messagePage for both initial hydration and older history", () => {
+    const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    assert.match(chatSource, /projectDashboardMessagePage/);
+    assert.match(chatSource, /canonicalMessageCountRef\.current = page\.loadedCount/);
+    assert.match(chatSource, /mergeDashboardMessagePages\(earlier, current\)/);
+    assert.doesNotMatch(chatSource, /canonicalMessageCountRef\.current \+= earlier\.length/);
   });
 
   test("keeps existing entry points while improving semantics, themes and composer hierarchy", () => {
@@ -339,5 +390,58 @@ describe("Dashboard desktop UX", () => {
     assert.doesNotMatch(chat, /const \[activeTool, setActiveTool\]/);
     assert.doesNotMatch(chat, /\bsetActiveTool\s*\(/);
     assert.match(internals, /tool-progress-status/);
+  });
+
+  test("deduplicates replayed message events by id and guards send re-entry", () => {
+    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    // user 事件：重同步(canonical)与事件流重放可能携带同一条消息，必须按 id
+    // 幂等追加（regression：busy-change 先于 user 广播时同一消息渲染两条气泡）。
+    const userHandler = chat.slice(chat.indexOf('if (dash.kind === "user")'), chat.indexOf('if (dash.kind === "assistant_delta")'));
+    assert.match(userHandler, /prev\.some\(\(item\) => String\(item\.id \|\| ""\) === String\(dash\.id \|\| ""\)\)/);
+    assert.match(userHandler, /inserted = true/);
+    assert.match(userHandler, /if \(inserted\) \{/);
+    assert.doesNotMatch(userHandler, /setMessages\(\(prev\) => \[\.\.\.prev, \{ id: dash\.id, role: "user"/);
+    const assistantHandler = chat.slice(chat.indexOf('if (dash.kind === "assistant_content_final"'), chat.indexOf('if (dash.kind === "tool_start")'));
+    assert.match(assistantHandler, /if \(dash\.kind !== "turn_finalized"\) canonicalMessageCountRef\.current \+= 1/);
+    assert.match(assistantHandler, /if \(inserted && dash\.kind !== "turn_finalized"\) setTotalMessages/);
+    // warning/error/info 事件：同样的幂等守卫。
+    const noticeHandler = chat.slice(
+      chat.indexOf('if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info")'),
+      chat.indexOf('if (dash.kind === "status")')
+    );
+    assert.match(noticeHandler, /const projectedMessage = reduced\.state\.messages\[messageId\]/);
+    assert.match(noticeHandler, /prev\.some\(\(item\) => String\(item\.id \|\| ""\) === messageId\)/);
+    // send()：提交 await 期间的重入守卫（双击/连按回车不得二次提交同一内容）。
+    assert.match(chat, /const sendInFlightRef = A2\(false\)/);
+    const sendFn = chat.slice(chat.indexOf("const send = q2(async () => {"), chat.indexOf("const saveSkillCredential = q2"));
+    assert.match(sendFn, /if \(sendInFlightRef\.current\) return;/);
+    assert.match(sendFn, /finally \{\s*sendInFlightRef\.current = false;/);
+  });
+
+  test("keeps process cards full height in the flex feed and scroll clamp pinned to bottom", () => {
+    const cssSrc = readFileSync(new URL("app.css", dashboardSourceRootUrl), "utf8");
+    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    // .chat-feed 是定高纵向 flex 容器；overflow:hidden 的 flex 子项自动最小高度
+    // 按 0 计算，缺 flex-shrink:0 时卡片会被收缩成细条（regression：工具卡片
+    // 塌缩为 2px，输出内容看似被遮蔽）。
+    const processCard = cssSrc.slice(cssSrc.indexOf(".process-card {"), cssSrc.indexOf(".process-card-details"));
+    assert.match(processCard, /flex-shrink:\s*0;/);
+    // 钉底状态下内容变矮会把 scrollTop 程序性钳小，不得误判为用户上滚而解除钉底。
+    const onScroll = chat.slice(chat.indexOf("const onScroll = () => {"), chat.indexOf("const onWheel = (event) => {"));
+    assert.match(onScroll, /scrollingUp && shouldAutoScroll\.current && distFromBottom < 80/);
+    assert.ok(
+      onScroll.indexOf("scrollingUp && shouldAutoScroll.current && distFromBottom < 80") < onScroll.indexOf("if (scrollingUp) {"),
+      "clamp guard must run before the user-scroll-up branch"
+    );
+    // 平滑滚动动画把一次滚轮拆成小步进事件：手势活跃期内（宽限时间戳）必须
+    // 同时抑制钳位免疫与钉底回臂，否则回臂→吞步进→钉底回拉取消动画，与用户
+    // 手势死锁（regression：任务终止后的收尾突变窗口内滚轮完全失效）。
+    assert.match(chat, /var USER_SCROLL_INTENT_GRACE_MS = 300;/);
+    assert.match(chat, /const lastScrollUpIntentAtRef = A2\(0\)/);
+    assert.match(onScroll, /userScrollIntentActive = Date\.now\(\) - lastScrollUpIntentAtRef\.current <= USER_SCROLL_INTENT_GRACE_MS/);
+    assert.match(onScroll, /scrollingUp && shouldAutoScroll\.current && distFromBottom < 80 && !userScrollIntentActive/);
+    assert.match(onScroll, /distFromBottom < 80 && !userScrollIntentActive\) \{\s*shouldAutoScroll\.current = true;/);
+    const onWheel = chat.slice(chat.indexOf("const onWheel = (event) => {"), chat.indexOf("const onPointerDown = (event) => {"));
+    assert.match(onWheel, /lastScrollUpIntentAtRef\.current = Date\.now\(\)/);
   });
 });
