@@ -402,6 +402,7 @@ export const en = {
     optimizeFailed: "Prompt optimization failed: {msg}",
     optimizeRequesting: "Optimizing prompt",
     optimizeCancel: "Cancel",
+    optimizeCancelFailed: "Could not confirm prompt optimization cancellation",
     optimizePreviewTitle: "Prompt optimization preview",
     optimizeOriginal: "Original",
     optimizeOptimized: "Optimized",

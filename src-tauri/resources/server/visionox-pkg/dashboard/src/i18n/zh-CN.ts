@@ -395,6 +395,7 @@ export const zhCN = {
     optimizeFailed: "提示词优化失败：{msg}",
     optimizeRequesting: "正在优化提示词",
     optimizeCancel: "取消",
+    optimizeCancelFailed: "无法确认提示词优化已取消",
     optimizePreviewTitle: "提示词优化预览",
     optimizeOriginal: "原文",
     optimizeOptimized: "优化稿",

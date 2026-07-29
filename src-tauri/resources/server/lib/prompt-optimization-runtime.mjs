@@ -1,6 +1,7 @@
 const DEFAULT_MAX_INPUT_CHARS = 20_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_CACHE_SIZE = 64;
+const DEFAULT_CANCELLED_CACHE_SIZE = 256;
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/u;
 const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
@@ -39,7 +40,7 @@ export function classifyPromptOptimizationInput(prompt, options = {}) {
   const trimmed = original.trim();
   if (!trimmed) return { kind: "empty", original, body: "", prefix: "" };
 
-  const slash = /^\/([A-Za-z0-9_-]+)(?=\s|$)/u.exec(trimmed);
+  const slash = /^\/(\S+)(?=\s|$)/u.exec(trimmed);
   if (slash && normalizeSlashCommands(options.slashCommands).has(slash[1].toLowerCase())) {
     return { kind: "command", original, body: trimmed, prefix: "", command: slash[1].toLowerCase() };
   }
@@ -196,6 +197,14 @@ export function createPromptOptimizationRuntime(options = {}) {
   const cancelled = new Set();
   let active = null;
 
+  function rememberCancellation(requestId) {
+    cancelled.delete(requestId);
+    cancelled.add(requestId);
+    while (cancelled.size > DEFAULT_CANCELLED_CACHE_SIZE) {
+      cancelled.delete(cancelled.values().next().value);
+    }
+  }
+
   function emitAudit(action, payload) {
     try { audit({ ts: Date.now(), action, payload }); } catch { /* Auditing cannot block the editor. */ }
   }
@@ -211,6 +220,11 @@ export function createPromptOptimizationRuntime(options = {}) {
       throw promptOptimizationError("prompt_optimization_request_id_invalid", "requestId 无效。", { status: 400 });
     }
     if (cache.has(requestId)) return cache.get(requestId).promise;
+    if (cancelled.has(requestId)) {
+      throw promptOptimizationError("prompt_optimization_cancelled", "提示词优化已取消。", {
+        status: 499, action: "keep_original",
+      });
+    }
     if (isTaskBusy()) {
       throw promptOptimizationError("prompt_optimization_busy", "主任务运行期间不能优化提示词。", {
         status: 409, retryable: true, action: "wait_for_task",
@@ -350,14 +364,13 @@ export function createPromptOptimizationRuntime(options = {}) {
     if (!REQUEST_ID_RE.test(id)) {
       return { requestId: id, cancelled: false };
     }
+    rememberCancellation(id);
     if (active?.requestId === id) {
-      cancelled.add(id);
       active.controller.abort(promptOptimizationError("prompt_optimization_cancelled", "提示词优化已取消。", {
         status: 499, action: "keep_original",
       }));
-      return { requestId: id, cancelled: true };
     }
-    return { requestId: id, cancelled: cancelled.has(id) };
+    return { requestId: id, cancelled: true };
   }
 
   return {

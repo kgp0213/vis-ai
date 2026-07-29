@@ -31,7 +31,7 @@ export function classifyPromptOptimizationDraft(draft: unknown, commands: SlashC
   const source = String(draft ?? "");
   const trimmed = source.trim();
   if (!trimmed) return { kind: "empty", body: "" };
-  const slash = /^\/([A-Za-z0-9_-]+)(?=\s|$)/u.exec(trimmed);
+  const slash = /^\/(\S+)(?=\s|$)/u.exec(trimmed);
   if (slash && slashNames(commands).has(slash[1].toLowerCase())) {
     return { kind: "command", body: trimmed };
   }

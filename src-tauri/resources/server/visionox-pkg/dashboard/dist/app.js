@@ -15077,6 +15077,7 @@ var en = {
     optimizeFailed: "Prompt optimization failed: {msg}",
     optimizeRequesting: "Optimizing prompt",
     optimizeCancel: "Cancel",
+    optimizeCancelFailed: "Could not confirm prompt optimization cancellation",
     optimizePreviewTitle: "Prompt optimization preview",
     optimizeOriginal: "Original",
     optimizeOptimized: "Optimized",
@@ -16937,6 +16938,7 @@ var zhCN = {
     optimizeFailed: "提示词优化失败：{msg}",
     optimizeRequesting: "正在优化提示词",
     optimizeCancel: "取消",
+    optimizeCancelFailed: "无法确认提示词优化已取消",
     optimizePreviewTitle: "提示词优化预览",
     optimizeOriginal: "原文",
     optimizeOptimized: "优化稿",
@@ -23294,7 +23296,7 @@ function classifyPromptOptimizationDraft(draft, commands = []) {
   const source = String(draft ?? "");
   const trimmed = source.trim();
   if (!trimmed) return { kind: "empty", body: "" };
-  const slash = /^\/([A-Za-z0-9_-]+)(?=\s|$)/u.exec(trimmed);
+  const slash = /^\/(\S+)(?=\s|$)/u.exec(trimmed);
   if (slash && slashNames(commands).has(slash[1].toLowerCase())) {
     return { kind: "command", body: trimmed };
   }
@@ -25636,13 +25638,25 @@ ${workspaceDir || ""}`;
   }, [draftKey]);
   const cancelPromptOptimizationRequest = q2((reason = "cancelled", updateState = true) => {
     const flight = promptOptimizationInFlightRef.current;
-    if (!flight) return false;
-    promptOptimizationInFlightRef.current = null;
+    if (!flight) return Promise.resolve(true);
+    if (flight.cancelPromise) return flight.cancelPromise;
+    flight.cancelRequested = true;
     flight.controller.abort();
-    void api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, { method: "DELETE", timeoutMs: 15e3 }).catch(() => {
+    flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
+      method: "DELETE",
+      timeoutMs: 15e3
+    }).then((result) => {
+      if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+      if (promptOptimizationInFlightRef.current === flight) promptOptimizationInFlightRef.current = null;
+      if (updateState) setPromptOptimization({ status: reason, preview: null, scope: null });
+      return true;
+    }).catch((error2) => {
+      if (updateState && promptOptimizationInFlightRef.current === flight) {
+        setError(t4("chat.optimizeFailed", { msg: error2.message }));
+      }
+      return false;
     });
-    if (updateState) setPromptOptimization({ status: reason, preview: null, scope: null });
-    return true;
+    return flight.cancelPromise;
   }, []);
   const setChatInput = q2((value, options2 = {}) => {
     const text = String(value ?? "");
@@ -25651,8 +25665,9 @@ ${workspaceDir || ""}`;
       promptDraftRevisionRef.current += 1;
       setPromptDraftRevision(promptDraftRevisionRef.current);
       if (options2.preserveOptimizationState !== true) {
-        cancelPromptOptimizationRequest("cancelled");
-        setPromptOptimization({ status: "idle", preview: null, scope: null });
+        const hadActiveOptimization = Boolean(promptOptimizationInFlightRef.current);
+        void cancelPromptOptimizationRequest("cancelled");
+        if (!hadActiveOptimization) setPromptOptimization({ status: "idle", preview: null, scope: null });
         setPromptOptimizationRestore(null);
       }
     }
@@ -25679,7 +25694,8 @@ ${workspaceDir || ""}`;
       workspace: workspaceDirRef.current ?? "",
       mode: modeRef.current ?? "general"
     });
-    promptOptimizationInFlightRef.current = { requestId, controller, scope };
+    const flight = { requestId, controller, scope, cancelRequested: false, cancelPromise: null };
+    promptOptimizationInFlightRef.current = flight;
     setPromptOptimization({ status: "requesting", preview: null, scope });
     setPromptOptimizationRestore(null);
     setError(null);
@@ -25704,7 +25720,7 @@ ${workspaceDir || ""}`;
       setPromptOptimization({ status: "preview", preview: result, scope });
     } catch (err) {
       if (err?.name === "AbortError" || controller.signal.aborted) {
-        if (!promptOptimizationInFlightRef.current || promptOptimizationInFlightRef.current.requestId === requestId) {
+        if (!flight.cancelRequested && promptOptimizationInFlightRef.current?.requestId === requestId) {
           setPromptOptimization({ status: "cancelled", preview: null, scope: null });
         }
         return;
@@ -25713,7 +25729,7 @@ ${workspaceDir || ""}`;
       setPromptOptimization({ status: "failed", preview: null, scope: null });
       setError(t4("chat.optimizeFailed", { msg: err.message }));
     } finally {
-      if (promptOptimizationInFlightRef.current?.requestId === requestId) {
+      if (!flight.cancelRequested && promptOptimizationInFlightRef.current?.requestId === requestId) {
         promptOptimizationInFlightRef.current = null;
       }
     }
@@ -25740,15 +25756,16 @@ ${workspaceDir || ""}`;
     setTimeout(() => inputRef.current?.focus(), 0);
   }, [promptOptimizationRestore, setChatInput]);
   y2(() => {
-    if (busy) cancelPromptOptimizationRequest("cancelled");
+    if (busy) void cancelPromptOptimizationRequest("cancelled");
   }, [busy, cancelPromptOptimizationRequest]);
   y2(() => {
-    cancelPromptOptimizationRequest("cancelled");
-    setPromptOptimization({ status: "idle", preview: null, scope: null });
+    const hadActiveOptimization = Boolean(promptOptimizationInFlightRef.current);
+    void cancelPromptOptimizationRequest("cancelled");
+    if (!hadActiveOptimization) setPromptOptimization({ status: "idle", preview: null, scope: null });
     setPromptOptimizationRestore(null);
   }, [activeConversationId, workspaceDir, mode, cancelPromptOptimizationRequest]);
   y2(() => () => {
-    cancelPromptOptimizationRequest("cancelled", false);
+    void cancelPromptOptimizationRequest("cancelled", false);
   }, [cancelPromptOptimizationRequest]);
   y2(() => {
     queuedPromptsRef.current = queuedPrompts;
@@ -27175,7 +27192,7 @@ ${workspaceDir || ""}`;
     const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
-    cancelPromptOptimizationRequest("cancelled");
+    if (!await cancelPromptOptimizationRequest("cancelled")) return;
     setPromptOptimization({ status: "idle", preview: null, scope: null });
     setPromptOptimizationRestore(null);
     sendInFlightRef.current = true;
