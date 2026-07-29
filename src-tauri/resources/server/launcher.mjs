@@ -125,6 +125,7 @@ const { createVHomeIntegration } = await importEarly("./lib/vhome-integration.mj
 const { createExternalUrlOpener } = await importEarly("./lib/external-url.mjs");
 const { buildMessageRiskPrompt, classifyUserSendIntent, consumeSendAuthorization, createSendAuthorization, normalizeMessageRiskReview } = await importEarly("./lib/message-send-policy.mjs");
 const { requestModelJson: requestTaskModelJson, requestModelText: requestTaskModelText } = await importEarly("./lib/model-task-request.mjs");
+const { createPromptOptimizationRuntime } = await importEarly("./lib/prompt-optimization-runtime.mjs");
 const { formatToolRepairNotice } = await importEarly("./lib/tool-repair-notice.mjs");
 const { validateFileWriteArgs } = await importEarly("./lib/file-write-policy.mjs");
 const { shellCommandArtifactPaths, shellCommandHasSideEffects, shellRuntimeInstallIntent } = await importEarly("./lib/shell-side-effect-policy.mjs");
@@ -10032,6 +10033,23 @@ async function buildSessionSnapshot() {
   }
 }
 
+const promptOptimizationRuntime = createPromptOptimizationRuntime({
+  requestModelText,
+  getModelContext: () => {
+    const modelConfig = effectiveModelConfig(config);
+    const provider = getActiveProvider(config);
+    return {
+      mode: LEGACY_MODE_ALIASES[config.mode] || config.mode || "general",
+      providerId: provider?.id ?? config.activeProviderId ?? null,
+      model: modelConfig?.model ?? null,
+      providerCapabilities: activeTaskModelCapabilities(modelConfig?.model),
+    };
+  },
+  isTaskBusy: () => busy,
+  slashCommands: SLASH_COMMAND_META,
+  audit: appendAuditEntry,
+});
+
 // ── Dashboard context ───────────────────────────────────────────
 const ctx = {
   mode: "desktop",
@@ -10605,49 +10623,8 @@ const ctx = {
     };
   },
 
-  optimizePrompt: async (prompt) => {
-    if (!client) throw new Error("尚未配置可用模型，请先在「模型」中导入配置并检测模型，再使用提示词优化。");
-    const source = String(prompt ?? "").trim();
-    if (!source) throw new Error("prompt is empty");
-    const activeModeId = LEGACY_MODE_ALIASES[config.mode] || config.mode || "general";
-    const intentGuidance = activeModeId === "coding"
-      ? [
-          "当前为编程模式。先判断用户是在咨询、排查、修改、构建还是审查代码。",
-          "在不改变原意的前提下，明确技术目标、影响范围、已有上下文、兼容性约束、验证方式和交付结果。",
-          "不要把讨论或诊断请求擅自改成实施请求，也不要虚构技术栈、文件名或测试命令。",
-        ].join("\n")
-      : [
-          "当前为通用模式。结合文字、已提及附件和对话线索，判断问答、办公文档、数据整理、研究或界面设计等子场景。",
-          "办公类重点明确来源范围、完整度、结构保留、输出格式/路径和验收；设计类重点明确目标用户、核心流程、布局、交互状态和响应式要求。",
-          "其他任务重点明确目标、对象、范围、期望交付物和成功标准。无法从原文确定的高影响条件保持为待确认项，不要替用户编造答案。",
-        ].join("\n");
-    const response = await client.chat({
-      model: effectiveModelConfig(config).model,
-      requestPurpose: "prompt-optimization",
-      signal: AbortSignal.timeout(120_000),
-      maxTokens: Math.min(4096, Math.max(1024, Math.ceil(source.length * 1.5))),
-      messages: [
-        {
-          role: "system",
-          content: [
-            "你是提示词编辑器，只改写用户的任务描述，不回答问题，也不执行任务。",
-            "保留原始意图、事实、文件路径、专有名称、范围、限制条件和交付要求。",
-            "补足有助于执行的目标、步骤边界和验收表述，但不得凭空添加用户未提出的需求。",
-            "保持原文语言；原文已经清晰时只做最小修改。",
-            intentGuidance,
-            "只输出优化后的提示词正文，不要解释，不要加引号、标题或代码围栏。",
-          ].join("\n"),
-        },
-        { role: "user", content: source },
-      ],
-    });
-    const optimized = String(response?.content ?? "").trim()
-      .replace(/^```(?:text|markdown)?\s*/i, "")
-      .replace(/\s*```$/, "")
-      .trim();
-    if (!optimized) throw new Error("model returned an empty optimized prompt");
-    return { prompt: optimized };
-  },
+  optimizePrompt: (input) => promptOptimizationRuntime.optimize(input),
+  cancelPromptOptimization: (requestId) => promptOptimizationRuntime.cancel(requestId),
 
   // P0-1: busy guard must be checked and set BEFORE any await to prevent
   // race conditions where two rapid calls both pass the busy check.
