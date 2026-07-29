@@ -70,6 +70,7 @@ describe("Dashboard prompt optimization", () => {
     assert.match(chatSource, /api\(`\/optimize-prompt\/\$\{encodeURIComponent\(flight\.requestId\)\}`,[\s\S]{0,160}method: "DELETE"/u);
     assert.match(chatSource, /flight\.cancelPromise\s*=\s*api\(`\/optimize-prompt/u);
     assert.match(chatSource, /result\?\.cancelled\s*!==\s*true/u);
+    assert.match(chatSource, /catch\(\(error\) => \{[\s\S]{0,360}flight\.cancelPromise = null/u);
     assert.match(chatSource, /promptOptimizationResponseIsCurrent\(/);
     assert.match(chatSource, /class="prompt-optimization-preview"/);
     assert.match(chatSource, /applyPromptOptimization/);
