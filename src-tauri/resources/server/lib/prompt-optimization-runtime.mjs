@@ -266,7 +266,14 @@ export function createPromptOptimizationRuntime(options = {}) {
     });
     const task = (async () => {
       try {
-        const requestedTokens = Math.min(4096, Math.max(1024, Math.ceil(classified.body.length * 1.5)));
+        const desiredTokens = Math.min(4096, Math.max(1024, Math.ceil(classified.body.length * 1.5)));
+        const declaredOutputCapacity = Number(
+          context.providerCapabilities?.maxOutputTokens
+          ?? context.providerCapabilities?.maxCompletionTokens,
+        );
+        const requestedTokens = Number.isSafeInteger(declaredOutputCapacity) && declaredOutputCapacity > 0
+          ? Math.min(desiredTokens, declaredOutputCapacity)
+          : desiredTokens;
         const text = await Promise.race([
           options.requestModelText({
             label: "prompt optimization",
