@@ -60,6 +60,21 @@ describe("prompt optimization runtime", () => {
     assert.ok(values.includes("number:12.5%"));
   });
 
+  test("protects Windows paths with spaces plus POSIX and relative file paths", () => {
+    const values = extractProtectedPromptFacts([
+      "处理 C:\\My Documents\\report.pdf",
+      "读取 /home/user/report.pdf",
+      "比较 ./docs/current.md 和 ../archive/previous.md",
+      "检查 .\\output\\result.json",
+    ].join("；")).map((fact) => `${fact.kind}:${fact.value}`);
+
+    assert.ok(values.includes("path:C:\\My Documents\\report.pdf"));
+    assert.ok(values.includes("path:/home/user/report.pdf"));
+    assert.ok(values.includes("path:./docs/current.md"));
+    assert.ok(values.includes("path:../archive/previous.md"));
+    assert.ok(values.includes("path:.\\output\\result.json"));
+  });
+
   test("sends only the current body and mode guidance, then restores the Skill prefix", async () => {
     const { runtime, requests, audits } = createHarness({
       response: "将 C:\\Data\\report.pdf 转换为 HTML，并验证输出。",
@@ -121,6 +136,34 @@ describe("prompt optimization runtime", () => {
     );
   });
 
+  test("rejects language changes and newly introduced side effects", async () => {
+    const language = createHarness({ response: "Explain the proposal and list its acceptance criteria." }).runtime;
+    await assert.rejects(
+      language.optimize({ prompt: "请解释这个方案", requestId: "language-mismatch", draftRevision: 1 }),
+      (error) => error.code === "prompt_optimization_language_mismatch"
+        && error.status === 422
+        && error.action === "keep_original",
+    );
+
+    const sideEffect = createHarness({ response: "执行该方案并将结果发送给所有联系人。" }).runtime;
+    await assert.rejects(
+      sideEffect.optimize({ prompt: "请解释这个方案", requestId: "side-effect-mismatch", draftRevision: 1 }),
+      (error) => error.code === "prompt_optimization_side_effect_mismatch"
+        && error.status === 422
+        && error.action === "keep_original"
+        && error.details?.introducedCategories?.includes("execution")
+        && error.details?.introducedCategories?.includes("external_send"),
+    );
+
+    const allowed = createHarness({ response: "修复该问题，运行测试并生成报告。" }).runtime;
+    const result = await allowed.optimize({
+      prompt: "修复这个问题并运行测试",
+      requestId: "side-effect-preserved",
+      draftRevision: 1,
+    });
+    assert.match(result.optimized, /修复该问题/u);
+  });
+
   test("reuses the same request ID and rejects a different concurrent request", async () => {
     let release;
     let calls = 0;
@@ -140,6 +183,28 @@ describe("prompt optimization runtime", () => {
     assert.deepEqual(await duplicate, await first);
     assert.equal((await runtime.optimize({ prompt: "再次变化", requestId: "same-id", draftRevision: 3 })).draftRevision, 1);
     assert.equal(calls, 1);
+  });
+
+  test("expires completed request results after the configured short-term TTL", async () => {
+    let clock = 1_000;
+    let calls = 0;
+    const { runtime } = createHarness({
+      now: () => clock,
+      cacheTtlMs: 500,
+      requestModelText: async () => {
+        calls += 1;
+        return `优化结果 ${calls}`;
+      },
+    });
+
+    const first = await runtime.optimize({ prompt: "优化任务", requestId: "ttl-request", draftRevision: 1 });
+    clock += 499;
+    const cached = await runtime.optimize({ prompt: "不同正文", requestId: "ttl-request", draftRevision: 2 });
+    assert.deepEqual(cached, first);
+    clock += 2;
+    const refreshed = await runtime.optimize({ prompt: "重新优化任务", requestId: "ttl-request", draftRevision: 3 });
+    assert.equal(refreshed.draftRevision, 3);
+    assert.equal(calls, 2);
   });
 
   test("rejects optimization while the ordinary task is busy", async () => {
