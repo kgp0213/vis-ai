@@ -23325,8 +23325,9 @@ function promptOptimizationResponseIsCurrent(response, scope, current) {
 }
 function promptOptimizationButtonDisabled(input) {
   if (input.busy === true || input.inFlight === true) return true;
+  const kind = input.classificationKind ?? classifyPromptOptimizationDraft(input.draft, input.slashCommands).kind;
   return ["empty", "command", "empty_skill"].includes(
-    classifyPromptOptimizationDraft(input.draft, input.slashCommands).kind
+    kind
   );
 }
 
@@ -25451,7 +25452,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [promptOptimizationRestore, setPromptOptimizationRestore] = d2(null);
   const promptOptimizationInFlightRef = A2(null);
   const promptDraftRevisionRef = A2(0);
-  const [promptDraftRevision, setPromptDraftRevision] = d2(0);
+  const promptDraftKindRef = A2(classifyPromptOptimizationDraft(initialInputRef.current, []).kind);
+  const [promptDraftKind, setPromptDraftKind] = d2(promptDraftKindRef.current);
   const promptOptimizing = promptOptimization.status === "requesting";
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
@@ -25663,7 +25665,11 @@ ${workspaceDir || ""}`;
     const previous = inputValueRef.current;
     if (text !== previous) {
       promptDraftRevisionRef.current += 1;
-      setPromptDraftRevision(promptDraftRevisionRef.current);
+      const nextKind = classifyPromptOptimizationDraft(text, slashCommands).kind;
+      if (promptDraftKindRef.current !== nextKind) {
+        promptDraftKindRef.current = nextKind;
+        setPromptDraftKind(nextKind);
+      }
       if (options2.preserveOptimizationState !== true) {
         const hadActiveOptimization = Boolean(promptOptimizationInFlightRef.current);
         void cancelPromptOptimizationRequest("cancelled");
@@ -25679,7 +25685,14 @@ ${workspaceDir || ""}`;
       setInputHasContent(hasContent);
     }
     if (options2.persist !== false) persistDraftSoon(text);
-  }, [persistDraftSoon, cancelPromptOptimizationRequest]);
+  }, [persistDraftSoon, cancelPromptOptimizationRequest, slashCommands]);
+  y2(() => {
+    const nextKind = classifyPromptOptimizationDraft(inputValueRef.current, slashCommands).kind;
+    if (promptDraftKindRef.current !== nextKind) {
+      promptDraftKindRef.current = nextKind;
+      setPromptDraftKind(nextKind);
+    }
+  }, [slashCommands]);
   const optimizeCurrentPrompt = q2(async () => {
     const source = inputValueRef.current;
     const classification = classifyPromptOptimizationDraft(source, slashCommands);
@@ -28863,7 +28876,7 @@ ${workspaceDir || ""}`;
     inFlight: Boolean(promptOptimizationInFlightRef.current),
     draft: inputValueRef.current,
     slashCommands,
-    revision: promptDraftRevision
+    classificationKind: promptDraftKind
   })}
                 onClick=${optimizeCurrentPrompt}
                 title=${t4("chat.optimizeInputTitle")}

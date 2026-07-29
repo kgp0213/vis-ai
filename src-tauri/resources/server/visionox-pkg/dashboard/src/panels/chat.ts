@@ -1160,7 +1160,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [promptOptimizationRestore, setPromptOptimizationRestore] = d2(null);
   const promptOptimizationInFlightRef = A2(null);
   const promptDraftRevisionRef = A2(0);
-  const [promptDraftRevision, setPromptDraftRevision] = d2(0);
+  const promptDraftKindRef = A2(classifyPromptOptimizationDraft(initialInputRef.current, []).kind);
+  const [promptDraftKind, setPromptDraftKind] = d2(promptDraftKindRef.current);
   const promptOptimizing = promptOptimization.status === "requesting";
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
@@ -1375,7 +1376,11 @@ const [providerCaps, setProviderCaps] = d2(null);
     const previous = inputValueRef.current;
     if (text !== previous) {
       promptDraftRevisionRef.current += 1;
-      setPromptDraftRevision(promptDraftRevisionRef.current);
+      const nextKind = classifyPromptOptimizationDraft(text, slashCommands).kind;
+      if (promptDraftKindRef.current !== nextKind) {
+        promptDraftKindRef.current = nextKind;
+        setPromptDraftKind(nextKind);
+      }
       if (options.preserveOptimizationState !== true) {
         const hadActiveOptimization = Boolean(promptOptimizationInFlightRef.current);
         void cancelPromptOptimizationRequest("cancelled");
@@ -1391,7 +1396,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       setInputHasContent(hasContent);
     }
     if (options.persist !== false) persistDraftSoon(text);
-  }, [persistDraftSoon, cancelPromptOptimizationRequest]);
+  }, [persistDraftSoon, cancelPromptOptimizationRequest, slashCommands]);
+  y2(() => {
+    const nextKind = classifyPromptOptimizationDraft(inputValueRef.current, slashCommands).kind;
+    if (promptDraftKindRef.current !== nextKind) {
+      promptDraftKindRef.current = nextKind;
+      setPromptDraftKind(nextKind);
+    }
+  }, [slashCommands]);
   const optimizeCurrentPrompt = q2(async () => {
     const source = inputValueRef.current;
     const classification = classifyPromptOptimizationDraft(source, slashCommands);
@@ -4478,7 +4490,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                   inFlight: Boolean(promptOptimizationInFlightRef.current),
                   draft: inputValueRef.current,
                   slashCommands,
-                  revision: promptDraftRevision,
+                  classificationKind: promptDraftKind,
                 })}
                 onClick=${optimizeCurrentPrompt}
                 title=${t4("chat.optimizeInputTitle")}

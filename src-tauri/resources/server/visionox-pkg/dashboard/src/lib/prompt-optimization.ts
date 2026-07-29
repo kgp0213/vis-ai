@@ -78,9 +78,12 @@ export function promptOptimizationButtonDisabled(input: {
   inFlight?: boolean;
   draft?: unknown;
   slashCommands?: SlashCommand[];
+  classificationKind?: ReturnType<typeof classifyPromptOptimizationDraft>["kind"];
 }): boolean {
   if (input.busy === true || input.inFlight === true) return true;
+  const kind = input.classificationKind
+    ?? classifyPromptOptimizationDraft(input.draft, input.slashCommands).kind;
   return ["empty", "command", "empty_skill"].includes(
-    classifyPromptOptimizationDraft(input.draft, input.slashCommands).kind,
+    kind,
   );
 }
