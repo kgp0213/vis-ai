@@ -1355,7 +1355,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (flight.cancelPromise) return flight.cancelPromise;
     flight.cancelRequested = true;
     flight.controller.abort();
-    flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
+    const cancellationPromise = flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
       method: "DELETE",
       timeoutMs: 15_000,
     }).then((result) => {
@@ -1364,12 +1364,13 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (updateState) setPromptOptimization({ status: reason, preview: null, scope: null });
       return true;
     }).catch((error) => {
+      if (flight.cancelPromise === cancellationPromise) flight.cancelPromise = null;
       if (updateState && promptOptimizationInFlightRef.current === flight) {
         setError(t4("chat.optimizeFailed", { msg: error.message }));
       }
       return false;
     });
-    return flight.cancelPromise;
+    return cancellationPromise;
   }, []);
   const setChatInput = q2((value, options = {}) => {
     const text = String(value ?? "");
