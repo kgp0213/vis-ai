@@ -29,6 +29,16 @@ async function apiPost(body, overrides = {}) {
   return res;
 }
 
+async function apiDelete(requestId, overrides = {}) {
+  const req = Readable.from([]);
+  req.url = `/api/optimize-prompt/${encodeURIComponent(requestId)}`;
+  req.method = "DELETE";
+  req.headers = { "x-reasonix-token": TOKEN };
+  const res = mockRes();
+  await dispatch(req, res, { ...overrides }, TOKEN);
+  return res;
+}
+
 describe("prompt optimization API", () => {
   test("launcher delegates editor requests to the isolated optimization runtime", () => {
     assert.match(launcherSource, /importEarly\("\.\/lib\/prompt-optimization-runtime\.mjs"\)/);
@@ -39,13 +49,21 @@ describe("prompt optimization API", () => {
     assert.match(launcherSource, /cancelPromptOptimization:\s*\(requestId\)\s*=>\s*promptOptimizationRuntime\.cancel\(requestId\)/);
   });
 
-  test("returns an editable result without submitting a conversation turn", async () => {
+  test("returns a revision-scoped preview without submitting a conversation turn", async () => {
     let received = null;
     let submitted = false;
-    const res = await apiPost({ prompt: "帮我处理这个文件" }, {
-      optimizePrompt: async (prompt) => {
-        received = prompt;
-        return { prompt: "读取指定文件，完整处理其内容，并在交付前验证输出。" };
+    const res = await apiPost({ prompt: "  帮我处理这个文件  ", requestId: "request-preview", draftRevision: 7 }, {
+      optimizePrompt: async (input) => {
+        received = input;
+        return {
+          requestId: input.requestId,
+          draftRevision: input.draftRevision,
+          original: input.prompt,
+          optimized: "读取指定文件，完整处理其内容，并在交付前验证输出。",
+          warnings: [],
+          protectedFacts: [],
+          unchanged: false,
+        };
       },
       submitPrompt: async () => {
         submitted = true;
@@ -53,65 +71,88 @@ describe("prompt optimization API", () => {
       },
     });
     assert.equal(res.status, 200);
-    assert.equal(received, "帮我处理这个文件");
-    assert.equal(res.json.prompt, "读取指定文件，完整处理其内容，并在交付前验证输出。");
+    assert.deepEqual(received, { prompt: "  帮我处理这个文件  ", requestId: "request-preview", draftRevision: 7 });
+    assert.deepEqual(res.json, {
+      requestId: "request-preview",
+      draftRevision: 7,
+      original: "  帮我处理这个文件  ",
+      optimized: "读取指定文件，完整处理其内容，并在交付前验证输出。",
+      warnings: [],
+      protectedFacts: [],
+      unchanged: false,
+    });
     assert.equal(submitted, false);
   });
 
-  test("rejects empty prompts before invoking the model", async () => {
+  test("requires prompt, requestId and a non-negative draft revision", async () => {
     let called = false;
-    const res = await apiPost({ prompt: " " }, {
-      optimizePrompt: async () => {
-        called = true;
-        return { prompt: "unused" };
-      },
-    });
-    assert.equal(res.status, 400);
+    for (const body of [
+      { prompt: " ", requestId: "empty", draftRevision: 0 },
+      { prompt: "有效", requestId: "", draftRevision: 0 },
+      { prompt: "有效", requestId: "valid", draftRevision: -1 },
+    ]) {
+      const res = await apiPost(body, {
+        optimizePrompt: async () => {
+          called = true;
+          return {};
+        },
+      });
+      assert.equal(res.status, 400);
+      assert.equal(typeof res.json.code, "string");
+      assert.equal(typeof res.json.message, "string");
+      assert.equal(typeof res.json.retryable, "boolean");
+    }
     assert.equal(called, false);
   });
 
-  test("writes a redacted diagnostic audit entry when optimization fails", async () => {
-    const auditEntries = [];
-    const res = await apiPost({ prompt: "帮我优化这段提示词" }, {
+  test("preserves structured runtime failures and their HTTP status", async () => {
+    const res = await apiPost({ prompt: "帮我优化这段提示词", requestId: "rate-limited", draftRevision: 1 }, {
       optimizePrompt: async () => {
-        const error = new Error("upstream rejected Authorization: Bearer secret-token-123 api_key=raw-secret-456");
-        error.code = "UPSTREAM_REJECTED";
+        const error = new Error("模型服务当前请求过多。");
+        error.code = "prompt_optimization_rate_limited";
         error.status = 429;
+        error.title = "提示词优化失败";
+        error.retryable = true;
+        error.action = "retry_later";
+        error.details = { requestId: "rate-limited" };
         throw error;
       },
-      getPromptOptimizationContext: () => ({
-        mode: "general",
-        providerId: "volcengine",
-        model: "doubao-test",
+    });
+    assert.equal(res.status, 429);
+    assert.equal(res.json.code, "prompt_optimization_rate_limited");
+    assert.equal(res.json.retryable, true);
+    assert.equal(res.json.action, "retry_later");
+    assert.deepEqual(res.json.details, { requestId: "rate-limited" });
+  });
+
+  test("cancels an optimization request through the idempotent DELETE route", async () => {
+    const cancelled = [];
+    const first = await apiDelete("cancel-me", {
+      cancelPromptOptimization: (requestId) => {
+        cancelled.push(requestId);
+        return { requestId, cancelled: true };
+      },
+    });
+    assert.equal(first.status, 200);
+    assert.deepEqual(first.json, { requestId: "cancel-me", cancelled: true });
+    assert.deepEqual(cancelled, ["cancel-me"]);
+  });
+
+  test("keeps the vendored route thin and never audits prompt bodies", async () => {
+    const auditEntries = [];
+    const res = await apiPost({ prompt: "secret prompt body", requestId: "thin-route", draftRevision: 1 }, {
+      optimizePrompt: async ({ prompt, requestId, draftRevision }) => ({
+        requestId,
+        draftRevision,
+        original: prompt,
+        optimized: prompt,
+        warnings: [],
+        protectedFacts: [],
+        unchanged: true,
       }),
       audit: (entry) => auditEntries.push(entry),
     });
-
-    assert.equal(res.status, 502);
-    assert.equal(auditEntries.length, 1);
-    assert.equal(auditEntries[0].action, "optimize-prompt-failed");
-    assert.equal(auditEntries[0].payload.stage, "model-request");
-    assert.equal(auditEntries[0].payload.providerId, "volcengine");
-    assert.equal(auditEntries[0].payload.model, "doubao-test");
-    assert.equal(auditEntries[0].payload.errorCode, "UPSTREAM_REJECTED");
-    assert.equal(auditEntries[0].payload.httpStatus, 429);
-    assert.equal(auditEntries[0].payload.inputLength, 9);
-    const serialized = JSON.stringify(auditEntries[0]);
-    assert.doesNotMatch(serialized, /secret-token-123|raw-secret-456/);
-    assert.match(auditEntries[0].payload.message, /\[redacted\]/);
-  });
-
-  test("audits an empty model response as a response validation failure", async () => {
-    const auditEntries = [];
-    const res = await apiPost({ prompt: "优化" }, {
-      optimizePrompt: async () => ({ prompt: "" }),
-      audit: (entry) => auditEntries.push(entry),
-    });
-
-    assert.equal(res.status, 502);
-    assert.equal(auditEntries.length, 1);
-    assert.equal(auditEntries[0].action, "optimize-prompt-failed");
-    assert.equal(auditEntries[0].payload.stage, "response-validation");
-    assert.equal(auditEntries[0].payload.message, "model returned an empty optimized prompt");
+    assert.equal(res.status, 200);
+    assert.equal(auditEntries.length, 0);
   });
 });
