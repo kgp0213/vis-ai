@@ -1,6 +1,7 @@
 const DEFAULT_MAX_INPUT_CHARS = 20_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_CACHE_SIZE = 64;
+const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_CANCELLED_CACHE_SIZE = 256;
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/u;
 const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
@@ -77,11 +78,21 @@ function collectMatches(text, kind, expression, valueAt = 0) {
   return matches;
 }
 
+function extractPathFacts(source) {
+  const windowsFile = /(?:[A-Za-z]:\\|\\\\|\.{1,2}\\)(?:[^<>"|?*\r\n,，。；;：！？）】》]*?)(?:\.[A-Za-z0-9][A-Za-z0-9._-]{0,15})(?=$|[\s,，。；;：！？）】》])/gu;
+  const posixFile = /(?<![:/\p{L}\p{N}_])(?:\/|~\/|\.{1,2}\/)(?:[^<>"'|?*\r\n,，。；;：！？）】》]*?)(?:\.[A-Za-z0-9][A-Za-z0-9._-]{0,15})(?=$|[\s,，。；;：！？）】》])/gu;
+  return [
+    ...collectMatches(source, "path", windowsFile),
+    ...collectMatches(source, "path", posixFile),
+    ...collectMatches(source, "path", /(?:[A-Za-z]:\\|\\\\|\.{1,2}\\)[^\s<>"'|?*]+/gu),
+  ];
+}
+
 export function extractProtectedPromptFacts(prompt) {
   const source = String(prompt ?? "");
   const found = [
     ...collectMatches(source, "url", /https?:\/\/[^\s<>"'，。；：！？）】》“”‘’]+/giu),
-    ...collectMatches(source, "path", /(?:[A-Za-z]:\\|\\\\)[^\s<>"'|?*]+/gu),
+    ...extractPathFacts(source),
     ...collectMatches(source, "date", /(?<!\d)\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日)?(?!\d)/gu),
     ...collectMatches(source, "quoted", /[“"]([^”"\r\n]+)[”"]/gu, 1),
     ...collectMatches(source, "quoted", /[‘']([^’'\r\n]+)[’']/gu, 1),
@@ -95,6 +106,45 @@ export function extractProtectedPromptFacts(prompt) {
     facts.set(key, current ? { ...current, count: current.count + 1 } : { ...fact, count: 1 });
   }
   return [...facts.values()];
+}
+
+function dominantPromptLanguage(text) {
+  const source = String(text ?? "");
+  const cjkCount = source.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu)?.length ?? 0;
+  const latinCount = source.match(/[A-Za-z]/gu)?.length ?? 0;
+  if (cjkCount >= 4 && cjkCount * 2 >= latinCount) return "cjk";
+  if (latinCount >= 12 && cjkCount === 0) return "latin";
+  return null;
+}
+
+const SIDE_EFFECT_RULES = Object.freeze([
+  {
+    category: "execution",
+    pattern: /(?:执行(?!步骤|计划|流程|方式|方法|说明)|运行(?:测试|命令|脚本|程序|构建)?|启动|构建|编译|修改|修复|创建|生成|写入|处理|转换|部署|实施)|\b(?:execute|run|start|build|compile|modify|fix|create|generate|write|process|convert|deploy|implement)(?:s|ed|ing)?\b/iu,
+  },
+  {
+    category: "external_send",
+    pattern: /(?:发送|发给|转发|邮件(?:给)?|通知(?:给)?|上传|发布|推送)|\b(?:send|email|message|notify|upload|publish|post|forward)(?:s|ed|ing)?\b/iu,
+  },
+  {
+    category: "installation",
+    pattern: /(?:安装|下载|新增依赖|更新依赖|配置环境)|\b(?:install|installation|download|add dependency|update dependency)(?:s|ed|ing)?\b/iu,
+  },
+  {
+    category: "destructive",
+    pattern: /(?:删除|清空|覆盖|替换原文件|卸载|重置)|\b(?:delete|remove|clear|overwrite|uninstall|reset|drop|truncate)(?:s|d|ed|ing)?\b/iu,
+  },
+]);
+
+function promptSideEffectCategories(text) {
+  return SIDE_EFFECT_RULES
+    .filter((rule) => rule.pattern.test(String(text ?? "")))
+    .map((rule) => rule.category);
+}
+
+function introducedSideEffectCategories(original, candidate) {
+  const existing = new Set(promptSideEffectCategories(original));
+  return promptSideEffectCategories(candidate).filter((category) => !existing.has(category));
 }
 
 function missingProtectedFacts(required, candidate) {
@@ -193,16 +243,26 @@ export function createPromptOptimizationRuntime(options = {}) {
   const maxInputChars = boundedInteger(options.maxInputChars, DEFAULT_MAX_INPUT_CHARS, 1, 100_000);
   const timeoutMs = boundedInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, 100, 600_000);
   const cacheSize = boundedInteger(options.cacheSize, DEFAULT_CACHE_SIZE, 1, 256);
+  const cacheTtlMs = boundedInteger(options.cacheTtlMs, DEFAULT_CACHE_TTL_MS, 100, 60 * 60_000);
+  const now = typeof options.now === "function" ? options.now : Date.now;
   const cache = new Map();
-  const cancelled = new Set();
+  const cancelled = new Map();
   let active = null;
 
   function rememberCancellation(requestId) {
     cancelled.delete(requestId);
-    cancelled.add(requestId);
+    cancelled.set(requestId, now() + cacheTtlMs);
     while (cancelled.size > DEFAULT_CANCELLED_CACHE_SIZE) {
-      cancelled.delete(cancelled.values().next().value);
+      cancelled.delete(cancelled.keys().next().value);
     }
+  }
+
+  function hasCancellation(requestId) {
+    const expiresAt = cancelled.get(requestId);
+    if (!Number.isFinite(expiresAt)) return false;
+    if (expiresAt > now()) return true;
+    cancelled.delete(requestId);
+    return false;
   }
 
   function emitAudit(action, payload) {
@@ -210,8 +270,16 @@ export function createPromptOptimizationRuntime(options = {}) {
   }
 
   function remember(requestId, promise) {
-    cache.set(requestId, { promise });
+    cache.set(requestId, { promise, expiresAt: now() + cacheTtlMs });
     while (cache.size > cacheSize) cache.delete(cache.keys().next().value);
+  }
+
+  function cachedRequest(requestId) {
+    const entry = cache.get(requestId);
+    if (!entry) return null;
+    if (entry.expiresAt > now()) return entry;
+    cache.delete(requestId);
+    return null;
   }
 
   async function optimize(input = {}) {
@@ -219,8 +287,9 @@ export function createPromptOptimizationRuntime(options = {}) {
     if (!REQUEST_ID_RE.test(requestId)) {
       throw promptOptimizationError("prompt_optimization_request_id_invalid", "requestId 无效。", { status: 400 });
     }
-    if (cache.has(requestId)) return cache.get(requestId).promise;
-    if (cancelled.has(requestId)) {
+    const cached = cachedRequest(requestId);
+    if (cached) return cached.promise;
+    if (hasCancellation(requestId)) {
       throw promptOptimizationError("prompt_optimization_cancelled", "提示词优化已取消。", {
         status: 499, action: "keep_original",
       });
@@ -317,6 +386,23 @@ export function createPromptOptimizationRuntime(options = {}) {
             details: { missingFacts },
           });
         }
+        const originalLanguage = dominantPromptLanguage(classified.body);
+        const optimizedLanguage = dominantPromptLanguage(optimizedBody);
+        if (originalLanguage && optimizedLanguage !== originalLanguage) {
+          throw promptOptimizationError("prompt_optimization_language_mismatch", "优化结果改变了原文语言。", {
+            status: 422,
+            action: "keep_original",
+            details: { expectedLanguage: originalLanguage, actualLanguage: optimizedLanguage },
+          });
+        }
+        const introducedCategories = introducedSideEffectCategories(classified.body, optimizedBody);
+        if (introducedCategories.length > 0) {
+          throw promptOptimizationError("prompt_optimization_side_effect_mismatch", "优化结果增加了原文未要求的副作用。", {
+            status: 422,
+            action: "keep_original",
+            details: { introducedCategories },
+          });
+        }
         const optimized = `${classified.prefix}${optimizedBody}`;
         const result = {
           requestId,
@@ -376,6 +462,9 @@ export function createPromptOptimizationRuntime(options = {}) {
   return {
     optimize,
     cancel,
-    snapshot: () => ({ activeRequestId: active?.requestId ?? null, cached: cache.size }),
+    snapshot: () => ({
+      activeRequestId: active?.requestId ?? null,
+      cached: [...cache.keys()].filter((requestId) => cachedRequest(requestId)).length,
+    }),
   };
 }
