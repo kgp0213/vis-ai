@@ -21,6 +21,12 @@ import { appBus, showToast } from "../lib/bus.js";
 import { fmtBytes, fmtCost, fmtUsd, primaryBalance } from "../lib/format.js";
 import { html as html4 } from "../lib/html.js";
 import { confirmExternalArtifactOpen, showArtifactPreview } from "../lib/markdown.js";
+import {
+  classifyPromptOptimizationDraft,
+  createPromptOptimizationScope,
+  promptOptimizationButtonDisabled,
+  promptOptimizationResponseIsCurrent,
+} from "../lib/prompt-optimization.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
 import {
   applyDashboardEvent as reduceDashboardEvent,
@@ -1150,7 +1156,12 @@ function ChatPanel({ userAvatar = null } = {}) {
   const draftSaveTimerRef = A2(null);
   const [inputHasContent, setInputHasContent] = d2(Boolean(initialInputRef.current.trim()));
   const inputHasContentRef = A2(inputHasContent);
-  const [promptOptimizing, setPromptOptimizing] = d2(false);
+  const [promptOptimization, setPromptOptimization] = d2({ status: "idle", preview: null, scope: null });
+  const [promptOptimizationRestore, setPromptOptimizationRestore] = d2(null);
+  const promptOptimizationInFlightRef = A2(null);
+  const promptDraftRevisionRef = A2(0);
+  const [promptDraftRevision, setPromptDraftRevision] = d2(0);
+  const promptOptimizing = promptOptimization.status === "requesting";
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
   const [draftReady, setDraftReady] = d2(false);
@@ -1228,7 +1239,11 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [workspaceDir, setWorkspaceDirLocal] = d2(null);
   const [activeConversationId, setActiveConversationIdState] = d2(null);
   const activeConversationIdRef = A2(activeConversationId);
+  const workspaceDirRef = A2(workspaceDir);
+  const modeRef = A2(mode);
   activeConversationIdRef.current = activeConversationId;
+  workspaceDirRef.current = workspaceDir;
+  modeRef.current = mode;
   const setActiveConversationId = q2((nextConversationId) => {
     const next = nextConversationId == null ? null : String(nextConversationId);
     if (String(activeConversationIdRef.current ?? "") !== String(next ?? "")) {
@@ -1333,8 +1348,27 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     }, 250);
   }, [draftKey]);
+  const cancelPromptOptimizationRequest = q2((reason = "cancelled", updateState = true) => {
+    const flight = promptOptimizationInFlightRef.current;
+    if (!flight) return false;
+    promptOptimizationInFlightRef.current = null;
+    flight.controller.abort();
+    void api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, { method: "DELETE", timeoutMs: 15_000 }).catch(() => {});
+    if (updateState) setPromptOptimization({ status: reason, preview: null, scope: null });
+    return true;
+  }, []);
   const setChatInput = q2((value, options = {}) => {
     const text = String(value ?? "");
+    const previous = inputValueRef.current;
+    if (text !== previous) {
+      promptDraftRevisionRef.current += 1;
+      setPromptDraftRevision(promptDraftRevisionRef.current);
+      if (options.preserveOptimizationState !== true) {
+        cancelPromptOptimizationRequest("cancelled");
+        setPromptOptimization({ status: "idle", preview: null, scope: null });
+        setPromptOptimizationRestore(null);
+      }
+    }
     inputValueRef.current = text;
     if (inputRef.current && inputRef.current.value !== text) inputRef.current.value = text;
     const hasContent = Boolean(text.trim());
@@ -1343,35 +1377,92 @@ const [providerCaps, setProviderCaps] = d2(null);
       setInputHasContent(hasContent);
     }
     if (options.persist !== false) persistDraftSoon(text);
-  }, [persistDraftSoon]);
+  }, [persistDraftSoon, cancelPromptOptimizationRequest]);
   const optimizeCurrentPrompt = q2(async () => {
-    const source = inputValueRef.current.trim();
-    if (!source || promptOptimizing) return;
-    setPromptOptimizing(true);
+    const source = inputValueRef.current;
+    const classification = classifyPromptOptimizationDraft(source, slashCommands);
+    if (busy || promptOptimizationInFlightRef.current || ["empty", "command", "empty_skill"].includes(classification.kind)) return;
+    const requestId = globalThis.crypto?.randomUUID?.() ?? `opt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const controller = new AbortController();
+    const scope = createPromptOptimizationScope({
+      requestId,
+      draftRevision: promptDraftRevisionRef.current,
+      original: source,
+      sessionId: activeConversationIdRef.current ?? "",
+      workspace: workspaceDirRef.current ?? "",
+      mode: modeRef.current ?? "general",
+    });
+    promptOptimizationInFlightRef.current = { requestId, controller, scope };
+    setPromptOptimization({ status: "requesting", preview: null, scope });
+    setPromptOptimizationRestore(null);
     setError(null);
     try {
-      const result = await api("/optimize-prompt", { method: "POST", body: { prompt: source } });
-      if (inputValueRef.current.trim() !== source) {
+      const result = await api("/optimize-prompt", {
+        method: "POST",
+        body: { prompt: source, requestId, draftRevision: scope.draftRevision },
+        signal: controller.signal,
+      });
+      if (promptOptimizationInFlightRef.current?.requestId !== requestId) return;
+      if (!promptOptimizationResponseIsCurrent(result, scope, {
+        draftRevision: promptDraftRevisionRef.current,
+        original: inputValueRef.current,
+        sessionId: activeConversationIdRef.current ?? "",
+        workspace: workspaceDirRef.current ?? "",
+        mode: modeRef.current ?? "general",
+      })) {
         showToast(t4("chat.draftKept"), "info");
+        setPromptOptimization({ status: "cancelled", preview: null, scope: null });
         return;
       }
-      const optimized = String(result?.prompt ?? "").trim();
-      if (!optimized) throw new Error(t4("chat.optimizeNoResult"));
-      setChatInput(optimized);
-      setTimeout(() => {
-        inputRef.current?.focus();
-        try {
-          inputRef.current.selectionStart = inputRef.current.selectionEnd = optimized.length;
-        } catch {
-        }
-      }, 0);
-      showToast(t4("chat.optimizeDone"), "success");
+      setPromptOptimization({ status: "preview", preview: result, scope });
     } catch (err) {
+      if (err?.name === "AbortError" || controller.signal.aborted) {
+        if (!promptOptimizationInFlightRef.current || promptOptimizationInFlightRef.current.requestId === requestId) {
+          setPromptOptimization({ status: "cancelled", preview: null, scope: null });
+        }
+        return;
+      }
+      if (promptOptimizationInFlightRef.current?.requestId !== requestId) return;
+      setPromptOptimization({ status: "failed", preview: null, scope: null });
       setError(t4("chat.optimizeFailed", { msg: err.message }));
     } finally {
-      setPromptOptimizing(false);
+      if (promptOptimizationInFlightRef.current?.requestId === requestId) {
+        promptOptimizationInFlightRef.current = null;
+      }
     }
-  }, [promptOptimizing, setChatInput]);
+  }, [busy, slashCommands]);
+  const applyPromptOptimization = q2(() => {
+    const preview = promptOptimization.preview;
+    if (!preview) return;
+    setPromptOptimization({ status: "applying", preview, scope: promptOptimization.scope });
+    setPromptOptimizationRestore({ original: preview.original });
+    setChatInput(preview.optimized, { preserveOptimizationState: true });
+    setPromptOptimization({ status: "idle", preview: null, scope: null });
+    setTimeout(() => inputRef.current?.focus(), 0);
+    showToast(t4("chat.optimizeDone"), "success");
+  }, [promptOptimization, setChatInput]);
+  const keepOriginalPrompt = q2(() => {
+    setPromptOptimization({ status: "idle", preview: null, scope: null });
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, []);
+  const restoreOriginalPrompt = q2(() => {
+    if (!promptOptimizationRestore) return;
+    const original = promptOptimizationRestore.original;
+    setPromptOptimizationRestore(null);
+    setChatInput(original, { preserveOptimizationState: true });
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }, [promptOptimizationRestore, setChatInput]);
+  y2(() => {
+    if (busy) cancelPromptOptimizationRequest("cancelled");
+  }, [busy, cancelPromptOptimizationRequest]);
+  y2(() => {
+    cancelPromptOptimizationRequest("cancelled");
+    setPromptOptimization({ status: "idle", preview: null, scope: null });
+    setPromptOptimizationRestore(null);
+  }, [activeConversationId, workspaceDir, mode, cancelPromptOptimizationRequest]);
+  y2(() => () => {
+    cancelPromptOptimizationRequest("cancelled", false);
+  }, [cancelPromptOptimizationRequest]);
   y2(() => {
     queuedPromptsRef.current = queuedPrompts;
   }, [queuedPrompts]);
@@ -2824,6 +2915,9 @@ const [providerCaps, setProviderCaps] = d2(null);
     const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
+    cancelPromptOptimizationRequest("cancelled");
+    setPromptOptimization({ status: "idle", preview: null, scope: null });
+    setPromptOptimizationRestore(null);
     sendInFlightRef.current = true;
     try {
       setError(null);
@@ -2865,7 +2959,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } finally {
       sendInFlightRef.current = false;
     }
-  }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput]);
+  }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest]);
   const saveSkillCredential = q2(async () => {
     if (!skillCredentialSetup || !skillCredentialValue.trim()) return;
     setSkillCredentialSaving(true);
@@ -3119,16 +3213,10 @@ const [providerCaps, setProviderCaps] = d2(null);
   const onInput = q2(
     (e3) => {
       const v3 = e3.target.value;
-      inputValueRef.current = v3;
-      const hasContent = Boolean(v3.trim());
-      if (inputHasContentRef.current !== hasContent) {
-        inputHasContentRef.current = hasContent;
-        setInputHasContent(hasContent);
-      }
-      persistDraftSoon(v3);
+      setChatInput(v3);
       updatePopover(v3);
     },
-    [updatePopover, persistDraftSoon]
+    [updatePopover, setChatInput]
   );
   const onKeyDown = q2(
     (e3) => {
@@ -4144,6 +4232,41 @@ const [providerCaps, setProviderCaps] = d2(null);
                 </div>
               </div>
             ` : null}
+            ${promptOptimization.status === "requesting" ? html4`
+              <div class="prompt-optimization-status" role="status" aria-live="polite">
+                <span class="composer-optimize-spin"></span>
+                <span>${t4("chat.optimizeRequesting")}</span>
+                <button type="button" onClick=${() => cancelPromptOptimizationRequest("cancelled")}>${t4("chat.optimizeCancel")}</button>
+              </div>
+            ` : null}
+            ${promptOptimization.status === "preview" && promptOptimization.preview ? html4`
+              <div class="prompt-optimization-preview" role="region" aria-label=${t4("chat.optimizePreviewTitle")}>
+                <div class="prompt-optimization-head">
+                  <strong>${t4("chat.optimizePreviewTitle")}</strong>
+                  ${promptOptimization.preview.unchanged ? html4`<span class="muted">${t4("chat.optimizeUnchanged")}</span>` : null}
+                </div>
+                <div class="prompt-optimization-columns">
+                  <section>
+                    <span>${t4("chat.optimizeOriginal")}</span>
+                    <pre>${promptOptimization.preview.original}</pre>
+                  </section>
+                  <section>
+                    <span>${t4("chat.optimizeOptimized")}</span>
+                    <pre>${promptOptimization.preview.optimized}</pre>
+                  </section>
+                </div>
+                <div class="prompt-optimization-actions">
+                  <button type="button" class="primary" onClick=${applyPromptOptimization}>${t4("chat.optimizeApply")}</button>
+                  <button type="button" onClick=${keepOriginalPrompt}>${t4("chat.optimizeKeepOriginal")}</button>
+                </div>
+              </div>
+            ` : null}
+            ${promptOptimizationRestore ? html4`
+              <div class="prompt-optimization-restore" role="status">
+                <span>${t4("chat.optimizeApplied")}</span>
+                <button type="button" onClick=${restoreOriginalPrompt}>${t4("chat.optimizeRestoreOriginal")}</button>
+              </div>
+            ` : null}
             <div class="composer-box">
             <textarea
               ref=${inputRef}
@@ -4334,7 +4457,13 @@ const [providerCaps, setProviderCaps] = d2(null);
               <button
                 type="button"
                 class="composer-optimize"
-                disabled=${!inputHasContent || promptOptimizing}
+                disabled=${promptOptimizationButtonDisabled({
+                  busy,
+                  inFlight: Boolean(promptOptimizationInFlightRef.current),
+                  draft: inputValueRef.current,
+                  slashCommands,
+                  revision: promptDraftRevision,
+                })}
                 onClick=${optimizeCurrentPrompt}
                 title=${t4("chat.optimizeInputTitle")}
                 aria-label=${t4("chat.optimizeInputAria")}

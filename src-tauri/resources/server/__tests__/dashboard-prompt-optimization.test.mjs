@@ -76,6 +76,11 @@ describe("Dashboard prompt optimization", () => {
     const optimizeEnd = chatSource.indexOf("const refreshBackgroundJobs", optimizeStart);
     assert.ok(optimizeStart >= 0 && optimizeEnd > optimizeStart);
     assert.doesNotMatch(chatSource.slice(optimizeStart, optimizeEnd), /submitPrompt|messages|setMessages/);
+    const sendStart = chatSource.indexOf("const send = q2(async () => {");
+    const sendEnd = chatSource.indexOf("const saveSkillCredential", sendStart);
+    const send = chatSource.slice(sendStart, sendEnd);
+    assert.match(send, /cancelPromptOptimizationRequest\("cancelled"\)/);
+    assert.match(send, /setPromptOptimizationRestore\(null\)/);
   });
 
   test("renders a stable preview surface", () => {
