@@ -1171,10 +1171,14 @@ function ChatPane(props) {
         return;
       }
       if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
+        const closesExecution = dash.kind === "turn_finalized"
+          || (dash.kind === "assistant_final" && dash.compatibility !== true && !dash.operationId && !dash.turnId);
         const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
         if (!projectedMessage) return;
-        cancelStreamingRaf();
-        setStreaming(null);
+        if (closesExecution) {
+          cancelStreamingRaf();
+          setStreaming(null);
+        }
         const nextMessage = projectedMessage;
         setMessages((prev) => {
           const index = prev.findIndex((item) => String(item?.id ?? "") === String(projectedMessage.id ?? ""));

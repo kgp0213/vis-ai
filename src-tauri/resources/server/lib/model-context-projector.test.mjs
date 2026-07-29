@@ -17,6 +17,8 @@ test("model projection excludes internal and credential fields while retaining r
   assert.equal(result.messages.some((message) => message.content === "内部"), false);
   assert.equal(result.resources.some((item) => item.resourceId === "tool-output-1"), true);
   assert.equal(result.resources.some((item) => item.resourceId.includes("plain.pdf")), true);
+  assert.equal(result.resources.find((item) => item.resourceId === "tool-output-1")?.readAction, null);
+  assert.equal(result.resources.find((item) => item.resourceId === "att-1")?.kind, "attachment");
   assert.equal(JSON.stringify(result.messages).includes("secret"), false);
 });
 test("projection compacts old tool results and reports overflow without claiming success", () => {

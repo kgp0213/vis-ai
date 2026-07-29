@@ -142,3 +142,13 @@ test("uses source UTF-8 bytes for an incremental cursor when redaction changes b
   assert.equal(result.outputTruncated, false);
   assert.equal(result.complete, true);
 });
+
+test("does not mark an empty unknown output window complete", () => {
+  const result = projectTaskOutput({
+    task: { taskId: "bg-unknown-output", outputResourceId: "task-output:bg-unknown-output", status: "running", running: true },
+    window: { content: "" },
+    reference: "bg-unknown-output",
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.resource.complete, false);
+});

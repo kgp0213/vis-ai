@@ -11,6 +11,7 @@ const MAX_RECOVERIES = 32;
 const MAX_TOOL_REPEATS = 16;
 const MAX_AUTHORIZATION_FACTS = 32;
 const MAX_LIFECYCLE_HOOKS = 32;
+const TOOL_EVIDENCE_TYPES = new Set(["tool_read", "mutation", "test", "execution", "external_side_effect"]);
 
 function boundedText(value, limit = 320) {
   return String(value ?? "").slice(0, limit);
@@ -81,13 +82,13 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     if (state.toolEvents.length > MAX_TOOL_EVENTS) state.toolEvents.shift();
   }
 
-  function observeToolProgress({ toolCallId = null, name = null, status = null, result = null } = {}) {
+  function observeToolProgress({ toolCallId = null, name = null, status = null, result = null, evidenceType = null, exitCode = null } = {}) {
     const id = boundedText(toolCallId, 180) || `legacy-${state.toolCalls.length + 1}`;
     const toolName = boundedText(name, 120) || null;
     let call = state.toolCalls.find((entry) => entry.toolCallId === id);
     const isNew = !call;
     if (!call) {
-      call = { toolCallId: id, name: toolName, status: null, result: null };
+      call = { toolCallId: id, name: toolName, status: null, result: null, evidenceType: null, exitCode: null };
       state.toolCalls.push(call);
       if (state.toolCalls.length > MAX_TOOL_EVENTS) state.toolCalls.shift();
     }
@@ -102,6 +103,9 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
     if (wasTerminal) return;
     call.status = boundedText(status, 40) || call.status;
     if (result !== null && result !== undefined) call.result = boundedText(result);
+    const normalizedEvidenceType = boundedText(evidenceType, 80).toLowerCase();
+    if (TOOL_EVIDENCE_TYPES.has(normalizedEvidenceType)) call.evidenceType = normalizedEvidenceType;
+    if (Number.isInteger(Number(exitCode))) call.exitCode = Number(exitCode);
     if (!wasTerminal && isTerminal) {
       state.tools.results++;
       if (status === "succeeded") state.tools.successes++;
@@ -517,10 +521,14 @@ export function createTurnReceipt({ turnId = null, requestId = null, operationId
       reason: message,
       updatedAt: now,
     };
+    state.executionState = "unknown";
+    state.goalState = "unknown";
     state.completion = {
       ...(state.completion ?? {}),
       ok: false,
       taskState: "unknown",
+      executionState: "unknown",
+      goalState: "unknown",
       completedAt: now,
     };
   }

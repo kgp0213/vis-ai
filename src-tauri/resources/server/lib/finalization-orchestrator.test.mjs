@@ -12,7 +12,7 @@ const artifactEvidence = [{
   id: "artifact-1",
   status: "verified",
   verified: true,
-  files: [{ path: "C:/work/out.txt", size: 4, isFile: true, readable: true, status: "verified" }],
+  files: [{ path: "C:/work/out.txt", size: 4, mtimeMs: 10, isFile: true, readable: true, status: "verified" }],
 }];
 
 test("finalization orchestrator requires a persistence boundary", () => {

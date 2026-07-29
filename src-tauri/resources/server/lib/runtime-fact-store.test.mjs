@@ -82,6 +82,28 @@ test("runtime fact store closes interrupted operation and tool facts as unknown 
   }
 });
 
+test("runtime fact store persists cold recovery for an in-flight assistant message", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-"));
+  const file = join(root, "session-message-recovery.facts.jsonl");
+  try {
+    const first = createRuntimeFactStore({ file, sessionId: "session-message-recovery", epoch: "epoch-first" });
+    await first.load();
+    await first.append({
+      type: "message.upsert",
+      operationId: "op-message",
+      entityId: "assistant-live",
+      payload: { id: "assistant-live", role: "assistant", executionState: "running", finalized: false },
+    });
+
+    const restored = createRuntimeFactStore({ file, sessionId: "session-message-recovery", epoch: "epoch-restored" });
+    await restored.load();
+    assert.equal(restored.snapshot().messages[0].executionState, "unknown");
+    assert.equal(restored.snapshot().messages[0].recoveryReason, "process_restarted");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("runtime fact store allows a new operation after the previous operation is terminal", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-"));
   const file = join(root, "session-operations.facts.jsonl");
@@ -153,6 +175,56 @@ test("runtime fact store preserves terminal message metadata across reload", asy
   }
 });
 
+test("runtime fact store repairs cold unknown and appends an explicit warning correction", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-"));
+  const file = join(root, "session-repair.facts.jsonl");
+  try {
+    const store = createRuntimeFactStore({ file, sessionId: "session-repair", epoch: "epoch-repair" });
+    await store.load();
+    await store.append({
+      type: "message.upsert",
+      entityId: "assistant-repair",
+      payload: { id: "assistant-repair", role: "assistant", executionState: "unknown", finalized: true },
+    });
+    const repaired = await store.append({
+      type: "message.upsert",
+      entityId: "assistant-repair",
+      payload: {
+        id: "assistant-repair",
+        role: "assistant",
+        executionState: "completed",
+        taskState: "completed",
+        goalState: "verified",
+        finalized: true,
+        receipt: { completion: { ok: true, taskState: "completed" } },
+        evidenceRefs: [{ evidenceId: "test-1", type: "test", verified: true }],
+      },
+    });
+    assert.equal(repaired.accepted, true);
+    assert.equal(store.snapshot().messages[0].executionState, "completed");
+
+    const corrected = await store.append({
+      type: "message.upsert",
+      entityId: "assistant-repair",
+      payload: {
+        id: "assistant-repair",
+        role: "assistant",
+        executionState: "completed_with_warnings",
+        taskState: "completed_with_warnings",
+        goalState: "verified",
+        finalized: true,
+        correction: true,
+        revision: 2,
+        warnings: ["cleanup warning"],
+      },
+    });
+    assert.equal(corrected.accepted, true);
+    assert.equal(store.snapshot().messages[0].taskState, "completed_with_warnings");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("runtime fact store replaces reset messages so truncated history cannot revive", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-"));
   const file = join(root, "session-reset.facts.jsonl");
@@ -219,6 +291,26 @@ test("runtime fact store repairs a damaged JSONL tail before appending new facts
     await reloaded.load();
     assert.deepEqual(reloaded.snapshot().messages.map((message) => message.id), ["before", "after"]);
     assert.doesNotMatch(await readFile(file, "utf8"), /partial/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime fact store rejects a persisted future schema instead of downgrading it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-"));
+  const file = join(root, "future-schema.facts.jsonl");
+  try {
+    await appendFile(file, `${JSON.stringify({
+      schemaVersion: 2,
+      factId: "future-1",
+      sequence: 1,
+      occurredAt: "2026-07-29T00:00:00.000Z",
+      sessionId: "session-future",
+      type: "message.upsert",
+      payload: { id: "message-1", role: "user", text: "hello" },
+    })}\n`, "utf8");
+    const store = createRuntimeFactStore({ file, sessionId: "session-future", epoch: "epoch-future" });
+    await assert.rejects(store.load(), /schema_version_unsupported/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

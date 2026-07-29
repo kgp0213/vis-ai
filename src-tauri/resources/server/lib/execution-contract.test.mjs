@@ -16,3 +16,10 @@ test("creates scoped execution events and protects terminal states", () => {
   assert.deepEqual(terminalStateTransition("completed", "running"), { state: "completed", changed: false, accepted: false });
   assert.equal(terminalStateTransition("running", "completed").state, "completed");
 });
+
+test("rejects malformed normalized execution events instead of creating an ambiguous fact", () => {
+  assert.throws(
+    () => normalizeExecutionEvent({ kind: "tool.running", eventSeq: 2, payload: {} }),
+    /execution schema/u,
+  );
+});

@@ -123,7 +123,7 @@ export function projectTaskOutput({ task = {}, window = {}, reference = null, si
     fullOutputAvailable: fullOutputAvailable ?? totalBytes > 0,
     offsetBytes,
     nextOffsetBytes,
-    complete: window.complete === true || nextOffsetBytes >= totalBytes,
+    complete: window.complete === true || (totalBytes > 0 && nextOffsetBytes >= totalBytes),
     output,
   };
   result.resource = normalizeResourceReference({

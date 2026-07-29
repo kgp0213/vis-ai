@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { access, open, readFile } from "node:fs/promises";
+import { access, open, readFile, rm } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -91,6 +91,30 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     }
   }
 
+  function managedReadablePath(entry) {
+    const source = preparedPathKey(entry?.sourcePath);
+    const readable = preparedPathKey(entry?.readablePath);
+    if (!readable || readable === source) return null;
+    const tempRoot = resolve(tmpdir(), "visionox_decrypted");
+    const relativePath = relative(tempRoot, resolve(entry.readablePath));
+    if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) return null;
+    return resolve(entry.readablePath);
+  }
+
+  async function removeManagedReadable(entry) {
+    const target = managedReadablePath(entry);
+    if (!target) return false;
+    try {
+      await rm(target, { force: true });
+      for (const [key, value] of decryptCache) {
+        if (preparedPathKey(value) === preparedPathKey(target)) decryptCache.delete(key);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function register(value, { notifyChange = true } = {}) {
     if (!value?.sourcePath) throw new TypeError("prepared document sourcePath is required");
     const sourcePath = resolve(String(value.sourcePath));
@@ -99,7 +123,10 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     const requestedId = /^doc_[a-f0-9]{20}$/.test(String(value.documentId ?? "")) ? String(value.documentId) : null;
     const documentId = requestedId ?? existingId ?? preparedDocumentId(sourcePath);
     const previous = byId.get(documentId);
-    if (previous) removeEntry(previous);
+    if (previous) {
+      removeEntry(previous);
+      if (preparedPathKey(previous.readablePath) !== preparedPathKey(value.readablePath)) void removeManagedReadable(previous);
+    }
     const readablePath = resolve(String(value.readablePath || sourcePath));
     const stat = safeStat(sourcePath);
     const entry = {
@@ -182,10 +209,16 @@ export function createPreparedDocumentRegistry({ maxEntries = DEFAULT_PREPARED_D
     return snapshot();
   }
 
-  function clear({ notifyChange = true } = {}) {
+  function clear({ notifyChange = true, removeReadable = true } = {}) {
+    const entries = [...byId.values()];
     byId.clear();
     byPath.clear();
     if (notifyChange) notify();
+    if (!removeReadable) return Promise.resolve({ removed: 0, retained: entries.length });
+    return Promise.all(entries.map(removeManagedReadable)).then((results) => ({
+      removed: results.filter(Boolean).length,
+      retained: results.filter((value) => !value).length,
+    }));
   }
 
   return { register, find, latest, touch, snapshot, restore, clear };
@@ -1012,6 +1045,20 @@ function normalizedPathSegment(value) {
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
+function hasPathTraversalSegment(value) {
+  return String(value ?? "")
+    .split(/[\\/]+/u)
+    .some((segment) => segment === "..");
+}
+
+function allowsExternalExpansion(raw, rootDir) {
+  if (!isAbsolute(raw) && !/^[A-Za-z]:[\\/]/u.test(raw)) return false;
+  // A caller may explicitly provide an external absolute path, but a path
+  // containing `..` must not escape a supplied workspace during compatibility
+  // or wildcard expansion. Direct existing-path reads remain unchanged.
+  return !String(rootDir ?? "").trim() || !hasPathTraversalSegment(raw);
+}
+
 // Keep compatibility lookups inside the operation workspace whenever the
 // caller supplied one. Explicit absolute paths may still target an external
 // document, but relative traversal must never expand outside that workspace.
@@ -1040,7 +1087,7 @@ function expandWhitespaceNormalizedPath(value, rootDir) {
   if (!looksLikePathString(raw) || hasPathWildcard(raw) || /[\r\n]/.test(raw)) return [];
   const absolute = resolveInputPath(raw, rootDir);
   const { root, parts } = rootedPathParts(absolute, rootDir, {
-    allowExternal: isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw),
+    allowExternal: allowsExternalExpansion(raw, rootDir),
   });
   if (parts.length === 0) return [];
 
@@ -1104,7 +1151,7 @@ function expandWildcardPath(value, rootDir) {
     ? resolve(raw)
     : resolve(rootDir ?? process.cwd(), raw);
   const { root, parts } = rootedPathParts(absPattern, rootDir, {
-    allowExternal: isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw),
+    allowExternal: allowsExternalExpansion(raw, rootDir),
   });
   if (parts.length === 0) return [];
 

@@ -88,14 +88,30 @@ test("operation finish ignores stale operations and preserves the first terminal
   assert.equal(harness.events.at(-1).operation.state, "unknown");
 });
 
-test("operation scope refresh uses current conversation and workspace", () => {
+test("operation scope is immutable and a session/workspace change stops the old operation", async () => {
   const harness = createHarness();
   const operation = harness.runtime.begin("chat");
   harness.setScope("conversation-2", "C:/workspace-b");
 
+  assert.equal(harness.runtime.scopeMatches(operation), false);
+  assert.equal(harness.runtime.refreshScope(operation), false);
+  assert.equal(operation.context.conversationId, "conversation-1");
+  assert.equal(operation.context.workspace, "C:/workspace-a");
+  assert.equal(operation.context.scopeMismatch.expected.conversationId, "conversation-1");
+  assert.equal(operation.context.scopeMismatch.observed.conversationId, "conversation-2");
+  assert.equal(operation.state, "stopping");
+  assert.equal(operation.finalState, "unknown");
+  assert.equal(operation.controller.signal.aborted, true);
+  await Promise.resolve();
+  assert.deepEqual(harness.stoppedJobs, [[operation.id, { graceMs: 100 }]]);
+});
+
+test("refreshing an unchanged operation scope is a no-op", () => {
+  const harness = createHarness();
+  const operation = harness.runtime.begin("chat");
+  assert.equal(harness.runtime.scopeMatches(operation), true);
   assert.equal(harness.runtime.refreshScope(operation), true);
-  assert.equal(operation.context.conversationId, "conversation-2");
-  assert.equal(operation.context.workspace, "C:/workspace-b");
+  assert.equal(operation.state, "running");
 });
 
 test("operation lifecycle observers receive non-blocking start, stop and finish facts", async () => {

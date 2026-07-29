@@ -160,6 +160,7 @@ export function createSessionRuntime({
         ...(message.id ? { id: String(message.id) } : {}),
         ...(message.turnId ? { turnId: String(message.turnId) } : {}),
         ...(message.operationId ? { operationId: String(message.operationId) } : {}),
+        ...(message.admittedInputId ? { admittedInputId: String(message.admittedInputId).slice(0, 160) } : {}),
         ...(Array.isArray(message.images) && message.images.length > 0 ? { images: message.images } : {}),
         ...(Array.isArray(message.attachments) && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
         ...(message.reasoning ? { reasoning: message.reasoning } : {}),
@@ -395,12 +396,23 @@ export function createSessionRuntime({
               }
               if (targetIndex >= 0) {
                 const current = entries[targetIndex];
+                const warningState = ["completed", "succeeded"].includes(persistedTaskState(current))
+                  ? "completed_with_warnings"
+                  : persistedTaskState(current);
                 const nextReceipt = current.receipt && typeof current.receipt === "object"
-                  ? { ...current.receipt, warnings: mergedWarnings }
+                  ? {
+                    ...current.receipt,
+                    warnings: mergedWarnings,
+                    ...(warningState ? { taskState: warningState, executionState: warningState } : {}),
+                    ...(current.receipt.completion && typeof current.receipt.completion === "object"
+                      ? { completion: { ...current.receipt.completion, taskState: warningState } }
+                      : {}),
+                  }
                   : current.receipt;
                 entries[targetIndex] = {
                   ...current,
                   warnings: mergedWarnings,
+                  ...(warningState ? { taskState: warningState, executionState: warningState } : {}),
                   ...(nextReceipt ? { receipt: nextReceipt } : {}),
                 };
                 await atomicWriteFile(activeSessionFile, serializeActiveSession(entries));

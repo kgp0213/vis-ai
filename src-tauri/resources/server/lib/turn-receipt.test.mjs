@@ -202,6 +202,24 @@ test("unknown tool results are terminal and reject late success updates", () => 
   assert.equal(receipt.snapshot().tools.results, 1);
 });
 
+test("tool progress persists host evidence type and exit code without raw arguments", () => {
+  const receipt = createTurnReceipt({ turnId: "turn-evidence" });
+  receipt.observeToolProgress({
+    toolCallId: "call-test",
+    name: "run_command",
+    status: "succeeded",
+    result: "[exit 0]",
+    evidenceType: "test",
+    exitCode: 0,
+    args: { command: "npm test -- --token=secret" },
+  });
+  const call = receipt.snapshot().toolCalls[0];
+  assert.equal(call.evidenceType, "test");
+  assert.equal(call.exitCode, 0);
+  assert.equal("args" in call, false);
+  assert.doesNotMatch(JSON.stringify(call), /secret/u);
+});
+
 test("completion maps incomplete outcomes to unknown and does not accept late replacement", () => {
   const receipt = createTurnReceipt({ turnId: "turn-incomplete" });
   assert.equal(receipt.complete({ ok: false, taskState: "incomplete" }), true);
@@ -219,6 +237,10 @@ test("persistence failure downgrades a provisional completion to unknown", () =>
   assert.equal(snapshot.phase.terminalState, "unknown");
   assert.equal(snapshot.completion.ok, false);
   assert.equal(snapshot.completion.taskState, "unknown");
+  assert.equal(snapshot.executionState, "unknown");
+  assert.equal(snapshot.goalState, "unknown");
+  assert.equal(snapshot.completion.executionState, "unknown");
+  assert.equal(snapshot.completion.goalState, "unknown");
   assert.match(snapshot.phase.reason, /not persisted/);
 });
 

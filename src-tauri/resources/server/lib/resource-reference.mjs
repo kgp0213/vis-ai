@@ -28,7 +28,10 @@ export function normalizeResourceReference({
     totalBytes: total,
     offsetBytes: offset,
     nextOffsetBytes: boundedNext,
-    complete: complete === true || boundedNext >= total,
+    // A zero total is also the default for an unknown length. It must not be
+    // treated as EOF unless the producer explicitly marked the resource
+    // complete (an actually empty resource can do so explicitly).
+    complete: complete === true || (total > 0 && boundedNext >= total),
     expiresAt: expiresAt ? String(expiresAt).slice(0, 80) : null,
     readAction: readAction ? String(readAction).slice(0, 160) : null,
   };

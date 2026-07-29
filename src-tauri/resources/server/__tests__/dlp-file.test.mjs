@@ -126,6 +126,25 @@ test("prepared document metadata preserves a source revision and recent-use time
   });
 });
 
+test("prepared document registry clears only managed decrypted copies", async () => {
+  await withTempDir(async (dir) => {
+    await withManagedDecryptedTempDir(async (managedDir) => {
+      const source = join(dir, "source.pdf");
+      const readable = join(managedDir, "source.pdf");
+      const external = join(dir, "keep.txt");
+      await writeFile(source, Buffer.from("source"));
+      await writeFile(readable, Buffer.from("prepared"));
+      await writeFile(external, Buffer.from("keep"));
+      const registry = createPreparedDocumentRegistry();
+      registry.register({ sourcePath: source, readablePath: readable, encrypted: true });
+      const result = await registry.clear({ notifyChange: false });
+      assert.equal(result.removed, 1);
+      assert.equal(existsSync(readable), false);
+      assert.equal(existsSync(external), true);
+    });
+  });
+});
+
 test("resolveDlpScriptPath returns null when configured script does not exist", () => {
   const script = resolveDlpScriptPath(
     { dlp: { scriptPath: "Z:\\missing\\visionox_file.py" } },
@@ -273,6 +292,28 @@ test("prepareLocalDocument does not expand relative traversal patterns outside r
       assert.equal(result.ok, false);
       assert.equal(result.sourcePath, undefined);
       assert.equal(result.candidates?.length ?? 0, 0);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test("prepareLocalDocument still accepts an explicit external absolute wildcard without traversal", async () => {
+  await withTempDir(async (dir) => {
+    const outside = join(dirname(dir), `visionox-dlp-explicit-${basename(dir)}`);
+    mkdirSync(outside, { recursive: true });
+    const source = join(outside, "external.pdf");
+    await writeFile(source, Buffer.from("%PDF-1.7"));
+    try {
+      const result = await prepareLocalDocument(join(outside, "*.pdf"), {
+        cfg: { dlp: { mode: "off" } },
+        env: { homeDir: dir, projectRoot: dir, rootDir: dir },
+        logger: null,
+        registry: createPreparedDocumentRegistry(),
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(resolve(result.sourcePath), resolve(source));
     } finally {
       await rm(outside, { recursive: true, force: true });
     }

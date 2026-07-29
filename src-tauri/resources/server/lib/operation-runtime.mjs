@@ -18,6 +18,19 @@ function safeWorkspace(value) {
   };
 }
 
+function scopeIdentity(conversationId, workspace) {
+  const safe = safeWorkspace(workspace);
+  return {
+    conversationId: String(conversationId ?? "").trim() || null,
+    workspaceId: safe?.id ?? null,
+  };
+}
+
+function sameScope(left, right) {
+  return left?.conversationId === right?.conversationId
+    && left?.workspaceId === right?.workspaceId;
+}
+
 export function createOperationRuntime({
   broadcast = () => {},
   stopOwned = async () => {},
@@ -67,6 +80,8 @@ export function createOperationRuntime({
     if (activeOperation) throw new Error(`operation ${activeOperation.id} is already active`);
     const startedAt = now();
     const controller = createController();
+    const conversationId = getConversationId();
+    const workspace = getWorkspace();
     const operation = {
       id: idFactory(),
       kind,
@@ -76,12 +91,15 @@ export function createOperationRuntime({
       progress: null,
       controller,
       context: null,
+      // Scope is an immutable ownership snapshot. A session/workspace switch
+      // must stop this operation rather than relabeling late callbacks.
+      scope: scopeIdentity(conversationId, workspace),
     };
     operation.context = createOperationContext({
       operationId: operation.id,
       kind,
-      conversationId: getConversationId(),
-      workspace: getWorkspace(),
+      conversationId,
+      workspace,
       signal: controller.signal,
       startedAt,
     });
@@ -148,9 +166,23 @@ export function createOperationRuntime({
 
   function refreshScope(operation = activeOperation) {
     if (!operation?.context || activeOperation?.id !== operation.id) return false;
-    operation.context.conversationId = getConversationId() || null;
-    operation.context.workspace = getWorkspace() || null;
-    return true;
+    const current = scopeIdentity(getConversationId(), getWorkspace());
+    if (sameScope(operation.scope, current)) return true;
+    operation.context.scopeMismatch = {
+      expected: { ...operation.scope },
+      observed: current,
+      detectedAt: now(),
+    };
+    operation.finalState = "unknown";
+    // Never mutate the original scope. Stopping is the only safe response to
+    // a session/workspace change while model or tool callbacks are in flight.
+    stop(operation, "scope_changed");
+    return false;
+  }
+
+  function scopeMatches(operation = activeOperation, { conversationId = getConversationId(), workspace = getWorkspace() } = {}) {
+    if (!operation) return false;
+    return sameScope(operation.scope, scopeIdentity(conversationId, workspace));
   }
 
   return {
@@ -159,6 +191,7 @@ export function createOperationRuntime({
     getActive: () => activeOperation,
     public: publicOperation,
     refreshScope,
+    scopeMatches,
     stop,
   };
 }

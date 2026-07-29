@@ -1,4 +1,5 @@
 import { estimateContextTokens } from "./context-budget.mjs";
+import { normalizeResourceReference } from "./resource-reference.mjs";
 
 const DEFAULT_CONTEXT_TOKENS = 131072;
 const MAX_RESOURCE_REFS = 64;
@@ -33,14 +34,31 @@ function contentText(content) {
   return content.map((part) => typeof part === "string" ? part : part?.text ?? part?.content ?? "").join("\n");
 }
 
+function addResource(resourceRefs, value, defaults = {}) {
+  const source = typeof value === "string" ? { resourceId: value } : value && typeof value === "object" ? value : {};
+  const resourceId = safeId(source.resourceId ?? source.id ?? source.attachmentId ?? source.path ?? source.readablePath);
+  if (!resourceId) return;
+  const descriptor = normalizeResourceReference({
+    resourceId,
+    kind: source.kind ?? defaults.kind ?? "tool-output",
+    preview: source.preview ?? source.name ?? "",
+    totalBytes: source.totalBytes ?? source.bytes ?? source.size ?? 0,
+    offsetBytes: source.offsetBytes ?? 0,
+    nextOffsetBytes: source.nextOffsetBytes ?? source.offsetBytes ?? 0,
+    complete: source.complete === true,
+    expiresAt: source.expiresAt ?? null,
+    readAction: source.readAction ?? defaults.readAction ?? null,
+  });
+  if (descriptor) resourceRefs.set(resourceId, descriptor);
+}
+
 function projectContent(content, resourceRefs) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return content == null ? "" : scalarSafe(content);
   return content.map((part) => {
     if (typeof part === "string") return part;
     const safe = scalarSafe(part ?? {});
-    const resourceId = safeId(safe.resourceId ?? safe.resource?.id ?? safe.source?.ref);
-    if (resourceId) resourceRefs.add(resourceId);
+    addResource(resourceRefs, safe.resource ?? safe, { kind: "tool-output" });
     return safe;
   });
 }
@@ -59,17 +77,29 @@ function capacityFrom({ providerCapabilities = {}, contextBudget = {} } = {}) {
 }
 
 function collectResources(history, operation, resourceRefs) {
-  const add = (value) => {
-    const id = safeId(value);
-    if (id) resourceRefs.add(id);
-  };
   for (const entry of Array.isArray(history) ? history : []) {
-    for (const ref of Array.isArray(entry?.resourceRefs) ? entry.resourceRefs : []) add(typeof ref === "string" ? ref : ref?.resourceId ?? ref?.id);
-    for (const attachment of Array.isArray(entry?.attachments) ? entry.attachments : []) add(attachment?.id ?? attachment?.attachmentId);
+    for (const ref of Array.isArray(entry?.resourceRefs) ? entry.resourceRefs : []) addResource(resourceRefs, ref);
+    for (const attachment of Array.isArray(entry?.attachments) ? entry.attachments : []) addResource(resourceRefs, {
+      ...(attachment?.resource ?? {}),
+      resourceId: attachment?.resourceId ?? attachment?.attachmentId ?? attachment?.id,
+      kind: attachment?.resource?.kind ?? attachment?.kind ?? "attachment",
+      preview: attachment?.resource?.preview ?? attachment?.name ?? "",
+      totalBytes: attachment?.resource?.totalBytes ?? attachment?.size ?? 0,
+      readAction: attachment?.resource?.readAction ?? "attachment_content",
+    });
   }
-  for (const ref of Array.isArray(operation?.resourceRefs) ? operation.resourceRefs : []) add(typeof ref === "string" ? ref : ref?.resourceId ?? ref?.id);
-  for (const ref of Array.isArray(operation?.preparedDocuments) ? operation.preparedDocuments : []) add(ref?.path ?? ref?.readablePath ?? ref?.resourceId);
-  for (const ref of Array.isArray(operation?.artifactPaths) ? operation.artifactPaths : []) add(ref);
+  for (const ref of Array.isArray(operation?.resourceRefs) ? operation.resourceRefs : []) addResource(resourceRefs, ref);
+  for (const ref of Array.isArray(operation?.preparedDocuments) ? operation.preparedDocuments : []) addResource(resourceRefs, {
+    ...ref,
+    resourceId: ref?.resourceId ?? ref?.path ?? ref?.readablePath,
+    kind: ref?.kind ?? "file",
+    readAction: ref?.readAction ?? "read_file",
+  });
+  for (const ref of Array.isArray(operation?.artifactPaths) ? operation.artifactPaths : []) addResource(resourceRefs, {
+    resourceId: ref,
+    kind: "artifact",
+    readAction: "read_file",
+  });
 }
 
 function projectEntry(entry, resourceRefs, view) {
@@ -127,7 +157,8 @@ function estimateMessagesWithMeasuredPrefix(messages, contextBudget = {}, droppe
  * read operation: it never mutates history, schedules work, or calls a model.
  */
 export function projectModelContext({ history = [], operation = {}, providerCapabilities = {}, contextBudget = {}, resourceRefs = [] } = {}) {
-  const refs = new Set((Array.isArray(resourceRefs) ? resourceRefs : []).map(safeId).filter(Boolean));
+  const refs = new Map();
+  for (const ref of Array.isArray(resourceRefs) ? resourceRefs : []) addResource(refs, ref);
   collectResources(history, operation, refs);
   const messages = (Array.isArray(history) ? history : []).map((entry) => projectEntry(entry, refs, "model")).filter(Boolean);
   const fullMessages = (Array.isArray(history) ? history : []).map((entry) => projectEntry(entry, refs, "full")).filter(Boolean);
@@ -151,7 +182,7 @@ export function projectModelContext({ history = [], operation = {}, providerCapa
   return {
     messages: retained,
     estimatedTokens,
-    resources: [...refs].slice(0, MAX_RESOURCE_REFS).map((id) => ({ resourceId: id })),
+    resources: [...refs.values()].slice(0, MAX_RESOURCE_REFS),
     droppedItems,
     compaction: { applied: droppedItems.length > 0, budgetTokens: budget, protectedTail: Math.min(4, retained.length) },
     measurement: measuredEstimate.applied

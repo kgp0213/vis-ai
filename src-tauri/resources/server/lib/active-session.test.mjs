@@ -110,3 +110,15 @@ test("keeps background task notifications in model history while hiding them fro
   assert.equal(model[0].backgroundTaskNotification.taskId, "bg-1");
   assert.deepEqual(activeEntriesForDashboard([notification], NOW), []);
 });
+
+test("preserves the stable input marker across cold model-history recovery", () => {
+  const model = activeEntriesForModel([{
+    role: "user",
+    id: "input-steer-1",
+    admittedInputId: "steer-1",
+    operationId: "op-1",
+    turnId: "turn-1",
+    content: "追加证据",
+  }]);
+  assert.equal(model[0].admittedInputId, "steer-1");
+});

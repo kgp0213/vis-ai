@@ -2019,6 +2019,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
+        const reducedStream = reduced.state.streamOffsets[String(dash.id ?? dash.messageId ?? "")];
         const reasoningDelta = String(dash.reasoningDelta ?? "");
         let turnReasoning = baseId?.turnReasoning ?? "";
         let reasoningTurns = baseId?.reasoningTurns ?? 0;
@@ -2035,8 +2036,12 @@ const [providerCaps, setProviderCaps] = d2(null);
         }
         streamBufRef.current = {
           id: dash.id,
-          text: (baseId?.text ?? "") + (dash.contentDelta ?? ""),
-          reasoning: (baseId?.reasoning ?? "") + reasoningDelta,
+          text: reducedStream?.contentText !== undefined
+            ? reducedStream.contentText
+            : (baseId?.text ?? "") + (dash.contentDelta ?? ""),
+          reasoning: reducedStream?.reasoningText !== undefined
+            ? reducedStream.reasoningText
+            : (baseId?.reasoning ?? "") + reasoningDelta,
           turnReasoning,
           reasoningTurns,
           reasoningStale
@@ -2048,13 +2053,22 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
         const isFinalized = dash.kind === "turn_finalized";
+        const compatibilityOnly = dash.kind === "assistant_final" && dash.compatibility === true;
+        // Content completion is a display fact. The model may still be
+        // validating artifacts or closing tool frames, so only the
+        // authoritative turn_finalized event is allowed to close execution
+        // state. Legacy command replies without an operation remain safe to
+        // close because they do not own an execution turn.
+        const closesExecution = isFinalized || (!compatibilityOnly && !dash.operationId && !dash.turnId);
         const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
         if (!projectedMessage) return;
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
-        cancelStreamingRaf();
-        setStreaming(null);
-        setActiveTools([]);
+        if (closesExecution) {
+          cancelStreamingRaf();
+          setStreaming(null);
+          setActiveTools([]);
+        }
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
         const nextMessage = {
           ...projectedMessage,
@@ -2074,14 +2088,14 @@ const [providerCaps, setProviderCaps] = d2(null);
             );
             if (!String(projectedMessage.text ?? "").trim() && !hasReceiptOnlyContent) return prev;
             inserted = true;
-            if (dash.kind !== "turn_finalized") canonicalMessageCountRef.current += 1;
+            if (!isFinalized) canonicalMessageCountRef.current += 1;
             return [...prev, nextMessage];
           }
           const copy = [...prev];
           copy[index] = { ...copy[index], ...nextMessage };
           return copy;
         });
-        if (inserted && dash.kind !== "turn_finalized") setTotalMessages((count) => count + 1);
+        if (inserted && !isFinalized) setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
@@ -2243,14 +2257,20 @@ const [providerCaps, setProviderCaps] = d2(null);
         void resyncRunnerRef.current?.(dash);
         return;
       }
-      executionStateRef.current = createDashboardReducerState({
-        ...executionStateRef.current,
-        epoch: observed.cursor.epoch,
-        lastSeq: observed.cursor.lastSeq,
-      });
       const eventSessionId = String(dash.sessionId ?? "").trim();
       const activeSessionId = String(activeConversationIdRef.current || snapshotSessionIdRef.current || "");
-      if (eventSessionId && activeSessionId && eventSessionId !== activeSessionId) return;
+      if (eventSessionId && activeSessionId && eventSessionId !== activeSessionId) {
+        // A foreign Session event advances the process transport cursor without
+        // entering this Session's projection. Flush first so it remains a
+        // strict ordering barrier for already queued local events.
+        eventBatcher.flush();
+        executionStateRef.current = createDashboardReducerState({
+          ...executionStateRef.current,
+          epoch: observed.cursor.epoch,
+          lastSeq: observed.cursor.lastSeq,
+        });
+        return;
+      }
       eventBatcher.enqueue(dash);
     };
     const replayBufferedDashboardEvents = (additionalEvents = []) => {

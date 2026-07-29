@@ -1,4 +1,5 @@
 import { isTerminalExecutionState, normalizeExecutionEvent, normalizeExecutionId, terminalStateTransition } from "./execution-contract.mjs";
+import { mergeTextAtOffset } from "./text-offset-merge.mjs";
 
 const ENTITY_KEYS = Object.freeze({
   turn: "turns",
@@ -40,7 +41,17 @@ function initialState() {
 }
 
 function entityIdFor(event, payload) {
-  return normalizeExecutionId(event.entityId ?? payload.entityId ?? payload.id ?? payload.toolCallId ?? payload.interactionId, null);
+  const kind = entityKindFor(event.kind, payload);
+  const base = normalizeExecutionId(event.entityId ?? payload.entityId ?? payload.id ?? payload.toolCallId ?? payload.interactionId, null);
+  if (kind !== "tool" || !base) return base;
+  const callId = normalizeExecutionId(payload.toolCallId ?? event.toolCallId ?? base, base);
+  const turnId = normalizeExecutionId(payload.turnId ?? event.turnId, null);
+  const stepId = normalizeExecutionId(payload.stepId ?? event.stepId, null);
+  if (!callId || (!turnId && !stepId)) return base;
+  // Scope provider call ids to their execution frame. Provider ids are often
+  // reused on retries or in a later Turn; the prefix stays within the closed
+  // execution-id alphabet while remaining human-readable in diagnostics.
+  return normalizeExecutionId(`tool:${turnId ?? "legacy"}:${stepId ?? "legacy"}:${callId}`, base);
 }
 
 function entityKindFor(kind, payload) {
@@ -54,11 +65,23 @@ function addAnomaly(state, anomaly) {
   state.anomalies = [...state.anomalies, { ...anomaly }].slice(-64);
 }
 
+function transitionForKind(kind, previous, incoming, payload = {}) {
+  const before = String(previous ?? "").trim().toLowerCase();
+  const after = String(incoming ?? "").trim().toLowerCase();
+  if (kind === "tool" && before === "failed" && ["queued", "running", "recovered"].includes(after)) {
+    return { accepted: true, state: after, changed: before !== after };
+  }
+  return terminalStateTransition(previous, incoming, {
+    correction: payload.correction === true || payload.revision !== undefined,
+    toolRecovery: kind === "tool",
+  });
+}
+
 function applyEntityState(state, kind, id, payload) {
   const key = ENTITY_KEYS[kind];
   if (!key || !id) return { changed: false };
   const previous = state[key][id] ?? { id, state: "running" };
-  const transition = terminalStateTransition(previous.state, payload.state);
+  const transition = transitionForKind(kind, previous.state, payload.state, payload);
   if (!transition.accepted) return { changed: false, anomaly: "late-terminal-update" };
   const next = { ...previous, ...payload, id, state: transition.state };
   state[key] = { ...state[key], [id]: next };
@@ -83,12 +106,15 @@ function appendDelta(state, payload, field, kind) {
   const enforceOffsets = true;
   const offset = Number.isSafeInteger(Number(payload.offset)) && Number(payload.offset) >= 0 ? Number(payload.offset) : base.offsets?.[field] ?? base[field]?.length ?? 0;
   const currentText = String(base[field] ?? "");
-  const currentOffset = Number(base.offsets?.[field] ?? currentText.length);
+  const currentOffset = currentText.length;
   const newStep = streamToken !== null && previousStreamToken !== null && String(streamToken) !== String(previousStreamToken);
   const effectiveOffset = enforceOffsets && offset === 0 && currentOffset > 0 && newStep && !reset ? currentOffset : offset;
-  if (enforceOffsets && effectiveOffset < currentOffset) return { changed: false };
-  if (enforceOffsets && effectiveOffset > currentOffset) return { changed: false, anomaly: "delta-gap", resyncRequired: true };
-  const nextText = currentText + String(payload.delta ?? payload.text ?? "");
+  const merged = enforceOffsets
+    ? mergeTextAtOffset(currentText, effectiveOffset, payload.delta ?? payload.text ?? "")
+    : mergeTextAtOffset(currentText, currentText.length, payload.delta ?? payload.text ?? "");
+  if (merged.gap) return { changed: false, anomaly: "delta-gap", resyncRequired: true };
+  if (!merged.changed) return { changed: false, duplicate: merged.duplicate === true };
+  const nextText = merged.text;
   const next = { ...base, [field]: nextText, offsets: { ...(base.offsets ?? {}), [field]: nextText.length } };
   state[key] = { ...state[key], [id]: next };
   return { changed: true };
@@ -111,8 +137,21 @@ export function applyExecutionEvent(inputState, inputEvent) {
     return { state, changed: false, resyncRequired: true, anomaly: "epoch-changed" };
   }
   if (event.eventEpoch) state.epoch = event.eventEpoch;
+  let sequenceGap = false;
+  if (event.eventSeq !== null && event.eventSeq < state.lastSeq) {
+    addAnomaly(state, { type: "event-out-of-order", expectedAtLeast: state.lastSeq, received: event.eventSeq, eventId: event.eventId });
+    return { state, changed: false, resyncRequired: true, anomaly: "event-out-of-order" };
+  }
+  if (event.eventSeq !== null && event.eventSeq === state.lastSeq && state.lastSeq > 0) {
+    addAnomaly(state, { type: "event-sequence-conflict", sequence: event.eventSeq, eventId: event.eventId });
+    return { state, changed: false, resyncRequired: true, anomaly: "event-sequence-conflict" };
+  }
   if (event.eventSeq !== null && event.eventSeq > state.lastSeq + 1) {
     addAnomaly(state, { type: "event-gap", expected: state.lastSeq + 1, received: event.eventSeq, eventId: event.eventId });
+    // A reducer can still apply the observed fact, but callers must hydrate a
+    // canonical snapshot before trusting the resulting state. Without this
+    // flag, a missing event would be silently treated as a complete replay.
+    sequenceGap = true;
   }
   if (event.eventSeq !== null) state.lastSeq = Math.max(state.lastSeq, event.eventSeq);
   if (event.eventId) state.seenEventIds[event.eventId] = true;
@@ -132,8 +171,13 @@ export function applyExecutionEvent(inputState, inputEvent) {
     if (kind && id) {
       const key = ENTITY_KEYS[kind];
       const previous = state[key][id];
-      state[key] = { ...state[key], [id]: { ...(previous ?? {}), ...payload, id } };
-      result = { changed: JSON.stringify(previous) !== JSON.stringify(state[key][id]) };
+      const transition = transitionForKind(kind, previous?.state, payload.state, payload);
+      if (!transition.accepted) {
+        result = { changed: false, anomaly: "late-terminal-update" };
+      } else {
+        state[key] = { ...state[key], [id]: { ...(previous ?? {}), ...payload, id, state: transition.state } };
+        result = { changed: JSON.stringify(previous) !== JSON.stringify(state[key][id]) };
+      }
     } else result = { changed: false, anomaly: "upsert-missing-entity" };
   } else if (event.kind === "receipt.updated") {
     const id = entityIdFor(event, payload) ?? "current";
@@ -142,7 +186,7 @@ export function applyExecutionEvent(inputState, inputEvent) {
     result = { changed: JSON.stringify(previous) !== JSON.stringify(state.receipts[id]) };
   }
   if (result.anomaly) addAnomaly(state, { type: result.anomaly, eventId: event.eventId, entityId: event.entityId });
-  return { state, ...result };
+  return { state, ...result, ...(sequenceGap ? { resyncRequired: true, anomaly: result.anomaly ?? "event-gap" } : {}) };
 }
 
 export function reduceExecutionEvents(events = [], seed = {}) {

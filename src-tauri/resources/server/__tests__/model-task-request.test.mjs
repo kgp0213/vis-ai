@@ -156,7 +156,7 @@ describe("model task request policy", () => {
   });
 
   test("passes every task purpose through to the provider request", async () => {
-    const purposes = ["summary", "report", "knowledge", "sessionReview", "learn"];
+    const purposes = ["summary", "report", "knowledge", "sessionReview", "learn", "side-question"];
     for (const requestPurpose of purposes) {
       const client = fakeClient({ content: '{"ok":true}', finishReason: "stop" });
       await requestModelJson({
@@ -169,6 +169,7 @@ describe("model task request policy", () => {
         label: `${requestPurpose} task`,
       });
       assert.equal(client.calls[0].requestPurpose, requestPurpose);
+      assert.equal(client.calls[0].tools, undefined);
     }
   });
 

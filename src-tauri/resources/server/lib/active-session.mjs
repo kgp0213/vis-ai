@@ -1,3 +1,5 @@
+import { validateSessionRecord } from "./execution-schema.mjs";
+
 const MODEL_ROLES = new Set(["system", "user", "assistant", "tool"]);
 const DASHBOARD_ROLES = new Set(["user", "assistant", "tool", "warning", "error", "info"]);
 const PERSISTED_FACT_ROLES = new Set(["execution"]);
@@ -14,6 +16,8 @@ function contentText(content) {
 
 function normalizeEntry(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const validation = validateSessionRecord(value);
+  if (!validation.ok) return null;
   const role = typeof value.role === "string" ? value.role : "";
   if (!MODEL_ROLES.has(role) && !DASHBOARD_ROLES.has(role) && !PERSISTED_FACT_ROLES.has(role)) return null;
   const content = value.content !== undefined ? value.content : value.text;
@@ -57,7 +61,7 @@ export function activeEntriesForModel(entries) {
         role: entry.role,
         content: entry.content !== undefined ? entry.content : entry.text ?? "",
       };
-      for (const key of ["internal", "modelVisible", "dashboardHidden", "source", "notificationId", "backgroundTaskNotification"]) {
+      for (const key of ["admittedInputId", "internal", "modelVisible", "dashboardHidden", "source", "notificationId", "backgroundTaskNotification"]) {
         if (entry[key] !== undefined) modelEntry[key] = entry[key];
       }
       if (entry.role === "user" && Array.isArray(entry.attachments) && entry.attachments.length > 0) {
@@ -142,6 +146,8 @@ export function recoverInterruptedToolCalls(entries, { now = () => new Date().to
       const recoveryScope = `${String(entry.turnId ?? entry.operationId ?? "scope").replace(/[^a-zA-Z0-9._-]+/gu, "_").slice(0, 72) || "scope"}-${index}`;
       recovered.push({
         id: `recovery-tool-${recoveryScope}-${toolCallId}`,
+        recoveryFactId: `recovery:tool:${recoveryScope}:${toolCallId}`,
+        recoveryRevision: 1,
         role: "tool",
         content: JSON.stringify({
           ok: false,

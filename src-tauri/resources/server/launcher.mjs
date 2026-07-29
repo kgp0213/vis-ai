@@ -81,6 +81,8 @@ const { requestToModal } = await importEarly("./lib/pause-gate-modal.mjs");
 const { buildGuidedDocumentPrompt, buildSystemPrompt, presentToolSpecsForMode, PROJECT_MEMORY_CANDIDATES } = await importEarly("./lib/system-prompt.mjs");
 const { activeEntriesForDashboard, activeEntriesForModel, parseActiveSessionJsonl, serializeActiveSession, withPendingUserEntry } = await importEarly("./lib/active-session.mjs");
 const { paginateExecutionTranscript, projectExecutionTranscript } = await importEarly("./lib/execution-transcript.mjs");
+const { materializeTranscriptSnapshot } = await importEarly("./lib/transcript-operations.mjs");
+const { validateSessionSnapshot } = await importEarly("./lib/execution-schema.mjs");
 const { createSessionRuntime } = await importEarly("./lib/session-runtime.mjs");
 const { createSessionRecoveryRuntime } = await importEarly("./lib/session-recovery.mjs");
 const { isTodoScopeCurrent, normalizeTodoList } = await importEarly("./lib/session-todo-state.mjs");
@@ -151,7 +153,7 @@ const { createPermissionRuleRuntime, readPermissionRules } = await importEarly("
 const { planToolCallBatches } = await importEarly("./lib/parallel-tool-scheduler.mjs");
 const { createOperationSteeringRuntime } = await importEarly("./lib/operation-steering.mjs");
 const { createModelBoundaryFence, projectBoundaryDeliveries } = await importEarly("./lib/model-boundary-fence.mjs");
-const { createSessionInputAdmission } = await importEarly("./lib/session-input-admission.mjs");
+const { createSessionInputAdmission, hasInputInModelHistory } = await importEarly("./lib/session-input-admission.mjs");
 const { createProgressiveToolDiscovery } = await importEarly("./lib/progressive-tool-discovery.mjs");
 const { explainToolActivation, filterToolSpecsByActivation, publicToolActivationPolicy, resolveToolActivationPolicy } = await importEarly("./lib/tool-activation-policy.mjs");
 const { createRuntimeLifecycleHooks } = await importEarly("./lib/runtime-lifecycle-hooks.mjs");
@@ -163,10 +165,10 @@ const { createProviderProvenanceStore, providerDiagnostics } = await importEarly
 const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.mjs");
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
-const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, detectArtifactRequest, filterTemporaryArtifactEvidence, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
+const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, artifactVerificationStatus, detectArtifactRequest, filterTemporaryArtifactEvidence, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { createTaskContract } = await importEarly("./lib/task-contract.mjs");
-const { verifyGoalContract } = await importEarly("./lib/goal-verification-runtime.mjs");
+const { classifyToolEvidence, verifyGoalContract } = await importEarly("./lib/goal-verification-runtime.mjs");
 const { createLoopTelemetry } = await importEarly("./lib/loop-observability.mjs");
 const { createTurnReceipt } = await importEarly("./lib/turn-receipt.mjs");
 const { createTaskOutputStore } = await importEarly("./lib/task-output-store.mjs");
@@ -3884,7 +3886,7 @@ workspaceRuntime = createWorkspaceRuntime({
     if (!existsSync(rootDir)) mkdirSync(rootDir, { recursive: true });
   },
   clearPreparedDocuments: async () => {
-    preparedDocumentRegistry.clear({ notifyChange: false });
+    await preparedDocumentRegistry.clear({ notifyChange: false });
     await writeActiveSessionMeta({ preparedDocuments: [] });
   },
   removeMcpServers: async () => {
@@ -4868,6 +4870,7 @@ function generatedArtifactFileInfo(abs) {
     const ext = extname(abs).toLowerCase();
     return {
       path: abs,
+      isFile: true,
       dir: dirname(abs),
       filename: basename(abs),
       ext,
@@ -4882,13 +4885,6 @@ function generatedArtifactFileInfo(abs) {
   }
 }
 
-function artifactVerificationStatus(info, { changedThisTurn = false, explicitlyVerified = false } = {}) {
-  if (!info) return "missing";
-  if (!Number.isFinite(Number(info.size)) || Number(info.size) <= 0 || info.readable !== true) return "invalid";
-  if (explicitlyVerified || changedThisTurn) return "verified";
-  return "present_unverified";
-}
-
 function rescanArtifactEvidence(entries = []) {
   return (Array.isArray(entries) ? entries : []).map((entry) => {
     const sourceFiles = Array.isArray(entry?.files) ? entry.files : [];
@@ -4901,6 +4897,7 @@ function rescanArtifactEvidence(entries = []) {
           path,
           size: 0,
           mtimeMs: 0,
+          isFile: false,
           readable: false,
           changedThisTurn: false,
           verification: "missing",
@@ -5373,9 +5370,26 @@ function buildLoop(client, rootDir) {
         if (delivery.type === "steer") {
           const input = delivery.payload;
           const messageId = `input-${input.id}`;
+          // A crash can occur after the stable history record is written but
+          // before admission.resolve("dispatched") persists. On restart the
+          // input is conservatively requeued; do not append it a second time
+          // if the ordinary loop already restored the same marker.
+          if (hasInputInModelHistory(loop?.log?.toMessages?.() ?? [], input)) {
+            const resolved = sessionInputAdmission.resolve(
+              input.id,
+              "dispatched",
+              "model_history_already_contains_input",
+              { operationId: operation.id },
+            );
+            if (!resolved?.ok) {
+              throw new Error(`${resolved?.code || "SESSION_INPUT_RESOLUTION_FAILED"}: ${resolved?.error || "delivered input status could not be saved"}`);
+            }
+            continue;
+          }
           try {
             const historyMessage = {
               id: messageId,
+              admittedInputId: input.id,
               role: "user",
               content: input.text,
               operationId: operation.id,
@@ -7779,11 +7793,17 @@ getLatestVersion().then((v) => { if (v) latestVersion = v; }).catch(() => {});
 
 // ── Event subscribers ───────────────────────────────────────────
 const dashboardEventStream = createDashboardEventStream();
+let dashboardEventCommitTail = Promise.resolve();
 const runtimeFactsDir = resolve(visionoxDataDir, "runtime-facts");
 const runtimeFactStores = new Map();
-let runtimeFactPersistedCursor = `${dashboardEventStream.epoch}:0`;
-let runtimeFactPersistenceBlocked = false;
+const runtimeFactPersistedCursors = new Map();
+const runtimeFactPersistenceBlocked = new Map();
 let runtimeFactWriteTail = Promise.resolve();
+
+function runtimeFactCursorFor(sessionId) {
+  const id = String(sessionId ?? "").trim();
+  return runtimeFactPersistedCursors.get(id) ?? `${dashboardEventStream.epoch}:0`;
+}
 
 function runtimeFactFile(sessionId) {
   const digest = createHash("sha256").update(String(sessionId), "utf8").digest("hex");
@@ -7921,17 +7941,16 @@ function queueRuntimeFactsFromDashboardEvent(event) {
         }
       }
     }
-    if (!runtimeFactPersistenceBlocked) {
-      runtimeFactPersistedCursor = eventId;
-      trackPersistentStorageIssue(`runtime-facts:${sessionId}`, runtimeFactFile(sessionId), null);
-    }
+    runtimeFactPersistedCursors.set(sessionId, eventId);
+    runtimeFactPersistenceBlocked.delete(sessionId);
+    trackPersistentStorageIssue(`runtime-facts:${sessionId}`, runtimeFactFile(sessionId), null);
   });
   runtimeFactWriteTail = work.catch((error) => {
-    runtimeFactPersistenceBlocked = true;
+    runtimeFactPersistenceBlocked.set(sessionId, true);
     console.error(`[launcher] runtime fact append failed: ${error.message}`);
     trackPersistentStorageIssue(`runtime-facts:${sessionId}`, runtimeFactFile(sessionId), error.message, "error");
   });
-  return runtimeFactWriteTail;
+  return work;
 }
 
 async function flushRuntimeFacts() {
@@ -7961,12 +7980,26 @@ function broadcastDashboardEvent(ev) {
     ?? scoped?.sessionId
     ?? (operationId ? operationSessionIds.get(String(operationId)) : null)
     ?? activeConversationId;
-  const delivered = dashboardEventStream.publish({
+  const delivered = dashboardEventStream.stage({
     ...ev,
     ...(operationId ? { operationId: String(operationId) } : {}),
     ...(sessionId ? { sessionId: String(sessionId) } : {}),
   });
-  void queueRuntimeFactsFromDashboardEvent(delivered);
+  if (!delivered?.eventId) {
+    dashboardEventStream.commit(delivered);
+    return delivered;
+  }
+  const durability = queueRuntimeFactsFromDashboardEvent(delivered);
+  dashboardEventCommitTail = dashboardEventCommitTail.then(async () => {
+    try {
+      await durability;
+      dashboardEventStream.commit(delivered);
+    } catch (error) {
+      console.error(`[launcher] dashboard event ${delivered.eventId} withheld because its fact was not durable: ${error.message}`);
+      dashboardEventStream.abort(delivered, "runtime-fact-persistence-failed");
+    }
+  });
+  void dashboardEventCommitTail;
   return delivered;
 }
 
@@ -8486,6 +8519,7 @@ async function finalizeOperationBoundary(operation, {
 }
 
 function scheduleQueuedSessionInputDrain(operation, scope = {}) {
+  if (!operation) return;
   const sessionId = scope.sessionId ?? operation?.context?.conversationId ?? null;
   const workspace = scope.workspace ?? operation?.context?.workspace ?? workspaceDir;
   if (!sessionId || !workspace) return;
@@ -8535,7 +8569,13 @@ function scheduleQueuedSessionInputDrain(operation, scope = {}) {
      }
   });
 }
-const refreshOperationContextScope = (operation) => operationRuntime.refreshScope(operation);
+function stopActiveOperationForSessionMutation(reason = "session_mutation") {
+  const operation = operationRuntime?.getActive?.();
+  if (!operation) return null;
+  operation.finalState = "unknown";
+  operationRuntime.stop(operation, reason);
+  return operation;
+}
 
 function operationKindForPrompt(text, opts = {}) {
   if (opts.internalHandoff === true) return "background-handoff";
@@ -8837,13 +8877,17 @@ async function resetActiveConversation({ withWelcome = true, reason = "new conve
   const mutationToken = beginSessionMutation("reset");
   if (!mutationToken) throw new Error("another session mutation is already in progress");
   try {
+    // The current Operation owns the old session. Stop it before finalizing
+    // and replacing the session identity; never rebind its callbacks to the
+    // new conversation.
+    stopActiveOperationForSessionMutation(reason === "scheduled task" ? "scheduled_session_reset" : "session_reset");
     clearActiveModals("session_reset");
     await finalizeActiveSession();
     const previousPlanSession = currentSessionName();
     activeConversationId = randomUUID();
     activeSessionName = null;
     activeContextRecoveryHandle = null;
-    preparedDocumentRegistry.clear({ notifyChange: false });
+    await preparedDocumentRegistry.clear({ notifyChange: false });
     if (loop) loop.clearLog();
     clearSessionMemories();
     activeTodos = [];
@@ -8927,12 +8971,16 @@ async function getSessionTranscript(name, options = {}) {
         updatedAt: activePlan.updatedAt || null,
       }]
       : [];
-  const snapshot = projectExecutionTranscript(parsed.entries, {
+  const projectedSnapshot = projectExecutionTranscript(parsed.entries, {
     sessionId: sessionName,
     goals,
     todos: meta.todos,
     prompts: meta.prompts,
   });
+  // Rebuild the read model through the same idempotent Turn/Step/Frame/entity
+  // operation reducer used by replay and recovery. JSONL remains the durable
+  // source; this is a projection boundary, never a second model loop.
+  const snapshot = materializeTranscriptSnapshot(projectedSnapshot);
   const page = paginateExecutionTranscript(snapshot, {
     beforeTurn: options.beforeTurn ?? null,
     afterTurn: options.afterTurn ?? null,
@@ -9930,10 +9978,11 @@ async function buildSessionSnapshot() {
     const sessionId = activeConversationId;
     const store = await runtimeFactStoreFor(sessionId);
     await flushRuntimeFacts();
+    await dashboardEventCommitTail;
     if (sessionId !== activeConversationId) continue;
 
     const facts = store.snapshot();
-    const eventCursor = runtimeFactPersistedCursor;
+    const eventCursor = dashboardEventStream.latestCursor();
     const messageSnapshot = messages.map((message) => structuredClone(message));
     const attachmentSnapshot = uniqueSnapshotEntities(messageSnapshot.flatMap((message) => Array.isArray(message.attachments) ? message.attachments : []));
     const generatedArtifacts = [...generatedArtifactPaths.values()].map((path) => ({
@@ -9951,7 +10000,7 @@ async function buildSessionSnapshot() {
       queued: 0,
       pendingActivation: false,
     };
-    return {
+    const snapshot = {
       ...facts,
       schemaVersion: 1,
       sessionId,
@@ -9977,6 +10026,9 @@ async function buildSessionSnapshot() {
       admission,
       busy: Boolean(activeOperation || admission.busy || sessionMutationInFlight),
     };
+    const validation = validateSessionSnapshot(snapshot);
+    if (!validation.ok) throw new Error(`session snapshot schema violation: ${validation.errors.join(", ")}`);
+    return snapshot;
   }
 }
 
@@ -10774,21 +10826,17 @@ ${modeList}
     }
 
     busy = true;
-    const operation = beginActiveOperation(operationKindForPrompt(text, opts));
-    activeTurnRequestId = requestId || operation.id;
-    activeMessageSendContext = {
-      source: operation.kind,
-      userPrompt: opts.internalHandoff === true
-        ? String(opts.originalUserPrompt || text || "").slice(0, 12_000)
-        : operation.kind === "chat"
-        ? String(text ?? "").slice(0, 12_000)
-        : operation.kind === "scheduled-prompt"
-          ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
-          : "",
-      scheduledAuthorization: operation.kind === "scheduled-prompt" && opts.scheduledSendAuthorization === true,
-      operationId: operation.id,
-      sendAuthorization: createSendAuthorization({
-        operationId: operation.id,
+    let operation = null;
+    let stopFromExternalSignal = () => {};
+    let detachExternalSignal = () => {};
+    // Named-session loading is a session mutation, not a model turn. Defer
+    // Operation creation until the target identity has been installed so an
+    // immutable Operation scope can never be rebound across sessions.
+    const initializeOperation = () => {
+      if (operation) return operation;
+      operation = beginActiveOperation(operationKindForPrompt(text, opts));
+      activeTurnRequestId = requestId || operation.id;
+      activeMessageSendContext = {
         source: operation.kind,
         userPrompt: opts.internalHandoff === true
           ? String(opts.originalUserPrompt || text || "").slice(0, 12_000)
@@ -10798,29 +10846,44 @@ ${modeList}
             ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
             : "",
         scheduledAuthorization: operation.kind === "scheduled-prompt" && opts.scheduledSendAuthorization === true,
-      }),
-      signal: operation.controller.signal,
-      autoHandoff: opts.isolated !== true && opts.internalHandoff !== true,
-      conversationScope: opts.isolated === true ? "isolated" : opts.internalHandoff === true ? "internal" : "chat",
+        operationId: operation.id,
+        sendAuthorization: createSendAuthorization({
+          operationId: operation.id,
+          source: operation.kind,
+          userPrompt: opts.internalHandoff === true
+            ? String(opts.originalUserPrompt || text || "").slice(0, 12_000)
+            : operation.kind === "chat"
+            ? String(text ?? "").slice(0, 12_000)
+            : operation.kind === "scheduled-prompt"
+              ? String(opts.sendAuthorizationPrompt ?? "").slice(0, 12_000)
+              : "",
+          scheduledAuthorization: operation.kind === "scheduled-prompt" && opts.scheduledSendAuthorization === true,
+        }),
+        signal: operation.controller.signal,
+        autoHandoff: opts.isolated !== true && opts.internalHandoff !== true,
+        conversationScope: opts.isolated === true ? "isolated" : opts.internalHandoff === true ? "internal" : "chat",
+      };
+      Object.assign(operation.context, {
+        conversationId: activeConversationId,
+        workspace: workspaceDir,
+        userPrompt: activeMessageSendContext.userPrompt,
+        scheduledAuthorization: activeMessageSendContext.scheduledAuthorization,
+        sendAuthorization: activeMessageSendContext.sendAuthorization,
+        conversationScope: activeMessageSendContext.conversationScope,
+      });
+      operationSessionIds.set(operation.id, operation.context.conversationId);
+      operationWorkspaceIds.set(operation.id, operation.context.workspace);
+      stopFromExternalSignal = () => {
+        if (!operation || operation.controller.signal.aborted) return;
+        operationRuntime.stop(operation, "external_abort");
+        loop?.abort();
+      };
+      if (opts.signal?.aborted) stopFromExternalSignal();
+      else opts.signal?.addEventListener("abort", stopFromExternalSignal, { once: true });
+      detachExternalSignal = () => opts.signal?.removeEventListener("abort", stopFromExternalSignal);
+      return operation;
     };
-    Object.assign(operation.context, {
-      conversationId: activeConversationId,
-      workspace: workspaceDir,
-      userPrompt: activeMessageSendContext.userPrompt,
-      scheduledAuthorization: activeMessageSendContext.scheduledAuthorization,
-      sendAuthorization: activeMessageSendContext.sendAuthorization,
-      conversationScope: activeMessageSendContext.conversationScope,
-    });
-    operationSessionIds.set(operation.id, operation.context.conversationId);
-    operationWorkspaceIds.set(operation.id, operation.context.workspace);
-    const stopFromExternalSignal = () => {
-      if (operation.controller.signal.aborted) return;
-      operationRuntime.stop(operation, "external_abort");
-      loop?.abort();
-    };
-    if (opts.signal?.aborted) stopFromExternalSignal();
-    else opts.signal?.addEventListener("abort", stopFromExternalSignal, { once: true });
-    const detachExternalSignal = () => opts.signal?.removeEventListener("abort", stopFromExternalSignal);
+    if (!(sessionName && loop)) initializeOperation();
 
     // committed: set to true when the fire-and-forget IIFE takes ownership
     // of busy-reset. Early-return paths leave it false so the outer finally
@@ -10894,7 +10957,7 @@ ${modeList}
       // ── Session resume: load historical messages ──────────────
       if (sessionName && loop) {
         clearSessionMemories();
-        preparedDocumentRegistry.clear({ notifyChange: false });
+        await preparedDocumentRegistry.clear({ notifyChange: false });
         try {
           const sessionFile = resumeSessionFile || sessionJsonlPath(sessionName);
           const sessionMeta = resumeSessionSnapshot?.meta ?? readSessionMeta(sessionName);
@@ -10906,8 +10969,9 @@ ${modeList}
             broadcastDashboardEvent({
               kind: "operation-change",
               sessionId: previousConversationId,
-              operationId: operation.id,
-              operation: { ...publicActiveOperation(operation), state: "unknown", reason: "session_rebound" },
+              operationId: null,
+              operation: null,
+              reason: "session_switch",
             });
           }
           activeSessionName = sessionName;
@@ -10918,19 +10982,6 @@ ${modeList}
           // durable inputs before any queued drain can run.
           sessionInputAdmission.restore(sessionMeta.promptInputs);
           interactionRuntime.restore(sessionMeta.interactions, { replaceSessionId: activeConversationId });
-          refreshOperationContextScope(operation);
-          const reboundSessionRun = bindOperationSessionRun(operation, { replace: true });
-          if (!reboundSessionRun.accepted || !reboundSessionRun.run?.runId) {
-            const error = new Error(reboundSessionRun.code || "SESSION_RUN_ACTIVE");
-            error.code = reboundSessionRun.code || "SESSION_RUN_ACTIVE";
-            throw error;
-          }
-          broadcastDashboardEvent({
-            kind: "operation-change",
-            sessionId: activeConversationId,
-            operationId: operation.id,
-            operation: publicActiveOperation(operation),
-          });
           activeContextRecoveryHandle = typeof sessionMeta.contextRecoveryHandle === "string" && sessionMeta.contextRecoveryHandle.trim()
             ? sessionMeta.contextRecoveryHandle.trim()
             : null;
@@ -10945,7 +10996,7 @@ ${modeList}
             : parseActiveSessionJsonl(raw);
           const legacyMigration = await attachmentRuntime.migrateLegacySessionEntries(parsed.entries, {
             sessionId: activeConversationId,
-            operationId: operation.id,
+            operationId: null,
             workspace: workspaceDir,
           });
           const entries = legacyMigration.entries;
@@ -10995,13 +11046,16 @@ ${modeList}
           endSessionMutation(sessionMutationToken);
           sessionMutationToken = null;
           await wakePendingBackgroundTaskNotifications({
-            operationId: operation.id,
+            operationId: null,
             sessionId: activeConversationId,
             workspace: workspaceDir,
           });
           if (!text || !text.trim()) {
             return { accepted: true, loaded: true, session: sessionName, mode: modeRestore.mode, modeChanged: modeRestore.changed };
           }
+          // The session identity is now stable. A prompt supplied together
+          // with the session switch starts a fresh Operation in that scope.
+          initializeOperation();
         } catch (err) {
           console.error(`[launcher] failed to load session ${sessionName}: ${err.message}`);
           return { accepted: false, reason: `Failed to load session: ${err.message}` };
@@ -11189,7 +11243,6 @@ ${modeList}
       // Handle /new and /clear: finalize active session and reset
       if (text === "/new" || text === "/clear") {
         await resetActiveConversation({ withWelcome: true, reason: "manual new conversation" });
-        refreshOperationContextScope(operation);
         // busy is already true from the outer guard; just broadcast events
         broadcastDashboardEvent({ kind: "busy-change", busy: true });
         return { accepted: true };
@@ -11267,7 +11320,6 @@ ${modeList}
       // /new-style behavior.
       if (opts.newConversation === true && opts.isolated !== true) {
         await resetActiveConversation({ withWelcome: false, reason: "scheduled task" });
-        refreshOperationContextScope(operation);
       }
 
       // /compact — manually trigger context compression (async LLM summarization)
@@ -11407,20 +11459,29 @@ ${modeList}
           return { accepted: true };
         }
         broadcastDashboardEvent({ kind: "busy-change", busy: true });
-        const btwId = `assistant-${Date.now()}`;
-        pushMessage({ id: btwId, role: "assistant", text: "\u{1F4AC} \u65C1\u8DEF\u63D0\u95EE\u4E2D..." });
-        broadcastDashboardEvent({ kind: "assistant_final", id: btwId, text: "\u{1F4AC} \u65C1\u8DEF\u63D0\u95EE\u4E2D..." });
+        broadcastDashboardEvent({ kind: "status", text: "\u65C1\u8DEF\u63D0\u95EE\u4E2D..." });
         try {
-          const tmpLoop = buildLoop(client, workspaceDir);
-          const stopTmpLoop = () => tmpLoop.abort();
-          operation.controller.signal.addEventListener("abort", stopTmpLoop, { once: true });
-          tmpLoop.clearLog();
-          let answer = "";
-          for await (const ev of tmpLoop.step(question)) {
-            if (ev.role === "assistant_delta") answer += ev.content ?? "";
-            if (ev.role === "assistant_final" && ev.content && ev.content.length > answer.length) answer = ev.content;
-          }
-          operation.controller.signal.removeEventListener("abort", stopTmpLoop);
+          const modelConfig = effectiveModelConfig(config);
+          const answer = await requestModelText({
+            label: "side question",
+            model: modelConfig.model,
+            messages: [
+              {
+                role: "system",
+                content: [
+                  "You are answering an isolated side question without changing the main agent task.",
+                  "Do not call tools. No tools are available for this request.",
+                  "不得调用任何工具、命令、文件操作或外部发送；只能根据当前问题直接给出文字回答。",
+                  "If the question cannot be answered without tools, state that limitation clearly.",
+                ].join("\n"),
+              },
+              { role: "user", content: question },
+            ],
+            temperature: 0.3,
+            maxTokens: 4096,
+            requestPurpose: "side-question",
+            signal: operation.controller.signal,
+          });
           if (operation.controller.signal.aborted) return { accepted: true, cancelled: true };
           const doneId = `assistant-${Date.now()}`;
           pushMessage({ id: doneId, role: "assistant", text: `\u{1F4AC} \u65C1\u8DEF\u56DE\u7B54\n\n${answer}` });
@@ -11935,6 +11996,11 @@ ${modeList}
                   name: progressEvent?.toolName ?? ev.toolName,
                   status: progressEvent?.status ?? ev.toolStatus,
                   result: ev.role === "tool" ? progressEvent?.content ?? null : null,
+                  evidenceType: classifyToolEvidence({
+                    name: progressEvent?.toolName ?? ev.toolName,
+                    args: ev.toolArgs,
+                  }),
+                  exitCode: normalizedToolOutcome?.exitCode,
                 });
               }
               if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);
@@ -11993,7 +12059,31 @@ ${modeList}
                   const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
                   const isRequestedExistingOutput = requestedExistingOutputKeys.has(key);
                   if (!info || info.size <= 0 || (!isRequestedExistingOutput && info.mtimeMs < turnStartedAt)) continue;
-                  if (turnArtifactPaths.has(key)) continue;
+                  if (turnArtifactPaths.has(key)) {
+                    // A later read_file/get_file_info for the same requested
+                    // path upgrades the original write fact in place. Without
+                    // this branch, the dedupe guard would leave the final
+                    // receipt permanently stuck at current-turn-write.
+                    if (isRequestedExistingOutput) {
+                      const existing = turnArtifactFiles.get(key);
+                      if (existing) {
+                        existing.status = artifactVerificationStatus(info, { explicitlyVerified: true });
+                        existing.verification = "existing-file-verified";
+                        existing.readable = info.readable;
+                        existing.size = info.size;
+                        existing.mtimeMs = info.mtimeMs;
+                        turnReceipt.recordArtifact({
+                          paths: [existing.path],
+                          files: [existing],
+                          producer: ev.toolName || "artifact-readback",
+                          verified: true,
+                          status: "verified",
+                          reason: "artifact explicitly verified by a host readback",
+                        });
+                      }
+                    }
+                    continue;
+                  }
                   const baseline = artifactBaselines.get(key);
                   const changedThisTurn = !baseline || info.mtimeMs > baseline.mtimeMs || info.size !== baseline.size;
                   const artifactRecord = {
@@ -12545,6 +12635,7 @@ ${modeList}
                       : "completed";
                 const goalVerification = verifyGoalContract({
                   contract: taskContract,
+                  workspaceDir,
                   executionState: executionFactState,
                   toolFacts: turnReceipt.snapshot().toolCalls,
                   receipt: turnReceipt.snapshot(),
@@ -12588,6 +12679,7 @@ ${modeList}
                 const finalizationEvaluation = {
                   ...evaluateTurnFinalization({
                     taskContract,
+                    workspaceDir,
                     executionFactState: executionState,
                     toolFacts: turnReceipt.snapshot().toolCalls,
                     receipt: turnReceipt.snapshot(),
@@ -12653,9 +12745,11 @@ ${modeList}
               }
             } catch (cleanupError) {
               const cleanupMessage = `后台任务清理失败：${cleanupError.message}`;
-              if (finalizationPersisted) {
+            if (finalizationPersisted) {
                 taskWarnings = [...new Set([...taskWarnings, cleanupMessage])].slice(0, 8);
                 turnReceipt.recordWarning(cleanupMessage);
+                if (["completed", "succeeded"].includes(String(taskState ?? "").toLowerCase())) taskState = "completed_with_warnings";
+                if (["completed", "succeeded"].includes(String(executionState ?? "").toLowerCase())) executionState = "completed_with_warnings";
                 try {
                   await persistActiveTurnFinalization({
                     modelEntries: loop?.log?.toMessages?.() ?? [],
@@ -13049,6 +13143,8 @@ try {
     Promise.all([
       closeActiveSessionStream(),
       backgroundPersistenceQueue,
+      flushRuntimeFacts(),
+      preparedDocumentRegistry.clear({ notifyChange: false }),
     ])
       .then(() => taskOutputStore.flush())
       .then(() => close())

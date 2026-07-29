@@ -146,7 +146,7 @@ function closeTurn(turn, state = "unknown", endedAt = null) {
 
 function inferTurnState(turn) {
   const explicit = String(turn?.explicitState ?? "").trim().toLowerCase();
-  if (["completed", "succeeded", "failed", "cancelled", "unknown", "incomplete", "needs_intervention"].includes(explicit)) {
+  if (["completed", "completed_with_warnings", "succeeded", "failed", "cancelled", "unknown", "incomplete", "needs_intervention"].includes(explicit)) {
     if (explicit === "succeeded") return "completed";
     return explicit;
   }
@@ -168,6 +168,7 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
   const interactions = new Map();
   const artifacts = new Map();
   const receipts = new Map();
+  const tasks = new Map();
   const goalEntities = new Map();
   const todoEntities = new Map();
   const promptEntities = new Map();
@@ -312,6 +313,17 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
           operationId: safeId(fact.sourceOperationId ?? entry.operationId, null),
           createdAt: fact.createdAt ?? entry.createdAt ?? null,
         });
+        const taskId = safeId(fact.taskId, id);
+        tasks.set(taskId, {
+          id: taskId,
+          taskId,
+          state: String(fact.status ?? "unknown"),
+          status: String(fact.status ?? "unknown"),
+          jobId: Number.isSafeInteger(Number(fact.jobId)) ? Number(fact.jobId) : null,
+          sessionId: sessionId ?? null,
+          operationId: safeId(fact.sourceOperationId ?? entry.operationId, null),
+          createdAt: fact.createdAt ?? entry.createdAt ?? null,
+        });
         continue;
       }
       if (isInternalUser(entry)) continue;
@@ -401,6 +413,7 @@ export function projectExecutionTranscript(entries, { sessionId = null, goals = 
     schemaVersion: 1,
     sessionId: sessionId ?? null,
     items,
+    tasks: [...tasks.values()],
     attachments: [...attachments.values()],
     interactions: [...interactions.values()],
     artifacts: [...artifacts.values()],
@@ -423,6 +436,17 @@ export function paginateExecutionTranscript(snapshot, { beforeTurn = null, after
   const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
   const beforeRequested = Boolean(beforeTurn);
   const afterRequested = Boolean(afterTurn);
+  if (beforeRequested && afterRequested) {
+    return {
+      ...snapshot,
+      items: [],
+      hasMoreOlder: false,
+      hasMoreNewer: false,
+      cursor: null,
+      resyncRequired: true,
+      cursorError: "beforeTurn and afterTurn are mutually exclusive",
+    };
+  }
   const before = beforeRequested ? items.find((item) => item.turnId === beforeTurn)?.ordinal : null;
   const after = afterRequested ? items.find((item) => item.turnId === afterTurn)?.ordinal : null;
   if ((beforeRequested && before === undefined) || (afterRequested && after === undefined)) {

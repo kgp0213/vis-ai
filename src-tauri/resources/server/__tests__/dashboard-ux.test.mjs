@@ -112,6 +112,19 @@ describe("Dashboard desktop UX", () => {
     assert.match(css, /\.reasoning-summary:focus-visible\s*\{/);
   });
 
+  test("routes the active event before advancing its reducer cursor and fences foreign sessions", () => {
+    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const start = chat.indexOf("const routeDashboardEvent = (dash) => {");
+    const end = chat.indexOf("const replayBufferedDashboardEvents", start);
+    assert.ok(start >= 0 && end > start, "Dashboard event route must remain discoverable");
+    const route = chat.slice(start, end);
+    const scopeCheck = route.indexOf("eventSessionId && activeSessionId && eventSessionId !== activeSessionId");
+    const enqueue = route.indexOf("eventBatcher.enqueue(dash)");
+    assert.ok(scopeCheck >= 0 && enqueue > scopeCheck, "foreign-session routing must precede active projection");
+    assert.match(route, /if \(eventSessionId && activeSessionId && eventSessionId !== activeSessionId\) \{[\s\S]{0,240}eventBatcher\.flush\(\);[\s\S]{0,320}lastSeq:\s*observed\.cursor\.lastSeq[\s\S]{0,160}return;/u);
+    assert.doesNotMatch(route.slice(0, scopeCheck), /executionStateRef\.current\s*=\s*createDashboardReducerState/u);
+  });
+
   test("collapses long tool outputs while keeping live progress visible", () => {
     const app = readFileSync(dashboardAppUrl, "utf8");
     const css = readFileSync(dashboardCssUrl, "utf8");
@@ -254,6 +267,17 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatSource, /const canonicalProjectionGenerationRef = A2\(0\)/);
     assert.match(chatSource, /dashboardSnapshotResponseIsCurrent/);
     assert.match(chatSource, /const requestGeneration = canonicalProjectionGenerationRef\.current/);
+  });
+
+  test("renders streaming text from the offset-aware reducer projection", () => {
+    const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const deltaHandler = chatSource.slice(
+      chatSource.indexOf('if (dash.kind === "assistant_delta")'),
+      chatSource.indexOf('if (dash.kind === "assistant_content_final"'),
+    );
+    assert.match(deltaHandler, /const reducedStream = reduced\.state\.streamOffsets/);
+    assert.match(deltaHandler, /reducedStream\?\.contentText/);
+    assert.match(deltaHandler, /reducedStream\?\.reasoningText/);
   });
 
   test("uses SessionSnapshot messagePage for both initial hydration and older history", () => {
@@ -402,8 +426,8 @@ describe("Dashboard desktop UX", () => {
     assert.match(userHandler, /if \(inserted\) \{/);
     assert.doesNotMatch(userHandler, /setMessages\(\(prev\) => \[\.\.\.prev, \{ id: dash\.id, role: "user"/);
     const assistantHandler = chat.slice(chat.indexOf('if (dash.kind === "assistant_content_final"'), chat.indexOf('if (dash.kind === "tool_start")'));
-    assert.match(assistantHandler, /if \(dash\.kind !== "turn_finalized"\) canonicalMessageCountRef\.current \+= 1/);
-    assert.match(assistantHandler, /if \(inserted && dash\.kind !== "turn_finalized"\) setTotalMessages/);
+    assert.match(assistantHandler, /if \(!isFinalized\) canonicalMessageCountRef\.current \+= 1/);
+    assert.match(assistantHandler, /if \(inserted && !isFinalized\) setTotalMessages/);
     // warning/error/info 事件：同样的幂等守卫。
     const noticeHandler = chat.slice(
       chat.indexOf('if (dash.kind === "warning" || dash.kind === "error" || dash.kind === "info")'),

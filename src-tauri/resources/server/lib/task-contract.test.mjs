@@ -36,3 +36,27 @@ test("legacy task states map conservatively", () => {
   assert.equal(mapLegacyTaskState("anything else"), "unknown");
   assert.equal(mapLegacyTaskState(null), null);
 });
+
+test("ordinary file questions do not become execution tasks from a noun alone", () => {
+  assert.equal(isExecutionTask({ intent: "看看这个文件" }), false);
+  assert.equal(isExecutionTask({ intent: "分析这段代码并解释原因" }), false);
+  assert.equal(isExecutionTask({ intent: "读取并验证这个文件" }), true);
+  assert.equal(isExecutionTask({ intent: "把结果保存为 report.md" }), true);
+});
+
+test("task contracts derive host evidence requirements from the requested outcome", () => {
+  const repair = createTaskContract({ intent: "修复代码中的 bug" });
+  assert.deepEqual(repair.requiredEvidence, ["mutation"]);
+
+  const repairAndTest = createTaskContract({ intent: "修改并测试代码" });
+  assert.deepEqual(repairAndTest.requiredEvidence, ["mutation", "test"]);
+
+  const external = createTaskContract({ intent: "发送结果", sideEffects: ["external"] });
+  assert.deepEqual(external.requiredEvidence, ["external_side_effect"]);
+
+  const artifact = createTaskContract({
+    intent: "生成报告文件",
+    expectedOutputs: [{ id: "report", path: "report.md" }],
+  });
+  assert.deepEqual(artifact.requiredEvidence, []);
+});

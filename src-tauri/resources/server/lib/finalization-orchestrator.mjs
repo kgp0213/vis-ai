@@ -9,6 +9,7 @@ function normalizeState(value, fallback = "unknown") {
 
 export function evaluateTurnFinalization({
   taskContract = null,
+  workspaceDir = null,
   executionFactState = "unknown",
   toolFacts = [],
   receipt = null,
@@ -24,6 +25,7 @@ export function evaluateTurnFinalization({
   let executionState = normalizeState(executionFactState);
   const verification = verifyGoalContract({
     contract: taskContract,
+    workspaceDir,
     executionState,
     toolFacts,
     receipt,

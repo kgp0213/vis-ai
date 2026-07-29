@@ -1,5 +1,6 @@
 const EXECUTION_KINDS = new Set(["artifact", "file", "office", "media", "code", "external", "side_effect"]);
 const COMPLETION_POLICIES = new Set(["execution_only", "evidence_required", "user_confirmation"]);
+const EVIDENCE_TYPES = new Set(["tool_read", "mutation", "test", "execution", "external_side_effect"]);
 
 function text(value, max = 2000) {
   return String(value ?? "").trim().slice(0, max);
@@ -37,11 +38,31 @@ function normalizeCriterion(value, index) {
   };
 }
 
+function normalizeRequiredEvidence(value) {
+  return [...new Set(list(value).map((entry) => text(entry, 80).toLowerCase()).filter((entry) => EVIDENCE_TYPES.has(entry)))];
+}
+
+function inferRequiredEvidence({ intent = "", expectedOutputs = [], sideEffects = [] } = {}) {
+  const value = String(intent);
+  const required = [];
+  const hasExpectedOutput = list(expectedOutputs).some((output) => output?.required !== false);
+  if (!hasExpectedOutput && /(?:修复|修改|写入|保存|创建|生成|转换|导出|删除|重命名|移动|复制|安装|部署|发布)/iu.test(value)) {
+    required.push("mutation");
+  }
+  if (/(?:测试|编译|构建|校验|验证|lint|typecheck|check|build|test)/iu.test(value)) required.push("test");
+  if (list(sideEffects).length > 0 || /(?:发送|上传|通知|外部副作用)/iu.test(value)) required.push("external_side_effect");
+  if (required.length === 0 && /(?:执行|运行)/iu.test(value)) required.push("execution");
+  return [...new Set(required)];
+}
+
 export function isExecutionTask({ intent = "", expectedOutputs = [], sideEffects = [], kind = "" } = {}) {
   const normalizedKind = text(kind, 80).toLowerCase();
   if (EXECUTION_KINDS.has(normalizedKind)) return true;
   if (list(expectedOutputs).length > 0 || list(sideEffects).length > 0) return true;
-  return /(?:生成|创建|写入|保存|修改|编译|测试|转换|导出|发送|上传|安装|执行|修复|产物|文件|代码)/iu.test(String(intent));
+  // A noun such as "文件" or "代码" is not an execution request by itself.
+  // Require an explicit mutating/operational verb so questions like "看看这个
+  // 文件" remain ordinary chat and do not become an unprovable incomplete task.
+  return /(?:生成|创建|写入|保存|修改|编译|测试|转换|导出|发送|上传|安装|执行|修复|删除|重命名|移动|复制|下载|运行|部署|发布|验证|检查并|读取并)/iu.test(String(intent));
 }
 
 export function createTaskContract({
@@ -56,6 +77,7 @@ export function createTaskContract({
   completionPolicy = null,
   kind = "",
   executionRequired = null,
+  requiredEvidence = null,
   createdAt = new Date().toISOString(),
 } = {}) {
   const outputs = list(expectedOutputs).map(normalizeExpectedOutput);
@@ -64,6 +86,9 @@ export function createTaskContract({
   const requiresVerification = executionRequired === null
     ? isExecutionTask({ intent, expectedOutputs: outputs, sideEffects: effects, kind })
     : executionRequired === true;
+  const evidenceRequirements = requiredEvidence === null
+    ? inferRequiredEvidence({ intent, expectedOutputs: outputs, sideEffects: effects })
+    : normalizeRequiredEvidence(requiredEvidence);
   const policy = text(completionPolicy, 80).toLowerCase();
   return {
     contractVersion: 1,
@@ -76,6 +101,7 @@ export function createTaskContract({
     sideEffects: effects,
     requiresApproval: requiresApproval === true,
     executionRequired: requiresVerification,
+    requiredEvidence: requiresVerification ? evidenceRequirements : [],
     completionPolicy: COMPLETION_POLICIES.has(policy)
       ? policy
       : (requiresVerification ? "evidence_required" : "execution_only"),
@@ -92,6 +118,7 @@ export function normalizeTaskContract(value, defaults = {}) {
     acceptanceCriteria: source.acceptanceCriteria ?? defaults.acceptanceCriteria,
     sideEffects: source.sideEffects ?? defaults.sideEffects,
     executionRequired: source.executionRequired ?? defaults.executionRequired,
+    requiredEvidence: source.requiredEvidence ?? defaults.requiredEvidence,
   });
 }
 
@@ -102,4 +129,4 @@ export function mapLegacyTaskState(value) {
   return state ? "unknown" : null;
 }
 
-export { EXECUTION_KINDS };
+export { EVIDENCE_TYPES, EXECUTION_KINDS };

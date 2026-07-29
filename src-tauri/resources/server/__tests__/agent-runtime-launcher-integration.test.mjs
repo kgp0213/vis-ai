@@ -26,6 +26,18 @@ test("launcher restores admission only after the owning Session identity is appl
   );
 });
 
+test("launcher stops the old Operation before replacing the active Session identity", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  const resetBlock = source.slice(
+    source.indexOf("async function resetActiveConversation"),
+    source.indexOf("function isValidSessionName"),
+  );
+  const stopIndex = resetBlock.indexOf("stopActiveOperationForSessionMutation(");
+  const replaceIndex = resetBlock.indexOf("activeConversationId = randomUUID()");
+  assert.ok(stopIndex >= 0 && replaceIndex > stopIndex, "old Operation must stop before Session identity changes");
+  assert.doesNotMatch(source, /refreshOperationContextScope/u);
+});
+
 test("resuming a session wakes its durable background notifications before an empty load returns", async () => {
   const source = await readFile(launcherUrl, "utf8");
   const resumeStart = source.indexOf("// ── Session resume: load historical messages");
@@ -63,6 +75,20 @@ test("launcher persists and closes an operation before publishing idle", async (
   assert.match(teardown, /scheduleQueuedSessionInputDrain\(operation\)/u);
   assert.match(teardown, /scheduleQueuedSessionInputDrain\(operation, \{[\s\S]{0,160}sessionId: activeConversationId/u);
   assert.doesNotMatch(source, /busy = false;\s*\n\s*broadcastDashboardEvent\(\{ kind: "busy-change", busy: false \}\);\s*\n\s*finishActiveOperation\(operation\)/u);
+});
+
+test("launcher includes strict file facts and guards queue cleanup without an Operation", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  const artifactStart = source.indexOf("function generatedArtifactFileInfo(");
+  const artifactEnd = source.indexOf("function rescanArtifactEvidence(", artifactStart);
+  assert.ok(artifactStart >= 0 && artifactEnd > artifactStart, "artifact metadata helper must remain discoverable");
+  const artifactBlock = source.slice(artifactStart, artifactEnd);
+  assert.match(artifactBlock, /isFile:\s*true/u);
+
+  const queueStart = source.indexOf("function scheduleQueuedSessionInputDrain(");
+  const queueEnd = source.indexOf("//", queueStart + 20);
+  const queueBlock = source.slice(queueStart, queueEnd > queueStart ? queueEnd : queueStart + 500);
+  assert.match(queueBlock, /if \(!operation\) return;/u);
 });
 
 test("normal and local-command exits share teardown and terminal steers become queue inputs", async () => {
@@ -108,6 +134,19 @@ test("reset and named-session switch block admission for the full mutation windo
   assert.match(admission, /if \(sessionMutationInFlight\)[\s\S]{0,200}SESSION_MUTATION_ACTIVE/u);
 });
 
+test("named-session loading does not rebind an Operation across session identities", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  const resumeStart = source.indexOf("// ── Session resume: load historical messages");
+  const resumeEnd = source.indexOf("// Handle /learn:", resumeStart);
+  assert.ok(resumeStart >= 0 && resumeEnd > resumeStart, "session resume block must remain discoverable");
+  const resumeBlock = source.slice(resumeStart, resumeEnd);
+  assert.doesNotMatch(resumeBlock, /refreshOperationContextScope|bindOperationSessionRun\(operation,\s*\{\s*replace:\s*true/u);
+  const emptyLoadIndex = resumeBlock.indexOf("if (!text || !text.trim())");
+  const initializeIndex = resumeBlock.indexOf("initializeOperation()", emptyLoadIndex);
+  assert.ok(emptyLoadIndex >= 0 && initializeIndex > emptyLoadIndex, "target prompt Operation must start after session loading");
+  assert.match(source, /if \(!\(sessionName && loop\)\) initializeOperation\(\)/u);
+});
+
 test("messages API preserves legacy pagination and adds an atomic session snapshot", async () => {
   const source = await readFile(serverUrl, "utf8");
   assert.match(source, /VISIONOX_PATCH_SESSION_SNAPSHOT_V1/u);
@@ -121,9 +160,9 @@ test("session snapshots wait for a stable fact tail and retry a concurrent sessi
   assert.match(source, /for \(;;\) \{[\s\S]{0,240}const sessionId = activeConversationId;[\s\S]{0,240}await runtimeFactStoreFor\(sessionId\);[\s\S]{0,240}await flushRuntimeFacts\(\);[\s\S]{0,160}if \(sessionId !== activeConversationId\) continue;/u);
 });
 
-test("session snapshot cursor advances only after every event fact is durable", async () => {
+test("session snapshot publishes the process cursor only after every event fact is durable", async () => {
   const source = await readFile(launcherUrl, "utf8");
-  assert.doesNotMatch(source, /runtimeFactPersistedCursors\s*=\s*new Map/u);
+  assert.match(source, /runtimeFactPersistedCursors\s*=\s*new Map/u);
   const factQueue = source.slice(
     source.indexOf("function queueRuntimeFactsFromDashboardEvent(event)"),
     source.indexOf("async function flushRuntimeFacts()"),
@@ -131,9 +170,9 @@ test("session snapshot cursor advances only after every event fact is durable", 
   assert.match(factQueue, /const result = await store\.append\(fact\)/u);
   assert.match(factQueue, /if \(!result\?\.accepted && !result\?\.duplicate/u);
   assert.match(factQueue, /result\?\.code !== "TERMINAL_STATE_DOWNGRADE"/u);
-  assert.match(factQueue, /runtimeFactPersistedCursor = eventId/u);
+  assert.match(factQueue, /runtimeFactPersistedCursors\.set\(sessionId, eventId\)/u);
   assert.ok(
-    factQueue.indexOf("runtimeFactPersistedCursor = eventId") > factQueue.indexOf("await store.append(fact)"),
+    factQueue.indexOf("runtimeFactPersistedCursors.set(sessionId, eventId)") > factQueue.indexOf("await store.append(fact)"),
     "the cursor watermark must move only after fact persistence",
   );
 
@@ -141,8 +180,8 @@ test("session snapshot cursor advances only after every event fact is durable", 
     source.indexOf("async function buildSessionSnapshot()"),
     source.indexOf("// ── Dashboard context"),
   );
-  assert.match(snapshotBuilder, /const facts = store\.snapshot\(\);[\s\S]{0,160}const eventCursor = runtimeFactPersistedCursor/u);
-  assert.doesNotMatch(snapshotBuilder, /dashboardEventStream\.latestCursor\(\)/u);
+  assert.match(snapshotBuilder, /await flushRuntimeFacts\(\);[\s\S]{0,120}await dashboardEventCommitTail;[\s\S]{0,240}const eventCursor = dashboardEventStream\.latestCursor\(\)/u);
+  assert.doesNotMatch(snapshotBuilder, /const eventCursor = runtimeFactCursorFor\(sessionId\)/u);
 });
 
 test("launcher preserves authoritative terminal fields in runtime facts", async () => {
@@ -165,6 +204,17 @@ test("launcher preserves authoritative terminal fields in runtime facts", async 
   assert.match(terminalBroadcaster, /interventionChoice:\s*payload\.interventionChoice/u);
 });
 
+test("launcher records host-classified tool evidence without persisting raw arguments", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  assert.match(source, /const \{ classifyToolEvidence, verifyGoalContract \} = await importEarly\("\.\/lib\/goal-verification-runtime\.mjs"\)/u);
+  const observation = source.slice(
+    source.indexOf("turnReceipt.observeToolProgress({"),
+    source.indexOf("if (ev.role === \"media_recovery\")"),
+  );
+  assert.match(observation, /evidenceType:\s*classifyToolEvidence\(\{[\s\S]{0,200}name:[\s\S]{0,120}args:\s*ev\.toolArgs/u);
+  assert.match(observation, /exitCode:\s*normalizedToolOutcome\?\.exitCode/u);
+});
+
 test("session snapshots merge durable message facts over compatibility messages", async () => {
   const source = await readFile(launcherUrl, "utf8");
   const snapshotBuilder = source.slice(
@@ -172,7 +222,7 @@ test("session snapshots merge durable message facts over compatibility messages"
     source.indexOf("// ── Dashboard context"),
   );
   assert.match(snapshotBuilder, /messages:\s*mergeSnapshotMessages\(messageSnapshot, facts\.messages\)/u);
-  assert.match(snapshotBuilder, /const facts = store\.snapshot\(\);[\s\S]{0,160}const eventCursor = runtimeFactPersistedCursor/u);
+  assert.match(snapshotBuilder, /const facts = store\.snapshot\(\);[\s\S]{0,160}const eventCursor = dashboardEventStream\.latestCursor\(\)/u);
 });
 
 test("session snapshots retain durable task notifications when the memory queue is empty", async () => {
@@ -237,4 +287,16 @@ test("manual Plan completion is fenced while an operation is active", async () =
   );
   assert.match(completion, /if \(busy \|\| operationRuntime\?\.getActive\?\.\(\)\)/u);
   assert.match(completion, /工具事实稳定后才能手动完成计划步骤/u);
+});
+
+test("side questions use a text-only auxiliary request instead of a tool loop", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  const start = source.indexOf('// /btw <question>');
+  const end = source.indexOf('// /report daily|weekly', start);
+  assert.ok(start >= 0 && end > start, "side-question command block must remain discoverable");
+  const block = source.slice(start, end);
+  assert.match(block, /await requestModelText\(\{/u);
+  assert.match(block, /requestPurpose:\s*"side-question"/u);
+  assert.match(block, /Do not call tools|不得调用任何工具/u);
+  assert.doesNotMatch(block, /buildLoop\(|tmpLoop|\.step\(/u);
 });

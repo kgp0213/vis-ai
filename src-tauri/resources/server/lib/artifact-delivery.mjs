@@ -168,6 +168,15 @@ export function toolResultSucceeded(value, { status = null } = {}) {
   return normalizeToolOutcome(value, { status }).ok === true;
 }
 
+export function artifactVerificationStatus(info, { changedThisTurn = false, explicitlyVerified = false } = {}) {
+  if (!info) return "missing";
+  if (!Number.isFinite(Number(info.size)) || Number(info.size) <= 0 || info.readable !== true) return "invalid";
+  // Keep changedThisTurn as a receipt fact, but a write alone cannot prove
+  // that the content satisfies the user's requested output.
+  if (explicitlyVerified) return "verified";
+  return "present_unverified";
+}
+
 const TEMPORARY_SCRIPT_EXTENSIONS = new Set([".py", ".js", ".ts", ".tsx", ".jsx", ".ps1", ".bat", ".cmd", ".sh"]);
 
 /**

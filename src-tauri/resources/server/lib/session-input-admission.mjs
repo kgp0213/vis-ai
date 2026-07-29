@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 const ACTIVE_STATUS = "admitted";
-const TERMINAL_STATUS = new Set(["promoted", "dispatching", "dispatched", "cancelled", "interrupted", "expired", "failed", "unknown"]);
+const TERMINAL_STATUS = new Set(["promoted", "dispatching", "dispatched", "cancelled", "interrupted", "expired", "failed", "unknown", "not_applied"]);
 const DELIVERY = new Set(["steer", "queue"]);
 const MAX_TEXT = 12_000;
 const MAX_ATTACHMENTS = 5;
@@ -19,6 +19,23 @@ function clone(value) {
 function normalizeId(value) {
   const result = text(value, 160);
   return result || null;
+}
+
+/**
+ * Returns true when an admitted input has already crossed the model-history
+ * boundary. The explicit marker is written with the history entry so a
+ * process restart can distinguish "persisted but not resolved" from a value
+ * that is still safe to requeue. The stable legacy id remains supported for
+ * sessions created before the marker was introduced.
+ */
+export function hasInputInModelHistory(entries, input) {
+  const inputId = normalizeId(input?.id);
+  if (!inputId || !Array.isArray(entries)) return false;
+  const marker = `input-${inputId}`;
+  return entries.some((entry) => entry
+    && entry.role === "user"
+    && (String(entry.admittedInputId ?? "").trim() === inputId
+      || String(entry.id ?? "").trim() === marker));
 }
 
 function normalizeAttachments(value) {
@@ -178,19 +195,27 @@ export function createSessionInputAdmission({
     for (const entry of entries.values()) {
       if (!["promoted", "dispatching"].includes(entry.status)) continue;
       const previousStatus = entry.status;
-      entry.status = ACTIVE_STATUS;
-      entry.delivery = "queue";
-      entry.operationId = null;
+      const safeToRequeue = previousStatus === "promoted" && entry.delivery === "queue";
+      entry.status = safeToRequeue
+        ? ACTIVE_STATUS
+        : entry.delivery === "steer"
+          ? "not_applied"
+          : "unknown";
+      if (safeToRequeue) entry.operationId = null;
       entry.dispatchToken = null;
       entry.resolution = {
         at: now(),
-        reason: "process_restarted_before_delivery_confirmed",
+        reason: safeToRequeue
+          ? "process_restarted_before_dispatch"
+          : entry.delivery === "steer"
+            ? "process_restarted_before_model_boundary"
+            : "process_restarted_after_dispatch_started",
       };
       recovered.push({ entry, previousStatus });
     }
     if (recovered.length === 0) return [];
     const saved = persist();
-    recovered.forEach(({ entry, previousStatus }) => publish("session-input-requeued", entry, {
+    recovered.forEach(({ entry, previousStatus }) => publish(entry.status === ACTIVE_STATUS ? "session-input-requeued" : "session-input-resolved", entry, {
       previousStatus,
       recovery: "process_restarted",
       persisted: saved.ok,
@@ -254,7 +279,13 @@ export function createSessionInputAdmission({
 
   function matchesScope(entry, { sessionId, operationId = null, workspace = null, allowOperationChange = false } = {}) {
     if (entry.sessionId !== text(sessionId, 200)) return false;
-    if (workspace && entry.workspace && entry.workspace !== workspaceKey(workspace)) return false;
+    if (workspace) {
+      const expectedWorkspace = workspaceKey(workspace);
+      // A scoped operation must never inherit an unbound legacy input. Treat a
+      // missing workspace binding as a mismatch so it cannot cross a workspace
+      // switch by accident.
+      if (!expectedWorkspace || !entry.workspace || entry.workspace !== expectedWorkspace) return false;
+    }
     if (!allowOperationChange && operationId && entry.operationId && entry.operationId !== text(operationId, 160)) return false;
     return true;
   }

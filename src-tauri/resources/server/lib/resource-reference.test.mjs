@@ -29,3 +29,9 @@ test("clamps invalid offsets and cursors to the resource length", () => {
   assert.equal(resource.nextOffsetBytes, 100);
   assert.equal(resource.complete, true);
 });
+
+test("does not infer completion when the resource length is unknown", () => {
+  const resource = normalizeResourceReference({ resourceId: "task-output:unknown" });
+  assert.equal(resource.totalBytes, 0);
+  assert.equal(resource.complete, false);
+});

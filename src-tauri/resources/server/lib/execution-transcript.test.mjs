@@ -221,6 +221,75 @@ test("restores task contract, split states and evidence from persisted execution
   assert.deepEqual(turn.warnings, ["工具曾经失败，已恢复"]);
 });
 
+test("turn pagination keeps global entities attached to every page", () => {
+  const entries = [
+    { role: "user", id: "u-1", turnId: "turn-1", content: "first", attachments: [{ id: "att-1", name: "input.txt", size: 10 }] },
+    { role: "assistant", id: "a-1", turnId: "turn-1", content: "first answer" },
+    { role: "user", id: "u-2", turnId: "turn-2", content: "second" },
+    { role: "assistant", id: "a-2", turnId: "turn-2", content: "second answer", receipt: {
+      turnId: "turn-2",
+      intervention: { interactionId: "interaction-2", active: true },
+      artifactEvidence: [{ verified: true, files: [{ artifactId: "artifact-2", path: "C:/work/out.txt", size: 4 }] }],
+    } },
+    {
+      role: "user",
+      content: "[VISIONOX_BACKGROUND_TASK_NOTIFICATION] status: completed",
+      internal: true,
+      backgroundTaskNotification: { notificationId: "notification-1", taskId: "task-1", status: "completed" },
+    },
+  ];
+  const snapshot = projectExecutionTranscript(entries, {
+    sessionId: "session-1",
+    goals: [{ id: "goal-1", title: "deliver", status: "active" }],
+    todos: [{ id: "todo-1", content: "verify", status: "in_progress" }],
+    prompts: [{ id: "prompt-1", status: "applied", instruction: "hidden" }],
+  });
+  const older = paginateExecutionTranscript(snapshot, { beforeTurn: "turn-2", limit: 1 });
+  assert.deepEqual(older.items.map((item) => item.turnId), ["turn-1"]);
+  for (const [key, id] of [
+    ["tasks", "task-1"],
+    ["attachments", "att-1"],
+    ["interactions", "interaction-2"],
+    ["artifacts", "artifact-2"],
+    ["receipts", "turn-2"],
+    ["goals", "goal-1"],
+    ["todos", "todo-1"],
+    ["prompts", "prompt-1"],
+    ["taskNotifications", "notification-1"],
+  ]) assert.equal(older[key].some((item) => item.id === id), true, key);
+  assert.equal(older.hasMoreNewer, true);
+  const newer = paginateExecutionTranscript(snapshot, { afterTurn: "turn-1", limit: 1 });
+  assert.deepEqual(newer.items.map((item) => item.turnId), ["turn-2"]);
+  for (const key of ["tasks", "attachments", "interactions", "artifacts", "receipts", "goals", "todos", "prompts", "taskNotifications"]) {
+    assert.deepEqual(newer[key], older[key], key);
+  }
+});
+
+test("rejects ambiguous before-and-after Turn pagination", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", turnId: "turn-1", content: "first" },
+    { role: "user", turnId: "turn-2", content: "second" },
+  ]);
+  const page = paginateExecutionTranscript(snapshot, { beforeTurn: "turn-2", afterTurn: "turn-1", limit: 1 });
+  assert.equal(page.resyncRequired, true);
+  assert.deepEqual(page.items, []);
+  assert.match(page.cursorError, /mutually exclusive/u);
+});
+
+test("preserves completed_with_warnings as a terminal Turn display state", () => {
+  const snapshot = projectExecutionTranscript([
+    { role: "user", content: "生成结果" },
+    {
+      role: "execution",
+      turnId: "turn-warning",
+      operationId: "op-warning",
+      taskState: "completed_with_warnings",
+      executionState: "completed_with_warnings",
+    },
+  ]);
+  assert.equal(snapshot.items[0].state, "completed_with_warnings");
+});
+
 test("uses persisted turn ids as pagination cursors", () => {
   const snapshot = projectExecutionTranscript([
     { role: "user", content: "run" },
@@ -252,5 +321,8 @@ test("keeps background task terminal facts separate from visible user messages",
   ], { sessionId: "s-1" });
   assert.equal(snapshot.taskNotifications.length, 1);
   assert.equal(snapshot.taskNotifications[0].taskId, "bg-1");
+  assert.equal(snapshot.tasks.length, 1);
+  assert.equal(snapshot.tasks[0].id, "bg-1");
+  assert.equal(snapshot.tasks[0].state, "failed");
   assert.equal(snapshot.items.length, 1);
 });

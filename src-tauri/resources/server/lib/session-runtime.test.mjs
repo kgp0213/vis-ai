@@ -209,9 +209,38 @@ test("session finalization can append a cleanup warning without downgrading the 
     }), true);
     const entries = (await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     const assistant = entries.find((entry) => entry.id === "assistant-warning");
-    assert.equal(assistant.taskState, "completed");
+    assert.equal(assistant.taskState, "completed_with_warnings");
     assert.deepEqual(assistant.warnings, ["cleanup failed"]);
     assert.deepEqual(assistant.receipt.warnings, ["cleanup failed"]);
+  } finally {
+    await rm(harness.root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup warning correction preserves a failed completion result", async () => {
+  const harness = await createHarness();
+  try {
+    harness.setLoopMessages([{ role: "user", content: "run task" }, { role: "assistant", content: "failed" }]);
+    const base = {
+      modelEntries: harness.loop.log.toMessages(),
+      pendingUser: { text: "run task" },
+      assistant: { messageId: "assistant-failed-warning", turnId: "turn-failed-warning", text: "failed" },
+      operationId: "op-failed-warning",
+      receipt: { completion: { ok: false, taskState: "failed" }, warnings: [] },
+      taskState: "failed",
+    };
+    assert.equal(await harness.runtime.persistTurnFinalization(base), true);
+    assert.equal(await harness.runtime.persistTurnFinalization({
+      ...base,
+      warnings: ["cleanup failed"],
+      receipt: { ...base.receipt, warnings: ["cleanup failed"] },
+      allowWarningCorrection: true,
+    }), true);
+    const entries = (await readFile(harness.activeSessionFile, "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const assistant = entries.find((entry) => entry.id === "assistant-failed-warning");
+    assert.equal(assistant.taskState, "failed");
+    assert.equal(assistant.receipt.completion.ok, false);
+    assert.deepEqual(assistant.warnings, ["cleanup failed"]);
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }

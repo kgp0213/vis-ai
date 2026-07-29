@@ -1,12 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createSessionInputAdmission } from "./session-input-admission.mjs";
+import { createSessionInputAdmission, hasInputInModelHistory } from "./session-input-admission.mjs";
 
 function ids() {
   let value = 0;
   return () => `test-${++value}`;
 }
+
+test("recognizes a promoted input already durably written to model history", () => {
+  const input = {
+    id: "steer-1",
+    sessionId: "session-1",
+    operationId: "op-1",
+    text: "追加证据",
+  };
+  assert.equal(hasInputInModelHistory([
+    {
+      role: "user",
+      id: "input-steer-1",
+      admittedInputId: "steer-1",
+      operationId: "op-1",
+      content: "追加证据",
+    },
+  ], input), true);
+  assert.equal(hasInputInModelHistory([
+    { role: "user", id: "input-other", operationId: "op-1", content: "追加证据" },
+  ], input), false);
+});
 
 test("admits input idempotently and rejects id reuse with different content", () => {
   const runtime = createSessionInputAdmission({ idFactory: ids(), now: () => "2026-07-26T00:00:00.000Z" });
@@ -91,7 +112,7 @@ test("a normally finished operation converts an undelivered steer into a durable
   assert.equal(events.at(-1).kind, "session-input-requeued");
 });
 
-test("restart recovery requeues inputs stranded at promoted or dispatching boundaries", () => {
+test("restart recovery requeues only undispatched queue input and never replays uncertain work", () => {
   const persisted = [];
   const initial = [
       {
@@ -127,6 +148,17 @@ test("restart recovery requeues inputs stranded at promoted or dispatching bound
         status: "dispatched",
         admittedSeq: 5,
       },
+      {
+        id: "queue-promoted",
+        sessionId: "session-1",
+        operationId: "op-dead",
+        workspace: "C:/work",
+        text: "safe queued follow-up",
+        delivery: "queue",
+        status: "promoted",
+        admittedSeq: 6,
+        promotedSeq: 7,
+      },
     ];
   const runtime = createSessionInputAdmission({
     initial,
@@ -135,14 +167,13 @@ test("restart recovery requeues inputs stranded at promoted or dispatching bound
   });
 
   const pending = runtime.list("session-1", { includeTerminal: false });
-  assert.deepEqual(pending.map((entry) => entry.id), ["steer-promoted", "queue-dispatching"]);
-  for (const entry of pending) {
-    assert.equal(entry.status, "admitted");
-    assert.equal(entry.delivery, "queue");
-    assert.equal(entry.operationId, null);
-    assert.equal(entry.dispatchToken, null);
-    assert.equal(entry.resolution.reason, "process_restarted_before_delivery_confirmed");
-  }
+  assert.deepEqual(pending.map((entry) => entry.id), ["queue-promoted"]);
+  assert.equal(pending[0].status, "admitted");
+  assert.equal(pending[0].delivery, "queue");
+  assert.equal(pending[0].operationId, null);
+  assert.equal(pending[0].resolution.reason, "process_restarted_before_dispatch");
+  assert.equal(runtime.list("session-1").find((entry) => entry.id === "steer-promoted")?.status, "not_applied");
+  assert.equal(runtime.list("session-1").find((entry) => entry.id === "queue-dispatching")?.status, "unknown");
   assert.equal(runtime.list("session-1").find((entry) => entry.id === "already-dispatched")?.status, "dispatched");
   assert.equal(persisted.length, 1);
 });
@@ -243,6 +274,13 @@ test("persistence failure rejects admission and emits no durable event", () => {
   assert.deepEqual(events, []);
   assert.equal(errors.at(-1), "disk full");
   assert.equal(runtime.lastError()?.code, "SESSION_INPUT_PERSIST_FAILED");
+});
+
+test("scoped matching fails closed when an input has no workspace binding", () => {
+  const admission = createSessionInputAdmission({ idFactory: () => "scope" });
+  const admitted = admission.admit({ sessionId: "session-a", text: "queued", workspace: null });
+  assert.equal(admitted.ok, true);
+  assert.equal(admission.promoteNextQueue("session-a", { workspace: "C:/work-a" }), null);
 });
 
 test("promotion rolls back when durable metadata cannot be written", () => {

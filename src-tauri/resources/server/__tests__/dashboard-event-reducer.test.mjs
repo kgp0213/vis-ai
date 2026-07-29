@@ -6,6 +6,7 @@ import { test } from "node:test";
 const require = createRequire(import.meta.url);
 const typescript = require("../visionox-pkg/node_modules/typescript/lib/typescript.js");
 const sourcePath = new URL("../visionox-pkg/dashboard/src/lib/event-reducer.ts", import.meta.url);
+const contractVectors = JSON.parse(await readFile(new URL("../__fixtures__/execution-schema-vectors.json", import.meta.url), "utf8"));
 
 let reducerPromise;
 async function loadReducer() {
@@ -240,6 +241,47 @@ test("tracks assistant delta offsets, drops duplicates, and requests resync for 
   assert.equal(retry.state.streamOffsets.m1.content, 3);
 });
 
+test("Dashboard deltas keep the novel suffix of a matching overlap", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  let state = createDashboardReducerState();
+  state = applyDashboardEvent(state, {
+    kind: "assistant_delta", id: "m1", stepId: "step-1", attempt: 1,
+    offset: 0, contentDelta: "abcd",
+  }).state;
+  const overlap = applyDashboardEvent(state, {
+    kind: "assistant_delta", id: "m1", stepId: "step-1", attempt: 1,
+    offset: 2, contentDelta: "cdef",
+  });
+  assert.equal(overlap.changed, true);
+  assert.equal(overlap.resyncRequired, undefined);
+  assert.equal(overlap.state.streamOffsets.m1.content, 6);
+  assert.equal(overlap.state.streamOffsets.m1.contentText, "abcdef");
+
+  const duplicate = applyDashboardEvent(overlap.state, {
+    kind: "assistant_delta", id: "m1", stepId: "step-1", attempt: 1,
+    offset: 0, contentDelta: "abcdef",
+  });
+  assert.equal(duplicate.changed, false);
+  assert.equal(duplicate.duplicate, true);
+});
+
+test("Dashboard deltas resync instead of accepting a mismatched overlap", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  let state = createDashboardReducerState();
+  state = applyDashboardEvent(state, {
+    kind: "assistant_delta", id: "m1", stepId: "step-1", attempt: 1,
+    offset: 0, contentDelta: "abcd",
+  }).state;
+  const divergent = applyDashboardEvent(state, {
+    kind: "assistant_delta", id: "m1", stepId: "step-1", attempt: 1,
+    offset: 2, contentDelta: "ZZef",
+  });
+  assert.equal(divergent.changed, false);
+  assert.equal(divergent.resyncRequired, true);
+  assert.equal(divergent.anomaly, "delta-gap");
+  assert.equal(divergent.state.streamOffsets.m1.contentText, "abcd");
+});
+
 test("late delta from an older attempt cannot rewind the stream", async () => {
   const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
   let state = createDashboardReducerState();
@@ -278,6 +320,54 @@ test("requests canonical resync for an event sequence gap but accepts a contiguo
   assert.equal(contiguous.state.lastSeq, 2);
 });
 
+test("transport cursor requests canonical resync for a late event sequence before batching", async () => {
+  const { observeDashboardEventCursor } = await loadReducer();
+  const late = observeDashboardEventCursor({ epoch: "e", lastSeq: 2 }, {
+    kind: "tool",
+    eventEpoch: "e",
+    eventSeq: 1,
+    eventId: "e:1",
+    toolCallId: "late-tool",
+    status: "failed",
+  });
+  assert.equal(late.resyncRequired, true);
+  assert.equal(late.anomaly, "event-out-of-order");
+  assert.equal(late.cursor.lastSeq, 2);
+});
+
+test("transport cursor requests canonical resync for a conflicting same-sequence event", async () => {
+  const { observeDashboardEventCursor } = await loadReducer();
+  const result = observeDashboardEventCursor({ epoch: "epoch-conflict", lastSeq: 2 }, {
+    kind: "status",
+    eventEpoch: "epoch-conflict",
+    eventSeq: 2,
+    eventId: "epoch-conflict:2-other",
+  });
+  assert.equal(result.resyncRequired, true);
+  assert.equal(result.anomaly, "event-sequence-conflict");
+});
+
+test("Dashboard reducer rejects late and conflicting sequenced events before projection", async () => {
+  const { applyDashboardEvent, createDashboardReducerState } = await loadReducer();
+  const seed = createDashboardReducerState({ epoch: "epoch-reducer", lastSeq: 2 });
+  const late = applyDashboardEvent(seed, {
+    kind: "status",
+    eventEpoch: "epoch-reducer",
+    eventSeq: 1,
+    eventId: "epoch-reducer:1",
+  });
+  assert.equal(late.resyncRequired, true);
+  assert.equal(late.anomaly, "event-out-of-order");
+  const conflict = applyDashboardEvent(seed, {
+    kind: "status",
+    eventEpoch: "epoch-reducer",
+    eventSeq: 2,
+    eventId: "epoch-reducer:2-other",
+  });
+  assert.equal(conflict.resyncRequired, true);
+  assert.equal(conflict.anomaly, "event-sequence-conflict");
+});
+
 test("hydrates the reducer from a complete session snapshot and continues after its cursor", async () => {
   const { applyDashboardEvent, createDashboardReducerStateFromSnapshot } = await loadReducer();
   let state = createDashboardReducerStateFromSnapshot({
@@ -303,6 +393,18 @@ test("hydrates the reducer from a complete session snapshot and continues after 
   });
   assert.equal(next.resyncRequired, undefined);
   assert.equal(next.state.artifacts["artifact-1"].verified, true);
+});
+
+test("Dashboard reducer matches the shared cross-layer convergence vectors", async () => {
+  const { applyDashboardEvent, createDashboardReducerState, mergeDashboardTextAtOffset } = await loadReducer();
+  let state = createDashboardReducerState();
+  for (const event of contractVectors.convergence.toolEvents) state = applyDashboardEvent(state, event).state;
+  const tool = Object.values(state.tools)[0];
+  assert.equal(tool.state, contractVectors.convergence.expectedToolState);
+  assert.equal(state.anomalies.at(-1).type, contractVectors.convergence.expectedToolAnomaly);
+  for (const vector of contractVectors.convergence.textOffsets) {
+    assert.deepEqual(mergeDashboardTextAtOffset(vector.local, vector.offset, vector.chunk), vector.expected, vector.name);
+  }
 });
 
 test("uses the canonical snapshot page boundary when durable messages shift the legacy page", async () => {
@@ -433,6 +535,51 @@ test("tracks the global SSE cursor across foreign sessions before reducing the a
   assert.equal(projection.state.messages["message-9"].text, "still contiguous globally");
 });
 
+test("rejects malformed dashboard replay events and requests a canonical resync", async () => {
+  const { createDashboardEventGuard, observeDashboardEventCursor, validateDashboardEventShape } = await loadReducer();
+  assert.equal(validateDashboardEventShape({ kind: "user", eventSeq: 2 }).ok, false);
+  const guard = createDashboardEventGuard();
+  assert.equal(guard.accept({ kind: "user", eventSeq: 2 }), false);
+  const observed = observeDashboardEventCursor({ epoch: "epoch-a", lastSeq: 1 }, { kind: "user", eventSeq: 2 });
+  assert.equal(observed.resyncRequired, true);
+  assert.equal(observed.anomaly, "invalid-event");
+});
+
+test("Dashboard rejects an unknown execution state before reducing the event", async () => {
+  const { validateDashboardEventShape, createDashboardEventGuard } = await loadReducer();
+  const event = {
+    kind: "turn_finalized",
+    eventEpoch: "epoch-a",
+    eventSeq: 1,
+    eventId: "epoch-a:1",
+    id: "message-1",
+    executionState: "finished-but-not-a-contract",
+  };
+  assert.equal(validateDashboardEventShape(event).ok, false);
+  assert.equal(createDashboardEventGuard().accept(event), false);
+});
+
+test("Dashboard rejects malformed canonical snapshot entities", async () => {
+  const {
+    createDashboardReducerStateFromSnapshot,
+    validateDashboardSessionSnapshotShape,
+  } = await loadReducer();
+  const snapshot = {
+    schemaVersion: 1,
+    sessionId: "session-1",
+    messages: [{ id: "message-1", role: "assistant", executionState: "not-a-state" }],
+  };
+  assert.equal(validateDashboardSessionSnapshotShape(snapshot).ok, false);
+  assert.throws(() => createDashboardReducerStateFromSnapshot(snapshot), /snapshot schema/u);
+});
+
+test("Dashboard schema matches the shared server transport vectors", async () => {
+  const { validateDashboardEventShape } = await loadReducer();
+  for (const vector of contractVectors.dashboardEvents) {
+    assert.equal(validateDashboardEventShape(vector.event).ok, vector.ok, vector.name);
+  }
+});
+
 test("replays events that arrived after the initial snapshot cursor", async () => {
   const {
     applyDashboardEvent,
@@ -457,6 +604,16 @@ test("replays events that arrived after the initial snapshot cursor", async () =
   assert.equal(state.messages["m-6"].text, "arrived while loading");
   assert.equal(state.messages["m-7"].text, "finished");
   assert.equal(state.lastSeq, 7);
+});
+
+test("canonical recovery discards buffered events from the previous process epoch", async () => {
+  const { dashboardEventsAfterCursor } = await loadReducer();
+  const replay = dashboardEventsAfterCursor([
+    { kind: "warning", eventEpoch: "old-epoch", eventSeq: 99, eventId: "old-epoch:99", id: "stale", text: "stale process" },
+    { kind: "user", eventEpoch: "new-epoch", eventSeq: 4, eventId: "new-epoch:4", id: "represented", text: "snapshot already has this" },
+    { kind: "assistant_final", eventEpoch: "new-epoch", eventSeq: 5, eventId: "new-epoch:5", id: "fresh", text: "fresh event" },
+  ], { epoch: "new-epoch", lastSeq: 4 });
+  assert.deepEqual(replay.map((event) => event.eventId), ["new-epoch:5"]);
 });
 
 test("rejects a snapshot response after its Session or projection generation changes", async () => {

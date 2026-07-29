@@ -23400,6 +23400,108 @@ function subscribeSseStatus(handler) {
 
 // dashboard/src/lib/event-reducer.ts
 var TERMINAL_TOOL_STATES = /* @__PURE__ */ new Set(["succeeded", "failed", "cancelled", "unknown"]);
+function validateDashboardSessionSnapshotShape(snapshot) {
+  const errors = [];
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return { ok: false, errors: ["snapshot_object_required"] };
+  if (snapshot.schemaVersion !== void 0 && snapshot.schemaVersion !== null) {
+    const version = Number(snapshot.schemaVersion);
+    if (!Number.isSafeInteger(version) || version < 1) errors.push("schema_version_invalid");
+    else if (version > 1) errors.push("schema_version_unsupported");
+  }
+  const collections = ["messages", "turns", "steps", "tools", "tasks", "interactions", "attachments", "artifacts", "receipts", "goals", "todos", "prompts", "taskNotifications"];
+  for (const field of collections) {
+    const value = snapshot[field];
+    if (value === void 0 || value === null) continue;
+    if (!Array.isArray(value) && (typeof value !== "object" || Array.isArray(value))) {
+      errors.push(`${field}_collection_invalid`);
+      continue;
+    }
+    const entities = Array.isArray(value) ? value : Object.values(value);
+    for (const entity of entities) {
+      if (!entity || typeof entity !== "object" || Array.isArray(entity)) {
+        errors.push(`${field}_entity_invalid`);
+        continue;
+      }
+      for (const stateField of ["state", "taskState", "executionState", "goalState"]) {
+        if (entity[stateField] === void 0 || entity[stateField] === null || entity[stateField] === "") continue;
+        if (!EXECUTION_STATE_VALUES.has(String(entity[stateField]).trim().toLowerCase())) errors.push(`${field}.${stateField}_invalid`);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+var EXECUTION_STATE_VALUES = /* @__PURE__ */ new Set([
+  "queued",
+  "starting",
+  "running",
+  "stopping",
+  "completed",
+  "completed_with_warnings",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "canceled",
+  "unknown",
+  "incomplete",
+  "lost",
+  "timed_out",
+  "killed",
+  "verified",
+  "unverified",
+  "interrupted",
+  "pending",
+  "resolved",
+  "active",
+  "recovered",
+  "applied",
+  "not_applied",
+  "expired",
+  "answered",
+  "dismissed",
+  "accepted",
+  "rejected",
+  "blocked",
+  "done",
+  "missing",
+  "invalid",
+  "present_unverified",
+  "needs_intervention",
+  "awaiting_approval",
+  "truncated",
+  "full",
+  "error"
+]);
+function validateDashboardEventShape(event) {
+  const errors = [];
+  if (!event || typeof event !== "object" || Array.isArray(event)) return { ok: false, errors: ["event_object_required"] };
+  if (event.schemaVersion !== void 0 && event.schemaVersion !== null) {
+    const version = Number(event.schemaVersion);
+    if (!Number.isSafeInteger(version) || version < 1) errors.push("schema_version_invalid");
+    else if (version > 1) errors.push("schema_version_unsupported");
+  }
+  if (!String(event.kind ?? "").trim()) errors.push("event_kind_required");
+  const hasSeq = event.eventSeq !== void 0 && event.eventSeq !== null;
+  if (hasSeq) {
+    const seq = Number(event.eventSeq);
+    if (!Number.isSafeInteger(seq) || seq < 0) errors.push("event_seq_invalid");
+    if (!String(event.eventEpoch ?? "").trim()) errors.push("event_epoch_required");
+    if (!String(event.eventId ?? "").trim()) errors.push("event_id_required");
+  }
+  if (event.payload !== void 0 && (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload))) {
+    errors.push("event_payload_invalid");
+  }
+  for (const field of ["state", "taskState", "executionState", "goalState"]) {
+    if (event[field] === void 0 || event[field] === null || event[field] === "") continue;
+    if (!EXECUTION_STATE_VALUES.has(String(event[field]).trim().toLowerCase())) errors.push(`${field}_invalid`);
+  }
+  if (event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)) {
+    for (const field of ["state", "taskState", "executionState", "goalState"]) {
+      if (event.payload[field] === void 0 || event.payload[field] === null || event.payload[field] === "") continue;
+      if (!EXECUTION_STATE_VALUES.has(String(event.payload[field]).trim().toLowerCase())) errors.push(`${field}_invalid`);
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
 function createDashboardEventGuard(maxEvents = 4096) {
   const eventIds = /* @__PURE__ */ new Set();
   const terminalTools = /* @__PURE__ */ new Map();
@@ -23430,7 +23532,8 @@ function createDashboardEventGuard(maxEvents = 4096) {
   };
   return {
     accept(event) {
-      if (!event || typeof event !== "object") return false;
+      const shape = validateDashboardEventShape(event);
+      if (!shape.ok) return false;
       if (!remember(String(event.eventId ?? ""))) return false;
       const toolCallId = String(event.toolCallId ?? event.id ?? "");
       const status = String(event.status ?? "");
@@ -23511,6 +23614,25 @@ function createDashboardReducerState(seed) {
     anomalies: [...seed?.anomalies ?? []]
   };
 }
+function mergeDashboardTextAtOffset(localValue, offsetValue, chunkValue) {
+  const local = String(localValue ?? "");
+  const chunk = String(chunkValue ?? "");
+  const offset = Number(offsetValue);
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > local.length) {
+    return { text: local, changed: false, gap: { expected: local.length, got: offset } };
+  }
+  if (!chunk) return { text: local, changed: false, duplicate: true };
+  if (local.slice(offset, offset + chunk.length) === chunk) {
+    return { text: local, changed: false, duplicate: true };
+  }
+  const overlap = local.length - offset;
+  if (overlap > 0 && local.slice(offset) !== chunk.slice(0, overlap)) {
+    return { text: local, changed: false, gap: { expected: local.length, got: offset } };
+  }
+  const novel = overlap > 0 ? chunk.slice(overlap) : chunk;
+  if (!novel) return { text: local, changed: false, duplicate: true };
+  return { text: local.slice(0, offset) + chunk, changed: true };
+}
 function entityRecord(value) {
   const entries = Array.isArray(value) ? value.map((item, index) => [String(item?.id ?? `entity-${index + 1}`), item]) : Object.entries(value && typeof value === "object" ? value : {});
   const result = {};
@@ -23551,7 +23673,8 @@ function createDashboardEventCursor(value) {
 }
 function observeDashboardEventCursor(input, event) {
   const cursor = createDashboardEventCursor(input);
-  if (!event || typeof event !== "object") return { cursor };
+  const shape = validateDashboardEventShape(event);
+  if (!shape.ok) return { cursor, resyncRequired: true, anomaly: "invalid-event" };
   const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
   const seq = Number(event.eventSeq);
   const sequenced = event.eventSeq !== null && event.eventSeq !== void 0 && Number.isSafeInteger(seq) && seq >= 0;
@@ -23564,6 +23687,12 @@ function observeDashboardEventCursor(input, event) {
   }
   const next = { epoch: epoch ?? cursor.epoch, lastSeq: cursor.lastSeq };
   const firstSeq = firstEventSequence(event);
+  if (sequenced && seq < cursor.lastSeq) {
+    return { cursor: next, resyncRequired: true, anomaly: "event-out-of-order" };
+  }
+  if (sequenced && seq === cursor.lastSeq && cursor.lastSeq > 0) {
+    return { cursor: next, resyncRequired: true, anomaly: "event-sequence-conflict" };
+  }
   if (sequenced && firstSeq !== null && firstSeq > cursor.lastSeq + 1) {
     next.lastSeq = Math.max(next.lastSeq, seq);
     return { cursor: next, resyncRequired: true, anomaly: "event-gap" };
@@ -23572,6 +23701,8 @@ function observeDashboardEventCursor(input, event) {
   return { cursor: next };
 }
 function createDashboardReducerStateFromSnapshot(snapshot = {}) {
+  const shape = validateDashboardSessionSnapshotShape(snapshot);
+  if (!shape.ok) throw new TypeError(`snapshot schema violation: ${shape.errors.join(", ")}`);
   const cursor = snapshotCursor(snapshot.eventCursor);
   return createDashboardReducerState({
     ...cursor,
@@ -23678,6 +23809,7 @@ function dashboardEventsAfterCursor(events = [], cursorLike) {
     if (id) seen.add(id);
     const epoch = event.eventEpoch ? String(event.eventEpoch) : null;
     const seq = Number(event.eventSeq);
+    if (epoch && cursor.epoch && epoch !== cursor.epoch) return false;
     return !(epoch && cursor.epoch === epoch && Number.isSafeInteger(seq) && seq <= cursor.lastSeq);
   }).sort((left, right) => {
     const leftSeq = Number(left.event?.eventSeq);
@@ -23734,6 +23866,12 @@ function applyDashboardEvent(input, event) {
   if (epoch) state.epoch = epoch;
   const seq = Number(event.eventSeq);
   const firstSeq = firstEventSequence(event);
+  if (Number.isSafeInteger(seq) && firstSeq !== null && firstSeq === seq && seq < state.lastSeq) {
+    return { state, changed: false, resyncRequired: true, anomaly: "event-out-of-order" };
+  }
+  if (Number.isSafeInteger(seq) && firstSeq === seq && seq === state.lastSeq && state.lastSeq > 0) {
+    return { state, changed: false, resyncRequired: true, anomaly: "event-sequence-conflict" };
+  }
   if (Number.isSafeInteger(seq) && firstSeq !== null && firstSeq > state.lastSeq + 1) {
     state.anomalies.push({ type: "event-gap", expected: state.lastSeq + 1, received: firstSeq });
     state.lastSeq = Math.max(state.lastSeq, seq);
@@ -23834,7 +23972,7 @@ function applyDashboardEvent(input, event) {
   if (kind === "assistant_delta") {
     const messageId = String(event.messageId ?? event.id ?? "");
     if (!messageId) return { state, changed: false, anomaly: "delta-missing-message" };
-    const previous2 = state.streamOffsets[messageId] ?? { content: 0, reasoning: 0, token: null, attempt: 1 };
+    const previous2 = state.streamOffsets[messageId] ?? { content: 0, reasoning: 0, contentText: "", reasoningText: "", token: null, attempt: 1 };
     const attempt = Math.max(1, Number.isSafeInteger(Number(event.attempt)) ? Number(event.attempt) : previous2.attempt);
     if (attempt < previous2.attempt) {
       state.anomalies.push({ type: "stale-attempt", entityId: messageId, expected: previous2.attempt, received: attempt });
@@ -23847,29 +23985,24 @@ function applyDashboardEvent(input, event) {
     const enforceOffsets = event.streamId != null || event.stepId != null || event.turnId != null || event.attempt !== void 0 || event.streamReset === true;
     const expectedContent = reset ? 0 : previous2.content;
     const expectedReasoning = reset ? 0 : previous2.reasoning;
+    const localContent = reset ? "" : String(previous2.contentText ?? "");
+    const localReasoning = reset ? "" : String(previous2.reasoningText ?? "");
     const contentOffset = Number(event.offset);
     const reasoningOffset = Number(event.reasoningOffset);
-    const check = (value, supplied, expected, field) => {
-      if (!value || !enforceOffsets || !Number.isSafeInteger(supplied) || supplied < 0) return "ok";
-      if (supplied === 0 && expected > 0 && token !== previous2.token && !reset) return "ok";
-      if (supplied < expected) return "duplicate";
-      if (supplied > expected) {
-        state.anomalies.push({ type: "delta-gap", entityId: messageId, field, expected, received: supplied });
-        return "gap";
-      }
-      return "ok";
-    };
-    const contentStatus = check(content, contentOffset, expectedContent, "content");
-    const reasoningStatus = check(reasoning, reasoningOffset, expectedReasoning, "reasoning");
-    if (contentStatus === "gap" || reasoningStatus === "gap") return { state, changed: false, resyncRequired: true, anomaly: "delta-gap" };
-    const acceptedContent = contentStatus === "duplicate" ? "" : content;
-    const acceptedReasoning = reasoningStatus === "duplicate" ? "" : reasoning;
-    if (!acceptedContent && !acceptedReasoning) return { state, changed: false, duplicate: true };
+    const contentMerge = !content || !enforceOffsets ? { text: localContent + content, changed: Boolean(content), duplicate: !content } : mergeDashboardTextAtOffset(localContent, Number.isSafeInteger(contentOffset) && contentOffset >= 0 ? contentOffset : expectedContent, content);
+    const reasoningMerge = !reasoning || !enforceOffsets ? { text: localReasoning + reasoning, changed: Boolean(reasoning), duplicate: !reasoning } : mergeDashboardTextAtOffset(localReasoning, Number.isSafeInteger(reasoningOffset) && reasoningOffset >= 0 ? reasoningOffset : expectedReasoning, reasoning);
+    if (contentMerge.gap || reasoningMerge.gap) {
+      state.anomalies.push({ type: "delta-gap", entityId: messageId, field: contentMerge.gap ? "content" : "reasoning", expected: (contentMerge.gap ?? reasoningMerge.gap)?.expected, received: (contentMerge.gap ?? reasoningMerge.gap)?.got });
+      return { state, changed: false, resyncRequired: true, anomaly: "delta-gap" };
+    }
+    if (!contentMerge.changed && !reasoningMerge.changed) return { state, changed: false, duplicate: true };
     state.streamOffsets = {
       ...state.streamOffsets,
       [messageId]: {
-        content: expectedContent + acceptedContent.length,
-        reasoning: expectedReasoning + acceptedReasoning.length,
+        content: contentMerge.text.length,
+        reasoning: reasoningMerge.text.length,
+        contentText: contentMerge.text,
+        reasoningText: reasoningMerge.text,
         token: token === null ? null : String(token),
         attempt
       }
@@ -26103,6 +26236,7 @@ ${workspaceDir || ""}`;
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
+        const reducedStream = reduced.state.streamOffsets[String(dash.id ?? dash.messageId ?? "")];
         const reasoningDelta = String(dash.reasoningDelta ?? "");
         let turnReasoning = baseId?.turnReasoning ?? "";
         let reasoningTurns = baseId?.reasoningTurns ?? 0;
@@ -26118,8 +26252,8 @@ ${workspaceDir || ""}`;
         }
         streamBufRef.current = {
           id: dash.id,
-          text: (baseId?.text ?? "") + (dash.contentDelta ?? ""),
-          reasoning: (baseId?.reasoning ?? "") + reasoningDelta,
+          text: reducedStream?.contentText !== void 0 ? reducedStream.contentText : (baseId?.text ?? "") + (dash.contentDelta ?? ""),
+          reasoning: reducedStream?.reasoningText !== void 0 ? reducedStream.reasoningText : (baseId?.reasoning ?? "") + reasoningDelta,
           turnReasoning,
           reasoningTurns,
           reasoningStale
@@ -26131,13 +26265,17 @@ ${workspaceDir || ""}`;
       }
       if (dash.kind === "assistant_content_final" || dash.kind === "assistant_final" || dash.kind === "turn_finalized") {
         const isFinalized = dash.kind === "turn_finalized";
+        const compatibilityOnly = dash.kind === "assistant_final" && dash.compatibility === true;
+        const closesExecution = isFinalized || !compatibilityOnly && !dash.operationId && !dash.turnId;
         const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
         if (!projectedMessage) return;
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
-        cancelStreamingRaf();
-        setStreaming(null);
-        setActiveTools([]);
+        if (closesExecution) {
+          cancelStreamingRaf();
+          setStreaming(null);
+          setActiveTools([]);
+        }
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
         const nextMessage = {
           ...projectedMessage,
@@ -26153,14 +26291,14 @@ ${workspaceDir || ""}`;
             );
             if (!String(projectedMessage.text ?? "").trim() && !hasReceiptOnlyContent) return prev;
             inserted = true;
-            if (dash.kind !== "turn_finalized") canonicalMessageCountRef.current += 1;
+            if (!isFinalized) canonicalMessageCountRef.current += 1;
             return [...prev, nextMessage];
           }
           const copy = [...prev];
           copy[index] = { ...copy[index], ...nextMessage };
           return copy;
         });
-        if (inserted && dash.kind !== "turn_finalized") setTotalMessages((count) => count + 1);
+        if (inserted && !isFinalized) setTotalMessages((count) => count + 1);
         return;
       }
       if (dash.kind === "tool_start") {
@@ -26318,14 +26456,17 @@ ${workspaceDir || ""}`;
         void resyncRunnerRef.current?.(dash);
         return;
       }
-      executionStateRef.current = createDashboardReducerState({
-        ...executionStateRef.current,
-        epoch: observed.cursor.epoch,
-        lastSeq: observed.cursor.lastSeq
-      });
       const eventSessionId = String(dash.sessionId ?? "").trim();
       const activeSessionId = String(activeConversationIdRef.current || snapshotSessionIdRef.current || "");
-      if (eventSessionId && activeSessionId && eventSessionId !== activeSessionId) return;
+      if (eventSessionId && activeSessionId && eventSessionId !== activeSessionId) {
+        eventBatcher.flush();
+        executionStateRef.current = createDashboardReducerState({
+          ...executionStateRef.current,
+          epoch: observed.cursor.epoch,
+          lastSeq: observed.cursor.lastSeq
+        });
+        return;
+      }
       eventBatcher.enqueue(dash);
     };
     const replayBufferedDashboardEvents = (additionalEvents = []) => {

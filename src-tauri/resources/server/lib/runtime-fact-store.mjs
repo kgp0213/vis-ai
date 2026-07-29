@@ -2,21 +2,12 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, truncate } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import { validateRuntimeFact } from "./execution-schema.mjs";
+import { recoverColdSnapshotEntities } from "./cold-recovery.mjs";
+import { isTerminalState, terminalStateTransition } from "./execution-state.mjs";
+
 const SCHEMA_VERSION = 1;
-const TERMINAL_STATES = new Set([
-  "cancelled",
-  "canceled",
-  "completed",
-  "failed",
-  "killed",
-  "lost",
-  "succeeded",
-  "timed_out",
-  "unknown",
-  "verified",
-]);
 const TERMINAL_FIELDS = ["state", "status", "taskState", "executionState", "goalState"];
-const FAILED_TOOL_RECOVERY_STATES = new Set(["queued", "running", "recovered"]);
 const COLLECTIONS = Object.freeze({
   turn: "turns",
   step: "steps",
@@ -92,13 +83,12 @@ function terminalDowngrade(previous, incoming, collection = null) {
   for (const field of TERMINAL_FIELDS) {
     const before = text(previous[field]).toLowerCase();
     const after = text(incoming[field]).toLowerCase();
-    if (collection === "tools"
-      && (field === "state" || field === "status")
-      && before === "failed"
-      && FAILED_TOOL_RECOVERY_STATES.has(after)) {
-      continue;
-    }
-    if (TERMINAL_STATES.has(before) && after && after !== before) return field;
+    if (!before || !after || before === after) continue;
+    const transition = terminalStateTransition(before, after, {
+      correction: incoming.correction === true || incoming.revision !== undefined,
+      toolRecovery: collection === "tools" && (field === "state" || field === "status"),
+    });
+    if (!transition.accepted) return field;
   }
   return null;
 }
@@ -162,7 +152,12 @@ function applyMessagesReplace(snapshot, fact) {
     for (const field of TERMINAL_FIELDS) {
       const before = text(previous?.[field]).toLowerCase();
       const after = text(incoming[field]).toLowerCase();
-      if (TERMINAL_STATES.has(before) && after !== before) next[field] = previous[field];
+      if (isTerminalState(before) && after !== before) {
+        const transition = terminalStateTransition(before, after, {
+          correction: payload.correction === true || payload.revision !== undefined,
+        });
+        if (!transition.accepted) next[field] = previous[field];
+      }
     }
     if (previous?.finalized === true) next.finalized = true;
     replacement.set(id, next);
@@ -230,8 +225,8 @@ function normalizeFact(input, { sessionId, sequence, now, idFactory }) {
   }
   const factId = text(input.factId) || text(idFactory());
   if (!factId) throw new TypeError("runtime fact id is required");
-  return {
-    schemaVersion: SCHEMA_VERSION,
+  const normalized = {
+    schemaVersion: input.schemaVersion ?? SCHEMA_VERSION,
     factId,
     sequence,
     occurredAt: text(input.occurredAt) || timestamp(now),
@@ -243,6 +238,9 @@ function normalizeFact(input, { sessionId, sequence, now, idFactory }) {
     type,
     payload: clone(input.payload ?? {}),
   };
+  const validation = validateRuntimeFact(normalized, { sessionId });
+  if (!validation.ok) throw new TypeError(`runtime fact schema violation: ${validation.errors.join(", ")}`);
+  return normalized;
 }
 
 function normalizePersistedFact(input, sessionId, lineNumber) {
@@ -259,8 +257,8 @@ function normalizePersistedFact(input, sessionId, lineNumber) {
   if (factSessionId !== sessionId) {
     throw new TypeError(`runtime fact at line ${lineNumber} belongs to session ${factSessionId || "<empty>"}`);
   }
-  return {
-    schemaVersion: SCHEMA_VERSION,
+  const normalized = {
+    schemaVersion: input.schemaVersion ?? SCHEMA_VERSION,
     factId,
     sequence,
     occurredAt: text(input.occurredAt),
@@ -272,6 +270,11 @@ function normalizePersistedFact(input, sessionId, lineNumber) {
     type,
     payload: clone(input.payload ?? {}),
   };
+  const validation = validateRuntimeFact(normalized, { sessionId });
+  if (!validation.ok) {
+    throw new TypeError(`runtime fact at line ${lineNumber} violates schema: ${validation.errors.join(", ")}`);
+  }
+  return normalized;
 }
 
 /** Append-only RuntimeFactV1 persistence and SessionSnapshotV1 projection. */
@@ -357,39 +360,35 @@ export function createRuntimeFactStore({
         await appendFile(factFile, "\n", "utf8");
       }
 
-      const interrupted = [];
-      if (isActive(nextState.operation?.state ?? nextState.operation?.status)) {
-        interrupted.push({
-          type: "operation.replace",
-          entityId: nextState.operation?.id,
-          payload: { ...nextState.operation, state: "unknown", status: "unknown", recoveryReason: "process_restarted" },
-        });
-      }
-      for (const [type, collection] of [["turn", "turns"], ["step", "steps"], ["tool", "tools"]]) {
-        for (const entity of nextState[collection]) {
-          if (!isActive(entity?.state ?? entity?.status)) continue;
-          interrupted.push({
-            type: `${type}.upsert`,
-            entityId: entity.id,
-            operationId: entity.operationId,
-            turnId: entity.turnId,
-            stepId: entity.stepId,
-            payload: { ...entity, state: "unknown", status: "unknown", recoveryReason: "process_restarted" },
-          });
-        }
-      }
-      if (nextState.admission?.busy === true || nextState.admission?.active === true) {
-        interrupted.push({
-          type: "admission.replace",
-          entityId: nextState.admission?.id,
-          payload: { ...nextState.admission, busy: false, active: false, state: "unknown", recoveryReason: "process_restarted" },
-        });
-      }
+      const coldRecovery = recoverColdSnapshotEntities(nextState, { reason: "process_restarted" });
+      Object.assign(nextState, coldRecovery.snapshot);
+      const interrupted = coldRecovery.changes.map((change) => {
+        const collection = change.collection;
+        const entity = collection === "operation" || collection === "admission"
+          ? nextState[collection]
+          : nextState[collection]?.find((candidate) => text(candidate?.id ?? candidate?.toolCallId ?? candidate?.notificationId) === change.entityId);
+        const type = collection === "operation"
+          ? "operation.replace"
+          : collection === "admission"
+            ? "admission.replace"
+            : collection === "taskNotifications"
+              ? "task-notification.upsert"
+              : `${collection.slice(0, -1)}.upsert`;
+        return {
+          factId: change.recoveryFactId,
+          type,
+          entityId: entity?.id ?? entity?.toolCallId ?? entity?.notificationId ?? change.entityId,
+          operationId: entity?.operationId,
+          turnId: entity?.turnId,
+          stepId: entity?.stepId,
+          payload: entity,
+        };
+      });
       const recoveryFacts = [];
       for (const input of interrupted) {
         const fact = normalizeFact({
           ...input,
-          factId: `recovery:${normalizedEpoch}:${input.type}:${input.entityId ?? recoveryFacts.length + 1}`,
+          factId: input.recoveryFactId ?? `recovery:${input.type}:${input.entityId ?? recoveryFacts.length + 1}`,
         }, {
           sessionId: normalizedSessionId,
           sequence: nextSequence + 1,

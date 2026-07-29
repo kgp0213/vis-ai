@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  artifactVerificationStatus,
   artifactDeliveryRetryPrompt,
   artifactMissingNotice,
   artifactPathsFromToolOutput,
@@ -164,6 +165,14 @@ test("artifact completion rejects failed tool results", () => {
   assert.equal(toolResultSucceeded('{"ok":true,"exitCode":null}'), true);
   assert.equal(toolResultSucceeded("", { status: "succeeded" }), true);
   assert.equal(toolResultSucceeded("completed", { status: "failed" }), false);
+});
+
+test("artifact verification distinguishes a write fact from a host readback", () => {
+  const info = { size: 12, readable: true };
+  assert.equal(artifactVerificationStatus(null), "missing");
+  assert.equal(artifactVerificationStatus({ size: 0, readable: true }), "invalid");
+  assert.equal(artifactVerificationStatus(info, { changedThisTurn: true }), "present_unverified");
+  assert.equal(artifactVerificationStatus(info, { explicitlyVerified: true }), "verified");
 });
 
 test("final artifact evidence drops deleted temporary scripts but keeps requested script outputs", () => {
