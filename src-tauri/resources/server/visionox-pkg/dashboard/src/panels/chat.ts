@@ -1360,13 +1360,19 @@ const [providerCaps, setProviderCaps] = d2(null);
       timeoutMs: 15_000,
     }).then((result) => {
       if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+      if (flight.cancelError) {
+        const cancelError = flight.cancelError;
+        flight.cancelError = null;
+        setError((current) => current === cancelError ? null : current);
+      }
       if (promptOptimizationInFlightRef.current === flight) promptOptimizationInFlightRef.current = null;
       if (updateState) setPromptOptimization({ status: reason, preview: null, scope: null });
       return true;
     }).catch((error) => {
       if (flight.cancelPromise === cancellationPromise) flight.cancelPromise = null;
       if (updateState && promptOptimizationInFlightRef.current === flight) {
-        setError(t4("chat.optimizeFailed", { msg: error.message }));
+        flight.cancelError = t4("chat.optimizeFailed", { msg: error.message });
+        setError(flight.cancelError);
       }
       return false;
     });
@@ -1419,7 +1425,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       workspace: workspaceDirRef.current ?? "",
       mode: modeRef.current ?? "general",
     });
-    const flight = { requestId, controller, scope, cancelRequested: false, cancelPromise: null };
+    const flight = { requestId, controller, scope, cancelRequested: false, cancelPromise: null, cancelError: null };
     promptOptimizationInFlightRef.current = flight;
     setPromptOptimization({ status: "requesting", preview: null, scope });
     setPromptOptimizationRestore(null);

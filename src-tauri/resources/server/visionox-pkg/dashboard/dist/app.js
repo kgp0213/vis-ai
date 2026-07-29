@@ -25644,21 +25644,28 @@ ${workspaceDir || ""}`;
     if (flight.cancelPromise) return flight.cancelPromise;
     flight.cancelRequested = true;
     flight.controller.abort();
-    flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
+    const cancellationPromise = flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
       method: "DELETE",
       timeoutMs: 15e3
     }).then((result) => {
       if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+      if (flight.cancelError) {
+        const cancelError = flight.cancelError;
+        flight.cancelError = null;
+        setError((current) => current === cancelError ? null : current);
+      }
       if (promptOptimizationInFlightRef.current === flight) promptOptimizationInFlightRef.current = null;
       if (updateState) setPromptOptimization({ status: reason, preview: null, scope: null });
       return true;
     }).catch((error2) => {
+      if (flight.cancelPromise === cancellationPromise) flight.cancelPromise = null;
       if (updateState && promptOptimizationInFlightRef.current === flight) {
-        setError(t4("chat.optimizeFailed", { msg: error2.message }));
+        flight.cancelError = t4("chat.optimizeFailed", { msg: error2.message });
+        setError(flight.cancelError);
       }
       return false;
     });
-    return flight.cancelPromise;
+    return cancellationPromise;
   }, []);
   const setChatInput = q2((value, options2 = {}) => {
     const text = String(value ?? "");
@@ -25707,7 +25714,7 @@ ${workspaceDir || ""}`;
       workspace: workspaceDirRef.current ?? "",
       mode: modeRef.current ?? "general"
     });
-    const flight = { requestId, controller, scope, cancelRequested: false, cancelPromise: null };
+    const flight = { requestId, controller, scope, cancelRequested: false, cancelPromise: null, cancelError: null };
     promptOptimizationInFlightRef.current = flight;
     setPromptOptimization({ status: "requesting", preview: null, scope });
     setPromptOptimizationRestore(null);
