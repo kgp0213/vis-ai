@@ -30,12 +30,13 @@ async function apiPost(body, overrides = {}) {
 }
 
 describe("prompt optimization API", () => {
-  test("uses mode-specific intent inference without inventing requirements", () => {
-    assert.match(launcherSource, /activeModeId === "coding"/);
-    assert.match(launcherSource, /咨询、排查、修改、构建还是审查代码/);
-    assert.match(launcherSource, /办公文档、数据整理、研究或界面设计/);
-    assert.match(launcherSource, /不要替用户编造答案/);
-    assert.match(launcherSource, /不要把讨论或诊断请求擅自改成实施请求/);
+  test("launcher delegates editor requests to the isolated optimization runtime", () => {
+    assert.match(launcherSource, /importEarly\("\.\/lib\/prompt-optimization-runtime\.mjs"\)/);
+    assert.match(launcherSource, /createPromptOptimizationRuntime\(\{/);
+    assert.match(launcherSource, /requestModelText,/);
+    assert.match(launcherSource, /isTaskBusy:\s*\(\)\s*=>\s*busy/);
+    assert.match(launcherSource, /optimizePrompt:\s*\(input\)\s*=>\s*promptOptimizationRuntime\.optimize\(input\)/);
+    assert.match(launcherSource, /cancelPromptOptimization:\s*\(requestId\)\s*=>\s*promptOptimizationRuntime\.cancel\(requestId\)/);
   });
 
   test("returns an editable result without submitting a conversation turn", async () => {
