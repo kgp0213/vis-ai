@@ -174,4 +174,93 @@ describe("prompt optimization runtime", () => {
     assert.doesNotMatch(serialized, /敏感正文|raw-secret|secret-token/);
     assert.match(serialized, /prompt_optimization_rate_limited/);
   });
+
+  test("limits requested output tokens to the Provider declared capacity", async () => {
+    let request = null;
+    const { runtime } = createHarness({
+      getModelContext: () => ({
+        mode: "general",
+        providerId: "provider-small-output",
+        model: "model-small-output",
+        providerCapabilities: { maxOutputTokens: 640 },
+      }),
+      requestModelText: async (input) => {
+        request = input;
+        return "明确目标、限制条件和验收标准。";
+      },
+    });
+
+    await runtime.optimize({
+      prompt: "优化这段任务描述",
+      requestId: "provider-output-capacity",
+      draftRevision: 1,
+    });
+
+    assert.equal(request.maxTokens, 640);
+  });
+
+  test("classifies authentication, network, truncation and empty response failures", async () => {
+    const cases = [
+      {
+        requestId: "auth-failure",
+        createError: () => Object.assign(new Error("unauthorized"), { status: 401 }),
+        code: "prompt_optimization_auth_failed",
+        status: 401,
+        retryable: false,
+      },
+      {
+        requestId: "network-failure",
+        createError: () => new Error("fetch failed: socket closed"),
+        code: "prompt_optimization_network_failed",
+        status: 502,
+        retryable: true,
+      },
+      {
+        requestId: "truncated-response",
+        createError: () => new Error("incomplete output: finish reason: length"),
+        code: "prompt_optimization_truncated",
+        status: 502,
+        retryable: true,
+      },
+    ];
+
+    for (const item of cases) {
+      const { runtime } = createHarness({
+        requestModelText: async () => { throw item.createError(); },
+      });
+      await assert.rejects(
+        runtime.optimize({ prompt: "优化任务描述", requestId: item.requestId, draftRevision: 1 }),
+        (error) => error.code === item.code
+          && error.status === item.status
+          && error.retryable === item.retryable,
+      );
+    }
+
+    const { runtime } = createHarness({ requestModelText: async () => "   " });
+    await assert.rejects(
+      runtime.optimize({ prompt: "优化任务描述", requestId: "empty-response", draftRevision: 1 }),
+      (error) => error.code === "prompt_optimization_empty_response"
+        && error.status === 502
+        && error.retryable === true,
+    );
+  });
+
+  test("aborts a Provider request when the optimization deadline expires", async () => {
+    let observedSignal = null;
+    const { runtime } = createHarness({
+      timeoutMs: 100,
+      requestModelText: ({ signal }) => {
+        observedSignal = signal;
+        return new Promise(() => {});
+      },
+    });
+
+    await assert.rejects(
+      runtime.optimize({ prompt: "优化任务描述", requestId: "provider-timeout", draftRevision: 1 }),
+      (error) => error.code === "prompt_optimization_timeout"
+        && error.status === 504
+        && error.retryable === true,
+    );
+    assert.equal(observedSignal.aborted, true);
+  });
 });
