@@ -5407,68 +5407,86 @@ async function handleSubmit(method, _rest, body, ctx) {
   return { status: 202, body: { accepted: true, ...result } };
 }
 
-// Prompt optimization is an editor operation: it never enters the session
-// transcript or the ordinary tool loop.
-function redactPromptOptimizationDiagnostic(value) {
-  return String(value ?? "")
-    .replace(/Bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
-    .replace(/((?:api[_ -]?key|authorization|token|password)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1[redacted]")
-    .replace(/\b(?:sk|api)-[a-z0-9._-]{6,}\b/gi, "[redacted]")
-    .slice(0, 6e3);
-}
-function auditPromptOptimizationFailure(ctx, error, { stage, inputLength } = {}) {
-  let context = {};
-  try {
-    context = ctx.getPromptOptimizationContext?.() ?? {};
-  } catch {
-  }
-  const rawStatus = error?.statusCode ?? error?.status ?? error?.response?.status;
-  const status = Number(rawStatus);
-  const payload = {
-    stage: stage ?? "unknown",
-    inputLength: Number(inputLength) || 0,
-    mode: typeof context.mode === "string" ? context.mode : null,
-    providerId: typeof context.providerId === "string" ? context.providerId : null,
-    model: typeof context.model === "string" ? context.model : null,
-    errorName: redactPromptOptimizationDiagnostic(error?.name || "Error"),
-    errorCode: redactPromptOptimizationDiagnostic(error?.code || "") || null,
-    httpStatus: Number.isFinite(status) ? status : null,
-    message: redactPromptOptimizationDiagnostic(error?.message || error || "prompt optimization failed"),
-    stack: redactPromptOptimizationDiagnostic(error?.stack || "") || null
+// Prompt optimization is an editor operation. The Launcher runtime owns model
+// access, cancellation, fact protection and redacted auditing; this vendored
+// route remains a narrow HTTP adapter.
+function promptOptimizationRouteError(status, code, message, options = {}) {
+  return {
+    status,
+    body: {
+      error: message,
+      code,
+      title: options.title ?? "提示词优化失败",
+      message,
+      retryable: options.retryable === true,
+      action: options.action ?? "keep_original",
+      details: options.details && typeof options.details === "object" ? options.details : {},
+      cause: null
+    }
   };
-  try {
-    ctx.audit?.({ ts: Date.now(), action: "optimize-prompt-failed", payload });
-  } catch {
-  }
-  return payload;
 }
-async function handleOptimizePrompt(method, _rest, body, ctx) {
-  if (method !== "POST") return { status: 405, body: { error: "POST only" } };
-  if (typeof ctx.optimizePrompt !== "function") {
-    return { status: 503, body: { error: "prompt optimization is unavailable" } };
+async function handleOptimizePrompt(method, rest, body, ctx) {
+  if (method === "DELETE") {
+    const requestId = String(rest[0] ?? "").trim();
+    if (!requestId || rest.length !== 1) {
+      return promptOptimizationRouteError(400, "prompt_optimization_request_id_required", "requestId is required");
+    }
+    if (typeof ctx.cancelPromptOptimization !== "function") {
+      return promptOptimizationRouteError(503, "prompt_optimization_unavailable", "prompt optimization cancellation is unavailable", { retryable: true });
+    }
+    return { status: 200, body: ctx.cancelPromptOptimization(requestId) };
   }
-  const { prompt } = parseBody11(body);
+  if (method !== "POST" || rest.length !== 0) {
+    return promptOptimizationRouteError(405, "prompt_optimization_method_not_allowed", "POST or DELETE required");
+  }
+  if (typeof ctx.optimizePrompt !== "function") {
+    return promptOptimizationRouteError(503, "prompt_optimization_unavailable", "prompt optimization is unavailable", { retryable: true });
+  }
+  const parsed = parseBody11(body);
+  const prompt = parsed.prompt;
+  const requestId = typeof parsed.requestId === "string" ? parsed.requestId.trim() : "";
+  const draftRevision = parsed.draftRevision;
   if (typeof prompt !== "string" || !prompt.trim()) {
-    return { status: 400, body: { error: "prompt (non-empty string) required" } };
+    return promptOptimizationRouteError(400, "prompt_optimization_empty", "prompt (non-empty string) required");
+  }
+  if (!/^[A-Za-z0-9._:-]{1,160}$/.test(requestId)) {
+    return promptOptimizationRouteError(400, "prompt_optimization_request_id_invalid", "valid requestId required");
+  }
+  if (!Number.isSafeInteger(draftRevision) || draftRevision < 0) {
+    return promptOptimizationRouteError(400, "prompt_optimization_draft_revision_invalid", "draftRevision must be a non-negative integer");
   }
   if (prompt.length > 2e4) {
-    return { status: 400, body: { error: "prompt is too long to optimize (maximum 20000 characters)" } };
+    return promptOptimizationRouteError(400, "prompt_optimization_too_long", "prompt is too long to optimize (maximum 20000 characters)", {
+      details: { maxInputChars: 2e4 }
+    });
   }
   let result;
   try {
-    result = await ctx.optimizePrompt(prompt.trim());
+    result = await ctx.optimizePrompt({ prompt, requestId, draftRevision });
   } catch (err) {
-    const failure = auditPromptOptimizationFailure(ctx, err, { stage: "model-request", inputLength: prompt.length });
-    return { status: 502, body: { error: failure.message } };
+    const status = Number(err?.status);
+    return promptOptimizationRouteError(Number.isSafeInteger(status) && status >= 400 && status <= 599 ? status : 502, err?.code || "prompt_optimization_failed", err?.message || "prompt optimization failed", {
+      title: err?.title,
+      retryable: err?.retryable,
+      action: err?.action,
+      details: err?.details
+    });
   }
-  const optimizedPrompt = typeof result?.prompt === "string" ? result.prompt.trim() : "";
-  if (!optimizedPrompt) {
-    const error = new Error(result?.error || "model returned an empty optimized prompt");
-    const failure = auditPromptOptimizationFailure(ctx, error, { stage: "response-validation", inputLength: prompt.length });
-    return { status: 502, body: { error: failure.message } };
+  if (!result || result.requestId !== requestId || result.draftRevision !== draftRevision || typeof result.original !== "string" || typeof result.optimized !== "string") {
+    return promptOptimizationRouteError(502, "prompt_optimization_response_invalid", "prompt optimization returned an invalid response", { retryable: true });
   }
-  ctx.audit?.({ ts: Date.now(), action: "optimize-prompt", payload: { inputLength: prompt.length, outputLength: optimizedPrompt.length } });
-  return { status: 200, body: { prompt: optimizedPrompt } };
+  return {
+    status: 200,
+    body: {
+      requestId,
+      draftRevision,
+      original: result.original,
+      optimized: result.optimized,
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      protectedFacts: Array.isArray(result.protectedFacts) ? result.protectedFacts : [],
+      unchanged: result.unchanged === true
+    }
+  };
 }
 
 // src/server/api/tools.ts

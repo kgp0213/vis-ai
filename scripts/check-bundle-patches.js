@@ -461,8 +461,10 @@ const required = [
       'credentials" && rest[1] === "test"',
       "语义搜索配置不完整",
       "result = await ctx.optimizePrompt",
-      "auditPromptOptimizationFailure",
-      "optimize-prompt-failed",
+      "cancelPromptOptimization",
+      "prompt_optimization_request_id_invalid",
+      "draftRevision",
+      "prompt_optimization_response_invalid",
     ],
   },
   {
