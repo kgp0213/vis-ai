@@ -1827,12 +1827,31 @@ const [providerCaps, setProviderCaps] = d2(null);
   // connected replacement instead of consuming a workbench snapshot against
   // a detached node.
   const [feedMountVersion, setFeedMountVersion] = d2(0);
+  const feedMountFrameRef = A2(null);
   const setFeedRef = q2((node) => {
     if (feedRef.current === node) return;
     feedRef.current = node;
     // Ref callbacks run during DOM commit, before the node is necessarily
-    // attached to document; the effect below validates isConnected again.
-    if (node) setFeedMountVersion((version) => version + 1);
+    // attached to document. Defer the generation bump until the next paint so
+    // the scroll restore effect sees a connected replacement feed instead of
+    // early-returning on the transient pre-attachment state.
+    if (feedMountFrameRef.current !== null) {
+      cancelAnimationFrame(feedMountFrameRef.current);
+      feedMountFrameRef.current = null;
+    }
+    if (!node) return;
+    const trackedNode = node;
+    const bumpWhenConnected = (remainingFrames) => {
+      if (feedRef.current !== trackedNode) return;
+      if (trackedNode.isConnected) {
+        feedMountFrameRef.current = null;
+        setFeedMountVersion((version) => version + 1);
+        return;
+      }
+      if (remainingFrames <= 0) return;
+      feedMountFrameRef.current = requestAnimationFrame(() => bumpWhenConnected(remainingFrames - 1));
+    };
+    feedMountFrameRef.current = requestAnimationFrame(() => bumpWhenConnected(2));
   }, []);
   // 滚动所有权唯一事实源：true=跟随底部（内容增长时贴底）；
   // false=手动阅读（程序禁止写 scrollTop，只累计"下方新消息"提示）。

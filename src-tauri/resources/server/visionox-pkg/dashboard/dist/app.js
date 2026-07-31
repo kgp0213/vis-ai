@@ -26666,10 +26666,27 @@ ${workspaceDir || ""}`;
   }, [busy, turnStartedAt]);
   const feedRef = A2(null);
   const [feedMountVersion, setFeedMountVersion] = d2(0);
+  const feedMountFrameRef = A2(null);
   const setFeedRef = q2((node) => {
     if (feedRef.current === node) return;
     feedRef.current = node;
-    if (node) setFeedMountVersion((version) => version + 1);
+    if (feedMountFrameRef.current !== null) {
+      cancelAnimationFrame(feedMountFrameRef.current);
+      feedMountFrameRef.current = null;
+    }
+    if (!node) return;
+    const trackedNode = node;
+    const bumpWhenConnected = (remainingFrames) => {
+      if (feedRef.current !== trackedNode) return;
+      if (trackedNode.isConnected) {
+        feedMountFrameRef.current = null;
+        setFeedMountVersion((version) => version + 1);
+        return;
+      }
+      if (remainingFrames <= 0) return;
+      feedMountFrameRef.current = requestAnimationFrame(() => bumpWhenConnected(remainingFrames - 1));
+    };
+    feedMountFrameRef.current = requestAnimationFrame(() => bumpWhenConnected(2));
   }, []);
   const followingBottomRef = A2(true);
   const scrollSchedulerRef = A2(null);

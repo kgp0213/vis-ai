@@ -466,6 +466,9 @@ describe("Dashboard desktop UX", () => {
     // 塌缩为 2px，输出内容看似被遮蔽）。
     const processCard = cssSrc.slice(cssSrc.indexOf(".process-card {"), cssSrc.indexOf(".process-card-details"));
     assert.match(processCard, /flex-shrink:\s*0;/);
+    assert.match(chat, /const feedMountFrameRef = A2\(null\)/);
+    assert.match(chat, /Defer the generation bump until the next paint/);
+    assert.match(chat, /requestAnimationFrame\(\(\) => bumpWhenConnected\(2\)\)/);
     // 精简后的滚动模型：onScroll 只做位置记录与顶部加载调度，永不改变跟随状态——
     // 内容高度变化（流式收敛、卡片折叠）产生不了输入事件，因此不可能误判并劫持视口。
     const onScroll = chat.slice(chat.indexOf("const onScroll = () => {"), chat.indexOf("const onWheel = (event) => {"));
