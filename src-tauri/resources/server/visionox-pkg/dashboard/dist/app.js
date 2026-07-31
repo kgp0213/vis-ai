@@ -15009,6 +15009,7 @@ var en = {
     modePickerTitle: "Work mode — takes effect on next new chat",
     modeOptionTitle: "{label}: {desc} · ECC {rules} · takes effect on next new chat",
     newMessagesBelow: "↓ New messages",
+    newMessagesBelowCount: "↓ {count} new messages",
     feedRefresh: "Refresh conversation",
     feedExpandAll: "Expand all work steps",
     feedCollapseAll: "Collapse all work steps",
@@ -15018,7 +15019,7 @@ var en = {
     planDismiss: "Dismiss for now",
     modelAndEffortTitle: "Model and reasoning settings",
     switchWorkspaceTitle: "Switch workspace",
-    bgChipTitle: "Running {running}, attention {attention}",
+    bgChipTitle: "Background tasks {total} · running {running} · attention {attention}",
     indexChipTitle: "Index: find relevant content in the workspace and knowledge bases",
     indexTitle: "Index",
     indexAuto: "Auto recall",
@@ -15047,7 +15048,7 @@ var en = {
     reasoningStatusOnly: "Status only",
     reasoningHidden: "Hidden",
     processDisplayLabel: "Process display",
-    processDisplayTitle: "Controls how task progress (tool calls, work steps) is shown: Compact shows a single summary line; Standard shows the step list and auto-collapses once the reply appears; Detailed always stays expanded.",
+    processDisplayTitle: "Controls how task progress (tool calls, work steps) is shown: Compact shows a single summary line; Standard shows the step list and collapses only after an authoritative final receipt; Detailed always stays expanded.",
     processCompact: "Compact",
     processStandard: "Standard",
     processDetailed: "Detailed",
@@ -15075,9 +15076,21 @@ var en = {
     optimizeNoResult: "The model returned no usable optimization",
     optimizeDone: "Prompt optimized. Review and send.",
     optimizeFailed: "Prompt optimization failed: {msg}",
+    optimizeAuthFailed: "Model authentication failed. Check the provider API key and try again.",
+    optimizeRateLimited: "The model service is busy. Your original draft was kept; try again later.",
+    optimizeTimedOut: "The model timed out. Your original draft was kept; retry later or switch models.",
+    optimizeNetworkFailed: "Could not reach the model service. Your original draft was kept; check the network and retry.",
+    optimizeProviderFailed: "The model service could not complete this optimization. Your original draft was kept; try again or switch models.",
+    optimizeSemanticMismatch: "The optimized draft changed the language, facts, actions, or scope, so it was blocked and your original draft was kept.",
+    optimizeConflict: "This optimization request is stale. Your original draft was kept; start a new optimization.",
+    optimizeBusy: "Another task or prompt optimization is running. Try again when it finishes.",
+    optimizeIncomplete: "The model returned an incomplete optimization. Your original draft was kept; try again.",
     optimizeRequesting: "Optimizing prompt",
     optimizeCancel: "Cancel",
     optimizeCancelFailed: "Could not confirm prompt optimization cancellation",
+    optimizeCleanupPending: "Confirming that the failed optimization has stopped...",
+    optimizeCleanupFailed: "The failed optimization may still be running. Clean it up before sending or optimizing again.",
+    optimizeCleanupRetry: "Retry cleanup",
     optimizePreviewTitle: "Prompt optimization preview",
     optimizeOriginal: "Original",
     optimizeOptimized: "Optimized",
@@ -16485,7 +16498,37 @@ var en = {
     pullingModel: "pulling {model} — this may take a few minutes on first install",
     savedConfig: "saved · {count} fields updated · re-run index to apply",
     runningPreview: "running dry walk against project root…",
-    exclude: "exclude"
+    exclude: "exclude",
+    knowledgeDocsTitle: "Knowledge documents",
+    knowledgeDocsDirty: "reindex pending",
+    knowledgeDocsNotIndexed: "The knowledge directory is not part of the semantic index — uploaded documents will not be searchable. Enable “include knowledge directory Markdown” in the index config card on this panel.",
+    knowledgeDocsEmpty: "No documents yet — upload .md / .txt / .pdf files to make them searchable.",
+    knowledgeDocsUpload: "Upload documents",
+    knowledgeDocsUploading: "uploading {done}/{total}…",
+    knowledgeDocsUploaded: "uploaded {count} document(s)",
+    knowledgeDocsDeleteConfirm: "Delete knowledge document {name}?",
+    knowledgeDocsDeleted: "deleted {name}",
+    knowledgeDocsReindex: "Re-index",
+    knowledgeDocsReindexStarted: "reindex triggered",
+    knowledgeDocsCancelIndex: "Cancel indexing",
+    knowledgeDocsDebouncing: "rebuild queued",
+    knowledgeDocsIndexing: "indexing",
+    knowledgeDocsDropNow: "Drop files to upload",
+    knowledgeDocsJobFailed: "Index job ended as {status}. The pending revision was kept.",
+    knowledgeDocsRetry: "Retry",
+    knowledgeDocsStatusIndexed: "indexed",
+    knowledgeDocsStatusIndexing: "indexing",
+    knowledgeDocsStatusPending: "pending rebuild",
+    knowledgeDocsStatusFailed: "failed",
+    knowledgeDocsStatusDeleted: "deleted, index cleanup pending",
+    knowledgeDocsUploadQueued: "queued",
+    knowledgeDocsUploadUploading: "uploading",
+    knowledgeDocsUploadSucceeded: "uploaded",
+    knowledgeDocsUploadFailed: "failed",
+    knowledgeDocsColName: "name",
+    knowledgeDocsColSize: "size",
+    knowledgeDocsColUpdated: "uploaded",
+    knowledgeDocsColStatus: "status"
   },
   modal: {
     shellTitle: "shell command",
@@ -16870,6 +16913,7 @@ var zhCN = {
     modePickerTitle: "工作场景 — 下次新对话生效",
     modeOptionTitle: "{label}: {desc} · ECC {rules} · 下次新对话生效",
     newMessagesBelow: "↓ 有新消息",
+    newMessagesBelowCount: "↓ {count} 条新消息",
     feedRefresh: "刷新对话",
     feedExpandAll: "展开全部工作步骤",
     feedCollapseAll: "折叠全部工作步骤",
@@ -16879,7 +16923,7 @@ var zhCN = {
     planDismiss: "暂时关闭",
     modelAndEffortTitle: "模型与思考设置",
     switchWorkspaceTitle: "切换工作空间",
-    bgChipTitle: "运行中 {running}，待处理 {attention}",
+    bgChipTitle: "后台任务 {total} · 运行中 {running} · 待处理 {attention}",
     indexChipTitle: "索引：从当前工作区和知识库中查找相关内容",
     indexTitle: "索引",
     indexAuto: "自动召回",
@@ -16908,7 +16952,7 @@ var zhCN = {
     reasoningStatusOnly: "仅状态行",
     reasoningHidden: "完全隐藏",
     processDisplayLabel: "过程显示",
-    processDisplayTitle: "控制任务过程信息（工具调用、工作步骤）的展示详略：简洁只显示一行摘要；标准展示步骤列表并在正文出现后自动收敛；详细始终展开且不自动收敛。",
+    processDisplayTitle: "控制任务过程信息（工具调用、工作步骤）的展示详略：简洁只显示一行摘要；标准展示步骤列表并仅在收到最终回执后收敛；详细始终展开且不自动收敛。",
     processCompact: "简洁",
     processStandard: "标准",
     processDetailed: "详细",
@@ -16936,9 +16980,21 @@ var zhCN = {
     optimizeNoResult: "模型没有返回可用的优化结果",
     optimizeDone: "提示词已优化，请确认后发送",
     optimizeFailed: "提示词优化失败：{msg}",
+    optimizeAuthFailed: "当前模型鉴权失败，请检查服务商 API Key 后重试",
+    optimizeRateLimited: "模型服务请求过多，原文已保留，请稍后重试",
+    optimizeTimedOut: "模型响应超时，原文已保留；可稍后重试或切换模型",
+    optimizeNetworkFailed: "无法连接模型服务，原文已保留，请检查网络后重试",
+    optimizeProviderFailed: "模型服务未能完成本次优化，原文已保留；请重试或切换模型",
+    optimizeSemanticMismatch: "优化结果改变了原文的语言、事实、动作或范围，已拦截并保留原文",
+    optimizeConflict: "本次优化请求已失效，原文已保留，请重新点击优化",
+    optimizeBusy: "已有任务或提示词优化正在运行，请稍后再试",
+    optimizeIncomplete: "模型返回的优化结果不完整，原文已保留，请重试",
     optimizeRequesting: "正在优化提示词",
     optimizeCancel: "取消",
     optimizeCancelFailed: "无法确认提示词优化已取消",
+    optimizeCleanupPending: "正在确认失败的优化请求已停止...",
+    optimizeCleanupFailed: "失败的优化请求可能仍在运行，请先完成清理再发送或重新优化",
+    optimizeCleanupRetry: "重试清理",
     optimizePreviewTitle: "提示词优化预览",
     optimizeOriginal: "原文",
     optimizeOptimized: "优化稿",
@@ -18383,7 +18439,37 @@ var zhCN = {
     pullingModel: "正在拉取 {model} — 首次安装可能需要几分钟",
     savedConfig: "已保存 · {count} 个字段已更新 · 重新运行索引以应用",
     runningPreview: "正在对项目根目录执行干运行…",
-    exclude: "排除"
+    exclude: "排除",
+    knowledgeDocsTitle: "知识库文档",
+    knowledgeDocsDirty: "待重建",
+    knowledgeDocsNotIndexed: "知识目录未纳入语义索引，上传的文档不会被检索。请在本面板的索引配置中开启“包含 knowledge 目录中的 Markdown”。",
+    knowledgeDocsEmpty: "暂无文档 — 上传 .md / .txt / .pdf 后即可被检索。",
+    knowledgeDocsUpload: "上传文档",
+    knowledgeDocsUploading: "上传中 {done}/{total}…",
+    knowledgeDocsUploaded: "已上传 {count} 个文档",
+    knowledgeDocsDeleteConfirm: "确定删除知识库文档 {name} 吗？",
+    knowledgeDocsDeleted: "已删除 {name}",
+    knowledgeDocsReindex: "重建索引",
+    knowledgeDocsReindexStarted: "已触发索引重建",
+    knowledgeDocsCancelIndex: "取消索引",
+    knowledgeDocsDebouncing: "等待合并重建",
+    knowledgeDocsIndexing: "索引中",
+    knowledgeDocsDropNow: "松开即可上传",
+    knowledgeDocsJobFailed: "索引任务状态为 {status}，待重建 revision 已保留。",
+    knowledgeDocsRetry: "重试",
+    knowledgeDocsStatusIndexed: "已索引",
+    knowledgeDocsStatusIndexing: "索引中",
+    knowledgeDocsStatusPending: "待重建",
+    knowledgeDocsStatusFailed: "失败",
+    knowledgeDocsStatusDeleted: "已删除待清理",
+    knowledgeDocsUploadQueued: "排队中",
+    knowledgeDocsUploadUploading: "上传中",
+    knowledgeDocsUploadSucceeded: "已上传",
+    knowledgeDocsUploadFailed: "失败",
+    knowledgeDocsColName: "文件名",
+    knowledgeDocsColSize: "大小",
+    knowledgeDocsColUpdated: "上传时间",
+    knowledgeDocsColStatus: "状态"
   },
   modal: {
     shellTitle: "Shell 命令",
@@ -18444,6 +18530,16 @@ var t4 = createT({ en, "zh-CN": zhCN });
 // dashboard/src/lib/api.ts
 var TOKEN = document.querySelector('meta[name="reasonix-token"]')?.getAttribute("content") ?? "";
 var MODE = document.querySelector('meta[name="reasonix-mode"]')?.getAttribute("content") ?? "standalone";
+function apiTransportError(message, code, transport) {
+  const error = new Error(message);
+  error.status = 0;
+  error.body = null;
+  error.code = code;
+  error.retryable = true;
+  error.action = "retry";
+  error.transport = transport;
+  return error;
+}
 async function api(path, opts = {}) {
   const method = opts.method ?? "GET";
   const url = `/api${path}${path.includes("?") ? "&" : "?"}token=${TOKEN}`;
@@ -18453,8 +18549,9 @@ async function api(path, opts = {}) {
   const timeoutMs = opts.timeoutMs === 0 ? 0 : Math.max(1e3, Number(opts.timeoutMs ?? (method === "GET" ? 15e3 : 12e4)));
   const controller = new AbortController();
   let timedOut = false;
-  const abortFromCaller = () => controller.abort();
-  opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
+  const abortFromCaller = () => controller.abort(opts.signal?.reason);
+  if (opts.signal?.aborted) abortFromCaller();
+  else opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
   const timeout = timeoutMs > 0 ? setTimeout(() => {
     timedOut = true;
     controller.abort();
@@ -18470,8 +18567,19 @@ async function api(path, opts = {}) {
     });
     text = await res.text();
   } catch (error) {
-    if (timedOut) throw new Error(t4("chat.requestTimeout", { sec: Math.round(timeoutMs / 1e3), path }));
-    throw error;
+    if (opts.signal?.aborted) throw error;
+    if (timedOut) {
+      throw apiTransportError(
+        t4("chat.requestTimeout", { sec: Math.round(timeoutMs / 1e3), path }),
+        "api_request_timeout",
+        "timeout"
+      );
+    }
+    throw apiTransportError(
+      error instanceof Error ? error.message : String(error),
+      "api_network_error",
+      "network"
+    );
   } finally {
     if (timeout) clearTimeout(timeout);
     opts.signal?.removeEventListener?.("abort", abortFromCaller);
@@ -21739,6 +21847,36 @@ function groupToolMessages(messages = []) {
   return units;
 }
 
+// dashboard/src/lib/chat-display-safety.ts
+function redactSensitiveDisplayText(value) {
+  let text = String(value ?? "");
+  text = text.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
+  text = text.replace(
+    /(["']?(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|password|secret|credential|authorization)["']?\s*[:=]\s*)(?:"([^"]*)"|'([^']*)'|([^\s,;}\]]+))/gi,
+    (_match, prefix, doubleQuoted, singleQuoted) => `${prefix}${doubleQuoted !== void 0 ? '"[redacted]"' : singleQuoted !== void 0 ? "'[redacted]'" : "[redacted]"}`
+  );
+  text = text.replace(/([?&](?:token|api[_-]?key|apikey|access[_-]?token|secret)=)[^&#\s]+/gi, "$1[redacted]");
+  text = text.replace(/\b(?:sk|ark)-[A-Za-z0-9_-]{12,}\b/gi, "[redacted-key]");
+  return text;
+}
+function safeTechnicalDisplayText(value) {
+  if (value === null || value === void 0) return "";
+  if (typeof value === "string") return redactSensitiveDisplayText(value);
+  try {
+    return redactSensitiveDisplayText(JSON.stringify(value));
+  } catch {
+    return redactSensitiveDisplayText(String(value));
+  }
+}
+function redactTechnicalMessages(values, options2 = {}) {
+  const maxItems = Number.isSafeInteger(options2.maxItems) && options2.maxItems > 0 ? options2.maxItems : 8;
+  const maxChars = Number.isSafeInteger(options2.maxChars) && options2.maxChars > 0 ? options2.maxChars : 1600;
+  return (Array.isArray(values) ? values : [values]).filter((value) => value !== null && value !== void 0 && String(value).trim()).slice(0, maxItems).map((value) => {
+    const text = safeTechnicalDisplayText(value).trim();
+    return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  });
+}
+
 // node_modules/highlight.js/es/common.js
 var import_common = __toESM(require_common(), 1);
 var common_default = import_common.default;
@@ -22398,7 +22536,7 @@ function ToolCard({ msg }) {
   const progressStatus = ["queued", "running", "succeeded", "failed", "cancelled", "unknown", "recovered"].includes(msg.toolStatus) ? msg.toolStatus : "succeeded";
   const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), recovered: t4("chat.statusCompletedWarnings"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled"), unknown: t4("chat.statusUnknown") }[progressStatus];
   const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
-  const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage) ? html4`<div class="tool-card-diagnostic"><strong>${t4("chat.toolFailedContinue")}</strong>${msg.code ? html4`<span>${msg.code}</span>` : null}${msg.recommendedAction ? html4`<span>${msg.recommendedAction}</span>` : null}${msg.diagnosticMessage ? html4`<span>${msg.diagnosticMessage}</span>` : null}</div>` : null;
+  const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage) ? html4`<details class="tool-card-diagnostic"><summary><strong>${t4("chat.toolFailedContinue")}</strong></summary><div class="tool-card-diagnostic-body">${msg.code ? html4`<span>${redactSensitiveDisplayText(msg.code)}</span>` : null}${msg.category ? html4`<span>${redactSensitiveDisplayText(msg.category)}</span>` : null}${msg.recommendedAction ? html4`<span>${redactSensitiveDisplayText(msg.recommendedAction)}</span>` : null}${msg.diagnosticMessage ? html4`<span>${redactSensitiveDisplayText(msg.diagnosticMessage)}</span>` : null}</div></details>` : null;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
     const diffHtml = renderSearchReplace(
       args.search,
@@ -22490,7 +22628,7 @@ function ToolCard({ msg }) {
         ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
       </div>
       ${diagnostic}
-      ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
+      ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(redactSensitiveDisplayText(JSON.stringify(args, null, 2)))}</pre></details>` : null}
       ${renderCollapsibleToolOutput(msg.text)}
     </div>
   `;
@@ -22502,7 +22640,6 @@ function briefToolLabel(msg) {
   return { name, target: typeof target === "string" ? target : null };
 }
 var TOOL_ROW_DETAIL_TAIL_LINES = 3;
-var TOOL_SETTLE_FALLBACK_MS = 8e3;
 function toolRowStatus(status) {
   if (["queued", "running"].includes(status)) return "active";
   if (["failed", "cancelled", "unknown"].includes(status)) return "failed";
@@ -22532,8 +22669,8 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const hasRecovery = attention.hasRecovery;
   const hitSet = searchHitIds ? new Set(searchHitIds) : null;
   const hasHit = items.some((m3) => hitSet?.has(String(m3.id)));
-  const [settled, setSettled] = d2(!taskActive);
-  const wasActiveRef = A2(taskActive);
+  const [settled, setSettled] = d2(!taskActive && followedByAnswer);
+  const wasActiveRef = A2(taskActive || !followedByAnswer);
   y2(() => {
     if (taskActive) {
       wasActiveRef.current = true;
@@ -22549,14 +22686,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
       wasActiveRef.current = false;
       return void 0;
     }
-    const shouldSettle = followedByAnswer;
-    if (!shouldSettle) {
-      const fallback = setTimeout(() => {
-        wasActiveRef.current = false;
-        setSettled(true);
-      }, TOOL_SETTLE_FALLBACK_MS);
-      return () => clearTimeout(fallback);
-    }
+    if (!followedByAnswer) return void 0;
     wasActiveRef.current = false;
     setSettled(true);
     return void 0;
@@ -22566,7 +22696,8 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const compact = processDisplay === "compact";
   const rows = compact ? [] : toolRowsFromItems(items);
   const cardState = hasFailed ? "failed" : taskActive || !settled ? "running" : "settled";
-  const title = taskActive ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}` : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
+  const groupActive = activeItems.length > 0;
+  const title = groupActive ? items.length > 1 ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}` : html4`${t4("chat.toolUsingLive")}` : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
   const meta = hasFailed ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>` : hasRecovery ? html4`<span class="process-card-meta-failed">${t4("chat.statusCompletedWarnings")}</span>` : taskActive && currentBrief ? html4`${currentBrief.name}` : null;
   const openAttr = compact ? void 0 : hasHit ? true : processDisplay === "detailed" ? true : attention.keepExpanded ? true : cardState === "running" ? true : void 0;
   return html4`
@@ -22609,13 +22740,13 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
       <summary><strong>${t4("chat.receiptTitle")}</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
       <div class="execution-receipt-grid">
         <span>${t4("chat.receiptTools")}</span><span>${t4("chat.receiptToolsSummary", { total: tools.results ?? 0, ok: tools.successes ?? 0, bad: tools.failures ?? 0 })}${tools.lastName ? ` · ${t4("chat.receiptRecent", { name: tools.lastName })}` : ""}</span>
-        ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${failures.at(-1).code}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
-        ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${recoveries.at(-1).recovery}` : ""}</span>` : null}
+        ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${redactSensitiveDisplayText(failures.at(-1).code)}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
+        ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${redactSensitiveDisplayText(recoveries.at(-1).recovery)}` : ""}</span>` : null}
         <span>${t4("chat.receiptArtifact")}</span><span>${artifactIncomplete ? t4("chat.receiptArtifactIncomplete") : artifactStatusLabel}</span>
         <span>${t4("chat.receiptGoal")}</span><span>${goal === "verified" ? t4("chat.goalVerified") : goal === "incomplete" ? t4("chat.goalIncomplete") : t4("chat.goalUnknown")}</span>
-        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
+         ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${safeTechnicalDisplayText(receipt.mediaRecovery)}` : ""}${receipt.mediaWarnings?.length ? ` · ${safeTechnicalDisplayText(receipt.mediaWarnings[0])}` : ""}</span>` : null}
         ${intervention.shown > 0 ? html4`<span>${t4("chat.receiptIntervention")}</span><span>${t4("chat.receiptInterventionShown", { count: intervention.shown })}${interventionChoice ? ` · ${t4("chat.receiptChoice", { choice: interventionChoice })}` : ""}</span>` : null}
-        ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
+        ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).map((warning) => redactSensitiveDisplayText(warning)).join("；")}</span>` : null}
       </div>
     </details>
   `;
@@ -23282,22 +23413,53 @@ function fmtRelativeTime(iso) {
 }
 
 // dashboard/src/lib/prompt-optimization.ts
-function slashNames(commands = []) {
-  const names = /* @__PURE__ */ new Set();
-  for (const command of commands) {
-    for (const value of [command.cmd, command.name, ...command.aliases ?? []]) {
-      const normalized = String(value ?? "").trim().replace(/^\//u, "").toLowerCase();
-      if (normalized) names.add(normalized);
-    }
+function describePromptOptimizationFailure(error) {
+  const name = String(error?.name ?? "");
+  const code = String(error?.code ?? "");
+  const status = Number(error?.status);
+  const transport = String(error?.transport ?? "");
+  if (name === "AbortError" || code === "prompt_optimization_cancelled") {
+    return { messageKey: null, shouldCleanup: false, cancelled: true };
   }
-  return names;
+  if (code === "prompt_optimization_auth_failed" || status === 401 || status === 403) {
+    return { messageKey: "chat.optimizeAuthFailed", shouldCleanup: false, cancelled: false };
+  }
+  if (code === "prompt_optimization_rate_limited" || status === 429) {
+    return { messageKey: "chat.optimizeRateLimited", shouldCleanup: false, cancelled: false };
+  }
+  if (code === "prompt_optimization_provider_failed") {
+    return { messageKey: "chat.optimizeProviderFailed", shouldCleanup: false, cancelled: false };
+  }
+  if (transport === "timeout" || code === "api_request_timeout" || code === "prompt_optimization_timeout") {
+    return { messageKey: "chat.optimizeTimedOut", shouldCleanup: true, cancelled: false };
+  }
+  if (transport === "network" || code === "api_network_error" || code === "prompt_optimization_network_failed") {
+    return { messageKey: "chat.optimizeNetworkFailed", shouldCleanup: true, cancelled: false };
+  }
+  if ([
+    "prompt_optimization_language_mismatch",
+    "prompt_optimization_side_effect_mismatch",
+    "prompt_optimization_fact_mismatch"
+  ].includes(code)) {
+    return { messageKey: "chat.optimizeSemanticMismatch", shouldCleanup: false, cancelled: false };
+  }
+  if (code === "prompt_optimization_idempotency_conflict") {
+    return { messageKey: "chat.optimizeConflict", shouldCleanup: false, cancelled: false };
+  }
+  if (code === "prompt_optimization_busy" || code === "prompt_optimization_request_busy") {
+    return { messageKey: "chat.optimizeBusy", shouldCleanup: false, cancelled: false };
+  }
+  if (code === "prompt_optimization_truncated" || code === "prompt_optimization_empty_response") {
+    return { messageKey: "chat.optimizeIncomplete", shouldCleanup: false, cancelled: false };
+  }
+  return { messageKey: null, shouldCleanup: false, cancelled: false };
 }
-function classifyPromptOptimizationDraft(draft, commands = []) {
+function classifyPromptOptimizationDraft(draft, _commands = []) {
   const source = String(draft ?? "");
   const trimmed = source.trim();
   if (!trimmed) return { kind: "empty", body: "" };
   const slash = /^\/(\S+)(?=\s|$)/u.exec(trimmed);
-  if (slash && slashNames(commands).has(slash[1].toLowerCase())) {
+  if (slash) {
     return { kind: "command", body: trimmed };
   }
   const skill = /^(\s*@[A-Za-z0-9][A-Za-z0-9._-]{0,63}[ \t]+)([\s\S]*)$/u.exec(source);
@@ -23321,7 +23483,7 @@ function createPromptOptimizationScope(input) {
   });
 }
 function promptOptimizationResponseIsCurrent(response, scope, current) {
-  return String(response?.requestId ?? "") === scope.requestId && Number(response?.draftRevision) === scope.draftRevision && Number(current.draftRevision) === scope.draftRevision && String(current.original) === scope.original && String(current.sessionId ?? "") === scope.sessionId && String(current.workspace ?? "") === scope.workspace && String(current.mode ?? "") === scope.mode;
+  return String(response?.requestId ?? "") === scope.requestId && Number(response?.draftRevision) === scope.draftRevision && String(response?.original ?? "") === scope.original && Number(current.draftRevision) === scope.draftRevision && String(current.original) === scope.original && String(current.sessionId ?? "") === scope.sessionId && String(current.workspace ?? "") === scope.workspace && String(current.mode ?? "") === scope.mode;
 }
 function promptOptimizationButtonDisabled(input) {
   if (input.busy === true || input.inFlight === true) return true;
@@ -23580,7 +23742,7 @@ function createDashboardEventGuard(maxEvents = 4096) {
   const terminalMessages = /* @__PURE__ */ new Map();
   const finalStateRank = (event) => {
     const state = String(event?.executionState ?? event?.taskState ?? "").toLowerCase();
-    return { unknown: 1, incomplete: 2, failed: 3, cancelled: 3, completed_with_warnings: 4, completed: 5 }[state] ?? 0;
+    return { unknown: 1, incomplete: 2, failed: 3, cancelled: 3, completed: 5, completed_with_warnings: 6 }[state] ?? 0;
   };
   const assistantFinalFingerprint = (event) => {
     try {
@@ -23635,12 +23797,16 @@ function createDashboardEventGuard(maxEvents = 4096) {
         if (previous) {
           if (nextEpoch && previous.eventEpoch === nextEpoch && nextSeq !== null && previous.eventSeq !== null && nextSeq <= previous.eventSeq) return false;
           if (previous.authoritative && !authoritative) return false;
+          const previousState = previous.state;
+          const nextState = String(event.executionState ?? event.taskState ?? "").toLowerCase();
+          if (previous.authoritative && authoritative && previousState === "completed" && nextState === "completed_with_warnings" && !correction) return false;
           if (authoritative && previous.authoritative && finalStateRank(event) < previous.stateRank) return false;
           if (!correction && previous.authoritative && authoritative) return false;
           if (revision && revision === previous.revision && fingerprint === previous.fingerprint) return false;
         }
         terminalMessages.set(id, {
           fingerprint,
+          state: String(event.executionState ?? event.taskState ?? previous?.state ?? "").toLowerCase(),
           eventEpoch: nextEpoch,
           eventSeq: nextSeq,
           revision,
@@ -23671,6 +23837,7 @@ function createDashboardReducerState(seed) {
     seen: new Set(seed?.seen ?? []),
     streamOffsets: { ...seed?.streamOffsets ?? {} },
     messages: { ...seed?.messages ?? {} },
+    messageOrder: Array.isArray(seed?.messageOrder) ? [...seed.messageOrder] : Object.keys(seed?.messages ?? {}),
     tools: { ...seed?.tools ?? {} },
     interactions: { ...seed?.interactions ?? {} },
     attachments: { ...seed?.attachments ?? {} },
@@ -23715,6 +23882,46 @@ function entityRecord(value) {
     result[id] = { ...raw, id };
   }
   return result;
+}
+function entityOrder(value, records) {
+  const source = Array.isArray(value) ? value.map((item, index) => String(item?.id ?? `entity-${index + 1}`)) : Object.keys(records);
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const rawId of source) {
+    const id = String(rawId ?? "").trim();
+    if (!id || seen.has(id) || !records[id]) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
+function messageEventCoordinates(event) {
+  return {
+    ...event?.eventEpoch !== void 0 ? { eventEpoch: String(event.eventEpoch) } : {},
+    ...event?.eventSeq !== void 0 && Number.isSafeInteger(Number(event.eventSeq)) ? { eventSeq: Number(event.eventSeq) } : {},
+    ...event?.eventId !== void 0 ? { eventId: String(event.eventId) } : {},
+    ...event?.turnId !== void 0 ? { turnId: String(event.turnId) } : {},
+    ...event?.operationId !== void 0 ? { operationId: String(event.operationId) } : {},
+    ...event?.revision !== void 0 ? { revision: String(event.revision) } : {},
+    ...event?.correction === true ? { correction: true } : {}
+  };
+}
+function orderedDashboardMessages(state) {
+  const ordered = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const id of Array.isArray(state?.messageOrder) ? state.messageOrder : []) {
+    const key = String(id ?? "");
+    const message = state.messages?.[key];
+    if (!message || seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(message);
+  }
+  for (const [id, message] of Object.entries(state?.messages ?? {})) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(message);
+  }
+  return ordered;
 }
 function snapshotCursor(value) {
   if (value && typeof value === "object") {
@@ -23776,9 +23983,11 @@ function createDashboardReducerStateFromSnapshot(snapshot = {}) {
   const shape = validateDashboardSessionSnapshotShape(snapshot);
   if (!shape.ok) throw new TypeError(`snapshot schema violation: ${shape.errors.join(", ")}`);
   const cursor = snapshotCursor(snapshot.eventCursor);
+  const messages = entityRecord(snapshot.messages);
   return createDashboardReducerState({
     ...cursor,
-    messages: entityRecord(snapshot.messages),
+    messages,
+    messageOrder: entityOrder(snapshot.messages, messages),
     tools: entityRecord(snapshot.tools),
     interactions: entityRecord(snapshot.interactions),
     attachments: entityRecord(snapshot.attachments),
@@ -23854,7 +24063,7 @@ function projectDashboardMessagePage(response = {}) {
   const snapshot = response?.snapshot && typeof response.snapshot === "object" ? response.snapshot : null;
   const state = snapshot ? createDashboardReducerStateFromSnapshot(snapshot) : createDashboardReducerState();
   const compatibilityMessages = Array.isArray(response?.messages) ? response.messages : [];
-  const messages = snapshot ? mergeCanonicalMessagePage(compatibilityMessages, state.messages) : compatibilityMessages.map((message) => ({ ...message }));
+  const messages = snapshot ? mergeCanonicalMessagePage(compatibilityMessages, orderedDashboardMessages(state)) : compatibilityMessages.map((message) => ({ ...message }));
   const rawTotal = Number(snapshot?.messagePage?.totalMessages ?? response?.totalMessages ?? messages.length);
   const totalMessages = Number.isSafeInteger(rawTotal) && rawTotal >= 0 ? rawTotal : messages.length;
   const fallbackStart = Math.max(0, totalMessages - messages.length);
@@ -23980,10 +24189,12 @@ function applyDashboardEvent(input, event) {
       id: messageId,
       role: "user",
       text: String(event.text ?? ""),
+      ...messageEventCoordinates(event),
       ...event.images !== void 0 ? { images: event.images } : {},
       ...event.attachments !== void 0 ? { attachments: event.attachments } : {}
     };
     state.messages = { ...state.messages, [messageId]: next };
+    if (!state.messageOrder.includes(messageId)) state.messageOrder = [...state.messageOrder, messageId];
     return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
   }
   if (["warning", "error", "info"].includes(kind)) {
@@ -23994,9 +24205,11 @@ function applyDashboardEvent(input, event) {
       ...previous2 ?? { id: messageId },
       id: messageId,
       role: kind,
-      text: String(event.text ?? "")
+      text: String(event.text ?? ""),
+      ...messageEventCoordinates(event)
     };
     state.messages = { ...state.messages, [messageId]: next };
+    if (!state.messageOrder.includes(messageId)) state.messageOrder = [...state.messageOrder, messageId];
     return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
   }
   if (kind === "background-task-notification") {
@@ -24026,6 +24239,7 @@ function applyDashboardEvent(input, event) {
       if (event[bucket2] !== void 0) state[bucket2] = entityRecord(event[bucket2]);
     };
     replace("messages");
+    if (event.messages !== void 0) state.messageOrder = entityOrder(event.messages, state.messages);
     replace("tools");
     replace("interactions");
     replace("attachments");
@@ -24093,6 +24307,7 @@ function applyDashboardEvent(input, event) {
       ...event.reasoning !== void 0 ? { reasoning: String(event.reasoning ?? "") } : {},
       ...event.turnId !== void 0 ? { turnId: String(event.turnId) } : {},
       ...event.operationId !== void 0 ? { operationId: String(event.operationId) } : {},
+      ...messageEventCoordinates(event),
       ...kind === "turn_finalized" ? {
         finalized: true,
         ...event.taskState !== void 0 ? { taskState: event.taskState } : {},
@@ -24107,6 +24322,7 @@ function applyDashboardEvent(input, event) {
       } : {}
     };
     state.messages = { ...state.messages, [messageId]: next };
+    if (!state.messageOrder.includes(messageId)) state.messageOrder = [...state.messageOrder, messageId];
     return { state, changed: JSON.stringify(previous2) !== JSON.stringify(next) };
   }
   if (kind === "todo-update") {
@@ -24358,6 +24574,390 @@ function createDashboardEventBatcher({ onFlush, maxEvents = 64, maxChars = 24e3,
   };
 }
 
+// dashboard/src/lib/chat-timeline.ts
+function textValue(value) {
+  return value === null || value === void 0 ? "" : String(value);
+}
+function frameValue2(value) {
+  return textValue(value).trim();
+}
+function eventSequence(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+function eventEpoch(value) {
+  const valueString = frameValue2(value);
+  return valueString || null;
+}
+function roleOf(entity) {
+  return frameValue2(entity?.role).toLowerCase() || "assistant";
+}
+function toolCallIdOf(entity) {
+  return frameValue2(entity?.toolCallId ?? entity?.tool_call_id ?? entity?.callId);
+}
+function turnIdOf(entity) {
+  const turn = frameValue2(entity?.turnId ?? entity?.turn_id);
+  return turn || null;
+}
+function stepIdOf(entity) {
+  return frameValue2(entity?.stepId ?? entity?.step_id);
+}
+function toolIdentity(entity) {
+  const callId = toolCallIdOf(entity);
+  if (!callId) return null;
+  return `tool:${JSON.stringify([turnIdOf(entity) ?? "", stepIdOf(entity), callId])}`;
+}
+function assistantSegmentIdentity(entity) {
+  const segment = frameValue2(entity?.__timelineSegmentId ?? entity?.segmentId);
+  if (!segment) return null;
+  const message = frameValue2(entity?.assistantMessageId ?? entity?.messageId ?? entity?.id);
+  if (!message) return null;
+  return `assistant:${JSON.stringify([message, segment])}`;
+}
+function assistantHasMeaning(entity) {
+  if (frameValue2(entity?.text ?? entity?.content ?? entity?.message)) return true;
+  if (frameValue2(entity?.reasoning ?? entity?.reasoningText)) return true;
+  if (Array.isArray(entity?.warnings) && entity.warnings.length > 0) return true;
+  if (entity?.receipt !== void 0 && entity?.receipt !== null) return true;
+  if (entity?.finalized === true) return true;
+  for (const field of [
+    "taskState",
+    "executionState",
+    "goalState",
+    "taskContract",
+    "evidenceRefs",
+    "interventionChoice",
+    "artifactIncomplete",
+    "error",
+    "diagnosticMessage"
+  ]) {
+    if (entity?.[field] !== void 0 && entity?.[field] !== null && entity?.[field] !== "") return true;
+  }
+  return false;
+}
+var TERMINAL_EXECUTION_STATES = /* @__PURE__ */ new Set([
+  "completed",
+  "completed_with_warnings",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "canceled",
+  "incomplete",
+  "needs_intervention",
+  "unknown",
+  "verified",
+  "present_unverified",
+  "invalid"
+]);
+function hasTerminalValue(value) {
+  const normalized = frameValue2(value).toLowerCase();
+  return Boolean(normalized) && TERMINAL_EXECUTION_STATES.has(normalized);
+}
+function assistantHasAuthoritativeFinalEvidence(entity) {
+  if (!entity || typeof entity !== "object") return false;
+  if (entity.finalized === true) return true;
+  if (entity.receipt && typeof entity.receipt === "object") return true;
+  return [entity.taskState, entity.executionState, entity.goalState].some(hasTerminalValue);
+}
+function normalizeTool(entity, sourceIndex) {
+  const callId = toolCallIdOf(entity);
+  const content = entity?.content !== void 0 ? entity.content : entity?.text;
+  const text = typeof content === "string" ? content : content === void 0 || content === null ? "" : JSON.stringify(content);
+  const id = frameValue2(entity?.id) || `tool-${callId || sourceIndex + 1}`;
+  return {
+    ...entity,
+    id,
+    role: "tool",
+    toolCallId: callId || entity?.toolCallId,
+    text,
+    ...entity?.toolArgs !== void 0 || entity?.args !== void 0 ? { toolArgs: entity?.toolArgs ?? entity?.args } : {},
+    toolStatus: entity?.toolStatus ?? entity?.status ?? entity?.state ?? "unknown"
+  };
+}
+function normalizeMessage(entity, sourceIndex) {
+  const id = frameValue2(entity?.id) || `message-${sourceIndex + 1}`;
+  return { ...entity, id };
+}
+function toInternal(entity, sourceIndex, streaming = false) {
+  const role = roleOf(entity);
+  const message = role === "tool" ? normalizeTool(entity, sourceIndex) : normalizeMessage(entity, sourceIndex);
+  const seq = streaming ? eventSequence(entity?.startEventSeq ?? entity?.eventSeq) : eventSequence(entity?.eventSeq ?? entity?.startEventSeq);
+  return {
+    message,
+    sourceIndex,
+    eventSeq: seq,
+    eventEpoch: eventEpoch(entity?.eventEpoch ?? entity?.epoch),
+    turnId: turnIdOf(entity),
+    role,
+    toolKey: role === "tool" ? toolIdentity(entity) : null,
+    stepKey: role === "tool" ? stepIdOf(entity) : null,
+    streaming,
+    explicitSegmentId: streaming ? frameValue2(entity?.segmentId) || null : frameValue2(entity?.segmentId) || null
+  };
+}
+function mergeToolRetry(existing, next) {
+  const oldText = frameValue2(existing.message?.text);
+  const nextText = frameValue2(next.message?.text);
+  const message = {
+    ...existing.message,
+    ...next.message,
+    ...nextText || !oldText ? {} : { text: existing.message.text }
+  };
+  const oldSeq = existing.eventSeq;
+  const nextSeq = next.eventSeq;
+  const firstSeq = oldSeq === null ? nextSeq : nextSeq === null ? oldSeq : Math.min(oldSeq, nextSeq);
+  return {
+    ...existing,
+    message,
+    eventSeq: firstSeq,
+    eventEpoch: existing.eventEpoch ?? next.eventEpoch
+  };
+}
+function mergeAssistantSegment(existing, next) {
+  const oldText = frameValue2(existing.message?.text);
+  const nextText = frameValue2(next.message?.text);
+  const message = {
+    ...existing.message,
+    ...next.message,
+    id: existing.message?.id ?? next.message?.id,
+    ...nextText || !oldText ? {} : { text: existing.message.text }
+  };
+  const oldSeq = existing.eventSeq;
+  const nextSeq = next.eventSeq;
+  const firstSeq = oldSeq === null ? nextSeq : nextSeq === null ? oldSeq : Math.min(oldSeq, nextSeq);
+  return {
+    ...existing,
+    message,
+    eventSeq: firstSeq,
+    eventEpoch: existing.eventEpoch ?? next.eventEpoch
+  };
+}
+function mergeEntities(messages, tools) {
+  const items = [];
+  const toolIndexes = /* @__PURE__ */ new Map();
+  const assistantSegmentIndexes = /* @__PURE__ */ new Map();
+  const append = (entity, sourceIndex) => {
+    if (!entity || typeof entity !== "object") return;
+    const item = toInternal(entity, sourceIndex);
+    if (item.role === "tool" && item.toolKey) {
+      const existingIndex = toolIndexes.get(item.toolKey);
+      if (existingIndex !== void 0) {
+        items[existingIndex] = mergeToolRetry(items[existingIndex], item);
+        return;
+      }
+      toolIndexes.set(item.toolKey, items.length);
+    }
+    if (item.role === "assistant") {
+      const segmentKey = assistantSegmentIdentity(item.message);
+      if (segmentKey) {
+        const existingIndex = assistantSegmentIndexes.get(segmentKey);
+        if (existingIndex !== void 0) {
+          items[existingIndex] = mergeAssistantSegment(items[existingIndex], item);
+          return;
+        }
+        assistantSegmentIndexes.set(segmentKey, items.length);
+      }
+    }
+    items.push(item);
+  };
+  for (const [index, entity] of (Array.isArray(messages) ? messages : []).entries()) append(entity, index);
+  const offset = Array.isArray(messages) ? messages.length : 0;
+  for (const [index, entity] of (Array.isArray(tools) ? tools : []).entries()) append(entity, offset + index);
+  return items;
+}
+function streamingIdentity(item) {
+  return frameValue2(item.message?.messageId ?? item.message?.id);
+}
+function replaceFinalStreamingSegments(items) {
+  const streams = items.filter((item) => item.streaming && item.role === "assistant");
+  const finals = items.filter((item) => !item.streaming && item.role === "assistant");
+  const consumedFinals = /* @__PURE__ */ new Set();
+  for (const final of finals) {
+    const finalId = streamingIdentity(final);
+    if (!finalId) continue;
+    const candidates = streams.filter((stream) => {
+      if (stream.streaming === false || streamingIdentity(stream) !== finalId) return false;
+      const finalSegment = frameValue2(final.message?.segmentId);
+      return !finalSegment || finalSegment === final.explicitSegmentId;
+    });
+    if (candidates.length === 0) continue;
+    candidates.sort((left, right) => (left.eventSeq ?? Number.MAX_SAFE_INTEGER) - (right.eventSeq ?? Number.MAX_SAFE_INTEGER) || left.sourceIndex - right.sourceIndex);
+    const target = candidates.at(-1);
+    const finalText = frameValue2(final.message?.text ?? final.message?.content);
+    target.message = {
+      ...target.message,
+      ...final.message,
+      ...finalText || !frameValue2(target.message?.text) ? {} : { text: target.message.text },
+      id: final.message.id ?? target.message.id
+    };
+    target.streaming = false;
+    target.eventEpoch = target.eventEpoch ?? final.eventEpoch;
+    consumedFinals.add(final);
+  }
+  return items.filter((item) => !consumedFinals.has(item));
+}
+function orderWithinEpochSlots(items) {
+  const result = items.slice();
+  const groups = /* @__PURE__ */ new Map();
+  for (const [index, item] of result.entries()) {
+    if (item.eventSeq === null) continue;
+    const key = item.eventEpoch || "__unscoped__";
+    const indexes = groups.get(key) ?? [];
+    indexes.push(index);
+    groups.set(key, indexes);
+  }
+  for (const indexes of groups.values()) {
+    if (indexes.length < 2) continue;
+    const ordered = indexes.map((index) => result[index]).sort((left, right) => left.eventSeq - right.eventSeq || left.sourceIndex - right.sourceIndex);
+    for (const [slot, item] of indexes.entries()) result[item] = ordered[slot];
+  }
+  return result;
+}
+function assignTurnIds(items) {
+  let legacyTurn = "";
+  let legacyIndex = 0;
+  for (const item of items) {
+    if (item.turnId) {
+      legacyTurn = item.turnId;
+      continue;
+    }
+    if (item.role === "user" || !legacyTurn) legacyTurn = `legacy-turn-${++legacyIndex}`;
+    item.turnId = legacyTurn;
+  }
+}
+function assignSegments(items) {
+  const counters = /* @__PURE__ */ new Map();
+  let previous = null;
+  let previousSegment = "";
+  let previousToolStep = "";
+  for (const item of items) {
+    const turn = item.turnId ?? "legacy-turn-1";
+    const counter = counters.get(turn) ?? { assistant: 0, tool: 0, other: 0 };
+    let segment = item.explicitSegmentId;
+    if (!segment) {
+      if (item.role === "assistant") {
+        if (previous?.turnId === turn && previous.role === "assistant") segment = previousSegment;
+        else segment = `${turn}:assistant:${++counter.assistant}`;
+      } else if (item.role === "tool") {
+        const step = item.stepKey || `call:${frameValue2(item.message?.toolCallId)}`;
+        if (previous?.turnId === turn && previous.role === "tool" && previousToolStep === step) segment = previousSegment;
+        else segment = `${turn}:tool:${++counter.tool}`;
+        previousToolStep = step;
+      } else {
+        segment = `${turn}:${item.role || "message"}:${++counter.other}`;
+      }
+    }
+    counters.set(turn, counter);
+    item.explicitSegmentId = segment;
+    previous = item;
+    previousSegment = segment;
+  }
+}
+function frameFromInternal(item, index) {
+  const segmentId = item.explicitSegmentId || `${item.turnId ?? "legacy-turn-1"}:message:${index + 1}`;
+  const messageId = frameValue2(item.message?.id) || `${item.role}-${index + 1}`;
+  return {
+    id: item.streaming ? `${messageId}:${segmentId}` : messageId,
+    kind: item.role === "tool" ? "tool" : "message",
+    role: item.role,
+    turnId: item.turnId ?? "legacy-turn-1",
+    segmentId,
+    startEventSeq: item.eventSeq,
+    eventSeq: item.eventSeq,
+    eventEpoch: item.eventEpoch,
+    message: item.message,
+    streaming: item.streaming
+  };
+}
+function projectChatTimeline(messages = [], tools = [], streamingSegments = []) {
+  const base2 = mergeEntities(Array.isArray(messages) ? messages : [], Array.isArray(tools) ? tools : []);
+  const streamOffset = base2.length + 1;
+  const streams = (Array.isArray(streamingSegments) ? streamingSegments : []).filter((segment) => segment && typeof segment === "object").map((segment, index) => toInternal({ ...segment, role: "assistant" }, streamOffset + index, segment.streaming !== false));
+  let items = replaceFinalStreamingSegments([...base2, ...streams]);
+  items = items.filter((item) => item.role !== "assistant" || assistantHasMeaning(item.message));
+  items = orderWithinEpochSlots(items);
+  assignTurnIds(items);
+  assignSegments(items);
+  const frames = items.map(frameFromInternal);
+  const turnMap = /* @__PURE__ */ new Map();
+  for (const frame of frames) {
+    const existing = turnMap.get(frame.turnId);
+    if (existing) existing.frames.push(frame);
+    else turnMap.set(frame.turnId, { id: `turn:${frame.turnId}`, turnId: frame.turnId, frames: [frame] });
+  }
+  return { frames, turns: [...turnMap.values()] };
+}
+
+// dashboard/src/lib/chat-scroll-policy.ts
+function createChatScrollState() {
+  return { owner: "auto", newBelowCount: 0 };
+}
+function addedCount(value) {
+  if (!Number.isFinite(value) || value == null) return 1;
+  return Math.max(0, Math.floor(value));
+}
+function withOwner(state, owner) {
+  return { owner, newBelowCount: state.newBelowCount };
+}
+function finishTransientOwner(state, atBottom) {
+  if (atBottom) return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
+  return { state: { owner: "user", newBelowCount: state.newBelowCount }, effect: "none" };
+}
+function reduceChatScrollState(state = createChatScrollState(), event) {
+  switch (event.type) {
+    case "content-growth": {
+      const added = addedCount(event.added);
+      if (state.owner === "auto") {
+        return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
+      }
+      return {
+        state: { owner: state.owner, newBelowCount: state.newBelowCount + added },
+        effect: "none"
+      };
+    }
+    case "user-scroll-up":
+      return { state: withOwner(state, "user"), effect: "none" };
+    case "user-scroll-down":
+      return event.atBottom ? { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" } : { state: withOwner(state, "user"), effect: "none" };
+    case "user-reached-bottom":
+      return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
+    case "anchor-start":
+      return { state: withOwner(state, "anchor"), effect: "none" };
+    case "anchor-end":
+      return finishTransientOwner(state, Boolean(event.atBottom));
+    case "jump-start":
+      return { state: withOwner(state, "jump"), effect: "none" };
+    case "jump-end":
+      return finishTransientOwner(state, Boolean(event.atBottom));
+    default:
+      return { state, effect: "none" };
+  }
+}
+function createFrameScheduler(options2) {
+  const requestFrame = options2.requestFrame ?? ((callback) => requestAnimationFrame(callback));
+  const cancelFrame = options2.cancelFrame ?? ((id) => cancelAnimationFrame(id));
+  let frameId = null;
+  return {
+    schedule() {
+      if (frameId !== null) return;
+      frameId = requestFrame(() => {
+        const completedFrameId = frameId;
+        frameId = null;
+        if (completedFrameId !== null) cancelFrame(completedFrameId);
+        options2.run();
+      });
+    },
+    cancel() {
+      if (frameId === null) return;
+      cancelFrame(frameId);
+      frameId = null;
+    },
+    get scheduled() {
+      return frameId !== null;
+    }
+  };
+}
+
 // dashboard/src/panels/chat.ts
 var N23 = N2;
 function planStatus(plan) {
@@ -24476,10 +25076,10 @@ function captureChatScrollAnchor(feed) {
   }
   return { id: null, scrollHeight: feed.scrollHeight, scrollTop: feed.scrollTop };
 }
-function restoreChatScrollAnchor(feed, anchor, done) {
+function restoreChatScrollAnchor(feed, anchor, done, isCurrent = () => true) {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     try {
-      if (!feed || !anchor) return;
+      if (!feed || !feed.isConnected || !anchor || !isCurrent()) return;
       if (anchor.id) {
         const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
         const node = Array.from(feed.querySelectorAll(selector)).find((item) => anchor.kind === "process" ? item.dataset.processAnchorId === anchor.id : item.dataset.msgId === anchor.id);
@@ -24516,7 +25116,9 @@ function upsertToolProgress(items, dash) {
     recommendedAction: dash.recommendedAction || null,
     retryable: dash.retryable === true,
     diagnosticMessage: dash.message || null,
-    repeatFailureBlocked: dash.repeatFailureBlocked === true
+    repeatFailureBlocked: dash.repeatFailureBlocked === true,
+    eventEpoch: dash.eventEpoch ?? null,
+    eventSeq: dash.eventSeq ?? null
   };
   const index = items.findIndex((item) => toolFrameMatches(item, next));
   if (index < 0) return [...items, next];
@@ -24544,9 +25146,15 @@ function upsertActiveTool(items, dash) {
 }
 function projectChatMessagePage(data) {
   const page = projectDashboardMessagePage(data);
+  const timeline = projectChatTimeline(page.messages, page.tools);
   return {
     ...page,
-    messages: mergeSnapshotToolsIntoMessages(page.messages, page.tools)
+    messages: timeline.frames.map((frame) => ({
+      ...frame.message,
+      __timelineSegmentId: frame.segmentId,
+      __timelineEventSeq: frame.eventSeq,
+      __timelineEventEpoch: frame.eventEpoch
+    }))
   };
 }
 function chatDraftKey(workspaceDir, mode) {
@@ -24930,11 +25538,12 @@ function backgroundActionRequestId() {
 }
 function documentHandoffNotice(job) {
   const state = job?.handoff?.state;
+  const lastError = safeTechnicalDisplayText(job?.handoff?.lastError || t4("chat.handoffCheckModel"));
   return {
     queued: { tone: "warn", text: t4("chat.handoffQueued") },
     running: { tone: "warn", text: t4("chat.handoffRunning") },
     waiting_conversation: { tone: "warn", text: t4("chat.handoffWaitingConversation") },
-    needs_user: { tone: "err", text: `${t4("chat.handoffNeedsUser", { error: job?.handoff?.lastError || t4("chat.handoffCheckModel") })}${t4("chat.handoffRedeliverNote")}` },
+    needs_user: { tone: "err", text: `${t4("chat.handoffNeedsUser", { error: lastError })}${t4("chat.handoffRedeliverNote")}` },
     user_paused: { tone: "warn", text: t4("chat.handoffUserPaused") },
     legacy_unassigned: { tone: "warn", text: t4("chat.handoffLegacy") }
   }[state] || null;
@@ -25015,11 +25624,11 @@ var BackgroundJobsWorkbench = N23(function BackgroundJobsWorkbench2({ jobs, pend
     ...Array.isArray(selected?.issues) ? selected.issues : []
   ];
   const genericUserAction = selected?.userAction;
-  const genericUserActionText = typeof genericUserAction === "string" ? genericUserAction : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || t4("chat.userActionNeededFallback");
-  const genericOutcomeSummary = typeof selected?.outcomeSummary === "string" ? selected.outcomeSummary.trim() : "";
+  const genericUserActionText = safeTechnicalDisplayText(typeof genericUserAction === "string" ? genericUserAction : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || t4("chat.userActionNeededFallback"));
+  const genericOutcomeSummary = safeTechnicalDisplayText(selected?.outcomeSummary).trim();
   const genericBlockingReason = selected?.blockingReason;
-  const genericBlockingReasonText = typeof genericBlockingReason === "string" ? genericBlockingReason : genericBlockingReason?.message || genericBlockingReason?.reason || genericBlockingReason?.code || "";
-  const genericBlockingReasonCode = typeof genericBlockingReason === "object" && genericBlockingReason?.code ? String(genericBlockingReason.code) : "";
+  const genericBlockingReasonText = safeTechnicalDisplayText(typeof genericBlockingReason === "string" ? genericBlockingReason : genericBlockingReason?.message || genericBlockingReason?.reason || genericBlockingReason?.code || "").trim();
+  const genericBlockingReasonCode = typeof genericBlockingReason === "object" && genericBlockingReason?.code ? safeTechnicalDisplayText(genericBlockingReason.code) : "";
   const genericUserInputRequestId = genericUserAction?.requestId || selected?.userInputRequest?.requestId || null;
   const selectedDeliveries = deliveries.filter((delivery) => String(delivery?.taskId ?? "") === String(selected?.id ?? ""));
   const selectedDelivery = selectedDeliveries.find((delivery) => delivery?.target === "task-center") || selectedDeliveries.find((delivery) => delivery?.target === "conversation") || selectedDeliveries[0] || null;
@@ -25101,11 +25710,11 @@ ${optionText}` : ""}`, "");
             ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>${t4("chat.userActionTitle")}</strong><div>${genericUserActionText}</div></div>` : null}
             ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.deliveryStateTitle")}</h4>${genericDeliveryStates.map((delivery) => {
     const deliveryState = delivery.deliveryState || {};
-    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || t4("chat.deliveryWaitingConfirm");
-    const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? deliveryState.code : "";
-    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? t4("chat.deliveryConversation") : t4("chat.deliveryTaskCenter")} · ${deliveryState.status || t4("chat.deliveryWaiting")}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
+    const deliveryMessage = safeTechnicalDisplayText(deliveryState.lastError || deliveryState.reason || deliveryState.code || t4("chat.deliveryWaitingConfirm"));
+    const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? safeTechnicalDisplayText(deliveryState.code) : "";
+    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? t4("chat.deliveryConversation") : t4("chat.deliveryTaskCenter")} · ${safeTechnicalDisplayText(deliveryState.status || t4("chat.deliveryWaiting"))}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
   })}</section>` : null}
-            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.warningsTitle")}</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
+             ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.warningsTitle")}</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${safeTechnicalDisplayText(warning?.message || warning?.detail || warning)}</div>`)}</section>` : null}
             <section class="background-task-section"><h4>${t4("chat.artifactsTitle")}</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">${t4("chat.artifactsEmpty")}</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>${t4("chat.previewBtn")}</button>` : null}</li>`)}</ul>`}</section>
             ${selected.coverage ? html4`<section class="background-task-section"><h4>${t4("chat.coverageTitle")}</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
           ` : !isDocument ? html4`
@@ -25137,17 +25746,17 @@ ${optionText}` : ""}`, "");
             ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>${t4("chat.artifactMissingTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactMissingBody")}</div></div>` : null}
             ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.artifactModifiedTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactModifiedBody")}</div></div>` : null}
             ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.completedWarnTitle")}</strong><div style="margin-top:4px">${t4("chat.completedWarnBody")}</div></div>` : null}
-            ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
+            ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${redactSensitiveDisplayText(selected.error)}</div>` : null}
             ${showReviewReasons && (reviewWarnings.length > 0 || modelIssues.length > 0) ? html4`
               <section style="margin-top:18px">
                 <h4 style="font-size:13px;margin:0 0 8px">${t4("chat.reviewReasonsTitle")}</h4>
-                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || t4("chat.reviewWarningFallback")}</div>`)}
+                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${redactSensitiveDisplayText(warning.message || t4("chat.reviewWarningFallback"))}</div>`)}
                 ${modelIssues.map((issue) => html4`
                   <div class="notice warn" style="margin:0 0 8px">
-                    <div><strong>${issue.providerId || t4("chat.unknownProvider")}/${issue.modelId || t4("chat.unknownModel")}</strong> · ${issue.message || t4("chat.modelCallFailed")}</div>
+                     <div><strong>${safeTechnicalDisplayText(issue.providerId || t4("chat.unknownProvider"))}/${safeTechnicalDisplayText(issue.modelId || t4("chat.unknownModel"))}</strong> · ${safeTechnicalDisplayText(issue.message || t4("chat.modelCallFailed"))}</div>
                     <div class="meta" style="margin-top:5px">${t4("chat.affectedBatches", { label: documentIssueBatchLabel(issue) })}</div>
-                    ${issue.action ? html4`<div style="margin-top:5px">${t4("chat.suggestionPrefix")}${issue.action}</div>` : null}
-                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">${t4("chat.technicalInfo")}</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join(t4("chat.techMsgJoin"))}</div></details>` : null}
+                     ${issue.action ? html4`<div style="margin-top:5px">${t4("chat.suggestionPrefix")}${safeTechnicalDisplayText(issue.action)}</div>` : null}
+                    ${redactTechnicalMessages(issue.technicalMessages).length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">${t4("chat.technicalInfo")}</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${redactTechnicalMessages(issue.technicalMessages).join(t4("chat.techMsgJoin"))}</div></details>` : null}
                   </div>
                 `)}
               </section>
@@ -25156,7 +25765,7 @@ ${optionText}` : ""}`, "");
             ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.criteriaTitle")}</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
             ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.modelHistoryTitle")}</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thModel")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thRole")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thResult")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thCalls")}</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? t4("chat.roleFallback") : t4("chat.rolePrimary")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? t4("chat.resultPass") : t4("chat.resultFail")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
             ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.draftPreviewTitle")}${selected.preview?.partial ? t4("chat.draftPreviewPartial") : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? t4("chat.previewTruncated") : ""}</pre></section>` : null}
-            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.recentEventsTitle")}</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
+            ${events.length > 0 ? html4`<details class="background-task-section" style="margin-top:18px"><summary style="cursor:pointer"><h4 style="display:inline;font-size:13px">${t4("chat.recentEventsTitle")}</h4></summary><div style="margin-top:8px">${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${redactSensitiveDisplayText(event.type || "event")}${event.batchId ? ` · ${redactSensitiveDisplayText(event.batchId)}` : ""}${event.error ? ` · ${redactSensitiveDisplayText(event.error)}` : ""}</span></div>`)}</div></details>` : null}
           `}
         </main>
       </div>
@@ -25399,6 +26008,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
+  const [streamingSegments, setStreamingSegments] = d2([]);
   const [reasoningDisplay, setReasoningDisplay] = d2(() => {
     try {
       const stored = localStorage.getItem("visionox-reasoning-display");
@@ -25455,6 +26065,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   const promptDraftKindRef = A2(classifyPromptOptimizationDraft(initialInputRef.current, []).kind);
   const [promptDraftKind, setPromptDraftKind] = d2(promptDraftKindRef.current);
   const promptOptimizing = promptOptimization.status === "requesting";
+  const promptOptimizationCleanupPending = promptOptimization.status === "cleanup" || promptOptimization.status === "cleanup_failed";
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
   const [draftReady, setDraftReady] = d2(false);
@@ -25615,6 +26226,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   const [selectedBackgroundJobId, setSelectedBackgroundJobId] = d2(null);
   const [backgroundJobDetail, setBackgroundJobDetail] = d2(null);
   const backgroundJobDetailRequestRef = A2(0);
+  const backgroundHasActivity = backgroundJobs.some((job) => backgroundJobIsActive(job) || backgroundJobNeedsAttention(job));
   var fileInputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
@@ -25638,17 +26250,21 @@ ${workspaceDir || ""}`;
       }
     }, 250);
   }, [draftKey]);
+  const deletePromptOptimizationRequest = q2(async (requestId) => {
+    const result = await api(`/optimize-prompt/${encodeURIComponent(requestId)}`, {
+      method: "DELETE",
+      timeoutMs: 15e3
+    });
+    if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+    return true;
+  }, []);
   const cancelPromptOptimizationRequest = q2((reason = "cancelled", updateState = true) => {
     const flight = promptOptimizationInFlightRef.current;
     if (!flight) return Promise.resolve(true);
     if (flight.cancelPromise) return flight.cancelPromise;
     flight.cancelRequested = true;
     flight.controller.abort();
-    const cancellationPromise = flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
-      method: "DELETE",
-      timeoutMs: 15e3
-    }).then((result) => {
-      if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+    const cancellationPromise = flight.cancelPromise = deletePromptOptimizationRequest(flight.requestId).then(() => {
       if (flight.cancelError) {
         const cancelError = flight.cancelError;
         flight.cancelError = null;
@@ -25659,14 +26275,14 @@ ${workspaceDir || ""}`;
       return true;
     }).catch((error2) => {
       if (flight.cancelPromise === cancellationPromise) flight.cancelPromise = null;
-      if (updateState && promptOptimizationInFlightRef.current === flight) {
+      if (updateState && !flight.cleanupRequired && promptOptimizationInFlightRef.current === flight) {
         flight.cancelError = t4("chat.optimizeFailed", { msg: error2.message });
         setError(flight.cancelError);
       }
       return false;
     });
     return cancellationPromise;
-  }, []);
+  }, [deletePromptOptimizationRequest]);
   const setChatInput = q2((value, options2 = {}) => {
     const text = String(value ?? "");
     const previous = inputValueRef.current;
@@ -25723,7 +26339,8 @@ ${workspaceDir || ""}`;
       const result = await api("/optimize-prompt", {
         method: "POST",
         body: { prompt: source, requestId, draftRevision: scope.draftRevision },
-        signal: controller.signal
+        signal: controller.signal,
+        timeoutMs: 135e3
       });
       if (promptOptimizationInFlightRef.current?.requestId !== requestId) return;
       if (!promptOptimizationResponseIsCurrent(result, scope, {
@@ -25746,14 +26363,32 @@ ${workspaceDir || ""}`;
         return;
       }
       if (promptOptimizationInFlightRef.current?.requestId !== requestId) return;
+      const failure = describePromptOptimizationFailure(err);
+      if (failure.cancelled) {
+        setPromptOptimization({ status: "cancelled", preview: null, scope: null });
+        return;
+      }
+      const primaryError = failure.messageKey ? t4(failure.messageKey) : t4("chat.optimizeFailed", { msg: err.message });
+      setError(primaryError);
+      if (failure.shouldCleanup) {
+        flight.cleanupRequired = true;
+        setPromptOptimization({ status: "cleanup", preview: null, scope });
+        const cleaned = await cancelPromptOptimizationRequest("failed", false);
+        setPromptOptimization({ status: cleaned ? "failed" : "cleanup_failed", preview: null, scope: null });
+        return;
+      }
       setPromptOptimization({ status: "failed", preview: null, scope: null });
-      setError(t4("chat.optimizeFailed", { msg: err.message }));
     } finally {
       if (!flight.cancelRequested && promptOptimizationInFlightRef.current?.requestId === requestId) {
         promptOptimizationInFlightRef.current = null;
       }
     }
-  }, [busy, slashCommands]);
+  }, [busy, slashCommands, cancelPromptOptimizationRequest]);
+  const retryPromptOptimizationCleanup = q2(async () => {
+    setPromptOptimization({ status: "cleanup", preview: null, scope: null });
+    const cleaned = await cancelPromptOptimizationRequest("failed", false);
+    setPromptOptimization({ status: cleaned ? "failed" : "cleanup_failed", preview: null, scope: null });
+  }, [cancelPromptOptimizationRequest]);
   const applyPromptOptimization = q2(() => {
     const preview = promptOptimization.preview;
     if (!preview) return;
@@ -25873,12 +26508,27 @@ ${workspaceDir || ""}`;
   }, [refreshBackgroundJobs, backgroundJobDetail, backgroundJobs]);
   const closeBackgroundWorkbench = q2(() => {
     backgroundJobDetailRequestRef.current += 1;
+    backgroundWorkbenchRef.current = false;
     setShowBackgroundJobs(false);
     setBackgroundJobDetail(null);
   }, []);
   const openBackgroundWorkbench = q2(async (id = null) => {
+    backgroundWorkbenchRef.current = true;
+    chatFeedGenerationRef.current += 1;
+    earlierLoadTokenRef.current += 1;
+    loadingEarlierRef.current = false;
+    setLoadingEarlierMessages(false);
     const requestId = ++backgroundJobDetailRequestRef.current;
+    const currentFeed = feedRef.current;
+    if (currentFeed) chatScrollSnapshotRef.current = {
+      top: currentFeed.scrollTop,
+      atBottom: currentFeed.scrollHeight - currentFeed.scrollTop - currentFeed.clientHeight < 80,
+      anchor: captureChatScrollAnchor(currentFeed)
+    };
+    topLoadIntentRef.current = false;
+    topLoadArmedRef.current = false;
     setShowBackgroundJobs(true);
+    setFeedMenu(null);
     setShowSkillPicker(false);
     setShowWsPicker(false);
     setShowModelPicker(false);
@@ -25947,13 +26597,10 @@ ${workspaceDir || ""}`;
   }, []);
   y2(() => {
     void refreshBackgroundJobs();
-    if (!showBackgroundJobs && !backgroundJobs.some((job) => job.running)) return;
+    if (!showBackgroundJobs && !backgroundHasActivity) return;
     const id = setInterval(refreshBackgroundJobs, 5e3);
     return () => clearInterval(id);
-  }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
-  y2(() => {
-    if (showBackgroundJobs && !backgroundJobsLoading && !backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job))) closeBackgroundWorkbench();
-  }, [showBackgroundJobs, backgroundJobsLoading, backgroundJobs, closeBackgroundWorkbench]);
+  }, [refreshBackgroundJobs, showBackgroundJobs, backgroundHasActivity]);
   y2(() => {
     const refreshOnFocus = () => {
       void refreshBackgroundJobs();
@@ -26052,9 +26699,23 @@ ${workspaceDir || ""}`;
   }, [busy, turnStartedAt]);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
+  const [feedMountVersion, setFeedMountVersion] = d2(0);
+  const setFeedRef = q2((node) => {
+    if (feedRef.current === node) return;
+    feedRef.current = node;
+    if (node) setFeedMountVersion((version) => version + 1);
+  }, []);
   const autoScrollInFlight = A2(false);
-  const autoScrollTokenRef = A2(0);
-  const autoScrollFrameRef = A2(null);
+  const chatScrollStateRef = A2(createChatScrollState());
+  const scrollSchedulerRef = A2(null);
+  const jumpOwnershipTimerRef = A2(null);
+  const jumpHighlightTimerRef = A2(null);
+  const jumpTokenRef = A2(null);
+  const chatScrollSnapshotRef = A2(null);
+  const chatFeedGenerationRef = A2(0);
+  const earlierLoadTokenRef = A2(0);
+  const backgroundWorkbenchRef = A2(false);
+  const renderedFrameCountRef = A2(0);
   const lastScrollTopRef = A2(0);
   const lastScrollUpIntentAtRef = A2(0);
   const loadingEarlierRef = A2(false);
@@ -26063,42 +26724,40 @@ ${workspaceDir || ""}`;
   const topLoadArmedRef = A2(false);
   const loadEarlierMessagesRef = A2(null);
   const [hasNewBelow, setHasNewBelow] = d2(false);
+  const [newBelowCount, setNewBelowCount] = d2(0);
   const [feedMenu, setFeedMenu] = d2(null);
-  const cancelAutoScroll = q2(() => {
-    autoScrollTokenRef.current += 1;
-    if (autoScrollFrameRef.current !== null) {
-      cancelAnimationFrame(autoScrollFrameRef.current);
-      autoScrollFrameRef.current = null;
+  const scheduleBottomPin = q2(() => {
+    if (!scrollSchedulerRef.current) {
+      scrollSchedulerRef.current = createFrameScheduler({
+        run() {
+          const el = feedRef.current;
+          if (!el || chatScrollStateRef.current.owner !== "auto") return;
+          autoScrollInFlight.current = true;
+          el.scrollTop = el.scrollHeight;
+          lastScrollTopRef.current = el.scrollTop;
+          setTimeout(() => {
+            autoScrollInFlight.current = false;
+          }, 0);
+        }
+      });
     }
-    shouldAutoScroll.current = false;
+    scrollSchedulerRef.current.schedule();
+  }, []);
+  const applyScrollPolicyEvent = q2((event) => {
+    const reduced = reduceChatScrollState(chatScrollStateRef.current, event);
+    chatScrollStateRef.current = reduced.state;
+    shouldAutoScroll.current = reduced.state.owner === "auto";
+    setHasNewBelow(reduced.state.newBelowCount > 0);
+    setNewBelowCount(reduced.state.newBelowCount);
+    if (reduced.effect === "pin-bottom") scheduleBottomPin();
+    return reduced.state;
+  }, [scheduleBottomPin]);
+  const cancelAutoScroll = q2(() => {
+    scrollSchedulerRef.current?.cancel();
+    applyScrollPolicyEvent({ type: "user-scroll-up" });
     autoScrollInFlight.current = false;
     if (feedRef.current) lastScrollTopRef.current = feedRef.current.scrollTop;
-  }, []);
-  const pinFeedToBottom = q2(() => {
-    if (!shouldAutoScroll.current) return;
-    const el = feedRef.current;
-    if (!el) return;
-    const token = autoScrollTokenRef.current + 1;
-    autoScrollTokenRef.current = token;
-    if (autoScrollFrameRef.current !== null) cancelAnimationFrame(autoScrollFrameRef.current);
-    autoScrollInFlight.current = true;
-    const applyScroll = () => {
-      if (token !== autoScrollTokenRef.current || !shouldAutoScroll.current) {
-        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
-        return false;
-      }
-      el.scrollTop = el.scrollHeight;
-      return true;
-    };
-    if (!applyScroll()) return;
-    autoScrollFrameRef.current = requestAnimationFrame(() => {
-      autoScrollFrameRef.current = null;
-      if (!applyScroll()) return;
-      setTimeout(() => {
-        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
-      }, 0);
-    });
-  }, []);
+  }, [applyScrollPolicyEvent]);
   const setAllToolGroupsOpen = (open) => {
     feedRef.current?.querySelectorAll("details.tool-log, details.process-card-details").forEach((node) => {
       node.open = open;
@@ -26113,17 +26772,11 @@ ${workspaceDir || ""}`;
   const preserveVisibleHistoryOnAppend = q2(() => {
     if (!shouldAutoScroll.current) setVisibleMessageCount((count) => count + 1);
   }, []);
-  const allVisibleMessages = streaming ? [
-    ...messages,
-    {
-      id: streaming.id,
-      role: "assistant",
-      text: streaming.text,
-      reasoning: streaming.reasoning,
-      turnReasoning: streaming.turnReasoning,
-      reasoningTurns: streaming.reasoningTurns
-    }
-  ] : messages;
+  const allVisibleMessages = projectChatTimeline(
+    messages,
+    [],
+    streamingSegments.length > 0 ? streamingSegments : streaming ? [{ ...streaming, messageId: streaming.id, segmentId: `${streaming.id}:segment:live` }] : []
+  ).frames.map((frame) => frame.message);
   y2(() => {
     const pending = window.__visionoxPendingChatJump;
     if (pending?.messageId) setJumpMessageId(pending.messageId);
@@ -26144,6 +26797,17 @@ ${workspaceDir || ""}`;
       return;
     }
     cancelAutoScroll();
+    applyScrollPolicyEvent({ type: "jump-start" });
+    if (jumpOwnershipTimerRef.current !== null) {
+      clearTimeout(jumpOwnershipTimerRef.current);
+      jumpOwnershipTimerRef.current = null;
+    }
+    if (jumpHighlightTimerRef.current !== null) {
+      clearTimeout(jumpHighlightTimerRef.current);
+      jumpHighlightTimerRef.current = null;
+    }
+    const jumpToken = String(jumpMessageId);
+    jumpTokenRef.current = jumpToken;
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
     setJumpMessageId(null);
@@ -26153,11 +26817,29 @@ ${workspaceDir || ""}`;
       }
     } catch {
     }
-    const id = setTimeout(() => {
+    jumpOwnershipTimerRef.current = setTimeout(() => {
+      if (jumpTokenRef.current !== jumpToken) return;
+      jumpTokenRef.current = null;
+      jumpOwnershipTimerRef.current = null;
+      const feed = feedRef.current;
+      const atBottom = Boolean(feed && feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80);
+      applyScrollPolicyEvent({ type: "jump-end", atBottom });
+    }, 450);
+    jumpHighlightTimerRef.current = setTimeout(() => {
+      jumpHighlightTimerRef.current = null;
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
-    return () => clearTimeout(id);
-  }, [cancelAutoScroll, jumpMessageId, messages, streaming, visibleMessageCount]);
+  }, [applyScrollPolicyEvent, cancelAutoScroll, jumpMessageId, messages, streaming, streamingSegments, visibleMessageCount]);
+  y2(() => () => {
+    if (jumpOwnershipTimerRef.current !== null) clearTimeout(jumpOwnershipTimerRef.current);
+    if (jumpHighlightTimerRef.current !== null) clearTimeout(jumpHighlightTimerRef.current);
+    jumpOwnershipTimerRef.current = null;
+    jumpHighlightTimerRef.current = null;
+    if (jumpTokenRef.current !== null) {
+      jumpTokenRef.current = null;
+      applyScrollPolicyEvent({ type: "jump-end", atBottom: false });
+    }
+  }, [applyScrollPolicyEvent]);
   y2(() => {
     let cancelled = false;
     if (streaming) return () => {
@@ -26237,7 +26919,7 @@ ${workspaceDir || ""}`;
     return () => {
       cancelled = true;
     };
-  }, [messages, streaming, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
+  }, [messages, streaming, streamingSegments, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
   y2(() => {
     let cancelled = false;
     const requestGeneration = canonicalProjectionGenerationRef.current;
@@ -26297,12 +26979,19 @@ ${workspaceDir || ""}`;
     };
   }, []);
   const streamBufRef = A2(null);
+  const streamFullTextRef = A2("");
+  const streamFullReasoningRef = A2("");
+  const streamSegmentStartRef = A2(0);
+  const streamReasoningStartRef = A2(0);
+  const streamSegmentCounterRef = A2(0);
   const streamRafRef = A2(null);
   const resyncingEventsRef = A2(false);
   const bufferedDashboardEventsRef = A2([]);
   const flushStreaming = q2(() => {
     streamRafRef.current = null;
-    if (streamBufRef.current) setStreaming(streamBufRef.current);
+    if (!streamBufRef.current) return;
+    setStreaming(streamBufRef.current);
+    setStreamingSegments([streamBufRef.current]);
   }, []);
   const cancelStreamingRaf = q2(() => {
     if (streamRafRef.current !== null) {
@@ -26310,6 +26999,12 @@ ${workspaceDir || ""}`;
       streamRafRef.current = null;
     }
     streamBufRef.current = null;
+    streamFullTextRef.current = "";
+    streamFullReasoningRef.current = "";
+    streamSegmentStartRef.current = 0;
+    streamReasoningStartRef.current = 0;
+    streamSegmentCounterRef.current = 0;
+    setStreamingSegments([]);
   }, []);
   const refetchCanonicalState = q2(async () => {
     const requestGeneration = canonicalProjectionGenerationRef.current;
@@ -26399,7 +27094,13 @@ ${workspaceDir || ""}`;
         return;
       }
       if (dash.kind === "user") {
-        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        const storedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        const projectedMessage = storedMessage ? {
+          ...storedMessage,
+          turnId: dash.turnId ?? storedMessage.turnId ?? null,
+          eventEpoch: dash.eventEpoch ?? storedMessage.eventEpoch ?? null,
+          eventSeq: dash.eventSeq ?? storedMessage.eventSeq ?? null
+        } : null;
         if (!projectedMessage) return;
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("running");
@@ -26423,13 +27124,21 @@ ${workspaceDir || ""}`;
       if (dash.kind === "assistant_delta") {
         if (dash.streamReset === true) {
           cancelStreamingRaf();
-          streamBufRef.current = null;
         }
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
         const reducedStream = reduced.state.streamOffsets[String(dash.id ?? dash.messageId ?? "")];
         const reasoningDelta = String(dash.reasoningDelta ?? "");
+        const contentDelta = String(dash.contentDelta ?? "");
+        if (!baseId && !streamBufRef.current && streamFullTextRef.current === "") {
+          streamSegmentStartRef.current = 0;
+          streamReasoningStartRef.current = 0;
+        }
+        const fullText = reducedStream?.contentText !== void 0 ? String(reducedStream.contentText) : streamFullTextRef.current + contentDelta;
+        const fullReasoning = reducedStream?.reasoningText !== void 0 ? String(reducedStream.reasoningText) : streamFullReasoningRef.current + reasoningDelta;
+        streamFullTextRef.current = fullText;
+        streamFullReasoningRef.current = fullReasoning;
         let turnReasoning = baseId?.turnReasoning ?? "";
         let reasoningTurns = baseId?.reasoningTurns ?? 0;
         let reasoningStale = baseId?.reasoningStale === true;
@@ -26442,10 +27151,19 @@ ${workspaceDir || ""}`;
           turnReasoning += reasoningDelta;
           reasoningStale = false;
         }
+        const segmentIndex = baseId?.segmentIndex ?? ++streamSegmentCounterRef.current;
+        const segmentId = baseId?.segmentId ?? `${dash.id}:segment:${segmentIndex}`;
         streamBufRef.current = {
           id: dash.id,
-          text: reducedStream?.contentText !== void 0 ? reducedStream.contentText : (baseId?.text ?? "") + (dash.contentDelta ?? ""),
-          reasoning: reducedStream?.reasoningText !== void 0 ? reducedStream.reasoningText : (baseId?.reasoning ?? "") + reasoningDelta,
+          messageId: dash.id,
+          role: "assistant",
+          turnId: dash.turnId ?? null,
+          eventEpoch: dash.eventEpoch ?? null,
+          startEventSeq: baseId?.startEventSeq ?? dash.eventSeq ?? null,
+          segmentId,
+          segmentIndex,
+          text: fullText.slice(streamSegmentStartRef.current),
+          reasoning: fullReasoning.slice(streamReasoningStartRef.current),
           turnReasoning,
           reasoningTurns,
           reasoningStale
@@ -26463,17 +27181,24 @@ ${workspaceDir || ""}`;
         if (!projectedMessage) return;
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
+        const finalFullText = String(projectedMessage.text ?? "");
+        const finalSegmentText = streamSegmentStartRef.current > 0 && finalFullText.length >= streamSegmentStartRef.current ? finalFullText.slice(streamSegmentStartRef.current) : finalFullText;
+        const nextMessage = {
+          ...projectedMessage,
+          text: finalSegmentText || completedStream?.text || "",
+          reasoning: projectedMessage.reasoning ?? completedStream?.reasoning,
+          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
+          segmentId: completedStream?.segmentId,
+          eventEpoch: completedStream?.eventEpoch ?? dash.eventEpoch ?? projectedMessage.eventEpoch ?? null,
+          eventSeq: completedStream?.startEventSeq ?? dash.eventSeq ?? projectedMessage.eventSeq ?? null,
+          __timelineSegmentId: completedStream?.segmentId
+        };
         if (closesExecution) {
           cancelStreamingRaf();
           setStreaming(null);
           setActiveTools([]);
         }
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
-        const nextMessage = {
-          ...projectedMessage,
-          reasoning: projectedMessage.reasoning ?? completedStream?.reasoning,
-          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0
-        };
         let inserted = false;
         setMessages((prev) => {
           const index = prev.findIndex((item) => String(item.id || "") === String(dash.id || ""));
@@ -26497,7 +27222,26 @@ ${workspaceDir || ""}`;
         const projectedTool = Object.values(reduced.state.tools).find((tool) => toolFrameMatches(tool, dash));
         if (!projectedTool) return;
         if (!dash.status || dash.status === "queued") preserveVisibleHistoryOnAppend();
-        if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
+        if (streamBufRef.current) {
+          if (streamRafRef.current !== null) {
+            clearTimeout(streamRafRef.current);
+            streamRafRef.current = null;
+          }
+          const frozenSegment = {
+            ...streamBufRef.current,
+            id: `${streamBufRef.current.id}:${streamBufRef.current.segmentId}`,
+            assistantMessageId: streamBufRef.current.id,
+            streaming: false,
+            reasoningStale: true,
+            __timelineSegmentId: streamBufRef.current.segmentId
+          };
+          setMessages((current) => current.some((item) => item.__timelineSegmentId === frozenSegment.__timelineSegmentId) ? current : [...current, frozenSegment]);
+          streamSegmentStartRef.current = streamFullTextRef.current.length;
+          streamReasoningStartRef.current = streamFullReasoningRef.current.length;
+          streamBufRef.current = null;
+          setStreaming(null);
+          setStreamingSegments([]);
+        }
         setActiveTools((current) => upsertActiveTool(current, projectedTool));
         setMessages((current) => upsertToolProgress(current, projectedTool));
         return;
@@ -26559,7 +27303,7 @@ ${workspaceDir || ""}`;
         setShowRetrievalSources(false);
         api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode))).catch(() => {
         });
-        const resetMessages = Object.values(reduced.state.messages).map((message) => ({
+        const resetMessages = orderedDashboardMessages(reduced.state).map((message) => ({
           ...message,
           id: message.id || `hist-${Math.random()}`,
           text: message.text || ""
@@ -26996,7 +27740,7 @@ ${workspaceDir || ""}`;
           reason: res.completion.error ?? t4("chat.lastRunFailed")
         };
       }
-      shouldAutoScroll.current = true;
+      applyScrollPolicyEvent({ type: "user-reached-bottom" });
       return { ok: true };
     } catch (err) {
       if (err?.status === 409) {
@@ -27011,7 +27755,7 @@ ${workspaceDir || ""}`;
       }
       return { ok: false, reason: err.message };
     }
-  }, [resolveSkillMention]);
+  }, [applyScrollPolicyEvent, resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
     const storedItem = {
@@ -27209,6 +27953,7 @@ ${workspaceDir || ""}`;
   }, [busy, queuePaused, queuedPrompts, queuePumpTick, submitPromptPayload, persistQueuedPrompt, deletePersistedQueuedPrompt]);
   const send = q2(async () => {
     if (sendInFlightRef.current) return;
+    if (promptOptimizationCleanupPending) return;
     const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
@@ -27237,7 +27982,7 @@ ${workspaceDir || ""}`;
         setChatInput("");
         pendingImagesRef.current = [];
         setPendingImages([]);
-        shouldAutoScroll.current = true;
+        applyScrollPolicyEvent({ type: "user-reached-bottom" });
         removeChatDraft(draftKey);
       } else if (result.busy) {
         if (await enqueuePrompt(text, images)) {
@@ -27256,7 +28001,7 @@ ${workspaceDir || ""}`;
     } finally {
       sendInFlightRef.current = false;
     }
-  }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest]);
+  }, [applyScrollPolicyEvent, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest, promptOptimizationCleanupPending]);
   const saveSkillCredential = q2(async () => {
     if (!skillCredentialSetup || !skillCredentialValue.trim()) return;
     setSkillCredentialSaving(true);
@@ -27283,7 +28028,7 @@ ${workspaceDir || ""}`;
           setPendingImages([]);
           removeChatDraft(draftKey);
         }
-        shouldAutoScroll.current = true;
+        applyScrollPolicyEvent({ type: "user-reached-bottom" });
       } else {
         setError(result.reason ?? "rejected");
       }
@@ -27292,7 +28037,7 @@ ${workspaceDir || ""}`;
     } finally {
       setSkillCredentialSaving(false);
     }
-  }, [skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
+  }, [applyScrollPolicyEvent, skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
   const resumeIncompletePlan = q2(async () => {
     if (busy || !planContinuation) return;
     const paused = planContinuation;
@@ -27354,6 +28099,7 @@ ${workspaceDir || ""}`;
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
       topLoadIntentRef.current = false;
+      cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -27367,14 +28113,14 @@ ${workspaceDir || ""}`;
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      shouldAutoScroll.current = true;
+      applyScrollPolicyEvent({ type: "user-reached-bottom" });
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput]);
+  }, [applyScrollPolicyEvent, busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput, cancelStreamingRaf]);
   const changeIndexRetrievalMode = q2(async (event) => {
     const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
@@ -27411,6 +28157,7 @@ ${workspaceDir || ""}`;
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
       topLoadIntentRef.current = false;
+      cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -27424,14 +28171,14 @@ ${workspaceDir || ""}`;
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      shouldAutoScroll.current = true;
+      applyScrollPolicyEvent({ type: "user-reached-bottom" });
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [draftKey, pendingImages, confirmQueuedReset, setChatInput]);
+  }, [applyScrollPolicyEvent, draftKey, pendingImages, confirmQueuedReset, setChatInput, cancelStreamingRaf]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -27802,13 +28549,58 @@ ${workspaceDir || ""}`;
   y2(() => {
     if (bootError) return;
     const el = feedRef.current;
-    if (!el) return;
+    if (!el || !el.isConnected) return;
     topLoadArmedRef.current = false;
     topLoadIntentRef.current = false;
     scrollbarDraggingRef.current = false;
     lastScrollTopRef.current = el.scrollTop;
+    const savedScroll = chatScrollSnapshotRef.current;
+    chatScrollSnapshotRef.current = null;
+    renderedFrameCountRef.current = 0;
+    if (savedScroll) {
+      const restoreGeneration = chatFeedGenerationRef.current;
+      const restore = (remainingFrames) => {
+        const current = feedRef.current;
+        if (restoreGeneration !== chatFeedGenerationRef.current) return;
+        if (!current) {
+          if (remainingFrames > 0) requestAnimationFrame(() => restore(remainingFrames - 1));
+          return;
+        }
+        if (!savedScroll.atBottom) {
+          scrollSchedulerRef.current?.cancel();
+          applyScrollPolicyEvent({ type: "user-scroll-up" });
+          const anchor = savedScroll.anchor;
+          if (anchor?.id) {
+            const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
+            const node = Array.from(current.querySelectorAll(selector)).find((item) => anchor.kind === "process" ? item.dataset.processAnchorId === anchor.id : item.dataset.msgId === anchor.id);
+            if (node) {
+              const feedTop = current.getBoundingClientRect().top;
+              const nodeTop = node.getBoundingClientRect().top - feedTop;
+              const delta = nodeTop - anchor.offset;
+              const beforeTop = current.scrollTop;
+              current.scrollTop = beforeTop + delta;
+              lastScrollTopRef.current = current.scrollTop;
+              if (remainingFrames > 0) {
+                requestAnimationFrame(() => restore(remainingFrames - 1));
+              }
+              return;
+            }
+            if (remainingFrames > 0) {
+              requestAnimationFrame(() => restore(remainingFrames - 1));
+              return;
+            }
+          }
+        }
+        const maxTop = Math.max(0, current.scrollHeight - current.clientHeight);
+        current.scrollTop = savedScroll.atBottom ? maxTop : Math.min(savedScroll.top, maxTop);
+        lastScrollTopRef.current = current.scrollTop;
+      };
+      requestAnimationFrame(() => restore(3));
+    } else if (chatScrollStateRef.current.owner === "auto") {
+      scheduleBottomPin();
+    }
     const maybeLoadEarlier = () => {
-      if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
+      if (backgroundWorkbenchRef.current || !el.isConnected || el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
       topLoadArmedRef.current = false;
       topLoadIntentRef.current = false;
       void loadEarlierMessagesRef.current?.();
@@ -27836,8 +28628,8 @@ ${workspaceDir || ""}`;
         lastScrollTopRef.current = currentTop;
         return;
       }
-      if (distFromBottom < 80 && !userScrollIntentActive) {
-        shouldAutoScroll.current = true;
+      if (distFromBottom < 80 && !userScrollIntentActive && chatScrollStateRef.current.owner !== "auto") {
+        applyScrollPolicyEvent({ type: "user-reached-bottom" });
       }
       lastScrollTopRef.current = currentTop;
       maybeLoadEarlier();
@@ -27887,6 +28679,12 @@ ${workspaceDir || ""}`;
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
+      const current = feedRef.current || el;
+      if (current && !chatScrollSnapshotRef.current && (!current.isConnected || backgroundWorkbenchRef.current)) chatScrollSnapshotRef.current = {
+        top: current.scrollTop,
+        atBottom: current.scrollHeight - current.scrollTop - current.clientHeight < 80,
+        anchor: captureChatScrollAnchor(current)
+      };
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onPointerDown);
@@ -27894,25 +28692,14 @@ ${workspaceDir || ""}`;
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [bootError, cancelAutoScroll, showBackgroundJobs]);
+  }, [applyScrollPolicyEvent, bootError, cancelAutoScroll, feedMountVersion, scheduleBottomPin, showBackgroundJobs]);
   y2(() => {
-    if (!shouldAutoScroll.current) {
-      if (messages.length > 0) setHasNewBelow(true);
-      return;
-    }
-    setHasNewBelow(false);
-    pinFeedToBottom();
-  }, [messages, streaming, pinFeedToBottom]);
-  y2(() => {
-    const el = feedRef.current;
-    if (!el || typeof MutationObserver !== "function") return;
-    const observer = new MutationObserver(() => {
-      if (!shouldAutoScroll.current) return;
-      pinFeedToBottom();
-    });
-    observer.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
-  }, [pinFeedToBottom]);
+    const nextCount = allVisibleMessages.length;
+    const added = Math.max(0, nextCount - renderedFrameCountRef.current);
+    renderedFrameCountRef.current = nextCount;
+    applyScrollPolicyEvent({ type: "content-growth", added });
+  }, [applyScrollPolicyEvent, messages, streaming, streamingSegments]);
+  y2(() => () => scrollSchedulerRef.current?.cancel(), []);
   y2(() => {
     if (!feedMenu) return;
     const close = () => setFeedMenu(null);
@@ -28250,18 +29037,28 @@ ${workspaceDir || ""}`;
   }, []);
   const dismissArtifacts = q2(() => setFileArtifactsDismissed(true), []);
   const loadEarlierMessages = q2(async () => {
-    if (loadingEarlierRef.current) return;
+    if (loadingEarlierRef.current || backgroundWorkbenchRef.current) return;
     const feed = feedRef.current;
+    if (!feed || !feed.isConnected) return;
+    const feedGeneration = chatFeedGenerationRef.current;
+    const loadToken = ++earlierLoadTokenRef.current;
+    const feedIsCurrent = () => !backgroundWorkbenchRef.current && feedGeneration === chatFeedGenerationRef.current && loadToken === earlierLoadTokenRef.current && feed.isConnected && feedRef.current === feed;
     const anchor = captureChatScrollAnchor(feed);
     const finishLoading = () => {
+      if (loadToken !== earlierLoadTokenRef.current) return;
       loadingEarlierRef.current = false;
       setLoadingEarlierMessages(false);
+      if (feedIsCurrent()) {
+        const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+        applyScrollPolicyEvent({ type: "anchor-end", atBottom });
+      }
     };
     if (visibleMessageCount < messages.length) {
+      applyScrollPolicyEvent({ type: "anchor-start" });
       loadingEarlierRef.current = true;
       setLoadingEarlierMessages(true);
       setVisibleMessageCount((count) => Math.min(messages.length, count + CHAT_RENDER_STEP));
-      restoreChatScrollAnchor(feed, anchor, finishLoading);
+      restoreChatScrollAnchor(feed, anchor, finishLoading, feedIsCurrent);
       return;
     }
     if (canonicalMessageCountRef.current >= totalMessages) return;
@@ -28274,7 +29071,8 @@ ${workspaceDir || ""}`;
       requestSessionId,
       activeSessionId: activeConversationIdRef.current,
       responseSessionId
-    });
+    }) && feedIsCurrent();
+    applyScrollPolicyEvent({ type: "anchor-start" });
     loadingEarlierRef.current = true;
     setLoadingEarlierMessages(true);
     try {
@@ -28291,12 +29089,12 @@ ${workspaceDir || ""}`;
         setVisibleMessageCount((count) => count + Math.min(CHAT_RENDER_STEP, earlier.length));
       }
       setTotalMessages(page.totalMessages);
-      restoreChatScrollAnchor(feed, anchor, finishLoading);
+      restoreChatScrollAnchor(feed, anchor, finishLoading, feedIsCurrent);
     } catch (err) {
-      setError(err.message);
+      if (loadToken === earlierLoadTokenRef.current && !backgroundWorkbenchRef.current) setError(err.message);
       finishLoading();
     }
-  }, [visibleMessageCount, messages, totalMessages]);
+  }, [applyScrollPolicyEvent, visibleMessageCount, messages, totalMessages]);
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
@@ -28398,11 +29196,12 @@ ${workspaceDir || ""}`;
             totalMessages=${totalMessages}
             canonicalMessageCount=${canonicalMessageCountRef.current}
             streaming=${streaming}
+            streamingSegments=${streamingSegments}
             taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
             reasoningDisplay=${reasoningDisplay}
             processDisplay=${processDisplay}
-            innerRef=${feedRef}
+            innerRef=${setFeedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
             loadingEarlier=${loadingEarlierMessages}
@@ -28414,17 +29213,12 @@ ${workspaceDir || ""}`;
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
           ${!showBackgroundJobs && hasNewBelow ? html4`
-            <button type="button" class="chat-new-messages-pill" onClick=${() => {
-    shouldAutoScroll.current = true;
-    setHasNewBelow(false);
-    pinFeedToBottom();
-  }}>${t4("chat.newMessagesBelow")}</button>
+            <button type="button" class="chat-new-messages-pill" onClick=${() => applyScrollPolicyEvent({ type: "user-reached-bottom" })}>${t4("chat.newMessagesBelowCount", { count: newBelowCount })}</button>
           ` : null}
-          ${feedMenu ? html4`
+          ${!showBackgroundJobs && feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => {
-    shouldAutoScroll.current = true;
-    setHasNewBelow(false);
+    applyScrollPolicyEvent({ type: "user-reached-bottom" });
     void resyncRunnerRef.current?.();
   })}>${t4("chat.feedRefresh")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
@@ -28569,6 +29363,18 @@ ${workspaceDir || ""}`;
                 <button type="button" onClick=${() => cancelPromptOptimizationRequest("cancelled")}>${t4("chat.optimizeCancel")}</button>
               </div>
             ` : null}
+            ${promptOptimization.status === "cleanup" ? html4`
+              <div class="prompt-optimization-status prompt-optimization-cleanup" role="status" aria-live="polite">
+                <span class="composer-optimize-spin"></span>
+                <span>${t4("chat.optimizeCleanupPending")}</span>
+              </div>
+            ` : null}
+            ${promptOptimization.status === "cleanup_failed" ? html4`
+              <div class="prompt-optimization-status prompt-optimization-cleanup" role="status" aria-live="polite">
+                <span>${t4("chat.optimizeCleanupFailed")}</span>
+                <button type="button" onClick=${retryPromptOptimizationCleanup}>${t4("chat.optimizeCleanupRetry")}</button>
+              </div>
+            ` : null}
             ${promptOptimization.status === "preview" && promptOptimization.preview ? html4`
               <div class="prompt-optimization-preview" role="region" aria-label=${t4("chat.optimizePreviewTitle")}>
                 <div class="prompt-optimization-head">
@@ -28630,13 +29436,17 @@ ${workspaceDir || ""}`;
     setShowRetrievalSources(false);
     if (next) void loadWorkspaceOptions();
   }}><${IconWorkspace} /> ${t4("chat.chipWorkspace")}</button>
-              ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? html4`
-                <button type="button" class="composer-chip-ghost has-activity" title=${t4("chat.bgChipTitle", { running: backgroundJobs.filter((job) => job.running).length, attention: backgroundJobs.filter(backgroundJobNeedsAttention).length })} aria-expanded=${showBackgroundJobs} onClick=${() => {
+              <button
+                type="button"
+                class=${`composer-chip-ghost ${backgroundHasActivity ? "has-activity" : ""}`}
+                title=${t4("chat.bgChipTitle", { total: backgroundJobs.length, running: backgroundJobs.filter(backgroundJobIsActive).length, attention: backgroundJobs.filter(backgroundJobNeedsAttention).length })}
+                aria-expanded=${showBackgroundJobs}
+                onClick=${() => {
     setShowPlusMenu(false);
     setShowIndexPicker(false);
     showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench();
-  }}><${IconJobs} /> ${t4("chat.chipJobs")} <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span></button>
-              ` : null}
+  }}
+              ><${IconJobs} /> ${t4("chat.chipJobs")}${backgroundHasActivity ? html4`<span class="n">${backgroundJobs.filter((job) => backgroundJobIsActive(job) || backgroundJobNeedsAttention(job)).length}</span>` : null}</button>
               <span style="position:relative;display:inline-flex">
                 <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title=${t4("chat.indexChipTitle")} onClick=${() => {
     const next = !showIndexPicker;
@@ -28897,7 +29707,7 @@ ${workspaceDir || ""}`;
                   <button
                     type="button"
                     class=${`composer-send composer-send-${sendMode}`}
-                    disabled=${sendMode === "idle"}
+                    disabled=${sendMode === "idle" || sendMode !== "stop" && promptOptimizationCleanupPending}
                     title=${sendLabel}
                     aria-label=${sendLabel}
                     onClick=${() => {
@@ -28931,19 +29741,16 @@ ${workspaceDir || ""}`;
     </div>
   `;
 }
-var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.length, canonicalMessageCount = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.length, canonicalMessageCount = messages.length, streaming, streamingSegments = [], taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
-  const allMessages = streaming ? [
-    ...messages,
-    {
-      id: streaming.id,
-      role: "assistant",
-      text: streaming.text,
-      reasoning: streaming.reasoning,
-      turnReasoning: streaming.turnReasoning,
-      reasoningTurns: streaming.reasoningTurns
-    }
-  ] : messages;
+  const transientSegments = streamingSegments.length > 0 ? streamingSegments : streaming ? [{ ...streaming, messageId: streaming.id, segmentId: `${streaming.id}:segment:live` }] : [];
+  const timeline = projectChatTimeline(messages, [], transientSegments);
+  const allMessages = timeline.frames.map((frame) => ({
+    ...frame.message,
+    __timelineSegmentId: frame.segmentId,
+    __timelineStreaming: frame.streaming,
+    __timelineEventSeq: frame.eventSeq
+  }));
   const hiddenCount = Math.max(0, allMessages.length - visibleCount);
   const remoteHiddenCount = Math.max(0, totalMessages - canonicalMessageCount);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
@@ -28955,11 +29762,11 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
   }));
   const renderChatMessage = (m3, globalIndex) => html4`
                 <${ChatMessage}
-                  key=${m3.id}
+                  key=${m3.__timelineSegmentId || m3.id}
                   msg=${m3}
                   index=${globalIndex}
                   searchMatch=${globalIndex === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
-                  streaming=${Boolean(streaming && streaming.id === m3.id)}
+                  streaming=${m3.__timelineStreaming === true}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
                   reasoningExpanded=${reasoningExpanded}
@@ -28984,7 +29791,7 @@ var ChatFeed = N23(function ChatFeed2({ messages, totalMessages = messages.lengt
         return renderChatMessage(unit.msg, unit.index);
       }
       const hitIds = unit.items.filter((item) => item.index === searchMatchIndex || Boolean(highlightMessageId && item.msg.id === highlightMessageId)).map((item) => String(item.msg.id));
-      const followedByAnswer = renderUnits.slice(unitIndex + 1).some((u3) => u3.kind === "msg" && u3.msg.role === "assistant" && (u3.msg.text ?? "").trim());
+      const followedByAnswer = renderUnits.slice(unitIndex + 1).some((u3) => u3.kind === "msg" && u3.msg.role === "assistant" && assistantHasAuthoritativeFinalEvidence(u3.msg));
       return html4`<${ToolGroup}
                     key=${unit.id}
                     items=${unit.items.map((item) => item.msg)}
@@ -31025,6 +31832,102 @@ function PermissionsPanel() {
   `;
 }
 
+// dashboard/src/lib/knowledge-documents.ts
+function knowledgeRequestHeaders(options2) {
+  const headers = {};
+  if (options2.workspaceFingerprint) headers["X-Visionox-Workspace-Fingerprint"] = options2.workspaceFingerprint;
+  if (options2.requestId) headers["X-Visionox-Request-Id"] = options2.requestId;
+  return headers;
+}
+function listKnowledgeDocuments(options2 = {}) {
+  return api("/knowledge/documents", { headers: knowledgeRequestHeaders(options2), signal: options2.signal });
+}
+function deleteKnowledgeDocument(documentId, options2 = {}) {
+  return api(`/knowledge/documents/${encodeURIComponent(documentId)}`, {
+    method: "DELETE",
+    headers: knowledgeRequestHeaders(options2),
+    signal: options2.signal
+  });
+}
+function reindexKnowledgeDocuments(options2 = {}) {
+  return api("/knowledge/documents/reindex", {
+    method: "POST",
+    headers: knowledgeRequestHeaders(options2),
+    body: {},
+    signal: options2.signal
+  });
+}
+function getKnowledgeReindexJob(jobId, options2 = {}) {
+  return api(`/knowledge/documents/reindex/${encodeURIComponent(jobId)}`, {
+    headers: knowledgeRequestHeaders(options2),
+    signal: options2.signal
+  });
+}
+function cancelKnowledgeReindexJob(jobId, options2 = {}) {
+  return api(`/knowledge/documents/reindex/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+    headers: knowledgeRequestHeaders(options2),
+    signal: options2.signal
+  });
+}
+function uploadError(status, statusText, parsed) {
+  const message = String(parsed?.message ?? parsed?.error ?? `${status} ${statusText}`);
+  const error = new Error(message);
+  error.status = status;
+  error.body = parsed;
+  error.code = typeof parsed?.code === "string" ? parsed.code : void 0;
+  error.title = typeof parsed?.title === "string" ? parsed.title : void 0;
+  error.retryable = typeof parsed?.retryable === "boolean" ? parsed.retryable : void 0;
+  error.action = typeof parsed?.action === "string" ? parsed.action : void 0;
+  error.details = parsed?.details && typeof parsed.details === "object" ? parsed.details : void 0;
+  return error;
+}
+async function uploadKnowledgeDocument(file, options2 = {}) {
+  const url = `/api/knowledge/documents?name=${encodeURIComponent(file.name)}&token=${TOKEN}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "X-Reasonix-Token": TOKEN,
+      "Content-Type": "application/octet-stream",
+      ...knowledgeRequestHeaders(options2)
+    },
+    body: file,
+    signal: options2.signal
+  });
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = { error: text };
+  }
+  if (!res.ok) throw uploadError(res.status, res.statusText, parsed);
+  return parsed;
+}
+
+// dashboard/src/lib/knowledge-documents-coordination.ts
+function isKnowledgeResponseCurrent(scope) {
+  if (!scope.requestId || scope.requestId !== scope.latestRequestId) return false;
+  if (!scope.requestWorkspaceFingerprint) return Boolean(scope.responseWorkspaceFingerprint);
+  return scope.currentWorkspaceFingerprint === scope.requestWorkspaceFingerprint && scope.responseWorkspaceFingerprint === scope.requestWorkspaceFingerprint;
+}
+function knowledgeDocumentStatusKey(status) {
+  switch (status) {
+    case "indexed":
+      return "knowledgeDocsStatusIndexed";
+    case "indexing":
+      return "knowledgeDocsStatusIndexing";
+    case "failed":
+      return "knowledgeDocsStatusFailed";
+    case "deleted_pending_index":
+      return "knowledgeDocsStatusDeleted";
+    case "ready":
+    case "stale":
+    default:
+      return "knowledgeDocsStatusPending";
+  }
+}
+
 // dashboard/src/panels/semantic.ts
 var N27 = N2;
 function SemanticPanel() {
@@ -31393,6 +32296,8 @@ function SemanticPanel() {
               </div>
             ` : null}
 
+        <${KnowledgeDocsCard} />
+
         ${job ? html4`
               ${sectionH3(t4("semantic.job"))}
               <${SemanticJobView} job=${job} running=${running} />
@@ -31722,6 +32627,304 @@ function SemanticExcludesCard() {
       </div>
 
       ${preview ? html4`<div style="margin-top:10px"><${ExcludesPreview} preview=${preview} /></div>` : null}
+    </div>
+  `;
+}
+function KnowledgeDocsCard() {
+  useLang();
+  const [data, setData] = d2(null);
+  const [error, setError] = d2(null);
+  const [busy, setBusy] = d2(false);
+  const [uploading, setUploading] = d2(false);
+  const [progress, setProgress] = d2(null);
+  const [uploadResults, setUploadResults] = d2([]);
+  const [dragging, setDragging] = d2(false);
+  const fileInputRef = A2(null);
+  const mountedRef = A2(true);
+  const requestSequenceRef = A2(0);
+  const latestListRequestRef = A2(null);
+  const latestMutationRequestRef = A2(null);
+  const listControllerRef = A2(null);
+  const mutationControllersRef = A2(/* @__PURE__ */ new Set());
+  const workspaceFingerprintRef = A2(null);
+  const nextRequestId = () => `knowledge-${++requestSequenceRef.current}`;
+  const abortMutations = () => {
+    for (const controller of mutationControllersRef.current) controller.abort();
+    mutationControllersRef.current.clear();
+  };
+  const responseIsCurrent = (scope, responseWorkspaceFingerprint) => isKnowledgeResponseCurrent({
+    requestId: scope.requestId,
+    latestRequestId: scope.kind === "list" ? latestListRequestRef.current : latestMutationRequestRef.current,
+    requestWorkspaceFingerprint: scope.workspaceFingerprint,
+    currentWorkspaceFingerprint: workspaceFingerprintRef.current,
+    responseWorkspaceFingerprint
+  });
+  const load = q2(async () => {
+    const requestId = nextRequestId();
+    latestListRequestRef.current = requestId;
+    listControllerRef.current?.abort();
+    const controller = new AbortController();
+    listControllerRef.current = controller;
+    try {
+      const requestWorkspaceFingerprint = workspaceFingerprintRef.current;
+      const r3 = await listKnowledgeDocuments({
+        signal: controller.signal,
+        workspaceFingerprint: requestWorkspaceFingerprint,
+        requestId
+      });
+      const scope = { kind: "list", requestId, workspaceFingerprint: requestWorkspaceFingerprint };
+      if (!mountedRef.current || !responseIsCurrent(scope, r3.workspaceFingerprint)) return;
+      if (workspaceFingerprintRef.current && workspaceFingerprintRef.current !== r3.workspaceFingerprint) {
+        abortMutations();
+        setUploading(false);
+        setProgress(null);
+        setUploadResults([]);
+      }
+      workspaceFingerprintRef.current = r3.workspaceFingerprint;
+      setData(r3);
+      setError(null);
+    } catch (err) {
+      if (controller.signal.aborted || err?.name === "AbortError") return;
+      if (!mountedRef.current || latestListRequestRef.current !== requestId) return;
+      setError(err.message);
+    }
+  }, []);
+  y2(() => {
+    return () => {
+      mountedRef.current = false;
+      listControllerRef.current?.abort();
+      abortMutations();
+    };
+  }, []);
+  y2(() => {
+    void load();
+    const polling = setInterval(load, data?.activeJob ? 1200 : 5e3);
+    return () => clearInterval(polling);
+  }, [load, data?.activeJob?.jobId, data?.activeJob?.status]);
+  const uploadFiles = q2(
+    async (fileList) => {
+      const files = Array.from(fileList ?? []);
+      if (files.length === 0 || uploading) return;
+      const workspaceFingerprint = workspaceFingerprintRef.current;
+      if (!workspaceFingerprint) return;
+      const requestId = nextRequestId();
+      latestMutationRequestRef.current = requestId;
+      const controller = new AbortController();
+      mutationControllersRef.current.add(controller);
+      const scope = { kind: "mutation", requestId, workspaceFingerprint };
+      setUploading(true);
+      setError(null);
+      setProgress({ done: 0, total: files.length });
+      const results = files.map((file, index) => ({ id: `${requestId}-${index}`, file, status: "queued", error: null }));
+      setUploadResults(results);
+      let succeeded = 0;
+      let completed = 0;
+      try {
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          if (controller.signal.aborted) break;
+          setUploadResults((current) => current.map((item) => item.id === results[index].id ? { ...item, status: "uploading" } : item));
+          try {
+            const uploaded = await uploadKnowledgeDocument(file, {
+              signal: controller.signal,
+              workspaceFingerprint,
+              requestId: `${requestId}-${index}`
+            });
+            if (!responseIsCurrent(scope, uploaded.workspaceFingerprint)) break;
+            succeeded += 1;
+            setUploadResults((current) => current.map((item) => item.id === results[index].id ? { ...item, status: "succeeded", result: uploaded, error: null } : item));
+          } catch (err) {
+            if (controller.signal.aborted || err?.name === "AbortError") break;
+            setUploadResults((current) => current.map((item) => item.id === results[index].id ? { ...item, status: "failed", error: err.message } : item));
+          }
+          completed += 1;
+          setProgress({ done: completed, total: files.length });
+        }
+        if (succeeded > 0) showToast(t4("semantic.knowledgeDocsUploaded", { count: succeeded }), "success");
+      } finally {
+        mutationControllersRef.current.delete(controller);
+        if (mountedRef.current && workspaceFingerprintRef.current === workspaceFingerprint) {
+          setUploading(false);
+          setProgress(null);
+        }
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        if (!controller.signal.aborted) await load();
+      }
+    },
+    [uploading, load]
+  );
+  const remove = q2(
+    async (document2) => {
+      if (busy || uploading) return;
+      const { documentId, name } = document2;
+      if (!confirm(t4("semantic.knowledgeDocsDeleteConfirm", { name }))) return;
+      const workspaceFingerprint = workspaceFingerprintRef.current;
+      const requestId = nextRequestId();
+      latestMutationRequestRef.current = requestId;
+      const controller = new AbortController();
+      mutationControllersRef.current.add(controller);
+      const scope = { kind: "mutation", requestId, workspaceFingerprint };
+      setBusy(true);
+      setError(null);
+      try {
+        const deleted = await deleteKnowledgeDocument(documentId, {
+          signal: controller.signal,
+          workspaceFingerprint,
+          requestId
+        });
+        if (!responseIsCurrent(scope, deleted.workspaceFingerprint)) return;
+        showToast(t4("semantic.knowledgeDocsDeleted", { name }), "success");
+        await load();
+      } catch (err) {
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        showToast(err.message, "error", 6e3);
+      } finally {
+        mutationControllersRef.current.delete(controller);
+        if (mountedRef.current && workspaceFingerprintRef.current === workspaceFingerprint) setBusy(false);
+      }
+    },
+    [busy, uploading, load]
+  );
+  const reindex = q2(async () => {
+    if (busy || uploading) return;
+    const workspaceFingerprint = workspaceFingerprintRef.current;
+    const requestId = nextRequestId();
+    latestMutationRequestRef.current = requestId;
+    const controller = new AbortController();
+    mutationControllersRef.current.add(controller);
+    const scope = { kind: "mutation", requestId, workspaceFingerprint };
+    setBusy(true);
+    setError(null);
+    try {
+      const started = await reindexKnowledgeDocuments({
+        signal: controller.signal,
+        workspaceFingerprint,
+        requestId
+      });
+      if (!responseIsCurrent(scope, started.workspaceFingerprint)) return;
+      showToast(t4("semantic.knowledgeDocsReindexStarted"), "success");
+      await load();
+    } catch (err) {
+      if (controller.signal.aborted || err?.name === "AbortError") return;
+      showToast(err.message, err.status === 409 ? "warn" : "error", 6e3);
+    } finally {
+      mutationControllersRef.current.delete(controller);
+      if (mountedRef.current && workspaceFingerprintRef.current === workspaceFingerprint) setBusy(false);
+    }
+  }, [busy, uploading, load]);
+  const cancelReindex = q2(async () => {
+    const job = data?.activeJob;
+    if (!job || busy) return;
+    const controller = new AbortController();
+    mutationControllersRef.current.add(controller);
+    setBusy(true);
+    try {
+      const cancelled = await cancelKnowledgeReindexJob(job.jobId, {
+        signal: controller.signal,
+        workspaceFingerprint: workspaceFingerprintRef.current,
+        requestId: nextRequestId()
+      });
+      if (cancelled.workspaceFingerprint !== workspaceFingerprintRef.current) return;
+      await load();
+    } catch (err) {
+      if (!controller.signal.aborted) showToast(err.message, "error", 6e3);
+    } finally {
+      mutationControllersRef.current.delete(controller);
+      if (mountedRef.current) setBusy(false);
+    }
+  }, [data?.activeJob?.jobId, busy, load]);
+  if (!data && !error) {
+    return html4`
+      <div class="card">
+        <div class="card-h"><span class="title">${t4("semantic.knowledgeDocsTitle")}</span></div>
+        <div style="color:var(--fg-3);font-size:12.5px">${t4("common.loading")}</div>
+      </div>
+    `;
+  }
+  const docs = [...data?.documents ?? [], ...data?.deletedDocuments ?? []];
+  const failedJob = data?.lastJob && ["failed", "partial", "blocked", "interrupted"].includes(data.lastJob.status) ? data.lastJob : null;
+  return html4`
+    <div class=${`card ${dragging ? "accent-brand" : ""}`}
+      onDragOver=${(event) => {
+    event.preventDefault();
+    setDragging(true);
+  }}
+      onDragLeave=${(event) => {
+    if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false);
+  }}
+      onDrop=${(event) => {
+    event.preventDefault();
+    setDragging(false);
+    void uploadFiles(event.dataTransfer?.files);
+  }}>
+      <div class="card-h">
+        <span class="title">${t4("semantic.knowledgeDocsTitle")}</span>
+        <span class="meta">
+          ${data?.indexDirty ? html4`<span class="pill warn">${t4("semantic.knowledgeDocsDirty")}</span>` : null}
+          ${data?.activeJob ? html4`<span class="pill pill-active">${data.activeJob.status === "queued" ? t4("semantic.knowledgeDocsDebouncing") : t4("semantic.knowledgeDocsIndexing")}</span>` : null}
+        </span>
+      </div>
+      ${error ? html4`<div class="notice err">${error}</div>` : null}
+      ${data && data.includeKnowledgeDocs === false ? html4`
+            <div class="notice warn">${t4("semantic.knowledgeDocsNotIndexed")}</div>
+          ` : null}
+      ${dragging ? html4`<div class="notice" style="text-align:center">${t4("semantic.knowledgeDocsDropNow")}</div>` : null}
+      ${failedJob ? html4`
+        <div class="notice err">
+          <div>${t4("semantic.knowledgeDocsJobFailed", { status: failedJob.status })}</div>
+          ${failedJob.error?.message ? html4`<div class="dim" style="margin-top:4px">${failedJob.error.message}</div>` : null}
+        </div>
+      ` : null}
+      ${data ? html4`
+            ${docs.length === 0 ? html4`<div style="color:var(--fg-3);font-size:12.5px">${t4("semantic.knowledgeDocsEmpty")}</div>` : html4`
+                  <div style="overflow-x:auto">
+                    <table class="tbl" style="font-size:11.5px">
+                      <thead>
+                        <tr>
+                          <th>${t4("semantic.knowledgeDocsColName")}</th>
+                          <th class="num">${t4("semantic.knowledgeDocsColSize")}</th>
+                          <th>${t4("semantic.knowledgeDocsColUpdated")}</th>
+                          <th>${t4("semantic.knowledgeDocsColStatus")}</th>
+                          <th style="width:64px"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${docs.map(
+    (doc) => html4`
+                            <tr>
+                              <td><code class="mono" style="overflow-wrap:anywhere;word-break:break-word">${doc.name}</code></td>
+                              <td class="num">${fmtBytes(doc.size)}</td>
+                              <td class="dim" style="white-space:nowrap">${new Date(doc.updatedAt).toLocaleString()}</td>
+                              <td><span class=${`pill ${doc.status === "indexed" ? "ok" : doc.status === "failed" ? "pill-err" : "warn"}`}>${t4(`semantic.${knowledgeDocumentStatusKey(doc.status)}`)}</span></td>
+                              <td><button class="danger" disabled=${busy || uploading || doc.status === "deleted_pending_index"} onClick=${() => remove(doc)}>${t4("common.remove")}</button></td>
+                            </tr>
+                          `
+  )}
+                      </tbody>
+                    </table>
+                  </div>
+                `}
+            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center">
+              <button class="btn primary" disabled=${uploading || busy} onClick=${() => fileInputRef.current?.click()}>
+                ${uploading ? t4("semantic.knowledgeDocsUploading", { done: progress?.done ?? 0, total: progress?.total ?? 0 }) : t4("semantic.knowledgeDocsUpload")}
+              </button>
+              <button class="btn ghost" disabled=${busy || uploading} onClick=${reindex}>${t4("semantic.knowledgeDocsReindex")}</button>
+              ${data.activeJob ? html4`<button class="btn ghost" disabled=${busy} onClick=${cancelReindex}>${t4("semantic.knowledgeDocsCancelIndex")}</button>` : null}
+            </div>
+            ${uploadResults.length > 0 ? html4`
+              <div style="margin-top:10px;display:grid;gap:5px">
+                ${uploadResults.map((item) => html4`
+                  <div style="display:flex;gap:8px;align-items:center;font-size:11.5px;min-width:0">
+                    <code class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${item.file.name}</code>
+                    <span class=${`pill ${item.status === "succeeded" ? "ok" : item.status === "failed" ? "pill-err" : "warn"}`}>${t4(`semantic.knowledgeDocsUpload${item.status[0].toUpperCase()}${item.status.slice(1)}`)}</span>
+                    ${item.status === "failed" ? html4`<button class="btn ghost" disabled=${uploading || busy} onClick=${() => uploadFiles([item.file])}>${t4("semantic.knowledgeDocsRetry")}</button>` : null}
+                  </div>
+                  ${item.error ? html4`<div class="dim" style="font-size:11px">${item.error}</div>` : null}
+                `)}
+              </div>
+            ` : null}
+          ` : null}
+      <input type="file" ref=${fileInputRef} accept=".md,.txt,.pdf" multiple style="display:none" onChange=${(e3) => uploadFiles(e3.target.files)} />
     </div>
   `;
 }
@@ -34490,7 +35693,7 @@ function ToolsPanel() {
 
 // dashboard/src/app.ts
 var html7 = htm_module_default.bind(k);
-function tabSections(userAvatar = null) {
+function tabSections(userAvatar = null, workspaceRoot = null) {
   return [
     {
       label: t4("app.sectionWorkspace"),
@@ -34511,7 +35714,7 @@ function tabSections(userAvatar = null) {
         { id: "skills", name: t4("app.tabSkills"), glyph: "S", panel: () => html7`<${SkillsPanel} />` },
         { id: "tools", name: t4("app.tabTools"), glyph: "▣", panel: () => html7`<${ToolsPanel} />` },
         { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />`, breakBefore: true },
-        { id: "semantic", name: t4("app.tabSemantic"), glyph: "≈", panel: () => html7`<${SemanticPanel} />` },
+        { id: "semantic", name: t4("app.tabSemantic"), glyph: "≈", panel: () => html7`<${SemanticPanel} key=${workspaceRoot ?? "detached"} />` },
         { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html7`<${HooksPanel} />` },
         { id: "permissions", name: t4("app.tabPermissions"), glyph: "▎", panel: () => html7`<${PermissionsPanel} />`, breakBefore: true },
         // SystemPanel is retained for diagnostics, but its standalone navigation is hidden because Overview now presents the high-value health summary.
@@ -34554,6 +35757,8 @@ function App() {
   const [vhomeOpenFallback, setVhomeOpenFallback] = d2(false);
   const [vhomeCopyStatus, setVhomeCopyStatus] = d2(null);
   const [vhomeRemainingSeconds, setVhomeRemainingSeconds] = d2(null);
+  const [wsRoot, setWsRoot] = d2(null);
+  const [buildDate2, setBuildDate] = d2(null);
   const vhomeControlRef = A2(null);
   const [activeId, setActiveId] = d2(() => {
     try {
@@ -34582,7 +35787,7 @@ function App() {
     }
   }, [activeId]);
   const vhomeAvatarUrl = vhomeStatus?.connected === true ? `/api/vhome/avatar?token=${encodeURIComponent(TOKEN)}&v=${encodeURIComponent(vhomeStatus.checkedAt ?? "")}` : null;
-  const TAB_SECTIONS = tabSections(vhomeAvatarUrl);
+  const TAB_SECTIONS = tabSections(vhomeAvatarUrl, wsRoot);
   const [openSections, setOpenSections] = d2(() => {
     let stored = [0];
     try {
@@ -34613,8 +35818,6 @@ function App() {
       return next;
     });
   }, []);
-  const [wsRoot, setWsRoot] = d2(null);
-  const [buildDate2, setBuildDate] = d2(null);
   y2(() => {
     const unsub = subscribeSse("health", (ev) => {
       setWsRoot(ev.cwd ?? null);

@@ -28,7 +28,7 @@ import { subscribeSse, usePoll } from "./lib/use-poll.js";
 import { CmdPalette, Select } from "./ui/index.js";
 
 var html7 = htm_module_default.bind(k);
-function tabSections(userAvatar = null) {
+function tabSections(userAvatar = null, workspaceRoot = null) {
   return [
     {
       label: t4("app.sectionWorkspace"),
@@ -49,7 +49,7 @@ function tabSections(userAvatar = null) {
         { id: "skills", name: t4("app.tabSkills"), glyph: "S", panel: () => html7`<${SkillsPanel} />` },
         { id: "tools", name: t4("app.tabTools"), glyph: "\u25A3", panel: () => html7`<${ToolsPanel} />` },
         { id: "mcp", name: t4("app.tabMcp"), glyph: "M", panel: () => html7`<${McpPanel} />`, breakBefore: true },
-        { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} />` },
+        { id: "semantic", name: t4("app.tabSemantic"), glyph: "\u2248", panel: () => html7`<${SemanticPanel} key=${workspaceRoot ?? "detached"} />` },
         { id: "hooks", name: t4("app.tabHooks"), glyph: "H", panel: () => html7`<${HooksPanel} />` },
         { id: "permissions", name: t4("app.tabPermissions"), glyph: "\u258E", panel: () => html7`<${PermissionsPanel} />`, breakBefore: true },
         // SystemPanel is retained for diagnostics, but its standalone navigation is hidden because Overview now presents the high-value health summary.
@@ -92,6 +92,8 @@ function App() {
   const [vhomeOpenFallback, setVhomeOpenFallback] = d2(false);
   const [vhomeCopyStatus, setVhomeCopyStatus] = d2(null);
   const [vhomeRemainingSeconds, setVhomeRemainingSeconds] = d2(null);
+  const [wsRoot, setWsRoot] = d2(null);
+  const [buildDate2, setBuildDate] = d2(null);
   const vhomeControlRef = A2(null);
   const [activeId, setActiveId] = d2(() => {
     try {
@@ -122,7 +124,7 @@ function App() {
   const vhomeAvatarUrl = vhomeStatus?.connected === true
     ? `/api/vhome/avatar?token=${encodeURIComponent(TOKEN)}&v=${encodeURIComponent(vhomeStatus.checkedAt ?? "")}`
     : null;
-  const TAB_SECTIONS = tabSections(vhomeAvatarUrl);
+  const TAB_SECTIONS = tabSections(vhomeAvatarUrl, wsRoot);
   const [openSections, setOpenSections] = d2(() => {
     let stored = [0];
     try {
@@ -153,8 +155,6 @@ function App() {
       return next;
     });
   }, []);
-  const [wsRoot, setWsRoot] = d2(null);
-  const [buildDate2, setBuildDate] = d2(null);
   y2(() => {
     const unsub = subscribeSse("health", (ev) => {
       setWsRoot(ev.cwd ?? null);

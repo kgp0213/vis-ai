@@ -196,6 +196,10 @@ test("launcher preserves authoritative terminal fields in runtime facts", async 
   assert.match(factAdapter, /evidenceRefs:\s*event\.evidenceRefs/u);
   assert.match(factAdapter, /event\.interventionChoice !== undefined/u);
   assert.match(factAdapter, /interventionChoice:\s*event\.interventionChoice/u);
+  assert.match(factAdapter, /eventEpoch:\s*String\(event\.eventEpoch\)/u);
+  assert.match(factAdapter, /eventSeq:\s*Number\(event\.eventSeq\)/u);
+  assert.match(factAdapter, /revision:\s*String\(event\.revision\)/u);
+  assert.match(factAdapter, /event\.correction === true \? \{ correction: true \}/u);
 
   const terminalBroadcaster = source.slice(
     source.indexOf("function broadcastTurnFinalized(payload = {})"),
@@ -246,6 +250,24 @@ test("launcher persists message resets and scopes tool facts by their complete f
   assert.match(factAdapter, /event\.kind === "messages-reset"[\s\S]{0,180}messages\.replace/u);
   assert.match(factAdapter, /\["warning", "error", "info"\]\.includes\(event\.kind\)[\s\S]{0,220}message\.upsert/u);
   assert.match(factAdapter, /toolFrameEntityId\(event\)/u);
+  const broadcaster = source.slice(
+    source.indexOf("function broadcastDashboardEvent(ev)"),
+    source.indexOf("function broadcastAssistantContentFinal"),
+  );
+  assert.match(broadcaster, /\["tool_start", "tool"\]\.includes[\s\S]{0,180}entityId:\s*toolFrameEntityId\(ev\)/u);
+});
+
+test("launcher persists the original user identity through steer-aware finalization", async () => {
+  const source = await readFile(launcherUrl, "utf8");
+  const turnBlock = source.slice(
+    source.indexOf("const userMsgId = String(nextMsgId++)"),
+    source.indexOf("// Fire-and-forget: process the turn asynchronously"),
+  );
+  assert.match(turnBlock, /const userTurnId = requestId \|\| operation\.id/u);
+  assert.match(turnBlock, /const userMessage = \{ id: userMsgId,[\s\S]{0,180}turnId: userTurnId,[\s\S]{0,120}operationId: operation\.id/u);
+  assert.match(turnBlock, /appendActiveMessage\(\{ role: "user", id: userMsgId, text, turnId: userTurnId, operationId: operation\.id/u);
+  assert.match(turnBlock, /broadcastDashboardEvent\(\{ kind: "user", \.\.\.userMessage \}\)/u);
+  assert.match(source, /pendingUser: \{ id: userMsgId, turnId: requestId \|\| operation\.id, operationId: operation\.id, text, attachments: attachmentRecords \}/u);
 });
 
 test("a promoted steer is durably resolved after its model-history record is saved", async () => {

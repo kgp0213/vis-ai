@@ -263,7 +263,7 @@ test("session finalization matches the terminal assistant fact before a same-ope
     ]);
     const base = {
       modelEntries: harness.loop.log.toMessages(),
-      pendingUser: { text: "原始请求" },
+      pendingUser: { id: "input-original-1", turnId: "turn-original", operationId: "op-shared", text: "原始请求" },
       assistant: { messageId: "assistant-shared", turnId: "turn-shared", text: "完成结果" },
       operationId: "op-shared",
     };
@@ -282,6 +282,8 @@ test("session finalization matches the terminal assistant fact before a same-ope
     const assistant = entries.find((entry) => entry.id === "assistant-shared");
     assert.equal(assistant.taskState, "completed");
     assert.equal(entries.find((entry) => entry.id === "input-steer-1").taskState, undefined);
+    assert.equal(entries.filter((entry) => entry.role === "user" && entry.content === "原始请求").length, 1);
+    assert.equal(entries.find((entry) => entry.content === "原始请求").id, "input-original-1");
   } finally {
     await rm(harness.root, { recursive: true, force: true });
   }

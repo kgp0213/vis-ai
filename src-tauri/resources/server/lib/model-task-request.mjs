@@ -152,17 +152,22 @@ export async function requestModelText({
   messages,
   model,
   maxTokens,
-  temperature = 0,
+  temperature,
   requestPurpose,
+  useConfiguredRequestDefaults = false,
   signal,
   allowEmpty = false,
 }) {
   if (!client || typeof client.chat !== "function") throw new Error(`${label} has no model client`);
+  const resolvedTemperature = useConfiguredRequestDefaults ? temperature : temperature ?? 0;
+  const resolvedMaxTokens = useConfiguredRequestDefaults && maxTokens === undefined
+    ? undefined
+    : capModelOutputTokens(maxTokens, capabilities);
   const response = await client.chat({
     model,
     messages,
-    temperature,
-    maxTokens: capModelOutputTokens(maxTokens, capabilities),
+    temperature: resolvedTemperature,
+    maxTokens: resolvedMaxTokens,
     requestPurpose,
     signal,
   });

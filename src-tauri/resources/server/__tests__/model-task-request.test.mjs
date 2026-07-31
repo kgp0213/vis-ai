@@ -155,6 +155,23 @@ describe("model task request policy", () => {
     assert.equal(client.calls[0].maxTokens, 1024);
   });
 
+  test("lets a JSON request profile supply temperature and output-token fields", async () => {
+    const client = fakeClient({ content: "optimized", finishReason: "stop" });
+    await requestModelText({
+      client,
+      model: "profile-driven-model",
+      capabilities: { maxOutputTokens: 4096 },
+      messages: baseMessages,
+      requestPurpose: "promptOptimization",
+      useConfiguredRequestDefaults: true,
+      label: "prompt optimization",
+    });
+    assert.equal(Object.hasOwn(client.calls[0], "temperature"), true);
+    assert.equal(client.calls[0].temperature, undefined);
+    assert.equal(Object.hasOwn(client.calls[0], "maxTokens"), true);
+    assert.equal(client.calls[0].maxTokens, undefined);
+  });
+
   test("passes every task purpose through to the provider request", async () => {
     const purposes = ["summary", "report", "knowledge", "sessionReview", "learn", "side-question"];
     for (const requestPurpose of purposes) {

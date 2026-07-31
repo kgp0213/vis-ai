@@ -298,6 +298,36 @@ describe("active session recovery", () => {
     assert.equal(entries.length, 1);
   });
 
+  test("pending user identity prevents a steer sync from appending the original prompt again", () => {
+    const entries = [
+      { role: "user", content: "原始请求" },
+      { role: "user", content: "追加指令", id: "steer-1", turnId: "turn-steer", operationId: "op-shared" },
+      { role: "assistant", content: "完成结果", id: "assistant-1", turnId: "turn-result", operationId: "op-shared" },
+    ];
+    const merged = withPendingUserEntry(entries, {
+      id: "user-1",
+      turnId: "turn-original",
+      operationId: "op-shared",
+      text: "原始请求",
+    });
+    assert.equal(merged.filter((entry) => entry.role === "user" && entry.content === "原始请求").length, 1);
+    assert.equal(merged[0].id, "user-1");
+    assert.equal(merged.length, entries.length);
+  });
+
+  test("identical text in a different identified turn remains a distinct user entry", () => {
+    const merged = withPendingUserEntry([
+      { role: "user", content: "重复文本", id: "user-old", turnId: "turn-old", operationId: "op-old" },
+    ], {
+      id: "user-new",
+      turnId: "turn-new",
+      operationId: "op-new",
+      text: "重复文本",
+    });
+    assert.equal(merged.length, 2);
+    assert.deepEqual(merged.map((entry) => entry.id), ["user-old", "user-new"]);
+  });
+
   test("attachment-only user messages persist metadata and restore a model reference", () => {
     const attachment = {
       id: "att_1234567890abcdef1234",

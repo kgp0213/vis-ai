@@ -173,14 +173,18 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatPanel, /t4\("chat\.feedRefresh"\)/);
     assert.match(chatPanel, /t4\("chat\.feedExpandAll"\)/);
     assert.match(chatPanel, /t4\("chat\.feedCollapseAll"\)/);
-    assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*shouldAutoScroll\.current = true;\s*setHasNewBelow\(false\);\s*void resyncRunnerRef\.current\?\.\(\);?\s*\}\)/);
+    assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*applyScrollPolicyEvent\(\{ type: "user-reached-bottom" \}\);\s*void resyncRunnerRef\.current\?\.\(\);?\s*\}\)/);
     assert.match(chatPanel, /details\.tool-log/);
+
+    // Switching to the background workbench must remove the chat-only context menu.
+    assert.match(chatPanel, /setShowBackgroundJobs\(true\);\s*setFeedMenu\(null\);/);
+    assert.match(chatPanel, /\$\{!showBackgroundJobs && feedMenu \?/);
 
     // 跟随加固与新消息提示：内容增长即钉底，脱钩时给出回底入口
     assert.match(chatPanel, /const \[hasNewBelow, setHasNewBelow\] = d2\(false\)/);
     assert.match(chatPanel, /class="chat-new-messages-pill"/);
-    assert.match(chatPanel, /t4\("chat\.newMessagesBelow"\)/);
-    assert.match(chatPanel, /new MutationObserver/);
+    assert.match(chatPanel, /t4\("chat\.newMessagesBelowCount"/);
+    assert.doesNotMatch(chatPanel, /new MutationObserver/);
     assert.match(chatPanel, /requestAnimationFrame/);
     assert.match(css, /\.chat-new-messages-pill\s*\{/);
     assert.match(css, /\.chat-feed-menu\s*\{/);
@@ -218,7 +222,8 @@ describe("Dashboard desktop UX", () => {
   test("hydrates terminal tools, preserves canonical pagination, and isolates Changes events by session", () => {
     const chatSource = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
     const changesSource = readFileSync(new URL("panels/changes.ts", dashboardSourceRootUrl), "utf8");
-    assert.match(chatSource, /mergeSnapshotToolsIntoMessages/);
+    assert.match(chatSource, /projectChatTimeline/);
+    assert.match(chatSource, /canonicalMessageCountRef\.current = page\.loadedCount/);
     assert.match(chatSource, /canonicalMessageCount=\$\{canonicalMessageCountRef\.current\}/);
     assert.match(chatSource, /totalMessages - canonicalMessageCount/);
     assert.match(changesSource, /const activeSessionIdRef = A2\(null\)/);
@@ -464,7 +469,8 @@ describe("Dashboard desktop UX", () => {
     assert.match(chat, /const lastScrollUpIntentAtRef = A2\(0\)/);
     assert.match(onScroll, /userScrollIntentActive = Date\.now\(\) - lastScrollUpIntentAtRef\.current <= USER_SCROLL_INTENT_GRACE_MS/);
     assert.match(onScroll, /scrollingUp && shouldAutoScroll\.current && distFromBottom < 80 && !userScrollIntentActive/);
-    assert.match(onScroll, /distFromBottom < 80 && !userScrollIntentActive\) \{\s*shouldAutoScroll\.current = true;/);
+    assert.match(onScroll, /distFromBottom < 80 && !userScrollIntentActive && chatScrollStateRef\.current\.owner !== "auto"/);
+    assert.match(onScroll, /applyScrollPolicyEvent\(\{ type: "user-reached-bottom" \}\)/);
     const onWheel = chat.slice(chat.indexOf("const onWheel = (event) => {"), chat.indexOf("const onPointerDown = (event) => {"));
     assert.match(onWheel, /lastScrollUpIntentAtRef\.current = Date\.now\(\)/);
   });

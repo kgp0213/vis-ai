@@ -3,21 +3,32 @@ import assert from "node:assert/strict";
 
 import { normalizeToolOutcome, projectToolProgressEvent, redactToolProgressValue, toolFrameEntityId } from "./tool-progress.mjs";
 import { createTurnReceipt } from "./turn-receipt.mjs";
+import { validateRuntimeFact } from "./execution-schema.mjs";
 
 describe("tool progress projection", () => {
   test("scopes a reused provider call id by turn and step", () => {
-    assert.equal(
-      toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" }),
-      JSON.stringify(["turn-1", "step-1", "call-1"]),
-    );
-    assert.equal(
-      toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-2", stepId: "step-1" }),
-      JSON.stringify(["turn-2", "step-1", "call-1"]),
-    );
+    const first = toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" });
+    const second = toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-2", stepId: "step-1" });
+    assert.match(first, /^tool:[A-Za-z0-9._:-]+$/u);
+    assert.match(second, /^tool:[A-Za-z0-9._:-]+$/u);
+    assert.notEqual(first, second);
     assert.equal(
       toolFrameEntityId({ entityId: "host-frame", toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" }),
       "host-frame",
     );
+  });
+
+  test("scoped tool frame ids are valid Runtime Fact entity ids", () => {
+    const entityId = toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" });
+    const validation = validateRuntimeFact({
+      factId: "fact-tool-1",
+      sequence: 1,
+      sessionId: "session-1",
+      type: "tool.upsert",
+      entityId,
+      payload: { id: entityId, state: "running", toolCallId: "call-1" },
+    }, { sessionId: "session-1" });
+    assert.equal(validation.ok, true, validation.errors.join(", "));
   });
 
   test("keeps one stable identity across queued, running and terminal facts", () => {

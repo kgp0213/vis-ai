@@ -102,6 +102,8 @@ export interface DashboardReducerState {
   seen: Set<string>;
   streamOffsets: Record<string, { content: number; reasoning: number; contentText?: string; reasoningText?: string; token: string | null; attempt: number }>;
   messages: Record<string, DashboardEntityState>;
+  /** Explicit source order; object key enumeration is not a message timeline. */
+  messageOrder: string[];
   tools: Record<string, DashboardEntityState>;
   interactions: Record<string, DashboardEntityState>;
   attachments: Record<string, DashboardEntityState>;
@@ -160,10 +162,12 @@ export interface DashboardBatcher {
 export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard {
   const eventIds = new Set<string>();
   const terminalTools = new Map<string, TerminalState>();
-  const terminalMessages = new Map<string, { fingerprint: string; eventEpoch: string | null; eventSeq: number | null; revision: string | null; authoritative: boolean; stateRank: number }>();
+  const terminalMessages = new Map<string, { fingerprint: string; state: string; eventEpoch: string | null; eventSeq: number | null; revision: string | null; authoritative: boolean; stateRank: number }>();
   const finalStateRank = (event: any): number => {
     const state = String(event?.executionState ?? event?.taskState ?? "").toLowerCase();
-    return ({ unknown: 1, incomplete: 2, failed: 3, cancelled: 3, completed_with_warnings: 4, completed: 5 } as Record<string, number>)[state] ?? 0;
+    // A warning correction is a stronger terminal fact than a plain
+    // completion: it must survive a later snapshot/replay projection.
+    return ({ unknown: 1, incomplete: 2, failed: 3, cancelled: 3, completed: 5, completed_with_warnings: 6 } as Record<string, number>)[state] ?? 0;
   };
 
   const assistantFinalFingerprint = (event: any): string => {
@@ -231,12 +235,16 @@ export function createDashboardEventGuard(maxEvents = 4096): DashboardEventGuard
           // The legacy assistant_final is a display compatibility event and
           // must not block the authoritative turn_finalized that follows it.
           if (previous.authoritative && !authoritative) return false;
+          const previousState = previous.state;
+          const nextState = String(event.executionState ?? event.taskState ?? "").toLowerCase();
+          if (previous.authoritative && authoritative && previousState === "completed" && nextState === "completed_with_warnings" && !correction) return false;
           if (authoritative && previous.authoritative && finalStateRank(event) < previous.stateRank) return false;
           if (!correction && previous.authoritative && authoritative) return false;
           if (revision && revision === previous.revision && fingerprint === previous.fingerprint) return false;
         }
         terminalMessages.set(id, {
           fingerprint,
+          state: String(event.executionState ?? event.taskState ?? previous?.state ?? "").toLowerCase(),
           eventEpoch: nextEpoch,
           eventSeq: nextSeq,
           revision,
@@ -269,6 +277,7 @@ export function createDashboardReducerState(seed?: Partial<DashboardReducerState
     seen: new Set(seed?.seen ?? []),
     streamOffsets: { ...(seed?.streamOffsets ?? {}) },
     messages: { ...(seed?.messages ?? {}) },
+    messageOrder: Array.isArray(seed?.messageOrder) ? [...seed.messageOrder] : Object.keys(seed?.messages ?? {}),
     tools: { ...(seed?.tools ?? {}) },
     interactions: { ...(seed?.interactions ?? {}) },
     attachments: { ...(seed?.attachments ?? {}) },
@@ -322,6 +331,51 @@ function entityRecord(value: unknown): Record<string, DashboardEntityState> {
     result[id] = { ...(raw as DashboardEntityState), id };
   }
   return result;
+}
+
+function entityOrder(value: unknown, records: Record<string, DashboardEntityState>): string[] {
+  const source = Array.isArray(value)
+    ? value.map((item: any, index) => String(item?.id ?? `entity-${index + 1}`))
+    : Object.keys(records);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawId of source) {
+    const id = String(rawId ?? "").trim();
+    if (!id || seen.has(id) || !records[id]) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
+
+function messageEventCoordinates(event: any): Record<string, any> {
+  return {
+    ...(event?.eventEpoch !== undefined ? { eventEpoch: String(event.eventEpoch) } : {}),
+    ...(event?.eventSeq !== undefined && Number.isSafeInteger(Number(event.eventSeq)) ? { eventSeq: Number(event.eventSeq) } : {}),
+    ...(event?.eventId !== undefined ? { eventId: String(event.eventId) } : {}),
+    ...(event?.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
+    ...(event?.operationId !== undefined ? { operationId: String(event.operationId) } : {}),
+    ...(event?.revision !== undefined ? { revision: String(event.revision) } : {}),
+    ...(event?.correction === true ? { correction: true } : {}),
+  };
+}
+
+export function orderedDashboardMessages(state: Pick<DashboardReducerState, "messages" | "messageOrder">): DashboardEntityState[] {
+  const ordered = [] as DashboardEntityState[];
+  const seen = new Set<string>();
+  for (const id of Array.isArray(state?.messageOrder) ? state.messageOrder : []) {
+    const key = String(id ?? "");
+    const message = state.messages?.[key];
+    if (!message || seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(message);
+  }
+  for (const [id, message] of Object.entries(state?.messages ?? {})) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(message);
+  }
+  return ordered;
 }
 
 function snapshotCursor(value: DashboardSessionSnapshot["eventCursor"]): { epoch: string | null; lastSeq: number } {
@@ -392,9 +446,11 @@ export function createDashboardReducerStateFromSnapshot(snapshot: DashboardSessi
   const shape = validateDashboardSessionSnapshotShape(snapshot);
   if (!shape.ok) throw new TypeError(`snapshot schema violation: ${shape.errors.join(", ")}`);
   const cursor = snapshotCursor(snapshot.eventCursor);
+  const messages = entityRecord(snapshot.messages);
   return createDashboardReducerState({
     ...cursor,
-    messages: entityRecord(snapshot.messages),
+    messages,
+    messageOrder: entityOrder(snapshot.messages, messages),
     tools: entityRecord(snapshot.tools),
     interactions: entityRecord(snapshot.interactions),
     attachments: entityRecord(snapshot.attachments),
@@ -505,7 +561,7 @@ export function projectDashboardMessagePage(response: any = {}): {
   const state = snapshot ? createDashboardReducerStateFromSnapshot(snapshot) : createDashboardReducerState();
   const compatibilityMessages = Array.isArray(response?.messages) ? response.messages : [];
   const messages = snapshot
-    ? mergeCanonicalMessagePage(compatibilityMessages, state.messages)
+    ? mergeCanonicalMessagePage(compatibilityMessages, orderedDashboardMessages(state))
     : compatibilityMessages.map((message: DashboardEntityState) => ({ ...message }));
   const rawTotal = Number(snapshot?.messagePage?.totalMessages ?? response?.totalMessages ?? messages.length);
   const totalMessages = Number.isSafeInteger(rawTotal) && rawTotal >= 0 ? rawTotal : messages.length;
@@ -659,10 +715,12 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       id: messageId,
       role: "user",
       text: String(event.text ?? ""),
+      ...messageEventCoordinates(event),
       ...(event.images !== undefined ? { images: event.images } : {}),
       ...(event.attachments !== undefined ? { attachments: event.attachments } : {}),
     };
     state.messages = { ...state.messages, [messageId]: next };
+    if (!state.messageOrder.includes(messageId)) state.messageOrder = [...state.messageOrder, messageId];
     return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
   }
   if (["warning", "error", "info"].includes(kind)) {
@@ -674,8 +732,10 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       id: messageId,
       role: kind,
       text: String(event.text ?? ""),
+      ...messageEventCoordinates(event),
     };
     state.messages = { ...state.messages, [messageId]: next };
+    if (!state.messageOrder.includes(messageId)) state.messageOrder = [...state.messageOrder, messageId];
     return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
   }
   if (kind === "background-task-notification") {
@@ -705,6 +765,7 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       if (event[bucket] !== undefined) state[bucket] = entityRecord(event[bucket]);
     };
     replace("messages");
+    if (event.messages !== undefined) state.messageOrder = entityOrder(event.messages, state.messages);
     replace("tools");
     replace("interactions");
     replace("attachments");
@@ -784,6 +845,7 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       ...(event.reasoning !== undefined ? { reasoning: String(event.reasoning ?? "") } : {}),
       ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
       ...(event.operationId !== undefined ? { operationId: String(event.operationId) } : {}),
+      ...messageEventCoordinates(event),
       ...(kind === "turn_finalized" ? {
         finalized: true,
         ...(event.taskState !== undefined ? { taskState: event.taskState } : {}),
@@ -798,6 +860,7 @@ export function applyDashboardEvent(input: DashboardReducerState, event: any): {
       } : {}),
     };
     state.messages = { ...state.messages, [messageId]: next };
+    if (!state.messageOrder.includes(messageId)) state.messageOrder = [...state.messageOrder, messageId];
     return { state, changed: JSON.stringify(previous) !== JSON.stringify(next) };
   }
   if (kind === "todo-update") {

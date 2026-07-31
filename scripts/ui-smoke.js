@@ -475,6 +475,7 @@ try {
   await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('input')].find((item) => item.placeholder === '未选择归档工作区'))`, Boolean);
   console.log("[ui-smoke] read-only DWS schedule templates rendered from the installed Skill");
   await evaluate(cdp, `[...document.querySelectorAll('.side-tab')].find((item) => item.textContent.includes('对话'))?.click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.chat-feed'))`, Boolean);
 
   await evaluate(cdp, `(() => {
     const baseJob = {
@@ -577,12 +578,20 @@ try {
     };
   })()`);
   await waitForBrowserValue(cdp, `Boolean([...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台')))`, Boolean);
+  await evaluate(cdp, `(() => {
+    const feed = document.querySelector('.chat-feed');
+    if (!feed) throw new Error('chat feed not found before background workbench test');
+    feed.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }));
+  })()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.chat-feed-menu'))`, Boolean);
   await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
   await waitForBrowserValue(cdp, `(() => ({
     workbench: Boolean(document.querySelector('.background-jobs-workbench .background-jobs-detail')),
+    staleFeedMenu: Boolean(document.querySelector('.chat-feed-menu')),
     chip: [...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.textContent ?? '',
     error: document.querySelector('.notice.err')?.textContent ?? '',
-  }))()`, (value) => value.workbench);
+  }))()`, (value) => value.workbench && !value.staleFeedMenu);
+  console.log("[ui-smoke] chat context menu is cleared before opening the background workbench");
   await waitForBrowserValue(cdp, `(() => ({
     count: document.querySelectorAll('.background-job-list-item').length,
     groups: [...document.querySelectorAll('.background-job-group-title')].map((item) => item.textContent.trim()),
@@ -687,6 +696,58 @@ try {
   await waitForBrowserValue(cdp, `Boolean(document.querySelector('.background-jobs-workbench'))`, Boolean);
   await evaluate(cdp, `document.querySelector('.background-jobs-close')?.click()`);
   await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
+  await waitForBrowserValue(cdp, `(() => { const feed = document.querySelector('.chat-feed'); return Boolean(feed && feed.scrollHeight > feed.clientHeight); })()`, Boolean);
+  const scrollBeforeWorkbench = await evaluate(cdp, `(() => {
+    const feed = document.querySelector('.chat-feed');
+    const maxTop = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    feed.scrollTop = maxTop;
+    feed.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -260 }));
+    feed.scrollTop = Math.min(260, maxTop);
+    feed.dispatchEvent(new Event('scroll', { bubbles: true }));
+    const feedTop = feed.getBoundingClientRect().top;
+    const node = [...feed.querySelectorAll('.chat-msg[data-msg-id], .process-card[data-process-anchor-id]')].find((item) => item.getBoundingClientRect().bottom >= feedTop);
+    return { top: feed.scrollTop, anchor: node ? { id: node.dataset.msgId || node.dataset.processAnchorId, top: node.getBoundingClientRect().top - feedTop } : null };
+  })()`);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.background-jobs-workbench'))`, Boolean);
+  await evaluate(cdp, `[...document.querySelectorAll('button.composer-chip-ghost')].find((item) => item.textContent.includes('后台'))?.click()`);
+  await waitForBrowserValue(cdp, `!document.querySelector('.background-jobs-workbench')`, Boolean);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300));
+  const scrollAfterWorkbench = await waitForBrowserValue(cdp, `document.querySelector('.chat-feed')?.scrollTop ?? -1`, (value) => value >= 0);
+  const anchorId = scrollBeforeWorkbench.anchor?.id ?? '';
+  const afterAnchor = await evaluate(cdp, `(() => {
+    const feed = document.querySelector('.chat-feed');
+    const feedTop = feed?.getBoundingClientRect().top ?? 0;
+    const id = ${JSON.stringify(anchorId)};
+    const node = id ? [...(feed?.querySelectorAll('.chat-msg[data-msg-id], .process-card[data-process-anchor-id]') || [])].find((item) => (item.dataset.msgId || item.dataset.processAnchorId) === id) : null;
+    return node ? { id, top: node.getBoundingClientRect().top - feedTop } : null;
+  })()`);
+  if (!afterAnchor || afterAnchor.id !== anchorId || Math.abs(afterAnchor.top - scrollBeforeWorkbench.anchor.top) > 8) {
+    const scrollDiagnostics = await evaluate(cdp, `(() => {
+      const feed = document.querySelector('.chat-feed');
+      const loader = feed?.querySelector('.chat-history-loader');
+      const nodes = [...(feed?.querySelectorAll('.chat-msg[data-msg-id], .process-card[data-process-anchor-id]') || [])];
+      const target = nodes.find((item) => (item.dataset.msgId || item.dataset.processAnchorId) === ${JSON.stringify(anchorId)});
+      const feedTop = feed?.getBoundingClientRect().top ?? 0;
+      const info = (item) => item ? {
+        id: item.dataset.msgId || item.dataset.processAnchorId,
+        top: item.getBoundingClientRect().top - feedTop,
+        height: item.getBoundingClientRect().height,
+        prev: item.previousElementSibling?.dataset?.msgId || item.previousElementSibling?.dataset?.processAnchorId || item.previousElementSibling?.className || null,
+        next: item.nextElementSibling?.dataset?.msgId || item.nextElementSibling?.dataset?.processAnchorId || item.nextElementSibling?.className || null,
+      } : null;
+      return {
+        feed: feed ? { scrollTop: feed.scrollTop, scrollHeight: feed.scrollHeight, clientHeight: feed.clientHeight, connected: feed.isConnected } : null,
+        loader: loader ? { height: loader.getBoundingClientRect().height, top: loader.getBoundingClientRect().top - feedTop, display: getComputedStyle(loader).display } : null,
+        nodeCount: nodes.length,
+        first: info(nodes[0]),
+        target: info(target),
+        last: info(nodes[nodes.length - 1]),
+      };
+    })()`);
+    throw new Error(`chat scroll anchor was not restored after background workbench: before=${JSON.stringify(scrollBeforeWorkbench)}, after=${scrollAfterWorkbench}, afterAnchor=${JSON.stringify(afterAnchor)}, diagnostics=${JSON.stringify(scrollDiagnostics)}`);
+  }
+  console.log("[ui-smoke] chat scroll position restored after returning from the background workbench");
   await evaluate(cdp, `(() => { window.fetch = window.__backgroundJobsOriginalFetch; delete window.__backgroundJobsOriginalFetch; })()`);
   console.log("[ui-smoke] background jobs preserve the composer, scroll across four layouts and close through all entry points");
 
@@ -759,7 +820,10 @@ try {
             else init.signal?.addEventListener('abort', abort, { once: true });
           });
         }
-        return new Response(JSON.stringify({
+        if (window.__promptOptimizationMode === 'network') {
+          throw new TypeError('Failed to fetch');
+        }
+        const response = () => new Response(JSON.stringify({
           requestId: request.requestId,
           draftRevision: request.draftRevision,
           original: request.prompt,
@@ -768,11 +832,20 @@ try {
           protectedFacts: [],
           unchanged: false,
         }), { status: 200, headers: { 'content-type': 'application/json' } });
+        if (window.__promptOptimizationMode === 'stale') {
+          return new Promise((resolve) => setTimeout(() => resolve(response()), 250));
+        }
+        return response();
       }
       if (method === 'DELETE' && url.pathname.includes('/api/optimize-prompt/')) {
         window.__promptOptimizationDeleteAttempts += 1;
-        if (window.__promptOptimizationDeleteAttempts === 1) {
-          return new Response(JSON.stringify({ error: 'cancel unavailable', message: 'cancel unavailable', code: 'cancel_test_failure' }), { status: 503, headers: { 'content-type': 'application/json' } });
+        if (window.__promptOptimizationMode === 'cancel') {
+          if (window.__promptOptimizationDeleteAttempts === 1) {
+            return new Response(JSON.stringify({ error: 'cancel unavailable', message: 'cancel unavailable', code: 'cancel_test_failure' }), { status: 503, headers: { 'content-type': 'application/json' } });
+          }
+        }
+        if (window.__promptOptimizationMode === 'network' && window.__promptOptimizationDeleteAttempts === 1) {
+          return new Response(JSON.stringify({ error: 'cleanup unavailable', message: 'cleanup unavailable', code: 'cleanup_test_failure' }), { status: 503, headers: { 'content-type': 'application/json' } });
         }
         return new Response(JSON.stringify({ cancelled: true }), { status: 200, headers: { 'content-type': 'application/json' } });
       }
@@ -783,7 +856,11 @@ try {
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: input.value }));
   })()`);
   await waitForBrowserValue(cdp, `!document.querySelector('.composer-optimize')?.disabled`, Boolean);
-  await evaluate(cdp, `document.querySelector('.composer-optimize')?.click()`);
+  await evaluate(cdp, `(() => {
+    const button = document.querySelector('.composer-optimize');
+    button?.click();
+    button?.click();
+  })()`);
   const optimizationPreview = await waitForBrowserValue(cdp, `(() => ({
     visible: Boolean(document.querySelector('.prompt-optimization-preview')),
     value: document.querySelector('.chat-input-area textarea')?.value ?? '',
@@ -793,25 +870,60 @@ try {
   if (optimizationPreview.value !== originalPrompt || optimizationPreview.columns[0] !== originalPrompt || optimizationPreview.columns[1] !== optimizedPrompt || optimizationPreview.submits !== 0) {
     throw new Error(`prompt optimization preview changed or submitted the draft: ${JSON.stringify(optimizationPreview)}`);
   }
+  if (await evaluate(cdp, `window.__promptOptimizationPostCalls`) !== 1) {
+    throw new Error('prompt optimization rapid double click created duplicate requests');
+  }
+  await evaluate(cdp, `document.querySelector('.prompt-optimization-actions button:not(.primary)')?.click()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    preview: Boolean(document.querySelector('.prompt-optimization-preview')),
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    submits: window.__promptOptimizationSubmitCalls,
+    persisted: Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index))).includes(${JSON.stringify(originalPrompt)}),
+  }))()`, (value) => !value.preview && value.value === originalPrompt && value.submits === 0 && value.persisted);
+  await evaluate(cdp, `document.querySelector('.composer-optimize')?.click()`);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.prompt-optimization-preview')) && window.__promptOptimizationPostCalls === 2`, Boolean);
   await evaluate(cdp, `document.querySelector('.prompt-optimization-actions .primary')?.click()`);
   await waitForBrowserValue(cdp, `(() => ({
     value: document.querySelector('.chat-input-area textarea')?.value ?? '',
     restore: Boolean(document.querySelector('.prompt-optimization-restore')),
     submits: window.__promptOptimizationSubmitCalls,
-  }))()`, (value) => value.value === optimizedPrompt && value.restore && value.submits === 0);
+    persisted: Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index))).includes(${JSON.stringify(optimizedPrompt)}),
+  }))()`, (value) => value.value === optimizedPrompt && value.restore && value.submits === 0 && value.persisted);
   await evaluate(cdp, `document.querySelector('.prompt-optimization-restore button')?.click()`);
   await waitForBrowserValue(cdp, `(() => ({
     value: document.querySelector('.chat-input-area textarea')?.value ?? '',
     restore: Boolean(document.querySelector('.prompt-optimization-restore')),
     submits: window.__promptOptimizationSubmitCalls,
-  }))()`, (value) => value.value === originalPrompt && !value.restore && value.submits === 0);
-  console.log("[ui-smoke] prompt optimization preview, apply and restore stayed isolated from submit");
+    persisted: Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index))).includes(${JSON.stringify(originalPrompt)}),
+  }))()`, (value) => value.value === originalPrompt && !value.restore && value.submits === 0 && value.persisted);
+  console.log("[ui-smoke] prompt optimization double-click, keep, apply, restore and draft persistence stayed isolated from submit");
+
+  const editedPrompt = "用户已继续编辑的新草稿";
+  await evaluate(cdp, `(() => {
+    window.__promptOptimizationMode = 'stale';
+    document.querySelector('.composer-optimize')?.click();
+  })()`);
+  await waitForBrowserValue(cdp, `window.__promptOptimizationPostCalls`, (value) => value === 3);
+  await evaluate(cdp, `(() => {
+    const input = document.querySelector('.chat-input-area textarea');
+    input.value = ${JSON.stringify(editedPrompt)};
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: input.value }));
+  })()`);
+  await waitForBrowserValue(cdp, `(() => ({
+    preview: Boolean(document.querySelector('.prompt-optimization-preview')),
+    requesting: Boolean(document.querySelector('.prompt-optimization-status')),
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    submits: window.__promptOptimizationSubmitCalls,
+    persisted: Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index))).includes(${JSON.stringify(editedPrompt)}),
+  }))()`, (value) => !value.preview && !value.requesting && value.value === editedPrompt && value.submits === 0 && value.persisted);
+  console.log("[ui-smoke] stale optimization response could not replace a newly edited draft");
 
   await evaluate(cdp, `(() => {
     window.__promptOptimizationMode = 'cancel';
+    window.__promptOptimizationDeleteAttempts = 0;
     document.querySelector('.composer-optimize')?.click();
   })()`);
-  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.prompt-optimization-status')) && window.__promptOptimizationPostCalls === 2`, Boolean);
+  await waitForBrowserValue(cdp, `Boolean(document.querySelector('.prompt-optimization-status')) && window.__promptOptimizationPostCalls === 4`, Boolean);
   await evaluate(cdp, `document.querySelector('.prompt-optimization-status button')?.click()`);
   await waitForBrowserValue(cdp, `window.__promptOptimizationDeleteAttempts`, (value) => value === 1);
   await waitForBrowserValue(cdp, `Boolean(document.querySelector('.prompt-optimization-status button'))`, Boolean);
@@ -821,8 +933,54 @@ try {
     requesting: Boolean(document.querySelector('.prompt-optimization-status')),
     submits: window.__promptOptimizationSubmitCalls,
     error: document.querySelector('.notice.err')?.textContent ?? '',
-  }))()`, (value) => value.attempts === 2 && !value.requesting && !value.error);
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    persisted: Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index))).includes(${JSON.stringify(editedPrompt)}),
+  }))()`, (value) => value.attempts === 2 && !value.requesting && !value.error && value.value === editedPrompt && value.persisted);
   if (cancellationRetry.submits !== 0) throw new Error(`prompt optimization cancellation submitted the draft: ${JSON.stringify(cancellationRetry)}`);
+  console.log("[ui-smoke] prompt optimization cancellation retried after a transient DELETE failure");
+
+  await evaluate(cdp, `(() => {
+    window.__promptOptimizationMode = 'network';
+    window.__promptOptimizationDeleteAttempts = 0;
+    document.querySelector('.composer-optimize')?.click();
+  })()`);
+  const transportFailure = await waitForBrowserValue(cdp, `(() => ({
+    attempts: window.__promptOptimizationDeleteAttempts,
+    posts: window.__promptOptimizationPostCalls,
+    cleanup: Boolean(document.querySelector('.prompt-optimization-cleanup')),
+    preview: Boolean(document.querySelector('.prompt-optimization-preview')),
+    enabled: document.querySelector('.composer-optimize')?.disabled === false,
+    retry: Boolean(document.querySelector('.prompt-optimization-cleanup button')),
+    error: document.querySelector('.notice.err')?.textContent ?? '',
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    submits: window.__promptOptimizationSubmitCalls,
+  }))()`, (value) => value.posts === 5
+    && value.attempts === 1
+    && value.cleanup
+    && !value.preview
+    && !value.enabled
+    && value.retry
+    && /无法连接模型服务|Could not reach the model service/.test(value.error));
+  if (transportFailure.value !== editedPrompt || transportFailure.submits !== 0) {
+    throw new Error(`prompt optimization transport failure changed or submitted the draft: ${JSON.stringify(transportFailure)}`);
+  }
+  await evaluate(cdp, `document.querySelector('.prompt-optimization-cleanup button')?.click()`);
+  const cleanupRetry = await waitForBrowserValue(cdp, `(() => ({
+    attempts: window.__promptOptimizationDeleteAttempts,
+    cleanup: Boolean(document.querySelector('.prompt-optimization-cleanup')),
+    enabled: document.querySelector('.composer-optimize')?.disabled === false,
+    error: document.querySelector('.notice.err')?.textContent ?? '',
+    value: document.querySelector('.chat-input-area textarea')?.value ?? '',
+    submits: window.__promptOptimizationSubmitCalls,
+  }))()`, (value) => value.attempts === 2
+    && !value.cleanup
+    && value.enabled
+    && /无法连接模型服务|Could not reach the model service/.test(value.error));
+  if (cleanupRetry.value !== editedPrompt || cleanupRetry.submits !== 0) {
+    throw new Error(`prompt optimization cleanup retry changed or submitted the draft: ${JSON.stringify(cleanupRetry)}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  if (await evaluate(cdp, `window.__promptOptimizationDeleteAttempts`) !== 2) throw new Error('prompt optimization cleanup retried unexpectedly');
   await evaluate(cdp, `(() => {
     window.fetch = window.__promptOptimizationOriginalFetch;
     delete window.__promptOptimizationOriginalFetch;
@@ -831,7 +989,7 @@ try {
     delete window.__promptOptimizationDeleteAttempts;
     delete window.__promptOptimizationSubmitCalls;
   })()`);
-  console.log("[ui-smoke] prompt optimization cancellation retried after a transient DELETE failure");
+  console.log("[ui-smoke] prompt optimization transport failure retained ownership until cleanup retry succeeded");
 
   await evaluate(cdp, `(() => {
     const chip = [...document.querySelectorAll('.composer-chip-ghost')].find((item) => item.textContent.includes('模型'));

@@ -66,6 +66,7 @@ export function createKnowledgeRuntime({
   now = () => new Date(),
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
   cacheMax = DEFAULT_CACHE_MAX,
+  getKnowledgeDocumentState = () => null,
 } = {}) {
   if (!configPath) throw new TypeError("knowledge runtime configPath is required");
   const loadSemanticConfig = requiredFunction(loadSemanticEmbeddingUserConfig, "loadSemanticEmbeddingUserConfig");
@@ -81,6 +82,7 @@ export function createKnowledgeRuntime({
   let semanticAvailable = false;
   let boundWorkspace = null;
   let registrationGeneration = 0;
+  let loadKnowledgeDocumentState = typeof getKnowledgeDocumentState === "function" ? getKnowledgeDocumentState : () => null;
 
   function clearRetrievalCache() {
     retrievalCache.clear();
@@ -304,6 +306,7 @@ export function createKnowledgeRuntime({
     if (!query) return { input: text, sources: [], status: "empty", elapsedMs: 0 };
     const semantic = loadSemanticConfig(configPath);
     const { provider, config } = semanticProviderConfig(semantic);
+    const documentState = loadKnowledgeDocumentState(workspace);
     const cacheKey = buildSemanticRetrievalCacheKey({
       workspace,
       query,
@@ -312,6 +315,9 @@ export function createKnowledgeRuntime({
       baseUrl: config.baseUrl,
       extraBody: config.extraBody,
       apiKey: config.apiKey,
+      knowledgeRevision: documentState
+        ? `${Number(documentState.contentRevision) || 0}:${Number(documentState.indexedRevision) || 0}`
+        : "",
     });
     const cached = getCached(cacheKey);
     if (cached) {
@@ -337,7 +343,29 @@ export function createKnowledgeRuntime({
         signal: combinedSignal,
       });
       if (!groups) return { input: text, sources: [], status: "unavailable", elapsedMs: Date.now() - startedAt };
-      const selected = selectRetrievalHits(rerankRetrievalHits([...groups.knowledge, ...groups.workspace], query));
+      const tombstones = new Set((documentState?.tombstones || []).map((item) => String(item.markdownPath || "").replaceAll("\\", "/")));
+      const documents = new Map((documentState?.documents || []).map((item) => [String(item.markdownPath || "").replaceAll("\\", "/"), item]));
+      const knowledgeHits = (groups.knowledge || []).flatMap((hit) => {
+        const path = String(hit?.entry?.path || "").replaceAll("\\", "/");
+        if (!path.startsWith("knowledge/uploads/")) return [hit];
+        if (tombstones.has(path)) return [];
+        const document = documents.get(path);
+        if (!document || document.status === "failed" || Number(document.indexedRevision || 0) <= 0) return [];
+        if (Number(document.mtimeMs) !== Number(hit?.entry?.mtimeMs)) return [];
+        return [{
+          ...hit,
+          entry: {
+            ...hit.entry,
+            knowledgeDocument: {
+              documentId: document.documentId,
+              sourceName: document.sourceName,
+              sourceType: document.sourceType,
+              contentHash: document.contentHash,
+            },
+          },
+        }];
+      });
+      const selected = selectRetrievalHits(rerankRetrievalHits([...knowledgeHits, ...(groups.workspace || [])], query));
       setCached(cacheKey, selected);
       return {
         ...buildRetrievedModelInput(text, selected),
@@ -368,7 +396,7 @@ export function createKnowledgeRuntime({
     writeUserConfig(config, configPath);
     try {
       const result = await rebuildIndex(task.workspaceDir, {
-        rebuild: false,
+        rebuild: task.knowledgeForceRebuild === true,
         configPath,
         signal,
         indexConfig: { ...loadIndex(configPath), includeKnowledgeDocs: true },
@@ -382,13 +410,19 @@ export function createKnowledgeRuntime({
         return {
           requested: true,
           status: `pending: ${result.chunksSkipped} embedding chunk(s) failed and the previous index was preserved`,
+          result,
         };
       }
-      setIndexDirty(task.workspaceDir, false);
-      return { requested: true, status: "completed" };
+      if (task.deferDirtyFinalization !== true) setIndexDirty(task.workspaceDir, false);
+      return { requested: true, status: "completed", result };
     } catch (error) {
       setIndexDirty(task.workspaceDir, true);
-      return { requested: true, status: `pending: ${error.message}` };
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      return {
+        requested: true,
+        status: `pending: ${error.message}`,
+        error: { code: String(error?.code || "knowledge_index_failed"), message: String(error?.message || error) },
+      };
     }
   }
 
@@ -401,6 +435,10 @@ export function createKnowledgeRuntime({
     readManifest,
     registerSemanticSearch,
     retrieve,
+    setDocumentStateProvider: (provider) => {
+      loadKnowledgeDocumentState = typeof provider === "function" ? provider : () => null;
+      clearRetrievalCache();
+    },
     setIndexDirty,
     updateSemanticIndex,
     writeKnowledgeFile,

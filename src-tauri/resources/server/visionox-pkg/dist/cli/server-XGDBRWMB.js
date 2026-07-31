@@ -5431,6 +5431,9 @@ async function handleOptimizePrompt(method, rest, body, ctx) {
     if (!requestId || rest.length !== 1) {
       return promptOptimizationRouteError(400, "prompt_optimization_request_id_required", "requestId is required");
     }
+    if (!/^[A-Za-z0-9._:-]{1,160}$/.test(requestId)) {
+      return promptOptimizationRouteError(400, "prompt_optimization_request_id_invalid", "valid requestId required");
+    }
     if (typeof ctx.cancelPromptOptimization !== "function") {
       return promptOptimizationRouteError(503, "prompt_optimization_unavailable", "prompt optimization cancellation is unavailable", { retryable: true });
     }
@@ -5472,7 +5475,7 @@ async function handleOptimizePrompt(method, rest, body, ctx) {
       details: err?.details
     });
   }
-  if (!result || result.requestId !== requestId || result.draftRevision !== draftRevision || typeof result.original !== "string" || typeof result.optimized !== "string") {
+  if (!result || result.requestId !== requestId || result.draftRevision !== draftRevision || result.original !== prompt || typeof result.optimized !== "string") {
     return promptOptimizationRouteError(502, "prompt_optimization_response_invalid", "prompt optimization returned an invalid response", { retryable: true });
   }
   return {

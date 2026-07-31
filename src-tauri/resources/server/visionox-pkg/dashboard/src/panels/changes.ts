@@ -14,7 +14,7 @@ import { primaryBalance } from "../lib/format.js";
 import { useLineComments } from "../lib/line-comments.js";
 import { useReviewDiffs } from "../lib/review-diffs.js";
 import { subscribeSse, subscribeSseStatus } from "../lib/use-poll.js";
-import { applyDashboardEvent as reduceDashboardEvent, createDashboardReducerState, createDashboardReducerStateFromSnapshot, mergeCanonicalMessagePage } from "../lib/event-reducer.js";
+import { applyDashboardEvent as reduceDashboardEvent, createDashboardReducerState, createDashboardReducerStateFromSnapshot, mergeCanonicalMessagePage, orderedDashboardMessages } from "../lib/event-reducer.js";
 import { mergeSnapshotToolsIntoMessages } from "../lib/chat-turn-rendering.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { Select } from "../ui/index.js";
@@ -1048,7 +1048,7 @@ function ChatPane(props) {
           executionStateRef.current = snapshotState;
           setMessages(data.snapshot
             ? mergeSnapshotToolsIntoMessages(
-              mergeCanonicalMessagePage(data.messages, snapshotState.messages),
+              mergeCanonicalMessagePage(data.messages, orderedDashboardMessages(snapshotState)),
               Object.values(snapshotState.tools),
             )
             : data.messages ?? []);
@@ -1105,7 +1105,7 @@ function ChatPane(props) {
       activeSessionIdRef.current = String(data.snapshot?.sessionId ?? "").trim() || null;
       setMessages(data.snapshot
         ? mergeSnapshotToolsIntoMessages(
-          mergeCanonicalMessagePage(data.messages, snapshotState.messages),
+          mergeCanonicalMessagePage(data.messages, orderedDashboardMessages(snapshotState)),
           Object.values(snapshotState.tools),
         )
         : data.messages ?? []);

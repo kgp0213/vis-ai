@@ -16,6 +16,7 @@ import {
   validateRequestDefaults,
   validateVisionPolicy,
 } from "../lib/model-request-policy.mjs";
+import { createPromptOptimizationRuntime } from "../lib/prompt-optimization-runtime.mjs";
 
 const { DeepSeekClient } = await import(new URL("../visionox-pkg/dist/cli/chunk-2KDUS647.js", import.meta.url));
 const { DeepSeekClient: PackageDeepSeekClient } = await import(new URL("../visionox-pkg/dist/index.js", import.meta.url));
@@ -117,6 +118,8 @@ describe("model request policy", () => {
     };
     assert.equal(validateAgentPolicy(policy, { requestPolicy: "json" }), null);
     assert.match(validateAgentPolicy({ maxToolIterations: 0 }), /maxToolIterations/);
+    assert.equal(validateAgentPolicy({ maxToolIterations: 256 }), null);
+    assert.match(validateAgentPolicy({ maxToolIterations: 257 }), /maxToolIterations/);
     assert.match(validateAgentPolicy({ maxToolContinuationWindows: 3 }), /maxToolContinuationWindows/);
     assert.match(validateAgentPolicy({ toolResultBudget: { defaultTokens: 16000, documentTokens: 40000, absoluteMaxTokens: 32000 } }), /documentTokens/);
     assert.match(validateAgentPolicy({ sameFailureClassLimit: 0 }), /sameFailureClassLimit/);
@@ -375,6 +378,129 @@ describe("model request policy", () => {
         extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 8192 } },
       },
     );
+  });
+
+  test("prompt optimization accepts a dedicated profile that overrides selected effort", () => {
+    const provider = {
+      requestPolicy: "json",
+      defaultEffort: "high",
+      models: [{
+        id: "slow-qwen",
+        efforts: ["low", "high"],
+        requestDefaults: {
+          max_tokens: 8192,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 } },
+        },
+        effortParams: {
+          low: { extra_body: { chat_template_kwargs: { thinking_budget: 2048 } } },
+          high: { extra_body: { chat_template_kwargs: { thinking_budget: 8192 } } },
+        },
+        verificationRequestDefaults: {
+          max_tokens: 8,
+          temperature: 0,
+          extra_body: { chat_template_kwargs: { enable_thinking: false } },
+        },
+        agentPolicy: {
+          requestProfiles: {
+            promptOptimization: {
+              temperature: 0.1,
+              extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 512 } },
+            },
+          },
+        },
+      }],
+    };
+
+    assert.equal(validateAgentPolicy(provider.models[0].agentPolicy, { requestPolicy: "json" }), null);
+    assert.deepEqual(
+      resolveProviderModelRequest(provider, "slow-qwen", { purpose: "promptOptimization", reasoningEffort: "high" }).requestDefaults,
+      {
+        max_tokens: 8192,
+        temperature: 0.1,
+        extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 512 } },
+      },
+    );
+  });
+
+  test("prompt optimization safely falls back to probe thinking controls without its token cap", () => {
+    const provider = {
+      requestPolicy: "json",
+      defaultEffort: "high",
+      models: [{
+        id: "fallback-qwen",
+        efforts: ["high"],
+        requestDefaults: {
+          max_tokens: 8192,
+          extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 } },
+        },
+        effortParams: {
+          high: { extra_body: { chat_template_kwargs: { enable_thinking: true, thinking_budget: 8192 } } },
+        },
+        verificationRequestDefaults: {
+          max_tokens: 8,
+          temperature: 0,
+          extra_body: { chat_template_kwargs: { enable_thinking: false } },
+        },
+      }],
+    };
+
+    assert.deepEqual(
+      resolveProviderModelRequest(provider, "fallback-qwen", { purpose: "promptOptimization", reasoningEffort: "high" }).requestDefaults,
+      {
+        max_tokens: 8192,
+        temperature: 0,
+        extra_body: { chat_template_kwargs: { enable_thinking: false, thinking_budget: 8192 } },
+      },
+    );
+  });
+
+  test("prompt optimization transports profile temperature and either native token-limit field", async () => {
+    for (const tokenField of ["max_tokens", "max_completion_tokens"]) {
+      let payload = null;
+      const provider = {
+        requestPolicy: "json",
+        models: [{
+          id: `profile-${tokenField}`,
+          capabilities: { maxOutputTokens: 4096 },
+          requestDefaults: { temperature: 0.8, [tokenField]: 2048 },
+          agentPolicy: {
+            requestProfiles: {
+              promptOptimization: { temperature: 0.1, [tokenField]: 256 },
+            },
+          },
+        }],
+      };
+      const model = provider.models[0].id;
+      const requestConfiguration = resolveProviderModelRequest(provider, model, { purpose: "promptOptimization" });
+      const client = new DeepSeekClient({
+        apiKey: "test",
+        baseUrl: "https://model.test/v1",
+        requestConfigForModel: (_model, options) => resolveProviderModelRequest(provider, model, options),
+        fetch: async (_url, init) => {
+          payload = JSON.parse(init.body);
+          return response({ choices: [{ message: { content: "优化任务" }, finish_reason: "stop" }], usage: {} });
+        },
+      });
+      const runtime = createPromptOptimizationRuntime({
+        requestModelText: async (request) => (await client.chat(request)).content,
+        getModelContext: () => ({
+          mode: "general",
+          providerId: "provider",
+          model,
+          providerCapabilities: { maxOutputTokens: 4096 },
+          requestConfiguration,
+        }),
+      });
+
+      await runtime.optimize({
+        prompt: "优化任务",
+        requestId: `transport-${tokenField}`,
+        draftRevision: 1,
+      });
+      assert.equal(payload.temperature, 0.1);
+      assert.equal(payload[tokenField], 256);
+      assert.equal(Object.hasOwn(payload, tokenField === "max_tokens" ? "max_completion_tokens" : "max_tokens"), false);
+    }
   });
 
   test("JSON providers accept and merge task-specific request profiles", () => {

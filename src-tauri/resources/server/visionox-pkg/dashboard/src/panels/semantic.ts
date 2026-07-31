@@ -8,6 +8,8 @@ import { appBus, requestChatMessageJump, showToast } from "../lib/bus.js";
 import { QUICK_CAPS_USD, budgetTone, bumpSuggestions, deriveBudgetState } from "../lib/budget.js";
 import { fmtBytes, fmtCompactNum, fmtCost, fmtNum, fmtPct, fmtRelativeTime, fmtUsd, primaryBalance } from "../lib/format.js";
 import { html as html4 } from "../lib/html.js";
+import { cancelKnowledgeReindexJob, deleteKnowledgeDocument, listKnowledgeDocuments, reindexKnowledgeDocuments, uploadKnowledgeDocument } from "../lib/knowledge-documents.js";
+import { isKnowledgeResponseCurrent, knowledgeDocumentStatusKey } from "../lib/knowledge-documents-coordination.js";
 import { INTERVAL_PRESETS_MS, formatRemaining, parseCustomInterval } from "../lib/loop-control.js";
 import { showArtifactPreview } from "../lib/markdown.js";
 import { subscribeSse, usePoll } from "../lib/use-poll.js";
@@ -382,6 +384,8 @@ function SemanticPanel() {
               </div>
             ` : null}
 
+        <${KnowledgeDocsCard} />
+
         ${job ? html4`
               ${sectionH3(t4("semantic.job"))}
               <${SemanticJobView} job=${job} running=${running} />
@@ -711,6 +715,301 @@ function SemanticExcludesCard() {
       </div>
 
       ${preview ? html4`<div style="margin-top:10px"><${ExcludesPreview} preview=${preview} /></div>` : null}
+    </div>
+  `;
+}
+function KnowledgeDocsCard() {
+  useLang();
+  const [data, setData] = d2(null);
+  const [error, setError] = d2(null);
+  const [busy, setBusy] = d2(false);
+  const [uploading, setUploading] = d2(false);
+  const [progress, setProgress] = d2(null);
+  const [uploadResults, setUploadResults] = d2([]);
+  const [dragging, setDragging] = d2(false);
+  const fileInputRef = A2(null);
+  const mountedRef = A2(true);
+  const requestSequenceRef = A2(0);
+  const latestListRequestRef = A2(null);
+  const latestMutationRequestRef = A2(null);
+  const listControllerRef = A2(null);
+  const mutationControllersRef = A2(/* @__PURE__ */ new Set());
+  const workspaceFingerprintRef = A2(null);
+  const nextRequestId = () => `knowledge-${++requestSequenceRef.current}`;
+  const abortMutations = () => {
+    for (const controller of mutationControllersRef.current) controller.abort();
+    mutationControllersRef.current.clear();
+  };
+  const responseIsCurrent = (scope, responseWorkspaceFingerprint) => isKnowledgeResponseCurrent({
+    requestId: scope.requestId,
+    latestRequestId: scope.kind === "list" ? latestListRequestRef.current : latestMutationRequestRef.current,
+    requestWorkspaceFingerprint: scope.workspaceFingerprint,
+    currentWorkspaceFingerprint: workspaceFingerprintRef.current,
+    responseWorkspaceFingerprint
+  });
+  const load = q2(async () => {
+    const requestId = nextRequestId();
+    latestListRequestRef.current = requestId;
+    listControllerRef.current?.abort();
+    const controller = new AbortController();
+    listControllerRef.current = controller;
+    try {
+      const requestWorkspaceFingerprint = workspaceFingerprintRef.current;
+      const r3 = await listKnowledgeDocuments({
+        signal: controller.signal,
+        workspaceFingerprint: requestWorkspaceFingerprint,
+        requestId,
+      });
+      const scope = { kind: "list", requestId, workspaceFingerprint: requestWorkspaceFingerprint };
+      if (!mountedRef.current || !responseIsCurrent(scope, r3.workspaceFingerprint)) return;
+      if (workspaceFingerprintRef.current && workspaceFingerprintRef.current !== r3.workspaceFingerprint) {
+        abortMutations();
+        setUploading(false);
+        setProgress(null);
+        setUploadResults([]);
+      }
+      workspaceFingerprintRef.current = r3.workspaceFingerprint;
+      setData(r3);
+      setError(null);
+    } catch (err) {
+      if (controller.signal.aborted || err?.name === "AbortError") return;
+      if (!mountedRef.current || latestListRequestRef.current !== requestId) return;
+      setError(err.message);
+    }
+  }, []);
+  y2(() => {
+    return () => {
+      mountedRef.current = false;
+      listControllerRef.current?.abort();
+      abortMutations();
+    };
+  }, []);
+  y2(() => {
+    void load();
+    const polling = setInterval(load, data?.activeJob ? 1200 : 5e3);
+    return () => clearInterval(polling);
+  }, [load, data?.activeJob?.jobId, data?.activeJob?.status]);
+  const uploadFiles = q2(
+    async (fileList) => {
+      const files = Array.from(fileList ?? []);
+      if (files.length === 0 || uploading) return;
+      const workspaceFingerprint = workspaceFingerprintRef.current;
+      if (!workspaceFingerprint) return;
+      const requestId = nextRequestId();
+      latestMutationRequestRef.current = requestId;
+      const controller = new AbortController();
+      mutationControllersRef.current.add(controller);
+      const scope = { kind: "mutation", requestId, workspaceFingerprint };
+      setUploading(true);
+      setError(null);
+      setProgress({ done: 0, total: files.length });
+      const results = files.map((file, index) => ({ id: `${requestId}-${index}`, file, status: "queued", error: null }));
+      setUploadResults(results);
+      let succeeded = 0;
+      let completed = 0;
+      try {
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          if (controller.signal.aborted) break;
+          setUploadResults((current) => current.map((item) => item.id === results[index].id ? { ...item, status: "uploading" } : item));
+          try {
+            const uploaded = await uploadKnowledgeDocument(file, {
+              signal: controller.signal,
+              workspaceFingerprint,
+              requestId: `${requestId}-${index}`,
+            });
+            if (!responseIsCurrent(scope, uploaded.workspaceFingerprint)) break;
+            succeeded += 1;
+            setUploadResults((current) => current.map((item) => item.id === results[index].id
+              ? { ...item, status: "succeeded", result: uploaded, error: null }
+              : item));
+          } catch (err) {
+            if (controller.signal.aborted || err?.name === "AbortError") break;
+            setUploadResults((current) => current.map((item) => item.id === results[index].id
+              ? { ...item, status: "failed", error: err.message }
+              : item));
+          }
+          completed += 1;
+          setProgress({ done: completed, total: files.length });
+        }
+        if (succeeded > 0) showToast(t4("semantic.knowledgeDocsUploaded", { count: succeeded }), "success");
+      } finally {
+        mutationControllersRef.current.delete(controller);
+        if (mountedRef.current && workspaceFingerprintRef.current === workspaceFingerprint) {
+          setUploading(false);
+          setProgress(null);
+        }
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        if (!controller.signal.aborted) await load();
+      }
+    },
+    [uploading, load]
+  );
+  const remove = q2(
+    async (document) => {
+      if (busy || uploading) return;
+      const { documentId, name } = document;
+      if (!confirm(t4("semantic.knowledgeDocsDeleteConfirm", { name }))) return;
+      const workspaceFingerprint = workspaceFingerprintRef.current;
+      const requestId = nextRequestId();
+      latestMutationRequestRef.current = requestId;
+      const controller = new AbortController();
+      mutationControllersRef.current.add(controller);
+      const scope = { kind: "mutation", requestId, workspaceFingerprint };
+      setBusy(true);
+      setError(null);
+      try {
+        const deleted = await deleteKnowledgeDocument(documentId, {
+          signal: controller.signal,
+          workspaceFingerprint,
+          requestId,
+        });
+        if (!responseIsCurrent(scope, deleted.workspaceFingerprint)) return;
+        showToast(t4("semantic.knowledgeDocsDeleted", { name }), "success");
+        await load();
+      } catch (err) {
+        if (controller.signal.aborted || err?.name === "AbortError") return;
+        showToast(err.message, "error", 6e3);
+      } finally {
+        mutationControllersRef.current.delete(controller);
+        if (mountedRef.current && workspaceFingerprintRef.current === workspaceFingerprint) setBusy(false);
+      }
+    },
+    [busy, uploading, load]
+  );
+  const reindex = q2(async () => {
+    if (busy || uploading) return;
+    const workspaceFingerprint = workspaceFingerprintRef.current;
+    const requestId = nextRequestId();
+    latestMutationRequestRef.current = requestId;
+    const controller = new AbortController();
+    mutationControllersRef.current.add(controller);
+    const scope = { kind: "mutation", requestId, workspaceFingerprint };
+    setBusy(true);
+    setError(null);
+    try {
+      const started = await reindexKnowledgeDocuments({
+        signal: controller.signal,
+        workspaceFingerprint,
+        requestId,
+      });
+      if (!responseIsCurrent(scope, started.workspaceFingerprint)) return;
+      showToast(t4("semantic.knowledgeDocsReindexStarted"), "success");
+      await load();
+    } catch (err) {
+      if (controller.signal.aborted || err?.name === "AbortError") return;
+      showToast(err.message, err.status === 409 ? "warn" : "error", 6e3);
+    } finally {
+      mutationControllersRef.current.delete(controller);
+      if (mountedRef.current && workspaceFingerprintRef.current === workspaceFingerprint) setBusy(false);
+    }
+  }, [busy, uploading, load]);
+  const cancelReindex = q2(async () => {
+    const job = data?.activeJob;
+    if (!job || busy) return;
+    const controller = new AbortController();
+    mutationControllersRef.current.add(controller);
+    setBusy(true);
+    try {
+      const cancelled = await cancelKnowledgeReindexJob(job.jobId, {
+        signal: controller.signal,
+        workspaceFingerprint: workspaceFingerprintRef.current,
+        requestId: nextRequestId(),
+      });
+      if (cancelled.workspaceFingerprint !== workspaceFingerprintRef.current) return;
+      await load();
+    } catch (err) {
+      if (!controller.signal.aborted) showToast(err.message, "error", 6e3);
+    } finally {
+      mutationControllersRef.current.delete(controller);
+      if (mountedRef.current) setBusy(false);
+    }
+  }, [data?.activeJob?.jobId, busy, load]);
+  if (!data && !error) {
+    return html4`
+      <div class="card">
+        <div class="card-h"><span class="title">${t4("semantic.knowledgeDocsTitle")}</span></div>
+        <div style="color:var(--fg-3);font-size:12.5px">${t4("common.loading")}</div>
+      </div>
+    `;
+  }
+  const docs = [...(data?.documents ?? []), ...(data?.deletedDocuments ?? [])];
+  const failedJob = data?.lastJob && ["failed", "partial", "blocked", "interrupted"].includes(data.lastJob.status)
+    ? data.lastJob
+    : null;
+  return html4`
+    <div class=${`card ${dragging ? "accent-brand" : ""}`}
+      onDragOver=${(event) => { event.preventDefault(); setDragging(true); }}
+      onDragLeave=${(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDragging(false); }}
+      onDrop=${(event) => { event.preventDefault(); setDragging(false); void uploadFiles(event.dataTransfer?.files); }}>
+      <div class="card-h">
+        <span class="title">${t4("semantic.knowledgeDocsTitle")}</span>
+        <span class="meta">
+          ${data?.indexDirty ? html4`<span class="pill warn">${t4("semantic.knowledgeDocsDirty")}</span>` : null}
+          ${data?.activeJob ? html4`<span class="pill pill-active">${data.activeJob.status === "queued" ? t4("semantic.knowledgeDocsDebouncing") : t4("semantic.knowledgeDocsIndexing")}</span>` : null}
+        </span>
+      </div>
+      ${error ? html4`<div class="notice err">${error}</div>` : null}
+      ${data && data.includeKnowledgeDocs === false ? html4`
+            <div class="notice warn">${t4("semantic.knowledgeDocsNotIndexed")}</div>
+          ` : null}
+      ${dragging ? html4`<div class="notice" style="text-align:center">${t4("semantic.knowledgeDocsDropNow")}</div>` : null}
+      ${failedJob ? html4`
+        <div class="notice err">
+          <div>${t4("semantic.knowledgeDocsJobFailed", { status: failedJob.status })}</div>
+          ${failedJob.error?.message ? html4`<div class="dim" style="margin-top:4px">${failedJob.error.message}</div>` : null}
+        </div>
+      ` : null}
+      ${data ? html4`
+            ${docs.length === 0 ? html4`<div style="color:var(--fg-3);font-size:12.5px">${t4("semantic.knowledgeDocsEmpty")}</div>` : html4`
+                  <div style="overflow-x:auto">
+                    <table class="tbl" style="font-size:11.5px">
+                      <thead>
+                        <tr>
+                          <th>${t4("semantic.knowledgeDocsColName")}</th>
+                          <th class="num">${t4("semantic.knowledgeDocsColSize")}</th>
+                          <th>${t4("semantic.knowledgeDocsColUpdated")}</th>
+                          <th>${t4("semantic.knowledgeDocsColStatus")}</th>
+                          <th style="width:64px"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        ${docs.map(
+    (doc) => html4`
+                            <tr>
+                              <td><code class="mono" style="overflow-wrap:anywhere;word-break:break-word">${doc.name}</code></td>
+                              <td class="num">${fmtBytes(doc.size)}</td>
+                              <td class="dim" style="white-space:nowrap">${new Date(doc.updatedAt).toLocaleString()}</td>
+                              <td><span class=${`pill ${doc.status === "indexed" ? "ok" : doc.status === "failed" ? "pill-err" : "warn"}`}>${t4(`semantic.${knowledgeDocumentStatusKey(doc.status)}`)}</span></td>
+                              <td><button class="danger" disabled=${busy || uploading || doc.status === "deleted_pending_index"} onClick=${() => remove(doc)}>${t4("common.remove")}</button></td>
+                            </tr>
+                          `
+  )}
+                      </tbody>
+                    </table>
+                  </div>
+                `}
+            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;align-items:center">
+              <button class="btn primary" disabled=${uploading || busy} onClick=${() => fileInputRef.current?.click()}>
+                ${uploading ? t4("semantic.knowledgeDocsUploading", { done: progress?.done ?? 0, total: progress?.total ?? 0 }) : t4("semantic.knowledgeDocsUpload")}
+              </button>
+              <button class="btn ghost" disabled=${busy || uploading} onClick=${reindex}>${t4("semantic.knowledgeDocsReindex")}</button>
+              ${data.activeJob ? html4`<button class="btn ghost" disabled=${busy} onClick=${cancelReindex}>${t4("semantic.knowledgeDocsCancelIndex")}</button>` : null}
+            </div>
+            ${uploadResults.length > 0 ? html4`
+              <div style="margin-top:10px;display:grid;gap:5px">
+                ${uploadResults.map((item) => html4`
+                  <div style="display:flex;gap:8px;align-items:center;font-size:11.5px;min-width:0">
+                    <code class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${item.file.name}</code>
+                    <span class=${`pill ${item.status === "succeeded" ? "ok" : item.status === "failed" ? "pill-err" : "warn"}`}>${t4(`semantic.knowledgeDocsUpload${item.status[0].toUpperCase()}${item.status.slice(1)}`)}</span>
+                    ${item.status === "failed" ? html4`<button class="btn ghost" disabled=${uploading || busy} onClick=${() => uploadFiles([item.file])}>${t4("semantic.knowledgeDocsRetry")}</button>` : null}
+                  </div>
+                  ${item.error ? html4`<div class="dim" style="font-size:11px">${item.error}</div>` : null}
+                `)}
+              </div>
+            ` : null}
+          ` : null}
+      <input type="file" ref=${fileInputRef} accept=".md,.txt,.pdf" multiple style="display:none" onChange=${(e3) => uploadFiles(e3.target.files)} />
     </div>
   `;
 }

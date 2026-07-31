@@ -20,11 +20,27 @@ export interface ApiOptions {
 export interface ApiError extends Error {
   status: number;
   body: unknown;
+  transport?: "timeout" | "network";
   code?: string;
   title?: string;
   retryable?: boolean;
   action?: string;
   details?: Record<string, unknown>;
+}
+
+function apiTransportError(
+  message: string,
+  code: "api_request_timeout" | "api_network_error",
+  transport: "timeout" | "network",
+): ApiError {
+  const error = new Error(message) as ApiError;
+  error.status = 0;
+  error.body = null;
+  error.code = code;
+  error.retryable = true;
+  error.action = "retry";
+  error.transport = transport;
+  return error;
 }
 
 export async function api<T = any>(path: string, opts: ApiOptions = {}): Promise<T> {
@@ -38,8 +54,9 @@ export async function api<T = any>(path: string, opts: ApiOptions = {}): Promise
     : Math.max(1000, Number(opts.timeoutMs ?? (method === "GET" ? 15_000 : 120_000)));
   const controller = new AbortController();
   let timedOut = false;
-  const abortFromCaller = () => controller.abort();
-  opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
+  const abortFromCaller = () => controller.abort(opts.signal?.reason);
+  if (opts.signal?.aborted) abortFromCaller();
+  else opts.signal?.addEventListener?.("abort", abortFromCaller, { once: true });
   const timeout = timeoutMs > 0 ? setTimeout(() => {
     timedOut = true;
     controller.abort();
@@ -55,8 +72,19 @@ export async function api<T = any>(path: string, opts: ApiOptions = {}): Promise
     });
     text = await res.text();
   } catch (error) {
-    if (timedOut) throw new Error(t4("chat.requestTimeout", { sec: Math.round(timeoutMs / 1000), path }));
-    throw error;
+    if (opts.signal?.aborted) throw error;
+    if (timedOut) {
+      throw apiTransportError(
+        t4("chat.requestTimeout", { sec: Math.round(timeoutMs / 1000), path }),
+        "api_request_timeout",
+        "timeout",
+      );
+    }
+    throw apiTransportError(
+      error instanceof Error ? error.message : String(error),
+      "api_network_error",
+      "network",
+    );
   } finally {
     if (timeout) clearTimeout(timeout);
     opts.signal?.removeEventListener?.("abort", abortFromCaller);

@@ -289,23 +289,58 @@ export function activeEntriesForDashboard(entries, now = Date.now()) {
 export function withPendingUserEntry(entries, pendingUser = null) {
   const next = Array.isArray(entries) ? [...entries] : [];
   const text = typeof pendingUser?.text === "string" ? pendingUser.text : "";
+  const pendingId = String(pendingUser?.id ?? pendingUser?.messageId ?? "").trim();
+  const pendingTurnId = String(pendingUser?.turnId ?? "").trim();
+  const pendingOperationId = String(pendingUser?.operationId ?? "").trim();
+  const pendingAdmittedInputId = String(pendingUser?.admittedInputId ?? "").trim();
   const attachments = Array.isArray(pendingUser?.attachments) && pendingUser.attachments.length > 0
     ? pendingUser.attachments.map((attachment) => ({ ...attachment }))
     : null;
   const images = Array.isArray(pendingUser?.images) && pendingUser.images.length > 0 ? [...pendingUser.images] : null;
   if (!text && !attachments && !images) return next;
 
-  let lastUserIndex = -1;
-  for (let index = next.length - 1; index >= 0; index--) {
-    if (next[index]?.role === "user") {
-      lastUserIndex = index;
-      break;
+  const userIndices = next
+    .map((entry, index) => entry?.role === "user" ? index : -1)
+    .filter((index) => index >= 0);
+  let targetIndex = -1;
+  if (pendingId) {
+    targetIndex = userIndices.find((index) => String(next[index]?.id ?? next[index]?.messageId ?? "").trim() === pendingId) ?? -1;
+    // The model history can omit the durable id for the original prompt while
+    // retaining a later steer entry with the same operation. Match only an
+    // unscoped, same-text legacy row in that case; never merge into a
+    // different identified turn merely because the text happens to repeat.
+    if (targetIndex < 0) {
+      targetIndex = userIndices.find((index) => {
+        const entry = next[index];
+        const entryId = String(entry?.id ?? entry?.messageId ?? "").trim();
+        const entryTurnId = String(entry?.turnId ?? "").trim();
+        const entryOperationId = String(entry?.operationId ?? "").trim();
+        return !entryId
+          && contentText(entry?.content) === text
+          && (!pendingTurnId || !entryTurnId || entryTurnId === pendingTurnId)
+          && (!pendingOperationId || !entryOperationId || entryOperationId === pendingOperationId);
+      }) ?? -1;
+    }
+  } else {
+    for (let cursor = userIndices.length - 1; cursor >= 0; cursor -= 1) {
+      const index = userIndices[cursor];
+      if (contentText(next[index]?.content) === text) {
+        targetIndex = index;
+        break;
+      }
     }
   }
-  const lastUser = lastUserIndex >= 0 ? next[lastUserIndex] : null;
-  if (lastUser && contentText(lastUser.content) === text) {
-    if (attachments || images) next[lastUserIndex] = {
-      ...lastUser,
+
+  const identity = {
+    ...(pendingId ? { id: pendingId } : {}),
+    ...(pendingTurnId ? { turnId: pendingTurnId } : {}),
+    ...(pendingOperationId ? { operationId: pendingOperationId } : {}),
+    ...(pendingAdmittedInputId ? { admittedInputId: pendingAdmittedInputId } : {}),
+  };
+  if (targetIndex >= 0) {
+    next[targetIndex] = {
+      ...next[targetIndex],
+      ...identity,
       ...(attachments ? { attachments } : {}),
       ...(images ? { images } : {}),
     };
@@ -314,6 +349,7 @@ export function withPendingUserEntry(entries, pendingUser = null) {
   next.push({
     role: "user",
     content: text,
+    ...identity,
     ...(attachments ? { attachments } : {}),
     ...(images ? { images } : {}),
   });

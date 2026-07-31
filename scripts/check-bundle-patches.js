@@ -69,6 +69,10 @@ const required = [
     markers: ["createKnowledgeRuntime", "boundWorkspace", "clearRetrievalCache", "readManifest", "writeManifest", "updateSemanticIndex", "setIndexDirty"],
   },
   {
+    file: "src-tauri/resources/server/lib/knowledge-documents.mjs",
+    markers: ["createKnowledgeDocumentsApi", "startKnowledgeAwareDashboardServer", "sanitizeUploadName", "createPdfJsTextExtractor", "/api/knowledge/documents"],
+  },
+  {
     file: "src-tauri/resources/server/lib/workspace-runtime.mjs",
     markers: ["createWorkspaceRuntime", "getState", "select", "removeHistory", "clearPreparedDocuments", "removeMcpServers", "removeWorkspaceTools", "registerWorkspaceTools", "rebuildLoop", "reloadMcp"],
   },
@@ -490,6 +494,11 @@ const required = [
       "inputValueRef",
       "setChatInput",
       "optimizeCurrentPrompt",
+      "api_request_timeout",
+      "api_network_error",
+      "prompt_optimization_fact_mismatch",
+      "deletePromptOptimizationRequest",
+      "chat.optimizeSemanticMismatch",
       "composer-send",
       "composer-plus-menu",
       "defaultValue=${inputValueRef.current}",

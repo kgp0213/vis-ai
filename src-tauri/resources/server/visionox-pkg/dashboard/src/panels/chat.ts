@@ -24,6 +24,7 @@ import { confirmExternalArtifactOpen, showArtifactPreview } from "../lib/markdow
 import {
   classifyPromptOptimizationDraft,
   createPromptOptimizationScope,
+  describePromptOptimizationFailure,
   promptOptimizationButtonDisabled,
   promptOptimizationResponseIsCurrent,
 } from "../lib/prompt-optimization.js";
@@ -38,9 +39,13 @@ import {
   dashboardSnapshotResponseIsCurrent,
   mergeDashboardMessagePages,
   observeDashboardEventCursor,
+  orderedDashboardMessages,
   projectDashboardMessagePage,
 } from "../lib/event-reducer.js";
-import { groupToolMessages, mergeSnapshotToolsIntoMessages, toolFrameMatches } from "../lib/chat-turn-rendering.js";
+import { groupToolMessages, toolFrameMatches } from "../lib/chat-turn-rendering.js";
+import { assistantHasAuthoritativeFinalEvidence, projectChatTimeline } from "../lib/chat-timeline.js";
+import { createChatScrollState, createFrameScheduler, reduceChatScrollState } from "../lib/chat-scroll-policy.js";
+import { redactSensitiveDisplayText, redactTechnicalMessages, safeTechnicalDisplayText } from "../lib/chat-display-safety.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { IconModel, IconWorkspace, IconJobs, IconSearch, IconWand, IconAttach, IconSkill } from "../ui/index.js";
 const N2: any = preactMemo;
@@ -167,10 +172,10 @@ function captureChatScrollAnchor(feed) {
   }
   return { id: null, scrollHeight: feed.scrollHeight, scrollTop: feed.scrollTop };
 }
-function restoreChatScrollAnchor(feed, anchor, done) {
+function restoreChatScrollAnchor(feed, anchor, done, isCurrent = () => true) {
   requestAnimationFrame(() => requestAnimationFrame(() => {
     try {
-      if (!feed || !anchor) return;
+      if (!feed || !feed.isConnected || !anchor || !isCurrent()) return;
       if (anchor.id) {
         const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
         const node = Array.from(feed.querySelectorAll(selector)).find((item) => anchor.kind === "process" ? item.dataset.processAnchorId === anchor.id : item.dataset.msgId === anchor.id);
@@ -209,6 +214,8 @@ function upsertToolProgress(items, dash) {
     retryable: dash.retryable === true,
     diagnosticMessage: dash.message || null,
     repeatFailureBlocked: dash.repeatFailureBlocked === true,
+    eventEpoch: dash.eventEpoch ?? null,
+    eventSeq: dash.eventSeq ?? null,
   };
   const index = items.findIndex((item) => toolFrameMatches(item, next));
   if (index < 0) return [...items, next];
@@ -238,9 +245,15 @@ function upsertActiveTool(items, dash) {
 
 function projectChatMessagePage(data) {
   const page = projectDashboardMessagePage(data);
+  const timeline = projectChatTimeline(page.messages, page.tools);
   return {
     ...page,
-    messages: mergeSnapshotToolsIntoMessages(page.messages, page.tools),
+    messages: timeline.frames.map((frame) => ({
+      ...frame.message,
+      __timelineSegmentId: frame.segmentId,
+      __timelineEventSeq: frame.eventSeq,
+      __timelineEventEpoch: frame.eventEpoch,
+    })),
   };
 }
 function chatDraftKey(workspaceDir, mode) {
@@ -626,11 +639,12 @@ function backgroundActionRequestId() {
 }
 function documentHandoffNotice(job) {
   const state = job?.handoff?.state;
+  const lastError = safeTechnicalDisplayText(job?.handoff?.lastError || t4("chat.handoffCheckModel"));
   return {
     queued: { tone: "warn", text: t4("chat.handoffQueued") },
     running: { tone: "warn", text: t4("chat.handoffRunning") },
     waiting_conversation: { tone: "warn", text: t4("chat.handoffWaitingConversation") },
-    needs_user: { tone: "err", text: `${t4("chat.handoffNeedsUser", { error: job?.handoff?.lastError || t4("chat.handoffCheckModel") })}${t4("chat.handoffRedeliverNote")}` },
+    needs_user: { tone: "err", text: `${t4("chat.handoffNeedsUser", { error: lastError })}${t4("chat.handoffRedeliverNote")}` },
     user_paused: { tone: "warn", text: t4("chat.handoffUserPaused") },
     legacy_unassigned: { tone: "warn", text: t4("chat.handoffLegacy") }
   }[state] || null;
@@ -713,16 +727,16 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
     ...(Array.isArray(selected?.issues) ? selected.issues : [])
   ];
   const genericUserAction = selected?.userAction;
-  const genericUserActionText = typeof genericUserAction === "string"
+  const genericUserActionText = safeTechnicalDisplayText(typeof genericUserAction === "string"
     ? genericUserAction
-    : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || t4("chat.userActionNeededFallback");
-  const genericOutcomeSummary = typeof selected?.outcomeSummary === "string" ? selected.outcomeSummary.trim() : "";
+    : genericUserAction?.question || genericUserAction?.message || genericUserAction?.prompt || genericUserAction?.label || t4("chat.userActionNeededFallback"));
+  const genericOutcomeSummary = safeTechnicalDisplayText(selected?.outcomeSummary).trim();
   const genericBlockingReason = selected?.blockingReason;
-  const genericBlockingReasonText = typeof genericBlockingReason === "string"
+  const genericBlockingReasonText = safeTechnicalDisplayText(typeof genericBlockingReason === "string"
     ? genericBlockingReason
-    : genericBlockingReason?.message || genericBlockingReason?.reason || genericBlockingReason?.code || "";
+    : genericBlockingReason?.message || genericBlockingReason?.reason || genericBlockingReason?.code || "").trim();
   const genericBlockingReasonCode = typeof genericBlockingReason === "object" && genericBlockingReason?.code
-    ? String(genericBlockingReason.code)
+    ? safeTechnicalDisplayText(genericBlockingReason.code)
     : "";
   const genericUserInputRequestId = genericUserAction?.requestId || selected?.userInputRequest?.requestId || null;
   const selectedDeliveries = deliveries.filter((delivery) => String(delivery?.taskId ?? "") === String(selected?.id ?? ""));
@@ -814,11 +828,11 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
             ${selected.userAction ? html4`<div class="notice warn background-task-user-action"><strong>${t4("chat.userActionTitle")}</strong><div>${genericUserActionText}</div></div>` : null}
             ${genericDeliveryStates.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.deliveryStateTitle")}</h4>${genericDeliveryStates.map((delivery) => {
     const deliveryState = delivery.deliveryState || {};
-    const deliveryMessage = deliveryState.lastError || deliveryState.reason || deliveryState.code || t4("chat.deliveryWaitingConfirm");
-    const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? deliveryState.code : "";
-    return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? t4("chat.deliveryConversation") : t4("chat.deliveryTaskCenter")} · ${deliveryState.status || t4("chat.deliveryWaiting")}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
+     const deliveryMessage = safeTechnicalDisplayText(deliveryState.lastError || deliveryState.reason || deliveryState.code || t4("chat.deliveryWaitingConfirm"));
+     const deliveryCode = deliveryState.code && deliveryState.code !== deliveryMessage ? safeTechnicalDisplayText(deliveryState.code) : "";
+     return html4`<div class=${`notice ${["blocked_user_retry", "exhausted"].includes(deliveryState.status) ? "err" : "warn"}`}><strong>${delivery.target === "conversation" ? t4("chat.deliveryConversation") : t4("chat.deliveryTaskCenter")} · ${safeTechnicalDisplayText(deliveryState.status || t4("chat.deliveryWaiting"))}</strong><div>${deliveryMessage}${deliveryCode ? html4` <span class="meta">(${deliveryCode})</span>` : null}</div></div>`;
   })}</section>` : null}
-            ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.warningsTitle")}</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${warning?.message || warning?.detail || warning}</div>`)}</section>` : null}
+             ${genericWarnings.length > 0 ? html4`<section class="background-task-section"><h4>${t4("chat.warningsTitle")}</h4>${genericWarnings.map((warning) => html4`<div class="notice ${warning?.severity === "error" ? "err" : "warn"}">${safeTechnicalDisplayText(warning?.message || warning?.detail || warning)}</div>`)}</section>` : null}
             <section class="background-task-section"><h4>${t4("chat.artifactsTitle")}</h4>${genericArtifacts.length === 0 ? html4`<div class="meta">${t4("chat.artifactsEmpty")}</div>` : html4`<ul class="background-task-artifacts">${genericArtifacts.map((artifact, index) => html4`<li><span title=${artifact?.path || ""}>${genericTaskArtifactLabel(artifact, index)}</span>${artifact?.path ? html4`<button type="button" onClick=${() => onPreview(selected, artifact)}>${t4("chat.previewBtn")}</button>` : null}</li>`)}</ul>`}</section>
             ${selected.coverage ? html4`<section class="background-task-section"><h4>${t4("chat.coverageTitle")}</h4><div class="meta">${typeof selected.coverage === "string" ? selected.coverage : JSON.stringify(selected.coverage)}</div></section>` : null}
           ` : !isDocument ? html4`
@@ -844,17 +858,17 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
             ${selected.artifactStatus === "missing" ? html4`<div class="notice err" style="margin-top:12px"><strong>${t4("chat.artifactMissingTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactMissingBody")}</div></div>` : null}
             ${selected.artifactStatus === "modified" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.artifactModifiedTitle")}</strong><div style="margin-top:4px">${t4("chat.artifactModifiedBody")}</div></div>` : null}
             ${selected.status === "completed_with_warnings" ? html4`<div class="notice warn" style="margin-top:12px"><strong>${t4("chat.completedWarnTitle")}</strong><div style="margin-top:4px">${t4("chat.completedWarnBody")}</div></div>` : null}
-            ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${selected.error}</div>` : null}
+            ${selected.error ? html4`<div class="notice err" style="margin-top:12px">${redactSensitiveDisplayText(selected.error)}</div>` : null}
             ${showReviewReasons && (reviewWarnings.length > 0 || modelIssues.length > 0) ? html4`
               <section style="margin-top:18px">
                 <h4 style="font-size:13px;margin:0 0 8px">${t4("chat.reviewReasonsTitle")}</h4>
-                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${warning.message || t4("chat.reviewWarningFallback")}</div>`)}
+                ${reviewWarnings.map((warning) => html4`<div class="notice warn" style="margin:0 0 8px">${redactSensitiveDisplayText(warning.message || t4("chat.reviewWarningFallback"))}</div>`)}
                 ${modelIssues.map((issue) => html4`
                   <div class="notice warn" style="margin:0 0 8px">
-                    <div><strong>${issue.providerId || t4("chat.unknownProvider")}/${issue.modelId || t4("chat.unknownModel")}</strong> · ${issue.message || t4("chat.modelCallFailed")}</div>
+                     <div><strong>${safeTechnicalDisplayText(issue.providerId || t4("chat.unknownProvider"))}/${safeTechnicalDisplayText(issue.modelId || t4("chat.unknownModel"))}</strong> · ${safeTechnicalDisplayText(issue.message || t4("chat.modelCallFailed"))}</div>
                     <div class="meta" style="margin-top:5px">${t4("chat.affectedBatches", { label: documentIssueBatchLabel(issue) })}</div>
-                    ${issue.action ? html4`<div style="margin-top:5px">${t4("chat.suggestionPrefix")}${issue.action}</div>` : null}
-                    ${Array.isArray(issue.technicalMessages) && issue.technicalMessages.length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">${t4("chat.technicalInfo")}</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${issue.technicalMessages.join(t4("chat.techMsgJoin"))}</div></details>` : null}
+                     ${issue.action ? html4`<div style="margin-top:5px">${t4("chat.suggestionPrefix")}${safeTechnicalDisplayText(issue.action)}</div>` : null}
+                    ${redactTechnicalMessages(issue.technicalMessages).length > 0 ? html4`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">${t4("chat.technicalInfo")}</summary><div class="meta" style="margin-top:5px;overflow-wrap:anywhere">${redactTechnicalMessages(issue.technicalMessages).join(t4("chat.techMsgJoin"))}</div></details>` : null}
                   </div>
                 `)}
               </section>
@@ -863,7 +877,7 @@ var BackgroundJobsWorkbench = N2(function BackgroundJobsWorkbench2({ jobs, pendi
             ${criteria.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.criteriaTitle")}</h4><ul style="margin:0;padding-left:20px">${criteria.map((item) => html4`<li style="font-size:12px;line-height:1.6">${item}</li>`)}</ul></section>` : null}
             ${modelHistory.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.modelHistoryTitle")}</h4><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thModel")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thRole")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thResult")}</th><th style="text-align:left;padding:6px;border-bottom:1px solid var(--border-default)">${t4("chat.thCalls")}</th></tr></thead><tbody>${modelHistory.slice(-50).map((entry) => html4`<tr><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.providerId}/${entry.modelId}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.role === "fallback" ? t4("chat.roleFallback") : t4("chat.rolePrimary")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.passed ? t4("chat.resultPass") : t4("chat.resultFail")}</td><td style="padding:6px;border-bottom:1px solid var(--border-subtle)">${entry.attempts || 0}</td></tr>`)}</tbody></table></div></section>` : null}
             ${preview ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.draftPreviewTitle")}${selected.preview?.partial ? t4("chat.draftPreviewPartial") : ""}</h4><pre style="margin:0;max-height:360px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:var(--surface-subtle);border:1px solid var(--border-default);font-size:12px;line-height:1.55">${preview}${String(selected.preview.content).length > preview.length ? t4("chat.previewTruncated") : ""}</pre></section>` : null}
-            ${events.length > 0 ? html4`<section style="margin-top:18px"><h4 style="font-size:13px;margin:0 0 8px">${t4("chat.recentEventsTitle")}</h4>${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${event.type || "event"}${event.batchId ? ` · ${event.batchId}` : ""}${event.error ? ` · ${event.error}` : ""}</span></div>`)}</section>` : null}
+            ${events.length > 0 ? html4`<details class="background-task-section" style="margin-top:18px"><summary style="cursor:pointer"><h4 style="display:inline;font-size:13px">${t4("chat.recentEventsTitle")}</h4></summary><div style="margin-top:8px">${events.map((event) => html4`<div class="meta" style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid var(--border-subtle)"><span>${event.at ? new Date(event.at).toLocaleString() : ""}</span><span style="overflow-wrap:anywhere">${redactSensitiveDisplayText(event.type || "event")}${event.batchId ? ` · ${redactSensitiveDisplayText(event.batchId)}` : ""}${event.error ? ` · ${redactSensitiveDisplayText(event.error)}` : ""}</span></div>`)}</div></details>` : null}
           `}
         </main>
       </div>
@@ -1106,6 +1120,7 @@ function ChatPanel({ userAvatar = null } = {}) {
   useLang();
   const [messages, setMessages] = d2([]);
   const [streaming, setStreaming] = d2(null);
+  const [streamingSegments, setStreamingSegments] = d2([]);
   const [reasoningDisplay, setReasoningDisplay] = d2(() => {
     try {
       const stored = localStorage.getItem("visionox-reasoning-display");
@@ -1163,6 +1178,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const promptDraftKindRef = A2(classifyPromptOptimizationDraft(initialInputRef.current, []).kind);
   const [promptDraftKind, setPromptDraftKind] = d2(promptDraftKindRef.current);
   const promptOptimizing = promptOptimization.status === "requesting";
+  const promptOptimizationCleanupPending = promptOptimization.status === "cleanup"
+    || promptOptimization.status === "cleanup_failed";
   const [jumpMessageId, setJumpMessageId] = d2(null);
   const [highlightMessageId, setHighlightMessageId] = d2(null);
   const [draftReady, setDraftReady] = d2(false);
@@ -1324,6 +1341,7 @@ const [providerCaps, setProviderCaps] = d2(null);
   const [selectedBackgroundJobId, setSelectedBackgroundJobId] = d2(null);
   const [backgroundJobDetail, setBackgroundJobDetail] = d2(null);
   const backgroundJobDetailRequestRef = A2(0);
+  const backgroundHasActivity = backgroundJobs.some((job) => backgroundJobIsActive(job) || backgroundJobNeedsAttention(job));
   var fileInputRef = A2(null);
   const queuedPromptsRef = A2([]);
   const queueSubmittingRef = A2(false);
@@ -1349,17 +1367,21 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     }, 250);
   }, [draftKey]);
+  const deletePromptOptimizationRequest = q2(async (requestId) => {
+    const result = await api(`/optimize-prompt/${encodeURIComponent(requestId)}`, {
+      method: "DELETE",
+      timeoutMs: 15_000,
+    });
+    if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+    return true;
+  }, []);
   const cancelPromptOptimizationRequest = q2((reason = "cancelled", updateState = true) => {
     const flight = promptOptimizationInFlightRef.current;
     if (!flight) return Promise.resolve(true);
     if (flight.cancelPromise) return flight.cancelPromise;
     flight.cancelRequested = true;
     flight.controller.abort();
-    const cancellationPromise = flight.cancelPromise = api(`/optimize-prompt/${encodeURIComponent(flight.requestId)}`, {
-      method: "DELETE",
-      timeoutMs: 15_000,
-    }).then((result) => {
-      if (result?.cancelled !== true) throw new Error(t4("chat.optimizeCancelFailed"));
+    const cancellationPromise = flight.cancelPromise = deletePromptOptimizationRequest(flight.requestId).then(() => {
       if (flight.cancelError) {
         const cancelError = flight.cancelError;
         flight.cancelError = null;
@@ -1370,14 +1392,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       return true;
     }).catch((error) => {
       if (flight.cancelPromise === cancellationPromise) flight.cancelPromise = null;
-      if (updateState && promptOptimizationInFlightRef.current === flight) {
+      if (updateState && !flight.cleanupRequired && promptOptimizationInFlightRef.current === flight) {
         flight.cancelError = t4("chat.optimizeFailed", { msg: error.message });
         setError(flight.cancelError);
       }
       return false;
     });
     return cancellationPromise;
-  }, []);
+  }, [deletePromptOptimizationRequest]);
   const setChatInput = q2((value, options = {}) => {
     const text = String(value ?? "");
     const previous = inputValueRef.current;
@@ -1435,6 +1457,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         method: "POST",
         body: { prompt: source, requestId, draftRevision: scope.draftRevision },
         signal: controller.signal,
+        timeoutMs: 135_000,
       });
       if (promptOptimizationInFlightRef.current?.requestId !== requestId) return;
       if (!promptOptimizationResponseIsCurrent(result, scope, {
@@ -1457,14 +1480,34 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (promptOptimizationInFlightRef.current?.requestId !== requestId) return;
+      const failure = describePromptOptimizationFailure(err);
+      if (failure.cancelled) {
+        setPromptOptimization({ status: "cancelled", preview: null, scope: null });
+        return;
+      }
+      const primaryError = failure.messageKey
+        ? t4(failure.messageKey)
+        : t4("chat.optimizeFailed", { msg: err.message });
+      setError(primaryError);
+      if (failure.shouldCleanup) {
+        flight.cleanupRequired = true;
+        setPromptOptimization({ status: "cleanup", preview: null, scope });
+        const cleaned = await cancelPromptOptimizationRequest("failed", false);
+        setPromptOptimization({ status: cleaned ? "failed" : "cleanup_failed", preview: null, scope: null });
+        return;
+      }
       setPromptOptimization({ status: "failed", preview: null, scope: null });
-      setError(t4("chat.optimizeFailed", { msg: err.message }));
     } finally {
       if (!flight.cancelRequested && promptOptimizationInFlightRef.current?.requestId === requestId) {
         promptOptimizationInFlightRef.current = null;
       }
     }
-  }, [busy, slashCommands]);
+  }, [busy, slashCommands, cancelPromptOptimizationRequest]);
+  const retryPromptOptimizationCleanup = q2(async () => {
+    setPromptOptimization({ status: "cleanup", preview: null, scope: null });
+    const cleaned = await cancelPromptOptimizationRequest("failed", false);
+    setPromptOptimization({ status: cleaned ? "failed" : "cleanup_failed", preview: null, scope: null });
+  }, [cancelPromptOptimizationRequest]);
   const applyPromptOptimization = q2(() => {
     const preview = promptOptimization.preview;
     if (!preview) return;
@@ -1585,12 +1628,37 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [refreshBackgroundJobs, backgroundJobDetail, backgroundJobs]);
   const closeBackgroundWorkbench = q2(() => {
     backgroundJobDetailRequestRef.current += 1;
+    backgroundWorkbenchRef.current = false;
     setShowBackgroundJobs(false);
     setBackgroundJobDetail(null);
   }, []);
   const openBackgroundWorkbench = q2(async (id = null) => {
+    backgroundWorkbenchRef.current = true;
+    // Invalidate any top-pagination request or delayed anchor restore that
+    // belongs to the feed being replaced by the workbench.
+    chatFeedGenerationRef.current += 1;
+    earlierLoadTokenRef.current += 1;
+    loadingEarlierRef.current = false;
+    setLoadingEarlierMessages(false);
     const requestId = ++backgroundJobDetailRequestRef.current;
+    // Capture while the feed is still mounted. The unmount cleanup may run
+    // after the ref has detached and no longer describe the visible viewport.
+    const currentFeed = feedRef.current;
+    if (currentFeed) chatScrollSnapshotRef.current = {
+      top: currentFeed.scrollTop,
+      atBottom: currentFeed.scrollHeight - currentFeed.scrollTop - currentFeed.clientHeight < 80,
+      anchor: captureChatScrollAnchor(currentFeed),
+    };
+    // A pending top-load gesture belongs to the outgoing feed. Carrying it
+    // across the workbench swap can load another page on the replacement's
+    // first scroll event and shift the restored anchor by an entire page.
+    topLoadIntentRef.current = false;
+    topLoadArmedRef.current = false;
     setShowBackgroundJobs(true);
+    // The feed context menu belongs to the chat viewport. Clear it before
+    // replacing that viewport with the background workbench so a stale menu
+    // cannot remain above the workbench or trigger hidden-chat actions.
+    setFeedMenu(null);
     setShowSkillPicker(false);
     setShowWsPicker(false);
     setShowModelPicker(false);
@@ -1659,14 +1727,10 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   y2(() => {
     void refreshBackgroundJobs();
-    if (!showBackgroundJobs && !backgroundJobs.some((job) => job.running)) return;
+    if (!showBackgroundJobs && !backgroundHasActivity) return;
     const id = setInterval(refreshBackgroundJobs, 5e3);
     return () => clearInterval(id);
-  }, [refreshBackgroundJobs, showBackgroundJobs, backgroundJobs.some((job) => job.running)]);
-  // B+：后台 chip 平时隐藏、仅在有运行中/需处理任务时出现。若工作台打开期间任务清零，则自动收起回消息流，避免工作台失去唯一入口。
-  y2(() => {
-    if (showBackgroundJobs && !backgroundJobsLoading && !backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job))) closeBackgroundWorkbench();
-  }, [showBackgroundJobs, backgroundJobsLoading, backgroundJobs, closeBackgroundWorkbench]);
+  }, [refreshBackgroundJobs, showBackgroundJobs, backgroundHasActivity]);
   y2(() => {
     const refreshOnFocus = () => {
       void refreshBackgroundJobs();
@@ -1760,9 +1824,30 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, [busy, turnStartedAt]);
   const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
+  // Preact may clear the object ref after the outgoing ChatFeed has already
+  // unmounted, then attach the replacement feed on a later commit. Keep a
+  // small mount generation so the scroll effect gets one more pass for the
+  // connected replacement instead of consuming a workbench snapshot against
+  // a detached node.
+  const [feedMountVersion, setFeedMountVersion] = d2(0);
+  const setFeedRef = q2((node) => {
+    if (feedRef.current === node) return;
+    feedRef.current = node;
+    // Ref callbacks run during DOM commit, before the node is necessarily
+    // attached to document; the effect below validates isConnected again.
+    if (node) setFeedMountVersion((version) => version + 1);
+  }, []);
   const autoScrollInFlight = A2(false);
-  const autoScrollTokenRef = A2(0);
-  const autoScrollFrameRef = A2(null);
+  const chatScrollStateRef = A2(createChatScrollState());
+  const scrollSchedulerRef = A2(null);
+  const jumpOwnershipTimerRef = A2(null);
+  const jumpHighlightTimerRef = A2(null);
+  const jumpTokenRef = A2(null);
+  const chatScrollSnapshotRef = A2(null);
+  const chatFeedGenerationRef = A2(0);
+  const earlierLoadTokenRef = A2(0);
+  const backgroundWorkbenchRef = A2(false);
+  const renderedFrameCountRef = A2(0);
   const lastScrollTopRef = A2(0);
   // 最近一次用户上滚手势（滚轮上滚/抓滚动条）的时间戳。平滑滚动动画会把
   // 一次滚轮拆成一串小步进 scroll 事件（首步可 ≤1px），手势活跃期内必须
@@ -1777,42 +1862,38 @@ const [providerCaps, setProviderCaps] = d2(null);
   const topLoadArmedRef = A2(false);
   const loadEarlierMessagesRef = A2(null);
   const [hasNewBelow, setHasNewBelow] = d2(false);
+  const [newBelowCount, setNewBelowCount] = d2(0);
   const [feedMenu, setFeedMenu] = d2(null);
-  const cancelAutoScroll = q2(() => {
-    autoScrollTokenRef.current += 1;
-    if (autoScrollFrameRef.current !== null) {
-      cancelAnimationFrame(autoScrollFrameRef.current);
-      autoScrollFrameRef.current = null;
+  const scheduleBottomPin = q2(() => {
+    if (!scrollSchedulerRef.current) {
+      scrollSchedulerRef.current = createFrameScheduler({
+        run() {
+          const el = feedRef.current;
+          if (!el || chatScrollStateRef.current.owner !== "auto") return;
+          autoScrollInFlight.current = true;
+          el.scrollTop = el.scrollHeight;
+          lastScrollTopRef.current = el.scrollTop;
+          setTimeout(() => { autoScrollInFlight.current = false; }, 0);
+        },
+      });
     }
-    shouldAutoScroll.current = false;
+    scrollSchedulerRef.current.schedule();
+  }, []);
+  const applyScrollPolicyEvent = q2((event) => {
+    const reduced = reduceChatScrollState(chatScrollStateRef.current, event);
+    chatScrollStateRef.current = reduced.state;
+    shouldAutoScroll.current = reduced.state.owner === "auto";
+    setHasNewBelow(reduced.state.newBelowCount > 0);
+    setNewBelowCount(reduced.state.newBelowCount);
+    if (reduced.effect === "pin-bottom") scheduleBottomPin();
+    return reduced.state;
+  }, [scheduleBottomPin]);
+  const cancelAutoScroll = q2(() => {
+    scrollSchedulerRef.current?.cancel();
+    applyScrollPolicyEvent({ type: "user-scroll-up" });
     autoScrollInFlight.current = false;
     if (feedRef.current) lastScrollTopRef.current = feedRef.current.scrollTop;
-  }, []);
-  const pinFeedToBottom = q2(() => {
-    if (!shouldAutoScroll.current) return;
-    const el = feedRef.current;
-    if (!el) return;
-    const token = autoScrollTokenRef.current + 1;
-    autoScrollTokenRef.current = token;
-    if (autoScrollFrameRef.current !== null) cancelAnimationFrame(autoScrollFrameRef.current);
-    autoScrollInFlight.current = true;
-    const applyScroll = () => {
-      if (token !== autoScrollTokenRef.current || !shouldAutoScroll.current) {
-        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
-        return false;
-      }
-      el.scrollTop = el.scrollHeight;
-      return true;
-    };
-    if (!applyScroll()) return;
-    autoScrollFrameRef.current = requestAnimationFrame(() => {
-      autoScrollFrameRef.current = null;
-      if (!applyScroll()) return;
-      setTimeout(() => {
-        if (token === autoScrollTokenRef.current) autoScrollInFlight.current = false;
-      }, 0);
-    });
-  }, []);
+  }, [applyScrollPolicyEvent]);
   const setAllToolGroupsOpen = (open) => {
     feedRef.current?.querySelectorAll("details.tool-log, details.process-card-details").forEach((node) => {
       node.open = open;
@@ -1827,17 +1908,13 @@ const [providerCaps, setProviderCaps] = d2(null);
   const preserveVisibleHistoryOnAppend = q2(() => {
     if (!shouldAutoScroll.current) setVisibleMessageCount((count) => count + 1);
   }, []);
-  const allVisibleMessages = streaming ? [
-    ...messages,
-    {
-      id: streaming.id,
-      role: "assistant",
-      text: streaming.text,
-      reasoning: streaming.reasoning,
-      turnReasoning: streaming.turnReasoning,
-      reasoningTurns: streaming.reasoningTurns
-    }
-  ] : messages;
+  const allVisibleMessages = projectChatTimeline(
+    messages,
+    [],
+    streamingSegments.length > 0
+      ? streamingSegments
+      : streaming ? [{ ...streaming, messageId: streaming.id, segmentId: `${streaming.id}:segment:live` }] : [],
+  ).frames.map((frame) => frame.message);
   y2(() => {
     const pending = window.__visionoxPendingChatJump;
     if (pending?.messageId) setJumpMessageId(pending.messageId);
@@ -1858,6 +1935,17 @@ const [providerCaps, setProviderCaps] = d2(null);
       return;
     }
     cancelAutoScroll();
+    applyScrollPolicyEvent({ type: "jump-start" });
+    if (jumpOwnershipTimerRef.current !== null) {
+      clearTimeout(jumpOwnershipTimerRef.current);
+      jumpOwnershipTimerRef.current = null;
+    }
+    if (jumpHighlightTimerRef.current !== null) {
+      clearTimeout(jumpHighlightTimerRef.current);
+      jumpHighlightTimerRef.current = null;
+    }
+    const jumpToken = String(jumpMessageId);
+    jumpTokenRef.current = jumpToken;
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
     setJumpMessageId(null);
@@ -1867,11 +1955,29 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     } catch {
     }
-    const id = setTimeout(() => {
+    jumpOwnershipTimerRef.current = setTimeout(() => {
+      if (jumpTokenRef.current !== jumpToken) return;
+      jumpTokenRef.current = null;
+      jumpOwnershipTimerRef.current = null;
+      const feed = feedRef.current;
+      const atBottom = Boolean(feed && feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80);
+      applyScrollPolicyEvent({ type: "jump-end", atBottom });
+    }, 450);
+    jumpHighlightTimerRef.current = setTimeout(() => {
+      jumpHighlightTimerRef.current = null;
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
-    return () => clearTimeout(id);
-  }, [cancelAutoScroll, jumpMessageId, messages, streaming, visibleMessageCount]);
+  }, [applyScrollPolicyEvent, cancelAutoScroll, jumpMessageId, messages, streaming, streamingSegments, visibleMessageCount]);
+  y2(() => () => {
+    if (jumpOwnershipTimerRef.current !== null) clearTimeout(jumpOwnershipTimerRef.current);
+    if (jumpHighlightTimerRef.current !== null) clearTimeout(jumpHighlightTimerRef.current);
+    jumpOwnershipTimerRef.current = null;
+    jumpHighlightTimerRef.current = null;
+    if (jumpTokenRef.current !== null) {
+      jumpTokenRef.current = null;
+      applyScrollPolicyEvent({ type: "jump-end", atBottom: false });
+    }
+  }, [applyScrollPolicyEvent]);
   y2(() => {
     let cancelled = false;
     if (streaming) return () => {
@@ -1951,7 +2057,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     return () => {
       cancelled = true;
     };
-  }, [messages, streaming, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
+  }, [messages, streaming, streamingSegments, busy, fileArtifactsKey, fileArtifactsRetryTick, fileArtifactsSelectedMessageId, fileArtifactsByMessageId]);
   y2(() => {
     let cancelled = false;
     const requestGeneration = canonicalProjectionGenerationRef.current;
@@ -2011,12 +2117,19 @@ const [providerCaps, setProviderCaps] = d2(null);
     };
   }, []);
   const streamBufRef = A2(null);
+  const streamFullTextRef = A2("");
+  const streamFullReasoningRef = A2("");
+  const streamSegmentStartRef = A2(0);
+  const streamReasoningStartRef = A2(0);
+  const streamSegmentCounterRef = A2(0);
   const streamRafRef = A2(null);
   const resyncingEventsRef = A2(false);
   const bufferedDashboardEventsRef = A2<any[]>([]);
   const flushStreaming = q2(() => {
     streamRafRef.current = null;
-    if (streamBufRef.current) setStreaming(streamBufRef.current);
+    if (!streamBufRef.current) return;
+    setStreaming(streamBufRef.current);
+    setStreamingSegments([streamBufRef.current]);
   }, []);
   const cancelStreamingRaf = q2(() => {
     if (streamRafRef.current !== null) {
@@ -2024,6 +2137,12 @@ const [providerCaps, setProviderCaps] = d2(null);
       streamRafRef.current = null;
     }
     streamBufRef.current = null;
+    streamFullTextRef.current = "";
+    streamFullReasoningRef.current = "";
+    streamSegmentStartRef.current = 0;
+    streamReasoningStartRef.current = 0;
+    streamSegmentCounterRef.current = 0;
+    setStreamingSegments([]);
   }, []);
   const refetchCanonicalState = q2(async () => {
     const requestGeneration = canonicalProjectionGenerationRef.current;
@@ -2113,7 +2232,13 @@ const [providerCaps, setProviderCaps] = d2(null);
         return;
       }
       if (dash.kind === "user") {
-        const projectedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        const storedMessage = reduced.state.messages[String(dash.id ?? dash.messageId ?? "")];
+        const projectedMessage = storedMessage ? {
+          ...storedMessage,
+          turnId: dash.turnId ?? storedMessage.turnId ?? null,
+          eventEpoch: dash.eventEpoch ?? storedMessage.eventEpoch ?? null,
+          eventSeq: dash.eventSeq ?? storedMessage.eventSeq ?? null,
+        } : null;
         if (!projectedMessage) return;
         setSemanticRetrievalSources([]);
         setSemanticRetrievalStatus("running");
@@ -2140,13 +2265,25 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (dash.kind === "assistant_delta") {
         if (dash.streamReset === true) {
           cancelStreamingRaf();
-          streamBufRef.current = null;
         }
         const cur = streamBufRef.current;
         if (!cur) preserveVisibleHistoryOnAppend();
         const baseId = cur?.id === dash.id ? cur : null;
         const reducedStream = reduced.state.streamOffsets[String(dash.id ?? dash.messageId ?? "")];
         const reasoningDelta = String(dash.reasoningDelta ?? "");
+        const contentDelta = String(dash.contentDelta ?? "");
+        if (!baseId && !streamBufRef.current && streamFullTextRef.current === "") {
+          streamSegmentStartRef.current = 0;
+          streamReasoningStartRef.current = 0;
+        }
+        const fullText = reducedStream?.contentText !== undefined
+          ? String(reducedStream.contentText)
+          : streamFullTextRef.current + contentDelta;
+        const fullReasoning = reducedStream?.reasoningText !== undefined
+          ? String(reducedStream.reasoningText)
+          : streamFullReasoningRef.current + reasoningDelta;
+        streamFullTextRef.current = fullText;
+        streamFullReasoningRef.current = fullReasoning;
         let turnReasoning = baseId?.turnReasoning ?? "";
         let reasoningTurns = baseId?.reasoningTurns ?? 0;
         let reasoningStale = baseId?.reasoningStale === true;
@@ -2160,14 +2297,19 @@ const [providerCaps, setProviderCaps] = d2(null);
           turnReasoning += reasoningDelta;
           reasoningStale = false;
         }
+        const segmentIndex = baseId?.segmentIndex ?? ++streamSegmentCounterRef.current;
+        const segmentId = baseId?.segmentId ?? `${dash.id}:segment:${segmentIndex}`;
         streamBufRef.current = {
           id: dash.id,
-          text: reducedStream?.contentText !== undefined
-            ? reducedStream.contentText
-            : (baseId?.text ?? "") + (dash.contentDelta ?? ""),
-          reasoning: reducedStream?.reasoningText !== undefined
-            ? reducedStream.reasoningText
-            : (baseId?.reasoning ?? "") + reasoningDelta,
+          messageId: dash.id,
+          role: "assistant",
+          turnId: dash.turnId ?? null,
+          eventEpoch: dash.eventEpoch ?? null,
+          startEventSeq: baseId?.startEventSeq ?? dash.eventSeq ?? null,
+          segmentId,
+          segmentIndex,
+          text: fullText.slice(streamSegmentStartRef.current),
+          reasoning: fullReasoning.slice(streamReasoningStartRef.current),
           turnReasoning,
           reasoningTurns,
           reasoningStale
@@ -2190,17 +2332,26 @@ const [providerCaps, setProviderCaps] = d2(null);
         if (!projectedMessage) return;
         const completedStream = streamBufRef.current;
         const replacedStreaming = Boolean(completedStream);
+        const finalFullText = String(projectedMessage.text ?? "");
+        const finalSegmentText = streamSegmentStartRef.current > 0 && finalFullText.length >= streamSegmentStartRef.current
+          ? finalFullText.slice(streamSegmentStartRef.current)
+          : finalFullText;
+        const nextMessage = {
+          ...projectedMessage,
+          text: finalSegmentText || completedStream?.text || "",
+          reasoning: projectedMessage.reasoning ?? completedStream?.reasoning,
+          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
+          segmentId: completedStream?.segmentId,
+          eventEpoch: completedStream?.eventEpoch ?? dash.eventEpoch ?? projectedMessage.eventEpoch ?? null,
+          eventSeq: completedStream?.startEventSeq ?? dash.eventSeq ?? projectedMessage.eventSeq ?? null,
+          __timelineSegmentId: completedStream?.segmentId,
+        };
         if (closesExecution) {
           cancelStreamingRaf();
           setStreaming(null);
           setActiveTools([]);
         }
         if (!replacedStreaming) preserveVisibleHistoryOnAppend();
-        const nextMessage = {
-          ...projectedMessage,
-          reasoning: projectedMessage.reasoning ?? completedStream?.reasoning,
-          reasoningTurns: completedStream?.reasoningTurns > 1 ? completedStream.reasoningTurns : void 0,
-        };
         let inserted = false;
         setMessages((prev) => {
           const index = prev.findIndex((item) => String(item.id || "") === String(dash.id || ""));
@@ -2228,7 +2379,28 @@ const [providerCaps, setProviderCaps] = d2(null);
         const projectedTool = Object.values(reduced.state.tools).find((tool) => toolFrameMatches(tool, dash));
         if (!projectedTool) return;
         if (!dash.status || dash.status === "queued") preserveVisibleHistoryOnAppend();
-        if (streamBufRef.current?.turnReasoning) streamBufRef.current = { ...streamBufRef.current, reasoningStale: true };
+        if (streamBufRef.current) {
+          if (streamRafRef.current !== null) {
+            clearTimeout(streamRafRef.current);
+            streamRafRef.current = null;
+          }
+          const frozenSegment = {
+            ...streamBufRef.current,
+            id: `${streamBufRef.current.id}:${streamBufRef.current.segmentId}`,
+            assistantMessageId: streamBufRef.current.id,
+            streaming: false,
+            reasoningStale: true,
+            __timelineSegmentId: streamBufRef.current.segmentId,
+          };
+          setMessages((current) => current.some((item) => item.__timelineSegmentId === frozenSegment.__timelineSegmentId)
+            ? current
+            : [...current, frozenSegment]);
+          streamSegmentStartRef.current = streamFullTextRef.current.length;
+          streamReasoningStartRef.current = streamFullReasoningRef.current.length;
+          streamBufRef.current = null;
+          setStreaming(null);
+          setStreamingSegments([]);
+        }
         setActiveTools((current) => upsertActiveTool(current, projectedTool));
         setMessages((current) => upsertToolProgress(current, projectedTool));
         return;
@@ -2291,7 +2463,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setSemanticRetrievalStatus("idle");
         setShowRetrievalSources(false);
         api("/index-retrieval-mode").then((retrieval) => setIndexRetrievalMode(globalThis.VisionoxIndexModePolicy.normalize(retrieval.mode))).catch(() => {});
-        const resetMessages = Object.values(reduced.state.messages).map((message) => ({
+        const resetMessages = orderedDashboardMessages(reduced.state).map((message) => ({
           ...message,
           id: message.id || `hist-${Math.random()}`,
           text: message.text || ""
@@ -2729,7 +2901,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           reason: res.completion.error ?? t4("chat.lastRunFailed")
         };
       }
-      shouldAutoScroll.current = true;
+      applyScrollPolicyEvent({ type: "user-reached-bottom" });
       return { ok: true };
     } catch (err) {
       if (err?.status === 409) {
@@ -2744,7 +2916,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       return { ok: false, reason: err.message };
     }
-  }, [resolveSkillMention]);
+  }, [applyScrollPolicyEvent, resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
     const storedItem = {
@@ -2947,6 +3119,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     // 否则同一条内容会被二次提交，被服务端 LOOP_BUSY 拒绝后落入队列，
     // 任务结束 drain 时在对话流中产生重复气泡。
     if (sendInFlightRef.current) return;
+    if (promptOptimizationCleanupPending) return;
     const text = inputValueRef.current.trim();
     const images = pendingImages.slice();
     if (!text && images.length === 0) return;
@@ -2975,7 +3148,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setChatInput("");
         pendingImagesRef.current = [];
         setPendingImages([]);
-        shouldAutoScroll.current = true;
+        applyScrollPolicyEvent({ type: "user-reached-bottom" });
         removeChatDraft(draftKey);
       } else if (result.busy) {
         if (await enqueuePrompt(text, images)) {
@@ -2994,7 +3167,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } finally {
       sendInFlightRef.current = false;
     }
-  }, [busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest]);
+  }, [applyScrollPolicyEvent, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest, promptOptimizationCleanupPending]);
   const saveSkillCredential = q2(async () => {
     if (!skillCredentialSetup || !skillCredentialValue.trim()) return;
     setSkillCredentialSaving(true);
@@ -3021,7 +3194,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           setPendingImages([]);
           removeChatDraft(draftKey);
         }
-        shouldAutoScroll.current = true;
+        applyScrollPolicyEvent({ type: "user-reached-bottom" });
       } else {
         setError(result.reason ?? "rejected");
       }
@@ -3030,7 +3203,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } finally {
       setSkillCredentialSaving(false);
     }
-  }, [skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
+  }, [applyScrollPolicyEvent, skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
   const resumeIncompletePlan = q2(async () => {
     if (busy || !planContinuation) return;
     const paused = planContinuation;
@@ -3092,6 +3265,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
       topLoadIntentRef.current = false;
+      cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -3105,14 +3279,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      shouldAutoScroll.current = true;
+      applyScrollPolicyEvent({ type: "user-reached-bottom" });
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput]);
+  }, [applyScrollPolicyEvent, busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput, cancelStreamingRaf]);
   const changeIndexRetrievalMode = q2(async (event) => {
     const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
@@ -3149,6 +3323,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
       topLoadArmedRef.current = false;
       topLoadIntentRef.current = false;
+      cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
       setCompletedSteps(0);
@@ -3162,14 +3337,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      shouldAutoScroll.current = true;
+      applyScrollPolicyEvent({ type: "user-reached-bottom" });
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [draftKey, pendingImages, confirmQueuedReset, setChatInput]);
+  }, [applyScrollPolicyEvent, draftKey, pendingImages, confirmQueuedReset, setChatInput, cancelStreamingRaf]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -3517,7 +3692,10 @@ const [providerCaps, setProviderCaps] = d2(null);
   y2(() => {
     if (bootError) return;
     const el = feedRef.current;
-    if (!el) return;
+    // During the workbench swap a ref can briefly still point at the old
+    // detached feed. Do not consume a transition snapshot or attach listeners
+    // to that node; wait for the connected replacement on the next effect.
+    if (!el || !el.isConnected) return;
     // ChatFeed can be temporarily unmounted by the background workbench.
     // Re-arm scroll listeners against the new element without carrying a
     // previous element's scroll position or top-load intent across it.
@@ -3525,8 +3703,64 @@ const [providerCaps, setProviderCaps] = d2(null);
     topLoadIntentRef.current = false;
     scrollbarDraggingRef.current = false;
     lastScrollTopRef.current = el.scrollTop;
+    const savedScroll = chatScrollSnapshotRef.current;
+    chatScrollSnapshotRef.current = null;
+    renderedFrameCountRef.current = 0;
+    if (savedScroll) {
+      const restoreGeneration = chatFeedGenerationRef.current;
+      // Preact may attach the new ref one frame after this effect runs while
+      // the workbench swaps the feed subtree. Retry briefly instead of
+      // allowing the auto-pin path to consume the transition with scrollTop=0.
+      const restore = (remainingFrames) => {
+        const current = feedRef.current;
+        if (restoreGeneration !== chatFeedGenerationRef.current) return;
+        if (!current) {
+          if (remainingFrames > 0) requestAnimationFrame(() => restore(remainingFrames - 1));
+          return;
+        }
+        if (!savedScroll.atBottom) {
+          // A non-bottom snapshot represents an intentional historical view.
+          // Restore ownership together with the pixel position so the first
+          // post-mount content-growth event cannot pin the feed to the tail.
+          scrollSchedulerRef.current?.cancel();
+          applyScrollPolicyEvent({ type: "user-scroll-up" });
+          const anchor = savedScroll.anchor;
+          if (anchor?.id) {
+            const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
+            const node = Array.from(current.querySelectorAll(selector)).find((item) => anchor.kind === "process"
+              ? item.dataset.processAnchorId === anchor.id
+              : item.dataset.msgId === anchor.id);
+            if (node) {
+              const feedTop = current.getBoundingClientRect().top;
+              const nodeTop = node.getBoundingClientRect().top - feedTop;
+              const delta = nodeTop - anchor.offset;
+              const beforeTop = current.scrollTop;
+              current.scrollTop = beforeTop + delta;
+              lastScrollTopRef.current = current.scrollTop;
+              if (remainingFrames > 0) {
+                requestAnimationFrame(() => restore(remainingFrames - 1));
+              }
+              return;
+            }
+            if (remainingFrames > 0) {
+              requestAnimationFrame(() => restore(remainingFrames - 1));
+              return;
+            }
+          }
+        }
+        const maxTop = Math.max(0, current.scrollHeight - current.clientHeight);
+        current.scrollTop = savedScroll.atBottom ? maxTop : Math.min(savedScroll.top, maxTop);
+        lastScrollTopRef.current = current.scrollTop;
+      };
+      requestAnimationFrame(() => restore(3));
+    } else if (chatScrollStateRef.current.owner === "auto") {
+      // ChatFeed may have been remounted after the background workbench was
+      // closed. Re-arm one coalesced bottom pin without writing twice in one
+      // render turn.
+      scheduleBottomPin();
+    }
     const maybeLoadEarlier = () => {
-      if (el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
+      if (backgroundWorkbenchRef.current || !el.isConnected || el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
       topLoadArmedRef.current = false;
       topLoadIntentRef.current = false;
       void loadEarlierMessagesRef.current?.();
@@ -3534,16 +3768,15 @@ const [providerCaps, setProviderCaps] = d2(null);
     const onScroll = () => {
       const currentTop = el.scrollTop;
       const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
+      const scrollingUp = currentTop < lastScrollTopRef.current - 1;
+      const userScrollIntentActive = Date.now() - lastScrollUpIntentAtRef.current <= USER_SCROLL_INTENT_GRACE_MS;
       // scrollTop 变小有两种来源：用户主动上滚，或钉底状态下内容变矮
       // （流式消息收敛为更短的最终文本、工具卡片折叠等）导致浏览器把
       // scrollTop 向下钳位。钳位时视口仍贴着底部且钉底开关处于开启。
-      // 平滑滚动动画会把一次滚轮拆成一串小步进事件：首步 ≤1px 时下面的
-      // 回臂分支可能重新打开钉底，因此钳位免疫必须以"近期无上滚手势"
-      // （USER_SCROLL_INTENT_GRACE_MS）为前提——手势活跃期内的上滚步进
-      // 一律走用户分支，不得吞掉，否则钉底回拉会取消滚动动画、与手势
-      // 死锁（regression：任务终止后的收尾突变窗口内滚轮完全失效）。
-      const scrollingUp = currentTop < lastScrollTopRef.current - 1;
-      const userScrollIntentActive = Date.now() - lastScrollUpIntentAtRef.current <= USER_SCROLL_INTENT_GRACE_MS;
+      // 平滑滚动动画会把一次滚轮拆成一串小步进事件：首步 <=1px 时下面的
+      // 用户分支可能重新打开/关闭钉底，因此钳位免疫必须以“近期无上滚手势”
+      // （USER_SCROLL_INTENT_GRACE_MS）为前提；手势活跃期内的上滚步进
+      // 一律交给用户分支，不得吞掉，否则钉底回拉会取消滚动动画、与手势死锁。
       if (scrollingUp && shouldAutoScroll.current && distFromBottom < 80 && !userScrollIntentActive) {
         lastScrollTopRef.current = currentTop;
         return;
@@ -3558,14 +3791,14 @@ const [providerCaps, setProviderCaps] = d2(null);
         maybeLoadEarlier();
         return;
       }
+      // 亚像素/小步进事件（scrollingUp=false）也可能属于用户平滑滚动动画
+      // 的首步；手势活跃期内禁止回臂，否则钉底会在动画途中复活并死锁。
       if (autoScrollInFlight.current) {
         lastScrollTopRef.current = currentTop;
         return;
       }
-      // 亚像素步进（scrollingUp =false）也可能属于用户平滑滚动动画的首步；
-      // 手势活跃期内禁止回臂，否则钉底会在动画途中复活并死锁。
-      if (distFromBottom < 80 && !userScrollIntentActive) {
-        shouldAutoScroll.current = true;
+      if (distFromBottom < 80 && !userScrollIntentActive && chatScrollStateRef.current.owner !== "auto") {
+        applyScrollPolicyEvent({ type: "user-reached-bottom" });
       }
       lastScrollTopRef.current = currentTop;
       maybeLoadEarlier();
@@ -3617,6 +3850,16 @@ const [providerCaps, setProviderCaps] = d2(null);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
+      const current = feedRef.current || el;
+      // Only capture during a real feed detach/workbench transition. Effect
+      // dependency updates can run cleanup while the same connected feed is
+      // still mounted; capturing there would overwrite the transition anchor
+      // with a temporary scrollTop=0 snapshot.
+      if (current && !chatScrollSnapshotRef.current && (!current.isConnected || backgroundWorkbenchRef.current)) chatScrollSnapshotRef.current = {
+        top: current.scrollTop,
+        atBottom: current.scrollHeight - current.scrollTop - current.clientHeight < 80,
+        anchor: captureChatScrollAnchor(current),
+      };
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onPointerDown);
@@ -3624,26 +3867,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [bootError, cancelAutoScroll, showBackgroundJobs]);
+  }, [applyScrollPolicyEvent, bootError, cancelAutoScroll, feedMountVersion, scheduleBottomPin, showBackgroundJobs]);
   y2(() => {
-    if (!shouldAutoScroll.current) {
-      if (messages.length > 0) setHasNewBelow(true);
-      return;
-    }
-    setHasNewBelow(false);
-    pinFeedToBottom();
-  }, [messages, streaming, pinFeedToBottom]);
-  // 跟随加固：内容高度一旦增长（流式输出、图片加载、分组展开）就重新钉在底部
-  y2(() => {
-    const el = feedRef.current;
-    if (!el || typeof MutationObserver !== "function") return;
-    const observer = new MutationObserver(() => {
-      if (!shouldAutoScroll.current) return;
-      pinFeedToBottom();
-    });
-    observer.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
-  }, [pinFeedToBottom]);
+    const nextCount = allVisibleMessages.length;
+    const added = Math.max(0, nextCount - renderedFrameCountRef.current);
+    renderedFrameCountRef.current = nextCount;
+    applyScrollPolicyEvent({ type: "content-growth", added });
+  }, [applyScrollPolicyEvent, messages, streaming, streamingSegments]);
+  y2(() => () => scrollSchedulerRef.current?.cancel(), []);
   y2(() => {
     if (!feedMenu) return;
     const close = () => setFeedMenu(null);
@@ -3985,18 +4216,32 @@ const [providerCaps, setProviderCaps] = d2(null);
   }, []);
   const dismissArtifacts = q2(() => setFileArtifactsDismissed(true), []);
   const loadEarlierMessages = q2(async () => {
-    if (loadingEarlierRef.current) return;
+    if (loadingEarlierRef.current || backgroundWorkbenchRef.current) return;
     const feed = feedRef.current;
+    if (!feed || !feed.isConnected) return;
+    const feedGeneration = chatFeedGenerationRef.current;
+    const loadToken = ++earlierLoadTokenRef.current;
+    const feedIsCurrent = () => !backgroundWorkbenchRef.current
+      && feedGeneration === chatFeedGenerationRef.current
+      && loadToken === earlierLoadTokenRef.current
+      && feed.isConnected
+      && feedRef.current === feed;
     const anchor = captureChatScrollAnchor(feed);
     const finishLoading = () => {
+      if (loadToken !== earlierLoadTokenRef.current) return;
       loadingEarlierRef.current = false;
       setLoadingEarlierMessages(false);
+      if (feedIsCurrent()) {
+        const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+        applyScrollPolicyEvent({ type: "anchor-end", atBottom });
+      }
     };
     if (visibleMessageCount < messages.length) {
+      applyScrollPolicyEvent({ type: "anchor-start" });
       loadingEarlierRef.current = true;
       setLoadingEarlierMessages(true);
       setVisibleMessageCount((count) => Math.min(messages.length, count + CHAT_RENDER_STEP));
-      restoreChatScrollAnchor(feed, anchor, finishLoading);
+      restoreChatScrollAnchor(feed, anchor, finishLoading, feedIsCurrent);
       return;
     }
     if (canonicalMessageCountRef.current >= totalMessages) return;
@@ -4009,7 +4254,8 @@ const [providerCaps, setProviderCaps] = d2(null);
       requestSessionId,
       activeSessionId: activeConversationIdRef.current,
       responseSessionId,
-    });
+    }) && feedIsCurrent();
+    applyScrollPolicyEvent({ type: "anchor-start" });
     loadingEarlierRef.current = true;
     setLoadingEarlierMessages(true);
     try {
@@ -4026,12 +4272,12 @@ const [providerCaps, setProviderCaps] = d2(null);
         setVisibleMessageCount((count) => count + Math.min(CHAT_RENDER_STEP, earlier.length));
       }
       setTotalMessages(page.totalMessages);
-      restoreChatScrollAnchor(feed, anchor, finishLoading);
+      restoreChatScrollAnchor(feed, anchor, finishLoading, feedIsCurrent);
     } catch (err) {
-      setError(err.message);
+      if (loadToken === earlierLoadTokenRef.current && !backgroundWorkbenchRef.current) setError(err.message);
       finishLoading();
     }
-  }, [visibleMessageCount, messages, totalMessages]);
+  }, [applyScrollPolicyEvent, visibleMessageCount, messages, totalMessages]);
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
@@ -4135,11 +4381,12 @@ const [providerCaps, setProviderCaps] = d2(null);
             totalMessages=${totalMessages}
             canonicalMessageCount=${canonicalMessageCountRef.current}
             streaming=${streaming}
+            streamingSegments=${streamingSegments}
             taskActive=${busy}
             reasoningExpanded=${reasoningExpanded}
             reasoningDisplay=${reasoningDisplay}
             processDisplay=${processDisplay}
-            innerRef=${feedRef}
+            innerRef=${setFeedRef}
             visibleCount=${visibleMessageCount}
             onLoadEarlier=${loadEarlierMessages}
             loadingEarlier=${loadingEarlierMessages}
@@ -4151,11 +4398,11 @@ const [providerCaps, setProviderCaps] = d2(null);
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
           ${!showBackgroundJobs && hasNewBelow ? html4`
-            <button type="button" class="chat-new-messages-pill" onClick=${() => { shouldAutoScroll.current = true; setHasNewBelow(false); pinFeedToBottom(); }}>${t4("chat.newMessagesBelow")}</button>
+            <button type="button" class="chat-new-messages-pill" onClick=${() => applyScrollPolicyEvent({ type: "user-reached-bottom" })}>${t4("chat.newMessagesBelowCount", { count: newBelowCount })}</button>
           ` : null}
-          ${feedMenu ? html4`
+          ${!showBackgroundJobs && feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { shouldAutoScroll.current = true; setHasNewBelow(false); void resyncRunnerRef.current?.(); })}>${t4("chat.feedRefresh")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { applyScrollPolicyEvent({ type: "user-reached-bottom" }); void resyncRunnerRef.current?.(); })}>${t4("chat.feedRefresh")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>${t4("chat.feedCollapseAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void newConversation(); })}>${t4("chat.new")}</button>
@@ -4274,6 +4521,18 @@ const [providerCaps, setProviderCaps] = d2(null);
                 <button type="button" onClick=${() => cancelPromptOptimizationRequest("cancelled")}>${t4("chat.optimizeCancel")}</button>
               </div>
             ` : null}
+            ${promptOptimization.status === "cleanup" ? html4`
+              <div class="prompt-optimization-status prompt-optimization-cleanup" role="status" aria-live="polite">
+                <span class="composer-optimize-spin"></span>
+                <span>${t4("chat.optimizeCleanupPending")}</span>
+              </div>
+            ` : null}
+            ${promptOptimization.status === "cleanup_failed" ? html4`
+              <div class="prompt-optimization-status prompt-optimization-cleanup" role="status" aria-live="polite">
+                <span>${t4("chat.optimizeCleanupFailed")}</span>
+                <button type="button" onClick=${retryPromptOptimizationCleanup}>${t4("chat.optimizeCleanupRetry")}</button>
+              </div>
+            ` : null}
             ${promptOptimization.status === "preview" && promptOptimization.preview ? html4`
               <div class="prompt-optimization-preview" role="region" aria-label=${t4("chat.optimizePreviewTitle")}>
                 <div class="prompt-optimization-head">
@@ -4317,9 +4576,13 @@ const [providerCaps, setProviderCaps] = d2(null);
             <div class="composer-bar">
               <button type="button" class="composer-chip-ghost" aria-expanded=${showModelPicker} title=${t4("chat.modelAndEffortTitle")} onClick=${() => { cancelModelGroupClose(); setShowModelPicker(!showModelPicker); setOpenModelGroupId(null); setShowSkillPicker(false); setShowWsPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); }}><${IconModel} /> ${t4("chat.chipModel")}</button>
               <button type="button" class="composer-chip-ghost" aria-expanded=${showWsPicker} title=${t4("chat.switchWorkspaceTitle")} onClick=${() => { const next = !showWsPicker; setShowWsPicker(next); setShowSkillPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowIndexPicker(false); setShowRetrievalSources(false); if (next) void loadWorkspaceOptions(); }}><${IconWorkspace} /> ${t4("chat.chipWorkspace")}</button>
-              ${backgroundJobs.some((job) => job.running || backgroundJobNeedsAttention(job)) ? html4`
-                <button type="button" class="composer-chip-ghost has-activity" title=${t4("chat.bgChipTitle", { running: backgroundJobs.filter((job) => job.running).length, attention: backgroundJobs.filter(backgroundJobNeedsAttention).length })} aria-expanded=${showBackgroundJobs} onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench(); }}><${IconJobs} /> ${t4("chat.chipJobs")} <span class="n">${backgroundJobs.filter((job) => job.running || backgroundJobNeedsAttention(job)).length}</span></button>
-              ` : null}
+              <button
+                type="button"
+                class=${`composer-chip-ghost ${backgroundHasActivity ? "has-activity" : ""}`}
+                title=${t4("chat.bgChipTitle", { total: backgroundJobs.length, running: backgroundJobs.filter(backgroundJobIsActive).length, attention: backgroundJobs.filter(backgroundJobNeedsAttention).length })}
+                aria-expanded=${showBackgroundJobs}
+                onClick=${() => { setShowPlusMenu(false); setShowIndexPicker(false); showBackgroundJobs ? closeBackgroundWorkbench() : void openBackgroundWorkbench(); }}
+              ><${IconJobs} /> ${t4("chat.chipJobs")}${backgroundHasActivity ? html4`<span class="n">${backgroundJobs.filter((job) => backgroundJobIsActive(job) || backgroundJobNeedsAttention(job)).length}</span>` : null}</button>
               <span style="position:relative;display:inline-flex">
                 <button type="button" class="composer-chip-ghost" aria-expanded=${showIndexPicker} title=${t4("chat.indexChipTitle")} onClick=${() => { const next = !showIndexPicker; setShowIndexPicker(next); setShowSkillPicker(false); setShowWsPicker(false); setShowModelPicker(false); setShowPlusMenu(false); setShowRetrievalSources(false); }}><${IconSearch} /> ${indexRetrievalMode === "tool" ? t4("chat.indexTool") : indexRetrievalMode === "off" ? t4("chat.indexOffShort") : t4("chat.indexAuto")}</button>
                 ${showIndexPicker ? html4`
@@ -4511,7 +4774,7 @@ const [providerCaps, setProviderCaps] = d2(null);
                   <button
                     type="button"
                     class=${`composer-send composer-send-${sendMode}`}
-                    disabled=${sendMode === "idle"}
+                    disabled=${sendMode === "idle" || (sendMode !== "stop" && promptOptimizationCleanupPending)}
                     title=${sendLabel}
                     aria-label=${sendLabel}
                     onClick=${() => { if (sendMode === "stop") void abort(); else void send(); }}
@@ -4542,19 +4805,18 @@ const [providerCaps, setProviderCaps] = d2(null);
     </div>
   `;
 }
-var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, canonicalMessageCount = messages.length, streaming, taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
+var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length, canonicalMessageCount = messages.length, streaming, streamingSegments = [], taskActive = false, reasoningExpanded = false, reasoningDisplay = "live", processDisplay = "standard", innerRef, visibleCount = CHAT_INITIAL_RENDER_COUNT, onLoadEarlier, loadingEarlier = false, searchMatchIndex = -1, highlightMessageId = null, onCopyMessage, onFillInput, selectedArtifactMessageId = null, onSelectArtifactMessage, userAvatar = null }) {
   useLang();
-  const allMessages = streaming ? [
-    ...messages,
-    {
-      id: streaming.id,
-      role: "assistant",
-      text: streaming.text,
-      reasoning: streaming.reasoning,
-      turnReasoning: streaming.turnReasoning,
-      reasoningTurns: streaming.reasoningTurns
-    }
-  ] : messages;
+  const transientSegments = streamingSegments.length > 0
+    ? streamingSegments
+    : streaming ? [{ ...streaming, messageId: streaming.id, segmentId: `${streaming.id}:segment:live` }] : [];
+  const timeline = projectChatTimeline(messages, [], transientSegments);
+  const allMessages = timeline.frames.map((frame) => ({
+    ...frame.message,
+    __timelineSegmentId: frame.segmentId,
+    __timelineStreaming: frame.streaming,
+    __timelineEventSeq: frame.eventSeq,
+  }));
   const hiddenCount = Math.max(0, allMessages.length - visibleCount);
   const remoteHiddenCount = Math.max(0, totalMessages - canonicalMessageCount);
   const renderedMessages = hiddenCount > 0 ? allMessages.slice(hiddenCount) : allMessages;
@@ -4568,11 +4830,11 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
   }));
   const renderChatMessage = (m3, globalIndex) => html4`
                 <${ChatMessage}
-                  key=${m3.id}
+                  key=${m3.__timelineSegmentId || m3.id}
                   msg=${m3}
                   index=${globalIndex}
                   searchMatch=${globalIndex === searchMatchIndex || Boolean(highlightMessageId && m3.id === highlightMessageId)}
-                  streaming=${Boolean(streaming && streaming.id === m3.id)}
+                  streaming=${m3.__timelineStreaming === true}
                   onCopy=${onCopyMessage}
                   onFillInput=${onFillInput}
                   reasoningExpanded=${reasoningExpanded}
@@ -4597,8 +4859,11 @@ var ChatFeed = N2(function ChatFeed2({ messages, totalMessages = messages.length
         return renderChatMessage(unit.msg, unit.index);
       }
       const hitIds = unit.items.filter((item) => item.index === searchMatchIndex || Boolean(highlightMessageId && item.msg.id === highlightMessageId)).map((item) => String(item.msg.id));
-      // 事件驱动收敛信号：该工具组之后是否已跟着一条 assistant 正文（过程让位正文）。
-      const followedByAnswer = renderUnits.slice(unitIndex + 1).some((u) => u.kind === "msg" && u.msg.role === "assistant" && (u.msg.text ?? "").trim());
+      // 只有最终回执/终态事实才允许工具组收敛；普通正文可能只是
+      // “我继续处理”之类的中间说明，不能据此隐藏失败或仍在运行的步骤。
+      const followedByAnswer = renderUnits.slice(unitIndex + 1).some((u) => u.kind === "msg"
+        && u.msg.role === "assistant"
+        && assistantHasAuthoritativeFinalEvidence(u.msg));
       return html4`<${ToolGroup}
                     key=${unit.id}
                     items=${unit.items.map((item) => item.msg)}

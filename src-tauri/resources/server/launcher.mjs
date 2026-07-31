@@ -113,6 +113,7 @@ const { createPromptIsolation } = await importEarly("./lib/scheduled-prompt-isol
 const { createRuntimeIssueRegistry } = await importEarly("./lib/runtime-issues.mjs");
 const { DEFAULT_SEMANTIC_EMBEDDING_MODEL, DEFAULT_SEMANTIC_EMBEDDING_URL, applySemanticEmbeddingDefaults } = await importEarly("./lib/semantic-config-defaults.mjs");
 const { createKnowledgeRuntime } = await importEarly("./lib/knowledge-runtime.mjs");
+const { createKnowledgeDocumentsApi, startKnowledgeAwareDashboardServer } = await importEarly("./lib/knowledge-documents.mjs");
 const { createWorkspaceRuntime } = await importEarly("./lib/workspace-runtime.mjs");
 const { createActiveSessionMetaStore } = await importEarly("./lib/active-session-meta.mjs");
 const { routeAutomaticSkill } = await importEarly("./lib/skill-routing.mjs");
@@ -886,9 +887,9 @@ deployEccRules();
 const serverModUrl = distPath("server-XGDBRWMB.js");
 console.error(`[launcher] importing ${serverModUrl}`);
 
-let startDashboardServer, pruneMemoryTrash;
+let startDashboardServer, pruneMemoryTrash, upstreamDispatch, upstreamCheckAuth;
 try {
-  ({ startDashboardServer, pruneMemoryTrash } = await import(serverModUrl));
+  ({ startDashboardServer, pruneMemoryTrash, dispatch: upstreamDispatch, checkAuth: upstreamCheckAuth } = await import(serverModUrl));
 } catch (err) {
   console.error(`[launcher] server module import failed: ${err.message}`);
   process.stdout.write(JSON.stringify({ error: `server module import failed: ${err.message}` }) + "\n");
@@ -953,7 +954,7 @@ const [
   { registerSkillTools, Eventizer, autoResolveVerdict, shouldAutoResolveCheckpoint },
   { openEventSink, eventLogPath },
   { getLatestVersion, VERSION },
-  { buildIndex, querySemanticGroups, indexExists },
+  { buildIndex, querySemanticGroups, indexExists, semanticIndexDirForRoot },
   { listSessions, listSessionsForWorkspace, loadSessionMessages, sessionPath, deleteSession },
   { DEEPSEEK_CONTEXT_TOKENS, DEFAULT_CONTEXT_TOKENS, DEEPSEEK_PRICING },
   { countTokens, estimateRequestTokens },
@@ -1568,6 +1569,14 @@ const knowledgeRuntime = createKnowledgeRuntime({
   onActiveIndexUpdated: async (rootDir) => activateSemanticSearch(rootDir),
 });
 
+const knowledgeDocumentsApi = createKnowledgeDocumentsApi({
+  knowledgeRuntime,
+  getCurrentCwd: () => workspaceDir,
+  getIndexConfig: () => loadIndexConfig(configPath),
+  getSemanticIndexDir: semanticIndexDirForRoot,
+});
+knowledgeRuntime.setDocumentStateProvider((workspace) => knowledgeDocumentsApi.retrievalState(workspace));
+
 function addToolToActivePrefix(spec) {
   const name = spec?.function?.name;
   if (!name) return false;
@@ -1941,6 +1950,14 @@ const preparedDocumentRegistry = createPreparedDocumentRegistry({
 });
 const operationBySignal = new WeakMap();
 let toolRepeatRuntime = null;
+// 轮询类工具天生靠反复调用推进（读后台输出、等任务完成），不参与空转判定；
+// 状态查询类命名（*_status、poll_* 等）同样豁免。
+const POLLING_TOOL_NAMES = new Set(["read_tool_output", "wait_for_job"]);
+const POLLING_TOOL_PATTERN = /(^|_)(poll|polling)(_|$)|_status$/i;
+function isPollingTool(name) {
+  const value = String(name ?? "");
+  return POLLING_TOOL_NAMES.has(value) || POLLING_TOOL_PATTERN.test(value);
+}
 function attachToolRepeatResultAugmenter() {
   if (!toolRepeatRuntime || typeof tools.getResultAugmenter !== "function" || typeof tools.setResultAugmenter !== "function") return;
   const baseResultAugmenter = tools.getResultAugmenter();
@@ -1958,6 +1975,7 @@ function attachToolRepeatResultAugmenter() {
       result: baseResult,
       repeatable,
       cacheable: outcome.ok === true,
+      pollExempt: isPollingTool(name),
     });
   };
   composed.__visionoxToolRepeat = true;
@@ -2035,7 +2053,8 @@ tools.setToolInterceptor(async (name, args, dispatchOptions = {}) => {
     args,
     repeatable: tools.get(name)?.readOnly === true || tools.get(name)?.repeatable === true,
   });
-  if (duplicate?.duplicate === true) return duplicate.result;
+  // duplicate=同请求去重命中缓存；blocked=重复调用已被暂停（L2 用户确认闸门）
+  if (duplicate?.duplicate === true || duplicate?.blocked === true) return duplicate.result;
   return undefined;
 });
 
@@ -5301,6 +5320,9 @@ function buildLoop(client, rootDir) {
         workspace: workspaceDir,
         boundary: "next_model_request",
       });
+      // 用户中途插话 = 对当前策略的人工确认/纠正：清空重复调用的升级状态与暂停名单，
+      // 被 L2 闸门暂停的调用由此获得放行机会。
+      if (Array.isArray(admitted) && admitted.length > 0) toolRepeatRuntime?.resetEscalation?.(operation.id);
       const admissionError = sessionInputAdmission.lastError?.();
       const hasPendingSteer = sessionInputAdmission.list(sessionId, { includeTerminal: false })
         .some((input) => input.delivery === "steer"
@@ -6717,7 +6739,17 @@ async function requestModelJson({ label, messages, model, maxTokens, temperature
   });
 }
 
-async function requestModelText({ label, messages, model, maxTokens, temperature = 0, signal, requestPurpose, allowEmpty = false }) {
+async function requestModelText({
+  label,
+  messages,
+  model,
+  maxTokens,
+  temperature,
+  signal,
+  requestPurpose,
+  useConfiguredRequestDefaults = false,
+  allowEmpty = false,
+}) {
   throwIfScheduleAborted(signal);
   return requestTaskModelText({
     client,
@@ -6728,6 +6760,7 @@ async function requestModelText({ label, messages, model, maxTokens, temperature
     maxTokens,
     temperature,
     requestPurpose,
+    useConfiguredRequestDefaults,
     signal,
     allowEmpty,
   });
@@ -7841,6 +7874,16 @@ function runtimeFactsForDashboardEvent(event) {
     turnId: event.turnId ?? null,
     stepId: event.stepId ?? null,
   };
+  const coordinates = {
+    ...(event.eventEpoch !== undefined ? { eventEpoch: String(event.eventEpoch) } : {}),
+    ...(event.eventSeq !== undefined && Number.isSafeInteger(Number(event.eventSeq)) ? { eventSeq: Number(event.eventSeq) } : {}),
+    ...(event.eventId !== undefined ? { eventId: String(event.eventId) } : {}),
+    ...(event.turnId !== undefined ? { turnId: String(event.turnId) } : {}),
+    ...(event.operationId !== undefined ? { operationId: String(event.operationId) } : {}),
+    ...(event.revision !== undefined ? { revision: String(event.revision) } : {}),
+    ...(event.correction === true ? { correction: true } : {}),
+  };
+  const messagePayload = (payload) => ({ ...payload, ...coordinates });
   const fact = (type, entityId, payload, suffix = type) => ({
     ...base,
     factId: `dashboard:${eventId}:${suffix}`,
@@ -7854,24 +7897,24 @@ function runtimeFactsForDashboardEvent(event) {
     })];
   }
   if (event.kind === "user") {
-    return [fact("message.upsert", event.id, {
+    return [fact("message.upsert", event.id, messagePayload({
       id: event.id,
       role: "user",
       text: String(event.text ?? ""),
       ...(Array.isArray(event.images) ? { images: event.images } : {}),
       ...(Array.isArray(event.attachments) ? { attachments: event.attachments } : {}),
-    })];
+    }))];
   }
   if (["warning", "error", "info"].includes(event.kind)) {
     const messageId = event.id ?? event.messageId ?? `notice:${eventId}`;
-    return [fact("message.upsert", messageId, {
+    return [fact("message.upsert", messageId, messagePayload({
       id: messageId,
       role: event.kind,
       text: String(event.text ?? ""),
-    })];
+    }))];
   }
   if (["assistant_content_final", "assistant_final", "turn_finalized"].includes(event.kind)) {
-    return [fact("message.upsert", event.id ?? event.messageId, {
+    return [fact("message.upsert", event.id ?? event.messageId, messagePayload({
       id: event.id ?? event.messageId,
       role: "assistant",
       ...(event.text !== undefined ? { text: String(event.text ?? "") } : {}),
@@ -7887,7 +7930,7 @@ function runtimeFactsForDashboardEvent(event) {
         artifactIncomplete: event.artifactIncomplete === true,
         ...(event.interventionChoice !== undefined ? { interventionChoice: event.interventionChoice } : {}),
       } : {}),
-    })];
+    }))];
   }
   if (["tool_start", "tool"].includes(event.kind)) {
     const frameId = toolFrameEntityId(event);
@@ -7975,6 +8018,9 @@ const modelBoundaryFence = createModelBoundaryFence();
 
 function broadcastDashboardEvent(ev) {
   if (!ev || typeof ev !== "object") return dashboardEventStream.publish(ev);
+  const normalizedEvent = ["tool_start", "tool"].includes(String(ev.kind ?? ""))
+    ? { ...ev, entityId: toolFrameEntityId(ev) }
+    : ev;
   const scoped = dashboardEventContext.getStore();
   const operationId = ev.operationId ?? scoped?.operationId ?? activeMessageSendContext.operationId ?? null;
   const sessionId = ev.sessionId
@@ -7982,7 +8028,7 @@ function broadcastDashboardEvent(ev) {
     ?? (operationId ? operationSessionIds.get(String(operationId)) : null)
     ?? activeConversationId;
   const delivered = dashboardEventStream.stage({
-    ...ev,
+    ...normalizedEvent,
     ...(operationId ? { operationId: String(operationId) } : {}),
     ...(sessionId ? { sessionId: String(sessionId) } : {}),
   });
@@ -10043,6 +10089,10 @@ const promptOptimizationRuntime = createPromptOptimizationRuntime({
       providerId: provider?.id ?? config.activeProviderId ?? null,
       model: modelConfig?.model ?? null,
       providerCapabilities: activeTaskModelCapabilities(modelConfig?.model),
+      requestConfiguration: resolveProviderModelRequest(provider, modelConfig?.model, {
+        purpose: "promptOptimization",
+        reasoningEffort: config.reasoningEffort,
+      }),
     };
   },
   isTaskBusy: () => busy,
@@ -10064,10 +10114,11 @@ const ctx = {
   loop,
   tools,
   addToolToPrefix: addToolToActivePrefix,
-  onSemanticIndexCommitted: async ({ root, indexConfig, complete }) => {
+  onSemanticIndexCommitted: async ({ root, result, indexConfig, complete }) => {
     knowledgeRuntime.clearRetrievalCache();
     if (resolve(root) === resolve(workspaceDir) && indexConfig?.includeKnowledgeDocs === true) {
-      knowledgeRuntime.setIndexDirty(root, !complete);
+      const reconciliation = await knowledgeDocumentsApi.reconcileCommittedIndex(root, { complete, result });
+      knowledgeRuntime.setIndexDirty(root, !reconciliation.clean);
     }
   },
   mcpServers,
@@ -11581,9 +11632,11 @@ ${modeList}
       const previousPlanMode = tools.planMode;
       try {
         if (opts.isolated !== true && opts.internalHandoff !== true) {
-          pushMessage({ id: userMsgId, role: "user", text, images: materializedImages.length ? materializedImages : undefined, attachments: attachmentRecords.length ? attachmentRecords : undefined });
-          appendActiveMessage({ role: "user", text, attachments: attachmentRecords.length ? attachmentRecords : undefined });
-          broadcastDashboardEvent({ kind: "user", id: userMsgId, text, images: materializedImages.length ? materializedImages : undefined, attachments: attachmentRecords.length ? attachmentRecords : undefined });
+          const userTurnId = requestId || operation.id;
+          const userMessage = { id: userMsgId, role: "user", text, turnId: userTurnId, operationId: operation.id, images: materializedImages.length ? materializedImages : undefined, attachments: attachmentRecords.length ? attachmentRecords : undefined };
+          pushMessage(userMessage);
+          appendActiveMessage({ role: "user", id: userMsgId, text, turnId: userTurnId, operationId: operation.id, attachments: attachmentRecords.length ? attachmentRecords : undefined });
+          broadcastDashboardEvent({ kind: "user", ...userMessage });
         }
         if (opts.readonly === true) tools.setPlanMode(true);
       } catch (error) {
@@ -12681,7 +12734,7 @@ ${modeList}
                   receipt: turnReceipt,
                   persistence: {
                     modelEntries: loop?.log?.toMessages?.() ?? [],
-                    pendingUser: { text, attachments: attachmentRecords },
+                    pendingUser: { id: userMsgId, turnId: requestId || operation.id, operationId: operation.id, text, attachments: attachmentRecords },
                     assistant: { messageId: assistantId, turnId: requestId || operation.id, text: assistantText },
                     operationId: operation.id,
                     taskContract,
@@ -12730,7 +12783,7 @@ ${modeList}
                 try {
                   await persistActiveTurnFinalization({
                     modelEntries: loop?.log?.toMessages?.() ?? [],
-                    pendingUser: { text, attachments: attachmentRecords },
+                    pendingUser: { id: userMsgId, turnId: requestId || operation.id, operationId: operation.id, text, attachments: attachmentRecords },
                     assistant: { messageId: assistantId, turnId: requestId || operation.id, text: assistantText },
                     operationId: operation.id,
                     receipt: turnReceipt.snapshot(),
@@ -13086,10 +13139,16 @@ const token = tokenOverride ?? randomBytes(32).toString("hex");
 console.error(`[launcher] starting dashboard server on port ${port}...`);
 
 try {
-  const { url, token: actualToken, port: actualPort, close } = await startDashboardServer(ctx, {
-    port,
-    host: "127.0.0.1",
-    token,
+  const { url, token: actualToken, port: actualPort, close } = await startKnowledgeAwareDashboardServer({
+    dispatch: upstreamDispatch,
+    checkAuth: upstreamCheckAuth,
+    knowledgeDocumentsApi,
+    ctx,
+    opts: {
+      port,
+      host: "127.0.0.1",
+      token,
+    },
   });
 
   console.error(`[launcher] dashboard ready: ${url}; startupMs=${Date.now() - launcherStartedAt}`);
@@ -13122,6 +13181,7 @@ try {
       backgroundPersistenceQueue,
       flushRuntimeFacts(),
       preparedDocumentRegistry.clear({ notifyChange: false }),
+      knowledgeDocumentsApi.shutdown(),
     ])
       .then(() => taskOutputStore.flush())
       .then(() => close())

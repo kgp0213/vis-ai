@@ -39,6 +39,7 @@ const REQUEST_PROFILE_NAMES = new Set([
   "sessionReview",
   "messageRisk",
   "documentReview",
+  "promptOptimization",
 ]);
 const SAFE_VERIFICATION_FALLBACK_PURPOSES = new Set([
   "summary",
@@ -48,6 +49,7 @@ const SAFE_VERIFICATION_FALLBACK_PURPOSES = new Set([
   "sessionReview",
   "messageRisk",
   "documentReview",
+  "promptOptimization",
 ]);
 const DOCUMENT_POLICY_FIELDS = new Set([
   "defaultFidelity",
@@ -161,9 +163,9 @@ export function validateAgentPolicy(value, options = {}) {
   }
   if (
     value.maxToolIterations !== undefined &&
-    (!Number.isSafeInteger(value.maxToolIterations) || value.maxToolIterations < 4 || value.maxToolIterations > 64)
+    (!Number.isSafeInteger(value.maxToolIterations) || value.maxToolIterations < 4 || value.maxToolIterations > 256)
   ) {
-    return "agentPolicy maxToolIterations must be an integer from 4 to 64";
+    return "agentPolicy maxToolIterations must be an integer from 4 to 256";
   }
   if (
     value.maxToolContinuationWindows !== undefined &&
@@ -445,18 +447,19 @@ export function resolveProviderModelRequest(provider, modelId, options = {}) {
   const model = provider?.models?.find((item) => item?.id === modelId);
   let requestDefaults = policy === JSON_REQUEST_POLICY ? model?.requestDefaults ?? {} : {};
   if (policy === JSON_REQUEST_POLICY) {
+    const deferPromptOptimizationProfile = options.purpose === "promptOptimization";
     const issue = validateRequestDefaults(requestDefaults);
     if (issue) throw new Error(`invalid request configuration for model "${modelId}": ${issue}`);
     if (options.purpose === "verification" && model?.verificationRequestDefaults !== undefined) {
       const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
       if (verificationIssue) throw new Error(`invalid verification request configuration for model "${modelId}": ${verificationIssue}`);
       requestDefaults = mergeJsonObjects(requestDefaults, model.verificationRequestDefaults);
-    } else if (model?.agentPolicy?.requestProfiles?.[options.purpose] !== undefined) {
+    } else if (!deferPromptOptimizationProfile && model?.agentPolicy?.requestProfiles?.[options.purpose] !== undefined) {
       const profile = model.agentPolicy.requestProfiles[options.purpose];
       const profileIssue = validateRequestDefaults(profile);
       if (profileIssue) throw new Error(`invalid ${options.purpose} request configuration for model "${modelId}": ${profileIssue}`);
       requestDefaults = mergeJsonObjects(requestDefaults, profile);
-    } else if (SAFE_VERIFICATION_FALLBACK_PURPOSES.has(options.purpose) && model?.verificationRequestDefaults !== undefined) {
+    } else if (!deferPromptOptimizationProfile && SAFE_VERIFICATION_FALLBACK_PURPOSES.has(options.purpose) && model?.verificationRequestDefaults !== undefined) {
       const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
       if (verificationIssue) throw new Error(`invalid verification request configuration for model "${modelId}": ${verificationIssue}`);
       requestDefaults = mergeJsonObjects(requestDefaults, safeVerificationTaskDefaults(model.verificationRequestDefaults));
@@ -468,6 +471,18 @@ export function resolveProviderModelRequest(provider, modelId, options = {}) {
       const fallbackEffort = efforts.includes(provider?.defaultEffort) ? provider.defaultEffort : efforts[0];
       const selectedEffort = efforts.includes(options.reasoningEffort) ? options.reasoningEffort : fallbackEffort;
       requestDefaults = mergeJsonObjects(requestDefaults, model.effortParams[selectedEffort]);
+    }
+    if (deferPromptOptimizationProfile) {
+      const profile = model?.agentPolicy?.requestProfiles?.promptOptimization;
+      if (profile !== undefined) {
+        const profileIssue = validateRequestDefaults(profile);
+        if (profileIssue) throw new Error(`invalid promptOptimization request configuration for model "${modelId}": ${profileIssue}`);
+        requestDefaults = mergeJsonObjects(requestDefaults, profile);
+      } else if (model?.verificationRequestDefaults !== undefined) {
+        const verificationIssue = validateRequestDefaults(model.verificationRequestDefaults);
+        if (verificationIssue) throw new Error(`invalid verification request configuration for model "${modelId}": ${verificationIssue}`);
+        requestDefaults = mergeJsonObjects(requestDefaults, safeVerificationTaskDefaults(model.verificationRequestDefaults));
+      }
     }
   }
   return { policy, requestDefaults };

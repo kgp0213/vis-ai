@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 const SENSITIVE_KEY = /^(?:authorization|cookie|set-cookie|password|passwd|secret|token|access[_-]?token|refresh[_-]?token|(?:x[_-]?)?api[_-]?key|apikey|client[_-]?secret|private[_-]?key|(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:aws[_-]?)?access[_-]?key[_-]?id|credentials?)$/i;
 const EXIT_CODE_RE = /\[exit\s+(-?\d+)\]/ig;
 const TIMEOUT_RE = /\[(?:killed after timeout|timeout)\]|\b(?:timed\s*out|execution timed out|command timed out)\b/i;
@@ -194,9 +196,17 @@ export function toolFrameEntityId(event) {
   const suppliedEntityId = String(event?.entityId ?? "").trim();
   const scopeIsMissing = !suppliedEntityId || suppliedEntityId === callId;
   if (callId && (turnId || stepId) && scopeIsMissing) {
-    return JSON.stringify([turnId || "legacy", stepId || "legacy", callId]);
+    // Runtime Fact entity ids are deliberately restricted to a compact ASCII
+    // alphabet. Hash the scoped tuple instead of serializing JSON punctuation;
+    // the original call/turn/step remain in the payload for inspection and
+    // Dashboard grouping.
+    return `tool:${createHash("sha256")
+      .update(JSON.stringify([turnId || "legacy", stepId || "legacy", callId]), "utf8")
+      .digest("hex")}`;
   }
-  return supplied;
+  if (/^[A-Za-z0-9._:-]{1,240}$/u.test(supplied)) return supplied;
+  if (supplied) return `tool:${createHash("sha256").update(supplied, "utf8").digest("hex")}`;
+  return "tool:unknown";
 }
 
 export function projectToolProgressEvent(event, { assistantId = "assistant" } = {}) {

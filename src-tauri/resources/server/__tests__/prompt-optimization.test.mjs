@@ -44,6 +44,7 @@ describe("prompt optimization API", () => {
     assert.match(launcherSource, /importEarly\("\.\/lib\/prompt-optimization-runtime\.mjs"\)/);
     assert.match(launcherSource, /createPromptOptimizationRuntime\(\{/);
     assert.match(launcherSource, /requestModelText,/);
+    assert.match(launcherSource, /requestConfiguration:\s*resolveProviderModelRequest\([\s\S]{0,180}purpose:\s*"promptOptimization"/u);
     assert.match(launcherSource, /isTaskBusy:\s*\(\)\s*=>\s*busy/);
     assert.match(launcherSource, /optimizePrompt:\s*\(input\)\s*=>\s*promptOptimizationRuntime\.optimize\(input\)/);
     assert.match(launcherSource, /cancelPromptOptimization:\s*\(requestId\)\s*=>\s*promptOptimizationRuntime\.cancel\(requestId\)/);
@@ -136,6 +137,35 @@ describe("prompt optimization API", () => {
     assert.equal(first.status, 200);
     assert.deepEqual(first.json, { requestId: "cancel-me", cancelled: true });
     assert.deepEqual(cancelled, ["cancel-me"]);
+  });
+
+  test("rejects an invalid cancellation request ID before invoking the runtime", async () => {
+    let called = false;
+    const res = await apiDelete("bad request id", {
+      cancelPromptOptimization: () => {
+        called = true;
+        return { cancelled: true };
+      },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.code, "prompt_optimization_request_id_invalid");
+    assert.equal(called, false);
+  });
+
+  test("rejects a runtime response whose original prompt does not match the request", async () => {
+    const res = await apiPost({ prompt: "当前正文", requestId: "original-mismatch", draftRevision: 2 }, {
+      optimizePrompt: async ({ requestId, draftRevision }) => ({
+        requestId,
+        draftRevision,
+        original: "其他正文",
+        optimized: "错误结果",
+        warnings: [],
+        protectedFacts: [],
+        unchanged: false,
+      }),
+    });
+    assert.equal(res.status, 502);
+    assert.equal(res.json.code, "prompt_optimization_response_invalid");
   });
 
   test("keeps the vendored route thin and never audits prompt bodies", async () => {

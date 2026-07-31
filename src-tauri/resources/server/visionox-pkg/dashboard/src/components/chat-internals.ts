@@ -7,6 +7,7 @@ import { html as html4 } from "../lib/html.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { ProcessCard, IconTool, IconChevron } from "../ui/index.js";
 import { toolGroupAttention } from "../lib/chat-turn-rendering.js";
+import { redactSensitiveDisplayText, safeTechnicalDisplayText } from "../lib/chat-display-safety.js";
 import {
   escapeHtml,
   hlLine,
@@ -99,7 +100,7 @@ function ToolCard({ msg }) {
   const progressLabel = { queued: t4("chat.statusQueued"), running: t4("chat.statusExecuting"), succeeded: t4("chat.statusCompleted"), recovered: t4("chat.statusCompletedWarnings"), failed: t4("chat.statusFailed"), cancelled: t4("chat.statusCancelled"), unknown: t4("chat.statusUnknown") }[progressStatus];
   const progressBadge = html4`<span class=${`tool-progress-status tool-progress-${progressStatus}`}>${progressLabel}</span>`;
   const diagnostic = msg.toolStatus === "failed" && (msg.code || msg.category || msg.diagnosticMessage)
-    ? html4`<div class="tool-card-diagnostic"><strong>${t4("chat.toolFailedContinue")}</strong>${msg.code ? html4`<span>${msg.code}</span>` : null}${msg.recommendedAction ? html4`<span>${msg.recommendedAction}</span>` : null}${msg.diagnosticMessage ? html4`<span>${msg.diagnosticMessage}</span>` : null}</div>`
+    ? html4`<details class="tool-card-diagnostic"><summary><strong>${t4("chat.toolFailedContinue")}</strong></summary><div class="tool-card-diagnostic-body">${msg.code ? html4`<span>${redactSensitiveDisplayText(msg.code)}</span>` : null}${msg.category ? html4`<span>${redactSensitiveDisplayText(msg.category)}</span>` : null}${msg.recommendedAction ? html4`<span>${redactSensitiveDisplayText(msg.recommendedAction)}</span>` : null}${msg.diagnosticMessage ? html4`<span>${redactSensitiveDisplayText(msg.diagnosticMessage)}</span>` : null}</div></details>`
     : null;
   if ((name === "edit_file" || name.endsWith("_edit_file")) && args && typeof args.search === "string" && typeof args.replace === "string") {
     const diffHtml = renderSearchReplace(
@@ -192,13 +193,14 @@ function ToolCard({ msg }) {
         ${path ? html4`<code class="tool-card-path">${path}</code>` : null}
       </div>
       ${diagnostic}
-      ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></details>` : null}
+      ${args ? html4`<details class="tool-card-args"><summary>${t4("modal.arguments")}</summary><pre>${escapeHtml(redactSensitiveDisplayText(JSON.stringify(args, null, 2)))}</pre></details>` : null}
       ${renderCollapsibleToolOutput(msg.text)}
     </div>
   `;
 }
-// 连续的工具调用在正文流里降级为一行淡灰日志：任务进行中原地更新"正在使用工具 · 第 N 步"，
-// 任务结束后落地为"使用了 N 个工具"。点击展开后是扁平日志列表（无卡片边框），
+// 连续的工具调用在正文流里降级为一行淡灰日志：组内有进行中工具时原地更新进度
+// （单步组显示"正在使用工具"，多步组显示"正在使用工具 · 第 N 步"），
+// 组内工具全部结束后落地为"使用了 N 个工具"。点击展开后是扁平日志列表（无卡片边框），
 // 每步一行，失败/取消的步骤以警示色标出。
 function briefToolLabel(msg) {
   const name = msg.toolName ?? "tool";
@@ -210,7 +212,6 @@ function briefToolLabel(msg) {
 // 当前步就地展开输出尾部作为"酌情细节"，已完成/待办步收敛成一行。
 // 热度衰减：当前步 100% 细节，其余一行；整组完成后整卡收敛成一行计数（可展开审计）。
 const TOOL_ROW_DETAIL_TAIL_LINES = 3;
-const TOOL_SETTLE_FALLBACK_MS = 8000;
 function toolRowStatus(status) {
   if (["queued", "running"].includes(status)) return "active";
   if (["failed", "cancelled", "unknown"].includes(status)) return "failed";
@@ -243,10 +244,11 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
 
   // 三档过程显示：compact=全程单行卡（不展开状态行）；standard=状态行+事件驱动收敛（现状）；
   // detailed=永不自动收敛、步骤明细常驻展开。失败粘性在三档下都成立（失败组始终可展开）。
-  // 事件驱动收敛：任务不再 active，且（下一条 assistant 正文已出现 followedByAnswer
-  // 或兜底超时）→ 收敛。异常粘性：只要组内有失败步，永不自动收敛。
-  const [settled, setSettled] = d2(!taskActive);
-  const wasActiveRef = A2(taskActive);
+  // 事件驱动收敛：任务不再 active，且下一条 assistant 已发布最终回执
+  // 或终态事实（followedByAnswer）→ 收敛。普通正文不算完成证据；
+  // 异常粘性：失败/恢复组永不自动收敛。
+  const [settled, setSettled] = d2(!taskActive && followedByAnswer);
+  const wasActiveRef = A2(taskActive || !followedByAnswer);
   y2(() => {
     if (taskActive) {
       wasActiveRef.current = true;
@@ -256,12 +258,7 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
     if (!wasActiveRef.current) return void 0;
     if (attention.keepExpanded) { wasActiveRef.current = false; return void 0; } // 失败/恢复粘性：不收敛
     if (processDisplay === "detailed") { wasActiveRef.current = false; return void 0; } // 详细档：不收敛
-    const shouldSettle = followedByAnswer;
-    if (!shouldSettle) {
-      // 正文还没来：设一个兜底最大延迟，避免无后续正文时永不收敛。
-      const fallback = setTimeout(() => { wasActiveRef.current = false; setSettled(true); }, TOOL_SETTLE_FALLBACK_MS);
-      return () => clearTimeout(fallback);
-    }
+    if (!followedByAnswer) return void 0;
     wasActiveRef.current = false;
     setSettled(true);
     return void 0;
@@ -274,8 +271,13 @@ function ToolGroup({ items, taskActive = false, searchHitIds = null, followedByA
   const rows = compact ? [] : toolRowsFromItems(items);
   const cardState = hasFailed ? "failed" : (taskActive || !settled) ? "running" : "settled";
 
-  const title = taskActive
-    ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}`
+  // 标题按组自身状态判定（taskActive 是全局忙碌态，已完成的组不应再显示"正在使用"）；
+  // 组内仅单步时不显示"第 1 步"——执行时无法预知后续步数，单步步数无信息量。
+  const groupActive = activeItems.length > 0;
+  const title = groupActive
+    ? (items.length > 1
+      ? html4`${t4("chat.toolUsingLiveStep", { n: doneItems.length + (currentTool ? 1 : 0) })}`
+      : html4`${t4("chat.toolUsingLive")}`)
     : html4`${t4("chat.toolUsedCount", { count: items.length })}`;
   const meta = hasFailed
     ? html4`<span class="process-card-meta-failed">${t4("chat.toolFailedCountSuffix", { count: failedItems.length })}</span>`
@@ -331,13 +333,13 @@ function renderExecutionReceipt(receipt, taskState, artifactIncomplete, interven
       <summary><strong>${t4("chat.receiptTitle")}</strong><span class="execution-receipt-state">${stateLabel}</span></summary>
       <div class="execution-receipt-grid">
         <span>${t4("chat.receiptTools")}</span><span>${t4("chat.receiptToolsSummary", { total: tools.results ?? 0, ok: tools.successes ?? 0, bad: tools.failures ?? 0 })}${tools.lastName ? ` · ${t4("chat.receiptRecent", { name: tools.lastName })}` : ""}</span>
-        ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${failures.at(-1).code}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
-        ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${recoveries.at(-1).recovery}` : ""}</span>` : null}
+        ${failures.length > 0 ? html4`<span>${t4("chat.receiptToolDiagnostic")}</span><span>${t4("chat.toolFailedContinue")}${failures.at(-1)?.code ? ` · ${redactSensitiveDisplayText(failures.at(-1).code)}` : ""}${failures.at(-1)?.retryable ? ` · ${t4("chat.receiptRetryable")}` : ""}${failures.at(-1)?.repeatFailureBlocked ? ` · ${t4("chat.receiptRepeatBlocked")}` : ""}</span>` : null}
+        ${recoveries.length > 0 ? html4`<span>${t4("chat.receiptRecovery")}</span><span>${t4("chat.receiptTimes", { count: recoveries.length })}${recoveries.at(-1)?.recovery ? ` · ${redactSensitiveDisplayText(recoveries.at(-1).recovery)}` : ""}</span>` : null}
         <span>${t4("chat.receiptArtifact")}</span><span>${artifactIncomplete ? t4("chat.receiptArtifactIncomplete") : artifactStatusLabel}</span>
         <span>${t4("chat.receiptGoal")}</span><span>${goal === "verified" ? t4("chat.goalVerified") : goal === "incomplete" ? t4("chat.goalIncomplete") : t4("chat.goalUnknown")}</span>
-        ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${receipt.mediaRecovery}` : ""}${receipt.mediaWarnings?.length ? ` · ${receipt.mediaWarnings[0]}` : ""}</span>` : null}
+         ${receipt.mediaReduced || receipt.mediaOmitted > 0 ? html4`<span>${t4("chat.receiptMedia")}</span><span>${t4("chat.receiptMediaItems", { count: receipt.mediaOmitted ?? 0 })}${receipt.mediaRecovery ? ` · ${safeTechnicalDisplayText(receipt.mediaRecovery)}` : ""}${receipt.mediaWarnings?.length ? ` · ${safeTechnicalDisplayText(receipt.mediaWarnings[0])}` : ""}</span>` : null}
         ${intervention.shown > 0 ? html4`<span>${t4("chat.receiptIntervention")}</span><span>${t4("chat.receiptInterventionShown", { count: intervention.shown })}${interventionChoice ? ` · ${t4("chat.receiptChoice", { choice: interventionChoice })}` : ""}</span>` : null}
-        ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).join("；")}</span>` : null}
+        ${warnings?.length ? html4`<span>${t4("chat.receiptReminder")}</span><span>${warnings.slice(0, 2).map((warning) => redactSensitiveDisplayText(warning)).join("；")}</span>` : null}
       </div>
     </details>
   `;

@@ -35,10 +35,11 @@ export function semanticRetrievalConfigFingerprint({ provider = "", model = "", 
 }
 
 /** Build a versioned cache key that changes when query or embedding config changes. */
-export function buildSemanticRetrievalCacheKey({ workspace = "", query = "", ...config } = {}) {
+export function buildSemanticRetrievalCacheKey({ workspace = "", query = "", knowledgeRevision = "", ...config } = {}) {
   const payload = canonicalJson({
     workspace: String(workspace ?? ""),
     query: String(query ?? ""),
+    knowledgeRevision: String(knowledgeRevision ?? ""),
     configFingerprint: semanticRetrievalConfigFingerprint(config),
   });
   return `semantic-retrieval:v1:${sha256(JSON.stringify(payload))}`;
@@ -95,8 +96,6 @@ export function selectRetrievalHits(hits, {
 } = {}) {
   const selected = [];
   const pathCounts = new Map();
-  let knowledgeCount = 0;
-  let workspaceCount = 0;
   const bestByType = { knowledge: 0, workspace: 0 };
   let globalBest = 0;
   for (const hit of Array.isArray(hits) ? hits : []) {
@@ -104,25 +103,47 @@ export function selectRetrievalHits(hits, {
     bestByType[type] = Math.max(bestByType[type], Number(hit?.score || 0));
     globalBest = Math.max(globalBest, Number(hit?.score || 0));
   }
-  for (const hit of Array.isArray(hits) ? hits : []) {
+  const candidates = (Array.isArray(hits) ? hits : []).filter((hit) => {
     const path = String(hit?.entry?.path || "");
-    if (!path) continue;
+    if (!path) return false;
     const knowledge = path.startsWith("knowledge/");
     const type = knowledge ? "knowledge" : "workspace";
-    if (Number(hit.score || 0) < Math.max(minimumScore, bestByType[type] - relativeMargin, globalBest - globalRelativeMargin)) continue;
-    if (knowledge ? knowledgeCount >= knowledgeLimit : workspaceCount >= workspaceLimit) continue;
+    return Number(hit.score || 0) >= Math.max(minimumScore, bestByType[type] - relativeMargin, globalBest - globalRelativeMargin);
+  });
+  const take = (hit) => {
+    const path = String(hit?.entry?.path || "");
     const pathCount = pathCounts.get(path) || 0;
-    if (pathCount >= perPathLimit) continue;
+    if (pathCount >= perPathLimit) return false;
     pathCounts.set(path, pathCount + 1);
-    if (knowledge) knowledgeCount++;
-    else workspaceCount++;
     selected.push(hit);
+    return true;
+  };
+  const knowledge = candidates.filter((hit) => String(hit?.entry?.path || "").startsWith("knowledge/"));
+  const workspace = candidates.filter((hit) => !String(hit?.entry?.path || "").startsWith("knowledge/"));
+  const chosenKnowledge = new Set();
+  if (knowledgeLimit >= 2) {
+    const uploaded = knowledge.find((hit) => String(hit?.entry?.path || "").startsWith("knowledge/uploads/"));
+    const curated = knowledge.find((hit) => !String(hit?.entry?.path || "").startsWith("knowledge/uploads/"));
+    for (const hit of [uploaded, curated].filter(Boolean).sort((left, right) => candidates.indexOf(left) - candidates.indexOf(right))) {
+      if (take(hit)) chosenKnowledge.add(hit);
+    }
   }
-  return selected;
+  for (const hit of knowledge) {
+    if (chosenKnowledge.size >= knowledgeLimit) break;
+    if (chosenKnowledge.has(hit)) continue;
+    if (take(hit)) chosenKnowledge.add(hit);
+  }
+  let workspaceCount = 0;
+  for (const hit of workspace) {
+    if (workspaceCount >= workspaceLimit) break;
+    if (take(hit)) workspaceCount++;
+  }
+  const selectedSet = new Set(selected);
+  return candidates.filter((hit) => selectedSet.has(hit));
 }
 
 function safeRetrievedText(value) {
-  return String(value || "").replace(/<\/retrieved-context>/gi, "&lt;/retrieved-context&gt;");
+  return String(value || "").replace(/<(?=\/?retrieved-context\b)/gi, "&lt;");
 }
 
 export function buildRetrievedModelInput(userText, hits, maxChars = 10000) {
@@ -141,7 +162,14 @@ export function buildRetrievedModelInput(userText, hits, maxChars = 10000) {
     if (remaining < 160) break;
     const content = safeRetrievedText(entry.text).slice(0, remaining);
     blocks.push(`${header}\n${content}`);
-    sources.push({ path, startLine: entry.startLine ?? 1, endLine: entry.endLine ?? entry.startLine ?? 1, score: Number(hit.score || 0), type: label });
+    sources.push({
+      path,
+      startLine: entry.startLine ?? 1,
+      endLine: entry.endLine ?? entry.startLine ?? 1,
+      score: Number(hit.score || 0),
+      type: label,
+      ...(entry.knowledgeDocument ?? {}),
+    });
     usedChars += header.length + content.length + 2;
   }
   if (blocks.length === 0) return { input: original, sources: [] };

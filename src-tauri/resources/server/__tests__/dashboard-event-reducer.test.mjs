@@ -136,6 +136,33 @@ test("accepts authoritative finalization after compatibility content and rejects
   assert.equal(guard.accept({ kind: "turn_finalized", id: "m-final", eventEpoch: "e", eventSeq: 4, eventId: "e:4", revision: "cleanup-warning", correction: true, text: "done", executionState: "completed", goalState: "verified", warnings: ["cleanup"] }), true);
 });
 
+test("accepts an explicit completed-to-warning correction and rejects an implicit downgrade", async () => {
+  const { createDashboardEventGuard } = await loadReducer();
+  const guard = createDashboardEventGuard();
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-warning", eventEpoch: "e", eventSeq: 1, eventId: "e:1", text: "done", executionState: "completed", goalState: "verified" }), true);
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-warning", eventEpoch: "e", eventSeq: 2, eventId: "e:2", text: "done", executionState: "completed_with_warnings", goalState: "verified", warnings: ["late cleanup warning"] }), false);
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-warning", eventEpoch: "e", eventSeq: 3, eventId: "e:3", revision: "late-cleanup-warning", correction: true, text: "done", executionState: "completed_with_warnings", goalState: "verified", warnings: ["late cleanup warning"] }), true);
+  assert.equal(guard.accept({ kind: "turn_finalized", id: "m-warning", eventEpoch: "e", eventSeq: 4, eventId: "e:4", text: "done", executionState: "completed", goalState: "verified" }), false);
+});
+
+test("preserves source order for numeric message ids during snapshot hydration", async () => {
+  const { projectDashboardMessagePage } = await loadReducer();
+  const projected = projectDashboardMessagePage({
+    snapshot: {
+      schemaVersion: 1,
+      eventCursor: { epoch: "e", seq: 8 },
+      messages: [
+        { id: "welcome", role: "assistant", text: "welcome" },
+        { id: "1", role: "user", text: "user one" },
+        { id: "assistant-1", role: "assistant", text: "answer one" },
+        { id: "2", role: "user", text: "user two" },
+        { id: "assistant-2", role: "assistant", text: "answer two" },
+      ],
+    },
+  });
+  assert.deepEqual(projected.messages.map((message) => message.id), ["welcome", "1", "assistant-1", "2", "assistant-2"]);
+});
+
 test("scopes terminal tool protection to the turn and step", async () => {
   const { createDashboardEventGuard } = await loadReducer();
   const guard = createDashboardEventGuard();
@@ -654,6 +681,9 @@ test("projects replayable notices into the durable message projection", async ()
     id: "warning-8",
     role: "warning",
     text: "结果需要用户复核",
+    eventEpoch: "epoch-a",
+    eventSeq: 8,
+    eventId: "epoch-a:8",
   });
   assert.equal(warning.state.lastSeq, 8);
 });
@@ -704,7 +734,7 @@ test("snapshot plus replay converges with a fresh durable snapshot", async () =>
     eventCursor: "epoch-a:7",
     messages: [
       initialSnapshot.messages[0],
-      { id: "assistant-1", role: "assistant", text: "done", finalized: true, taskState: "completed", executionState: "completed", goalState: "verified", taskContract, evidenceRefs, interventionChoice: "continue", receipt: { ok: true }, warnings: [], artifactIncomplete: false },
+      { id: "assistant-1", role: "assistant", text: "done", eventEpoch: "epoch-a", eventSeq: 6, eventId: "epoch-a:6", finalized: true, taskState: "completed", executionState: "completed", goalState: "verified", taskContract, evidenceRefs, interventionChoice: "continue", receipt: { ok: true }, warnings: [], artifactIncomplete: false },
     ],
     tools: [{ ...events[1], id: toolFrameId, state: "succeeded" }],
     artifacts: [{ id: "artifact-1", path: "C:/work/report.md", verified: true }],

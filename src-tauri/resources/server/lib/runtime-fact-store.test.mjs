@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 
 import { createRuntimeFactStore } from "./runtime-fact-store.mjs";
+import { toolFrameEntityId } from "./tool-progress.mjs";
 
 test("runtime fact store persists typed facts and restores a complete session snapshot", async () => {
   const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-"));
@@ -32,6 +33,30 @@ test("runtime fact store persists typed facts and restores a complete session sn
     assert.equal(snapshot.messages[0].text, "hello");
     assert.equal(snapshot.tools[0].state, "succeeded");
     assert.equal(snapshot.operation.state, "completed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime fact store persists and cold-restores a scoped tool frame id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "visionox-runtime-facts-tool-id-"));
+  const file = join(root, "session-tool-id.facts.jsonl");
+  try {
+    const entityId = toolFrameEntityId({ toolCallId: "call-1", turnId: "turn-1", stepId: "step-1" });
+    const first = createRuntimeFactStore({ file, sessionId: "session-tool-id", epoch: "epoch-tool-id" });
+    await first.load();
+    assert.equal((await first.append({
+      type: "tool.upsert",
+      operationId: "op-1",
+      turnId: "turn-1",
+      stepId: "step-1",
+      entityId,
+      payload: { id: entityId, toolCallId: "call-1", state: "succeeded" },
+    })).accepted, true);
+    const restored = createRuntimeFactStore({ file, sessionId: "session-tool-id", epoch: "epoch-tool-id" });
+    await restored.load();
+    assert.equal(restored.snapshot().tools[0].id, entityId);
+    assert.equal(restored.snapshot().tools[0].state, "succeeded");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

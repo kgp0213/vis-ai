@@ -333,14 +333,15 @@ Kimi K3 始终推理，当前只支持顶层 `reasoning_effort: "max"`，因此�
 | 字段 | 范围 | 当前作用 |
 |---|---|---|
 | `documentWorkflow` | 仅 `guided` | 增加本地文档访问提示 |
-| `maxToolIterations` | 4–64 | 单轮最多工具迭代数 |
+| `maxToolIterations` | 4–256 | 单轮最多工具迭代数（默认 64） |
 | `maxToolContinuationWindows` | 0–2 | 工具轮次到顶后的延续窗口数 |
 | `sameFailureClassLimit` | 2–10 | 同类失败的熔断阈值；修正后的不同参数仍允许执行 |
 | `toolResultBudget` | 三个字段均为 1024–32768 | 普通、文档工具结果预算和绝对上限；前两者不能超过绝对上限 |
-| `requestProfiles` | JSON 对象 | 按 `toolContinuation`、`finalAnswer`、`summary`、`report`、`knowledge`、`learn`、`sessionReview`、`messageRisk` 或 `documentReview` 覆盖请求参数 |
+| `requestProfiles` | JSON 对象 | 按 `toolContinuation`、`finalAnswer`、`summary`、`report`、`knowledge`、`learn`、`sessionReview`、`messageRisk`、`documentReview` 或 `promptOptimization` 覆盖请求参数 |
 | `documentPolicy` | 兼容对象 | 保留旧 JSON 校验；其中 `batchOutputTokens` 仍可限制报告等文档用途的输出预算，但不会启动后台 Worker、检查点或备用模型接管 |
 
 `requestProfiles` 只适用于 `requestPolicy: "json"`，且只在程序明确选择对应用途时覆盖 `requestDefaults`。
+`requestProfiles.promptOptimization` 专用于输入框提示词优化；存在时会覆盖该次请求的 `requestDefaults`，并覆盖用户当前选择的推理强度参数。未配置时，程序会安全复用 `verificationRequestDefaults` 中的思考和采样控制，但会排除 `max_tokens` 与 `max_completion_tokens`，因此不会继承通信检测常用的极小输出上限。
 通信检测始终使用独立的 `verificationRequestDefaults`。长任务实际还受模型上下文与输出能力、工具结果预算和
 `context-input-transaction` 约束；不要通过旧 `documentPolicy` 猜测任务已经完成。
 

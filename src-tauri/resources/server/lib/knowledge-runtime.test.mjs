@@ -11,7 +11,7 @@ afterEach(() => {
   for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function createFixture({ apiKey = "" } = {}) {
+function createFixture({ apiKey = "", querySemanticGroups = null, getKnowledgeDocumentState = null, buildIndex = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "visionox-knowledge-runtime-"));
   fixtureRoots.push(root);
   const configPath = join(root, "config.json");
@@ -27,11 +27,11 @@ function createFixture({ apiKey = "" } = {}) {
     configPath,
     loadSemanticEmbeddingUserConfig: () => config.semantic,
     registerSemanticSearchTool: async () => true,
-    querySemanticGroups: async () => {
+    querySemanticGroups: querySemanticGroups ?? (async () => {
       queryCount++;
       return { knowledge: [{ score: 0.9, entry: { path: "knowledge/topic.md", startLine: 1, endLine: 2, text: "durable project fact" } }], workspace: [] };
-    },
-    buildIndex: async () => indexResult,
+    }),
+    buildIndex: buildIndex ?? (async () => indexResult),
     loadIndexConfig: () => ({}),
     readConfig: () => config,
     writeConfig: (next) => { config = next; },
@@ -40,6 +40,7 @@ function createFixture({ apiKey = "" } = {}) {
       writeFileSync(target, content, "utf8");
     },
     getActiveWorkspace: () => root,
+    getKnowledgeDocumentState: getKnowledgeDocumentState ?? (() => null),
   });
   return {
     root,
@@ -82,6 +83,47 @@ describe("knowledge runtime", () => {
     assert.equal(added, 1);
   });
 
+  test("filters deleted and stale upload hits before they enter model context", async () => {
+    let revision = 2;
+    let queries = 0;
+    const fixture = createFixture({
+      querySemanticGroups: async () => {
+        queries += 1;
+        return {
+          knowledge: [
+            { score: 0.95, entry: { path: "knowledge/uploads/deleted.md", mtimeMs: 10, text: "deleted secret" } },
+            { score: 0.9, entry: { path: "knowledge/uploads/current.md", mtimeMs: 20, text: "current fact" } },
+            { score: 0.8, entry: { path: "knowledge/topics/decision.md", mtimeMs: 1, text: "curated decision" } },
+          ],
+          workspace: [],
+        };
+      },
+      getKnowledgeDocumentState: () => ({
+        contentRevision: revision,
+        indexedRevision: 1,
+        documents: [{
+          documentId: "current-id",
+          sourceName: "current.pdf",
+          sourceType: "pdf",
+          contentHash: "current-hash",
+          markdownPath: "knowledge/uploads/current.md",
+          mtimeMs: 20,
+          status: "indexed",
+          indexedRevision: 1,
+        }],
+        tombstones: [{ markdownPath: "knowledge/uploads/deleted.md" }],
+      }),
+    });
+    await fixture.runtime.registerSemanticSearch({ specs: () => [] }, fixture.root);
+    const first = await fixture.runtime.retrieve({ text: "find current", recentMessages: [], workspace: fixture.root, mode: "auto" });
+    assert.doesNotMatch(first.input, /deleted secret/);
+    assert.match(first.input, /current fact/);
+    assert.equal(first.sources.find((source) => source.path.endsWith("current.md")).documentId, "current-id");
+    revision = 3;
+    await fixture.runtime.retrieve({ text: "find current", recentMessages: [], workspace: fixture.root, mode: "auto" });
+    assert.equal(queries, 2, "catalog revision must invalidate semantic retrieval cache keys");
+  });
+
   test("preserves a dirty manifest when index chunks fail", async () => {
     const fixture = createFixture({ apiKey: "configured" });
     fixture.indexResult = { committed: false, chunksSkipped: 2, skipBuckets: { readError: 1 } };
@@ -95,6 +137,29 @@ describe("knowledge runtime", () => {
     const fixture = createFixture();
     const result = await fixture.runtime.updateSemanticIndex({ knowledgeAutoIndex: true, workspaceDir: fixture.root });
     assert.equal(result.status, "skipped: embedding API key is not configured");
+  });
+
+  test("propagates cancellation and forwards a forced rebuild request", async () => {
+    let observedOptions = null;
+    const fixture = createFixture({
+      apiKey: "configured",
+      buildIndex: async (_workspace, options) => {
+        observedOptions = options;
+        await new Promise((resolvePromise) => options.signal.addEventListener("abort", resolvePromise, { once: true }));
+        throw Object.assign(new Error("cancelled"), { name: "AbortError" });
+      },
+    });
+    const controller = new AbortController();
+    const pending = fixture.runtime.updateSemanticIndex({
+      knowledgeAutoIndex: true,
+      knowledgeForceRebuild: true,
+      workspaceDir: fixture.root,
+    }, controller.signal);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    controller.abort();
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.equal(observedOptions.rebuild, true);
+    assert.equal(fixture.runtime.readManifest(fixture.root).indexDirty, true);
   });
 
   test("keeps the newest workspace binding when registrations complete out of order", async () => {
