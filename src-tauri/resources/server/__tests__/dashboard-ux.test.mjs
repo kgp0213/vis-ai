@@ -8,6 +8,17 @@ const dashboardIndexUrl = new URL("../visionox-pkg/dashboard/index.html", import
 const dashboardSourceRootUrl = new URL("../visionox-pkg/dashboard/src/", import.meta.url);
 
 describe("Dashboard desktop UX", () => {
+  test("keeps memoized chat/session projections wired to useMemo, not portals", () => {
+    const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
+    const sessions = readFileSync(new URL("panels/sessions.ts", dashboardSourceRootUrl), "utf8");
+    for (const source of [chat, sessions]) {
+      assert.match(source, /useMemo as T2/);
+      assert.doesNotMatch(source, /createPortal as T2/);
+    }
+    assert.match(sessions, /const detailChatMessages = T2\(\(\) =>/);
+    assert.match(sessions, /const transcriptMatches = T2\(\(\) =>/);
+  });
+
   test("shows redacted provider diagnostics in the existing settings surface", () => {
     const settings = readFileSync(new URL("panels/settings.ts", dashboardSourceRootUrl), "utf8");
     assert.match(settings, /api\("\/providers\/diagnostics"\)/);
@@ -173,7 +184,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(chatPanel, /t4\("chat\.feedRefresh"\)/);
     assert.match(chatPanel, /t4\("chat\.feedExpandAll"\)/);
     assert.match(chatPanel, /t4\("chat\.feedCollapseAll"\)/);
-    assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*applyScrollPolicyEvent\(\{ type: "user-reached-bottom" \}\);\s*void resyncRunnerRef\.current\?\.\(\);?\s*\}\)/);
+    assert.match(chatPanel, /feedMenuAction\(\(\) => \{\s*followBottom\(\);?\s*void resyncRunnerRef\.current\?\.\(\);?\s*\}\)/);
     assert.match(chatPanel, /details\.tool-log/);
 
     // Switching to the background workbench must remove the chat-only context menu.
@@ -447,7 +458,7 @@ describe("Dashboard desktop UX", () => {
     assert.match(sendFn, /finally \{\s*sendInFlightRef\.current = false;/);
   });
 
-  test("keeps process cards full height in the flex feed and scroll clamp pinned to bottom", () => {
+  test("keeps process cards full height in the flex feed; scroll ownership follows explicit user input only", () => {
     const cssSrc = readFileSync(new URL("app.css", dashboardSourceRootUrl), "utf8");
     const chat = readFileSync(new URL("panels/chat.ts", dashboardSourceRootUrl), "utf8");
     // .chat-feed 是定高纵向 flex 容器；overflow:hidden 的 flex 子项自动最小高度
@@ -455,23 +466,37 @@ describe("Dashboard desktop UX", () => {
     // 塌缩为 2px，输出内容看似被遮蔽）。
     const processCard = cssSrc.slice(cssSrc.indexOf(".process-card {"), cssSrc.indexOf(".process-card-details"));
     assert.match(processCard, /flex-shrink:\s*0;/);
-    // 钉底状态下内容变矮会把 scrollTop 程序性钳小，不得误判为用户上滚而解除钉底。
+    // 精简后的滚动模型：onScroll 只做位置记录与顶部加载调度，永不改变跟随状态——
+    // 内容高度变化（流式收敛、卡片折叠）产生不了输入事件，因此不可能误判并劫持视口。
     const onScroll = chat.slice(chat.indexOf("const onScroll = () => {"), chat.indexOf("const onWheel = (event) => {"));
-    assert.match(onScroll, /scrollingUp && shouldAutoScroll\.current && distFromBottom < 80/);
-    assert.ok(
-      onScroll.indexOf("scrollingUp && shouldAutoScroll.current && distFromBottom < 80") < onScroll.indexOf("if (scrollingUp) {"),
-      "clamp guard must run before the user-scroll-up branch"
-    );
-    // 平滑滚动动画把一次滚轮拆成小步进事件：手势活跃期内（宽限时间戳）必须
-    // 同时抑制钳位免疫与钉底回臂，否则回臂→吞步进→钉底回拉取消动画，与用户
-    // 手势死锁（regression：任务终止后的收尾突变窗口内滚轮完全失效）。
-    assert.match(chat, /var USER_SCROLL_INTENT_GRACE_MS = 300;/);
-    assert.match(chat, /const lastScrollUpIntentAtRef = A2\(0\)/);
-    assert.match(onScroll, /userScrollIntentActive = Date\.now\(\) - lastScrollUpIntentAtRef\.current <= USER_SCROLL_INTENT_GRACE_MS/);
-    assert.match(onScroll, /scrollingUp && shouldAutoScroll\.current && distFromBottom < 80 && !userScrollIntentActive/);
-    assert.match(onScroll, /distFromBottom < 80 && !userScrollIntentActive && chatScrollStateRef\.current\.owner !== "auto"/);
-    assert.match(onScroll, /applyScrollPolicyEvent\(\{ type: "user-reached-bottom" \}\)/);
+    assert.match(onScroll, /lastScrollTopRef\.current = el\.scrollTop;/);
+    assert.match(onScroll, /if \(el\.scrollTop <= CHAT_TOP_LOAD_THRESHOLD\) scheduleTopLoadCheck\(\);/);
+    assert.doesNotMatch(onScroll, /followingBottomRef\.current =/);
+    assert.doesNotMatch(onScroll, /distFromBottom/);
+    // 只有用户的原始输入事件能脱离跟随：上滚滚轮、抓滚动条、上翻按键、触摸滑动。
     const onWheel = chat.slice(chat.indexOf("const onWheel = (event) => {"), chat.indexOf("const onPointerDown = (event) => {"));
-    assert.match(onWheel, /lastScrollUpIntentAtRef\.current = Date\.now\(\)/);
+    assert.match(onWheel, /if \(Number\(event\.deltaY\) < 0\) \{/);
+    assert.match(onWheel, /stopFollowing\(\)/);
+    const onPointerDown = chat.slice(chat.indexOf("const onPointerDown = (event) => {"), chat.indexOf("const onPointerUp = () => {"));
+    assert.match(onPointerDown, /scrollbarDraggingRef\.current = true/);
+    assert.match(onPointerDown, /stopFollowing\(\)/);
+    assert.match(chat, /const onKeyDown = \(event\) => \{/);
+    assert.match(chat, /event\.key === "PageUp"/);
+    assert.match(chat, /const onTouchMove = \(\) => stopFollowing\(\)/);
+    // 恢复跟随只有显式动作：发送消息、点"回到底部"pill、打开会话。
+    assert.match(chat, /const followBottom = q2\(\(\) => \{/);
+    assert.match(chat, /followingBottomRef\.current = true/);
+    assert.match(chat, /class="chat-new-messages-pill" onClick=\$\{followBottom\}/);
+    // 内容增长不再经过多 owner 状态机，收敛为一个纯决策函数。
+    assert.match(chat, /computeGrowthEffect\(followingBottomRef\.current, added\)/);
+    // 旧的时间窗口猜测逻辑必须彻底删除：钳位免疫、意图宽限期、平滑动画死锁
+    // 补丁都不复存在（这些补丁本身就是跳段 bug 的来源）。
+    assert.doesNotMatch(chat, /USER_SCROLL_INTENT_GRACE_MS/);
+    assert.doesNotMatch(chat, /lastUserScrollIntentAtRef/);
+    assert.doesNotMatch(chat, /lastScrollUpIntentAtRef/);
+    assert.doesNotMatch(chat, /autoScrollInFlight/);
+    assert.doesNotMatch(chat, /topLoadArmedRef/);
+    assert.doesNotMatch(chat, /topLoadIntentRef/);
+    assert.doesNotMatch(chat, /applyScrollPolicyEvent/);
   });
 });

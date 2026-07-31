@@ -735,21 +735,21 @@ describe("Dashboard 回归护栏", () => {
     assert.match(app, /process-card\[data-process-anchor-id\]/);
     assert.match(app, /groupId=\$\{unit\.id\}/);
     assert.match(app, /scrollbarDraggingRef/);
-     assert.match(app, /const chatScrollStateRef = A2\(createChatScrollState\(\)\)/);
+    assert.match(app, /const followingBottomRef = A2\(true\)/);
      assert.match(app, /const scrollSchedulerRef = A2\(null\)/);
-    assert.match(app, /const topLoadArmedRef = A2\(false\)/);
-    assert.match(app, /const topLoadIntentRef = A2\(false\)/);
-    assert.match(app, /topLoadIntentRef\.current = true/);
+    assert.match(app, /const topLoadTimerRef = A2\(null\)/);
+    assert.match(app, /const suppressTopLoadUntilRef = A2\(0\)/);
+    assert.match(app, /scheduleTopLoadCheck/);
     assert.match(app, /showBackgroundJobs/);
-    assert.match(app, /const cancelAutoScroll = q2\(\(\) =>/);
+    assert.match(app, /const stopFollowing = q2\(\(\) =>/);
      assert.match(app, /const scheduleBottomPin = q2\(\(\) =>/);
      assert.match(app, /scrollSchedulerRef\.current\?\.cancel\(\)/);
      assert.match(app, /createFrameScheduler/);
     assert.match(app, /event\.deltaY\) < 0/);
     assert.match(app, /addEventListener\("wheel", onWheel/);
-    assert.match(app, /lastScrollTopRef\.current = currentTop;\s*maybeLoadEarlier\(\);\s*return;/);
+    assert.match(app, /lastScrollTopRef\.current = el\.scrollTop;\s*if \(el\.scrollTop <= CHAT_TOP_LOAD_THRESHOLD\) scheduleTopLoadCheck\(\);/);
     assert.match(app, /loadEarlierMessagesRef/);
-    assert.match(app, /topLoadArmedRef/);
+    assert.match(app, /shouldTriggerTopLoad/);
     assert.match(app, /t4\("chat\.shownOfTotal", \{ shown: renderedMessages\.length, total: displayTotal \}\)/);
     assert.match(app, /const inputValueRef = A2/);
     assert.match(inputHandler, /setChatInput\(v3\)/);
@@ -773,7 +773,7 @@ describe("Dashboard 回归护栏", () => {
 
     assert.ok(bootErrorReturn > finalChatHook);
     assert.match(app, /const preserveVisibleHistoryOnAppend = q2\(\(\) => \{/);
-    assert.match(app, /if \(!shouldAutoScroll\.current\) setVisibleMessageCount\(\(count\) => count \+ 1\)/);
+    assert.match(app, /if \(!followingBottomRef\.current\) setVisibleMessageCount\(\(count\) => count \+ 1\)/);
     assert.match(app, /if \(!cur\) preserveVisibleHistoryOnAppend\(\)/);
     assert.match(app, /if \(!replacedStreaming\) preserveVisibleHistoryOnAppend\(\)/);
   });

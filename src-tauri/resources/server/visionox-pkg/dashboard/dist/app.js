@@ -24889,49 +24889,15 @@ function projectChatTimeline(messages = [], tools = [], streamingSegments = []) 
 }
 
 // dashboard/src/lib/chat-scroll-policy.ts
-function createChatScrollState() {
-  return { owner: "auto", newBelowCount: 0 };
+function computeGrowthEffect(followingBottom, added) {
+  const count = !Number.isFinite(added) || added == null ? 1 : Math.max(0, Math.floor(added));
+  if (count === 0) return { type: "none" };
+  if (followingBottom) return { type: "pin" };
+  return { type: "count", added: count };
 }
-function addedCount(value) {
-  if (!Number.isFinite(value) || value == null) return 1;
-  return Math.max(0, Math.floor(value));
-}
-function withOwner(state, owner) {
-  return { owner, newBelowCount: state.newBelowCount };
-}
-function finishTransientOwner(state, atBottom) {
-  if (atBottom) return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
-  return { state: { owner: "user", newBelowCount: state.newBelowCount }, effect: "none" };
-}
-function reduceChatScrollState(state = createChatScrollState(), event) {
-  switch (event.type) {
-    case "content-growth": {
-      const added = addedCount(event.added);
-      if (state.owner === "auto") {
-        return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
-      }
-      return {
-        state: { owner: state.owner, newBelowCount: state.newBelowCount + added },
-        effect: "none"
-      };
-    }
-    case "user-scroll-up":
-      return { state: withOwner(state, "user"), effect: "none" };
-    case "user-scroll-down":
-      return event.atBottom ? { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" } : { state: withOwner(state, "user"), effect: "none" };
-    case "user-reached-bottom":
-      return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
-    case "anchor-start":
-      return { state: withOwner(state, "anchor"), effect: "none" };
-    case "anchor-end":
-      return finishTransientOwner(state, Boolean(event.atBottom));
-    case "jump-start":
-      return { state: withOwner(state, "jump"), effect: "none" };
-    case "jump-end":
-      return finishTransientOwner(state, Boolean(event.atBottom));
-    default:
-      return { state, effect: "none" };
-  }
+function shouldTriggerTopLoad(check) {
+  if (check.loading || check.dragging || check.backgrounded || check.suppressed) return false;
+  return check.scrollTop <= check.threshold;
 }
 function createFrameScheduler(options2) {
   const requestFrame = options2.requestFrame ?? ((callback) => requestAnimationFrame(callback));
@@ -25055,7 +25021,6 @@ function providerModelTestSummary(providers) {
 var CHAT_RENDER_STEP = 30;
 var CHAT_MESSAGE_PAGE_SIZE = 60;
 var CHAT_TOP_LOAD_THRESHOLD = 96;
-var USER_SCROLL_INTENT_GRACE_MS = 300;
 var FILE_ARTIFACT_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "sh"]);
@@ -26232,8 +26197,8 @@ function ChatPanel({ userAvatar = null } = {}) {
   const queueSubmittingRef = A2(false);
   const sendInFlightRef = A2(false);
   const CHAT_QUEUE_LIMIT = 5;
-  const draftKey = $2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
-  const queueStorageKey = $2(() => workspaceDir && activeConversationId ? `${draftKey}:conversation:${activeConversationId}:queue` : null, [draftKey, workspaceDir, activeConversationId]);
+  const draftKey = T2(() => chatDraftKey(workspaceDir, mode), [workspaceDir, mode]);
+  const queueStorageKey = T2(() => workspaceDir && activeConversationId ? `${draftKey}:conversation:${activeConversationId}:queue` : null, [draftKey, workspaceDir, activeConversationId]);
   const queueStorageKeyRef = A2(queueStorageKey);
   queueStorageKeyRef.current = queueStorageKey;
   const uploadScopeKey = `${activeConversationId || "unresolved"}
@@ -26525,8 +26490,10 @@ ${workspaceDir || ""}`;
       atBottom: currentFeed.scrollHeight - currentFeed.scrollTop - currentFeed.clientHeight < 80,
       anchor: captureChatScrollAnchor(currentFeed)
     };
-    topLoadIntentRef.current = false;
-    topLoadArmedRef.current = false;
+    if (topLoadTimerRef.current !== null) {
+      clearTimeout(topLoadTimerRef.current);
+      topLoadTimerRef.current = null;
+    }
     setShowBackgroundJobs(true);
     setFeedMenu(null);
     setShowSkillPicker(false);
@@ -26697,7 +26664,6 @@ ${workspaceDir || ""}`;
       setTurnStartedAt(null);
     }
   }, [busy, turnStartedAt]);
-  const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   const [feedMountVersion, setFeedMountVersion] = d2(0);
   const setFeedRef = q2((node) => {
@@ -26705,24 +26671,20 @@ ${workspaceDir || ""}`;
     feedRef.current = node;
     if (node) setFeedMountVersion((version) => version + 1);
   }, []);
-  const autoScrollInFlight = A2(false);
-  const chatScrollStateRef = A2(createChatScrollState());
+  const followingBottomRef = A2(true);
   const scrollSchedulerRef = A2(null);
-  const jumpOwnershipTimerRef = A2(null);
   const jumpHighlightTimerRef = A2(null);
-  const jumpTokenRef = A2(null);
   const chatScrollSnapshotRef = A2(null);
   const chatFeedGenerationRef = A2(0);
   const earlierLoadTokenRef = A2(0);
   const backgroundWorkbenchRef = A2(false);
   const renderedFrameCountRef = A2(0);
   const lastScrollTopRef = A2(0);
-  const lastScrollUpIntentAtRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
-  const topLoadIntentRef = A2(false);
-  const topLoadArmedRef = A2(false);
   const loadEarlierMessagesRef = A2(null);
+  const topLoadTimerRef = A2(null);
+  const suppressTopLoadUntilRef = A2(0);
   const [hasNewBelow, setHasNewBelow] = d2(false);
   const [newBelowCount, setNewBelowCount] = d2(0);
   const [feedMenu, setFeedMenu] = d2(null);
@@ -26731,33 +26693,41 @@ ${workspaceDir || ""}`;
       scrollSchedulerRef.current = createFrameScheduler({
         run() {
           const el = feedRef.current;
-          if (!el || chatScrollStateRef.current.owner !== "auto") return;
-          autoScrollInFlight.current = true;
+          if (!el || !followingBottomRef.current) return;
           el.scrollTop = el.scrollHeight;
           lastScrollTopRef.current = el.scrollTop;
-          setTimeout(() => {
-            autoScrollInFlight.current = false;
-          }, 0);
         }
       });
     }
     scrollSchedulerRef.current.schedule();
   }, []);
-  const applyScrollPolicyEvent = q2((event) => {
-    const reduced = reduceChatScrollState(chatScrollStateRef.current, event);
-    chatScrollStateRef.current = reduced.state;
-    shouldAutoScroll.current = reduced.state.owner === "auto";
-    setHasNewBelow(reduced.state.newBelowCount > 0);
-    setNewBelowCount(reduced.state.newBelowCount);
-    if (reduced.effect === "pin-bottom") scheduleBottomPin();
-    return reduced.state;
-  }, [scheduleBottomPin]);
-  const cancelAutoScroll = q2(() => {
+  const stopFollowing = q2(() => {
     scrollSchedulerRef.current?.cancel();
-    applyScrollPolicyEvent({ type: "user-scroll-up" });
-    autoScrollInFlight.current = false;
-    if (feedRef.current) lastScrollTopRef.current = feedRef.current.scrollTop;
-  }, [applyScrollPolicyEvent]);
+    followingBottomRef.current = false;
+  }, []);
+  const followBottom = q2(() => {
+    followingBottomRef.current = true;
+    setHasNewBelow(false);
+    setNewBelowCount(0);
+    scheduleBottomPin();
+  }, [scheduleBottomPin]);
+  const scheduleTopLoadCheck = q2(() => {
+    if (topLoadTimerRef.current !== null) clearTimeout(topLoadTimerRef.current);
+    topLoadTimerRef.current = setTimeout(() => {
+      topLoadTimerRef.current = null;
+      const el = feedRef.current;
+      if (!el || !el.isConnected) return;
+      if (!shouldTriggerTopLoad({
+        scrollTop: el.scrollTop,
+        threshold: CHAT_TOP_LOAD_THRESHOLD,
+        loading: loadingEarlierRef.current,
+        dragging: scrollbarDraggingRef.current,
+        backgrounded: backgroundWorkbenchRef.current,
+        suppressed: Date.now() < suppressTopLoadUntilRef.current
+      })) return;
+      void loadEarlierMessagesRef.current?.();
+    }, 150);
+  }, []);
   const setAllToolGroupsOpen = (open) => {
     feedRef.current?.querySelectorAll("details.tool-log, details.process-card-details").forEach((node) => {
       node.open = open;
@@ -26770,7 +26740,7 @@ ${workspaceDir || ""}`;
     action();
   };
   const preserveVisibleHistoryOnAppend = q2(() => {
-    if (!shouldAutoScroll.current) setVisibleMessageCount((count) => count + 1);
+    if (!followingBottomRef.current) setVisibleMessageCount((count) => count + 1);
   }, []);
   const allVisibleMessages = projectChatTimeline(
     messages,
@@ -26796,18 +26766,11 @@ ${workspaceDir || ""}`;
       if (index >= 0) setVisibleMessageCount((count) => Math.max(count, messages.length - index));
       return;
     }
-    cancelAutoScroll();
-    applyScrollPolicyEvent({ type: "jump-start" });
-    if (jumpOwnershipTimerRef.current !== null) {
-      clearTimeout(jumpOwnershipTimerRef.current);
-      jumpOwnershipTimerRef.current = null;
-    }
+    stopFollowing();
     if (jumpHighlightTimerRef.current !== null) {
       clearTimeout(jumpHighlightTimerRef.current);
       jumpHighlightTimerRef.current = null;
     }
-    const jumpToken = String(jumpMessageId);
-    jumpTokenRef.current = jumpToken;
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
     setJumpMessageId(null);
@@ -26817,29 +26780,15 @@ ${workspaceDir || ""}`;
       }
     } catch {
     }
-    jumpOwnershipTimerRef.current = setTimeout(() => {
-      if (jumpTokenRef.current !== jumpToken) return;
-      jumpTokenRef.current = null;
-      jumpOwnershipTimerRef.current = null;
-      const feed = feedRef.current;
-      const atBottom = Boolean(feed && feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80);
-      applyScrollPolicyEvent({ type: "jump-end", atBottom });
-    }, 450);
     jumpHighlightTimerRef.current = setTimeout(() => {
       jumpHighlightTimerRef.current = null;
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
-  }, [applyScrollPolicyEvent, cancelAutoScroll, jumpMessageId, messages, streaming, streamingSegments, visibleMessageCount]);
+  }, [stopFollowing, jumpMessageId, messages, streaming, streamingSegments, visibleMessageCount]);
   y2(() => () => {
-    if (jumpOwnershipTimerRef.current !== null) clearTimeout(jumpOwnershipTimerRef.current);
     if (jumpHighlightTimerRef.current !== null) clearTimeout(jumpHighlightTimerRef.current);
-    jumpOwnershipTimerRef.current = null;
     jumpHighlightTimerRef.current = null;
-    if (jumpTokenRef.current !== null) {
-      jumpTokenRef.current = null;
-      applyScrollPolicyEvent({ type: "jump-end", atBottom: false });
-    }
-  }, [applyScrollPolicyEvent]);
+  }, []);
   y2(() => {
     let cancelled = false;
     if (streaming) return () => {
@@ -27324,8 +27273,9 @@ ${workspaceDir || ""}`;
         setOperation(reduced.state.operation);
         setPlanContinuation(null);
         setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-        topLoadArmedRef.current = false;
-        topLoadIntentRef.current = false;
+        followingBottomRef.current = true;
+        setHasNewBelow(false);
+        setNewBelowCount(0);
         return;
       }
       if (dash.kind === "config-changed") {
@@ -27740,7 +27690,7 @@ ${workspaceDir || ""}`;
           reason: res.completion.error ?? t4("chat.lastRunFailed")
         };
       }
-      applyScrollPolicyEvent({ type: "user-reached-bottom" });
+      followBottom();
       return { ok: true };
     } catch (err) {
       if (err?.status === 409) {
@@ -27755,7 +27705,7 @@ ${workspaceDir || ""}`;
       }
       return { ok: false, reason: err.message };
     }
-  }, [applyScrollPolicyEvent, resolveSkillMention]);
+  }, [followBottom, resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
     const storedItem = {
@@ -27982,7 +27932,7 @@ ${workspaceDir || ""}`;
         setChatInput("");
         pendingImagesRef.current = [];
         setPendingImages([]);
-        applyScrollPolicyEvent({ type: "user-reached-bottom" });
+        followBottom();
         removeChatDraft(draftKey);
       } else if (result.busy) {
         if (await enqueuePrompt(text, images)) {
@@ -28001,7 +27951,7 @@ ${workspaceDir || ""}`;
     } finally {
       sendInFlightRef.current = false;
     }
-  }, [applyScrollPolicyEvent, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest, promptOptimizationCleanupPending]);
+  }, [followBottom, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest, promptOptimizationCleanupPending]);
   const saveSkillCredential = q2(async () => {
     if (!skillCredentialSetup || !skillCredentialValue.trim()) return;
     setSkillCredentialSaving(true);
@@ -28028,7 +27978,7 @@ ${workspaceDir || ""}`;
           setPendingImages([]);
           removeChatDraft(draftKey);
         }
-        applyScrollPolicyEvent({ type: "user-reached-bottom" });
+        followBottom();
       } else {
         setError(result.reason ?? "rejected");
       }
@@ -28037,7 +27987,7 @@ ${workspaceDir || ""}`;
     } finally {
       setSkillCredentialSaving(false);
     }
-  }, [applyScrollPolicyEvent, skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
+  }, [followBottom, skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
   const resumeIncompletePlan = q2(async () => {
     if (busy || !planContinuation) return;
     const paused = planContinuation;
@@ -28097,8 +28047,9 @@ ${workspaceDir || ""}`;
       canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = false;
-      topLoadIntentRef.current = false;
+      followingBottomRef.current = true;
+      setHasNewBelow(false);
+      setNewBelowCount(0);
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
@@ -28113,14 +28064,14 @@ ${workspaceDir || ""}`;
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      applyScrollPolicyEvent({ type: "user-reached-bottom" });
+      followBottom();
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [applyScrollPolicyEvent, busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput, cancelStreamingRaf]);
+  }, [followBottom, busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput, cancelStreamingRaf]);
   const changeIndexRetrievalMode = q2(async (event) => {
     const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
@@ -28155,8 +28106,9 @@ ${workspaceDir || ""}`;
       canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = false;
-      topLoadIntentRef.current = false;
+      followingBottomRef.current = true;
+      setHasNewBelow(false);
+      setNewBelowCount(0);
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
@@ -28171,14 +28123,14 @@ ${workspaceDir || ""}`;
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      applyScrollPolicyEvent({ type: "user-reached-bottom" });
+      followBottom();
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [applyScrollPolicyEvent, draftKey, pendingImages, confirmQueuedReset, setChatInput, cancelStreamingRaf]);
+  }, [followBottom, draftKey, pendingImages, confirmQueuedReset, setChatInput, cancelStreamingRaf]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -28550,10 +28502,9 @@ ${workspaceDir || ""}`;
     if (bootError) return;
     const el = feedRef.current;
     if (!el || !el.isConnected) return;
-    topLoadArmedRef.current = false;
-    topLoadIntentRef.current = false;
     scrollbarDraggingRef.current = false;
     lastScrollTopRef.current = el.scrollTop;
+    suppressTopLoadUntilRef.current = Date.now() + 400;
     const savedScroll = chatScrollSnapshotRef.current;
     chatScrollSnapshotRef.current = null;
     renderedFrameCountRef.current = 0;
@@ -28568,7 +28519,7 @@ ${workspaceDir || ""}`;
         }
         if (!savedScroll.atBottom) {
           scrollSchedulerRef.current?.cancel();
-          applyScrollPolicyEvent({ type: "user-scroll-up" });
+          followingBottomRef.current = false;
           const anchor = savedScroll.anchor;
           if (anchor?.id) {
             const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
@@ -28596,54 +28547,17 @@ ${workspaceDir || ""}`;
         lastScrollTopRef.current = current.scrollTop;
       };
       requestAnimationFrame(() => restore(3));
-    } else if (chatScrollStateRef.current.owner === "auto") {
+    } else if (followingBottomRef.current) {
       scheduleBottomPin();
     }
-    const maybeLoadEarlier = () => {
-      if (backgroundWorkbenchRef.current || !el.isConnected || el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
-      topLoadArmedRef.current = false;
-      topLoadIntentRef.current = false;
-      void loadEarlierMessagesRef.current?.();
-    };
     const onScroll = () => {
-      const currentTop = el.scrollTop;
-      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
-      const scrollingUp = currentTop < lastScrollTopRef.current - 1;
-      const userScrollIntentActive = Date.now() - lastScrollUpIntentAtRef.current <= USER_SCROLL_INTENT_GRACE_MS;
-      if (scrollingUp && shouldAutoScroll.current && distFromBottom < 80 && !userScrollIntentActive) {
-        lastScrollTopRef.current = currentTop;
-        return;
-      }
-      if (scrollingUp) {
-        if (topLoadIntentRef.current) {
-          topLoadArmedRef.current = true;
-          topLoadIntentRef.current = false;
-        }
-        cancelAutoScroll();
-        lastScrollTopRef.current = currentTop;
-        maybeLoadEarlier();
-        return;
-      }
-      if (autoScrollInFlight.current) {
-        lastScrollTopRef.current = currentTop;
-        return;
-      }
-      if (distFromBottom < 80 && !userScrollIntentActive && chatScrollStateRef.current.owner !== "auto") {
-        applyScrollPolicyEvent({ type: "user-reached-bottom" });
-      }
-      lastScrollTopRef.current = currentTop;
-      maybeLoadEarlier();
+      lastScrollTopRef.current = el.scrollTop;
+      if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD) scheduleTopLoadCheck();
     };
     const onWheel = (event) => {
       if (Number(event.deltaY) < 0) {
-        lastScrollUpIntentAtRef.current = Date.now();
-        topLoadIntentRef.current = true;
-        cancelAutoScroll();
-        if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD && !scrollbarDraggingRef.current) {
-          topLoadArmedRef.current = true;
-          topLoadIntentRef.current = false;
-          maybeLoadEarlier();
-        }
+        stopFollowing();
+        if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD) scheduleTopLoadCheck();
       }
     };
     const onPointerDown = (event) => {
@@ -28651,20 +28565,16 @@ ${workspaceDir || ""}`;
       const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
       if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
         scrollbarDraggingRef.current = true;
-        lastScrollUpIntentAtRef.current = Date.now();
-        topLoadIntentRef.current = true;
-        cancelAutoScroll();
+        stopFollowing();
       }
     };
     const onPointerUp = () => {
-      if (!scrollbarDraggingRef.current) return;
       scrollbarDraggingRef.current = false;
-      if (topLoadIntentRef.current) {
-        topLoadArmedRef.current = true;
-        topLoadIntentRef.current = false;
-      }
-      maybeLoadEarlier();
     };
+    const onKeyDown2 = (event) => {
+      if (event.key === "PageUp" || event.key === "ArrowUp" || event.key === "Home") stopFollowing();
+    };
+    const onTouchMove = () => stopFollowing();
     const onContextMenu = (event) => {
       event.preventDefault();
       setFeedMenu({
@@ -28675,30 +28585,37 @@ ${workspaceDir || ""}`;
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("pointerdown", onPointerDown, { passive: true });
+    el.addEventListener("keydown", onKeyDown2);
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
     el.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
-      const current = feedRef.current || el;
-      if (current && !chatScrollSnapshotRef.current && (!current.isConnected || backgroundWorkbenchRef.current)) chatScrollSnapshotRef.current = {
-        top: current.scrollTop,
-        atBottom: current.scrollHeight - current.scrollTop - current.clientHeight < 80,
-        anchor: captureChatScrollAnchor(current)
-      };
+      if (topLoadTimerRef.current !== null) {
+        clearTimeout(topLoadTimerRef.current);
+        topLoadTimerRef.current = null;
+      }
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("keydown", onKeyDown2);
+      el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [applyScrollPolicyEvent, bootError, cancelAutoScroll, feedMountVersion, scheduleBottomPin, showBackgroundJobs]);
+  }, [bootError, feedMountVersion, scheduleBottomPin, scheduleTopLoadCheck, showBackgroundJobs, stopFollowing]);
   y2(() => {
     const nextCount = allVisibleMessages.length;
     const added = Math.max(0, nextCount - renderedFrameCountRef.current);
     renderedFrameCountRef.current = nextCount;
-    applyScrollPolicyEvent({ type: "content-growth", added });
-  }, [applyScrollPolicyEvent, messages, streaming, streamingSegments]);
+    const effect = computeGrowthEffect(followingBottomRef.current, added);
+    if (effect.type === "pin") scheduleBottomPin();
+    else if (effect.type === "count") {
+      setNewBelowCount((count) => count + effect.added);
+      setHasNewBelow(true);
+    }
+  }, [messages, scheduleBottomPin, streaming, streamingSegments]);
   y2(() => () => scrollSchedulerRef.current?.cancel(), []);
   y2(() => {
     if (!feedMenu) return;
@@ -29048,13 +28965,8 @@ ${workspaceDir || ""}`;
       if (loadToken !== earlierLoadTokenRef.current) return;
       loadingEarlierRef.current = false;
       setLoadingEarlierMessages(false);
-      if (feedIsCurrent()) {
-        const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-        applyScrollPolicyEvent({ type: "anchor-end", atBottom });
-      }
     };
     if (visibleMessageCount < messages.length) {
-      applyScrollPolicyEvent({ type: "anchor-start" });
       loadingEarlierRef.current = true;
       setLoadingEarlierMessages(true);
       setVisibleMessageCount((count) => Math.min(messages.length, count + CHAT_RENDER_STEP));
@@ -29072,7 +28984,6 @@ ${workspaceDir || ""}`;
       activeSessionId: activeConversationIdRef.current,
       responseSessionId
     }) && feedIsCurrent();
-    applyScrollPolicyEvent({ type: "anchor-start" });
     loadingEarlierRef.current = true;
     setLoadingEarlierMessages(true);
     try {
@@ -29094,7 +29005,7 @@ ${workspaceDir || ""}`;
       if (loadToken === earlierLoadTokenRef.current && !backgroundWorkbenchRef.current) setError(err.message);
       finishLoading();
     }
-  }, [applyScrollPolicyEvent, visibleMessageCount, messages, totalMessages]);
+  }, [visibleMessageCount, messages, totalMessages]);
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
@@ -29213,12 +29124,12 @@ ${workspaceDir || ""}`;
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
           ${!showBackgroundJobs && hasNewBelow ? html4`
-            <button type="button" class="chat-new-messages-pill" onClick=${() => applyScrollPolicyEvent({ type: "user-reached-bottom" })}>${t4("chat.newMessagesBelowCount", { count: newBelowCount })}</button>
+            <button type="button" class="chat-new-messages-pill" onClick=${followBottom}>${t4("chat.newMessagesBelowCount", { count: newBelowCount })}</button>
           ` : null}
           ${!showBackgroundJobs && feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => {
-    applyScrollPolicyEvent({ type: "user-reached-bottom" });
+    followBottom();
     void resyncRunnerRef.current?.();
   })}>${t4("chat.feedRefresh")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
@@ -33435,13 +33346,13 @@ function SessionsPanel({ userAvatar = null } = {}) {
       setRenameBusy(false);
     }
   }, [open, renameText]);
-  const detailChatMessages = $2(() => (open?.messages ?? []).map((m3, i3) => ({
+  const detailChatMessages = T2(() => (open?.messages ?? []).map((m3, i3) => ({
     id: `r-${i3}`,
     role: m3.role === "tool" ? "tool" : m3.role === "assistant" ? "assistant" : m3.role === "user" ? "user" : "info",
     text: m3.content ?? "",
     toolName: m3.toolName
   })), [open?.messages]);
-  const transcriptMatches = $2(() => computeChatSearchMatches(detailChatMessages, transcriptSearch), [detailChatMessages, transcriptSearch]);
+  const transcriptMatches = T2(() => computeChatSearchMatches(detailChatMessages, transcriptSearch), [detailChatMessages, transcriptSearch]);
   y2(() => {
     setTranscriptSearchIndex((cur) => transcriptMatches.length ? Math.min(Math.max(cur, 0), transcriptMatches.length - 1) : 0);
   }, [transcriptSearch, transcriptMatches.length]);

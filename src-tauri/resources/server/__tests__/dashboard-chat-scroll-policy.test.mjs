@@ -15,48 +15,35 @@ async function loadScrollPolicy() {
   return import(`data:text/javascript;base64,${Buffer.from(output, "utf8").toString("base64")}`);
 }
 
-test("user scrolling owns the feed until they explicitly return to the bottom", async () => {
-  const { createChatScrollState, reduceChatScrollState } = await loadScrollPolicy();
-  let state = createChatScrollState();
+test("content growth pins only while following; otherwise it counts new messages below", async () => {
+  const { computeGrowthEffect } = await loadScrollPolicy();
 
-  let reduced = reduceChatScrollState(state, { type: "content-growth", added: 1 });
-  assert.equal(reduced.effect, "pin-bottom");
-  assert.equal(reduced.state.owner, "auto");
+  assert.deepEqual(computeGrowthEffect(true, 1), { type: "pin" });
+  assert.deepEqual(computeGrowthEffect(true, 5), { type: "pin" });
 
-  state = reduceChatScrollState(reduced.state, { type: "user-scroll-up" }).state;
-  reduced = reduceChatScrollState(state, { type: "content-growth", added: 3 });
-  assert.equal(reduced.effect, "none");
-  assert.equal(reduced.state.owner, "user");
-  assert.equal(reduced.state.newBelowCount, 3);
+  // 手动阅读模式下，内容增长绝不写滚动位置，只累计提示计数。
+  assert.deepEqual(computeGrowthEffect(false, 3), { type: "count", added: 3 });
+  assert.deepEqual(computeGrowthEffect(false, 1), { type: "count", added: 1 });
 
-  reduced = reduceChatScrollState(reduced.state, { type: "user-reached-bottom" });
-  assert.equal(reduced.effect, "pin-bottom");
-  assert.equal(reduced.state.owner, "auto");
-  assert.equal(reduced.state.newBelowCount, 0);
+  // 没有新增内容时什么都不做；非法输入按 1 条计。
+  assert.deepEqual(computeGrowthEffect(true, 0), { type: "none" });
+  assert.deepEqual(computeGrowthEffect(false, 0), { type: "none" });
+  assert.deepEqual(computeGrowthEffect(false, undefined), { type: "count", added: 1 });
 });
 
-test("history anchors and message jumps do not silently rearm automatic following", async () => {
-  const { createChatScrollState, reduceChatScrollState } = await loadScrollPolicy();
-  let state = reduceChatScrollState(createChatScrollState(), { type: "user-scroll-up" }).state;
+test("top auto-load requires a settled viewport still parked at the top", async () => {
+  const { shouldTriggerTopLoad } = await loadScrollPolicy();
+  const base = { scrollTop: 0, threshold: 96, loading: false, dragging: false, backgrounded: false, suppressed: false };
 
-  state = reduceChatScrollState(state, { type: "anchor-start" }).state;
-  assert.equal(state.owner, "anchor");
-  let reduced = reduceChatScrollState(state, { type: "content-growth", added: 2 });
-  assert.equal(reduced.effect, "none");
-  state = reduceChatScrollState(reduced.state, { type: "anchor-end" }).state;
-  assert.equal(state.owner, "user");
-  assert.equal(state.newBelowCount, 2);
+  assert.equal(shouldTriggerTopLoad(base), true);
+  assert.equal(shouldTriggerTopLoad({ ...base, scrollTop: 96 }), true);
 
-  state = reduceChatScrollState(state, { type: "jump-start" }).state;
-  assert.equal(state.owner, "jump");
-  state = reduceChatScrollState(state, { type: "jump-end", atBottom: false }).state;
-  assert.equal(state.owner, "user");
-  assert.equal(state.newBelowCount, 2);
-
-  reduced = reduceChatScrollState(state, { type: "jump-start" });
-  state = reduceChatScrollState(reduced.state, { type: "jump-end", atBottom: true }).state;
-  assert.equal(state.owner, "auto");
-  assert.equal(state.newBelowCount, 0);
+  // 已离开顶部、加载中、拖拽滚动条、后台工作台、挂载恢复期内，一律不触发。
+  assert.equal(shouldTriggerTopLoad({ ...base, scrollTop: 97 }), false);
+  assert.equal(shouldTriggerTopLoad({ ...base, loading: true }), false);
+  assert.equal(shouldTriggerTopLoad({ ...base, dragging: true }), false);
+  assert.equal(shouldTriggerTopLoad({ ...base, backgrounded: true }), false);
+  assert.equal(shouldTriggerTopLoad({ ...base, suppressed: true }), false);
 });
 
 test("the frame scheduler coalesces repeated pin requests into one scroll write", async () => {

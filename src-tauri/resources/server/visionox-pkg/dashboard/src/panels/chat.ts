@@ -1,7 +1,7 @@
 // Recovered from the product bundle; types are tightened incrementally without changing behavior.
 // @ts-nocheck
-import { createPortal as T2, memo as preactMemo } from "preact/compat";
-import { useCallback as q2, useEffect as y2, useRef as A2, useState as d2 } from "preact/hooks";
+import { memo as preactMemo } from "preact/compat";
+import { useCallback as q2, useEffect as y2, useMemo as T2, useRef as A2, useState as d2 } from "preact/hooks";
 import {
   ChatMessage,
   CheckpointModal,
@@ -44,7 +44,7 @@ import {
 } from "../lib/event-reducer.js";
 import { groupToolMessages, toolFrameMatches } from "../lib/chat-turn-rendering.js";
 import { assistantHasAuthoritativeFinalEvidence, projectChatTimeline } from "../lib/chat-timeline.js";
-import { createChatScrollState, createFrameScheduler, reduceChatScrollState } from "../lib/chat-scroll-policy.js";
+import { computeGrowthEffect, createFrameScheduler, shouldTriggerTopLoad } from "../lib/chat-scroll-policy.js";
 import { redactSensitiveDisplayText, redactTechnicalMessages, safeTechnicalDisplayText } from "../lib/chat-display-safety.js";
 import { t as t4, useLang } from "../i18n/index.js";
 import { IconModel, IconWorkspace, IconJobs, IconSearch, IconWand, IconAttach, IconSkill } from "../ui/index.js";
@@ -149,9 +149,6 @@ function providerModelTestSummary(providers) {
 var CHAT_RENDER_STEP = 30;
 var CHAT_MESSAGE_PAGE_SIZE = 60;
 var CHAT_TOP_LOAD_THRESHOLD = 96;
-// 用户上滚手势的宽限期：手势刷新后这段时间内，钉底回臂与钳位免疫保持抑制，
-// 覆盖平滑滚动动画从滚轮事件到动画结束的完整时长。
-var USER_SCROLL_INTENT_GRACE_MS = 300;
 var FILE_ARTIFACT_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_PREVIEW_EXTS = /* @__PURE__ */ new Set(["md", "markdown", "html", "htm", "txt", "csv", "json", "xml", "yaml", "yml", "py", "js", "ts", "tsx", "jsx", "css", "sql", "ps1", "bat", "cmd", "sh", "ini", "toml"]);
 var FILE_ARTIFACT_SCRIPT_EXTS = /* @__PURE__ */ new Set(["py", "js", "ts", "tsx", "jsx", "ps1", "bat", "cmd", "sh"]);
@@ -1649,11 +1646,12 @@ const [providerCaps, setProviderCaps] = d2(null);
       atBottom: currentFeed.scrollHeight - currentFeed.scrollTop - currentFeed.clientHeight < 80,
       anchor: captureChatScrollAnchor(currentFeed),
     };
-    // A pending top-load gesture belongs to the outgoing feed. Carrying it
-    // across the workbench swap can load another page on the replacement's
-    // first scroll event and shift the restored anchor by an entire page.
-    topLoadIntentRef.current = false;
-    topLoadArmedRef.current = false;
+    // 待处理的顶部加载属于即将卸下的旧 feed，跨工作台切换时必须丢弃，
+    // 否则会在新 feed 恢复锚点后误触发加载、把视口移位一整页。
+    if (topLoadTimerRef.current !== null) {
+      clearTimeout(topLoadTimerRef.current);
+      topLoadTimerRef.current = null;
+    }
     setShowBackgroundJobs(true);
     // The feed context menu belongs to the chat viewport. Clear it before
     // replacing that viewport with the background workbench so a stale menu
@@ -1822,7 +1820,6 @@ const [providerCaps, setProviderCaps] = d2(null);
       setTurnStartedAt(null);
     }
   }, [busy, turnStartedAt]);
-  const shouldAutoScroll = A2(true);
   const feedRef = A2(null);
   // Preact may clear the object ref after the outgoing ChatFeed has already
   // unmounted, then attach the replacement feed on a later commit. Keep a
@@ -1837,30 +1834,25 @@ const [providerCaps, setProviderCaps] = d2(null);
     // attached to document; the effect below validates isConnected again.
     if (node) setFeedMountVersion((version) => version + 1);
   }, []);
-  const autoScrollInFlight = A2(false);
-  const chatScrollStateRef = A2(createChatScrollState());
+  // 滚动所有权唯一事实源：true=跟随底部（内容增长时贴底）；
+  // false=手动阅读（程序禁止写 scrollTop，只累计"下方新消息"提示）。
+  // 只有用户原始输入事件能置 false；只有显式动作（发送/回到底部/打开会话）能置 true。
+  const followingBottomRef = A2(true);
   const scrollSchedulerRef = A2(null);
-  const jumpOwnershipTimerRef = A2(null);
   const jumpHighlightTimerRef = A2(null);
-  const jumpTokenRef = A2(null);
   const chatScrollSnapshotRef = A2(null);
   const chatFeedGenerationRef = A2(0);
   const earlierLoadTokenRef = A2(0);
   const backgroundWorkbenchRef = A2(false);
   const renderedFrameCountRef = A2(0);
   const lastScrollTopRef = A2(0);
-  // 最近一次用户上滚手势（滚轮上滚/抓滚动条）的时间戳。平滑滚动动画会把
-  // 一次滚轮拆成一串小步进 scroll 事件（首步可 ≤1px），手势活跃期内必须
-  // 抑制钉底回臂与钳位免疫，否则会与用户手势死锁：回臂→吞步进→钉底回拉
-  // 取消动画→下一格滚轮重复，滚轮永久失效。
-  const lastScrollUpIntentAtRef = A2(0);
   const loadingEarlierRef = A2(false);
   const scrollbarDraggingRef = A2(false);
-  const topLoadIntentRef = A2(false);
-  // 只有用户先离开顶部后才允许触发历史加载；初始化时 scrollTop=0
-  // 不是用户滚动意图，不能因此把隐藏窗口一次性全部展开。
-  const topLoadArmedRef = A2(false);
   const loadEarlierMessagesRef = A2(null);
+  // 顶部自动加载的防抖句柄与挂载/恢复后的短暂抑制期：
+  // 滚动停止 150ms 且仍停在顶部才触发历史加载。
+  const topLoadTimerRef = A2(null);
+  const suppressTopLoadUntilRef = A2(0);
   const [hasNewBelow, setHasNewBelow] = d2(false);
   const [newBelowCount, setNewBelowCount] = d2(0);
   const [feedMenu, setFeedMenu] = d2(null);
@@ -1869,31 +1861,46 @@ const [providerCaps, setProviderCaps] = d2(null);
       scrollSchedulerRef.current = createFrameScheduler({
         run() {
           const el = feedRef.current;
-          if (!el || chatScrollStateRef.current.owner !== "auto") return;
-          autoScrollInFlight.current = true;
+          if (!el || !followingBottomRef.current) return;
           el.scrollTop = el.scrollHeight;
           lastScrollTopRef.current = el.scrollTop;
-          setTimeout(() => { autoScrollInFlight.current = false; }, 0);
         },
       });
     }
     scrollSchedulerRef.current.schedule();
   }, []);
-  const applyScrollPolicyEvent = q2((event) => {
-    const reduced = reduceChatScrollState(chatScrollStateRef.current, event);
-    chatScrollStateRef.current = reduced.state;
-    shouldAutoScroll.current = reduced.state.owner === "auto";
-    setHasNewBelow(reduced.state.newBelowCount > 0);
-    setNewBelowCount(reduced.state.newBelowCount);
-    if (reduced.effect === "pin-bottom") scheduleBottomPin();
-    return reduced.state;
-  }, [scheduleBottomPin]);
-  const cancelAutoScroll = q2(() => {
+  // 脱离跟随：用户上滚/拖滚动条/触摸滑动/上翻按键/跳转消息时调用。
+  // 从此程序不再写 scrollTop，直到用户显式回到底部。
+  const stopFollowing = q2(() => {
     scrollSchedulerRef.current?.cancel();
-    applyScrollPolicyEvent({ type: "user-scroll-up" });
-    autoScrollInFlight.current = false;
-    if (feedRef.current) lastScrollTopRef.current = feedRef.current.scrollTop;
-  }, [applyScrollPolicyEvent]);
+    followingBottomRef.current = false;
+  }, []);
+  // 恢复跟随：仅发送消息、点"回到底部"/新消息 pill、打开会话等显式动作调用。
+  const followBottom = q2(() => {
+    followingBottomRef.current = true;
+    setHasNewBelow(false);
+    setNewBelowCount(0);
+    scheduleBottomPin();
+  }, [scheduleBottomPin]);
+  // 顶部自动加载：滚动停止 150ms 后仍停在顶部才触发，一次性操作，
+  // 加载完成后由锚点恢复保持视口位置，不持有任何长期滚动状态。
+  const scheduleTopLoadCheck = q2(() => {
+    if (topLoadTimerRef.current !== null) clearTimeout(topLoadTimerRef.current);
+    topLoadTimerRef.current = setTimeout(() => {
+      topLoadTimerRef.current = null;
+      const el = feedRef.current;
+      if (!el || !el.isConnected) return;
+      if (!shouldTriggerTopLoad({
+        scrollTop: el.scrollTop,
+        threshold: CHAT_TOP_LOAD_THRESHOLD,
+        loading: loadingEarlierRef.current,
+        dragging: scrollbarDraggingRef.current,
+        backgrounded: backgroundWorkbenchRef.current,
+        suppressed: Date.now() < suppressTopLoadUntilRef.current,
+      })) return;
+      void loadEarlierMessagesRef.current?.();
+    }, 150);
+  }, []);
   const setAllToolGroupsOpen = (open) => {
     feedRef.current?.querySelectorAll("details.tool-log, details.process-card-details").forEach((node) => {
       node.open = open;
@@ -1906,7 +1913,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     action();
   };
   const preserveVisibleHistoryOnAppend = q2(() => {
-    if (!shouldAutoScroll.current) setVisibleMessageCount((count) => count + 1);
+    if (!followingBottomRef.current) setVisibleMessageCount((count) => count + 1);
   }, []);
   const allVisibleMessages = projectChatTimeline(
     messages,
@@ -1934,18 +1941,13 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (index >= 0) setVisibleMessageCount((count) => Math.max(count, messages.length - index));
       return;
     }
-    cancelAutoScroll();
-    applyScrollPolicyEvent({ type: "jump-start" });
-    if (jumpOwnershipTimerRef.current !== null) {
-      clearTimeout(jumpOwnershipTimerRef.current);
-      jumpOwnershipTimerRef.current = null;
-    }
+    // 跳转是一次性操作：脱离跟随后 scrollIntoView，不需要所有权定时器——
+    // 居中定位必然不在底部，后续是否贴底只由用户的显式动作决定。
+    stopFollowing();
     if (jumpHighlightTimerRef.current !== null) {
       clearTimeout(jumpHighlightTimerRef.current);
       jumpHighlightTimerRef.current = null;
     }
-    const jumpToken = String(jumpMessageId);
-    jumpTokenRef.current = jumpToken;
     el.scrollIntoView({ block: "center", behavior: "smooth" });
     setHighlightMessageId(jumpMessageId);
     setJumpMessageId(null);
@@ -1955,29 +1957,15 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
     } catch {
     }
-    jumpOwnershipTimerRef.current = setTimeout(() => {
-      if (jumpTokenRef.current !== jumpToken) return;
-      jumpTokenRef.current = null;
-      jumpOwnershipTimerRef.current = null;
-      const feed = feedRef.current;
-      const atBottom = Boolean(feed && feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80);
-      applyScrollPolicyEvent({ type: "jump-end", atBottom });
-    }, 450);
     jumpHighlightTimerRef.current = setTimeout(() => {
       jumpHighlightTimerRef.current = null;
       setHighlightMessageId((cur) => cur === jumpMessageId ? null : cur);
     }, 5e3);
-  }, [applyScrollPolicyEvent, cancelAutoScroll, jumpMessageId, messages, streaming, streamingSegments, visibleMessageCount]);
+  }, [stopFollowing, jumpMessageId, messages, streaming, streamingSegments, visibleMessageCount]);
   y2(() => () => {
-    if (jumpOwnershipTimerRef.current !== null) clearTimeout(jumpOwnershipTimerRef.current);
     if (jumpHighlightTimerRef.current !== null) clearTimeout(jumpHighlightTimerRef.current);
-    jumpOwnershipTimerRef.current = null;
     jumpHighlightTimerRef.current = null;
-    if (jumpTokenRef.current !== null) {
-      jumpTokenRef.current = null;
-      applyScrollPolicyEvent({ type: "jump-end", atBottom: false });
-    }
-  }, [applyScrollPolicyEvent]);
+  }, []);
   y2(() => {
     let cancelled = false;
     if (streaming) return () => {
@@ -2484,8 +2472,10 @@ const [providerCaps, setProviderCaps] = d2(null);
         setOperation(reduced.state.operation);
         setPlanContinuation(null);
         setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-        topLoadArmedRef.current = false;
-        topLoadIntentRef.current = false;
+        // 会话切换：恢复跟随底部并清空"下方新消息"提示。
+        followingBottomRef.current = true;
+        setHasNewBelow(false);
+        setNewBelowCount(0);
         return;
       }
       if (dash.kind === "config-changed") {
@@ -2901,7 +2891,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           reason: res.completion.error ?? t4("chat.lastRunFailed")
         };
       }
-      applyScrollPolicyEvent({ type: "user-reached-bottom" });
+      followBottom();
       return { ok: true };
     } catch (err) {
       if (err?.status === 409) {
@@ -2916,7 +2906,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       }
       return { ok: false, reason: err.message };
     }
-  }, [applyScrollPolicyEvent, resolveSkillMention]);
+  }, [followBottom, resolveSkillMention]);
   const persistQueuedPrompt = q2((item) => {
     if (!queueStorageKey || !item) return Promise.resolve();
     const storedItem = {
@@ -3148,7 +3138,7 @@ const [providerCaps, setProviderCaps] = d2(null);
         setChatInput("");
         pendingImagesRef.current = [];
         setPendingImages([]);
-        applyScrollPolicyEvent({ type: "user-reached-bottom" });
+        followBottom();
         removeChatDraft(draftKey);
       } else if (result.busy) {
         if (await enqueuePrompt(text, images)) {
@@ -3167,7 +3157,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } finally {
       sendInFlightRef.current = false;
     }
-  }, [applyScrollPolicyEvent, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest, promptOptimizationCleanupPending]);
+  }, [followBottom, busy, pendingImages, draftKey, enqueuePrompt, submitPromptPayload, setChatInput, cancelPromptOptimizationRequest, promptOptimizationCleanupPending]);
   const saveSkillCredential = q2(async () => {
     if (!skillCredentialSetup || !skillCredentialValue.trim()) return;
     setSkillCredentialSaving(true);
@@ -3194,7 +3184,7 @@ const [providerCaps, setProviderCaps] = d2(null);
           setPendingImages([]);
           removeChatDraft(draftKey);
         }
-        applyScrollPolicyEvent({ type: "user-reached-bottom" });
+        followBottom();
       } else {
         setError(result.reason ?? "rejected");
       }
@@ -3203,7 +3193,7 @@ const [providerCaps, setProviderCaps] = d2(null);
     } finally {
       setSkillCredentialSaving(false);
     }
-  }, [applyScrollPolicyEvent, skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
+  }, [followBottom, skillCredentialSetup, skillCredentialValue, submitPromptPayload, setChatInput, draftKey, deletePersistedQueuedPrompt]);
   const resumeIncompletePlan = q2(async () => {
     if (busy || !planContinuation) return;
     const paused = planContinuation;
@@ -3263,8 +3253,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = false;
-      topLoadIntentRef.current = false;
+      followingBottomRef.current = true;
+      setHasNewBelow(false);
+      setNewBelowCount(0);
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
@@ -3279,14 +3270,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      applyScrollPolicyEvent({ type: "user-reached-bottom" });
+      followBottom();
       removeChatDraft(draftKey);
       showToast(t4("chat.newToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.newFailed", { error: err.message }));
     }
-  }, [applyScrollPolicyEvent, busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput, cancelStreamingRaf]);
+  }, [followBottom, busy, messages.length, draftKey, pendingImages, confirmQueuedReset, waitForIdle, setChatInput, cancelStreamingRaf]);
   const changeIndexRetrievalMode = q2(async (event) => {
     const next = globalThis.VisionoxIndexModePolicy.normalize(event.target.value);
     try {
@@ -3321,8 +3312,9 @@ const [providerCaps, setProviderCaps] = d2(null);
       canonicalMessageCountRef.current = 0;
       setTotalMessages(0);
       setVisibleMessageCount(CHAT_INITIAL_RENDER_COUNT);
-      topLoadArmedRef.current = false;
-      topLoadIntentRef.current = false;
+      followingBottomRef.current = true;
+      setHasNewBelow(false);
+      setNewBelowCount(0);
       cancelStreamingRaf();
       setStreaming(null);
       setActiveTools([]);
@@ -3337,14 +3329,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       setQueuedPrompts([]);
       setQueueSendingId(null);
       setQueuePaused(false);
-      applyScrollPolicyEvent({ type: "user-reached-bottom" });
+      followBottom();
       removeChatDraft(draftKey);
       showToast(t4("chat.clearToast"), "info");
       setTimeout(() => void resyncRunnerRef.current?.(), 200);
     } catch (err) {
       setError(t4("chat.clearFailed", { error: err.message }));
     }
-  }, [applyScrollPolicyEvent, draftKey, pendingImages, confirmQueuedReset, setChatInput, cancelStreamingRaf]);
+  }, [followBottom, draftKey, pendingImages, confirmQueuedReset, setChatInput, cancelStreamingRaf]);
   const updatePopover = q2(
     async (text) => {
       const slashMatch = /^\/([A-Za-z0-9_-]*)$/.exec(text);
@@ -3698,11 +3690,11 @@ const [providerCaps, setProviderCaps] = d2(null);
     if (!el || !el.isConnected) return;
     // ChatFeed can be temporarily unmounted by the background workbench.
     // Re-arm scroll listeners against the new element without carrying a
-    // previous element's scroll position or top-load intent across it.
-    topLoadArmedRef.current = false;
-    topLoadIntentRef.current = false;
+    // previous element's scroll position across it. 挂载/恢复后的短暂窗口内
+    // 抑制顶部自动加载，避免恢复过程把视口停在顶部时误触发翻页。
     scrollbarDraggingRef.current = false;
     lastScrollTopRef.current = el.scrollTop;
+    suppressTopLoadUntilRef.current = Date.now() + 400;
     const savedScroll = chatScrollSnapshotRef.current;
     chatScrollSnapshotRef.current = null;
     renderedFrameCountRef.current = 0;
@@ -3719,11 +3711,10 @@ const [providerCaps, setProviderCaps] = d2(null);
           return;
         }
         if (!savedScroll.atBottom) {
-          // A non-bottom snapshot represents an intentional historical view.
-          // Restore ownership together with the pixel position so the first
-          // post-mount content-growth event cannot pin the feed to the tail.
+          // 非底部快照代表用户当时正在阅读历史：恢复像素位置的同时
+          // 保持手动阅读模式，挂载后的内容增长不得把视口拉到尾部。
           scrollSchedulerRef.current?.cancel();
-          applyScrollPolicyEvent({ type: "user-scroll-up" });
+          followingBottomRef.current = false;
           const anchor = savedScroll.anchor;
           if (anchor?.id) {
             const selector = anchor.kind === "process" ? ".process-card[data-process-anchor-id]" : ".chat-msg[data-msg-id]";
@@ -3753,68 +3744,23 @@ const [providerCaps, setProviderCaps] = d2(null);
         lastScrollTopRef.current = current.scrollTop;
       };
       requestAnimationFrame(() => restore(3));
-    } else if (chatScrollStateRef.current.owner === "auto") {
+    } else if (followingBottomRef.current) {
       // ChatFeed may have been remounted after the background workbench was
       // closed. Re-arm one coalesced bottom pin without writing twice in one
       // render turn.
       scheduleBottomPin();
     }
-    const maybeLoadEarlier = () => {
-      if (backgroundWorkbenchRef.current || !el.isConnected || el.scrollTop > CHAT_TOP_LOAD_THRESHOLD || scrollbarDraggingRef.current || loadingEarlierRef.current || !topLoadArmedRef.current) return;
-      topLoadArmedRef.current = false;
-      topLoadIntentRef.current = false;
-      void loadEarlierMessagesRef.current?.();
-    };
     const onScroll = () => {
-      const currentTop = el.scrollTop;
-      const distFromBottom = el.scrollHeight - currentTop - el.clientHeight;
-      const scrollingUp = currentTop < lastScrollTopRef.current - 1;
-      const userScrollIntentActive = Date.now() - lastScrollUpIntentAtRef.current <= USER_SCROLL_INTENT_GRACE_MS;
-      // scrollTop 变小有两种来源：用户主动上滚，或钉底状态下内容变矮
-      // （流式消息收敛为更短的最终文本、工具卡片折叠等）导致浏览器把
-      // scrollTop 向下钳位。钳位时视口仍贴着底部且钉底开关处于开启。
-      // 平滑滚动动画会把一次滚轮拆成一串小步进事件：首步 <=1px 时下面的
-      // 用户分支可能重新打开/关闭钉底，因此钳位免疫必须以“近期无上滚手势”
-      // （USER_SCROLL_INTENT_GRACE_MS）为前提；手势活跃期内的上滚步进
-      // 一律交给用户分支，不得吞掉，否则钉底回拉会取消滚动动画、与手势死锁。
-      if (scrollingUp && shouldAutoScroll.current && distFromBottom < 80 && !userScrollIntentActive) {
-        lastScrollTopRef.current = currentTop;
-        return;
-      }
-      if (scrollingUp) {
-        if (topLoadIntentRef.current) {
-          topLoadArmedRef.current = true;
-          topLoadIntentRef.current = false;
-        }
-        cancelAutoScroll();
-        lastScrollTopRef.current = currentTop;
-        maybeLoadEarlier();
-        return;
-      }
-      // 亚像素/小步进事件（scrollingUp=false）也可能属于用户平滑滚动动画
-      // 的首步；手势活跃期内禁止回臂，否则钉底会在动画途中复活并死锁。
-      if (autoScrollInFlight.current) {
-        lastScrollTopRef.current = currentTop;
-        return;
-      }
-      if (distFromBottom < 80 && !userScrollIntentActive && chatScrollStateRef.current.owner !== "auto") {
-        applyScrollPolicyEvent({ type: "user-reached-bottom" });
-      }
-      lastScrollTopRef.current = currentTop;
-      maybeLoadEarlier();
+      // scroll 事件只记录位置并调度顶部加载检查，永不改变跟随状态——
+      // 内容高度变化（流式收敛、卡片折叠）产生不了输入事件，无从误判。
+      lastScrollTopRef.current = el.scrollTop;
+      if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD) scheduleTopLoadCheck();
     };
     const onWheel = (event) => {
       if (Number(event.deltaY) < 0) {
-        lastScrollUpIntentAtRef.current = Date.now();
-        topLoadIntentRef.current = true;
-        cancelAutoScroll();
-        // At the exact top a wheel gesture may not emit a scroll event. The
-        // wheel itself is still an explicit user request for earlier history.
-        if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD && !scrollbarDraggingRef.current) {
-          topLoadArmedRef.current = true;
-          topLoadIntentRef.current = false;
-          maybeLoadEarlier();
-        }
+        stopFollowing();
+        // 停在顶部时的上滚滚轮可能不再触发 scroll 事件，这里直接调度检查。
+        if (el.scrollTop <= CHAT_TOP_LOAD_THRESHOLD) scheduleTopLoadCheck();
       }
     };
     const onPointerDown = (event) => {
@@ -3822,20 +3768,16 @@ const [providerCaps, setProviderCaps] = d2(null);
       const scrollbarWidth = Math.max(14, rect.width - el.clientWidth);
       if (el.scrollHeight > el.clientHeight && event.clientX >= rect.right - scrollbarWidth) {
         scrollbarDraggingRef.current = true;
-        lastScrollUpIntentAtRef.current = Date.now();
-        topLoadIntentRef.current = true;
-        cancelAutoScroll();
+        stopFollowing();
       }
     };
     const onPointerUp = () => {
-      if (!scrollbarDraggingRef.current) return;
       scrollbarDraggingRef.current = false;
-      if (topLoadIntentRef.current) {
-        topLoadArmedRef.current = true;
-        topLoadIntentRef.current = false;
-      }
-      maybeLoadEarlier();
     };
+    const onKeyDown = (event) => {
+      if (event.key === "PageUp" || event.key === "ArrowUp" || event.key === "Home") stopFollowing();
+    };
+    const onTouchMove = () => stopFollowing();
     const onContextMenu = (event) => {
       event.preventDefault();
       setFeedMenu({
@@ -3846,34 +3788,38 @@ const [providerCaps, setProviderCaps] = d2(null);
     el.addEventListener("scroll", onScroll, { passive: true });
     el.addEventListener("wheel", onWheel, { passive: true });
     el.addEventListener("pointerdown", onPointerDown, { passive: true });
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
     el.addEventListener("contextmenu", onContextMenu);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
-      const current = feedRef.current || el;
-      // Only capture during a real feed detach/workbench transition. Effect
-      // dependency updates can run cleanup while the same connected feed is
-      // still mounted; capturing there would overwrite the transition anchor
-      // with a temporary scrollTop=0 snapshot.
-      if (current && !chatScrollSnapshotRef.current && (!current.isConnected || backgroundWorkbenchRef.current)) chatScrollSnapshotRef.current = {
-        top: current.scrollTop,
-        atBottom: current.scrollHeight - current.scrollTop - current.clientHeight < 80,
-        anchor: captureChatScrollAnchor(current),
-      };
+      if (topLoadTimerRef.current !== null) {
+        clearTimeout(topLoadTimerRef.current);
+        topLoadTimerRef.current = null;
+      }
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [applyScrollPolicyEvent, bootError, cancelAutoScroll, feedMountVersion, scheduleBottomPin, showBackgroundJobs]);
+  }, [bootError, feedMountVersion, scheduleBottomPin, scheduleTopLoadCheck, showBackgroundJobs, stopFollowing]);
   y2(() => {
     const nextCount = allVisibleMessages.length;
     const added = Math.max(0, nextCount - renderedFrameCountRef.current);
     renderedFrameCountRef.current = nextCount;
-    applyScrollPolicyEvent({ type: "content-growth", added });
-  }, [applyScrollPolicyEvent, messages, streaming, streamingSegments]);
+    // 内容增长的唯一决策：跟随中→贴底；手动阅读→只累计提示，绝不写 scrollTop。
+    const effect = computeGrowthEffect(followingBottomRef.current, added);
+    if (effect.type === "pin") scheduleBottomPin();
+    else if (effect.type === "count") {
+      setNewBelowCount((count) => count + effect.added);
+      setHasNewBelow(true);
+    }
+  }, [messages, scheduleBottomPin, streaming, streamingSegments]);
   y2(() => () => scrollSchedulerRef.current?.cancel(), []);
   y2(() => {
     if (!feedMenu) return;
@@ -4227,17 +4173,14 @@ const [providerCaps, setProviderCaps] = d2(null);
       && feed.isConnected
       && feedRef.current === feed;
     const anchor = captureChatScrollAnchor(feed);
+    // 加载历史是一次性操作：完成后仅复位加载标志。跟随状态不受影响——
+    // 用户既然滚到了顶部，此前必然已通过输入事件脱离跟随。
     const finishLoading = () => {
       if (loadToken !== earlierLoadTokenRef.current) return;
       loadingEarlierRef.current = false;
       setLoadingEarlierMessages(false);
-      if (feedIsCurrent()) {
-        const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-        applyScrollPolicyEvent({ type: "anchor-end", atBottom });
-      }
     };
     if (visibleMessageCount < messages.length) {
-      applyScrollPolicyEvent({ type: "anchor-start" });
       loadingEarlierRef.current = true;
       setLoadingEarlierMessages(true);
       setVisibleMessageCount((count) => Math.min(messages.length, count + CHAT_RENDER_STEP));
@@ -4255,7 +4198,6 @@ const [providerCaps, setProviderCaps] = d2(null);
       activeSessionId: activeConversationIdRef.current,
       responseSessionId,
     }) && feedIsCurrent();
-    applyScrollPolicyEvent({ type: "anchor-start" });
     loadingEarlierRef.current = true;
     setLoadingEarlierMessages(true);
     try {
@@ -4277,7 +4219,7 @@ const [providerCaps, setProviderCaps] = d2(null);
       if (loadToken === earlierLoadTokenRef.current && !backgroundWorkbenchRef.current) setError(err.message);
       finishLoading();
     }
-  }, [applyScrollPolicyEvent, visibleMessageCount, messages, totalMessages]);
+  }, [visibleMessageCount, messages, totalMessages]);
   y2(() => {
     loadEarlierMessagesRef.current = loadEarlierMessages;
   }, [loadEarlierMessages]);
@@ -4398,11 +4340,11 @@ const [providerCaps, setProviderCaps] = d2(null);
             onSelectArtifactMessage=${selectArtifactMessage}
           />`}
           ${!showBackgroundJobs && hasNewBelow ? html4`
-            <button type="button" class="chat-new-messages-pill" onClick=${() => applyScrollPolicyEvent({ type: "user-reached-bottom" })}>${t4("chat.newMessagesBelowCount", { count: newBelowCount })}</button>
+            <button type="button" class="chat-new-messages-pill" onClick=${followBottom}>${t4("chat.newMessagesBelowCount", { count: newBelowCount })}</button>
           ` : null}
           ${!showBackgroundJobs && feedMenu ? html4`
             <div class="chat-feed-menu" style=${`left:${feedMenu.x}px;top:${feedMenu.y}px;`} role="menu">
-              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { applyScrollPolicyEvent({ type: "user-reached-bottom" }); void resyncRunnerRef.current?.(); })}>${t4("chat.feedRefresh")}</button>
+              <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { followBottom(); void resyncRunnerRef.current?.(); })}>${t4("chat.feedRefresh")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(true))}>${t4("chat.feedExpandAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => setAllToolGroupsOpen(false))}>${t4("chat.feedCollapseAll")}</button>
               <button type="button" role="menuitem" onPointerDown=${feedMenuAction(() => { void newConversation(); })}>${t4("chat.new")}</button>

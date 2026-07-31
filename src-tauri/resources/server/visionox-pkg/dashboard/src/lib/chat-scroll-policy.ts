@@ -1,75 +1,38 @@
-export type ChatScrollOwner = "auto" | "user" | "anchor" | "jump";
+// 聊天滚动策略（精简版）。
+//
+// 设计原则：滚动所有权是一个布尔——followingBottom（是否跟随底部）。
+// 只有用户的原始输入事件（上滚滚轮、拖滚动条、触摸滑动、上翻按键、
+// 跳转消息）能脱离跟随；只有显式动作（发送消息、点"回到底部"、
+// 打开会话）能恢复跟随。scroll 事件本身永远不改变所有权，内容高度
+// 变化（流式收敛、卡片折叠）因此不可能误判并劫持视口。
+// 历史加载与前后台恢复是一次性操作，不再持有长期 owner 状态。
 
-export type ChatScrollState = {
-  owner: ChatScrollOwner;
-  newBelowCount: number;
+export type GrowthEffect =
+  | { type: "none" }
+  | { type: "pin" }
+  | { type: "count"; added: number };
+
+/** 内容增长时的唯一决策：跟随时贴底，否则累计"下方新消息"计数。 */
+export function computeGrowthEffect(followingBottom: boolean, added: number | undefined): GrowthEffect {
+  const count = !Number.isFinite(added) || added == null ? 1 : Math.max(0, Math.floor(added));
+  if (count === 0) return { type: "none" };
+  if (followingBottom) return { type: "pin" };
+  return { type: "count", added: count };
+}
+
+export type TopLoadCheck = {
+  scrollTop: number;
+  threshold: number;
+  loading: boolean;
+  dragging: boolean;
+  backgrounded: boolean;
+  suppressed: boolean;
 };
 
-export type ChatScrollEvent =
-  | { type: "content-growth"; added?: number }
-  | { type: "user-scroll-up" }
-  | { type: "user-scroll-down"; atBottom?: boolean }
-  | { type: "user-reached-bottom" }
-  | { type: "anchor-start" }
-  | { type: "anchor-end"; atBottom?: boolean }
-  | { type: "jump-start" }
-  | { type: "jump-end"; atBottom?: boolean };
-
-export type ChatScrollReduction = {
-  state: ChatScrollState;
-  effect: "none" | "pin-bottom";
-};
-
-export function createChatScrollState(): ChatScrollState {
-  return { owner: "auto", newBelowCount: 0 };
-}
-
-function addedCount(value: number | undefined): number {
-  if (!Number.isFinite(value) || value == null) return 1;
-  return Math.max(0, Math.floor(value));
-}
-
-function withOwner(state: ChatScrollState, owner: ChatScrollOwner): ChatScrollState {
-  return { owner, newBelowCount: state.newBelowCount };
-}
-
-function finishTransientOwner(state: ChatScrollState, atBottom: boolean | undefined): ChatScrollReduction {
-  if (atBottom) return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
-  return { state: { owner: "user", newBelowCount: state.newBelowCount }, effect: "none" };
-}
-
-export function reduceChatScrollState(
-  state: ChatScrollState = createChatScrollState(),
-  event: ChatScrollEvent,
-): ChatScrollReduction {
-  switch (event.type) {
-    case "content-growth": {
-      const added = addedCount(event.added);
-      if (state.owner === "auto") {
-        return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
-      }
-      return {
-        state: { owner: state.owner, newBelowCount: state.newBelowCount + added },
-        effect: "none",
-      };
-    }
-    case "user-scroll-up":
-      return { state: withOwner(state, "user"), effect: "none" };
-    case "user-scroll-down":
-      return event.atBottom ? { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" } : { state: withOwner(state, "user"), effect: "none" };
-    case "user-reached-bottom":
-      return { state: { owner: "auto", newBelowCount: 0 }, effect: "pin-bottom" };
-    case "anchor-start":
-      return { state: withOwner(state, "anchor"), effect: "none" };
-    case "anchor-end":
-      return finishTransientOwner(state, Boolean(event.atBottom));
-    case "jump-start":
-      return { state: withOwner(state, "jump"), effect: "none" };
-    case "jump-end":
-      return finishTransientOwner(state, Boolean(event.atBottom));
-    default:
-      return { state, effect: "none" };
-  }
+/** 顶部自动加载的唯一判定：滚动已停止（由调用方防抖保证）且仍停在顶部。 */
+export function shouldTriggerTopLoad(check: TopLoadCheck): boolean {
+  if (check.loading || check.dragging || check.backgrounded || check.suppressed) return false;
+  return check.scrollTop <= check.threshold;
 }
 
 export type FrameSchedulerOptions = {

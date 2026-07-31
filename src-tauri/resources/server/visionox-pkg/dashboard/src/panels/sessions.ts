@@ -1,7 +1,7 @@
 // Recovered from the product bundle; types are tightened incrementally without changing behavior.
 // @ts-nocheck
-import { createPortal as T2, memo as preactMemo } from "preact/compat";
-import { useCallback as q2, useEffect as y2, useRef as A2, useState as d2 } from "preact/hooks";
+import { memo as preactMemo } from "preact/compat";
+import { useCallback as q2, useEffect as y2, useMemo as T2, useRef as A2, useState as d2 } from "preact/hooks";
 import { ChatMessage, ToolCard, computeChatSearchMatches, parseToolArgs } from "../components/chat-internals.js";
 import { MODE, TOKEN, api, writeClipboardText } from "../lib/api.js";
 import { appBus, requestChatMessageJump, showToast } from "../lib/bus.js";
