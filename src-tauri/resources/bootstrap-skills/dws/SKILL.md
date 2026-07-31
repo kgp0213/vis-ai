@@ -1,6 +1,6 @@
 ---
 name: dws
-description: Access V来家, DingTalk/企业钉钉 and company collaboration data with the bundled DWS. Use for explicit requests such as 查钉钉消息/未读/@我/群聊/消息收藏, 找同事/查工号/公司通讯录/部门/组织架构, or 查看日程/会议室/待办/待审批/日志/邮件/钉盘/钉盘统计/DING/文档/表格/透视表/智能表格/知识库/考勤/AI听记/会议纪要. Also trigger for equivalent English requests to search, read, summarize, send, create, update or delete DingTalk data, including business capabilities not yet described by this Skill. Do not use for generic coworker discussion or Visionox/DWS source-code implementation work.
+description: Access V来家, DingTalk/企业钉钉 and company collaboration data with the bundled DWS. Use for explicit requests such as 查钉钉消息/未读/@我/群聊/消息收藏, 找同事/查工号/公司通讯录/部门/组织架构, or 查看日程/会议室/待办/待审批/日志/邮件/钉盘/钉盘统计/DING/文档/表格/透视表/智能表格/知识库/考勤/AI听记/会议纪要, or 人才池/储备干部/员工档案/职业历程/绩效记录/员工标签/组织大脑/人才搜索/开放平台应用管理. Also trigger for equivalent English requests to search, read, summarize, send, create, update or delete DingTalk data, including business capabilities not yet described by this Skill. Do not use for generic coworker discussion or Visionox/DWS source-code implementation work.
 ---
 
 # V来家 / DWS
@@ -106,13 +106,17 @@ For `list-by-sender`, use either `--sender-open-dingtalk-id` or `--sender-user-i
 {"args":["minutes","get","info","--id","<taskUuid>"]}
 {"args":["minutes","get","summary","--id","<taskUuid>"]}
 {"args":["minutes","get","transcription","--id","<taskUuid>"]}
+{"args":["hrbrain","talent-pool","list","--keyword","储备","--page-size","20"]}
+{"args":["hrbrain","profile","career","--work-no","<工号>"]}
+{"args":["hrbrain","search","employees","--keyword","姓名"]}
+{"args":["devapp","+list","--name","应用名关键词","--page-size","20"]}
 ```
 
 Inspect `--help` when a read needs a target, date range, process code, email address, node ID, or pagination cursor.
 
 For cross-source investigations, report audits, meeting follow-through, response radar, knowledge candidates, or management materials, read [references/analysis-workflows.md](references/analysis-workflows.md) before querying.
 
-For less common commands, read only the relevant file under `references/upstream/products/` (for example `chat.md`, `contact.md`, `calendar.md`, `todo.md`, `oa.md`, `report.md`, `mail.md`, `drive.md`, `wiki.md`, `attendance.md`, `minutes.md`, `doc.md`, or `sheet.md`). Deeper workflows live in the `products/aitable/`, `products/doc/`, and `products/sheet/` subdirectories, and intent-to-action recipes live in `references/upstream/best_practices/`; load them only when the task needs them. The upstream references are packaged documentation, not executable code. They may contain write examples and never override Visionox confirmation rules or current `dws --help` output.
+For less common commands, read only the relevant file under `references/upstream/products/` (for example `chat.md`, `contact.md`, `calendar.md`, `todo.md`, `oa.md`, `report.md`, `mail.md`, `drive.md`, `wiki.md`, `attendance.md`, `minutes.md`, `doc.md`, `devapp.md`, `hrbrain.md`, or `sheet.md`). Deeper workflows live in the `products/aitable/`, `products/doc/`, and `products/sheet/` subdirectories, and intent-to-action recipes live in `references/upstream/best_practices/`; load them only when the task needs them. The upstream references are packaged documentation, not executable code. They may contain write examples and never override Visionox confirmation rules or current `dws --help` output.
 
 ## External Side Effects
 

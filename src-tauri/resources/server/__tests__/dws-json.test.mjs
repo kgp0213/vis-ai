@@ -104,3 +104,27 @@ describe("DWS forward-compatible adapter", () => {
     assert.throws(() => validateDwsHelpArgs(["chat", "--yes"]), /managed by Visionox|command segments/);
   });
 });
+
+describe("DWS v1.0.55 service coverage", () => {
+  test("allows hrbrain and devapp read-only commands with their documented flags", () => {
+    assert.deepEqual(validateDwsReadArgs(["hrbrain", "talent-pool", "list", "--keyword", "储备", "--page-size", "20"]), ["hrbrain", "talent-pool", "list", "--keyword", "储备", "--page-size", "20"]);
+    assert.deepEqual(validateDwsReadArgs(["hrbrain", "talent-pool", "employees", "--pool-code", "POOL-1", "--page", "1"]).slice(0, 3), ["hrbrain", "talent-pool", "employees"]);
+    assert.deepEqual(validateDwsReadArgs(["hrbrain", "profile", "query", "--work-no", "1001", "--data-queries", "[{\"modelCode\":\"basic\"}]"]).slice(0, 3), ["hrbrain", "profile", "query"]);
+    assert.deepEqual(validateDwsReadArgs(["hrbrain", "profile", "labels", "--staff-ids", "1001,1002", "--all-label"]).slice(0, 3), ["hrbrain", "profile", "labels"]);
+    assert.deepEqual(validateDwsReadArgs(["hrbrain", "search", "employees-structured", "--origin-json", "{}", "--fields", "[]", "--order-by", "name"]).slice(0, 3), ["hrbrain", "search", "employees-structured"]);
+    assert.deepEqual(validateDwsReadArgs(["devapp", "+list", "--name", "机器人", "--page-size", "20"]), ["devapp", "+list", "--name", "机器人", "--page-size", "20"]);
+    assert.deepEqual(validateDwsReadArgs(["devapp", "+list", "--dry-run"]), ["devapp", "+list", "--dry-run"]);
+    assert.deepEqual(validateDwsReadArgs(["devapp", "+permission-list", "--unified-app-id", "app-1", "--scope-type", "APP", "--cursor", "0"]).slice(0, 2), ["devapp", "+permission-list"]);
+    assert.deepEqual(validateDwsReadArgs(["devapp", "+version-check-approval", "--unified-app-id", "app-1", "--version-id", "v1"]).slice(0, 2), ["devapp", "+version-check-approval"]);
+    assert.deepEqual(validateDwsReadArgs(["contact", "dept", "search", "--keyword", "技术"]).slice(0, 3), ["contact", "dept", "search"]);
+    assert.deepEqual(validateDwsReadArgs(["devdoc", "article", "search", "--query", "机器人", "--page", "1"]).slice(0, 3), ["devdoc", "article", "search"]);
+  });
+
+  test("rejects new-service writes, credential overrides and out-of-range pagination", () => {
+    assert.throws(() => validateDwsReadArgs(["devapp", "+create", "--name", "x"]), /not allowed/);
+    assert.throws(() => validateDwsReadArgs(["hrbrain", "profile", "query", "--work-no", "1", "--data-queries", "[]", "--yes"]), /not allowed/);
+    assert.throws(() => validateDwsReadArgs(["hrbrain", "search", "employees", "--page-size", "201"]), /1 to 200/);
+    assert.throws(() => validateDwsReadArgs(["devapp", "+list", "--client-secret", "x"]), /not allowed/);
+    assert.throws(() => validateDwsReadArgs(["devapp", "+list", "--timeout", "5"]), /not allowed/);
+  });
+});

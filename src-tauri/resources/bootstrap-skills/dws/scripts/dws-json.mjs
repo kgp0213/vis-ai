@@ -41,20 +41,59 @@ const READ_COMMANDS = new Set([
   "minutes get summary",
   "minutes get todos",
   "minutes get transcription",
+  "contact dept search",
+  "contact relation list-my-followings",
+  "chat list-all-conversations",
+  "calendar book list",
+  "mail mailbox list",
+  "doc template list",
+  "sheet template list",
+  "aitable base list",
+  "aitable table list",
+  "attendance vacation types",
+  "attendance shift list",
+  "report template list",
+  "ding message list",
+  "live stream list",
+  "devdoc article search",
+  "devapp +list",
+  "devapp +get",
+  "devapp +event-list",
+  "devapp +member-list",
+  "devapp +permission-list",
+  "devapp +robot-get",
+  "devapp +version-get",
+  "devapp +version-list",
+  "devapp +version-status",
+  "devapp +webapp-get",
+  "devapp +version-check-approval",
+  "hrbrain talent-pool list",
+  "hrbrain talent-pool detail",
+  "hrbrain talent-pool employees",
+  "hrbrain profile metadata",
+  "hrbrain profile query",
+  "hrbrain profile labels",
+  "hrbrain profile career",
+  "hrbrain profile performance",
+  "hrbrain search employees",
+  "hrbrain search employees-structured",
+  "hrbrain search fields",
 ]);
 
 const VALUE_FLAGS = new Set([
-  "--behavior-type", "--calendar-id", "--chat-scope", "--count", "--created-from", "--created-to", "--creator-type", "--cursor",
-  "--depts", "--dimension", "--direction", "--end", "--extensions", "--file-types", "--group",
-  "--id", "--keyword", "--limit", "--modified-end", "--modified-from", "--modified-start", "--modified-to", "--node", "--open-dingtalk-id",
-  "--operate-type", "--org-ids", "--page", "--pivot-table-id", "--plan-finish-date-end", "--plan-finish-date-start", "--priority", "--profile", "--queries", "--query", "--range", "--role-types", "--sender-open-dingtalk-id", "--sender-user-id",
-  "--sender-user-ids", "--sheet-id", "--size", "--start", "--status", "--target", "--template-name", "--time", "--time-range", "--topic-id",
-  "--types", "--user", "--workspace",
+  "--api-status", "--app-group-id", "--app-key", "--auth-status", "--behavior-type", "--calendar-id", "--chat-scope", "--count", "--created-from",
+  "--created-to", "--creator", "--creator-type", "--cursor", "--data-queries", "--dept-name", "--depts", "--develop-type", "--dimension", "--direction",
+  "--end", "--extensions", "--fields", "--file-types", "--filter-cool-app", "--group", "--id", "--job-level", "--jq", "--keyword", "--labels", "--limit",
+  "--modified-end", "--modified-from", "--modified-start", "--modified-to", "--name", "--node", "--open-dingtalk-id", "--operate-type", "--order-by",
+  "--org-ids", "--origin-json", "--page", "--page-size", "--pivot-table-id", "--plan-finish-date-end", "--plan-finish-date-start", "--pool-code",
+  "--pool-type", "--position-name", "--priority", "--profile", "--queries", "--query", "--range", "--role-types", "--scope-type", "--scope-value",
+  "--sender-open-dingtalk-id", "--sender-user-id", "--sender-user-ids", "--sheet-id", "--size", "--staff-ids", "--start", "--status", "--target",
+  "--template-name", "--time", "--time-range", "--topic-id", "--types", "--unified-app-id", "--user", "--version-id", "--work-no", "--workspace",
 ]);
 
-const BOOLEAN_FLAGS = new Set(["--exclude-muted", "--mock", "--no-header"]);
+const BOOLEAN_FLAGS = new Set(["--all-label", "--dry-run", "--exclude-muted", "--mock", "--no-header"]);
 export const DWS_READ_LIMIT = 200;
-const LIMIT_FLAGS = new Map([["--count", DWS_READ_LIMIT], ["--limit", DWS_READ_LIMIT], ["--size", DWS_READ_LIMIT]]);
+const LIMIT_FLAGS = new Map([["--count", DWS_READ_LIMIT], ["--limit", DWS_READ_LIMIT], ["--page-size", DWS_READ_LIMIT], ["--size", DWS_READ_LIMIT]]);
 const WRITE_COMMANDS = new Set(["chat message send"]);
 const WRITE_VALUE_FLAGS = new Set(["--file-path", "--group", "--msg-type", "--open-dingtalk-id", "--text", "--title", "--user", "--uuid"]);
 const WRITE_TARGET_FLAGS = new Set(["--group", "--open-dingtalk-id", "--user"]);
