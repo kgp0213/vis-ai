@@ -33,8 +33,8 @@
     {
       "id": "dingtalk-workspace-cli",
       "skills": ["dws"],
-      "source": "https://github.com/open-dingtalk/dingtalk-workspace-cli",
-      "version": "1.0.52",
+      "source": "https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli",
+      "version": "1.0.55",
       "license": "Apache-2.0",
       "licenseFile": "DWS_LICENSE.txt",
       "status": "verified"

@@ -15,9 +15,9 @@
     },
     {
       "path": "server/dws.exe",
-      "version": "1.0.52",
-      "bytes": 44950016,
-      "sha256": "70e3cd3874e5416f575738ed77c6f3cc4c249a16b100d58ef466f9d81607b2a1"
+      "version": "1.0.55",
+      "bytes": 61570048,
+      "sha256": "0b679987d91ccdc61892a06cd4518017fa7b7b1d300ed906ce0a891e0afc780c"
     }
   ]
 }

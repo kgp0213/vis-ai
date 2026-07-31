@@ -132,7 +132,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/runtime-manifest.json",
-    markers: ["server/node.exe", "server/officecli.exe", "server/dws.exe", "70e3cd3874e5416f575738ed77c6f3cc4c249a16b100d58ef466f9d81607b2a1"],
+    markers: ["server/node.exe", "server/officecli.exe", "server/dws.exe", "0b679987d91ccdc61892a06cd4518017fa7b7b1d300ed906ce0a891e0afc780c"],
   },
   {
     file: "scripts/verify-nsis-bundle.js",
@@ -935,7 +935,7 @@ const required = [
   },
   {
     file: "src-tauri/resources/bootstrap-skills/dws/integration.json",
-    markers: ['"version": "1.0.52.1"', '"license": "Apache-2.0"', '"integrationApiVersion": 1'],
+    markers: ['"version": "1.0.55.1"', '"license": "Apache-2.0"', '"integrationApiVersion": 1'],
   },
   {
     file: "src-tauri/resources/bootstrap-skills/dws/schedule-templates.json",
