@@ -168,6 +168,7 @@ const { registerVHomeSkillTools } = await importEarly("./lib/vhome-skill-tools.m
 const { runDwsExec, runDwsHelp, runDwsRead, runDwsWrite } = await importEarly("../bootstrap-skills/dws/scripts/dws-json.mjs");
 const { createPreparedDocumentRegistry, getDlpConfig, prepareLocalDocument, preparedDocumentEnvironment, preparedDocumentToolResult, resolveReadablePathForDlp, wrapReadFileToolWithDlp, wrapToolsPathArgsWithDlp } = await importEarly("./lib/dlp-file.mjs");
 const { artifactDeliveryRetryPrompt, artifactMissingNotice, artifactPathsFromToolOutput, artifactVerificationStatus, detectArtifactRequest, filterTemporaryArtifactEvidence, isPlanOnlyRequest, latestAssistantResponse, registerSaveLastAssistantResponseTool, requestedArtifactPaths, requestedOutputArtifactPaths, shouldEnforceArtifactDelivery, toolResultSucceeded } = await importEarly("./lib/artifact-delivery.mjs");
+const { createTurnDirectoryScan } = await importEarly("./lib/turn-artifact-diff.mjs");
 const { deriveTaskState, detectTaskWarnings } = await importEarly("./lib/task-outcome.mjs");
 const { createTaskContract } = await importEarly("./lib/task-contract.mjs");
 const { classifyToolEvidence, verifyGoalContract } = await importEarly("./lib/goal-verification-runtime.mjs");
@@ -11793,10 +11794,24 @@ ${modeList}
           if (absolute) artifactBaselines.set(process.platform === "win32" ? absolute.toLowerCase() : absolute, baseline);
         }
         operation.context.artifactBaseline = [...artifactBaselines.entries()].map(([path, baseline]) => ({ path, baseline }));
+        // Watch every directory the turn touches so files created indirectly
+        // (for example by a run_command child process) become visible to
+        // artifact tracking even when their paths never appear in tool args
+        // or output. Baselines are captured as each directory is first noted.
+        const turnDirectoryScan = createTurnDirectoryScan({ workspaceDir });
+        const turnReadFilePaths = new Set();
+        for (const requestedPath of requestedOutputPaths) {
+          const absolute = rememberGeneratedArtifactPath(requestedPath);
+          if (absolute) turnDirectoryScan.noteDirectory(dirname(absolute));
+        }
+        for (const scanDiagnostic of turnDirectoryScan.drainDiagnostics()) {
+          console.error(`[artifact] turn directory scan skipped ${scanDiagnostic.kind}: ${scanDiagnostic.dir}${scanDiagnostic.detail ? ` (${scanDiagnostic.detail})` : ""}`);
+        }
         operation.context.calibrationUntrusted = false;
         const requestedExistingOutputKeys = new Set();
         const completeCoverageRequired = requiresCompleteContextCoverage(text, artifactRequest);
         const turnArtifactPaths = new Set();
+        const turnObservedArtifactPaths = new Set();
         const turnArtifactFiles = new Map();
         const freshContextRequested = startsFreshContextTransaction(text);
         if (freshContextRequested && activeContextRecoveryHandle) {
@@ -12033,10 +12048,36 @@ ${modeList}
                   exitCode: normalizedToolOutcome?.exitCode,
                 });
               }
+              if (ev.role === "tool_start" || ev.role === "tool") {
+                // Directories referenced by tool args are captured as they
+                // stream by; tool_start fires before execution, so a freshly
+                // noted directory is diffed against its pre-execution state.
+                try {
+                  turnDirectoryScan.noteToolEvent({
+                    toolName: ev.toolName,
+                    args: ev.toolArgs,
+                    result: ev.role === "tool" ? ev.content : null,
+                  });
+                  for (const scanDiagnostic of turnDirectoryScan.drainDiagnostics()) {
+                    console.error(`[artifact] turn directory scan skipped ${scanDiagnostic.kind}: ${scanDiagnostic.dir}${scanDiagnostic.detail ? ` (${scanDiagnostic.detail})` : ""}`);
+                  }
+                } catch {}
+              }
               if (ev.role === "media_recovery") turnReceipt.recordMedia(ev);
               if (ev.role === "tool") {
                 sawToolActivity = true;
                 const toolSucceeded = normalizedToolOutcome?.ok === true && toolResultSucceeded(ev.content, { status: ev.toolStatus });
+                if (toolSucceeded && /^(?:read_file|get_file_info|file_info|stat_file)$/i.test(String(ev.toolName || ""))) {
+                  // Remember host readbacks so a file later discovered by the
+                  // turn directory diff can be upgraded to verified, matching
+                  // the requested-artifact readback precedent below.
+                  const readArgs = parseMaybeJsonObject(ev.toolArgs);
+                  for (const key of ["path", "filePath", "file_path", "filename"]) {
+                    if (typeof readArgs?.[key] !== "string") continue;
+                    const absolute = rememberGeneratedArtifactPath(readArgs[key]);
+                    if (absolute) turnReadFilePaths.add(process.platform === "win32" ? absolute.toLowerCase() : absolute);
+                  }
+                }
                 if (!toolSucceeded) {
                   const failure = recordOperationToolFailure(operation.context, {
                     toolCallId: ev.callId ?? ev.toolCallId,
@@ -12089,7 +12130,7 @@ ${modeList}
                   const key = process.platform === "win32" ? artifactPath.toLowerCase() : artifactPath;
                   const isRequestedExistingOutput = requestedExistingOutputKeys.has(key);
                   if (!info || info.size <= 0 || (!isRequestedExistingOutput && info.mtimeMs < turnStartedAt)) continue;
-                  if (turnArtifactPaths.has(key)) {
+                  if (turnArtifactPaths.has(key) || turnObservedArtifactPaths.has(key)) {
                     // A later read_file/get_file_info for the same requested
                     // path upgrades the original write fact in place. Without
                     // this branch, the dedupe guard would leave the final
@@ -12112,6 +12153,7 @@ ${modeList}
                         });
                       }
                     }
+                    turnArtifactPaths.add(key);
                     continue;
                   }
                   const baseline = artifactBaselines.get(key);
@@ -12415,6 +12457,73 @@ ${modeList}
                 maxAttempts: MAX_PLAN_AUTO_CONTINUATIONS,
                 plan: incompletePlan,
               });
+            }
+            if (continuation.action === "none" && !operation.controller.signal.aborted) {
+              // Final sweep of every turn-touched directory. Deliverables
+              // created indirectly (run_command child processes, scripts)
+              // surface here even when no tool arg or output named them, and
+              // they must be registered before the artifact retry and the
+              // completion verdict below read turnArtifactPaths.
+              let turnScanChanged = [];
+              try {
+                turnScanChanged = turnDirectoryScan.scanChanged().changed;
+              } catch {}
+              const scannedNewFiles = [];
+              for (const scanned of Array.isArray(turnScanChanged) ? turnScanChanged : []) {
+                const info = generatedArtifactFileInfo(scanned?.path);
+                const key = process.platform === "win32" ? String(scanned?.path ?? "").toLowerCase() : String(scanned?.path ?? "");
+                if (!info || info.size <= 0 || turnArtifactPaths.has(key) || turnObservedArtifactPaths.has(key)) continue;
+                const explicitlyVerified = turnReadFilePaths.has(key);
+                const artifactRecord = {
+                  ...info,
+                  retention: "preserve",
+                  changedThisTurn: true,
+                  verification: explicitlyVerified ? "existing-file-verified" : "current-turn-write",
+                  status: artifactVerificationStatus(info, { changedThisTurn: true, explicitlyVerified }),
+                };
+                turnObservedArtifactPaths.add(key);
+                turnArtifactFiles.set(key, artifactRecord);
+                scannedNewFiles.push(artifactRecord);
+              }
+              if (scannedNewFiles.length > 0) {
+                // Keep verified and unverified files in separate evidence
+                // entries so a host readback is not diluted by merely
+                // present files (and vice versa) in downstream checks.
+                for (const group of [scannedNewFiles.filter((file) => file.status === "verified"), scannedNewFiles.filter((file) => file.status !== "verified")]) {
+                  if (group.length === 0) continue;
+                  const groupVerified = group.every((file) => file.status === "verified");
+                  const evidence = {
+                    paths: group.map((file) => file.path),
+                    files: group,
+                    producer: "filesystem-scan",
+                    verified: groupVerified,
+                    status: groupVerified ? "verified" : "present_unverified",
+                    reason: "turn-touched directory diff",
+                  };
+                  turnReceipt.recordArtifact(evidence);
+                  try {
+                    contextInputTransactions.noteArtifactEvidence({
+                      paths: evidence.paths,
+                      producer: evidence.producer,
+                      verified: evidence.verified,
+                      status: evidence.status,
+                      reason: evidence.reason,
+                      sourceReferences: [],
+                    });
+                  } catch {}
+                }
+                broadcastDashboardEvent({
+                  kind: "artifact-created",
+                  assistantId,
+                  files: scannedNewFiles.map((file) => ({
+                    ...file,
+                    id: file.id ?? createHash("sha256").update(String(file.path), "utf8").digest("hex"),
+                  })),
+                });
+              }
+              for (const scanDiagnostic of turnDirectoryScan.drainDiagnostics()) {
+                console.error(`[artifact] turn directory scan skipped ${scanDiagnostic.kind}: ${scanDiagnostic.dir}${scanDiagnostic.detail ? ` (${scanDiagnostic.detail})` : ""}`);
+              }
             }
             if (
               continuation.action === "none" &&
